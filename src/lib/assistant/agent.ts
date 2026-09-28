@@ -11,6 +11,7 @@
 // A tool that throws becomes a generic error result; the turn continues.
 
 import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
+import { ChatOpenAI } from "@langchain/openai";
 import { tool } from "@langchain/core/tools";
 import { AIMessage, HumanMessage, SystemMessage, ToolMessage, type BaseMessage } from "@langchain/core/messages";
 import { z } from "zod";
@@ -23,6 +24,10 @@ export const AGENT_LIMITS = {
     maxModelCalls: 4,
     maxWritesPerTurn: 1,
     turnTimeoutMs: 45_000,
+    /** One model request (measured max 3.7 s). Gemini sometimes sits on a request for minutes. */
+    modelCallTimeoutMs: 10_000,
+    /** Stalled / overloaded model requests tolerated per turn; they do not count as model calls. */
+    maxFailedModelCalls: 2,
     userTextMaxChars: 2000,
     replyMaxChars: 1000,
 } as const;
@@ -45,6 +50,8 @@ export type AgentTurnOutput = {
     /** This turn's messages (human → … → final AI), to append to memory. */
     turnMessages: BaseMessage[];
     modelCalls: number;
+    /** The backup model answered at least once this turn. */
+    usedBackup: boolean;
 };
 
 export type AgentDeps = {
@@ -53,7 +60,45 @@ export type AgentDeps = {
     ctx: ToolContext;
     logToolCall: (r: ToolCallRecord) => Promise<void>;
     clock?: () => number;
+    /** Per-request cap; default AGENT_LIMITS.modelCallTimeoutMs. */
+    modelCallTimeoutMs?: number;
+    /** Takes over for the rest of the turn when the model stalls or is overloaded. */
+    backupModel?: ToolCallingModel | null;
 };
+
+class ModelCallTimeout extends Error {}
+
+/** A stall, rate limit or server error — worth another try. A 400 (our bug) is not. */
+function isTransientModelError(err: unknown): boolean {
+    if (err instanceof ModelCallTimeout) return true;
+    const status = (err as { status?: unknown } | null)?.status;
+    if (typeof status === "number") return status === 429 || status >= 500;
+    const msg = err instanceof Error ? err.message : String(err);
+    return /\[(429|5\d\d)[ \]]|fetch failed|ECONNRESET|ETIMEDOUT|socket hang up/i.test(msg);
+}
+
+/**
+ * model.invoke with a deadline WE enforce. The signal alone is not enough:
+ * @langchain/google-genai 2.x drops it on the non-streaming path (_generate
+ * calls completionWithRetry without options), so a stalled Gemini request
+ * held a WhatsApp turn for 5 minutes. The abandoned request is left to finish
+ * in the background; its answer is ignored.
+ */
+async function invokeWithin(model: ToolCallingModel, messages: BaseMessage[], ms: number): Promise<AIMessage> {
+    const ctrl = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+            ctrl.abort();
+            reject(new ModelCallTimeout(`model call timed out after ${ms} ms`));
+        }, ms);
+    });
+    try {
+        return await Promise.race([model.invoke(messages, { signal: ctrl.signal }), timeout]);
+    } finally {
+        clearTimeout(timer);
+    }
+}
 
 /** Cap list results at MAX_TOOL_ROWS and scrub sensitive text (Invariants 5, 8). */
 export function sanitizeResult(result: ToolResult): ToolResult {
@@ -87,14 +132,38 @@ export async function runAgentTurn(input: AgentTurnInput, deps: AgentDeps): Prom
     const results: AgentTurnOutput["results"] = [];
     let writes = 0;
     let modelCalls = 0;
+    let failedCalls = 0;
+    let model = deps.model;
+    let usedBackup = false;
 
-    while (modelCalls < AGENT_LIMITS.maxModelCalls) {
-        const remaining = deadline - clock();
-        if (remaining <= 0) break;
-        modelCalls++;
-        const ai = await deps.model.invoke([new SystemMessage(input.system), ...input.history, ...turn], {
-            signal: AbortSignal.timeout(remaining),
-        });
+    const callCap = deps.modelCallTimeoutMs ?? AGENT_LIMITS.modelCallTimeoutMs;
+
+    turnLoop: while (modelCalls < AGENT_LIMITS.maxModelCalls) {
+        let ai: AIMessage;
+        // A stalled or overloaded model is retried — on the backup model from
+        // then on, when there is one. Any other error fails the turn.
+        for (;;) {
+            const remaining = deadline - clock();
+            if (remaining <= 0) break turnLoop;
+            try {
+                ai = await invokeWithin(
+                    model,
+                    [new SystemMessage(input.system), ...input.history, ...turn],
+                    Math.min(remaining, callCap),
+                );
+                modelCalls++;
+                break;
+            } catch (err) {
+                if (!isTransientModelError(err)) throw err;
+                failedCalls++;
+                if (deps.backupModel && !usedBackup) {
+                    model = deps.backupModel;
+                    usedBackup = true;
+                } else if (failedCalls > AGENT_LIMITS.maxFailedModelCalls) {
+                    break turnLoop;
+                }
+            }
+        }
         turn.push(ai);
 
         const calls = ai.tool_calls ?? [];
@@ -105,6 +174,7 @@ export async function runAgentTurn(input: AgentTurnInput, deps: AgentDeps): Prom
                 results,
                 turnMessages: turn,
                 modelCalls,
+                usedBackup,
             };
         }
 
@@ -128,7 +198,7 @@ export async function runAgentTurn(input: AgentTurnInput, deps: AgentDeps): Prom
         }
     }
 
-    return { text: FALLBACK, results, turnMessages: turn, modelCalls };
+    return { text: FALLBACK, results, turnMessages: turn, modelCalls, usedBackup };
 }
 
 /**
@@ -213,6 +283,33 @@ export function createToolCallingModel(args: {
         // WhatsApp message to a tool call does not need deep reasoning, and a
         // turn is up to 4 calls inside a 45 s budget.
         thinkingConfig: { thinkingLevel: "LOW" },
+    });
+    return chat.bindTools(
+        args.tools.map((t) =>
+            tool(async () => "", { name: t.name, description: t.description, schema: t.schema as z.ZodObject }),
+        ),
+    ) as unknown as ToolCallingModel;
+}
+
+/**
+ * The backup: a model through OpenRouter's OpenAI-compatible API (paid, so it does
+ * not share the free Gemini key's stalls). Same tools, same loop; LangChain
+ * converts the Zod schemas to function declarations.
+ */
+export function createBackupToolCallingModel(args: {
+    model: string;
+    apiKey: string;
+    tools: ToolSpec[];
+}): ToolCallingModel {
+    const chat = new ChatOpenAI({
+        model: args.model,
+        apiKey: args.apiKey,
+        temperature: 0,
+        maxRetries: 0,
+        configuration: {
+            baseURL: "https://openrouter.ai/api/v1",
+            defaultHeaders: { "X-Title": "iTarang WhatsApp Assistant" },
+        },
     });
     return chat.bindTools(
         args.tools.map((t) =>
