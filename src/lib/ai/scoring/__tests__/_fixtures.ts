@@ -4,6 +4,7 @@
 import { EMPTY_SIGNALS, type QualificationSignals, type Disqualifier } from "../signals";
 
 export interface SignalSpec {
+  lithium?: QualificationSignals["lithium_dealer"]; // the band gate — default unknown
   relevant?: boolean; // relevant_dealer — default true
   segment?: QualificationSignals["dealer_segment"];
   role?: QualificationSignals["dealer_role"];
@@ -24,6 +25,7 @@ const yn = (b: boolean | undefined): "yes" | "no" => (b ? "yes" : "no");
 export function mk(p: SignalSpec = {}): QualificationSignals {
   return {
     ...EMPTY_SIGNALS,
+    lithium_dealer: p.lithium ?? "unknown",
     relevant_dealer: yn(p.relevant ?? true),
     dealer_segment: p.segment ?? "battery",
     dealer_role: p.role ?? "dealer",
