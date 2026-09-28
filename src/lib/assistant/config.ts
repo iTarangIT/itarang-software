@@ -9,6 +9,10 @@ export type AssistantConfig = {
     apiKey: string | null;
     /** ASSISTANT_DISABLED=true → one fixed reply to everyone, no model, no data. */
     disabled: boolean;
+    /** OPENROUTER_API_KEY — paid, so it does not stall like the free key. null = no backup. */
+    openRouterApiKey: string | null;
+    /** The agent's backup on OpenRouter when Gemini stalls. ASSISTANT_BACKUP_MODEL, default DEFAULT_BACKUP_MODEL. */
+    backupModel: string;
     /** Pilot allow-list for write tools (users.id). Empty = nobody. */
     writeUserIds: ReadonlySet<string>;
 };
@@ -21,11 +25,21 @@ export type AssistantConfig = {
  */
 export const DEFAULT_MODEL = "gemini-3.6-flash";
 
+/**
+ * The free key's model, bought through OpenRouter: same behaviour, a queue that
+ * does not stall. On real sandbox turns (2026-09-28) it picked the right tools
+ * in 2.5-4.3 s, 3-call turns included; gpt-4.1-mini looked a dealer up in the
+ * product catalogue and gpt-4.1 miscounted the queue.
+ */
+export const DEFAULT_BACKUP_MODEL = "google/gemini-3.5-flash-lite";
+
 export function assistantConfig(env: NodeJS.ProcessEnv = process.env): AssistantConfig {
     return {
         model: env.ASSISTANT_MODEL?.trim() || DEFAULT_MODEL,
         apiKey: env.WA_ASSIST_GEMINI_API_KEY?.trim() || null,
         disabled: (env.ASSISTANT_DISABLED ?? "").trim().toLowerCase() === "true",
+        openRouterApiKey: env.OPENROUTER_API_KEY?.trim() || null,
+        backupModel: env.ASSISTANT_BACKUP_MODEL?.trim() || DEFAULT_BACKUP_MODEL,
         writeUserIds: new Set(
             (env.ASSISTANT_WRITES_ENABLED_USER_IDS ?? "")
                 .split(",")

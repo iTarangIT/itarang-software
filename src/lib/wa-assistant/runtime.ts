@@ -17,7 +17,13 @@ import { markHandled, recordOutbound } from "./messages";
 import { renderLeadCard, renderPreview, renderTapOutcome, renderTurn, type WaPayload } from "./render";
 import type { RouterDeps } from "./router";
 import type { AssistantUser } from "@/lib/assistant/types";
-import { MAX_VOICE_BYTES, transcribeVoice } from "./voice/transcribe";
+import {
+    hedgeTranscription,
+    MAX_VOICE_BYTES,
+    transcribeVoice,
+    transcribeWithOpenRouter,
+    type Transcriber,
+} from "./voice/transcribe";
 import { loadVoiceVocab } from "./voice/vocab";
 import { voiceConfig } from "./voice/config";
 
@@ -115,13 +121,29 @@ export function defaultRouterDeps(env: WaAssistEnv): RouterDeps {
             if (!media.ok) {
                 return media.tooLarge ? { kind: "too_long" } : { kind: "failed", error: `download: ${media.error}` };
             }
-            return transcribeVoice({
-                bytes: media.bytes,
-                mimeType: audio.mimeType ?? media.mimeType,
-                apiKey: assistantConfig().apiKey,
-                model: voiceConfig().model,
-                vocab,
-            });
+            const cfg = voiceConfig();
+            const mimeType = audio.mimeType ?? media.mimeType;
+            const direct: Transcriber = (signal) =>
+                transcribeVoice({
+                    bytes: media.bytes,
+                    mimeType,
+                    apiKey: assistantConfig().apiKey,
+                    model: cfg.model,
+                    vocab,
+                    signal,
+                });
+            // Paid OpenRouter first; the free key races it only when it is slow or fails.
+            const paid = cfg.openRouter;
+            const { outcome, via } = paid
+                ? await hedgeTranscription(
+                      (signal) => transcribeWithOpenRouter({ bytes: media.bytes, mimeType, ...paid, vocab, signal }),
+                      direct,
+                  )
+                : await hedgeTranscription(direct, null);
+            if (paid && via === "backup") {
+                logFn("warn", "[wa-assist] voice transcribed by the free-key backup", { userId: user.id, outcome: outcome.kind });
+            }
+            return outcome;
         },
         hasPendingAction: hasOpenPendingAction,
         runTextTurn: async (user, text, messageRowId) => {
@@ -129,6 +151,7 @@ export function defaultRouterDeps(env: WaAssistEnv): RouterDeps {
             if (!leased.ok) return { kind: "busy" };
             const r = leased.value;
             if (r.kind === "ok") {
+                if (r.usedBackup) logFn("warn", "[wa-assist] agent turn used the OpenRouter backup", { userId: user.id });
                 return {
                     kind: "ok",
                     payload: renderTurn(r),

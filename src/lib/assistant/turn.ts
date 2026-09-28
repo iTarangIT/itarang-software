@@ -9,11 +9,11 @@ import { buildSystemPrompt } from "./prompt";
 import { loadHistory, saveHistory, toolsetStamp } from "./memory";
 import { withEditContext } from "./edit";
 import { logToolCall } from "./audit";
-import { callTool, createToolCallingModel, runAgentTurn, type ToolCallingModel } from "./agent";
+import { callTool, createBackupToolCallingModel, createToolCallingModel, runAgentTurn, type ToolCallingModel } from "./agent";
 import type { ToolSpec } from "./tools/spec";
 
 export type AgentTurnResult =
-    | { kind: "ok"; text: string; results: { tool: string; result: ToolResult }[]; modelCalls: number }
+    | { kind: "ok"; text: string; results: { tool: string; result: ToolResult }[]; modelCalls: number; usedBackup: boolean }
     | { kind: "not_configured" }
     | { kind: "no_tools" };
 
@@ -39,6 +39,11 @@ export async function agentTurn(
     const model = opts.model
         ? opts.model(tools)
         : createToolCallingModel({ model: cfg.model, apiKey: cfg.apiKey!, tools });
+    // Paid OpenRouter takes over when the free Gemini key stalls (never in tests).
+    const backupModel =
+        !opts.model && cfg.openRouterApiKey
+            ? createBackupToolCallingModel({ model: cfg.backupModel, apiKey: cfg.openRouterApiKey, tools })
+            : null;
 
     // A history built with other tools is dropped (memory.ts): stale refusals must not replay.
     const toolset = toolsetStamp(tools.map((t) => t.name));
@@ -51,10 +56,10 @@ export async function agentTurn(
             history,
             userText,
         },
-        { model, tools, ctx: { user, messageId: opts.messageId, now, writesEnabled }, logToolCall },
+        { model, backupModel, tools, ctx: { user, messageId: opts.messageId, now, writesEnabled }, logToolCall },
     );
     await saveHistory(user.id, toolset, [...history, ...out.turnMessages]);
-    return { kind: "ok", text: out.text, results: out.results, modelCalls: out.modelCalls };
+    return { kind: "ok", text: out.text, results: out.results, modelCalls: out.modelCalls, usedBackup: out.usedBackup };
 }
 
 /**
