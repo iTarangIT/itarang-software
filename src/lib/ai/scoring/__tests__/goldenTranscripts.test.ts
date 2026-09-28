@@ -25,7 +25,24 @@ const GOLDENS: Golden[] = [
       "user: अभी bike चला रहा हूँ।",
       "agent: कोई बात नहीं sir, आप आराम से drive कीजिये। बाद में connect कर लूँगी। आपका दिन शुभ हो।",
     ].join("\n"),
-    bands: ["Cold", "Warm", "Disqualified"],
+    bands: ["Cold", "Disqualified"],
+  },
+  {
+    name: "bare 'जी' to the lithium question — Qualified",
+    transcript: [
+      "agent: नमस्ते sir! Priya बोल रही हूँ iTarang से। क्या आप lithium battery dealer हैं?",
+      "user: जी।",
+      "agent: धन्यवाद sir, मैं आपको details भेजती हूँ।",
+    ].join("\n"),
+    bands: ["Qualified"],
+  },
+  {
+    name: "lead-acid only — Disqualified",
+    transcript: [
+      "agent: नमस्ते sir, Priya iTarang से। क्या आप lithium battery dealer हैं?",
+      "user: नहीं, हम सिर्फ lead-acid बेचते हैं।",
+    ].join("\n"),
+    bands: ["Disqualified"],
   },
   {
     name: "flat rejection — Disqualified",
@@ -36,10 +53,10 @@ const GOLDENS: Golden[] = [
     bands: ["Disqualified"],
   },
   {
-    name: "strong buyer, volume + EMI ask + passive callback — Qualified",
+    name: "lithium dealer + monthly volume + EMI ask — Qualified",
     transcript: [
-      "agent: namaste sir, Priya from iTarang, Trontek lithium battery with EMI financing.",
-      "user: haan mujhe chahiye. mere paas 20 e-rickshaw hain, sabki battery badalni hai. EMI ka kya plan hai? rate kya hai?",
+      "agent: namaste sir, Priya from iTarang, Trontek lithium battery with EMI financing. kya aap lithium battery dealer hain?",
+      "user: ji haan, lithium hi bechta hoon. mahine ke 20 set nikal jaate hain. EMI ka kya plan hai? rate kya hai?",
       "agent: ji sir, 12 month EMI available hai. kal aapke shop pe visit fix karein?",
       "user: haan kal subah aa jao, main owner hi hoon.",
     ].join("\n"),
