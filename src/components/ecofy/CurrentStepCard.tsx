@@ -46,15 +46,23 @@ export interface CurrentStepCardProps {
     onDone: () => void;
 }
 
+// Brand gradient (same token as the profile hero band: --gradient-primary).
+const BRAND_GRADIENT = "bg-[image:var(--gradient-primary)]";
+
 const TONE = {
     action: {
-        card: "border-indigo-200 from-indigo-50/80",
-        bar: "bg-gradient-to-b from-indigo-500 to-violet-500",
-        pill: "bg-gradient-to-r from-indigo-600 to-violet-600 text-white shadow-sm shadow-indigo-200",
+        card: "border-brand-200 from-brand-50/70",
+        bar: BRAND_GRADIENT,
+        pill: `${BRAND_GRADIENT} text-white shadow-md shadow-brand-300/50 ring-1 ring-brand-900/20`,
         railPill: "You are here",
     },
     waiting: { card: "border-amber-300 from-amber-50/70", bar: "bg-amber-400", pill: "bg-amber-500 text-white", railPill: "Pending" },
-    done: { card: "border-gray-300 from-gray-50", bar: "bg-gray-400", pill: "bg-gray-700 text-white", railPill: "Done" },
+    done: {
+        card: "border-brand-200 from-brand-50/70",
+        bar: BRAND_GRADIENT,
+        pill: `${BRAND_GRADIENT} text-white shadow-md shadow-brand-300/50 ring-1 ring-brand-900/20`,
+        railPill: "Done",
+    },
 } satisfies Record<StepTone, { card: string; bar: string; pill: string; railPill: string }>;
 
 export function CurrentStepCard(p: CurrentStepCardProps) {
@@ -132,7 +140,7 @@ function Shell({
                     <h2 className="text-base font-semibold text-gray-900">{brief.title}</h2>
                     <p className="mt-0.5 text-sm text-gray-700">{brief.detail}</p>
                     {brief.gate && <p className="mt-1 text-xs text-gray-600">{brief.gate}</p>}
-                    <p className="mt-1 text-xs font-medium text-indigo-700">Next → {brief.next}</p>
+                    <p className="mt-1 text-xs font-medium text-blue-800">Next → {brief.next}</p>
                 </div>
 
                 {children}

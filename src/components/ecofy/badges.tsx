@@ -69,15 +69,18 @@ export function StageRail({
     partyLabel?: string;
 }) {
     const idx = stage === "CLOSED" ? STAGE_RAIL.length : STAGE_RAIL.findIndex((s) => s.stage === stage);
+    // Brand gradient — same token as the profile hero band (--gradient-primary).
+    const brandNode = "bg-[image:var(--gradient-primary)] text-white ring-4 ring-brand-200/70 shadow-md shadow-brand-300/50";
+    const brandPill = "bg-[image:var(--gradient-primary)] text-white shadow-sm shadow-brand-300/50";
     const currentNode = {
-        action: "bg-gradient-to-br from-indigo-600 to-violet-600 text-white ring-4 ring-indigo-100",
+        action: brandNode,
         waiting: "bg-amber-500 text-white ring-4 ring-amber-100",
-        done: "bg-gray-700 text-white ring-4 ring-gray-200",
+        done: brandNode,
     }[tone];
     const currentPill = {
-        action: "bg-gradient-to-r from-indigo-600 to-violet-600 text-white",
+        action: brandPill,
         waiting: "bg-amber-500 text-white",
-        done: "bg-gray-700 text-white",
+        done: brandPill,
     }[tone];
     return (
         <ol className="grid grid-cols-3 gap-y-3 sm:grid-cols-5 lg:grid-cols-9">

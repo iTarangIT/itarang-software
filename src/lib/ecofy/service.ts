@@ -265,6 +265,134 @@ export function runCalculatorEstimate(input: unknown): Promise<unknown> {
 }
 
 // ---------------------------------------------------------------------------
+// Calculator designer (Ecofy M08, CONFLICTS #31). The designer screen lives in
+// the CRM: the Sales Head drafts, edits, tests, submits and publishes releases
+// through Ecofy's own /calculator/releases endpoints. Ecofy keeps the state
+// machine, validation and audit; the CRM keeps every write in the ledger.
+// ---------------------------------------------------------------------------
+
+export interface EcofyCalcRelease {
+    id: string;
+    version: number;
+    status: "DRAFT" | "PENDING_APPROVAL" | "PUBLISHED" | "RETIRED" | "REJECTED" | string;
+    changeNote: string | null;
+    decisionNote: string | null;
+    createdAt: string;
+    submittedAt: string | null;
+    publishedAt: string | null;
+}
+
+export interface EcofyCalcAppliance {
+    name: string;
+    defaultWatts: number;
+    isMotor: boolean;
+    startMultiplier: number;
+    sortOrder?: number;
+    active?: boolean;
+}
+
+export interface EcofyCalcBundle extends EcofyCalcRelease {
+    params: Record<string, unknown>;
+    appliances: EcofyCalcAppliance[];
+    systems: Array<Record<string, unknown>>;
+}
+
+export type EcofyCalcDecision = "submit" | "approve" | "reject" | "restore";
+
+/** The published release is cached 5 minutes; any lifecycle change drops it. */
+function dropReleaseCache() {
+    releaseCache = null;
+}
+
+export function listCalcReleases(): Promise<EcofyCalcRelease[]> {
+    return ecofyCall<EcofyCalcRelease[]>("GET", "/calculator/releases");
+}
+
+export function readCalcRelease(releaseId: string): Promise<EcofyCalcBundle> {
+    return ecofyCall<EcofyCalcBundle>("GET", `/calculator/releases/${releaseId}`);
+}
+
+export async function createCalcDraft(changeNote: string, actorName: string): Promise<EcofyCalcRelease> {
+    const r = await ecofyCall<EcofyCalcRelease>("POST", "/calculator/releases", { body: { changeNote }, actorName });
+    dropReleaseCache();
+    return r;
+}
+
+export async function patchCalcDraft(
+    releaseId: string,
+    body: { params?: Record<string, unknown>; changeNote?: string },
+    actorName: string,
+): Promise<EcofyCalcRelease> {
+    return ecofyCall<EcofyCalcRelease>("PATCH", `/calculator/releases/${releaseId}`, { body, actorName });
+}
+
+export async function putCalcAppliances(releaseId: string, items: EcofyCalcAppliance[], actorName: string): Promise<void> {
+    await ecofyCall("PUT", `/calculator/releases/${releaseId}/appliances`, { body: items, actorName });
+}
+
+/** FR-08.4 test bench: any input against any release (draft or published). A read on Ecofy's side. */
+export function runCalcTestBench(releaseId: string, input: unknown): Promise<unknown> {
+    return ecofyCall("POST", `/calculator/releases/${releaseId}/test`, { body: input, skipLedger: true });
+}
+
+const DECISION_PATH: Record<EcofyCalcDecision, string> = {
+    submit: "submit",
+    approve: "approve",
+    reject: "reject",
+    restore: "restore",
+};
+
+/** submit / approve / reject take an optional note (reject requires one); restore takes the new draft's change note. */
+export async function decideCalcRelease(
+    releaseId: string,
+    decision: EcofyCalcDecision,
+    note: string | undefined,
+    actorName: string,
+): Promise<EcofyCalcRelease> {
+    const body = decision === "restore" ? { changeNote: note } : { note: note || undefined };
+    const r = await ecofyCall<EcofyCalcRelease>("POST", `/calculator/releases/${releaseId}/${DECISION_PATH[decision]}`, {
+        body,
+        actorName,
+    });
+    dropReleaseCache();
+    return r;
+}
+
+export interface EcofyCalcImportResult {
+    imported: number;
+    rejected: Array<{ rowNo: number; code: string; reason: string }>;
+}
+
+/**
+ * FR-08.2 standard-systems import. Ecofy's import endpoint wants a committed
+ * document id, and documents belong to a case (Ecofy CONFLICTS #22): the
+ * template is uploaded as an OTHER document on the first case the integration
+ * user can see, then imported into the draft.
+ */
+export async function importCalcSystems(
+    releaseId: string,
+    file: { bytes: Buffer; fileName: string; mimeType: string },
+    replaceAll: boolean,
+    actorName: string,
+): Promise<EcofyCalcImportResult> {
+    const cases = (await ecofyCall<Array<{ id: string }>>("GET", "/cases", { query: { limit: 1 } })) ?? [];
+    const anyCase = cases[0]?.id;
+    if (!anyCase) {
+        throw new EcofyCallError(
+            "The import needs at least one Ecofy case to attach the template file to (Ecofy V1 limitation).",
+            409,
+            "NO_CASE",
+        );
+    }
+    const doc = await uploadToEcofy({ id: null, ecofy_case_id: anyCase }, { ...file, typeCode: "OTHER" }, actorName);
+    return ecofyCall<EcofyCalcImportResult>("POST", `/calculator/releases/${releaseId}/systems/import`, {
+        body: { documentId: doc.id, replaceAll },
+        actorName,
+        ecofyCaseId: anyCase,
+    });
+}
+
+// ---------------------------------------------------------------------------
 // Writes
 // ---------------------------------------------------------------------------
 
@@ -460,7 +588,8 @@ export interface EcofyUpload {
  * `quote: true` uses the EPC-quote upload slot.
  */
 export async function uploadToEcofy(
-    lead: EcofyLeadRef,
+    // `id: null` for a case that is not a CRM lead (the calculator designer's template upload).
+    lead: { id: string | null; ecofy_case_id: string },
     file: EcofyUpload,
     actorName: string,
     opts: { quote?: boolean } = {},
