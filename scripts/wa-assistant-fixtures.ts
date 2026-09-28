@@ -165,6 +165,11 @@ export function routerDeps(
         // covered by router.test.ts and scripts/verify-wa-voice.ts.
         isVoiceDisabled: () => true,
         transcribeVoice: async () => ({ kind: "failed", error: "not used in DB verification" }),
+        // Photos / PDFs / pins off for the same reason (E-311 routing: router.test.ts, scripts/_media-e2e.mts).
+        isMediaDisabled: () => true,
+        storeMedia: async () => ({ kind: "failed", error: "not used in DB verification" }),
+        hasNewerMedia: async () => false,
+        sleep: async () => {},
         hasPendingAction: async () => false,
         runTextTurn,
         log: () => {},
