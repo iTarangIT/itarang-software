@@ -4,7 +4,7 @@
 // /api/ecofy/*, React Query hooks, and the shared types the tabs render.
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import type { EcofyLeadRead, EcofyLookup } from "@/lib/ecofy/actionSchemas";
+import type { EcofyLeadRead, EcofyLookup, EpcPartnerInput } from "@/lib/ecofy/actionSchemas";
 
 export class EcofyUiError extends Error {}
 
@@ -60,6 +60,12 @@ export interface EpcPartner {
     id: string;
     name: string;
     active: boolean;
+    contactName?: string | null;
+    mobile?: string | null;
+    email?: string | null;
+    pincodes?: string[];
+    segments?: string[];
+    createdAt?: string;
 }
 export interface Financier {
     id: string;
@@ -81,6 +87,16 @@ export function useLookup<T>(what: EcofyLookup, enabled = true) {
     });
 }
 
+/** Create an EPC partner ("EPC agent") in Ecofy and refresh every picker that lists them. */
+export function useCreateEpcPartner() {
+    const qc = useQueryClient();
+    return async (input: EpcPartnerInput): Promise<EpcPartner> => {
+        const created = await ecofyPost<EpcPartner>("/api/ecofy/epc-partners", input);
+        await qc.invalidateQueries({ queryKey: ["ecofy-lookup", "epc-partners"] });
+        return created;
+    };
+}
+
 /** Invalidate everything shown for a lead after an action. */
 export function useRefreshLead(leadId: string) {
     const qc = useQueryClient();
@@ -94,10 +110,15 @@ export function runLeadAction<T = unknown>(leadId: string, body: Record<string, 
     );
 }
 
-/** datetime-local value (IST as typed) → ISO with offset, which the API needs. */
+/**
+ * `YYYY-MM-DDTHH:mm` as typed in the DateTimeField (always IST — the CRM's
+ * users and Ecofy's calendar are in Asia/Kolkata) → ISO instant for the API.
+ * The offset is written explicitly so a laptop set to another zone cannot
+ * shift a 10:00 meeting.
+ */
 export function localToIso(v: string): string | undefined {
-    if (!v) return undefined;
-    const d = new Date(v);
+    if (!v || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(v)) return undefined;
+    const d = new Date(`${v}:00+05:30`);
     return Number.isNaN(d.getTime()) ? undefined : d.toISOString();
 }
 

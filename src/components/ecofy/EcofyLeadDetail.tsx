@@ -35,6 +35,8 @@ const TABS = [
     "Assignment",
 ] as const;
 type Tab = (typeof TABS)[number];
+// Withdrawal is the Sales Head's (iTarang Admin) call: ASM / ISR do not see the tab.
+const MANAGER_ONLY_TABS: readonly Tab[] = ["Withdrawal"];
 
 export interface EcofyLeadDetailProps {
     leadId: string;
@@ -64,6 +66,7 @@ export function EcofyLeadDetail(props: EcofyLeadDetailProps) {
     const refreshLead = useRefreshLead(leadId);
     const [tab, setTab] = useState<Tab>("Current step");
     const manager = ecofyViewerKind(viewer.role) === "manager";
+    const tabs = manager ? TABS : TABS.filter((t) => !MANAGER_ONLY_TABS.includes(t));
     const c = caseQ.data;
 
     const onDone = () => {
@@ -89,7 +92,6 @@ export function EcofyLeadDetail(props: EcofyLeadDetailProps) {
                         {c?.segment && <span className="rounded bg-gray-100 px-1.5 py-0.5 text-xs font-medium text-gray-700">{c.segment}</span>}
                         <TemperatureBadge value={c?.temperature ?? local.temperature} />
                         <StageBadge value={c?.stage ?? local.stage} subStatus={c?.subStatus} />
-                        {c && <span className="text-xs text-gray-400">v{c.version}</span>}
                     </div>
                     <p className="mt-2 text-sm text-gray-600">
                         {local.assigneeName ? (
@@ -163,7 +165,7 @@ export function EcofyLeadDetail(props: EcofyLeadDetailProps) {
                 <div className="grid gap-5 lg:grid-cols-[1.4fr_1fr]">
                     <div className="min-w-0 space-y-4">
                         <nav className="flex flex-wrap gap-1">
-                            {TABS.map((t) => (
+                            {tabs.map((t) => (
                                 <button
                                     key={t}
                                     type="button"
@@ -186,7 +188,7 @@ export function EcofyLeadDetail(props: EcofyLeadDetailProps) {
                         {tab === "Financing" && <FinancingTab {...tabProps} />}
                         {tab === "Installation" && <InstallationTab {...tabProps} />}
                         {tab === "Documents" && <DocumentsTab {...tabProps} />}
-                        {tab === "Withdrawal" && <WithdrawalTab {...tabProps} />}
+                        {tab === "Withdrawal" && manager && <WithdrawalTab {...tabProps} />}
                         {tab === "Assignment" && <AssignmentsTab {...tabProps} />}
                     </div>
                     <div className="space-y-4">

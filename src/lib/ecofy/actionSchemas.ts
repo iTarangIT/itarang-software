@@ -190,3 +190,49 @@ export const ECOFY_LOOKUPS = [
     "financiers",
 ] as const;
 export type EcofyLookup = (typeof ECOFY_LOOKUPS)[number];
+
+/**
+ * A new EPC partner ("EPC agent") created from the CRM: the agent's name,
+ * phone, address and (optionally) shop name. Sales Head, ASM and ISR may all
+ * add one — the call runs as Ecofy's integration user, which is an iTarang
+ * Admin there, so Ecofy accepts it.
+ *
+ * Ecofy's master (EpcPartnerIn in m02-settings/schemas.ts) has no address
+ * column but requires ≥1 pincode and ≥1 segment, so the address must carry a
+ * 6-digit pincode — see toEcofyEpcPartner().
+ */
+export const EPC_SEGMENTS = ["RESI", "ESS", "CI"] as const;
+// A 6-digit run not inside a longer number, so a phone number in the address is never read as a pincode.
+const PINCODE_RE = /(?<!\d)[1-9][0-9]{5}(?!\d)/g;
+
+export function pincodesInAddress(address: string): string[] {
+    return [...new Set(address.match(PINCODE_RE) ?? [])];
+}
+
+export const epcPartnerInputSchema = z.object({
+    name: z.string().trim().min(2, "at least 2 characters").max(120),
+    phone: z
+        .string()
+        .trim()
+        .regex(/^[6-9][0-9]{9}$/, "10-digit Indian mobile, no +91"),
+    address: z
+        .string()
+        .trim()
+        .min(6, "too short")
+        .max(500)
+        .refine((a) => pincodesInAddress(a).length > 0, { message: "must include a 6-digit pincode" }),
+    shopName: z.string().trim().max(120).optional(),
+});
+export type EpcPartnerInput = z.infer<typeof epcPartnerInputSchema>;
+
+/** What Ecofy stores: shop (or the agent) as the partner name, the agent as contact, pincodes from the address, every segment. */
+export function toEcofyEpcPartner(input: EpcPartnerInput) {
+    return {
+        name: input.shopName || input.name,
+        contactName: input.name,
+        mobile: input.phone,
+        pincodes: pincodesInAddress(input.address),
+        segments: [...EPC_SEGMENTS],
+        active: true,
+    };
+}

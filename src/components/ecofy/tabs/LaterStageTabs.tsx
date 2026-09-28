@@ -7,8 +7,9 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ECOFY_ROLE_LABEL } from "@/lib/ecofy/access";
 import { formatIst, inr } from "../badges";
-import { ecofyGet, ecofyUpload, todayIso, useLeadData, useLookup, type EpcPartner, type ListItem } from "../client";
-import { Btn, Chip, Empty, ErrorNote, Field, FormBox, inputCls, KV, Loading, Panel } from "../ui";
+import { ecofyGet, ecofyUpload, todayIso, useLeadData, useLookup, type ListItem } from "../client";
+import { EpcPartnerPicker } from "../EpcPartnerPicker";
+import { Btn, Chip, Empty, ErrorNote, Field, FormBox, inputCls, KV, Loading, Panel, fileInputCls } from "../ui";
 import { pretty, useCan, useRunner, type TabProps } from "./shared";
 
 type Decision = {
@@ -228,7 +229,6 @@ export function InstallationTab(p: TabProps) {
     const can = useCan(p);
     const { busy, run } = useRunner(leadId, p.onDone);
     const q = useLeadData<Installation>(leadId, "installation");
-    const epcs = useLookup<EpcPartner>("epc-partners");
     const [epc, setEpc] = useState("");
     const [scheduledOn, setScheduledOn] = useState("");
     const [u, setU] = useState({ status: "", onDate: todayIso(), note: "", stopReason: "", ack: false });
@@ -239,19 +239,8 @@ export function InstallationTab(p: TabProps) {
             {q.isLoading ? <Loading /> : q.error ? <ErrorNote error={q.error} /> : null}
             {!q.isLoading && !inst && !can("create_installation") && <Empty>No installation yet — it is created after the File (S6).</Empty>}
             {!inst && can("create_installation") && (
-                <div className="flex flex-wrap items-end gap-2 rounded-lg bg-gray-50 p-3">
-                    <Field label="EPC partner">
-                        <select className={inputCls} value={epc} onChange={(e) => setEpc(e.target.value)}>
-                            <option value="">—</option>
-                            {(epcs.data ?? [])
-                                .filter((e) => e.active)
-                                .map((e) => (
-                                    <option key={e.id} value={e.id}>
-                                        {e.name}
-                                    </option>
-                                ))}
-                        </select>
-                    </Field>
+                <div className="grid grid-cols-1 items-end gap-2 rounded-lg bg-gray-50 p-3 sm:grid-cols-2">
+                    <EpcPartnerPicker value={epc} onChange={setEpc} />
                     <Field label="Scheduled on (optional)">
                         <input type="date" className={inputCls} value={scheduledOn} onChange={(e) => setScheduledOn(e.target.value)} />
                     </Field>
@@ -372,7 +361,7 @@ export function DocumentsTab(p: TabProps) {
     return (
         <Panel title="Documents & recordings" right="PDF, JPG, PNG, MP3, M4A, WAV · 25 MB · no KYC types">
             {can("upload_document") && (
-                <div className="mb-4 flex flex-wrap items-end gap-3 rounded-lg bg-gray-50 p-3">
+                <div className="mb-4 grid grid-cols-1 items-start gap-3 rounded-lg bg-gray-50 p-3 sm:grid-cols-2">
                     <Field label="Type">
                         <select className={inputCls} value={typeCode} onChange={(e) => setTypeCode(e.target.value)}>
                             {(types.data ?? [])
@@ -385,12 +374,14 @@ export function DocumentsTab(p: TabProps) {
                             {!types.data?.length && <option value="SITE_PHOTO">Site photo</option>}
                         </select>
                     </Field>
+                    <Field label="File">
+                        <input type="file" className={fileInputCls} disabled={busy || (typeCode === "CALL_RECORDING" && !consent)} onChange={upload} />
+                    </Field>
                     {typeCode === "CALL_RECORDING" && (
-                        <label className="flex items-center gap-1 text-xs">
+                        <label className="flex items-center gap-1 text-xs sm:col-span-2">
                             <input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} /> Customer consented to recording (deleted after 60 days)
                         </label>
                     )}
-                    <input type="file" className="text-sm" disabled={busy || (typeCode === "CALL_RECORDING" && !consent)} onChange={upload} />
                 </div>
             )}
             {q.isLoading ? <Loading /> : q.error ? <ErrorNote error={q.error} /> : null}
