@@ -321,7 +321,9 @@ export async function notifyEcofyInbound(p: {
     const spec =
         to === "CLOSED"
             ? { type: "ecofy.lead_closed", title: `Ecofy closed the lead${p.reason ? ` (${p.reason})` : ""}` }
-            : to === "S0"
+            : to === "S0" && p.previousStage === "CLOSED"
+              ? { type: "ecofy.lead_reopened", title: `Ecofy reopened the lead${p.reason ? ` (${p.reason})` : ""}` }
+              : to === "S0"
               ? { type: "ecofy.lead_returned", title: `Lead went back to Ecofy${p.reason ? ` (${p.reason})` : ""}` }
               : to === "S6" || to === "S7" || to === "S8"
                 ? { type: "ecofy.financing_updated", title: `Ecofy moved the lead to ${stageName(to)}` }

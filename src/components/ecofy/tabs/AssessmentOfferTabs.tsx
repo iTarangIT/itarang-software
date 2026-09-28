@@ -2,10 +2,13 @@
 
 // Assessment (S3) and Offer (S4–S5): eligibility, EPC quotes, offer, OTP, File.
 
+import Link from "next/link";
 import { useState } from "react";
+import { ecofyCalculatorHref } from "@/lib/ecofy/access";
 import { formatIst, inr } from "../badges";
-import { ecofyGet, ecofyUpload, todayIso, useLeadData, useLookup, type EpcPartner, type Financier } from "../client";
-import { Btn, Chip, Empty, ErrorNote, Field, FormBox, inputCls, KV, Loading, Panel } from "../ui";
+import { ecofyGet, ecofyUpload, todayIso, useLeadData, useLookup, type Financier } from "../client";
+import { EpcPartnerPicker } from "../EpcPartnerPicker";
+import { Btn, Chip, Empty, ErrorNote, Field, FormBox, inputCls, KV, Loading, Panel, fileInputCls } from "../ui";
 import { pretty, useCan, useRunner, type TabProps } from "./shared";
 
 type Assessment = {
@@ -21,6 +24,14 @@ type Assessment = {
     result?: { steps?: Record<string, number | null>; texts?: { message?: string } };
 };
 
+/** The calculator screen for this viewer's role, prefilled from the lead. */
+function calculatorHref(p: Pick<TabProps, "viewer" | "c">): string {
+    const q = new URLSearchParams({ segment: p.c.segment });
+    if (p.c.productInterest) q.set("productInterest", p.c.productInterest);
+    if (p.c.sanctionedLoadKw != null) q.set("sanctionedLoadKw", String(p.c.sanctionedLoadKw));
+    return `${ecofyCalculatorHref(p.viewer.role)}?${q.toString()}`;
+}
+
 export function AssessmentTab(p: TabProps) {
     const q = useLeadData<Assessment[]>(p.leadId, "assessments");
     const can = useCan(p);
@@ -34,8 +45,12 @@ export function AssessmentTab(p: TabProps) {
             {can("save_assessment") && (
                 <Panel title="New assessment" right={p.c.segment === "CI" ? "C&I: EPC sizing required" : `latest version ${latest?.version ?? 0}`}>
                     <p className="mb-3 text-xs text-gray-500">
-                        Record a manual or EPC sizing. The calculator-driven assessment is available in Ecofy itself.
-                        No size at all is saved as “pending technical data”.
+                        Record a manual or EPC sizing. To size it first, open the{" "}
+                        <Link href={calculatorHref(p)} className="text-blue-700 hover:underline">
+                            Ecofy calculator
+                        </Link>{" "}
+                        (quick estimates are not stored; the calculator-driven assessment itself is saved in Ecofy). No size
+                        at all is saved as “pending technical data”.
                     </p>
                     <FormBox
                         onSubmit={() =>
@@ -155,7 +170,8 @@ export function OfferTab(p: TabProps) {
     const quotes = useLeadData<Quote[]>(leadId, "quotes");
     const offers = useLeadData<Offer[]>(leadId, "offers");
     const file = useLeadData<FileRec>(leadId, "file");
-    const epcs = useLookup<EpcPartner>("epc-partners");
+    const reacceptancePending = c.stage === "S6" && c.subStatus === "REACCEPTANCE_PENDING";
+    const reacceptance = useLeadData<Otp | null>(leadId, "reacceptance", reacceptancePending && can("verify_otp"));
     const financiers = useLookup<Financier>("financiers", can("route_financier"));
     const [financierId, setFinancierId] = useState("");
     const [pdf, setPdf] = useState<File | null>(null);
@@ -182,7 +198,6 @@ export function OfferTab(p: TabProps) {
     const active = quotes.data?.find((q) => q.status === "ACTIVE" || q.status === "ACCEPTED");
     const liveOffer = offers.data?.find((o) => ["DRAFT", "SENT", "ACCEPTED"].includes(o.status));
     const num = (v: string) => (v ? Number(v) : undefined);
-    const activeEpcs = (epcs.data ?? []).filter((e) => e.active);
 
     async function uploadQuote() {
         if (!pdf) return;
@@ -250,17 +265,8 @@ export function OfferTab(p: TabProps) {
 
             <Panel title="EPC quotes" right="the price is the EPC partner's quote">
                 {can("quote_request") && (
-                    <div className="mb-4 flex flex-wrap items-end gap-2 rounded-lg bg-gray-50 p-3">
-                        <Field label="Log a quote request to">
-                            <select className={inputCls} value={qr.epcPartnerId} onChange={(e) => setQr((x) => ({ ...x, epcPartnerId: e.target.value }))}>
-                                <option value="">EPC partner…</option>
-                                {activeEpcs.map((e) => (
-                                    <option key={e.id} value={e.id}>
-                                        {e.name}
-                                    </option>
-                                ))}
-                            </select>
-                        </Field>
+                    <div className="mb-4 grid grid-cols-1 items-end gap-2 rounded-lg bg-gray-50 p-3 sm:grid-cols-2">
+                        <EpcPartnerPicker label="Log a quote request to" placeholder="EPC agent…" value={qr.epcPartnerId} onChange={(id) => setQr((x) => ({ ...x, epcPartnerId: id }))} />
                         <Field label="Channel">
                             <select className={inputCls} value={qr.channel} onChange={(e) => setQr((x) => ({ ...x, channel: e.target.value }))}>
                                 {["EMAIL", "WHATSAPP", "PHONE"].map((ch) => (
@@ -277,16 +283,7 @@ export function OfferTab(p: TabProps) {
                 )}
                 {can("upload_quote") && (
                     <FormBox onSubmit={uploadQuote}>
-                        <Field label="EPC partner">
-                            <select required className={inputCls} value={qf.epcPartnerId} onChange={(e) => setQf((x) => ({ ...x, epcPartnerId: e.target.value }))}>
-                                <option value="">—</option>
-                                {activeEpcs.map((e) => (
-                                    <option key={e.id} value={e.id}>
-                                        {e.name}
-                                    </option>
-                                ))}
-                            </select>
-                        </Field>
+                        <EpcPartnerPicker required value={qf.epcPartnerId} onChange={(id) => setQf((x) => ({ ...x, epcPartnerId: id }))} />
                         <Field label="Answers assessment">
                             <select className={inputCls} value={qf.assessmentId || latestAssessment?.id || ""} onChange={(e) => setQf((x) => ({ ...x, assessmentId: e.target.value }))}>
                                 {(assessments.data ?? []).map((a) => (
@@ -297,7 +294,7 @@ export function OfferTab(p: TabProps) {
                             </select>
                         </Field>
                         <Field label="Quote PDF" wide>
-                            <input type="file" accept="application/pdf" className="text-sm" onChange={(e) => setPdf(e.target.files?.[0] ?? null)} />
+                            <input type="file" accept="application/pdf" className={fileInputCls} onChange={(e) => setPdf(e.target.files?.[0] ?? null)} />
                         </Field>
                         <Field label="System description" wide>
                             <input required minLength={3} className={inputCls} value={qf.systemDesc} onChange={(e) => setQf((x) => ({ ...x, systemDesc: e.target.value }))} />
@@ -434,7 +431,43 @@ export function OfferTab(p: TabProps) {
                                 )}
                             </div>
                         )}
-                        {can("verify_otp") && (
+                        {reacceptancePending && can("verify_otp") && (
+                            <div className="flex flex-wrap items-end gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3">
+                                <div className="w-full text-xs text-amber-900">
+                                    <b>Re-acceptance OTP.</b> The sanction is below the accepted total. Ecofy sends the customer an OTP with the revised amounts; enter the code the customer reads out to confirm the revised terms (S6 → S7).
+                                </div>
+                                {reacceptance.data ? (
+                                    <>
+                                        <span className="text-xs text-gray-500">
+                                            Sent to {reacceptance.data.maskedMobile}, expires {formatIst(reacceptance.data.expiresAt)} · {reacceptance.data.attemptsRemaining} attempts
+                                        </span>
+                                        <Field label="Customer's OTP" hint="6 digits · 5 attempts · 10 minutes">
+                                            <input
+                                                className={`${inputCls} w-40 text-center tracking-[0.3em]`}
+                                                maxLength={6}
+                                                value={code}
+                                                onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
+                                            />
+                                        </Field>
+                                        <Btn
+                                            variant="success"
+                                            disabled={busy || code.length !== 6}
+                                            onClick={async () => {
+                                                const r = await run("Re-accepted — revised terms confirmed", { action: "verify_otp", challengeId: reacceptance.data!.challengeId, code });
+                                                if (r !== undefined) setCode("");
+                                            }}
+                                        >
+                                            Verify re-acceptance
+                                        </Btn>
+                                    </>
+                                ) : (
+                                    <span className="text-xs text-gray-500">
+                                        {reacceptance.isLoading ? "Checking for a live OTP…" : "No live re-acceptance OTP yet — Ecofy Admin triggers it from the case's Financing tab in Ecofy."}
+                                    </span>
+                                )}
+                            </div>
+                        )}
+                        {!reacceptancePending && can("verify_otp") && (
                             <div className="flex flex-wrap items-end gap-2">
                                 <Field label="Customer's OTP" hint="6 digits · 5 attempts · 10 minutes">
                                     <input

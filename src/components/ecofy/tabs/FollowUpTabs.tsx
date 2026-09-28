@@ -5,8 +5,9 @@
 import { useState } from "react";
 import { ECOFY_CALL_OUTCOMES } from "@/lib/ecofy/access";
 import { formatIst } from "../badges";
-import { localToIso, useLeadData, useLookup, type EpcPartner, type ListItem } from "../client";
-import { Btn, Chip, Empty, ErrorNote, Field, FormBox, inputCls, KV, Loading, Panel } from "../ui";
+import { localToIso, useLeadData, useLookup, type ListItem } from "../client";
+import { EpcPartnerPicker } from "../EpcPartnerPicker";
+import { Btn, Chip, DateTimeField, Empty, ErrorNote, Field, FormBox, inputCls, KV, Loading, Panel } from "../ui";
 import { useCan, useRunner, type TabProps } from "./shared";
 
 type TimelineItem = { at: string; kind: string; title: string; detail?: Record<string, unknown>; actor: { fullName: string; role: string | null } | null };
@@ -84,15 +85,13 @@ export function ActivitiesTab(p: TabProps) {
                         </Field>
                     )}
                     {(f.type === "FOLLOW_UP" || f.type === "CALL") && (
-                        <Field label={f.type === "FOLLOW_UP" ? "Follow-up at (mandatory)" : "Next follow-up"} hint="You get a reminder when it is due.">
-                            <input
-                                type="datetime-local"
-                                className={inputCls}
-                                value={f.nextFollowUpAt}
-                                required={f.type === "FOLLOW_UP"}
-                                onChange={(e) => setF((x) => ({ ...x, nextFollowUpAt: e.target.value }))}
-                            />
-                        </Field>
+                        <DateTimeField
+                            label={f.type === "FOLLOW_UP" ? "Follow-up at (mandatory)" : "Next follow-up"}
+                            hint="You get a reminder when it is due."
+                            value={f.nextFollowUpAt}
+                            required={f.type === "FOLLOW_UP"}
+                            onChange={(v) => setF((x) => ({ ...x, nextFollowUpAt: v }))}
+                        />
                     )}
                     <Field label="Note" wide>
                         <textarea className={inputCls} rows={2} value={f.note} onChange={(e) => setF((x) => ({ ...x, note: e.target.value }))} />
@@ -149,7 +148,6 @@ export function AppointmentsTab(p: TabProps) {
     const q = useLeadData<Appointment[]>(p.leadId, "appointments");
     const can = useCan(p);
     const types = useLookup<ListItem>("meeting_type");
-    const epcs = useLookup<EpcPartner>("epc-partners");
     const { busy, run } = useRunner(p.leadId, p.onDone);
     const [f, setF] = useState({ meetingType: "PHONE", scheduledAt: "", bookingRemarks: "", epcPartnerId: "" });
     const [act, setAct] = useState<Record<string, { actualAt?: string; meetingRemarks?: string; outcomeReason?: string; scheduledAt?: string; epcFeedback?: string }>>({});
@@ -192,22 +190,15 @@ export function AppointmentsTab(p: TabProps) {
                             ))}
                         </select>
                     </Field>
-                    <Field label="Scheduled at" hint="You get a reminder an hour before.">
-                        <input type="datetime-local" required className={inputCls} value={f.scheduledAt} onChange={(e) => setF((x) => ({ ...x, scheduledAt: e.target.value }))} />
-                    </Field>
+                    <DateTimeField
+                        label="Scheduled at"
+                        hint="You get a reminder an hour before."
+                        required
+                        value={f.scheduledAt}
+                        onChange={(v) => setF((x) => ({ ...x, scheduledAt: v }))}
+                    />
                     {f.meetingType === "EPC_VISIT" && (
-                        <Field label="EPC partner">
-                            <select required className={inputCls} value={f.epcPartnerId} onChange={(e) => setF((x) => ({ ...x, epcPartnerId: e.target.value }))}>
-                                <option value="">—</option>
-                                {(epcs.data ?? [])
-                                    .filter((e) => e.active)
-                                    .map((e) => (
-                                        <option key={e.id} value={e.id}>
-                                            {e.name}
-                                        </option>
-                                    ))}
-                            </select>
-                        </Field>
+                        <EpcPartnerPicker required value={f.epcPartnerId} onChange={(id) => setF((x) => ({ ...x, epcPartnerId: id }))} />
                     )}
                     <Field label="Booking remarks" wide={f.meetingType !== "EPC_VISIT"}>
                         <input className={inputCls} value={f.bookingRemarks} onChange={(e) => setF((x) => ({ ...x, bookingRemarks: e.target.value }))} />
@@ -241,9 +232,7 @@ export function AppointmentsTab(p: TabProps) {
                         />
                         {can("update_appointment") && a.status === "SCHEDULED" && (
                             <div className="mt-3 grid gap-2 border-t border-gray-100 pt-3 sm:grid-cols-2">
-                                <Field label="Actual date & time">
-                                    <input type="datetime-local" className={inputCls} onChange={(e) => setA(a.id, "actualAt", e.target.value)} />
-                                </Field>
+                                <DateTimeField label="Actual date & time" value={act[a.id]?.actualAt ?? ""} onChange={(v) => setA(a.id, "actualAt", v)} />
                                 <Field label="Meeting remarks (to complete)">
                                     <input className={inputCls} onChange={(e) => setA(a.id, "meetingRemarks", e.target.value)} />
                                 </Field>
@@ -255,9 +244,7 @@ export function AppointmentsTab(p: TabProps) {
                                 <Field label="No-show / cancel reason">
                                     <input className={inputCls} onChange={(e) => setA(a.id, "outcomeReason", e.target.value)} />
                                 </Field>
-                                <Field label="New time (to reschedule)">
-                                    <input type="datetime-local" className={inputCls} onChange={(e) => setA(a.id, "scheduledAt", e.target.value)} />
-                                </Field>
+                                <DateTimeField label="New time (to reschedule)" value={act[a.id]?.scheduledAt ?? ""} onChange={(v) => setA(a.id, "scheduledAt", v)} />
                                 <div className="flex flex-wrap gap-2 sm:col-span-2">
                                     <Btn variant="success" disabled={busy} onClick={() => update(a.id, "COMPLETE")}>
                                         Mark completed
