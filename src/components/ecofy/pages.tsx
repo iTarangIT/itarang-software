@@ -50,7 +50,7 @@ export async function EcofyDetailPage(p: { roles: string[]; id: string; backHref
         throw err;
     }
     const [assignee] = lead.assigned_to_user_id
-        ? await db.select({ name: users.name }).from(users).where(eq(users.id, lead.assigned_to_user_id)).limit(1)
+        ? await db.select({ name: users.name, role: users.role }).from(users).where(eq(users.id, lead.assigned_to_user_id)).limit(1)
         : [];
 
     return (
@@ -66,6 +66,7 @@ export async function EcofyDetailPage(p: { roles: string[]; id: string; backHref
                 temperature: lead.temperature,
                 assignedTo: lead.assigned_to_user_id,
                 assigneeName: assignee?.name ?? null,
+                assigneeRole: assignee?.role ?? null,
                 assignedAt: lead.assigned_at?.toISOString() ?? null,
                 nextFollowUpAt: lead.next_follow_up_at?.toISOString() ?? null,
                 nextAppointmentAt: lead.next_appointment_at?.toISOString() ?? null,

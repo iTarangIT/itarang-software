@@ -52,29 +52,63 @@ export const STAGE_RAIL = [
     { stage: "S8", label: "Asset", owner: "Ecofy" },
 ] as const;
 
-export function StageRail({ stage }: { stage: string | null }) {
-    const idx = STAGE_RAIL.findIndex((s) => s.stage === stage);
+/**
+ * The 9-stage rail. `tone` colours the current node by whose turn it is
+ * (green = the viewer acts, amber = waiting on another party, gray = done) and
+ * `partyLabel` is pinned under it ("You are here" / "Pending: Ecofy"), so the
+ * current step is never in doubt. Completed nodes stay ✓, the connector is
+ * solid up to the current node and dashed after it.
+ */
+export function StageRail({
+    stage,
+    tone = "action",
+    partyLabel,
+}: {
+    stage: string | null;
+    tone?: "action" | "waiting" | "done";
+    partyLabel?: string;
+}) {
+    const idx = stage === "CLOSED" ? STAGE_RAIL.length : STAGE_RAIL.findIndex((s) => s.stage === stage);
+    const currentNode = {
+        action: "bg-gradient-to-br from-indigo-600 to-violet-600 text-white ring-4 ring-indigo-100",
+        waiting: "bg-amber-500 text-white ring-4 ring-amber-100",
+        done: "bg-gray-700 text-white ring-4 ring-gray-200",
+    }[tone];
+    const currentPill = {
+        action: "bg-gradient-to-r from-indigo-600 to-violet-600 text-white",
+        waiting: "bg-amber-500 text-white",
+        done: "bg-gray-700 text-white",
+    }[tone];
     return (
-        <ol className="grid grid-cols-3 gap-2 sm:grid-cols-5 lg:grid-cols-9">
+        <ol className="grid grid-cols-3 gap-y-3 sm:grid-cols-5 lg:grid-cols-9">
             {STAGE_RAIL.map((s, i) => {
                 const done = idx > i;
                 const current = idx === i;
                 return (
-                    <li key={s.stage} className="flex flex-col items-center text-center">
+                    <li key={s.stage} className="relative flex flex-col items-center text-center">
+                        {/* connector to the previous node */}
+                        {i > 0 && (
+                            <span
+                                aria-hidden
+                                className={`absolute left-0 right-1/2 top-3.5 z-0 border-t-2 ${
+                                    done || current ? "border-gray-900" : "border-dashed border-gray-300"
+                                }`}
+                            />
+                        )}
+                        {i < STAGE_RAIL.length - 1 && (
+                            <span
+                                aria-hidden
+                                className={`absolute left-1/2 right-0 top-3.5 z-0 border-t-2 ${done ? "border-gray-900" : "border-dashed border-gray-300"}`}
+                            />
+                        )}
                         <span
-                            className={`flex h-7 w-7 items-center justify-center rounded-full text-xs font-semibold ${
-                                current
-                                    ? "bg-sky-600 text-white ring-4 ring-sky-100"
-                                    : done
-                                      ? "bg-gray-900 text-white"
-                                      : "border border-gray-300 bg-white text-gray-500"
+                            className={`relative z-[1] flex h-7 w-7 items-center justify-center rounded-full text-xs font-semibold ${
+                                current ? currentNode : done ? "bg-gray-900 text-white" : "border border-gray-300 bg-white text-gray-500"
                             }`}
                         >
                             {done ? "✓" : i}
                         </span>
-                        <span className={`mt-1 text-[11px] ${current ? "font-semibold text-gray-900" : "text-gray-600"}`}>
-                            {s.label}
-                        </span>
+                        <span className={`mt-1 text-[11px] ${current ? "font-semibold text-gray-900" : "text-gray-600"}`}>{s.label}</span>
                         <span
                             className={`text-[10px] font-medium uppercase tracking-wide ${
                                 s.owner === "iTarang" ? "text-sky-600" : s.owner === "EPC" ? "text-violet-600" : "text-emerald-600"
@@ -82,6 +116,9 @@ export function StageRail({ stage }: { stage: string | null }) {
                         >
                             {s.owner}
                         </span>
+                        {current && partyLabel && (
+                            <span className={`mt-1 rounded-full px-2 py-0.5 text-[10px] font-semibold ${currentPill}`}>{partyLabel}</span>
+                        )}
                     </li>
                 );
             })}

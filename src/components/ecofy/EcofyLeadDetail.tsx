@@ -4,36 +4,27 @@
 // Sales Head (/sales-head/ecofy/leads/[id]) and the assigned ASM / ISR
 // (/asm/ecofy-leads/[id], /inside-sales/ecofy-leads/[id]); what each can DO is
 // decided by src/lib/ecofy/access.ts, and Ecofy re-checks every gate.
+//
+// Layout: header → CurrentStepCard (always visible: stage rail, whose turn it
+// is, the one form needed now) → history tabs + customer / lead facts.
 
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, ExternalLink, RefreshCw } from "lucide-react";
 import { ecofyViewerKind } from "@/lib/ecofy/access";
-import { formatIst, inr, StageBadge, StageRail, TemperatureBadge } from "./badges";
+import { formatIst, inr, StageBadge, TemperatureBadge } from "./badges";
 import { useLeadData, useRefreshLead, type EcofyCase } from "./client";
-import { EcofyAssignBar } from "./EcofyAssignBar";
+import { CurrentStepCard } from "./CurrentStepCard";
 import { ErrorNote, KV, Loading, Panel } from "./ui";
-import { CurrentStepTab } from "./tabs/CurrentStepTab";
 import { ActivitiesTab, AppointmentsTab, TimelineTab } from "./tabs/FollowUpTabs";
 import { AssessmentTab, OfferTab } from "./tabs/AssessmentOfferTabs";
-import { AssignmentsTab, DocumentsTab, FinancingTab, InstallationTab, WithdrawalTab } from "./tabs/LaterStageTabs";
+import { DocumentsTab, FinancingTab, InstallationTab, WithdrawalTab } from "./tabs/LaterStageTabs";
 import type { TabProps } from "./tabs/shared";
 import { CrmWorkLog, LocalActivityList, useLocalActivities } from "./CrmWorkLog";
 
-const TABS = [
-    "Current step",
-    "Timeline",
-    "Activities",
-    "Appointments",
-    "Assessment",
-    "Offer",
-    "Financing",
-    "Installation",
-    "Documents",
-    "Withdrawal",
-    "Assignment",
-] as const;
+// History and full views. The current step is not a tab — it is the card above.
+const TABS = ["Timeline", "Activities", "Appointments", "Assessment", "Offer", "Financing", "Installation", "Documents", "Withdrawal"] as const;
 type Tab = (typeof TABS)[number];
 // Withdrawal is the Sales Head's (iTarang Admin) call: ASM / ISR do not see the tab.
 const MANAGER_ONLY_TABS: readonly Tab[] = ["Withdrawal"];
@@ -51,6 +42,7 @@ export interface EcofyLeadDetailProps {
         temperature: string | null;
         assignedTo: string | null;
         assigneeName: string | null;
+        assigneeRole: string | null;
         assignedAt: string | null;
         nextFollowUpAt: string | null;
         nextAppointmentAt: string | null;
@@ -64,7 +56,7 @@ export function EcofyLeadDetail(props: EcofyLeadDetailProps) {
     const router = useRouter();
     const caseQ = useLeadData<EcofyCase>(leadId, "case");
     const refreshLead = useRefreshLead(leadId);
-    const [tab, setTab] = useState<Tab>("Current step");
+    const [tab, setTab] = useState<Tab>("Timeline");
     const manager = ecofyViewerKind(viewer.role) === "manager";
     const tabs = manager ? TABS : TABS.filter((t) => !MANAGER_ONLY_TABS.includes(t));
     const c = caseQ.data;
@@ -126,25 +118,22 @@ export function EcofyLeadDetail(props: EcofyLeadDetailProps) {
                 </div>
             </header>
 
-            {manager && (c?.stage ?? local.stage) && !["S0", "CLOSED"].includes((c?.stage ?? local.stage) as string) && (
-                <Panel title={local.assignedTo ? "Reassign" : "Assign to an ASM or ISR"} right="the owner works the lead from their dashboard">
-                    <EcofyAssignBar leadIds={[leadId]} reassign={Boolean(local.assignedTo)} compact onDone={onDone} />
-                </Panel>
+            {caseQ.isLoading && <Loading />}
+
+            {(c || caseQ.error) && (
+                <CurrentStepCard
+                    leadId={leadId}
+                    c={c ?? null}
+                    localStage={local.stage}
+                    viewer={viewer}
+                    assignedTo={local.assignedTo}
+                    assigneeName={local.assigneeName}
+                    assigneeRole={local.assigneeRole}
+                    assignedAt={local.assignedAt}
+                    onDone={onDone}
+                />
             )}
 
-            <Panel
-                title="Case timeline"
-                right={c ? `in stage ${c.ageing.inStageWorkingHours} wh · open ${c.ageing.openWorkingHours} wh` : undefined}
-            >
-                <StageRail stage={c?.stage ?? local.stage} />
-                {c?.stage === "CLOSED" && (
-                    <p className="mt-3 rounded-lg bg-amber-50 p-2 text-sm text-amber-900">
-                        Closed: {c.closureReason} {c.closureNote ? `— ${c.closureNote}` : ""} on {formatIst(c.closedAt)}
-                    </p>
-                )}
-            </Panel>
-
-            {caseQ.isLoading && <Loading />}
             {caseQ.error && (
                 <div className="space-y-4">
                     <ErrorNote error={caseQ.error} />
@@ -164,7 +153,7 @@ export function EcofyLeadDetail(props: EcofyLeadDetailProps) {
             {c && tabProps && (
                 <div className="grid gap-5 lg:grid-cols-[1.4fr_1fr]">
                     <div className="min-w-0 space-y-4">
-                        <nav className="flex flex-wrap gap-1">
+                        <nav className="flex flex-wrap gap-1" aria-label="History">
                             {tabs.map((t) => (
                                 <button
                                     key={t}
@@ -179,7 +168,6 @@ export function EcofyLeadDetail(props: EcofyLeadDetailProps) {
                             ))}
                         </nav>
                         <PendingCrmEntries leadId={leadId} />
-                        {tab === "Current step" && <CurrentStepTab {...tabProps} />}
                         {tab === "Timeline" && <TimelineTab {...tabProps} />}
                         {tab === "Activities" && <ActivitiesTab {...tabProps} />}
                         {tab === "Appointments" && <AppointmentsTab {...tabProps} />}
@@ -189,7 +177,6 @@ export function EcofyLeadDetail(props: EcofyLeadDetailProps) {
                         {tab === "Installation" && <InstallationTab {...tabProps} />}
                         {tab === "Documents" && <DocumentsTab {...tabProps} />}
                         {tab === "Withdrawal" && manager && <WithdrawalTab {...tabProps} />}
-                        {tab === "Assignment" && <AssignmentsTab {...tabProps} />}
                     </div>
                     <div className="space-y-4">
                         <Panel title="Customer">
