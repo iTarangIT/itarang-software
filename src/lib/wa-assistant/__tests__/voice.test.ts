@@ -1,6 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 import { buildTranscriptionPrompt, cleanTerm, staticVocab, VOCAB_LIMITS } from "../voice/prompt";
-import { cleanTranscript, MAX_VOICE_BYTES, normalizeAudioMime, transcribeVoice } from "../voice/transcribe";
+import {
+    cleanTranscript,
+    hedgeTranscription,
+    MAX_VOICE_BYTES,
+    normalizeAudioMime,
+    OPENROUTER_CHAT_URL,
+    transcribeVoice,
+    transcribeWithOpenRouter,
+    type TranscribeOutcome,
+} from "../voice/transcribe";
 
 const AUDIO = Buffer.from([0x4f, 0x67, 0x67, 0x53, 1, 2, 3]);
 
@@ -163,5 +172,86 @@ describe("transcribeVoice", () => {
         expect(await transcribeVoice({ ...base, bytes: Buffer.alloc(MAX_VOICE_BYTES + 1), fetchImpl: g.fn })).toEqual({ kind: "too_long" });
         expect(await transcribeVoice({ ...base, mimeType: "audio/amr", fetchImpl: g.fn })).toEqual({ kind: "unsupported", mimeType: "audio/amr" });
         expect(g.raw).not.toHaveBeenCalled();
+    });
+});
+
+describe("transcribeWithOpenRouter", () => {
+    const orBase = { bytes: AUDIO, mimeType: "audio/ogg; codecs=opus", apiKey: "or-test", model: "google/gemini-3.6-flash", sleep: async () => {} };
+    const reply = (content: string, status = 200) => new Response(JSON.stringify({ choices: [{ message: { content } }] }), { status });
+
+    it("sends the audio as input_audio with the same prompt, a strict JSON schema and the key as a bearer token", async () => {
+        const fn = vi.fn(async (_url: string, _init: RequestInit) => reply(JSON.stringify({ transcript: "Mujhe mera queue dikhao.", has_speech: true })));
+        const r = await transcribeWithOpenRouter({ ...orBase, fetchImpl: fn as unknown as typeof fetch });
+        expect(r).toEqual({ kind: "ok", text: "Mujhe mera queue dikhao." });
+        const [url, init] = fn.mock.calls[0];
+        expect(url).toBe(OPENROUTER_CHAT_URL);
+        expect(new Headers(init.headers).get("authorization")).toBe("Bearer or-test");
+        const body = JSON.parse(String(init.body));
+        expect(body.model).toBe("google/gemini-3.6-flash");
+        expect(body.messages[0].content[0]).toEqual({ type: "input_audio", input_audio: { data: AUDIO.toString("base64"), format: "ogg" } });
+        expect(body.messages[0].content[1].text).toBe(buildTranscriptionPrompt());
+        expect(body.response_format.json_schema.strict).toBe(true);
+    });
+
+    it("no speech / malformed / 400 / no key", async () => {
+        const one = (res: Response) => vi.fn(async () => res) as unknown as typeof fetch;
+        expect(await transcribeWithOpenRouter({ ...orBase, fetchImpl: one(reply(JSON.stringify({ transcript: "", has_speech: false }))) })).toEqual({ kind: "no_speech" });
+        expect(await transcribeWithOpenRouter({ ...orBase, fetchImpl: one(reply("not json")) })).toEqual({ kind: "failed", error: "openrouter_unparseable_json" });
+        const bad = new Response(JSON.stringify({ error: { message: "bad model" } }), { status: 400 });
+        expect(await transcribeWithOpenRouter({ ...orBase, fetchImpl: one(bad) })).toEqual({ kind: "failed", error: "bad model" });
+        expect(await transcribeWithOpenRouter({ ...orBase, apiKey: null })).toMatchObject({ kind: "failed" });
+    });
+
+    it("a stalled request is cut off and retried once", async () => {
+        let n = 0;
+        const fn = vi.fn(async (_url: string, init: RequestInit) =>
+            n++ === 0
+                ? new Promise<Response>((_, reject) => init.signal!.addEventListener("abort", () => reject(new Error("aborted"))))
+                : reply(JSON.stringify({ transcript: "ok", has_speech: true })),
+        );
+        expect(await transcribeWithOpenRouter({ ...orBase, fetchImpl: fn as unknown as typeof fetch, attemptTimeoutMs: 20 })).toEqual({ kind: "ok", text: "ok" });
+        expect(fn).toHaveBeenCalledTimes(2);
+    });
+});
+
+describe("hedgeTranscription", () => {
+    const ok = (text: string, ms = 0) => vi.fn(async (): Promise<TranscribeOutcome> => { await new Promise((r) => setTimeout(r, ms)); return { kind: "ok", text }; });
+    const stall = () => vi.fn((signal: AbortSignal) => new Promise<TranscribeOutcome>((resolve) => signal.addEventListener("abort", () => resolve({ kind: "failed", error: "cancelled" }))));
+    const fail = (error: string) => vi.fn(async (): Promise<TranscribeOutcome> => ({ kind: "failed", error }));
+
+    it("a fast primary answers alone; the backup is never started", async () => {
+        const backup = ok("backup");
+        expect(await hedgeTranscription(ok("primary"), backup, 50)).toEqual({ outcome: { kind: "ok", text: "primary" }, via: "primary" });
+        expect(backup).not.toHaveBeenCalled();
+    });
+
+    it("a stalled primary: the backup starts after the hedge delay, wins, and the primary is cancelled", async () => {
+        const primary = stall();
+        const r = await hedgeTranscription(primary, ok("from backup"), 10);
+        expect(r).toEqual({ outcome: { kind: "ok", text: "from backup" }, via: "backup" });
+        expect(primary.mock.calls[0][0].aborted).toBe(true);
+    });
+
+    it("a failing primary starts the backup at once", async () => {
+        const started = Date.now();
+        const r = await hedgeTranscription(fail("openrouter_http_402"), ok("from backup"), 10_000);
+        expect(r.via).toBe("backup");
+        expect(Date.now() - started).toBeLessThan(1000);
+    });
+
+    it("no_speech is an answer, not a failure", async () => {
+        const backup = ok("x");
+        const r = await hedgeTranscription(vi.fn(async (): Promise<TranscribeOutcome> => ({ kind: "no_speech" })), backup, 10_000);
+        expect(r.outcome).toEqual({ kind: "no_speech" });
+        expect(backup).not.toHaveBeenCalled();
+    });
+
+    it("both failing → failed, naming both causes", async () => {
+        const r = await hedgeTranscription(fail("openrouter_timeout"), fail("gemini_timeout"), 10);
+        expect(r.outcome).toEqual({ kind: "failed", error: "primary: openrouter_timeout; backup: gemini_timeout" });
+    });
+
+    it("no backup → the primary's own outcome", async () => {
+        expect((await hedgeTranscription(fail("gemini_timeout"), null)).outcome).toEqual({ kind: "failed", error: "primary: gemini_timeout" });
     });
 });

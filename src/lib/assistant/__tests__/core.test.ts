@@ -267,6 +267,65 @@ describe("runAgentTurn", () => {
         expect(model.invoke).toHaveBeenCalledTimes(1);
     });
 
+    it("a stalled model call is cut off and retried even when the model ignores its abort signal", async () => {
+        const never = new Promise<AIMessage>(() => {});
+        const model: ToolCallingModel = { invoke: vi.fn().mockReturnValueOnce(never).mockResolvedValueOnce(new AIMessage("your queue")) };
+        const out = await runAgentTurn(
+            { system: "s", history: [], userText: "x" },
+            { model, tools: [], ctx: ctx(ISR), logToolCall, modelCallTimeoutMs: 20 },
+        );
+        expect(out.text).toBe("your queue");
+        expect(model.invoke).toHaveBeenCalledTimes(2);
+    });
+
+    it("a model that stalls every time ends the turn with the fallback, not a hang", async () => {
+        const model: ToolCallingModel = { invoke: vi.fn(() => new Promise<AIMessage>(() => {})) };
+        const out = await runAgentTurn(
+            { system: "s", history: [], userText: "x" },
+            { model, tools: [], ctx: ctx(ISR), logToolCall, modelCallTimeoutMs: 20 },
+        );
+        expect(out.text).toMatch(/couldn't finish/i);
+        expect(model.invoke).toHaveBeenCalledTimes(AGENT_LIMITS.maxFailedModelCalls + 1);
+    });
+
+    it("a stalled primary hands the rest of the turn to the backup model", async () => {
+        const tool = fakeTool("my_queue", "read", { kind: "not_found" });
+        const primary: ToolCallingModel = { invoke: vi.fn(() => new Promise<AIMessage>(() => {})) };
+        const backup = scripted([call("my_queue", { lead_id: "x" }), new AIMessage("here is your queue")]);
+        const out = await runAgentTurn(
+            { system: "s", history: [], userText: "mujhe mera queue dikhao" },
+            { model: primary, backupModel: backup, tools: [tool], ctx: ctx(ISR), logToolCall, modelCallTimeoutMs: 20 },
+        );
+        expect(out).toMatchObject({ text: "here is your queue", usedBackup: true, modelCalls: 2 });
+        expect(primary.invoke).toHaveBeenCalledTimes(1);
+        expect(tool.run).toHaveBeenCalledTimes(1);
+    });
+
+    it("a 429 / 5xx from the primary also goes to the backup; a 400 does not", async () => {
+        const overloaded = Object.assign(new Error("[503 Service Unavailable] overloaded"), { status: 503 });
+        const primary: ToolCallingModel = { invoke: vi.fn().mockRejectedValue(overloaded) };
+        const out = await runAgentTurn(
+            { system: "s", history: [], userText: "x" },
+            { model: primary, backupModel: scripted([new AIMessage("ok")]), tools: [], ctx: ctx(ISR), logToolCall },
+        );
+        expect(out).toMatchObject({ text: "ok", usedBackup: true });
+
+        const badRequest: ToolCallingModel = { invoke: vi.fn().mockRejectedValue(new Error("[400 Bad Request] exclusiveMinimum")) };
+        const backup = scripted([new AIMessage("never")]);
+        await expect(
+            runAgentTurn({ system: "s", history: [], userText: "x" }, { model: badRequest, backupModel: backup, tools: [], ctx: ctx(ISR), logToolCall }),
+        ).rejects.toThrow("400");
+        expect(backup.invoke).not.toHaveBeenCalled();
+    });
+
+    it("a model error that is not a stall still fails the turn", async () => {
+        const model: ToolCallingModel = { invoke: vi.fn().mockRejectedValue(new Error("400 Bad Request")) };
+        await expect(
+            runAgentTurn({ system: "s", history: [], userText: "x" }, { model, tools: [], ctx: ctx(ISR), logToolCall }),
+        ).rejects.toThrow("400 Bad Request");
+        expect(model.invoke).toHaveBeenCalledTimes(1);
+    });
+
     it("the final reply is capped at 1000 characters", async () => {
         const model = scripted([new AIMessage("x".repeat(5000))]);
         const out = await runAgentTurn({ system: "s", history: [], userText: "x" }, { model, tools: [], ctx: ctx(ISR), logToolCall });
