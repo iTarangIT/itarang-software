@@ -47,16 +47,16 @@ describe("registry", () => {
     });
 
     it("off the pilot list → read tools only; on it → the role's writes", () => {
-        expect(toolNamesFor("inside_sales_rep", false)).toEqual(["my_queue", "search_lead", "get_lead_details", "my_numbers", "product_catalogue", "quote_status"]);
-        expect(toolNamesFor("asm", false)).toEqual(["my_queue", "search_lead", "get_lead_details", "my_numbers", "product_catalogue", "quote_status"]);
+        expect(toolNamesFor("inside_sales_rep", false)).toEqual(["my_queue", "search_lead", "get_lead_details", "my_numbers", "product_catalogue", "quote_status", "read_document"]);
+        expect(toolNamesFor("asm", false)).toEqual(["my_queue", "search_lead", "get_lead_details", "my_numbers", "product_catalogue", "quote_status", "read_document"]);
         expect(toolNamesFor("asm", true)).toContain("log_visit");
         expect(toolNamesFor("inside_sales_rep", true)).not.toContain("log_visit");
         expect(toolNamesFor("inside_sales_rep", true)).toEqual([...ROLE_TOOLS.inside_sales_rep]);
     });
 
-    it("all nineteen tools have a Zod schema that rejects junk (unknown keys are stripped, never acted on)", () => {
+    it("all twenty-two tools have a Zod schema that rejects junk (unknown keys are stripped, never acted on)", () => {
         const all = [...toolsFor("asm", true), ...toolsFor("inside_sales_rep", true)];
-        expect(new Set(all.map((t) => t.name)).size).toBe(19);
+        expect(new Set(all.map((t) => t.name)).size).toBe(22);
         // my_numbers and product_catalogue take no lead: checked on their own below.
         for (const t of all.filter((x) => x.name !== "my_numbers" && x.name !== "product_catalogue")) {
             expect(t.schema.safeParse({ lead_id: "", evil: 1 }).success, t.name).toBe(false);
@@ -150,6 +150,8 @@ describe("scope predicate (INV1)", () => {
                 : t.name === "mark_converted" ? { lead_id: "DL-1", gstin: "x" }
                 : t.name === "invite_dealer_onboarding" || t.name === "send_quote" ? { lead_id: "DL-1" }
                 : t.name === "create_quote" ? { lead_id: "DL-1", lines: [{ product_id: "p-1", quantity: 1, unit_price: 100 }] }
+                : t.name === "attach_document" ? { lead_id: "DL-1", attachment_ids: ["m7k2q9"], doc_type: "other" }
+                : t.name === "update_lead" ? { lead_id: "DL-1", city: "Pune" }
                 : { lead_id: "DL-1", channel: "note" };
             const r = await t.run(ctx(ASM), t.schema.parse(input));
             expect(r.kind, t.name).toBe("declined");

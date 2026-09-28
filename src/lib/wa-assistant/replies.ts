@@ -10,6 +10,15 @@ export const REPLY = {
     media: "I can read typed messages only for now. Please type it.",
     /** A photo, document, sticker, … while voice notes are on. */
     mediaNotVoice: "I can read typed messages and voice notes only. Please type it or send a voice note.",
+    /** A video, sticker, contact card, … while photos / PDFs / pins are on (E-311). */
+    mediaUnsupportedKind:
+        "I can take typed messages, voice notes, photos, PDFs and location pins. Please send it as one of those.",
+    /** A photo / document over MAX_MEDIA_BYTES. */
+    mediaTooLarge: "That file is too big for me (up to 10 MB). Please send a smaller photo or PDF.",
+    /** A document that is not a JPG / PNG / WEBP / PDF (Word, Excel, …). */
+    mediaWrongType: "I can take photos (JPG, PNG) and PDFs. Please send it as a photo or a PDF.",
+    /** Download or storage failed. Nothing was changed. */
+    mediaFailed: "I couldn't save that file, nothing was changed. Please send it again.",
     /** A voice note with no speech in it, or nothing that could be made out. */
     voiceNoSpeech: "I couldn't hear anything in that voice note. Please send it again or type it.",
     /** Over MAX_VOICE_BYTES (about 3 minutes). */

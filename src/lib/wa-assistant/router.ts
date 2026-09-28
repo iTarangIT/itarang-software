@@ -20,6 +20,15 @@
 //                        continues into step 6 exactly as if it had been typed.
 //                        Nothing heard / too long / failed → a fixed reply.
 //                        WA_ASSIST_VOICE_DISABLED → the UC-14 reply instead.
+//      Photo / PDF / location pin (E-311) → stored at once (Meta's media URLs
+//                        expire), then a short quiet wait: when a newer photo /
+//                        PDF / pin from the same sender is already recorded (an
+//                        album, several shop photos) this one ends as
+//                        media_batched and only the LAST message runs the agent,
+//                        which sees every unused attachment of the last 15
+//                        minutes. The caption continues into step 6 as the text.
+//                        Too big / wrong type / failed → a fixed reply.
+//                        WA_ASSIST_MEDIA_DISABLED → the UC-14 reply instead.
 //      Other non-text  → the fixed UC-14 reply, counted by `type`.
 //   6. Text            → a bare "yes / haan / confirm" while a preview is
 //                        waiting gets the fixed "tap Confirm" reply (typing — or
@@ -78,10 +87,28 @@ export type RouterDeps = {
     isVoiceDisabled: () => boolean;
     /** Download a voice note and turn it into text. Never throws. */
     transcribeVoice: (user: AssistantUser, audio: { id: string; mimeType: string | null }) => Promise<TranscribeOutcome>;
+    /** WA_ASSIST_MEDIA_DISABLED, read per message: photos / PDFs / pins get the UC-14 reply. */
+    isMediaDisabled: () => boolean;
+    /** Download (photo / PDF) or record (pin) one attachment for this user. Never throws. */
+    storeMedia: (user: AssistantUser, msg: InboundMessage, messageRowId: string) => Promise<StoreMediaOutcome>;
+    /** Is a photo / PDF / pin from this sender recorded AFTER this row? (album batching) */
+    hasNewerMedia: (waPhone: string, messageRowId: string) => Promise<boolean>;
+    sleep: (ms: number) => Promise<void>;
     /** Lease → agent → memory, for one text message. */
     runTextTurn: (user: AssistantUser, text: string, messageRowId: string) => Promise<TextTurnOutcome>;
     log: (level: "info" | "warn" | "error", msg: string, meta: Record<string, unknown>) => void;
 };
+
+export type StoreMediaOutcome =
+    | { kind: "stored"; ref: string }
+    | { kind: "too_large" }
+    | { kind: "unsupported"; mimeType: string | null }
+    | { kind: "failed"; error: string };
+
+/** Photos of one album arrive within a second or two; answer once, after they stop. */
+export const ALBUM_QUIET_MS = 4000;
+
+const ATTACHMENT_TYPES = new Set(["image", "document", "location"]);
 
 const TAP_RE = /^ast:(c|x|e|lead|inv):(.+)$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -189,7 +216,33 @@ export async function routeMessage(msg: InboundMessage, rowId: string, deps: Rou
         // 5. Voice notes → text; anything else that is not typed text → UC-14.
         let text: string;
         let transcript: string | undefined;
-        if (msg.type === "audio" && !deps.isVoiceDisabled()) {
+        let viaMedia = false;
+        if (ATTACHMENT_TYPES.has(msg.type) && !deps.isMediaDisabled()) {
+            const stored = await deps.storeMedia(user, msg, rowId);
+            if (stored.kind !== "stored") {
+                const [handling, reply] =
+                    stored.kind === "too_large"
+                        ? (["media_too_large", REPLY.mediaTooLarge] as const)
+                        : stored.kind === "unsupported"
+                          ? (["media_unsupported", REPLY.mediaWrongType] as const)
+                          : (["media_failed", REPLY.mediaFailed] as const);
+                const error =
+                    stored.kind === "failed" ? stored.error : stored.kind === "unsupported" ? `unsupported ${stored.mimeType}` : null;
+                await deps.markHandled(rowId, handling, { userId, ...(error ? { error } : {}) });
+                await deps.replyText(msg.waPhone, reply, userId);
+                deps.log(stored.kind === "failed" ? "warn" : "info", "[wa-assist] media not stored", { ...meta, userId, outcome: stored.kind, error });
+                return;
+            }
+            await deps.sleep(ALBUM_QUIET_MS);
+            if (await deps.hasNewerMedia(msg.waPhone, rowId)) {
+                // A later attachment will answer for all of them.
+                await deps.markHandled(rowId, "media_batched", { userId });
+                deps.log("info", "[wa-assist] media batched", { ...meta, userId, ref: stored.ref });
+                return;
+            }
+            viaMedia = true;
+            text = msg.media?.caption ?? "";
+        } else if (msg.type === "audio" && !deps.isVoiceDisabled()) {
             const sttStarted = Date.now();
             const heard: TranscribeOutcome = msg.audio
                 ? await deps.transcribeVoice(user, msg.audio)
@@ -228,7 +281,11 @@ export async function routeMessage(msg: InboundMessage, rowId: string, deps: Rou
             });
         } else if (msg.type !== "text") {
             await deps.markHandled(rowId, "media", { userId });
-            await deps.replyText(msg.waPhone, deps.isVoiceDisabled() ? REPLY.media : REPLY.mediaNotVoice, userId);
+            await deps.replyText(
+                msg.waPhone,
+                deps.isVoiceDisabled() ? REPLY.media : deps.isMediaDisabled() ? REPLY.mediaNotVoice : REPLY.mediaUnsupportedKind,
+                userId,
+            );
             deps.log("info", "[wa-assist] media", { ...meta, userId });
             return;
         } else {
@@ -237,7 +294,7 @@ export async function routeMessage(msg: InboundMessage, rowId: string, deps: Rou
 
         // 6. Text — typed, or a voice note's transcript (stored on the row for review).
         const logged = transcript !== undefined ? { userId, text: transcript } : { userId };
-        if (isTypedConfirm(text) && (await deps.hasPendingAction(userId))) {
+        if (!viaMedia && isTypedConfirm(text) && (await deps.hasPendingAction(userId))) {
             await deps.markHandled(rowId, "typed_confirm", logged);
             await deps.replyText(msg.waPhone, REPLY.tapConfirm, userId);
             return;
@@ -252,12 +309,13 @@ export async function routeMessage(msg: InboundMessage, rowId: string, deps: Rou
             await deps.replyText(msg.waPhone, REPLY.notReady, userId);
             deps.log("error", "[wa-assist] agent not configured (WA_ASSIST_GEMINI_API_KEY)", meta);
         } else {
-            await deps.markHandled(rowId, "text_agent", logged);
+            await deps.markHandled(rowId, viaMedia ? "media_agent" : "text_agent", logged);
             await deps.sendPayload(msg.waPhone, outcome.payload, userId);
             deps.log("info", "[wa-assist] turn", {
                 ...meta,
                 userId,
                 voice: transcript !== undefined,
+                media: viaMedia,
                 modelCalls: outcome.modelCalls,
                 toolCalls: outcome.toolCalls,
                 latencyMs: Date.now() - started,

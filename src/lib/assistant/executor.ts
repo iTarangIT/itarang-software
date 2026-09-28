@@ -224,7 +224,7 @@ export async function executeAction(
             }
 
             const { afterCommit: post, ...written } = await applier.apply(
-                { tx, user, step: action.step as 1 | 2 },
+                { tx, user, step: action.step as 1 | 2, actionId: action.id },
                 plan,
             );
             afterCommit = post;
