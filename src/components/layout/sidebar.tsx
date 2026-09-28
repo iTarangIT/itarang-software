@@ -268,6 +268,27 @@ function ecofySubnav() {
       { id: "sh-ecofy-eligibility", label: "Eligibility Queue", icon: ClipboardCheck, href: "/sales-head/ecofy/eligibility" },
       { id: "sh-ecofy-financing", label: "Financing Queue", icon: Landmark, href: "/sales-head/ecofy/financing" },
       { id: "sh-ecofy-assets", label: "Assets", icon: Battery, href: "/sales-head/ecofy/assets" },
+      { id: "sh-ecofy-calculator", label: "Calculator", icon: Calculator, href: "/sales-head/ecofy/calculator" },
+      { id: "sh-ecofy-epc-agents", label: "EPC Agents", icon: Wrench, href: "/sales-head/ecofy/epc-agents" },
+    ],
+  };
+}
+
+// E-307 — ASM / ISR › Ecofy. A node like the Sales Head's: the leads the
+// Sales Head assigned to me plus Ecofy's energy calculator. The leads child
+// keeps its historical id ("asm-ecofy-leads" / "is-ecofy-leads") because the
+// follow-up badge and the dashboard card point at it.
+function ecofyWorkerSubnav(idPrefix: "asm" | "is", base: string) {
+  return {
+    id: `${idPrefix}-ecofy`,
+    label: "Ecofy",
+    icon: Sun,
+    // A node, not a route (see nbfcSettingsSubnav).
+    href: `${base}/ecofy-leads`,
+    children: [
+      { id: `${idPrefix}-ecofy-leads`, label: "My Leads", icon: Users, href: `${base}/ecofy-leads` },
+      { id: `${idPrefix}-ecofy-calculator`, label: "Calculator", icon: Calculator, href: `${base}/ecofy-calculator` },
+      { id: `${idPrefix}-ecofy-epc-agents`, label: "EPC Agents", icon: Wrench, href: `${base}/ecofy-epc-agents` },
     ],
   };
 }
@@ -1702,13 +1723,8 @@ const roleNavigation: Record<string, any[]> = {
           icon: ListChecks,
           href: "/inside-sales",
         },
-        {
-          // E-307 — Ecofy leads the Sales Head assigned to this ISR.
-          id: "is-ecofy-leads",
-          label: "Ecofy Leads",
-          icon: Sun,
-          href: "/inside-sales/ecofy-leads",
-        },
+        // E-307 — Ecofy leads the Sales Head assigned to this ISR + the calculator.
+        ecofyWorkerSubnav("is", "/inside-sales"),
         {
           id: "is-campaigns",
           label: "Campaigns",
@@ -1745,13 +1761,8 @@ const roleNavigation: Record<string, any[]> = {
           icon: MapPinned,
           href: "/asm",
         },
-        {
-          // E-307 — Ecofy leads the Sales Head assigned to this ASM.
-          id: "asm-ecofy-leads",
-          label: "Ecofy Leads",
-          icon: Sun,
-          href: "/asm/ecofy-leads",
-        },
+        // E-307 — Ecofy leads the Sales Head assigned to this ASM + the calculator.
+        ecofyWorkerSubnav("asm", "/asm"),
         {
           id: "asm-campaigns",
           label: "Campaigns",
@@ -2881,7 +2892,9 @@ export function Sidebar() {
     const byId: Record<string, number> = {
       "sh-ecofy": ecofyBadge.queue,
       "sh-ecofy-queue": ecofyBadge.queue,
+      "asm-ecofy": ecofyBadge.followUpsDue || ecofyBadge.open,
       "asm-ecofy-leads": ecofyBadge.followUpsDue || ecofyBadge.open,
+      "is-ecofy": ecofyBadge.followUpsDue || ecofyBadge.open,
       "is-ecofy-leads": ecofyBadge.followUpsDue || ecofyBadge.open,
     };
     type BadgeNode = { id: string; badge?: number | string; children?: Array<{ id: string; badge?: number | string }> };

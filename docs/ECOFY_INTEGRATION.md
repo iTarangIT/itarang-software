@@ -148,8 +148,8 @@ Everything an iTarang Admin (or Caller) does in the Ecofy screens is a call to E
 (`docs/ecofy_openapi_v1.0.1.yaml`, base `https://sandbox-ecofy.itarang.com/api/v1`). The CRM calls **the same
 endpoints** server-to-server. It signs each request instead of logging in, and the call runs as a real Ecofy user of the
 iTarang org. Examples: the queue, assign/reassign, calls and follow-ups, appointments, return to Ecofy, close/reopen,
-assessment, eligibility, EPC quote requests, offers and OTP, the File, financing routing, installation, asset, documents,
-reports, users, settings and lists. Each endpoint keeps its `x-roles`, gates, RLS, If-Match, Idempotency-Key and audit.
+assessment, the energy calculator (published release + quick estimate), EPC partners (list + add — Sales Head, ASM and ISR can all add an "EPC agent" from the CRM with name, phone, address and optional shop name; the call runs as the integration user, an iTarang Admin, which is the role `POST /epc-partners` requires. Ecofy has no address column: the pincode(s) in the address become `pincodes`, the shop (or the agent) becomes `name`, the agent `contactName`, and all three segments are set), eligibility, EPC quote requests, offers and OTP,
+the File, financing routing, installation, asset, documents, reports, users, settings and lists. Each endpoint keeps its `x-roles`, gates, RLS, If-Match, Idempotency-Key and audit.
 
 Headers on every call:
 

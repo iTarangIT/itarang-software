@@ -55,6 +55,30 @@ export function ecofyLeadHref(role: string | null | undefined, leadId: string): 
     }
 }
 
+/** Where each role opens the Ecofy energy calculator (sub-navigation + Assessment-tab link). */
+export function ecofyCalculatorHref(role: string | null | undefined): string {
+    switch ((role ?? "").toLowerCase()) {
+        case "asm":
+            return "/asm/ecofy-calculator";
+        case "inside_sales_rep":
+            return "/inside-sales/ecofy-calculator";
+        default:
+            return "/sales-head/ecofy/calculator";
+    }
+}
+
+/** Where each role manages EPC agents (sub-navigation). */
+export function ecofyEpcAgentsHref(role: string | null | undefined): string {
+    switch ((role ?? "").toLowerCase()) {
+        case "asm":
+            return "/asm/ecofy-epc-agents";
+        case "inside_sales_rep":
+            return "/inside-sales/ecofy-epc-agents";
+        default:
+            return "/sales-head/ecofy/epc-agents";
+    }
+}
+
 export const ECOFY_ACTIONS = [
     // lead work — Sales Head and the assigned ASM / ISR
     "log_activity",
@@ -123,7 +147,7 @@ const STAGES: Record<EcofyAction, string[] | null> = {
     upload_quote: ["S4"],
     compose_offer: ["S4"],
     send_otp: ["S4", "S5"],
-    verify_otp: ["S5"],
+    verify_otp: ["S5", "S6"], // S6 = re-acceptance OTP (sanction below the accepted total)
     create_installation: ["S6", "S7"],
     update_installation: ["S6", "S7", "S8"],
     request_withdrawal: ["S1", "S2", "S3", "S4", "S5", "S6", "S7"],

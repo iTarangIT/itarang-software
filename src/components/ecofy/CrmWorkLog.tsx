@@ -12,7 +12,7 @@ import { toast } from "sonner";
 import { canDoEcofyAction, ECOFY_CALL_OUTCOMES } from "@/lib/ecofy/access";
 import { formatIst } from "./badges";
 import { ecofyGet, localToIso, runLeadAction } from "./client";
-import { Btn, Chip, Empty, Field, FormBox, inputCls, Panel } from "./ui";
+import { Btn, Chip, DateTimeField, Empty, Field, FormBox, inputCls, Panel } from "./ui";
 
 type LocalRow = {
     id: string;
@@ -111,15 +111,13 @@ export function CrmWorkLog({
                             </Field>
                         )}
                         {(a.type === "FOLLOW_UP" || a.type === "CALL") && (
-                            <Field label={a.type === "FOLLOW_UP" ? "Follow-up at (mandatory)" : "Next follow-up"} hint="You get a reminder when it is due.">
-                                <input
-                                    type="datetime-local"
-                                    required={a.type === "FOLLOW_UP"}
-                                    className={inputCls}
-                                    value={a.nextFollowUpAt}
-                                    onChange={(e) => setA((x) => ({ ...x, nextFollowUpAt: e.target.value }))}
-                                />
-                            </Field>
+                            <DateTimeField
+                                label={a.type === "FOLLOW_UP" ? "Follow-up at (mandatory)" : "Next follow-up"}
+                                hint="You get a reminder when it is due."
+                                required={a.type === "FOLLOW_UP"}
+                                value={a.nextFollowUpAt}
+                                onChange={(v) => setA((x) => ({ ...x, nextFollowUpAt: v }))}
+                            />
                         )}
                         <Field label="Note" wide>
                             <textarea rows={2} className={inputCls} value={a.note} onChange={(e) => setA((x) => ({ ...x, note: e.target.value }))} />
@@ -156,9 +154,13 @@ export function CrmWorkLog({
                                 ))}
                             </select>
                         </Field>
-                        <Field label="Scheduled at" hint="You get a reminder an hour before.">
-                            <input type="datetime-local" required className={inputCls} value={m.scheduledAt} onChange={(e) => setM((x) => ({ ...x, scheduledAt: e.target.value }))} />
-                        </Field>
+                        <DateTimeField
+                            label="Scheduled at"
+                            hint="You get a reminder an hour before."
+                            required
+                            value={m.scheduledAt}
+                            onChange={(v) => setM((x) => ({ ...x, scheduledAt: v }))}
+                        />
                         <Field label="Booking remarks" wide>
                             <input className={inputCls} value={m.bookingRemarks} onChange={(e) => setM((x) => ({ ...x, bookingRemarks: e.target.value }))} />
                         </Field>
