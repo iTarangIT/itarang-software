@@ -131,6 +131,32 @@ describe("transcribeVoice", () => {
         expect(q.raw).toHaveBeenCalledTimes(3);
     });
 
+    it("a request Gemini sits on is abandoned after the attempt timeout and retried", async () => {
+        let n = 0;
+        const fn = vi.fn(async (_url: string, init: RequestInit) => {
+            if (n++ === 0) {
+                // Hang until aborted, like the 28-53 s stalls seen on sandbox.
+                return new Promise<Response>((_, reject) =>
+                    init.signal!.addEventListener("abort", () => reject(new DOMException("This operation was aborted", "AbortError"))),
+                );
+            }
+            return new Response(JSON.stringify(answer({ transcript: "mujhe aaj ka queue dikhao", has_speech: true }).body));
+        });
+        const r = await transcribeVoice({ ...base, fetchImpl: fn as unknown as typeof fetch, attemptTimeoutMs: 20 });
+        expect(r).toEqual({ kind: "ok", text: "mujhe aaj ka queue dikhao" });
+        expect(fn).toHaveBeenCalledTimes(2);
+    });
+
+    it("every attempt stalling → failed as gemini_timeout, within the deadline", async () => {
+        const fn = vi.fn(
+            async (_url: string, init: RequestInit) =>
+                new Promise<Response>((_, reject) => init.signal!.addEventListener("abort", () => reject(new Error("aborted")))),
+        );
+        const r = await transcribeVoice({ ...base, fetchImpl: fn as unknown as typeof fetch, attemptTimeoutMs: 10, deadlineMs: 1000 });
+        expect(r).toEqual({ kind: "failed", error: "gemini_timeout" });
+        expect(fn).toHaveBeenCalledTimes(3);
+    });
+
     it("no key / too big / AMR are refused without a call", async () => {
         const g = gemini([answer({ transcript: "x", has_speech: true })]);
         expect(await transcribeVoice({ ...base, apiKey: null, fetchImpl: g.fn })).toMatchObject({ kind: "failed" });
