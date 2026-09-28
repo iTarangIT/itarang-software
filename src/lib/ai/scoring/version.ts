@@ -13,12 +13,18 @@
 // The signal shape changed wholesale (signals-2.0.0) and the prompt is
 // facts-only with passive-callback-counts (extract-2.0.0). Old rows keep their
 // own version stamps and still render via shape detection.
-export const SCORING_VERSION = "qualification-1.0.0";
-export const SIGNAL_SCHEMA_VERSION = "signals-2.0.0";
+//
+// qualification-2.0.0: the lithium-dealer rule. One question decides the band
+// — lithium_dealer yes → Qualified 75 (90 with volume_shared), no →
+// Disqualified, unknown → Cold. The five-info-signal threshold and the
+// callback path to Qualified are retired. signals-2.1.0 adds lithium_dealer
+// (yes/no/unknown); extract-2.1.0 teaches the prompt to read it.
+export const SCORING_VERSION = "qualification-2.0.0";
+export const SIGNAL_SCHEMA_VERSION = "signals-2.1.0";
 
 // Tags the EXTRACTION prompt (parser.ts) + its few-shot calibration set
 // (analysis/calibrationExamples.ts). Bump whenever the prompt wording or the
 // calibration examples change — this is the Lever-A (extraction-side)
 // counterpart to SCORING_VERSION, so an audit can tell whether a signal shift
 // came from a new prompt or a new band rule.
-export const EXTRACTION_VERSION = "extract-2.0.0";
+export const EXTRACTION_VERSION = "extract-2.1.0";
