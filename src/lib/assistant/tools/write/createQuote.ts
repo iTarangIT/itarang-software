@@ -70,7 +70,7 @@ export const createQuote: ToolFactory = () =>
                 .array(
                     z.object({
                         product_id: z.string().trim().min(1).max(64).describe("product_id from product_catalogue — never invented"),
-                        quantity: z.number().int().positive().max(100000).optional(),
+                        quantity: z.number().int().min(1).max(100000).optional(), // not .positive(): exclusiveMinimum 400s Gemini
                         unit_price: z
                             .number()
                             .nonnegative()

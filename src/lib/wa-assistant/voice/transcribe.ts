@@ -35,6 +35,8 @@ type Opts = {
     sleep?: (ms: number) => Promise<void>;
     /** Whole call, retries included. */
     deadlineMs?: number;
+    /** One attempt. Gemini sometimes sits on a request for 30-50 s and then answers a retry in 2 s. */
+    attemptTimeoutMs?: number;
 };
 
 const MAX_ATTEMPTS = 3;
@@ -88,7 +90,8 @@ export async function transcribeVoice(o: Opts): Promise<TranscribeOutcome> {
 
     const fetchImpl = o.fetchImpl ?? fetch;
     const sleep = o.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
-    const deadline = Date.now() + (o.deadlineMs ?? 30_000);
+    const deadline = Date.now() + (o.deadlineMs ?? 40_000);
+    const attemptMs = o.attemptTimeoutMs ?? 12_000;
 
     const body = JSON.stringify({
         contents: [
@@ -119,7 +122,7 @@ export async function transcribeVoice(o: Opts): Promise<TranscribeOutcome> {
         const remaining = deadline - Date.now();
         if (remaining <= 0) break;
         const ctrl = new AbortController();
-        const timer = setTimeout(() => ctrl.abort(), remaining);
+        const timer = setTimeout(() => ctrl.abort(), Math.min(remaining, attemptMs));
         try {
             const res = await fetchImpl(`${GENAI_BASE}/${encodeURIComponent(o.model)}:generateContent`, {
                 method: "POST",
@@ -149,7 +152,7 @@ export async function transcribeVoice(o: Opts): Promise<TranscribeOutcome> {
             if (!parsed.has_speech || isEmptyTranscript(transcript)) return { kind: "no_speech" };
             return { kind: "ok", text: transcript };
         } catch (err) {
-            lastError = err instanceof Error ? err.message : String(err);
+            lastError = ctrl.signal.aborted ? "gemini_timeout" : err instanceof Error ? err.message : String(err);
             if (attempt < MAX_ATTEMPTS && Date.now() < deadline) {
                 await sleep(400 * attempt);
                 continue;
