@@ -418,6 +418,20 @@
   .sidebar-section-toggle[data-has-active="true"] {
     color: rgba(255, 255, 255, 0.88);
   }
+  /* A section header that IS the destination (AI Analyst): a sky icon marks it
+     as a place to go rather than a folder, and the open page gets the same
+     sky bar + tint as an active nav item. */
+  .sidebar-section-direct {
+    color: rgba(255, 255, 255, 0.7);
+  }
+  .sidebar-section-direct svg {
+    color: var(--color-brand-sky);
+  }
+  .sidebar-section-direct[data-has-active="true"] {
+    color: #fff;
+    background: rgba(19, 143, 198, 0.16);
+    box-shadow: inset 3px 0 0 var(--color-brand-sky);
+  }
   /* Hairline between groups gives the column structure once every section
      is collapsed; :first-child would otherwise draw one under the logo rule. */
   .sidebar-section + .sidebar-section {
