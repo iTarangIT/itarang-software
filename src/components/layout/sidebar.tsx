@@ -62,6 +62,7 @@ import {
   AudioLines,
   Sun,
   Newspaper,
+  Sparkles,
   Inbox,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -480,6 +481,17 @@ const ROLE_TRAILING_SECTIONS: Record<string, any[]> = {
   ],
 };
 
+// The AI Analyst (the Data Analyst agent, a separate Python service proxied via
+// /api/analyst/*). A `direct` group: one destination, rendered as a link in the
+// section-header row rather than a collapsible heading, so it is one click from
+// anywhere instead of hiding inside a closed section. It keeps `items` so
+// getActiveItemId / activeSection / the badge passes treat it like any group.
+const aiAnalystSection = (id: string, href: string) => ({
+  section: "AI ANALYST",
+  direct: true,
+  items: [{ id, label: "AI Analyst", icon: Sparkles, href }],
+});
+
 const roleNavigation: Record<string, any[]> = {
   ceo: [
     {
@@ -493,6 +505,7 @@ const roleNavigation: Record<string, any[]> = {
         },
       ],
     },
+    aiAnalystSection("ceo-ai-analyst", "/ceo/analyst"),
     {
       // E-307 — the CEO may open every /sales-head page and works the Ecofy
       // workspace with Sales Head rights (src/lib/ecofy/access.ts).
@@ -689,6 +702,7 @@ const roleNavigation: Record<string, any[]> = {
         },
       ],
     },
+    aiAnalystSection("sh-ai-analyst", "/sales-head/analyst"),
     {
       section: "LEAD MANAGEMENT",
       items: [
@@ -2342,6 +2356,28 @@ function SidebarNav({
 
       <div className="sidebar-scroll flex-1 overflow-y-auto py-2">
         {menuItems.map((group: any) => {
+          // A `direct` group is one destination, not a folder: a link in the
+          // section-header row, nothing to expand (see aiAnalystSection).
+          if (group.direct && group.items.length === 1) {
+            const item = group.items[0];
+            const isActive = item.id === activeItemId;
+            return (
+              <div key={group.section} className="sidebar-section">
+                <Link
+                  href={item.href}
+                  onClick={onNavigate}
+                  data-testid={`nav-${item.id}`}
+                  data-has-active={isActive ? "true" : undefined}
+                  aria-current={isActive ? "page" : undefined}
+                  className="sidebar-section-toggle sidebar-section-direct"
+                >
+                  <item.icon aria-hidden="true" className="w-4 h-4 shrink-0" strokeWidth={2} />
+                  <span className="truncate">{group.section}</span>
+                </Link>
+              </div>
+            );
+          }
+
           const isOpen = isSectionOpen(group.section);
           const hasActive = group.items.some(
             (item: any) =>
