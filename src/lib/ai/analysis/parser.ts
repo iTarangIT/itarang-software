@@ -61,6 +61,12 @@ it "no". Each signal must be a FACT the dealer stated, not an impression — mar
 Output STRICT JSON ONLY — no preamble, no markdown, no code fences.
 
 RULES for each field:
+- lithium_dealer = "yes" if he confirms he sells / deals in / works with
+  lithium or lithium-ion batteries. A short "haan / ji / जी / yes / हाँ" in
+  direct reply to the agent asking whether he is a lithium battery dealer
+  COUNTS as "yes". "no" if he says he does not (only lead-acid, or does not
+  deal in batteries at all). "unknown" if the question never came up or he
+  never clearly answered it. This is the most important field.
 - relevant_dealer = "yes" if he manufactures, assembles, sells, OR trades
   batteries, e-rickshaws, OR electric two-wheelers (any one qualifies); capture
   which in dealer_segment.
@@ -71,8 +77,8 @@ RULES for each field:
   only — no band impact).
 - battery_spec_shared = "yes" if he states the battery capacity he works on
   (voltage / Ah, e.g. 48V/60V/72V, 100Ah, lithium / lead-acid).
-- volume_shared = "yes" if he gives a number: units per month, or business
-  volume / turnover.
+- volume_shared = "yes" if he states a number for his monthly volume (units /
+  sets / batteries per month, or monthly business volume).
 - existing_financier_shared = "yes" if he names/confirms a financier or NBFC he
   works with (or explicitly states he uses none).
 - financing_need_expressed = "yes" if he says he needs financing, or that rising
@@ -98,6 +104,7 @@ ALSO:
 
 OUTPUT EXACTLY THIS JSON SHAPE (fill every field):
 {
+  "lithium_dealer": "yes" | "no" | "unknown",
   "relevant_dealer": "yes" | "no",
   "dealer_segment": "battery" | "e_rickshaw" | "e_2w" | "multiple" | "none",
   "dealer_role": "oem" | "dealer" | "both" | "unknown",
@@ -110,6 +117,7 @@ OUTPUT EXACTLY THIS JSON SHAPE (fill every field):
   "callback_agreed": "yes" | "no",
   "disqualifier": "none" | "dont_call" | "hostile" | "not_interested" | "call_dropped",
   "evidence": {
+    "lithium_dealer": "<his answer to the lithium-dealer question>",
     "relevant_dealer": "<short quote/paraphrase>",
     "battery_spec_shared": "<capacity / voltage / Ah / chemistry stated>",
     "volume_shared": "<units per month or business volume stated>",

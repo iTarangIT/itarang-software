@@ -30,12 +30,20 @@ const DISQUALIFIER_OPTIONS = [
 
 // The yes/no facts a reviewer can flip in deep mode. The five marked `info`
 // drive info_signals_count. Mirrors src/lib/ai/scoring/signals.ts — kept in
-// sync by hand, as it was before this move.
+// sync by hand, as it was before this move. `options` overrides the default
+// yes/no pair for the one tri-state fact (lithium_dealer).
 export const CORRECTABLE_FACTS: Array<{
   key: string;
   label: string;
   info: boolean;
+  options?: string[];
 }> = [
+  {
+    key: "lithium_dealer",
+    label: "Lithium battery dealer",
+    info: false,
+    options: ["yes", "no", "unknown"],
+  },
   { key: "relevant_dealer", label: "Relevant dealer", info: false },
   { key: "battery_spec_shared", label: "Battery spec shared", info: true },
   { key: "volume_shared", label: "Volume shared", info: true },
@@ -105,8 +113,10 @@ export function CorrectIntentForm({
   const [deep, setDeep] = useState(false);
   const [facts, setFacts] = useState<Record<string, string>>(() => {
     const seed: Record<string, string> = {};
-    for (const { key } of CORRECTABLE_FACTS) {
-      seed[key] = (signals?.[key] as string | undefined) ?? "no";
+    for (const { key, options } of CORRECTABLE_FACTS) {
+      seed[key] =
+        (signals?.[key] as string | undefined) ??
+        (options?.includes("unknown") ? "unknown" : "no");
     }
     return seed;
   });
@@ -345,7 +355,7 @@ export function CorrectIntentForm({
         </button>
         {deep && (
           <div className="space-y-2 rounded-xl border border-amber-100 bg-white p-3">
-            {CORRECTABLE_FACTS.map(({ key, label, info }) => {
+            {CORRECTABLE_FACTS.map(({ key, label, info, options }) => {
               const val = facts[key] ?? "no";
               return (
                 <div
@@ -361,7 +371,7 @@ export function CorrectIntentForm({
                     )}
                   </span>
                   <div className="flex gap-1">
-                    {["yes", "no"].map((opt) => (
+                    {(options ?? ["yes", "no"]).map((opt) => (
                       <button
                         key={opt}
                         type="button"
