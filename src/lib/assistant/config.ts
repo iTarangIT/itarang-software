@@ -13,6 +13,8 @@ export type AssistantConfig = {
     openRouterApiKey: string | null;
     /** The agent's backup on OpenRouter when Gemini stalls. ASSISTANT_BACKUP_MODEL, default DEFAULT_BACKUP_MODEL. */
     backupModel: string;
+    /** Reads photos / PDFs (read_document). ASSISTANT_VISION_MODEL on OpenRouter, default DEFAULT_BACKUP_MODEL. */
+    visionModel: string;
     /** Pilot allow-list for write tools (users.id). Empty = nobody. */
     writeUserIds: ReadonlySet<string>;
 };
@@ -40,6 +42,7 @@ export function assistantConfig(env: NodeJS.ProcessEnv = process.env): Assistant
         disabled: (env.ASSISTANT_DISABLED ?? "").trim().toLowerCase() === "true",
         openRouterApiKey: env.OPENROUTER_API_KEY?.trim() || null,
         backupModel: env.ASSISTANT_BACKUP_MODEL?.trim() || DEFAULT_BACKUP_MODEL,
+        visionModel: env.ASSISTANT_VISION_MODEL?.trim() || DEFAULT_BACKUP_MODEL,
         writeUserIds: new Set(
             (env.ASSISTANT_WRITES_ENABLED_USER_IDS ?? "")
                 .split(",")

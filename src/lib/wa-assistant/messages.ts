@@ -40,6 +40,12 @@ export const HANDLING = [
     "voice_too_long",
     "voice_unsupported",
     "voice_failed",
+    // E-311 — photos / PDFs / location pins.
+    "media_agent",
+    "media_batched",
+    "media_too_large",
+    "media_unsupported",
+    "media_failed",
     "error",
 ] as const;
 export type Handling = (typeof HANDLING)[number];
@@ -135,4 +141,21 @@ export async function recordOutbound(o: {
         action_id: o.actionId ?? null,
         raw_payload: (o.raw ?? null) as never,
     });
+}
+
+/**
+ * Album batching (E-311): is a photo / PDF / pin from this sender recorded
+ * after this row? Every message of a webhook batch is recorded before any is
+ * routed, so this also sees the later photos of the same batch.
+ */
+export async function hasNewerAttachment(waPhone: string, rowId: string): Promise<boolean> {
+    const rows = await db.execute<{ one: number }>(sql`
+        SELECT 1 AS one FROM assistant_wa_messages m
+         WHERE m.direction = 'in' AND m.wa_phone = ${waPhone}
+           AND m.type IN ('image', 'document', 'location')
+           AND m.id <> ${rowId}::uuid
+           AND m.created_at > (SELECT created_at FROM assistant_wa_messages WHERE id = ${rowId}::uuid)
+         LIMIT 1
+    `);
+    return rows.length > 0;
 }

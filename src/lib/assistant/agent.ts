@@ -122,6 +122,8 @@ function clipChars(s: string, max: number): string {
 }
 
 const FALLBACK = "Sorry, I couldn't finish that. Please try again with a shorter message.";
+/** The turn's reply once a change card is proposed (prompt rule 10's one line). */
+export const PREVIEW_REPLY = "Tap Confirm to save.";
 
 export async function runAgentTurn(input: AgentTurnInput, deps: AgentDeps): Promise<AgentTurnOutput> {
     const clock = deps.clock ?? Date.now;
@@ -195,6 +197,18 @@ export async function runAgentTurn(input: AgentTurnInput, deps: AgentDeps): Prom
             });
             if (ok) results.push({ tool: call.name, result });
             turn.push(new ToolMessage({ tool_call_id: call.id ?? call.name, content: JSON.stringify(result) }));
+        }
+
+        // A card is on its way to the user: the channel shows the card, never
+        // the text, and one change per message means nothing else may follow.
+        // End here instead of spending a model call on "Tap Confirm" — which
+        // also kept 4-step document turns (read → search → details → write)
+        // from running out of model calls. The closing AI message keeps the
+        // stored history alternating (tool result → model → next user turn).
+        if (results.some((r) => r.result.kind === "preview")) {
+            const text = PREVIEW_REPLY;
+            turn.push(new AIMessage(text));
+            return { text, results, turnMessages: turn, modelCalls, usedBackup };
         }
     }
 

@@ -16,6 +16,8 @@ import { inviteDealerOnboardingApplier } from "./tools/write/inviteDealerOnboard
 import { createLeadApplier } from "./tools/write/createLead";
 import { createQuoteApplier } from "./tools/write/createQuote";
 import { sendQuoteApplier } from "./tools/write/sendQuote";
+import { attachDocumentApplier } from "./tools/write/attachDocument";
+import { updateLeadApplier } from "./tools/write/updateLead";
 
 export const APPLIERS: Readonly<Record<WriteToolName, Applier<unknown>>> = Object.freeze({
     log_call: logCallApplier,
@@ -31,4 +33,6 @@ export const APPLIERS: Readonly<Record<WriteToolName, Applier<unknown>>> = Objec
     create_lead: createLeadApplier,
     create_quote: createQuoteApplier,
     send_quote: sendQuoteApplier,
+    attach_document: attachDocumentApplier,
+    update_lead: updateLeadApplier,
 });

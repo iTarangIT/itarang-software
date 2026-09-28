@@ -35,6 +35,7 @@ export const READ_TOOL_NAMES = [
     "my_numbers",
     "product_catalogue",
     "quote_status",
+    "read_document",
 ] as const;
 export const WRITE_TOOL_NAMES = [
     "log_call",
@@ -50,6 +51,8 @@ export const WRITE_TOOL_NAMES = [
     "create_lead",
     "create_quote",
     "send_quote",
+    "attach_document",
+    "update_lead",
 ] as const;
 export type ReadToolName = (typeof READ_TOOL_NAMES)[number];
 export type WriteToolName = (typeof WRITE_TOOL_NAMES)[number];
@@ -116,6 +119,19 @@ export type ToolResult =
     | { kind: "products"; rows: ProductSummary[]; total: number }
     /** One lead's latest quote (quote_status). */
     | { kind: "quote"; quote: Record<string, unknown> }
+    /**
+     * A photo / PDF read by read_document: what it is and the checked fields
+     * printed on it. Never a PAN / Aadhaar / bank value (Invariant 8).
+     */
+    | {
+          kind: "document";
+          attachment_id: string;
+          doc_kind: string;
+          summary: string;
+          fields: Record<string, string | null>;
+          /** Fields that were printed but failed their format check. */
+          unreadable: string[];
+      }
     | { kind: "preview"; action_id: string; preview: Preview }
     | { kind: "not_found" }
     | { kind: "question"; question: string }
