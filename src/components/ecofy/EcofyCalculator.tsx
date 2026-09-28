@@ -79,12 +79,46 @@ const btn = (on: boolean) =>
         on ? "bg-gray-900 text-white" : "border border-gray-300 bg-white text-gray-800 hover:bg-gray-50"
     }`;
 
-export function EcofyCalculator({ segment, defaults = {} }: { segment: CalcSegment; defaults?: CalculatorDefaults }) {
+/** A release bundle as the designer API returns it (params carry the segments). */
+type DesignerBundle = {
+    id: string;
+    version: number;
+    appliances: Array<{ name: string; defaultWatts: number; isMotor: boolean; active?: boolean }>;
+    params?: { segments?: Record<string, { enabled: boolean; inputs?: string[] }> };
+};
+
+/**
+ * `releaseId` = the designer's test bench (FR-08.4): inputs and appliances come
+ * from THAT release (draft or published) and every estimate runs against it.
+ * Without it, the published release is used, as on the calculator screen.
+ */
+export function EcofyCalculator({
+    segment,
+    defaults = {},
+    releaseId,
+}: {
+    segment: CalcSegment;
+    defaults?: CalculatorDefaults;
+    releaseId?: string;
+}) {
     const rel = useQuery({
-        queryKey: ["ecofy-calculator-release"],
-        staleTime: 5 * 60_000,
-        queryFn: () => ecofyGet<Release>("/api/ecofy/calculator"),
+        queryKey: ["ecofy-calculator-release", releaseId ?? "published"],
+        // a draft changes while it is being edited; the published release is stable
+        staleTime: releaseId ? 0 : 5 * 60_000,
+        queryFn: async (): Promise<Release> => {
+            if (!releaseId) return ecofyGet<Release>("/api/ecofy/calculator");
+            const b = await ecofyGet<DesignerBundle>(`/api/ecofy/calculator/releases/${releaseId}`);
+            return {
+                id: b.id,
+                version: b.version,
+                appliances: (b.appliances ?? [])
+                    .filter((a) => a.active !== false)
+                    .map((a) => ({ name: a.name, defaultWatts: a.defaultWatts, isMotor: Boolean(a.isMotor) })),
+                segments: b.params?.segments ?? {},
+            };
+        },
     });
+    const estimateUrl = releaseId ? `/api/ecofy/calculator/releases/${releaseId}/test` : "/api/ecofy/calculator";
     const appliances = useMemo(() => rel.data?.appliances ?? [], [rel.data]);
     const [method, setMethod] = useState<Method>("APPLIANCES");
     const [linesState, setLines] = useState<Line[] | null>(null);
@@ -144,7 +178,7 @@ export function EcofyCalculator({ segment, defaults = {} }: { segment: CalcSegme
         const t = setTimeout(async () => {
             setComputing(true);
             try {
-                const r = await ecofyPost<CalcResultView>("/api/ecofy/calculator", input);
+                const r = await ecofyPost<CalcResultView>(estimateUrl, input);
                 if (!cancelled) {
                     setResult(r);
                     setErr(null);
@@ -159,7 +193,7 @@ export function EcofyCalculator({ segment, defaults = {} }: { segment: CalcSegme
             cancelled = true;
             clearTimeout(t);
         };
-    }, [input, segment, rel.data]);
+    }, [input, segment, rel.data, estimateUrl]);
 
     if (segment === "CI") {
         return (
