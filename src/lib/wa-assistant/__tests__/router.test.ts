@@ -55,6 +55,10 @@ function fakeDeps(sender: SenderResolution = RAHUL) {
         isDisabled: vi.fn(() => false),
         isVoiceDisabled: vi.fn(() => false),
         transcribeVoice: vi.fn(async () => ({ kind: "ok" as const, text: "Sharma Battery House ka follow-up kal 11 baje" })),
+        isMediaDisabled: vi.fn(() => false),
+        storeMedia: vi.fn(async () => ({ kind: "stored" as const, ref: "m7k2q9" })),
+        hasNewerMedia: vi.fn(async () => false),
+        sleep: vi.fn(async () => {}),
         hasPendingAction: vi.fn(async () => false),
         runTextTurn: vi.fn(async () => ({
             kind: "ok" as const,
@@ -116,19 +120,31 @@ describe("routeMessage — order and fixed replies", () => {
         expect(f.replies.map((r) => r.text)).toEqual([REPLY.unlinked, REPLY.unlinked]);
     });
 
-    it("UC-14: image, sticker, document, unsupported → fixed media reply (voice notes named), logged by type", async () => {
-        for (const type of ["image", "sticker", "document", "video", "location", "unsupported"]) {
+    it("UC-14: sticker, video, contacts, unsupported → fixed reply naming what works, logged by type", async () => {
+        for (const type of ["sticker", "video", "contacts", "unsupported"]) {
             const g = fakeDeps();
             await routeMessage(msg({ type, text: null }), "r", g.deps);
-            expect(g.replies.map((r) => r.text)).toEqual([REPLY.mediaNotVoice]);
+            expect(g.replies.map((r) => r.text)).toEqual([REPLY.mediaUnsupportedKind]);
             expect(g.handled[0].handling).toBe("media");
             expect(g.deps.transcribeVoice).not.toHaveBeenCalled();
+            expect(g.deps.storeMedia).not.toHaveBeenCalled();
+        }
+    });
+
+    it("WA_ASSIST_MEDIA_DISABLED: photos, PDFs and pins get the voice-era reply and are never stored", async () => {
+        for (const type of ["image", "document", "location"]) {
+            const g = fakeDeps();
+            (g.deps.isMediaDisabled as ReturnType<typeof vi.fn>).mockReturnValue(true);
+            await routeMessage(msg({ type, text: null }), "r", g.deps);
+            expect(g.replies.map((r) => r.text)).toEqual([REPLY.mediaNotVoice]);
+            expect(g.deps.storeMedia).not.toHaveBeenCalled();
         }
     });
 
     it("WA_ASSIST_VOICE_DISABLED: a voice note gets the original UC-14 reply, never transcribed", async () => {
         const g = fakeDeps();
         (g.deps.isVoiceDisabled as ReturnType<typeof vi.fn>).mockReturnValue(true);
+        (g.deps.isMediaDisabled as ReturnType<typeof vi.fn>).mockReturnValue(true);
         await routeMessage(msg({ type: "audio", text: null, audio: { id: "m1", mimeType: "audio/ogg" } }), "r", g.deps);
         await routeMessage(msg({ type: "image", text: null }), "r", g.deps);
         expect(g.replies.map((r) => r.text)).toEqual([REPLY.media, REPLY.media]);
@@ -269,12 +285,18 @@ describe("routeMessage — Gate 2: kill switch, typed confirm, agent outcomes", 
         expect(f.handled.at(-1)).toMatchObject({ handling: "error", extra: { error: "openai 500" } });
     });
 
-    it("INV5_model_never_sees: taps, LINK codes, media and unlinked senders never reach the agent", async () => {
+    // Since E-311 a photo / PDF / pin DOES reach the agent — as an attachment id
+    // and its caption, never as bytes (only read_document sends a file to a
+    // model, and its checked output has no PAN / Aadhaar field). Unsupported
+    // media (sticker, video) and an unlinked sender's photo still never do.
+    it("INV5_model_never_sees: taps, LINK codes, unsupported media and unlinked senders never reach the agent", async () => {
         const cases: [Partial<InboundMessage>, SenderResolution][] = [
             [{ type: "interactive", replyId: "ast:c:abc", text: "Confirm" }, RAHUL],
             [{ type: "interactive", replyId: "ast:lead:DL-1", text: "ABC" }, RAHUL],
             [{ text: "LINK 482913" }, RAHUL],
-            [{ type: "image", text: null }, RAHUL],
+            [{ type: "sticker", text: null }, RAHUL],
+            [{ type: "video", text: null }, RAHUL],
+            [{ type: "image", text: null, media: { kind: "image", id: "x", mimeType: "image/jpeg", fileName: null, caption: null } }, { kind: "unlinked" }],
             [{ type: "audio", text: null, audio: { id: "m1", mimeType: "audio/ogg" } }, { kind: "unlinked" }],
             [{ text: "show me everything" }, { kind: "unlinked" }],
             [{ text: "show me everything" }, { kind: "revoked", reason: "user_inactive", userId: "u" }],
@@ -455,5 +477,82 @@ describe("routeMessage — voice notes", () => {
         await routeMessage(voice(), "r", f.deps);
         expect(f.replies.at(-1)?.text).toBe(REPLY.busy);
         expect(f.handled[0]).toMatchObject({ handling: "text_busy", extra: { text: expect.any(String) } });
+    });
+});
+
+// ── Photos, PDFs, location pins (E-311) ─────────────────────────────────────
+
+describe("routeMessage — attachments", () => {
+    const photo = (over: Partial<InboundMessage> = {}) =>
+        msg({
+            type: "image",
+            text: "TIGER BATTERY ka GST",
+            media: { kind: "image", id: "meta-1", mimeType: "image/jpeg", fileName: null, caption: "TIGER BATTERY ka GST" },
+            ...over,
+        });
+
+    it("stored → quiet wait → the agent gets the caption, handled as media_agent", async () => {
+        const f = fakeDeps();
+        await routeMessage(photo(), "row-p", f.deps);
+        expect(f.deps.storeMedia).toHaveBeenCalledWith(RAHUL.kind === "ok" ? RAHUL.user : null, expect.objectContaining({ type: "image" }), "row-p");
+        expect(f.deps.sleep).toHaveBeenCalledWith(4000);
+        expect(f.deps.hasNewerMedia).toHaveBeenCalledWith(PHONE, "row-p");
+        expect(f.deps.runTextTurn).toHaveBeenCalledWith(expect.anything(), "TIGER BATTERY ka GST", "row-p");
+        expect(f.handled[0]).toMatchObject({ handling: "media_agent" });
+        expect(f.replies.map((r) => r.text)).toEqual(["agent reply"]);
+    });
+
+    it("an album: every photo but the last ends as media_batched with NO reply", async () => {
+        const f = fakeDeps();
+        (f.deps.hasNewerMedia as ReturnType<typeof vi.fn>).mockResolvedValueOnce(true);
+        await routeMessage(photo({ media: { kind: "image", id: "meta-1", mimeType: "image/jpeg", fileName: null, caption: null } }), "row-1", f.deps);
+        expect(f.handled[0]).toMatchObject({ handling: "media_batched" });
+        expect(f.replies).toEqual([]);
+        expect(f.deps.runTextTurn).not.toHaveBeenCalled();
+    });
+
+    it("a photo with no caption still runs the agent (it sees the attachment list)", async () => {
+        const f = fakeDeps();
+        await routeMessage(photo({ text: null, media: { kind: "image", id: "meta-1", mimeType: "image/jpeg", fileName: null, caption: null } }), "r", f.deps);
+        expect(f.deps.runTextTurn).toHaveBeenCalledWith(expect.anything(), "", "r");
+    });
+
+    it("a caption of 'ok' while a card is waiting is NOT the typed-confirm guard — the photo is handled", async () => {
+        const f = fakeDeps();
+        (f.deps.hasPendingAction as ReturnType<typeof vi.fn>).mockResolvedValue(true);
+        await routeMessage(photo({ media: { kind: "image", id: "meta-1", mimeType: "image/jpeg", fileName: null, caption: "ok" } }), "r", f.deps);
+        expect(f.deps.runTextTurn).toHaveBeenCalled();
+        expect(f.replies.map((r) => r.text)).not.toContain(REPLY.tapConfirm);
+    });
+
+    it("too big / wrong type / failed → a fixed reply, nothing else runs", async () => {
+        const cases = [
+            [{ kind: "too_large" }, "media_too_large", REPLY.mediaTooLarge],
+            [{ kind: "unsupported", mimeType: "application/msword" }, "media_unsupported", REPLY.mediaWrongType],
+            [{ kind: "failed", error: "download: 500" }, "media_failed", REPLY.mediaFailed],
+        ] as const;
+        for (const [outcome, handling, reply] of cases) {
+            const f = fakeDeps();
+            (f.deps.storeMedia as ReturnType<typeof vi.fn>).mockResolvedValue(outcome);
+            await routeMessage(photo(), "r", f.deps);
+            expect(f.handled[0]).toMatchObject({ handling });
+            expect(f.replies.map((r) => r.text)).toEqual([reply]);
+            expect(f.deps.sleep).not.toHaveBeenCalled();
+            expect(f.deps.runTextTurn).not.toHaveBeenCalled();
+        }
+    });
+
+    it("a location pin goes the same way (no caption → empty text)", async () => {
+        const f = fakeDeps();
+        await routeMessage(msg({ type: "location", text: null, location: { lat: 18.52, lng: 73.85, name: null, address: null } }), "r", f.deps);
+        expect(f.deps.storeMedia).toHaveBeenCalled();
+        expect(f.deps.runTextTurn).toHaveBeenCalledWith(expect.anything(), "", "r");
+    });
+
+    it("an unlinked sender's photo is never stored", async () => {
+        const f = fakeDeps({ kind: "unlinked" });
+        await routeMessage(photo(), "r", f.deps);
+        expect(f.deps.storeMedia).not.toHaveBeenCalled();
+        expect(f.replies.map((r) => r.text)).toEqual([REPLY.unlinked]);
     });
 });

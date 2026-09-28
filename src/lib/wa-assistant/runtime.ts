@@ -13,7 +13,8 @@ import { WaAssistClient } from "./client";
 import { resolveSender } from "./identity";
 import { verifyLinkCode } from "./link";
 import { withUserLease } from "./lock";
-import { markHandled, recordOutbound } from "./messages";
+import { hasNewerAttachment, markHandled, recordOutbound } from "./messages";
+import { isAcceptedMime, MAX_MEDIA_BYTES, normalizeMediaMime, storeLocation, storeMediaFile } from "@/lib/assistant/media";
 import { renderLeadCard, renderPreview, renderTapOutcome, renderTurn, type WaPayload } from "./render";
 import type { RouterDeps } from "./router";
 import type { AssistantUser } from "@/lib/assistant/types";
@@ -145,6 +146,46 @@ export function defaultRouterDeps(env: WaAssistEnv): RouterDeps {
             }
             return outcome;
         },
+        // E-311 — photos / PDFs / location pins. WA_ASSIST_MEDIA_DISABLED=true → the UC-14 reply.
+        isMediaDisabled: () => (process.env.WA_ASSIST_MEDIA_DISABLED ?? "").trim().toLowerCase() === "true",
+        storeMedia: async (user, msg, messageRowId) => {
+            try {
+                if (msg.type === "location") {
+                    if (!msg.location) return { kind: "failed", error: "location message without coordinates" };
+                    const row = await storeLocation({
+                        userId: user.id,
+                        sourceMessageId: messageRowId,
+                        latitude: msg.location.lat,
+                        longitude: msg.location.lng,
+                        name: msg.location.name,
+                        address: msg.location.address,
+                    });
+                    return { kind: "stored", ref: row.ref };
+                }
+                const m = msg.media;
+                if (!m) return { kind: "failed", error: `${msg.type} message without a media id` };
+                // A Word / Excel file is refused before downloading it.
+                if (m.mimeType && !isAcceptedMime(m.mimeType)) return { kind: "unsupported", mimeType: m.mimeType };
+                const media = await client.downloadMedia(m.id, MAX_MEDIA_BYTES);
+                if (!media.ok) return media.tooLarge ? { kind: "too_large" } : { kind: "failed", error: `download: ${media.error}` };
+                const mime = normalizeMediaMime(m.mimeType ?? media.mimeType);
+                if (!mime || !isAcceptedMime(mime)) return { kind: "unsupported", mimeType: mime };
+                const row = await storeMediaFile({
+                    userId: user.id,
+                    sourceMessageId: messageRowId,
+                    kind: m.kind,
+                    bytes: media.bytes,
+                    mimeType: mime,
+                    fileName: m.fileName,
+                    caption: m.caption,
+                });
+                return { kind: "stored", ref: row.ref };
+            } catch (err) {
+                return { kind: "failed", error: err instanceof Error ? err.message : String(err) };
+            }
+        },
+        hasNewerMedia: hasNewerAttachment,
+        sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
         hasPendingAction: hasOpenPendingAction,
         runTextTurn: async (user, text, messageRowId) => {
             const leased = await withUserLease(user.id, () => agentTurn(user, text, { messageId: messageRowId }));

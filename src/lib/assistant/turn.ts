@@ -11,6 +11,16 @@ import { withEditContext } from "./edit";
 import { logToolCall } from "./audit";
 import { callTool, createBackupToolCallingModel, createToolCallingModel, runAgentTurn, type ToolCallingModel } from "./agent";
 import type { ToolSpec } from "./tools/spec";
+import { pendingMedia, pendingMediaContext, type MediaRow } from "./media";
+
+/** A host without E-311 has no attachments — never a failed turn. */
+async function pendingMediaOrNone(userId: string): Promise<MediaRow[]> {
+    try {
+        return await pendingMedia(userId);
+    } catch {
+        return [];
+    }
+}
 
 export type AgentTurnResult =
     | { kind: "ok"; text: string; results: { tool: string; result: ToolResult }[]; modelCalls: number; usedBackup: boolean }
@@ -49,7 +59,10 @@ export async function agentTurn(
     const toolset = toolsetStamp(tools.map((t) => t.name));
     const history = await loadHistory(user.id, toolset, "whatsapp", now);
     // After an Edit tap, this message is a change to that card.
-    const userText = await withEditContext(user, text);
+    const edited = await withEditContext(user, text);
+    // E-311 — photos / PDFs / pins sent in the last 15 minutes and not used yet.
+    const attachments = pendingMediaContext(await pendingMediaOrNone(user.id));
+    const userText = attachments ? `${attachments}\n${edited.trim() || "(no text — only the attachments above)"}` : edited;
     const out = await runAgentTurn(
         {
             system: buildSystemPrompt({ user, now, tools: tools.map((t) => t.name), writesEnabled }),

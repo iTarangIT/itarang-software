@@ -33,6 +33,11 @@ import type { Preview, ToolResult } from "../../types";
 import { defineTool, LeadId, ownedLeadOr, type ToolFactory } from "../spec";
 import { leadUrl } from "../leads";
 import { defineApplier } from "../../applierSpec";
+import { sql } from "drizzle-orm";
+import { db } from "@/lib/db";
+import { consumeMedia, mediaUrl } from "../../media";
+import { checkPinAgainstShop, fmtDistance } from "../../geo";
+import { AttachmentId, PlannedFile, plannedFile, resolveAttachments } from "../attachments";
 import { highImpactConsequence, highImpactWarning } from "./logCall";
 import { futureDay, MAX_DAYS_AHEAD } from "./when";
 import {
@@ -63,6 +68,19 @@ export const LogVisitPlan = z.object({
     lost: z.object({ reason: z.enum(LOST_REASON), notes: z.string().nullable() }).nullable(),
     /** Which of status_to / interest came from the auto rule (audit + preview). */
     auto: z.object({ status: z.boolean(), interest: z.boolean() }).default({ status: false, interest: false }),
+    /** E-311 — photos the ASM sent, filed on the visit (lead_visits.photos + the visit touchpoint). */
+    photos: z.array(PlannedFile).default([]),
+    /** E-311 — the ASM's location pin as the visit's GPS check-in, and how far it was from the shop. */
+    gps: z
+        .object({
+            media_id: z.string().uuid(),
+            lat: z.number(),
+            lng: z.number(),
+            /** The line added to the visit remarks, e.g. "📍 WhatsApp location: 3.2 km from the shop address". */
+            note: z.string(),
+        })
+        .nullable()
+        .default(null),
 });
 export type LogVisitPlan = z.infer<typeof LogVisitPlan>;
 
@@ -86,7 +104,8 @@ export const logVisit: ToolFactory = () =>
         description:
             "Propose logging a field visit on a lead the ASM owns: visit status, outcome, remarks, next action and next-visit date, " +
             "with optional interest or status change. 'Convert' is not done here — send the CRM link. " +
-            "To only schedule a visit, use set_follow_up. Nothing is saved until Confirm.",
+            "To only schedule a visit, use set_follow_up. Photos (photo_ids) and a location pin (location_id) the ASM sent " +
+            "are filed on a completed visit as proof. Nothing is saved until Confirm.",
         schema: z
             .object({
                 lead_id: LeadId,
@@ -99,6 +118,8 @@ export const logVisit: ToolFactory = () =>
                 interest: Interest.optional(),
                 status: StatusChoiceEnum.optional(),
                 lost_reason: LostReason.optional(),
+                photo_ids: z.array(AttachmentId).max(10).optional(),
+                location_id: AttachmentId.optional(),
             })
             .refine((v) => v.visit_status !== "visited" || !!v.outcome, {
                 message: "outcome is required when visit_status is visited",
@@ -187,6 +208,41 @@ export const logVisit: ToolFactory = () =>
                 }
             }
 
+            // Photos and the pin are proof of a visit that happened.
+            const photoRefs = input.photo_ids ?? [];
+            if ((photoRefs.length || input.location_id) && !visited) {
+                return ask("Photos and location are saved on a visit that happened. Did you meet the dealer?");
+            }
+            let photos: LogVisitPlan["photos"] = [];
+            if (photoRefs.length) {
+                const found = await resolveAttachments(ctx, photoRefs, { kinds: ["image"], forWrite: true });
+                if (found.result) return found.result;
+                photos = found.rows.map(plannedFile);
+            }
+            let gps: LogVisitPlan["gps"] = null;
+            let gpsLine: string | null = null;
+            let gpsWarning: string | null = null;
+            if (input.location_id) {
+                const found = await resolveAttachments(ctx, [input.location_id], { kinds: ["location"], forWrite: true });
+                if (found.result) return found.result;
+                const pin = found.rows[0];
+                const [addr] = await db.execute<{ area: string | null; pincode: string | null }>(
+                    sql`SELECT area, pincode FROM dealer_leads WHERE id = ${lead.id}`,
+                );
+                const check = await checkPinAgainstShop(
+                    { lat: pin.latitude!, lng: pin.longitude! },
+                    { area: addr?.area, city: lead.city, state: lead.state, pincode: addr?.pincode },
+                );
+                gpsLine =
+                    check.kind === "unmapped"
+                        ? "saved (shop address not mapped)"
+                        : check.kind === "near"
+                          ? `at the shop (${fmtDistance(check.meters)})`
+                          : `⚠ ${fmtDistance(check.meters)} from the shop address`;
+                if (check.kind === "far") gpsWarning = `The location is ${fmtDistance(check.meters)} from the shop's address.`;
+                gps = { media_id: pin.id, lat: pin.latitude!, lng: pin.longitude!, note: `📍 WhatsApp location: ${gpsLine}` };
+            }
+
             const plan: LogVisitPlan = {
                 lead_id: lead.id,
                 visit_status: input.visit_status,
@@ -199,6 +255,8 @@ export const logVisit: ToolFactory = () =>
                 status_to: statusTo,
                 lost,
                 auto,
+                photos,
+                gps,
             };
 
             const lines: Preview["lines"] = [
@@ -222,6 +280,8 @@ export const logVisit: ToolFactory = () =>
             if (nextVisit) lines.push({ label: "Next visit", value: `${fmtDate(nextVisit)} (goes to Today's Schedule)` });
             if (plan.next_action === "escalate") lines.push({ label: "Next step", value: "escalate" });
             lines.push({ label: "Remarks", value: remarks });
+            if (photos.length) lines.push({ label: "📷 Photos", value: String(photos.length) });
+            if (gpsLine) lines.push({ label: "📍 Location", value: gpsLine });
 
             const warnings: string[] = [];
             const secondConfirm = !!lost && isHighImpactLostReason(lost.reason);
@@ -230,6 +290,7 @@ export const logVisit: ToolFactory = () =>
                 warnings.push("This lead's field ASM isn't set to you, so the next visit won't show in your Today's Schedule.");
             }
             if (plan.next_action === "escalate") warnings.push("Raise the escalation itself on the CRM screen.");
+            if (gpsWarning) warnings.push(gpsWarning);
 
             const preview: Preview = {
                 title: `Log visit — ${lead.shop_name || lead.dealer_name || lead.id}`,
@@ -258,9 +319,10 @@ export const logVisitApplier = defineApplier<LogVisitPlan>({
     schema: LogVisitPlan,
     needsSecondConfirm: (p) => !!p.lost && isHighImpactLostReason(p.lost.reason),
     secondConfirmWarning: (p) => highImpactWarning(p.lost!.reason),
-    apply: async ({ tx, user, step }, p) => {
+    apply: async ({ tx, user, step, actionId }, p) => {
         // A visit is an ASM's; the plan is bound to the role that proposed it.
         if (user.role !== "asm") throw new Error("visit plan does not match the user's role");
+        await consumeMedia(tx, [...p.photos.map((f) => f.media_id), ...(p.gps ? [p.gps.media_id] : [])], actionId);
         const visit = await recordVisit(
             {
                 leadId: p.lead_id,
@@ -269,9 +331,11 @@ export const logVisitApplier = defineApplier<LogVisitPlan>({
                 visit_outcome: p.visit_outcome,
                 // Passed explicitly: recordVisit's own default is the UTC date.
                 actual_visit_date: p.visit_date,
-                visit_remarks: p.remarks,
+                visit_remarks: p.gps ? `${p.remarks}\n${p.gps.note}` : p.remarks,
                 next_action: p.next_action,
                 next_visit_date: p.next_visit_date,
+                ...(p.photos.length ? { photos: p.photos.map((f) => mediaUrl(f.storage_bucket, f.storage_key)) } : {}),
+                ...(p.gps ? { gps_check_in_lat: p.gps.lat, gps_check_in_lng: p.gps.lng } : {}),
             },
             { tx },
         );

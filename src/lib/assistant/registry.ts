@@ -27,6 +27,9 @@ import { productCatalogue } from "./tools/read/productCatalogue";
 import { quoteStatus } from "./tools/read/quoteStatus";
 import { createQuote } from "./tools/write/createQuote";
 import { sendQuote } from "./tools/write/sendQuote";
+import { readDocument } from "./tools/read/readDocument";
+import { attachDocument } from "./tools/write/attachDocument";
+import { updateLead } from "./tools/write/updateLead";
 
 const FACTORIES: Readonly<Record<ToolName, ToolFactory>> = Object.freeze({
     my_queue: myQueue,
@@ -48,13 +51,17 @@ const FACTORIES: Readonly<Record<ToolName, ToolFactory>> = Object.freeze({
     quote_status: quoteStatus,
     create_quote: createQuote,
     send_quote: sendQuote,
+    read_document: readDocument,
+    attach_document: attachDocument,
+    update_lead: updateLead,
 });
 
 /**
  * BRD §5: log_visit is ASM-only; transfer_to_asm is ISR-only (the screen's
  * Transfer button is not offered to an ASM — an ASM hands back with
  * reassign_lead). Everything else is both roles — including the quote tools
- * (product_catalogue, quote_status, create_quote, send_quote).
+ * (product_catalogue, quote_status, create_quote, send_quote) and the media
+ * tools (read_document, attach_document, update_lead — E-311).
  */
 export const ROLE_TOOLS: Readonly<Record<AssistantRole, readonly ToolName[]>> = Object.freeze({
     inside_sales_rep: Object.freeze([
@@ -63,12 +70,14 @@ export const ROLE_TOOLS: Readonly<Record<AssistantRole, readonly ToolName[]>> = 
         "transfer_to_asm", "reassign_lead", "escalate_lead", "mark_converted",
         "invite_dealer_onboarding", "create_lead",
         "product_catalogue", "quote_status", "create_quote", "send_quote",
+        "read_document", "attach_document", "update_lead",
     ] as const),
     asm: Object.freeze([
         "my_queue", "search_lead", "get_lead_details", "my_numbers",
         "log_call", "log_visit", "mark_lost", "claim_lead", "set_follow_up",
         "reassign_lead", "escalate_lead", "mark_converted", "invite_dealer_onboarding", "create_lead",
         "product_catalogue", "quote_status", "create_quote", "send_quote",
+        "read_document", "attach_document", "update_lead",
     ] as const),
 });
 

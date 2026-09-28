@@ -11,7 +11,13 @@ import type { AssistantUser } from "./types";
 
 export type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
-export type ApplyContext = { tx: Tx; user: AssistantUser; step: 1 | 2 };
+export type ApplyContext = {
+    tx: Tx;
+    user: AssistantUser;
+    step: 1 | 2;
+    /** The confirmed action — recorded on the attachments it consumes (E-311). */
+    actionId?: string;
+};
 
 export type RejectReason =
     | "stale"
@@ -20,7 +26,9 @@ export type RejectReason =
     | "lead_missing"
     | "not_claimable"
     | "duplicate_phone"
-    | "target_unavailable";
+    | "target_unavailable"
+    /** A photo / file on the plan was consumed by another confirmed action meanwhile (E-311). */
+    | "attachment_used";
 
 /** A rejection the executor maps to a reply; the action is marked failed with it. Appliers may throw it too. */
 export class ActionRejected extends Error {
