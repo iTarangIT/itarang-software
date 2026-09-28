@@ -3,24 +3,23 @@ import { INTENT_THRESHOLDS, leadStatusFor, bandToStatus } from "../thresholds";
 import { computeBand } from "../computeBand";
 import { mk } from "./_fixtures";
 
-// The band's lead_score (90/60/30/0) rides in the numeric field, so the numeric
-// classifier must agree with the band it came from — this locks the carried
-// score to the same tier so every downstream bucket/sort stays correct.
+// The band's lead_score (90/75/30/0 from the AI; 60 for a human Warm) rides in
+// the numeric field, so the numeric classifier must agree with the band it came
+// from — this locks the carried score to the same tier so every downstream
+// bucket/sort stays correct.
 describe("score↔band agreement", () => {
   it("each band's lead_score classifies back to the same status", () => {
-    const cases: Array<[ReturnType<typeof computeBand>["band"], string]> = [
-      [computeBand(mk({ spec: true, volume: true, need: true })).band, "qualified"], // 90
-      [computeBand(mk({ volume: true })).band, "warm"], // 60
-      [computeBand(mk({ pitch: true })).band, "cold"], // 30
-      [computeBand(mk({ relevant: false })).band, "disqualified"], // 0
+    const results = [
+      computeBand(mk({ lithium: "yes", volume: true })), // Qualified 90
+      computeBand(mk({ lithium: "yes" })), // Qualified 75
+      computeBand(mk({ pitch: true })), // Cold 30
+      computeBand(mk({ lithium: "no" })), // Disqualified 0
     ];
-    expect(leadStatusFor(90)).toBe("qualified");
-    expect(leadStatusFor(60)).toBe("warm");
-    expect(leadStatusFor(30)).toBe("cold");
-    expect(leadStatusFor(0)).toBe("disqualified");
-    for (const [band, status] of cases) {
-      expect(bandToStatus(band)).toBe(status);
+    expect(results.map((r) => r.lead_score)).toEqual([90, 75, 30, 0]);
+    for (const r of results) {
+      expect(leadStatusFor(r.lead_score)).toBe(bandToStatus(r.band));
     }
+    expect(leadStatusFor(60)).toBe("warm"); // human-override Warm
   });
 
   it("tier boundaries are exactly INTENT_THRESHOLDS", () => {

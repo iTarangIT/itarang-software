@@ -16,15 +16,16 @@ import { mk } from "./_fixtures";
 const ALL_BANDS: Band[] = ["Qualified", "Warm", "Cold", "Disqualified"];
 
 describe("bandOutcome — the shared band → lead mapping", () => {
-  it("returns the SAME lead_score/interest_level computeBand does, for every band", () => {
+  it("returns the SAME lead_score/interest_level computeBand does, for every AI-reachable band", () => {
     // Signal sets chosen to land on each band through the real rule, so this
     // compares the override's table against genuine engine output rather than
-    // against itself.
+    // against itself. Warm is override-only since qualification-2.0.0 (the AI
+    // never produces it); the classify-back test below still covers it. A
+    // Qualified override matches the BASE Qualified (lithium yes, no volume).
     const cases: Array<{ band: Band; signals: Parameters<typeof computeBand>[0] }> = [
-      { band: "Qualified", signals: mk({ spec: true, volume: true, need: true }) },
-      { band: "Warm", signals: mk({ spec: true }) },
+      { band: "Qualified", signals: mk({ lithium: "yes" }) },
       { band: "Cold", signals: mk({ pitch: true }) },
-      { band: "Disqualified", signals: mk({ relevant: false }) },
+      { band: "Disqualified", signals: mk({ lithium: "no" }) },
     ];
 
     for (const { band, signals } of cases) {

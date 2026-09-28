@@ -1,54 +1,41 @@
 import { describe, it, expect } from "vitest";
-import { computeBand, INFO_SIGNALS_QUALIFY_THRESHOLD } from "../computeBand";
+import { computeBand, VOLUME_BONUS } from "../computeBand";
 import { deriveOutcome } from "../legacyAnalysis";
 import { mk } from "./_fixtures";
 
-// The band rule (docs/intent_docs/intent_score.pdf §3). Top rule wins. These
-// pin production behaviour — any change to the rule must update these on purpose.
-describe("computeBand — the band rule (top rule wins)", () => {
-  it("substance path: ≥3 info signals → Qualified (90/hot/push_to_crm)", () => {
-    const r = computeBand(mk({ spec: true, volume: true, need: true }));
+// The band rule (qualification-2.0.0 — the lithium-dealer rule). Top rule wins.
+// These pin production behaviour — any change to the rule must update these on
+// purpose.
+describe("computeBand — the lithium-dealer rule (top rule wins)", () => {
+  it("lithium yes → Qualified 75 (qualified/push_to_crm)", () => {
+    const r = computeBand(mk({ lithium: "yes" }));
     expect(r.band).toBe("Qualified");
-    expect(r.info_signals_count).toBe(3);
-    expect(r.lead_score).toBe(90);
+    expect(r.lead_score).toBe(75);
     expect(r.interest_level).toBe("hot");
     expect(r.action).toBe("push_to_crm");
     expect(r.call_status).toBe("complete");
     expect(r.hard_negative).toBe(false);
   });
 
-  it("commitment path: passive callback with zero info → Qualified", () => {
-    const r = computeBand(mk({ callback: true }));
+  it("lithium yes + monthly volume → Qualified 90", () => {
+    const r = computeBand(mk({ lithium: "yes", volume: true }));
     expect(r.band).toBe("Qualified");
-    expect(r.info_signals_count).toBe(0);
+    expect(r.lead_score).toBe(75 + VOLUME_BONUS);
     expect(r.lead_score).toBe(90);
   });
 
-  it("1–2 info signals, no callback → Warm (60/warm/schedule_call)", () => {
-    const one = computeBand(mk({ volume: true }));
-    expect(one.band).toBe("Warm");
-    expect(one.info_signals_count).toBe(1);
-    expect(one.lead_score).toBe(60);
-    expect(one.interest_level).toBe("warm");
-    expect(one.action).toBe("schedule_call");
-
-    const two = computeBand(mk({ spec: true, volume: true }));
-    expect(two.band).toBe("Warm");
-    expect(two.info_signals_count).toBe(2);
-  });
-
-  it("pitch heard, nothing disclosed → Cold (30/cold/follow_up)", () => {
-    const r = computeBand(mk({ pitch: true }));
-    expect(r.band).toBe("Cold");
-    expect(r.info_signals_count).toBe(0);
-    expect(r.lead_score).toBe(30);
-    expect(r.interest_level).toBe("cold");
-    expect(r.action).toBe("follow_up");
-  });
-
-  it("relevant_dealer=no → Disqualified, OVERRIDING callback + substance", () => {
+  it("other info signals do NOT move the score — only volume does", () => {
     const r = computeBand(
-      mk({ relevant: false, callback: true, spec: true, volume: true, need: true }),
+      mk({ lithium: "yes", spec: true, financier: true, need: true, value: true }),
+    );
+    expect(r.band).toBe("Qualified");
+    expect(r.lead_score).toBe(75);
+    expect(r.info_signals_count).toBe(4); // still counted for audit
+  });
+
+  it("lithium no → Disqualified 0, overriding callback + volume", () => {
+    const r = computeBand(
+      mk({ lithium: "no", callback: true, spec: true, volume: true, need: true }),
     );
     expect(r.band).toBe("Disqualified");
     expect(r.lead_score).toBe(0);
@@ -57,12 +44,38 @@ describe("computeBand — the band rule (top rule wins)", () => {
     expect(r.hard_negative).toBe(true);
   });
 
-  it("hard disqualifier beats callback AND substance", () => {
+  it("lithium never answered → Cold 30, even with callback + substance", () => {
+    for (const signals of [
+      mk({ pitch: true }),
+      mk({ callback: true }),
+      mk({ spec: true, volume: true, need: true }),
+    ]) {
+      const r = computeBand(signals);
+      expect(r.band).toBe("Cold");
+      expect(r.lead_score).toBe(30);
+      expect(r.interest_level).toBe("cold");
+      expect(r.action).toBe("follow_up");
+      expect(r.hard_negative).toBe(false);
+    }
+  });
+
+  it("the AI never produces Warm", () => {
+    for (const lithium of ["yes", "no", "unknown"] as const) {
+      for (const volume of [true, false]) {
+        expect(computeBand(mk({ lithium, volume, spec: true })).band).not.toBe("Warm");
+      }
+    }
+  });
+
+  it("relevant_dealer no longer gates the band", () => {
+    expect(computeBand(mk({ lithium: "yes", relevant: false })).band).toBe("Qualified");
+  });
+
+  it("hard disqualifier beats a lithium yes", () => {
     for (const d of ["dont_call", "hostile", "not_interested"] as const) {
-      const r = computeBand(
-        mk({ disqualifier: d, callback: true, spec: true, volume: true, need: true }),
-      );
+      const r = computeBand(mk({ lithium: "yes", volume: true, disqualifier: d }));
       expect(r.band).toBe("Disqualified");
+      expect(r.lead_score).toBe(0);
       expect(r.hard_negative).toBe(true);
       expect(r.action).toBe("stop");
     }
@@ -70,7 +83,7 @@ describe("computeBand — the band rule (top rule wins)", () => {
 });
 
 describe("computeBand — dropped calls", () => {
-  it("dropped_empty: call_dropped + 0 info + no callback → no band, auto_retry", () => {
+  it("dropped_empty: lithium unknown + 0 info + no callback → no band, auto_retry", () => {
     const r = computeBand(mk({ relevant: false, disqualifier: "call_dropped" }));
     expect(r.band).toBe(null);
     expect(r.call_status).toBe("dropped_empty");
@@ -79,25 +92,23 @@ describe("computeBand — dropped calls", () => {
     expect(r.hard_negative).toBe(false); // untouched, not demoted
   });
 
-  it("dropped_partial: substance captured before the drop → banded normally", () => {
-    const r = computeBand(
-      mk({ disqualifier: "call_dropped", spec: true, volume: true, need: true }),
-    );
+  it("dropped after a lithium yes + volume → dropped_partial Qualified 90", () => {
+    const r = computeBand(mk({ disqualifier: "call_dropped", lithium: "yes", volume: true }));
     expect(r.call_status).toBe("dropped_partial");
     expect(r.band).toBe("Qualified");
-    expect(r.info_signals_count).toBe(3);
+    expect(r.lead_score).toBe(90);
   });
 
-  it("dropped_partial via callback alone (0 info) → Qualified", () => {
-    const r = computeBand(mk({ disqualifier: "call_dropped", callback: true }));
+  it("dropped after a lithium no → dropped_partial Disqualified", () => {
+    const r = computeBand(mk({ disqualifier: "call_dropped", lithium: "no" }));
     expect(r.call_status).toBe("dropped_partial");
-    expect(r.band).toBe("Qualified");
+    expect(r.band).toBe("Disqualified");
   });
 
-  it("dropped + 1 info, no callback → dropped_partial Warm (not voided)", () => {
+  it("dropped with substance but no lithium answer → dropped_partial Cold", () => {
     const r = computeBand(mk({ disqualifier: "call_dropped", volume: true }));
     expect(r.call_status).toBe("dropped_partial");
-    expect(r.band).toBe("Warm");
+    expect(r.band).toBe("Cold");
   });
 });
 
@@ -109,26 +120,26 @@ describe("computeBand — info_signals_count & breakdown", () => {
       ).info_signals_count,
     ).toBe(5);
     expect(computeBand(mk()).info_signals_count).toBe(0);
-    // pitch/callback/relevant are NOT info signals.
+    // lithium/pitch/callback/relevant are NOT info signals.
     expect(
-      computeBand(mk({ pitch: true, callback: true, relevant: true })).info_signals_count,
+      computeBand(mk({ lithium: "yes", pitch: true, callback: true, relevant: true }))
+        .info_signals_count,
     ).toBe(0);
   });
 
-  it("breakdown carries one row per info signal flagged info, with present", () => {
-    const r = computeBand(mk({ spec: true, volume: false }));
+  it("breakdown leads with the lithium row, then one row per info signal", () => {
+    const r = computeBand(mk({ lithium: "yes", spec: true, volume: false }));
+    expect(r.score_breakdown[0].signal).toBe("lithium_dealer");
+    expect(r.score_breakdown[0].present).toBe(true);
     const infoRows = r.score_breakdown.filter((l) => l.info);
     expect(infoRows).toHaveLength(5);
     expect(infoRows.find((l) => l.signal === "battery_spec_shared")?.present).toBe(true);
     expect(infoRows.find((l) => l.signal === "volume_shared")?.present).toBe(false);
   });
 
-  it("the qualify threshold is 3", () => {
-    expect(INFO_SIGNALS_QUALIFY_THRESHOLD).toBe(3);
-    expect(computeBand(mk({ spec: true, volume: true })).band).toBe("Warm"); // 2
-    expect(computeBand(mk({ spec: true, volume: true, need: true })).band).toBe(
-      "Qualified",
-    ); // 3
+  it("lithium row is not present for no or unknown", () => {
+    expect(computeBand(mk({ lithium: "no" })).score_breakdown[0].present).toBe(false);
+    expect(computeBand(mk()).score_breakdown[0].present).toBe(false);
   });
 });
 
