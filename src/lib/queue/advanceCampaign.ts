@@ -86,6 +86,8 @@ type ClaimedRow = { id: string; lead_id: string; attempt_count: number };
 // counts the dial (attempt_count + 1), consumes the booking (next_attempt_at
 // NULL) and clears the previous attempt's provider id, so a late webhook for
 // that earlier call cannot close this one (completeCampaignLead compares ids).
+// It clears the previous outcome too, or a redial in flight would show the last
+// call's "INVITE failed" until its own result lands (attempt_history keeps it).
 async function claimNextPending(campaignId: string): Promise<{
   campaignLeadId: string;
   leadId: string;
@@ -112,7 +114,8 @@ async function claimNextPending(campaignId: string): Promise<{
         started_at = NOW(),
         attempt_count = attempt_count + 1,
         next_attempt_at = NULL,
-        bolna_call_id = NULL
+        bolna_call_id = NULL,
+        call_outcome = NULL
     WHERE id IN (SELECT id FROM next_row)
     RETURNING id, lead_id, attempt_count
   `);
