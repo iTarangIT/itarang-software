@@ -16,7 +16,7 @@
 // the org default working hours, so an automatic retry never rings a dealer at
 // night even though a manual 'now' campaign may be started at any hour.
 
-import { isRetryableFailure } from "./failureReason";
+import { classifyTriggerDetail, isRetryableFailure } from "./failureReason";
 
 export type RetryWindow = {
     /** 'HH:MM' IST */
@@ -38,6 +38,14 @@ export type RetryInput = {
     maxRetries: number | null;
     now: Date;
     window: RetryWindow;
+    /** Retries already granted free because OUR line was blocked (see below). */
+    lineBlockedRetriesUsed?: number;
+};
+
+export type RetryPlan = {
+    at: Date;
+    /** false = this dial never reached the dealer's network; it is refunded. */
+    consumesAttempt: boolean;
 };
 
 const MIN = 60_000;
@@ -80,6 +88,50 @@ export function isAutoRetryable(status: string, callOutcome: string | null): boo
         return isRetryableFailure({ status, callOutcome });
     }
     return false; // completed, skipped, pending, calling, unknown
+}
+
+// ── Line blocked on OUR side ────────────────────────────────────────────────
+//
+// SIP 403 Forbidden / 401 / 407, a misconfigured from-number, an empty wallet,
+// a 429 rate limit: the provider refused to place the call at all. Nothing is
+// learned about the dealer, so the dial is refunded instead of burning one of
+// the lead's attempts, and the lead waits LINE_BLOCKED_PAUSE for the line to
+// come back. Capped, so a line that stays blocked cannot loop a campaign
+// forever — past the cap the dial counts like any other failure.
+//
+// Seen on prod 2026-09-30: every dial from 13:56 came back "sip status: 403:
+// Forbidden" and each one spent a lead's last retry.
+export const LINE_BLOCKED_PAUSE_MS = 30 * MIN;
+export const MAX_LINE_BLOCKED_RETRIES = 10;
+
+export function isLineBlockedFailure(callOutcome: string | null): boolean {
+    const outcome = callOutcome ?? "";
+    const m = /^trigger_(?:failed|exception):\s*([\s\S]*)$/i.exec(outcome);
+    if (!m) return false;
+    const detail = m[1].toLowerCase();
+    if (/(^|[^0-9])(401|403|407|429)([^0-9]|$)/.test(detail)) return true;
+    if (detail.includes("too many requests") || detail.includes("rate limit")) return true;
+    return classifyTriggerDetail(detail) === "config_error";
+}
+
+/**
+ * planRetry plus whether the dial that just ended counts against the lead's
+ * attempt budget. null = the lead is done.
+ */
+export function planRetryDetailed(input: RetryInput): RetryPlan | null {
+    const { maxRetries } = input;
+    if (maxRetries == null || maxRetries <= 0) return null;
+    if (
+        isLineBlockedFailure(input.callOutcome) &&
+        (input.lineBlockedRetriesUsed ?? 0) < MAX_LINE_BLOCKED_RETRIES
+    ) {
+        return {
+            at: clampIntoWindow(new Date(input.now.getTime() + LINE_BLOCKED_PAUSE_MS), input.window),
+            consumesAttempt: false,
+        };
+    }
+    const at = planRetry(input);
+    return at ? { at, consumesAttempt: true } : null;
 }
 
 /**

@@ -7,6 +7,9 @@ import { describe, expect, it } from "vitest";
 import {
     clampIntoWindow,
     isAutoRetryable,
+    isLineBlockedFailure,
+    MAX_LINE_BLOCKED_RETRIES,
+    planRetryDetailed,
     isWindowOpen,
     nextWindowOpen,
     planRetry,
@@ -101,6 +104,62 @@ describe("planRetry — calling hours", () => {
         expect(planRetry(base({ status: "busy", now: ist("2026-09-28T07:00:00") }))).toEqual(
             ist("2026-09-28T09:00:00"),
         );
+    });
+});
+
+describe("line blocked on our side (refunded attempts)", () => {
+    // Real prod outcome, 2026-09-30.
+    const SIP_403 =
+        "trigger_failed: unexpected status from INVITE response: sip status: 403: Forbidden (SIP 403)";
+    const SIP_429 =
+        "trigger_failed: unexpected status from INVITE response: sip status: 429 (PROVIDE_REFERRER_IDENTITY)";
+
+    it("recognises 403 / 429 / config errors, not dealer-side SIP codes", () => {
+        expect(isLineBlockedFailure(SIP_403)).toBe(true);
+        expect(isLineBlockedFailure(SIP_429)).toBe(true);
+        expect(isLineBlockedFailure("trigger_failed: invalid from_number")).toBe(true);
+        expect(isLineBlockedFailure("trigger_failed: INVITE failed: sip status: 486 Busy Here")).toBe(false);
+        expect(isLineBlockedFailure("trigger_failed: INVITE failed: sip status: 480")).toBe(false);
+        expect(isLineBlockedFailure("no_webhook")).toBe(false);
+        expect(isLineBlockedFailure(null)).toBe(false);
+    });
+
+    it("a phone number containing 403 is not a SIP 403", () => {
+        expect(isLineBlockedFailure("trigger_failed: sip status: 480 for +919840312345")).toBe(false);
+    });
+
+    it("refunds the dial and waits 30 min, even on the last attempt", () => {
+        const plan = planRetryDetailed(
+            base({ status: "failed", callOutcome: SIP_403, attemptCount: 4, now: ist("2026-09-30T14:00:00") }),
+        );
+        expect(plan).toEqual({ at: ist("2026-09-30T14:30:00"), consumesAttempt: false });
+    });
+
+    it("the 30-min pause still respects calling hours", () => {
+        const plan = planRetryDetailed(
+            base({ status: "failed", callOutcome: SIP_403, now: ist("2026-09-30T18:45:00") }),
+        );
+        expect(plan?.at).toEqual(ist("2026-10-01T09:00:00"));
+    });
+
+    it("after MAX_LINE_BLOCKED_RETRIES the dial counts like any failure", () => {
+        const plan = planRetryDetailed(
+            base({
+                status: "failed",
+                callOutcome: SIP_403,
+                attemptCount: 4,
+                lineBlockedRetriesUsed: MAX_LINE_BLOCKED_RETRIES,
+            }),
+        );
+        expect(plan).toBeNull(); // 4th dial, budget spent
+    });
+
+    it("is off for campaigns without auto-retry", () => {
+        expect(planRetryDetailed(base({ status: "failed", callOutcome: SIP_403, maxRetries: null }))).toBeNull();
+    });
+
+    it("a normal outcome consumes the attempt", () => {
+        expect(planRetryDetailed(base())?.consumesAttempt).toBe(true);
     });
 });
 

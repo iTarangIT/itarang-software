@@ -81,6 +81,24 @@ async function main() {
   const r4 = await recordAttemptOutcome({ campaignLeadId: `${CID}_c`, status: "busy", outcome: "busy", bolnaCallId: "conv_c4" });
   check("4th dial (1 + max_retries) books no retry", r4.written && r4.retryAt === null && (await row(`${CID}_c`)).next_attempt_at === null, r4);
 
+  // 4b. our line refused the dial (SIP 403) → attempt refunded, retry in ~30 min.
+  await db.insert(dialerCampaignLeads).values({
+    id: `${CID}_d`, campaign_id: CID, lead_id: `${CID}_lead_d`, queue_position: 3, status: "calling", attempt_count: 4,
+  });
+  const r4b = await recordAttemptOutcome({
+    campaignLeadId: `${CID}_d`,
+    status: "failed",
+    outcome: "trigger_failed: unexpected status from INVITE response: sip status: 403: Forbidden (SIP 403)",
+  });
+  const d = await row(`${CID}_d`);
+  const hist = d.attempt_history as Array<{ counted?: boolean }>;
+  check(
+    "SIP 403 on the last dial is refunded and rebooked",
+    r4b.written && r4b.retryAt != null && d.attempt_count === 3 && hist.at(-1)?.counted === false,
+    { attempt_count: d.attempt_count, retryAt: r4b.retryAt, hist },
+  );
+  await db.update(dialerCampaignLeads).set({ next_attempt_at: null }).where(eq(dialerCampaignLeads.id, `${CID}_d`));
+
   // 5. running campaign, only a FUTURE retry left → waiting, not completed.
   await db.update(dialerCampaignLeads)
     .set({ next_attempt_at: sql`now() + interval '2 hours'` })
