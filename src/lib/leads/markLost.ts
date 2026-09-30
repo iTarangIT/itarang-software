@@ -38,6 +38,13 @@ export class HighImpactUnconfirmedError extends Error {
     }
 }
 
+/** ID 76: "Lost to competition" names the competitor. */
+export class CompetitorRequiredError extends Error {
+    constructor() {
+        super("Name the competitor when the reason is 'Lost to competition'.");
+    }
+}
+
 export class LostLeadNotFoundError extends Error {
     constructor() {
         super("Lead not found");
@@ -51,11 +58,16 @@ export type MarkLostInput = {
     notes?: string | null;
     /** Required true for the four high-impact reasons (the UI's consequence modal). */
     confirmedHighImpact?: boolean;
+    /** Required for lost_to_competition (ID 76); stored in dealer_leads.competitor_name (E-314). */
+    competitorName?: string | null;
 };
 
 /** The same refusals the route has always made, before anything is written. */
-export function checkMarkLost(input: Pick<MarkLostInput, "reason" | "notes" | "confirmedHighImpact">): void {
+export function checkMarkLost(
+    input: Pick<MarkLostInput, "reason" | "notes" | "confirmedHighImpact" | "competitorName">,
+): void {
     if (input.reason === "other" && !input.notes?.trim()) throw new LostNotesRequiredError();
+    if (input.reason === "lost_to_competition" && !input.competitorName?.trim()) throw new CompetitorRequiredError();
     if (isHighImpactLostReason(input.reason) && !input.confirmedHighImpact) throw new HighImpactUnconfirmedError();
 }
 
@@ -66,10 +78,17 @@ export async function markLeadLost(input: MarkLostInput, opts?: { tx?: Tx }): Pr
             SELECT lead_status FROM dealer_leads WHERE id = ${input.leadId} LIMIT 1
         `);
         if (stateRows.length === 0) throw new LostLeadNotFoundError();
-        // Reachable from ANY status, for any role — a Converted lead (the
-        // onboarding-dropout loopback, no longer admin-only) and a lead with no
-        // status included. The reason itself is still mandatory.
+        // Reachable from any OPEN status, Won included (a dealer who drops out
+        // of onboarding), and a lead with no status. A Converted lead goes to
+        // Lost only through the admin drop-out resolution (S3, statusRules.ts).
         const fromStatus = stateRows[0]?.lead_status as LeadStatus | null;
+
+        // ID 76: the competitor's name (E-314 column, raw — only this reason writes it).
+        if (input.reason === "lost_to_competition") {
+            await tx.execute(sql`
+                UPDATE dealer_leads SET competitor_name = ${input.competitorName!.trim()} WHERE id = ${input.leadId}
+            `);
+        }
 
         // BRD §0.7 side effect: business_closed permanently excludes from AI dialer.
         if (input.reason === "business_closed") {
@@ -90,6 +109,7 @@ export async function markLeadLost(input: MarkLostInput, opts?: { tx?: Tx }): Pr
                     toLostReason: input.reason,
                     reasonNotes: input.notes ?? null,
                     closingRole: deriveClosingRole(input.actor.role),
+                    event: "mark_lost",
                 },
             },
             { tx },

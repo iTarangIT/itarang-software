@@ -16,6 +16,7 @@ const createPending = vi.fn<(...a: unknown[]) => Promise<unknown>>(async () => (
 vi.mock("../actions", async (orig) => ({ ...(await orig<typeof import("../actions")>()), createPending }));
 const recordVisit = vi.fn<(...a: unknown[]) => Promise<unknown>>(async () => ({ visitId: "v-1", scheduledVisitId: null }));
 vi.mock("@/lib/asm/recordVisit", () => ({ recordVisit, scheduleVisit: vi.fn() }));
+vi.mock("@/lib/asm/visitStatus", () => ({ applyVisitStatus: vi.fn(async () => ({ historyId: null, status: null })) }));
 const createInsideSalesLead = vi.fn<(...a: unknown[]) => Promise<unknown>>(async () => ({ id: "DL-NEW", afterCommit: undefined }));
 vi.mock("@/lib/inside-sales/createLead", async (orig) => ({
     ...(await orig<typeof import("@/lib/inside-sales/createLead")>()),

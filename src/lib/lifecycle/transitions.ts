@@ -2,9 +2,10 @@
 // Source of truth for the status vocabulary and the list of high-impact Lost
 // reasons that need a confirmation modal.
 //
-// Transition VALIDATION was removed (2026-08-18): Inside Sales and ASM reps set
-// whatever status the conversation actually reached. See canTransition.
+// Transition validation is back (S3, 29 Sep 2026): see statusRules.ts.
 // BRD refs: §0.7 (Status Lifecycle), §0.10 (Commercials).
+
+import { checkStatusMove } from "@/lib/lifecycle/statusRules";
 
 export const LEAD_STATUS = [
   "New_Unassigned",
@@ -14,6 +15,9 @@ export const LEAD_STATUS = [
   "Commercials_Finalised",
   "Awaiting_Customer_Decision",
   "Transferred_to_ASM",
+  // ID 74 (29 Sep 2026): the rep's Mark Won. Converted is set only when the
+  // admin approves the dealer's onboarding — credit and targets run on it.
+  "Won",
   "Converted",
   "Lost",
 ] as const;
@@ -27,6 +31,9 @@ export const OPEN_STATUSES: LeadStatus[] = [
   "Commercials_Finalised",
   "Awaiting_Customer_Decision",
   "Transferred_to_ASM",
+  // Won is still open: the dealer is onboarding. It leaves the funnel only as
+  // Converted (onboarding approved) or Lost (dropped out).
+  "Won",
 ];
 
 export const TERMINAL_STATUSES: LeadStatus[] = ["Converted", "Lost"];
@@ -43,6 +50,10 @@ export const LOST_REASON = [
   "duplicate_lead",
   "other",
   "onboarding_dropout",
+  // ID 76 (29 Sep 2026). lost_to_competition carries the competitor's name
+  // (dealer_leads.competitor_name, E-314).
+  "lost_to_competition",
+  "moved_to_other_business",
 ] as const;
 export type LostReason = (typeof LOST_REASON)[number];
 
@@ -76,34 +87,37 @@ export type TransitionResult =
   | { ok: true }
   | { ok: false; severity: Severity; reason: string };
 
-// The transition map is now PERMISSIVE: every status is reachable from every
-// other one. Product decision (2026-08-18) — reps kept hitting "X → Y is not an
-// allowed transition" on moves the conversation had genuinely made
-// (Transferred_to_ASM → Under_Discussion after a visit reopened the deal,
-// Under_Discussion → Commercials_Explained before the commercials were typed
-// up), with no way forward. The team owns the funnel; what the reporting reads
-// is the audit trail — a dealer_lead_status_history row plus a touchpoint per
-// change — and that is unchanged.
+// S3 (tracker ID 115, 29 Sep 2026): the permissive map of 2026-08-18 is gone.
+// Status moves forward only and only on its event; the rules live in
+// statusRules.ts and writeTouchpoint enforces them for every entry point.
 //
-// Still a map, and still excluding self-transitions, because the UI reads it to
-// build the "Update lead status" menu (LeadStatusEditor). To reinstate a
-// restricted funnel, put the per-status lists back here and read TransitionCtx
-// in canTransition again; every caller still handles a hard-failure verdict.
+// TRANSITION_MAP is what a rep's own action can reach from each status — the UI
+// reads it to build the "Update lead status" menu (LeadStatusEditor): forward
+// open stages, plus Transfer / Converted / Lost through their dedicated flows.
+// A closed lead offers nothing; reopening is reactivation or admin "Correct status".
 export const TRANSITION_MAP: Record<LeadStatus, LeadStatus[]> = Object.fromEntries(
-  LEAD_STATUS.map((from) => [from, LEAD_STATUS.filter((to) => to !== from)]),
+  LEAD_STATUS.map((from) => [
+    from,
+    LEAD_STATUS.filter((to) => {
+      if (to === "Transferred_to_ASM") return checkStatusMove({ from, to, event: "transfer" }).ok;
+      if (to === "Won") return checkStatusMove({ from, to, event: "mark_won" }).ok;
+      if (to === "Converted") return false; // onboarding approval only, never a rep's menu
+      if (to === "Lost") return checkStatusMove({ from, to, event: "mark_lost" }).ok;
+      return checkStatusMove({ from, to, event: "progress" }).ok;
+    }),
+  ]),
 ) as Record<LeadStatus, LeadStatus[]>;
 
-// Every transition is allowed, for every actor, with no preconditions: no
-// transition map, no engaged-touchpoint gate, no final_price gate, no admin-only
-// reopen, no soft warnings. Signature and return type are deliberately unchanged
-// so the call sites keep compiling and re-tightening is a one-file change.
+// An ordinary (progress) move under the S3 rules. TransitionCtx is still
+// accepted so the call sites stay untouched; nothing reads it.
 export function canTransition(
-  _from: LeadStatus,
-  _to: LeadStatus,
+  from: LeadStatus,
+  to: LeadStatus,
   ctx: TransitionCtx = {},
 ): TransitionResult {
   void ctx;
-  return { ok: true };
+  const verdict = checkStatusMove({ from, to, event: "progress" });
+  return verdict.ok ? { ok: true } : { ok: false, severity: "hard", reason: verdict.reason };
 }
 
 export function isHighImpactLostReason(r: LostReason): boolean {

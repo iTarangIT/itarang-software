@@ -18,10 +18,11 @@ import crypto from "crypto";
 import { db } from "@/lib/db";
 import { dealerLeads } from "@/lib/db/schema";
 import { errorMessage } from "@/lib/api-utils";
+import { isForward } from "@/lib/lifecycle/statusRules";
 import { writeTouchpoint } from "@/lib/touchpoints/write";
 import { reactivateLead } from "@/lib/leads/reactivation";
 import { classifyAgainstExisting, loadExistingByPhone } from "@/lib/leads/dedupe";
-import { isTerminal, type LeadStatus } from "@/lib/lifecycle/transitions";
+import type { LeadStatus } from "@/lib/lifecycle/transitions";
 import {
     callStatusFor,
     dispositionFor,
@@ -31,6 +32,9 @@ import {
 } from "./mapper";
 import type { NeodoveInboundEvent } from "./types";
 import { resolveAgentUserId } from "./agentMap";
+import { applyNeodoveCallOwnership } from "./ownerFromCall";
+import { reviewLeadContactability } from "@/lib/leads/contactability";
+import { classifyDisposition } from "@/lib/leads/dispositions";
 
 export type InboundOutcome = {
     handled: boolean;
@@ -199,11 +203,11 @@ async function handleDisposition(
     }
     const dealerLeadId = resolved.id;
 
-    // Only attempt a status change when the NeoDove stage maps to one AND the
-    // lead is not already closed. Reps now set any status they like (see
-    // canTransition), but a REMOTE system must not silently reopen a lead the
-    // team marked Converted / Lost — that is recorded as a plain touchpoint
-    // instead: the call still happened.
+    // A connected call is first contact (ID 116): it lifts the lead to
+    // Under_Discussion only when the lead is earlier than that. Anything else —
+    // a later stage, a closed lead — is recorded as a plain touchpoint: the call
+    // still happened, and an inbound event must never be refused (S3 guard in
+    // writeTouchpoint would throw on a backward move).
     const target = leadStatusFor(event);
     let statusChange: Parameters<typeof writeTouchpoint>[0]["statusChange"];
 
@@ -212,18 +216,14 @@ async function handleDisposition(
             SELECT lead_status FROM dealer_leads WHERE id = ${dealerLeadId} LIMIT 1
         `);
         const from = (current[0]?.lead_status ?? null) as LeadStatus | null;
-        if (from && from !== target) {
-            if (isTerminal(from)) {
-                console.warn(
-                    `[NeoDove/inbound] refused ${from} → ${target} for ${dealerLeadId}: lead is already closed`,
-                );
-            } else {
-                statusChange = { from, to: target, closingRole: "system" };
-            }
+        if (isForward(from, target)) {
+            statusChange = { from, to: target, closingRole: "system", event: "progress" };
         }
     }
 
     const callStatus = callStatusFor(event);
+    const agentUserId = await resolveAgentUserId(event.agentName);
+    const callAt = event.occurredAt ?? new Date();
 
     const { touchpointId } = await writeTouchpoint({
         dealerLeadId,
@@ -233,8 +233,8 @@ async function handleDisposition(
         // unmapped agent stays null — never guessed, never the lead's owner —
         // and is re-pointed when the mapping is saved. The agent's name goes to
         // external_agent_name either way (E-226).
-        performedBy: await resolveAgentUserId(event.agentName),
-        performedAt: event.occurredAt ?? new Date(),
+        performedBy: agentUserId,
+        performedAt: callAt,
         callStatus,
         callDurationSec: event.callDurationSec,
         isEngaged: callStatus === "connected",
@@ -247,6 +247,21 @@ async function handleDisposition(
 
     await attachCallEvidence(touchpointId, event);
     await recordLeadDisposition(dealerLeadId, event);
+
+    // ID 83: the first human call by a linked agent makes them the owner of an
+    // unowned lead; a call after the owner's "Call this lead now" is marked
+    // "called on your behalf". Only for call events, never lead create/delete.
+    if (touchpointTypeFor(event.eventType) === "inside_sales_call") {
+        await applyNeodoveCallOwnership({ leadId: dealerLeadId, touchpointId, agentUserId, callAt });
+        // ID 36: contactability after every call.
+        await reviewLeadContactability({
+            leadId: dealerLeadId,
+            connected: callStatus === "connected",
+            reasonLabel: classifyDisposition(event.disposition ?? event.tag ?? "", {
+                callConnected: event.callConnected ?? false,
+            })?.label ?? null,
+        });
+    }
 
     await db.execute(sql`
         UPDATE dealer_leads

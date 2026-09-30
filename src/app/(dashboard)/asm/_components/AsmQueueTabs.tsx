@@ -7,6 +7,8 @@ type Props = {
     active: AsmQueueTab;
     counts: AsmQueueCounts | null;
     onChange: (tab: AsmQueueTab) => void;
+    /** Tabs not offered to this viewer (the unowned pool for reps, ID 45). */
+    hidden?: readonly AsmQueueTab[];
 };
 
 const ICONS: Record<AsmQueueTab, React.ComponentType<{ className?: string }>> = {
@@ -17,10 +19,10 @@ const ICONS: Record<AsmQueueTab, React.ComponentType<{ className?: string }>> = 
     my_closed: CheckCheck,
 };
 
-export function AsmQueueTabs({ active, counts, onChange }: Props) {
+export function AsmQueueTabs({ active, counts, onChange, hidden = [] }: Props) {
     return (
         <div className="border-b border-gray-100 flex overflow-x-auto">
-            {ASM_QUEUE_TABS.map((tab) => {
+            {ASM_QUEUE_TABS.filter((t) => !hidden.includes(t)).map((tab) => {
                 const Icon = ICONS[tab];
                 const isActive = tab === active;
                 const count = counts?.[tab];

@@ -38,6 +38,7 @@ import { pushLead } from "@/lib/neodove/client";
 import { dealerLeadToNeodove, type PushableLead } from "@/lib/neodove/mapper";
 import { NEODOVE_ADMIN_ROLES } from "@/lib/neodove/roles";
 import {
+    ASSIGN_ON_PUSH,
     assignAfterPush,
     logAssignmentSummary,
     resolveNeodoveAssignee,
@@ -347,7 +348,7 @@ async function drainSelection(
     // working set: ownership is the operator's decision about these leads, not
     // a property of whether NeoDove happened to accept each one, and iterating
     // the selection also backfills leads already linked by an earlier push.
-    if (assign.target) {
+    if (ASSIGN_ON_PUSH && assign.target) {
         let assigned = 0;
         let assignFailed = 0;
         for (const leadId of leadIds) {

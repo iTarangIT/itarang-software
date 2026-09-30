@@ -100,11 +100,13 @@ describe("checkCallProposal", () => {
         expect(r).toEqual({ ok: false, question: "Is the dealer warm or hot?" });
     });
 
-    it("commercials explained under Hot → Commercials_Explained", () => {
-        const r = checkCallProposal({
-            label: "Commercials Explained", connect: "connected", bucket: "Hot", status: "Commercials_Explained",
-        });
-        expect(r).toMatchObject({ ok: true, status: "Commercials_Explained" });
+    it("commercials explained never sets a commercials stage (ID 75) — first contact only", () => {
+        expect(
+            checkCallProposal({ label: "Commercials Explained", connect: "connected", bucket: "Hot", status: "Commercials_Explained" }).ok,
+        ).toBe(false);
+        expect(
+            checkCallProposal({ label: "Commercials Explained", connect: "connected", bucket: "Hot", status: "Under_Discussion" }),
+        ).toMatchObject({ ok: true, status: "Under_Discussion" });
     });
 
     it("a bucket the label isn't filed under → asks", () => {
@@ -119,7 +121,7 @@ describe("checkCallProposal", () => {
 
     it("quote sent proposes interest hot", () => {
         expect(
-            checkCallProposal({ label: "Quotation Sent", connect: "connected", bucket: "Hot", status: "Awaiting_Customer_Decision" }),
+            checkCallProposal({ label: "Quotation Sent", connect: "connected", bucket: "Hot" }),
         ).toMatchObject({ ok: true, interest: "hot" });
     });
 
@@ -144,11 +146,9 @@ describe("checkVisitProposal", () => {
         expect(checkVisitProposal({ outcome: "productive" })).toMatchObject({ ok: true, status: NO_CHANGE });
     });
 
-    it("commercials progressed must say explained or finalised", () => {
-        expect(checkVisitProposal({ outcome: "commercials_progressed" }).ok).toBe(false);
-        expect(
-            checkVisitProposal({ outcome: "commercials_progressed", status: "Commercials_Finalised" }),
-        ).toMatchObject({ ok: true, status: "Commercials_Finalised" });
+    it("commercials progressed never sets a commercials stage (ID 75)", () => {
+        expect(checkVisitProposal({ outcome: "commercials_progressed" }).ok).toBe(true);
+        expect(checkVisitProposal({ outcome: "commercials_progressed", status: "Commercials_Finalised" }).ok).toBe(false);
     });
 
     it("dealer uninterested → asks keep open or Lost; Lost needs an allowed reason", () => {

@@ -61,6 +61,10 @@
       "schedule": "0 4 * * *"
     },
     {
+      "path": "/api/cron/dealer-agreement-refresh",
+      "schedule": "*/15 * * * *"
+    },
+    {
       "path": "/api/cron/nbfc/run-emi-aging",
       "schedule": "30 5 * * *"
     },

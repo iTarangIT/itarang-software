@@ -195,6 +195,7 @@ export const createLeadApplier = defineApplier<CreateLeadPlan>({
                     interestLevel: p.interest_level,
                     language: p.language,
                     businessType: p.business_type,
+                    door: "whatsapp_assistant",
                 },
                 { tx },
             );

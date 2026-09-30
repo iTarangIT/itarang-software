@@ -144,6 +144,21 @@ export async function readDocument(
   };
 }
 
+/**
+ * Run a caller-supplied extraction prompt over one file and return the parsed
+ * JSON object, or null. For documents outside the WhatsApp onboarding catalogue
+ * (e.g. an executed dealer agreement, src/lib/agreement/readExecutedAgreement.ts)
+ * — kept out of DOC_FIELDS so the onboarding classifier never offers them.
+ */
+export async function readDocumentWithPrompt(
+  buffer: Buffer,
+  mimeType: string,
+  prompt: string,
+): Promise<Record<string, unknown> | null> {
+  const out = await generate(buffer, mimeType, prompt);
+  return "error" in out ? null : (out.parsed as Record<string, unknown>);
+}
+
 export interface ClassificationResult {
   /** Detected document type (a key of DOC_FIELDS) or "unknown". */
   documentType: string;

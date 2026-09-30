@@ -7,6 +7,7 @@ import {
   extractStampCertificateIds,
 } from "@/lib/digio/parse-status";
 import { isS3Backend, putObject, filesProxyPath } from "@/lib/storage/s3";
+import { DEALER_AGREEMENT_EXPIRE_IN_DAYS, DIGIO_MAX_EXPIRE_IN_DAYS } from "@/lib/agreement/constants";
 
 type AgreementPayload = {
   company?: any;
@@ -530,7 +531,14 @@ export async function POST(req: NextRequest) {
     const digioPayload: Record<string, unknown> = {
       file_name: `${cleanString(company.companyName) || "dealer"}-agreement.pdf`,
       file_data: agreementBase64,
-      expire_in_days: 30,
+      // ID 54: the caller's window (initiate-agreement sends
+      // DEALER_AGREEMENT_EXPIRE_IN_DAYS = 90). This was hard-coded to 30, so
+      // the 26 Sep change to 90 days never reached Digio. Clamped to Digio's
+      // documented 1..90 — above 90 Digio refuses the whole initiation.
+      expire_in_days: Math.min(
+        DIGIO_MAX_EXPIRE_IN_DAYS,
+        Math.max(1, Math.round(Number(agreement.expireInDays) || DEALER_AGREEMENT_EXPIRE_IN_DAYS)),
+      ),
       notify_signers: !suppressSignerEmails,
       send_sign_link: !suppressSignerEmails,
       include_authentication_url: true,

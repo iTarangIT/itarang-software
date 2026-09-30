@@ -14,6 +14,7 @@
  * hot leads handed to ground, and calls. KYC disbursed has no per-person source
  * yet (loans are not linked to a CRM owner) and shows as "not measured".
  */
+import { humanCall, wasHotAt } from "@/lib/reports/metricDefinitions";
 import { sql } from "drizzle-orm";
 
 import { db } from "@/lib/db";
@@ -89,11 +90,12 @@ async function actualsFor(monthFirst: string, upTo: string, elapsedWorkingDays: 
              GROUP BY br.owner_id
         ),
         hot AS (
+            -- ID 59: Hot AT THE MOMENT of transfer, not Hot now.
             SELECT t.performed_by AS u, COUNT(*) AS n
               FROM lead_touchpoints t
               JOIN dealer_leads dl ON dl.id = t.dealer_lead_id
              WHERE t.touchpoint_type = 'asm_transfer'
-               AND lower(dl.interest_level) = 'hot'
+               AND ${wasHotAt(sql`t.dealer_lead_id`, sql`t.performed_at`, sql`dl.interest_level`)}
                AND (t.performed_at AT TIME ZONE 'Asia/Kolkata')::date BETWEEN ${monthFirst}::date AND ${upTo}::date
                AND t.performed_by IS NOT NULL
              GROUP BY t.performed_by
@@ -101,7 +103,7 @@ async function actualsFor(monthFirst: string, upTo: string, elapsedWorkingDays: 
         calls AS (
             SELECT t.performed_by AS u, COUNT(*) AS n
               FROM lead_touchpoints t
-             WHERE t.touchpoint_type = 'inside_sales_call'
+             WHERE ${humanCall()}
                AND (t.performed_at AT TIME ZONE 'Asia/Kolkata')::date BETWEEN ${monthFirst}::date AND ${upTo}::date
                AND t.performed_by IS NOT NULL
              GROUP BY t.performed_by

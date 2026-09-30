@@ -9,6 +9,7 @@ import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-util
 import { LOST_REASON } from "@/lib/lifecycle/transitions";
 import { assertOwner } from "@/lib/leads/ownership";
 import {
+    CompetitorRequiredError,
     HighImpactUnconfirmedError,
     LostLeadNotFoundError,
     LostNotesRequiredError,
@@ -21,6 +22,7 @@ const BodySchema = z.object({
     lost_reason: z.enum(LOST_REASON),
     lost_reason_notes: z.string().max(5000).nullable().optional(),
     confirmed_high_impact: z.boolean().optional(),
+    competitor_name: z.string().trim().max(200).nullable().optional(),
 });
 
 export const POST = withErrorHandler(
@@ -39,9 +41,14 @@ export const POST = withErrorHandler(
                 reason: body.lost_reason,
                 notes: body.lost_reason_notes ?? null,
                 confirmedHighImpact: body.confirmed_high_impact,
+                competitorName: body.competitor_name ?? null,
             });
         } catch (err) {
-            if (err instanceof LostNotesRequiredError || err instanceof HighImpactUnconfirmedError) {
+            if (
+                err instanceof LostNotesRequiredError ||
+                err instanceof HighImpactUnconfirmedError ||
+                err instanceof CompetitorRequiredError
+            ) {
                 return errorResponse(err.message, 400);
             }
             if (err instanceof LostLeadNotFoundError) return errorResponse("Lead not found", 404);

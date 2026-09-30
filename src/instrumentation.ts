@@ -39,6 +39,7 @@ export async function register() {
       startMonitorMorningTicker,
       startGreenNewsTicker,
       startWaAssistantSweepTicker,
+      startDealerAgreementRefreshTicker,
     } = await import("./instrumentation-node");
     await startDialerTickers();
     await startZohoSyncTicker();
@@ -53,6 +54,8 @@ export async function register() {
     await startNbfcRequestSlaTicker();
     // E-307 — Ecofy follow-up / meeting reminders (kickoff 170s out).
     await startEcofyReminderTicker();
+    // ID 53 — dealer agreement status refreshes itself (kickoff 210s out).
+    await startDealerAgreementRefreshTicker();
     await startRecordingTranscriptionTicker();
     await startDriveMirrorTicker();
     // E-280 — Drive sales-invoice scan. Kickoff staggered 195s out, the last

@@ -17,9 +17,9 @@ import { z } from "zod";
 import { requireRole } from "@/lib/auth-utils";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
 import { recordVisit } from "@/lib/asm/recordVisit";
+import { applyVisitStatus } from "@/lib/asm/visitStatus";
 import { assertOwner } from "@/lib/leads/ownership";
 import { withLeadActor } from "@/lib/leads/actorContext";
-import { logLeadTouchpoint } from "@/lib/inside-sales/logTouchpoint";
 import { setInterestLevel } from "@/lib/leads/interestLevel";
 import {
     VISIT_NEXT_ACTION,
@@ -90,20 +90,16 @@ export const POST = withErrorHandler(
         const visited = visit.visit_status === "visited";
         const { visitId } = await withLeadActor(user.id, async (tx) => {
             const recorded = await recordVisit({ ...visit, leadId: id, asmId: user.id }, { tx });
-            // A visit that didn't happen can't move the lead.
-            if (visited && status_to) {
-                await logLeadTouchpoint(
-                    {
-                        leadId: id,
-                        actorId: user.id,
-                        body: {
-                            touchpoint_type: "status_change_note",
-                            remarks: `Status after visit: ${visit.visit_remarks}`,
-                            status_change: { to: status_to },
-                        },
-                    },
-                    { tx },
-                );
+            // A visit that didn't happen can't move the lead. A visit that DID
+            // ends Awaiting field visit and restores the pre-transfer stage
+            // when that is further along (ID 77, applyVisitStatus).
+            if (visited) {
+                await applyVisitStatus(tx, {
+                    leadId: id,
+                    actorId: user.id,
+                    requested: status_to ?? null,
+                    remarks: `Status after visit: ${visit.visit_remarks}`,
+                });
             }
             if (visited && interest_level) {
                 await setInterestLevel(

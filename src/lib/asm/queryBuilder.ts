@@ -50,7 +50,8 @@ export function tabFilter(tab: AsmQueueTab, asmId: string) {
             // status-equals filter created ghosts when an admin reassign or
             // any other path set current_owner_id without flipping the status.
             // Ownership + not-terminal is the natural definition of "my active".
-            return sql`dl.current_owner_id = ${asmId} AND dl.lead_status NOT IN (${TERMINAL_LIST}) AND dl.is_active IS NOT FALSE`;
+            // ID 36: dead / non-responsive numbers are in Number Repair, not here.
+            return sql`dl.current_owner_id = ${asmId} AND dl.lead_status NOT IN (${TERMINAL_LIST}) AND dl.is_active IS NOT FALSE AND (to_jsonb(dl) ->> 'contactability') IS NULL`;
         case "today":
             return sql`dl.asm_id = ${asmId} AND lv.scheduled_date = CURRENT_DATE AND lv.visit_status IN ('scheduled','pending_scheduling') AND dl.is_active IS NOT FALSE`;
         case "territory":

@@ -37,11 +37,19 @@ describe("planTouchpoint (extracted from POST /api/inside-sales/lead/[id]/touchp
         expect(() => planTouchpoint(body({ disposition: { connect_status: "connected", label: "Did not pick" } }), lead)).toThrow(UnknownDispositionError);
     });
 
-    it("status change: from the lead's current status; Converted/Lost close as is_phone", () => {
-        expect(planTouchpoint(body({ status_change: { to: "Lost", reason_notes: "x" } }), lead).statusChange).toEqual({
-            from: "Under_Discussion", to: "Lost", reasonNotes: "x", closingRole: "is_phone",
-        });
-        expect(planTouchpoint(body({ status_change: { to: "Commercials_Explained" } }), lead).statusChange?.closingRole).toBeUndefined();
+    it("no manual status (ID 80/114): commercials requests are dropped; the outcome rule sets first contact", () => {
+        expect(planTouchpoint(body({ status_change: { to: "Commercials_Explained", reason_notes: "x" } }), lead).statusChange).toBeUndefined();
+        const fresh = { ...lead, fromStatus: "Assigned_Not_Contacted" as const };
+        expect(
+            planTouchpoint(body({ disposition: { connect_status: "connected", label: "Commercials Explained", bucket: "Hot" } }), fresh).statusChange,
+        ).toEqual({ from: "Assigned_Not_Contacted", to: "Under_Discussion", reasonNotes: null, event: "progress" });
+        expect(planTouchpoint(body({ status_change: { to: "Under_Discussion" } }), fresh).statusChange?.to).toBe("Under_Discussion");
+    });
+
+    it("Converted / Lost / Transferred_to_ASM cannot be set from a touchpoint (ID 57)", () => {
+        for (const to of ["Converted", "Lost", "Transferred_to_ASM"]) {
+            expect(() => body({ status_change: { to } })).toThrow();
+        }
     });
 
     it("explicit is_engaged and call_status win when no disposition says otherwise", () => {

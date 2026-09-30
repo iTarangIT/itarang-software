@@ -34,7 +34,7 @@ export const markConverted: ToolFactory = () =>
         name: "mark_converted",
         kind: "write",
         description:
-            "Propose marking a lead the user owns as Converted. Needs the dealer's 15-character GSTIN — ask for it, never " +
+            "Propose marking a lead the user owns as Won (it becomes Converted when the dealer's onboarding is approved). Needs the dealer's 15-character GSTIN — ask for it, never " +
             "invent one. Creates the dealer onboarding application. Nothing is saved until Confirm.",
         schema: z.object({
             lead_id: LeadId,
@@ -47,8 +47,8 @@ export const markConverted: ToolFactory = () =>
             const lead = owned.lead;
             const crmUrl = leadUrl(ctx.user, lead.id);
 
-            if (lead.lead_status === "Converted") {
-                return { kind: "declined", reason: "This lead is already Converted.", crm_url: crmUrl };
+            if (lead.lead_status === "Converted" || lead.lead_status === "Won") {
+                return { kind: "declined", reason: `This lead is already ${lead.lead_status}.`, crm_url: crmUrl };
             }
             const gstin = normalizeGstin(input.gstin);
             if (!isValidGstin(gstin)) {
@@ -57,13 +57,13 @@ export const markConverted: ToolFactory = () =>
 
             const plan: MarkConvertedPlan = { lead_id: lead.id, gstin, notes: input.notes?.trim() || null };
             const lines: Preview["lines"] = [
-                { label: "Status", value: `${statusLabel(lead.lead_status)} → Converted` },
+                { label: "Status", value: `${statusLabel(lead.lead_status)} → Won` },
                 { label: "GSTIN", value: gstin },
             ];
             if (plan.notes) lines.push({ label: "Notes", value: plan.notes });
             lines.push({ label: "Creates", value: "the dealer onboarding application" });
             const preview: Preview = {
-                title: `Mark Converted — ${lead.shop_name || lead.dealer_name || lead.id}`,
+                title: `Mark Won — ${lead.shop_name || lead.dealer_name || lead.id}`,
                 lines,
                 resets_idle_clock: isWorkedTouchpoint("status_change_note", true),
                 warning: "Undoing a conversion can only be done on the CRM screen.",

@@ -5,6 +5,7 @@ import { createClient } from "@supabase/supabase-js";
 import { extractDigioDocumentId } from "./parse-status";
 import { fetchDigioPdfWithRetry } from "./fetch-pdf-retry";
 import { isS3Backend, putObject, filesProxyPath } from "@/lib/storage/s3";
+import { renderDealerAuditTrailPdf } from "@/lib/agreement/render-dealer-audit-trail";
 
 type Application = typeof dealerOnboardingApplications.$inferSelect;
 
@@ -17,9 +18,10 @@ function basicAuthHeader(clientId: string, clientSecret: string) {
 }
 
 /**
- * Ensure the dealer's DigiO audit trail PDF is cached in Supabase and return
- * its public URL. Returns the existing URL if already cached, fetches from
- * DigiO and uploads to Supabase otherwise. Returns null if prerequisites
+ * Ensure the dealer's audit trail PDF is cached in storage and return its
+ * URL. Returns the existing URL if already cached; otherwise renders it the
+ * same way the "Download Audit Trail" button does (Digio's direct download is
+ * the fallback) and stores it under the same key the button uses. Returns null if prerequisites
  * (providerDocumentId / credentials) are missing or the fetch fails.
  */
 export async function ensureDealerAuditTrailUrl(
@@ -84,16 +86,33 @@ export async function ensureDealerAuditTrailUrl(
     console.warn("[ensureDealerAuditTrailUrl] status pre-check failed (non-blocking):", err);
   }
 
-  const digioUrl = `${baseUrl}/v2/client/document/download_audit_trail?document_id=${encodeURIComponent(
-    application.provider_document_id
-  )}`;
+  // Primary: render it ourselves from Digio's audit_log JSON + status and our
+  // signer / event rows — exactly what the "Download Audit Trail" button does.
+  // Digio's download_audit_trail endpoint answers ENTITY_NOT_FOUND for these
+  // documents, so relying on it alone left Approve with no audit trail.
+  let pdfBuffer: ArrayBuffer | null = null;
+  try {
+    const rendered = await renderDealerAuditTrailPdf(application);
+    const ab = rendered.buffer.slice(rendered.byteOffset, rendered.byteOffset + rendered.byteLength) as ArrayBuffer;
+    const head = new Uint8Array(ab, 0, Math.min(4, ab.byteLength));
+    if (ab.byteLength >= 500 && head[0] === 0x25 && head[1] === 0x50 && head[2] === 0x44 && head[3] === 0x46) {
+      pdfBuffer = ab;
+    } else {
+      console.warn("[ensureDealerAuditTrailUrl] rendered audit trail is not a valid PDF", { byteLength: ab.byteLength });
+    }
+  } catch (err) {
+    console.warn("[ensureDealerAuditTrailUrl] audit trail render failed — trying Digio download:", err instanceof Error ? err.message : err);
+  }
 
-  // DigiO's download_audit_trail intermittently returns HTTP 500 SYSTEM_ERROR
-  // even when the agreement is "completed" — retry a few times to catch a
-  // working window before giving up.
-  const pdfBuffer = await fetchDigioPdfWithRetry(digioUrl, authHeader, {
-    label: "ensureDealerAuditTrailUrl",
-  });
+  // Fallback: Digio's direct-download PDF (intermittent 500s → retried).
+  if (!pdfBuffer) {
+    const digioUrl = `${baseUrl}/v2/client/document/download_audit_trail?document_id=${encodeURIComponent(
+      application.provider_document_id
+    )}`;
+    pdfBuffer = await fetchDigioPdfWithRetry(digioUrl, authHeader, {
+      label: "ensureDealerAuditTrailUrl",
+    });
+  }
   if (!pdfBuffer) return null;
 
   const bucketName = "dealer-documents";

@@ -21,6 +21,10 @@ import {
 } from "@/lib/touchpoints/write";
 import { TOUCHPOINT_TYPE, CALL_STATUS, NEXT_ACTION, shouldAutoEngage } from "@/lib/lifecycle/touchpointTypes";
 import { LEAD_STATUS, type LeadStatus } from "@/lib/lifecycle/transitions";
+import { isForward } from "@/lib/lifecycle/statusRules";
+import { reviewLeadContactability } from "@/lib/leads/contactability";
+import { autoProgressForCall } from "@/lib/leads/autoProgress";
+import type { DispositionBucket } from "@/lib/leads/dispositions";
 import {
     callStatusForDisposition,
     classifyDisposition,
@@ -54,9 +58,16 @@ export const TouchpointBodySchema = z.object({
     attachments: z.array(z.unknown()).max(20).optional(),
     next_action: z.enum(NEXT_ACTION).nullable().optional(),
     next_action_at: z.string().datetime().nullable().optional(),
+    // Converted / Lost / Transferred_to_ASM are not settable here (ID 57):
+    // Mark Converted, Mark Lost and Transfer are the only ways in.
     status_change: z
         .object({
-            to: z.enum(LEAD_STATUS),
+            to: z.enum(LEAD_STATUS).refine(
+                // Explicit boolean: an inferred type predicate would narrow the
+                // type and break callers that pass a LeadStatus.
+                (s): boolean => s !== "Converted" && s !== "Lost" && s !== "Transferred_to_ASM",
+                { message: "Use Mark Converted, Mark Lost or Transfer to ASM." },
+            ),
             reason_notes: z.string().max(2000).nullable().optional(),
         })
         .optional(),
@@ -121,23 +132,40 @@ export function planTouchpoint(
         body.is_engaged ??
         shouldAutoEngage(body.touchpoint_type, { callStatus: derivedCallStatus, visitOutcome: null });
 
-    // Whatever status the rep picked is what the lead gets: no transition map,
-    // no engaged-touchpoint gate, no final_price gate (see the lifecycle
-    // engine), and a lead that never had a status can be given one —
-    // from_status is nullable on the history row. Every change still writes
-    // dealer_lead_status_history, which is what the reporting reads.
-    let statusChange: WriteTouchpointInput["statusChange"];
-    if (body.status_change) {
-        statusChange = {
-            from: fromStatus,
-            to: body.status_change.to,
-            reasonNotes: body.status_change.reason_notes ?? null,
-            closingRole:
-                body.status_change.to === "Converted" || body.status_change.to === "Lost"
-                    ? "is_phone"
-                    : undefined,
-        };
+    // ID 80 / 114 (29 Sep 2026): no manual status. The status comes from the
+    // call outcome by the shared rule (autoProgress), here in the server so the
+    // API, the forms and the Assistant all apply it. A caller may still ask for
+    // FIRST CONTACT (Under_Discussion — e.g. a follow-up where the rep spoke to
+    // the dealer); commercials stages come only from quote events (ID 75), Won /
+    // Lost / transfer from their own actions. writeTouchpoint's S3 guard has
+    // the final word; an unforward request is dropped here, not refused.
+    let statusTo: LeadStatus | null = null;
+    if (classified && body.touchpoint_type === "inside_sales_call") {
+        statusTo = autoProgressForCall({
+            connected: classified.connectStatus === "connected",
+            label: classified.label,
+            bucket: classified.bucket as DispositionBucket | null,
+            currentStatus: fromStatus,
+            currentInterest: null,
+        }).statusTo;
     }
+    const requested = body.status_change?.to ?? null;
+    if (
+        !statusTo &&
+        requested === "Under_Discussion" &&
+        fromStatus !== "Transferred_to_ASM" &&
+        isForward(fromStatus, requested)
+    ) {
+        statusTo = requested;
+    }
+    const statusChange: WriteTouchpointInput["statusChange"] = statusTo
+        ? {
+              from: fromStatus,
+              to: statusTo,
+              reasonNotes: body.status_change?.reason_notes ?? null,
+              event: "progress",
+          }
+        : undefined;
 
     return {
         dealerLeadId: leadId,
@@ -181,6 +209,19 @@ export async function logLeadTouchpoint(
             actorId,
         });
         const result = await writeTouchpoint(input, { tx });
+
+        // ID 36: every logged call re-checks contactability (dead number from
+        // the outcome, non-responsive from the call log; a connect clears it).
+        if (input.touchpointType === "inside_sales_call") {
+            await reviewLeadContactability(
+                {
+                    leadId,
+                    connected: input.callStatus === "connected",
+                    reasonLabel: input.disposition?.label ?? null,
+                },
+                { tx },
+            );
+        }
 
         // Caller wants to set / clear next_follow_up_at (BRD §0.5 form field).
         if (body.follow_up_at !== undefined) {

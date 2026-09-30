@@ -229,6 +229,7 @@ export const POST = withErrorHandler(async (req: Request) => {
                     toLostReason: body.lost_reason,
                     closingRole: "admin",
                     reasonNotes: body.reason ?? "Bulk mark lost (admin).",
+                    event: "mark_lost",
                 },
             });
             affected++;

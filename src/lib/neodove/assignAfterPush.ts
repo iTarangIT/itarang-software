@@ -30,6 +30,16 @@ import type { LeadStatus } from "@/lib/lifecycle/transitions";
 import { NEODOVE_ASSIGNEE_ROLES } from "./roles";
 
 /**
+ * OFF since 29 Sep 2026 (tracker ID 63, handover P0-9). Pushing or dialling a
+ * lead no longer gives it a CRM owner: the owner collected owner-clock breaches
+ * on leads NeoDove was still dialling, and assignment counts were inflated. The
+ * owner is now set by the first HUMAN call of a linked NeoDove agent (ID 83).
+ * The push/dial routes still validate the picker (resolveNeodoveAssignee) so a
+ * bad user id is a 400, but skip assignAfterPush while this is false.
+ */
+export const ASSIGN_ON_PUSH: boolean = false;
+
+/**
  * The campaign's default CRM owner.
  *
  * Read through to_jsonb rather than naming the column: a missing column fails a

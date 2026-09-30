@@ -650,6 +650,10 @@ export async function middleware(request: NextRequest) {
     // own: NotificationCenter reads /api/notifications, which is scoped to the
     // caller's own rows, so admitting a role here shows it only its own feed.
     "/admin/notifications": ["admin", "sales_head", "ceo", "partner"],
+    // Number Repair (tracker ID 36) — same five roles as the page and the
+    // repair-number API; without this row the bare "/admin" entry below
+    // bounced business_head and sales_manager.
+    "/admin/number-repair": ["admin", "sales_head", "ceo", "business_head", "sales_manager"],
     // The ISR lead-detail page is where quotation notifications deep-link
     // (src/lib/notifications/events.ts → /inside-sales/lead/{id}?quote=…). The
     // page already admits these roles; without this row middleware bounced
