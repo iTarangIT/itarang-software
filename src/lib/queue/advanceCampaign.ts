@@ -30,6 +30,7 @@ import { and, eq, sql } from "drizzle-orm";
 import {
   attachBolnaCallId,
   finalizeCampaign,
+  recordAttemptOutcome,
   syncCampaignCounters,
 } from "./campaignTracker";
 import { triggerBolnaCall } from "@/lib/ai/bolna_ai/triggerCall";
@@ -49,6 +50,10 @@ import {
 export type AdvanceResult =
   | { kind: "placed"; leadId: string; campaignLeadId: string; callId: string | null }
   | { kind: "no-pending"; finalized: boolean }
+  // E-315 — nothing is dialable right now, but unreached leads have automatic
+  // retries booked. The campaign stays 'running' (idle) and the 60s
+  // wakeDueRetries tick re-enters here once the earliest one is due.
+  | { kind: "waiting-retry"; nextAt: Date | null }
   | { kind: "skipped"; reason: string }
   | { kind: "campaign-not-running" }
   // E-254 — the calling window is shut. The campaign has been parked (see
@@ -68,43 +73,72 @@ export type AdvanceOptions = {
   preCallDelayMs?: number;
 };
 
-// Atomically claim the next pending row. Uses SKIP LOCKED so concurrent
+type ClaimedRow = { id: string; lead_id: string; attempt_count: number };
+
+// Atomically claim the next row to dial. Uses SKIP LOCKED so concurrent
 // callers (webhook + polling tick) won't both pick the same row, and
 // returns the locked row's id + lead_id so the caller can place the call
 // without a TOCTOU window.
+//
+// E-315 — a row is dialable when it has never been dialled ('pending') OR its
+// automatic retry is due (next_attempt_at <= now()). Due retries go FIRST: a
+// 15-minute busy redial must not wait behind a 200-lead first pass. The claim
+// counts the dial (attempt_count + 1), consumes the booking (next_attempt_at
+// NULL) and clears the previous attempt's provider id, so a late webhook for
+// that earlier call cannot close this one (completeCampaignLead compares ids).
 async function claimNextPending(campaignId: string): Promise<{
   campaignLeadId: string;
   leadId: string;
+  attemptCount: number;
 } | null> {
   // Use Drizzle's raw SQL for the CTE — gives us SKIP LOCKED which the
-  // builder helpers don't expose. The subquery picks one pending row by
-  // queue_position, locks it, and the outer UPDATE flips it to calling.
-  const rows = await db.execute<{ id: string; lead_id: string }>(sql`
+  // builder helpers don't expose. The subquery picks one row, locks it, and
+  // the outer UPDATE flips it to calling.
+  const rows = await db.execute<ClaimedRow>(sql`
     WITH next_row AS (
       SELECT id
       FROM dialer_campaign_leads
       WHERE campaign_id = ${campaignId}
-        AND status = 'pending'
-      ORDER BY queue_position ASC
+        AND (
+          status = 'pending'
+          OR (next_attempt_at IS NOT NULL AND next_attempt_at <= now())
+        )
+      ORDER BY next_attempt_at ASC NULLS LAST, queue_position ASC
       LIMIT 1
       FOR UPDATE SKIP LOCKED
     )
     UPDATE dialer_campaign_leads
     SET status = 'calling',
-        started_at = NOW()
+        started_at = NOW(),
+        attempt_count = attempt_count + 1,
+        next_attempt_at = NULL,
+        bolna_call_id = NULL
     WHERE id IN (SELECT id FROM next_row)
-    RETURNING id, lead_id
+    RETURNING id, lead_id, attempt_count
   `);
 
   // drizzle-orm + postgres-js returns rows on .execute() as the array
   // directly or under .rows depending on driver. Handle both.
   const row =
-    (rows as unknown as { rows?: Array<{ id: string; lead_id: string }> })
-      .rows?.[0] ??
-    (rows as unknown as Array<{ id: string; lead_id: string }>)[0];
+    (rows as unknown as { rows?: ClaimedRow[] }).rows?.[0] ??
+    (rows as unknown as ClaimedRow[])[0];
 
   if (!row) return null;
-  return { campaignLeadId: row.id, leadId: row.lead_id };
+  return {
+    campaignLeadId: row.id,
+    leadId: row.lead_id,
+    attemptCount: Number(row.attempt_count),
+  };
+}
+
+// E-315 — the earliest booked retry in this campaign, or null when none.
+async function nextScheduledRetry(campaignId: string): Promise<Date | null> {
+  const r = await db
+    .select({ at: sql<Date | null>`min(${dialerCampaignLeads.next_attempt_at})` })
+    .from(dialerCampaignLeads)
+    .where(eq(dialerCampaignLeads.campaign_id, campaignId));
+  const at = r[0]?.at;
+  return at ? new Date(at) : null;
 }
 
 // Are there any rows still calling in this campaign? Used to decide
@@ -212,6 +246,13 @@ export async function advanceCampaign(
           resumeAt: parked.resumeAt,
         };
       }
+
+      // E-315 — no first-pass leads left, but automatic retries are booked.
+      // Stay 'running' and idle rather than parking: a SINGLE run parked as
+      // 'paused' would need a human to resume it. The retry times already sit
+      // inside the window, and wakeDueRetries re-enters here once it reopens.
+      const nextAt = await nextScheduledRetry(campaignId);
+      if (nextAt) return { kind: "waiting-retry", nextAt };
     }
 
     const provider = (cmp[0].provider || "bolna").toLowerCase();
@@ -222,6 +263,7 @@ export async function advanceCampaign(
     // first failed. Normal campaigns and cron follow-ups keep the guard.
     const isRecall =
       (cmp[0].region_filter as { recall?: boolean } | null)?.recall === true;
+    // (E-315 automatic retries bypass it too — see bypassIdempotency below.)
 
     // Pre-call delay (legacy webhook path used 5s to space requests).
     if (opts.preCallDelayMs && opts.preCallDelayMs > 0) {
@@ -244,6 +286,10 @@ export async function advanceCampaign(
         // observe the empty queue.
         const stillCalling = await hasCallingRows(campaignId);
         if (!stillCalling) {
+          // E-315 — unreached leads with a retry still booked mean the
+          // campaign is NOT done; it idles until wakeDueRetries finds one due.
+          const nextAt = await nextScheduledRetry(campaignId);
+          if (nextAt) return { kind: "waiting-retry", nextAt };
           await finalizeCampaign(campaignId, "completed");
           return { kind: "no-pending", finalized: true };
         }
@@ -344,6 +390,11 @@ export async function advanceCampaign(
         continue;
       }
 
+      // E-315 — a retry is a deliberate same-day redial; without the bypass the
+      // 25h duplicate guard answers success-with-no-call-id and the row sits in
+      // 'calling' until the watchdog fails it.
+      const bypassIdempotency = isRecall || claimed.attemptCount > 1;
+
       // Place the call via the right provider.
       let trigResult: { success: boolean; call_id?: string; error?: string };
       try {
@@ -351,13 +402,13 @@ export async function advanceCampaign(
           trigResult = (await triggerElevenLabsCall({
             phone: lead[0].phone,
             leadId: lead[0].id,
-            bypassIdempotency: isRecall,
+            bypassIdempotency,
           })) as typeof trigResult;
         } else {
           trigResult = (await triggerBolnaCall({
             phone: lead[0].phone,
             leadId: lead[0].id,
-            bypassIdempotency: isRecall,
+            bypassIdempotency,
           })) as typeof trigResult;
         }
       } catch (err) {
@@ -377,14 +428,11 @@ export async function advanceCampaign(
             error: err instanceof Error ? err.message : String(err),
           },
         );
-        await db
-          .update(dialerCampaignLeads)
-          .set({
-            status: classifyCallEnd({ triggerError: exReason }).status,
-            completed_at: new Date(),
-            call_outcome: `trigger_exception: ${exReason}`,
-          })
-          .where(eq(dialerCampaignLeads.id, claimed.campaignLeadId));
+        await recordAttemptOutcome({
+          campaignLeadId: claimed.campaignLeadId,
+          status: classifyCallEnd({ triggerError: exReason }).status,
+          outcome: `trigger_exception: ${exReason}`,
+        });
         await syncCampaignCounters(campaignId);
         continue;
       }
@@ -409,14 +457,11 @@ export async function advanceCampaign(
         // line HERE, synchronously, as the INVITE's SIP status (486 / 480 /
         // 603) — so this is where most "the dealer didn't pick up" outcomes
         // are born. Classify it instead of filing every one as failed.
-        await db
-          .update(dialerCampaignLeads)
-          .set({
-            status: classifyCallEnd({ triggerError: reason }).status,
-            completed_at: new Date(),
-            call_outcome: `trigger_failed: ${reason}`,
-          })
-          .where(eq(dialerCampaignLeads.id, claimed.campaignLeadId));
+        await recordAttemptOutcome({
+          campaignLeadId: claimed.campaignLeadId,
+          status: classifyCallEnd({ triggerError: reason }).status,
+          outcome: `trigger_failed: ${reason}`,
+        });
         await syncCampaignCounters(campaignId);
         continue;
       }

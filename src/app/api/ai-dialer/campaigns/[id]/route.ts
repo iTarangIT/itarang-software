@@ -47,6 +47,8 @@ export const GET = withErrorHandler(
         windowDays: dialerCampaigns.window_days,
         resumeAfter: dialerCampaigns.resume_after,
         pausedAt: dialerCampaigns.paused_at,
+        // E-315 — automatic redials per unreached lead (NULL = off).
+        maxRetries: dialerCampaigns.max_retries,
       })
       .from(dialerCampaigns)
       .leftJoin(users, eq(users.id, dialerCampaigns.triggered_by))
@@ -74,6 +76,24 @@ export const GET = withErrorHandler(
       }
     }
 
-    return successResponse({ ...campaign, statusCounts });
+    // E-315 — auto-retry progress: how many unreached leads have a redial
+    // booked, when the next one goes out, and total dials incl. retries.
+    const retryRows = await db
+      .select({
+        retryScheduled: sql<number>`count(*) FILTER (WHERE ${dialerCampaignLeads.next_attempt_at} IS NOT NULL)::int`,
+        nextRetryAt: sql<string | null>`min(${dialerCampaignLeads.next_attempt_at})`,
+        totalDials: sql<number>`coalesce(sum(${dialerCampaignLeads.attempt_count}), 0)::int`,
+      })
+      .from(dialerCampaignLeads)
+      .where(eq(dialerCampaignLeads.campaign_id, id));
+    const retry = retryRows[0];
+
+    return successResponse({
+      ...campaign,
+      statusCounts,
+      retryScheduled: Number(retry?.retryScheduled ?? 0),
+      nextRetryAt: retry?.nextRetryAt ? new Date(retry.nextRetryAt).toISOString() : null,
+      totalDials: Number(retry?.totalDials ?? 0),
+    });
   },
 );
