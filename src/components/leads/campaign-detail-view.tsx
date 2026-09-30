@@ -74,7 +74,24 @@ type Campaign = {
   windowDays: unknown;
   resumeAfter: string | null;
   pausedAt: string | null;
+  // E-315 — automatic retries. maxRetries null = auto-retry off (older runs).
+  maxRetries?: number | null;
+  retryScheduled?: number;
+  nextRetryAt?: string | null;
+  totalDials?: number;
 };
+
+// "Mon, 29 Sept, 09:00 am" in IST — for booked retry times.
+function fmtIst(iso: string): string {
+  return new Date(iso).toLocaleString("en-IN", {
+    timeZone: "Asia/Kolkata",
+    weekday: "short",
+    day: "2-digit",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
 
 type Lead = {
   id: string;
@@ -105,6 +122,8 @@ type Lead = {
   corrected: boolean;
   attemptCount: number;
   convertedOnAttempt: number | null;
+  /** E-315 — when this lead's automatic retry goes out; null = none booked. */
+  nextAttemptAt?: string | null;
 };
 
 type Bucket = "all" | CampaignLeadStatus;
@@ -171,6 +190,7 @@ function StatCard({
   expanded,
   controls,
   hint,
+  sub,
 }: {
   label: string;
   value: number | string;
@@ -191,6 +211,8 @@ function StatCard({
   controls?: string;
   /** Tooltip: what the bucket means. */
   hint?: string;
+  /** Small line under the number. */
+  sub?: string;
 }) {
   const toneClass = {
     neutral: "bg-gray-50 text-gray-700 border-gray-200",
@@ -226,6 +248,7 @@ function StatCard({
         )}
       </div>
       <p className="text-2xl font-bold mt-1 tabular-nums">{value}</p>
+      {sub && <p className="text-[11px] mt-0.5 opacity-75">{sub}</p>}
     </>
   );
 
@@ -307,6 +330,15 @@ function LeadRow({
       </td>
       <td className="px-3 py-2.5">
         <CampaignLeadStatusBadge status={row.status} />
+        {row.nextAttemptAt && (
+          <span
+            className="mt-1 flex items-center gap-1 text-[10px] text-blue-700"
+            title="An automatic retry is booked for this lead"
+          >
+            <RotateCcw className="w-2.5 h-2.5" />
+            Retry {fmtIst(row.nextAttemptAt)}
+          </span>
+        )}
       </td>
       <td className="px-3 py-2.5">
         <CampaignOutcomeBadge
@@ -327,7 +359,7 @@ function LeadRow({
         {row.attemptCount > 0 ? (
           <span
             className="inline-flex items-center gap-1.5"
-            title="Total dialer attempts for this lead across all campaigns (original + recalls)"
+            title="Total dials to this lead across all campaigns (first calls, automatic retries and recalls)"
           >
             <span className="inline-flex items-center gap-1 font-medium text-gray-700 tabular-nums">
               <RotateCcw className="w-3 h-3 text-gray-400" />
@@ -820,6 +852,19 @@ export function CampaignDetailView({
                 IST
               </p>
             )}
+            {/* E-315 — the campaign is waiting on automatic retries, not
+                stuck: say how many and when the next goes out. */}
+            {(campaign.retryScheduled ?? 0) > 0 &&
+              campaign.status !== "completed" &&
+              campaign.nextRetryAt && (
+                <p className="mt-2 text-xs text-blue-700 inline-flex items-center gap-1">
+                  <RotateCcw className="w-3 h-3" />
+                  Auto-retry · {campaign.retryScheduled} lead
+                  {campaign.retryScheduled === 1 ? "" : "s"} to redial · next{" "}
+                  {fmtIst(campaign.nextRetryAt)} IST
+                  {campaign.status === "stopped" && " (resume to continue)"}
+                </p>
+              )}
             {campaign.status === "paused" && (
               <p className="mt-2 text-xs text-slate-600">
                 Paused at the end of its calling window with {pendingLeads} lead
@@ -854,12 +899,22 @@ export function CampaignDetailView({
           value={campaign.callsMade}
           Icon={PhoneCall}
           tone="blue"
+          sub={
+            (campaign.totalDials ?? 0) > campaign.callsMade
+              ? `${campaign.totalDials} dials incl. retries`
+              : undefined
+          }
         />
         <StatCard
           label="Completed"
           value={campaign.completedLeads}
           Icon={CheckCircle2}
           tone="emerald"
+          sub={
+            campaign.totalLeads > 0
+              ? `${Math.round((campaign.completedLeads / campaign.totalLeads) * 100)}% of leads`
+              : undefined
+          }
           onClick={toggleDuration}
           expanded={durationOpen}
           controls={DURATION_PANEL_ID}
