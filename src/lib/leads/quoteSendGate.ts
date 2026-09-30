@@ -26,6 +26,9 @@ export type QuoteRow = {
   dealer_decision_at: string | null;
   dealer_decision_via: string | null;
   dealer_decision_note: string | null;
+  /** ID 60: withdrawn, or replaced by a later quote version. */
+  withdrawn_at: string | null;
+  is_latest_quote: boolean | null;
 };
 
 export async function loadQuote(
@@ -38,6 +41,13 @@ export async function loadQuote(
            c.quote_pdf_url, c.quote_pdf_error, c.version_no,
            c.dealer_decision, c.dealer_decision_at, c.dealer_decision_via,
            c.dealer_decision_note,
+           c.withdrawn_at::text AS withdrawn_at,
+           NOT EXISTS (
+             SELECT 1 FROM dealer_lead_commercials q
+              WHERE q.dealer_lead_id = c.dealer_lead_id
+                AND q.event_type IN ('quote_issue', 'quote_revision')
+                AND q.version_no > c.version_no
+           ) AS is_latest_quote,
            COALESCE((c.quote_snapshot->>'total')::numeric,
                     c.final_price, c.price_quoted)::text AS quote_total,
            l.dealer_name, l.phone AS dealer_phone, l.contact_email AS dealer_email
@@ -55,7 +65,7 @@ export async function loadQuote(
 /** Why a quotation cannot go to the dealer. The route maps it to 404 / 409. */
 export class QuotationNotSendableError extends Error {
   constructor(
-    readonly reason: "not_found" | "not_approved" | "no_draft",
+    readonly reason: "not_found" | "not_approved" | "no_draft" | "stale",
     message: string,
   ) {
     super(message);
@@ -73,6 +83,16 @@ export function assertSendable(row: QuoteRow | null): asserts row is QuoteRow & 
     throw new QuotationNotSendableError(
       "not_approved",
       `This quotation is ${row.approval_status ?? "undecided"} and cannot be sent to a dealer.`,
+    );
+  }
+  // ID 60: a dealer is only ever sent the current, not-withdrawn version.
+  if (row.withdrawn_at) {
+    throw new QuotationNotSendableError("stale", "This quotation has been withdrawn and cannot be sent.");
+  }
+  if (row.is_latest_quote === false) {
+    throw new QuotationNotSendableError(
+      "stale",
+      "A newer version of this quotation exists. Send the latest version instead.",
     );
   }
   if (!row.quote_pdf_url || !row.quote_number) {

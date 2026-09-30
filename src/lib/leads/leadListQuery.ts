@@ -10,6 +10,7 @@
 // Follows the pattern of src/lib/asm/queryBuilder.ts and
 // src/lib/admin/listQueries.ts (raw sql`` fragments, db.execute).
 
+import { parseMobileList } from "@/lib/leads/claimScope";
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { UNASSIGNED_FILTER } from "@/lib/admin/leadsInfoFilters";
@@ -74,6 +75,11 @@ export type LeadListFilters = {
     state?: string | null;
     city?: string | null;
     search?: string | null;
+    /**
+     * ID 36: "Hide dead & disqualified" is ON by default — dead-number and
+     * non-responsive leads are hidden unless "include" (all) or "only".
+     */
+    contactability?: "include" | "only" | null;
     /** Display bucket over final_intent_score. See intentBucket.ts. */
     intent?: IntentBucket | null;
     /**
@@ -459,7 +465,21 @@ function buildWhere(f: LeadListFilters, opts?: { ignoreIntent?: boolean }) {
     if (f.assignedTo && ISO_DATE_RE.test(f.assignedTo)) {
         conds.push(sql`dl.assigned_at::date <= ${f.assignedTo}`);
     }
-    if (f.search) {
+    // ID 36 — read via to_jsonb so a DB without E-314 shows everything.
+    if (f.contactability === "only") {
+        conds.push(sql`(to_jsonb(dl) ->> 'contactability') IS NOT NULL`);
+    } else if (f.contactability !== "include") {
+        conds.push(sql`(to_jsonb(dl) ->> 'contactability') IS NULL`);
+    }
+
+    // ID 46: "9876543210, 9123456789" selects exactly those leads by mobile
+    // (last 10 digits — dealer_leads.phone is stored in mixed formats).
+    const mobileList = f.search && /[,;]/.test(f.search) ? parseMobileList(f.search).mobiles : [];
+    if (mobileList.length > 1) {
+        conds.push(
+            sql`right(regexp_replace(dl.phone, '[^0-9]', '', 'g'), 10) IN (SELECT jsonb_array_elements_text(${JSON.stringify(mobileList)}::jsonb))`,
+        );
+    } else if (f.search) {
         const like = `%${f.search}%`;
         // `location` is included because the old /leads search covered it and
         // the old Leads Info search did not — dropping it would silently break

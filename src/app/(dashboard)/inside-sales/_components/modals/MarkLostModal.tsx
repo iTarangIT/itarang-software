@@ -13,6 +13,8 @@ type Props = {
     onClose: () => void;
     leadId: string;
     onSuccess: () => void;
+    /** ID 76: pre-filled from a Lost-type call or visit outcome. */
+    defaultReason?: LostReason | null;
 };
 
 const LABELS: Record<LostReason, string> = {
@@ -27,10 +29,13 @@ const LABELS: Record<LostReason, string> = {
     duplicate_lead: "Duplicate lead",
     other: "Other (notes required)",
     onboarding_dropout: "Onboarding dropout (admin only)",
+    lost_to_competition: "Lost to competition (name the competitor)",
+    moved_to_other_business: "Moved to other business",
 };
 
-export function MarkLostModal({ open, onClose, leadId, onSuccess }: Props) {
-    const [reason, setReason] = useState<LostReason | "">("");
+export function MarkLostModal({ open, onClose, leadId, onSuccess, defaultReason }: Props) {
+    const [reason, setReason] = useState<LostReason | "">(defaultReason ?? "");
+    const [competitor, setCompetitor] = useState("");
     const [notes, setNotes] = useState("");
     const [submitting, setSubmitting] = useState(false);
     const [confirmingHighImpact, setConfirmingHighImpact] = useState(false);
@@ -39,6 +44,7 @@ export function MarkLostModal({ open, onClose, leadId, onSuccess }: Props) {
         if (submitting) return;
         setReason("");
         setNotes("");
+        setCompetitor("");
         setConfirmingHighImpact(false);
         onClose();
     };
@@ -50,6 +56,10 @@ export function MarkLostModal({ open, onClose, leadId, onSuccess }: Props) {
         }
         if (reason === "other" && !notes.trim()) {
             toast.error("Notes are required when reason is 'other'.");
+            return;
+        }
+        if (reason === "lost_to_competition" && !competitor.trim()) {
+            toast.error("Name the competitor.");
             return;
         }
         if (reason === "onboarding_dropout") {
@@ -69,6 +79,7 @@ export function MarkLostModal({ open, onClose, leadId, onSuccess }: Props) {
                     lost_reason: reason,
                     lost_reason_notes: notes.trim() || null,
                     confirmed_high_impact: confirmedHighImpact || undefined,
+                    competitor_name: reason === "lost_to_competition" ? competitor.trim() : undefined,
                 }),
             });
             const json = await res.json();
@@ -119,6 +130,17 @@ export function MarkLostModal({ open, onClose, leadId, onSuccess }: Props) {
                             ))}
                         </select>
                     </div>
+                    {reason === "lost_to_competition" && (
+                        <div>
+                            <Label>Competitor <span className="text-rose-600">*</span></Label>
+                            <input
+                                className="mt-1 w-full rounded-md border border-gray-200 px-3 py-2 text-sm"
+                                value={competitor}
+                                onChange={(e) => setCompetitor(e.target.value)}
+                                placeholder="e.g. the brand or dealer they went with"
+                            />
+                        </div>
+                    )}
                     <div>
                         <Label>Notes {reason === "other" && <span className="text-rose-600">*</span>}</Label>
                         <textarea

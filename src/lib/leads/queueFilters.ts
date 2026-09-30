@@ -70,7 +70,9 @@ export const LEAD_STATUS_LABEL: Record<LeadStatus, string> = {
   Commercials_Explained: "Commercials Explained",
   Commercials_Finalised: "Commercials Finalised",
   Awaiting_Customer_Decision: "Awaiting Decision",
-  Transferred_to_ASM: "Transferred to ASM",
+  // ID 77: shown as "Awaiting field visit" — only a visit (or "Visit not needed") ends it.
+  Transferred_to_ASM: "Awaiting field visit",
+  Won: "Won — onboarding",
   Converted: "Converted",
   Lost: "Lost",
 };

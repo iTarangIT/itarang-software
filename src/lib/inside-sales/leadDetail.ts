@@ -6,12 +6,15 @@
 // Not scope-checked — callers are. The route is role-gated; the Assistant
 // checks the user's scope predicate first and then projects an allowlist.
 
+import { loadLiveOemPrices } from "@/lib/leads/oemPrices";
+import { quotePriceChanged } from "@/lib/leads/oemPricing";
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { fetchAssignedByForLeads } from "@/lib/leads/leadAssignedBy";
 import type {
     LeadDetailBundle,
     LeadDetailCommercials,
+    LeadOnboardingMilestones,
     LeadDetailLead,
     LeadDetailStatusHistory,
     LeadDetailTouchpoint,
@@ -108,7 +111,9 @@ export async function fetchLeadDetailBundle(leadId: string): Promise<LeadDetailB
                 quote_number, quote_pdf_url, quote_pdf_generated_at, quote_pdf_error,
                 -- E-243 the dealer's own answer.
                 dealer_decision, dealer_decision_at, dealer_decision_via,
-                dealer_decision_note
+                dealer_decision_note, oem_evaluation,
+                -- ID 78 (E-314), read through to_jsonb so a DB without it still loads.
+                to_jsonb(dealer_lead_commercials) ->> 'withdraw_reason' AS withdraw_reason
             FROM dealer_lead_commercials
             WHERE dealer_lead_id = ${leadId}
             ORDER BY version_no DESC
@@ -159,6 +164,40 @@ export async function fetchLeadDetailBundle(leadId: string): Promise<LeadDetailB
         LIMIT 1
     `);
 
+    // ID 78: flag an OPEN quote (released, unanswered, not withdrawn) whose
+    // product reference price changed since it was issued.
+    const history = commercialsHistory as LeadDetailCommercials[];
+    for (const c of history) {
+        const open =
+            (c.event_type === "quote_issue" || c.event_type === "quote_revision") &&
+            c.approval_status === "approved" &&
+            !c.dealer_decision &&
+            !c.withdrawn_at;
+        if (!open || !c.product_lines?.length) continue;
+        try {
+            const live = await loadLiveOemPrices(c.product_lines);
+            c.price_changed_since_issue = quotePriceChanged(c.oem_evaluation ?? null, live);
+        } catch {
+            c.price_changed_since_issue = false;
+        }
+    }
+
+    // ID 84: onboarding milestones on the lead.
+    const onboardingRows = (await db.execute<LeadOnboardingMilestones>(sql`
+        SELECT oa.id::text AS application_id, oa.onboarding_status,
+               oa.submitted_at::text AS docs_submitted_at, oa.agreement_status,
+               oa.approved_at::text AS approved_at,
+               COALESCE(oa.last_action_at, oa.updated_at)::text AS last_activity_at,
+               (oa.onboarding_status NOT IN ('approved', 'rejected')
+                AND COALESCE(oa.last_action_at, oa.updated_at) < NOW() - INTERVAL '14 days') AS stalled
+          FROM dealer_onboarding_applications oa
+          JOIN dealer_leads dl ON dl.id = ${leadId}
+         WHERE oa.id = dl.dealer_onboarding_application_id
+            OR oa.originating_dealer_lead_id = ${leadId}
+         ORDER BY oa.created_at DESC
+         LIMIT 1
+    `)) as unknown as LeadOnboardingMilestones[];
+
     const bundle: LeadDetailBundle = {
         lead: { ...(lead as LeadDetailLead), assigned_by: assignedBy[leadId] ?? null },
         latest_campaign_id: campaignRows[0]?.campaign_id ?? null,
@@ -167,6 +206,7 @@ export async function fetchLeadDetailBundle(leadId: string): Promise<LeadDetailB
         commercials_history: commercialsHistory as LeadDetailCommercials[],
         touchpoints: touchpoints as LeadDetailTouchpoint[],
         status_history: statusHistory as LeadDetailStatusHistory[],
+        onboarding: onboardingRows[0] ?? null,
     };
     return bundle;
 }

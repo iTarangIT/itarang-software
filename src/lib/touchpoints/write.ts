@@ -31,6 +31,19 @@ import {
 } from "@/lib/lifecycle/touchpointTypes";
 import type { LeadStatus, LostReason } from "@/lib/lifecycle/transitions";
 import { isTerminal } from "@/lib/lifecycle/transitions";
+import { checkStatusMove, type StatusEvent } from "@/lib/lifecycle/statusRules";
+
+/**
+ * A status move the S3 rules refuse (statusRules.ts). Carries an HTTP status so
+ * withErrorHandler answers 409 with the sentence instead of a 500.
+ */
+export class StatusGuardError extends Error {
+  readonly status = 409;
+  constructor(reason: string) {
+    super(reason);
+    this.name = "StatusGuardError";
+  }
+}
 
 export type StatusChange = {
   // null = the lead had no status at all (legacy / lift-in rows). from_status
@@ -42,6 +55,12 @@ export type StatusChange = {
   reasonNotes?: string | null;
   // closing_role per BRD §0.13: is_phone / asm_visit / is_post_handoff / admin / system.
   closingRole?: "is_phone" | "asm_visit" | "is_post_handoff" | "admin" | "system";
+  /**
+   * What caused the move (statusRules.ts). Defaults to "progress": an ordinary
+   * touchpoint, forward only. The writer checks it against the lead's status as
+   * read INSIDE this transaction — `from` above is only the caller's view.
+   */
+  event?: StatusEvent;
 };
 
 export type WriteTouchpointInput = {
@@ -102,6 +121,11 @@ export type WriteTouchpointInput = {
    */
   fromOwnerId?: string | null;
   toOwnerId?: string | null;
+  /**
+   * Force the idle clock (last_worked_at) for a touchpoint type that is not
+   * work by default. ID 79: a WhatsApp reply proven by a screenshot is work.
+   */
+  countsAsWork?: boolean;
 };
 
 export type WriteTouchpointResult = {
@@ -125,7 +149,7 @@ export async function writeTouchpoint(
   // E-300 — the idle clock moves only for work (isWorkedTouchpoint), and only
   // forward: a visit logged today for last week must not rewind a call made
   // yesterday. GREATEST ignores the NULL of a never-worked lead.
-  const workedStamp = isWorkedTouchpoint(input.touchpointType, !!input.statusChange)
+  const workedStamp = input.countsAsWork || isWorkedTouchpoint(input.touchpointType, !!input.statusChange)
     ? {
         last_worked_at: sql`GREATEST(${dealerLeads.last_worked_at}, ${performedAt.toISOString()}::timestamptz)`,
       }
@@ -203,11 +227,31 @@ export async function writeTouchpoint(
     //    without a history row.
     if (input.statusChange) {
       const sc = input.statusChange;
+      // S3 guard (ID 115): the lead's status as it is now, locked for this
+      // transaction, is what the move is checked against — never the caller's
+      // possibly stale `from`.
+      const current = await tx.execute<{
+        lead_status: string | null;
+        current_owner_id: string | null;
+      }>(sql`
+        SELECT lead_status, current_owner_id
+          FROM dealer_leads WHERE id = ${input.dealerLeadId}
+         FOR UPDATE
+      `);
+      const fromStatus = current[0]?.lead_status ?? null;
+      const verdict = checkStatusMove({
+        from: fromStatus,
+        to: sc.to,
+        event: sc.event ?? "progress",
+        reason: sc.reasonNotes,
+      });
+      if (!verdict.ok) throw new StatusGuardError(verdict.reason);
+
       const [history] = await tx
         .insert(dealerLeadStatusHistory)
         .values({
           dealer_lead_id: input.dealerLeadId,
-          from_status: sc.from,
+          from_status: fromStatus,
           to_status: sc.to,
           from_lost_reason: sc.fromLostReason ?? null,
           to_lost_reason: sc.toLostReason ?? null,
@@ -234,25 +278,52 @@ export async function writeTouchpoint(
         updatePayload.lost_reason = sc.toLostReason;
       }
 
-      if (isTerminal(sc.to)) {
+      // ID 117: credit goes to the OWNER who closed it, not whoever pressed
+      // the button (an admin marking a rep's lead). The actor is the fallback
+      // for an unowned lead.
+      const closer = current[0]?.current_owner_id ?? input.performedBy;
+      if (sc.to === "Won") {
+        // ID 74: Mark Won records the closing owner; Converted (onboarding
+        // approved) later keeps it, so a reassignment in between never moves
+        // the credit.
+        if (closer) updatePayload.closing_owner_id = closer;
+        if (sc.closingRole) updatePayload.closing_role = sc.closingRole;
+      } else if (sc.to === "Converted") {
         updatePayload.closed_at = performedAt;
-        if (input.performedBy) {
-          updatePayload.closing_owner_id = input.performedBy;
+        updatePayload.closing_owner_id = sql`COALESCE(${dealerLeads.closing_owner_id}, ${closer})`;
+        if (sc.closingRole) {
+          updatePayload.closing_role = sql`COALESCE(${dealerLeads.closing_role}, ${sc.closingRole})`;
+        }
+      } else if (isTerminal(sc.to)) {
+        updatePayload.closed_at = performedAt;
+        if (closer) {
+          updatePayload.closing_owner_id = closer;
         }
         if (sc.closingRole) {
           updatePayload.closing_role = sc.closingRole;
         }
-      } else if (sc.from === "Lost" && sc.to === "Assigned_Not_Contacted") {
-        // Reactivation (BRD §0.9) — clear terminal residue.
+      } else if (fromStatus && (isTerminal(fromStatus as LeadStatus) || fromStatus === "Won")) {
+        // Leaving Converted / Lost (reactivation, correction) — clear the
+        // terminal residue so the lead is not still counted as closed.
         updatePayload.closed_at = null;
         updatePayload.closing_owner_id = null;
         updatePayload.closing_role = null;
+        if (sc.toLostReason === undefined) updatePayload.lost_reason = null;
       }
 
       await tx
         .update(dealerLeads)
         .set(updatePayload)
         .where(eq(dealerLeads.id, input.dealerLeadId));
+
+      // E-314 (not in schema.ts): when the lead was won. Raw, and only on the
+      // Won path, so hosts without E-314 fail Mark Won and nothing else.
+      if (sc.to === "Won") {
+        await tx.execute(sql`
+          UPDATE dealer_leads SET won_at = ${performedAt.toISOString()}::timestamptz
+           WHERE id = ${input.dealerLeadId}
+        `);
+      }
     } else {
       // 3. No status change — still bump last_touchpoint_at ("last activity");
       //    the idle clock (last_worked_at) moves only for real work.

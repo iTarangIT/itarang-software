@@ -9,6 +9,9 @@ import {
     CheckCircle2,
     XCircle,
 } from "lucide-react";
+import { useState } from "react";
+import { toast } from "sonner";
+import { Ban } from "lucide-react";
 import type { LeadDetailBundle } from "@/lib/inside-sales/types";
 import { isOpen, type LeadStatus } from "@/lib/lifecycle/transitions";
 
@@ -27,10 +30,39 @@ type Props = {
     isOwner: boolean;
     viewerRole: string;
     onAction: (modal: ActiveModal) => void;
+    /** Refresh after an inline action (Visit not needed). */
+    onChanged?: () => void;
 };
 
-export function AsmLeadActionBar({ bundle, isOwner, viewerRole, onAction }: Props) {
+export function AsmLeadActionBar({ bundle, isOwner, viewerRole, onAction, onChanged }: Props) {
     const lead = bundle.lead;
+    const [savingNotNeeded, setSavingNotNeeded] = useState(false);
+
+    // ID 77: Awaiting field visit ends only with a visit or "Visit not needed" + reason.
+    const visitNotNeeded = async () => {
+        const reason = window.prompt("Why is a field visit not needed? (at least 5 characters)")?.trim();
+        if (!reason) return;
+        if (reason.length < 5) {
+            toast.error("Give a reason of at least 5 characters.");
+            return;
+        }
+        setSavingNotNeeded(true);
+        try {
+            const res = await fetch(`/api/asm/lead/${encodeURIComponent(lead.id)}/visit-not-needed`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ reason }),
+            });
+            const json = await res.json();
+            if (!res.ok) throw new Error(json?.error?.message ?? "Could not save");
+            toast.success("Visit marked not needed.");
+            onChanged?.();
+        } catch (err) {
+            toast.error((err as Error).message);
+        } finally {
+            setSavingNotNeeded(false);
+        }
+    };
     const status = lead.lead_status as LeadStatus | null;
     const open = status ? isOpen(status) : false;
     const isAdmin = viewerRole === "admin" || viewerRole === "ceo";
@@ -46,8 +78,7 @@ export function AsmLeadActionBar({ bundle, isOwner, viewerRole, onAction }: Prop
         );
     }
 
-    // Converted / Lost are not gated on the current status — an ASM can reopen a
-    // lead closed by mistake, the same freedom the status dropdown gives.
+    // Won / Lost are refused server-side for a closed lead (S3, statusRules.ts).
     // Escalate stays open-only because its route refuses a closed lead.
 
     return (
@@ -55,6 +86,11 @@ export function AsmLeadActionBar({ bundle, isOwner, viewerRole, onAction }: Prop
             <Btn primary tone="emerald" icon={MapPinned} onClick={() => onAction("visit")}>
                 Log Visit
             </Btn>
+            {status === "Transferred_to_ASM" && (
+                <Btn icon={Ban} onClick={visitNotNeeded} disabled={savingNotNeeded}>
+                    Visit not needed
+                </Btn>
+            )}
             <Btn icon={MessageSquarePlus} onClick={() => onAction("touchpoint")}>
                 Log Touchpoint
             </Btn>
@@ -66,7 +102,7 @@ export function AsmLeadActionBar({ bundle, isOwner, viewerRole, onAction }: Prop
                 icon={CheckCircle2}
                 onClick={() => onAction("mark_converted")}
             >
-                Mark Converted
+                Mark Won
             </Btn>
             <Btn
                 tone="rose"

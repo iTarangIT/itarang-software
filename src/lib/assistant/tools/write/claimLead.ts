@@ -58,9 +58,6 @@ async function whyNotClaimable(user: AssistantUser, leadId: string): Promise<Too
     const crm_url = leadUrl(user, lead.id);
     if (lead.owned) return { kind: "declined", reason: "You already own this lead.", crm_url };
     if (lead.current_owner_id) return { kind: "declined", reason: "This lead already has an owner, so it can't be claimed.", crm_url };
-    if (user.role === "asm") {
-        return { kind: "declined", reason: "This lead is outside your territory, so you can't claim it.", crm_url };
-    }
     return { kind: "declined", reason: "This lead can't be claimed.", crm_url };
 }
 
@@ -69,7 +66,7 @@ export const claimLead: ToolFactory = () =>
         name: "claim_lead",
         kind: "write",
         description:
-            "Propose claiming ONE unowned lead from the user's claim pool (ISR: unassigned pool; ASM: unclaimed in their territory). " +
+            "Propose claiming ONE unowned lead from the user's claim pool (any unowned, open lead; an ASM may claim outside their territory — it is flagged for the Sales Head). " +
             "Pass lead_id when you have it, otherwise the name the user gave — it is searched in the pool only. " +
             "Nothing is saved until Confirm.",
         schema: z

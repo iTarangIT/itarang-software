@@ -120,7 +120,7 @@ describe("scope predicate (INV1)", () => {
 
     it("claim pool: ISR = unassigned tab; ASM = unclaimed (in-territory) tab, not the whole feed", () => {
         expect(render(claimPoolPredicate(ISR)).sql).toBe(render(isrTab("unassigned", ISR.id)).sql);
-        expect(render(claimPoolPredicate(ASM)).sql).toBe(render(asmTab("unclaimed", ASM.id)).sql);
+        expect(render(claimPoolPredicate(ASM)).sql).toBe(render(isrTab("unassigned", ASM.id)).sql);
     });
 
     it("INV1_same_access: an out-of-scope id and a nonexistent id give the IDENTICAL result", async () => {

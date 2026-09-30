@@ -61,6 +61,11 @@ export const TOUCHPOINT_TYPE = [
   "ai_dialer_admin_push",
   // Post-conversion loopback (BRD §0.11)
   "onboarding_dropout_action",
+  // 29 Sep 2026 — lead events (tracker IDs 81, 82, 36). None is work.
+  "lead_created",
+  "lead_reinquiry",
+  "sales_ready",
+  "contactability_flag",
 ] as const;
 export type TouchpointType = (typeof TOUCHPOINT_TYPE)[number];
 

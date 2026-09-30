@@ -29,6 +29,8 @@ export const MarkLostPlan = z.object({
     lead_id: z.string().min(1),
     reason: z.enum(REP_LOST_REASONS as [LostReason, ...LostReason[]]),
     notes: z.string().nullable(),
+    /** ID 76: required for lost_to_competition. */
+    competitor_name: z.string().nullable().optional(),
 });
 export type MarkLostPlan = z.infer<typeof MarkLostPlan>;
 
@@ -45,6 +47,7 @@ export const markLost: ToolFactory = () =>
             lead_id: LeadId,
             lost_reason: z.enum(REP_LOST_REASONS as [LostReason, ...LostReason[]]),
             notes: Remarks.optional(),
+            competitor_name: z.string().trim().max(200).optional(),
         }),
         run: async (ctx, input): Promise<ToolResult> => {
             const owned = await ownedLeadOr(ctx, input.lead_id);
@@ -58,17 +61,22 @@ export const markLost: ToolFactory = () =>
             if (lead.lead_status === "Converted") {
                 return {
                     kind: "declined",
-                    reason: "This lead is Converted. Closing a converted lead is done on the CRM screen.",
+                    reason: "This lead is Converted. Only an admin can close a converted lead (drop-out resolution).",
                     crm_url: crmUrl,
                 };
             }
             const notes = input.notes?.trim() || null;
             if (input.lost_reason === "other" && !notes) return ask("Why was it lost? I need a short note for 'other'.");
 
-            const plan: MarkLostPlan = { lead_id: lead.id, reason: input.lost_reason, notes };
+            const competitor = input.competitor_name?.trim() || null;
+            if (input.lost_reason === "lost_to_competition" && !competitor) {
+                return ask("Which competitor did the dealer go with?");
+            }
+            const plan: MarkLostPlan = { lead_id: lead.id, reason: input.lost_reason, notes, competitor_name: competitor };
             const lines: Preview["lines"] = [
                 { label: "Status", value: `${statusLabel(lead.lead_status)} → Lost (${reasonLabel(plan.reason)})` },
             ];
+            if (competitor) lines.push({ label: "Competitor", value: competitor });
             if (notes) lines.push({ label: "Notes", value: notes });
             const secondConfirm = isHighImpactLostReason(plan.reason);
             const preview: Preview = {
@@ -105,6 +113,7 @@ export const markLostApplier = defineApplier<MarkLostPlan>({
                 actor: { id: user.id, role: user.role },
                 reason: p.reason,
                 notes: p.notes,
+                competitorName: p.competitor_name ?? null,
                 // Only a step-2 action carries the second Confirm.
                 confirmedHighImpact: step === 2,
             },

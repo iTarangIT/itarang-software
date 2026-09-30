@@ -29,7 +29,8 @@ export const TOUCHPOINT_TYPE_LABEL: Record<TouchpointType, string> = {
     brochure_sent: "Brochure sent",
     // "Released", not "Delivered": this is the quote clearing the approval gate.
     // Whether it reached the dealer is `quote_dispatched`.
-    quote_sent: "Quote approved & released",
+    // ID 75: shown as "Quote released" (stored value quote_sent kept for history).
+    quote_sent: "Quote released",
     quote_submitted: "Quote sent for approval",
     quote_rejected: "Quote rejected",
     quote_dispatched: "Quote sent to dealer",
@@ -52,6 +53,10 @@ export const TOUCHPOINT_TYPE_LABEL: Record<TouchpointType, string> = {
     reactivated_via_admin: "Reactivated (admin)",
     ai_dialer_admin_push: "Pushed to AI dialer",
     onboarding_dropout_action: "Onboarding loopback",
+    lead_created: "Lead created",
+    lead_reinquiry: "Re-inquiry",
+    sales_ready: "Sales-ready",
+    contactability_flag: "Contactability",
 };
 
 export const CALL_STATUS_LABEL: Record<CallStatus, string> = {

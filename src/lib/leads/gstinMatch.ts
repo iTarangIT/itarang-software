@@ -39,7 +39,7 @@ export function dealerLeadByGstin(key: SQL): SQL {
          WHERE ${key} IS NOT NULL
            AND (${GSTIN_KEY(sql`gm_dl.gstin`)} = ${key}
                 OR ${GSTIN_KEY(sql`gm_app.gst_number`)} = ${key})
-         ORDER BY (gm_dl.lead_status = 'Converted') DESC,
+         ORDER BY (gm_dl.lead_status IN ('Converted', 'Won')) DESC,
                   gm_dl.closed_at DESC NULLS LAST,
                   gm_dl.created_at ASC
          LIMIT 1

@@ -29,10 +29,14 @@ const EVENT_TYPES = [
     { key: "quote_issue", label: "Quote issued" },
     { key: "quote_revision", label: "Quote revision" },
     { key: "terms_update", label: "Terms update" },
-    { key: "final_terms", label: "Final terms (sets final_price)" },
+    { key: "final_terms", label: "Final terms" },
 ] as const;
 
 type EventType = (typeof EVENT_TYPES)[number]["key"];
+
+// ID 61: terms rows carry no price of their own — the server takes the
+// dealer-approved quote's price. A price change is a Quote revision.
+const TERMS_EVENTS: readonly EventType[] = ["terms_update", "final_terms"];
 
 const ASSET_TYPES: { key: AssetType; label: string }[] = [
     { key: "battery", label: "Battery" },
@@ -170,8 +174,10 @@ export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercia
         setSubmitting(true);
         try {
             const body: Record<string, unknown> = { event_type: eventType };
+            const isTerms = TERMS_EVENTS.includes(eventType);
             // Final price is the product roll-up — no separate manual field.
-            if (linesSubtotal > 0) body.final_price = linesSubtotal;
+            // Terms events send no price or lines (ID 61).
+            if (!isTerms && linesSubtotal > 0) body.final_price = linesSubtotal;
             if (paymentMethod) body.payment_method = paymentMethod;
             if (creditTerms) body.credit_terms = creditTerms;
             if (deliveryTerms) body.delivery_terms = deliveryTerms;
@@ -179,7 +185,7 @@ export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercia
             if (quoteUrl) body.quote_document_url = quoteUrl;
             if (brochureUrl) body.brochure_url = brochureUrl;
             if (dealNotes) body.deal_notes = dealNotes;
-            if (lines.length) body.product_lines = lines;
+            if (!isTerms && lines.length) body.product_lines = lines;
             if (notes) body.notes = notes;
 
             const res = await fetch(`/api/inside-sales/lead/${encodeURIComponent(leadId)}/commercials`, {
@@ -240,8 +246,15 @@ export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercia
                         {EVENT_TYPES.map((e) => <option key={e.key} value={e.key}>{e.label}</option>)}
                     </select>
                 </div>
+                {TERMS_EVENTS.includes(eventType) && (
+                    <p className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-800">
+                        {eventType === "final_terms"
+                            ? "Final terms use the price of the quote the dealer approved. To change the price, create a Quote revision — it goes through approval."
+                            : "Terms updates keep the latest quote's price. To change the price, create a Quote revision."}
+                    </p>
+                )}
                 {/* ── Products (E-128/E-168) — the card drives the deal total ─ */}
-                <div className="rounded-lg border border-gray-200 bg-gray-50/60 p-3 space-y-3">
+                <div className={`rounded-lg border border-gray-200 bg-gray-50/60 p-3 space-y-3 ${TERMS_EVENTS.includes(eventType) ? "hidden" : ""}`}>
                     <div className="flex items-center justify-between">
                         <Label className="!mb-0">Products</Label>
                         <span className="text-xs text-gray-500">

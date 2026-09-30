@@ -19,6 +19,7 @@
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { requireRole } from "@/lib/auth-utils";
+import { exportsOwnLeadsOnly, logDataDownload } from "@/lib/exports/downloadLog";
 import { withErrorHandler } from "@/lib/api-utils";
 import { LEADS_PAGE_ROLES, capabilitiesFor } from "@/lib/leads/access";
 import { buildExportWhere } from "@/lib/leads/leadListQuery";
@@ -120,7 +121,11 @@ export const GET = withErrorHandler(async (req: Request) => {
     // full-leads export (B11), so no two of them can disagree about a match.
     const filters = await parseLeadListFilters(searchParams, caps);
 
-    const where = buildExportWhere(filters);
+    // ID 58: a rep's (or partner's) export holds only the leads they own.
+    const ownOnly = exportsOwnLeadsOnly(user.role);
+    const where = ownOnly
+        ? sql`${buildExportWhere(filters)} AND dl.current_owner_id = ${user.id}`
+        : buildExportWhere(filters);
 
     const [{ n: total }] = (await db.execute<{ n: number }>(sql`
         SELECT COUNT(*)::int AS n FROM dealer_leads dl WHERE ${where}
@@ -246,6 +251,15 @@ export const GET = withErrorHandler(async (req: Request) => {
             : c.key === "business_type"
               ? businessTypeLabel(r[c.key] as string | null)
               : r[c.key];
+
+    await logDataDownload({
+        userId: user.id,
+        role: user.role,
+        dataset: "dealer_leads",
+        rowCount: rows.length,
+        ownOnly,
+        filters: Object.fromEntries(searchParams.entries()),
+    });
 
     const stamp = fmtDateTime(new Date()).replace(/[: ]/g, "-");
     const truncated = total > rows.length;

@@ -19,6 +19,9 @@
 
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
+import { isForward } from "@/lib/lifecycle/statusRules";
+import { OUTSIDE_TERRITORY_MARKER } from "@/lib/leads/claimScope";
+import { markSalesReady } from "@/lib/leads/salesReady";
 import { writeTouchpoint } from "@/lib/touchpoints/write";
 import type { LeadStatus } from "@/lib/lifecycle/transitions";
 
@@ -74,7 +77,6 @@ export async function claimLead(
             SET current_owner_id = ${actorId},
                 originator_id = COALESCE(originator_id, ${actorId}),
                 assigned_at = NOW(),
-                lead_status = 'Assigned_Not_Contacted',
                 updated_at = NOW()
                 ${asmAssignment}
             WHERE id = ${leadId}
@@ -86,22 +88,49 @@ export async function claimLead(
         // Zero rows = someone else won between our SELECT and UPDATE.
         if (updated.length === 0) return { ok: false, reason: "already_owned" };
 
+        // ID 45: an ASM may claim in any territory; a claim outside their own
+        // is marked on the touchpoint so the Sales Head sees it.
+        let outsideTerritory = false;
+        if (opts?.actorRole === "asm") {
+            const inTerritory = await tx.execute<{ ok: boolean }>(sql`
+                SELECT EXISTS (
+                    SELECT 1 FROM dealer_leads dl
+                      JOIN asm_territories t ON t.asm_id = ${actorId}
+                                            AND t.state = dl.state
+                                            AND (t.city IS NULL OR t.city = dl.city)
+                                            AND (t.active_from IS NULL OR t.active_from <= CURRENT_DATE)
+                                            AND (t.active_to IS NULL OR t.active_to >= CURRENT_DATE)
+                     WHERE dl.id = ${leadId}
+                ) AS ok
+            `);
+            outsideTerritory = !inTerritory[0]?.ok;
+        }
+
         await writeTouchpoint(
             {
                 dealerLeadId: leadId,
                 touchpointType: "lead_claimed",
                 performedBy: actorId,
-                remarks: "Claimed from unassigned queue",
+                remarks: outsideTerritory
+                    ? `Claimed ${OUTSIDE_TERRITORY_MARKER}`
+                    : "Claimed from unassigned queue",
                 // E-295: the guarded UPDATE guarantees the lead was unowned.
                 fromOwnerId: null,
                 toOwnerId: actorId,
-                statusChange: {
-                    from: (row.lead_status as LeadStatus | null) ?? "New_Unassigned",
-                    to: "Assigned_Not_Contacted",
-                },
+                // S3: the claim lifts a New / unstatused lead to Assigned; a lead
+                // released after it was worked keeps its stage (never backwards).
+                statusChange: isForward(row.lead_status, "Assigned_Not_Contacted")
+                    ? {
+                          from: (row.lead_status as LeadStatus | null) ?? "New_Unassigned",
+                          to: "Assigned_Not_Contacted",
+                      }
+                    : undefined,
             },
             { tx },
         );
+
+        // ID 82: a claim is a Sales-ready event (first one wins).
+        await markSalesReady(tx, { leadId, reason: "claimed_by_rep", actorId });
 
         return { ok: true };
     };

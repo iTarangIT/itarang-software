@@ -11,7 +11,11 @@ const inr = (n: number) => `₹${n.toLocaleString("en-IN", { maximumFractionDigi
 
 export function SalesOutcomeStrip({ d }: { d: SalesDashboard }) {
     const tiles = [
-        { label: "Quotes issued", value: fmt(d.outcome.quotes_issued), hint: "quote versions created" },
+        {
+            label: "Quotes issued",
+            value: fmt(d.outcome.quotes_issued),
+            hint: `first quote per lead · ${fmt(d.outcome.quote_revisions ?? 0)} revisions`,
+        },
         { label: "Converted", value: fmt(d.totals.converted), hint: "leads closed as Converted" },
         {
             label: "Batteries to dealers",

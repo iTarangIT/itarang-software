@@ -1764,3 +1764,46 @@ export async function startWaAssistantSweepTicker() {
   if (typeof interval.unref === "function") interval.unref();
   console.log("[instrumentation] wa-assistant action sweep (60s) started in-process");
 }
+
+// ---------------------------------------------------------------------------
+// Dealer agreement status refresh (tracker ID 53, 29 Sep 2026).
+// ---------------------------------------------------------------------------
+// The agreement status only moved while someone had the dealer review page
+// open. This asks Digio about every open, initiated agreement every 15 minutes
+// through the same refresh the button uses. Same shape and reasoning as the
+// tickers above: the vercel.json crons do not fire on the pm2 boxes;
+// /api/cron/dealer-agreement-refresh is the backstop.
+export async function startDealerAgreementRefreshTicker() {
+  if (process.env.VERCEL === "1") return;
+
+  const TICK_INTERVAL_MS = 15 * 60_000;
+  let inFlight = false;
+
+  const tick = async () => {
+    if (inFlight) return;
+    inFlight = true;
+    try {
+      const { runDealerAgreementRefreshSweep } = await import("@/lib/agreement/autoRefreshSweep");
+      const r = await runDealerAgreementRefreshSweep();
+      if (r.changed || r.failed) {
+        console.log(
+          `[instrumentation:agreement-refresh] checked=${r.checked} changed=${r.changed} failed=${r.failed}`,
+        );
+      }
+    } catch (err) {
+      console.error(
+        "[instrumentation:agreement-refresh] tick failed:",
+        err instanceof Error ? err.message : err,
+      );
+    } finally {
+      inFlight = false;
+    }
+  };
+
+  const kickoff = setTimeout(tick, 210_000);
+  if (typeof kickoff.unref === "function") kickoff.unref();
+  const interval = setInterval(tick, TICK_INTERVAL_MS);
+  if (typeof interval.unref === "function") interval.unref();
+
+  console.log("[instrumentation] dealer agreement refresh sweep (15 min) started in-process");
+}

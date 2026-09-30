@@ -76,10 +76,12 @@ const ISR_DATE_COLUMN = sql`dl.created_at`;
  */
 export function tabFilter(tab: QueueTab, userId: string) {
     switch (tab) {
+        // ID 36: a dead / non-responsive number leaves the working tabs (it is
+        // in Number Repair, owner kept). Read via to_jsonb: E-314 may be absent.
         case "my_open":
-            return sql`dl.current_owner_id = ${userId} AND dl.lead_status IN (${OPEN_LIST}) AND dl.is_active IS NOT FALSE`;
+            return sql`dl.current_owner_id = ${userId} AND dl.lead_status IN (${OPEN_LIST}) AND dl.is_active IS NOT FALSE AND (to_jsonb(dl) ->> 'contactability') IS NULL`;
         case "follow_ups":
-            return sql`dl.current_owner_id = ${userId} AND dl.next_follow_up_at IS NOT NULL AND dl.next_follow_up_at <= NOW() AND dl.lead_status IN (${OPEN_LIST}) AND dl.is_active IS NOT FALSE`;
+            return sql`dl.current_owner_id = ${userId} AND dl.next_follow_up_at IS NOT NULL AND dl.next_follow_up_at <= NOW() AND dl.lead_status IN (${OPEN_LIST}) AND dl.is_active IS NOT FALSE AND (to_jsonb(dl) ->> 'contactability') IS NULL`;
         case "unassigned":
             // "Claimable" = anything nobody owns and isn't terminal — not just
             // lead_status = 'New_Unassigned'. Manual-upload / scraped leads are

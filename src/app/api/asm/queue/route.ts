@@ -10,7 +10,8 @@
 import { NextRequest } from "next/server";
 import { z } from "zod";
 import { requireRole } from "@/lib/auth-utils";
-import { successResponse, withErrorHandler } from "@/lib/api-utils";
+import { isPoolTabFor } from "@/lib/leads/claimScope";
+import { successResponse, withErrorHandler, errorResponse } from "@/lib/api-utils";
 import { fetchAsmQueueRows, countAsmQueueRows, fetchAsmQueueIds } from "@/lib/asm/queryBuilder";
 import { BULK_CLAIM_CAP } from "@/lib/inside-sales/types";
 import { fetchAssignedByForLeads } from "@/lib/leads/leadAssignedBy";
@@ -47,6 +48,11 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
         q: url.searchParams.get("q") ?? undefined,
         ids_only: url.searchParams.get("ids_only") ?? undefined,
     });
+
+    // ID 45: reps never list the unowned pool — they claim by number search.
+    if (isPoolTabFor(user.role, parsed.tab)) {
+        return errorResponse("Search by mobile number to find and claim a lead.", 403);
+    }
 
     const filters = readAsmQueueFilters(url.searchParams);
 

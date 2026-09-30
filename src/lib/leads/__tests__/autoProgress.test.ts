@@ -22,16 +22,17 @@ describe("autoProgressForCall", () => {
     it.each([
         ["Need Some Time", "Under_Discussion", "cold"],
         ["Details Shared", "Under_Discussion", "warm"],
-        ["Quotation Sent", "Awaiting_Customer_Decision", "hot"],
-        ["Under Negotiation", "Awaiting_Customer_Decision", "hot"],
-        ["Commercials Finalised", "Commercials_Finalised", "hot"],
+        // ID 75: commercials outcomes are first contact only — the quote moves the stage.
+        ["Quotation Sent", "Under_Discussion", "hot"],
+        ["Under Negotiation", "Under_Discussion", "hot"],
+        ["Commercials Finalised", "Under_Discussion", "hot"],
     ])("connected · %s → %s, %s", (label, status, interest) => {
         expect(call(label)).toEqual({ statusTo: status, interestTo: interest });
     });
 
-    it("Commercials Explained: status auto, temperature from the stated bucket only", () => {
-        expect(call("Commercials Explained")).toEqual({ statusTo: "Commercials_Explained", interestTo: null });
-        expect(call("Commercials Explained", { bucket: "Hot" })).toEqual({ statusTo: "Commercials_Explained", interestTo: "hot" });
+    it("Commercials Explained: first contact only (ID 75), temperature from the stated bucket only", () => {
+        expect(call("Commercials Explained")).toEqual({ statusTo: "Under_Discussion", interestTo: null });
+        expect(call("Commercials Explained", { bucket: "Hot" })).toEqual({ statusTo: "Under_Discussion", interestTo: "hot" });
     });
 
     it("not connected → nothing", () => {
@@ -46,7 +47,7 @@ describe("autoProgressForCall", () => {
     it("status never moves backwards, never touches terminal, same value → null", () => {
         expect(call("Details Shared", { currentStatus: "Commercials_Explained" }).statusTo).toBeNull();
         expect(call("Quotation Sent", { currentStatus: "Commercials_Finalised" }).statusTo).toBeNull();
-        expect(call("Commercials Finalised", { currentStatus: "Awaiting_Customer_Decision" }).statusTo).toBe("Commercials_Finalised");
+        expect(call("Commercials Finalised", { currentStatus: "Awaiting_Customer_Decision" }).statusTo).toBeNull();
         expect(call("Details Shared", { currentStatus: "Converted" }).statusTo).toBeNull();
         expect(call("Details Shared", { currentStatus: "Lost" }).statusTo).toBeNull();
         expect(call("Details Shared", { currentStatus: "Under_Discussion" }).statusTo).toBeNull();
@@ -57,8 +58,8 @@ describe("autoProgressForCall", () => {
         expect(call("Need Some Time", { currentInterest: "hot" }).interestTo).toBe("cold");
     });
 
-    it("an ASM's transferred lead still moves forward", () => {
-        expect(call("Details Shared", { currentStatus: "Transferred_to_ASM" }).statusTo).toBe("Under_Discussion");
+    it("a call never ends Awaiting field visit (ID 77)", () => {
+        expect(call("Details Shared", { currentStatus: "Transferred_to_ASM" }).statusTo).toBeNull();
     });
 });
 
@@ -69,8 +70,8 @@ describe("autoProgressForVisit", () => {
     it("productive → Under Discussion, temperature as said", () => {
         expect(visit("productive")).toEqual({ statusTo: "Under_Discussion", interestTo: null });
     });
-    it("commercials progressed → hot (status is asked)", () => {
-        expect(visit("commercials_progressed")).toEqual({ statusTo: null, interestTo: "hot" });
+    it("commercials progressed → hot; status is first contact only (ID 75)", () => {
+        expect(visit("commercials_progressed")).toEqual({ statusTo: "Under_Discussion", interestTo: "hot" });
     });
     it("dealer uninterested → cold (keep open / Lost is asked)", () => {
         expect(visit("dealer_uninterested")).toEqual({ statusTo: null, interestTo: "cold" });

@@ -6,6 +6,9 @@ export type DealerApprovalNotificationPayload = {
   dealerCode: string;
   dealerName: string;
   approvedAt: string;
+  /** Attached when available — the same copies the dealer's welcome email carries. */
+  signedAgreementPdf?: Buffer | null;
+  auditTrailPdf?: Buffer | null;
 };
 
 function escapeHtml(value: unknown): string {
@@ -47,6 +50,25 @@ export async function sendDealerApprovalNotificationEmail(
 
   const subject = `Dealer Onboarding Approved — ${payload.companyName} (${payload.dealerCode})`;
 
+  const attachments: Array<{ filename: string; content: Buffer; contentType: string }> = [];
+  if (payload.signedAgreementPdf) {
+    attachments.push({
+      filename: `Signed-Agreement-${payload.dealerCode}.pdf`,
+      content: payload.signedAgreementPdf,
+      contentType: "application/pdf",
+    });
+  }
+  if (payload.auditTrailPdf) {
+    attachments.push({
+      filename: `Audit-Trail-${payload.dealerCode}.pdf`,
+      content: payload.auditTrailPdf,
+      contentType: "application/pdf",
+    });
+  }
+  const attachmentNote = attachments.length
+    ? `<p style="margin: 16px 0 0; font-size: 14px;">Attached: ${attachments.map((a) => escapeHtml(a.filename)).join(", ")}.</p>`
+    : "";
+
   const html = `
     <div style="font-family: Arial, sans-serif; color: #0f172a; line-height: 1.6; max-width: 640px; margin: 0 auto;">
       <div style="padding: 24px; border: 1px solid #e2e8f0; border-radius: 16px; background: #ffffff;">
@@ -68,6 +90,8 @@ export async function sendDealerApprovalNotificationEmail(
           <p style="margin: 0;">The dealer account is now active. No further action is required from you.</p>
         </div>
 
+        ${attachmentNote}
+
         <p style="margin-top: 24px; margin-bottom: 0;">
           Regards,<br/>
           iTarang Compliance Team
@@ -81,6 +105,7 @@ export async function sendDealerApprovalNotificationEmail(
     to: recipients.join(","),
     subject,
     html,
+    attachments: attachments.length ? attachments : undefined,
   });
 
   console.log("DEALER APPROVAL NOTIFICATION EMAIL SENT:", {

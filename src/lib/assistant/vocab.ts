@@ -107,7 +107,8 @@ export const CALL_VOCAB: readonly CallVocabRow[] = deepFreeze<CallVocabRow[]>([
         labels: ["Commercials Explained"],
         buckets: ["Warm", "Hot"],
         askBucket: true,
-        status: { options: ["Commercials_Explained"], whenUnstated: "no_change", question: "" },
+        // ID 75: commercials stages come only from quote events — a call is first contact.
+        status: { options: ["Under_Discussion"], whenUnstated: "no_change", question: "" },
         lostReasonByLabel: {},
         interest: null,
         extra: "Ask temperature (warm or hot) if not stated",
@@ -120,7 +121,7 @@ export const CALL_VOCAB: readonly CallVocabRow[] = deepFreeze<CallVocabRow[]>([
         buckets: ["Warm"],
         askBucket: false,
         status: {
-            options: ["Awaiting_Customer_Decision", "Lost"],
+            options: ["Under_Discussion", "Lost"],
             whenUnstated: "ask",
             question: "Is the dealer still considering it, or not interested at all (mark Lost — price too high)?",
         },
@@ -136,13 +137,14 @@ export const CALL_VOCAB: readonly CallVocabRow[] = deepFreeze<CallVocabRow[]>([
         buckets: ["Hot"],
         askBucket: false,
         status: {
-            options: ["Awaiting_Customer_Decision", "Commercials_Finalised"],
+            // ID 75: the quote itself moves the stage; the call is first contact.
+            options: ["Under_Discussion"],
             whenUnstated: "no_change",
             question: "",
         },
         lostReasonByLabel: {},
         interest: "hot",
-        extra: "Interest hot; link to Transfer or Mark Converted",
+        extra: "Interest hot; link to Transfer or Mark Won",
     },
     {
         id: "lost",
@@ -158,7 +160,7 @@ export const CALL_VOCAB: readonly CallVocabRow[] = deepFreeze<CallVocabRow[]>([
         },
         lostReasonByLabel: {
             "Not Interested": ["not_interested"],
-            "Lost to Competition": ["other"],
+            "Lost to Competition": ["lost_to_competition"],
             "Business Closed": ["business_closed"],
         },
         interest: null,
@@ -175,11 +177,8 @@ export const VISIT_VOCAB: readonly VisitVocabRow[] = deepFreeze<VisitVocabRow[]>
         outcomes: ["productive", "commercials_progressed"],
         statusByOutcome: {
             productive: { options: [NO_CHANGE], whenUnstated: "no_change", question: "" },
-            commercials_progressed: {
-                options: ["Commercials_Explained", "Commercials_Finalised"],
-                whenUnstated: "ask",
-                question: "Were the commercials explained, or finalised?",
-            },
+            // ID 75: commercials stages come only from quote events.
+            commercials_progressed: { options: ["Under_Discussion"], whenUnstated: "no_change", question: "" },
         },
         lostReasons: [],
         extra: "Interest as stated; next visit date",

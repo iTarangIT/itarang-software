@@ -8,7 +8,8 @@
 
 import { z } from "zod";
 import { requireRole } from "@/lib/auth-utils";
-import { successResponse, withErrorHandler } from "@/lib/api-utils";
+import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
+import { claimsByNumberOnly } from "@/lib/leads/claimScope";
 import { BULK_CLAIM_CAP, CLAIM_ROLES, claimLead } from "@/lib/inside-sales/claimLead";
 import type { BulkClaimResult } from "@/lib/inside-sales/types";
 
@@ -20,6 +21,10 @@ const BodySchema = z.object({
 
 export const POST = withErrorHandler(async (req: Request) => {
     const user = await requireRole([...CLAIM_ROLES]);
+    // ID 45: reps claim one searched lead at a time — no bulk claim.
+    if (claimsByNumberOnly(user.role)) {
+        return errorResponse("Search by mobile number and claim each lead from the results.", 403);
+    }
     const body = BodySchema.parse(await req.json());
     const ids = Array.from(new Set(body.lead_ids));
 
