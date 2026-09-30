@@ -20,6 +20,8 @@ export type WindowTickOutcome = {
   resumed: string[];
   /** Of those resumed, the ones that went on to place a call. */
   advanced: string[];
+  /** E-315 — idle campaigns woken because an automatic retry fell due. */
+  retried: string[];
 };
 
 /**
@@ -155,13 +157,77 @@ export async function resumeDueCampaigns(): Promise<{
 }
 
 /**
+ * E-315 — wake campaigns that are idle waiting for an automatic retry.
+ *
+ * Once a campaign's first pass is done, its remaining work is retries booked
+ * minutes to a day ahead (next_attempt_at). No webhook is coming to re-enter
+ * advanceCampaign, so without this the campaign would sit 'running' forever.
+ *
+ * Only campaigns with NO call in flight: while one is calling, its webhook
+ * advances the campaign and a second advance here would place a parallel call.
+ * The claim is an atomic UPDATE with a 30s lease on last_advanced_at, for the
+ * same reason as resumeDueCampaigns — both drivers can tick in the same second,
+ * and a read-then-write would let both dial. Stamping last_advanced_at also
+ * tells the stall watchdog the campaign is alive.
+ */
+export async function wakeDueRetries(): Promise<string[]> {
+  const due = await db.execute<{ id: string }>(sql`
+    UPDATE dialer_campaigns c
+       SET last_advanced_at = now()
+     WHERE c.status = 'running'
+       AND (c.last_advanced_at IS NULL OR c.last_advanced_at < now() - interval '30 seconds')
+       AND EXISTS (
+         SELECT 1 FROM dialer_campaign_leads l
+          WHERE l.campaign_id = c.id
+            AND l.next_attempt_at IS NOT NULL
+            AND l.next_attempt_at <= now()
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM dialer_campaign_leads l
+          WHERE l.campaign_id = c.id AND l.status = 'calling'
+       )
+    RETURNING c.id
+  `);
+  const rows =
+    (due as unknown as { rows?: Array<{ id: string }> }).rows ??
+    (due as unknown as Array<{ id: string }>);
+
+  const woken: string[] = [];
+  for (const { id } of rows) {
+    try {
+      const r = await advanceCampaign(id);
+      if (r.kind === "placed") woken.push(id);
+    } catch (err) {
+      console.error(
+        `[wakeDueRetries] advance failed for ${id}:`,
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+  return woken;
+}
+
+/**
  * One tick of the calling-window clock. Park first, then resume: the two sets
  * are disjoint (a campaign is either 'running' or 'scheduled'), so the order is
  * not load-bearing, but parking first means a campaign that closes and reopens
- * within the same tick settles on the correct side of the boundary.
+ * within the same tick settles on the correct side of the boundary. Due
+ * automatic retries (E-315) are woken last, after any resume has placed its
+ * call, so a just-resumed campaign is not double-advanced.
  */
 export async function runCampaignWindowTick(): Promise<WindowTickOutcome> {
   const parked = await parkClosedCampaigns();
   const { resumed, advanced } = await resumeDueCampaigns();
-  return { parked, resumed, advanced };
+  let retried: string[] = [];
+  try {
+    retried = await wakeDueRetries();
+  } catch (err) {
+    // Pre-E-315 database (column missing) or a transient error — must not
+    // break park/resume, which already ran.
+    console.error(
+      "[runCampaignWindowTick] wakeDueRetries failed:",
+      err instanceof Error ? err.message : err,
+    );
+  }
+  return { parked, resumed, advanced, retried };
 }
