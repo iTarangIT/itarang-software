@@ -141,11 +141,13 @@ async function exceptionsTile(): Promise<NonNullable<ControlTower["exceptions"]>
     const [q] = await rows(sql`
         SELECT
           (SELECT COUNT(*) FROM dealer_lead_commercials WHERE approval_status = 'pending') AS quotes_pending,
-          (SELECT COUNT(*) FROM dealer_leads
-            WHERE current_owner_id IS NULL AND is_active IS NOT FALSE
-              AND lead_status IS NOT NULL
-              AND lead_status NOT IN ('Converted', 'Lost')
-              AND created_at < now() - INTERVAL '7 days') AS unassigned
+          -- ID 82: "Sales-ready leads awaiting assignment" — the clock runs
+          -- from the Sales-ready event (E-314, read via to_jsonb so a DB
+          -- without it reads 0), not from creation.
+          (SELECT COUNT(*) FROM dealer_leads dl
+            WHERE dl.current_owner_id IS NULL AND dl.is_active IS NOT FALSE
+              AND COALESCE(dl.lead_status, '') NOT IN ('Won', 'Converted', 'Lost')
+              AND (to_jsonb(dl) ->> 'sales_ready_at')::timestamptz < now() - INTERVAL '7 days') AS unassigned
     `);
     const [idle, dealers, below] = await Promise.all([
         summarizeNeedsAttention({ minDays: 7 }),

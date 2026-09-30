@@ -76,7 +76,7 @@ exports[`INV6_closed_vocabulary: §9.3 map is a subset of the existing enums > m
       "said": "explained commercials, gave the price",
       "status": {
         "options": [
-          "Commercials_Explained",
+          "Under_Discussion",
         ],
         "question": "",
         "whenUnstated": "no_change",
@@ -102,7 +102,7 @@ exports[`INV6_closed_vocabulary: §9.3 map is a subset of the existing enums > m
       "said": "price too high (still talking / not interested)",
       "status": {
         "options": [
-          "Awaiting_Customer_Decision",
+          "Under_Discussion",
           "Lost",
         ],
         "question": "Is the dealer still considering it, or not interested at all (mark Lost — price too high)?",
@@ -115,7 +115,7 @@ exports[`INV6_closed_vocabulary: §9.3 map is a subset of the existing enums > m
         "Hot",
       ],
       "connect": "connected",
-      "extra": "Interest hot; link to Transfer or Mark Converted",
+      "extra": "Interest hot; link to Transfer or Mark Won",
       "id": "quote_negotiation",
       "interest": "hot",
       "labels": [
@@ -127,8 +127,7 @@ exports[`INV6_closed_vocabulary: §9.3 map is a subset of the existing enums > m
       "said": "quote sent, negotiating, deal final",
       "status": {
         "options": [
-          "Awaiting_Customer_Decision",
-          "Commercials_Finalised",
+          "Under_Discussion",
         ],
         "question": "",
         "whenUnstated": "no_change",
@@ -153,7 +152,7 @@ exports[`INV6_closed_vocabulary: §9.3 map is a subset of the existing enums > m
           "business_closed",
         ],
         "Lost to Competition": [
-          "other",
+          "lost_to_competition",
         ],
         "Not Interested": [
           "not_interested",
@@ -222,11 +221,10 @@ exports[`INV6_closed_vocabulary: §9.3 map is a subset of the existing enums > m
       "statusByOutcome": {
         "commercials_progressed": {
           "options": [
-            "Commercials_Explained",
-            "Commercials_Finalised",
+            "Under_Discussion",
           ],
-          "question": "Were the commercials explained, or finalised?",
-          "whenUnstated": "ask",
+          "question": "",
+          "whenUnstated": "no_change",
         },
         "productive": {
           "options": [

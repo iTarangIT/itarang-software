@@ -1096,7 +1096,14 @@ export default function DealerReviewPage() {
   // Manual agreement completion — upload the final signed agreement + audit
   // trail by hand when Digio signing was completed out-of-band.
   const [manualSignedFile, setManualSignedFile] = useState<File | null>(null);
-  const [manualAuditFile, setManualAuditFile]   = useState<File | null>(null);
+  // ID 55: more than one audit trail, and a mismatch the admin must confirm.
+  const [manualAuditFiles, setManualAuditFiles] = useState<File[]>([]);
+  const [manualCheck, setManualCheck] = useState<{
+    verdict: string;
+    reasons: string[];
+    read?: { signedOn?: string | null; documentId?: string | null; signers?: Array<{ name: string | null; signedAt: string | null }> };
+  } | null>(null);
+  const [manualMismatchReason, setManualMismatchReason] = useState("");
   // E-225 — provenance of a manually signed (paper) agreement.
   const [manualAgreementRef, setManualAgreementRef] = useState("");
   const [manualSignedOn, setManualSignedOn]         = useState("");
@@ -1675,24 +1682,40 @@ export default function DealerReviewPage() {
     }
   };
 
-  const handleManualUpload = async () => {
-    if (!manualSignedFile) {
+  // ID 55: the system reads the files and checks them against the dealer and
+  // Digio. A mismatch comes back 422 with the reasons; the admin can confirm it
+  // with a reason, which resends the same files. After completion the same
+  // handler ADDS files (more audit trails) without touching the status.
+  const handleManualUpload = async (opts: { confirm?: boolean; addOnly?: boolean } = {}) => {
+    if (!opts.addOnly && !manualSignedFile) {
       toast.error("Select the signed agreement PDF.");
       return;
     }
     // The audit trail is a Digio artefact. A paper agreement has none, so it is
     // only demanded when this upload is rescuing a stalled e-sign.
-    if (!isManualAgreement && !manualAuditFile) {
-      toast.error("Select both the signed agreement PDF and the audit trail PDF.");
+    if (!opts.addOnly && !isManualAgreement && manualAuditFiles.length === 0) {
+      toast.error("Select the signed agreement PDF and at least one audit trail PDF.");
+      return;
+    }
+    if (opts.addOnly && !manualSignedFile && manualAuditFiles.length === 0) {
+      toast.error("Select at least one file to add.");
+      return;
+    }
+    if (opts.confirm && manualMismatchReason.trim().length < 5) {
+      toast.error("Give a reason (at least 5 characters) to save documents that do not match.");
       return;
     }
     setManualUploading(true);
     try {
       const fd = new FormData();
-      fd.append("signedAgreement", manualSignedFile);
-      if (manualAuditFile) fd.append("auditTrail", manualAuditFile);
+      if (manualSignedFile) fd.append("signedAgreement", manualSignedFile);
+      for (const f of manualAuditFiles) fd.append("auditTrail", f);
       if (manualAgreementRef.trim()) fd.append("agreementRef", manualAgreementRef.trim());
       if (manualSignedOn) fd.append("agreementSignedOn", manualSignedOn);
+      if (opts.confirm) {
+        fd.append("confirmMismatch", "true");
+        fd.append("mismatchReason", manualMismatchReason.trim());
+      }
 
       const res = await fetch(
         `/api/admin/dealer-verifications/${dealerId}/upload-signed-agreement`,
@@ -1700,15 +1723,22 @@ export default function DealerReviewPage() {
       );
       let json: any = null;
       try { json = await res.json(); } catch { /* non-JSON body */ }
+      if (res.status === 422 && json?.needsConfirmation) {
+        setManualCheck({ verdict: json.verdict, reasons: json.reasons ?? [], read: json.read });
+        toast.error(json.message || "The documents do not match this dealer.");
+        return;
+      }
       if (!res.ok || !json?.success) {
         toast.error(json?.message || `Upload failed (HTTP ${res.status})`);
         return;
       }
       toast.success(json.message || "Agreement marked completed.");
       setManualSignedFile(null);
-      setManualAuditFile(null);
+      setManualAuditFiles([]);
       setManualAgreementRef("");
       setManualSignedOn("");
+      setManualCheck(null);
+      setManualMismatchReason("");
       await reloadDealer();
     } catch (err: any) {
       toast.error(err?.message || "Something went wrong while uploading documents");
@@ -1716,6 +1746,43 @@ export default function DealerReviewPage() {
       setManualUploading(false);
     }
   };
+
+  const manualCheckPanel = manualCheck && (
+    <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-4">
+      <p className="text-sm font-semibold text-red-800">
+        {manualCheck.verdict === "unreadable"
+          ? "The system could not read these files"
+          : "These documents do not match this dealer"}
+      </p>
+      <ul className="mt-1.5 list-disc pl-5 text-xs text-red-700">
+        {manualCheck.reasons.map((r) => <li key={r}>{r}</li>)}
+      </ul>
+      {manualCheck.read?.signers && manualCheck.read.signers.length > 0 && (
+        <p className="mt-2 text-xs text-slate-600">
+          Read: {manualCheck.read.signers.map((sg) => `${sg.name ?? "?"}${sg.signedAt ? ` (${sg.signedAt})` : ""}`).join(", ")}
+          {manualCheck.read.documentId ? ` · document ${manualCheck.read.documentId}` : ""}
+        </p>
+      )}
+      <label className="mt-3 block text-[11px] font-semibold uppercase tracking-[0.14em] text-red-700">
+        Save anyway — reason
+      </label>
+      <input
+        type="text"
+        value={manualMismatchReason}
+        onChange={(e) => setManualMismatchReason(e.target.value)}
+        placeholder="e.g. scan is of the signed copy; GSTIN changed after onboarding"
+        className="mt-1 h-9 w-full rounded-lg border border-red-200 bg-white px-3 text-sm outline-none focus:border-red-400"
+      />
+      <button
+        type="button"
+        onClick={() => handleManualUpload({ confirm: true, addOnly: isAgreementCompleted })}
+        disabled={manualUploading || manualMismatchReason.trim().length < 5}
+        className="mt-2 inline-flex items-center gap-2 rounded-xl bg-red-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-700 disabled:opacity-50"
+      >
+        Confirm and save
+      </button>
+    </div>
+  );
 
   const handleAgreementAction = async (action: "initiate" | "refresh" | "reinitiate" | "retry") => {
     if (data?.onboardingStatus === "rejected") { toast.error("This application is rejected and locked."); return; }
@@ -2580,7 +2647,7 @@ export default function DealerReviewPage() {
                           <input
                             type="file"
                             accept="application/pdf,.pdf"
-                            onChange={(e) => setManualSignedFile(e.target.files?.[0] || null)}
+                            onChange={(e) => { setManualSignedFile(e.target.files?.[0] || null); setManualCheck(null); }}
                             className="mt-2 block w-full text-xs text-slate-700 file:mr-3 file:rounded-xl file:border-0 file:bg-amber-100 file:px-3 file:py-2 file:text-xs file:font-semibold file:text-amber-800 hover:file:bg-amber-200"
                           />
                           {manualSignedFile && (
@@ -2625,34 +2692,88 @@ export default function DealerReviewPage() {
                             <input
                               type="file"
                               accept="application/pdf,.pdf"
-                              onChange={(e) => setManualAuditFile(e.target.files?.[0] || null)}
+                              multiple
+                              onChange={(e) => { setManualAuditFiles(Array.from(e.target.files ?? [])); setManualCheck(null); }}
                               className="mt-2 block w-full text-xs text-slate-700 file:mr-3 file:rounded-xl file:border-0 file:bg-amber-100 file:px-3 file:py-2 file:text-xs file:font-semibold file:text-amber-800 hover:file:bg-amber-200"
                             />
-                            {manualAuditFile && (
-                              <p className="mt-1 truncate text-xs text-emerald-700">✓ {manualAuditFile.name}</p>
-                            )}
+                            <p className="mt-1 text-[11px] text-amber-700">You can select more than one trail.</p>
+                            {manualAuditFiles.map((f) => (
+                              <p key={f.name} className="mt-1 truncate text-xs text-emerald-700">✓ {f.name}</p>
+                            ))}
                           </div>
                         )}
                       </div>
 
+                      <p className="mt-3 text-xs text-amber-800">
+                        The system reads the files — signers, signing dates, document ID, dealer name and
+                        GSTIN — checks them against this dealer and Digio, and fills in the signed date.
+                      </p>
+                      {manualCheckPanel}
                       <button
-                        onClick={handleManualUpload}
+                        onClick={() => handleManualUpload()}
                         disabled={
                           manualUploading ||
                           !manualSignedFile ||
-                          (!isManualAgreement && !manualAuditFile)
+                          (!isManualAgreement && manualAuditFiles.length === 0)
                         }
                         className="mt-4 inline-flex items-center gap-2 rounded-2xl bg-amber-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         <UploadCloud className="h-4 w-4" />
                         {manualUploading
-                          ? "Saving…"
+                          ? "Reading & saving…"
                           : isManualAgreement
                             ? "Save Agreement"
                             : "Save & Mark Completed"}
                       </button>
                     </div>
                   </div>
+                </div>
+              )}
+
+              {/* ID 55 — after completion, more audit trails (or a clearer
+                  signed copy) can be added. They are read and checked the same
+                  way; the status and dates never change again. */}
+              {isAgreementCompleted && !isRejected && (
+                <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-5">
+                  <p className="text-sm font-semibold text-slate-900">Add agreement documents</p>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Upload another audit trail or a signed copy. Each file is kept alongside the ones already on record.
+                  </p>
+                  <div className="mt-3 grid grid-cols-1 gap-4 md:grid-cols-2">
+                    <div>
+                      <label className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-600">
+                        Audit Trail(s) (PDF)
+                      </label>
+                      <input
+                        type="file"
+                        accept="application/pdf,.pdf"
+                        multiple
+                        onChange={(e) => { setManualAuditFiles(Array.from(e.target.files ?? [])); setManualCheck(null); }}
+                        className="mt-2 block w-full text-xs text-slate-700 file:mr-3 file:rounded-xl file:border-0 file:bg-slate-100 file:px-3 file:py-2 file:text-xs file:font-semibold file:text-slate-700"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-600">
+                        Signed Agreement (optional)
+                      </label>
+                      <input
+                        type="file"
+                        accept="application/pdf,.pdf"
+                        onChange={(e) => { setManualSignedFile(e.target.files?.[0] || null); setManualCheck(null); }}
+                        className="mt-2 block w-full text-xs text-slate-700 file:mr-3 file:rounded-xl file:border-0 file:bg-slate-100 file:px-3 file:py-2 file:text-xs file:font-semibold file:text-slate-700"
+                      />
+                    </div>
+                  </div>
+                  {manualCheckPanel}
+                  <button
+                    type="button"
+                    onClick={() => handleManualUpload({ addOnly: true })}
+                    disabled={manualUploading || (!manualSignedFile && manualAuditFiles.length === 0)}
+                    className="mt-3 inline-flex items-center gap-2 rounded-xl bg-slate-800 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-900 disabled:opacity-50"
+                  >
+                    <UploadCloud className="h-4 w-4" />
+                    {manualUploading ? "Reading & saving…" : "Add documents"}
+                  </button>
                 </div>
               )}
 

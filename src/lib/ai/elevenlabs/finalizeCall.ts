@@ -1,6 +1,8 @@
 // Shared post-call pipeline for ElevenLabs calls. See finalizeCall.ts in the
 // Bolna folder for the design rationale — this is the symmetric version.
 
+import { aiInterestLevelSql } from "@/lib/ai/storage/aiInterest";
+import { markSalesReady } from "@/lib/leads/salesReady";
 import { analyzeTranscript } from "@/lib/ai/analysis";
 import { db } from "@/lib/db";
 import { aiCallLogs, dealerLeads, dialerCampaigns } from "@/lib/db/schema";
@@ -478,7 +480,8 @@ export async function finalizeElevenLabsCall(
       total_attempts: updatedLead.total_attempts,
       final_intent_score: updatedLead.final_intent_score,
       current_status: updatedLead.current_status,
-      interest_level: updatedLead.interest_level,
+      // ID 64: owned or closed leads keep their temperature.
+      interest_level: aiInterestLevelSql(updatedLead.interest_level ?? null),
       call_status: updatedLead.call_status,
       info_signals_count: updatedLead.info_signals_count,
       intent_band: updatedLead.intent_band,
@@ -487,6 +490,11 @@ export async function finalizeElevenLabsCall(
       provider: "elevenlabs",
     })
     .where(eq(dealerLeads.id, lead.id));
+
+  // ID 82: an AI call that qualifies the lead is a Sales-ready event (first wins).
+  if (updatedLead.current_status === "qualified") {
+    await markSalesReady(db, { leadId: lead.id, reason: "ai_qualified", actorId: null });
+  }
 
   const summary = analysis.memory?.intent_summary
     ? `${analysis.band} — ${analysis.memory.intent_summary}`

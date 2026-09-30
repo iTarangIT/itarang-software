@@ -65,6 +65,7 @@ import {
   Sparkles,
   Inbox,
   SlidersHorizontal,
+  PhoneOff,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -579,6 +580,14 @@ const roleNavigation: Record<string, any[]> = {
           href: "/admin/reports/needs-attention",
         },
         {
+          // ID 36 — dead / non-responsive numbers; owner kept, repair puts the
+          // lead back to work.
+          id: "ceo-number-repair",
+          label: "Number Repair",
+          icon: PhoneOff,
+          href: "/admin/number-repair",
+        },
+        {
           // R-18 — converted dealers' re-order health.
           id: "ceo-dealer-health",
           label: "Dealer Health",
@@ -814,6 +823,14 @@ const roleNavigation: Record<string, any[]> = {
           label: "Needs Attention",
           icon: AlertTriangle,
           href: "/admin/reports/needs-attention",
+        },
+        {
+          // ID 36 — dead / non-responsive numbers; owner kept, repair puts the
+          // lead back to work.
+          id: "sh-number-repair",
+          label: "Number Repair",
+          icon: PhoneOff,
+          href: "/admin/number-repair",
         },
         {
           // R-18 — converted dealers' re-order health.
@@ -1194,6 +1211,14 @@ const roleNavigation: Record<string, any[]> = {
           icon: Phone,
           href: "/sales-manager/ai-calls",
         },
+        {
+          // ID 36 — dead / non-responsive numbers; owner kept, repair puts the
+          // lead back to work.
+          id: "sm-number-repair",
+          label: "Number Repair",
+          icon: PhoneOff,
+          href: "/admin/number-repair",
+        },
       ],
     },
     // Dealer Prospecting section removed — scraped leads now live inside /leads as a tab
@@ -1334,6 +1359,14 @@ const roleNavigation: Record<string, any[]> = {
           label: "Needs Attention",
           icon: AlertTriangle,
           href: "/admin/reports/needs-attention",
+        },
+        {
+          // ID 36 — dead / non-responsive numbers; owner kept, repair puts the
+          // lead back to work.
+          id: "admin-number-repair",
+          label: "Number Repair",
+          icon: PhoneOff,
+          href: "/admin/number-repair",
         },
         {
           // R-18 — converted dealers' re-order health.
@@ -1597,6 +1630,14 @@ const roleNavigation: Record<string, any[]> = {
           label: "Targets",
           icon: TrendingUp,
           href: "/admin/targets",
+        },
+        {
+          // ID 36 — dead / non-responsive numbers; owner kept, repair puts the
+          // lead back to work.
+          id: "bh-number-repair",
+          label: "Number Repair",
+          icon: PhoneOff,
+          href: "/admin/number-repair",
         },
         {
           id: "kyc-review",

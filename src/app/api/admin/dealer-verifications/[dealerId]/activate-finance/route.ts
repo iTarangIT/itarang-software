@@ -99,9 +99,9 @@ export async function POST(_req: NextRequest, context: RouteContext) {
       );
     }
 
-    // Pre-flight the signed PDF the same way approve does: the signed agreement
-    // is the artifact that proves signing finished, so refuse to flip the flag
-    // if we can't produce it. The audit trail is supplementary — Digio's
+    // Fetch the signed PDF and audit trail the same way approve does, so they
+    // are cached for the dealer's records. Neither blocks activation (ID 56):
+    // the completed status above is the proof signing finished. The audit trail — Digio's
     // download_audit_trail endpoint is intermittently flaky, so a missing audit
     // trail is logged and skipped rather than blocking activation.
     const [signedAgreementUrl, auditTrailUrl] = await Promise.all([
@@ -115,15 +115,12 @@ export async function POST(_req: NextRequest, context: RouteContext) {
       }),
     ]);
 
+    // ID 56: agreement signed → activate. The completed-status gate above is
+    // the rule; a signed PDF Digio has not handed over yet is logged, not a block.
     if (!signedAgreementUrl) {
-      return NextResponse.json(
-        {
-          success: false,
-          message:
-            "Signed agreement is not available yet — please retry once signing is fully complete.",
-        },
-        { status: 409 },
-      );
+      console.warn("ACTIVATE FINANCE — signed agreement PDF not available yet; proceeding", {
+        applicationId: application.id,
+      });
     }
 
     if (!auditTrailUrl) {

@@ -13,7 +13,7 @@
 // CLIENT-SAFE: no db import — the modals import it.
 
 import { CONNECTED_DISPOSITIONS, type DispositionBucket } from "@/lib/leads/dispositions";
-import type { LeadStatus } from "@/lib/lifecycle/transitions";
+import type { LeadStatus, LostReason } from "@/lib/lifecycle/transitions";
 import type { VisitOutcome } from "@/lib/asm/types";
 
 export type Interest = "hot" | "warm" | "cold";
@@ -53,13 +53,33 @@ function forward(from: string | null, to: LeadStatus): LeadStatus | null {
 
 const BUCKET_INTEREST: Partial<Record<DispositionBucket, Interest>> = { Cold: "cold", Warm: "warm", Hot: "hot" };
 
-/** Status a connected call's label moves to; every other open-bucket label → Under_Discussion. */
-const CALL_STATUS_BY_LABEL: Readonly<Record<string, LeadStatus>> = {
-    "Commercials Explained": "Commercials_Explained",
-    "Quotation Sent": "Awaiting_Customer_Decision",
-    "Under Negotiation": "Awaiting_Customer_Decision",
-    "Commercials Finalised": "Commercials_Finalised",
+/**
+ * The call outcomes that NAME a commercials stage. Since 29 Sep 2026 (ID 75)
+ * they move nothing beyond first contact: commercials stages come only from
+ * quote events (src/lib/leads/quoteStatus.ts). The forms show "No quote in
+ * the system" next to them when the lead has no quote.
+ */
+export const COMMERCIALS_CALL_LABELS: readonly string[] = [
+    "Commercials Explained",
+    "Quotation Sent",
+    "Under Negotiation",
+    "Commercials Finalised",
+];
+
+/**
+ * ID 76: the Lost reason a Lost-type call outcome pre-fills in Mark Lost.
+ * Null = the rep picks (the form still opens).
+ */
+const LOST_REASON_BY_LABEL: Readonly<Record<string, LostReason>> = {
+    "Not Interested": "not_interested",
+    "Lost to Competition": "lost_to_competition",
+    "Some other Business": "moved_to_other_business",
+    "Business Closed": "business_closed",
 };
+
+export function lostReasonForLabel(label: string): LostReason | null {
+    return LOST_REASON_BY_LABEL[label] ?? null;
+}
 
 /** The one bucket a connected label belongs to; null when it is in several (or none). */
 export function bucketForLabel(label: string): DispositionBucket | null {
@@ -83,11 +103,13 @@ export function autoProgressForCall(input: {
 }): AutoProgress {
     if (!input.connected) return NONE;
     const bucket = input.bucket ?? bucketForLabel(input.label);
+    // ID 77: a call never ends Awaiting field visit — only a visit does.
+    const statusFrozen = input.currentStatus === "Transferred_to_ASM";
     if (bucket === "Lost" || bucket === "Converted") return NONE;
-    if (!bucket && !CALL_STATUS_BY_LABEL[input.label]) return NONE;
-    const target = CALL_STATUS_BY_LABEL[input.label] ?? "Under_Discussion";
+    if (!bucket && !COMMERCIALS_CALL_LABELS.includes(input.label)) return NONE;
+    // A connected call is first contact — never a commercials stage (ID 75).
     return {
-        statusTo: forward(input.currentStatus, target),
+        statusTo: statusFrozen ? null : forward(input.currentStatus, "Under_Discussion"),
         interestTo: interestChange(bucket ? (BUCKET_INTEREST[bucket] ?? null) : null, input.currentInterest),
     };
 }
@@ -104,8 +126,12 @@ export function autoProgressForVisit(input: {
         case "productive":
             return { statusTo: forward(input.currentStatus, "Under_Discussion"), interestTo: null };
         case "commercials_progressed":
-            // Explained vs finalised is asked, not guessed.
-            return { statusTo: null, interestTo: interestChange("hot", input.currentInterest) };
+            // Commercials stages come only from quote events (ID 75); the visit
+            // is still first contact.
+            return {
+                statusTo: forward(input.currentStatus, "Under_Discussion"),
+                interestTo: interestChange("hot", input.currentInterest),
+            };
         case "dealer_uninterested":
             // Keep open vs Lost is asked, not guessed.
             return { statusTo: null, interestTo: interestChange("cold", input.currentInterest) };

@@ -33,6 +33,7 @@ import { getNeodoveConfig } from "@/lib/neodove/config";
 import { getPriorityDialCampaign, pushOneLead } from "@/lib/neodove/pushOne";
 import { NEODOVE_ADMIN_ROLES } from "@/lib/neodove/roles";
 import {
+    ASSIGN_ON_PUSH,
     assignAfterPush,
     resolveNeodoveAssignee,
 } from "@/lib/neodove/assignAfterPush";
@@ -96,7 +97,7 @@ export const POST = withErrorHandler(
         // failed at NeoDove's end. Never on the pre-push refusals (404 / 409 /
         // 400), which sent nothing.
         let assigned = false;
-        if (assignee.target && (result.ok || result.status === 502)) {
+        if (ASSIGN_ON_PUSH && assignee.target && (result.ok || result.status === 502)) {
             assigned = await assignAfterPush({
                 leadId: id,
                 campaignId: campaign.id,

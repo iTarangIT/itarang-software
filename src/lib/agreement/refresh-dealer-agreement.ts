@@ -324,7 +324,7 @@ async function runRefresh(
 
       const digioAuthHeaders = {
         Authorization: basicAuthHeader(clientId, clientSecret),
-        Accept: "application/pdf",
+        Accept: "*/*",
       };
 
       if (extractedSignedUrl && !application.signed_agreement_storage_path) {
@@ -355,7 +355,7 @@ async function runRefresh(
           method: "GET",
           headers: {
             Authorization: basicAuthHeader(clientId, clientSecret),
-            Accept: "application/pdf",
+            Accept: "*/*",
           },
         });
 

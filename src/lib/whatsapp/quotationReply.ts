@@ -151,6 +151,15 @@ export async function handleQuotationReply(event: InboundEvent): Promise<boolean
       await say(event.waPhone, result.reason);
       return true;
 
+    case "replaced":
+      // ID 60: an old version's button. The latest was sent separately.
+      await say(
+        event.waPhone,
+        `This quotation has been replaced${result.latestQuoteNumber ? ` by ${result.latestQuoteNumber}` : ""}. ` +
+          "Please respond to the latest quotation we sent you.",
+      );
+      return true;
+
     default:
       await say(
         event.waPhone,

@@ -15,7 +15,8 @@
 import { NextRequest } from "next/server";
 import { z } from "zod";
 import { requireRole } from "@/lib/auth-utils";
-import { withErrorHandler } from "@/lib/api-utils";
+import { isPoolTabFor } from "@/lib/leads/claimScope";
+import { withErrorHandler, errorResponse } from "@/lib/api-utils";
 import { fetchQueueRows, countQueueRows } from "@/lib/inside-sales/queryBuilder";
 import { fetchAssignedByForLeads } from "@/lib/leads/leadAssignedBy";
 import { QUEUE_TABS, TAB_LABELS, type QueueRow } from "@/lib/inside-sales/types";
@@ -31,6 +32,7 @@ import {
 } from "@/lib/leads/queueCsv";
 import { fetchBusinessTypeForLeads } from "@/lib/leads/leadListQuery";
 import { businessTypeLabel } from "@/lib/leads/businessType";
+import { exportsOwnLeadsOnly, logDataDownload } from "@/lib/exports/downloadLog";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -93,6 +95,11 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
         callback: url.searchParams.get("callback") ?? undefined,
         format: url.searchParams.get("format") ?? undefined,
     });
+
+    // ID 45: reps never list the unowned pool — they claim by number search.
+    if (isPoolTabFor(user.role, parsed.tab)) {
+        return errorResponse("Search by mobile number to find and claim a lead.", 403);
+    }
     const common = {
         tab: parsed.tab,
         userId: user.id,
@@ -102,7 +109,7 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
         filters: readQueueFilters(url.searchParams),
     };
 
-    const [rows, total] = await Promise.all([
+    const [allRows, matched] = await Promise.all([
         // The sheet is ordered the way the screen is — same params, same builder.
         fetchQueueRows({
             ...common,
@@ -112,6 +119,20 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
         }),
         countQueueRows(common),
     ]);
+
+    // ID 58: a rep's (or partner's) sheet holds only the leads they own — never
+    // the unowned pool or the team's leads, whatever tab it came from.
+    const ownOnly = exportsOwnLeadsOnly(user.role);
+    const rows = ownOnly ? allRows.filter((r) => r.current_owner_id === user.id) : allRows;
+    const total = ownOnly ? rows.length : matched;
+    await logDataDownload({
+        userId: user.id,
+        role: user.role,
+        dataset: `inside_sales_queue:${parsed.tab}`,
+        rowCount: rows.length,
+        ownOnly,
+        filters: { q: parsed.q ?? null, neodove: parsed.neodove ?? null, callback: parsed.callback ?? null, format: parsed.format },
+    });
 
     // Who handed each lead over. Decorated in a SEPARATE, fail-tolerant
     // statement exactly as the list route does it, so a failure here drops one

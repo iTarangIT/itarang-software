@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Dropdown } from "@/components/ui/select-dropdown";
 import type { RegionsResponse } from "@/app/api/locations/regions/route";
 import { BUSINESS_TYPE_OPTIONS } from "@/lib/leads/businessType";
+import { LEAD_ORIGIN_LABEL, LEAD_ORIGINS } from "@/lib/leads/leadSourceVocab";
 
 type Props = {
     open: boolean;
@@ -34,6 +35,8 @@ export function CreateLeadModal({ open, onClose, onSuccess }: Props) {
     const [interest, setInterest] = useState<"hot" | "warm" | "cold" | "">("");
     // E-296 "Type of Business". "" = not set.
     const [businessType, setBusinessType] = useState("");
+    // ID 81: where the dealer came from (fixed list). The door is automatic.
+    const [origin, setOrigin] = useState("");
     const [submitting, setSubmitting] = useState(false);
 
     // Canonical state + city reference lists (E-108/E-110/E-111). Loaded once
@@ -68,6 +71,7 @@ export function CreateLeadModal({ open, onClose, onSuccess }: Props) {
         setCity("");
         setInterest("");
         setBusinessType("");
+        setOrigin("");
     };
 
     const handleClose = () => {
@@ -99,6 +103,7 @@ export function CreateLeadModal({ open, onClose, onSuccess }: Props) {
                     state: stateName || null,
                     interest_level: interest || null,
                     business_type: businessType || null,
+                    origin: origin || null,
                 }),
             });
             const json = await res.json();
@@ -200,6 +205,19 @@ export function CreateLeadModal({ open, onClose, onSuccess }: Props) {
                         <option value="">Not set</option>
                         {BUSINESS_TYPE_OPTIONS.map((o) => (
                             <option key={o.value} value={o.value}>{o.label}</option>
+                        ))}
+                    </select>
+                </div>
+                <div>
+                    <Label>Where did this dealer come from?</Label>
+                    <select
+                        className="mt-1 w-full rounded-md border border-gray-200 px-3 py-2 text-sm bg-white"
+                        value={origin}
+                        onChange={(e) => setOrigin(e.target.value)}
+                    >
+                        <option value="">Not set</option>
+                        {LEAD_ORIGINS.map((o) => (
+                            <option key={o} value={o}>{LEAD_ORIGIN_LABEL[o]}</option>
                         ))}
                     </select>
                 </div>

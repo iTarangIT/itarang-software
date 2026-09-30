@@ -248,7 +248,7 @@ export async function fetchMergeRequests(
 // status with no action for 30+ calendar days), and admin has not yet acted
 // (onboarding_dropout_reason still NULL).
 export const DROPOUT_WHERE = sql`
-    dl.lead_status = 'Converted'
+    dl.lead_status IN ('Won', 'Converted')  -- ID 74: Won = onboarding under way
     AND dl.is_active IS NOT FALSE
     AND dl.onboarding_dropout_reason IS NULL
     AND dl.dealer_onboarding_application_id IS NOT NULL
@@ -257,9 +257,13 @@ export const DROPOUT_WHERE = sql`
         OR (
             oa.onboarding_status IN ('draft', 'submitted', 'correction_requested')
             AND COALESCE(oa.last_action_at, oa.updated_at)
-                < NOW() - INTERVAL '30 days'
+                < NOW() - INTERVAL '21 days'
         )
     )
+    -- ID 84: "keep waiting" parks the decision for another 21 days (E-314,
+    -- read via to_jsonb so a DB without it behaves as before).
+    AND COALESCE((to_jsonb(dl) ->> 'onboarding_stalled_at')::timestamptz, 'epoch'::timestamptz)
+        < NOW() - INTERVAL '21 days'
 `;
 
 export async function countOnboardingDropouts(): Promise<number> {

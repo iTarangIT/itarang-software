@@ -120,9 +120,10 @@ describe("log_call proposals (UC-02, UC-03)", () => {
     it("quote sent proposes interest hot; an interest already set is not re-proposed", async () => {
         await run(ISR, "log_call", {
             lead_id: "DL-1", channel: "call", connect_status: "connected", disposition: "Quotation Sent", bucket: "Hot",
-            status: "Awaiting_Customer_Decision",
         });
-        expect(stored().plan).toMatchObject({ interest: "hot", status_to: "Awaiting_Customer_Decision" });
+        // ID 75: the call is first contact only — no commercials stage from a call.
+        expect(stored().plan).toMatchObject({ interest: "hot" });
+        expect(stored().plan.status_to ?? null).not.toBe("Awaiting_Customer_Decision");
         findLeadInScope.mockResolvedValue(lead({ interest_level: "hot" }));
         await run(ISR, "log_call", { lead_id: "DL-1", channel: "note", remarks: "x", interest: "hot" });
         expect(stored().plan).toMatchObject({ interest: null });

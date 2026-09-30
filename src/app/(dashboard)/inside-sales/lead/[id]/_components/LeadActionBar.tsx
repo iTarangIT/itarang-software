@@ -83,7 +83,7 @@ export function LeadActionBar({ bundle, isOwner, viewerRole, onAction }: Props) 
                 tone="emerald"
                 onClick={() => onAction("mark_converted")}
             >
-                Mark Converted
+                Mark Won
             </ActionButton>
             <ActionButton
                 icon={XCircle}

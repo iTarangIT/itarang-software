@@ -11,6 +11,8 @@ import { Button } from "@/components/ui/button";
 import { QueueTabs } from "./QueueTabs";
 import { LeadQueueTable } from "./LeadQueueTable";
 import { BulkClaimBar } from "./BulkClaimBar";
+import { ClaimByNumberPanel } from "@/components/leads/ClaimByNumberPanel";
+import { claimsByNumberOnly, ISR_POOL_TABS } from "@/lib/leads/claimScope";
 import { CreateLeadModal } from "./modals/CreateLeadModal";
 import { QueueFilterBar } from "@/components/leads/QueueFilterBar";
 import { QueueCsvButton } from "@/components/leads/QueueCsvButton";
@@ -66,10 +68,14 @@ export function QueueView({
     // Same list the claim routes enforce: a ceo/sales_head can read the
     // Unassigned tab but cannot claim, so they get no checkbox column.
     const canClaim = (CLAIM_ROLES as readonly string[]).includes(viewerRole);
+    // ID 45: an ISR never lists the unowned pool — they claim by number search.
+    const numberOnly = claimsByNumberOnly(viewerRole);
     const router = useRouter();
     const queryClient = useQueryClient();
     const params = useSearchParams();
-    const initialTab = parseTab(params.get("tab"));
+    const parsedTab = parseTab(params.get("tab"));
+    const initialTab: QueueTab =
+        numberOnly && ISR_POOL_TABS.includes(parsedTab) ? "my_open" : parsedTab;
     const initialPage = Math.max(1, Number(params.get("page") ?? "1"));
     const initialQ = params.get("q") ?? "";
     const initialNeodove = params.get("neodove") === "1";
@@ -210,7 +216,7 @@ export function QueueView({
     const data = rowsQuery.data?.data;
 
     // ── Bulk claim selection (Unassigned tab only) ───────────────────────
-    const selectable = tab === "unassigned" && canClaim;
+    const selectable = tab === "unassigned" && canClaim && !numberOnly;
     const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
     // Clear on tab or filter change — a selection carried across a filter
     // change could claim leads the rep can no longer see. Paging deliberately
@@ -306,10 +312,14 @@ export function QueueView({
 
     return (
         <div className="space-y-4">
+            {numberOnly && (
+                <ClaimByNumberPanel onClaimed={() => void queryClient.invalidateQueries()} />
+            )}
             <div className="rounded-xl border border-gray-100 bg-white shadow-sm">
                 <QueueTabs
                     active={tab}
                     counts={counts ?? null}
+                    hidden={numberOnly ? ISR_POOL_TABS : []}
                     onChange={(t) => {
                         setTab(t);
                         setPage(1);

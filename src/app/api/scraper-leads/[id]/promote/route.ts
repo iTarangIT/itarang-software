@@ -5,6 +5,12 @@ import { dealerLeads, scraperLeads } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import {
+  findExistingLeadByPhone,
+  recordLeadCreated,
+  recordReinquiry,
+  stampLeadSource,
+} from "@/lib/leads/leadSource";
+import {
   normalizeCity,
   normalizeState,
   inferStateFromCity,
@@ -23,14 +29,12 @@ export async function POST(req: NextRequest, { params }: any) {
       return NextResponse.json({ success: false, error: "Scraper lead not found" }, { status: 404 });
     }
 
-    // 2. Check if already promoted (phone already in dealer_leads)
-    if (scraperLead.phone) {
-      const existing = await db.query.dealerLeads.findFirst({
-        where: (l, { eq }) => eq(l.phone, scraperLead.phone!),
-      });
-      if (existing) {
-        return NextResponse.json({ success: true, dealerLeadId: existing.id, alreadyExisted: true });
-      }
+    // 2. ID 81: the SHARED duplicate check (last 10 digits). A known dealer is a
+    //    Re-inquiry on the existing lead, never a second copy.
+    const existingId = await findExistingLeadByPhone(scraperLead.phone);
+    if (existingId) {
+      await recordReinquiry({ leadId: existingId, door: "scraper", actorId: null, note: scraperLead.name ?? null });
+      return NextResponse.json({ success: true, dealerLeadId: existingId, alreadyExisted: true });
     }
 
     // 3. Promote — insert into dealer_leads
@@ -55,6 +59,10 @@ export async function POST(req: NextRequest, { params }: any) {
       follow_up_history: [],
       created_at: new Date(),
     });
+
+    // ID 81: source + "Lead created".
+    await stampLeadSource(db, newId, { door: "scraper", origin: "google_maps_scrape" });
+    await recordLeadCreated(db, { leadId: newId, actorId: null, door: "scraper", ownerId: null });
 
     // 4. Update scraper lead status to promoted
     await db

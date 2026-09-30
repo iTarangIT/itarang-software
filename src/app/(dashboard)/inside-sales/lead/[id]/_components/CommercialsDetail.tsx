@@ -66,9 +66,12 @@ export function Field({ label, value }: { label: string; value: React.ReactNode 
 export function QuoteApprovalBlock({
     cc,
     onSend,
+    onWithdraw,
 }: {
     cc: LeadDetailCommercials;
     onSend?: () => void;
+    /** ID 78: owner or manager closes a stale quote with a reason. */
+    onWithdraw?: () => void;
 }) {
     const status = cc.approval_status ?? "approved";
     const tone =
@@ -95,6 +98,18 @@ export function QuoteApprovalBlock({
                     <span className="tabular-nums opacity-70">{fmtDate(cc.approved_at)}</span>
                 )}
             </div>
+
+            {cc.withdrawn_at && (
+                <p className="mt-1.5 rounded bg-white/70 px-2 py-1 text-[11px] font-medium text-gray-700">
+                    Withdrawn {fmtDate(cc.withdrawn_at)}
+                    {cc.withdraw_reason ? ` — ${cc.withdraw_reason}` : ""}. The dealer can no longer answer it.
+                </p>
+            )}
+            {cc.price_changed_since_issue && (
+                <p className="mt-1.5 rounded bg-amber-100 px-2 py-1 text-[11px] font-semibold text-amber-900">
+                    A product price changed since this quote was issued — revise or withdraw it.
+                </p>
+            )}
 
             {status === "rejected" && cc.rejection_reason && (
                 <p className="mt-1.5 whitespace-pre-wrap opacity-90">
@@ -125,7 +140,15 @@ export function QuoteApprovalBlock({
                                 : "Draft not generated yet."}
                         </span>
                     )}
-                    {onSend && (
+                    {onWithdraw && !cc.withdrawn_at && cc.dealer_decision !== "approved" && (
+                        <button
+                            onClick={onWithdraw}
+                            className="rounded-md border border-gray-300 bg-white px-2.5 py-1 text-[11px] font-semibold text-gray-700 hover:bg-gray-50"
+                        >
+                            Withdraw
+                        </button>
+                    )}
+                    {onSend && !cc.withdrawn_at && (
                         <button
                             onClick={onSend}
                             className="ml-auto rounded-md bg-emerald-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-emerald-700"
@@ -220,10 +243,12 @@ export function ProductLines({ lines }: { lines: LeadDetailCommercials["product_
 export function CommercialsDetail({
     cc,
     onSend,
+    onWithdraw,
 }: {
     cc: LeadDetailCommercials;
     /** Omitted on a superseded version — see QuoteApprovalBlock. */
     onSend?: () => void;
+    onWithdraw?: () => void;
 }) {
     return (
         <div className="grid grid-cols-2 gap-3">
@@ -254,7 +279,7 @@ export function CommercialsDetail({
 
             {isGatedQuote(cc.event_type) && (
                 <div className="col-span-2">
-                    <QuoteApprovalBlock cc={cc} onSend={onSend} />
+                    <QuoteApprovalBlock cc={cc} onSend={onSend} onWithdraw={onWithdraw} />
                 </div>
             )}
 
