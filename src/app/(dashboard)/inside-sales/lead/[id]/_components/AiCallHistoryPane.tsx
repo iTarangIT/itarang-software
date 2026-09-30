@@ -8,12 +8,10 @@
  * this file only fetches. Re-drawing those cards here would guarantee the two
  * views disagree about what an attempt looks like within a release or two.
  *
- * WHY THIS TAKES A campaignId FOR A PER-LEAD VIEW: the transcript endpoint is
- * routed under a campaign, but it answers with every attempt across ALL
- * campaigns the lead has ever been in (it resolves the lead's full campaign set
- * server-side). So any one of the lead's campaign ids yields the same list, and
- * the lead detail API hands us the newest. No campaign at all means the lead was
- * never dialled — the empty state below, not an error.
+ * Reads /api/inside-sales/lead/[id]/ai-calls: every campaign attempt AND every
+ * one-off Bolna / ElevenLabs call placed from the leads list, which belongs to
+ * no campaign. It used to read the campaign transcript endpoint, so a lead that
+ * was only ever called one-off showed "No AI calls yet".
  */
 import { useQuery } from "@tanstack/react-query";
 import { Loader2, PhoneOff } from "lucide-react";
@@ -38,21 +36,13 @@ function Centered({ children }: { children: React.ReactNode }) {
     );
 }
 
-export function AiCallHistoryPane({
-    leadId,
-    campaignId,
-}: {
-    leadId: string;
-    /** Newest campaign this lead was dialled in; null if it never was. */
-    campaignId: string | null;
-}) {
+export function AiCallHistoryPane({ leadId }: { leadId: string }) {
     const query = useQuery({
-        queryKey: ["lead-call-history", leadId, campaignId],
-        enabled: Boolean(campaignId),
+        queryKey: ["lead-call-history", leadId],
         staleTime: 30_000,
         queryFn: async () => {
             const res = await fetch(
-                `/api/ai-dialer/campaigns/${encodeURIComponent(campaignId as string)}/leads/${encodeURIComponent(leadId)}/transcript`,
+                `/api/inside-sales/lead/${encodeURIComponent(leadId)}/ai-calls`,
                 { cache: "no-store" },
             );
             const json = (await res.json()) as TranscriptResponse;
@@ -63,25 +53,25 @@ export function AiCallHistoryPane({
         },
     });
 
-    if (!campaignId) {
+    if (query.isLoading) {
+        return (
+            <Centered>
+                <Loader2 className="h-5 w-5 animate-spin text-gray-400" />
+            </Centered>
+        );
+    }
+
+    if (query.isSuccess && (query.data?.attempts ?? []).length === 0) {
         return (
             <Centered>
                 <div>
                     <PhoneOff className="mx-auto h-8 w-8 text-gray-300" />
                     <p className="mt-3 text-sm font-medium text-gray-700">No AI calls yet</p>
                     <p className="mt-1 text-xs text-gray-500">
-                        This lead has not been included in a dialer campaign. Attempts appear here
-                        once it is called.
+                        Campaign calls and single Bolna / ElevenLabs calls appear here once the
+                        call has ended.
                     </p>
                 </div>
-            </Centered>
-        );
-    }
-
-    if (query.isLoading) {
-        return (
-            <Centered>
-                <Loader2 className="h-5 w-5 animate-spin text-gray-400" />
             </Centered>
         );
     }

@@ -115,7 +115,8 @@ type RawTurn = {
 // campaign. Ordered chronologically by the transcript route.
 export type Attempt = {
   attempt: number;
-  campaignId: string;
+  // null for a one-off call placed outside any campaign (lead page only).
+  campaignId: string | null;
   campaignName: string | null;
   isRecall: boolean;
   status: string;
