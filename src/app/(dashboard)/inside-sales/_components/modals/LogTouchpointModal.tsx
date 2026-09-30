@@ -389,7 +389,7 @@ export function LogTouchpointModal({
                                     type="file"
                                     accept="image/jpeg,image/png,image/webp"
                                     onChange={(e) => setWaScreenshot(e.target.files?.[0] ?? null)}
-                                    className="block w-full text-xs"
+                                    className="block w-full cursor-pointer text-xs text-gray-700 file:mr-3 file:cursor-pointer file:rounded-md file:border file:border-solid file:border-gray-300 file:bg-white file:px-3 file:py-1.5 file:text-xs file:font-medium file:text-gray-800 hover:file:bg-gray-50"
                                 />
                                 <label className="flex items-center gap-2 text-sm text-gray-700">
                                     <input
