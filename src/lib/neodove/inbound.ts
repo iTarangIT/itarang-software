@@ -19,7 +19,7 @@ import { db } from "@/lib/db";
 import { dealerLeads } from "@/lib/db/schema";
 import { errorMessage } from "@/lib/api-utils";
 import { isForward } from "@/lib/lifecycle/statusRules";
-import { writeTouchpoint } from "@/lib/touchpoints/write";
+import { StatusGuardError, writeTouchpoint } from "@/lib/touchpoints/write";
 import { reactivateLead } from "@/lib/leads/reactivation";
 import { classifyAgainstExisting, loadExistingByPhone } from "@/lib/leads/dedupe";
 import type { LeadStatus } from "@/lib/lifecycle/transitions";
@@ -216,7 +216,11 @@ async function handleDisposition(
             SELECT lead_status FROM dealer_leads WHERE id = ${dealerLeadId} LIMIT 1
         `);
         const from = (current[0]?.lead_status ?? null) as LeadStatus | null;
-        if (isForward(from, target)) {
+        // Awaiting field visit (Transferred_to_ASM) ranks just below
+        // Under_Discussion, so isForward() says yes — but only a visit ends it
+        // (ID 77) and the guard refuses the move. Asking for it made the whole
+        // write throw and the call record was lost.
+        if (from !== "Transferred_to_ASM" && isForward(from, target)) {
             statusChange = { from, to: target, closingRole: "system", event: "progress" };
         }
     }
@@ -225,7 +229,7 @@ async function handleDisposition(
     const agentUserId = await resolveAgentUserId(event.agentName);
     const callAt = event.occurredAt ?? new Date();
 
-    const { touchpointId } = await writeTouchpoint({
+    const callTouchpoint: Parameters<typeof writeTouchpoint>[0] = {
         dealerLeadId,
         touchpointType: touchpointTypeFor(event.eventType),
         // The CRM user an admin has confirmed this NeoDove agent is (review
@@ -243,7 +247,18 @@ async function handleDisposition(
         externalEventId: event.externalEventId,
         syncMethod: "api",
         statusChange,
-    });
+    };
+    // An inbound call is never refused: if the S3 guard rejects the status move
+    // (a race — the lead moved between the read above and this write), the call
+    // is still recorded, without the move.
+    let touchpointId: string;
+    try {
+        ({ touchpointId } = await writeTouchpoint(callTouchpoint));
+    } catch (err) {
+        if (!(err instanceof StatusGuardError) || !statusChange) throw err;
+        console.warn(`[neodove/inbound] status move skipped for ${dealerLeadId}: ${err.message}`);
+        ({ touchpointId } = await writeTouchpoint({ ...callTouchpoint, statusChange: undefined }));
+    }
 
     await attachCallEvidence(touchpointId, event);
     await recordLeadDisposition(dealerLeadId, event);
