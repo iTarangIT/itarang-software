@@ -22,6 +22,7 @@ import {
 } from "./CommercialsDetail";
 import { QuotationSendDialog } from "./QuotationSendDialog";
 import { businessTypeLabel, businessTypeTone } from "@/lib/leads/businessType";
+import { doorLabel, originLabel, SOURCE_LABELS } from "@/lib/leads/leadSourceVocab";
 
 type GroupKey = "snapshot" | "business" | "commercials" | "workflow" | "attribution" | "ownership";
 
@@ -153,6 +154,9 @@ export function LeadDetailRightPane({ bundle }: Props) {
                                                     </span>
                                                 }
                                             />
+                                            {/* ID 81 — where the lead came from; locked at creation. */}
+                                            <Field label={SOURCE_LABELS.door} value={doorLabel(lead.source_door) ?? "Not recorded"} />
+                                            <Field label={SOURCE_LABELS.origin} value={originLabel(lead.source_origin) ?? "Not recorded"} />
                                             <Field label="Phone" value={lead.phone} />
                                             <Field label="Language" value={lead.language} />
                                             <Field label="City" value={lead.city} />

@@ -25,6 +25,7 @@ import { dealerLeads } from "@/lib/db/schema";
 import { AttachmentId, DOC_TYPE_LABEL, DOC_TYPES, PlannedFile, plannedFile, resolveAttachments } from "../attachments";
 import { fileDocuments } from "./attachDocument";
 import { GSTIN_RE } from "./updateLead";
+import { LEAD_ORIGIN_LABEL, LEAD_ORIGINS } from "@/lib/leads/leadSourceVocab";
 
 const INTEREST = ["hot", "warm", "cold"] as const;
 
@@ -37,6 +38,8 @@ export const CreateLeadPlan = z.object({
     interest_level: z.enum(INTEREST).nullable(),
     language: z.string().nullable(),
     business_type: z.enum(BUSINESS_TYPES).nullable(),
+    /** ID 81 — Found via. Default keeps older pending plans parseable. */
+    origin: z.enum(LEAD_ORIGINS).nullable().default(null),
     /** E-311 — details read off a visiting card / GST certificate, set on the new lead in the same transaction. */
     extra: z
         .object({
@@ -70,8 +73,9 @@ export const createLead: ToolFactory = () =>
         name: "create_lead",
         kind: "write",
         description:
-            "Propose creating a NEW dealer lead. Needs the dealer's name and 10-digit mobile number; shop name, city, state, " +
-            "interest level, language and business type are optional — only what the user said. From a visiting card or " +
+            "Propose creating a NEW dealer lead. Needs the dealer's name, 10-digit mobile number, city, business type and " +
+            "origin (how the dealer was found: " + LEAD_ORIGINS.join(", ") + ") — ask for any the user did not say, never guess. " +
+            "Shop name, state, interest level and language are optional — only what the user said. From a visiting card or " +
             "GST certificate (read_document) also area, pincode, email and GSTIN, and source_attachment_id + " +
             "source_doc_type to save the card on the new lead. Nothing is saved until Confirm.",
         schema: z.object({
@@ -83,6 +87,7 @@ export const createLead: ToolFactory = () =>
             interest_level: z.enum(INTEREST).optional(),
             language: opt(40),
             business_type: z.enum(BUSINESS_TYPES).optional(),
+            origin: z.enum(LEAD_ORIGINS).optional().describe("How the dealer was found — only what the user said"),
             area: opt(120),
             pincode: opt(10),
             email: opt(120),
@@ -120,6 +125,15 @@ export const createLead: ToolFactory = () =>
                 };
             }
 
+            // ID 81: required at creation — source cannot be added properly later.
+            // Asked after the duplicate check: no questions about a dealer we have.
+            if (!input.city) return ask("Which city is the dealer in?");
+            if (!input.business_type) {
+                return ask(`What type of business is it? (${BUSINESS_TYPES.map((b) => b.replace(/_/g, " ")).join(", ")})`);
+            }
+            if (!input.origin) {
+                return ask(`How did we find this dealer? (${LEAD_ORIGINS.map((o) => LEAD_ORIGIN_LABEL[o]).join(", ")})`);
+            }
             const plan: CreateLeadPlan = {
                 dealer_name: input.dealer_name.trim(),
                 phone,
@@ -129,6 +143,7 @@ export const createLead: ToolFactory = () =>
                 interest_level: input.interest_level ?? null,
                 language: input.language || null,
                 business_type: input.business_type ?? null,
+                origin: input.origin ?? null,
                 extra:
                     input.area || pincode || email || gstin
                         ? { area: input.area || null, pincode, contact_email: email, gstin }
@@ -147,6 +162,7 @@ export const createLead: ToolFactory = () =>
             if (plan.interest_level) lines.push({ label: "Interest", value: plan.interest_level });
             if (plan.language) lines.push({ label: "Language", value: plan.language });
             if (plan.business_type) lines.push({ label: "Business", value: plan.business_type.replace(/_/g, " ") });
+            if (plan.origin) lines.push({ label: "Found via", value: LEAD_ORIGIN_LABEL[plan.origin] });
             if (plan.extra?.area || plan.extra?.pincode) {
                 lines.push({ label: "Area", value: [plan.extra.area, plan.extra.pincode].filter(Boolean).join(" · ") });
             }
@@ -195,6 +211,7 @@ export const createLeadApplier = defineApplier<CreateLeadPlan>({
                     interestLevel: p.interest_level,
                     language: p.language,
                     businessType: p.business_type,
+                    origin: p.origin,
                     door: "whatsapp_assistant",
                 },
                 { tx },
