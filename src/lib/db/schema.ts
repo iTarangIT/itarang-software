@@ -4152,6 +4152,9 @@ export const dialerCampaigns = pgTable(
     // resumed the morning after an overnight pause carries yesterday's
     // started_at and is force-stopped before placing its first call.
     last_advanced_at: timestamp("last_advanced_at", { withTimezone: true }),
+    // E-315 — automatic redials per unreached lead. NULL = auto-retry off
+    // (every pre-E-315 campaign); createCampaign sets 3.
+    max_retries: integer("max_retries"),
   },
   (t) => ({
     statusIdx: index("idx_dialer_campaigns_status").on(t.status),
@@ -4190,6 +4193,11 @@ export const dialerCampaignLeads = pgTable(
     created_at: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
+    // E-315 — auto-retry. status keeps the latest outcome while
+    // next_attempt_at says when the row is redialled (retryPolicy.ts).
+    attempt_count: integer("attempt_count").notNull().default(0),
+    next_attempt_at: timestamp("next_attempt_at", { withTimezone: true }),
+    attempt_history: jsonb("attempt_history").notNull().default([]),
   },
   (t) => ({
     campaignStatusIdx: index("idx_dialer_campaign_leads_campaign_status").on(
@@ -13181,5 +13189,118 @@ export const dealerLeadDocuments = pgTable(
   },
   (t) => ({
     leadIdx: index("dealer_lead_documents_lead_idx").on(t.dealer_lead_id, t.created_at),
+  }),
+);
+
+// E-316 — Feature Request & Approval module. Permissions come from the seat in
+// feature_request_members, never from users.role. Nothing here is ever deleted:
+// comment edits keep the old text and every transition writes an event row.
+export const featureRequestMembers = pgTable("feature_request_members", {
+  user_id: uuid("user_id").primaryKey(),
+  /** requester | product_reviewer | tech_reviewer | developer */
+  seat: varchar("seat", { length: 30 }).notNull(),
+  is_active: boolean("is_active").notNull().default(true),
+  created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const featureRequests = pgTable(
+  "feature_requests",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    code: varchar("code", { length: 20 })
+      .notNull()
+      .default(sql`('FR-' || lpad(nextval('feature_request_code_seq')::text, 4, '0'))`),
+    title: text("title").notNull(),
+    description: text("description").notNull(),
+    /** low | medium | high | critical */
+    priority: varchar("priority", { length: 20 }).notNull().default("medium"),
+    module: varchar("module", { length: 120 }).notNull(),
+    status: varchar("status", { length: 40 }).notNull().default("pending_product_review"),
+    current_owner_id: uuid("current_owner_id"),
+    resubmit_to_status: varchar("resubmit_to_status", { length: 40 }),
+    assigned_developer_id: uuid("assigned_developer_id"),
+    revision: integer("revision").notNull().default(1),
+    created_by: uuid("created_by").notNull(),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+    closed_at: timestamp("closed_at", { withTimezone: true }),
+  },
+  (t) => ({
+    codeUq: uniqueIndex("feature_requests_code_uq").on(t.code),
+    statusIdx: index("feature_requests_status_idx").on(t.status, t.updated_at),
+    ownerIdx: index("feature_requests_owner_idx").on(t.current_owner_id),
+  }),
+);
+
+export const featureRequestComments = pgTable(
+  "feature_request_comments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    feature_request_id: uuid("feature_request_id").notNull(),
+    parent_id: uuid("parent_id"),
+    author_id: uuid("author_id").notNull(),
+    author_role: varchar("author_role", { length: 50 }).notNull(),
+    body: text("body").notNull(),
+    /** comment | approval | rejection | changes_requested | assignment | status_change | resubmission | reopen | created */
+    kind: varchar("kind", { length: 30 }).notNull().default("comment"),
+    edited_at: timestamp("edited_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    frIdx: index("feature_request_comments_fr_idx").on(t.feature_request_id, t.created_at),
+  }),
+);
+
+export const featureRequestCommentEdits = pgTable(
+  "feature_request_comment_edits",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    comment_id: uuid("comment_id").notNull(),
+    previous_body: text("previous_body").notNull(),
+    edited_by: uuid("edited_by").notNull(),
+    edited_at: timestamp("edited_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    commentIdx: index("feature_request_comment_edits_comment_idx").on(t.comment_id, t.edited_at),
+  }),
+);
+
+export const featureRequestAttachments = pgTable(
+  "feature_request_attachments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /** NULL between upload and the create/comment call that claims it. */
+    feature_request_id: uuid("feature_request_id"),
+    /** NULL = attached to the request itself. */
+    comment_id: uuid("comment_id"),
+    uploaded_by: uuid("uploaded_by").notNull(),
+    file_name: text("file_name").notNull(),
+    mime_type: varchar("mime_type", { length: 150 }),
+    size_bytes: integer("size_bytes").notNull(),
+    storage_bucket: varchar("storage_bucket", { length: 60 }).notNull(),
+    storage_key: text("storage_key").notNull(),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    frIdx: index("feature_request_attachments_fr_idx").on(t.feature_request_id, t.created_at),
+  }),
+);
+
+export const featureRequestEvents = pgTable(
+  "feature_request_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    feature_request_id: uuid("feature_request_id").notNull(),
+    actor_id: uuid("actor_id").notNull(),
+    action: varchar("action", { length: 40 }).notNull(),
+    from_status: varchar("from_status", { length: 40 }),
+    to_status: varchar("to_status", { length: 40 }),
+    target_user_id: uuid("target_user_id"),
+    note: text("note"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    frIdx: index("feature_request_events_fr_idx").on(t.feature_request_id, t.created_at),
   }),
 );

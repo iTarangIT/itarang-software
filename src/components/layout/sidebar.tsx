@@ -66,6 +66,7 @@ import {
   Inbox,
   SlidersHorizontal,
   PhoneOff,
+  Lightbulb,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -518,7 +519,17 @@ const aiAnalystSection = (id: string, href: string) => ({
   items: [{ id, label: "AI Analyst", icon: Sparkles, href }],
 });
 
+// E-316 — the Feature Request module is the whole workspace for the product
+// head, tech head and developer logins.
+const FEATURE_REQUESTS_SECTION = {
+  section: "FEATURE REQUESTS",
+  items: [{ id: "feature-requests", label: "Feature Requests", icon: Lightbulb, href: "/feature-requests" }],
+};
+
 const roleNavigation: Record<string, any[]> = {
+  product_head: [FEATURE_REQUESTS_SECTION],
+  tech_head: [FEATURE_REQUESTS_SECTION],
+  developer: [FEATURE_REQUESTS_SECTION],
   ceo: [
     {
       section: "OVERVIEW",
@@ -712,6 +723,13 @@ const roleNavigation: Record<string, any[]> = {
           label: "Expense Approvals",
           icon: ClipboardCheck,
           href: "/ceo/expenses",
+        },
+        // E-316 — raise a feature request and follow it through review.
+        {
+          id: "feature-requests",
+          label: "Feature Requests",
+          icon: Lightbulb,
+          href: "/feature-requests",
         },
         // E-230 — E-226's "OEM Price List" entry pointed at /ceo/oem-prices,
         // which now redirects to /oem-pricing under BUSINESS above. Two sidebar
@@ -2809,6 +2827,10 @@ export function Sidebar() {
     "it",
     "operations",
     "partner",
+    // E-316 — feature-request-only logins; no expense submission.
+    "product_head",
+    "tech_head",
+    "developer",
   ]);
   let menuItems = [
     ...filteredMenuItems,

@@ -15,7 +15,16 @@ import {
   sqlStatusList,
   type CallEndStatus,
 } from "@/lib/ai-dialer/campaignLeadStatus";
-import { scheduleColumns, type ValidatedSchedule } from "./campaignWindow";
+import {
+  resolveScheduleDefaults,
+  scheduleColumns,
+  type ValidatedSchedule,
+} from "./campaignWindow";
+import { planRetryDetailed, type RetryWindow } from "@/lib/ai-dialer/retryPolicy";
+
+// E-315 — automatic redials per unreached lead for every NEW campaign. A lead
+// gets at most 1 + this many dials. Old campaigns keep max_retries NULL (off).
+export const DEFAULT_MAX_RETRIES = 3;
 
 // Bolna typically resolves a call within ~2 minutes. After 4 minutes with no
 // webhook the call is effectively orphaned — flip the row to failed and let
@@ -81,6 +90,9 @@ export async function createCampaign(opts: {
   // the zod-validated shape; scheduleColumns() decides which columns that
   // becomes, so no call site has to remember the mode<->columns coupling.
   schedule?: ValidatedSchedule | null;
+  // E-315 — automatic redials per unreached lead. Defaults to
+  // DEFAULT_MAX_RETRIES; pass 0 to create a campaign that dials each lead once.
+  maxRetries?: number;
 }): Promise<CreateCampaignResult> {
   try {
     // THE HARD GUARANTEE for the AI-connected block.
@@ -125,6 +137,7 @@ export async function createCampaign(opts: {
       region_filter: opts.region ?? null,
       status: opts.status ?? "running",
       total_leads: queueIds.length,
+      max_retries: opts.maxRetries ?? DEFAULT_MAX_RETRIES,
       // E-254 — schedule_mode + the three window columns, or the unscheduled
       // quartet when no schedule was supplied.
       ...scheduleColumns(opts.schedule),
@@ -327,6 +340,143 @@ export async function syncCampaignCounters(
   }
 }
 
+// ── E-315: the one place an attempt's outcome is written ─────────────────────
+
+// assignment_config working hours — the window automatic retries of an
+// unscheduled ('now') campaign are held to. Cached: it changes ~never and this
+// runs once per finished call.
+let defaultWindowCache: { at: number; window: RetryWindow } | null = null;
+const DEFAULT_WINDOW_TTL_MS = 5 * 60 * 1000;
+
+async function defaultRetryWindow(): Promise<RetryWindow> {
+  if (defaultWindowCache && Date.now() - defaultWindowCache.at < DEFAULT_WINDOW_TTL_MS) {
+    return defaultWindowCache.window;
+  }
+  const d = await resolveScheduleDefaults();
+  const window = { start: d.window_start, end: d.window_end, days: d.window_days };
+  defaultWindowCache = { at: Date.now(), window };
+  return window;
+}
+
+/**
+ * Write how one dial of a campaign row ended, and decide whether it is redialled.
+ *
+ * Every outcome writer goes through here — completeCampaignLead (webhook +
+ * poll finalizers), the advanceCampaign trigger-failure branches and the
+ * no_webhook sweep — so the retry decision (retryPolicy.planRetry) cannot be
+ * bypassed by whichever path happens to see the call end.
+ *
+ * status keeps the LATEST outcome ('busy', 'silent', …) even when a retry is
+ * scheduled; next_attempt_at is what makes advanceCampaign dial it again. The
+ * `status IN ('pending','calling')` guard makes a second writer for the same
+ * attempt (late webhook after the sweep, poll racing webhook) a no-op.
+ *
+ * Returns the scheduled retry time, or null when the row is done.
+ */
+export async function recordAttemptOutcome(opts: {
+  campaignLeadId: string;
+  status: CallEndStatus;
+  outcome?: string | null;
+  bolnaCallId?: string | null;
+  intentScore?: number | null;
+}): Promise<{ written: boolean; retryAt: Date | null }> {
+  const row = await db
+    .select({
+      attempt_count: dialerCampaignLeads.attempt_count,
+      attempt_history: dialerCampaignLeads.attempt_history,
+      max_retries: dialerCampaigns.max_retries,
+      schedule_mode: dialerCampaigns.schedule_mode,
+      window_start: dialerCampaigns.window_start,
+      window_end: dialerCampaigns.window_end,
+      window_days: dialerCampaigns.window_days,
+    })
+    .from(dialerCampaignLeads)
+    .innerJoin(
+      dialerCampaigns,
+      eq(dialerCampaigns.id, dialerCampaignLeads.campaign_id),
+    )
+    .where(eq(dialerCampaignLeads.id, opts.campaignLeadId))
+    .limit(1);
+  const r = row[0];
+  // Rows dialled before E-315 carry 0; they were dialled once.
+  const attempt = Math.max(r?.attempt_count ?? 1, 1);
+
+  let retryAt: Date | null = null;
+  // false = our line refused the dial (SIP 403 etc.) — refund the attempt.
+  let consumesAttempt = true;
+  if (r && r.max_retries != null && r.max_retries > 0) {
+    const scheduled =
+      r.schedule_mode && r.schedule_mode !== "now" && r.window_start && r.window_end;
+    const window: RetryWindow = scheduled
+      ? {
+          start: r.window_start!,
+          end: r.window_end!,
+          days: Array.isArray(r.window_days) ? (r.window_days as string[]) : null,
+        }
+      : await defaultRetryWindow();
+    const history = Array.isArray(r.attempt_history)
+      ? (r.attempt_history as Array<{ counted?: boolean }>)
+      : [];
+    const plan = planRetryDetailed({
+      status: opts.status,
+      callOutcome: opts.outcome ?? null,
+      attemptCount: attempt,
+      maxRetries: r.max_retries,
+      now: new Date(),
+      window,
+      lineBlockedRetriesUsed: history.filter((h) => h.counted === false).length,
+    });
+    retryAt = plan?.at ?? null;
+    consumesAttempt = plan?.consumesAttempt ?? true;
+  }
+
+  const entry = {
+    n: attempt,
+    status: opts.status,
+    outcome: opts.outcome ?? null,
+    at: new Date().toISOString(),
+    call_id: opts.bolnaCallId ?? null,
+    // Only written when false, so existing history entries read as counted.
+    ...(consumesAttempt ? {} : { counted: false }),
+  };
+
+  const updated = await db
+    .update(dialerCampaignLeads)
+    .set({
+      status: opts.status,
+      completed_at: new Date(),
+      bolna_call_id: opts.bolnaCallId ?? null,
+      call_outcome: opts.outcome ?? null,
+      intent_score: opts.intentScore ?? null,
+      next_attempt_at: retryAt,
+      // The claim already counted this dial; hand it back when it never left
+      // our side of the line.
+      ...(consumesAttempt
+        ? {}
+        : { attempt_count: sql`greatest(${dialerCampaignLeads.attempt_count} - 1, 0)` }),
+      attempt_history: sql`coalesce(${dialerCampaignLeads.attempt_history}, '[]'::jsonb) || ${JSON.stringify([entry])}::jsonb`,
+    })
+    .where(
+      and(
+        eq(dialerCampaignLeads.id, opts.campaignLeadId),
+        inArray(dialerCampaignLeads.status, ["pending", "calling"]),
+      ),
+    )
+    .returning({ id: dialerCampaignLeads.id });
+
+  const written = updated.length > 0;
+  if (written && retryAt) {
+    console.log("[CAMPAIGN] retry scheduled", {
+      campaignLeadId: opts.campaignLeadId,
+      status: opts.status,
+      attempt,
+      refunded: !consumesAttempt,
+      retryAt: retryAt.toISOString(),
+    });
+  }
+  return { written, retryAt: written ? retryAt : null };
+}
+
 export async function completeCampaignLead(opts: {
   leadId: string;
   /** Where the attempt landed — from campaignLeadStatus.classifyCallEnd. */
@@ -342,9 +492,13 @@ export async function completeCampaignLead(opts: {
 
     // Fallback: scan for the most recent active row for this lead.
     let targetRowId: string | null = null;
+    let targetCallId: string | null = null;
     if (campaignId) {
       const row = await db
-        .select({ id: dialerCampaignLeads.id })
+        .select({
+          id: dialerCampaignLeads.id,
+          bolna_call_id: dialerCampaignLeads.bolna_call_id,
+        })
         .from(dialerCampaignLeads)
         .where(
           and(
@@ -356,6 +510,7 @@ export async function completeCampaignLead(opts: {
         .orderBy(desc(dialerCampaignLeads.created_at))
         .limit(1);
       targetRowId = row[0]?.id ?? null;
+      targetCallId = row[0]?.bolna_call_id ?? null;
     }
 
     if (!targetRowId) {
@@ -363,6 +518,7 @@ export async function completeCampaignLead(opts: {
         .select({
           id: dialerCampaignLeads.id,
           campaign_id: dialerCampaignLeads.campaign_id,
+          bolna_call_id: dialerCampaignLeads.bolna_call_id,
         })
         .from(dialerCampaignLeads)
         .where(
@@ -374,21 +530,32 @@ export async function completeCampaignLead(opts: {
         .orderBy(desc(dialerCampaignLeads.created_at))
         .limit(1);
       targetRowId = row[0]?.id ?? null;
+      targetCallId = row[0]?.bolna_call_id ?? null;
       campaignId = row[0]?.campaign_id ?? campaignId;
     }
 
     if (!targetRowId || !campaignId) return { campaignId: null };
 
-    await db
-      .update(dialerCampaignLeads)
-      .set({
-        status: opts.status,
-        completed_at: new Date(),
-        bolna_call_id: opts.bolnaCallId ?? null,
-        call_outcome: opts.outcome ?? null,
-        intent_score: opts.intentScore ?? null,
-      })
-      .where(eq(dialerCampaignLeads.id, targetRowId));
+    // E-315 — a row is now dialled several times. A webhook/poll result for an
+    // EARLIER attempt must not close the retry that is in flight right now:
+    // the claim clears bolna_call_id and attachBolnaCallId sets the new one,
+    // so a different id on the row means this result is stale.
+    if (opts.bolnaCallId && targetCallId && targetCallId !== opts.bolnaCallId) {
+      console.warn("[campaignTracker.completeCampaignLead] ignoring result for an earlier attempt", {
+        campaignLeadId: targetRowId,
+        rowCallId: targetCallId,
+        resultCallId: opts.bolnaCallId,
+      });
+      return { campaignId: null };
+    }
+
+    await recordAttemptOutcome({
+      campaignLeadId: targetRowId,
+      status: opts.status,
+      outcome: opts.outcome,
+      bolnaCallId: opts.bolnaCallId,
+      intentScore: opts.intentScore,
+    });
 
     // Counters are derived from the rows we just wrote — see
     // syncCampaignCounters for why this is a recompute and not a ±1 bump.
@@ -450,15 +617,17 @@ export async function sweepStalledCallingLeads(
       });
     }
 
-    const ids = stalled.map((r) => r.id);
-    await db
-      .update(dialerCampaignLeads)
-      .set({
+    // One row at a time through the E-315 writer, so a call we never heard
+    // back about is retried like any other unreached attempt. The writer's
+    // pending/calling guard keeps this idempotent against a late webhook.
+    for (const r of stalled) {
+      await recordAttemptOutcome({
+        campaignLeadId: r.id,
         status: "failed",
-        completed_at: new Date(),
-        call_outcome: "no_webhook",
-      })
-      .where(inArray(dialerCampaignLeads.id, ids));
+        outcome: "no_webhook",
+        bolnaCallId: r.bolna_call_id,
+      });
+    }
 
     // Resync parent counters per-campaign — a sweep across all campaigns can
     // touch multiple, so collect the distinct ids first.

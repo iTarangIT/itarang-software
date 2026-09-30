@@ -45,7 +45,7 @@ async function savepoint(exec: Tx | typeof db, fn: (x: Tx) => Promise<unknown>):
 
 /**
  * Stamp door / origin / campaign on a lead. The first value of each is kept for
- * good (E-315 also locks it in the database): a returning dealer is a
+ * good (E-317 also locks it in the database): a returning dealer is a
  * Re-inquiry, never a new source.
  */
 export async function stampLeadSource(

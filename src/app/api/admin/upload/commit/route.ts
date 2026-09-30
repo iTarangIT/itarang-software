@@ -192,7 +192,7 @@ export const POST = withErrorHandler(async (req: Request) => {
     `);
 
     // ID 81: Found via on every lead this batch created. Best-effort (E-314
-    // columns); the E-315 lock keeps a value already there.
+    // columns); the E-317 lock keeps a value already there.
     try {
         await db.execute(sql`
             UPDATE dealer_leads SET source_origin = COALESCE(source_origin, ${b.origin})
