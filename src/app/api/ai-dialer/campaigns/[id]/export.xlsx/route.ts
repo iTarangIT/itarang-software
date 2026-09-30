@@ -18,6 +18,7 @@ import {
 } from "@/lib/db/schema";
 import { withErrorHandler } from "@/lib/api-utils";
 import { requireRole } from "@/lib/auth-utils";
+import { exportsOwnLeadsOnly, logDataDownload } from "@/lib/exports/downloadLog";
 import { deriveDurationSeconds } from "@/lib/ai-dialer/call-duration/derive";
 import {
   bucketFor,
@@ -97,7 +98,7 @@ export const GET = withErrorHandler(
     _req: Request,
     { params }: { params: Promise<{ id: string }> },
   ) => {
-    await requireRole([
+    const user = await requireRole([
       "ceo",
       "business_head",
       "sales_head",
@@ -133,6 +134,7 @@ export const GET = withErrorHandler(
           shop_name: dealerLeads.shop_name,
           dealer_name: dealerLeads.dealer_name,
           phone: dealerLeads.phone,
+          current_owner_id: dealerLeads.current_owner_id,
           city: dealerLeads.city,
           state: dealerLeads.state,
           final_intent_score: dealerLeads.final_intent_score,
@@ -159,6 +161,23 @@ export const GET = withErrorHandler(
         .orderBy(asc(dialerCampaignLeads.queue_position)),
       resolveDurationBucketConfig(),
     ]);
+
+    // ID 58: a rep's or ASM's sheet holds only the leads they own — a campaign
+    // spans the unowned pool, and this sheet carries every phone number. The
+    // Campaign sheet keeps the campaign-wide counts (no names, no numbers).
+    // Every download is logged, like the queue exports.
+    const ownOnly = exportsOwnLeadsOnly(user.role);
+    const exportRows = ownOnly
+      ? leadRows.filter((r) => r.current_owner_id === user.id)
+      : leadRows;
+    await logDataDownload({
+      userId: user.id,
+      role: user.role,
+      dataset: `ai_dialer_campaign:${id}`,
+      rowCount: exportRows.length,
+      ownOnly,
+      filters: { campaign_id: id },
+    });
 
     const workbook = new ExcelJS.Workbook();
     workbook.creator = "iTarang";
@@ -191,6 +210,10 @@ export const GET = withErrorHandler(
         ),
         ["Skipped", byStatus.get("skipped") ?? 0],
         ["Queued", byStatus.get("pending") ?? 0],
+        [
+          "Leads in this file",
+          ownOnly ? `${exportRows.length} (your own leads only)` : exportRows.length,
+        ],
         ["Started", fmt(campaignRow.started_at)],
         ["Ended", fmt(campaignRow.completed_at)],
         [
@@ -234,7 +257,7 @@ export const GET = withErrorHandler(
     ];
     styleHeader(sheet.getRow(1));
 
-    leadRows.forEach((r, i) => {
+    exportRows.forEach((r, i) => {
       const row = sheet.addRow({
         queue_position: (r.queue_position ?? 0) + 1,
         name: r.shop_name || r.dealer_name || "—",
@@ -278,7 +301,7 @@ export const GET = withErrorHandler(
       });
     });
 
-    if (leadRows.length > 0) {
+    if (exportRows.length > 0) {
       sheet.autoFilter = {
         from: { row: 1, column: 1 },
         to: { row: 1, column: sheet.columns.length },
