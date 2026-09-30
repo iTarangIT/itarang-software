@@ -66,7 +66,7 @@ export const POST = withErrorHandler(
     });
 
     // ID 81: source + "Lead created".
-    await stampLeadSource(db, newId, { door: "scraper", origin: "google_maps_scrape" });
+    await stampLeadSource(db, newId, { door: "scraper", origin: "scraped_listing" });
     await recordLeadCreated(db, { leadId: newId, actorId: user.id, door: "scraper", ownerId: null });
 
     // Mark scraper lead as pushed so button shows "Added"

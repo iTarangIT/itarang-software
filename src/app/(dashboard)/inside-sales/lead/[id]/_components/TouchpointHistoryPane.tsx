@@ -16,6 +16,63 @@ type Props = {
     statusHistory: LeadDetailStatusHistory[];
 };
 
+type Attachment = { url: string; type: string | null; reused: boolean };
+
+// touchpoints.attachments is untyped jsonb: keep only entries with a url.
+function readAttachments(raw: unknown[] | undefined): Attachment[] {
+    return (raw ?? []).flatMap((a) => {
+        const o = a as { url?: unknown; type?: unknown; reused?: unknown } | null;
+        if (!o || typeof o.url !== "string" || !o.url) return [];
+        return [{ url: o.url, type: typeof o.type === "string" ? o.type : null, reused: o.reused === true }];
+    });
+}
+
+const IMAGE_URL = /\.(jpe?g|png|webp|gif)(\?|$)/i;
+
+// ID 79: a WhatsApp screenshot (or any image) shows as a thumbnail that opens
+// the full image; other files as a link. A reused screenshot is flagged.
+function Attachments({ items }: { items: Attachment[] }) {
+    if (items.length === 0) return null;
+    return (
+        <div className="mt-2 flex flex-wrap gap-2">
+            {items.map((a) =>
+                a.type === "whatsapp_screenshot" || IMAGE_URL.test(a.url) ? (
+                    <a
+                        key={a.url}
+                        href={a.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="group relative block"
+                        title="Open the full image"
+                    >
+                        {/* eslint-disable-next-line @next/next/no-img-element -- auth-proxied /api/files URL, not optimisable */}
+                        <img
+                            src={a.url}
+                            alt="WhatsApp screenshot"
+                            className={`h-24 w-24 rounded-md border object-cover group-hover:opacity-90 ${a.reused ? "border-rose-400" : "border-gray-200"}`}
+                        />
+                        {a.reused && (
+                            <span className="absolute left-1 top-1 rounded bg-rose-600 px-1 py-0.5 text-[9px] font-semibold uppercase text-white">
+                                Reused
+                            </span>
+                        )}
+                    </a>
+                ) : (
+                    <a
+                        key={a.url}
+                        href={a.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-xs font-medium text-blue-600 hover:underline"
+                    >
+                        View attachment
+                    </a>
+                ),
+            )}
+        </div>
+    );
+}
+
 function formatTime(iso: string): string {
     return new Date(iso).toLocaleString("en-IN", {
         timeZone: "Asia/Kolkata",
@@ -89,6 +146,7 @@ export function TouchpointHistoryPane({ leadId, touchpoints }: Props) {
                                                 Duration: {Math.floor(t.call_duration_sec / 60)}m {t.call_duration_sec % 60}s
                                             </div>
                                         )}
+                                        <Attachments items={readAttachments(t.attachments)} />
                                     </div>
                                 </li>
                             );

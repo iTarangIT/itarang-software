@@ -25,6 +25,7 @@ import {
 import { reactivateLead } from "@/lib/leads/reactivation";
 import { writeTouchpoint } from "@/lib/touchpoints/write";
 import type { UploadBatchSummary } from "@/lib/admin/types";
+import { LEAD_ORIGINS } from "@/lib/leads/leadSourceVocab";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -34,6 +35,9 @@ const BodySchema = z.object({
     csv_text: z.string().min(1).max(6_000_000),
     routing_to_ai: z.boolean().default(false),
     source_label: z.string().trim().max(120).optional().nullable(),
+    // ID 81 — Found via, for every lead in the file. Required: source can only
+    // be captured at creation. Entered via (bulk_upload) comes from the batch id.
+    origin: z.enum(LEAD_ORIGINS, { message: "Pick how these dealers were found (Found via)." }),
 });
 
 export const POST = withErrorHandler(async (req: Request) => {
@@ -186,6 +190,17 @@ export const POST = withErrorHandler(async (req: Request) => {
             updated_at = NOW()
         WHERE batch_id = ${batchId}
     `);
+
+    // ID 81: Found via on every lead this batch created. Best-effort (E-314
+    // columns); the E-315 lock keeps a value already there.
+    try {
+        await db.execute(sql`
+            UPDATE dealer_leads SET source_origin = COALESCE(source_origin, ${b.origin})
+             WHERE upload_batch_id = ${batchId}
+        `);
+    } catch (e) {
+        console.warn("[upload/commit] Found via not stamped (E-314 applied?):", e);
+    }
 
     const summaryRows = await db.execute<UploadBatchSummary>(sql`
         SELECT batch_id, file_name, uploaded_by, NULL AS uploaded_by_name,

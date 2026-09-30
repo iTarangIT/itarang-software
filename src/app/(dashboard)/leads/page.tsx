@@ -29,6 +29,7 @@ import {
   Download,
 } from "lucide-react";
 import { SendToNeodoveModal } from "@/components/leads/send-to-neodove-modal";
+import { LEAD_ORIGIN_LABEL, LEAD_ORIGINS } from "@/lib/leads/leadSourceVocab";
 import { toast } from "sonner";
 import { INTENT_THRESHOLDS } from "@/lib/ai/scoring/thresholds";
 import { ScraperDashboard } from "@/components/scraper/ScraperDashboard";
@@ -328,6 +329,8 @@ function UploadModal({
   onSuccess: () => void;
 }) {
   const [status, setStatus] = useState<UploadStatus>("idle");
+  // ID 81 — Found via for the whole file, required.
+  const [origin, setOrigin] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<any[]>([]);
   const [result, setResult] = useState<{
@@ -383,7 +386,7 @@ function UploadModal({
       const res = await fetch("/api/leads/import", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ leads: rows }),
+        body: JSON.stringify({ leads: rows, origin }),
       });
       const data = await res.json();
       if (!res.ok || !data.success) {
@@ -609,6 +612,26 @@ function UploadModal({
                 </div>
               )}
               {file && preview.length > 0 && status !== "uploading" && (
+                <label className="block">
+                  <span className="text-xs font-medium text-gray-600">
+                    Found via <span className="text-red-500">*</span>
+                    <span className="ml-1 font-normal text-gray-400">(how these dealers were found)</span>
+                  </span>
+                  <select
+                    value={origin}
+                    onChange={(e) => setOrigin(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm"
+                  >
+                    <option value="">Select…</option>
+                    {LEAD_ORIGINS.map((o) => (
+                      <option key={o} value={o}>
+                        {LEAD_ORIGIN_LABEL[o]}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              {file && preview.length > 0 && status !== "uploading" && (
                 <div className="flex gap-2">
                   <button
                     onClick={() => {
@@ -624,7 +647,8 @@ function UploadModal({
                   </button>
                   <button
                     onClick={handleUpload}
-                    className="flex-1 px-4 py-2 text-sm font-medium bg-gray-900 text-white rounded-lg hover:bg-gray-700 transition-colors"
+                    disabled={!origin}
+                    className="flex-1 px-4 py-2 text-sm font-medium bg-gray-900 text-white rounded-lg hover:bg-gray-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     Import {(window as any).__uploadRows?.length ?? 0} leads
                   </button>
