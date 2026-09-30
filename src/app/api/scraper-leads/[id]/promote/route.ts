@@ -61,7 +61,7 @@ export async function POST(req: NextRequest, { params }: any) {
     });
 
     // ID 81: source + "Lead created".
-    await stampLeadSource(db, newId, { door: "scraper", origin: "google_maps_scrape" });
+    await stampLeadSource(db, newId, { door: "scraper", origin: "scraped_listing" });
     await recordLeadCreated(db, { leadId: newId, actorId: null, door: "scraper", ownerId: null });
 
     // 4. Update scraper lead status to promoted

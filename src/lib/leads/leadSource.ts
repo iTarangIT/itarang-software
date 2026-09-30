@@ -24,6 +24,10 @@ export {
     LEAD_DOORS,
     LEAD_ORIGINS,
     LEAD_ORIGIN_LABEL,
+    LEAD_DOOR_LABEL,
+    SOURCE_LABELS,
+    doorLabel,
+    originLabel,
     type LeadDoor,
     type LeadOrigin,
 } from "./leadSourceVocab";
@@ -39,7 +43,11 @@ async function savepoint(exec: Tx | typeof db, fn: (x: Tx) => Promise<unknown>):
     }
 }
 
-/** Stamp door / origin / campaign on a lead. Never overwrites an existing door. */
+/**
+ * Stamp door / origin / campaign on a lead. The first value of each is kept for
+ * good (E-317 also locks it in the database): a returning dealer is a
+ * Re-inquiry, never a new source.
+ */
 export async function stampLeadSource(
     exec: Tx | typeof db,
     leadId: string,
@@ -49,8 +57,8 @@ export async function stampLeadSource(
         x.execute(sql`
             UPDATE dealer_leads
                SET source_door = COALESCE(source_door, ${src.door}),
-                   source_origin = COALESCE(${src.origin ?? null}, source_origin),
-                   acquisition_campaign_id = COALESCE(${src.campaignId ?? null}::uuid, acquisition_campaign_id)
+                   source_origin = COALESCE(source_origin, ${src.origin ?? null}),
+                   acquisition_campaign_id = COALESCE(acquisition_campaign_id, ${src.campaignId ?? null}::uuid)
              WHERE id = ${leadId}
         `),
     );

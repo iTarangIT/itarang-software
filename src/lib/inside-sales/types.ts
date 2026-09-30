@@ -113,6 +113,10 @@ export type LeadDetailLead = QueueRow & {
     onboarding_created_at: string | null;
     /** E-296 "Type of Business" — see src/lib/leads/businessType.ts. NULL = not set. */
     business_type?: string | null;
+    /** ID 81 (E-314): Entered via / Found via / Campaign — see leadSourceVocab.ts. */
+    source_door?: string | null;
+    source_origin?: string | null;
+    acquisition_campaign_id?: string | null;
 };
 
 export type LeadDetailTouchpoint = {

@@ -90,6 +90,19 @@ export function CreateLeadModal({ open, onClose, onSuccess }: Props) {
             toast.error("Enter a valid 10-digit phone number.");
             return;
         }
+        // ID 81: required at creation — source cannot be added properly later.
+        if (!city) {
+            toast.error("Pick the city.");
+            return;
+        }
+        if (!businessType) {
+            toast.error("Pick the type of business.");
+            return;
+        }
+        if (!origin) {
+            toast.error("Pick how the dealer was found.");
+            return;
+        }
         setSubmitting(true);
         try {
             const res = await fetch("/api/inside-sales/lead/create", {
@@ -99,11 +112,11 @@ export function CreateLeadModal({ open, onClose, onSuccess }: Props) {
                     dealer_name: dealerName.trim(),
                     shop_name: shopName.trim() || null,
                     phone: phoneDigits,
-                    city: city || null,
+                    city,
                     state: stateName || null,
                     interest_level: interest || null,
-                    business_type: businessType || null,
-                    origin: origin || null,
+                    business_type: businessType,
+                    origin,
                 }),
             });
             const json = await res.json();
@@ -173,7 +186,7 @@ export function CreateLeadModal({ open, onClose, onSuccess }: Props) {
                         />
                     </div>
                     <div>
-                        <Label>City</Label>
+                        <Label>City *</Label>
                         <Dropdown
                             value={city}
                             onChange={setCity}
@@ -196,26 +209,26 @@ export function CreateLeadModal({ open, onClose, onSuccess }: Props) {
                     </select>
                 </div>
                 <div>
-                    <Label>Type of business</Label>
+                    <Label>Type of business *</Label>
                     <select
                         className="mt-1 w-full rounded-md border border-gray-200 px-3 py-2 text-sm bg-white"
                         value={businessType}
                         onChange={(e) => setBusinessType(e.target.value)}
                     >
-                        <option value="">Not set</option>
+                        <option value="">Select…</option>
                         {BUSINESS_TYPE_OPTIONS.map((o) => (
                             <option key={o.value} value={o.value}>{o.label}</option>
                         ))}
                     </select>
                 </div>
                 <div>
-                    <Label>Where did this dealer come from?</Label>
+                    <Label>Found via *</Label>
                     <select
                         className="mt-1 w-full rounded-md border border-gray-200 px-3 py-2 text-sm bg-white"
                         value={origin}
                         onChange={(e) => setOrigin(e.target.value)}
                     >
-                        <option value="">Not set</option>
+                        <option value="">Select…</option>
                         {LEAD_ORIGINS.map((o) => (
                             <option key={o} value={o}>{LEAD_ORIGIN_LABEL[o]}</option>
                         ))}

@@ -20,14 +20,16 @@ const BodySchema = z.object({
         .string()
         .trim()
         .regex(/^\d{10}$/, "Phone must be exactly 10 digits"),
-    city: z.string().trim().max(120).optional().nullable(),
+    // ID 81: phone, name, city, business type and origin are required at
+    // creation — source can only be captured now, never added properly later.
+    city: z.string().trim().min(1, "City is required").max(120),
     state: z.string().trim().max(120).optional().nullable(),
     interest_level: z.enum(["hot", "warm", "cold"]).optional().nullable(),
     language: z.string().trim().max(40).optional().nullable(),
-    // E-296 "Type of Business". Optional; "" = not set.
-    business_type: z.union([BusinessTypeSchema, z.literal("")]).optional().nullable(),
-    // ID 81 — where the dealer came from (fixed list) and the acquisition campaign.
-    origin: z.enum(LEAD_ORIGINS).optional().nullable(),
+    // E-296 "Type of Business".
+    business_type: BusinessTypeSchema,
+    // ID 81 — Found via (fixed list) and the acquisition campaign.
+    origin: z.enum(LEAD_ORIGINS, { message: "Pick how the dealer was found" }),
     campaign_id: z.string().uuid().optional().nullable(),
 });
 
@@ -47,7 +49,7 @@ export const POST = withErrorHandler(async (req: Request) => {
             interestLevel: body.interest_level,
             language: body.language,
             businessType: body.business_type,
-            origin: body.origin ?? null,
+            origin: body.origin,
             campaignId: body.campaign_id ?? null,
         });
     } catch (err) {
