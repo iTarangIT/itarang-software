@@ -20,7 +20,7 @@ import {
   scheduleColumns,
   type ValidatedSchedule,
 } from "./campaignWindow";
-import { planRetry, type RetryWindow } from "@/lib/ai-dialer/retryPolicy";
+import { planRetryDetailed, type RetryWindow } from "@/lib/ai-dialer/retryPolicy";
 
 // E-315 — automatic redials per unreached lead for every NEW campaign. A lead
 // gets at most 1 + this many dials. Old campaigns keep max_retries NULL (off).
@@ -383,6 +383,7 @@ export async function recordAttemptOutcome(opts: {
   const row = await db
     .select({
       attempt_count: dialerCampaignLeads.attempt_count,
+      attempt_history: dialerCampaignLeads.attempt_history,
       max_retries: dialerCampaigns.max_retries,
       schedule_mode: dialerCampaigns.schedule_mode,
       window_start: dialerCampaigns.window_start,
@@ -401,6 +402,8 @@ export async function recordAttemptOutcome(opts: {
   const attempt = Math.max(r?.attempt_count ?? 1, 1);
 
   let retryAt: Date | null = null;
+  // false = our line refused the dial (SIP 403 etc.) — refund the attempt.
+  let consumesAttempt = true;
   if (r && r.max_retries != null && r.max_retries > 0) {
     const scheduled =
       r.schedule_mode && r.schedule_mode !== "now" && r.window_start && r.window_end;
@@ -411,14 +414,20 @@ export async function recordAttemptOutcome(opts: {
           days: Array.isArray(r.window_days) ? (r.window_days as string[]) : null,
         }
       : await defaultRetryWindow();
-    retryAt = planRetry({
+    const history = Array.isArray(r.attempt_history)
+      ? (r.attempt_history as Array<{ counted?: boolean }>)
+      : [];
+    const plan = planRetryDetailed({
       status: opts.status,
       callOutcome: opts.outcome ?? null,
       attemptCount: attempt,
       maxRetries: r.max_retries,
       now: new Date(),
       window,
+      lineBlockedRetriesUsed: history.filter((h) => h.counted === false).length,
     });
+    retryAt = plan?.at ?? null;
+    consumesAttempt = plan?.consumesAttempt ?? true;
   }
 
   const entry = {
@@ -427,6 +436,8 @@ export async function recordAttemptOutcome(opts: {
     outcome: opts.outcome ?? null,
     at: new Date().toISOString(),
     call_id: opts.bolnaCallId ?? null,
+    // Only written when false, so existing history entries read as counted.
+    ...(consumesAttempt ? {} : { counted: false }),
   };
 
   const updated = await db
@@ -438,6 +449,11 @@ export async function recordAttemptOutcome(opts: {
       call_outcome: opts.outcome ?? null,
       intent_score: opts.intentScore ?? null,
       next_attempt_at: retryAt,
+      // The claim already counted this dial; hand it back when it never left
+      // our side of the line.
+      ...(consumesAttempt
+        ? {}
+        : { attempt_count: sql`greatest(${dialerCampaignLeads.attempt_count} - 1, 0)` }),
       attempt_history: sql`coalesce(${dialerCampaignLeads.attempt_history}, '[]'::jsonb) || ${JSON.stringify([entry])}::jsonb`,
     })
     .where(
@@ -454,6 +470,7 @@ export async function recordAttemptOutcome(opts: {
       campaignLeadId: opts.campaignLeadId,
       status: opts.status,
       attempt,
+      refunded: !consumesAttempt,
       retryAt: retryAt.toISOString(),
     });
   }
