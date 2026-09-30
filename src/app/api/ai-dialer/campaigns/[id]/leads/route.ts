@@ -85,6 +85,10 @@ function shapeRow(r: any) {
     }),
     // Cross-campaign attempt tracking (only populated on the detail query).
     attemptCount: Number(r.attemptCount ?? 0),
+    nextAttemptAt:
+      "nextAttemptAt" in r && r.nextAttemptAt
+        ? new Date(r.nextAttemptAt as string | Date).toISOString()
+        : null,
     convertedOnAttempt:
       r.convertedOnAttempt != null ? Number(r.convertedOnAttempt) : null,
   };
@@ -165,10 +169,15 @@ const selectShape = {
 // bucket=all banner query, which doesn't render these columns.
 const detailSelectShape = {
   ...selectShape,
+  // E-315 — a row can now be dialled several times (automatic retries), so
+  // this sums its dials; a pre-E-315 row carries 0 and counts as one, as before.
   attemptCount: sql<number>`(
-    select count(*)::int from dialer_campaign_leads x
+    select coalesce(sum(greatest(x.attempt_count, 1)), 0)::int
+    from dialer_campaign_leads x
     where x.lead_id = ${dialerCampaignLeads.lead_id}
   )`,
+  // E-315 — when this row's automatic retry goes out (null = none booked).
+  nextAttemptAt: dialerCampaignLeads.next_attempt_at,
   convertedOnAttempt: sql<number | null>`(
     select s.ord::int from (
       select row_number() over (

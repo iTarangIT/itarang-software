@@ -24,7 +24,7 @@ import {
   sweepStalledCallingLeads,
 } from "@/lib/queue/campaignTracker";
 import { advanceCampaign } from "@/lib/queue/advanceCampaign";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, isNotNull } from "drizzle-orm";
 import { NextResponse } from "next/server";
 
 export const maxDuration = 60;
@@ -101,7 +101,25 @@ export async function GET(req: Request) {
         runStartedAt.getTime() - new Date(lastActiveAt).getTime();
 
       let finalizedAs: "stopped" | null = null;
-      if (campaignAgeMs > STALL_FINALIZE_AGE_MS) {
+      // E-315 — a campaign whose remaining work is automatic retries booked
+      // hours (or a day) ahead is WAITING, not stalled. wakeDueRetries wakes it
+      // when one falls due; force-stopping it here would cancel every retry.
+      const waitingOnRetry =
+        campaignAgeMs > STALL_FINALIZE_AGE_MS &&
+        (
+          await db
+            .select({ id: dialerCampaignLeads.id })
+            .from(dialerCampaignLeads)
+            .where(
+              and(
+                eq(dialerCampaignLeads.campaign_id, c.id),
+                isNotNull(dialerCampaignLeads.next_attempt_at),
+              ),
+            )
+            .limit(1)
+        ).length > 0;
+
+      if (campaignAgeMs > STALL_FINALIZE_AGE_MS && !waitingOnRetry) {
         const lastActivity = await db
           .select({ completed_at: dialerCampaignLeads.completed_at })
           .from(dialerCampaignLeads)

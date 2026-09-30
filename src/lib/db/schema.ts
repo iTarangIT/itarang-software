@@ -4151,6 +4151,9 @@ export const dialerCampaigns = pgTable(
     // resumed the morning after an overnight pause carries yesterday's
     // started_at and is force-stopped before placing its first call.
     last_advanced_at: timestamp("last_advanced_at", { withTimezone: true }),
+    // E-315 — automatic redials per unreached lead. NULL = auto-retry off
+    // (every pre-E-315 campaign); createCampaign sets 3.
+    max_retries: integer("max_retries"),
   },
   (t) => ({
     statusIdx: index("idx_dialer_campaigns_status").on(t.status),
@@ -4189,6 +4192,11 @@ export const dialerCampaignLeads = pgTable(
     created_at: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
+    // E-315 — auto-retry. status keeps the latest outcome while
+    // next_attempt_at says when the row is redialled (retryPolicy.ts).
+    attempt_count: integer("attempt_count").notNull().default(0),
+    next_attempt_at: timestamp("next_attempt_at", { withTimezone: true }),
+    attempt_history: jsonb("attempt_history").notNull().default([]),
   },
   (t) => ({
     campaignStatusIdx: index("idx_dialer_campaign_leads_campaign_status").on(
