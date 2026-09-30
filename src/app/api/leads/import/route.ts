@@ -35,6 +35,7 @@ import {
   inferStateFromCity,
 } from "@/lib/scraper-enrichment";
 import { normalizeBusinessType } from "@/lib/leads/businessType";
+import { LEAD_ORIGINS } from "@/lib/leads/leadSourceVocab";
 
 // Same ceiling the bulk wizard enforces (MAX_UPLOAD_ROWS). Without it this
 // route will happily accept an unbounded JSON array.
@@ -76,6 +77,13 @@ export const POST = withErrorHandler(async (req: Request) => {
   if (leads.length === 0) {
     return errorResponse("No leads provided", 400);
   }
+  // ID 81 — Found via for the whole file. Required: source can only be
+  // captured at creation. Entered via is bulk_upload.
+  const origin = typeof body?.origin === "string" ? body.origin : "";
+  if (!(LEAD_ORIGINS as readonly string[]).includes(origin)) {
+    return errorResponse("Pick how these dealers were found (Found via).", 400);
+  }
+  const insertedIds: string[] = [];
   if (leads.length > MAX_IMPORT_ROWS) {
     return errorResponse(
       `Too many rows — ${leads.length} received, limit is ${MAX_IMPORT_ROWS}. Use Bulk Lead Upload for larger sheets.`,
@@ -221,6 +229,7 @@ export const POST = withErrorHandler(async (req: Request) => {
             }
           }
           result.inserted++;
+          insertedIds.push(newId);
           details.push({ row: rowNo, phone, outcome });
           break;
         }
@@ -234,6 +243,21 @@ export const POST = withErrorHandler(async (req: Request) => {
         outcome: "error",
         error: err instanceof Error ? err.message : String(err),
       });
+    }
+  }
+
+  // ID 81: Entered via = Bulk upload, Found via = what the uploader picked.
+  // Best-effort (E-314 columns); the E-315 lock keeps any value already there.
+  if (insertedIds.length > 0) {
+    try {
+      await db.execute(sql`
+        UPDATE dealer_leads
+           SET source_door = COALESCE(source_door, 'bulk_upload'),
+               source_origin = COALESCE(source_origin, ${origin})
+         WHERE id IN (SELECT jsonb_array_elements_text(${JSON.stringify(insertedIds)}::jsonb))
+      `);
+    } catch (e) {
+      console.warn("[leads/import] source not stamped (E-314 applied?):", e);
     }
   }
 

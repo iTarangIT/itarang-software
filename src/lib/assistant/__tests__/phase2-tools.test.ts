@@ -268,11 +268,30 @@ describe("create_lead", () => {
     });
 
     it("ISR → claim pool; ASM → owned by them; no lead id on the pending action", async () => {
-        await run(ISR, "create_lead", { dealer_name: "Suresh", phone: "+91 98765 43210", city: "Nashik" });
-        expect(stored()).toMatchObject({ tool: "create_lead", leadId: null, plan: { phone: "9876543210", city: "Nashik" } });
+        const REQUIRED = { city: "Nashik", business_type: "battery_sale", origin: "trade_event" } as const;
+        await run(ISR, "create_lead", { dealer_name: "Suresh", phone: "+91 98765 43210", ...REQUIRED });
+        expect(stored()).toMatchObject({
+            tool: "create_lead",
+            leadId: null,
+            plan: { phone: "9876543210", city: "Nashik", origin: "trade_event" },
+        });
+        expect(stored().preview.lines).toContainEqual({ label: "Found via", value: "Trade event" });
         expect(stored().preview.lines).toContainEqual({ label: "Goes to", value: "the unassigned claim pool" });
-        await run(ASM, "create_lead", { dealer_name: "Suresh", phone: "9876543210" });
+        await run(ASM, "create_lead", { dealer_name: "Suresh", phone: "9876543210", ...REQUIRED });
         expect(stored().preview.lines).toContainEqual({ label: "Goes to", value: "your queue — owned by you" });
+    });
+
+    it("ID 81: asks for city, business type and origin before proposing", async () => {
+        const base = { dealer_name: "Suresh", phone: "9876543210" };
+        expect(await run(ISR, "create_lead", base)).toMatchObject({ kind: "question", question: expect.stringMatching(/city/i) });
+        expect(await run(ISR, "create_lead", { ...base, city: "Nashik" })).toMatchObject({
+            kind: "question",
+            question: expect.stringMatching(/type of business/i),
+        });
+        expect(await run(ISR, "create_lead", { ...base, city: "Nashik", business_type: "finance" })).toMatchObject({
+            kind: "question",
+            question: expect.stringMatching(/how did we find/i),
+        });
     });
 
     it("an existing phone → declined; the lead is named only if the user can see it", async () => {

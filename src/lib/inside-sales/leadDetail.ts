@@ -79,7 +79,11 @@ export async function fetchLeadDetailBundle(leadId: string): Promise<LeadDetailB
             to_jsonb(dl) ->> 'neodove_sync_status' AS neodove_sync_status,
             -- E-296 "Type of Business", same to_jsonb guard: NULL on a
             -- database without the migration, which renders "Not set".
-            to_jsonb(dl) ->> 'business_type' AS business_type
+            to_jsonb(dl) ->> 'business_type' AS business_type,
+            -- ID 81 (E-314) source tags, same to_jsonb guard.
+            to_jsonb(dl) ->> 'source_door' AS source_door,
+            to_jsonb(dl) ->> 'source_origin' AS source_origin,
+            to_jsonb(dl) ->> 'acquisition_campaign_id' AS acquisition_campaign_id
         FROM dealer_leads dl
         LEFT JOIN users owner ON owner.id::text = dl.current_owner_id
         LEFT JOIN users originator ON originator.id::text = dl.originator_id

@@ -294,6 +294,7 @@ describe("create_lead from a visiting card", () => {
         media.set("mcard1", file("mcard1"));
         const r = await run(ISR, "create_lead", {
             dealer_name: "Rakesh Sharma", phone: "+91 98765 43210", shop_name: "Sharma Battery House", city: "Pune",
+            business_type: "battery_sale", origin: "field_walk_in",
             area: "Hadapsar", pincode: "411013", email: "Sharma@Gmail.com", source_attachment_id: "mcard1",
         });
         expect(r.kind).toBe("preview");
