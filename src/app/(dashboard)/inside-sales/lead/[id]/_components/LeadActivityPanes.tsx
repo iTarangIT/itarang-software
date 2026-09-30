@@ -66,10 +66,7 @@ export function LeadActivityPanes({
                         statusHistory={bundle.status_history}
                     />
                 ) : tab === "calls" ? (
-                    <AiCallHistoryPane
-                        leadId={leadId}
-                        campaignId={bundle.latest_campaign_id}
-                    />
+                    <AiCallHistoryPane leadId={leadId} />
                 ) : tab === "tracking" ? (
                     <div className="overflow-y-auto border-r border-gray-100 bg-white">
                         <LeadTrackingPanel leadId={leadId} canDownload />
