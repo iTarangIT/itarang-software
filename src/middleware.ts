@@ -431,6 +431,13 @@ export async function middleware(request: NextRequest) {
     // (the no-user branch above only redirects protected paths). It fails
     // open, not closed.
     monitor: "/monitor",
+    // E-316 — Feature Request & Approval module. All three land on the same
+    // shared page; the "/feature-requests" sharedRouteAccess row below is what
+    // actually admits them (without it, matchedRole would resolve to the first
+    // of these three and bounce the other two).
+    product_head: "/feature-requests",
+    tech_head: "/feature-requests",
+    developer: "/feature-requests",
   };
 
   // E-212 — /reset-password is reached from an emailed token link by a user who
@@ -600,6 +607,9 @@ export async function middleware(request: NextRequest) {
     // the layout does the fine-grained nbfc_users.role === 'nbfc_risk_head'
     // gate. admin/ceo retain support access.
     "/risk-head": ["nbfc_partner", "admin", "ceo"],
+    // E-316 — the API re-checks the caller's seat in feature_request_members;
+    // this row only decides who can open the pages.
+    "/feature-requests": ["ceo", "product_head", "tech_head", "developer"],
     "/admin/dealer-verification": ["sales_head", "ceo"],
     "/admin/kyc-review": ["admin", "sales_head", "business_head", "ceo"],
     // NBFC onboarding (BRD §6.0): sales_head submits, CEO approves. Admin and
