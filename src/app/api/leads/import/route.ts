@@ -247,7 +247,7 @@ export const POST = withErrorHandler(async (req: Request) => {
   }
 
   // ID 81: Entered via = Bulk upload, Found via = what the uploader picked.
-  // Best-effort (E-314 columns); the E-315 lock keeps any value already there.
+  // Best-effort (E-314 columns); the E-317 lock keeps any value already there.
   if (insertedIds.length > 0) {
     try {
       await db.execute(sql`

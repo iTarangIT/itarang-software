@@ -178,6 +178,9 @@ export default function LoginPage() {
                 navigateTo('/operations');
             } else if (appUser.role === 'partner') {
                 navigateTo('/partner');
+            } else if (['product_head', 'tech_head', 'developer'].includes(appUser.role)) {
+                // E-316 — Feature Request module logins.
+                navigateTo('/feature-requests');
             } else if (appUser.role === 'monitor') {
                 navigateTo('/monitor');
             } else {

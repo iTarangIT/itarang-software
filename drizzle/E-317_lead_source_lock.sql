@@ -1,4 +1,4 @@
--- E-315 — lead source: final vocabulary, correct doors, first source locked
+-- E-317 — lead source: final vocabulary, correct doors, first source locked
 -- (tracker ID 81, handover P2-9). 2026-09-30. Requires E-314.
 --
 -- Three tags on every lead, shown on screen as:
@@ -77,7 +77,7 @@ BEGIN
     UPDATE dealer_leads SET source_origin = 'scraped_listing'
      WHERE source_door = 'scraper' AND source_origin IS NULL;
 EXCEPTION WHEN undefined_column OR undefined_table THEN
-    RAISE NOTICE 'E-315 backfill skipped — apply E-314 first';
+    RAISE NOTICE 'E-317 backfill skipped — apply E-314 first';
 END
 $do$;
 
