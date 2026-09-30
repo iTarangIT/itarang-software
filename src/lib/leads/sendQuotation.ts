@@ -18,6 +18,7 @@
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { writeTouchpoint } from "@/lib/touchpoints/write";
+import { advanceLeadOnQuoteEvent } from "@/lib/leads/quoteStatus";
 import {
   dispatchQuotation,
   type DispatchOutcome,
@@ -139,6 +140,8 @@ export async function sendApprovedQuotation(
             : ""),
       attachments: [{ url: row.quote_pdf_url, type: "quote" }],
     });
+    // ID 75: delivered to the dealer → awaiting their decision.
+    await advanceLeadOnQuoteEvent(row.dealer_lead_id, "delivered", actor.id);
   }
 
   return {

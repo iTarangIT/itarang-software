@@ -55,7 +55,7 @@ async function downloadPdf(
   try {
     res = await fetch(url, {
       method: "GET",
-      headers: { Authorization: authHeader, Accept: "application/pdf" },
+      headers: { Authorization: authHeader, Accept: "*/*" },
       cache: "no-store",
     });
   } catch (err) {

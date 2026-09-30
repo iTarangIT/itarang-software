@@ -1,5 +1,6 @@
 "use client";
 
+import type { LostReason } from "@/lib/lifecycle/transitions";
 import { useCallback, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, AlertTriangle, ArrowLeft } from "lucide-react";
@@ -38,6 +39,8 @@ type Props = {
 export function AsmLeadDetailView({ leadId, viewerId, viewerRole }: Props) {
     const qc = useQueryClient();
     const [activeModal, setActiveModal] = useState<ActiveModal>(null);
+    // ID 76: a Lost-type call outcome opens Mark Lost with the reason pre-filled.
+    const [lostPrefill, setLostPrefill] = useState<LostReason | null>(null);
     const [staleInfo, setStaleInfo] = useState<{
         currentOwnerName?: string | null;
         currentUpdatedAt?: string | null;
@@ -157,6 +160,7 @@ export function AsmLeadDetailView({ leadId, viewerId, viewerRole }: Props) {
                 isOwner={isOwner}
                 viewerRole={viewerRole}
                 onAction={setActiveModal}
+                onChanged={onActionSuccess}
             />
 
             <LogVisitModal
@@ -176,6 +180,13 @@ export function AsmLeadDetailView({ leadId, viewerId, viewerRole }: Props) {
                 updatedAt={updatedAt}
                 context="asm"
                 onVisitSuccess={onVisitSuccess}
+                hasQuote={bundle.commercials_history.some(
+                    (c) => (c.event_type === "quote_issue" || c.event_type === "quote_revision") && !c.withdrawn_at,
+                )}
+                onLostOutcome={(r) => {
+                    setLostPrefill(r);
+                    setActiveModal("mark_lost");
+                }}
             />
             <UpdateCommercialsModal
                 open={activeModal === "commercials"}
@@ -185,10 +196,15 @@ export function AsmLeadDetailView({ leadId, viewerId, viewerRole }: Props) {
                 onSuccess={onActionSuccess}
             />
             <MarkLostModal
+                key={lostPrefill ?? "none"}
                 open={activeModal === "mark_lost"}
-                onClose={() => setActiveModal(null)}
+                onClose={() => {
+                    setActiveModal(null);
+                    setLostPrefill(null);
+                }}
                 leadId={leadId}
                 onSuccess={onActionSuccess}
+                defaultReason={lostPrefill}
             />
             <MarkConvertedModal
                 open={activeModal === "mark_converted"}

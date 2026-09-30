@@ -1,8 +1,11 @@
 // POST /api/admin/onboarding-dropouts/[id]/resolve — BRD §0.13 Point B.
-// Three admin actions on a Converted lead whose onboarding fell through:
-//   keep_converted — counted as won; dropout reason recorded for tracking.
-//   flip_to_lost   — lead_status → Lost, lost_reason = 'onboarding_dropout'.
-//   re_engage      — runs the reactivation cycle (Converted → Assigned/New).
+// The day-21 decision (ID 84, 29 Sep 2026) on a Won lead — or a legacy
+// Converted one — whose onboarding fell through or went quiet:
+//   keep_waiting — Stalled: the lead stays Won and the decision comes back in
+//                  21 days (onboarding_stalled_at, E-314). No "keep converted":
+//                  Converted means the onboarding was approved.
+//   flip_to_lost — lead_status → Lost, lost_reason = 'onboarding_dropout'.
+//   re_engage    — runs the reactivation cycle (→ Assigned/New).
 
 import { sql } from "drizzle-orm";
 import { z } from "zod";
@@ -19,7 +22,7 @@ import { ONBOARDING_DROPOUT_REASONS } from "@/lib/admin/types";
 const MUTATE_ROLES = ["admin", "sales_head", "partner"];
 
 const BodySchema = z.object({
-    action: z.enum(["keep_converted", "flip_to_lost", "re_engage"]),
+    action: z.enum(["keep_waiting", "flip_to_lost", "re_engage"]),
     onboarding_dropout_reason: z.enum(ONBOARDING_DROPOUT_REASONS),
     onboarding_dropout_notes: z.string().trim().min(5).max(5000),
 });
@@ -41,18 +44,19 @@ export const POST = withErrorHandler(
         `);
         const lead = leadRows[0];
         if (!lead) return errorResponse("Lead not found.", 404);
-        if (lead.lead_status !== "Converted") {
+        if (lead.lead_status !== "Won" && lead.lead_status !== "Converted") {
             return errorResponse(
-                "Only a Converted lead can be resolved as an onboarding dropout.",
+                "Only a Won (or legacy Converted) lead can be resolved as an onboarding dropout.",
                 409,
             );
         }
+        const fromWon = lead.lead_status === "Won";
 
-        if (body.action === "keep_converted") {
-            // Stays won; record the dropout reason for tracking only.
+        if (body.action === "keep_waiting") {
+            // Stalled: stays Won; the decision returns in 21 days.
             await db.execute(sql`
                 UPDATE dealer_leads SET
-                    onboarding_dropout_reason = ${body.onboarding_dropout_reason},
+                    onboarding_stalled_at = NOW(),
                     onboarding_dropout_notes = ${body.onboarding_dropout_notes},
                     updated_at = NOW()
                 WHERE id = ${id}
@@ -61,7 +65,7 @@ export const POST = withErrorHandler(
                 dealerLeadId: id,
                 touchpointType: "onboarding_dropout_action",
                 performedBy: user.id,
-                remarks: `Kept Converted — ${body.onboarding_dropout_notes}`,
+                remarks: `Onboarding stalled — keep waiting (decision again in 21 days). ${body.onboarding_dropout_notes}`,
             });
         } else if (body.action === "flip_to_lost") {
             // Converted → Lost (admin loopback, BRD §0.7).
@@ -71,11 +75,14 @@ export const POST = withErrorHandler(
                 performedBy: user.id,
                 remarks: body.onboarding_dropout_notes,
                 statusChange: {
-                    from: "Converted",
+                    from: fromWon ? "Won" : "Converted",
                     to: "Lost",
                     toLostReason: "onboarding_dropout",
                     closingRole: "admin",
                     reasonNotes: body.onboarding_dropout_notes,
+                    // Won → Lost is an ordinary Mark Lost; Converted → Lost is
+                    // the admin drop-out loopback.
+                    event: fromWon ? "mark_lost" : "dropout_lost",
                 },
             });
             await db.execute(sql`
@@ -122,7 +129,7 @@ export const POST = withErrorHandler(
                     INSERT INTO dealer_lead_status_history
                         (dealer_lead_id, from_status, to_status, changed_by,
                          changed_at, reason_notes)
-                    VALUES (${id}, 'Converted', ${newStatus}, ${user.id}, NOW(),
+                    VALUES (${id}, ${lead.lead_status}, ${newStatus}, ${user.id}, NOW(),
                         ${body.onboarding_dropout_notes})
                 `);
                 // E-295: from/to owner recorded so Lead Tracking sees the hop

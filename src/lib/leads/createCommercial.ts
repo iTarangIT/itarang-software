@@ -13,6 +13,7 @@ import { eq, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { dealerLeadCommercials, dealerLeads } from "@/lib/db/schema";
 import { writeTouchpoint } from "@/lib/touchpoints/write";
+import { advanceLeadOnQuoteEvent } from "@/lib/leads/quoteStatus";
 import { initialApprovalStatus, isGatedQuoteEvent } from "@/lib/leads/quoteApproval";
 import { tryGenerateQuotationDraft } from "@/lib/leads/quoteDraft";
 import {
@@ -109,6 +110,40 @@ export async function createLeadCommercial(
             approvalMode = resolved.mode;
         }
 
+        // ID 61: terms rows carry no price of their own. A price change is a
+        // new quote revision through the approval gate; final terms take the
+        // dealer-approved quote's price, terms updates the latest quote's.
+        // Whatever price the caller sent for these events is ignored.
+        let price = {
+            price_quoted: body.price_quoted ?? null,
+            final_price: body.final_price ?? null,
+            product_lines: body.product_lines ?? [],
+        };
+        if (body.event_type === "final_terms" || body.event_type === "terms_update") {
+            const source = await tx.execute<{
+                price_quoted: string | null;
+                final_price: string | null;
+                product_lines: CommercialsProductLine[] | null;
+            }>(sql`
+                SELECT price_quoted::text AS price_quoted,
+                       final_price::text AS final_price,
+                       product_lines
+                  FROM dealer_lead_commercials
+                 WHERE dealer_lead_id = ${id}
+                   AND event_type IN ('quote_issue', 'quote_revision')
+                   AND withdrawn_at IS NULL
+                   ${body.event_type === "final_terms" ? sql`AND dealer_decision = 'approved'` : sql``}
+                 ORDER BY version_no DESC
+                 LIMIT 1
+            `);
+            const q = source[0];
+            price = {
+                price_quoted: q?.price_quoted != null ? Number(q.price_quoted) : null,
+                final_price: q?.final_price != null ? Number(q.final_price) : null,
+                product_lines: q?.product_lines ?? [],
+            };
+        }
+
         await tx.execute(sql`
             UPDATE dealer_lead_commercials
             SET is_current = false, updated_at = NOW()
@@ -122,17 +157,17 @@ export async function createLeadCommercial(
                 version_no: nextVersion,
                 is_current: true,
                 event_type: body.event_type,
-                price_quoted: body.price_quoted != null ? String(body.price_quoted) : null,
+                price_quoted: price.price_quoted != null ? String(price.price_quoted) : null,
                 quote_document_url: body.quote_document_url ?? null,
                 brochure_url: body.brochure_url ?? null,
                 brochure_sent_at: body.event_type === "brochure_share" ? performedAt : null,
                 credit_terms: body.credit_terms ?? null,
                 delivery_terms: body.delivery_terms ?? null,
                 warranty_terms: body.warranty_terms ?? null,
-                final_price: body.final_price != null ? String(body.final_price) : null,
+                final_price: price.final_price != null ? String(price.final_price) : null,
                 payment_method: body.payment_method ?? null,
                 deal_notes: body.deal_notes ?? null,
-                product_lines: body.product_lines ?? [],
+                product_lines: price.product_lines,
                 notes: body.notes ?? null,
                 created_by: actor.id,
                 // E-221 + E-226 — a gated quote lands 'pending' unless the OEM
@@ -260,6 +295,8 @@ export async function createLeadCommercial(
                     raisedByName: actor.name,
                 });
             }
+            // ID 75: a quote in the system is what makes it Commercials explained.
+            await advanceLeadOnQuoteEvent(id, "created", actor.id);
             return { quote_number: draft?.quote_number ?? null };
         }
         if (body.event_type === "brochure_share") {

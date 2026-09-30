@@ -1,11 +1,17 @@
-// Mark a lead Converted (BRD §0.7 / §0.13). Extracted from
-// POST /api/inside-sales/lead/[id]/mark-converted so the screen and the
-// WhatsApp Assistant convert exactly the same way.
+// Mark a lead WON (tracker ID 74, 29 Sep 2026; was "Mark Converted", BRD
+// §0.7 / §0.13). Extracted from POST /api/inside-sales/lead/[id]/mark-converted
+// so the screen and the WhatsApp Assistant do it exactly the same way — the
+// route and function keep their old names.
 //
-// Terminal Converted, settable from any status. Conversion and onboarding
-// creation commit or roll back together (BRD §0.13 Point A): a lead is never
-// left Converted without an application. Re-converting is safe — the
+// The rep's action sets Won and records the closing owner; Converted is set
+// only when the admin approves the dealer's onboarding (markLeadConvertedOnApproval),
+// and conversion credit, targets and incentives run on Converted. Won and
+// onboarding creation commit or roll back together (BRD §0.13 Point A): a lead
+// is never left Won without an application. Re-running is safe — the
 // application is created ON CONFLICT DO NOTHING, keyed on the lead.
+//
+// Won is allowed before a dealer-approved quote and FLAGGED
+// (won_without_approved_quote, E-314) — decision still open with business.
 //
 // Without `tx` it runs inside withLeadActor (the E-304 audit trigger records the
 // GSTIN edit against the actor). With `tx`, the caller must already have set
@@ -74,7 +80,7 @@ export async function markLeadConverted(
         const fromStatus = state.lead_status as LeadStatus | null;
 
         const closingRole = deriveConvertClosingRole(actor.role, state.asm_id);
-        const remarks = input.notes?.trim() || "Lead marked as Converted. Dealer onboarding initiated.";
+        const remarks = input.notes?.trim() || "Lead marked Won. Dealer onboarding initiated.";
 
         await tx.execute(sql`
             UPDATE dealer_leads SET gstin = ${input.gstin} WHERE id = ${leadId}
@@ -88,13 +94,26 @@ export async function markLeadConverted(
                 remarks,
                 statusChange: {
                     from: fromStatus,
-                    to: "Converted",
+                    to: "Won",
                     reasonNotes: input.notes ?? null,
                     closingRole,
+                    event: "mark_won",
                 },
             },
             { tx },
         );
+
+        // ID 74: flag a Won with no dealer-approved, not-withdrawn quote.
+        await tx.execute(sql`
+            UPDATE dealer_leads
+               SET won_without_approved_quote = NOT EXISTS (
+                     SELECT 1 FROM dealer_lead_commercials c
+                      WHERE c.dealer_lead_id = ${leadId}
+                        AND c.event_type IN ('quote_issue', 'quote_revision')
+                        AND c.dealer_decision = 'approved'
+                        AND c.withdrawn_at IS NULL)
+             WHERE id = ${leadId}
+        `);
 
         const { applicationId } = await createOnboardingApplicationForConvertedLead(leadId, tx);
         if (!applicationId) {
@@ -131,14 +150,14 @@ export async function markLeadConverted(
             await notifyUser(actor.id, {
                 type: "onboarding_initiated",
                 title: "Dealer onboarding initiated",
-                message: "Lead converted — a draft dealer onboarding application was created.",
+                message: "Lead marked Won — a draft dealer onboarding application was created. It becomes Converted when the onboarding is approved.",
                 leadId,
                 data: { onboarding_application_id: applicationId },
             });
             await notifyRoles(["admin", "sales_head", "partner"], {
                 type: "onboarding_initiated",
                 title: "New dealer onboarding application created",
-                message: `${actor.name} converted a lead — onboarding application created.`,
+                message: `${actor.name} marked a lead Won — onboarding application created.`,
                 leadId,
                 data: { onboarding_application_id: applicationId },
             });

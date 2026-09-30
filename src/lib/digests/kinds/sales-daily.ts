@@ -34,8 +34,10 @@
  *
  * DEFINITIONS (all from the builder; see its header for the rep columns):
  *   unique visits    distinct dealers with a visit in the period (lead_visits.asm_id)
- *   dealers called   distinct dealer_lead_id on inside_sales_call / ai_call
- *                    touchpoints performed by the SPOC in the period.
+ *   dealers called   distinct dealer_lead_id on HUMAN calls (inside_sales_call,
+ *                    a NeoDove re-disposition counted once — humanCall(),
+ *                    src/lib/reports/metricDefinitions.ts, ID 59); AI dialer
+ *                    calls are not counted. Performed by the SPOC in the period.
  *                    NeoDove (CC) calls count for the rep once an admin maps
  *                    the NeoDove agent to their CRM user (review R-03,
  *                    /leads/neodove-campaigns/agents); unmapped agents' calls
@@ -48,7 +50,8 @@
  *   new hot          leads whose rating became Hot in the period and are still
  *                    Hot (interest_changed_at, E-301), keyed on current owner
  *   hot → converted  of `converted`, those rated Hot when they closed
- *   quotes / batteries / revenue / KYC   the builder's Section O (review
+ *   quotes           the FIRST quote per lead (revisions are not counted, ID 59)
+ *   batteries / revenue / KYC   the builder's Section O (review
  *                    R-10). Batteries, revenue and KYC reach a SPOC only via
  *                    the dealer's GSTIN on a CRM lead (gstinMatch.ts).
  *
@@ -59,6 +62,7 @@
 import { sql } from "drizzle-orm";
 
 import type { SalesDashboard, SalesSpocBlock } from "@/lib/admin/salesDashboardTypes";
+import { BLOCK_A_COLUMNS, blockAHeadline, blockATableRows, buildBlockA, fmtValue } from "../salesDailyBlockA";
 import type {
   DigestDetail,
   DigestFigures,
@@ -67,58 +71,27 @@ import type {
   DigestTable,
 } from "../types";
 
+// Daily Sales email v1.1 (tracker ID 9, handover P4-6; decided 26 / 29 Sep
+// 2026). ONE management email — no personal emails to ASMs and ISRs, who see
+// their own numbers on their performance pages. Sent 09:00 IST (morning slot).
+//   Headline   one line: yesterday's outcome and what is behind target.
+//   A Company  22 rows × Yesterday · Last 7 days · MTD · MTD target · % of
+//              target · same period last month · Δ (salesDailyBlockA.ts).
+//   Right now  sales-ready leads with no owner and the oldest wait.
+//   B Field team (ASM)          per ASM, Yesterday + MTD.
+//   C Inside sales (ISR / CC)   per ISR, Yesterday + MTD.
+//   D Position at 08:00         open Hot / Warm / Cold per owner.
+//   E Today and tomorrow        scheduled visits and follow-ups per owner.
+//   F Oldest overdue            the 10 oldest overdue items, by name — no phone numbers.
 const SECTIONS: DigestSection[] = [
-  {
-    key: "summary",
-    label: "Headline",
-    hint: "Total visits yesterday, new hot leads yesterday and total open hot leads, at the top.",
-    group: "activity",
-  },
-  {
-    key: "yesterday",
-    label: "Yesterday",
-    hint: "Per SPOC: unique visits, dealers called, new visits, new hot, hot → converted, converted, quotes, batteries, revenue, KYC.",
-    group: "activity",
-  },
-  {
-    key: "mtd",
-    label: "Month to date",
-    hint: "The same columns from the 1st of the month to yesterday.",
-    group: "activity",
-  },
-  {
-    key: "last7",
-    label: "Last 7 days",
-    hint: "The same columns over the seven days ending yesterday.",
-    group: "activity",
-  },
-  {
-    key: "pipeline",
-    label: "Open pipeline",
-    hint: "Per SPOC, once: open hot / warm / cold leads as of this morning, and hot leads rated more than 7 days ago.",
-    group: "backlog",
-  },
-  {
-    key: "today",
-    label: "Scheduled today",
-    hint: "Visits each SPOC has on the calendar for today, and for tomorrow.",
-    group: "backlog",
-  },
-];
-
-const COLUMNS = [
-  "Period",
-  "Name of SPOC",
-  "Unique visit count",
-  "Count of dealers called",
-  "New visit count",
-  "New Hot",
-  "Hot → Converted",
-  "Converted",
-  "Quotes issued",
-  "Batteries to dealers",
-  "Revenue ₹",
-  "KYC submitted",
+  { key: "summary", label: "Headline", hint: "One line: yesterday's outcome and what is behind target.", group: "activity" },
+  { key: "block_a", label: "A · Company", hint: "22 metrics: yesterday, last 7 days, MTD, MTD target, % of target, same period last month, Δ.", group: "activity" },
+  { key: "right_now", label: "Right now", hint: "Sales-ready leads with no owner, and the oldest wait.", group: "backlog" },
+  { key: "block_b", label: "B · Field team (ASM)", hint: "Per ASM, yesterday and MTD.", group: "activity" },
+  { key: "block_c", label: "C · Inside sales (ISR / CC)", hint: "Per ISR, yesterday and MTD.", group: "activity" },
+  { key: "block_d", label: "D · Position at 08:00", hint: "Open Hot / Warm / Cold per owner, and Hot rated 8+ days ago.", group: "backlog" },
+  { key: "block_e", label: "E · Today and tomorrow", hint: "Scheduled visits and follow-ups due, per owner.", group: "backlog" },
+  { key: "block_f", label: "F · Oldest overdue", hint: "The 10 oldest overdue follow-ups and visits, by name.", group: "backlog" },
 ];
 
 // ─────────────────────────────── dates ──────────────────────────────────────
@@ -131,6 +104,15 @@ function addDays(iso: string, n: number): string {
 
 function firstOfMonth(iso: string): string {
   return `${iso.slice(0, 7)}-01`;
+}
+
+/** 1st of last month → the same day of last month (capped at its last day). */
+function sameSpanLastMonth(iso: string): { from: string; to: string } {
+  const d = new Date(`${iso}T00:00:00Z`);
+  const first = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() - 1, 1));
+  const lastDay = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 0)).getUTCDate();
+  const to = new Date(Date.UTC(first.getUTCFullYear(), first.getUTCMonth(), Math.min(d.getUTCDate(), lastDay)));
+  return { from: first.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10) };
 }
 
 // ─────────────────────────────── helpers ────────────────────────────────────
@@ -190,28 +172,105 @@ function pipelineRows(d: SalesDashboard): DigestTable["rows"] {
     ]);
 }
 
-/** One table row per SPOC for one period. Sorted by name so the mail is scannable. */
-function periodRows(
-  period: string,
-  d: SalesDashboard,
+/** Blocks B / C: per rep of one role, Yesterday + MTD side by side. */
+function repRows(
+  role: "asm" | "inside_sales_rep",
+  y: SalesDashboard,
+  mtd: SalesDashboard,
 ): DigestTable["rows"] {
-  return (d.per_spoc ?? [])
-    .slice()
+  const yBy = new Map((y.per_spoc ?? []).map((b) => [b.spoc_id, b]));
+  return (mtd.per_spoc ?? [])
+    .filter((b) => b.role === role)
     .sort((a, b) => (a.name ?? "").localeCompare(b.name ?? ""))
-    .map((b) => [
-      period,
-      b.name ?? "(unknown user)",
-      b.totals.unique_visits,
-      b.totals.dealers_called,
-      b.totals.new_visits,
-      b.totals.new_hot,
-      b.totals.hot_converted,
-      b.totals.converted,
-      b.outcome.quotes_issued,
-      b.outcome.batteries_to_dealers,
-      Math.round(b.outcome.revenue),
-      b.outcome.kyc_submitted,
-    ]);
+    .map((m) => {
+      const d = yBy.get(m.spoc_id);
+      return role === "asm"
+        ? [
+            m.name ?? "(unknown user)",
+            d?.totals.unique_visits ?? 0,
+            m.totals.unique_visits,
+            d?.totals.new_visits ?? 0,
+            m.totals.new_visits,
+            d?.totals.converted ?? 0,
+            m.totals.converted,
+            fmtValue(m.outcome.revenue, "money"),
+          ]
+        : [
+            m.name ?? "(unknown user)",
+            d?.totals.calls ?? 0,
+            m.totals.calls,
+            d?.totals.dealers_called ?? 0,
+            m.totals.dealers_called,
+            d?.outcome.quotes_issued ?? 0,
+            m.outcome.quotes_issued,
+            m.totals.converted,
+          ];
+    });
+}
+
+async function rightNow(): Promise<{ waiting: number; oldestDays: number | null }> {
+  try {
+    const { db } = await import("@/lib/db");
+    const [r] = (await db.execute(sql`
+      SELECT COUNT(*)::int AS waiting,
+             MAX(FLOOR(EXTRACT(EPOCH FROM (now() - (to_jsonb(dl) ->> 'sales_ready_at')::timestamptz)) / 86400))::int AS oldest
+        FROM dealer_leads dl
+       WHERE dl.current_owner_id IS NULL AND dl.is_active IS NOT FALSE
+         AND COALESCE(dl.lead_status, '') NOT IN ('Won', 'Converted', 'Lost')
+         AND (to_jsonb(dl) ->> 'sales_ready_at') IS NOT NULL
+    `)) as unknown as Array<{ waiting: number; oldest: number | null }>;
+    return { waiting: Number(r?.waiting ?? 0), oldestDays: r?.oldest ?? null };
+  } catch {
+    return { waiting: 0, oldestDays: null };
+  }
+}
+
+/** Block E: follow-ups due today / tomorrow per owner. */
+async function followUpsPerOwner(today: string, tomorrow: string): Promise<Map<string, Scheduled>> {
+  const { db } = await import("@/lib/db");
+  const rows = (await db.execute(sql`
+    SELECT dl.current_owner_id AS spoc,
+           COUNT(*) FILTER (WHERE (dl.next_follow_up_at AT TIME ZONE 'Asia/Kolkata')::date = ${today}::date)::int AS today,
+           COUNT(*) FILTER (WHERE (dl.next_follow_up_at AT TIME ZONE 'Asia/Kolkata')::date = ${tomorrow}::date)::int AS tomorrow
+      FROM dealer_leads dl
+     WHERE dl.current_owner_id IS NOT NULL
+       AND dl.is_active IS NOT FALSE
+       AND COALESCE(dl.lead_status, '') NOT IN ('Won', 'Converted', 'Lost')
+       AND (dl.next_follow_up_at AT TIME ZONE 'Asia/Kolkata')::date IN (${today}::date, ${tomorrow}::date)
+     GROUP BY dl.current_owner_id
+  `)) as unknown as Array<{ spoc: string; today: number; tomorrow: number }>;
+  return new Map(rows.map((r) => [r.spoc, { today: Number(r.today), tomorrow: Number(r.tomorrow) }]));
+}
+
+/** Block F: the 10 oldest overdue follow-ups and visits, by name — never a phone number. */
+async function oldestOverdue(): Promise<DigestTable["rows"]> {
+  const { db } = await import("@/lib/db");
+  const rows = (await db.execute(sql`
+    SELECT * FROM (
+      SELECT COALESCE(dl.dealer_name, dl.shop_name, dl.id) AS dealer, u.name AS owner,
+             'Follow-up' AS what, (dl.next_follow_up_at AT TIME ZONE 'Asia/Kolkata')::date AS due
+        FROM dealer_leads dl
+        LEFT JOIN users u ON u.id::text = dl.current_owner_id
+       WHERE dl.next_follow_up_at < now() AND dl.is_active IS NOT FALSE
+         AND COALESCE(dl.lead_status, '') NOT IN ('Won', 'Converted', 'Lost')
+      UNION ALL
+      SELECT COALESCE(dl.dealer_name, dl.shop_name, dl.id), u.name, 'Visit', v.scheduled_date
+        FROM lead_visits v
+        JOIN dealer_leads dl ON dl.id = v.dealer_lead_id
+        LEFT JOIN users u ON u.id::text = v.asm_id
+       WHERE v.scheduled_date < (now() AT TIME ZONE 'Asia/Kolkata')::date
+         AND v.visit_status IN ('scheduled', 'pending_scheduling')
+         AND COALESCE(dl.lead_status, '') NOT IN ('Won', 'Converted', 'Lost')
+    ) x
+    ORDER BY due ASC
+    LIMIT 10
+  `)) as unknown as Array<{ dealer: string; owner: string | null; what: string; due: string }>;
+  const today = new Date().toISOString().slice(0, 10);
+  return rows.map((r) => {
+    const due = String(r.due).slice(0, 10);
+    const days = Math.max(0, Math.round((Date.parse(`${today}T00:00:00Z`) - Date.parse(`${due}T00:00:00Z`)) / 86400000));
+    return [r.dealer, r.owner ?? "(no owner)", r.what, due, days];
+  });
 }
 
 // ─────────────────────────────── collect ────────────────────────────────────
@@ -221,84 +280,117 @@ async function collect(
 ): Promise<{ ok: boolean; figures: DigestFigures; error?: string }> {
   try {
     const { buildSalesDashboard } = await import("@/lib/admin/salesDashboard");
+    const { db } = await import("@/lib/db");
     const sendDay = addDays(istDay, 1);
     const dayAfter = addDays(istDay, 2);
+    const periods = {
+      yesterday: { from: istDay, to: istDay },
+      last7: { from: addDays(istDay, -6), to: istDay },
+      mtd: { from: firstOfMonth(istDay), to: istDay },
+      lastMonth: sameSpanLastMonth(istDay),
+    };
 
-    const [yesterday, mtd, last7, scheduled] = await Promise.all([
-      buildSalesDashboard({ from: istDay, to: istDay, granularity: "day" }),
-      buildSalesDashboard({ from: firstOfMonth(istDay), to: istDay, granularity: "day" }),
-      buildSalesDashboard({ from: addDays(istDay, -6), to: istDay, granularity: "day" }),
+    const [yesterday, last7, mtd, lastMonth, scheduled, followUps, now, overdue] = await Promise.all([
+      buildSalesDashboard({ ...periods.yesterday, granularity: "day" }),
+      buildSalesDashboard({ ...periods.last7, granularity: "day" }),
+      buildSalesDashboard({ ...periods.mtd, granularity: "day" }),
+      buildSalesDashboard({ ...periods.lastMonth, granularity: "day" }),
       scheduledPerSpoc(sendDay, dayAfter),
+      followUpsPerOwner(sendDay, dayAfter),
+      rightNow(),
+      oldestOverdue(),
     ]);
+    const blockA = await buildBlockA(db as never, periods, { yesterday, last7, mtd, lastMonth });
 
-    // Today's table: every SPOC with something on the calendar, named via the
-    // builder's per-rep blocks when they appear there, else by id.
+    // Names for Block E: the builder's per-rep blocks, then users for the rest.
     const names = new Map<string, string>();
-    for (const d of [yesterday, mtd, last7]) {
-      for (const b of d.per_spoc ?? []) names.set(b.spoc_id, b.name ?? b.spoc_id);
-    }
-    const missing = [...scheduled.keys()].filter((id) => !names.has(id));
+    for (const d of [yesterday, mtd]) for (const b of d.per_spoc ?? []) names.set(b.spoc_id, b.name ?? b.spoc_id);
+    const missing = [...new Set([...scheduled.keys(), ...followUps.keys()])].filter((id) => !names.has(id));
     if (missing.length) {
-      const { db } = await import("@/lib/db");
       const rows = (await db.execute(sql`
         SELECT id::text AS id, name FROM users
          WHERE id::text IN (${sql.join(missing.map((m) => sql`${m}`), sql`, `)})
       `)) as unknown as Array<{ id: string; name: string | null }>;
       for (const r of rows) names.set(r.id, r.name ?? r.id);
     }
-    const todayRows: DigestTable["rows"] = [...scheduled.entries()]
-      .filter(([, s]) => s.today > 0 || s.tomorrow > 0)
-      .map(([id, s]) => [names.get(id) ?? id, s.today, s.tomorrow])
+    const eIds = [...new Set([...scheduled.keys(), ...followUps.keys()])];
+    const todayRows: DigestTable["rows"] = eIds
+      .map((id) => {
+        const v = scheduled.get(id) ?? { today: 0, tomorrow: 0 };
+        const f = followUps.get(id) ?? { today: 0, tomorrow: 0 };
+        return [names.get(id) ?? id, v.today, f.today, v.tomorrow, f.tomorrow] as Array<string | number>;
+      })
+      .filter((r) => (r.slice(1) as number[]).some((n) => n > 0))
       .sort((a, b) => String(a[0]).localeCompare(String(b[0])));
-
-    const hotTotal = yesterday.interest.rows.find((r) => r.interest_level === "hot")?.total ?? 0;
 
     return {
       ok: true,
       figures: {
-        // The one-line headline the spec asks for. Kept as activity lines so the
-        // ledger's `counts` blob and the Excel Figures sheet carry them too.
-        activity: [
-          { key: "summary", label: "Visits yesterday", value: yesterday.totals.visits },
-          { key: "summary", label: "New hot leads yesterday", value: yesterday.totals.new_hot },
-          { key: "summary", label: "Hot leads open", value: hotTotal },
-        ],
+        activity: [],
+        headline: [blockAHeadline(blockA.rows)],
+        wide: true,
         backlog: [],
         tables: [
           {
-            key: "yesterday",
-            title: "Yesterday",
-            columns: COLUMNS,
-            rows: periodRows("Yesterday", yesterday),
-            empty: "No visits, calls or conversions yesterday.",
+            key: "block_a",
+            title: "A · Company",
+            columns: BLOCK_A_COLUMNS,
+            rows: blockATableRows(blockA.rows),
+            textColumns: 1,
+            groupHeaders: true,
+            note: blockA.targetsNote,
+            // "Right now" sits right after the table, as in the mockup.
+            footer: {
+              key: "right_now",
+              label: "Right now · 08:00",
+              items: [
+                {
+                  label: "Sales-ready, no owner",
+                  value: `${now.waiting} lead${now.waiting === 1 ? "" : "s"}`,
+                  hint: now.oldestDays != null ? `Oldest waiting ${now.oldestDays} days` : undefined,
+                },
+              ],
+            },
           },
           {
-            key: "mtd",
-            title: "Month to date",
-            columns: COLUMNS,
-            rows: periodRows("MTD", mtd),
-            empty: "Nothing recorded so far this month.",
+            key: "block_b",
+            title: "B · Field team (ASM)",
+            columns: ["ASM", "Dealers visited · Yesterday", "MTD", "New dealers visited · Yesterday", "MTD", "Converted · Yesterday", "MTD", "Revenue ₹ MTD"],
+            rows: repRows("asm", yesterday, mtd),
+            textColumns: 1,
+            empty: "No ASM activity this month.",
           },
           {
-            key: "last7",
-            title: "Last 7 days",
-            columns: COLUMNS,
-            rows: periodRows("Last 7 days", last7),
-            empty: "Nothing recorded in the last seven days.",
+            key: "block_c",
+            title: "C · Inside sales (ISR / CC)",
+            columns: ["ISR", "Calls · Yesterday", "MTD", "Dealers called · Yesterday", "MTD", "Quotes created · Yesterday", "MTD", "Converted MTD"],
+            rows: repRows("inside_sales_rep", yesterday, mtd),
+            textColumns: 1,
+            empty: "No inside-sales activity this month.",
           },
           {
-            key: "pipeline",
-            title: "Open pipeline — as of this morning",
-            columns: ["Name of SPOC", "Hot", "Warm", "Cold", "Hot, rated 8+ days ago"],
+            key: "block_d",
+            title: "D · Position at 08:00",
+            columns: ["Owner", "Hot", "Warm", "Cold", "Hot, rated 8+ days ago"],
             rows: pipelineRows(yesterday),
+            textColumns: 1,
             empty: "No open hot, warm or cold leads.",
           },
           {
-            key: "today",
-            title: "Scheduled today",
-            columns: ["Name of SPOC", "Scheduled visits today", "Scheduled visits tomorrow"],
+            key: "block_e",
+            title: "E · Today and tomorrow",
+            columns: ["Owner", "Visits today", "Follow-ups today", "Visits tomorrow", "Follow-ups tomorrow"],
             rows: todayRows,
-            empty: "No visits scheduled for today or tomorrow.",
+            textColumns: 1,
+            empty: "Nothing scheduled for today or tomorrow.",
+          },
+          {
+            key: "block_f",
+            title: "F · Oldest overdue",
+            columns: ["Dealer", "Owner", "What", "Was due", "Days overdue"],
+            rows: overdue,
+            textColumns: 4,
+            empty: "Nothing overdue.",
           },
         ],
       },
@@ -319,11 +411,11 @@ export const salesDailyDigest: DigestKindDescriptor = {
   id: "sales_daily",
   label: "Sales Daily",
   description:
-    "One mail every morning, per SPOC: what happened yesterday, month to date and over " +
-    "the last seven days — unique visits, dealers called, new visits, new hot leads, hot " +
-    "leads converted and conversions — then the open hot / warm / cold pipeline as of " +
-    "this morning, and the visits scheduled for today and tomorrow. Nothing is " +
-    "sent until recipients are added here.",
+    "Daily Sales email v1.1 — one management email at 09:00 IST: a one-line headline, " +
+    "A · Company (22 metrics with MTD target, % of target and the same period last month), " +
+    "sales-ready leads waiting for an owner, B · Field team, C · Inside sales, D · Position " +
+    "at 08:00, E · Today and tomorrow, and F · the 10 oldest overdue items. No personal " +
+    "emails to reps. Nothing is sent until recipients are added here.",
   settingsKey: "sales_daily_digest",
   settingsHref: "/admin/settings/sales-daily",
   ctaHref: "/admin/reports/sales-dashboard",

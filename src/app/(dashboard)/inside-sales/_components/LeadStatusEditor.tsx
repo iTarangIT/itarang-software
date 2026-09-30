@@ -1,43 +1,33 @@
 "use client";
 
-// Editable lead-status chip in the lead-detail header (replaces the old
-// temperature editor there). Offers EVERY other status — there is no transition
-// gate any more, so a rep can move a lead wherever the conversation went,
-// including reopening a closed one. Intermediate statuses are saved as a
-// status_change_note touchpoint so the status history stays server-side;
-// Converted / Lost / Transferred_to_ASM have dedicated flows (onboarding, lost
-// reason, ASM pick) and delegate to the parent view's existing modals via
-// onModalAction.
+// Lead-status chip in the lead-detail header. Since 29 Sep 2026 (ID 80) a rep
+// sets no status by hand: the chip only opens the dedicated flows — Mark Won
+// (GSTIN), Mark Lost (reason), Transfer to ASM — via onModalAction. Every other
+// move comes from an event (calls, quotes, visits, approvals).
+// An admin gets "Correct status": any status, a required reason, logged
+// (POST /api/admin/leads/[id]/correct-status) — the only override.
 
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Pencil } from "lucide-react";
 import { StatusChip } from "./StatusChip";
-import { TRANSITION_MAP, type LeadStatus } from "@/lib/lifecycle/transitions";
+import { LEAD_STATUS, TRANSITION_MAP, type LeadStatus } from "@/lib/lifecycle/transitions";
 
 export type StatusModalAction = "mark_converted" | "mark_lost" | "transfer_asm";
 
 const MODAL_TARGETS: Partial<Record<LeadStatus, StatusModalAction>> = {
-    Converted: "mark_converted",
+    Won: "mark_converted",
     Lost: "mark_lost",
     Transferred_to_ASM: "transfer_asm",
 };
 
-// Statuses settable directly from the header. New_Unassigned is excluded — it
-// is the pre-assignment state, and setting it on an owned lead would strand it
-// outside every queue; claim / assignment set it through their own routes.
-const DIRECT_TARGETS: LeadStatus[] = [
-    "Assigned_Not_Contacted",
-    "Under_Discussion",
-    "Commercials_Explained",
-    "Commercials_Finalised",
-    "Awaiting_Customer_Decision",
-];
 
 type Props = {
     leadId: string;
     status: string | null | undefined;
     editable: boolean;
+    /** Admin / CEO: "Correct status" with a reason (ID 80). */
+    canCorrect?: boolean;
     // Dedicated-flow modals the parent view can open (ASM has no transfer_asm).
     modalActions?: StatusModalAction[];
     onModalAction?: (action: StatusModalAction) => void;
@@ -48,6 +38,7 @@ export function LeadStatusEditor({
     leadId,
     status,
     editable,
+    canCorrect = false,
     modalActions = [],
     onModalAction,
     onUpdated,
@@ -75,37 +66,36 @@ export function LeadStatusEditor({
 
     const from = (status ?? null) as LeadStatus | null;
     const legalTargets = from ? TRANSITION_MAP[from] ?? [] : [];
-    const directOptions = legalTargets.filter((t) => DIRECT_TARGETS.includes(t));
+    // ID 80: only an admin correction sets a status directly — to any status.
+    const directOptions = canCorrect ? LEAD_STATUS.filter((t) => t !== from) : [];
     const modalOptions = legalTargets.filter((t) => {
         const action = MODAL_TARGETS[t];
         return action && modalActions.includes(action);
     });
 
-    if (!editable || (directOptions.length === 0 && modalOptions.length === 0)) {
+    const visibleModal = editable ? modalOptions : [];
+    if (!(editable || canCorrect) || (directOptions.length === 0 && visibleModal.length === 0)) {
         return <StatusChip status={from} />;
     }
 
     const saveDirect = async (to: LeadStatus) => {
+        if (reason.trim().length < 5) {
+            toast.error("Correct status needs a reason (at least 5 characters).");
+            return;
+        }
         setSaving(true);
         try {
             const res = await fetch(
-                `/api/inside-sales/lead/${encodeURIComponent(leadId)}/touchpoint`,
+                `/api/admin/leads/${encodeURIComponent(leadId)}/correct-status`,
                 {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                        touchpoint_type: "status_change_note",
-                        remarks: reason.trim() || undefined,
-                        status_change: {
-                            to,
-                            reason_notes: reason.trim() || null,
-                        },
-                    }),
+                    body: JSON.stringify({ to, reason: reason.trim() }),
                 },
             );
             const json = await res.json();
             if (!res.ok) throw new Error(json?.error?.message ?? "Failed to update status");
-            toast.success("Lead status updated");
+            toast.success("Status corrected");
             setOpen(false);
             setReason("");
             onUpdated?.();
@@ -139,14 +129,16 @@ export function LeadStatusEditor({
             {open && (
                 <div className="absolute left-0 top-7 z-50 w-64 rounded-lg border border-gray-200 bg-white p-3 shadow-lg">
                     <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-gray-500">
-                        Update lead status
+                        {canCorrect ? "Correct status (admin)" : "Close or transfer"}
                     </p>
+                    {canCorrect && (
                     <input
                         value={reason}
                         onChange={(e) => setReason(e.target.value)}
-                        placeholder="Reason (optional)"
+                        placeholder="Reason (required)"
                         className="mb-2 w-full rounded-md border border-gray-200 px-2 py-1 text-xs focus:border-gray-400 focus:outline-none"
                     />
+                    )}
                     <div className="flex flex-col gap-1">
                         {directOptions.map((t) => (
                             <button
@@ -159,7 +151,7 @@ export function LeadStatusEditor({
                                 <StatusChip status={t} size="sm" />
                             </button>
                         ))}
-                        {modalOptions.map((t) => (
+                        {visibleModal.map((t) => (
                             <button
                                 key={t}
                                 type="button"

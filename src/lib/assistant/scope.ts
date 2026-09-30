@@ -50,16 +50,17 @@ export function scopeJoin(user: ScopeUser): SQL {
 }
 
 /**
- * Leads this user may CLAIM: ISR — the global unassigned pool; ASM — unowned
- * AND inside their territory (the Territory Feed's "or unowned anywhere" is for
- * reading, not claiming). Unknown role → FALSE.
+ * Leads this user may CLAIM: any unowned, open lead — for an ISR and, since
+ * 26 Sep 2026 (tracker ID 45), for an ASM too: claims are allowed in any
+ * territory, and claimLead marks one outside the ASM's own for the Sales Head.
+ * Unknown role → FALSE.
  */
 export function claimPoolPredicate(user: ScopeUser): SQL {
     switch (user.role) {
         case "inside_sales_rep":
             return isrTab("unassigned", user.id);
         case "asm":
-            return asmTab("unclaimed", user.id);
+            return isrTab("unassigned", user.id);
         default:
             return sql`FALSE`;
     }

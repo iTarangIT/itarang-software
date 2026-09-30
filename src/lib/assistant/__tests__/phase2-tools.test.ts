@@ -218,7 +218,8 @@ describe("mark_converted", () => {
         const r = await run(ISR, "mark_converted", { lead_id: "DL-7", gstin: " 27aaacb1234c1z5 " });
         expect(r.kind).toBe("preview");
         expect(stored().plan).toEqual({ lead_id: "DL-7", gstin: "27AAACB1234C1Z5", notes: null });
-        expect(stored().preview.lines).toContainEqual({ label: "Status", value: "Under Discussion → Converted" });
+        // ID 74: the rep's action sets Won; Converted comes with onboarding approval.
+        expect(stored().preview.lines).toContainEqual({ label: "Status", value: "Under Discussion → Won" });
         expect(stored().preview.warning).toMatch(/CRM screen/);
     });
 

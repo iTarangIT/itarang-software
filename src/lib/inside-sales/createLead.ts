@@ -13,12 +13,24 @@ import { db } from "@/lib/db";
 import { dealerLeads } from "@/lib/db/schema";
 import { recordLeadCapture } from "@/lib/leads/lead-registry";
 import type { BusinessType } from "@/lib/leads/businessType";
+import { loadExistingByPhone, normalizePhone } from "@/lib/leads/dedupe";
+import { markSalesReady } from "@/lib/leads/salesReady";
+import {
+    recordLeadCreated,
+    recordReinquiry,
+    stampLeadSource,
+    type LeadDoor,
+    type LeadOrigin,
+} from "@/lib/leads/leadSource";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 export class DuplicatePhoneError extends Error {
-    constructor() {
+    /** The lead that already has this number (a Re-inquiry is logged on it). */
+    readonly existingLeadId: string | null;
+    constructor(existingLeadId: string | null = null) {
         super("A lead with this phone number already exists.");
+        this.existingLeadId = existingLeadId;
     }
 }
 
@@ -33,6 +45,12 @@ export type CreateLeadInput = {
     interestLevel?: "hot" | "warm" | "cold" | null;
     language?: string | null;
     businessType?: BusinessType | "" | null;
+    /** ID 81: how the lead entered (automatic per path). Defaults to rep_create. */
+    door?: LeadDoor;
+    /** ID 81: where the dealer came from (fixed list). */
+    origin?: LeadOrigin | null;
+    /** ID 81: acquisition campaign. */
+    campaignId?: string | null;
 };
 
 export type CreateLeadResult = {
@@ -77,7 +95,16 @@ export async function createInsideSalesLead(
 ): Promise<CreateLeadResult> {
     const exec = opts?.tx ?? db;
 
-    // Phone is UNIQUE on dealer_leads — reject duplicates with a clear error.
+    // ID 81: the SHARED duplicate check (last 10 digits, dedupe.ts) — the same
+    // one uploads and NeoDove use — so +91 / spaced numbers match too. A known
+    // dealer is a Re-inquiry on the existing lead, never a second copy.
+    const door: LeadDoor = input.door ?? "rep_create";
+    const normalised = normalizePhone(input.phone);
+    const existing = normalised ? (await loadExistingByPhone([normalised])).get(normalised) : undefined;
+    if (existing) {
+        await recordReinquiry({ leadId: existing.id, door, actorId: input.actor.id, note: input.dealerName });
+        throw new DuplicatePhoneError(existing.id);
+    }
     if (await phoneExists(exec, input.phone)) throw new DuplicatePhoneError();
 
     const id = `DL-${Date.now()}-${nanoid(8)}`;
@@ -132,6 +159,19 @@ export async function createInsideSalesLead(
             console.warn("[inside-sales/createLead] business_type not saved (E-296 applied?):", e);
         }
     }
+
+    // ID 81 / 83: source stamp, and "Lead created" with the ownership hop when
+    // the creator keeps the lead.
+    await stampLeadSource(exec, id, { door, origin: input.origin ?? null, campaignId: input.campaignId ?? null });
+    await recordLeadCreated(exec, {
+        leadId: id,
+        actorId: input.actor.id,
+        door,
+        ownerId: selfAssigns ? input.actor.id : null,
+    });
+
+    // ID 82: a lead a rep created is sales-ready from creation.
+    await markSalesReady(exec, { leadId: id, reason: "rep_created", actorId: input.actor.id });
 
     // E-179 central registry — dealer prospect captured by Inside Sales / ASM.
     const afterCommit = () =>

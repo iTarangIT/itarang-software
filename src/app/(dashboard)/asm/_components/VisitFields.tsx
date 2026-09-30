@@ -34,7 +34,7 @@ const STATUS_LABELS: Record<VisitStatus, string> = {
 
 const NEXT_ACTION_LABELS: Record<VisitNextAction, string> = {
     next_visit: "Schedule another visit",
-    convert: "Mark Converted",
+    convert: "Mark Won",
     lost: "Mark Lost",
     escalate: "Escalate",
 };
@@ -344,20 +344,18 @@ export function VisitFields({ form }: { form: UseVisitForm }) {
             {visitStatus === "visited" && lead && (
                 <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                     <div>
-                        <Label>
-                            Lead status after visit{" "}
-                            {auto.status && <span className="text-[11px] text-emerald-700">(auto)</span>}
-                        </Label>
-                        <select
-                            className="mt-1 w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm"
-                            value={statusTo}
-                            onChange={(e) => setStatusTo(e.target.value as VisitStatusTarget | "")}
-                        >
-                            <option value="">— leave as {(lead.lead_status ?? "not set").replace(/_/g, " ")} —</option>
-                            {VISIT_STATUS_TARGETS.map((s) => (
-                                <option key={s} value={s}>{s.replace(/_/g, " ")}</option>
-                            ))}
-                        </select>
+                        <Label>Lead status after visit</Label>
+                        {/* ID 80 / 75 / 77: no status picker. A done visit ends
+                            Awaiting field visit (the pre-transfer stage is
+                            restored) and is first contact otherwise;
+                            commercials stages move only with quotes. */}
+                        <p className="mt-1 rounded-md bg-gray-50 px-3 py-2 text-xs text-gray-600">
+                            {statusTo
+                                ? `Moves to ${statusTo.replace(/_/g, " ")} (or the stage it had before the transfer, if further).`
+                                : lead.lead_status === "Transferred_to_ASM"
+                                  ? "Ends Awaiting field visit — the lead goes back to its earlier stage, at least Under discussion."
+                                  : "Status is set by events: quotes move the commercials stages."}
+                        </p>
                     </div>
                     <div>
                         <Label>

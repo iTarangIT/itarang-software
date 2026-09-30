@@ -32,8 +32,9 @@ import {
   DEALER_DECISIONS,
   loadQuotationForDealer,
   recordDealerDecision,
+  staleQuoteReason,
 } from "@/lib/leads/quoteDecision";
-import { readQuoteToken } from "@/lib/leads/quoteToken";
+import { mintQuoteToken, readQuoteToken } from "@/lib/leads/quoteToken";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -55,6 +56,12 @@ const NOT_FOUND = {
  * so a token can only ever name one document. Verifying it anyway means a
  * mismatch fails closed instead of quietly answering something else.
  */
+/** ID 60: the page link for the lead's latest quote version, or null. */
+function latestUrl(latestCommercialId: string | null, latestVersionNo: number | null): string | null {
+  if (!latestCommercialId || latestVersionNo == null) return null;
+  return `/quote/${mintQuoteToken({ commercialId: latestCommercialId, versionNo: latestVersionNo })}`;
+}
+
 async function resolve(token: string) {
   const claims = readQuoteToken(token);
   if (!claims) return null;
@@ -71,6 +78,7 @@ export async function GET(
     const { token } = await ctx.params;
     const row = await resolve(token);
     if (!row) return NextResponse.json(NOT_FOUND, { status: 404 });
+    const stale = staleQuoteReason(row);
 
     return NextResponse.json({
       success: true,
@@ -85,12 +93,17 @@ export async function GET(
         open:
           row.approval_status === "approved" &&
           !!row.quote_pdf_url &&
-          !row.dealer_decision,
+          !row.dealer_decision &&
+          !stale,
         decision: row.dealer_decision,
         decided_at: row.dealer_decision_at,
         // Only meaningful when `open` is false and no decision exists — i.e.
         // iTarang withdrew the quotation after sending it.
-        withdrawn: row.approval_status !== "approved",
+        withdrawn: row.approval_status !== "approved" || stale === "withdrawn",
+        // ID 60: a later version replaced this one — the page points there.
+        replaced: stale === "replaced",
+        latest_url:
+          stale === "replaced" ? latestUrl(row.latest_commercial_id, row.latest_version_no) : null,
       },
     });
   } catch (e) {
@@ -147,6 +160,17 @@ export async function POST(
             decided_at: result.decidedAt,
           },
         });
+      case "replaced":
+        return NextResponse.json(
+          {
+            success: false,
+            error: {
+              message: `This quotation has been replaced${result.latestQuoteNumber ? ` by ${result.latestQuoteNumber}` : ""}. Please respond to the latest one.`,
+            },
+            data: { latest_url: latestUrl(result.latestCommercialId, result.latestVersionNo) },
+          },
+          { status: 409 },
+        );
       case "not_sendable":
         return NextResponse.json(
           { success: false, error: { message: result.reason } },

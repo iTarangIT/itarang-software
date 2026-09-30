@@ -3,6 +3,7 @@
 
 import type { NextRequest } from "next/server";
 import { requireRole } from "@/lib/auth-utils";
+import { ISR_POOL_TABS, claimsByNumberOnly } from "@/lib/leads/claimScope";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
 import { fetchAllTabCounts } from "@/lib/inside-sales/queryBuilder";
 import { readQueueFilters } from "@/lib/leads/queueFilters";
@@ -29,5 +30,9 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
         callbackOnly: sp.get("callback") === "1",
         filters: readQueueFilters(sp),
     });
+    // ID 45: no pool counts for reps — they claim by number search only.
+    if (claimsByNumberOnly(user.role)) {
+        for (const t of ISR_POOL_TABS) (counts as Record<string, number>)[t] = 0;
+    }
     return successResponse(counts);
 });

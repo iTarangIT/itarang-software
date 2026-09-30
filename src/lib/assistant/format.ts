@@ -41,6 +41,8 @@ export function fmtDate(v: string | Date | null | undefined): string | null {
 
 /** "Under_Discussion" → "Under Discussion"; null → "none". */
 export function statusLabel(s: string | null | undefined): string {
+    // ID 77: the transfer is shown as what it is waiting for.
+    if (s === "Transferred_to_ASM") return "Awaiting field visit";
     return s ? s.replace(/_/g, " ") : "none";
 }
 

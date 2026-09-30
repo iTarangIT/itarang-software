@@ -34,9 +34,11 @@
  * `dealer_leads.closing_owner_id` (who held it when it closed). The `spoc_id`
  * filter and the per-rep grouping use those columns respectively.
  *
- * WHAT A CALL IS. `inside_sales_call` and `ai_call` only — see the header of
- * src/lib/lifecycle/touchpointTypes.ts for why a priority-dial request is NOT
- * a call and must not inflate call volume.
+ * WHAT A CALL IS. A HUMAN call, counted once — humanCall() in
+ * src/lib/reports/metricDefinitions.ts (tracker ID 59, 26 Sep 2026): AI dialer
+ * calls are not a rep's effort, and a NeoDove re-disposition of the same call is
+ * not a second call. A priority-dial request is not a call either (see
+ * src/lib/lifecycle/touchpointTypes.ts).
  *
  * AGEING = HOW LONG THE LEAD HAS HELD ITS CURRENT RATING. Buckets are days
  * since `dealer_leads.interest_changed_at` (E-301, review R-05, metric M12),
@@ -59,6 +61,7 @@ import {
 } from "@/lib/leads/businessType";
 import { dealerLeadByGstin, GSTIN_KEY } from "@/lib/leads/gstinMatch";
 import { matchedUnion, REVENUE_NOT_VOID } from "@/lib/dashboard/revenueSource";
+import { humanCall, isFirstQuote } from "@/lib/reports/metricDefinitions";
 import {
     INTEREST_LEVELS,
     SALES_DASHBOARD_GRANULARITIES,
@@ -125,7 +128,6 @@ export function parseSalesDashboardParams(url: URL): SalesDashboardParams {
 
 // ─────────────────────────────── Fragments ──────────────────────────────────
 
-const CALL_TYPES = sql`('inside_sales_call', 'ai_call')`;
 /** A scheduled visit that has not happened yet and was not called off. */
 const OPEN_VISIT = sql`v.visit_status NOT IN ('visited', 'cancelled', 'no_show')`;
 const IST = "Asia/Kolkata";
@@ -210,7 +212,7 @@ async function querySnapshot(
             SELECT ${spocKey(sql`t.performed_by`, bySpoc)} AS spoc
               FROM lead_touchpoints t
               JOIN dealer_leads dl ON dl.id = t.dealer_lead_id
-             WHERE t.touchpoint_type IN ${CALL_TYPES}
+             WHERE ${humanCall()}
                -- coarse bound first (indexable), exact IST day second
                AND t.performed_at >= (${today}::date - 2)::timestamp
                AND (t.performed_at AT TIME ZONE ${IST})::date = ${today}::date - 1
@@ -306,7 +308,7 @@ async function querySeries(
                               (t.performed_at AT TIME ZONE ${IST})::date::timestamp)::date AS bucket
               FROM lead_touchpoints t
               JOIN dealer_leads dl ON dl.id = t.dealer_lead_id
-             WHERE t.touchpoint_type IN ${CALL_TYPES}
+             WHERE ${humanCall()}
                AND t.performed_at >= (${f.from}::date - 1)::timestamp
                AND t.performed_at <  (${f.to}::date + 2)::timestamp
                AND (t.performed_at AT TIME ZONE ${IST})::date >= ${f.from}::date
@@ -485,7 +487,7 @@ async function queryTotals(
             SELECT ${spocKey(sql`t.performed_by`, bySpoc)} AS spoc, t.dealer_lead_id
               FROM lead_touchpoints t
               JOIN dealer_leads dl ON dl.id = t.dealer_lead_id
-             WHERE t.touchpoint_type IN ${CALL_TYPES}
+             WHERE ${humanCall()}
                AND t.performed_at >= (${f.from}::date - 1)::timestamp
                AND t.performed_at <  (${f.to}::date + 2)::timestamp
                AND (t.performed_at AT TIME ZONE ${IST})::date >= ${f.from}::date
@@ -569,6 +571,7 @@ const EMPTY_TOTALS: SalesTotals = {
 type OutcomeRow = {
     spoc: string | null;
     quotes_issued: string;
+    quote_revisions: string;
     revenue: string;
     batteries_to_dealers: string;
     kyc_submitted: string;
@@ -591,7 +594,10 @@ async function queryOutcome(
     const owner = sql`dl.current_owner_id`;
     const rows = await db.execute<OutcomeRow>(sql`
         WITH quotes AS (
-            SELECT ${spocKey(sql`c.created_by`, bySpoc)} AS spoc, COUNT(*) AS n
+            -- ID 59: quotes created = the FIRST quote per lead; revisions apart.
+            SELECT ${spocKey(sql`c.created_by`, bySpoc)} AS spoc,
+                   COUNT(*) FILTER (WHERE ${isFirstQuote()}) AS n,
+                   COUNT(*) FILTER (WHERE NOT ${isFirstQuote()}) AS revisions
               FROM dealer_lead_commercials c
               JOIN dealer_leads dl ON dl.id = c.dealer_lead_id
              WHERE c.event_type IN ('quote_issue', 'quote_revision')
@@ -644,6 +650,7 @@ async function queryOutcome(
         )
         SELECT s.spoc,
                COALESCE(qu.n, 0)::text AS quotes_issued,
+               COALESCE(qu.revisions, 0)::text AS quote_revisions,
                COALESCE(rv.n, 0)::text AS revenue,
                COALESCE(ba.n, 0)::text AS batteries_to_dealers,
                COALESCE(ky.n, 0)::text AS kyc_submitted
@@ -657,6 +664,7 @@ async function queryOutcome(
     for (const r of rows as unknown as OutcomeRow[]) {
         out.set(r.spoc, {
             quotes_issued: num(r.quotes_issued),
+            quote_revisions: num(r.quote_revisions),
             revenue: round2(num(r.revenue)),
             batteries_to_dealers: num(r.batteries_to_dealers),
             kyc_submitted: num(r.kyc_submitted),
@@ -667,6 +675,7 @@ async function queryOutcome(
 
 const EMPTY_OUTCOME: SalesOutcome = {
     quotes_issued: 0,
+    quote_revisions: 0,
     revenue: 0,
     batteries_to_dealers: 0,
     kyc_submitted: 0,

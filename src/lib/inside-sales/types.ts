@@ -197,6 +197,12 @@ export type LeadDetailCommercials = {
     dealer_decision_at: string | null;
     dealer_decision_via: string | null;
     dealer_decision_note: string | null;
+    /** ID 78 (E-314): why the quote was withdrawn. */
+    withdraw_reason?: string | null;
+    /** OEM evaluation at issue (E-226); used for the price-changed flag. */
+    oem_evaluation?: { lines?: Array<{ asset_type: string; product_id: string; oem_price: number | null; price_id: string | null }> } | null;
+    /** ID 78: an open quote whose product reference price changed since it was issued. */
+    price_changed_since_issue?: boolean;
 };
 
 export type LeadDetailStatusHistory = {
@@ -223,6 +229,22 @@ export type LeadDetailBundle = {
      * transcript endpoint returns attempts across ALL campaigns regardless.
      */
     latest_campaign_id: string | null;
+    /**
+     * ID 84: the onboarding this lead started (Mark Won), as milestones on the
+     * lead — null when there is none.
+     */
+    onboarding?: LeadOnboardingMilestones | null;
+};
+
+export type LeadOnboardingMilestones = {
+    application_id: string;
+    onboarding_status: string;
+    docs_submitted_at: string | null;
+    agreement_status: string | null;
+    approved_at: string | null;
+    last_activity_at: string | null;
+    /** No onboarding activity for 14+ days and not yet approved / rejected. */
+    stalled: boolean;
 };
 
 // ───────────────────────────── action payloads ────────────────────────────

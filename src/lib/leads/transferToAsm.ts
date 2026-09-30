@@ -63,8 +63,9 @@ export async function transferLeadToAsm(input: TransferToAsmInput, opts?: { tx?:
             SELECT lead_status FROM dealer_leads WHERE id = ${input.leadId} LIMIT 1
         `);
         if (stateRows.length === 0) throw new TransferLeadNotFoundError();
-        // Lifecycle transition gate intentionally absent: a transfer to a chosen
-        // ASM is always allowed regardless of current lead_status.
+        // S3 (ID 115): a transfer only from an open stage. writeTouchpoint
+        // enforces it; the transfer event is what lets the status drop to
+        // Transferred_to_ASM from a later stage (pre_transfer_status keeps it).
         const fromStatus = stateRows[0]?.lead_status as LeadStatus | null;
 
         await tx.execute(sql`
@@ -92,7 +93,7 @@ export async function transferLeadToAsm(input: TransferToAsmInput, opts?: { tx?:
                 // E-295: the caller's assertOwner proved the actor held the lead.
                 fromOwnerId: input.actorId,
                 toOwnerId: input.asmId,
-                statusChange: { from: fromStatus, to: "Transferred_to_ASM" },
+                statusChange: { from: fromStatus, to: "Transferred_to_ASM", event: "transfer" },
             },
             { tx },
         );

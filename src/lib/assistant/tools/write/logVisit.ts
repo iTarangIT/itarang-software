@@ -4,7 +4,7 @@
 // logVisitApplier writes ALL of it in the executor's one transaction:
 //   visit row + visit touchpoint + scheduled next visit   recordVisit (the visit route's writer)
 //   interest change                                       setInterestLevel
-//   status change (commercials explained / finalised)     logLeadTouchpoint (status_change_note)
+//   status after a done visit (ends Awaiting field visit)  applyVisitStatus (ID 77)
 //
 // Status and temperature the ASM did NOT state are filled by the shared auto
 // rule (lib/leads/autoProgress.ts) and marked "(auto)" on the preview.
@@ -21,7 +21,7 @@ import { LEAD_STATUS, LOST_REASON, isHighImpactLostReason } from "@/lib/lifecycl
 import { INTEREST_LEVELS } from "@/lib/admin/salesDashboardTypes";
 import { VISIT_NEXT_ACTION, VISIT_OUTCOME } from "@/lib/asm/types";
 import { recordVisit } from "@/lib/asm/recordVisit";
-import { logLeadTouchpoint } from "@/lib/inside-sales/logTouchpoint";
+import { applyVisitStatus } from "@/lib/asm/visitStatus";
 import { markLeadLost } from "@/lib/leads/markLost";
 import { setInterestLevel } from "@/lib/leads/interestLevel";
 import { autoProgressForVisit } from "@/lib/leads/autoProgress";
@@ -351,20 +351,17 @@ export const logVisitApplier = defineApplier<LogVisitPlan>({
             );
         }
         let statusHistoryId: string | null = null;
-        if (p.status_to) {
-            const tp = await logLeadTouchpoint(
-                {
-                    leadId: p.lead_id,
-                    actorId: user.id,
-                    body: {
-                        touchpoint_type: "status_change_note",
-                        remarks: `After the visit on ${p.visit_date}: ${p.remarks}`,
-                        status_change: { to: p.status_to },
-                    },
-                },
-                { tx },
-            );
-            statusHistoryId = tp.historyId;
+        // ID 77: a DONE visit ends Awaiting field visit (restoring the
+        // pre-transfer stage when further along); otherwise the rep's choice
+        // moves the lead forward. Same writer as the visit route.
+        if (p.visit_status === "visited" && !p.lost) {
+            const r = await applyVisitStatus(tx, {
+                leadId: p.lead_id,
+                actorId: user.id,
+                requested: p.status_to ?? null,
+                remarks: `After the visit on ${p.visit_date}: ${p.remarks}`,
+            });
+            statusHistoryId = r.historyId;
         }
         if (p.lost) {
             await markLeadLost(

@@ -75,10 +75,10 @@ export function MarkConvertedModal({ open, onClose, leadId, onSuccess }: Props) 
             // or closes, so the choice step can render.
             const id = json?.data?.onboardingApplicationId;
             if (id) {
-                toast.success("Lead Converted — choose how to onboard the dealer.");
+                toast.success("Lead marked Won — choose how to onboard the dealer.");
                 setAppId(id);
             } else {
-                toast.success("Lead marked Converted.");
+                toast.success("Lead marked Won.");
                 onSuccess();
             }
         } catch (err) {
@@ -137,7 +137,7 @@ export function MarkConvertedModal({ open, onClose, leadId, onSuccess }: Props) 
         <Modal
             open={open}
             onClose={handleClose}
-            title={inChoice ? "Start dealer onboarding" : "Mark Converted"}
+            title={inChoice ? "Start dealer onboarding" : "Mark Won"}
             width="sm"
             closeOnBackdrop={!submitting && !waSending}
             footer={
@@ -164,7 +164,7 @@ export function MarkConvertedModal({ open, onClose, leadId, onSuccess }: Props) 
                             disabled={submitting || !gstinOk}
                             className="bg-emerald-600 hover:bg-emerald-700 text-white"
                         >
-                            {submitting ? "Saving…" : "Mark Converted"}
+                            {submitting ? "Saving…" : "Mark Won"}
                         </Button>
                     </>
                 )
@@ -173,7 +173,7 @@ export function MarkConvertedModal({ open, onClose, leadId, onSuccess }: Props) 
             {inChoice ? (
                 <div className="space-y-4">
                     <p className="text-sm text-gray-700">
-                        The lead is <span className="font-semibold">Converted</span> and a draft
+                        The lead is <span className="font-semibold">Won</span> and a draft
                         onboarding application is ready. Pick a channel and press
                         <span className="font-semibold"> Confirm</span> to start onboarding.
                     </p>
@@ -225,7 +225,7 @@ export function MarkConvertedModal({ open, onClose, leadId, onSuccess }: Props) 
                             <CheckCircle2 className="h-5 w-5" />
                         </div>
                         <div className="space-y-1 text-sm text-gray-700">
-                            <p>Marks the lead as <span className="font-semibold">Converted</span> (closing_owner_id = you) and initiates dealer onboarding.</p>
+                            <p>Marks the lead <span className="font-semibold">Won</span> (you are recorded as the closing owner) and starts dealer onboarding. It becomes <span className="font-semibold">Converted</span> when the onboarding is approved.</p>
                             <p className="text-xs text-gray-500">
                                 A draft dealer onboarding application is created automatically and linked to this lead. If it cannot be created, the conversion is rolled back.
                             </p>

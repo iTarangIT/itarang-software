@@ -83,7 +83,7 @@ export async function POST(_req: NextRequest, context: RouteContext) {
       method: "GET",
       headers: {
         Authorization: basicAuthHeader(clientId, clientSecret),
-        Accept: "application/pdf",
+        Accept: "*/*",
       },
       cache: "no-store",
     });

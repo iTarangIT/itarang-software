@@ -7,6 +7,8 @@ type Props = {
     active: QueueTab;
     counts: QueueCounts | null;
     onChange: (tab: QueueTab) => void;
+    /** Tabs not offered to this viewer (the unowned pool for reps, ID 45). */
+    hidden?: readonly QueueTab[];
 };
 
 const ICONS: Record<QueueTab, React.ComponentType<{ className?: string }>> = {
@@ -17,10 +19,10 @@ const ICONS: Record<QueueTab, React.ComponentType<{ className?: string }>> = {
     my_closed: CheckCheck,
 };
 
-export function QueueTabs({ active, counts, onChange }: Props) {
+export function QueueTabs({ active, counts, onChange, hidden = [] }: Props) {
     return (
         <div className="border-b border-gray-100 flex overflow-x-auto">
-            {QUEUE_TABS.map((tab) => {
+            {QUEUE_TABS.filter((t) => !hidden.includes(t)).map((tab) => {
                 const Icon = ICONS[tab];
                 const isActive = tab === active;
                 const count = counts?.[tab];

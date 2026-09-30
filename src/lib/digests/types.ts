@@ -102,6 +102,20 @@ export type DigestTable = {
   rows: Array<Array<string | number>>;
   /** Shown in place of the grid when `rows` is empty. */
   empty?: string;
+  /** How many leading columns are text (left-aligned). Default 2. */
+  textColumns?: number;
+  /**
+   * A row whose cells after the first are all empty is a GROUP HEADER
+   * ("INTAKE", "EFFORT" ...): rendered spanning the table.
+   */
+  groupHeaders?: boolean;
+  /** One muted line under the title (e.g. how targets are pro-rated). */
+  note?: string;
+  /**
+   * A shaded box right AFTER the grid (Sales Daily "Right now"). Governed by
+   * its own section key, so it can be switched off without hiding the table.
+   */
+  footer?: { key: string; label: string; items: Array<{ label: string; value: string; hint?: string }> };
 };
 
 /** What a kind reports for one IST day. */
@@ -110,6 +124,13 @@ export type DigestFigures = {
   backlog: BacklogLine[];
   /** Optional grid blocks, rendered after the activity lines. Absent = none. */
   tables?: DigestTable[];
+  /**
+   * Optional sentences shown in a shaded box at the top (Sales Daily v1.1
+   * headline). Governed by the section key "summary".
+   */
+  headline?: string[];
+  /** Render the mail wide (880 px) for many-column tables. */
+  wide?: boolean;
 };
 
 /** A section the admin can tick off on the settings screen. */

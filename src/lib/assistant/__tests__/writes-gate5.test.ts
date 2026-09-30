@@ -19,6 +19,8 @@ vi.mock("@/lib/leads/interestLevel", () => ({ setInterestLevel }));
 const recordVisit = vi.fn<(...a: unknown[]) => Promise<unknown>>(async () => ({ visitId: "v-1", scheduledVisitId: "v-2" }));
 const scheduleVisit = vi.fn();
 vi.mock("@/lib/asm/recordVisit", () => ({ recordVisit, scheduleVisit }));
+const applyVisitStatus = vi.fn<(...a: unknown[]) => Promise<unknown>>(async () => ({ historyId: "h-1", status: "Under_Discussion" }));
+vi.mock("@/lib/asm/visitStatus", () => ({ applyVisitStatus }));
 const claimLead = vi.fn<(...a: unknown[]) => Promise<unknown>>(async () => ({ ok: true }));
 vi.mock("@/lib/inside-sales/claimLead", () => ({ claimLead }));
 
@@ -96,12 +98,10 @@ describe("log_visit proposals (UC-01)", () => {
         expect(stored().preview.lines[0]).toEqual({ label: "Visit", value: "visited · productive (Wed 23 Sep)" });
     });
 
-    it("§9.3 row 7: commercials progressed asks which, then proposes the status on its own touchpoint", async () => {
+    it("§9.3 row 7 (ID 75): commercials progressed never sets a commercials stage", async () => {
         const base = { ...UC01, outcome: "commercials_progressed", interest: undefined };
-        expect((await run(ASM, "log_visit", base)).kind).toBe("question");
-        await run(ASM, "log_visit", { ...base, status: "Commercials_Finalised" });
-        expect(stored().plan).toMatchObject({ status_to: "Commercials_Finalised", lost: null });
-        expect(stored().preview.lines).toContainEqual({ label: "Status", value: "Under Discussion → Commercials Finalised" });
+        expect((await run(ASM, "log_visit", base)).kind).toBe("preview");
+        expect((await run(ASM, "log_visit", { ...base, status: "Commercials_Finalised" })).kind).toBe("question");
     });
 
     it("§9.3 row 8: dealer uninterested → Lost with the reason; notes are the remarks", async () => {
@@ -178,7 +178,7 @@ describe("mark_lost proposals", () => {
     it("from → Lost with the reason; a status change resets the idle clock", async () => {
         const r = await run(ISR, "mark_lost", { lead_id: "DL-1042", lost_reason: "not_interested", notes: "bought elsewhere" });
         expect(r.kind).toBe("preview");
-        expect(stored().plan).toEqual({ lead_id: "DL-1042", reason: "not_interested", notes: "bought elsewhere" });
+        expect(stored().plan).toEqual({ lead_id: "DL-1042", reason: "not_interested", notes: "bought elsewhere", competitor_name: null });
         expect(stored().preview).toMatchObject({ title: "Mark Lost — ABC Traders", resets_idle_clock: true, needs_second_confirm: false, warning: null });
         expect(stored().preview.lines).toEqual([
             { label: "Status", value: "Under Discussion → Lost (not interested)" },
@@ -237,12 +237,11 @@ describe("claim_lead proposals (UC-05)", () => {
         expect(q).toMatch(/ILIKE/);
     });
 
-    it("an ASM's pool is in-territory only; the preview makes them the field ASM", async () => {
+    it("an ASM may claim in any territory (ID 45); the preview makes them the field ASM", async () => {
         poolRows.push(poolLead({ lead_status: null }));
         await run(ASM, "claim_lead", { lead_id: "DL-7" });
         const q = sqlText(execute.mock.calls[0]![0]);
-        expect(q).toContain("asm_territories");
-        expect(q).not.toMatch(/OR dl\.current_owner_id IS NULL/); // the Territory Feed's read-only widening
+        expect(q).toContain("dl.current_owner_id IS NULL");
         expect(stored().preview.lines).toContainEqual({ label: "Status", value: "New Unassigned → Assigned Not Contacted" });
         expect(stored().preview.lines).toContainEqual({ label: "Field ASM", value: "you (visits go to your Today's Schedule)" });
     });
@@ -257,11 +256,11 @@ describe("claim_lead proposals (UC-05)", () => {
         expect(createPending).not.toHaveBeenCalled();
     });
 
-    it("an id outside the pool: out of scope = not_found; in scope = the reason (ASM: territory)", async () => {
+    it("an id outside the pool: out of scope = not_found; in scope = the reason (no territory block, ID 45)", async () => {
         findLeadInScope.mockResolvedValue(null);
         expect(await run(ASM, "claim_lead", { lead_id: "DL-9" })).toEqual({ kind: "not_found" });
         findLeadInScope.mockResolvedValue(lead({ current_owner_id: null, owned: false }));
-        expect(await run(ASM, "claim_lead", { lead_id: "DL-9" })).toMatchObject({ kind: "declined", reason: expect.stringMatching(/outside your territory/) });
+        expect(await run(ASM, "claim_lead", { lead_id: "DL-9" })).toMatchObject({ kind: "declined", reason: "This lead can't be claimed." });
         findLeadInScope.mockResolvedValue(lead({ current_owner_id: "isr-2", owned: false }));
         expect(await run(ISR, "claim_lead", { lead_id: "DL-9" })).toMatchObject({ kind: "declined", reason: expect.stringMatching(/already has an owner/) });
         findLeadInScope.mockResolvedValue(lead({ current_owner_id: "isr-1", owned: true }));
@@ -306,15 +305,14 @@ describe("gate 5 appliers (run inside the executor's transaction)", () => {
         expect(setInterestLevel).toHaveBeenCalledWith(expect.objectContaining({ leadId: "DL-1042", level: "hot" }), { tx: TX });
         expect(logLeadTouchpoint).not.toHaveBeenCalled();
         expect(markLeadLost).not.toHaveBeenCalled();
-        expect(after).toEqual({ visit_id: "v-1", scheduled_visit_id: "v-2", status_history_id: null });
+        // ID 77: a done visit always runs the visit-status writer (it ends Awaiting field visit).
+        expect(applyVisitStatus).toHaveBeenCalledWith(TX, expect.objectContaining({ leadId: "DL-1042", requested: null }));
+        expect(after).toEqual({ visit_id: "v-1", scheduled_visit_id: "v-2", status_history_id: "h-1" });
     });
 
     it("status change and Lost go on the same tx, AFTER the visit; high-impact only at step 2", async () => {
-        await apply("log_visit", ASM, { ...visitPlan, interest: null, status_to: "Commercials_Explained" });
-        expect(logLeadTouchpoint).toHaveBeenCalledWith(
-            expect.objectContaining({ body: expect.objectContaining({ touchpoint_type: "status_change_note", status_change: { to: "Commercials_Explained" } }) }),
-            { tx: TX },
-        );
+        await apply("log_visit", ASM, { ...visitPlan, interest: null, status_to: "Under_Discussion" });
+        expect(applyVisitStatus).toHaveBeenCalledWith(TX, expect.objectContaining({ requested: "Under_Discussion" }));
         vi.clearAllMocks();
         const lost = { ...visitPlan, next_action: "lost", next_visit_date: null, lost: { reason: "not_interested", notes: "x" } };
         await apply("log_visit", ASM, lost);
@@ -335,7 +333,7 @@ describe("gate 5 appliers (run inside the executor's transaction)", () => {
         expect(APPLIERS.mark_lost.secondConfirmWarning(APPLIERS.mark_lost.schema.parse(plan))).toMatch(/Tap Confirm again/);
         await apply("mark_lost", ISR, plan, 2);
         expect(markLeadLost).toHaveBeenCalledWith(
-            { leadId: "DL-1042", actor: { id: "isr-1", role: "inside_sales_rep" }, reason: "duplicate_lead", notes: null, confirmedHighImpact: true },
+            { leadId: "DL-1042", actor: { id: "isr-1", role: "inside_sales_rep" }, reason: "duplicate_lead", notes: null, competitorName: null, confirmedHighImpact: true },
             { tx: TX },
         );
         expect(() => APPLIERS.mark_lost.schema.parse({ ...plan, reason: "onboarding_dropout" })).toThrow();
@@ -344,7 +342,7 @@ describe("gate 5 appliers (run inside the executor's transaction)", () => {
     it("claim_lead: pool re-check on the locked row (tx), then claimLead on the tx with the role", async () => {
         expect(APPLIERS.claim_lead.ownership).toBe("claim");
         expect(await APPLIERS.claim_lead.assertClaimable(TX as never, "DL-7", ASM)).toBe(true);
-        expect(sqlText((txExecute.mock.calls as unknown as [SQL][])[0]![0])).toContain("asm_territories");
+        expect(sqlText((txExecute.mock.calls as unknown as [SQL][])[0]![0])).toContain("dl.current_owner_id IS NULL");
         txExecute.mockResolvedValueOnce([]);
         expect(await APPLIERS.claim_lead.assertClaimable(TX as never, "DL-7", ASM)).toBe(false);
 

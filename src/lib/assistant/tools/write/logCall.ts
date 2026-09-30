@@ -55,7 +55,14 @@ export const LogCallPlan = z.object({
     remarks: z.string().nullable(),
     /** A non-Lost status change, recorded on the call touchpoint. */
     status_to: z.enum(LEAD_STATUS).nullable(),
-    lost: z.object({ reason: z.enum(LOST_REASON), notes: z.string().nullable() }).nullable(),
+    lost: z
+        .object({
+            reason: z.enum(LOST_REASON),
+            notes: z.string().nullable(),
+            /** ID 76: required for lost_to_competition. Optional so older pending plans still parse. */
+            competitor_name: z.string().nullable().optional(),
+        })
+        .nullable(),
     /** UTC ISO instant. */
     follow_up_at: z.string().nullable(),
     interest: z.enum(INTEREST_LEVELS).nullable(),
@@ -99,6 +106,7 @@ export const logCall: ToolFactory = () =>
                 bucket: Bucket.optional(),
                 status: StatusChoiceEnum.optional(),
                 lost_reason: LostReasonEnum.optional(),
+                competitor_name: z.string().trim().max(200).optional(),
                 follow_up_at: IsoDateTime.optional(),
                 interest: Interest.optional(),
                 duration_minutes: z.number().int().min(0).max(600).optional(),
@@ -133,7 +141,11 @@ export const logCall: ToolFactory = () =>
                 if (!check.ok) return ask(check.question);
                 disposition = { connect_status: input.connect_status!, label: input.disposition!, bucket: input.bucket ?? null };
                 if (check.status === "Lost") {
-                    lost = { reason: check.lostReason!, notes: remarks };
+                    const competitor = input.competitor_name?.trim() || null;
+                    if (check.lostReason === "lost_to_competition" && !competitor) {
+                        return ask("Which competitor did the dealer go with?");
+                    }
+                    lost = { reason: check.lostReason!, notes: remarks, competitor_name: competitor };
                 } else if (check.status !== NO_CHANGE && check.status !== lead.lead_status) {
                     statusTo = check.status;
                 }
@@ -276,6 +288,7 @@ export const logCallApplier = defineApplier<LogCallPlan>({
                     actor: { id: user.id, role: user.role },
                     reason: p.lost.reason,
                     notes: p.lost.notes,
+                    competitorName: p.lost.competitor_name ?? null,
                     // Only a step-2 action carries the second Confirm.
                     confirmedHighImpact: step === 2,
                 },

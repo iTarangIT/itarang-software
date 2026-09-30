@@ -29,6 +29,7 @@ import { pushLead } from "@/lib/neodove/client";
 import { dealerLeadToNeodove, type PushableLead } from "@/lib/neodove/mapper";
 import { NEODOVE_ADMIN_ROLES } from "@/lib/neodove/roles";
 import {
+    ASSIGN_ON_PUSH,
     assignAfterPush,
     logAssignmentSummary,
     resolveNeodoveAssignee,
@@ -262,7 +263,7 @@ async function drainCampaign(
     // other request; and keeping `results` a boolean[] preserves the
     // filter(Boolean) accumulators, which would silently count every element as
     // pushed if the elements became objects.
-    if (assign.target) {
+    if (ASSIGN_ON_PUSH && assign.target) {
         let assigned = 0;
         let assignFailed = 0;
         for (const leadId of assign.leadIds) {

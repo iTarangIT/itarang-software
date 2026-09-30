@@ -39,6 +39,9 @@ interface QuoteContext {
   decision: "approved" | "declined" | null;
   decided_at: string | null;
   withdrawn: boolean;
+  /** ID 60: a later version replaced this one. */
+  replaced?: boolean;
+  latest_url?: string | null;
 }
 
 type Phase = "loading" | "ready" | "submitting" | "done" | "unavailable";
@@ -146,14 +149,26 @@ export default function QuoteResponsePage() {
         {phase === "unavailable" && (
           <div className="rounded-2xl border border-slate-200 bg-white p-6 text-center">
             <p className="text-sm font-semibold text-slate-900">
-              This quotation isn&apos;t open for a response
+              {ctx?.replaced
+                ? "This quotation has been replaced"
+                : "This quotation isn’t open for a response"}
             </p>
             <p className="mt-1.5 text-xs text-slate-500">
               {error ??
-                (ctx?.withdrawn
-                  ? "It has been withdrawn or revised. Your iTarang contact can send you the current one."
-                  : "Please contact your iTarang representative.")}
+                (ctx?.replaced
+                  ? "A newer version was sent to you. Please review and respond to the latest one."
+                  : ctx?.withdrawn
+                    ? "It has been withdrawn or revised. Your iTarang contact can send you the current one."
+                    : "Please contact your iTarang representative.")}
             </p>
+            {ctx?.replaced && ctx.latest_url && (
+              <a
+                href={ctx.latest_url}
+                className="mt-4 inline-block rounded-xl bg-blue-600 px-5 py-3 text-sm font-bold text-white active:bg-blue-700"
+              >
+                Open the latest quotation
+              </a>
+            )}
           </div>
         )}
 
