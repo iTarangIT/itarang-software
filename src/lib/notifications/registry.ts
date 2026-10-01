@@ -162,6 +162,7 @@ export const TYPE_LABELS: Record<string, string> = {
   "lead.discarded": "Lead discarded",
   "lead.closed": "Lead closed",
   "lead.qualified": "Lead qualified",
+  "lead.system_correction": "System correction to your leads' stages",
 
   // --- Dealer onboarding ---
   "onboarding.chat_started": "Dealer started the WhatsApp onboarding chat",

@@ -42,7 +42,10 @@ export async function runDealerAgreementRefreshSweep(): Promise<AgreementSweepRe
         // Least recently checked first (tracker ID 53): every successful
         // refresh stamps updated_at, so a batch that cannot cover the whole
         // backlog rotates through it instead of re-asking about the newest
-        // 100 forever. Ties (never refreshed) go oldest first.
+        // 100 forever. A FAILED attempt stamps it too (markAttempted), so
+        // permanently failing rows move to the back instead of pinning the
+        // front of the queue and starving everyone else. Ties (never
+        // refreshed) go oldest first.
         .orderBy(
             sql`${dealerOnboardingApplications.updated_at} ASC NULLS FIRST`,
             asc(dealerOnboardingApplications.created_at),
@@ -57,7 +60,10 @@ export async function runDealerAgreementRefreshSweep(): Promise<AgreementSweepRe
             const r = await refreshDealerAgreementFromDigio(app, { source: "auto" });
             if (!r.ok) {
                 // 429 = refreshed moments ago by the page poll; not a failure.
-                if (r.status !== 429) result.failed++;
+                if (r.status !== 429) {
+                    result.failed++;
+                    await markAttempted(app.id);
+                }
                 continue;
             }
             const [after] = await db
@@ -71,7 +77,29 @@ export async function runDealerAgreementRefreshSweep(): Promise<AgreementSweepRe
                 `[agreement-sweep] ${app.id} refresh failed:`,
                 err instanceof Error ? err.message : err,
             );
+            await markAttempted(app.id);
         }
     }
     return result;
+}
+
+/**
+ * Tracker ID 53: a failed refresh never stamps updated_at itself, so without
+ * this a row Digio keeps rejecting stays at the head of the oldest-first queue
+ * and >100 of them would starve every other open agreement. There is no
+ * last-checked column, so updated_at doubles as the attempt marker. Best
+ * effort: a failure here must not abort the rest of the sweep.
+ */
+async function markAttempted(id: string): Promise<void> {
+    try {
+        await db
+            .update(dealerOnboardingApplications)
+            .set({ updated_at: new Date() })
+            .where(eq(dealerOnboardingApplications.id, id));
+    } catch (err) {
+        console.error(
+            `[agreement-sweep] ${id} could not record the failed attempt:`,
+            err instanceof Error ? err.message : err,
+        );
+    }
 }

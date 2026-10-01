@@ -80,7 +80,10 @@ export type QueueResponse = {
     tab: QueueTab;
 };
 
-export type QueueCounts = Record<QueueTab, number>;
+export type QueueCounts = Record<QueueTab, number> & {
+    /** ID 75.4: the rep's own "Finalised, not Won" leads on My open (chip badge). */
+    finalised_not_won?: number;
+};
 
 // Lead Detail bundle returned by GET /api/inside-sales/lead/[id].
 // Shape kept flat-ish so each pane component reads one branch.

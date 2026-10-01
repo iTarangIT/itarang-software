@@ -1,0 +1,4376 @@
+openapi: 3.1.0
+info:
+  title: Ecofy Lead Workspace API
+  version: 1.0.1
+  description: Contract for ecofy.itarang.com (see README for the current BRD). All paths are under /api/v1. x-roles lists the only roles allowed;
+    case visibility rules apply to every call. Amount fields a role may not see are omitted, never null.
+servers:
+- url: https://ecofy.itarang.com/api/v1
+- url: https://ecofy-sandbox.itarang.com/api/v1
+security:
+- session: []
+paths:
+  /auth/session:
+    post:
+      tags:
+      - M01 Access
+      summary: Register the Supabase session; checks the device
+      x-roles: &id001
+      - ECOFY_ADMIN
+      - ECOFY_USER
+      - ITARANG_ADMIN
+      - ITARANG_CALLER
+      operationId: post_auth_session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SessionRegister'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/SessionState'
+                additionalProperties: false
+                required:
+                - data
+        default: &id002
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /auth/device/verify:
+    post:
+      tags:
+      - M01 Access
+      summary: Verify the emailed device OTP; trusts the device
+      x-roles: *id001
+      operationId: post_auth_device_verify
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeviceVerify'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/SessionState'
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+  /auth/device/resend:
+    post:
+      tags:
+      - M01 Access
+      summary: Resend the device OTP
+      x-roles: *id001
+      operationId: post_auth_device_resend
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/SessionState'
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+  /auth/logout:
+    post:
+      tags:
+      - M01 Access
+      summary: End the session
+      x-roles: *id001
+      operationId: post_auth_logout
+      responses:
+        '200':
+          description: OK
+        default: *id002
+  /me:
+    get:
+      tags:
+      - M01 Access
+      summary: Current user and permissions
+      x-roles: *id001
+      operationId: get_me
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Me'
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+  /users:
+    get:
+      tags:
+      - M01 Access
+      summary: 'List users (EA: Ecofy only)'
+      x-roles: &id003
+      - ECOFY_ADMIN
+      - ITARANG_ADMIN
+      operationId: get_users
+      parameters:
+      - &id007
+        name: cursor
+        in: query
+        schema: &id006
+          type: string
+      - &id008
+        name: limit
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 100
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/User'
+                  meta:
+                    $ref: '#/components/schemas/Page'
+                additionalProperties: false
+                required:
+                - data
+                - meta
+        default: *id002
+    post:
+      tags:
+      - M01 Access
+      summary: Invite a user (seat check)
+      x-roles: *id003
+      operationId: post_users
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserInvite'
+      responses:
+        '201':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/User'
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+  /users/{userId}:
+    patch:
+      tags:
+      - M01 Access
+      summary: Rename, deactivate, reactivate
+      x-roles: *id003
+      operationId: patch_users_userId
+      parameters:
+      - name: userId
+        in: path
+        required: true
+        schema: &id004
+          type: string
+          format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserPatch'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/User'
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+  /users/{userId}/reset-password:
+    post:
+      tags:
+      - M01 Access
+      summary: Send a reset link
+      x-roles: *id003
+      operationId: post_users_userId_reset_password
+      parameters:
+      - name: userId
+        in: path
+        required: true
+        schema: *id004
+      responses:
+        '200':
+          description: OK
+        default: *id002
+  /users/{userId}/revoke-devices:
+    post:
+      tags:
+      - M01 Access
+      summary: Revoke all trusted devices of a user
+      x-roles: &id005
+      - ITARANG_ADMIN
+      operationId: post_users_userId_revoke_devices
+      parameters:
+      - name: userId
+        in: path
+        required: true
+        schema: *id004
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Reason'
+      responses:
+        '200':
+          description: OK
+        default: *id002
+  /seats:
+    get:
+      tags:
+      - M01 Access
+      summary: Seat limits and usage
+      x-roles: *id005
+      operationId: get_seats
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        role:
+                          $ref: '#/components/schemas/Role'
+                        seatLimit:
+                          type: integer
+                        seatsUsed:
+                          type: integer
+                      additionalProperties: false
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+  /seats/{role}:
+    patch:
+      tags:
+      - M01 Access
+      summary: Change a seat cap
+      x-roles: *id005
+      operationId: patch_seats_role
+      parameters:
+      - name: role
+        in: path
+        required: true
+        schema: *id006
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SeatLimitPatch'
+      responses:
+        '200':
+          description: OK
+        default: *id002
+  /settings:
+    get:
+      tags:
+      - M02 Settings
+      summary: All settings
+      x-roles: *id003
+      operationId: get_settings
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+  /settings/{key}:
+    patch:
+      tags:
+      - M02 Settings
+      summary: Change a setting (logged)
+      x-roles: *id005
+      operationId: patch_settings_key
+      parameters:
+      - name: key
+        in: path
+        required: true
+        schema: *id006
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SettingPatch'
+      responses:
+        '200':
+          description: OK
+        default: *id002
+  /lists/{listCode}/items:
+    get:
+      tags:
+      - M02 Settings
+      summary: List items
+      x-roles: *id001
+      operationId: get_lists_listCode_items
+      parameters:
+      - name: listCode
+        in: path
+        required: true
+        schema: *id006
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+    post:
+      tags:
+      - M02 Settings
+      summary: Add a list item
+      x-roles: *id005
+      operationId: post_lists_listCode_items
+      parameters:
+      - name: listCode
+        in: path
+        required: true
+        schema: *id006
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ListItemCreate'
+      responses:
+        '201':
+          description: OK
+        default: *id002
+  /lists/{listCode}/items/{itemId}:
+    patch:
+      tags:
+      - M02 Settings
+      summary: Rename, reorder, deactivate
+      x-roles: *id005
+      operationId: patch_lists_listCode_items_itemId
+      parameters:
+      - name: listCode
+        in: path
+        required: true
+        schema: *id006
+      - name: itemId
+        in: path
+        required: true
+        schema: *id004
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ListItemPatch'
+      responses:
+        '200':
+          description: OK
+        default: *id002
+  /calendar:
+    get:
+      tags:
+      - M02 Settings
+      summary: Working hours and holidays
+      x-roles: *id003
+      operationId: get_calendar
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/CalendarPut'
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+    put:
+      tags:
+      - M02 Settings
+      summary: Replace working hours and holidays
+      x-roles: *id005
+      operationId: put_calendar
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CalendarPut'
+      responses:
+        '200':
+          description: OK
+        default: *id002
+  /epc-partners:
+    get:
+      tags:
+      - M02 Settings
+      summary: EPC partners
+      x-roles: *id001
+      operationId: get_epc_partners
+      parameters:
+      - *id007
+      - *id008
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/EpcPartner'
+                  meta:
+                    $ref: '#/components/schemas/Page'
+                additionalProperties: false
+                required:
+                - data
+                - meta
+        default: *id002
+    post:
+      tags:
+      - M02 Settings
+      summary: Add an EPC partner
+      x-roles: *id005
+      operationId: post_epc_partners
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EpcPartner'
+      responses:
+        '201':
+          description: OK
+        default: *id002
+  /epc-partners/{partnerId}:
+    patch:
+      tags:
+      - M02 Settings
+      summary: Edit an EPC partner
+      x-roles: *id005
+      operationId: patch_epc_partners_partnerId
+      parameters:
+      - name: partnerId
+        in: path
+        required: true
+        schema: *id004
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EpcPartner'
+      responses:
+        '200':
+          description: OK
+        default: *id002
+  /financiers:
+    get:
+      tags:
+      - M02 Settings
+      summary: Financiers
+      x-roles: *id003
+      operationId: get_financiers
+      parameters:
+      - *id007
+      - *id008
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Financier'
+                  meta:
+                    $ref: '#/components/schemas/Page'
+                additionalProperties: false
+                required:
+                - data
+                - meta
+        default: *id002
+    post:
+      tags:
+      - M02 Settings
+      summary: Add a financier
+      x-roles: *id005
+      operationId: post_financiers
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Financier'
+      responses:
+        '201':
+          description: OK
+        default: *id002
+  /financiers/{financierId}:
+    patch:
+      tags:
+      - M02 Settings
+      summary: Edit a financier
+      x-roles: *id005
+      operationId: patch_financiers_financierId
+      parameters:
+      - name: financierId
+        in: path
+        required: true
+        schema: *id004
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Financier'
+      responses:
+        '200':
+          description: OK
+        default: *id002
+  /imports/template:
+    get:
+      tags:
+      - M03 Intake
+      summary: Download lead upload template v0.3
+      x-roles: *id003
+      operationId: get_imports_template
+      responses:
+        '200':
+          description: OK
+        default: *id002
+  /imports:
+    post:
+      tags:
+      - M03 Intake
+      summary: Start an import (presigned upload URL)
+      x-roles: *id003
+      operationId: post_imports
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ImportStart'
+      responses:
+        '201':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/UploadTicket'
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+  /imports/{importId}/mapping:
+    post:
+      tags:
+      - M03 Intake
+      summary: Save the column mapping
+      x-roles: *id003
+      operationId: post_imports_importId_mapping
+      parameters:
+      - name: importId
+        in: path
+        required: true
+        schema: *id004
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ImportMapping'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Import'
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+  /imports/{importId}/validate:
+    post:
+      tags:
+      - M03 Intake
+      summary: Dry run with counts and row errors
+      x-roles: *id003
+      operationId: post_imports_importId_validate
+      parameters:
+      - name: importId
+        in: path
+        required: true
+        schema: *id004
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/ImportPreview'
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+  /imports/{importId}/commit:
+    post:
+      tags:
+      - M03 Intake
+      summary: Commit with consent confirmation
+      x-roles: *id003
+      operationId: post_imports_importId_commit
+      parameters:
+      - name: importId
+        in: path
+        required: true
+        schema: *id004
+      - &id009
+        name: Idempotency-Key
+        in: header
+        required: true
+        schema:
+          type: string
+          minLength: 8
+          maxLength: 100
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ImportCommit'
+      responses:
+        '202':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Import'
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+  /imports/{importId}:
+    get:
+      tags:
+      - M03 Intake
+      summary: Import status
+      x-roles: *id003
+      operationId: get_imports_importId
+      parameters:
+      - name: importId
+        in: path
+        required: true
+        schema: *id004
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Import'
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+  /imports/{importId}/report.csv:
+    get:
+      tags:
+      - M03 Intake
+      summary: Row-level report (CSV)
+      x-roles: *id003
+      operationId: get_imports_importId_report_csv
+      parameters:
+      - name: importId
+        in: path
+        required: true
+        schema: *id004
+      responses:
+        '200':
+          description: OK
+        default: *id002
+  /cases:
+    post:
+      tags:
+      - M03 Intake
+      summary: Create a single lead
+      x-roles:
+      - ECOFY_USER
+      - ECOFY_ADMIN
+      - ITARANG_ADMIN
+      operationId: post_cases
+      parameters:
+      - *id009
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CaseCreate'
+      responses:
+        '201':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Case'
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+    get:
+      tags:
+      - M04 Qualification
+      summary: List cases (scoped)
+      x-roles: *id001
+      operationId: get_cases
+      parameters:
+      - *id007
+      - *id008
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Case'
+                  meta:
+                    $ref: '#/components/schemas/Page'
+                additionalProperties: false
+                required:
+                - data
+                - meta
+        default: *id002
+  /cases/{caseId}:
+    get:
+      tags:
+      - M04 Qualification
+      summary: Case detail (scoped)
+      x-roles: *id001
+      operationId: get_cases_caseId
+      parameters:
+      - name: caseId
+        in: path
+        required: true
+        schema: *id004
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Case'
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+  /cases/{caseId}/timeline:
+    get:
+      tags:
+      - M18 Audit
+      summary: Stage history, activities, documents, decisions
+      x-roles: *id001
+      operationId: get_cases_caseId_timeline
+      parameters:
+      - name: caseId
+        in: path
+        required: true
+        schema: *id004
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+  /cases/{caseId}/assign:
+    post:
+      tags:
+      - M04 Qualification
+      summary: Assign or reassign
+      x-roles: *id003
+      operationId: post_cases_caseId_assign
+      parameters:
+      - name: caseId
+        in: path
+        required: true
+        schema: *id004
+      - &id010
+        name: If-Match
+        in: header
+        required: true
+        schema:
+          type: integer
+        description: Current case version
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Assign'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Case'
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+  /cases/bulk-assign:
+    post:
+      tags:
+      - M04 Qualification
+      summary: Bulk assign (S0 by EA, S1+ by IA)
+      x-roles: *id003
+      operationId: post_cases_bulk_assign
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BulkAssign'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      assigned:
+                        type: integer
+                      skipped:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            caseId: *id004
+                            code: *id006
+                          additionalProperties: false
+                    additionalProperties: false
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+  /cases/{caseId}/temperature:
+    post:
+      tags:
+      - M04 Qualification
+      summary: Set temperature; Hot moves to S1
+      x-roles:
+      - ECOFY_USER
+      - ECOFY_ADMIN
+      operationId: post_cases_caseId_temperature
+      parameters:
+      - name: caseId
+        in: path
+        required: true
+        schema: *id004
+      - *id010
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TemperatureSet'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Case'
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+  /cases/{caseId}/push:
+    post:
+      tags:
+      - M04 Qualification
+      summary: Push a Warm lead to S1
+      x-roles:
+      - ECOFY_USER
+      - ECOFY_ADMIN
+      operationId: post_cases_caseId_push
+      parameters:
+      - name: caseId
+        in: path
+        required: true
+        schema: *id004
+      - *id010
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Note'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Case'
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+  /cases/{caseId}/close:
+    post:
+      tags:
+      - M14 Withdrawal
+      summary: Close before acceptance (stage owner)
+      x-roles: *id001
+      operationId: post_cases_caseId_close
+      parameters:
+      - name: caseId
+        in: path
+        required: true
+        schema: *id004
+      - *id010
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Close'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Case'
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+  /queue:
+    get:
+      tags:
+      - M05 Queue
+      summary: Hot first, then Warm, with ageing
+      x-roles: *id005
+      operationId: get_queue
+      parameters:
+      - *id007
+      - *id008
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Case'
+                  meta:
+                    $ref: '#/components/schemas/Page'
+                additionalProperties: false
+                required:
+                - data
+                - meta
+        default: *id002
+  /cases/{caseId}/return:
+    post:
+      tags:
+      - M05 Queue
+      summary: Return to Ecofy (goes to the qualifier)
+      x-roles: *id005
+      operationId: post_cases_caseId_return
+      parameters:
+      - name: caseId
+        in: path
+        required: true
+        schema: *id004
+      - *id010
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Return'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Case'
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+  /cases/{caseId}/activities:
+    get:
+      tags:
+      - M06 Follow-up
+      summary: Activities
+      x-roles: *id001
+      operationId: get_cases_caseId_activities
+      parameters:
+      - name: caseId
+        in: path
+        required: true
+        schema: *id004
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+    post:
+      tags:
+      - M06 Follow-up
+      summary: Log a call, remark, comment or follow-up
+      x-roles: *id001
+      operationId: post_cases_caseId_activities
+      parameters:
+      - name: caseId
+        in: path
+        required: true
+        schema: *id004
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ActivityCreate'
+      responses:
+        '201':
+          description: OK
+        default: *id002
+  /cases/{caseId}/appointments:
+    get:
+      tags:
+      - M06 Follow-up
+      summary: 'Appointments: scheduled vs actual'
+      x-roles: *id001
+      operationId: get_cases_caseId_appointments
+      parameters:
+      - name: caseId
+        in: path
+        required: true
+        schema: *id004
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+    post:
+      tags:
+      - M06 Follow-up
+      summary: Book a meeting or EPC visit
+      x-roles: &id011
+      - ITARANG_CALLER
+      - ITARANG_ADMIN
+      operationId: post_cases_caseId_appointments
+      parameters:
+      - name: caseId
+        in: path
+        required: true
+        schema: *id004
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AppointmentCreate'
+      responses:
+        '201':
+          description: OK
+        default: *id002
+  /appointments/{appointmentId}:
+    patch:
+      tags:
+      - M06 Follow-up
+      summary: Reschedule, complete, no-show, cancel
+      x-roles: *id011
+      operationId: patch_appointments_appointmentId
+      parameters:
+      - name: appointmentId
+        in: path
+        required: true
+        schema: *id004
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AppointmentUpdate'
+      responses:
+        '200':
+          description: OK
+        default: *id002
+  /cases/{caseId}/advance:
+    post:
+      tags:
+      - M06 Follow-up
+      summary: S2 -> S3 (meeting gate)
+      x-roles: *id011
+      operationId: post_cases_caseId_advance
+      parameters:
+      - name: caseId
+        in: path
+        required: true
+        schema: *id004
+      - *id010
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Case'
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+  /calculator/estimate:
+    post:
+      tags:
+      - M07 Assessment
+      summary: Quick estimate (not stored)
+      x-roles: *id001
+      operationId: post_calculator_estimate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CalcInput'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/CalcResult'
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+  /cases/{caseId}/assessments:
+    get:
+      tags:
+      - M07 Assessment
+      summary: Assessment versions
+      x-roles: *id001
+      operationId: get_cases_caseId_assessments
+      parameters:
+      - name: caseId
+        in: path
+        required: true
+        schema: *id004
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Assessment'
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+    post:
+      tags:
+      - M07 Assessment
+      summary: Save an assessment
+      x-roles:
+      - ECOFY_USER
+      - ITARANG_CALLER
+      - ITARANG_ADMIN
+      operationId: post_cases_caseId_assessments
+      parameters:
+      - name: caseId
+        in: path
+        required: true
+        schema: *id004
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AssessmentCreate'
+      responses:
+        '201':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Assessment'
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+  /assessments/{assessmentId}/confirm:
+    post:
+      tags:
+      - M07 Assessment
+      summary: Confirm; S3 -> S4
+      x-roles: *id011
+      operationId: post_assessments_assessmentId_confirm
+      parameters:
+      - name: assessmentId
+        in: path
+        required: true
+        schema: *id004
+      - *id010
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Case'
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+  /calculator/releases:
+    get:
+      tags:
+      - M08 Calculator Designer
+      summary: Releases
+      x-roles: *id003
+      operationId: get_calculator_releases
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Release'
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+    post:
+      tags:
+      - M08 Calculator Designer
+      summary: Create a draft
+      x-roles: *id005
+      operationId: post_calculator_releases
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReleaseCreate'
+      responses:
+        '201':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Release'
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+  /calculator/releases/{releaseId}:
+    get:
+      tags:
+      - M08 Calculator Designer
+      summary: Release detail
+      x-roles: *id003
+      operationId: get_calculator_releases_releaseId
+      parameters:
+      - name: releaseId
+        in: path
+        required: true
+        schema: *id004
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Release'
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+    patch:
+      tags:
+      - M08 Calculator Designer
+      summary: Edit draft params
+      x-roles: *id005
+      operationId: patch_calculator_releases_releaseId
+      parameters:
+      - name: releaseId
+        in: path
+        required: true
+        schema: *id004
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReleasePatch'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Release'
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+  /calculator/releases/{releaseId}/appliances:
+    put:
+      tags:
+      - M08 Calculator Designer
+      summary: Replace draft appliances
+      x-roles: *id005
+      operationId: put_calculator_releases_releaseId_appliances
+      parameters:
+      - name: releaseId
+        in: path
+        required: true
+        schema: *id004
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: '#/components/schemas/ApplianceIn'
+      responses:
+        '200':
+          description: OK
+        default: *id002
+  /calculator/releases/{releaseId}/systems:
+    put:
+      tags:
+      - M08 Calculator Designer
+      summary: Replace draft standard systems
+      x-roles: *id005
+      operationId: put_calculator_releases_releaseId_systems
+      parameters:
+      - name: releaseId
+        in: path
+        required: true
+        schema: *id004
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: '#/components/schemas/SystemIn'
+      responses:
+        '200':
+          description: OK
+        default: *id002
+  /calculator/releases/{releaseId}/systems/import:
+    post:
+      tags:
+      - M08 Calculator Designer
+      summary: Import template v0.2
+      x-roles: *id005
+      operationId: post_calculator_releases_releaseId_systems_import
+      parameters:
+      - name: releaseId
+        in: path
+        required: true
+        schema: *id004
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SystemsImport'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      imported:
+                        type: integer
+                      rejected:
+                        type: array
+                        items:
+                          type: object
+                    additionalProperties: false
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+  /calculator/releases/{releaseId}/test:
+    post:
+      tags:
+      - M08 Calculator Designer
+      summary: Test bench
+      x-roles: *id003
+      operationId: post_calculator_releases_releaseId_test
+      parameters:
+      - name: releaseId
+        in: path
+        required: true
+        schema: *id004
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CalcInput'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/CalcResult'
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+  /calculator/releases/{releaseId}/submit:
+    post:
+      tags:
+      - M08 Calculator Designer
+      summary: Send for Ecofy approval
+      x-roles: *id005
+      operationId: post_calculator_releases_releaseId_submit
+      parameters:
+      - name: releaseId
+        in: path
+        required: true
+        schema: *id004
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReleaseDecision'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Release'
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+  /calculator/releases/{releaseId}/approve:
+    post:
+      tags:
+      - M08 Calculator Designer
+      summary: Approve and publish
+      x-roles: &id012
+      - ECOFY_ADMIN
+      operationId: post_calculator_releases_releaseId_approve
+      parameters:
+      - name: releaseId
+        in: path
+        required: true
+        schema: *id004
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReleaseDecision'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Release'
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+  /calculator/releases/{releaseId}/reject:
+    post:
+      tags:
+      - M08 Calculator Designer
+      summary: Reject with a note
+      x-roles: *id012
+      operationId: post_calculator_releases_releaseId_reject
+      parameters:
+      - name: releaseId
+        in: path
+        required: true
+        schema: *id004
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReleaseDecision'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Release'
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+  /calculator/releases/{releaseId}/restore:
+    post:
+      tags:
+      - M08 Calculator Designer
+      summary: Copy into a new draft
+      x-roles: *id005
+      operationId: post_calculator_releases_releaseId_restore
+      parameters:
+      - name: releaseId
+        in: path
+        required: true
+        schema: *id004
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReleaseCreate'
+      responses:
+        '201':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Release'
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+  /cases/{caseId}/eligibility:
+    post:
+      tags:
+      - M09 Offer
+      summary: Send for eligibility
+      x-roles: *id011
+      operationId: post_cases_caseId_eligibility
+      parameters:
+      - name: caseId
+        in: path
+        required: true
+        schema: *id004
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EligibilityRequest'
+      responses:
+        '201':
+          description: OK
+        default: *id002
+  /eligibility-queue:
+    get:
+      tags:
+      - M09 Offer
+      summary: 'Awaiting eligibility (EA: Ecofy; IA: others)'
+      x-roles: *id003
+      operationId: get_eligibility_queue
+      parameters:
+      - *id007
+      - *id008
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Case'
+                  meta:
+                    $ref: '#/components/schemas/Page'
+                additionalProperties: false
+                required:
+                - data
+                - meta
+        default: *id002
+  /eligibility/{eligibilityId}/decision:
+    post:
+      tags:
+      - M09 Offer
+      summary: Record eligibility (role per financier)
+      x-roles: *id003
+      operationId: post_eligibility_eligibilityId_decision
+      parameters:
+      - name: eligibilityId
+        in: path
+        required: true
+        schema: *id004
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EligibilityDecision'
+      responses:
+        '200':
+          description: OK
+        default: *id002
+  /cases/{caseId}/quote-requests:
+    post:
+      tags:
+      - M09 Offer
+      summary: Log a quote request
+      x-roles: *id011
+      operationId: post_cases_caseId_quote_requests
+      parameters:
+      - name: caseId
+        in: path
+        required: true
+        schema: *id004
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QuoteRequestCreate'
+      responses:
+        '201':
+          description: OK
+        default: *id002
+  /quote-requests/{quoteRequestId}:
+    patch:
+      tags:
+      - M09 Offer
+      summary: Update a quote request
+      x-roles: *id011
+      operationId: patch_quote_requests_quoteRequestId
+      parameters:
+      - name: quoteRequestId
+        in: path
+        required: true
+        schema: *id004
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QuoteRequestPatch'
+      responses:
+        '200':
+          description: OK
+        default: *id002
+  /cases/{caseId}/quotes/upload-url:
+    post:
+      tags:
+      - M09 Offer
+      summary: Upload URL for the EPC quote PDF
+      x-roles: *id011
+      operationId: post_cases_caseId_quotes_upload_url
+      parameters:
+      - name: caseId
+        in: path
+        required: true
+        schema: *id004
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FileUploadStart'
+      responses:
+        '201':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/UploadTicket'
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+  /cases/{caseId}/quotes:
+    post:
+      tags:
+      - M09 Offer
+      summary: Record the EPC quote
+      x-roles: *id011
+      operationId: post_cases_caseId_quotes
+      parameters:
+      - name: caseId
+        in: path
+        required: true
+        schema: *id004
+      - *id009
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QuoteCreate'
+      responses:
+        '201':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Quote'
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+  /cases/{caseId}/offers:
+    post:
+      tags:
+      - M09 Offer
+      summary: Compose the offer
+      x-roles: *id011
+      operationId: post_cases_caseId_offers
+      parameters:
+      - name: caseId
+        in: path
+        required: true
+        schema: *id004
+      - *id009
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OfferCreate'
+      responses:
+        '201':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Offer'
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+  /offers/{offerId}:
+    get:
+      tags:
+      - M09 Offer
+      summary: Offer (no financing amounts)
+      x-roles: *id001
+      operationId: get_offers_offerId
+      parameters:
+      - name: offerId
+        in: path
+        required: true
+        schema: *id004
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Offer'
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+  /offers/{offerId}/otp:
+    post:
+      tags:
+      - M10 Acceptance
+      summary: Send OTP; S4 -> S5
+      x-roles: *id011
+      operationId: post_offers_offerId_otp
+      parameters:
+      - name: offerId
+        in: path
+        required: true
+        schema: *id004
+      - *id010
+      - *id009
+      responses:
+        '201':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/OtpChallenge'
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+  /otp/{challengeId}/verify:
+    post:
+      tags:
+      - M10 Acceptance
+      summary: Verify; File created and locked
+      x-roles: *id011
+      operationId: post_otp_challengeId_verify
+      parameters:
+      - name: challengeId
+        in: path
+        required: true
+        schema: *id004
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OtpVerify'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/FileRecord'
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+  /files/{fileId}:
+    get:
+      tags:
+      - M10 Acceptance
+      summary: File and acceptances
+      x-roles: *id001
+      operationId: get_files_fileId
+      parameters:
+      - name: fileId
+        in: path
+        required: true
+        schema: *id004
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/FileRecord'
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+  /financing-queue:
+    get:
+      tags:
+      - M11 Financing
+      summary: Files awaiting a decision
+      x-roles: *id003
+      operationId: get_financing_queue
+      parameters:
+      - *id007
+      - *id008
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Case'
+                  meta:
+                    $ref: '#/components/schemas/Page'
+                additionalProperties: false
+                required:
+                - data
+                - meta
+        default: *id002
+  /cases/{caseId}/financing/decisions:
+    post:
+      tags:
+      - M11 Financing
+      summary: Sanction or reject (role per financier)
+      x-roles: *id003
+      operationId: post_cases_caseId_financing_decisions
+      parameters:
+      - name: caseId
+        in: path
+        required: true
+        schema: *id004
+      - *id010
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FinancingDecision'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Case'
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+  /cases/{caseId}/reacceptance:
+    post:
+      tags:
+      - M11 Financing
+      summary: Trigger re-acceptance OTP
+      x-roles: *id012
+      operationId: post_cases_caseId_reacceptance
+      parameters:
+      - name: caseId
+        in: path
+        required: true
+        schema: *id004
+      - *id009
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Reacceptance'
+      responses:
+        '201':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/OtpChallenge'
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+  /cases/{caseId}/route-financier:
+    post:
+      tags:
+      - M11 Financing
+      summary: Route to the next financier (S4 or S6)
+      x-roles: *id005
+      operationId: post_cases_caseId_route_financier
+      parameters:
+      - name: caseId
+        in: path
+        required: true
+        schema: *id004
+      - *id010
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RouteFinancier'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Case'
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+  /cases/{caseId}/installation:
+    post:
+      tags:
+      - M12 Installation
+      summary: Create the installation
+      x-roles: *id011
+      operationId: post_cases_caseId_installation
+      parameters:
+      - name: caseId
+        in: path
+        required: true
+        schema: *id004
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InstallationCreate'
+      responses:
+        '201':
+          description: OK
+        default: *id002
+  /installations/{installationId}:
+    patch:
+      tags:
+      - M12 Installation
+      summary: Move installation status
+      x-roles: *id011
+      operationId: patch_installations_installationId
+      parameters:
+      - name: installationId
+        in: path
+        required: true
+        schema: *id004
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InstallationUpdate'
+      responses:
+        '200':
+          description: OK
+        default: *id002
+  /cases/{caseId}/down-payment:
+    post:
+      tags:
+      - M12 Installation
+      summary: Record down payment (role per financier)
+      x-roles: *id003
+      operationId: post_cases_caseId_down_payment
+      parameters:
+      - name: caseId
+        in: path
+        required: true
+        schema: *id004
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DownPayment'
+      responses:
+        '201':
+          description: OK
+        default: *id002
+  /cases/{caseId}/disbursement:
+    post:
+      tags:
+      - M12 Installation
+      summary: Record payout; S7 -> S8
+      x-roles: *id003
+      operationId: post_cases_caseId_disbursement
+      parameters:
+      - name: caseId
+        in: path
+        required: true
+        schema: *id004
+      - *id010
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Disbursement'
+      responses:
+        '201':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Case'
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+  /assets:
+    get:
+      tags:
+      - M13 Asset
+      summary: Assets
+      x-roles: *id003
+      operationId: get_assets
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+  /assets/{assetId}:
+    get:
+      tags:
+      - M13 Asset
+      summary: Asset detail
+      x-roles: *id003
+      operationId: get_assets_assetId
+      parameters:
+      - name: assetId
+        in: path
+        required: true
+        schema: *id004
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+  /assets/{assetId}/emi-status:
+    post:
+      tags:
+      - M13 Asset
+      summary: Record EMI status
+      x-roles: *id012
+      operationId: post_assets_assetId_emi_status
+      parameters:
+      - name: assetId
+        in: path
+        required: true
+        schema: *id004
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmiStatus'
+      responses:
+        '201':
+          description: OK
+        default: *id002
+  /assets/{assetId}/events:
+    post:
+      tags:
+      - M13 Asset
+      summary: Buyback or redeployment
+      x-roles: *id012
+      operationId: post_assets_assetId_events
+      parameters:
+      - name: assetId
+        in: path
+        required: true
+        schema: *id004
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AssetEvent'
+      responses:
+        '201':
+          description: OK
+        default: *id002
+  /cases/{caseId}/withdrawals:
+    post:
+      tags:
+      - M14 Withdrawal
+      summary: Request a withdrawal
+      x-roles: *id011
+      operationId: post_cases_caseId_withdrawals
+      parameters:
+      - name: caseId
+        in: path
+        required: true
+        schema: *id004
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Reason'
+      responses:
+        '201':
+          description: OK
+        default: *id002
+  /withdrawals/{withdrawalId}/confirm:
+    post:
+      tags:
+      - M14 Withdrawal
+      summary: Confirm (closes the case)
+      x-roles: *id005
+      operationId: post_withdrawals_withdrawalId_confirm
+      parameters:
+      - name: withdrawalId
+        in: path
+        required: true
+        schema: *id004
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Case'
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+  /withdrawals/{withdrawalId}/reject:
+    post:
+      tags:
+      - M14 Withdrawal
+      summary: Reject
+      x-roles: *id005
+      operationId: post_withdrawals_withdrawalId_reject
+      parameters:
+      - name: withdrawalId
+        in: path
+        required: true
+        schema: *id004
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Reason'
+      responses:
+        '200':
+          description: OK
+        default: *id002
+  /withdrawals/{withdrawalId}/sanction-cancelled:
+    post:
+      tags:
+      - M14 Withdrawal
+      summary: Mark sanction cancelled
+      x-roles: *id012
+      operationId: post_withdrawals_withdrawalId_sanction_cancelled
+      parameters:
+      - name: withdrawalId
+        in: path
+        required: true
+        schema: *id004
+      responses:
+        '200':
+          description: OK
+        default: *id002
+  /withdrawals/{withdrawalId}/epc-informed:
+    post:
+      tags:
+      - M14 Withdrawal
+      summary: Mark EPC informed
+      x-roles: *id005
+      operationId: post_withdrawals_withdrawalId_epc_informed
+      parameters:
+      - name: withdrawalId
+        in: path
+        required: true
+        schema: *id004
+      responses:
+        '200':
+          description: OK
+        default: *id002
+  /cases/{caseId}/reopen:
+    post:
+      tags:
+      - M14 Withdrawal
+      summary: Reopen (never a case with a File)
+      x-roles: *id005
+      operationId: post_cases_caseId_reopen
+      parameters:
+      - name: caseId
+        in: path
+        required: true
+        schema: *id004
+      - *id010
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Reason'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Case'
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+  /cases/{caseId}/documents/upload-url:
+    post:
+      tags:
+      - M15 Documents
+      summary: Upload URL for a document
+      x-roles: *id001
+      operationId: post_cases_caseId_documents_upload_url
+      parameters:
+      - name: caseId
+        in: path
+        required: true
+        schema: *id004
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FileUploadStart'
+      responses:
+        '201':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/UploadTicket'
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+  /cases/{caseId}/documents:
+    post:
+      tags:
+      - M15 Documents
+      summary: Commit an uploaded document
+      x-roles: *id001
+      operationId: post_cases_caseId_documents
+      parameters:
+      - name: caseId
+        in: path
+        required: true
+        schema: *id004
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DocumentCommit'
+      responses:
+        '201':
+          description: OK
+        default: *id002
+  /documents/{documentId}/download-url:
+    get:
+      tags:
+      - M15 Documents
+      summary: Presigned download (logged)
+      x-roles: *id001
+      operationId: get_documents_documentId_download_url
+      parameters:
+      - name: documentId
+        in: path
+        required: true
+        schema: *id004
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      url:
+                        type: string
+                        format: uri
+                      expiresAt: &id014
+                        type: string
+                        format: date-time
+                    additionalProperties: false
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+  /documents/{documentId}:
+    delete:
+      tags:
+      - M15 Documents
+      summary: Soft delete
+      x-roles: *id003
+      operationId: delete_documents_documentId
+      parameters:
+      - name: documentId
+        in: path
+        required: true
+        schema: *id004
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Reason'
+      responses:
+        '200':
+          description: OK
+        default: *id002
+  /notifications:
+    get:
+      tags:
+      - M16 Notifications
+      summary: Bell
+      x-roles: *id001
+      operationId: get_notifications
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+  /notifications/{notificationId}/read:
+    post:
+      tags:
+      - M16 Notifications
+      summary: Mark read
+      x-roles: *id001
+      operationId: post_notifications_notificationId_read
+      parameters:
+      - name: notificationId
+        in: path
+        required: true
+        schema: *id004
+      responses:
+        '200':
+          description: OK
+        default: *id002
+  /dashboards/funnel:
+    get:
+      tags:
+      - M17 Dashboards
+      summary: Funnel (scoped)
+      x-roles: *id001
+      operationId: get_dashboards_funnel
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+  /dashboards/ageing:
+    get:
+      tags:
+      - M17 Dashboards
+      summary: Ageing (scoped)
+      x-roles: *id001
+      operationId: get_dashboards_ageing
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+  /dashboards/users/{userId}:
+    get:
+      tags:
+      - M17 Dashboards
+      summary: Per-user activity (own or admin)
+      x-roles: *id001
+      operationId: get_dashboards_users_userId
+      parameters:
+      - name: userId
+        in: path
+        required: true
+        schema: *id004
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+  /usage:
+    get:
+      tags:
+      - M17 Dashboards
+      summary: Monthly usage counts (never blocks)
+      x-roles: *id003
+      operationId: get_usage
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Usage'
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+  /reports/{code}.csv:
+    get:
+      tags:
+      - M17 Dashboards
+      summary: CSV export (logged)
+      x-roles: *id003
+      operationId: get_reports_code_csv
+      parameters:
+      - name: code
+        in: path
+        required: true
+        schema: *id006
+      responses:
+        '200':
+          description: OK
+        default: *id002
+  /audit:
+    get:
+      tags:
+      - M18 Audit
+      summary: Audit search
+      x-roles: *id003
+      operationId: get_audit
+      parameters:
+      - *id007
+      - *id008
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: array
+                      items:
+                        type: object
+                  meta:
+                    $ref: '#/components/schemas/Page'
+                additionalProperties: false
+                required:
+                - data
+                - meta
+        default: *id002
+  /health:
+    get:
+      tags:
+      - Ops
+      summary: DB, Redis, S3 checks
+      x-roles:
+      - PUBLIC
+      operationId: get_health
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      db: &id013
+                        type: boolean
+                      redis: *id013
+                      s3: *id013
+                    additionalProperties: false
+                additionalProperties: false
+                required:
+                - data
+        default: *id002
+      security: []
+  /webhooks/sms/delivery:
+    post:
+      tags:
+      - Ops
+      summary: SMS delivery report (shared secret)
+      x-roles:
+      - GUPSHUP
+      operationId: post_webhooks_sms_delivery
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: OK
+        default: *id002
+      security: []
+components:
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+              enum:
+              - VALIDATION_FAILED
+              - UNAUTHENTICATED
+              - SESSION_REPLACED
+              - DEVICE_VERIFICATION_REQUIRED
+              - FORBIDDEN
+              - NOT_FOUND
+              - VERSION_CONFLICT
+              - GATE_NOT_MET
+              - SEAT_LIMIT
+              - IDEMPOTENCY_KEY_REUSED
+              - RATE_LIMITED
+            message: *id006
+            details:
+              type: object
+            gate:
+              type: string
+              description: Name of the failed gate when code = GATE_NOT_MET
+            requestId: *id006
+          additionalProperties: false
+          required:
+          - code
+          - message
+          - requestId
+      additionalProperties: false
+      required:
+      - error
+    Page:
+      type: object
+      properties:
+        nextCursor:
+          type:
+          - string
+          - 'null'
+        limit:
+          type: integer
+      additionalProperties: false
+      required:
+      - nextCursor
+    Role:
+      type: string
+      enum:
+      - ECOFY_ADMIN
+      - ECOFY_USER
+      - ITARANG_ADMIN
+      - ITARANG_CALLER
+    Stage:
+      type: string
+      enum:
+      - S0
+      - S1
+      - S2
+      - S3
+      - S4
+      - S5
+      - S6
+      - S7
+      - S8
+      - CLOSED
+    Segment:
+      type: string
+      enum:
+      - RESI
+      - ESS
+      - CI
+    Temperature:
+      type: string
+      enum:
+      - COLD
+      - WARM
+      - HOT
+      - NOT_INTERESTED
+    Reason:
+      type: object
+      properties:
+        reason:
+          type: string
+          minLength: 3
+          maxLength: 500
+      additionalProperties: false
+      required:
+      - reason
+    Note:
+      type: object
+      properties:
+        note:
+          type: string
+          maxLength: 1000
+      additionalProperties: false
+    SessionRegister:
+      type: object
+      properties: {}
+      additionalProperties: false
+      description: Called right after Supabase signInWithPassword. The device cookie is read from the request.
+    SessionState:
+      type: object
+      properties:
+        status:
+          type: string
+          enum:
+          - ACTIVE
+          - DEVICE_OTP_SENT
+        otpExpiresAt: *id014
+        resendAfterSeconds:
+          type: integer
+      additionalProperties: false
+      required:
+      - status
+    DeviceVerify:
+      type: object
+      properties:
+        code:
+          type: string
+          pattern: ^[0-9]{6}$
+      additionalProperties: false
+      required:
+      - code
+    Me:
+      type: object
+      properties:
+        id: *id004
+        fullName: *id006
+        email:
+          type: string
+          format: email
+        role:
+          $ref: '#/components/schemas/Role'
+        org:
+          type: string
+          enum:
+          - ECOFY
+          - ITARANG
+        permissions:
+          type: array
+          items: *id006
+      additionalProperties: false
+      required:
+      - id
+      - fullName
+      - email
+      - role
+      - org
+      - permissions
+    UserInvite:
+      type: object
+      properties:
+        fullName:
+          type: string
+          minLength: 2
+          maxLength: 100
+        email:
+          type: string
+          format: email
+        mobile:
+          type: string
+          pattern: ^[6-9][0-9]{9}$
+        role:
+          $ref: '#/components/schemas/Role'
+      additionalProperties: false
+      required:
+      - fullName
+      - email
+      - role
+    UserPatch:
+      type: object
+      properties:
+        fullName:
+          type: string
+          minLength: 2
+          maxLength: 100
+        status:
+          type: string
+          enum:
+          - ACTIVE
+          - DEACTIVATED
+        reason:
+          type: string
+          maxLength: 500
+      additionalProperties: false
+    User:
+      type: object
+      properties:
+        id: *id004
+        fullName: *id006
+        email: *id006
+        role:
+          $ref: '#/components/schemas/Role'
+        status:
+          type: string
+          enum:
+          - INVITED
+          - ACTIVE
+          - DEACTIVATED
+        lastLoginAt:
+          type:
+          - string
+          - 'null'
+          format: date-time
+      additionalProperties: false
+      required:
+      - id
+      - fullName
+      - email
+      - role
+      - status
+    SeatLimitPatch:
+      type: object
+      properties:
+        seatLimit:
+          type: integer
+          minimum: 0
+          maximum: 50
+        reason:
+          type: string
+          minLength: 3
+      additionalProperties: false
+      required:
+      - seatLimit
+      - reason
+    SettingPatch:
+      type: object
+      properties:
+        value: {}
+        reason:
+          type: string
+          maxLength: 500
+      additionalProperties: false
+      required:
+      - value
+      description: value must match the setting's type (see seed)
+    ListItemCreate:
+      type: object
+      properties:
+        code:
+          type: string
+          pattern: ^[A-Z0-9_]{2,40}$
+        label:
+          type: string
+          minLength: 1
+          maxLength: 80
+        sortOrder:
+          type: integer
+      additionalProperties: false
+      required:
+      - code
+      - label
+    ListItemPatch:
+      type: object
+      properties:
+        label:
+          type: string
+          minLength: 1
+          maxLength: 80
+        sortOrder:
+          type: integer
+        active: *id013
+      additionalProperties: false
+    CalendarPut:
+      type: object
+      properties:
+        workingHours:
+          type: array
+          items:
+            type: object
+            properties:
+              weekday:
+                type: integer
+                minimum: 1
+                maximum: 7
+              start:
+                type: string
+                pattern: ^[0-2][0-9]:[0-5][0-9]$
+              end:
+                type: string
+                pattern: ^[0-2][0-9]:[0-5][0-9]$
+            additionalProperties: false
+            required:
+            - weekday
+            - start
+            - end
+        holidays:
+          type: array
+          items:
+            type: object
+            properties:
+              day: &id015
+                type: string
+                format: date
+              name: *id006
+            additionalProperties: false
+            required:
+            - day
+            - name
+      additionalProperties: false
+      required:
+      - workingHours
+      - holidays
+    EpcPartner:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 2
+        contactName: *id006
+        mobile:
+          type: string
+          pattern: ^[6-9][0-9]{9}$
+        email:
+          type: string
+          format: email
+        pincodes:
+          type: array
+          items:
+            type: string
+            pattern: ^[1-9][0-9]{5}$
+        segments:
+          type: array
+          items:
+            $ref: '#/components/schemas/Segment'
+        active: *id013
+      additionalProperties: false
+      required:
+      - name
+      - pincodes
+      - segments
+    Financier:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 2
+        valuesVisibleTo:
+          type: string
+          enum:
+          - ECOFY_ADMIN
+          - ITARANG_ADMIN
+        active: *id013
+      additionalProperties: false
+      required:
+      - name
+      - valuesVisibleTo
+    ImportStart:
+      type: object
+      properties:
+        fileName:
+          type: string
+          pattern: \.(xlsx|csv)$
+        sizeBytes:
+          type: integer
+          minimum: 1
+          maximum: 10485760
+      additionalProperties: false
+      required:
+      - fileName
+      - sizeBytes
+    UploadTicket:
+      type: object
+      properties:
+        id: *id004
+        uploadUrl:
+          type: string
+          format: uri
+        expiresAt: *id014
+      additionalProperties: false
+      required:
+      - id
+      - uploadUrl
+      - expiresAt
+    ImportMapping:
+      type: object
+      properties:
+        mapping:
+          type: object
+          additionalProperties: *id006
+          description: source header -> template column
+        saveAs:
+          type: string
+          maxLength: 60
+      additionalProperties: false
+      required:
+      - mapping
+    ImportPreview:
+      type: object
+      properties:
+        rowCount:
+          type: integer
+        created:
+          type: integer
+        duplicate:
+          type: integer
+        reopened:
+          type: integer
+        newLinked:
+          type: integer
+        rejected:
+          type: integer
+        sampleErrors:
+          type: array
+          items:
+            type: object
+            properties:
+              rowNo:
+                type: integer
+              column: *id006
+              code: *id006
+              message: *id006
+            additionalProperties: false
+            required:
+            - rowNo
+            - code
+      additionalProperties: false
+      required:
+      - rowCount
+      - created
+      - duplicate
+      - reopened
+      - newLinked
+      - rejected
+    ImportCommit:
+      type: object
+      properties:
+        consentAttested:
+          const: true
+        attestationText: *id006
+      additionalProperties: false
+      required:
+      - consentAttested
+      - attestationText
+    Import:
+      type: object
+      properties:
+        id: *id004
+        status:
+          type: string
+          enum:
+          - UPLOADED
+          - MAPPED
+          - VALIDATED
+          - COMMITTING
+          - COMMITTED
+          - FAILED
+        preview:
+          $ref: '#/components/schemas/ImportPreview'
+      additionalProperties: false
+      required:
+      - id
+      - status
+    CustomerIn:
+      type: object
+      properties:
+        fullName:
+          type: string
+          minLength: 2
+          maxLength: 100
+        mobile:
+          type: string
+          pattern: ^[6-9][0-9]{9}$
+        altMobile:
+          type: string
+          pattern: ^[6-9][0-9]{9}$
+        email:
+          type: string
+          format: email
+        customerType:
+          type: string
+          enum:
+          - INDIVIDUAL
+          - BUSINESS
+        businessName: *id006
+        address:
+          type: string
+          minLength: 3
+          maxLength: 250
+        city: *id006
+        state: *id006
+        pincode:
+          type: string
+          pattern: ^[1-9][0-9]{5}$
+        preferredLanguage: *id006
+        propertyType: *id006
+        consentObtained:
+          const: true
+        consentDate: *id015
+        consentSource: *id006
+      additionalProperties: false
+      required:
+      - fullName
+      - mobile
+      - customerType
+      - address
+      - city
+      - state
+      - pincode
+      - consentObtained
+      - consentDate
+      - consentSource
+    CaseCreate:
+      type: object
+      properties:
+        customer:
+          $ref: '#/components/schemas/CustomerIn'
+        segment:
+          $ref: '#/components/schemas/Segment'
+        productInterest: *id006
+        avgMonthlyBillInr: &id016
+          type: integer
+          minimum: 0
+          description: Whole rupees
+        sanctionedLoadKw:
+          type: number
+          minimum: 0
+        existingBackup: *id006
+        preferredCallTime: *id006
+        fromEstimateId:
+          type: string
+          description: 'Optional: quick-estimate snapshot to save as assessment v1'
+      additionalProperties: false
+      required:
+      - customer
+      - segment
+      description: 'EU: creates at S0 (owner Ecofy). IA: creates at S1 (owner iTarang).'
+    Case:
+      type: object
+      properties:
+        id: *id004
+        caseNo: *id006
+        version:
+          type: integer
+        stage:
+          $ref: '#/components/schemas/Stage'
+        subStatus:
+          type:
+          - string
+          - 'null'
+        segment:
+          $ref: '#/components/schemas/Segment'
+        temperature:
+          type:
+          - string
+          - 'null'
+        source: *id006
+        owner:
+          type: string
+          enum:
+          - ECOFY
+          - ITARANG
+        assignedUserId:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        customer:
+          type: object
+        stageEnteredAt: *id014
+        ageing:
+          type: object
+          properties:
+            inStageWorkingHours:
+              type: number
+            openWorkingHours:
+              type: number
+          additionalProperties: false
+      additionalProperties: true
+      required:
+      - id
+      - caseNo
+      - version
+      - stage
+      - segment
+      - source
+      - owner
+    Assign:
+      type: object
+      properties:
+        userId: *id004
+        reason:
+          type: string
+          maxLength: 500
+      additionalProperties: false
+      required:
+      - userId
+      description: reason required when the case already has an assignee
+    BulkAssign:
+      type: object
+      properties:
+        caseIds:
+          type: array
+          items: *id004
+          minItems: 1
+          maxItems: 500
+        userId: *id004
+        reason:
+          type: string
+          maxLength: 500
+      additionalProperties: false
+      required:
+      - caseIds
+      - userId
+    TemperatureSet:
+      type: object
+      properties:
+        temperature:
+          $ref: '#/components/schemas/Temperature'
+        note:
+          type: string
+          maxLength: 1000
+        closureReason: *id006
+      additionalProperties: false
+      required:
+      - temperature
+      description: NOT_INTERESTED needs closureReason; HOT moves the case to S1
+    Close:
+      type: object
+      properties:
+        closureReason: *id006
+        note:
+          type: string
+          maxLength: 1000
+      additionalProperties: false
+      required:
+      - closureReason
+    Return:
+      type: object
+      properties:
+        reasonCode: *id006
+        note:
+          type: string
+          maxLength: 1000
+      additionalProperties: false
+      required:
+      - reasonCode
+    ActivityCreate:
+      type: object
+      properties:
+        type:
+          type: string
+          enum:
+          - CALL
+          - REMARK
+          - COMMENT
+          - FOLLOW_UP
+        callOutcome:
+          type: string
+          enum:
+          - CONNECTED
+          - NO_ANSWER
+          - BUSY
+          - SWITCHED_OFF
+          - WRONG_NUMBER
+          - CALL_BACK
+        note:
+          type: string
+          maxLength: 2000
+        nextFollowUpAt: *id014
+      additionalProperties: false
+      required:
+      - type
+      description: CALL needs callOutcome; FOLLOW_UP needs nextFollowUpAt
+    AppointmentCreate:
+      type: object
+      properties:
+        meetingType: *id006
+        scheduledAt: *id014
+        bookingRemarks:
+          type: string
+          maxLength: 1000
+        epcPartnerId: *id004
+      additionalProperties: false
+      required:
+      - meetingType
+      - scheduledAt
+      description: EPC_VISIT needs epcPartnerId
+    AppointmentUpdate:
+      type: object
+      properties:
+        action:
+          type: string
+          enum:
+          - RESCHEDULE
+          - COMPLETE
+          - NO_SHOW
+          - CANCEL
+        scheduledAt: *id014
+        actualAt: *id014
+        meetingRemarks:
+          type: string
+          minLength: 3
+          maxLength: 2000
+        outcomeReason:
+          type: string
+          minLength: 3
+        epcFeedback:
+          type: string
+          maxLength: 2000
+      additionalProperties: false
+      required:
+      - action
+      description: 'RESCHEDULE: scheduledAt (creates a linked appointment). COMPLETE: actualAt + meetingRemarks. NO_SHOW / CANCEL: outcomeReason'
+    ApplianceLine:
+      type: object
+      properties:
+        applianceName: *id006
+        watts:
+          type: integer
+          minimum: 1
+        quantity:
+          type: integer
+          minimum: 1
+      additionalProperties: false
+      required:
+      - applianceName
+      - watts
+      - quantity
+    CalcInput:
+      type: object
+      properties:
+        segment:
+          $ref: '#/components/schemas/Segment'
+        productInterest:
+          type: string
+          enum:
+          - SOLAR_STORAGE
+          - STORAGE_ONLY
+          - SOLAR_ONLY
+          - NOT_SURE
+        method:
+          type: string
+          enum:
+          - APPLIANCES
+          - MONTHLY_UNITS
+          - RUNNING_LOAD
+          - NONE
+        appliances:
+          type: array
+          items:
+            $ref: '#/components/schemas/ApplianceLine'
+        monthlyUnits:
+          type: number
+          minimum: 0
+        runningLoadKw:
+          type: number
+          minimum: 0
+        sanctionedLoadKw:
+          type: number
+          minimum: 0
+        backupHours:
+          type: number
+          minimum: 0
+          maximum: 24
+        phase:
+          type: string
+          enum:
+          - SINGLE
+          - THREE
+      additionalProperties: false
+      required:
+      - segment
+      - method
+      - phase
+      description: 'Returns PENDING_TECHNICAL_DATA when a need the chosen system type requires cannot be computed (power: appliances, running
+        load or sanctioned load; battery: appliances, running load or monthly units; solar: monthly units). backupHours is not asked for SOLAR_ONLY'
+    CalcSteps:
+      type: object
+      properties:
+        running_load_kw:
+          type: number
+        backup_energy_kwh:
+          type: number
+        usable_battery_needed_kwh:
+          type: number
+        battery_size_kwh:
+          type: number
+        motor_start_kw:
+          type: number
+        required_inverter_kva:
+          type: number
+        solar_kwp:
+          type: number
+      additionalProperties: false
+      description: null for steps skipped by the system type
+    SystemOption:
+      type: object
+      properties:
+        systemCode: *id006
+        systemName: *id006
+        role:
+          type: string
+          enum:
+          - RECOMMENDED
+          - SMALLER
+          - LARGER
+        priceRange:
+          type: object
+          properties:
+            equipmentMin: *id016
+            equipmentMax: *id016
+            installationMin: *id016
+            installationMax: *id016
+            gstPct:
+              type: number
+            totalMin: *id016
+            totalMax: *id016
+          additionalProperties: false
+      additionalProperties: false
+      required:
+      - systemCode
+      - systemName
+      - role
+    CalcResult:
+      type: object
+      properties:
+        releaseVersion:
+          type: integer
+        recommendationStatus:
+          type: string
+          enum:
+          - RECOMMENDED
+          - CUSTOM_REQUIRED
+          - PENDING_TECHNICAL_DATA
+        steps:
+          $ref: '#/components/schemas/CalcSteps'
+        options:
+          type: array
+          items:
+            $ref: '#/components/schemas/SystemOption'
+        texts:
+          type: object
+          properties:
+            disclaimer: *id006
+            financingLine: *id006
+            message: *id006
+          additionalProperties: false
+      additionalProperties: false
+      required:
+      - releaseVersion
+      - recommendationStatus
+      - steps
+      - options
+    AssessmentCreate:
+      type: object
+      properties:
+        method:
+          type: string
+          enum:
+          - CALCULATOR
+          - MANUAL
+          - EPC
+        calculator:
+          $ref: '#/components/schemas/CalcInput'
+        manual:
+          type: object
+          properties:
+            batteryKwh:
+              type: number
+              minimum: 0
+            inverterKva:
+              type: number
+              minimum: 0
+            solarKwp:
+              type: number
+              minimum: 0
+            sourceNote:
+              type: string
+              minLength: 3
+          additionalProperties: false
+        selectedSystemCode: *id006
+        overrideReason:
+          type: string
+          minLength: 3
+      additionalProperties: false
+      required:
+      - method
+      description: CALCULATOR needs calculator; MANUAL/EPC need manual. Manual entry without any size = PENDING_TECHNICAL_DATA. overrideReason
+        required when selectedSystemCode differs from the recommendation
+    Assessment:
+      type: object
+      properties:
+        id: *id004
+        version:
+          type: integer
+        method: *id006
+        recommendationStatus: *id006
+        recommendedCode:
+          type:
+          - string
+          - 'null'
+        selectedCode:
+          type:
+          - string
+          - 'null'
+        result:
+          $ref: '#/components/schemas/CalcResult'
+        confirmedAt:
+          type:
+          - string
+          - 'null'
+      additionalProperties: true
+      required:
+      - id
+      - version
+      - method
+      - recommendationStatus
+    ReleaseCreate:
+      type: object
+      properties:
+        fromReleaseId: *id004
+        changeNote:
+          type: string
+          minLength: 3
+      additionalProperties: false
+      required:
+      - changeNote
+    ReleasePatch:
+      type: object
+      properties:
+        params:
+          type: object
+          description: Full params object as in the seed (values, segments, rules, display, texts)
+        changeNote: *id006
+      additionalProperties: false
+      required:
+      - params
+    ApplianceIn:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 2
+        defaultWatts:
+          type: integer
+          minimum: 1
+        isMotor: *id013
+        startMultiplier:
+          type: number
+          minimum: 1
+          maximum: 8
+        sortOrder:
+          type: integer
+        active: *id013
+      additionalProperties: false
+      required:
+      - name
+      - defaultWatts
+      - isMotor
+      - startMultiplier
+    SystemIn:
+      type: object
+      properties:
+        systemCode: *id006
+        systemName: *id006
+        forResi: *id013
+        forEss: *id013
+        forCi: *id013
+        systemType:
+          type: string
+          enum:
+          - SOLAR_STORAGE
+          - STORAGE_ONLY
+          - SOLAR_ONLY
+        batteryCapacityKwh:
+          type: number
+          minimum: 0
+        usableCapacityKwh:
+          type: number
+          minimum: 0
+        batteryChemistry: *id006
+        inverterKva:
+          type: number
+          exclusiveMinimum: 0
+        inverterType:
+          type: string
+          enum:
+          - HYBRID
+          - OFF_GRID
+          - ON_GRID
+        phase:
+          type: string
+          enum:
+          - SINGLE
+          - THREE
+        solarKwp:
+          type: number
+          minimum: 0
+        expandable: *id013
+        maxExpansionKwh:
+          type: number
+          minimum: 0
+        batteryWarrantyYears:
+          type: integer
+        inverterWarrantyYears:
+          type: integer
+        equipmentPriceMinInr: *id016
+        equipmentPriceMaxInr: *id016
+        installationPriceMinInr: *id016
+        installationPriceMaxInr: *id016
+        gstPct:
+          type: number
+          minimum: 0
+        priceUpdatedOn: *id015
+        epcPartners: *id006
+        active: *id013
+        notes: *id006
+      additionalProperties: false
+      required:
+      - systemCode
+      - systemName
+      - forResi
+      - forEss
+      - forCi
+      - systemType
+      - batteryCapacityKwh
+      - usableCapacityKwh
+      - inverterKva
+      - inverterType
+      - phase
+      - solarKwp
+      - equipmentPriceMinInr
+      - equipmentPriceMaxInr
+      - installationPriceMinInr
+      - installationPriceMaxInr
+      - gstPct
+      - priceUpdatedOn
+      - active
+    SystemsImport:
+      type: object
+      properties:
+        documentId: *id004
+        replaceAll: *id013
+      additionalProperties: false
+      required:
+      - documentId
+      description: Standard systems template v0.2 already uploaded
+    ReleaseDecision:
+      type: object
+      properties:
+        note:
+          type: string
+          maxLength: 1000
+      additionalProperties: false
+      description: note required on reject
+    Release:
+      type: object
+      properties:
+        id: *id004
+        version:
+          type: integer
+        status:
+          type: string
+          enum:
+          - DRAFT
+          - PENDING_APPROVAL
+          - PUBLISHED
+          - REJECTED
+          - RETIRED
+        params:
+          type: object
+        decisionNote:
+          type:
+          - string
+          - 'null'
+      additionalProperties: true
+      required:
+      - id
+      - version
+      - status
+    EligibilityRequest:
+      type: object
+      properties:
+        financierId: *id004
+      additionalProperties: false
+      description: Defaults to the case's current financier
+    EligibilityDecision:
+      type: object
+      properties:
+        status:
+          type: string
+          enum:
+          - ELIGIBLE
+          - NOT_ELIGIBLE
+          - INFO_NEEDED
+        maxEligibleInr:
+          type: integer
+          minimum: 1
+        reason:
+          type: string
+          minLength: 3
+      additionalProperties: false
+      required:
+      - status
+      description: ELIGIBLE needs maxEligibleInr; NOT_ELIGIBLE and INFO_NEEDED need reason
+    QuoteRequestCreate:
+      type: object
+      properties:
+        epcPartnerId: *id004
+        channel:
+          type: string
+          enum:
+          - EMAIL
+          - WHATSAPP
+          - PHONE
+      additionalProperties: false
+      required:
+      - epcPartnerId
+      - channel
+    QuoteRequestPatch:
+      type: object
+      properties:
+        status:
+          type: string
+          enum:
+          - RECEIVED
+          - DECLINED
+      additionalProperties: false
+      required:
+      - status
+    FileUploadStart:
+      type: object
+      properties:
+        typeCode: *id006
+        fileName: *id006
+        mimeType:
+          type: string
+          enum:
+          - application/pdf
+          - image/jpeg
+          - image/png
+          - audio/mpeg
+          - audio/mp4
+          - audio/wav
+        sizeBytes:
+          type: integer
+          minimum: 1
+          maximum: 26214400
+      additionalProperties: false
+      required:
+      - typeCode
+      - fileName
+      - mimeType
+      - sizeBytes
+    QuoteCreate:
+      type: object
+      properties:
+        documentId: *id004
+        assessmentId: *id004
+        epcPartnerId: *id004
+        quoteRequestId: *id004
+        systemDesc:
+          type: string
+          minLength: 3
+        batteryKwh:
+          type: number
+          minimum: 0
+        inverterKva:
+          type: number
+          minimum: 0
+        solarKwp:
+          type: number
+          minimum: 0
+        equipmentInr: *id016
+        installationInr: *id016
+        gstInr: *id016
+        validUntil: *id015
+        notes:
+          type: string
+          maxLength: 1000
+        provisional: *id013
+        provisionalReason:
+          type: string
+          minLength: 3
+      additionalProperties: false
+      required:
+      - documentId
+      - assessmentId
+      - epcPartnerId
+      - systemDesc
+      - equipmentInr
+      - installationInr
+      - gstInr
+      - validUntil
+      description: provisional must be true (with provisionalReason) when the assessment is PENDING_TECHNICAL_DATA
+    Quote:
+      type: object
+      properties:
+        id: *id004
+        version:
+          type: integer
+        status:
+          type: string
+          enum:
+          - ACTIVE
+          - SUPERSEDED
+          - EXPIRED
+          - ACCEPTED
+        totalInr: *id016
+        provisional: *id013
+      additionalProperties: true
+      required:
+      - id
+      - version
+      - status
+      - totalInr
+      - provisional
+    OfferCreate:
+      type: object
+      properties:
+        quoteId: *id004
+      additionalProperties: false
+      required:
+      - quoteId
+    Offer:
+      type: object
+      properties:
+        id: *id004
+        version:
+          type: integer
+        status:
+          type: string
+          enum:
+          - DRAFT
+          - SENT
+          - ACCEPTED
+          - SUPERSEDED
+          - EXPIRED
+        limitCheck:
+          type: string
+          enum:
+          - WITHIN
+          - ABOVE
+          - UNKNOWN
+        provisional: *id013
+        content:
+          type: object
+          properties:
+            system: *id006
+            equipmentInr: *id016
+            installationInr: *id016
+            gstInr: *id016
+            totalInr: *id016
+            financingLine: *id006
+          additionalProperties: false
+      additionalProperties: false
+      required:
+      - id
+      - version
+      - status
+      - limitCheck
+      - content
+      description: Never contains eligible, sanctioned, financed or down-payment amounts
+    OtpChallenge:
+      type: object
+      properties:
+        challengeId: *id004
+        expiresAt: *id014
+        resendAfterSeconds:
+          type: integer
+        maskedMobile: *id006
+      additionalProperties: false
+      required:
+      - challengeId
+      - expiresAt
+      - maskedMobile
+    OtpVerify:
+      type: object
+      properties:
+        code:
+          type: string
+          pattern: ^[0-9]{6}$
+      additionalProperties: false
+      required:
+      - code
+    FileRecord:
+      type: object
+      properties:
+        id: *id004
+        fileNo: *id006
+        acceptedQuoteId: *id004
+        quoteVersion:
+          type: integer
+        acceptedTotalInr: *id016
+        acceptedAt: *id014
+        provisional: *id013
+        acceptances:
+          type: array
+          items:
+            type: object
+            properties:
+              kind:
+                type: string
+                enum:
+                - INITIAL
+                - REVISED
+              acceptedAt: *id014
+            additionalProperties: false
+      additionalProperties: false
+      required:
+      - id
+      - fileNo
+      - acceptedQuoteId
+      - quoteVersion
+      - acceptedTotalInr
+      - acceptedAt
+    FinancingValues:
+      type: object
+      properties:
+        sanctionedInr:
+          type: integer
+          minimum: 1
+        downPaymentInr: *id016
+        tenureMonths:
+          type: integer
+          minimum: 1
+          maximum: 120
+        emiInr:
+          type: integer
+          minimum: 0
+          description: EMI provided by the lender after sanction; recorded, never calculated, never shown in the customer offer
+        lenderFileNo: *id006
+      additionalProperties: false
+      required:
+      - sanctionedInr
+    FinancingDecision:
+      type: object
+      properties:
+        status:
+          type: string
+          enum:
+          - SANCTIONED
+          - REJECTED
+        values:
+          $ref: '#/components/schemas/FinancingValues'
+        rejectionReason:
+          type: string
+          minLength: 3
+      additionalProperties: false
+      required:
+      - status
+      description: SANCTIONED needs values; REJECTED needs rejectionReason. Sanction below the accepted total sets REACCEPTANCE_PENDING
+    Reacceptance:
+      type: object
+      properties:
+        decisionId: *id004
+      additionalProperties: false
+      required:
+      - decisionId
+      description: Ecofy Admin only; SMS carries financed amount and down payment
+    RouteFinancier:
+      type: object
+      properties:
+        financierId: *id004
+        note:
+          type: string
+          minLength: 3
+      additionalProperties: false
+      required:
+      - financierId
+      - note
+    InstallationCreate:
+      type: object
+      properties:
+        epcPartnerId: *id004
+        scheduledOn: *id015
+      additionalProperties: false
+      required:
+      - epcPartnerId
+    InstallationUpdate:
+      type: object
+      properties:
+        status:
+          type: string
+          enum:
+          - SCHEDULED
+          - IN_PROGRESS
+          - INSTALLED
+          - COMMISSIONED
+          - STOPPED
+        onDate: *id015
+        note:
+          type: string
+          maxLength: 1000
+        stopReason:
+          type: string
+          minLength: 3
+        acknowledgeNoSanction: *id013
+      additionalProperties: false
+      required:
+      - status
+      description: INSTALLED needs >=1 INSTALLATION_PHOTO and a CUSTOMER_ACCEPTANCE_LETTER on the case; IN_PROGRESS before sanction needs acknowledgeNoSanction=true
+    DownPayment:
+      type: object
+      properties:
+        receivedOn: *id015
+        amountInr:
+          type: integer
+          minimum: 1
+        reference: *id006
+      additionalProperties: false
+      required:
+      - receivedOn
+      - amountInr
+    Disbursement:
+      type: object
+      properties:
+        disbursedOn: *id015
+        amountInr:
+          type: integer
+          minimum: 1
+        reference: *id006
+      additionalProperties: false
+      required:
+      - disbursedOn
+      - amountInr
+    EmiStatus:
+      type: object
+      properties:
+        asOf: *id015
+        state:
+          type: string
+          enum:
+          - CURRENT
+          - DPD_1_30
+          - DPD_31_60
+          - DPD_61_90
+          - DPD_90_PLUS
+          - CLOSED
+        note: *id006
+      additionalProperties: false
+      required:
+      - asOf
+      - state
+    AssetEvent:
+      type: object
+      properties:
+        type:
+          type: string
+          enum:
+          - BUYBACK
+          - REDEPLOYED
+          - CLOSED
+        onDate: *id015
+        note: *id006
+      additionalProperties: false
+      required:
+      - type
+      - onDate
+    DocumentCommit:
+      type: object
+      properties:
+        documentId: *id004
+        sha256:
+          type: string
+          pattern: ^[a-f0-9]{64}$
+        recordingConsent: *id013
+      additionalProperties: false
+      required:
+      - documentId
+      - sha256
+      description: recordingConsent=true required for CALL_RECORDING
+    Usage:
+      type: object
+      properties:
+        month:
+          type: string
+          pattern: ^[0-9]{4}-[0-9]{2}$
+        seatsByRole:
+          type: object
+          additionalProperties:
+            type: integer
+        filesCreated:
+          type: integer
+        filesToDate:
+          type: integer
+        activeAssets:
+          type: integer
+      additionalProperties: false
+      required:
+      - month
+      - filesCreated
+      - activeAssets
+  securitySchemes:
+    session:
+      type: apiKey
+      in: cookie
+      name: sb-access-token
+      description: Supabase session cookie (httpOnly, host-only). Device cookie ecofy_device is also required.

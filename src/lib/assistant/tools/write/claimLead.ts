@@ -16,7 +16,7 @@ import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { claimLead as claimLeadWrite } from "@/lib/inside-sales/claimLead";
 import { parseMobileList } from "@/lib/leads/claimScope";
-import { claimPoolPredicate, findLeadInScope, scopeJoin } from "../../scope";
+import { claimPoolPredicate, findClaimState, scopeJoin } from "../../scope";
 import { createPending } from "../../actions";
 import { statusLabel } from "../../format";
 import { MAX_TOOL_ROWS, type AssistantUser, type Preview, type ToolResult } from "../../types";
@@ -55,13 +55,18 @@ async function findInPool(user: AssistantUser, by: { id: string } | { mobiles: s
     `);
 }
 
-/** Why a lead the user CAN see is not in their pool (anything unseen stays NOT_FOUND). */
+/**
+ * Why a lead on the user's queue screens is not in their claim pool (anything
+ * unseen stays NOT_FOUND). ID 45: findClaimState returns only booleans, so
+ * this explains claimability without revealing the lead's details; the CRM
+ * link is given only when the lead is in the READ scope.
+ */
 async function whyNotClaimable(user: AssistantUser, leadId: string): Promise<ToolResult> {
-    const lead = await findLeadInScope(user, leadId);
-    if (!lead) return NOT_FOUND;
-    const crm_url = leadUrl(user, lead.id);
-    if (lead.owned) return { kind: "declined", reason: "You already own this lead.", crm_url };
-    if (lead.current_owner_id) return { kind: "declined", reason: "This lead already has an owner, so it can't be claimed.", crm_url };
+    const st = await findClaimState(user, leadId);
+    if (!st) return NOT_FOUND;
+    const crm_url = st.readable ? leadUrl(user, leadId.trim()) : null;
+    if (st.owned) return { kind: "declined", reason: "You already own this lead.", crm_url };
+    if (st.has_owner) return { kind: "declined", reason: "This lead already has an owner, so it can't be claimed.", crm_url };
     return { kind: "declined", reason: "This lead can't be claimed.", crm_url };
 }
 

@@ -30,6 +30,7 @@ import type {
   DigestTable,
 } from "@/lib/digests/types";
 import type { DigestDetailLevel, DigestSections } from "@/lib/digests/schedule";
+import { RAG_CELL_STYLE, ragToneOfCell } from "@/lib/digests/rag";
 import { getMailer } from "./mailer";
 
 function esc(v: unknown): string {
@@ -175,6 +176,15 @@ export function buildDigestEmail(
         .join("");
       const isGroup = (r: Array<string | number>) =>
         !!t.groupHeaders && r.slice(1).every((v) => v === "" || v == null);
+      // ID 9: red / amber / green on the "% of target" columns (toneColumns).
+      const cellColor = (v: string | number, i: number): string => {
+        const tone = t.toneColumns?.includes(i) ? ragToneOfCell(v) : null;
+        if (tone) {
+          const c = RAG_CELL_STYLE[tone];
+          return `${c.color};background:${c.background};font-weight:700`;
+        }
+        return v === "Not measured yet" ? "#94a3b8" : SLATE;
+      };
       const body = t.rows
         .map((r) =>
           isGroup(r)
@@ -183,7 +193,7 @@ export function buildDigestEmail(
                 border-bottom:1px solid #e2e8f0">${esc(r[0])}</td></tr>`
             : `<tr>${r
                 .map(
-                  (v, i) => `<td style="padding:6px 6px;color:${v === "Not measured yet" ? "#94a3b8" : SLATE};
+                  (v, i) => `<td style="padding:6px 6px;color:${cellColor(v, i)};
                   font-size:13px;${i === 0 && t.groupHeaders ? "font-weight:600;" : ""}
                   text-align:${i < textCols ? "left" : "right"};border-bottom:1px solid #f1f5f9;
                   white-space:${i < textCols ? "normal" : "nowrap"};

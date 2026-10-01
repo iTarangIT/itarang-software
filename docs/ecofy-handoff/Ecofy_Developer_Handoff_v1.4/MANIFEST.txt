@@ -1,0 +1,17 @@
+Ecofy Developer Handoff v1.4
+
+AUTHORITATIVE
+00_START_HERE.md
+01_PRODUCT_SPEC/Ecofy_CRM_LMS_BRD_v1.4.docx
+02_API_DATABASE/ecofy_openapi_v1.0.1.yaml
+02_API_DATABASE/ecofy_schema_v1.4.sql
+02_API_DATABASE/ecofy_schema_tests_v1.4.sql
+02_API_DATABASE/ecofy_seed_v1.1.sql
+03_ACCEPTANCE/Ecofy_UAT_Scenarios_v1.1.xlsx
+04_INPUT_TEMPLATES/Ecofy_Lead_Upload_Template_v0.3.xlsx
+04_INPUT_TEMPLATES/Ecofy_Standard_Systems_Template_v0.2.xlsx
+
+REFERENCE ONLY
+05_REFERENCE_ONLY/Ecofy_Build_Baseline_v1.3.docx
+05_REFERENCE_ONLY/ecofy_system_design_v1.3.png
+05_REFERENCE_ONLY/ecofy_prototype_REFERENCE_ONLY.html

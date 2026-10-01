@@ -28,8 +28,8 @@ import { getNeodoveConfig } from "@/lib/neodove/config";
 import { pushLead } from "@/lib/neodove/client";
 import { dealerLeadToNeodove, type PushableLead } from "@/lib/neodove/mapper";
 import { NEODOVE_ADMIN_ROLES } from "@/lib/neodove/roles";
+import { ASSIGN_ON_PUSH } from "@/lib/neodove/assignPolicy";
 import {
-    ASSIGN_ON_PUSH,
     assignAfterPush,
     logAssignmentSummary,
     resolveNeodoveAssignee,

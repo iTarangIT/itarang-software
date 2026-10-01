@@ -19,8 +19,12 @@ export const TOUCHPOINT_TYPE = [
   "neodove_dial_request",
   // Commercials / collateral
   "brochure_sent",
-  // `quote_sent` means RELEASED — the quote cleared the approval gate. It has
-  // meant that since E-221 and is written by both approval paths.
+  // `quote_released` — the quote cleared the approval gate (ID 75 rename).
+  // Written by both approval paths since 1 Oct 2026. `quote_sent` is the SAME
+  // event under its old name (E-221 until the rename): never written again,
+  // kept so history still parses and renders. Readers must accept both —
+  // use QUOTE_RELEASED_TYPES / isQuoteReleased, never a bare literal.
+  "quote_released",
   "quote_sent",
   // E-242 registers three values that were already being WRITTEN and were never
   // listed here. `quote_submitted` (inside-sales commercials route) and
@@ -68,6 +72,17 @@ export const TOUCHPOINT_TYPE = [
   "contactability_flag",
 ] as const;
 export type TouchpointType = (typeof TOUCHPOINT_TYPE)[number];
+
+/**
+ * ID 75: every stored value that means "quote released" — the new name first,
+ * then the legacy `quote_sent` rows (no data rewrite). SQL readers bind this
+ * array (e.g. `touchpoint_type = ANY(${[...QUOTE_RELEASED_TYPES]})`).
+ */
+export const QUOTE_RELEASED_TYPES = ["quote_released", "quote_sent"] as const satisfies readonly TouchpointType[];
+
+export function isQuoteReleased(type: string | null | undefined): boolean {
+  return type != null && (QUOTE_RELEASED_TYPES as readonly string[]).includes(type);
+}
 
 /**
  * Whether a touchpoint counts as WORK on a lead and resets its idle clock

@@ -23,6 +23,9 @@
  * Each change is logged as a "System correction" (status history + timeline)
  * that never counts as the owner's work (countsAsWork:false, ID 115.5). The
  * owner lists are printed and written to reports/ as CSV, dry run included.
+ * On --apply each owner is also sent their list: ONE in-app notification per
+ * owner (notifyUser, type lead.system_correction, titled "System correction"),
+ * after their changes are written. Leads with no owner are only in the CSV.
  * Re-run = no-op.
  */
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -30,6 +33,7 @@ import { join } from "node:path";
 import { sql } from "drizzle-orm";
 import { db } from "../src/lib/db";
 import { writeTouchpoint } from "../src/lib/touchpoints/write";
+import { notifyUser } from "../src/lib/notifications/notify";
 import { isForward } from "../src/lib/lifecycle/statusRules";
 import type { LeadStatus } from "../src/lib/lifecycle/transitions";
 
@@ -38,6 +42,7 @@ type Row = {
     dealer_name: string | null;
     lead_status: LeadStatus;
     pre_transfer_status: string | null;
+    owner_id: string | null;
     owner_name: string | null;
     has_quote: boolean;
     delivered: boolean;
@@ -86,6 +91,7 @@ async function main() {
         )
         SELECT dl.id, COALESCE(dl.dealer_name, dl.shop_name) AS dealer_name, dl.lead_status,
                dl.pre_transfer_status,
+               u.id::text AS owner_id,
                u.name AS owner_name,
                (lq.dealer_lead_id IS NOT NULL) AS has_quote,
                (lq.dealer_lead_id IS NOT NULL AND EXISTS (
@@ -207,6 +213,50 @@ async function main() {
         });
     }
     console.log(`\nApplied ${changes.length}.`);
+
+    // ID 75.2: tell each owner what moved — one notification per owner, sent
+    // only after all their changes are written. Best effort: a failed
+    // notification never undoes a correction (the CSV is the fallback list).
+    const perOwner = new Map<string, Change[]>();
+    for (const c of changes) {
+        if (!c.r.owner_id) continue;
+        perOwner.set(c.r.owner_id, [...(perOwner.get(c.r.owner_id) ?? []), c]);
+    }
+    const SHOWN = 10;
+    let notified = 0;
+    for (const [ownerId, list] of perOwner) {
+        const lines = list.slice(0, SHOWN).map(({ r, kind, from, to }) =>
+            kind === "pre_transfer"
+                ? `${r.dealer_name ?? r.id}: after the field visit → ${to} (was ${from ?? "none"})`
+                : `${r.dealer_name ?? r.id}: ${from ?? "none"} → ${to}`,
+        );
+        if (list.length > SHOWN) lines.push(`…and ${list.length - SHOWN} more`);
+        try {
+            await notifyUser(ownerId, {
+                type: "lead.system_correction",
+                title: `System correction: ${list.length} of your lead${list.length === 1 ? "" : "s"} moved`,
+                message:
+                    "Commercials stages now follow quote events (ID 75), so these were recomputed. " +
+                    "Not counted as your work.\n" +
+                    lines.join("\n"),
+                data: {
+                    reason: REASON,
+                    leads: list.map(({ r, kind, from, to }) => ({
+                        lead_id: r.id,
+                        dealer_name: r.dealer_name,
+                        kind,
+                        from,
+                        to,
+                    })),
+                },
+                leadId: list.length === 1 ? list[0].r.id : null,
+            });
+            notified++;
+        } catch (e) {
+            console.error(`Could not notify owner ${ownerId}:`, e instanceof Error ? e.message : e);
+        }
+    }
+    console.log(`Notified ${notified} of ${perOwner.size} owners (System correction).`);
     process.exit(0);
 }
 

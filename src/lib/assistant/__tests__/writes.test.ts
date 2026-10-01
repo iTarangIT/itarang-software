@@ -220,6 +220,7 @@ describe("appliers (run inside the executor's transaction)", () => {
         // The executor parses the stored plan before it opens the transaction.
         expect(() => APPLIERS.log_call!.schema.parse({ ...callPlan, lost: { reason: "because", notes: null } })).toThrow();
         expect(() => APPLIERS.log_call!.schema.parse({ ...callPlan, touchpoint_type: "quote_sent" })).toThrow();
+        expect(() => APPLIERS.log_call!.schema.parse({ ...callPlan, touchpoint_type: "quote_released" })).toThrow();
         expect(logLeadTouchpoint).not.toHaveBeenCalled();
     });
 });

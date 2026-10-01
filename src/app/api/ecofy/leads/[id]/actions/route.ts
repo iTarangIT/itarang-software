@@ -11,7 +11,7 @@
 import { requireRole } from "@/lib/auth-utils";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
 import { checkEcofyAction, ECOFY_ALL_ROLES } from "@/lib/ecofy/access";
-import { ecofyActionSchema } from "@/lib/ecofy/actionSchemas";
+import { calculatorAssessmentRefusal, ecofyActionSchema } from "@/lib/ecofy/actionSchemas";
 import { notifyEcofyAction } from "@/lib/ecofy/notify";
 import { ecofyActorName, getEcofyLeadForViewer } from "@/lib/ecofy/queries";
 import { recordEcofyDueTimes } from "@/lib/ecofy/reminders";
@@ -34,6 +34,9 @@ export const POST = withErrorHandler(async (req: Request, ctx: { params: Promise
 
     const allowed = checkEcofyAction({ id: user.id, role: user.role }, lead, input.action);
     if (!allowed.ok) throw new ActionRefused(allowed.reason, allowed.status);
+    // FR-07.11 + segment match for a CALCULATOR assessment (Ecofy checks again).
+    const calcRefusal = calculatorAssessmentRefusal(lead.segment, input);
+    if (calcRefusal) throw new ActionRefused(calcRefusal, 400);
 
     const actorName = ecofyActorName(user);
     let data: unknown = null;

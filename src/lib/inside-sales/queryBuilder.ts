@@ -16,6 +16,7 @@ import {
     type QueueFilterInput,
 } from "@/lib/leads/queueFilterSql";
 import type { QueueRegion } from "@/lib/leads/queueFilters";
+import { finalisedNotWonSql } from "@/lib/leads/finalisedNotWon";
 import type { QueueSort } from "@/lib/leads/queueSort";
 
 const OPEN_LIST = sql.raw(
@@ -54,6 +55,12 @@ type BuildArgs = {
     neodoveOnly?: boolean;
     /** Only leads who asked to be called back — from either system. */
     callbackOnly?: boolean;
+    /**
+     * ID 75.4: only "Finalised, not Won" leads — Commercials_Finalised with an
+     * approved, non-withdrawn dealer decision (finalisedNotWonSql, the admin
+     * panel's predicate). A chip, not a sixth tab.
+     */
+    finalisedOnly?: boolean;
     /** Stage / interest / region / date range — see @/lib/leads/queueFilters. */
     filters?: QueueFilterInput;
     /** User-chosen column + direction; the tab order stays as the tiebreak. */
@@ -113,8 +120,9 @@ function extraFilters({
     q,
     neodoveOnly,
     callbackOnly,
+    finalisedOnly,
     filters,
-}: Pick<BuildArgs, "q" | "neodoveOnly" | "callbackOnly" | "filters">) {
+}: Pick<BuildArgs, "q" | "neodoveOnly" | "callbackOnly" | "finalisedOnly" | "filters">) {
     const parts: SQL[] = [];
     if (q) parts.push(leadSearchClause(q));
     if (neodoveOnly) {
@@ -135,6 +143,7 @@ function extraFilters({
             OR to_jsonb(dl) ->> 'last_disposition' = 'As to Call Back'
         )`);
     }
+    if (finalisedOnly) parts.push(sql` AND ${finalisedNotWonSql()}`);
     if (filters) parts.push(...queueFilterClauses(filters, ISR_DATE_COLUMN));
     return parts.length ? sql.join(parts, sql``) : sql``;
 }
@@ -175,13 +184,14 @@ export async function fetchQueueRows({
     q,
     neodoveOnly,
     callbackOnly,
+    finalisedOnly,
     filters,
     sort,
 }: BuildArgs): Promise<QueueRow[]> {
     const offset = (page - 1) * limit;
     const where = tabFilter(tab, userId);
     const order = queueSortOrder(sort, tabOrder(tab));
-    const search = extraFilters({ q, neodoveOnly, callbackOnly, filters });
+    const search = extraFilters({ q, neodoveOnly, callbackOnly, finalisedOnly, filters });
 
     const rows = await db.execute<QueueRow>(sql`
         SELECT
@@ -229,12 +239,13 @@ export async function fetchQueueIds({
     q,
     neodoveOnly,
     callbackOnly,
+    finalisedOnly,
     filters,
     sort,
 }: Omit<BuildArgs, "page">): Promise<string[]> {
     const where = tabFilter(tab, userId);
     const order = queueSortOrder(sort, tabOrder(tab));
-    const search = extraFilters({ q, neodoveOnly, callbackOnly, filters });
+    const search = extraFilters({ q, neodoveOnly, callbackOnly, finalisedOnly, filters });
     const rows = await db.execute<{ id: string }>(sql`
         SELECT dl.id
         FROM dealer_leads dl
@@ -251,13 +262,14 @@ export async function countQueueRows({
     q,
     neodoveOnly,
     callbackOnly,
+    finalisedOnly,
     filters,
 }: Pick<
     BuildArgs,
-    "tab" | "userId" | "q" | "neodoveOnly" | "callbackOnly" | "filters"
+    "tab" | "userId" | "q" | "neodoveOnly" | "callbackOnly" | "finalisedOnly" | "filters"
 >): Promise<number> {
     const where = tabFilter(tab, userId);
-    const search = extraFilters({ q, neodoveOnly, callbackOnly, filters });
+    const search = extraFilters({ q, neodoveOnly, callbackOnly, finalisedOnly, filters });
     const rows = await db.execute<{ c: string }>(sql`
         SELECT COUNT(*)::text AS c FROM dealer_leads dl WHERE ${where} ${search}
     `);
@@ -275,11 +287,12 @@ export async function countQueueRows({
  */
 export async function fetchAllTabCounts(
     userId: string,
-    opts?: Pick<BuildArgs, "neodoveOnly" | "callbackOnly" | "filters">,
+    opts?: Pick<BuildArgs, "neodoveOnly" | "callbackOnly" | "finalisedOnly" | "filters">,
 ): Promise<Record<QueueTab, number>> {
     const extra = extraFilters({
         neodoveOnly: opts?.neodoveOnly,
         callbackOnly: opts?.callbackOnly,
+        finalisedOnly: opts?.finalisedOnly,
         filters: opts?.filters,
     });
     const rows = await db.execute<{
@@ -304,6 +317,19 @@ export async function fetchAllTabCounts(
         team: Number(r.team ?? 0),
         my_closed: Number(r.my_closed ?? 0),
     };
+}
+
+/**
+ * ID 75.4: the rep's own "Finalised, not Won" leads on My open — the count
+ * badge on the queue chip. Not narrowed by the other filters: it answers "how
+ * many of mine are waiting for Mark Won", whatever the table shows right now.
+ */
+export async function countFinalisedNotWon(userId: string): Promise<number> {
+    const rows = await db.execute<{ c: string }>(sql`
+        SELECT COUNT(*)::text AS c FROM dealer_leads dl
+         WHERE ${tabFilter("my_open", userId)} AND ${finalisedNotWonSql()}
+    `);
+    return Number(rows[0]?.c ?? 0);
 }
 
 /**

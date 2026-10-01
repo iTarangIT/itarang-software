@@ -7,7 +7,8 @@ const poolRows: Record<string, unknown>[] = [];
 const execute = vi.fn<(q: SQL) => Promise<Record<string, unknown>[]>>(async () => poolRows);
 vi.mock("@/lib/db", () => ({ db: { execute } }));
 const findLeadInScope = vi.fn();
-vi.mock("../scope", async (orig) => ({ ...(await orig<typeof import("../scope")>()), findLeadInScope }));
+const findClaimState = vi.fn();
+vi.mock("../scope", async (orig) => ({ ...(await orig<typeof import("../scope")>()), findLeadInScope, findClaimState }));
 const createPending = vi.fn<(...a: unknown[]) => Promise<unknown>>(async () => ({ id: "act-1", expiresAt: new Date() }));
 vi.mock("../actions", async (orig) => ({ ...(await orig<typeof import("../actions")>()), createPending }));
 const logLeadTouchpoint = vi.fn<(...a: unknown[]) => Promise<unknown>>(async () => ({ touchpointId: "tp-1", historyId: "h-1" }));
@@ -264,15 +265,18 @@ describe("claim_lead proposals (UC-05)", () => {
         expect(createPending).not.toHaveBeenCalled();
     });
 
-    it("an id outside the pool: out of scope = not_found; in scope = the reason (no territory block, ID 45)", async () => {
-        findLeadInScope.mockResolvedValue(null);
+    it("an id outside the pool: off the user's tabs = not_found; on them = the reason only (no territory block, ID 45)", async () => {
+        findClaimState.mockResolvedValue(null);
         expect(await run(ASM, "claim_lead", { lead_id: "DL-9" })).toEqual({ kind: "not_found" });
-        findLeadInScope.mockResolvedValue(lead({ current_owner_id: null, owned: false }));
-        expect(await run(ASM, "claim_lead", { lead_id: "DL-9" })).toMatchObject({ kind: "declined", reason: "This lead can't be claimed." });
-        findLeadInScope.mockResolvedValue(lead({ current_owner_id: "isr-2", owned: false }));
-        expect(await run(ISR, "claim_lead", { lead_id: "DL-9" })).toMatchObject({ kind: "declined", reason: expect.stringMatching(/already has an owner/) });
-        findLeadInScope.mockResolvedValue(lead({ current_owner_id: "isr-1", owned: true }));
+        // A pool-tab lead (e.g. ASM territory): the reason, but no CRM link — not in the read scope.
+        findClaimState.mockResolvedValue({ owned: false, has_owner: false, readable: false });
+        expect(await run(ASM, "claim_lead", { lead_id: "DL-9" })).toEqual({ kind: "declined", reason: "This lead can't be claimed.", crm_url: null });
+        findClaimState.mockResolvedValue({ owned: false, has_owner: true, readable: true });
+        expect(await run(ISR, "claim_lead", { lead_id: "DL-9" })).toMatchObject({ kind: "declined", reason: expect.stringMatching(/already has an owner/), crm_url: expect.any(String) });
+        findClaimState.mockResolvedValue({ owned: true, has_owner: true, readable: true });
         expect(await run(ISR, "claim_lead", { lead_id: "DL-9" })).toMatchObject({ kind: "declined", reason: "You already own this lead." });
+        // The explanation never goes through the read scope's lead details.
+        expect(findLeadInScope).not.toHaveBeenCalled();
         expect(createPending).not.toHaveBeenCalled();
     });
 

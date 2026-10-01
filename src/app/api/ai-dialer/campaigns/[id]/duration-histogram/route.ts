@@ -15,8 +15,9 @@
 //
 // AUTH (ID 45): the campaign readers (requireCampaignReader — the /leads
 // roles). It used to be "none beyond the session", but middleware does NOT gate
-// /api/*. Counts and reasons only — no names, numbers or transcripts — so it
-// stays campaign-wide for reps, like the campaign stat tiles.
+// /api/*. Own-only roles (reps) get the histogram and funnel over the leads
+// they own only — the same current_owner_id scope as [id]/leads, so a bar a
+// rep clicks never promises rows the leads table will not show them.
 import { db } from "@/lib/db";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
 import { requireCampaignReader } from "@/lib/ai-dialer/campaignAccess";
@@ -35,7 +36,8 @@ import {
 
 export const GET = withErrorHandler(
     async (_req: Request, ctx: { params: Promise<{ id: string }> }) => {
-        await requireCampaignReader();
+        const { user, ownOnly } = await requireCampaignReader();
+        const ownerId = ownOnly ? user.id : undefined;
         const { id: campaignId } = await ctx.params;
         if (!campaignId) return errorResponse("Campaign id required", 400);
 
@@ -58,8 +60,8 @@ export const GET = withErrorHandler(
         const withTurns = await hasTranscriptTurnsColumn();
 
         const [histogramRows, funnelRows] = await Promise.all([
-            db.execute(buildDurationHistogramSql(campaignId, buckets)),
-            db.execute(buildCallQualitySql(campaignId, { withTurns })),
+            db.execute(buildDurationHistogramSql(campaignId, buckets, { ownerId })),
+            db.execute(buildCallQualitySql(campaignId, { withTurns, ownerId })),
         ]);
 
         const histogram = foldDurationHistogram(

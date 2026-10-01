@@ -1,11 +1,12 @@
-// GET /api/inside-sales/queue/counts?neodove=1&callback=1&<filters>
-// Badge counts for the 5 tabs in one round trip.
+// GET /api/inside-sales/queue/counts?neodove=1&callback=1&finalised=1&<filters>
+// Badge counts for the 5 tabs in one round trip, plus finalised_not_won — the
+// rep's own "Finalised, not Won" leads on My open (ID 75.4 chip badge).
 
 import type { NextRequest } from "next/server";
 import { requireRole } from "@/lib/auth-utils";
 import { ISR_POOL_TABS, claimsByNumberOnly } from "@/lib/leads/claimScope";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
-import { fetchAllTabCounts } from "@/lib/inside-sales/queryBuilder";
+import { countFinalisedNotWon, fetchAllTabCounts } from "@/lib/inside-sales/queryBuilder";
 import { readQueueFilters } from "@/lib/leads/queueFilters";
 
 export const dynamic = "force-dynamic";
@@ -25,14 +26,18 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
     // Mirrors the list's own filters, so the badge above a tab and the rows
     // inside it can never disagree about how many leads there are.
     const sp = new URL(req.url).searchParams;
-    const counts = await fetchAllTabCounts(user.id, {
-        neodoveOnly: sp.get("neodove") === "1",
-        callbackOnly: sp.get("callback") === "1",
-        filters: readQueueFilters(sp),
-    });
+    const [counts, finalisedNotWon] = await Promise.all([
+        fetchAllTabCounts(user.id, {
+            neodoveOnly: sp.get("neodove") === "1",
+            callbackOnly: sp.get("callback") === "1",
+            finalisedOnly: sp.get("finalised") === "1",
+            filters: readQueueFilters(sp),
+        }),
+        countFinalisedNotWon(user.id),
+    ]);
     // ID 45: no pool counts for reps — they claim by number search only.
     if (claimsByNumberOnly(user.role)) {
         for (const t of ISR_POOL_TABS) (counts as Record<string, number>)[t] = 0;
     }
-    return successResponse(counts);
+    return successResponse({ ...counts, finalised_not_won: finalisedNotWon });
 });

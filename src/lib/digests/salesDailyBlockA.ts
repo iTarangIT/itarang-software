@@ -22,6 +22,7 @@ import { engagedCall, wasHotAt } from "@/lib/reports/metricDefinitions";
 import { monthEnd, workingDaysBetween } from "@/lib/targets/rules";
 import { scrapKgSourced } from "@/lib/buyback/scrapKgSourced";
 import { istRangeNaive, istRangeTz } from "./window";
+import { RAG_AMBER_MIN } from "./rag";
 
 export const NOT_MEASURED = "Not measured yet";
 
@@ -74,6 +75,9 @@ export const BLOCK_A_COLUMNS = [
     "Δ MTD",
 ];
 
+/** Index of "% of target" in BLOCK_A_COLUMNS — coloured red / amber / green (rag.ts). */
+export const BLOCK_A_PCT_COLUMN = BLOCK_A_COLUMNS.indexOf("% of target");
+
 /** Rows for the email table: a group header row, then its metrics. */
 export function blockATableRows(rows: BlockARow[]): Array<Array<string | number>> {
     const out: Array<Array<string | number>> = [];
@@ -118,11 +122,11 @@ export function blockAHeadline(rows: BlockARow[]): string {
     const withTarget = rows
         .map((r) => ({ r, p: pctOfTarget(r.values.mtd, r.target) }))
         .filter((x) => x.p != null) as Array<{ r: BlockARow; p: number }>;
-    const behind = withTarget.filter((x) => x.p < 80).map((x) => `${x.r.label.toLowerCase()} at ${x.p}%`);
+    const behind = withTarget.filter((x) => x.p < RAG_AMBER_MIN).map((x) => `${x.r.label.toLowerCase()} at ${x.p}%`);
     const tail = withTarget.length
         ? behind.length
             ? ` Month to date behind target: ${behind.join(", ")}.`
-            : " Month to date: every targeted metric at 80% or more."
+            : ` Month to date: every targeted metric at ${RAG_AMBER_MIN}% or more.`
         : "";
     return `Yesterday: ${parts.join(" · ")}.${tail}`;
 }

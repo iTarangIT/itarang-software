@@ -61,11 +61,18 @@
 
 import { sql } from "drizzle-orm";
 
-import { BLOCK_A_COLUMNS, blockAHeadline, blockATableRows, buildBlockA } from "../salesDailyBlockA";
+import {
+  BLOCK_A_COLUMNS,
+  BLOCK_A_PCT_COLUMN,
+  blockAHeadline,
+  blockATableRows,
+  buildBlockA,
+} from "../salesDailyBlockA";
 import {
   BLOCK_D_COLUMNS,
   NO_OWNER_KEY,
   REP_BLOCK_COLUMNS,
+  REP_BLOCK_PCT_COLUMN,
   blockDRows,
   buildRepBlocks,
   loadAwaitingFieldVisit,
@@ -297,6 +304,7 @@ async function collect(
             rows: blockATableRows(blockA.rows),
             textColumns: 1,
             groupHeaders: true,
+            toneColumns: [BLOCK_A_PCT_COLUMN],
             note: blockA.targetsNote,
             // "Right now" sits right after the table, as in the mockup.
             footer: {
@@ -318,6 +326,7 @@ async function collect(
             rows: repBlockTableRows(buildRepBlocks("asm", yesterday, mtd, extras, blockA.userTargets)),
             textColumns: 1,
             groupHeaders: true,
+            toneColumns: [REP_BLOCK_PCT_COLUMN],
             note: "One block per ASM. MTD target and % of target only where the ASM has a target for that metric.",
             empty: "No ASMs on the Sales dashboard this month.",
           },
@@ -328,6 +337,7 @@ async function collect(
             rows: repBlockTableRows(buildRepBlocks("inside_sales_rep", yesterday, mtd, extras, blockA.userTargets)),
             textColumns: 1,
             groupHeaders: true,
+            toneColumns: [REP_BLOCK_PCT_COLUMN],
             note: "One block per ISR / CC. MTD target and % of target only where the rep has a target for that metric.",
             empty: "No inside-sales reps on the Sales dashboard this month.",
           },
