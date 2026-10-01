@@ -174,6 +174,7 @@ export const TYPE_LABELS: Record<string, string> = {
   "onboarding.correction_requested": "Corrections requested on a dealer application",
   dealer_onboarding_submitted: "Dealer application submitted (legacy)",
   onboarding_initiated: "Onboarding started from a converted lead",
+  lead_conversion_failed: "Onboarding approved but its lead was not moved to Converted",
   "vendor.registered": "Scrap vendor registered",
 
   // --- KYC & consent ---

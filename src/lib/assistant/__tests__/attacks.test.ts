@@ -264,7 +264,8 @@ describe("B. prompt injection at the tool boundary", () => {
         expect(createPending).toHaveBeenCalledTimes(1);
         const row = createPending.mock.calls[0]![0] as { userId: string; plan: Record<string, unknown> };
         expect(row.userId).toBe("isr-1");
-        expect(row.plan).toEqual({ lead_id: "DL-1", reason: "not_interested", notes: null });
+        // ID 76: the plan carries competitor_name (null unless lost_to_competition).
+        expect(row.plan).toEqual({ lead_id: "DL-1", reason: "not_interested", notes: null, competitor_name: null });
         expect(records[0]!.input).toEqual({ lead_id: "DL-1", lost_reason: "not_interested" });
     });
 

@@ -42,6 +42,10 @@ export const POST = withErrorHandler(
                 actorId: user.id,
                 requested: null,
                 remarks: `Visit not needed — ${reason}`,
+                // ID 77.4: the reason lands on the status-history row, and a
+                // skipped visit is not work — it must not reset the idle clock.
+                reasonNotes: `Visit not needed: ${reason}`,
+                countsAsWork: false,
             });
         });
 

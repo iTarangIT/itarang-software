@@ -10,6 +10,7 @@ import { assertOwner } from "@/lib/leads/ownership";
 import {
     LeadNotFoundError,
     logLeadTouchpoint,
+    StatusRequestNotAllowedError,
     TouchpointBodySchema,
     UnknownDispositionError,
 } from "@/lib/inside-sales/logTouchpoint";
@@ -31,6 +32,7 @@ export const POST = withErrorHandler(
         } catch (err) {
             if (err instanceof LeadNotFoundError) return errorResponse("Lead not found", 404);
             if (err instanceof UnknownDispositionError) return errorResponse(err.message, 400);
+            if (err instanceof StatusRequestNotAllowedError) return errorResponse(err.message, 400);
             // 42703 = undefined_column. Only reachable when a disposition was
             // sent AND this database has not applied E-236. A legible 503 beats
             // a 500 the rep cannot act on.

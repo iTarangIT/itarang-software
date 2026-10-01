@@ -19,7 +19,13 @@ import {
     type WriteTouchpointInput,
     type WriteTouchpointResult,
 } from "@/lib/touchpoints/write";
-import { TOUCHPOINT_TYPE, CALL_STATUS, NEXT_ACTION, shouldAutoEngage } from "@/lib/lifecycle/touchpointTypes";
+import {
+    TOUCHPOINT_TYPE,
+    CALL_STATUS,
+    NEXT_ACTION,
+    isConversationTouchpoint,
+    shouldAutoEngage,
+} from "@/lib/lifecycle/touchpointTypes";
 import { LEAD_STATUS, type LeadStatus } from "@/lib/lifecycle/transitions";
 import { isForward } from "@/lib/lifecycle/statusRules";
 import { reviewLeadContactability } from "@/lib/leads/contactability";
@@ -87,6 +93,16 @@ export class UnknownDispositionError extends Error {
     }
 }
 
+/**
+ * ID 115.2: first contact (Under_Discussion) was asked for on a touchpoint that
+ * is not a conversation with the dealer (a note). The route answers 400.
+ */
+export class StatusRequestNotAllowedError extends Error {
+    constructor() {
+        super("Only a call, visit or WhatsApp touchpoint can move the lead to Under discussion. Log the conversation itself.");
+    }
+}
+
 export class LeadNotFoundError extends Error {
     constructor() {
         super("Lead not found");
@@ -95,7 +111,8 @@ export class LeadNotFoundError extends Error {
 
 /**
  * Body + the lead's current status → the writeTouchpoint input. Pure.
- * Throws UnknownDispositionError for a disposition outside the sheet.
+ * Throws UnknownDispositionError for a disposition outside the sheet, and
+ * StatusRequestNotAllowedError for Under_Discussion asked on a non-conversation.
  */
 export function planTouchpoint(
     body: TouchpointBody,
@@ -155,6 +172,9 @@ export function planTouchpoint(
               }
             : undefined;
     const requested = body.status_change?.to ?? null;
+    if (requested === "Under_Discussion" && !isConversationTouchpoint(body.touchpoint_type)) {
+        throw new StatusRequestNotAllowedError();
+    }
     const statusChange: WriteTouchpointInput["statusChange"] =
         requested === "Under_Discussion" &&
         fromStatus !== "Transferred_to_ASM" &&

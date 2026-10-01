@@ -60,6 +60,11 @@ export type MarkLostInput = {
     confirmedHighImpact?: boolean;
     /** Required for lost_to_competition (ID 76); stored in dealer_leads.competitor_name (E-314). */
     competitorName?: string | null;
+    /**
+     * ID 115.4: Won → Lost is refused unless admin-driven. Only the admin
+     * onboarding drop-out resolution passes it.
+     */
+    adminOverride?: boolean;
 };
 
 /** The same refusals the route has always made, before anything is written. */
@@ -75,13 +80,16 @@ export async function markLeadLost(input: MarkLostInput, opts?: { tx?: Tx }): Pr
     checkMarkLost(input);
     const run = async (tx: Tx) => {
         const stateRows = await tx.execute<{ lead_status: string | null }>(sql`
-            SELECT lead_status FROM dealer_leads WHERE id = ${input.leadId} LIMIT 1
+            SELECT lead_status FROM dealer_leads WHERE id = ${input.leadId} LIMIT 1 FOR UPDATE
         `);
         if (stateRows.length === 0) throw new LostLeadNotFoundError();
-        // Reachable from any OPEN status, Won included (a dealer who drops out
-        // of onboarding), and a lead with no status. A Converted lead goes to
-        // Lost only through the admin drop-out resolution (S3, statusRules.ts).
+        // Reachable from any OPEN status before Won, and a lead with no status.
+        // Won → Lost needs adminOverride; a Converted lead goes to Lost only
+        // through the admin drop-out resolution (S3, statusRules.ts).
         const fromStatus = stateRows[0]?.lead_status as LeadStatus | null;
+        // ID 115.6: a second Mark Lost racing the first is a no-op — nothing to
+        // write, and the first one's reason / competitor are not overwritten.
+        if (fromStatus === "Lost") return;
 
         // ID 76: the competitor's name (E-314 column, raw — only this reason writes it).
         if (input.reason === "lost_to_competition") {
@@ -110,6 +118,7 @@ export async function markLeadLost(input: MarkLostInput, opts?: { tx?: Tx }): Pr
                     reasonNotes: input.notes ?? null,
                     closingRole: deriveClosingRole(input.actor.role),
                     event: "mark_lost",
+                    adminOverride: input.adminOverride,
                 },
             },
             { tx },

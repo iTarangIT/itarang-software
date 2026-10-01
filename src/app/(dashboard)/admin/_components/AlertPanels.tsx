@@ -13,6 +13,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import {
     AlarmClock,
+    BadgeCheck,
     CalendarClock,
     CheckCircle2,
     ChevronDown,
@@ -26,6 +27,7 @@ import {
     MapPin,
     PauseCircle,
     PhoneOff,
+    Route,
     ShieldAlert,
     UserMinus,
     UserX,
@@ -34,7 +36,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import {
     ALERT_PANELS,
-    ALERT_PANEL_LABELS,
+    alertPanelLabel,
     type AlertPanelKey,
     type AlertPanelRow,
 } from "@/lib/admin/types";
@@ -49,6 +51,9 @@ const SELECTABLE: Set<AlertPanelKey> = new Set([
     "out_of_territory_handoffs",
     // R-16 — bulk mark-lost / reassign is exactly what a dead number needs.
     "non_responsive",
+    // ID 77.1 — overdue field visits are typically reassigned in bulk.
+    "transfer_visit_overdue",
+    "finalised_not_won",
 ]);
 
 type Severity = "warning" | "critical";
@@ -70,6 +75,8 @@ const PANEL_META: Record<
     out_of_territory_handoffs: { icon: Map, severity: "warning" },
     non_responsive: { icon: PhoneOff, severity: "warning" },
     won_without_quote: { icon: FileWarning, severity: "warning" },
+    transfer_visit_overdue: { icon: Route, severity: "critical" },
+    finalised_not_won: { icon: BadgeCheck, severity: "warning" },
 };
 
 // Tailwind classes per severity, applied only when count > 0.
@@ -92,9 +99,12 @@ const SEVERITY_CLASSES: Record<
 export function AlertPanels({
     counts,
     filterQs,
+    transferVisitLimitDays,
 }: {
     counts: Record<AlertPanelKey, number>;
     filterQs: string;
+    /** ID 77.1 — the admin-set ASM visit limit, shown in its panel's label. */
+    transferVisitLimitDays?: number;
 }) {
     const qc = useQueryClient();
     const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -149,6 +159,7 @@ export function AlertPanels({
                     <AlertPanel
                         key={key}
                         panelKey={key}
+                        label={alertPanelLabel(key, { transferVisitLimitDays })}
                         count={counts[key] ?? 0}
                         filterQs={filterQs}
                         selectable={SELECTABLE.has(key)}
@@ -163,6 +174,7 @@ export function AlertPanels({
 
 function AlertPanel({
     panelKey,
+    label,
     count,
     filterQs,
     selectable,
@@ -170,6 +182,7 @@ function AlertPanel({
     onToggle,
 }: {
     panelKey: AlertPanelKey;
+    label: string;
     count: number;
     filterQs: string;
     selectable: boolean;
@@ -226,7 +239,7 @@ function AlertPanel({
                         active ? "font-medium text-ink" : "text-ink-muted"
                     }`}
                 >
-                    {ALERT_PANEL_LABELS[panelKey]}
+                    {label}
                 </span>
                 <Badge
                     variant={

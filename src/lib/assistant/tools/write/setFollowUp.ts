@@ -7,8 +7,9 @@
 //
 // When the rep actually spoke to the dealer (spoke_with_dealer), the shared
 // auto rule (lib/leads/autoProgress.ts) moves the status forward to Under
-// Discussion — on the same note touchpoint, marked "(auto)" on the preview.
-// A bare reminder moves nothing.
+// Discussion, marked "(auto)" on the preview. The touchpoint is then logged as
+// the call it was: only a conversation may ask for first contact (ID 115.2,
+// logTouchpoint.ts). A bare reminder stays a note and moves nothing.
 
 import { z } from "zod";
 import { and, eq, inArray } from "drizzle-orm";
@@ -163,7 +164,7 @@ export const setFollowUpApplier = defineApplier<SetFollowUpPlan>({
                     leadId: p.lead_id,
                     actorId: user.id,
                     body: {
-                        touchpoint_type: "status_change_note",
+                        touchpoint_type: p.status_to ? "inside_sales_call" : "status_change_note",
                         remarks: `Visit scheduled for ${p.visit_date}: ${p.note}`,
                         next_action: "follow_up",
                         next_action_at: dayToInstant(p.visit_date),
@@ -179,7 +180,7 @@ export const setFollowUpApplier = defineApplier<SetFollowUpPlan>({
                 leadId: p.lead_id,
                 actorId: user.id,
                 body: {
-                    touchpoint_type: "status_change_note",
+                    touchpoint_type: p.status_to ? "inside_sales_call" : "status_change_note",
                     remarks: `Follow-up: ${p.note}`,
                     next_action: "follow_up",
                     next_action_at: p.follow_up_at,

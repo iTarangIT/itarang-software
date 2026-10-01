@@ -26,6 +26,17 @@ import type {
 import { ALERT_PANELS } from "./types";
 import { countOnboardingDropouts } from "./listQueries";
 import { nonResponsiveSql } from "@/lib/leads/nonResponsive";
+import {
+    TRANSFER_AT_EXPR,
+    TRANSFER_VISIT_OVERDUE_SQL,
+    TRANSFER_WORKING_DAYS_SQL,
+} from "@/lib/asm/transferVisitLimit";
+import {
+    AGREEMENT_AWAITING_DEALER,
+    DEALER_ONBOARDING_STATUSES,
+    STALL_DEALER_DAYS,
+    STALL_US_WORKING_DAYS,
+} from "@/lib/onboarding/stall";
 
 const OPEN_LIST = sql.raw(OPEN_STATUSES.map((s) => `'${s}'`).join(", "));
 // ID 74 — the idle / no-touch lists count only leads the rep can still work;
@@ -48,6 +59,59 @@ function workingDaysSince(expr: string): SQL {
         ) gs WHERE EXTRACT(DOW FROM gs) <> 0
     )`);
 }
+
+// ID 84.3 — onboarding stalled, the same rule as the lead page (src/lib/
+// onboarding/stall.ts): waiting on the DEALER (draft / correction requested /
+// agreement sent, unsigned) 7+ calendar days, or on US (submitted for review,
+// agreement to initiate, re-send or approve) 2+ working days. The "us" clock
+// skips holiday_calendar too, like the lead page — a short threshold is where a
+// holiday matters. Only leads still open (Won included); a lead already in the
+// 21-day drop-out review is listed there instead.
+const sqlList = (xs: readonly string[]) => xs.map((x) => `'${x}'`).join(", ");
+const ONB_LAST = "COALESCE(oa.last_action_at, oa.updated_at)";
+const ONB_WAITING_ON = sql.raw(`(CASE
+    WHEN oa.onboarding_status IN (${sqlList(DEALER_ONBOARDING_STATUSES)}) THEN 'dealer'
+    WHEN oa.onboarding_status = 'submitted'
+         AND COALESCE(oa.agreement_status, '') IN (${sqlList(AGREEMENT_AWAITING_DEALER)}) THEN 'dealer'
+    WHEN oa.onboarding_status = 'submitted' THEN 'us'
+END)`);
+const ONB_US_WORKING_DAYS = sql.raw(`(
+    SELECT COUNT(*) FROM generate_series(
+        ((${ONB_LAST})::date + 1), CURRENT_DATE, INTERVAL '1 day'
+    ) gs
+    WHERE EXTRACT(DOW FROM gs) <> 0
+      AND gs::date NOT IN (SELECT hc.holiday_date FROM holiday_calendar hc
+                            WHERE hc.is_active IS NOT FALSE AND hc.holiday_date IS NOT NULL)
+)`);
+// Same predicate as the onboarding_dropouts panel, so a lead is in one or the other.
+const IN_DROPOUT_REVIEW = sql`(dl.lead_status IN ('Won', 'Converted')
+    AND dl.onboarding_dropout_reason IS NULL
+    AND (oa.onboarding_status IN ('rejected','withdrawn')
+         OR (oa.onboarding_status IN ('draft','submitted','correction_requested')
+             AND ${sql.raw(ONB_LAST)} < NOW() - INTERVAL '21 days'))
+    AND COALESCE((to_jsonb(dl) ->> 'onboarding_stalled_at')::timestamptz, 'epoch'::timestamptz)
+        < NOW() - INTERVAL '21 days')`;
+const ONBOARDING_STALLED = sql`dl.lead_status IN (${OPEN_LIST}) AND dl.is_active IS NOT FALSE
+    AND oa.onboarding_status IN ('draft','submitted','correction_requested')
+    AND (
+        (${ONB_WAITING_ON} = 'dealer'
+            AND ${sql.raw(ONB_LAST)} < NOW() - INTERVAL '${sql.raw(String(STALL_DEALER_DAYS))} days')
+        OR (${ONB_WAITING_ON} = 'us' AND ${ONB_US_WORKING_DAYS} >= ${sql.raw(String(STALL_US_WORKING_DAYS))})
+    )
+    AND NOT ${IN_DROPOUT_REVIEW}`;
+
+// ID 75.4 — the dealer approved the quote 2+ days ago and the lead still sits
+// at Commercials finalised: nobody pressed Mark Won.
+const FINALISED_NOT_WON = sql`dl.lead_status = 'Commercials_Finalised'
+    AND dl.is_active IS NOT FALSE
+    AND EXISTS (SELECT 1 FROM dealer_lead_commercials c
+        WHERE c.dealer_lead_id = dl.id
+          AND c.dealer_decision = 'approved'
+          AND COALESCE(c.approval_status, 'approved') = 'approved'
+          AND c.withdrawn_at IS NULL
+          AND c.dealer_decision_at < NOW() - INTERVAL '2 days')`;
+const FINALISED_APPROVED_AT = sql`(SELECT MAX(c.dealer_decision_at) FROM dealer_lead_commercials c
+    WHERE c.dealer_lead_id = dl.id AND c.dealer_decision = 'approved' AND c.withdrawn_at IS NULL)`;
 
 // The idle clock (E-300, review R-04): last call / visit / status change only.
 // last_touchpoint_at also moves on assignment, claims, dial requests and
@@ -394,9 +458,16 @@ function panelCountSql(key: AlertPanelKey, lf: SQL): SQL {
                 WHERE dl.lead_status IN ('Won', 'Converted')
                   AND COALESCE(oa.last_action_at, oa.updated_at) < NOW() - INTERVAL '3 days' ${lf}`;
         case "onboarding_stalled":
-            return sql`SELECT COUNT(*)::text AS c FROM dealer_onboarding_applications oa
-                WHERE oa.onboarding_status IN ('draft','submitted','correction_requested')
-                  AND COALESCE(oa.last_action_at, oa.updated_at) < NOW() - INTERVAL '30 days'`;
+            return sql`SELECT COUNT(*)::text AS c FROM dealer_leads dl
+                JOIN dealer_onboarding_applications oa
+                    ON oa.id = dl.dealer_onboarding_application_id
+                WHERE ${ONBOARDING_STALLED} ${lf}`;
+        case "transfer_visit_overdue":
+            return sql`SELECT COUNT(*)::text AS c FROM dealer_leads dl
+                WHERE ${TRANSFER_VISIT_OVERDUE_SQL} ${lf}`;
+        case "finalised_not_won":
+            return sql`SELECT COUNT(*)::text AS c FROM dealer_leads dl
+                WHERE ${FINALISED_NOT_WON} ${lf}`;
         case "asm_no_activity":
             return sql`SELECT COUNT(*)::text AS c FROM dealer_leads dl
                 WHERE dl.lead_status = 'Transferred_to_ASM' AND dl.asm_id IS NOT NULL
@@ -563,18 +634,42 @@ export async function fetchAlertPanel(
         }
         case "onboarding_stalled": {
             const rows = await db.execute<AlertPanelRow>(sql`
-                SELECT oa.id,
-                       COALESCE(oa.company_name, '(unnamed application)') AS primary,
-                       CONCAT_WS(', ', oa.city, oa.state) AS secondary,
-                       CONCAT(oa.onboarding_status, ' — idle since ',
-                           TO_CHAR(COALESCE(oa.last_action_at, oa.updated_at), 'DD Mon')) AS meta,
-                       '/admin/onboarding-dropouts' AS href
-                FROM dealer_onboarding_applications oa
-                WHERE oa.onboarding_status IN ('draft','submitted','correction_requested')
-                  AND COALESCE(oa.last_action_at, oa.updated_at) < NOW() - INTERVAL '30 days'
-                ORDER BY COALESCE(oa.last_action_at, oa.updated_at) ASC
+                SELECT dl.id,
+                       COALESCE(dl.dealer_name, dl.shop_name, oa.company_name, '(unnamed)') AS primary,
+                       CONCAT_WS(', ', dl.city, dl.state) AS secondary,
+                       CONCAT(
+                           CASE ${ONB_WAITING_ON} WHEN 'dealer' THEN 'Stalled · waiting on dealer'
+                                                  ELSE 'Stalled · waiting on us' END,
+                           ' · ', REPLACE(oa.onboarding_status, '_', ' '),
+                           ' · idle since ', TO_CHAR(${sql.raw(ONB_LAST)}, 'DD Mon')) AS meta,
+                       CONCAT('/inside-sales/lead/', dl.id) AS href
+                FROM dealer_leads dl
+                JOIN dealer_onboarding_applications oa
+                    ON oa.id = dl.dealer_onboarding_application_id
+                WHERE ${ONBOARDING_STALLED} ${lf}
+                ORDER BY ${sql.raw(ONB_LAST)} ASC
                 LIMIT ${limit}
             `);
+            return rows as unknown as AlertPanelRow[];
+        }
+        case "transfer_visit_overdue": {
+            const rows = await leadPanel(
+                sql`${TRANSFER_VISIT_OVERDUE_SQL} ${lf}`,
+                sql`CONCAT('transferred ',
+                        TO_CHAR((${sql.raw(TRANSFER_AT_EXPR)}) AT TIME ZONE 'Asia/Kolkata', 'DD Mon'),
+                        ' · ', ${TRANSFER_WORKING_DAYS_SQL}, ' working days, no visit')`,
+                sql`${TRANSFER_WORKING_DAYS_SQL} DESC`,
+            );
+            return rows as unknown as AlertPanelRow[];
+        }
+        case "finalised_not_won": {
+            const rows = await leadPanel(
+                sql`${FINALISED_NOT_WON} ${lf}`,
+                sql`CONCAT('dealer approved ',
+                        TO_CHAR(${FINALISED_APPROVED_AT} AT TIME ZONE 'Asia/Kolkata', 'DD Mon'),
+                        ' · not marked Won')`,
+                sql`${FINALISED_APPROVED_AT} ASC NULLS LAST`,
+            );
             return rows as unknown as AlertPanelRow[];
         }
         case "pending_escalations": {

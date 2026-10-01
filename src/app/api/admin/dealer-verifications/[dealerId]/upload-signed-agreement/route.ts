@@ -13,6 +13,7 @@ import { normalizeAgreementStatus } from "@/lib/agreement/status";
 import { isS3Backend, putObject, filesProxyPath } from "@/lib/storage/s3";
 import { usesManualAgreement } from "@/lib/dealer/dealer-capabilities";
 import { checkUploadedAgreement } from "@/lib/agreement/readExecutedAgreement";
+import { markAgreementOutcome } from "@/lib/onboarding/leadMilestones";
 
 type RouteContext = {
   params: Promise<{ dealerId: string }>;
@@ -345,6 +346,8 @@ export async function POST(req: NextRequest, context: RouteContext) {
           updated_at: now,
         })
         .where(eq(dealerOnboardingApplications.id, dealerId));
+      // ID 84.2: the lead's agreement milestone. Best-effort — never throws.
+      await markAgreementOutcome({ applicationId: dealerId }, "completed");
     } else if (fillAudit) {
       await db
         .update(dealerOnboardingApplications)
