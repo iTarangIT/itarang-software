@@ -196,6 +196,7 @@ export function AsmLeadDetailView({ leadId, viewerId, viewerRole }: Props) {
                     setLostPrefill(r);
                     setActiveModal("mark_lost");
                 }}
+                onOpenCommercials={() => setActiveModal("commercials")}
             />
             <UpdateCommercialsModal
                 open={activeModal === "commercials"}

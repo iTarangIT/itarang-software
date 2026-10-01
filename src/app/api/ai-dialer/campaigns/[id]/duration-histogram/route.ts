@@ -13,13 +13,14 @@
 // sibling [id]/route.ts, which keeps it clear of the in-flight campaign-schedule
 // edits on that file.
 //
-// AUTH: none beyond the session, matching the sibling [id]/leads route. This
-// endpoint returns strictly less than the lead table already rendered on the
-// same page — counts and reasons, no names, no phone numbers, no transcripts —
-// and src/middleware.ts already requires an authenticated session for /api/*.
-// (export.xlsx does gate by role, because a downloaded file leaves the building.)
+// AUTH (ID 45): the campaign readers (requireCampaignReader — the /leads
+// roles). It used to be "none beyond the session", but middleware does NOT gate
+// /api/*. Own-only roles (reps) get the histogram and funnel over the leads
+// they own only — the same current_owner_id scope as [id]/leads, so a bar a
+// rep clicks never promises rows the leads table will not show them.
 import { db } from "@/lib/db";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
+import { requireCampaignReader } from "@/lib/ai-dialer/campaignAccess";
 import { resolveDurationBucketConfig } from "@/lib/ai-dialer/call-duration/config-store";
 import {
     buildDurationHistogramSql,
@@ -32,13 +33,11 @@ import {
     buildCallQualitySql,
     hasTranscriptTurnsColumn,
 } from "@/lib/ai-dialer/call-quality/query";
-import { LEADS_PAGE_ROLES } from "@/lib/leads/access";
-import { requireRole } from "@/lib/auth-utils";
 
 export const GET = withErrorHandler(
     async (_req: Request, ctx: { params: Promise<{ id: string }> }) => {
-        // ID 118: signed in, with a role that reaches this screen.
-        await requireRole([...LEADS_PAGE_ROLES]);
+        const { user, ownOnly } = await requireCampaignReader();
+        const ownerId = ownOnly ? user.id : undefined;
         const { id: campaignId } = await ctx.params;
         if (!campaignId) return errorResponse("Campaign id required", 400);
 
@@ -61,8 +60,8 @@ export const GET = withErrorHandler(
         const withTurns = await hasTranscriptTurnsColumn();
 
         const [histogramRows, funnelRows] = await Promise.all([
-            db.execute(buildDurationHistogramSql(campaignId, buckets)),
-            db.execute(buildCallQualitySql(campaignId, { withTurns })),
+            db.execute(buildDurationHistogramSql(campaignId, buckets, { ownerId })),
+            db.execute(buildCallQualitySql(campaignId, { withTurns, ownerId })),
         ]);
 
         const histogram = foldDurationHistogram(

@@ -12,6 +12,11 @@
  *   Non-responsive (R-16) leads are returned with non_responsive = true and
  *             kept OUT of the idle totals — a dead number is not neglect. The
  *             page shows them as their own bucket.
+ *   Visit overdue (ID 77.1): a Transferred_to_ASM lead past the admin-set
+ *             transfer → first-visit limit (src/lib/asm/transferVisitLimit.ts)
+ *             is listed with visit_overdue = true even below its idle
+ *             threshold. Only on the page (no `minDays`); the weekly mail keeps
+ *             its plain idle rule.
  *
  * Shared by the /admin/needs-attention page and the weekly idle email, so the
  * list and the mail cannot disagree.
@@ -21,6 +26,7 @@ import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { WORKABLE_STATUSES } from "@/lib/lifecycle/transitions";
 import { nonResponsiveSql } from "@/lib/leads/nonResponsive";
+import { TRANSFER_VISIT_OVERDUE_SQL } from "@/lib/asm/transferVisitLimit";
 
 export const IDLE_THRESHOLD_CC = 5;
 export const IDLE_THRESHOLD_ASM = 7;
@@ -39,6 +45,8 @@ export type NeedsAttentionRow = {
     last_disposition: string | null;
     last_disposition_bucket: string | null;
     non_responsive: boolean;
+    /** ID 77.1 — awaiting field visit past the transfer → visit limit. */
+    visit_overdue: boolean;
 };
 
 // ID 74 — Won is open but waits on onboarding, not on the rep: not "idle".
@@ -77,7 +85,11 @@ function baseQuery(opts: Opts): SQL {
                    dl.last_worked_at,
                    dl.last_disposition,
                    dl.last_disposition_bucket,
-                   ${nonResponsiveSql(sql`dl.id`)}               AS non_responsive,
+                   -- ID 36: a contactability flag (dead number / non-responsive,
+                   -- E-314) counts as not idle — the lead is in Number Repair.
+                   (${nonResponsiveSql(sql`dl.id`)}
+                    OR (to_jsonb(dl)->>'contactability') IS NOT NULL) AS non_responsive,
+                   ${TRANSFER_VISIT_OVERDUE_SQL}                 AS visit_overdue,
                    ${threshold}                                  AS threshold
               FROM dealer_leads dl
               LEFT JOIN users u ON u.id::text = dl.current_owner_id
@@ -86,7 +98,8 @@ function baseQuery(opts: Opts): SQL {
                AND dl.lead_status IN (${OPEN_LIST})
                ${opts.holderId ? sql`AND dl.current_owner_id = ${opts.holderId}` : sql``}
         ) y
-         WHERE y.days_idle >= y.threshold)`;
+         WHERE y.days_idle >= y.threshold
+               ${opts.minDays == null ? sql`OR y.visit_overdue` : sql``})`;
 }
 
 /** The oldest `limit` rows (idle first, then non-responsive). */
@@ -112,6 +125,7 @@ export async function listNeedsAttention(
         last_disposition: (r.last_disposition as string | null) ?? null,
         last_disposition_bucket: (r.last_disposition_bucket as string | null) ?? null,
         non_responsive: Boolean(r.non_responsive),
+        visit_overdue: Boolean(r.visit_overdue),
     }));
 }
 

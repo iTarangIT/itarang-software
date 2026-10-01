@@ -19,8 +19,12 @@ export const TOUCHPOINT_TYPE = [
   "neodove_dial_request",
   // Commercials / collateral
   "brochure_sent",
-  // `quote_sent` means RELEASED — the quote cleared the approval gate. It has
-  // meant that since E-221 and is written by both approval paths.
+  // `quote_released` — the quote cleared the approval gate (ID 75 rename).
+  // Written by both approval paths since 1 Oct 2026. `quote_sent` is the SAME
+  // event under its old name (E-221 until the rename): never written again,
+  // kept so history still parses and renders. Readers must accept both —
+  // use QUOTE_RELEASED_TYPES / isQuoteReleased, never a bare literal.
+  "quote_released",
   "quote_sent",
   // E-242 registers three values that were already being WRITTEN and were never
   // listed here. `quote_submitted` (inside-sales commercials route) and
@@ -70,6 +74,17 @@ export const TOUCHPOINT_TYPE = [
 export type TouchpointType = (typeof TOUCHPOINT_TYPE)[number];
 
 /**
+ * ID 75: every stored value that means "quote released" — the new name first,
+ * then the legacy `quote_sent` rows (no data rewrite). SQL readers bind this
+ * array (e.g. `touchpoint_type = ANY(${[...QUOTE_RELEASED_TYPES]})`).
+ */
+export const QUOTE_RELEASED_TYPES = ["quote_released", "quote_sent"] as const satisfies readonly TouchpointType[];
+
+export function isQuoteReleased(type: string | null | undefined): boolean {
+  return type != null && (QUOTE_RELEASED_TYPES as readonly string[]).includes(type);
+}
+
+/**
  * Whether a touchpoint counts as WORK on a lead and resets its idle clock
  * (dealer_leads.last_worked_at, E-300). Requirement #6 point 7: "Only a logged
  * call, visit or status change — never just opening the lead, or people will
@@ -105,6 +120,21 @@ export function isWorkedTouchpoint(
 ): boolean {
   if (type === "inside_sales_call" || type === "visit") return true;
   return type === "status_change_note" && hasStatusChange && statusEvent !== "correction";
+}
+
+/**
+ * ID 115.2: the touchpoints that are a conversation with the dealer — a call, a
+ * visit or a WhatsApp chat. Only these may ask for first contact
+ * (Under_Discussion) on the touchpoint form; a note cannot.
+ */
+export const CONVERSATION_TOUCHPOINT_TYPES: readonly TouchpointType[] = [
+  "inside_sales_call",
+  "visit",
+  "whatsapp",
+];
+
+export function isConversationTouchpoint(type: TouchpointType): boolean {
+  return CONVERSATION_TOUCHPOINT_TYPES.includes(type);
 }
 
 export const CALL_STATUS = [

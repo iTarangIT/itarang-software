@@ -22,6 +22,7 @@
 
 import { useEffect, useState } from "react";
 import { X, CheckCircle2, AlertTriangle, Info } from "lucide-react";
+import { ASSIGN_ON_PUSH } from "@/lib/neodove/assignPolicy";
 
 type EndpointRef = { ref: string; kind: "push" | "update" };
 
@@ -54,6 +55,11 @@ export type EditableCampaign = {
     // E-237, read the same way: absent reads as "no default CRM owner".
     crm_owner_user_id?: string | null;
 };
+
+// Tracker ID 63: while ASSIGN_ON_PUSH is false a push gives no CRM owner, so
+// the "assign in CRM" picker is hidden. Shared with the push routes.
+const OWNER_ON_FIRST_CALL_COPY =
+    "Owner is set by the first call of a linked NeoDove agent.";
 
 type Assignee = {
     user_id: string;
@@ -466,7 +472,19 @@ export function NeodoveCampaignModal({
                         IS applied — every push into this campaign assigns its
                         leads to this person. Putting it inside would make that
                         block's banner untrue, which is the one thing it exists
-                        to prevent. */}
+                        to prevent. ID 63: hidden while ASSIGN_ON_PUSH is off —
+                        the stored value is kept but no push applies it. */}
+                    {!ASSIGN_ON_PUSH && (
+                        <div>
+                            <p className="block text-sm font-medium text-gray-700">
+                                CRM owner for pushed leads
+                            </p>
+                            <p className="mt-1 text-xs text-gray-500">
+                                {OWNER_ON_FIRST_CALL_COPY}
+                            </p>
+                        </div>
+                    )}
+                    {ASSIGN_ON_PUSH && (
                     <div>
                         <label className="block text-sm font-medium text-gray-700">
                             Assign pushed leads in CRM to
@@ -493,6 +511,7 @@ export function NeodoveCampaignModal({
                             Applies to future pushes only.
                         </p>
                     </div>
+                    )}
 
                     {/* ── Mirror of NeoDove's own campaign settings (E-225) ──
                         Everything below is RECORDED, not applied. NeoDove has

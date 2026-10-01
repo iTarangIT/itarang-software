@@ -8,8 +8,13 @@
 //
 // Forward only (S3). A lead Awaiting field visit (Transferred_to_ASM) keeps that
 // status — only a visit ends it (ID 77) — but its pre_transfer_status is raised,
-// so the visit restores the later stage. Best-effort: a quote event must never
-// fail because the lead could not move; the reason is logged.
+// so the visit restores the later stage (`awaitingVisit` in the result, ID 75.1).
+// Best-effort: a quote event must never fail because the lead could not move;
+// the reason is logged. A rep creating or sending a quote IS work and resets
+// the idle clock as before; the dealer's approval (and any system-driven move,
+// actorId null) is not the owner's work and must not (ID 115.5).
+//
+// `actorId` null = system (the dealer's own decision, ID 75.5).
 
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
@@ -31,11 +36,18 @@ const REMARK: Record<QuoteStatusEvent, string> = {
     dealer_approved: "Dealer approved the quote — Commercials finalised. Next: Mark Won.",
 };
 
+export type QuoteEventResult = {
+    moved: boolean;
+    status: string | null;
+    /** True when the lead is Awaiting field visit: only pre_transfer_status was raised. */
+    awaitingVisit?: boolean;
+};
+
 export async function advanceLeadOnQuoteEvent(
     leadId: string,
     event: QuoteStatusEvent,
     actorId: string | null,
-): Promise<{ moved: boolean; status: string | null }> {
+): Promise<QuoteEventResult> {
     const target = TARGET[event];
     try {
         const rows = (await db.execute<{ lead_status: string | null; pre_transfer_status: string | null }>(sql`
@@ -52,7 +64,7 @@ export async function advanceLeadOnQuoteEvent(
                      WHERE id = ${leadId} AND lead_status = 'Transferred_to_ASM'
                 `);
             }
-            return { moved: false, status: lead.lead_status };
+            return { moved: false, status: lead.lead_status, awaitingVisit: true };
         }
         if (!isForward(lead.lead_status, target)) return { moved: false, status: lead.lead_status };
 
@@ -61,6 +73,7 @@ export async function advanceLeadOnQuoteEvent(
             touchpointType: "status_change_note",
             performedBy: actorId,
             remarks: REMARK[event],
+            countsAsWork: event === "dealer_approved" || actorId === null ? false : undefined,
             statusChange: { from: lead.lead_status as LeadStatus | null, to: target, event: "progress" },
         });
         return { moved: true, status: target };

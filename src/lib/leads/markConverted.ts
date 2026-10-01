@@ -112,6 +112,9 @@ export async function markLeadConverted(
     opts?: { tx?: Tx },
 ): Promise<MarkConvertedResult> {
     const { leadId, actor } = input;
+    // ID 115.6: a second Mark Won (double tap, two reps) is a no-op move; it
+    // must not log a second "onboarding initiated" or notify twice.
+    let repeat = false;
     const run = async (tx: Tx): Promise<string> => {
         const rows = await tx.execute<{ lead_status: string | null; asm_id: string | null }>(sql`
             SELECT dl.lead_status, dl.asm_id FROM dealer_leads dl WHERE dl.id = ${leadId} LIMIT 1
@@ -119,6 +122,7 @@ export async function markLeadConverted(
         const state = rows[0];
         if (!state) throw new ConvertLeadNotFoundError();
         const fromStatus = state.lead_status as LeadStatus | null;
+        repeat = fromStatus === "Won";
 
         const closingRole = deriveConvertClosingRole(actor.role, state.asm_id);
         const remarks = input.notes?.trim() || "Lead marked Won. Dealer onboarding initiated.";
@@ -146,8 +150,8 @@ export async function markLeadConverted(
 
         const { applicationId } = await attachOnboardingToWonLead(tx, leadId, input.gstin);
 
-        // BRD §0.13 audit — record the onboarding initiation event.
-        await tx.insert(auditLogs).values({
+        // BRD §0.13 audit — record the onboarding initiation event (once).
+        if (!repeat) await tx.insert(auditLogs).values({
             id: randomUUID(),
             entity_type: "dealer_lead",
             entity_id: leadId,
@@ -163,6 +167,7 @@ export async function markLeadConverted(
 
     // BRD §0.13 Step 7 — notify the closing owner + admins.
     const notify = async () => {
+        if (repeat) return;
         try {
             await notifyUser(actor.id, {
                 type: "onboarding_initiated",

@@ -120,7 +120,7 @@ export function KpiStrip({ kpis }: { kpis: AdminKpis }) {
             tone: flag(kpis.onboarding_dropouts_pending, "warning"),
         },
         {
-            label: "Stale Converted · 3d+",
+            label: "Stale Won / Converted · 3d+",
             value: kpis.stale_converted,
             icon: CalendarClock,
             tone: flag(kpis.stale_converted, "warning"),

@@ -20,6 +20,9 @@ import { sql } from "drizzle-orm";
 import type { SalesDashboard } from "@/lib/admin/salesDashboardTypes";
 import { engagedCallCount, wasHotAt } from "@/lib/reports/metricDefinitions";
 import { monthEnd, workingDaysBetween } from "@/lib/targets/rules";
+import { scrapKgSourced } from "@/lib/buyback/scrapKgSourced";
+import { istRangeNaive, istRangeTz } from "./window";
+import { RAG_AMBER_MIN } from "./rag";
 
 export const NOT_MEASURED = "Not measured yet";
 
@@ -85,6 +88,9 @@ export const BLOCK_A_COLUMNS = [
     "Δ MTD",
 ];
 
+/** Index of "% of target" in BLOCK_A_COLUMNS — coloured red / amber / green (rag.ts). */
+export const BLOCK_A_PCT_COLUMN = BLOCK_A_COLUMNS.indexOf("% of target");
+
 /** Rows for the email table: a group header row, then its metrics. */
 export function blockATableRows(rows: BlockARow[]): Array<Array<string | number>> {
     const out: Array<Array<string | number>> = [];
@@ -129,11 +135,11 @@ export function blockAHeadline(rows: BlockARow[]): string {
     const withTarget = rows
         .map((r) => ({ r, p: rowPctOfTarget(r) }))
         .filter((x) => x.p != null) as Array<{ r: BlockARow; p: number }>;
-    const behind = withTarget.filter((x) => x.p < 80).map((x) => `${x.r.label.toLowerCase()} at ${x.p}%`);
+    const behind = withTarget.filter((x) => x.p < RAG_AMBER_MIN).map((x) => `${x.r.label.toLowerCase()} at ${x.p}%`);
     const tail = withTarget.length
         ? behind.length
             ? ` Month to date behind target: ${behind.join(", ")}.`
-            : " Month to date: every targeted metric at 80% or more."
+            : ` Month to date: every targeted metric at ${RAG_AMBER_MIN}% or more.`
         : "";
     return `Yesterday: ${parts.join(" · ")}.${tail}`;
 }
@@ -155,8 +161,33 @@ async function count(db: Exec, q: ReturnType<typeof sql>): Promise<number | null
     }
 }
 
-const inRange = (col: ReturnType<typeof sql>, p: Period) =>
-    sql`(${col} AT TIME ZONE 'Asia/Kolkata')::date BETWEEN ${p.from}::date AND ${p.to}::date`;
+/** [from, to] inclusive IST days on a timestamptz column (window.ts). */
+const inRange = (col: ReturnType<typeof sql>, p: Period) => istRangeTz(col, p.from, p.to);
+
+function dayAfter(iso: string): string {
+    const d = new Date(`${iso}T00:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + 1);
+    return d.toISOString().slice(0, 10);
+}
+
+/** Kg sourced (complete_pickup) per period — the CEO control tower's figure. */
+async function scrapKgPerPeriod(db: Exec, periods: Periods): Promise<RowValues> {
+    const one = async (p: Period): Promise<number | null> => {
+        try {
+            return await scrapKgSourced(p.from, dayAfter(p.to), db);
+        } catch (e) {
+            console.warn("[salesDailyBlockA] scrap kg not measured:", e instanceof Error ? e.message : e);
+            return null;
+        }
+    };
+    const [y, d7, mtd, lm] = await Promise.all([
+        one(periods.yesterday),
+        one(periods.last7),
+        one(periods.mtd),
+        one(periods.lastMonth),
+    ]);
+    return { y, d7, mtd, lm };
+}
 
 async function perPeriod(db: Exec, periods: Periods, make: (p: Period) => ReturnType<typeof sql>): Promise<RowValues> {
     const [y, d7, mtd, lm] = await Promise.all([
@@ -179,34 +210,47 @@ async function companyTargets(db: Exec, monthFirst: string, upTo: string) {
         const total = workingDaysBetween(monthFirst, monthEnd(monthFirst), set);
         const elapsed = workingDaysBetween(monthFirst, upTo, set);
         const rows = (await db.execute(sql`
-            SELECT metric, SUM(ceo_target + admin_addon)::float8 AS monthly, COUNT(DISTINCT user_id)::int AS people
+            SELECT user_id::text AS user_id, metric, SUM(ceo_target + admin_addon)::float8 AS monthly
               FROM sales_targets
              WHERE month = ${monthFirst}::date AND status IN ('pushed', 'accepted')
-             GROUP BY metric
-        `)) as Array<{ metric: string; monthly: number; people: number }>;
+             GROUP BY user_id, metric
+        `)) as Array<{ user_id: string; metric: string; monthly: number }>;
         const [who] = (await db.execute(sql`
             SELECT (SELECT COUNT(DISTINCT user_id) FROM sales_targets
                      WHERE month = ${monthFirst}::date AND status IN ('pushed', 'accepted'))::int AS with_target,
                    (SELECT COUNT(*) FROM users
                      WHERE is_active = TRUE AND role IN ('asm', 'inside_sales_rep'))::int AS reps
         `)) as Array<{ with_target: number; reps: number }>;
+        // Company = Σ per person, so Blocks B / C and Block A pro-rate alike.
         const map = new Map<string, number>();
+        const perUser = new Map<string, Map<string, number>>();
         for (const r of rows) {
+            const monthly = Number(r.monthly);
             // calls_per_day is a per-person daily figure: × working days elapsed.
-            map.set(
-                r.metric,
-                r.metric === "calls_per_day" ? r.monthly * elapsed : total > 0 ? (r.monthly * elapsed) / total : 0,
-            );
+            const mtd = r.metric === "calls_per_day" ? monthly * elapsed : total > 0 ? (monthly * elapsed) / total : 0;
+            map.set(r.metric, (map.get(r.metric) ?? 0) + mtd);
+            const u = perUser.get(r.user_id) ?? new Map<string, number>();
+            u.set(r.metric, (u.get(r.metric) ?? 0) + mtd);
+            perUser.set(r.user_id, u);
         }
-        return { map, withTarget: who?.with_target ?? 0, reps: who?.reps ?? 0, elapsed, total };
+        return { map, perUser, withTarget: who?.with_target ?? 0, reps: who?.reps ?? 0, elapsed, total };
     } catch {
-        return { map: new Map<string, number>(), withTarget: 0, reps: 0, elapsed: 0, total: 0 };
+        return {
+            map: new Map<string, number>(),
+            perUser: new Map<string, Map<string, number>>(),
+            withTarget: 0,
+            reps: 0,
+            elapsed: 0,
+            total: 0,
+        };
     }
 }
 
 export type BlockA = {
     rows: BlockARow[];
     targetsNote: string;
+    /** Per-person MTD targets (user id → metric → target), for Blocks B / C. */
+    userTargets: Map<string, Map<string, number>>;
 };
 
 export async function buildBlockA(
@@ -229,9 +273,14 @@ export async function buildBlockA(
     });
     const NONE: RowValues = { y: null, d7: null, mtd: null, lm: null };
 
-    const [leadsIn, salesReady, assigned, engaged, hotToField, delivered, dealerApproved, won, kycDisbursed, scrapDeals] =
+    const [leadsIn, salesReady, assigned, engaged, hotToField, delivered, dealerApproved, won, kycDisbursed, scrapDeals, scrapKg] =
         await Promise.all([
-            perPeriod(db, periods, (p) => sql`SELECT COUNT(*) AS n FROM dealer_leads dl WHERE ${inRange(sql`dl.created_at`, p)}`),
+            // dealer_leads.created_at is a NAIVE timestamp holding UTC wall-clock.
+            perPeriod(
+                db,
+                periods,
+                (p) => sql`SELECT COUNT(*) AS n FROM dealer_leads dl WHERE ${istRangeNaive(sql`dl.created_at`, p.from, p.to)}`,
+            ),
             perPeriod(
                 db,
                 periods,
@@ -284,6 +333,7 @@ export async function buildBlockA(
                 (p) => sql`SELECT COUNT(DISTINCT al.request_id) AS n FROM buyback_activity_log al
                             WHERE al.action = 'dealer_accept' AND ${inRange(sql`al.created_at`, p)}`,
             ),
+            scrapKgPerPeriod(db, periods),
         ]);
 
     const tgt = (metric: string) => (t.map.has(metric) ? Math.round(t.map.get(metric)!) : null);
@@ -321,8 +371,10 @@ export async function buildBlockA(
         { group: "OUTCOME", label: "KYC submitted", kind: "count", values: fromDash((d) => d.outcome.kyc_submitted), target: tgt("kyc_submitted") },
         { group: "OUTCOME", label: "KYC disbursed", kind: "count", values: kycDisbursed, target: tgt("kyc_disbursed") },
         { group: "OUTCOME", label: "Scrap deals", kind: "count", values: scrapDeals, target: tgt("scrap_deals") },
-        // Scrap kg and the two discipline rows wait for the clocks (handover P3).
-        { group: "OUTCOME", label: "Scrap sourced (kg)", kind: "count", values: NONE, target: null },
+        // Kg over requests that completed pickup — scrapKgSourced(), the CEO
+        // control tower's buyback tile. The two discipline rows wait for the
+        // clocks (handover P3).
+        { group: "OUTCOME", label: "Scrap sourced (kg)", kind: "count", values: scrapKg, target: null },
         { group: "DISCIPLINE", label: "First attempt within limit", kind: "percent", values: NONE, target: null },
         { group: "DISCIPLINE", label: "Time limits missed", kind: "count", values: NONE, target: null },
     ];
@@ -335,5 +387,5 @@ export async function buildBlockA(
         t.total > 0
             ? `Month to date is ${t.elapsed} of ${t.total} working days, so targets are ${t.elapsed}/${t.total} of the monthly target. Targets set for ${t.withTarget} of ${t.reps} people.${visitsNote}`
             : "No targets are set for this month.";
-    return { rows, targetsNote };
+    return { rows, targetsNote, userTargets: t.perUser };
 }

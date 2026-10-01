@@ -4,8 +4,8 @@
 // query string — so row N here is row N on the screen.
 
 import { z } from "zod";
-import { QUEUE_TABS, TAB_LABELS, type QueueTab } from "@/lib/inside-sales/types";
-import { ASM_QUEUE_TABS, ASM_TAB_LABELS, type AsmQueueTab } from "@/lib/asm/types";
+import { TAB_LABELS, type QueueTab } from "@/lib/inside-sales/types";
+import { ASM_TAB_LABELS, type AsmQueueTab } from "@/lib/asm/types";
 import { countQueueRows, fetchQueueRows } from "@/lib/inside-sales/queryBuilder";
 import { countAsmQueueRows, fetchAsmQueueRows } from "@/lib/asm/queryBuilder";
 import { readQueueFilters } from "@/lib/leads/queueFilters";
@@ -14,6 +14,7 @@ import { readAsmQueueFilters } from "@/lib/asm/queueFilterParams";
 import { MAX_TOOL_ROWS, type AssistantUser, type ToolResult } from "../../types";
 import { defineTool, type ToolFactory } from "../spec";
 import { queueUrl, toLeadSummary } from "../leads";
+import { ASM_OWN_TABS, ISR_OWN_TABS } from "../../scope";
 
 /** The screen's own defaults: what its route reads from `?` with no params. */
 const NO_PARAMS = () => new URLSearchParams();
@@ -51,7 +52,9 @@ export async function queueRowsForTool(user: AssistantUser, tab: string, search?
 }
 
 export const myQueue: ToolFactory = (role) => {
-    const tabs = role === "asm" ? ASM_QUEUE_TABS : QUEUE_TABS;
+    // ID 45: own tabs only — the pool (unassigned / team / territory /
+    // unclaimed) is not browsable from the Assistant.
+    const tabs: readonly string[] = role === "asm" ? ASM_OWN_TABS : ISR_OWN_TABS;
     const labels: Record<string, string> = role === "asm" ? ASM_TAB_LABELS : TAB_LABELS;
     return defineTool({
         name: "my_queue",

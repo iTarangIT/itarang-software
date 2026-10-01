@@ -169,6 +169,7 @@ export function LeadDetailView({ leadId, viewerId, viewerRole, backHref = "/insi
                     setLostPrefill(r);
                     setActiveModal("mark_lost");
                 }}
+                onOpenCommercials={() => setActiveModal("commercials")}
             />
             <UpdateCommercialsModal
                 open={activeModal === "commercials"}

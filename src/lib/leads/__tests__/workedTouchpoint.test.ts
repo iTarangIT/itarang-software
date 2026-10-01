@@ -47,6 +47,25 @@ describe("isWorkedTouchpoint", () => {
         expect(isWorkedTouchpoint("escalation_ceo_comment", false)).toBe(false);
         expect(isWorkedTouchpoint("whatsapp", false)).toBe(false);
         expect(isWorkedTouchpoint("quote_sent", false)).toBe(false);
+        expect(isWorkedTouchpoint("quote_released", false)).toBe(false);
         expect(isWorkedTouchpoint("reactivated_via_admin", true)).toBe(false);
+    });
+});
+
+describe("isQuoteReleased (ID 75 rename)", () => {
+    it("accepts the new quote_released and the legacy quote_sent, nothing else", async () => {
+        const { QUOTE_RELEASED_TYPES, isQuoteReleased } = await import("@/lib/lifecycle/touchpointTypes");
+        expect([...QUOTE_RELEASED_TYPES]).toEqual(["quote_released", "quote_sent"]);
+        expect(isQuoteReleased("quote_released")).toBe(true);
+        expect(isQuoteReleased("quote_sent")).toBe(true);
+        expect(isQuoteReleased("quote_submitted")).toBe(false);
+        expect(isQuoteReleased("quote_dispatched")).toBe(false);
+        expect(isQuoteReleased(null)).toBe(false);
+    });
+
+    it("labels both stored values \"Quote released\"", async () => {
+        const { TOUCHPOINT_TYPE_LABEL } = await import("@/lib/lifecycle/touchpointLabels");
+        expect(TOUCHPOINT_TYPE_LABEL.quote_released).toBe("Quote released");
+        expect(TOUCHPOINT_TYPE_LABEL.quote_sent).toBe("Quote released");
     });
 });

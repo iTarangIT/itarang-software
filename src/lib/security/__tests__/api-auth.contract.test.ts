@@ -127,7 +127,8 @@ function uncheckedHandlers(src: string): string[] {
     .filter((m) => {
       const text = body(m.index!);
       if (SESSION_CHECK.test(text)) return false;
-      return !checkingHelpers.some((h) => new RegExp(String.raw`\b${h}\s*\(`).test(text));
+      // Calls a checking helper, or IS one: `export const GET = handle;`.
+      return !checkingHelpers.some((h) => new RegExp(String.raw`\b${h}\s*\(|=\s*${h}\s*;`).test(text));
     })
     .map((m) => m[1]);
 }

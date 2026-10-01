@@ -118,7 +118,30 @@ export async function resolveAssignTarget(
 // is deliberately no "refused" member: a blocked transition falls through to the
 // plain swap rather than aborting, so the lead still changes hands and still
 // gets an audit row. Assignment never silently does nothing.
-export type AssignPath = "asm_swap" | "asm_lift" | "rep_lift" | "owner_swap";
+export type AssignPath =
+    | "asm_swap"
+    | "asm_lift"
+    | "rep_lift"
+    | "transfer_undo"
+    | "owner_swap";
+
+/**
+ * ID 77.5 — the status a Transferred_to_ASM lead goes back to when it is handed
+ * to an ISR / partner instead: where it was before the transfer, when that was
+ * an open working stage, else Assigned_Not_Contacted. Pure; exported for tests.
+ */
+export function statusBeforeTransfer(preTransfer: string | null): LeadStatus {
+    if (
+        preTransfer &&
+        isOpen(preTransfer as LeadStatus) &&
+        preTransfer !== "Transferred_to_ASM" &&
+        preTransfer !== "Won" &&
+        preTransfer !== "New_Unassigned"
+    ) {
+        return preTransfer as LeadStatus;
+    }
+    return "Assigned_Not_Contacted";
+}
 
 export type AssignOutcome = {
     assigned: boolean;
@@ -311,6 +334,82 @@ async function assignOwner(input: AssignLeadOwnerInput): Promise<AssignOutcome> 
         }
         // Transition refused — fall through to the plain swap so the lead still
         // changes hands and still gets an audit row.
+    }
+
+    // ── ID 77.5: an ISR / partner taking a lead that is Awaiting field visit
+    // (Transferred_to_ASM). Left as it was, the lead would sit on the rep's
+    // queue in a status only an ASM visit can end. Restore the pre-transfer
+    // stage (fallback Assigned_Not_Contacted) and clear pre_transfer_status —
+    // owner swap and status move in ONE transaction, the move as a
+    // `correction` (the only event that may leave Transferred_to_ASM without a
+    // visit). Reassignment is not work: the idle clock is left alone.
+    if (
+        (target.role === "inside_sales_rep" || target.role === "partner") &&
+        fromStatus === "Transferred_to_ASM"
+    ) {
+        const restored = await db.transaction(async (tx) => {
+            const rows = (await tx.execute<{
+                from_owner_id: string | null;
+                pre_transfer_status: string | null;
+                lead_status: string | null;
+            }>(sql`
+                WITH prev AS (
+                    SELECT id, current_owner_id, pre_transfer_status, lead_status
+                      FROM dealer_leads
+                     WHERE id = ${leadId} FOR UPDATE
+                )
+                UPDATE dealer_leads dl
+                   SET current_owner_id = ${target.id},
+                       assigned_at = NOW(), updated_at = NOW(),
+                       originator_id = COALESCE(dl.originator_id, ${target.id}),
+                       pre_transfer_status = CASE
+                           WHEN prev.lead_status = 'Transferred_to_ASM' THEN NULL
+                           ELSE dl.pre_transfer_status END
+                  FROM prev
+                 WHERE dl.id = prev.id
+                RETURNING prev.current_owner_id AS from_owner_id,
+                          prev.pre_transfer_status AS pre_transfer_status,
+                          prev.lead_status AS lead_status
+            `)) as unknown as Array<{
+                from_owner_id: string | null;
+                pre_transfer_status: string | null;
+                lead_status: string | null;
+            }>;
+            const prev = rows[0];
+            // The lead moved on between the caller's read and this lock (a
+            // visit landed): just record the hop, no status move.
+            const stillTransferred = prev?.lead_status === "Transferred_to_ASM";
+            const to = statusBeforeTransfer(prev?.pre_transfer_status ?? null);
+            await writeTouchpoint(
+                {
+                    dealerLeadId: leadId,
+                    touchpointType,
+                    performedBy: actorId,
+                    remarks,
+                    externalSystem,
+                    fromOwnerId: prev?.from_owner_id ?? null,
+                    toOwnerId: target.id,
+                    countsAsWork: false,
+                    ...(stillTransferred
+                        ? {
+                              statusChange: {
+                                  from: "Transferred_to_ASM" as LeadStatus,
+                                  to,
+                                  event: "correction" as const,
+                                  reasonNotes: `Reassigned to ${target.name ?? "an inside-sales rep"} before the field visit; back to the pre-transfer stage`,
+                              },
+                          }
+                        : {}),
+                },
+                { tx },
+            );
+            return stillTransferred ? to : null;
+        });
+        return {
+            assigned: true,
+            path: restored ? "transfer_undo" : "owner_swap",
+            statusLiftedTo: restored,
+        };
     }
 
     // ── Default: plain ownership swap (other roles, terminal leads, or any

@@ -40,6 +40,7 @@ export async function register() {
       startGreenNewsTicker,
       startWaAssistantSweepTicker,
       startDealerAgreementRefreshTicker,
+      startAgreementExpiryReminderTicker,
     } = await import("./instrumentation-node");
     await startDialerTickers();
     await startZohoSyncTicker();
@@ -56,6 +57,9 @@ export async function register() {
     await startEcofyReminderTicker();
     // ID 53 — dealer agreement status refreshes itself (kickoff 210s out).
     await startDealerAgreementRefreshTicker();
+    // ID 53 — agreement expiry reminders, hourly (kickoff 215s out); the
+    // Vercel cron for it never fired on the pm2 boxes.
+    await startAgreementExpiryReminderTicker();
     await startRecordingTranscriptionTicker();
     await startDriveMirrorTicker();
     // E-280 — Drive sales-invoice scan. Kickoff staggered 195s out, the last

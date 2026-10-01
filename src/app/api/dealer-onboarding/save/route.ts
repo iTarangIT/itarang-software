@@ -8,6 +8,7 @@ import {
   dealerOnboardingDocuments,
 } from "@/lib/db/schema";
 import { recordLeadCapture } from "@/lib/leads/lead-registry";
+import { markDocsSubmitted } from "@/lib/onboarding/leadMilestones";
 
 type NullableString = string | null;
 type SafeRecord = Record<string, unknown>;
@@ -419,6 +420,13 @@ export async function POST(req: NextRequest) {
       );
       mergeCookies(cookieCollector, res);
       return res;
+    }
+
+    // ID 84.2: the submission transition stamps the lead's "docs submitted"
+    // milestone (first submission only; autosaves of a draft do not).
+    // Best-effort — never throws.
+    if (onboardingStatus === "submitted") {
+      await markDocsSubmitted(application.id);
     }
 
     // E-179 central registry. Autosave fires on every wizard step, so wait for

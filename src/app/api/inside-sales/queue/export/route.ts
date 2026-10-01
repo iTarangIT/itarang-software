@@ -53,6 +53,7 @@ const QuerySchema = z.object({
     q: z.string().trim().min(1).max(120).optional(),
     neodove: z.literal("1").optional(),
     callback: z.literal("1").optional(),
+    finalised: z.literal("1").optional(),
     format: z.enum(["csv", "xlsx"]).default("csv"),
 });
 
@@ -93,6 +94,7 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
         q: url.searchParams.get("q") ?? undefined,
         neodove: url.searchParams.get("neodove") ?? undefined,
         callback: url.searchParams.get("callback") ?? undefined,
+        finalised: url.searchParams.get("finalised") ?? undefined,
         format: url.searchParams.get("format") ?? undefined,
     });
 
@@ -112,6 +114,7 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
         q: parsed.q ?? null,
         neodoveOnly: parsed.neodove === "1",
         callbackOnly: parsed.callback === "1",
+        finalisedOnly: parsed.finalised === "1",
         filters: readQueueFilters(url.searchParams),
         ownedBy: ownOnly ? user.id : null,
     };
@@ -133,7 +136,7 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
         dataset: `inside_sales_queue:${parsed.tab}`,
         rowCount: rows.length,
         ownOnly,
-        filters: { q: parsed.q ?? null, neodove: parsed.neodove ?? null, callback: parsed.callback ?? null, format: parsed.format },
+        filters: { q: parsed.q ?? null, neodove: parsed.neodove ?? null, callback: parsed.callback ?? null, finalised: parsed.finalised ?? null, format: parsed.format },
     });
 
     // Who handed each lead over. Decorated in a SEPARATE, fail-tolerant

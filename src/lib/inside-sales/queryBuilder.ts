@@ -16,6 +16,7 @@ import {
     type QueueFilterInput,
 } from "@/lib/leads/queueFilterSql";
 import type { QueueRegion } from "@/lib/leads/queueFilters";
+import { finalisedNotWonSql } from "@/lib/leads/finalisedNotWon";
 import type { QueueSort } from "@/lib/leads/queueSort";
 
 const OPEN_LIST = sql.raw(
@@ -54,6 +55,12 @@ type BuildArgs = {
     neodoveOnly?: boolean;
     /** Only leads who asked to be called back — from either system. */
     callbackOnly?: boolean;
+    /**
+     * ID 75.4: only "Finalised, not Won" leads — Commercials_Finalised with an
+     * approved, non-withdrawn dealer decision (finalisedNotWonSql, the admin
+     * panel's predicate). A chip, not a sixth tab.
+     */
+    finalisedOnly?: boolean;
     /** Stage / interest / region / date range — see @/lib/leads/queueFilters. */
     filters?: QueueFilterInput;
     /** User-chosen column + direction; the tab order stays as the tiebreak. */
@@ -98,7 +105,10 @@ export function tabFilter(tab: QueueTab, userId: string) {
             // to every queue. Owner-IS-NULL + not-terminal surfaces them here.
             return sql`dl.current_owner_id IS NULL AND dl.lead_status IS DISTINCT FROM 'Converted' AND dl.lead_status IS DISTINCT FROM 'Lost' AND dl.is_active IS NOT FALSE`;
         case "team":
-            return sql`dl.lead_status IN (${OPEN_LIST}) AND dl.is_active IS NOT FALSE`;
+            // ID 45: the team's OWNED leads only — the unowned pool is the
+            // Unassigned tab (claim there), not something to browse here.
+            // ID 36: dead / non-responsive numbers are in Number Repair.
+            return sql`dl.current_owner_id IS NOT NULL AND dl.lead_status IN (${OPEN_LIST}) AND dl.is_active IS NOT FALSE AND (to_jsonb(dl) ->> 'contactability') IS NULL`;
         case "my_closed":
             return sql`dl.current_owner_id = ${userId} AND dl.lead_status IN (${TERMINAL_LIST}) AND dl.closed_at >= NOW() - INTERVAL '90 days' AND dl.is_active IS NOT FALSE`;
     }
@@ -116,9 +126,10 @@ function extraFilters({
     q,
     neodoveOnly,
     callbackOnly,
+    finalisedOnly,
     filters,
     ownedBy,
-}: Pick<BuildArgs, "q" | "neodoveOnly" | "callbackOnly" | "filters" | "ownedBy">) {
+}: Pick<BuildArgs, "q" | "neodoveOnly" | "callbackOnly" | "finalisedOnly" | "filters" | "ownedBy">) {
     const parts: SQL[] = [];
     if (ownedBy) parts.push(sql` AND dl.current_owner_id = ${ownedBy}`);
     if (q) parts.push(leadSearchClause(q));
@@ -140,6 +151,7 @@ function extraFilters({
             OR to_jsonb(dl) ->> 'last_disposition' = 'As to Call Back'
         )`);
     }
+    if (finalisedOnly) parts.push(sql` AND ${finalisedNotWonSql()}`);
     if (filters) parts.push(...queueFilterClauses(filters, ISR_DATE_COLUMN));
     return parts.length ? sql.join(parts, sql``) : sql``;
 }
@@ -180,6 +192,7 @@ export async function fetchQueueRows({
     q,
     neodoveOnly,
     callbackOnly,
+    finalisedOnly,
     filters,
     sort,
     ownedBy,
@@ -187,7 +200,7 @@ export async function fetchQueueRows({
     const offset = (page - 1) * limit;
     const where = tabFilter(tab, userId);
     const order = queueSortOrder(sort, tabOrder(tab));
-    const search = extraFilters({ q, neodoveOnly, callbackOnly, filters, ownedBy });
+    const search = extraFilters({ q, neodoveOnly, callbackOnly, finalisedOnly, filters, ownedBy });
 
     const rows = await db.execute<QueueRow>(sql`
         SELECT
@@ -235,12 +248,13 @@ export async function fetchQueueIds({
     q,
     neodoveOnly,
     callbackOnly,
+    finalisedOnly,
     filters,
     sort,
 }: Omit<BuildArgs, "page">): Promise<string[]> {
     const where = tabFilter(tab, userId);
     const order = queueSortOrder(sort, tabOrder(tab));
-    const search = extraFilters({ q, neodoveOnly, callbackOnly, filters });
+    const search = extraFilters({ q, neodoveOnly, callbackOnly, finalisedOnly, filters });
     const rows = await db.execute<{ id: string }>(sql`
         SELECT dl.id
         FROM dealer_leads dl
@@ -257,14 +271,15 @@ export async function countQueueRows({
     q,
     neodoveOnly,
     callbackOnly,
+    finalisedOnly,
     filters,
     ownedBy,
 }: Pick<
     BuildArgs,
-    "tab" | "userId" | "q" | "neodoveOnly" | "callbackOnly" | "filters" | "ownedBy"
+    "tab" | "userId" | "q" | "neodoveOnly" | "callbackOnly" | "finalisedOnly" | "filters" | "ownedBy"
 >): Promise<number> {
     const where = tabFilter(tab, userId);
-    const search = extraFilters({ q, neodoveOnly, callbackOnly, filters, ownedBy });
+    const search = extraFilters({ q, neodoveOnly, callbackOnly, finalisedOnly, filters, ownedBy });
     const rows = await db.execute<{ c: string }>(sql`
         SELECT COUNT(*)::text AS c FROM dealer_leads dl WHERE ${where} ${search}
     `);
@@ -282,11 +297,12 @@ export async function countQueueRows({
  */
 export async function fetchAllTabCounts(
     userId: string,
-    opts?: Pick<BuildArgs, "neodoveOnly" | "callbackOnly" | "filters">,
+    opts?: Pick<BuildArgs, "neodoveOnly" | "callbackOnly" | "finalisedOnly" | "filters">,
 ): Promise<Record<QueueTab, number>> {
     const extra = extraFilters({
         neodoveOnly: opts?.neodoveOnly,
         callbackOnly: opts?.callbackOnly,
+        finalisedOnly: opts?.finalisedOnly,
         filters: opts?.filters,
     });
     const rows = await db.execute<{
@@ -311,6 +327,19 @@ export async function fetchAllTabCounts(
         team: Number(r.team ?? 0),
         my_closed: Number(r.my_closed ?? 0),
     };
+}
+
+/**
+ * ID 75.4: the rep's own "Finalised, not Won" leads on My open — the count
+ * badge on the queue chip. Not narrowed by the other filters: it answers "how
+ * many of mine are waiting for Mark Won", whatever the table shows right now.
+ */
+export async function countFinalisedNotWon(userId: string): Promise<number> {
+    const rows = await db.execute<{ c: string }>(sql`
+        SELECT COUNT(*)::text AS c FROM dealer_leads dl
+         WHERE ${tabFilter("my_open", userId)} AND ${finalisedNotWonSql()}
+    `);
+    return Number(rows[0]?.c ?? 0);
 }
 
 /**

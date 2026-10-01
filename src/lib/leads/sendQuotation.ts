@@ -121,7 +121,8 @@ export async function sendApprovedQuotation(
   // One touchpoint for the send, and only when something actually went. A
   // history entry for a send where every channel failed would put a delivery
   // that never happened into the lead timeline — the same mistake E-221
-  // avoided by not writing `quote_sent` on submission.
+  // avoided by not writing `quote_released` (formerly `quote_sent`) on
+  // submission.
   if (sent.length) {
     await writeTouchpoint({
       dealerLeadId: row.dealer_lead_id,

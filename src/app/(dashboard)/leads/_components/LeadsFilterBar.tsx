@@ -380,6 +380,22 @@ export function LeadsFilterBar({
                     Callback{aiFacets ? ` (${aiFacets.leadsCallback})` : ""}
                 </button>
 
+                {/* ID 36: dead-number / non-responsive (Number Repair) and
+                    AI-disqualified leads are hidden by default. Unticking shows
+                    them (hide_dead=0); source reports always count them. */}
+                <label
+                    className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-600 hover:border-gray-400"
+                    title="Dead / non-responsive numbers (in Number Repair) and AI-disqualified leads are hidden by default"
+                >
+                    <input
+                        type="checkbox"
+                        className="h-3.5 w-3.5 rounded border-gray-300"
+                        checked={draft.showDead !== "1"}
+                        onChange={(e) => onChange("showDead", e.target.checked ? "" : "1")}
+                    />
+                    Hide dead &amp; disqualified
+                </label>
+
                 <button
                     type="button"
                     onClick={onToggleMore}

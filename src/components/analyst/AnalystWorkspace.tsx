@@ -12,10 +12,10 @@
 //  - Every flex/grid ancestor of the result table carries `min-w-0`, or a wide result stretches
 //    the page instead of scrolling inside its own box.
 
-import { BarChart3, ChevronDown, Database, MessageSquarePlus, Sparkles } from "lucide-react";
+import { BarChart3, ChevronDown, Database, FileSpreadsheet, MessageSquarePlus, Plus, Settings2, Sparkles } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useState, useTransition } from "react";
+import { useCallback, useEffect, useState, useTransition } from "react";
 
 import { buildChart, forecastTable } from "@/lib/analyst/chart";
 import { isRunning, type RunState } from "@/lib/analyst/run-types";
@@ -37,6 +37,8 @@ import {
   UserMessage,
 } from "./parts";
 import { ResultChart } from "./result-chart";
+import { sourcesApi } from "./sources/api";
+import { SourcesPanel, type PanelView } from "./sources/SourcesPanel";
 
 /** Starter questions for an empty conversation. Phrased for what the connected data can answer. */
 const SUGGESTIONS = [
@@ -56,21 +58,26 @@ export type AnalystWorkspaceProps = {
   unreachable: boolean;
   /** Set when the page could not load the agent's data, to say why. */
   problem: string | null;
+  /** CEO / admin: may add, change and remove data sources. */
+  canManage?: boolean;
 };
 
 export function AnalystWorkspace({
   basePath,
   threadId,
-  connections,
+  connections: initialConnections,
   history,
   threads: initialThreads,
   unreachable,
   problem,
+  canManage = false,
 }: AnalystWorkspaceProps) {
   const { state, turns, ask, cancel } = useRun();
   const { viewportRef, contentRef, onSubmit: followSubmittedQuestion } = useTranscriptScroll();
   const [question, setQuestion] = useState("");
   const [threads, setThreads] = useState(initialThreads);
+  const [connections, setConnections] = useState(initialConnections);
+  const [panel, setPanel] = useState<PanelView | null>(null);
   // A continued thread keeps asking the source it was asking, if that still exists.
   const [connectionId, setConnectionId] = useState(() => {
     const last = history[history.length - 1]?.connection_id;
@@ -87,6 +94,27 @@ export function AnalystWorkspace({
   const needsTables = active !== null && active.total_tables > 0 && active.selected_tables === 0;
   const ready = connectionId !== "" && !needsTables && !unreachable;
   const canSend = question.trim().length >= 3 && ready && !busy;
+
+  const refreshConnections = useCallback(async () => {
+    try {
+      const next = await sourcesApi.list();
+      setConnections(next);
+      // Keep asking the chosen source; fall back to the first if it was removed, or to a
+      // newly added one if there was none.
+      setConnectionId((current) => (next.some((c) => c.id === current) ? current : (next[0]?.id ?? "")));
+      return next;
+    } catch {
+      // The list on screen stays; the next action or page load corrects it.
+    }
+  }, []);
+
+  // A Google dataset reads its files in the background; follow it until it settles.
+  const syncing = connections.some((c) => c.sync_status === "syncing");
+  useEffect(() => {
+    if (!syncing) return;
+    const timer = setInterval(() => void refreshConnections(), 4000);
+    return () => clearInterval(timer);
+  }, [syncing, refreshConnections]);
 
   const refreshThreads = useCallback(async () => {
     try {
@@ -141,6 +169,17 @@ export function AnalystWorkspace({
             {unreachable ? null : (
               <ConnectionPicker connections={connections} value={connectionId} onChange={setConnectionId} active={active} />
             )}
+            {unreachable || problem ? null : (
+              <button
+                type="button"
+                onClick={() => setPanel({ view: "list" })}
+                title="Data sources"
+                className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[0.8125rem] font-medium text-ink-muted transition-colors hover:bg-bg hover:text-ink"
+              >
+                <Settings2 aria-hidden className="size-4" />
+                <span className="hidden sm:inline">Data sources</span>
+              </button>
+            )}
             <Link
               href={basePath}
               className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[0.8125rem] font-medium text-ink-muted transition-colors hover:bg-bg hover:text-ink lg:hidden"
@@ -162,6 +201,8 @@ export function AnalystWorkspace({
                 active={active}
                 unreachable={unreachable}
                 problem={problem}
+                canManage={canManage}
+                onAddSource={() => setPanel({ view: "add" })}
                 onPick={ready && !busy ? (s) => submit(s) : null}
               />
             ) : (
@@ -194,7 +235,18 @@ export function AnalystWorkspace({
           <div className="mx-auto w-full max-w-3xl">
             {needsTables && active ? (
               <p className="mb-2 text-center text-[0.8125rem] text-warning">
-                No tables are chosen for {active.name} yet — choose them in the analyst&rsquo;s admin console first.
+                No tables are chosen for {active.name} yet.{" "}
+                {canManage ? (
+                  <button
+                    type="button"
+                    onClick={() => setPanel({ view: "tables", connectionId: active.id })}
+                    className="font-medium underline underline-offset-2 hover:text-ink"
+                  >
+                    Choose tables
+                  </button>
+                ) : (
+                  "Ask the CEO or an admin to choose them."
+                )}
               </p>
             ) : null}
             <Composer
@@ -223,6 +275,17 @@ export function AnalystWorkspace({
         {/* Balances the space above the welcome, which is what centres the composer. */}
         {empty ? <div aria-hidden className="flex-1" /> : null}
       </div>
+
+      {panel ? (
+        <SourcesPanel
+          key={JSON.stringify(panel)}
+          initialView={panel}
+          connections={connections}
+          canManage={canManage}
+          onClose={() => setPanel(null)}
+          onChanged={refreshConnections}
+        />
+      ) : null}
     </div>
   );
 }
@@ -331,7 +394,11 @@ function ConnectionPicker({
         many && "transition-colors focus-within:ring-2 focus-within:ring-brand-100 hover:bg-bg",
       )}
     >
-      <Database aria-hidden className="size-4 shrink-0 text-ink-muted" strokeWidth={1.75} />
+      {active?.kind === "file" ? (
+        <FileSpreadsheet aria-hidden className="size-4 shrink-0 text-ink-muted" strokeWidth={1.75} />
+      ) : (
+        <Database aria-hidden className="size-4 shrink-0 text-ink-muted" strokeWidth={1.75} />
+      )}
       <span className="max-w-[12rem] truncate">{active?.name}</span>
       {many ? (
         <>
@@ -343,8 +410,10 @@ function ConnectionPicker({
             className="absolute inset-0 size-full cursor-pointer appearance-none opacity-0"
           >
             {connections.map((c) => (
-              <option key={c.id} value={c.id}>
+              <option key={c.id} value={c.id} disabled={c.sync_status === "syncing" && c.total_tables === 0}>
                 {c.name}
+                {c.kind === "file" ? " (files)" : ""}
+                {c.sync_status === "syncing" ? " (reading files)" : ""}
               </option>
             ))}
           </select>
@@ -359,12 +428,16 @@ function Welcome({
   active,
   unreachable,
   problem,
+  canManage,
+  onAddSource,
   onPick,
 }: {
   connections: Connection[];
   active: Connection | null;
   unreachable: boolean;
   problem: string | null;
+  canManage: boolean;
+  onAddSource: () => void;
   onPick: ((question: string) => void) | null;
 }) {
   const router = useRouter();
@@ -400,9 +473,25 @@ function Welcome({
       ) : connections.length === 0 ? (
         <>
           <h2 className="text-xl font-semibold text-ink">No data source is connected yet</h2>
-          <p className="mt-2 max-w-[52ch] text-[0.9375rem] leading-relaxed text-ink-muted">
-            An admin needs to connect a read-only database to the analyst before questions can be asked.
-          </p>
+          {canManage ? (
+            <>
+              <p className="mt-2 max-w-[52ch] text-[0.9375rem] leading-relaxed text-ink-muted">
+                Connect the iTarang database or another Postgres database, upload CSV, Excel or PDF files, or link a
+                Google Sheet. Then ask questions about it in plain English.
+              </p>
+              <button
+                type="button"
+                onClick={onAddSource}
+                className="mt-5 inline-flex items-center gap-2 rounded-full bg-brand-500 px-4 py-2 text-[0.875rem] font-medium text-white transition-colors hover:bg-brand-600"
+              >
+                <Plus aria-hidden className="size-4" /> Add a data source
+              </button>
+            </>
+          ) : (
+            <p className="mt-2 max-w-[52ch] text-[0.9375rem] leading-relaxed text-ink-muted">
+              The CEO or an admin needs to connect a data source before questions can be asked.
+            </p>
+          )}
         </>
       ) : (
         <>

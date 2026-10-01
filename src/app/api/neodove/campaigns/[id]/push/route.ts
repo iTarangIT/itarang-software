@@ -28,8 +28,8 @@ import { getNeodoveConfig } from "@/lib/neodove/config";
 import { pushLead } from "@/lib/neodove/client";
 import { dealerLeadToNeodove, type PushableLead } from "@/lib/neodove/mapper";
 import { NEODOVE_ADMIN_ROLES } from "@/lib/neodove/roles";
+import { ASSIGN_ON_PUSH } from "@/lib/neodove/assignPolicy";
 import {
-    ASSIGN_ON_PUSH,
     assignAfterPush,
     logAssignmentSummary,
     resolveNeodoveAssignee,
@@ -147,14 +147,15 @@ export const POST = withErrorHandler(
             queued: pendingCount,
             excluded: audience.excluded,
             // Intent, not outcome — the drain runs after this response is sent.
-            assignTo: assignee.target
+            // ID 63: nothing is assigned while ASSIGN_ON_PUSH is off.
+            assignTo: ASSIGN_ON_PUSH && assignee.target
                 ? {
                       id: assignee.target.id,
                       name: assignee.target.name,
                       role: assignee.target.role,
                   }
                 : null,
-            willAssign: assignee.target ? audience.queueIds.length : 0,
+            willAssign: ASSIGN_ON_PUSH && assignee.target ? audience.queueIds.length : 0,
             status: "pushing",
         });
     },

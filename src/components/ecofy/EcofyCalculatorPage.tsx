@@ -3,11 +3,15 @@
 // E-307 — the standalone calculator screen shared by Sales Head, ASM and ISR.
 // Reads its defaults from the query string so a lead's Assessment tab can
 // open it prefilled (?segment=&productInterest=&monthlyUnits=&sanctionedLoadKw=).
+// Opened from a lead (?leadId=&caseNo=&back=) it also offers "Save to this
+// lead's assessment" (a CALCULATOR assessment, FR-07.2); the segment is then
+// locked to the lead's, and the actions route re-checks access and segment.
 
 import Link from "next/link";
 import { Suspense, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { EcofyCalculator, type CalcSegment } from "./EcofyCalculator";
+import { CalculatorAssessmentSave } from "./CalculatorAssessmentSave";
+import { EcofyCalculator, type CalcSegment, type CalculatorComputed } from "./EcofyCalculator";
 
 const SEGMENTS: Array<{ code: CalcSegment; label: string }> = [
     { code: "RESI", label: "Residential" },
@@ -21,8 +25,17 @@ function numParam(v: string | null): number | undefined {
     return Number.isFinite(n) && n >= 0 ? n : undefined;
 }
 
+/** Same-origin path only, so a crafted link cannot send the user elsewhere. */
+function safeBack(v: string | null): string | null {
+    return v && v.startsWith("/") && !v.startsWith("//") && !v.includes("\\") ? v : null;
+}
+
 function Inner({ backHref }: { backHref?: { href: string; label: string } }) {
     const sp = useSearchParams();
+    const leadId = sp.get("leadId");
+    const caseNo = sp.get("caseNo");
+    const leadBack = safeBack(sp.get("back"));
+    const [computed, setComputed] = useState<CalculatorComputed | null>(null);
     const initial = (sp.get("segment") ?? "RESI").toUpperCase();
     const [segment, setSegment] = useState<CalcSegment>(
         SEGMENTS.some((s) => s.code === initial) ? (initial as CalcSegment) : "RESI",
@@ -43,10 +56,16 @@ function Inner({ backHref }: { backHref?: { href: string; label: string } }) {
                         never stored — to attach a sizing to a lead, open the lead&apos;s Assessment tab.
                     </p>
                 </div>
-                {backHref && (
-                    <Link href={backHref.href} className="text-sm text-blue-700 hover:underline">
-                        ← {backHref.label}
+                {leadId && leadBack ? (
+                    <Link href={leadBack} className="text-sm text-blue-700 hover:underline">
+                        ← Back to {caseNo ?? "the lead"}
                     </Link>
+                ) : (
+                    backHref && (
+                        <Link href={backHref.href} className="text-sm text-blue-700 hover:underline">
+                            ← {backHref.label}
+                        </Link>
+                    )
                 )}
             </header>
 
@@ -59,7 +78,7 @@ function Inner({ backHref }: { backHref?: { href: string; label: string } }) {
                 <header className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-100 px-4 py-3">
                     <h2 className="text-sm font-semibold text-gray-900">Energy calculator</h2>
                     <div className="flex gap-1">
-                        {SEGMENTS.map((s) => (
+                        {SEGMENTS.filter((s) => !leadId || s.code === segment).map((s) => (
                             <button
                                 key={s.code}
                                 type="button"
@@ -76,8 +95,17 @@ function Inner({ backHref }: { backHref?: { href: string; label: string } }) {
                     </div>
                 </header>
                 <div className="p-4">
-                    <EcofyCalculator segment={segment} defaults={defaults} />
+                    <EcofyCalculator segment={segment} defaults={defaults} onComputed={leadId ? setComputed : undefined} />
                 </div>
+                {leadId && segment !== "CI" && (
+                    <div className="border-t border-gray-100 p-4">
+                        <p className="mb-2 text-sm text-gray-700">
+                            Sizing for lead <b>{caseNo ?? leadId.slice(0, 8)}</b> — save this run as the lead&apos;s assessment
+                            (Ecofy stores the release, the inputs and every step).
+                        </p>
+                        <CalculatorAssessmentSave leadId={leadId} computed={computed} label="Save to this lead's assessment" />
+                    </div>
+                )}
             </section>
         </div>
     );

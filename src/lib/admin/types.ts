@@ -71,6 +71,10 @@ export const ALERT_PANELS = [
     "non_responsive",
     // ID 74 — Mark Won with no dealer-approved quote: allowed, and flagged.
     "won_without_quote",
+    // ID 77.1 — Transferred to ASM, no visit within the admin-set limit.
+    "transfer_visit_overdue",
+    // ID 75.4 — dealer approved the quote 2+ days ago, lead not marked Won.
+    "finalised_not_won",
 ] as const;
 export type AlertPanelKey = (typeof ALERT_PANELS)[number];
 
@@ -80,15 +84,32 @@ export const ALERT_PANEL_LABELS: Record<AlertPanelKey, string> = {
     awaiting_decision_14d: "Awaiting Customer Decision > 14 days",
     pending_escalations: "Pending Escalations",
     onboarding_dropouts: "Onboarding Dropouts Pending Review",
-    stale_converted: "Stale Converted (no onboarding activity 3+ days)",
-    onboarding_stalled: "Onboarding Stalled (> 30 days)",
+    stale_converted: "Stale Won / Converted (no onboarding activity 3+ days)",
+    onboarding_stalled: "Onboarding stalled (dealer 7+ days / us 2+ working days)",
     asm_no_activity: "ASM No Activity After Handoff",
     address_mismatch: "Address Mismatch Review",
     duplicate_merge_requests: "Duplicate Merge Requests",
     out_of_territory_handoffs: "Out-of-Territory Handoffs",
     non_responsive: "Non-responsive (6 unanswered call days in 45)",
     won_without_quote: "Won without an approved quote",
+    transfer_visit_overdue: "Awaiting field visit past 3 working days",
+    finalised_not_won: "Commercials finalised, not marked Won",
 };
+
+/**
+ * A panel's label with its live threshold. Only transfer_visit_overdue has one
+ * (the admin-set ASM visit limit, ID 77.1); every other label is fixed.
+ */
+export function alertPanelLabel(
+    key: AlertPanelKey,
+    opts: { transferVisitLimitDays?: number | null } = {},
+): string {
+    if (key === "transfer_visit_overdue" && opts.transferVisitLimitDays) {
+        const n = opts.transferVisitLimitDays;
+        return `Awaiting field visit past ${n} working day${n === 1 ? "" : "s"}`;
+    }
+    return ALERT_PANEL_LABELS[key];
+}
 
 // Generic drill-down row used by every alert panel.
 export type AlertPanelRow = {
@@ -116,6 +137,8 @@ export type DashboardResponse = {
     kpis: AdminKpis;
     team: TeamPerfRow[];
     alert_counts: Record<AlertPanelKey, number>;
+    /** ID 77.1 — the admin-set ASM visit limit, for the panel label. */
+    transfer_visit_limit_days?: number;
 };
 
 // ────────────────────────────── Escalations ───────────────────────────────

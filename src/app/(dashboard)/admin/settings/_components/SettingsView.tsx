@@ -10,6 +10,7 @@ import { NotificationAccessManager } from "./NotificationAccessManager";
 import { EmailNotificationManager } from "./EmailNotificationManager";
 import { QuotationCcForm } from "./QuotationCcForm";
 import { TerritoryManager } from "./TerritoryManager";
+import { AsmVisitLimitForm } from "./AsmVisitLimitForm";
 import type { SettingsBundle } from "@/lib/admin/types";
 
 // Two sections, two channels: Notification Access (E-231) governs the in-app
@@ -34,7 +35,8 @@ import type { SettingsBundle } from "@/lib/admin/types";
 // restored for this tab alone and only fires while it is the active tab.
 
 // Quotation CC (E-297) sits here too: it is also "who gets which email".
-const TAB_VALUES = ["access", "email", "quotation-cc", "territories"] as const;
+// ASM visit limit (ID 77.1) sits beside ASM Territories.
+const TAB_VALUES = ["access", "email", "quotation-cc", "territories", "asm-visit-limit"] as const;
 type TabValue = (typeof TAB_VALUES)[number];
 
 export function SettingsView() {
@@ -78,6 +80,7 @@ export function SettingsView() {
                     { value: "email", label: "Email Notification" },
                     { value: "quotation-cc", label: "Quotation CC" },
                     { value: "territories", label: "ASM Territories" },
+                    { value: "asm-visit-limit", label: "ASM Visit Limit" },
                 ]}
             />
 
@@ -86,6 +89,7 @@ export function SettingsView() {
                     {active === "access" && <NotificationAccessManager />}
                     {active === "email" && <EmailNotificationManager />}
                     {active === "quotation-cc" && <QuotationCcForm />}
+                    {active === "asm-visit-limit" && <AsmVisitLimitForm />}
                     {active === "territories" &&
                         (bundleQuery.isLoading ? (
                             <div className="flex items-center gap-2 py-8 text-sm text-ink-muted">
