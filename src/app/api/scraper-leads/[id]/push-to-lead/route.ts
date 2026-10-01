@@ -15,10 +15,16 @@ import {
 } from "@/lib/api-utils";
 import { requireRole } from "@/lib/auth-utils";
 import { eq } from "drizzle-orm";
+import {
+  findExistingLeadByPhone,
+  recordLeadCreated,
+  recordReinquiry,
+  stampLeadSource,
+} from "@/lib/leads/leadSource";
 
 export const POST = withErrorHandler(
   async (req: Request, { params }: { params: Promise<{ id: string }> }) => {
-    await requireRole(["sales_manager", "sales_head", "ceo", "business_head"]);
+    const user = await requireRole(["sales_manager", "sales_head", "ceo", "business_head"]);
 
     const { id } = await params;
 
@@ -33,20 +39,15 @@ export const POST = withErrorHandler(
     if (lead.status === "pushed")
       return errorResponse("Already added to Leads", 409);
 
-    // Check if phone already exists in dealer_leads
-    if (lead.phone) {
-      const existing = await db
-        .select({ id: dealerLeads.id })
-        .from(dealerLeads)
-        .where(eq(dealerLeads.phone, lead.phone))
-        .limit(1);
-
-      if (existing.length > 0) {
-        return errorResponse(
-          "A lead with this phone number already exists in Leads",
-          409,
-        );
-      }
+    // ID 81: the SHARED duplicate check (last 10 digits). A known dealer is a
+    // Re-inquiry on the existing lead, never a second copy.
+    const existingId = await findExistingLeadByPhone(lead.phone);
+    if (existingId) {
+      await recordReinquiry({ leadId: existingId, door: "scraper", actorId: user.id, note: lead.name ?? null });
+      return errorResponse(
+        `A lead with this phone number already exists in Leads (${existingId}) — logged as a re-inquiry.`,
+        409,
+      );
     }
 
     // Create dealer lead from scraper lead
@@ -63,6 +64,10 @@ export const POST = withErrorHandler(
       follow_up_history: [],
       created_at: new Date(),
     });
+
+    // ID 81: source + "Lead created".
+    await stampLeadSource(db, newId, { door: "scraper", origin: "scraped_listing" });
+    await recordLeadCreated(db, { leadId: newId, actorId: user.id, door: "scraper", ownerId: null });
 
     // Mark scraper lead as pushed so button shows "Added"
     await db

@@ -45,6 +45,19 @@ function normalizePhone(raw: string): string {
   return (raw || "").replace(/\D/g, "");
 }
 
+/**
+ * Whether an event was addressed to `phoneNumberId` (BRD §2.3-8). The Sales
+ * Assistant is a second number in the same WABA; its events must never reach
+ * the dealer bot. Passes when either side is unknown (no env configured, or a
+ * dry-run event with no metadata) so today's behaviour is unchanged there.
+ */
+export function isForPhoneNumber(
+  event: Pick<InboundEvent, "phoneNumberId">,
+  phoneNumberId: string | undefined,
+): boolean {
+  return !phoneNumberId || !event.phoneNumberId || event.phoneNumberId === phoneNumberId;
+}
+
 export class MetaWhatsAppAdapter implements WhatsAppAdapter {
   readonly provider = "meta";
 
@@ -110,6 +123,8 @@ export class MetaWhatsAppAdapter implements WhatsAppAdapter {
         const value = change.value ?? {};
         const contactName: string | undefined =
           value.contacts?.[0]?.profile?.name;
+        const phoneNumberId: string | undefined =
+          value.metadata?.phone_number_id;
 
         // Delivery receipts (sent/delivered/read/failed).
         for (const status of value.statuses ?? []) {
@@ -118,13 +133,14 @@ export class MetaWhatsAppAdapter implements WhatsAppAdapter {
             waPhone: normalizePhone(status.recipient_id ?? ""),
             type: "status",
             deliveryStatus: status.status,
+            phoneNumberId,
             raw: status,
           });
         }
 
         // Dealer messages.
         for (const msg of value.messages ?? []) {
-          events.push(this.normalizeMessage(msg, contactName));
+          events.push({ ...this.normalizeMessage(msg, contactName), phoneNumberId });
         }
       }
     }

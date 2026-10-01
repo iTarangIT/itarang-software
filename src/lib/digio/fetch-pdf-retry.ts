@@ -1,5 +1,9 @@
 // Fetch a PDF from DigiO's binary endpoints with retry on transient failures.
 //
+// Accept is */* on purpose: Digio's /document/download answers HTTP 500
+// SYSTEM_ERROR to every request carrying `Accept: application/pdf` and 200 with
+// the PDF otherwise (verified 29 Sep 2026). Do not "tighten" it back.
+//
 // DigiO's /document/download and /document/download_audit_trail endpoints
 // intermittently return HTTP 500 `{code:"SYSTEM_ERROR","message":"System error
 // has occurred"}` even when the document status is "completed" and the PDF is
@@ -31,7 +35,7 @@ export async function fetchDigioPdfWithRetry(
     try {
       const res = await fetch(url, {
         method: "GET",
-        headers: { Authorization: authHeader, Accept: "application/pdf" },
+        headers: { Authorization: authHeader, Accept: "*/*" },
         cache: "no-store",
         signal: AbortSignal.timeout(20_000),
       });

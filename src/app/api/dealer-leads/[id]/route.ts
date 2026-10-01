@@ -37,11 +37,7 @@ import { withErrorHandler } from "@/lib/api-utils";
 import { LEADS_PAGE_ROLES } from "@/lib/leads/access";
 import { normalizePhone } from "@/lib/leads/dedupe";
 import { BusinessTypeSchema } from "@/lib/leads/businessType";
-import {
-  normalizeCity,
-  normalizeState,
-  inferStateFromCity,
-} from "@/lib/scraper-enrichment";
+import { canonicalRegionUpdates } from "@/lib/leads/regionFields";
 
 export const dynamic = "force-dynamic";
 
@@ -152,31 +148,15 @@ export const PATCH = withErrorHandler(
 
     // Region: canonicalise city/state the way the create route does, and fall
     // back to `location` as a city string so a lead edited here still shows up
-    // in the region selector and the dialer's audience query.
-    if (
-      body.city !== undefined ||
-      body.state !== undefined ||
-      body.location !== undefined
-    ) {
-      const canonicalCity =
-        normalizeCity(body.city || body.location || undefined) ?? null;
-      const canonicalState =
-        normalizeState(body.state || undefined) ??
-        inferStateFromCity(canonicalCity) ??
-        null;
-      if (body.city !== undefined) updates.city = canonicalCity;
-      if (body.state !== undefined) updates.state = canonicalState;
-      if (body.location !== undefined) {
-        updates.location = body.location || canonicalCity;
-      } else if (!existing.location && canonicalCity) {
-        // `location` is the legacy free-form region field and is still what the
-        // lead detail page renders (`location || city`). Backfill it from the
-        // city when it is EMPTY so an edited lead doesn't show a blank region —
-        // but never overwrite an existing value, which may hold a fuller
-        // address than the city alone.
-        updates.location = canonicalCity;
-      }
-    }
+    // in the region selector and the dialer's audience query. Shared with the
+    // WhatsApp Assistant's update_lead (src/lib/leads/regionFields.ts).
+    Object.assign(
+      updates,
+      canonicalRegionUpdates(
+        { city: body.city, state: body.state, location: body.location },
+        existing.location,
+      ),
+    );
 
     const businessTypeTouched = body.business_type !== undefined;
 

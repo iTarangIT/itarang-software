@@ -612,3 +612,15 @@ telephony adapter would write the same two fields.
 - [Workflows → Send Webhook](https://docs.neodove.com/admin-portal/workflows/workflow-send-webhook-functionality)
 - [Reports FAQs](https://docs.neodove.com/admin-portal/reports/faqs) — confirms export-only
 - [Vyapar acquisition](https://www.crunchbase.com/acquisition/vyapar-app-acquires-neodove--e43869db)
+
+## Events per call (tracker ID 59 / handover P0-5) — answered 2026-09-29
+
+**Question:** does NeoDove send one event or two per call?
+
+**Answer: more than one.** Checked read-only on database-1 (sandbox; NeoDove data up to 2026-08-20):
+
+- Every NeoDove call touchpoint is a `LEAD_DISPOSE` delivery. An agent who re-dispositions a lead (e.g. status code 5, then 6 a few seconds later) produces a second delivery and so a second `inside_sales_call` touchpoint. 439 of 2,665 NeoDove call touchpoints (16%) had another on the same lead within 3 minutes.
+- 1,204 of them carry only a stage ("[NeoDove] Stage: …") and no disposition label — the same dispose event with the label missing, still one per delivery.
+- **No call duration arrives** — `call_duration_sec` is NULL on all 2,665 rows. "Engaged = connected and 30 s or more" cannot be measured until NeoDove sends a duration (or the mapping is found).
+
+**What the CRM does:** the raw touchpoints are kept (each carries the disposition the agent picked). Reports count calls through `humanCall()` in `src/lib/reports/metricDefinitions.ts`: a NeoDove call touchpoint with an earlier one on the same lead, by the same agent, within 3 minutes is the same call and is not counted again. AI dialer calls are not counted as calls.

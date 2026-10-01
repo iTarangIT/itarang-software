@@ -223,6 +223,7 @@ export async function assignLeadOwner(
                 statusChange: {
                     from: fromStatus ?? "New_Unassigned",
                     to: "Transferred_to_ASM",
+                    event: "transfer",
                 },
             });
             return {

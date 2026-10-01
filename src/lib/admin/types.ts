@@ -242,11 +242,23 @@ export const ONBOARDING_DROPOUT_REASONS = [
     "inactivity_stalled",
     "other_dropout",
 ] as const;
+/** ID 84: display labels; inactivity_stalled reads "Went quiet". */
+export const ONBOARDING_DROPOUT_REASON_LABEL: Record<string, string> = {
+    kyc_failed: "KYC failed",
+    compliance_issue: "Compliance issue",
+    dealer_withdrew: "Dealer withdrew",
+    loan_rejected: "Loan rejected",
+    inactivity_stalled: "Went quiet",
+    other_dropout: "Other",
+};
 export type OnboardingDropoutReason =
     (typeof ONBOARDING_DROPOUT_REASONS)[number];
 
+// ID 84 (29 Sep 2026): no "keep converted" — a Won lead becomes Converted only
+// when its onboarding is approved. The day-21 decision is: keep waiting
+// (Stalled), flip to Lost, or re-engage.
 export const DROPOUT_RESOLUTION_ACTIONS = [
-    "keep_converted",
+    "keep_waiting",
     "flip_to_lost",
     "re_engage",
 ] as const;

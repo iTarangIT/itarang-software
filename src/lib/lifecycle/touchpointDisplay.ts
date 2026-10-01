@@ -57,6 +57,10 @@ export const TOUCHPOINT_ICONS: Record<TouchpointType | "default", TouchpointIcon
     reactivated_via_admin: Sparkles,
     ai_dialer_admin_push: Sparkles,
     onboarding_dropout_action: AlertCircle,
+    lead_created: AlertCircle,
+    lead_reinquiry: AlertCircle,
+    sales_ready: AlertCircle,
+    contactability_flag: AlertCircle,
     default: Activity,
 };
 

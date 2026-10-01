@@ -524,32 +524,15 @@ export function callStatusFor(event: NeodoveInboundEvent): CallStatus | null {
     return event.eventType === "call_connected" ? "connected" : null;
 }
 
-// NeoDove stage → our LeadStatus. Intentionally SPARSE and intentionally
-// missing every terminal state.
-//
-// `Lost` is absent on purpose: our Lost transition requires a lost_reason from
-// a fixed vocabulary (BRD §0.7) that NeoDove has no equivalent for, and a
-// wrongly-attributed Lost is expensive to unwind. `Converted` is absent because
-// conversion here means a real dealer-onboarding record exists, which a
-// telecaller marking a dropdown cannot create. Both are surfaced to a human via
-// the touchpoint + campaign detail instead.
-const STAGE_TO_LEAD_STATUS: Record<string, LeadStatus> = {
-    hot: "Under_Discussion",
-    warm: "Under_Discussion",
-    interested: "Under_Discussion",
-    "in discussion": "Under_Discussion",
-    "follow up": "Under_Discussion",
-    negotiation: "Commercials_Explained",
-    "quote sent": "Commercials_Explained",
-    "quotation sent": "Commercials_Explained",
-    "awaiting decision": "Awaiting_Customer_Decision",
-    "decision pending": "Awaiting_Customer_Decision",
-};
-
+// NeoDove → our LeadStatus (ID 116, 29 Sep 2026). A NeoDove call is a CALL
+// EVENT only: a connected call is first contact, so it proposes
+// Under_Discussion; the inbound writer applies it only when the lead is earlier
+// than that (S3, forward only). Stages and dispositions never set a status —
+// commercials stages come only from quote events in the CRM, and Converted /
+// Lost need Mark Converted (onboarding record) / Mark Lost (reason). The stage
+// and disposition stay on the touchpoint as the call outcome and temperature.
 export function leadStatusFor(event: NeodoveInboundEvent): LeadStatus | null {
-    const key = (event.stage ?? event.disposition ?? "").trim().toLowerCase();
-    if (!key) return null;
-    return STAGE_TO_LEAD_STATUS[key] ?? null;
+    return callStatusFor(event) === "connected" ? "Under_Discussion" : null;
 }
 
 /**

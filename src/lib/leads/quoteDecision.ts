@@ -19,15 +19,19 @@
  *
  * ## What it deliberately does NOT do
  *
- * Move the lead. A dealer is an outside party; letting one drive the internal
- * state machine would mean a mis-tap silently rewrites pipeline reporting. The
- * decision is recorded, a touchpoint is written and the owner is notified — a
- * human still advances the lead. The conversion flow is untouched.
+ * Answer an old version (ID 60): a replaced or withdrawn quote is refused and
+ * the dealer is pointed to the latest.
+ *
+ * Close the deal. Since 29 Sep 2026 (ID 75, handover P2-4) a dealer's APPROVAL
+ * moves the lead to Commercials finalised — quote events are the only thing
+ * that move commercials stages — and the owner is prompted to Mark Won. Won and
+ * Converted stay human actions.
  */
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { notifyQuotationDealerDecision } from "@/lib/notifications/events";
 import { writeTouchpoint } from "@/lib/touchpoints/write";
+import { advanceLeadOnQuoteEvent } from "@/lib/leads/quoteStatus";
 
 // The vocabulary lives in ./quoteDecision.types so pure consumers (the button
 // parser, route zod schemas) can name it without importing a DB connection.
@@ -63,7 +67,14 @@ export type RecordDealerDecisionResult =
       decidedAt: string | null;
     }
   | { outcome: "not_found" }
-  | { outcome: "not_sendable"; reason: string };
+  | { outcome: "not_sendable"; reason: string }
+  | {
+      /** ID 60: a later version replaced this one; the dealer answers only the latest. */
+      outcome: "replaced";
+      latestCommercialId: string | null;
+      latestVersionNo: number | null;
+      latestQuoteNumber: string | null;
+    };
 
 type QuoteRow = {
   commercial_id: string;
@@ -78,6 +89,23 @@ type QuoteRow = {
   current_owner_id: string | null;
   final_price: string | null;
   price_quoted: string | null;
+  withdrawn_at: string | null;
+  /** The lead's newest quote version (quote_issue / quote_revision), which may be this row. */
+  latest_commercial_id: string | null;
+  latest_version_no: number | null;
+  latest_quote_number: string | null;
+}
+
+/**
+ * Why a dealer may not answer this version (ID 60), or null when they may:
+ * withdrawn, or replaced by a later quote version.
+ */
+export function staleQuoteReason(
+  row: Pick<QuoteRow, "commercial_id" | "withdrawn_at" | "latest_commercial_id">,
+): "withdrawn" | "replaced" | null {
+  if (row.withdrawn_at) return "withdrawn";
+  if (row.latest_commercial_id && row.latest_commercial_id !== row.commercial_id) return "replaced";
+  return null;
 }
 
 /** The quotation behind a token or a WhatsApp reply, with what the page needs to render. */
@@ -91,9 +119,23 @@ export async function loadQuotationForDealer(
            c.dealer_decision, c.dealer_decision_at,
            c.final_price::text AS final_price,
            c.price_quoted::text AS price_quoted,
-           l.dealer_name, l.current_owner_id
+           c.withdrawn_at::text AS withdrawn_at,
+           l.dealer_name, l.current_owner_id,
+           latest.commercial_id::text AS latest_commercial_id,
+           latest.version_no AS latest_version_no,
+           latest.quote_number AS latest_quote_number
       FROM dealer_lead_commercials c
       LEFT JOIN dealer_leads l ON l.id = c.dealer_lead_id
+      -- ID 60: the newest QUOTE version of this lead. Terms / final-terms rows
+      -- are versions too but not quotes, so they never "replace" a quote.
+      LEFT JOIN LATERAL (
+        SELECT q.commercial_id, q.version_no, q.quote_number
+          FROM dealer_lead_commercials q
+         WHERE q.dealer_lead_id = c.dealer_lead_id
+           AND q.event_type IN ('quote_issue', 'quote_revision')
+         ORDER BY q.version_no DESC
+         LIMIT 1
+      ) latest ON TRUE
      WHERE c.commercial_id = ${commercialId}::uuid
      LIMIT 1
   `);
@@ -128,6 +170,20 @@ export async function recordDealerDecision(
       reason: "This quotation has no document to respond to.",
     };
   }
+  // ID 60: only the current, not-withdrawn version can be answered — a yes on
+  // an old link must never record a deal at a superseded price.
+  const stale = staleQuoteReason(row);
+  if (stale === "withdrawn") {
+    return { outcome: "not_sendable", reason: "This quotation has been withdrawn." };
+  }
+  if (stale === "replaced") {
+    return {
+      outcome: "replaced",
+      latestCommercialId: row.latest_commercial_id,
+      latestVersionNo: row.latest_version_no,
+      latestQuoteNumber: row.latest_quote_number,
+    };
+  }
 
   // Fast path for a link opened twice — saves the UPDATE, though the WHERE
   // clause below is what actually guarantees it.
@@ -156,6 +212,7 @@ export async function recordDealerDecision(
            updated_at            = NOW()
      WHERE commercial_id = ${input.commercialId}::uuid
        AND dealer_decision IS NULL
+       AND withdrawn_at IS NULL
     RETURNING commercial_id::text AS commercial_id
   `);
 
@@ -196,6 +253,11 @@ export async function recordDealerDecision(
     });
   } catch (e) {
     console.error("[quoteDecision] touchpoint failed", e);
+  }
+
+  // ID 75: the dealer's yes finalises the commercials (never fails the answer).
+  if (input.decision === "approved") {
+    await advanceLeadOnQuoteEvent(row.dealer_lead_id, "dealer_approved", row.current_owner_id);
   }
 
   await notifyQuotationDealerDecision({

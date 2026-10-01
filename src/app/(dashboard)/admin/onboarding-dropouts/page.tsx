@@ -14,9 +14,9 @@ export default async function AdminOnboardingDropoutsPage() {
                     Onboarding Dropouts
                 </h1>
                 <p className="mt-1 text-sm text-ink-muted">
-                    Converted leads whose dealer onboarding was rejected,
-                    withdrawn, or has stalled. Keep Converted, Flip to Lost, or
-                    Re-engage.
+                    Won leads whose dealer onboarding was rejected, withdrawn or
+                    has gone quiet for 21 days. Decide: keep waiting (Stalled),
+                    flip to Lost, or re-engage.
                 </p>
             </header>
             <OnboardingDropoutsView viewerRole={user.role} />

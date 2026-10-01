@@ -60,6 +60,13 @@ import {
   Database,
   Activity,
   AudioLines,
+  Sun,
+  Newspaper,
+  Sparkles,
+  Inbox,
+  SlidersHorizontal,
+  PhoneOff,
+  Lightbulb,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -246,6 +253,53 @@ const COMMON_ITEMS = [
  * longest-href-wins over a flattened list, the badge mapping keys on item.id,
  * and `data-testid="nav-…"` is unchanged for both.
  */
+// E-307 — Sales Head › Ecofy. Children, not flat items: six screens of one
+// pipeline read better folded under one entry. getActiveItemId() is
+// longest-href-wins over the flattened children, so /sales-head/ecofy/queue
+// beats the /sales-head/ecofy Dashboard, and the lead detail route
+// /sales-head/ecofy/leads/[id] keeps "All Leads" lit.
+function ecofySubnav() {
+  return {
+    id: "sh-ecofy",
+    label: "Ecofy",
+    icon: Sun,
+    // A node, not a route (see nbfcSettingsSubnav).
+    href: "/sales-head/ecofy",
+    children: [
+      { id: "sh-ecofy-dashboard", label: "Dashboard", icon: LayoutDashboard, href: "/sales-head/ecofy" },
+      { id: "sh-ecofy-queue", label: "Pickup Queue", icon: Inbox, href: "/sales-head/ecofy/queue" },
+      { id: "sh-ecofy-leads", label: "All Leads", icon: Users, href: "/sales-head/ecofy/leads" },
+      { id: "sh-ecofy-eligibility", label: "Eligibility Queue", icon: ClipboardCheck, href: "/sales-head/ecofy/eligibility" },
+      { id: "sh-ecofy-financing", label: "Financing Queue", icon: Landmark, href: "/sales-head/ecofy/financing" },
+      { id: "sh-ecofy-assets", label: "Assets", icon: Battery, href: "/sales-head/ecofy/assets" },
+      { id: "sh-ecofy-calculator", label: "Calculator", icon: Calculator, href: "/sales-head/ecofy/calculator" },
+      // Ecofy CONFLICTS #31 — the release designer moved here from Ecofy's own
+      // Admin menu. Longest-href-wins keeps "Calculator" unlit on this route.
+      { id: "sh-ecofy-calculator-designer", label: "Calculator designer", icon: SlidersHorizontal, href: "/sales-head/ecofy/calculator/designer" },
+      { id: "sh-ecofy-epc-agents", label: "EPC Agents", icon: Wrench, href: "/sales-head/ecofy/epc-agents" },
+    ],
+  };
+}
+
+// E-307 — ASM / ISR › Ecofy. A node like the Sales Head's: the leads the
+// Sales Head assigned to me plus Ecofy's energy calculator. The leads child
+// keeps its historical id ("asm-ecofy-leads" / "is-ecofy-leads") because the
+// follow-up badge and the dashboard card point at it.
+function ecofyWorkerSubnav(idPrefix: "asm" | "is", base: string) {
+  return {
+    id: `${idPrefix}-ecofy`,
+    label: "Ecofy",
+    icon: Sun,
+    // A node, not a route (see nbfcSettingsSubnav).
+    href: `${base}/ecofy-leads`,
+    children: [
+      { id: `${idPrefix}-ecofy-leads`, label: "My Leads", icon: Users, href: `${base}/ecofy-leads` },
+      { id: `${idPrefix}-ecofy-calculator`, label: "Calculator", icon: Calculator, href: `${base}/ecofy-calculator` },
+      { id: `${idPrefix}-ecofy-epc-agents`, label: "EPC Agents", icon: Wrench, href: `${base}/ecofy-epc-agents` },
+    ],
+  };
+}
+
 function nbfcSettingsSubnav(idPrefix: string) {
   return {
     id: `${idPrefix}-nbfc-settings`,
@@ -454,7 +508,28 @@ const ROLE_TRAILING_SECTIONS: Record<string, any[]> = {
   ],
 };
 
+// The AI Analyst (the Data Analyst agent, a separate Python service proxied via
+// /api/analyst/*). A `direct` group: one destination, rendered as a link in the
+// section-header row rather than a collapsible heading, so it is one click from
+// anywhere instead of hiding inside a closed section. It keeps `items` so
+// getActiveItemId / activeSection / the badge passes treat it like any group.
+const aiAnalystSection = (id: string, href: string) => ({
+  section: "AI ANALYST",
+  direct: true,
+  items: [{ id, label: "AI Analyst", icon: Sparkles, href }],
+});
+
+// E-316 — the Feature Request module is the whole workspace for the product
+// head, tech head and developer logins.
+const FEATURE_REQUESTS_SECTION = {
+  section: "FEATURE REQUESTS",
+  items: [{ id: "feature-requests", label: "Feature Requests", icon: Lightbulb, href: "/feature-requests" }],
+};
+
 const roleNavigation: Record<string, any[]> = {
+  product_head: [FEATURE_REQUESTS_SECTION],
+  tech_head: [FEATURE_REQUESTS_SECTION],
+  developer: [FEATURE_REQUESTS_SECTION],
   ceo: [
     {
       section: "OVERVIEW",
@@ -466,6 +541,13 @@ const roleNavigation: Record<string, any[]> = {
           href: "/ceo",
         },
       ],
+    },
+    aiAnalystSection("ceo-ai-analyst", "/ceo/analyst"),
+    {
+      // E-307 — the CEO may open every /sales-head page and works the Ecofy
+      // workspace with Sales Head rights (src/lib/ecofy/access.ts).
+      section: "ECOFY",
+      items: [ecofySubnav()],
     },
     {
       section: "PART 0 OVERSIGHT",
@@ -507,6 +589,14 @@ const roleNavigation: Record<string, any[]> = {
           label: "Needs Attention",
           icon: AlertTriangle,
           href: "/admin/reports/needs-attention",
+        },
+        {
+          // ID 36 — dead / non-responsive numbers; owner kept, repair puts the
+          // lead back to work.
+          id: "ceo-number-repair",
+          label: "Number Repair",
+          icon: PhoneOff,
+          href: "/admin/number-repair",
         },
         {
           // R-18 — converted dealers' re-order health.
@@ -560,6 +650,12 @@ const roleNavigation: Record<string, any[]> = {
           label: "IoT Dashboard",
           icon: Battery,
           href: "/ceo/intellicar",
+        },
+        {
+          id: "ceo-news",
+          label: "Green Energy News",
+          icon: Newspaper,
+          href: "/ceo/news",
         },
       ],
     },
@@ -628,6 +724,13 @@ const roleNavigation: Record<string, any[]> = {
           icon: ClipboardCheck,
           href: "/ceo/expenses",
         },
+        // E-316 — raise a feature request and follow it through review.
+        {
+          id: "feature-requests",
+          label: "Feature Requests",
+          icon: Lightbulb,
+          href: "/feature-requests",
+        },
         // E-230 — E-226's "OEM Price List" entry pointed at /ceo/oem-prices,
         // which now redirects to /oem-pricing under BUSINESS above. Two sidebar
         // entries onto one table is exactly the "multiple gates to reach one
@@ -651,6 +754,7 @@ const roleNavigation: Record<string, any[]> = {
         },
       ],
     },
+    aiAnalystSection("sh-ai-analyst", "/sales-head/analyst"),
     {
       section: "LEAD MANAGEMENT",
       items: [
@@ -739,6 +843,14 @@ const roleNavigation: Record<string, any[]> = {
           href: "/admin/reports/needs-attention",
         },
         {
+          // ID 36 — dead / non-responsive numbers; owner kept, repair puts the
+          // lead back to work.
+          id: "sh-number-repair",
+          label: "Number Repair",
+          icon: PhoneOff,
+          href: "/admin/number-repair",
+        },
+        {
           // R-18 — converted dealers' re-order health.
           id: "sh-dealer-health",
           label: "Dealer Health",
@@ -749,6 +861,14 @@ const roleNavigation: Record<string, any[]> = {
         // LEAD MANAGEMENT. It now lives in ROLE_TRAILING_SECTIONS so it renders
         // last — see the note there.
       ],
+    },
+    {
+      // E-307 — the Ecofy workspace: what iTarang Admin does inside Ecofy
+      // (sandbox-ecofy.itarang.com), done from the CRM through the signed
+      // Ecofy API. One node with a sub-navigation (E-259 mechanism); ids keep
+      // the sh- prefix like every other sales_head entry.
+      section: "ECOFY",
+      items: [ecofySubnav()],
     },
     {
       section: "SALES",
@@ -1109,6 +1229,14 @@ const roleNavigation: Record<string, any[]> = {
           icon: Phone,
           href: "/sales-manager/ai-calls",
         },
+        {
+          // ID 36 — dead / non-responsive numbers; owner kept, repair puts the
+          // lead back to work.
+          id: "sm-number-repair",
+          label: "Number Repair",
+          icon: PhoneOff,
+          href: "/admin/number-repair",
+        },
       ],
     },
     // Dealer Prospecting section removed — scraped leads now live inside /leads as a tab
@@ -1249,6 +1377,14 @@ const roleNavigation: Record<string, any[]> = {
           label: "Needs Attention",
           icon: AlertTriangle,
           href: "/admin/reports/needs-attention",
+        },
+        {
+          // ID 36 — dead / non-responsive numbers; owner kept, repair puts the
+          // lead back to work.
+          id: "admin-number-repair",
+          label: "Number Repair",
+          icon: PhoneOff,
+          href: "/admin/number-repair",
         },
         {
           // R-18 — converted dealers' re-order health.
@@ -1514,6 +1650,14 @@ const roleNavigation: Record<string, any[]> = {
           href: "/admin/targets",
         },
         {
+          // ID 36 — dead / non-responsive numbers; owner kept, repair puts the
+          // lead back to work.
+          id: "bh-number-repair",
+          label: "Number Repair",
+          icon: PhoneOff,
+          href: "/admin/number-repair",
+        },
+        {
           id: "kyc-review",
           label: "KYC Review",
           icon: Shield,
@@ -1656,6 +1800,8 @@ const roleNavigation: Record<string, any[]> = {
           icon: ListChecks,
           href: "/inside-sales",
         },
+        // E-307 — Ecofy leads the Sales Head assigned to this ISR + the calculator.
+        ecofyWorkerSubnav("is", "/inside-sales"),
         {
           id: "is-campaigns",
           label: "Campaigns",
@@ -1672,6 +1818,12 @@ const roleNavigation: Record<string, any[]> = {
           icon: TrendingUp,
           href: "/inside-sales/performance",
         },
+        {
+          id: "is-link-whatsapp",
+          label: "Link WhatsApp",
+          icon: MessageSquare,
+          href: "/settings/whatsapp-link",
+        },
       ],
     },
   ],
@@ -1686,6 +1838,8 @@ const roleNavigation: Record<string, any[]> = {
           icon: MapPinned,
           href: "/asm",
         },
+        // E-307 — Ecofy leads the Sales Head assigned to this ASM + the calculator.
+        ecofyWorkerSubnav("asm", "/asm"),
         {
           id: "asm-campaigns",
           label: "Campaigns",
@@ -1698,6 +1852,12 @@ const roleNavigation: Record<string, any[]> = {
           label: "My Performance",
           icon: TrendingUp,
           href: "/asm/performance",
+        },
+        {
+          id: "asm-link-whatsapp",
+          label: "Link WhatsApp",
+          icon: MessageSquare,
+          href: "/settings/whatsapp-link",
         },
       ],
     },
@@ -2124,6 +2284,8 @@ interface SubNavItem {
   label: string;
   href: string;
   icon: LucideIcon;
+  /** E-307 — optional count, same pill as a top-level item. */
+  badge?: number | string;
 }
 
 interface NavItemForActive {
@@ -2268,6 +2430,28 @@ function SidebarNav({
 
       <div className="sidebar-scroll flex-1 overflow-y-auto py-2">
         {menuItems.map((group: any) => {
+          // A `direct` group is one destination, not a folder: a link in the
+          // section-header row, nothing to expand (see aiAnalystSection).
+          if (group.direct && group.items.length === 1) {
+            const item = group.items[0];
+            const isActive = item.id === activeItemId;
+            return (
+              <div key={group.section} className="sidebar-section">
+                <Link
+                  href={item.href}
+                  onClick={onNavigate}
+                  data-testid={`nav-${item.id}`}
+                  data-has-active={isActive ? "true" : undefined}
+                  aria-current={isActive ? "page" : undefined}
+                  className="sidebar-section-toggle sidebar-section-direct"
+                >
+                  <item.icon aria-hidden="true" className="w-4 h-4 shrink-0" strokeWidth={2} />
+                  <span className="truncate">{group.section}</span>
+                </Link>
+              </div>
+            );
+          }
+
           const isOpen = isSectionOpen(group.section);
           const hasActive = group.items.some(
             (item: any) =>
@@ -2339,6 +2523,17 @@ function SidebarNav({
                                 strokeWidth={1.75}
                               />
                               <span className="truncate flex-1">{item.label}</span>
+                              {item.badge ? (
+                                <span
+                                  className="inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-[10px] font-bold"
+                                  style={{
+                                    background: "var(--color-brand-sky)",
+                                    color: "#fff",
+                                  }}
+                                >
+                                  {item.badge}
+                                </span>
+                              ) : null}
                               <ChevronDown
                                 aria-hidden="true"
                                 className="w-3.5 h-3.5 ml-auto shrink-0 opacity-60 transition-transform duration-200 [details[open]_&]:rotate-180"
@@ -2372,6 +2567,17 @@ function SidebarNav({
                                     <span className="truncate flex-1">
                                       {child.label}
                                     </span>
+                                    {child.badge ? (
+                                      <span
+                                        className="ml-auto inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-[10px] font-bold"
+                                        style={{
+                                          background: "var(--color-brand-sky)",
+                                          color: "#fff",
+                                        }}
+                                      >
+                                        {child.badge}
+                                      </span>
+                                    ) : null}
                                   </Link>
                                 );
                               })}
@@ -2621,6 +2827,10 @@ export function Sidebar() {
     "it",
     "operations",
     "partner",
+    // E-316 — feature-request-only logins; no expense submission.
+    "product_head",
+    "tech_head",
+    "developer",
   ]);
   let menuItems = [
     ...filteredMenuItems,
@@ -2651,6 +2861,31 @@ export function Sidebar() {
     existingExpenses.items.push(...group.items);
     return acc;
   }, []);
+
+  // E-307 — Ecofy badges. Sales Head: leads waiting in the pickup queue (on
+  // the Pickup Queue child AND the collapsed "Ecofy" node, so it shows while
+  // folded). ASM / ISR: their follow-ups due, else their open Ecofy leads.
+  // Polled every 60s; reads the local table only.
+  const [ecofyBadge, setEcofyBadge] = useState<{ queue: number; open: number; followUpsDue: number } | null>(null);
+  useEffect(() => {
+    if (!["sales_head", "ceo", "asm", "inside_sales_rep"].includes(inferredRole)) return;
+    let cancelled = false;
+    const load = () =>
+      fetch("/api/ecofy/counts", { cache: "no-store" })
+        .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+        .then((j) => {
+          if (!cancelled && j?.data) setEcofyBadge(j.data);
+        })
+        .catch(() => {
+          /* silent — badge stays absent on failure (e.g. DB without E-307) */
+        });
+    void load();
+    const t = setInterval(load, 60_000);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, [inferredRole]);
 
   // NBFC Onboarding Plan §15.1 — count badge on the CEO "Pending NBFC
   // Approvals" link, fetched once on mount. Polling is overkill for a queue
@@ -2751,6 +2986,32 @@ export function Sidebar() {
       items: group.items.map((item: { id: string }) => {
         const n = navActivity[item.id];
         return n ? { ...item, badge: n > 99 ? "99+" : n } : item;
+      }),
+    }));
+  }
+
+  if (ecofyBadge) {
+    const cap = (n: number) => (n > 99 ? "99+" : n);
+    const byId: Record<string, number> = {
+      "sh-ecofy": ecofyBadge.queue,
+      "sh-ecofy-queue": ecofyBadge.queue,
+      "asm-ecofy": ecofyBadge.followUpsDue || ecofyBadge.open,
+      "asm-ecofy-leads": ecofyBadge.followUpsDue || ecofyBadge.open,
+      "is-ecofy": ecofyBadge.followUpsDue || ecofyBadge.open,
+      "is-ecofy-leads": ecofyBadge.followUpsDue || ecofyBadge.open,
+    };
+    type BadgeNode = { id: string; badge?: number | string; children?: Array<{ id: string; badge?: number | string }> };
+    menuItems = menuItems.map((group: { items: BadgeNode[] }) => ({
+      ...group,
+      items: group.items.map((item) => {
+        const n = byId[item.id];
+        const withChildren = item.children
+          ? {
+              ...item,
+              children: item.children.map((c) => (byId[c.id] ? { ...c, badge: cap(byId[c.id]) } : c)),
+            }
+          : item;
+        return n ? { ...withChildren, badge: cap(n) } : withChildren;
       }),
     }));
   }

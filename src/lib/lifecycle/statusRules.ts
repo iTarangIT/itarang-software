@@ -1,0 +1,159 @@
+// S3 status rules — the ONE forward-only check every lead status write goes
+// through (tracker ID 115, handover P0-11). Pure and client-safe: writeTouchpoint
+// enforces it server-side for every entry point (web forms, APIs, WhatsApp
+// Assistant, NeoDove, AI dialer, admin and bulk tools); screens may import it to
+// hide moves that would be refused.
+//
+//   progress      an ordinary touchpoint (call, visit, follow-up). Moves an OPEN
+//                 lead FORWARD only; never to Transferred_to_ASM, Converted or
+//                 Lost, which have their own events.
+//   transfer      Transfer to ASM — only from an open stage.
+//   mark_won      the rep's Mark Won (GSTIN enforced by its writer) — from an
+//                 open stage before Won (ID 74).
+//   onboarding_approved
+//                 the admin approving the dealer's onboarding sets Converted —
+//                 from Won, or from any open stage for a lead that was never
+//                 marked Won (direct onboardings, legacy rows).
+//   mark_lost     the Mark Lost action (reason enforced by its writer) — from
+//                 any open stage, Won included (a dealer who drops out).
+//   visit         an ASM visit DONE, or "Visit not needed" with a reason — the
+//                 only events that end Transferred_to_ASM ("Awaiting field
+//                 visit", ID 77). Otherwise a forward move like progress.
+//   quote_withdrawn
+//                 Withdraw quote (ID 78): a commercials-stage lead goes back to
+//                 Under_Discussion - the one backward move an event may make.
+//   reactivation  a closed lead re-enters the pipeline at New_Unassigned or
+//                 Assigned_Not_Contacted (BRD §0.9 reactivation, drop-out re-engage).
+//   dropout_lost  admin drop-out resolution: Converted → Lost.
+//   correction    admin "Correct status" with a reason — the only override.
+//
+// A status equal to the current one is refused for every event: it would write
+// a history row that records nothing.
+
+import type { LeadStatus } from "@/lib/lifecycle/transitions";
+
+export const STATUS_EVENTS = [
+    "progress",
+    "transfer",
+    "mark_won",
+    "onboarding_approved",
+    "mark_lost",
+    "reactivation",
+    "dropout_lost",
+    "visit",
+    "quote_withdrawn",
+    "correction",
+] as const;
+export type StatusEvent = (typeof STATUS_EVENTS)[number];
+
+/**
+ * How far along the funnel an open status is. Transferred_to_ASM sits just below
+ * Under_Discussion so the ASM's first real conversation still moves it forward.
+ * A quote awaiting the dealer's decision comes before commercials finalised.
+ * Kept in step with autoProgress.ts.
+ */
+export const STATUS_RANK: Readonly<Partial<Record<LeadStatus, number>>> = {
+    New_Unassigned: 0,
+    Assigned_Not_Contacted: 1,
+    Transferred_to_ASM: 1.5,
+    Under_Discussion: 2,
+    Commercials_Explained: 3,
+    Awaiting_Customer_Decision: 4,
+    Commercials_Finalised: 5,
+    Won: 6,
+};
+
+const CLOSED = new Set<string>(["Converted", "Lost"]);
+const REOPEN_TARGETS = new Set<string>(["New_Unassigned", "Assigned_Not_Contacted"]);
+
+export type StatusGuardVerdict = { ok: true } | { ok: false; reason: string };
+
+/** Rank of a stored status; null / legacy values count as the start of the funnel. */
+export function rankOf(status: string | null): number | null {
+    if (status == null) return 0;
+    if (CLOSED.has(status)) return null;
+    return STATUS_RANK[status as LeadStatus] ?? 0;
+}
+
+/** True when `to` is further along the funnel than `from` (both open). */
+export function isForward(from: string | null, to: LeadStatus): boolean {
+    const a = rankOf(from);
+    const b = STATUS_RANK[to];
+    return a !== null && b !== undefined && b > a;
+}
+
+const label = (s: string | null) => (s ?? "no status").replace(/_/g, " ");
+
+export function checkStatusMove(input: {
+    from: string | null;
+    to: LeadStatus;
+    event: StatusEvent;
+    /** Required for `correction`. */
+    reason?: string | null;
+}): StatusGuardVerdict {
+    const { from, to, event } = input;
+    const open = from == null || !CLOSED.has(from);
+    if (from === to) return { ok: false, reason: `The lead is already ${label(to)}.` };
+
+    switch (event) {
+        case "progress":
+            if (!open) return { ok: false, reason: `The lead is ${label(from)}; it is closed.` };
+            if (from === "Transferred_to_ASM") {
+                return { ok: false, reason: "Only a visit, or 'Visit not needed' with a reason, ends Awaiting field visit." };
+            }
+            if (to === "Transferred_to_ASM") return { ok: false, reason: "Use Transfer to ASM." };
+            if (to === "Won") return { ok: false, reason: "Use Mark Won." };
+            if (to === "Converted") return { ok: false, reason: "Converted is set when the dealer's onboarding is approved." };
+            if (to === "Lost") return { ok: false, reason: "Use Mark Lost." };
+            if (!isForward(from, to)) {
+                return { ok: false, reason: `A lead cannot move back from ${label(from)} to ${label(to)}.` };
+            }
+            return { ok: true };
+        case "transfer":
+            if (to !== "Transferred_to_ASM") return { ok: false, reason: "A transfer can only move to Transferred to ASM." };
+            if (!open || from === "Won") return { ok: false, reason: `A ${label(from)} lead cannot be transferred.` };
+            return { ok: true };
+        case "mark_won":
+            if (to !== "Won") return { ok: false, reason: "Mark Won can only set Won." };
+            if (!open) return { ok: false, reason: `The lead is already ${label(from)}.` };
+            return { ok: true };
+        case "onboarding_approved":
+            if (to !== "Converted") return { ok: false, reason: "Onboarding approval can only set Converted." };
+            if (!open) return { ok: false, reason: `The lead is already ${label(from)}.` };
+            return { ok: true };
+        case "mark_lost":
+            if (to !== "Lost") return { ok: false, reason: "Mark Lost can only set Lost." };
+            if (!open) return { ok: false, reason: `The lead is already ${label(from)}.` };
+            return { ok: true };
+        case "visit":
+            if (!open) return { ok: false, reason: `The lead is ${label(from)}; it is closed.` };
+            if (to === "Transferred_to_ASM" || to === "Won" || to === "Converted" || to === "Lost") {
+                return { ok: false, reason: `A visit cannot set ${label(to)}.` };
+            }
+            if (!isForward(from, to)) {
+                return { ok: false, reason: `A lead cannot move back from ${label(from)} to ${label(to)}.` };
+            }
+            return { ok: true };
+        case "quote_withdrawn": {
+            const commercials = ["Commercials_Explained", "Awaiting_Customer_Decision", "Commercials_Finalised"];
+            if (to !== "Under_Discussion" || !commercials.includes(from ?? "")) {
+                return { ok: false, reason: "Withdrawing a quote moves a commercials-stage lead back to Under discussion only." };
+            }
+            return { ok: true };
+        }
+        case "reactivation":
+            if (open) return { ok: false, reason: "Only a closed lead can be reactivated." };
+            if (!REOPEN_TARGETS.has(to)) return { ok: false, reason: "A reactivated lead restarts at New or Assigned." };
+            return { ok: true };
+        case "dropout_lost":
+            if (from !== "Converted" || to !== "Lost") {
+                return { ok: false, reason: "Drop-out resolution moves Converted to Lost only." };
+            }
+            return { ok: true };
+        case "correction":
+            if (!input.reason || !input.reason.trim()) {
+                return { ok: false, reason: "Correct status needs a reason." };
+            }
+            return { ok: true };
+    }
+}

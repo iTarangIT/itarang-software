@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import RequestCorrectionDialog from "@/components/admin/dealer-verification/RequestCorrectionDialog";
@@ -244,6 +244,22 @@ type AgreementTrackingResponse = {
   signers: AgreementSignerRow[];
   timeline: AgreementTimelineItem[];
 };
+
+// Agreement statuses that will never change again on their own — polling stops
+// here. Mirrors TERMINAL_AGREEMENT_STATUSES in the agreement-tracking route.
+const TERMINAL_AGREEMENT_STATUSES = ["completed", "failed", "expired"];
+const AGREEMENT_POLL_INTERVAL_MS = 10_000;
+
+// Button action → API route folder. The slugs don't all follow `${action}-agreement`
+// (the route is `re-initiate-agreement`, and there is no dedicated retry route:
+// "Retry Download Signed Copy" is just a refresh, which re-downloads and caches
+// the signed PDF + audit trail whenever Digio reports the document complete).
+const AGREEMENT_ACTION_ROUTES = {
+  initiate:   "initiate-agreement",
+  refresh:    "refresh-agreement",
+  reinitiate: "re-initiate-agreement",
+  retry:      "refresh-agreement",
+} as const;
 
 // ✅ NEW — shape for the edit form
 type CompanyEditForm = {
@@ -1080,7 +1096,14 @@ export default function DealerReviewPage() {
   // Manual agreement completion — upload the final signed agreement + audit
   // trail by hand when Digio signing was completed out-of-band.
   const [manualSignedFile, setManualSignedFile] = useState<File | null>(null);
-  const [manualAuditFile, setManualAuditFile]   = useState<File | null>(null);
+  // ID 55: more than one audit trail, and a mismatch the admin must confirm.
+  const [manualAuditFiles, setManualAuditFiles] = useState<File[]>([]);
+  const [manualCheck, setManualCheck] = useState<{
+    verdict: string;
+    reasons: string[];
+    read?: { signedOn?: string | null; documentId?: string | null; signers?: Array<{ name: string | null; signedAt: string | null }> };
+  } | null>(null);
+  const [manualMismatchReason, setManualMismatchReason] = useState("");
   // E-225 — provenance of a manually signed (paper) agreement.
   const [manualAgreementRef, setManualAgreementRef] = useState("");
   const [manualSignedOn, setManualSignedOn]         = useState("");
@@ -1097,17 +1120,22 @@ export default function DealerReviewPage() {
 
   // ─── loaders ───────────────────────────────────────────────────────────────
 
-  const loadAgreementTracking = async () => {
+  // `silent` is used by the in-flight agreement poll: no loading flag (so the
+  // tracking table doesn't flash "Loading…" every tick) and a failed tick keeps
+  // the last good state instead of blanking the panel.
+  const loadAgreementTracking = async (opts: { silent?: boolean } = {}) => {
+    const { silent = false } = opts;
     try {
-      setTrackingLoading(true);
+      if (!silent) setTrackingLoading(true);
       const res  = await fetch(`/api/admin/dealer-verifications/${dealerId}/agreement-tracking`, { cache: "no-store" });
       const json = await res.json();
-      if (json.success) setTracking(json.data); else setTracking(null);
+      if (json.success) setTracking(json.data);
+      else if (!silent) setTracking(null);
     } catch (error) {
       console.error("Failed to load agreement tracking", error);
-      setTracking(null);
+      if (!silent) setTracking(null);
     } finally {
-      setTrackingLoading(false);
+      if (!silent) setTrackingLoading(false);
     }
   };
 
@@ -1503,6 +1531,67 @@ export default function DealerReviewPage() {
     }
   };
 
+  // ─── live agreement status ────────────────────────────────────────────────
+  // Nothing pushes Digio signing events into this app (no dealer-agreement
+  // webhook), so while an e-sign agreement is in flight we poll the (fast)
+  // tracking endpoint. Each hit makes the server run the full refresh in the
+  // background; the next tick picks up "completed" and the Download Signed
+  // Agreement / Download Audit Trail buttons appear without anyone clicking
+  // Refresh Status. Stops on any terminal status, and skips ticks while the tab
+  // is hidden — but refetches the moment it is focused again, which is the
+  // common case (sales_head signs as the iTarang signatory in another tab).
+  const shouldPollAgreement =
+    !isManualAgreement &&
+    !isRejected &&
+    hasInitiatedAgreement &&
+    !TERMINAL_AGREEMENT_STATUSES.includes(normalizedAgreementStatus);
+
+  useEffect(() => {
+    if (!shouldPollAgreement) return;
+    let cancelled = false;
+    let inFlight = false;
+
+    const tick = async () => {
+      if (cancelled || inFlight) return;
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      inFlight = true;
+      try {
+        await loadAgreementTracking({ silent: true });
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    const intervalId = setInterval(tick, AGREEMENT_POLL_INTERVAL_MS);
+    const onFocus = () => { void tick(); };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") void tick();
+    };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
+    return () => {
+      cancelled = true;
+      clearInterval(intervalId);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shouldPollAgreement, dealerId]);
+
+  // When the poll observes the flip to "completed", pull the dealer detail once
+  // too so data.agreement (status, signedAgreementUrl), the checklist and the
+  // badges agree with the tracking panel.
+  const prevAgreementStatusRef = useRef<string>(normalizedAgreementStatus);
+  useEffect(() => {
+    const prev = prevAgreementStatusRef.current;
+    prevAgreementStatusRef.current = normalizedAgreementStatus;
+    if (normalizedAgreementStatus === "completed" && prev !== "completed" && prev !== "") {
+      void reloadDealer();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [normalizedAgreementStatus]);
+
   const handleCancelCorrection = async () => {
     if (cancellingCorrection) return;
     if (!window.confirm(
@@ -1593,24 +1682,40 @@ export default function DealerReviewPage() {
     }
   };
 
-  const handleManualUpload = async () => {
-    if (!manualSignedFile) {
+  // ID 55: the system reads the files and checks them against the dealer and
+  // Digio. A mismatch comes back 422 with the reasons; the admin can confirm it
+  // with a reason, which resends the same files. After completion the same
+  // handler ADDS files (more audit trails) without touching the status.
+  const handleManualUpload = async (opts: { confirm?: boolean; addOnly?: boolean } = {}) => {
+    if (!opts.addOnly && !manualSignedFile) {
       toast.error("Select the signed agreement PDF.");
       return;
     }
     // The audit trail is a Digio artefact. A paper agreement has none, so it is
     // only demanded when this upload is rescuing a stalled e-sign.
-    if (!isManualAgreement && !manualAuditFile) {
-      toast.error("Select both the signed agreement PDF and the audit trail PDF.");
+    if (!opts.addOnly && !isManualAgreement && manualAuditFiles.length === 0) {
+      toast.error("Select the signed agreement PDF and at least one audit trail PDF.");
+      return;
+    }
+    if (opts.addOnly && !manualSignedFile && manualAuditFiles.length === 0) {
+      toast.error("Select at least one file to add.");
+      return;
+    }
+    if (opts.confirm && manualMismatchReason.trim().length < 5) {
+      toast.error("Give a reason (at least 5 characters) to save documents that do not match.");
       return;
     }
     setManualUploading(true);
     try {
       const fd = new FormData();
-      fd.append("signedAgreement", manualSignedFile);
-      if (manualAuditFile) fd.append("auditTrail", manualAuditFile);
+      if (manualSignedFile) fd.append("signedAgreement", manualSignedFile);
+      for (const f of manualAuditFiles) fd.append("auditTrail", f);
       if (manualAgreementRef.trim()) fd.append("agreementRef", manualAgreementRef.trim());
       if (manualSignedOn) fd.append("agreementSignedOn", manualSignedOn);
+      if (opts.confirm) {
+        fd.append("confirmMismatch", "true");
+        fd.append("mismatchReason", manualMismatchReason.trim());
+      }
 
       const res = await fetch(
         `/api/admin/dealer-verifications/${dealerId}/upload-signed-agreement`,
@@ -1618,15 +1723,22 @@ export default function DealerReviewPage() {
       );
       let json: any = null;
       try { json = await res.json(); } catch { /* non-JSON body */ }
+      if (res.status === 422 && json?.needsConfirmation) {
+        setManualCheck({ verdict: json.verdict, reasons: json.reasons ?? [], read: json.read });
+        toast.error(json.message || "The documents do not match this dealer.");
+        return;
+      }
       if (!res.ok || !json?.success) {
         toast.error(json?.message || `Upload failed (HTTP ${res.status})`);
         return;
       }
       toast.success(json.message || "Agreement marked completed.");
       setManualSignedFile(null);
-      setManualAuditFile(null);
+      setManualAuditFiles([]);
       setManualAgreementRef("");
       setManualSignedOn("");
+      setManualCheck(null);
+      setManualMismatchReason("");
       await reloadDealer();
     } catch (err: any) {
       toast.error(err?.message || "Something went wrong while uploading documents");
@@ -1634,6 +1746,43 @@ export default function DealerReviewPage() {
       setManualUploading(false);
     }
   };
+
+  const manualCheckPanel = manualCheck && (
+    <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-4">
+      <p className="text-sm font-semibold text-red-800">
+        {manualCheck.verdict === "unreadable"
+          ? "The system could not read these files"
+          : "These documents do not match this dealer"}
+      </p>
+      <ul className="mt-1.5 list-disc pl-5 text-xs text-red-700">
+        {manualCheck.reasons.map((r) => <li key={r}>{r}</li>)}
+      </ul>
+      {manualCheck.read?.signers && manualCheck.read.signers.length > 0 && (
+        <p className="mt-2 text-xs text-slate-600">
+          Read: {manualCheck.read.signers.map((sg) => `${sg.name ?? "?"}${sg.signedAt ? ` (${sg.signedAt})` : ""}`).join(", ")}
+          {manualCheck.read.documentId ? ` · document ${manualCheck.read.documentId}` : ""}
+        </p>
+      )}
+      <label className="mt-3 block text-[11px] font-semibold uppercase tracking-[0.14em] text-red-700">
+        Save anyway — reason
+      </label>
+      <input
+        type="text"
+        value={manualMismatchReason}
+        onChange={(e) => setManualMismatchReason(e.target.value)}
+        placeholder="e.g. scan is of the signed copy; GSTIN changed after onboarding"
+        className="mt-1 h-9 w-full rounded-lg border border-red-200 bg-white px-3 text-sm outline-none focus:border-red-400"
+      />
+      <button
+        type="button"
+        onClick={() => handleManualUpload({ confirm: true, addOnly: isAgreementCompleted })}
+        disabled={manualUploading || manualMismatchReason.trim().length < 5}
+        className="mt-2 inline-flex items-center gap-2 rounded-xl bg-red-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-700 disabled:opacity-50"
+      >
+        Confirm and save
+      </button>
+    </div>
+  );
 
   const handleAgreementAction = async (action: "initiate" | "refresh" | "reinitiate" | "retry") => {
     if (data?.onboardingStatus === "rejected") { toast.error("This application is rejected and locked."); return; }
@@ -1700,7 +1849,7 @@ export default function DealerReviewPage() {
           }}
         : {};
 
-      const res  = await fetch(`/api/admin/dealer-verifications/${dealerId}/${action}-agreement`, {
+      const res  = await fetch(`/api/admin/dealer-verifications/${dealerId}/${AGREEMENT_ACTION_ROUTES[action]}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(action === "initiate" || action === "reinitiate" ? payload : {}),
@@ -2498,7 +2647,7 @@ export default function DealerReviewPage() {
                           <input
                             type="file"
                             accept="application/pdf,.pdf"
-                            onChange={(e) => setManualSignedFile(e.target.files?.[0] || null)}
+                            onChange={(e) => { setManualSignedFile(e.target.files?.[0] || null); setManualCheck(null); }}
                             className="mt-2 block w-full text-xs text-slate-700 file:mr-3 file:rounded-xl file:border-0 file:bg-amber-100 file:px-3 file:py-2 file:text-xs file:font-semibold file:text-amber-800 hover:file:bg-amber-200"
                           />
                           {manualSignedFile && (
@@ -2543,34 +2692,88 @@ export default function DealerReviewPage() {
                             <input
                               type="file"
                               accept="application/pdf,.pdf"
-                              onChange={(e) => setManualAuditFile(e.target.files?.[0] || null)}
+                              multiple
+                              onChange={(e) => { setManualAuditFiles(Array.from(e.target.files ?? [])); setManualCheck(null); }}
                               className="mt-2 block w-full text-xs text-slate-700 file:mr-3 file:rounded-xl file:border-0 file:bg-amber-100 file:px-3 file:py-2 file:text-xs file:font-semibold file:text-amber-800 hover:file:bg-amber-200"
                             />
-                            {manualAuditFile && (
-                              <p className="mt-1 truncate text-xs text-emerald-700">✓ {manualAuditFile.name}</p>
-                            )}
+                            <p className="mt-1 text-[11px] text-amber-700">You can select more than one trail.</p>
+                            {manualAuditFiles.map((f) => (
+                              <p key={f.name} className="mt-1 truncate text-xs text-emerald-700">✓ {f.name}</p>
+                            ))}
                           </div>
                         )}
                       </div>
 
+                      <p className="mt-3 text-xs text-amber-800">
+                        The system reads the files — signers, signing dates, document ID, dealer name and
+                        GSTIN — checks them against this dealer and Digio, and fills in the signed date.
+                      </p>
+                      {manualCheckPanel}
                       <button
-                        onClick={handleManualUpload}
+                        onClick={() => handleManualUpload()}
                         disabled={
                           manualUploading ||
                           !manualSignedFile ||
-                          (!isManualAgreement && !manualAuditFile)
+                          (!isManualAgreement && manualAuditFiles.length === 0)
                         }
                         className="mt-4 inline-flex items-center gap-2 rounded-2xl bg-amber-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         <UploadCloud className="h-4 w-4" />
                         {manualUploading
-                          ? "Saving…"
+                          ? "Reading & saving…"
                           : isManualAgreement
                             ? "Save Agreement"
                             : "Save & Mark Completed"}
                       </button>
                     </div>
                   </div>
+                </div>
+              )}
+
+              {/* ID 55 — after completion, more audit trails (or a clearer
+                  signed copy) can be added. They are read and checked the same
+                  way; the status and dates never change again. */}
+              {isAgreementCompleted && !isRejected && (
+                <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-5">
+                  <p className="text-sm font-semibold text-slate-900">Add agreement documents</p>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Upload another audit trail or a signed copy. Each file is kept alongside the ones already on record.
+                  </p>
+                  <div className="mt-3 grid grid-cols-1 gap-4 md:grid-cols-2">
+                    <div>
+                      <label className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-600">
+                        Audit Trail(s) (PDF)
+                      </label>
+                      <input
+                        type="file"
+                        accept="application/pdf,.pdf"
+                        multiple
+                        onChange={(e) => { setManualAuditFiles(Array.from(e.target.files ?? [])); setManualCheck(null); }}
+                        className="mt-2 block w-full text-xs text-slate-700 file:mr-3 file:rounded-xl file:border-0 file:bg-slate-100 file:px-3 file:py-2 file:text-xs file:font-semibold file:text-slate-700"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-600">
+                        Signed Agreement (optional)
+                      </label>
+                      <input
+                        type="file"
+                        accept="application/pdf,.pdf"
+                        onChange={(e) => { setManualSignedFile(e.target.files?.[0] || null); setManualCheck(null); }}
+                        className="mt-2 block w-full text-xs text-slate-700 file:mr-3 file:rounded-xl file:border-0 file:bg-slate-100 file:px-3 file:py-2 file:text-xs file:font-semibold file:text-slate-700"
+                      />
+                    </div>
+                  </div>
+                  {manualCheckPanel}
+                  <button
+                    type="button"
+                    onClick={() => handleManualUpload({ addOnly: true })}
+                    disabled={manualUploading || (!manualSignedFile && manualAuditFiles.length === 0)}
+                    className="mt-3 inline-flex items-center gap-2 rounded-xl bg-slate-800 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-900 disabled:opacity-50"
+                  >
+                    <UploadCloud className="h-4 w-4" />
+                    {manualUploading ? "Reading & saving…" : "Add documents"}
+                  </button>
                 </div>
               )}
 
@@ -2735,7 +2938,11 @@ export default function DealerReviewPage() {
                     {agreementActionLoading === "reinitiate" ? "Re-initiating…" : "Re-initiate Agreement"}
                   </button>
                 )}
-                {(agreementStatusForUi || "").toLowerCase() === "signed" && !data.agreement?.copyUrl && (
+                {/* Fully signed on Digio but no cached signed copy yet (the
+                    download/caching step failed after completion). Previously
+                    keyed on status === "signed", which the refresh normaliser
+                    never emits, so the button was unreachable. */}
+                {signedAgreementReady && !tracking?.signedAgreementUrl && !data.agreement?.signedAgreementUrl && (
                   <button onClick={() => handleAgreementAction("retry")}
                     disabled={agreementActionLoading !== null || isRejected}
                     className="inline-flex items-center gap-2 rounded-2xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50">

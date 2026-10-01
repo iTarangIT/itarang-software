@@ -16,6 +16,7 @@ const STATUS_COLORS: Record<LeadStatus, { bg: string; text: string; border: stri
     Commercials_Finalised: { bg: "bg-violet-50", text: "text-violet-700", border: "border-violet-200" },
     Awaiting_Customer_Decision: { bg: "bg-amber-50", text: "text-amber-700", border: "border-amber-200" },
     Transferred_to_ASM: { bg: "bg-orange-50", text: "text-orange-700", border: "border-orange-200" },
+    Won: { bg: "bg-teal-50", text: "text-teal-700", border: "border-teal-200" },
     Converted: { bg: "bg-emerald-50", text: "text-emerald-700", border: "border-emerald-200" },
     Lost: { bg: "bg-rose-50", text: "text-rose-700", border: "border-rose-200" },
 };

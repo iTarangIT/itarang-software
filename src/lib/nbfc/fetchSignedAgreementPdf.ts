@@ -42,7 +42,7 @@ const AUDIT_TRAIL_PATH =
 async function downloadPdf(url: string, authHeader: string, label: string): Promise<Buffer | null> {
   let res: Response;
   try {
-    res = await fetch(url, { method: "GET", headers: { Authorization: authHeader, Accept: "application/pdf" }, cache: "no-store" });
+    res = await fetch(url, { method: "GET", headers: { Authorization: authHeader, Accept: "*/*" }, cache: "no-store" });
   } catch (err) {
     console.warn("[fetchSignedAgreement] network error", { label, err: err instanceof Error ? err.message : String(err) });
     return null;

@@ -5,6 +5,7 @@
 // is converted to CSV in the browser so the server side stays CSV-only.
 
 import { useState } from "react";
+import { LEAD_ORIGIN_LABEL, LEAD_ORIGINS } from "@/lib/leads/leadSourceVocab";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
@@ -39,6 +40,8 @@ export function UploadWizard() {
     );
     const [routingToAi, setRoutingToAi] = useState(false);
     const [sourceLabel, setSourceLabel] = useState("");
+    // ID 81 — Found via, required for the whole file.
+    const [origin, setOrigin] = useState("");
     const [busy, setBusy] = useState(false);
     const [result, setResult] = useState<UploadBatchSummary | null>(null);
 
@@ -118,6 +121,7 @@ export function UploadWizard() {
                     csv_text: csvText,
                     routing_to_ai: routingToAi,
                     source_label: sourceLabel.trim() || null,
+                    origin,
                 }),
             });
             const json = await res.json();
@@ -313,12 +317,30 @@ export function UploadWizard() {
                                 className="h-9 w-56"
                             />
                         </div>
+                        <div>
+                            <label className="block text-[10px] font-medium uppercase tracking-wide text-ink-muted mb-1">
+                                Found via <span className="text-rose-600">*</span>
+                            </label>
+                            <select
+                                value={origin}
+                                onChange={(e) => setOrigin(e.target.value)}
+                                className="h-9 w-48 rounded-md border border-gray-200 bg-white px-2 text-sm"
+                            >
+                                <option value="">Select…</option>
+                                {LEAD_ORIGINS.map((o) => (
+                                    <option key={o} value={o}>
+                                        {LEAD_ORIGIN_LABEL[o]}
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
                         <Button
                             type="button"
                             className="ml-auto"
                             onClick={commit}
                             disabled={
                                 busy ||
+                                !origin ||
                                 validation.valid_rows +
                                     validation.reactivate_rows ===
                                     0

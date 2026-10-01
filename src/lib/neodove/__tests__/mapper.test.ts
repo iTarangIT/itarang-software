@@ -482,18 +482,16 @@ describe("callStatusFor", () => {
     });
 });
 
-describe("leadStatusFor", () => {
-    it("maps known stages to open statuses", () => {
-        expect(leadStatusFor(parseInboundEvent({ stage: "hot" }))).toBe(
-            "Under_Discussion",
-        );
-        expect(leadStatusFor(parseInboundEvent({ stage: "quote sent" }))).toBe(
-            "Commercials_Explained",
-        );
+describe("leadStatusFor (ID 116: a call event only)", () => {
+    it("a connected call proposes first contact (Under_Discussion)", () => {
+        expect(leadStatusFor(parseInboundEvent({ call_connected: "true" }))).toBe("Under_Discussion");
     });
 
-    it("returns null for unknown stages", () => {
-        expect(leadStatusFor(parseInboundEvent({ stage: "Mysterious" }))).toBeNull();
+    it("stages never set a status — commercials come only from quote events", () => {
+        for (const stage of ["hot", "quote sent", "negotiation", "awaiting decision", "Mysterious"]) {
+            expect(leadStatusFor(parseInboundEvent({ stage })), stage).toBeNull();
+        }
+        expect(leadStatusFor(parseInboundEvent({ stage: "quote sent", call_connected: "true" }))).toBe("Under_Discussion");
         expect(leadStatusFor(parseInboundEvent({}))).toBeNull();
     });
 
@@ -784,7 +782,8 @@ describe("the disposition never moves the pipeline", () => {
                 lead_tag_name: tag,
                 lead_stage_name: tag === "Deal Closed" ? "Converted" : "Lost",
             });
-            expect(leadStatusFor(event), tag).toBeNull();
+            // At most first contact (a connected call) — never a closing status.
+            expect([null, "Under_Discussion"], tag).toContain(leadStatusFor(event));
         }
     });
 });

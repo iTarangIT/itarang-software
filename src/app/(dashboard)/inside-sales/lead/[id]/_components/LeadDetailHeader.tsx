@@ -90,6 +90,7 @@ export function LeadDetailHeader({
                             leadId={lead.id}
                             status={lead.lead_status}
                             editable={isOwner}
+                            canCorrect={viewerRole === "admin" || viewerRole === "ceo"}
                             modalActions={statusModalActions}
                             onModalAction={onStatusModal}
                             onUpdated={onUpdated}

@@ -41,6 +41,13 @@ import {
 } from "@/lib/scraper-enrichment";
 import { recordLeadCapture } from "@/lib/leads/lead-registry";
 import {
+  LEAD_ORIGINS,
+  recordLeadCreated,
+  recordReinquiry,
+  stampLeadSource,
+  type LeadOrigin,
+} from "@/lib/leads/leadSource";
+import {
   classifyAgainstExisting,
   loadExistingByPhone,
   normalizePhone,
@@ -51,6 +58,15 @@ import {
 } from "@/lib/leads/businessType";
 
 export async function POST(req: NextRequest) {
+  // ⚠ SECURITY: this create had no auth check (middleware does not gate
+  // /api/*), so any signed-in role — or an anonymous POST — could insert a
+  // prospect. Same readers as the list below.
+  let user;
+  try {
+    user = await requireRole([...LEADS_PAGE_ROLES]);
+  } catch {
+    return NextResponse.json({ success: false, error: "Forbidden" }, { status: 403 });
+  }
   try {
     const body = await req.json();
 
@@ -66,6 +82,7 @@ export async function POST(req: NextRequest) {
       area,
       pincode,
       business_type,
+      origin,
     } = body;
 
     if (!dealer_name || !phone) {
@@ -74,6 +91,21 @@ export async function POST(req: NextRequest) {
         { status: 400 },
       );
     }
+    // ID 81: a rep-created lead needs city, business type and origin — source
+    // can only be captured at creation, never added properly later.
+    if (!String(city ?? location ?? "").trim()) {
+      return NextResponse.json({ success: false, error: "City is required." }, { status: 400 });
+    }
+    if (!String(business_type ?? "").trim()) {
+      return NextResponse.json({ success: false, error: "Type of Business is required." }, { status: 400 });
+    }
+    if (!(LEAD_ORIGINS as readonly string[]).includes(String(origin ?? ""))) {
+      return NextResponse.json(
+        { success: false, error: "Pick how the dealer was found (Found via)." },
+        { status: 400 },
+      );
+    }
+    const leadOrigin = origin as LeadOrigin;
 
     // E-296 "Type of Business". Optional; tolerant of labels ("Battery Sale")
     // because the /leads xlsx importer posts spreadsheet cells here. A non-blank
@@ -126,6 +158,11 @@ export async function POST(req: NextRequest) {
     );
 
     if (outcome !== "valid") {
+      // ID 81: a known dealer arriving again is a Re-inquiry on the existing
+      // lead — never a second copy, never a new source.
+      if (duplicateLeadId) {
+        await recordReinquiry({ leadId: duplicateLeadId, door: "rep_create", actorId: user.id, note: dealer_name });
+      }
       // A phone match is reported, never silently resolved. The four outcomes
       // mean different things to the operator and each needs a different next
       // action, so the classification is handed back rather than flattened
@@ -180,6 +217,15 @@ export async function POST(req: NextRequest) {
         businessTypeSaved = false;
         console.warn("[DEALER-LEADS] business_type not saved (E-296 applied?):", e);
       }
+    }
+
+    // ID 81: Entered via = Rep-created, Found via = what the rep picked, and
+    // the "Lead created" event. Best-effort — the lead exists either way.
+    await stampLeadSource(db, id, { door: "rep_create", origin: leadOrigin });
+    try {
+      await recordLeadCreated(db, { leadId: id, actorId: user.id, door: "rep_create", ownerId: null });
+    } catch (e) {
+      console.warn("[DEALER-LEADS] Lead created not recorded:", e);
     }
 
     // E-179 central registry — manually captured dealer prospect.

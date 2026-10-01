@@ -9,7 +9,8 @@
 import { NextRequest } from "next/server";
 import { z } from "zod";
 import { requireRole } from "@/lib/auth-utils";
-import { successResponse, withErrorHandler } from "@/lib/api-utils";
+import { isPoolTabFor } from "@/lib/leads/claimScope";
+import { successResponse, withErrorHandler, errorResponse } from "@/lib/api-utils";
 import { fetchAsmQueueRegions } from "@/lib/asm/queryBuilder";
 import { ASM_QUEUE_TABS } from "@/lib/asm/types";
 
@@ -34,6 +35,11 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
     const parsed = QuerySchema.parse({
         tab: url.searchParams.get("tab") ?? undefined,
     });
+
+    // ID 45: reps never list the unowned pool — they claim by number search.
+    if (isPoolTabFor(user.role, parsed.tab)) {
+        return errorResponse("Search by mobile number to find and claim a lead.", 403);
+    }
 
     const regions = await fetchAsmQueueRegions(user.id, parsed.tab);
     return successResponse({ regions });

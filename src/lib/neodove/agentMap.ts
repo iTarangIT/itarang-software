@@ -23,6 +23,7 @@
  *
  * Pure rules (key normalisation, parsing, suggestions): ./agentMapRules.ts.
  */
+import { backfillOwnersForLinkedAgent } from "./ownerFromCall";
 import { sql } from "drizzle-orm";
 
 import { db } from "@/lib/db";
@@ -241,6 +242,9 @@ export async function setNeodoveAgentMapping(
             )
             SELECT COUNT(*)::text AS n FROM m
         `);
+        // ID 83: linking an agent assigns the unowned leads they already
+        // called first, dated at that call.
+        if (userId) await backfillOwnersForLinkedAgent(tx, userId);
         return { moved: Number((moved as unknown as { n: string }[])[0]?.n ?? 0) };
     });
 }

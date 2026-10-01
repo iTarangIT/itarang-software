@@ -16,6 +16,9 @@ import {
 import { QueueCsvButton } from "@/components/leads/QueueCsvButton";
 import { BulkClaimBar } from "@/components/leads/BulkClaimBar";
 import { ClaimLeadConfirm } from "@/components/leads/ClaimLeadConfirm";
+import { ClaimByNumberPanel } from "@/components/leads/ClaimByNumberPanel";
+import { OutsideTerritoryClaims } from "@/components/leads/OutsideTerritoryClaims";
+import { ASM_POOL_TABS, claimsByNumberOnly } from "@/lib/leads/claimScope";
 import { CLAIM_ROLES } from "@/lib/inside-sales/types";
 import {
     EMPTY_QUEUE_FILTERS,
@@ -70,7 +73,13 @@ export function AsmQueueView({ viewerId, viewerRole }: Props) {
     // B3: the claim routes gate on CLAIM_ROLES; a ceo / sales_head browsing
     // this queue sees the pool but gets no Claim controls rather than a 403.
     const canClaim = (CLAIM_ROLES as readonly string[]).includes(viewerRole);
-    const [tab, setTab] = useState<AsmQueueTab>(parseTab(params.get("tab")));
+    // ID 45: an ASM never lists the unowned pool (Territory Feed / Unclaimed) —
+    // they claim by number search. Managers keep the territory view.
+    const numberOnly = claimsByNumberOnly(viewerRole);
+    const [tab, setTab] = useState<AsmQueueTab>(() => {
+        const t = parseTab(params.get("tab"));
+        return numberOnly && ASM_POOL_TABS.includes(t) ? "my_visits" : t;
+    });
     const [page, setPage] = useState(Math.max(1, Number(params.get("page") ?? "1")));
     const [search, setSearch] = useState(params.get("q") ?? "");
     const [searchDebounced, setSearchDebounced] = useState(params.get("q") ?? "");
@@ -221,7 +230,7 @@ export function AsmQueueView({ viewerId, viewerRole }: Props) {
     // (every row claimable) and Territory Feed (mixed — only the unowned rows
     // get a checkbox). Same reset-on-scope-change pattern as the Inside Sales
     // queue: a tab or filter change drops the selection, paging keeps it.
-    const selectable = (tab === "unclaimed" || tab === "territory") && canClaim;
+    const selectable = (tab === "unclaimed" || tab === "territory") && canClaim && !numberOnly;
     const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
     const selectionScope = `${tab}|${filterKey}`;
     const [selectionScopeSeen, setSelectionScopeSeen] = useState(selectionScope);
@@ -289,9 +298,16 @@ export function AsmQueueView({ viewerId, viewerRole }: Props) {
 
     return (
         <div className="rounded-xl border border-gray-100 bg-white shadow-sm">
+            {numberOnly && (
+                <div className="border-b border-gray-100 p-4">
+                    <ClaimByNumberPanel onClaimed={() => void queryClient.invalidateQueries()} />
+                </div>
+            )}
+            {!numberOnly && <OutsideTerritoryClaims />}
             <AsmQueueTabs
                 active={tab}
                 counts={counts ?? null}
+                hidden={numberOnly ? ASM_POOL_TABS : []}
                 onChange={(t) => {
                     setTab(t);
                     setPage(1);

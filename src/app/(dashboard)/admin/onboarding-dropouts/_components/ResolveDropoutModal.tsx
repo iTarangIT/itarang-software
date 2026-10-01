@@ -11,8 +11,7 @@ import { Button } from "@/components/ui/button";
 import {
     ONBOARDING_DROPOUT_REASONS,
     type DropoutResolutionAction,
-    type OnboardingDropoutRow,
-} from "@/lib/admin/types";
+    type OnboardingDropoutRow, ONBOARDING_DROPOUT_REASON_LABEL } from "@/lib/admin/types";
 
 type Props = {
     open: boolean;
@@ -28,9 +27,9 @@ const ACTIONS: {
     icon: React.ComponentType<{ className?: string }>;
 }[] = [
     {
-        value: "keep_converted",
-        label: "Keep Converted",
-        desc: "Deal stays won; record the dropout cause for tracking.",
+        value: "keep_waiting",
+        label: "Stalled — keep waiting",
+        desc: "The lead stays Won; this decision comes back in 21 days.",
         icon: CheckCircle2,
     },
     {
@@ -54,7 +53,7 @@ export function ResolveDropoutModal({
     onSuccess,
 }: Props) {
     const [action, setAction] =
-        useState<DropoutResolutionAction>("keep_converted");
+        useState<DropoutResolutionAction>("keep_waiting");
     const [reason, setReason] = useState<string>(ONBOARDING_DROPOUT_REASONS[0]);
     const [notes, setNotes] = useState("");
     const [submitting, setSubmitting] = useState(false);
@@ -159,7 +158,7 @@ export function ResolveDropoutModal({
                     >
                         {ONBOARDING_DROPOUT_REASONS.map((r) => (
                             <option key={r} value={r}>
-                                {r.replace(/_/g, " ")}
+                                {ONBOARDING_DROPOUT_REASON_LABEL[r] ?? r.replace(/_/g, " ")}
                             </option>
                         ))}
                     </select>

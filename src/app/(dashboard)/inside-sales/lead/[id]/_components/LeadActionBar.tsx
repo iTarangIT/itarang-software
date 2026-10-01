@@ -10,7 +10,7 @@ import {
     XCircle,
     UserPlus2,
 } from "lucide-react";
-import type { LeadDetailBundle } from "@/lib/inside-sales/types";
+import { CLAIM_ROLES, type LeadDetailBundle } from "@/lib/inside-sales/types";
 import { isOpen, isTerminal, type LeadStatus } from "@/lib/lifecycle/transitions";
 import type { ActiveModal } from "./LeadDetailView";
 
@@ -28,7 +28,18 @@ export function LeadActionBar({ bundle, isOwner, viewerRole, onAction }: Props) 
     const open = status ? isOpen(status) : false;
     const isAdmin = viewerRole === "admin" || viewerRole === "ceo";
 
-    // Claim banner shows when lead is unassigned — visible to any IS rep + admin.
+    // Claim banner shows when lead is unassigned — only to the roles the claim
+    // route accepts (CLAIM_ROLES). A manager reaching this page (Open lead page)
+    // saw the button and got "Forbidden" on click; they assign from Leads.
+    const canClaim = (CLAIM_ROLES as readonly string[]).includes(viewerRole);
+    if (isUnassigned && !canClaim) {
+        return (
+            <div className="sticky bottom-0 z-10 bg-white border-t border-gray-200 px-6 py-3 text-xs text-gray-500">
+                <span className="font-medium text-gray-700">Unassigned lead.</span> Assign it to a rep from
+                Leads (select the lead → Reassign).
+            </div>
+        );
+    }
     if (isUnassigned) {
         return (
             <div className="sticky bottom-0 z-10 bg-white border-t border-gray-200 px-6 py-3 flex items-center justify-between gap-4">
@@ -83,7 +94,7 @@ export function LeadActionBar({ bundle, isOwner, viewerRole, onAction }: Props) 
                 tone="emerald"
                 onClick={() => onAction("mark_converted")}
             >
-                Mark Converted
+                Mark Won
             </ActionButton>
             <ActionButton
                 icon={XCircle}

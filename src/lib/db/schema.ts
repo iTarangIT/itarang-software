@@ -22,6 +22,7 @@ import {
   unique,
   customType,
   doublePrecision,
+  smallint,
 } from "drizzle-orm/pg-core";
 
 import { relations, sql } from "drizzle-orm";
@@ -12767,5 +12768,539 @@ export const dealerLeadFieldChanges = pgTable(
   (t) => ({
     leadIdx: index("dealer_lead_field_changes_lead_idx").on(t.dealer_lead_id, t.changed_at),
     atIdx: index("dealer_lead_field_changes_at_idx").on(t.changed_at),
+  }),
+);
+
+// E-305 — leads pushed from Ecofy (docs/ECOFY_INTEGRATION.md). Written only by
+// POST /api/integrations/ecofy/events (src/lib/ecofy/inbound.ts); id is the
+// crmLeadId Ecofy links to its case.
+export const ecofyLeads = pgTable(
+  "ecofy_leads",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    ecofy_case_id: text("ecofy_case_id").notNull(),
+    case_no: text("case_no"),
+    version: integer("version").default(0).notNull(),
+    stage: varchar("stage", { length: 20 }),
+    sub_status: text("sub_status"),
+    segment: varchar("segment", { length: 40 }),
+    temperature: varchar("temperature", { length: 10 }),
+    lead_source: varchar("lead_source", { length: 60 }),
+    owner: varchar("owner", { length: 40 }),
+    qualified_by_name: text("qualified_by_name"),
+    queue_entered_at: timestamp("queue_entered_at", { withTimezone: true }),
+    product_interest: varchar("product_interest", { length: 60 }),
+    avg_monthly_bill_inr: numeric("avg_monthly_bill_inr", { precision: 14, scale: 2 }),
+    sanctioned_load_kw: numeric("sanctioned_load_kw", { precision: 10, scale: 2 }),
+    existing_backup: text("existing_backup"),
+    preferred_call_time: text("preferred_call_time"),
+    closure_reason: text("closure_reason"),
+    customer_name: text("customer_name"),
+    customer_mobile: varchar("customer_mobile", { length: 20 }),
+    customer_alt_mobile: varchar("customer_alt_mobile", { length: 20 }),
+    customer_email: text("customer_email"),
+    customer_type: varchar("customer_type", { length: 40 }),
+    business_name: text("business_name"),
+    address: text("address"),
+    city: text("city"),
+    state: varchar("state", { length: 40 }),
+    pincode: varchar("pincode", { length: 12 }),
+    preferred_language: varchar("preferred_language", { length: 20 }),
+    property_type: varchar("property_type", { length: 40 }),
+    ecofy_url: text("ecofy_url"),
+    snapshot: jsonb("snapshot").default({}).notNull(),
+    last_change: jsonb("last_change"),
+    last_event_id: text("last_event_id"),
+    last_event_type: varchar("last_event_type", { length: 60 }),
+    last_event_at: timestamp("last_event_at", { withTimezone: true }),
+    // E-307 — CRM-owned; never written by the inbound upsert.
+    assigned_to_user_id: uuid("assigned_to_user_id"),
+    assigned_role: varchar("assigned_role", { length: 30 }),
+    assigned_by: text("assigned_by"),
+    assigned_at: timestamp("assigned_at", { withTimezone: true }),
+    next_follow_up_at: timestamp("next_follow_up_at", { withTimezone: true }),
+    next_appointment_at: timestamp("next_appointment_at", { withTimezone: true }),
+    follow_up_reminded_at: timestamp("follow_up_reminded_at", { withTimezone: true }),
+    appointment_reminded_at: timestamp("appointment_reminded_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    caseIdUniq: uniqueIndex("ecofy_leads_case_id_uniq").on(t.ecofy_case_id),
+    queueIdx: index("ecofy_leads_queue_idx").on(t.temperature, t.queue_entered_at),
+    assigneeIdx: index("ecofy_leads_assignee_idx").on(t.assigned_to_user_id, t.stage),
+  }),
+);
+
+// E-308 — calls / remarks / follow-ups / meeting bookings recorded in the CRM
+// while Ecofy could not take them; replayed to Ecofy by the reminder ticker.
+export const ecofyLeadActivities = pgTable(
+  "ecofy_lead_activities",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    ecofy_lead_id: uuid("ecofy_lead_id").notNull(),
+    kind: varchar("kind", { length: 20 }).notNull(),
+    payload: jsonb("payload").notNull(),
+    created_by: uuid("created_by"),
+    created_by_name: text("created_by_name"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    sync_status: varchar("sync_status", { length: 12 }).default("pending").notNull(),
+    sync_attempts: integer("sync_attempts").default(0).notNull(),
+    last_attempt_at: timestamp("last_attempt_at", { withTimezone: true }),
+    synced_at: timestamp("synced_at", { withTimezone: true }),
+    sync_error: text("sync_error"),
+  },
+  (t) => ({
+    leadIdx: index("ecofy_lead_activities_lead_idx").on(t.ecofy_lead_id, t.created_at),
+  }),
+);
+
+// E-307 — assign / reassign history for an Ecofy lead.
+export const ecofyLeadAssignments = pgTable(
+  "ecofy_lead_assignments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    ecofy_lead_id: uuid("ecofy_lead_id").notNull(),
+    from_user_id: uuid("from_user_id"),
+    to_user_id: uuid("to_user_id").notNull(),
+    to_role: varchar("to_role", { length: 30 }),
+    reason: text("reason"),
+    assigned_by: text("assigned_by"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    leadIdx: index("ecofy_lead_assignments_lead_idx").on(t.ecofy_lead_id, t.created_at),
+  }),
+);
+
+// E-305 — Ecofy sync ledger, both directions. UNIQUE (direction, event_id) is
+// the inbound dedupe and the outbound retry key.
+export const ecofySyncEvents = pgTable(
+  "ecofy_sync_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    direction: varchar("direction", { length: 10 }).notNull(),
+    event_id: text("event_id").notNull(),
+    event_type: varchar("event_type", { length: 60 }).notNull(),
+    ecofy_case_id: text("ecofy_case_id"),
+    ecofy_lead_id: uuid("ecofy_lead_id"),
+    payload: jsonb("payload").notNull(),
+    response: jsonb("response"),
+    http_status: integer("http_status"),
+    attempts: integer("attempts").default(1).notNull(),
+    error: text("error"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    directionEventUniq: uniqueIndex("ecofy_sync_events_direction_event_uniq").on(
+      t.direction,
+      t.event_id,
+    ),
+    caseIdx: index("ecofy_sync_events_case_idx").on(t.ecofy_case_id, t.created_at),
+  }),
+);
+
+// --- GREEN ENERGY NEWS FEED (E-306) ---
+// CEO dashboard news aggregator: RSS + Google News RSS → Gemini tagging and a
+// daily 5-bullet brief. See src/lib/news/*. Source of truth: drizzle/E-306.
+
+export const greenNewsItems = pgTable(
+  "green_news_items",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /** sha256 of the canonical URL — the insert-time dedupe key. */
+    url_hash: varchar("url_hash", { length: 64 }).notNull(),
+    url: text("url").notNull(),
+    source_key: varchar("source_key", { length: 40 }).notNull(),
+    source_name: text("source_name"),
+    title: text("title").notNull(),
+    /** Normalised-title key: same story from two feeds. */
+    title_hash: varchar("title_hash", { length: 64 }).notNull(),
+    snippet: text("snippet"),
+    /** Gemini one-liner; NULL until classified. */
+    summary: text("summary"),
+    image_url: text("image_url"),
+    published_at: timestamp("published_at", { withTimezone: true }).notNull(),
+    fetched_at: timestamp("fetched_at", { withTimezone: true }).defaultNow().notNull(),
+    /** 'india' | 'world'; NULL until classified. */
+    region: varchar("region", { length: 10 }),
+    /** Vocabulary in src/lib/news/categories.ts. */
+    category: varchar("category", { length: 30 }),
+    /** 0-100 from Gemini. */
+    relevance: smallint("relevance"),
+    hidden: boolean("hidden").default(false).notNull(),
+    classified_at: timestamp("classified_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    urlHashUniq: uniqueIndex("green_news_items_url_hash_uniq").on(t.url_hash),
+    publishedIdx: index("green_news_items_published_idx").on(t.published_at),
+    regionCategoryIdx: index("green_news_items_region_category_idx").on(
+      t.region,
+      t.category,
+      t.published_at,
+    ),
+    titleHashIdx: index("green_news_items_title_hash_idx").on(t.title_hash),
+  }),
+);
+
+export const greenNewsBriefs = pgTable(
+  "green_news_briefs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /** The IST calendar day the brief covers. */
+    brief_date: date("brief_date").notNull(),
+    /** [{ text, item_ids: uuid[] }] */
+    bullets: jsonb("bullets").default([]).notNull(),
+    model: text("model"),
+    item_count: integer("item_count").default(0).notNull(),
+    generated_at: timestamp("generated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    dateUniq: uniqueIndex("green_news_briefs_date_uniq").on(t.brief_date),
+  }),
+);
+
+export const greenNewsRuns = pgTable(
+  "green_news_runs",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey().notNull(),
+    started_at: timestamp("started_at", { withTimezone: true }).defaultNow().notNull(),
+    finished_at: timestamp("finished_at", { withTimezone: true }),
+    /** 'running' | 'ok' | 'failed' */
+    status: varchar("status", { length: 16 }).default("running").notNull(),
+    /** 'ticker' | 'cron' | 'manual' */
+    triggered_by: varchar("triggered_by", { length: 16 }).notNull(),
+    fetched: integer("fetched").default(0).notNull(),
+    inserted: integer("inserted").default(0).notNull(),
+    classified: integer("classified").default(0).notNull(),
+    brief_written: boolean("brief_written").default(false).notNull(),
+    error: text("error"),
+  },
+  (t) => ({
+    startedIdx: index("green_news_runs_started_idx").on(t.started_at),
+  }),
+);
+
+// E-309 — WhatsApp Sales Assistant (docs/wa-assistant/PLAN.md). Five NEW tables;
+// nothing else reads them, so an unapplied E-309 breaks only the Assistant.
+// Status vocabularies are CHECK constraints in the migration; the source of
+// truth for every column is drizzle/E-309_wa_assistant.sql.
+
+/** User ↔ WhatsApp number. Pending LINK codes are status='pending' rows. */
+export const assistantWaBindings = pgTable(
+  "assistant_wa_bindings",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    user_id: uuid("user_id").notNull().references(() => users.id),
+    /** E.164 with the leading '+'; NULL while the row is a pending code. */
+    wa_phone: text("wa_phone"),
+    /** pending | active | revoked */
+    status: varchar("status", { length: 10 }).notNull(),
+    /** HMAC-SHA256 of the 6-digit code — never the code itself. */
+    code_hash: text("code_hash"),
+    code_expires_at: timestamp("code_expires_at", { withTimezone: true }),
+    verified_at: timestamp("verified_at", { withTimezone: true }),
+    revoked_at: timestamp("revoked_at", { withTimezone: true }),
+    revoked_reason: varchar("revoked_reason", { length: 40 }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    activeUserUniq: uniqueIndex("assistant_wa_bindings_active_user_uniq")
+      .on(t.user_id)
+      .where(sql`status = 'active'`),
+    activePhoneUniq: uniqueIndex("assistant_wa_bindings_active_phone_uniq")
+      .on(t.wa_phone)
+      .where(sql`status = 'active'`),
+    pendingUserUniq: uniqueIndex("assistant_wa_bindings_pending_user_uniq")
+      .on(t.user_id)
+      .where(sql`status = 'pending'`),
+    pendingCodeUniq: uniqueIndex("assistant_wa_bindings_pending_code_uniq")
+      .on(t.code_hash)
+      .where(sql`status = 'pending'`),
+  }),
+);
+
+/** Last 20 turns per user, plus the per-user turn lease. */
+export const assistantConversations = pgTable(
+  "assistant_conversations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    user_id: uuid("user_id").notNull().references(() => users.id),
+    channel: varchar("channel", { length: 20 }).default("whatsapp").notNull(),
+    messages: jsonb("messages").default([]).notNull(),
+    last_activity_at: timestamp("last_activity_at", { withTimezone: true }).defaultNow().notNull(),
+    lease_token: uuid("lease_token"),
+    lease_until: timestamp("lease_until", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    userChannelUniq: uniqueIndex("assistant_conversations_user_channel_uniq").on(t.user_id, t.channel),
+  }),
+);
+
+/** Every proposed write. Runs only from a Confirm tap, once, within its expiry. */
+export const assistantActions = pgTable(
+  "assistant_actions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    user_id: uuid("user_id").notNull().references(() => users.id),
+    channel: varchar("channel", { length: 20 }).default("whatsapp").notNull(),
+    tool: varchar("tool", { length: 40 }).notNull(),
+    lead_id: text("lead_id"),
+    /** dealer_leads.updated_at when the preview was built (assertNotStale). */
+    lead_version: timestamp("lead_version", { withTimezone: true }),
+    input: jsonb("input").notNull(),
+    preview: jsonb("preview").notNull(),
+    before: jsonb("before"),
+    after: jsonb("after"),
+    /** pending | executing | confirmed | cancelled | expired | failed | escalated */
+    status: varchar("status", { length: 12 }).default("pending").notNull(),
+    /** 2 = the second Confirm of a high-impact Lost. */
+    step: smallint("step").default(1).notNull(),
+    /** Self-reference (FK in the migration). */
+    parent_action_id: uuid("parent_action_id"),
+    expires_at: timestamp("expires_at", { withTimezone: true }).notNull(),
+    executed_at: timestamp("executed_at", { withTimezone: true }),
+    error: text("error"),
+    wa_message_id: text("wa_message_id"),
+    source_message_id: uuid("source_message_id"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    userStatusIdx: index("assistant_actions_user_status_idx").on(t.user_id, t.status),
+    openExpiryIdx: index("assistant_actions_open_expiry_idx")
+      .on(t.status, t.expires_at)
+      .where(sql`status IN ('pending', 'executing')`),
+  }),
+);
+
+/** Inbound + outbound WhatsApp log. provider_message_id UNIQUE = inbound dedupe. */
+export const assistantWaMessages = pgTable(
+  "assistant_wa_messages",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    provider_message_id: text("provider_message_id"),
+    /** in | out */
+    direction: varchar("direction", { length: 3 }).notNull(),
+    type: varchar("type", { length: 20 }).notNull(),
+    user_id: uuid("user_id"),
+    wa_phone: text("wa_phone").notNull(),
+    phone_number_id: text("phone_number_id"),
+    text: varchar("text", { length: 2000 }),
+    /** What the router did with an inbound message (see wa-assistant/messages.ts). */
+    handling: varchar("handling", { length: 30 }),
+    delivery_status: varchar("delivery_status", { length: 12 }),
+    action_id: uuid("action_id"),
+    raw_payload: jsonb("raw_payload"),
+    error: text("error"),
+    handled_at: timestamp("handled_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    providerIdUniq: uniqueIndex("assistant_wa_messages_provider_id_uniq").on(t.provider_message_id),
+    phoneCreatedIdx: index("assistant_wa_messages_phone_created_idx").on(t.wa_phone, t.created_at),
+    userCreatedIdx: index("assistant_wa_messages_user_created_idx").on(t.user_id, t.created_at),
+    unhandledIdx: index("assistant_wa_messages_unhandled_idx")
+      .on(t.created_at)
+      .where(sql`direction = 'in' AND handled_at IS NULL`),
+  }),
+);
+
+/** Every agent tool call: input and truncated output. */
+export const assistantToolCalls = pgTable(
+  "assistant_tool_calls",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    user_id: uuid("user_id").notNull(),
+    message_id: uuid("message_id"),
+    tool: varchar("tool", { length: 40 }).notNull(),
+    input: jsonb("input"),
+    output: jsonb("output"),
+    ok: boolean("ok").notNull(),
+    error: text("error"),
+    latency_ms: integer("latency_ms"),
+    action_id: uuid("action_id"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    userCreatedIdx: index("assistant_tool_calls_user_created_idx").on(t.user_id, t.created_at),
+  }),
+);
+
+// E-311 — photos / PDFs / location pins sent to the assistant. Stored on
+// arrival; `ref` is the short id the model sees; used once (used_at).
+export const assistantMedia = pgTable(
+  "assistant_media",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    ref: varchar("ref", { length: 12 }).notNull(),
+    user_id: uuid("user_id").notNull(),
+    channel: varchar("channel", { length: 20 }).notNull().default("whatsapp"),
+    source_message_id: uuid("source_message_id"),
+    /** image | document | location */
+    kind: varchar("kind", { length: 20 }).notNull(),
+    mime_type: varchar("mime_type", { length: 100 }),
+    byte_size: integer("byte_size"),
+    file_name: text("file_name"),
+    storage_bucket: varchar("storage_bucket", { length: 60 }),
+    storage_key: text("storage_key"),
+    caption: text("caption"),
+    latitude: numeric("latitude", { precision: 10, scale: 7 }),
+    longitude: numeric("longitude", { precision: 10, scale: 7 }),
+    place_name: text("place_name"),
+    place_address: text("place_address"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    used_at: timestamp("used_at", { withTimezone: true }),
+    used_by_action_id: uuid("used_by_action_id"),
+  },
+  (t) => ({
+    userRefUq: uniqueIndex("assistant_media_user_ref_uq").on(t.user_id, t.ref),
+    userUnusedIdx: index("assistant_media_user_unused_idx")
+      .on(t.user_id, t.created_at)
+      .where(sql`used_at IS NULL`),
+  }),
+);
+
+// E-311 — documents on a DEALER lead (dealer_leads.id). Not lead_documents,
+// which is the customer/loan `leads` family.
+export const dealerLeadDocuments = pgTable(
+  "dealer_lead_documents",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    dealer_lead_id: text("dealer_lead_id").notNull(),
+    /** gst_certificate | pan | shop_licence | shop_photo | visiting_card | purchase_order | other */
+    doc_type: varchar("doc_type", { length: 40 }).notNull(),
+    storage_bucket: varchar("storage_bucket", { length: 60 }).notNull(),
+    storage_key: text("storage_key").notNull(),
+    mime_type: varchar("mime_type", { length: 100 }),
+    byte_size: integer("byte_size"),
+    file_name: text("file_name"),
+    note: text("note"),
+    /** whatsapp_assistant | crm */
+    source: varchar("source", { length: 30 }).notNull().default("crm"),
+    media_id: uuid("media_id"),
+    uploaded_by: uuid("uploaded_by"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    leadIdx: index("dealer_lead_documents_lead_idx").on(t.dealer_lead_id, t.created_at),
+  }),
+);
+
+// E-316 — Feature Request & Approval module. Permissions come from the seat in
+// feature_request_members, never from users.role. Nothing here is ever deleted:
+// comment edits keep the old text and every transition writes an event row.
+export const featureRequestMembers = pgTable("feature_request_members", {
+  user_id: uuid("user_id").primaryKey(),
+  /** requester | product_reviewer | tech_reviewer | developer */
+  seat: varchar("seat", { length: 30 }).notNull(),
+  is_active: boolean("is_active").notNull().default(true),
+  created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const featureRequests = pgTable(
+  "feature_requests",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    code: varchar("code", { length: 20 })
+      .notNull()
+      .default(sql`('FR-' || lpad(nextval('feature_request_code_seq')::text, 4, '0'))`),
+    title: text("title").notNull(),
+    description: text("description").notNull(),
+    /** low | medium | high | critical */
+    priority: varchar("priority", { length: 20 }).notNull().default("medium"),
+    module: varchar("module", { length: 120 }).notNull(),
+    status: varchar("status", { length: 40 }).notNull().default("pending_product_review"),
+    current_owner_id: uuid("current_owner_id"),
+    resubmit_to_status: varchar("resubmit_to_status", { length: 40 }),
+    assigned_developer_id: uuid("assigned_developer_id"),
+    revision: integer("revision").notNull().default(1),
+    created_by: uuid("created_by").notNull(),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+    closed_at: timestamp("closed_at", { withTimezone: true }),
+  },
+  (t) => ({
+    codeUq: uniqueIndex("feature_requests_code_uq").on(t.code),
+    statusIdx: index("feature_requests_status_idx").on(t.status, t.updated_at),
+    ownerIdx: index("feature_requests_owner_idx").on(t.current_owner_id),
+  }),
+);
+
+export const featureRequestComments = pgTable(
+  "feature_request_comments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    feature_request_id: uuid("feature_request_id").notNull(),
+    parent_id: uuid("parent_id"),
+    author_id: uuid("author_id").notNull(),
+    author_role: varchar("author_role", { length: 50 }).notNull(),
+    body: text("body").notNull(),
+    /** comment | approval | rejection | changes_requested | assignment | status_change | resubmission | reopen | created */
+    kind: varchar("kind", { length: 30 }).notNull().default("comment"),
+    edited_at: timestamp("edited_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    frIdx: index("feature_request_comments_fr_idx").on(t.feature_request_id, t.created_at),
+  }),
+);
+
+export const featureRequestCommentEdits = pgTable(
+  "feature_request_comment_edits",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    comment_id: uuid("comment_id").notNull(),
+    previous_body: text("previous_body").notNull(),
+    edited_by: uuid("edited_by").notNull(),
+    edited_at: timestamp("edited_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    commentIdx: index("feature_request_comment_edits_comment_idx").on(t.comment_id, t.edited_at),
+  }),
+);
+
+export const featureRequestAttachments = pgTable(
+  "feature_request_attachments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /** NULL between upload and the create/comment call that claims it. */
+    feature_request_id: uuid("feature_request_id"),
+    /** NULL = attached to the request itself. */
+    comment_id: uuid("comment_id"),
+    uploaded_by: uuid("uploaded_by").notNull(),
+    file_name: text("file_name").notNull(),
+    mime_type: varchar("mime_type", { length: 150 }),
+    size_bytes: integer("size_bytes").notNull(),
+    storage_bucket: varchar("storage_bucket", { length: 60 }).notNull(),
+    storage_key: text("storage_key").notNull(),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    frIdx: index("feature_request_attachments_fr_idx").on(t.feature_request_id, t.created_at),
+  }),
+);
+
+export const featureRequestEvents = pgTable(
+  "feature_request_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    feature_request_id: uuid("feature_request_id").notNull(),
+    actor_id: uuid("actor_id").notNull(),
+    action: varchar("action", { length: 40 }).notNull(),
+    from_status: varchar("from_status", { length: 40 }),
+    to_status: varchar("to_status", { length: 40 }),
+    target_user_id: uuid("target_user_id"),
+    note: text("note"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    frIdx: index("feature_request_events_fr_idx").on(t.feature_request_id, t.created_at),
   }),
 );

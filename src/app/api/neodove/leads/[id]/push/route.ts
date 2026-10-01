@@ -21,6 +21,7 @@ import { getNeodoveConfig } from "@/lib/neodove/config";
 import { pushOneLead } from "@/lib/neodove/pushOne";
 import { NEODOVE_ADMIN_ROLES } from "@/lib/neodove/roles";
 import {
+    ASSIGN_ON_PUSH,
     assignAfterPush,
     resolveNeodoveAssignee,
 } from "@/lib/neodove/assignAfterPush";
@@ -77,7 +78,7 @@ export const POST = withErrorHandler(
         // would hand a rep a lead nobody has taken.
         const attempted = result.ok || result.status === 502;
         let assigned = false;
-        if (assignee.target && attempted) {
+        if (ASSIGN_ON_PUSH && assignee.target && attempted) {
             assigned = await assignAfterPush({
                 leadId: id,
                 campaignId: parsed.data.campaignId,

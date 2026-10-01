@@ -431,6 +431,13 @@ export async function middleware(request: NextRequest) {
     // (the no-user branch above only redirects protected paths). It fails
     // open, not closed.
     monitor: "/monitor",
+    // E-316 — Feature Request & Approval module. All three land on the same
+    // shared page; the "/feature-requests" sharedRouteAccess row below is what
+    // actually admits them (without it, matchedRole would resolve to the first
+    // of these three and bounce the other two).
+    product_head: "/feature-requests",
+    tech_head: "/feature-requests",
+    developer: "/feature-requests",
   };
 
   // E-212 — /reset-password is reached from an emailed token link by a user who
@@ -484,6 +491,9 @@ export async function middleware(request: NextRequest) {
     // "you must be signed in", which is what was missing: before this, an
     // unauthenticated visitor rendered the page instead of being sent to /login.
     path === "/profile" ||
+    // Settings → Link WhatsApp (Sales Assistant). Same "must be signed in"
+    // half as /profile; the page itself re-checks the role.
+    path.startsWith("/settings") ||
     path === "/" ||
     path === "/dashboard";
 
@@ -597,6 +607,9 @@ export async function middleware(request: NextRequest) {
     // the layout does the fine-grained nbfc_users.role === 'nbfc_risk_head'
     // gate. admin/ceo retain support access.
     "/risk-head": ["nbfc_partner", "admin", "ceo"],
+    // E-316 — the API re-checks the caller's seat in feature_request_members;
+    // this row only decides who can open the pages.
+    "/feature-requests": ["ceo", "product_head", "tech_head", "developer"],
     "/admin/dealer-verification": ["sales_head", "ceo"],
     "/admin/kyc-review": ["admin", "sales_head", "business_head", "ceo"],
     // NBFC onboarding (BRD §6.0): sales_head submits, CEO approves. Admin and
@@ -647,6 +660,10 @@ export async function middleware(request: NextRequest) {
     // own: NotificationCenter reads /api/notifications, which is scoped to the
     // caller's own rows, so admitting a role here shows it only its own feed.
     "/admin/notifications": ["admin", "sales_head", "ceo", "partner"],
+    // Number Repair (tracker ID 36) — same five roles as the page and the
+    // repair-number API; without this row the bare "/admin" entry below
+    // bounced business_head and sales_manager.
+    "/admin/number-repair": ["admin", "sales_head", "ceo", "business_head", "sales_manager"],
     // The ISR lead-detail page is where quotation notifications deep-link
     // (src/lib/notifications/events.ts → /inside-sales/lead/{id}?quote=…). The
     // page already admits these roles; without this row middleware bounced

@@ -13,12 +13,14 @@
 import { NextRequest } from "next/server";
 import { z } from "zod";
 import { requireRole } from "@/lib/auth-utils";
-import { withErrorHandler } from "@/lib/api-utils";
+import { isPoolTabFor } from "@/lib/leads/claimScope";
+import { withErrorHandler, errorResponse } from "@/lib/api-utils";
 import { fetchAsmQueueRows, countAsmQueueRows } from "@/lib/asm/queryBuilder";
 import { readAsmQueueFilters } from "@/lib/asm/queueFilterParams";
 import { fetchAssignedByForLeads } from "@/lib/leads/leadAssignedBy";
 import { fetchBusinessTypeForLeads } from "@/lib/leads/leadListQuery";
 import { businessTypeLabel } from "@/lib/leads/businessType";
+import { exportsOwnLeadsOnly, logDataDownload } from "@/lib/exports/downloadLog";
 import {
     ASM_QUEUE_TABS,
     ASM_TAB_LABELS,
@@ -99,9 +101,14 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
         tab: url.searchParams.get("tab") ?? undefined,
         q: url.searchParams.get("q") ?? undefined,
     });
+
+    // ID 45: reps never list the unowned pool — they claim by number search.
+    if (isPoolTabFor(user.role, parsed.tab)) {
+        return errorResponse("Search by mobile number to find and claim a lead.", 403);
+    }
     const filters = readAsmQueueFilters(url.searchParams);
 
-    const [rows, total] = await Promise.all([
+    const [allRows, matched] = await Promise.all([
         fetchAsmQueueRows({
             tab: parsed.tab,
             asmId: user.id,
@@ -117,6 +124,20 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
             ...filters,
         }),
     ]);
+
+    // ID 58: a rep's sheet holds only the leads they own — never the unowned
+    // pool or a colleague's leads, whatever tab it came from.
+    const ownOnly = exportsOwnLeadsOnly(user.role);
+    const rows = ownOnly ? allRows.filter((r) => r.current_owner_id === user.id) : allRows;
+    const total = ownOnly ? rows.length : matched;
+    await logDataDownload({
+        userId: user.id,
+        role: user.role,
+        dataset: `asm_queue:${parsed.tab}`,
+        rowCount: rows.length,
+        ownOnly,
+        filters: { q: parsed.q ?? null, ...filters },
+    });
 
     // Who handed each lead over. Decorated in a SEPARATE, fail-tolerant
     // statement exactly as the list route does it — the builder does not select

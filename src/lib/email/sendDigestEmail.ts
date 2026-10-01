@@ -165,23 +165,31 @@ export function buildDigestEmail(
   const tables: DigestTable[] = (p.figures.tables ?? []).filter((t) => on(t.key));
   const tableBlocks = tables
     .map((t) => {
+      const textCols = t.textColumns ?? 2;
       const head = t.columns
         .map(
           (c, i) => `<th style="padding:6px 6px;color:${MUTED};font-size:10px;letter-spacing:.06em;
-            text-transform:uppercase;text-align:${i < 2 ? "left" : "right"};
+            text-transform:uppercase;text-align:${i < textCols ? "left" : "right"};
             border-bottom:1px solid #e2e8f0;vertical-align:bottom">${esc(c)}</th>`,
         )
         .join("");
+      const isGroup = (r: Array<string | number>) =>
+        !!t.groupHeaders && r.slice(1).every((v) => v === "" || v == null);
       const body = t.rows
-        .map(
-          (r) =>
-            `<tr>${r
-              .map(
-                (v, i) => `<td style="padding:6px 6px;color:${SLATE};font-size:13px;
-                  text-align:${i < 2 ? "left" : "right"};border-bottom:1px solid #f1f5f9;
+        .map((r) =>
+          isGroup(r)
+            ? `<tr><td colspan="${t.columns.length}" style="padding:10px 6px 4px;color:${NAVY};
+                font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;
+                border-bottom:1px solid #e2e8f0">${esc(r[0])}</td></tr>`
+            : `<tr>${r
+                .map(
+                  (v, i) => `<td style="padding:6px 6px;color:${v === "Not measured yet" ? "#94a3b8" : SLATE};
+                  font-size:13px;${i === 0 && t.groupHeaders ? "font-weight:600;" : ""}
+                  text-align:${i < textCols ? "left" : "right"};border-bottom:1px solid #f1f5f9;
+                  white-space:${i < textCols ? "normal" : "nowrap"};
                   ${typeof v === "number" ? "font-variant-numeric:tabular-nums;" : ""}">${esc(v)}</td>`,
-              )
-              .join("")}</tr>`,
+                )
+                .join("")}</tr>`,
         )
         .join("");
       const grid = t.rows.length
@@ -190,10 +198,31 @@ export function buildDigestEmail(
              <thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`
         : `<p style="margin:0 0 6px;color:${MUTED};font-size:13px;font-family:Arial,sans-serif">
              ${esc(t.empty ?? "Nothing to show.")}</p>`;
+      const note = t.note
+        ? `<p style="margin:0 0 6px;color:${MUTED};font-size:12px;font-family:Arial,sans-serif">${esc(t.note)}</p>`
+        : "";
+      const footer =
+        t.footer && on(t.footer.key)
+          ? `<table role="presentation" cellpadding="0" cellspacing="0"
+               style="border-collapse:collapse;width:100%;margin:10px 0 6px;background:#f1f5f9;
+               border-radius:8px;font-family:Arial,sans-serif">
+               <tr><td colspan="${t.footer.items.length}" style="padding:10px 14px 2px;color:${MUTED};
+                 font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase">${esc(t.footer.label)}</td></tr>
+               <tr>${t.footer.items
+                 .map(
+                   (it) => `<td style="padding:4px 14px 12px;vertical-align:top">
+                     <div style="color:${MUTED};font-size:12px">${esc(it.label)}</div>
+                     <div style="color:${NAVY};font-size:18px;font-weight:700">${esc(it.value)}</div>
+                     ${it.hint ? `<div style="color:${MUTED};font-size:11px">${esc(it.hint)}</div>` : ""}</td>`,
+                 )
+                 .join("")}</tr></table>`
+          : "";
       return `
       <p style="margin:22px 0 6px;color:${MUTED};font-size:11px;letter-spacing:.14em;
         text-transform:uppercase;font-family:Arial,sans-serif">${esc(t.title)}</p>
-      ${grid}`;
+      ${note}
+      ${grid}
+      ${footer}`;
     })
     .join("");
 
@@ -222,14 +251,24 @@ export function buildDigestEmail(
         })
         .join("");
 
+  // Sales Daily v1.1 headline: sentences in a shaded box, never squeezed into
+  // the label | number rows.
+  const headline = on("summary") ? (p.figures.headline ?? []) : [];
+  const headlineBox = headline.length
+    ? `<div style="margin:0 0 18px;padding:12px 14px;background:#f8fafc;border:1px solid #e2e8f0;
+         border-radius:8px;font-family:Arial,sans-serif;font-size:14px;line-height:1.55;color:${SLATE}">
+         ${headline.map((h) => `<p style="margin:0 0 4px">${esc(h)}</p>`).join("")}</div>`
+    : "";
+
   const html = `
   <div style="font-family:Georgia,'Iowan Old Style',Palatino,serif;font-size:14px;
-    color:#0f172a;max-width:560px">
+    color:#0f172a;max-width:${p.figures.wide ? 880 : 560}px">
     <p style="margin:0 0 4px;color:${copy.accent};font-size:11px;letter-spacing:.14em;
       text-transform:uppercase;font-family:Arial,sans-serif">${esc(copy.eyebrow)}</p>
     <h1 style="margin:0 0 6px;font-size:24px;line-height:1.25;color:${NAVY}">
       ${esc(p.kind.label)}</h1>
     <p style="margin:0 0 22px;color:${SLATE};font-size:15px">${esc(copy.period(dayLabel))}</p>
+    ${headlineBox}
     ${
       activity.length
         ? `<table role="presentation" cellpadding="0" cellspacing="0"
@@ -277,7 +316,13 @@ export function buildDigestEmail(
     `${p.kind.label} — ${copy.period(dayLabel)}`,
   ];
   if (activity.length) {
-    textParts.push("", ...activity.map((l) => `${l.indent ? "  " : ""}${l.label}: ${l.display ?? l.value}`));
+    if (on("summary") && p.figures.headline?.length) textParts.push("", ...p.figures.headline);
+  for (const t of p.figures.tables ?? []) {
+    if (t.footer && on(t.key) && on(t.footer.key)) {
+      textParts.push("", ...t.footer.items.map((it) => `${it.label}: ${it.value}${it.hint ? ` (${it.hint})` : ""}`));
+    }
+  }
+  textParts.push("", ...activity.map((l) => `${l.indent ? "  " : ""}${l.label}: ${l.display ?? l.value}`));
   }
   for (const t of tables) {
     textParts.push("", t.title.toUpperCase());

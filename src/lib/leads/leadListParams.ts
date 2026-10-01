@@ -52,6 +52,7 @@ export async function parseLeadListFilters(
         state: searchParams.get("state")?.trim() || null,
         city: searchParams.get("city")?.trim() || null,
         search: searchParams.get("search")?.trim() || null,
+        contactability: (["include", "only"] as const).find((v) => v === searchParams.get("contactability")) ?? null,
         from: searchParams.get("from")?.trim() || null,
         to: searchParams.get("to")?.trim() || null,
         connectStatus: isConnectStatus(connectStatusParam) ? connectStatusParam : null,

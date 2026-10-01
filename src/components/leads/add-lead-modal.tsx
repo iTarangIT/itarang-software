@@ -15,6 +15,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertTriangle, CheckCircle, Loader2, Plus, X } from "lucide-react";
+import { BUSINESS_TYPE_OPTIONS } from "@/lib/leads/businessType";
+import { LEAD_ORIGIN_LABEL, LEAD_ORIGINS } from "@/lib/leads/leadSourceVocab";
 
 type DuplicateCheck = {
     valid: boolean;
@@ -40,6 +42,9 @@ const EMPTY = {
     area: "",
     pincode: "",
     language: "hindi",
+    // ID 81: required at creation, with city.
+    business_type: "",
+    origin: "",
 };
 
 export function AddLeadModal({
@@ -96,6 +101,9 @@ export function AddLeadModal({
     const canSubmit =
         form.dealer_name.trim().length > 0 &&
         form.phone.replace(/\D/g, "").length >= 10 &&
+        form.city.trim().length > 0 &&
+        !!form.business_type &&
+        !!form.origin &&
         !saving;
 
     const handleSubmit = async () => {
@@ -243,7 +251,7 @@ export function AddLeadModal({
                                 placeholder="Sharada Enterprises"
                             />
                             <Field
-                                label="City"
+                                label="City *"
                                 value={form.city}
                                 onChange={(v) => set("city", v)}
                                 placeholder="Ujjain"
@@ -259,6 +267,18 @@ export function AddLeadModal({
                                 value={form.pincode}
                                 onChange={(v) => set("pincode", v)}
                                 placeholder="456001"
+                            />
+                            <Select
+                                label="Type of business *"
+                                value={form.business_type}
+                                onChange={(v) => set("business_type", v)}
+                                options={BUSINESS_TYPE_OPTIONS}
+                            />
+                            <Select
+                                label="Found via *"
+                                value={form.origin}
+                                onChange={(v) => set("origin", v)}
+                                options={LEAD_ORIGINS.map((o) => ({ value: o, label: LEAD_ORIGIN_LABEL[o] }))}
                             />
                         </div>
 
@@ -313,6 +333,36 @@ function Field({
                 placeholder={placeholder}
                 className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-gray-400 focus:outline-none"
             />
+        </label>
+    );
+}
+
+function Select({
+    label,
+    value,
+    onChange,
+    options,
+}: {
+    label: string;
+    value: string;
+    onChange: (v: string) => void;
+    options: { value: string; label: string }[];
+}) {
+    return (
+        <label className="block">
+            <span className="text-xs font-medium text-gray-600">{label}</span>
+            <select
+                value={value}
+                onChange={(e) => onChange(e.target.value)}
+                className="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm focus:border-gray-400 focus:outline-none"
+            >
+                <option value="">Select…</option>
+                {options.map((o) => (
+                    <option key={o.value} value={o.value}>
+                        {o.label}
+                    </option>
+                ))}
+            </select>
         </label>
     );
 }

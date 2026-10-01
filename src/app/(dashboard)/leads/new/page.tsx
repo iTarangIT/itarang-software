@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { BUSINESS_TYPE_OPTIONS } from "@/lib/leads/businessType";
+import { LEAD_ORIGIN_LABEL, LEAD_ORIGINS } from "@/lib/leads/leadSourceVocab";
 
 // ─── Constants ────────────────────────────────────────────────
 
@@ -65,8 +66,9 @@ export default function NewDealerLeadPage() {
     location: "",
     language: "hinglish",
     current_status: "new",
-    // E-296 "Type of Business". "" = not set.
+    // E-296 "Type of Business" and ID 81 "Found via" — both required.
     business_type: "",
+    origin: "",
   });
 
   const update = (field: string, value: string) => {
@@ -85,6 +87,9 @@ export default function NewDealerLeadPage() {
       e.phone = "Enter a valid 10–13 digit phone number";
     if (!form.location.trim())
       e.location = "Location is required";
+    // ID 81: source can only be captured at creation.
+    if (!form.business_type) e.business_type = "Pick the type of business";
+    if (!form.origin) e.origin = "Pick how the dealer was found";
     setErrors(e);
     return Object.keys(e).length === 0;
   };
@@ -104,7 +109,8 @@ export default function NewDealerLeadPage() {
           location: form.location.trim(),
           language: form.language,
           current_status: form.current_status,
-          business_type: form.business_type || null,
+          business_type: form.business_type,
+          origin: form.origin,
         }),
       });
       const data = await res.json();
@@ -249,11 +255,11 @@ export default function NewDealerLeadPage() {
           >
             <div className="space-y-6">
 
-              {/* Type of Business (E-296) — optional; tap the active one to clear. */}
+              {/* Type of Business (E-296) — required (ID 81). */}
               <div>
                 <label className="flex items-center gap-1.5 text-xs font-semibold text-gray-600 mb-2.5">
                   <Briefcase className="w-3.5 h-3.5" /> Type of Business
-                  <span className="font-normal text-gray-400">(optional)</span>
+                  <span className="text-rose-500">*</span>
                 </label>
                 <div className="flex flex-wrap gap-2">
                   {BUSINESS_TYPE_OPTIONS.map((t) => {
@@ -277,6 +283,38 @@ export default function NewDealerLeadPage() {
                     );
                   })}
                 </div>
+                {errors.business_type && (
+                  <p className="mt-1.5 text-xs text-rose-600">{errors.business_type}</p>
+                )}
+              </div>
+
+              {/* Found via (ID 81) — how we found this dealer; fixed list, required. */}
+              <div>
+                <label className="flex items-center gap-1.5 text-xs font-semibold text-gray-600 mb-2.5">
+                  <Tag className="w-3.5 h-3.5" /> Found via
+                  <span className="text-rose-500">*</span>
+                </label>
+                <div className="flex flex-wrap gap-2">
+                  {LEAD_ORIGINS.map((o) => {
+                    const active = form.origin === o;
+                    return (
+                      <button
+                        key={o}
+                        type="button"
+                        aria-pressed={active}
+                        onClick={() => update("origin", o)}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all border ${
+                          active
+                            ? "bg-gray-900 text-white border-gray-900 shadow-sm"
+                            : "bg-white text-gray-600 border-gray-200 hover:border-gray-400 hover:bg-gray-50"
+                        }`}
+                      >
+                        {LEAD_ORIGIN_LABEL[o]}
+                      </button>
+                    );
+                  })}
+                </div>
+                {errors.origin && <p className="mt-1.5 text-xs text-rose-600">{errors.origin}</p>}
               </div>
 
               {/* Language */}

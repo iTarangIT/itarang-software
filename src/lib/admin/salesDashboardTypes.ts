@@ -125,8 +125,10 @@ export interface SalesTotals {
  * what did match — not company revenue, which lives on the CEO page.
  */
 export interface SalesOutcome {
-    /** Quote versions (quote_issue / quote_revision) created in the range, by their creator. */
+    /** Leads whose FIRST quote was created in the range, by its creator (ID 59). */
     quotes_issued: number;
+    /** Later quote versions (revisions) created in the range, by their creator. */
+    quote_revisions: number;
     /** Non-void invoices dated in the range, linked to a lead on GSTIN. ₹. */
     revenue: number;
     /** Batteries allocated to a dealer account in the range (inventory.allocated_to_dealer_at). */

@@ -1982,8 +1982,8 @@ export async function notifyQuotationDealerDecision(p: {
 
   const message =
     p.decision === "approved"
-      ? `${dealer} APPROVED quotation${ref}${money} ${channel}. Take it forward in the CRM — ` +
-        `nothing has been moved automatically.`
+      ? `${dealer} APPROVED quotation${ref}${money} ${channel}. The lead is now Commercials ` +
+        `finalised — open it and Mark Won.`
       : `${dealer} DECLINED quotation${ref}${money} ${channel}.` +
         (p.note ? ` They said: "${p.note}"` : "") +
         ` Follow up or raise a revision.`;

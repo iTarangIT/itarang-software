@@ -1,6 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import { toast } from "sonner";
+import { useQueryClient } from "@tanstack/react-query";
 import { IntentReviewCard } from "@/components/leads/intent-review/IntentReviewCard";
 import {
     ChevronDown,
@@ -20,6 +22,7 @@ import {
 } from "./CommercialsDetail";
 import { QuotationSendDialog } from "./QuotationSendDialog";
 import { businessTypeLabel, businessTypeTone } from "@/lib/leads/businessType";
+import { doorLabel, originLabel, SOURCE_LABELS } from "@/lib/leads/leadSourceVocab";
 
 type GroupKey = "snapshot" | "business" | "commercials" | "workflow" | "attribution" | "ownership";
 
@@ -51,6 +54,34 @@ export function LeadDetailRightPane({ bundle }: Props) {
 
     const lead = bundle.lead;
     const cc = bundle.current_commercials;
+    const queryClient = useQueryClient();
+
+    // ID 78: Withdraw quote — the reason is required; the lead goes back to
+    // Under discussion and the dealer's link closes.
+    const withdraw = async (commercialId: string) => {
+        const reason = window.prompt("Why is this quote being withdrawn? (at least 5 characters)")?.trim();
+        if (!reason) return;
+        if (reason.length < 5) {
+            toast.error("Give a reason of at least 5 characters.");
+            return;
+        }
+        try {
+            const res = await fetch(
+                `/api/inside-sales/lead/${encodeURIComponent(lead.id)}/commercials/${encodeURIComponent(commercialId)}/withdraw`,
+                {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ reason }),
+                },
+            );
+            const json = await res.json();
+            if (!res.ok) throw new Error(json?.error?.message ?? "Could not withdraw the quote");
+            toast.success("Quote withdrawn.");
+            await queryClient.invalidateQueries();
+        } catch (err) {
+            toast.error((err as Error).message);
+        }
+    };
 
     return (
         <div className="overflow-y-auto bg-gray-50/30">
@@ -60,6 +91,35 @@ export function LeadDetailRightPane({ bundle }: Props) {
                     stayed invisible to the rep who has to act on it. Renders
                     nothing when the AI has never called this lead. */}
                 <IntentReviewCard leadId={lead.id} />
+
+                {/* ID 84: onboarding milestones — stalls show before they become drop-outs. */}
+                {bundle.onboarding && (
+                    <div
+                        className={`rounded-lg border px-4 py-3 text-xs ${
+                            bundle.onboarding.stalled ? "border-amber-200 bg-amber-50" : "border-gray-100 bg-white"
+                        }`}
+                    >
+                        <p className="text-sm font-semibold text-gray-800">
+                            Dealer onboarding
+                            {bundle.onboarding.stalled && (
+                                <span className="ml-2 rounded bg-amber-200 px-1.5 py-0.5 text-[10px] font-bold text-amber-900">
+                                    STALLED
+                                </span>
+                            )}
+                        </p>
+                        <div className="mt-2 grid grid-cols-2 gap-2 text-gray-600">
+                            <span>Status: {bundle.onboarding.onboarding_status.replace(/_/g, " ")}</span>
+                            <span>
+                                Docs submitted:{" "}
+                                {bundle.onboarding.docs_submitted_at ? fmtDate(bundle.onboarding.docs_submitted_at) : "not yet"}
+                            </span>
+                            <span>Agreement: {(bundle.onboarding.agreement_status ?? "not started").replace(/_/g, " ")}</span>
+                            <span>
+                                Approved: {bundle.onboarding.approved_at ? fmtDate(bundle.onboarding.approved_at) : "not yet"}
+                            </span>
+                        </div>
+                    </div>
+                )}
 
                 {GROUPS.map((g) => {
                     const Icon = g.icon;
@@ -94,6 +154,9 @@ export function LeadDetailRightPane({ bundle }: Props) {
                                                     </span>
                                                 }
                                             />
+                                            {/* ID 81 — where the lead came from; locked at creation. */}
+                                            <Field label={SOURCE_LABELS.door} value={doorLabel(lead.source_door) ?? "Not recorded"} />
+                                            <Field label={SOURCE_LABELS.origin} value={originLabel(lead.source_origin) ?? "Not recorded"} />
                                             <Field label="Phone" value={lead.phone} />
                                             <Field label="Language" value={lead.language} />
                                             <Field label="City" value={lead.city} />
@@ -139,6 +202,7 @@ export function LeadDetailRightPane({ bundle }: Props) {
                                                     <CommercialsDetail
                                                         cc={cc}
                                                         onSend={() => setSendFor(cc.commercial_id)}
+                                                        onWithdraw={() => void withdraw(cc.commercial_id)}
                                                     />
                                                     <CommercialsVersionHistory
                                                         history={bundle.commercials_history}

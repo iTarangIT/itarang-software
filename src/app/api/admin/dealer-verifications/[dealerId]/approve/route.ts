@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { convertLeadOnOnboardingApproval } from "@/lib/leads/convertOnApproval";
 import { db } from "@/lib/db";
 import {
   dealerOnboardingApplications,
@@ -17,6 +18,7 @@ import { getDealerNotificationRecipients } from "@/lib/email/dealer-notification
 import { downloadPdfBuffer } from "@/lib/email/downloadPdfBuffer";
 import { ensureDealerAuditTrailUrl } from "@/lib/digio/ensure-audit-trail";
 import { ensureDealerSignedAgreementUrl } from "@/lib/digio/ensure-signed-agreement";
+import { refreshDealerAgreementFromDigio } from "@/lib/agreement/refresh-dealer-agreement";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { requireSalesHead } from "@/lib/auth/requireSalesHead";
 import { classifyGstinConflict } from "@/lib/dealer/duplicate-check";
@@ -172,7 +174,7 @@ export async function POST(req: NextRequest, context: RouteContext) {
       .from(dealerOnboardingApplications)
       .where(eq(dealerOnboardingApplications.id, dealerId));
 
-    const application = existing[0];
+    let application = existing[0];
 
     if (!application) {
       return NextResponse.json(
@@ -229,12 +231,34 @@ export async function POST(req: NextRequest, context: RouteContext) {
       !devBypassAgreement &&
       !usesManualAgreement(application.dealer_type);
 
+    const agreementReady = (app: typeof application) =>
+      app.agreement_status === "completed" &&
+      app.review_status === "agreement_completed" &&
+      Boolean(app.provider_document_id);
+
+    // Approve never needs a prior "Refresh Status" click. When the stored
+    // agreement state is behind — signers finished but no refresh has run, or
+    // an older record whose review_status never moved to agreement_completed —
+    // ask Digio now through the same refresh the button uses, then re-check.
+    if (agreementGateApplies && !agreementReady(application) && application.provider_document_id) {
+      const refreshed = await refreshDealerAgreementFromDigio(application, { source: "manual" }).catch(
+        (err) => {
+          console.warn("APPROVE — agreement refresh before gate failed:", err?.message || err);
+          return null;
+        },
+      );
+      if (refreshed && !refreshed.ok) {
+        console.warn("APPROVE — agreement refresh before gate:", refreshed.message);
+      }
+      const [reloaded] = await db
+        .select()
+        .from(dealerOnboardingApplications)
+        .where(eq(dealerOnboardingApplications.id, dealerId));
+      if (reloaded) application = reloaded;
+    }
+
     if (agreementGateApplies) {
-      if (
-        application.agreement_status !== "completed" ||
-        application.review_status !== "agreement_completed" ||
-        !application.provider_document_id
-      ) {
+      if (!agreementReady(application)) {
         return NextResponse.json(
           {
             success: false,
@@ -353,7 +377,7 @@ export async function POST(req: NextRequest, context: RouteContext) {
     const isManualAgreement = usesManualAgreement(application.dealer_type);
 
     if ((application.finance_enabled || isManualAgreement) && !devBypassAgreement) {
-      const [signedUrl, auditUrl] = await Promise.all([
+      let [signedUrl, auditUrl] = await Promise.all([
         ensureDealerSignedAgreementUrl(application).catch((err) => {
           console.error("ENSURE SIGNED AGREEMENT ERROR:", err);
           return null;
@@ -367,54 +391,68 @@ export async function POST(req: NextRequest, context: RouteContext) {
             }),
       ]);
 
-      const [signedBuf, auditBuf] = await Promise.all([
+      let [signedBuf, auditBuf] = await Promise.all([
         downloadPdfBuffer(signedUrl),
         downloadPdfBuffer(auditUrl),
       ]);
 
-      // The SIGNED agreement is the essential artifact — it proves signing is
-      // complete and is attached to the welcome email/WhatsApp. Block approval
-      // only if we can't obtain it.
-      //
-      // The AUDIT TRAIL is a supplementary compliance doc fetched live from
-      // Digio's download_audit_trail endpoint, which is flaky in practice
-      // (intermittent HTTP 500 "System error has occurred", even when the doc
-      // status is "completed"). A missing audit trail must NOT block dealer
-      // activation — it's attached when available and silently omitted
-      // otherwise (downloadPdfBuffer already returns null gracefully).
-      //
-      // A MANUAL-mode dealer is exempt: there may legitimately be no signed
-      // copy yet, and the decision is the admin's to make (the review page
-      // warns). Their welcome email simply goes out without the attachment
-      // rather than approval failing.
-      if (!signedBuf && !isManualAgreement) {
-        console.warn("APPROVE BLOCKED — signed agreement PDF not ready", {
-          applicationId: application.id,
-          hasSignedUrl: Boolean(signedUrl),
-          hasSignedBuf: Boolean(signedBuf),
-        });
+      // Approve is the moment the PDFs are needed (welcome email to the dealer,
+      // copy to the Sales Heads) — nobody has to download them first. Right
+      // after the last signature Digio can take a few seconds to hand over the
+      // signed PDF, and its audit-trail endpoint is flaky, so a missing one
+      // gets ONE more try after a short wait before approval goes ahead
+      // without it (ID 56).
+      if (!isManualAgreement && (!signedBuf || !auditBuf)) {
+        await new Promise((r) => setTimeout(r, 3_000));
+        const [retrySigned, retryAudit] = await Promise.all([
+          signedBuf
+            ? Promise.resolve(null)
+            : ensureDealerSignedAgreementUrl(application)
+                .catch(() => null)
+                .then(async (url) => ({ url, buf: await downloadPdfBuffer(url) })),
+          auditBuf
+            ? Promise.resolve(null)
+            : ensureDealerAuditTrailUrl(application)
+                .catch(() => null)
+                .then(async (url) => ({ url, buf: await downloadPdfBuffer(url) })),
+        ]);
+        if (retrySigned?.buf) {
+          signedBuf = retrySigned.buf;
+          signedUrl = retrySigned.url;
+        }
+        if (retryAudit?.buf) {
+          auditBuf = retryAudit.buf;
+          auditUrl = retryAudit.url;
+        }
+      }
 
+      // The welcome email must carry BOTH the signed agreement and the audit
+      // trail (decided 29 Sep 2026, superseding ID 56's "approve without the
+      // PDF"). They are fetched here from Digio — nobody has to click Download
+      // first — and if either still cannot be fetched after the retries above,
+      // approval stops BEFORE any account is created, so the Sales Head simply
+      // clicks Approve again once Digio responds. A manual-mode (paper) dealer
+      // has no Digio audit trail and keeps the old warn-only behaviour.
+      if (!isManualAgreement && (!signedBuf || !auditBuf)) {
+        const missing = [
+          !signedBuf ? "signed agreement" : null,
+          !auditBuf ? "audit trail" : null,
+        ].filter(Boolean);
+        console.warn("APPROVE BLOCKED — could not fetch from Digio:", {
+          applicationId: application.id,
+          missing,
+        });
         return NextResponse.json(
           {
             success: false,
             message:
-              "Signed agreement is not ready yet — please retry once signing is fully complete.",
+              `Could not get the ${missing.join(" and ")} from Digio, so the dealer was NOT approved (the welcome email must carry both). Please try Approve again in a minute. If it keeps failing, Digio is refusing this server — check the Digio credentials / whitelisted IP.`,
             details: {
               signedAgreementAvailable: Boolean(signedBuf),
               auditTrailAvailable: Boolean(auditBuf),
             },
           },
           { status: 409 }
-        );
-      }
-
-      if (!auditBuf) {
-        console.warn(
-          "APPROVE — audit trail PDF unavailable; proceeding without it",
-          {
-            applicationId: application.id,
-            hasAuditUrl: Boolean(auditUrl),
-          }
         );
       }
 
@@ -789,13 +827,36 @@ export async function POST(req: NextRequest, context: RouteContext) {
       throw txError;
     });
 
+    // ID 74: the lead this onboarding came from becomes Converted now — the
+    // rep's Mark Won only set Won. Post-commit and best-effort.
+    await convertLeadOnOnboardingApproval(dealerId, auth.user.id);
+
     let emailSent = false;
     let emailError: string | null = null;
 
     // Dealer gets the welcome email with credentials, not this one — includeDealer: false.
-    const notificationRecipients = await getDealerNotificationRecipients(application, {
+    const signerRecipients = await getDealerNotificationRecipients(application, {
       includeDealer: false,
     });
+    // The Sales Head who approved, and every active Sales Head, get the
+    // internal copy with the signed agreement + audit trail attached. Never the
+    // dealer welcome email itself: that one carries the temporary password.
+    const salesHeadEmails = await db
+      .select({ email: users.email })
+      .from(users)
+      .where(and(eq(users.role, "sales_head"), eq(users.is_active, true)))
+      .then((rows) => rows.map((r) => r.email))
+      .catch((err) => {
+        console.warn("APPROVAL: could not list Sales Head emails:", err?.message || err);
+        return [] as Array<string | null>;
+      });
+    const notificationRecipients = Array.from(
+      new Set(
+        [...signerRecipients, auth.user.email, ...salesHeadEmails]
+          .map((e) => (typeof e === "string" ? e.trim().toLowerCase() : ""))
+          .filter(Boolean),
+      ),
+    );
 
     console.log("APPROVE MAIL DEBUG:", {
       applicationId: application.id,
@@ -831,6 +892,8 @@ export async function POST(req: NextRequest, context: RouteContext) {
           dealerName:
             application.owner_name || application.company_name || "Dealer",
           approvedAt: new Date().toISOString(),
+          signedAgreementPdf,
+          auditTrailPdf,
         });
         internalNotificationResult = {
           success: true,
