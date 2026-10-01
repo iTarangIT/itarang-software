@@ -266,6 +266,9 @@ export const DROPOUT_WHERE = sql`
         < NOW() - INTERVAL '21 days'
 `;
 
+// ID 74 — when the lead closed, else when it was marked Won (E-314).
+const DROPOUT_WON_OR_CLOSED_AT = sql`COALESCE(dl.closed_at, (to_jsonb(dl) ->> 'won_at')::timestamptz)`;
+
 export async function countOnboardingDropouts(): Promise<number> {
     const rows = await db.execute<{ c: string }>(sql`
         SELECT COUNT(*)::text AS c
@@ -294,7 +297,10 @@ export async function fetchOnboardingDropouts({
             dl.phone,
             dl.city,
             dl.state,
-            dl.closed_at,
+            -- ID 74: a Won lead (still onboarding) has no closed_at; its date is
+            -- when it was marked Won (E-314, read through to_jsonb). Aliased
+            -- closed_at so the row type and the table are unchanged.
+            ${DROPOUT_WON_OR_CLOSED_AT} AS closed_at,
             oa.id AS onboarding_application_id,
             oa.onboarding_status,
             COALESCE(oa.last_action_at, oa.updated_at) AS onboarding_last_action_at,
@@ -310,7 +316,7 @@ export async function fetchOnboardingDropouts({
             ON oa.id = dl.dealer_onboarding_application_id
         LEFT JOIN users ow ON ow.id::text = dl.current_owner_id
         WHERE ${DROPOUT_WHERE}${search}
-        ORDER BY dl.closed_at ASC NULLS LAST
+        ORDER BY ${DROPOUT_WON_OR_CLOSED_AT} ASC NULLS LAST
         LIMIT ${limit} OFFSET ${offset}
     `);
 

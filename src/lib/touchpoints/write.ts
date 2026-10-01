@@ -32,6 +32,9 @@ import {
 import type { LeadStatus, LostReason } from "@/lib/lifecycle/transitions";
 import { isTerminal } from "@/lib/lifecycle/transitions";
 import { checkStatusMove, type StatusEvent } from "@/lib/lifecycle/statusRules";
+import type { Interest } from "@/lib/leads/autoProgress";
+import { planOutcome, type TouchpointOutcome } from "@/lib/leads/outcomeRule";
+import { setInterestLevel } from "@/lib/leads/interestLevel";
 
 /**
  * A status move the S3 rules refuse (statusRules.ts). Carries an HTTP status so
@@ -103,6 +106,23 @@ export type WriteTouchpointInput = {
   dispositionSource?: string | null;
   statusChange?: StatusChange;
   /**
+   * ID 114 — what the call or visit came to. When set, the writer derives the
+   * status move and the temperature from it (outcomeRule.ts) against the lead
+   * row it has locked, so every entry point applies the same rule. An explicit
+   * `statusChange` still wins; without `outcome` (and `interest`) nothing is
+   * derived and the write is exactly what it was before.
+   */
+  outcome?: TouchpointOutcome;
+  /**
+   * Temperature to save with this touchpoint, in the same transaction:
+   * a level = the rep stated it; null = leave it as it is; undefined (absent)
+   * = derive it from `outcome`, where the owned-lead rule allows (P0-10).
+   * Written through setInterestLevel, so it is audited like a manual change.
+   */
+  interest?: Interest | null;
+  /** Audit reason for the temperature change. */
+  interestReason?: string | null;
+  /**
    * E-295 — the ownership hop this touchpoint records, for Lead Tracking.
    *
    * `fromOwnerId` is the dealer_leads.current_owner_id BEFORE the write (null =
@@ -140,22 +160,74 @@ export type WriteTouchpointResult = {
 // as before — every existing caller is unaffected.
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
+/** dealer_leads as read FOR UPDATE at the top of the write. */
+type LockedLead = {
+  lead_status: string | null;
+  current_owner_id: string | null;
+  interest_level: string | null;
+  pre_transfer_status: string | null;
+  interest_changed_at: string | null;
+} & Record<string, unknown>;
+
 export async function writeTouchpoint(
   input: WriteTouchpointInput,
   opts?: { tx?: Tx },
 ): Promise<WriteTouchpointResult> {
   const performedAt = input.performedAt ?? new Date();
-
-  // E-300 — the idle clock moves only for work (isWorkedTouchpoint), and only
-  // forward: a visit logged today for last week must not rewind a call made
-  // yesterday. GREATEST ignores the NULL of a never-worked lead.
-  const workedStamp = input.countsAsWork || isWorkedTouchpoint(input.touchpointType, !!input.statusChange)
-    ? {
-        last_worked_at: sql`GREATEST(${dealerLeads.last_worked_at}, ${performedAt.toISOString()}::timestamptz)`,
-      }
-    : {};
+  const wantsOutcome = input.outcome !== undefined || input.interest !== undefined;
 
   const run = async (tx: Tx): Promise<WriteTouchpointResult> => {
+    // 0. The lead as it is NOW, locked for this transaction. The S3 guard
+    //    (ID 115) checks a status move against this row — never the caller's
+    //    possibly stale `from` — and the outcome rule (ID 114) derives from it.
+    //    Read only when there is a move to check or an outcome to apply; the
+    //    E-301 column goes through to_jsonb so a database without it reads null.
+    let statusChange = input.statusChange;
+    let interestTo: Interest | null = null;
+    let current: LockedLead | undefined;
+    if (statusChange || wantsOutcome) {
+      const rows = await tx.execute<LockedLead>(sql`
+        SELECT lead_status, current_owner_id, interest_level, pre_transfer_status,
+               ${wantsOutcome ? sql`to_jsonb(dealer_leads) ->> 'interest_changed_at'` : sql`NULL::text`} AS interest_changed_at
+          FROM dealer_leads WHERE id = ${input.dealerLeadId}
+         FOR UPDATE
+      `);
+      current = (rows as unknown as LockedLead[])[0];
+    }
+    if (current && wantsOutcome) {
+      const plan = planOutcome({
+        outcome: input.outcome,
+        hasExplicitStatus: !!statusChange,
+        interest: input.interest,
+        actorId: input.performedBy,
+        performedAt,
+        lead: {
+          status: current.lead_status,
+          interest: current.interest_level,
+          preTransferStatus: current.pre_transfer_status,
+          ownerId: current.current_owner_id,
+          interestChangedAt: current.interest_changed_at ? new Date(current.interest_changed_at) : null,
+        },
+      });
+      if (plan.statusTo) {
+        statusChange = {
+          from: current.lead_status as LeadStatus | null,
+          to: plan.statusTo,
+          event: plan.event,
+        };
+      }
+      interestTo = plan.interestTo;
+    }
+
+    // E-300 — the idle clock moves only for work (isWorkedTouchpoint), and only
+    // forward: a visit logged today for last week must not rewind a call made
+    // yesterday. GREATEST ignores the NULL of a never-worked lead.
+    const workedStamp = input.countsAsWork || isWorkedTouchpoint(input.touchpointType, !!statusChange)
+      ? {
+          last_worked_at: sql`GREATEST(${dealerLeads.last_worked_at}, ${performedAt.toISOString()}::timestamptz)`,
+        }
+      : {};
+
     // 1. Touchpoint row — single source of audit truth.
     const [touchpoint] = await tx
       .insert(leadTouchpoints)
@@ -225,20 +297,10 @@ export async function writeTouchpoint(
     // 2. Status change — both audit row and the dealer_leads update happen
     //    in the same transaction so we can never have an updated status
     //    without a history row.
-    if (input.statusChange) {
-      const sc = input.statusChange;
-      // S3 guard (ID 115): the lead's status as it is now, locked for this
-      // transaction, is what the move is checked against — never the caller's
-      // possibly stale `from`.
-      const current = await tx.execute<{
-        lead_status: string | null;
-        current_owner_id: string | null;
-      }>(sql`
-        SELECT lead_status, current_owner_id
-          FROM dealer_leads WHERE id = ${input.dealerLeadId}
-         FOR UPDATE
-      `);
-      const fromStatus = current[0]?.lead_status ?? null;
+    if (statusChange) {
+      const sc = statusChange;
+      // S3 guard (ID 115), against the row locked in step 0.
+      const fromStatus = current?.lead_status ?? null;
       const verdict = checkStatusMove({
         from: fromStatus,
         to: sc.to,
@@ -281,12 +343,26 @@ export async function writeTouchpoint(
       // ID 117: credit goes to the OWNER who closed it, not whoever pressed
       // the button (an admin marking a rep's lead). The actor is the fallback
       // for an unowned lead.
-      const closer = current[0]?.current_owner_id ?? input.performedBy;
+      const closer = current?.current_owner_id ?? input.performedBy;
       if (sc.to === "Won") {
         // ID 74: Mark Won records the closing owner; Converted (onboarding
         // approved) later keeps it, so a reassignment in between never moves
         // the credit.
-        if (closer) updatePayload.closing_owner_id = closer;
+        if (fromStatus === "Converted") {
+          // A correction back from Converted (onboarding not approved after
+          // all): the lead is open again, and whoever closed it keeps the
+          // credit — not whoever happens to own it today.
+          updatePayload.closed_at = null;
+          if (closer) {
+            updatePayload.closing_owner_id = sql`COALESCE(${dealerLeads.closing_owner_id}, ${closer})`;
+          }
+        } else {
+          if (fromStatus === "Lost") {
+            updatePayload.closed_at = null;
+            if (sc.toLostReason === undefined) updatePayload.lost_reason = null;
+          }
+          if (closer) updatePayload.closing_owner_id = closer;
+        }
         if (sc.closingRole) updatePayload.closing_role = sc.closingRole;
       } else if (sc.to === "Converted") {
         updatePayload.closed_at = performedAt;
@@ -335,6 +411,20 @@ export async function writeTouchpoint(
           updated_at: performedAt,
         })
         .where(eq(dealerLeads.id, input.dealerLeadId));
+    }
+
+    // 4. Temperature (ID 114) — same transaction, audited like a manual
+    //    change (interest_level_overrides + the E-304 history trigger).
+    if (interestTo && input.performedBy) {
+      await setInterestLevel(
+        {
+          leadId: input.dealerLeadId,
+          actorId: input.performedBy,
+          level: interestTo,
+          reason: input.interestReason ?? "Auto: from the logged outcome",
+        },
+        { tx },
+      );
     }
 
     return {

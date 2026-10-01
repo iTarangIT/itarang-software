@@ -72,7 +72,7 @@ File: `src/app/api/admin/dealer-verifications/[dealerId]/initiate-agreement/rout
    - Dealer signer + iTarang signer 1 are **required** (`:325-338`)
    - iTarang signer 2 is optional, but if any field was started all fields must be valid (`:340-354`)
 8. **Compute `signingOrder`** — `:362-367`. Defaults: `["dealer", "itarang_1"]` or `["dealer", "itarang_1", "itarang_2"]`.
-9. **Build `createAgreementPayload`** — `:369-420`. Contains `company`, `ownership`, and `agreement` blocks. `sequential: true`, `expireInDays: 5`.
+9. **Build `createAgreementPayload`** — `:369-420`. Contains `company`, `ownership`, and `agreement` blocks. `sequential: true`, `expireInDays: DEALER_AGREEMENT_EXPIRE_IN_DAYS` (90 days, Digio's maximum — `src/lib/agreement/constants.ts`; was 5).
 10. **Invoke Digio handler in-process** — `:434-441`. The route imports `POST as createDigioAgreement` from the Digio integration route and calls it with a synthetic `NextRequest`. Rationale comment at `:427-433`: an earlier `fetch("${origin}/...")` failed on Hostinger because the server couldn't dial its own public URL; the in-process call preserves the real downstream error and keeps the hop on the same Node process.
 11. **Validate response** — `:460-469`. Forwards Digio's message + raw body on failure.
 12. **Extract response fields** — helpers at `:115-203`:
@@ -122,7 +122,7 @@ File: `src/app/api/integrations/digio/create-agreement/route.ts`
 - **HTML template** — `buildTarangDealerAgreementHtml()` at `:241`, defined in `src/lib/agreement/dealer-agreement-template.ts`. Escapes input via a local `esc()` helper.
 - **PDF render** — `renderPdfFromHtml()` at `:98-120`. Launches Puppeteer, sets page HTML, exports A4 PDF with 14mm margins.
 - **Signer validation + duplicate guard** — `:55-82`. Rejects duplicate identifiers (returns 400).
-- **Digio upload** — POST `${DIGIO_BASE_URL}/v2/client/document/uploadpdf` at `:324`. Body includes base64 PDF, signers array, `sequential: true`, 5-day expiry.
+- **Digio upload** — POST `${DIGIO_BASE_URL}/v2/client/document/uploadpdf` at `:324`. Body includes base64 PDF, signers array, `sequential: true`, and the caller's expiry clamped to 1–90 days (90 today; was 5).
 - **Env vars** — `DIGIO_CLIENT_ID`, `DIGIO_CLIENT_SECRET`, `DIGIO_BASE_URL`. Default base URL `https://ext.digio.in:444` at `:147`.
 - **Response normalisation** — `:367-402`. Extracts `requestId`, `documentId`, per-signer `signing_parties[].authentication_url`, overall status. Normalises to `completed` / `partially_signed` / `sent_for_signature`.
 - **Failure modes**:

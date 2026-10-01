@@ -142,7 +142,10 @@ export function checkStatusMove(input: {
             return { ok: true };
         }
         case "reactivation":
-            if (open) return { ok: false, reason: "Only a closed lead can be reactivated." };
+            // Won is open, but an onboarding that fell through re-engages the
+            // dealer from the start (drop-out "re-engage", ID 84) — the one
+            // open status a reactivation may leave.
+            if (open && from !== "Won") return { ok: false, reason: "Only a closed or Won lead can be reactivated." };
             if (!REOPEN_TARGETS.has(to)) return { ok: false, reason: "A reactivated lead restarts at New or Assigned." };
             return { ok: true };
         case "dropout_lost":

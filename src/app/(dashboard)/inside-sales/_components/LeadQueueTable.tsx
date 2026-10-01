@@ -18,7 +18,8 @@ import { OwnerIndicator } from "./OwnerIndicator";
 import { NeodoveTag } from "@/components/leads/neodove-tag";
 import { SentByStamp } from "@/components/leads/sent-by-stamp";
 import { staleSeverity, workingDaysSince } from "@/lib/inside-sales/staleness";
-import type { QueueRow, QueueTab } from "@/lib/inside-sales/types";
+import { wonWithoutQuote, type QueueRow, type QueueTab } from "@/lib/inside-sales/types";
+import { WonWithoutQuoteChip } from "@/components/leads/won-without-quote-chip";
 
 type Props = {
     tab: QueueTab;
@@ -200,6 +201,7 @@ export function LeadQueueTable({
                                             {/* Renders nothing unless the lead is actually with the
                                                 calling team — see NeodoveTag. */}
                                             <NeodoveTag syncStatus={row.neodove_sync_status} />
+                                            {wonWithoutQuote(row) && <WonWithoutQuoteChip />}
                                         </div>
                                         {row.shop_name && row.dealer_name && (
                                             <div className="text-[11px] text-gray-500 mt-0.5">{row.shop_name}</div>

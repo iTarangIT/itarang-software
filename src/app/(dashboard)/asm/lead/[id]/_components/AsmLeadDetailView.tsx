@@ -5,7 +5,7 @@ import { useCallback, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, AlertTriangle, ArrowLeft } from "lucide-react";
 import Link from "next/link";
-import type { LeadDetailBundle } from "@/lib/inside-sales/types";
+import { hasApprovedQuote, type LeadDetailBundle } from "@/lib/inside-sales/types";
 import { LeadDetailHeader } from "@/app/(dashboard)/inside-sales/lead/[id]/_components/LeadDetailHeader";
 import { LeadActivityPanes } from "@/app/(dashboard)/inside-sales/lead/[id]/_components/LeadActivityPanes";
 import { LeadDetailRightPane } from "@/app/(dashboard)/inside-sales/lead/[id]/_components/LeadDetailRightPane";
@@ -211,6 +211,7 @@ export function AsmLeadDetailView({ leadId, viewerId, viewerRole }: Props) {
                 onClose={() => setActiveModal(null)}
                 leadId={leadId}
                 onSuccess={onActionSuccess}
+                hasApprovedQuote={hasApprovedQuote(bundle.commercials_history)}
             />
             <ReassignLeadModal
                 open={activeModal === "reassign"}

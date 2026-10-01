@@ -183,15 +183,26 @@ async function main() {
         needCore();
         const d = await salesDailyDigest.collect(YESTERDAY);
         assert(d.ok, d.error ?? "collect failed");
+        // Daily Sales email v1.1 (Blocks A–F) replaced the per-period tables this
+        // check was written against; the same three rules, on the new blocks.
         const t = d.figures.tables ?? [];
-        const y = t.find((x) => x.key === "yesterday")!;
-        assert(y.columns.includes("New Hot") && y.columns.includes("Hot → Converted"), "movement columns missing");
-        assert(!y.columns.includes("Hot") && !y.columns.includes("Warm"), "snapshot H/W/C still in period rows");
-        assert(!y.columns.some((c) => /tomorrow/i.test(c)), "'tomorrow' column still in period rows");
-        assert(y.columns.includes("Revenue ₹"), "outcome columns missing");
-        assert(t.some((x) => x.key === "pipeline"), "pipeline table missing");
-        for (const row of y.rows) assert(row.length === y.columns.length, "row width ≠ columns");
-        return `${t.length} tables`;
+        const table = (key: string) => {
+            const x = t.find((y) => y.key === key);
+            assert(!!x, `${key} table missing`);
+            return x!;
+        };
+        const a = table("block_a");
+        const labels = a.rows.map((r) => String(r[0]));
+        assert(labels.includes("Revenue") && labels.includes("Quotes created"), "outcome rows missing from Block A");
+        for (const key of ["block_b", "block_c"]) {
+            const p = table(key);
+            assert(!p.columns.some((c) => /^(hot|warm|cold)$/i.test(c)), `snapshot H/W/C in ${key} period columns`);
+            assert(!p.columns.some((c) => /tomorrow/i.test(c)), `'tomorrow' column in ${key}`);
+        }
+        table("block_d"); // the H/W/C position, once, as of the send
+        table("block_e"); // today and tomorrow, once
+        for (const x of t) for (const row of x.rows) assert(row.length === x.columns.length, `${x.key}: row width ≠ columns`);
+        return `${t.length} tables, Block A ${a.rows.length} rows`;
     });
 
     await check("R-10 Sales dashboard — team outcome = sum of reps (quotes)", async () => {
@@ -215,11 +226,28 @@ async function main() {
         needCore();
         const d = await buybackDailyDigest.collect(YESTERDAY);
         assert(d.ok, d.error ?? "collect failed");
-        const y = (d.figures.tables ?? []).find((x) => x.key === "yesterday")!;
-        assert(y.columns.includes("Lines missing weight"), "missing-weight column absent");
-        assert(!y.columns.includes("Hot"), "Hot column still present");
-        assert(!y.columns.some((c) => /tomorrow/i.test(c)), "'tomorrow' column still present");
-        assert((d.figures.tables ?? []).some((x) => x.key === "pipeline"), "pipeline table missing");
+        // Revised Format B (sheet 4, ID 10): blocks A–D.
+        const tables = d.figures.tables ?? [];
+        const table = (key: string) => {
+            const t = tables.find((x) => x.key === key);
+            assert(!!t, `${key} table missing`);
+            return t!;
+        };
+        const b = table("per_spoc");
+        assert(b.columns.includes("Lines missing weight"), "missing-weight column absent");
+        assert(!b.columns.includes("Hot"), "Hot column still present");
+        assert(!b.columns.some((c) => /tomorrow/i.test(c)), "'tomorrow' column still present");
+        assert(b.columns.includes("₹ paid") && b.columns.includes("Avg ₹ / kg"), "money columns absent");
+        const a = table("company");
+        assert(a.rows.length === 9, `Block A has ${a.rows.length} rows, expected 9`);
+        assert(a.rows.every((r) => r.length === a.columns.length), "Block A row width");
+        assert(b.rows.every((r) => r.length === b.columns.length), "Block B row width");
+        const c = table("pipeline");
+        assert(c.columns.length === 8 && c.rows.every((r) => r.length === 8), "Block C shape");
+        const p = table("today");
+        assert(p.columns.includes("Expected kg today"), "expected-kg column absent");
+        assert((d.figures.headline ?? []).length === 1, "headline missing");
+        return `A ${a.rows.length} rows, B ${b.rows.length}, C ${c.rows.length}, D ${p.rows.length}`;
     });
 
     await check("R-15 needs attention — list sorted oldest first, weekly mail = summary", async () => {

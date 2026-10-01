@@ -34,6 +34,7 @@ import { summarizeNeedsAttention } from "@/lib/leads/needsAttention";
 import { listDealerHealth } from "@/lib/dealers/accountHealth";
 import type { AccountBucket } from "@/lib/dealers/accountHealthRules";
 import { businessTypeLabel } from "@/lib/leads/businessType";
+import { engagedCall, humanCall } from "@/lib/reports/metricDefinitions";
 
 export type Compare = { now: number; prev: number | null };
 
@@ -333,9 +334,13 @@ async function peopleTile(from: string, toIncl: string) {
         buildSalesDashboard({ from, to: toIncl, granularity: "month" }),
         summarizeNeedsAttention({ minDays: 7 }),
         rows(sql`
+            -- ID 59: human calls counted once, engaged = connected and >= 30 s
+            -- (metricDefinitions.ts) — the same call the dashboard and the
+            -- daily email count, not the is_engaged flag (any connected call).
             SELECT t.performed_by AS u,
-                   COUNT(*) AS calls,
-                   COUNT(*) FILTER (WHERE t.is_engaged IS TRUE) AS engaged
+                   COUNT(*) FILTER (WHERE ${humanCall()}) AS calls,
+                   COUNT(*) FILTER (WHERE ${engagedCall()}) AS engaged,
+                   COUNT(*) FILTER (WHERE t.call_duration_sec IS NOT NULL) AS timed
               FROM lead_touchpoints t
              WHERE t.touchpoint_type = 'inside_sales_call' AND t.performed_by IS NOT NULL
                AND (t.performed_at AT TIME ZONE 'Asia/Kolkata')::date BETWEEN ${from}::date AND ${toIncl}::date
@@ -354,7 +359,15 @@ async function peopleTile(from: string, toIncl: string) {
         }),
     ]);
     const idleBy = new Map(idle.map((h) => [h.holder_id, h.idle]));
-    const engBy = new Map(engaged.map((e) => [String(e.u), n(e.calls) > 0 ? Math.round((n(e.engaged) / n(e.calls)) * 100) : null]));
+    // No call in the window carries a duration (NeoDove sends none today) →
+    // the 30-second rule cannot be measured: show "—", never a column of 0%.
+    const anyTimed = engaged.some((e) => n(e.timed) > 0);
+    const engBy = new Map(
+        engaged.map((e) => [
+            String(e.u),
+            anyTimed && n(e.calls) > 0 ? Math.round((n(e.engaged) / n(e.calls)) * 100) : null,
+        ]),
+    );
     const list = (dash.per_spoc ?? [])
         .filter((b) => b.role !== null)
         .map((b) => ({

@@ -39,6 +39,12 @@ describe("checkStatusMove", () => {
         expect(checkStatusMove({ from: "Under_Discussion", to: "New_Unassigned", event: "reactivation" }).ok).toBe(false);
     });
 
+    it("a Won lead whose onboarding fell through re-engages from the start (ID 84)", () => {
+        expect(checkStatusMove({ from: "Won", to: "Assigned_Not_Contacted", event: "reactivation" }).ok).toBe(true);
+        expect(checkStatusMove({ from: "Won", to: "New_Unassigned", event: "reactivation" }).ok).toBe(true);
+        expect(checkStatusMove({ from: "Won", to: "Under_Discussion", event: "reactivation" }).ok).toBe(false);
+    });
+
     it("correction needs a reason and allows any move", () => {
         expect(checkStatusMove({ from: "Commercials_Finalised", to: "Under_Discussion", event: "correction" }).ok).toBe(false);
         expect(

@@ -38,6 +38,8 @@ const TERMINAL_LIST = sql.raw(
 // dealer_leads_neodove_sync_idx. That is a deliberate trade: the alternative is
 // a fully working screen that 500s the moment someone touches the filter.
 const NEODOVE_STATUS = sql`to_jsonb(dl) ->> 'neodove_sync_status'`;
+// ID 74 (E-314, also absent from schema.ts) — same to_jsonb guard, same reason.
+const WON_WITHOUT_QUOTE = sql`(to_jsonb(dl) ->> 'won_without_approved_quote')::boolean`;
 const NEODOVE_LINKED_LIST = sql.raw(
     NEODOVE_LINKED_SYNC_STATUSES.map((s) => `'${s}'`).join(", "),
 );
@@ -199,7 +201,8 @@ export async function fetchQueueRows({
             dl.assigned_at,
             dl.created_at,
             dl.updated_at,
-            ${NEODOVE_STATUS} AS neodove_sync_status
+            ${NEODOVE_STATUS} AS neodove_sync_status,
+            ${WON_WITHOUT_QUOTE} AS won_without_approved_quote
         FROM dealer_leads dl
         LEFT JOIN users owner ON owner.id::text = dl.current_owner_id
         WHERE ${where} ${search}

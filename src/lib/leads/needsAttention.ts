@@ -19,7 +19,7 @@
 import { sql, type SQL } from "drizzle-orm";
 
 import { db } from "@/lib/db";
-import { OPEN_STATUSES } from "@/lib/lifecycle/transitions";
+import { WORKABLE_STATUSES } from "@/lib/lifecycle/transitions";
 import { nonResponsiveSql } from "@/lib/leads/nonResponsive";
 
 export const IDLE_THRESHOLD_CC = 5;
@@ -41,7 +41,8 @@ export type NeedsAttentionRow = {
     non_responsive: boolean;
 };
 
-const OPEN_LIST = sql.raw(OPEN_STATUSES.map((s) => `'${s}'`).join(", "));
+// ID 74 — Won is open but waits on onboarding, not on the rep: not "idle".
+const OPEN_LIST = sql.raw(WORKABLE_STATUSES.map((s) => `'${s}'`).join(", "));
 const IDLE_BASIS = sql`COALESCE(dl.last_worked_at, dl.assigned_at, dl.created_at)`;
 /** Mon–Sat days elapsed since the basis, Sundays excluded — as the admin dashboard counts. */
 const DAYS_IDLE = sql`(

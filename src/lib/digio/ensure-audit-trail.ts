@@ -6,6 +6,7 @@ import { extractDigioDocumentId } from "./parse-status";
 import { fetchDigioPdfWithRetry } from "./fetch-pdf-retry";
 import { isS3Backend, putObject, filesProxyPath } from "@/lib/storage/s3";
 import { renderDealerAuditTrailPdf } from "@/lib/agreement/render-dealer-audit-trail";
+import { downloadPdfBuffer } from "@/lib/email/downloadPdfBuffer";
 
 type Application = typeof dealerOnboardingApplications.$inferSelect;
 
@@ -27,7 +28,20 @@ function basicAuthHeader(clientId: string, clientSecret: string) {
 export async function ensureDealerAuditTrailUrl(
   application: Application
 ): Promise<string | null> {
-  if (application.audit_trail_url) return application.audit_trail_url;
+  // A cached URL is only trustworthy if the PDF behind it can still be read
+  // (same reasoning as ensureDealerSignedAgreementUrl). A row cached before the
+  // S3 migration can point at a file that no longer exists anywhere; returning
+  // it made Approve fail on every retry. Unreadable → rebuild and re-store below.
+  if (application.audit_trail_url) {
+    if (await downloadPdfBuffer(application.audit_trail_url)) {
+      return application.audit_trail_url;
+    }
+    console.warn(
+      "[ensureDealerAuditTrailUrl] cached URL present but the file is unreadable — rebuilding",
+      { applicationId: application.id, cachedUrl: application.audit_trail_url }
+    );
+    if (!application.provider_document_id) return application.audit_trail_url;
+  }
   if (!application.provider_document_id) return null;
 
   const clientId = cleanEnv(process.env.DIGIO_CLIENT_ID);
