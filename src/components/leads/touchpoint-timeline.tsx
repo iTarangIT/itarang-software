@@ -82,7 +82,7 @@ export function TouchpointTimeline({
     touchpoints: LeadTouchpoint[];
     /** Needed to build the export URL; omit and the button is not offered. */
     leadId?: string;
-    /** Role check done by the server page against LEAD_HISTORY_EXPORT_ROLES. */
+    /** Decided by the server page with canExportLeadHistory() — role, and own lead for a rep (ID 58). */
     canExport?: boolean;
 }) {
     const [shown, setShown] = useState(PAGE);

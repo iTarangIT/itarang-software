@@ -107,7 +107,12 @@ export function CeoControlTower({ windowQs }: { windowQs: string }) {
                         <Exception
                             label="Sales-ready leads awaiting assignment (7+ days)"
                             count={x.unassigned_over_7d}
-                            href="/admin/ready-to-assign"
+                            href="/admin/ready-to-assign?min_days=7"
+                            extra={
+                                x.awaiting_assignment_total != null
+                                    ? `${num(x.awaiting_assignment_total)} awaiting in all`
+                                    : undefined
+                            }
                         />
                         <Exception label="Leads idle over 7 working days" count={x.idle_over_7d} href="/admin/reports/needs-attention" />
                         <Exception
@@ -242,7 +247,7 @@ export function CeoControlTower({ windowQs }: { windowQs: string }) {
                                                     <th className="text-right font-medium">Converted</th>
                                                     <th className="text-right font-medium">Revenue</th>
                                                     <th className="text-right font-medium">Idle</th>
-                                                    <th className="text-right font-medium">Engaged % (≥30 s)</th>
+                                                    <th className="text-right font-medium">Engaged % (≥{p.engaged_min_seconds ?? 30} s)</th>
                                                 </tr>
                                             </thead>
                                             <tbody>

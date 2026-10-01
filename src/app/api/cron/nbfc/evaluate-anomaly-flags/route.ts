@@ -11,12 +11,13 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { evaluateAnomalyFlags } from "@/lib/nbfc/anomalyFlags";
+import { fromVercelCron } from "@/lib/security/cronAuth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 function isAuthorised(req: NextRequest): boolean {
-  if (req.headers.get("x-vercel-cron")) return true;
+  if (fromVercelCron(req)) return true;
 
   const auth = req.headers.get("authorization") ?? "";
   const expected = process.env.CRON_SECRET;

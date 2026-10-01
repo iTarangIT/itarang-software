@@ -24,6 +24,7 @@
 import { sql } from "drizzle-orm";
 import ExcelJS from "exceljs";
 import { db } from "@/lib/db";
+import { engagedState } from "@/lib/reports/metricDefinitions";
 import { fmtIst, styleHeader, zebra } from "@/lib/excel/sheetStyle";
 import { LEAD_STATUS_LABEL } from "@/lib/leads/queueFilters";
 import {
@@ -264,7 +265,9 @@ export async function buildTouchpointWorkbook(
                 t.performed_at::text AS performed_at,
                 t.call_status,
                 t.call_duration_sec,
-                t.is_engaged,
+                -- ID 59: the definition, not the stored flag. A call is engaged
+                -- at 30 s+ of measured duration; NULL prints as a dash.
+                ${engagedState()} AS is_engaged,
                 t.remarks,
                 t.next_action,
                 t.next_action_at::text AS next_action_at

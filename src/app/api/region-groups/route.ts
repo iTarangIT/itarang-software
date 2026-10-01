@@ -14,6 +14,8 @@ import { db } from "@/lib/db";
 import { regionGroups } from "@/lib/db/schema";
 import { desc } from "drizzle-orm";
 import { nanoid } from "nanoid";
+import { LEADS_PAGE_ROLES } from "@/lib/leads/access";
+import { guardApi } from "@/lib/auth/apiGuard";
 
 type RegionEntry = { state: string; cities?: string[] };
 
@@ -36,6 +38,9 @@ function sanitizeRegions(input: unknown): RegionEntry[] {
 }
 
 export async function GET() {
+  // ID 118: signed in, with a role that reaches this screen.
+  const authGate = await guardApi([...LEADS_PAGE_ROLES]);
+  if (!authGate.ok) return authGate.response;
   try {
     const rows = await db
       .select()
@@ -52,6 +57,9 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
+  // ID 118: signed in, with a role that reaches this screen.
+  const authGate = await guardApi([...LEADS_PAGE_ROLES]);
+  if (!authGate.ok) return authGate.response;
   try {
     const body = await req.json();
     const name = typeof body?.name === "string" ? body.name.trim() : "";

@@ -12,6 +12,11 @@
 //
 // The columns are E-314 and not in schema.ts: writes run under a SAVEPOINT in
 // a caller's transaction, so a DB without E-314 loses the stamp and nothing else.
+//
+// Paths that bring in many leads at once (bulk upload, /leads Import, the
+// scraper, AI-dialer lists) use the *Bulk / recordReinquiries helpers: one
+// statement for the batch instead of a transaction per lead, and one summary
+// notification instead of one per dealer.
 
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
@@ -25,13 +30,21 @@ export {
     LEAD_ORIGINS,
     LEAD_ORIGIN_LABEL,
     LEAD_DOOR_LABEL,
+    LIST_DEFAULT_ORIGIN,
     SOURCE_LABELS,
+    campaignRequired,
     doorLabel,
     originLabel,
     type LeadDoor,
     type LeadOrigin,
 } from "./leadSourceVocab";
-import type { LeadDoor, LeadOrigin } from "./leadSourceVocab";
+import { LEAD_DOOR_LABEL, type LeadDoor, type LeadOrigin } from "./leadSourceVocab";
+
+/** A bulk path logs at most one Re-inquiry per lead in this many days. */
+export const REINQUIRY_WINDOW_DAYS = 30;
+
+const doorWords = (door: LeadDoor) => door.replace(/_/g, " ");
+const idList = (ids: string[]) => sql`(SELECT jsonb_array_elements_text(${JSON.stringify(ids)}::jsonb))`;
 
 async function savepoint(exec: Tx | typeof db, fn: (x: Tx) => Promise<unknown>): Promise<boolean> {
     try {
@@ -86,6 +99,67 @@ export async function recordLeadCreated(
 }
 
 /**
+ * Door / origin / campaign on many leads at once — same first-value-wins rule
+ * as stampLeadSource. Best-effort: false when the columns are not there.
+ */
+export async function stampLeadSourceBulk(
+    leadIds: string[],
+    src: { door: LeadDoor; origin?: LeadOrigin | null; campaignId?: string | null },
+): Promise<boolean> {
+    if (leadIds.length === 0) return true;
+    try {
+        await db.execute(sql`
+            UPDATE dealer_leads
+               SET source_door = COALESCE(source_door, ${src.door}),
+                   source_origin = COALESCE(source_origin, ${src.origin ?? null}),
+                   acquisition_campaign_id = COALESCE(acquisition_campaign_id, ${src.campaignId ?? null}::uuid)
+             WHERE id IN ${idList(leadIds)}
+        `);
+        return true;
+    } catch (e) {
+        console.warn("[leadSource] bulk source not written (E-314 applied?):", e instanceof Error ? e.message : e);
+        return false;
+    }
+}
+
+/**
+ * "Lead created" on many new leads in one statement. The same line and the
+ * same last-activity stamp recordLeadCreated writes, without a transaction per
+ * lead — a 5,000-row sheet must not open 5,000 of them. A lead that already
+ * has the line is skipped. Never throws: the leads exist either way.
+ */
+export async function recordLeadsCreatedBulk(
+    leadIds: string[],
+    input: { door: LeadDoor; actorId: string | null },
+): Promise<number> {
+    if (leadIds.length === 0) return 0;
+    try {
+        const rows = await db.execute<{ id: string }>(sql`
+            WITH written AS (
+                INSERT INTO lead_touchpoints
+                    (dealer_lead_id, touchpoint_type, performed_by, performed_at, remarks, sync_method)
+                SELECT dl.id, 'lead_created', ${input.actorId}::text, NOW(),
+                       ${`Lead created (${doorWords(input.door)}).`},
+                       ${input.actorId ? "manual" : "system"}
+                  FROM dealer_leads dl
+                 WHERE dl.id IN ${idList(leadIds)}
+                   AND NOT EXISTS (SELECT 1 FROM lead_touchpoints t
+                                    WHERE t.dealer_lead_id = dl.id AND t.touchpoint_type = 'lead_created')
+                RETURNING dealer_lead_id
+            )
+            UPDATE dealer_leads dl
+               SET last_touchpoint_at = COALESCE(dl.last_touchpoint_at, NOW())
+              FROM written w WHERE dl.id = w.dealer_lead_id
+            RETURNING dl.id
+        `);
+        return (rows as unknown as unknown[]).length;
+    } catch (e) {
+        console.error('[leadSource] "Lead created" not recorded for the batch:', e instanceof Error ? e.message : e);
+        return 0;
+    }
+}
+
+/**
  * The SHARED duplicate check for a single phone (ID 81): the lead that already
  * has this number, matched on the last 10 digits like every upload path.
  */
@@ -96,7 +170,11 @@ export async function findExistingLeadByPhone(phone: string | null | undefined):
     return existing?.id ?? null;
 }
 
-/** "Re-inquiry" on the lead a returning dealer already has (never a second copy). */
+/**
+ * "Re-inquiry" on the lead a returning dealer already has (never a second
+ * copy). The lead's owner and the Sales Head are told (ID 81) — the owner is
+ * skipped when they are the one who brought the dealer in again.
+ */
 export async function recordReinquiry(input: {
     leadId: string;
     door: LeadDoor;
@@ -108,10 +186,88 @@ export async function recordReinquiry(input: {
             dealerLeadId: input.leadId,
             touchpointType: "lead_reinquiry",
             performedBy: input.actorId,
-            remarks: `Re-inquiry via ${input.door.replace(/_/g, " ")}${input.note ? ` — ${input.note}` : ""}.`,
+            remarks: `Re-inquiry via ${doorWords(input.door)}${input.note ? ` — ${input.note}` : ""}.`,
             syncMethod: input.actorId ? "manual" : "system",
         });
     } catch (e) {
         console.error("[leadSource] re-inquiry not recorded:", e instanceof Error ? e.message : e);
+        return;
     }
+    try {
+        // Loaded here, not at the top: the notification hub pulls in the whole
+        // emit stack, which the other callers of this module do not need.
+        const { notifyLeadReinquiry } = await import("@/lib/notifications/events");
+        await notifyLeadReinquiry({
+            leadId: input.leadId,
+            via: LEAD_DOOR_LABEL[input.door],
+            actorId: input.actorId,
+        });
+    } catch (e) {
+        console.warn("[leadSource] re-inquiry notification failed:", e instanceof Error ? e.message : e);
+    }
+}
+
+/**
+ * Re-inquiries from a path that brings in many dealers at once. One line per
+ * lead, at most once per REINQUIRY_WINDOW_DAYS for the same door — a weekly
+ * re-scrape of one city, or the same list dialled again, must not write a line
+ * on every known dealer every time. The owners and the Sales Head get ONE
+ * summary each, not a notification per dealer.
+ *
+ * Returns how many lines were written. Never throws.
+ */
+export async function recordReinquiries(
+    known: { id: string; note?: string | null }[],
+    input: { door: LeadDoor; actorId: string | null; windowDays?: number },
+): Promise<number> {
+    const notes = new Map<string, string | null>();
+    for (const k of known) if (!notes.has(k.id)) notes.set(k.id, k.note?.trim() || null);
+    if (notes.size === 0) return 0;
+
+    const via = `Re-inquiry via ${doorWords(input.door)}`;
+    let written: { id: string; owner_id: string | null }[] = [];
+    try {
+        const payload = [...notes].map(([id, note]) => ({ id, note }));
+        written = (await db.execute<{ id: string; owner_id: string | null }>(sql`
+            WITH incoming AS (
+                SELECT x.id, x.note
+                  FROM jsonb_to_recordset(${JSON.stringify(payload)}::jsonb) AS x(id text, note text)
+            ), written AS (
+                INSERT INTO lead_touchpoints
+                    (dealer_lead_id, touchpoint_type, performed_by, performed_at, remarks, sync_method)
+                SELECT dl.id, 'lead_reinquiry', ${input.actorId}::text, NOW(),
+                       ${via} || COALESCE(' — ' || i.note, '') || '.',
+                       ${input.actorId ? "manual" : "system"}
+                  FROM incoming i
+                  JOIN dealer_leads dl ON dl.id = i.id
+                 WHERE NOT EXISTS (
+                        SELECT 1 FROM lead_touchpoints t
+                         WHERE t.dealer_lead_id = dl.id
+                           AND t.touchpoint_type = 'lead_reinquiry'
+                           AND t.remarks LIKE ${`${via}%`}
+                           AND t.performed_at >= NOW() - make_interval(days => ${input.windowDays ?? REINQUIRY_WINDOW_DAYS}))
+                RETURNING dealer_lead_id
+            )
+            UPDATE dealer_leads dl
+               SET last_touchpoint_at = NOW(), updated_at = NOW()
+              FROM written w WHERE dl.id = w.dealer_lead_id
+            RETURNING dl.id, dl.current_owner_id AS owner_id
+        `)) as unknown as { id: string; owner_id: string | null }[];
+    } catch (e) {
+        console.error("[leadSource] re-inquiries not recorded:", e instanceof Error ? e.message : e);
+        return 0;
+    }
+    if (written.length === 0) return 0;
+
+    try {
+        const { notifyLeadReinquiryBatch } = await import("@/lib/notifications/events");
+        await notifyLeadReinquiryBatch({
+            via: LEAD_DOOR_LABEL[input.door],
+            actorId: input.actorId,
+            leads: written.map((w) => ({ leadId: w.id, ownerUserId: w.owner_id })),
+        });
+    } catch (e) {
+        console.warn("[leadSource] re-inquiry summary notification failed:", e instanceof Error ? e.message : e);
+    }
+    return written.length;
 }

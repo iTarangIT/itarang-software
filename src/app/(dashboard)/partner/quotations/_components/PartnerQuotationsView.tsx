@@ -38,6 +38,12 @@ export interface PartnerQuotation {
     rejection_reason: string | null;
     dealer_decision: string | null;
     dealer_decision_at: string | null;
+    /** ID 78: closed by the sales team — the dealer can no longer answer it. */
+    withdrawn_at?: string | null;
+    /** ID 60: no newer approved, not-withdrawn version exists. */
+    is_latest_quote?: boolean;
+    /** ID 78: an open quote whose product reference price changed since issue. */
+    price_changed_since_issue?: boolean;
     created_at: string | null;
     dealer_name: string | null;
     shop_name: string | null;
@@ -204,8 +210,13 @@ export function PartnerQuotationsView() {
                         )}
                         {rows.map((q) => {
                             const leadHref = `/partner/lead/${encodeURIComponent(q.dealer_lead_id)}`;
+                            // The send gate's own rule (quoteSendGate): approved, not
+                            // withdrawn, and not replaced by a newer approved version.
                             const canSend =
-                                q.approval_status === "approved" && q.is_current && Boolean(q.quote_pdf_url);
+                                q.approval_status === "approved" &&
+                                !q.withdrawn_at &&
+                                q.is_latest_quote !== false &&
+                                Boolean(q.quote_pdf_url);
                             return (
                                 <tr key={q.commercial_id} className="hover:bg-blue-50/40">
                                     <td className="px-4 py-2.5 font-mono text-xs">
@@ -229,6 +240,16 @@ export function PartnerQuotationsView() {
                                     </td>
                                     <td className="px-4 py-2.5">
                                         <StatusPill q={q} />
+                                        {q.withdrawn_at && (
+                                            <span className="ml-1 inline-flex items-center rounded-full border border-gray-300 bg-gray-100 px-2 py-0.5 text-[11px] font-semibold text-gray-700">
+                                                Withdrawn {fmtDate(q.withdrawn_at)}
+                                            </span>
+                                        )}
+                                        {q.price_changed_since_issue && (
+                                            <div className="mt-1 max-w-xs text-xs font-medium text-amber-800">
+                                                Price changed since issue
+                                            </div>
+                                        )}
                                         {q.approval_status === "rejected" && q.rejection_reason && (
                                             <div className="mt-1 max-w-xs whitespace-pre-wrap text-xs text-rose-800">
                                                 {q.rejection_reason}

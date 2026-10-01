@@ -624,3 +624,30 @@ telephony adapter would write the same two fields.
 - **No call duration arrives** — `call_duration_sec` is NULL on all 2,665 rows. "Engaged = connected and 30 s or more" cannot be measured until NeoDove sends a duration (or the mapping is found).
 
 **What the CRM does:** the raw touchpoints are kept (each carries the disposition the agent picked). Reports count calls through `humanCall()` in `src/lib/reports/metricDefinitions.ts`: a NeoDove call touchpoint with an earlier one on the same lead, by the same agent, within 3 minutes is the same call and is not counted again. AI dialer calls are not counted as calls.
+
+## Engaged calls and dealers visited (tracker ID 59) — review points closed 2026-10-01
+
+**Engaged call = connected AND 30 s or more, by NeoDove's recorded duration.** A duration a rep types into the log form is their estimate, not a measurement, and no longer makes a call engaged (review point 1). One rule, two forms that cannot drift: `isEngagedCall()` in `src/lib/lifecycle/touchpointTypes.ts` (what writers store in `is_engaged`) and `engagedCall()` / `engagedState()` / `engagedCallCount()` in `src/lib/reports/metricDefinitions.ts` (what every report reads).
+
+Because NeoDove still sends no duration (0 of 2,639 calls on database-2, 01 Oct 2026), nothing qualifies today. Reports therefore show **"Not measured yet"** — the daily email's "Engaged calls" row, "—" in the CEO control tower's Engaged % column — rather than a 0 that reads as "nobody had a real conversation".
+
+**The rule is a setting, not code.** The threshold (default 30 s, 5–600) and whose duration counts are stored in `app_settings['engaged_call_rule']` and edited on **Sales Daily settings → Engaged call** (`/admin/settings/sales-daily`; admin, CEO, Sales Head; `GET|PUT /api/admin/settings/engaged-call`). The SQL fragments look the row up inline, so a save reaches every report on its next query — no deploy, no restart. A malformed row falls back to the default.
+
+**Tracker question 6 is still open** (count rep-entered durations in the meantime, or wait for NeoDove). It is the second control on that screen: "Only the duration NeoDove records" (default) or "Also the duration a rep enters" (database-2 would then show 10 engaged calls, all time).
+
+Who reads the definition now (review point 2): the sales dashboard, targets and daily email (already), the CEO control tower, the Admin KPI "Engaged → Converted", the touchpoint workbook and the single-lead history export ("Engaged" column: Yes / No / — for a connected call with no measured duration), and the lead timelines. Writers: the NeoDove webhook, the CSV reconcile and the manual log form — on a call the "engaged" tick is no longer offered and is ignored if sent. Calls stored before 01 Oct 2026 still carry `is_engaged = any connected call`; readers do not use that flag for calls, so no backfill is needed. A visit's flag (productive / commercials progressed) and a WhatsApp reply are unchanged.
+
+**Tracker question 5** (do ISRs call through NeoDove?): in September 2026 on database-2, 51 of 1,976 human calls (2.6%) were logged by hand — 39 of the inside-sales reps' 1,807 (2.2%). Re-measure with `scripts/verify-id59-metrics.ts`.
+
+**Dealers visited** (review point 4): the target "Dealer visits (new + existing)" now measures DISTINCT dealers visited (metric M08), the same figure the daily email shows against it; it used to count visits. September 2026 on database-2: 93 visits to 87 distinct dealers.
+
+Verify (read-only): `node --import tsx --env-file=.env.local scripts/verify-id59-metrics.ts`.
+
+**Connected calls, counted once** (found in the gap check, 2026-10-01): the admin Daily Activity report counted every `call_status = 'connected'` row, so a NeoDove call the agent re-dispositioned was two connected calls. It now uses `connectedCall()` (same file): a human call counted once, connected on its own row or on a later twin. Last 30 days on database-2: 1,183 connected rows → 1,177 connected calls.
+
+**Follow-ups closed 2026-10-01 (same day):**
+
+- **Email Block C** (inside sales, per rep) gained Connected MTD, Connect % MTD, Engaged MTD ("—" = not measured yet) and Hot to field MTD, as the reporting format lists them.
+- **Email Block A, Dealers visited vs target:** the figure shown is distinct dealers company-wide; % of target is computed on the target's basis (each person's own dealers, summed), and the note under the table says so when the two differ.
+- **Stored flag on old call rows:** `scripts/backfill-call-engaged-flag.ts` (dry run by default; `--apply` saves the old values to a file first, `--restore <file>` puts them back) re-aligns `lead_touchpoints.is_engaged` on call rows with the rule, for anything that reads the column directly. Dry run 2026-10-01: database-1 824 of 2,721 call rows, database-2 1,812 of 2,796 — all "engaged → not engaged". Not applied.
+- `scripts/verify-id59-metrics.ts --settings` proves, in a rolled-back transaction, that saving a rule changes what the reports count.

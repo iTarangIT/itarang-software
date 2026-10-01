@@ -2,6 +2,7 @@
 //   screenshot      image (jpeg / png / webp), optional
 //   remarks         text, required
 //   dealer_replied  "true" | "false"
+//   follow_up_at    ISO datetime, optional — the next follow-up agreed in the chat
 //
 // Tracker ID 79 (handover P2-7): a WhatsApp chat counts as contact only with a
 // screenshot. The file is stored, hashed (a reused image is flagged) and the
@@ -9,6 +10,7 @@
 // Assistant's log_call uses.
 
 import { randomUUID } from "node:crypto";
+import { sql } from "drizzle-orm";
 import { requireRole } from "@/lib/auth-utils";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
 import { assertOwner } from "@/lib/leads/ownership";
@@ -31,6 +33,11 @@ export const POST = withErrorHandler(
         const remarks = String(form.get("remarks") ?? "").trim();
         if (!remarks) return errorResponse("Remarks are required.", 400);
         const dealerReplied = String(form.get("dealer_replied") ?? "") === "true";
+        const followUpRaw = String(form.get("follow_up_at") ?? "").trim();
+        const followUpAt = followUpRaw ? new Date(followUpRaw) : null;
+        if (followUpAt && Number.isNaN(followUpAt.getTime())) {
+            return errorResponse("The follow-up date is not a valid date.", 400);
+        }
         const file = form.get("screenshot");
 
         let screenshot: { url: string; sha256: string } | null = null;
@@ -49,9 +56,24 @@ export const POST = withErrorHandler(
             screenshot = { url: stored.url, sha256: screenshotHash(bytes) };
         }
 
-        const result = await withLeadActor(user.id, (tx) =>
-            recordWhatsappContact(tx, { leadId: id, actorId: user.id, remarks, dealerReplied, screenshot }),
-        );
+        const result = await withLeadActor(user.id, async (tx) => {
+            const res = await recordWhatsappContact(tx, {
+                leadId: id,
+                actorId: user.id,
+                remarks,
+                dealerReplied,
+                screenshot,
+                nextActionAt: followUpAt,
+            });
+            // The follow-up the queue reads — what logLeadTouchpoint sets for a call.
+            if (followUpAt) {
+                await tx.execute(sql`
+                    UPDATE dealer_leads SET next_follow_up_at = ${followUpAt.toISOString()}, updated_at = NOW()
+                     WHERE id = ${id}
+                `);
+            }
+            return res;
+        });
         return successResponse(result);
     },
 );

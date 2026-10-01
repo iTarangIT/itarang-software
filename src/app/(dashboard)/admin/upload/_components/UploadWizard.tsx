@@ -5,7 +5,8 @@
 // is converted to CSV in the browser so the server side stays CSV-only.
 
 import { useState } from "react";
-import { LEAD_ORIGIN_LABEL, LEAD_ORIGINS } from "@/lib/leads/leadSourceVocab";
+import { LEAD_ORIGIN_LABEL, LEAD_ORIGINS, campaignRequired } from "@/lib/leads/leadSourceVocab";
+import { CampaignPicker } from "@/components/leads/CampaignPicker";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
@@ -42,6 +43,8 @@ export function UploadWizard() {
     const [sourceLabel, setSourceLabel] = useState("");
     // ID 81 — Found via, required for the whole file.
     const [origin, setOrigin] = useState("");
+    // ID 81 — the acquisition campaign. Blank = the batch gets one of its own.
+    const [campaignId, setCampaignId] = useState("");
     const [busy, setBusy] = useState(false);
     const [result, setResult] = useState<UploadBatchSummary | null>(null);
 
@@ -51,6 +54,8 @@ export function UploadWizard() {
         setValidation(null);
         setRoutingToAi(false);
         setSourceLabel("");
+        setOrigin("");
+        setCampaignId("");
         setResult(null);
     }
 
@@ -122,6 +127,7 @@ export function UploadWizard() {
                     routing_to_ai: routingToAi,
                     source_label: sourceLabel.trim() || null,
                     origin,
+                    campaign_id: campaignId || null,
                 }),
             });
             const json = await res.json();
@@ -334,6 +340,14 @@ export function UploadWizard() {
                                 ))}
                             </select>
                         </div>
+                        <CampaignPicker
+                            origin={origin}
+                            value={campaignId}
+                            onChange={setCampaignId}
+                            hint="Blank: this batch gets a campaign of its own."
+                            labelClassName="block text-[10px] font-medium uppercase tracking-wide text-ink-muted mb-1"
+                            controlClassName="h-9 w-56 rounded-md border border-gray-200 bg-white px-2 text-sm"
+                        />
                         <Button
                             type="button"
                             className="ml-auto"
@@ -341,6 +355,7 @@ export function UploadWizard() {
                             disabled={
                                 busy ||
                                 !origin ||
+                                (campaignRequired(origin) && !campaignId) ||
                                 validation.valid_rows +
                                     validation.reactivate_rows ===
                                     0

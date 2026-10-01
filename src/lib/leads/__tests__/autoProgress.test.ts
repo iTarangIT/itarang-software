@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { autoProgressForCall, autoProgressForFollowUp, autoProgressForVisit, bucketForLabel } from "../autoProgress";
+import { autoProgressForCall, autoProgressForVisit, bucketForLabel } from "../autoProgress";
 
 // The shared auto status / temperature rule (user decision 2026-09-26): one
 // rule for the CRM's Log Touchpoint / Log Visit AND the WhatsApp Assistant.
@@ -82,10 +82,8 @@ describe("autoProgressForVisit", () => {
     });
 });
 
-describe("autoProgressForFollowUp", () => {
-    it("after a talk → Under Discussion; no talk → nothing", () => {
-        expect(autoProgressForFollowUp({ spokeWithDealer: true, currentStatus: "Assigned_Not_Contacted" })).toEqual({ statusTo: "Under_Discussion", interestTo: null });
-        expect(autoProgressForFollowUp({ spokeWithDealer: false, currentStatus: "Assigned_Not_Contacted" })).toEqual({ statusTo: null, interestTo: null });
-        expect(autoProgressForFollowUp({ spokeWithDealer: true, currentStatus: "Commercials_Explained" }).statusTo).toBeNull();
+describe("follow-ups (ID 80)", () => {
+    it("there is no auto rule for a follow-up: a note moves nothing", async () => {
+        expect(Object.keys(await import("@/lib/leads/autoProgress"))).not.toContain("autoProgressForFollowUp");
     });
 });

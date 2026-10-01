@@ -1,11 +1,12 @@
 import { db } from "@/lib/db";
+import { engagedState } from "@/lib/reports/metricDefinitions";
 import { aiCallLogs } from "@/lib/db/schema";
 import { or, eq, sql, desc } from "drizzle-orm";
 import { requireRole } from "@/lib/auth-utils";
 import {
   LEADS_PAGE_ROLES,
-  LEAD_HISTORY_EXPORT_ROLES,
   LEAD_TRACKING_ROLES,
+  canExportLeadHistory,
   LEAD_WORKSPACE_ROLES,
 } from "@/lib/leads/access";
 import { StatusChip } from "@/app/(dashboard)/inside-sales/_components/StatusChip";
@@ -101,7 +102,7 @@ export default async function LeadDetailPage({ params }: any) {
            to_char(t.performed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS performed_at,
            t.call_status,
            t.call_duration_sec,
-           t.is_engaged,
+           ${engagedState()} AS is_engaged,
            t.remarks,
            t.external_system,
            t.sync_method,
@@ -216,9 +217,11 @@ export default async function LeadDetailPage({ params }: any) {
           <TouchpointTimeline
             touchpoints={touchpoints}
             leadId={id}
-            canExport={(LEAD_HISTORY_EXPORT_ROLES as readonly string[]).includes(
-              user.role,
-            )}
+            canExport={canExportLeadHistory({
+              role: user.role,
+              userId: user.id,
+              currentOwnerId: lead.current_owner_id,
+            })}
           />
         </div>
       </div>

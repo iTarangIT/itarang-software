@@ -16,6 +16,13 @@ import {
     withErrorHandler,
 } from "@/lib/api-utils";
 import { writeTouchpoint } from "@/lib/touchpoints/write";
+import {
+    CompetitorRequiredError,
+    HighImpactUnconfirmedError,
+    LostNotesRequiredError,
+    checkMarkLost,
+    markLeadLost,
+} from "@/lib/leads/markLost";
 import { buildTouchpointWorkbook } from "@/lib/leads/touchpointWorkbook";
 import { buildLeadTracking } from "@/lib/leads/tracking";
 import { trackingCsvResponse } from "@/lib/leads/trackingCsv";
@@ -27,6 +34,7 @@ import {
     type LeadStatus,
 } from "@/lib/lifecycle/transitions";
 import { BusinessTypeSchema } from "@/lib/leads/businessType";
+import { exportsOwnLeadsOnly, logDataDownload } from "@/lib/exports/downloadLog";
 
 export const dynamic = "force-dynamic";
 // 300, not 60: export_touchpoints may assemble a workbook for up to 5,000 leads
@@ -52,6 +60,9 @@ const BodySchema = z.object({
     target_user_id: z.string().min(1).optional(),
     lost_reason: z.enum(LOST_REASON).optional(),
     reason: z.string().trim().max(2000).optional(),
+    // mark_lost only — the same two answers the single-lead Mark Lost asks for.
+    competitor_name: z.string().trim().max(200).nullable().optional(),
+    confirmed_high_impact: z.boolean().optional(),
     // set_business_type only. null clears the type ("Not set").
     business_type: BusinessTypeSchema.nullable().optional(),
 });
@@ -66,6 +77,35 @@ export const POST = withErrorHandler(async (req: Request) => {
     const body = BodySchema.parse(await req.json());
     const ids = body.lead_ids;
 
+    // ID 58 — the three exports below hand lead data out as a file, so they
+    // follow the export rule, not the bulk-action rule: a role whose exports
+    // are limited to its own leads (OWN_LEADS_EXPORT_ROLES — here, partner)
+    // gets only the selected leads it owns, and every download is logged.
+    const isExport =
+        body.action === "export" ||
+        body.action === "export_touchpoints" ||
+        body.action === "export_tracking";
+    const ownOnly = isExport && exportsOwnLeadsOnly(user.role);
+    let exportIds = ids;
+    if (ownOnly) {
+        const owned = (await db.execute<{ id: string }>(sql`
+            SELECT id FROM dealer_leads WHERE id IN ${ids} AND current_owner_id = ${user.id}
+        `)) as unknown as { id: string }[];
+        exportIds = owned.map((r) => r.id);
+        if (exportIds.length === 0) {
+            return errorResponse("You can export your own leads only — none of the selected leads are yours.", 403);
+        }
+    }
+    const logExport = (dataset: string, rowCount: number) =>
+        logDataDownload({
+            userId: user.id,
+            role: user.role,
+            dataset,
+            rowCount,
+            ownOnly,
+            filters: { selected: ids.length, exported: exportIds.length },
+        });
+
     // ── Export — return a CSV download. ────────────────────────────────────
     if (body.action === "export") {
         const rows = await db.execute<Record<string, unknown>>(sql`
@@ -74,9 +114,10 @@ export const POST = withErrorHandler(async (req: Request) => {
                    ow.name AS owner_name, dl.created_at
             FROM dealer_leads dl
             LEFT JOIN users ow ON ow.id::text = dl.current_owner_id
-            WHERE dl.id IN ${ids}
+            WHERE dl.id IN ${exportIds}
             ORDER BY dl.created_at DESC
         `);
+        await logExport("leads_bulk_csv", rows.length);
         const headers = [
             "phone",
             "dealer_name",
@@ -106,8 +147,9 @@ export const POST = withErrorHandler(async (req: Request) => {
     // and it writes no touchpoint of its own (exporting the log is not an event
     // in the log).
     if (body.action === "export_touchpoints") {
-        const workbook = await buildTouchpointWorkbook(ids);
+        const workbook = await buildTouchpointWorkbook(exportIds);
         const buffer = await workbook.xlsx.writeBuffer();
+        await logExport("leads_bulk_touchpoints", exportIds.length);
         return new Response(Buffer.from(buffer), {
             status: 200,
             headers: {
@@ -125,7 +167,8 @@ export const POST = withErrorHandler(async (req: Request) => {
     // Read-only like the two above. Leads come out in the order the tracking
     // builder returns them; rows inside a lead run oldest-first.
     if (body.action === "export_tracking") {
-        const trackings = await buildLeadTracking(ids);
+        const trackings = await buildLeadTracking(exportIds);
+        await logExport("leads_bulk_tracking", trackings.size);
         return trackingCsvResponse([...trackings.values()], "lead-tracking");
     }
 
@@ -212,25 +255,41 @@ export const POST = withErrorHandler(async (req: Request) => {
         if (!body.lost_reason) {
             return errorResponse("lost_reason is required to mark lost.", 400);
         }
+        // ID 57 — a lead is lost the same way from every entry point: the
+        // single-lead Mark Lost rules (notes for "other", the competitor for
+        // "lost to competition", an explicit confirmation for a high-impact
+        // reason) and its side effects (competitor name stored, a closed
+        // business excluded from the AI dialer) through the one writer.
+        const lost = {
+            reason: body.lost_reason,
+            notes: body.reason ?? null,
+            confirmedHighImpact: body.confirmed_high_impact,
+            competitorName: body.competitor_name ?? null,
+        };
+        try {
+            checkMarkLost(lost);
+        } catch (err) {
+            if (
+                err instanceof LostNotesRequiredError ||
+                err instanceof HighImpactUnconfirmedError ||
+                err instanceof CompetitorRequiredError
+            ) {
+                return errorResponse(err.message, 400);
+            }
+            throw err;
+        }
         for (const lead of leads) {
             const status = lead.lead_status as LeadStatus | null;
             if (!status || !isOpen(status)) {
                 skipped++;
                 continue;
             }
-            await writeTouchpoint({
-                dealerLeadId: lead.id,
-                touchpointType: "status_change_note",
-                performedBy: user.id,
-                remarks: body.reason ?? "Bulk mark lost (admin).",
-                statusChange: {
-                    from: status,
-                    to: "Lost",
-                    toLostReason: body.lost_reason,
-                    closingRole: "admin",
-                    reasonNotes: body.reason ?? "Bulk mark lost (admin).",
-                    event: "mark_lost",
-                },
+            await markLeadLost({
+                leadId: lead.id,
+                actor: { id: user.id, role: user.role },
+                ...lost,
+                notes: body.reason ?? "Bulk mark lost (admin).",
+                closingRole: "admin",
             });
             affected++;
         }

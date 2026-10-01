@@ -54,7 +54,12 @@ export const sendQuote: ToolFactory = () =>
             const lead = owned.lead;
             const crmUrl = leadUrl(ctx.user, lead.id);
 
-            const latest = await loadLatestQuote(lead.id);
+            // ID 60: the quote to send is the newest APPROVED, not-withdrawn
+            // version — a revision still at the CEO, or rejected, replaces
+            // nothing, so the last approved version stays sendable. With no
+            // approved version the newest quote explains why nothing can go.
+            const live = await loadLatestQuote(lead.id, "live");
+            const latest = live ?? (await loadLatestQuote(lead.id));
             if (!latest) {
                 return { kind: "declined", reason: "This lead has no quote yet. Create one first.", crm_url: crmUrl };
             }
@@ -104,6 +109,17 @@ export const sendQuote: ToolFactory = () =>
             if (channels.includes("email")) lines.push({ label: "Email", value: email! });
             if (row.dealer_decision) {
                 lines.push({ label: "Dealer already", value: row.dealer_decision.replace(/_/g, " ") });
+            }
+            // A newer revision that is not approved does not go — say so, so
+            // the rep is not surprised by the version on the card.
+            const newest = live ? await loadLatestQuote(lead.id) : null;
+            if (newest && newest.version_no > row.version_no) {
+                lines.push({
+                    label: "Note",
+                    value:
+                        `v${newest.version_no} is ${(APPROVAL_LABEL[newest.approval_status ?? ""] ?? "not approved").toLowerCase()}, ` +
+                        `so v${row.version_no} is still the current quote`,
+                });
             }
             const preview: Preview = {
                 title: `Send quote — ${lead.shop_name || lead.dealer_name || lead.id}`,

@@ -136,6 +136,8 @@ export async function PUT(req: NextRequest) {
         merged[field.key] = String(provided);
       } else if (currentSecrets[field.key] != null && currentSecrets[field.key] !== "") {
         merged[field.key] = currentSecrets[field.key];
+      } else if (field.optional) {
+        continue;
       } else {
         return NextResponse.json(
           { ok: false, error: `BAD_REQUEST: ${field.label} is required` },

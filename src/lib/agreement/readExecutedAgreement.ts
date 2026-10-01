@@ -5,7 +5,7 @@
 // Reading is Gemini (the same client the WhatsApp onboarding reader uses) with
 // a prompt of its own. Digio is asked about provider_document_id when there is
 // one. Neither ever throws: an unreadable file comes back ok=false and the
-// matcher reports "unreadable".
+// matcher fails the upload on it.
 
 import { readDocumentWithPrompt } from "@/lib/whatsapp/extraction";
 import { fetchDigioDocumentStatus } from "@/lib/digio";
@@ -30,21 +30,35 @@ const PROMPT = [
     '  "all_parties_signed": <true if every party shown has signed / the trail says completed, false if a party is shown as pending, null if unclear>',
     "}",
     "Rules: read values exactly as printed; never guess; null for anything not present. Include every signer the document lists.",
+    'document_type is "other" for anything that is neither the agreement itself nor an e-sign audit trail (an invoice, an ID card, a blank or unrelated page).',
+    "iTarang is the OTHER party: never return iTarang's own name or GSTIN as dealer_name / dealer_gstin.",
 ].join("\n");
 
 function str(v: unknown): string | null {
     return typeof v === "string" && v.trim() ? v.trim() : null;
 }
 
+const DOC_TYPES = new Set(["dealer_agreement", "audit_trail", "other"]);
+
+// iTarang's own GSTIN is printed on every agreement (dealer-agreement-template.ts).
+// The prompt says not to return it as the dealer's; this makes sure.
+const ITARANG_GSTIN = "06AALFI7813E1ZE";
+
 export async function readAgreementFile(
     buffer: Buffer,
     kind: ExtractedAgreementDoc["kind"],
+    fileName: string | null = null,
 ): Promise<ExtractedAgreementDoc> {
     const parsed = await readDocumentWithPrompt(buffer, "application/pdf", PROMPT).catch(() => null);
-    if (!parsed || parsed.legible === false || parsed.document_type === "other") {
+    const documentType = (
+        parsed && DOC_TYPES.has(String(parsed.document_type)) ? parsed.document_type : null
+    ) as ExtractedAgreementDoc["documentType"];
+    if (!parsed || parsed.legible === false || documentType === "other") {
         return {
             kind,
+            fileName,
             ok: false,
+            documentType,
             documentId: null,
             dealerName: null,
             gstin: null,
@@ -54,6 +68,7 @@ export async function readAgreementFile(
             allPartiesSigned: null,
         };
     }
+    const gstin = str(parsed.dealer_gstin)?.replace(/\s/g, "").toUpperCase() ?? null;
     const signers = Array.isArray(parsed.signers)
         ? (parsed.signers as Array<Record<string, unknown>>).map((s) => ({
               name: str(s?.name),
@@ -62,10 +77,12 @@ export async function readAgreementFile(
         : [];
     return {
         kind,
+        fileName,
         ok: true,
+        documentType,
         documentId: str(parsed.document_id),
         dealerName: str(parsed.dealer_name),
-        gstin: str(parsed.dealer_gstin)?.replace(/\s/g, "") ?? null,
+        gstin: gstin && gstin !== ITARANG_GSTIN ? gstin : null,
         agreementDate: str(parsed.agreement_date),
         referenceNumber: str(parsed.reference_number),
         signers,
@@ -88,6 +105,9 @@ async function digioView(documentId: string | null) {
     }
 }
 
+/** Today as an IST calendar day, YYYY-MM-DD. */
+const istToday = () => new Date(Date.now() + 330 * 60_000).toISOString().slice(0, 10);
+
 export async function checkUploadedAgreement(input: {
     application: {
         company_name: string | null;
@@ -95,10 +115,12 @@ export async function checkUploadedAgreement(input: {
         provider_document_id: string | null;
     };
     manualMode: boolean;
-    files: Array<{ kind: ExtractedAgreementDoc["kind"]; buffer: Buffer }>;
+    files: Array<{ kind: ExtractedAgreementDoc["kind"]; buffer: Buffer; fileName?: string | null }>;
+    /** What the admin typed with the upload — checked against what is read. */
+    typed?: { signedOn: string | null; referenceNumber: string | null };
 }): Promise<{ result: AgreementCheckResult; docs: ExtractedAgreementDoc[] }> {
     const [docs, digio] = await Promise.all([
-        Promise.all(input.files.map((f) => readAgreementFile(f.buffer, f.kind))),
+        Promise.all(input.files.map((f) => readAgreementFile(f.buffer, f.kind, f.fileName ?? null))),
         input.manualMode ? Promise.resolve(null) : digioView(input.application.provider_document_id),
     ]);
     const result = checkExecutedAgreement({
@@ -110,6 +132,8 @@ export async function checkUploadedAgreement(input: {
         },
         docs,
         digio,
+        typed: input.typed,
+        today: istToday(),
     });
     return { result, docs };
 }

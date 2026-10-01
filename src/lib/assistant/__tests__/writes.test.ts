@@ -144,15 +144,25 @@ describe("set_follow_up proposals (UC-07)", () => {
     it("ISR: follow-up instant → isr_follow_up plan", async () => {
         const r = await run(ISR, "set_follow_up", { lead_id: "DL-1", follow_up_at: "2026-09-28T10:00:00+05:30", note: "send brochure" });
         expect(r.kind).toBe("preview");
-        expect(stored().plan).toEqual({ kind: "isr_follow_up", lead_id: "DL-1", follow_up_at: "2026-09-28T04:30:00.000Z", note: "send brochure", status_to: null });
+        // ID 80: a follow-up plan carries no status at all.
+        expect(stored().plan).toEqual({ kind: "isr_follow_up", lead_id: "DL-1", follow_up_at: "2026-09-28T04:30:00.000Z", note: "send brochure" });
         expect(stored().preview.resets_idle_clock).toBe(false);
+    });
+
+    // ID 80: a card proposed BEFORE the deploy may still say "→ Under Discussion".
+    // Confirmed afterwards, its plan is re-validated and the status is dropped.
+    it("a stored plan that still carries status_to loses it when it is applied", async () => {
+        const { SetFollowUpPlan } = await import("../tools/write/setFollowUp");
+        const old = { kind: "isr_follow_up", lead_id: "DL-1", follow_up_at: "2026-09-28T04:30:00.000Z", note: "talked", status_to: "Under_Discussion" };
+        expect(SetFollowUpPlan.parse(old)).toEqual({ kind: "isr_follow_up", lead_id: "DL-1", follow_up_at: "2026-09-28T04:30:00.000Z", note: "talked" });
+        expect(SetFollowUpPlan.parse({ kind: "asm_visit", lead_id: "DL-1", visit_date: "2026-09-28", note: "x", status_to: "Under_Discussion" })).not.toHaveProperty("status_to");
     });
 
     it("UC-07 ASM: 'Schedule Gupta Motors for Monday' → a scheduled visit that goes to Today's Schedule", async () => {
         findLeadInScope.mockResolvedValue(lead({ current_owner_id: "asm-1", asm_id: "asm-1", shop_name: "Gupta Motors" }));
         const r = await run(ASM, "set_follow_up", { lead_id: "DL-1", visit_date: "2026-09-28", note: "discuss quote" });
         expect(r.kind).toBe("preview");
-        expect(stored().plan).toEqual({ kind: "asm_visit", lead_id: "DL-1", visit_date: "2026-09-28", note: "discuss quote", status_to: null });
+        expect(stored().plan).toEqual({ kind: "asm_visit", lead_id: "DL-1", visit_date: "2026-09-28", note: "discuss quote" });
         expect(stored().preview).toMatchObject({ title: "Schedule visit — Gupta Motors", warning: null });
         expect(stored().preview.lines[0]).toEqual({ label: "Visit", value: "Mon 28 Sep (goes to Today's Schedule)" });
     });

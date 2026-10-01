@@ -23,7 +23,7 @@
  *
  * Pure rules (key normalisation, parsing, suggestions): ./agentMapRules.ts.
  */
-import { backfillOwnersForLinkedAgent } from "./ownerFromCall";
+import { backfillOwnersForLinkedAgent, callerNotLinkedCounts } from "./ownerFromCall";
 import { sql } from "drizzle-orm";
 
 import { db } from "@/lib/db";
@@ -85,6 +85,11 @@ export type NeodoveAgentRow = {
     name: string;
     calls: number;
     unattributed: number;
+    /**
+     * ID 83 "caller not linked": unowned leads this agent called first while
+     * not linked. Linking the agent assigns them, dated at that call.
+     */
+    leads_waiting: number;
     last_call_at: string | null;
     user_id: string | null;
     user_name: string | null;
@@ -104,8 +109,13 @@ export type NeodoveAgentsSummary = {
 };
 
 export async function listNeodoveAgents(): Promise<NeodoveAgentsSummary> {
-    const [map, agentRows, totals, userRows] = await Promise.all([
+    const [map, waiting, agentRows, totals, userRows] = await Promise.all([
         readMap(),
+        // Decoration: a failure here must not take the mapping screen down.
+        callerNotLinkedCounts().catch((e) => {
+            console.warn("[neodove/agentMap] caller-not-linked counts skipped:", e instanceof Error ? e.message : e);
+            return new Map<string, number>();
+        }),
         db.execute<{
             key: string;
             name: string;
@@ -157,6 +167,7 @@ export async function listNeodoveAgents(): Promise<NeodoveAgentsSummary> {
             name: r.name,
             calls: Number(r.calls),
             unattributed: Number(r.unattributed),
+            leads_waiting: waiting.get(r.key) ?? 0,
             last_call_at: r.last_call_at ? new Date(r.last_call_at).toISOString() : null,
             user_id: userId,
             // A mapped user who has since been deactivated drops out of `users`.

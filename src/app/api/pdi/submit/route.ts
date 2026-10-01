@@ -4,8 +4,12 @@ import { db } from '@/lib/db';
 import { pdiRecords, oemInventoryForPDI, inventory } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
 import { v4 as uuidv4 } from 'uuid';
+import { guardApi } from "@/lib/auth/apiGuard";
 
 export async function POST(request: Request) {
+    // ID 118: signed in, with a role that reaches this screen.
+    const authGate = await guardApi(["service_engineer", "inventory_manager", "admin", "ops_manager", "super_admin", "sales_head", "ceo"]);
+    if (!authGate.ok) return authGate.response;
     try {
         const body = await request.json();
 

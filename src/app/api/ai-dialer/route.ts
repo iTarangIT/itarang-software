@@ -3,8 +3,13 @@ import { dealerLeads } from "@/lib/db/schema";
 import { triggerBolnaCall } from "@/lib/ai/bolna_ai/triggerCall";
 import { desc, isNotNull } from "drizzle-orm";
 import { NextResponse } from "next/server";
+import { LEADS_OVERSIGHT_ROLES } from "@/lib/leads/access";
+import { guardApi } from "@/lib/auth/apiGuard";
 
 export async function POST() {
+  // ID 118: signed in, with a role that reaches this screen.
+  const authGate = await guardApi([...LEADS_OVERSIGHT_ROLES]);
+  if (!authGate.ok) return authGate.response;
   try {
     const leads = await db
       .select()

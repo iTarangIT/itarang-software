@@ -16,6 +16,7 @@ import { inviteDealerOnboardingApplier } from "./tools/write/inviteDealerOnboard
 import { createLeadApplier } from "./tools/write/createLead";
 import { createQuoteApplier } from "./tools/write/createQuote";
 import { sendQuoteApplier } from "./tools/write/sendQuote";
+import { withdrawQuoteApplier } from "./tools/write/withdrawQuote";
 import { attachDocumentApplier } from "./tools/write/attachDocument";
 import { updateLeadApplier } from "./tools/write/updateLead";
 
@@ -33,6 +34,7 @@ export const APPLIERS: Readonly<Record<WriteToolName, Applier<unknown>>> = Objec
     create_lead: createLeadApplier,
     create_quote: createQuoteApplier,
     send_quote: sendQuoteApplier,
+    withdraw_quote: withdrawQuoteApplier,
     attach_document: attachDocumentApplier,
     update_lead: updateLeadApplier,
 });

@@ -3,25 +3,32 @@ export const runtime = "nodejs";
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import {
+  dealerAgreementDocuments,
   dealerAgreementEvents,
+  dealerAgreementOverrideRequests,
   dealerOnboardingApplications,
 } from "@/lib/db/schema";
-import { eq, sql } from "drizzle-orm";
-import { createClient } from "@supabase/supabase-js";
+import { eq } from "drizzle-orm";
 import { requireSalesHead } from "@/lib/auth/requireSalesHead";
 import { normalizeAgreementStatus } from "@/lib/agreement/status";
-import { isS3Backend, putObject, filesProxyPath } from "@/lib/storage/s3";
 import { usesManualAgreement } from "@/lib/dealer/dealer-capabilities";
 import { checkUploadedAgreement } from "@/lib/agreement/readExecutedAgreement";
+import {
+  AGREEMENT_BUCKET,
+  MIGRATION_MISSING_MESSAGE,
+  OVERRIDE_REASON_MIN,
+  agreementCompletionValues,
+  auditTrailPath,
+  isMissingSchemaError,
+  signedAgreementPath,
+  storeAgreementPdf,
+} from "@/lib/agreement/executedAgreementStore";
+import { notifyAgreementApprovalRequested } from "@/lib/notifications/events";
 import { markAgreementOutcome } from "@/lib/onboarding/leadMilestones";
 
 type RouteContext = {
   params: Promise<{ dealerId: string }>;
 };
-
-function cleanEnv(value?: string) {
-  return value?.trim().replace(/^["']|["']$/g, "");
-}
 
 function isValidPdfBuffer(buffer: ArrayBuffer | null | undefined): boolean {
   if (!buffer || buffer.byteLength < 500) return false;
@@ -55,12 +62,22 @@ function isValidPdfBuffer(buffer: ArrayBuffer | null | undefined): boolean {
  * is the paper's own provenance — a reference number and the date signed.
  *
  * Both cases write the same canonical storage paths, so the download routes and
- * ensureDealer*Url() resolve the uploaded copy and Digio is never re-queried. *
- * ID 55 (29 Sep 2026): the system READS the files — signers, signing dates,
- * Digio document ID, dealer name / GSTIN — checks them against the application
- * and Digio (checkUploadedAgreement), and writes the signed date and reference
- * from them. A mismatch needs the admin's confirmation with a reason. Several
- * audit trails can be uploaded, and more added after completion.
+ * ensureDealer*Url() resolve the uploaded copy and Digio is never re-queried.
+ *
+ * ID 55 (29 Sep 2026; tightened 01 Oct after the 30 Sep review): the system
+ * READS every file — signers, signing dates, Digio document ID, dealer name /
+ * GSTIN — and checks each against the application, Digio and what the admin
+ * typed (checkUploadedAgreement).
+ *
+ *   verified   the agreement is completed here, with the signed date and
+ *              reference written FROM THE DOCUMENTS.
+ *   otherwise  the uploader cannot complete it. They may ask for a second
+ *              approval with a reason: the files are stored, the status does
+ *              not move, and someone else decides
+ *              (agreement-override/[requestId], E-318).
+ *
+ * Status, per-file records and the timeline event commit in ONE transaction —
+ * there is no completed agreement without its record.
  */
 export async function POST(req: NextRequest, context: RouteContext) {
   const auth = await requireSalesHead();
@@ -115,8 +132,7 @@ export async function POST(req: NextRequest, context: RouteContext) {
     // For a MANUAL-mode dealer the same check would be unsatisfiable: they
     // never go to Digio (initiate-agreement refuses them), so
     // provider_document_id is null forever and this is the primary path, not a
-    // fallback. Either way the write is admin-only and lands a
-    // "manual_completion" event for traceability.
+    // fallback.
     if (!isManualMode && !application.provider_document_id) {
       return NextResponse.json(
         {
@@ -216,80 +232,170 @@ export async function POST(req: NextRequest, context: RouteContext) {
     const typedSignedOn = rawSignedOn || null;
 
     // ─── read and check the documents (ID 55) ─────────────────────────────
-    // The system reads every file (signers, dates, document ID, dealer name /
-    // GSTIN) and checks them against this application and Digio. A mismatch is
-    // not saved unless the admin confirms it with a reason — the page resends
-    // the same files with confirmMismatch=true.
+    // Every file is read and has to stand on its own; the typed date and
+    // reference are checked against what was read rather than replacing it.
     const { result: check, docs: extracted } = await checkUploadedAgreement({
       application,
       manualMode: isManualMode,
-      files: uploads.map((u) => ({ kind: u.kind, buffer: u.buffer })),
+      files: uploads.map((u) => ({ kind: u.kind, buffer: u.buffer, fileName: u.file.name })),
+      typed: { signedOn: typedSignedOn, referenceNumber: typedRef },
     });
-    const confirmMismatch = String(form.get("confirmMismatch") ?? "") === "true";
-    const mismatchReason = String(form.get("mismatchReason") ?? "").trim();
-    if (check.verdict !== "verified" && !(confirmMismatch && mismatchReason.length >= 5)) {
+    const read = {
+      signedOn: check.signedOn,
+      documentId: check.documentId,
+      referenceNumber: check.referenceNumber,
+      signers: check.signers,
+    };
+
+    // `confirmMismatch` is the pre-E-318 name of the same request.
+    const requestApproval =
+      String(form.get("requestApproval") ?? form.get("confirmMismatch") ?? "") === "true";
+    const requestReason = String(form.get("mismatchReason") ?? "").trim();
+
+    if (check.verdict !== "verified" && !(requestApproval && requestReason.length >= OVERRIDE_REASON_MIN)) {
       return NextResponse.json(
         {
           success: false,
           needsConfirmation: true,
+          needsApproval: true,
+          reasonMinLength: OVERRIDE_REASON_MIN,
           message:
             check.verdict === "unreadable"
-              ? "The system could not read the uploaded files. Check them, or confirm with a reason to save anyway."
-              : "The uploaded documents do not match this dealer. Check them, or confirm with a reason to save anyway.",
+              ? "The system could not read the uploaded files. Check them, or send them for a second approval with a reason."
+              : "The uploaded documents could not be verified for this dealer. Check them, or send them for a second approval with a reason.",
           verdict: check.verdict,
           reasons: check.reasons,
-          read: {
-            signedOn: check.signedOn,
-            documentId: check.documentId,
-            referenceNumber: check.referenceNumber,
-            signers: check.signers,
-          },
+          read,
         },
         { status: 422 }
       );
     }
 
     // ─── upload to storage ────────────────────────────────────────────────
-    const bucketName = "dealer-documents";
-
-    // Canonical paths — identical to ensureDealer*Url() and the download routes
-    // so everything downstream resolves the manually-uploaded copy. They hold
-    // the FIRST signed agreement / audit trail; every file also gets its own
-    // key so a second trail never overwrites the first.
-    const signedPath = `agreements/${dealerId}/signed-agreement.pdf`;
-    const auditPath = `agreements/${dealerId}/audit-trail.pdf`;
-
-    let supabase: ReturnType<typeof createClient> | null = null;
-    if (!isS3Backend) {
-      const supabaseUrl = cleanEnv(process.env.NEXT_PUBLIC_SUPABASE_URL);
-      const serviceRoleKey = cleanEnv(process.env.SUPABASE_SERVICE_ROLE_KEY);
-      if (!supabaseUrl || !serviceRoleKey) {
-        return NextResponse.json(
-          { success: false, message: "Missing Supabase configuration" },
-          { status: 500 }
-        );
-      }
-      supabase = createClient(supabaseUrl, serviceRoleKey);
-    }
-    const store = async (path: string, buffer: Buffer): Promise<string | undefined> => {
-      if (isS3Backend) {
-        await putObject(bucketName, path, buffer, "application/pdf");
-        return filesProxyPath(bucketName, path);
-      }
-      const { error } = await supabase!.storage
-        .from(bucketName)
-        .upload(path, buffer, { contentType: "application/pdf", upsert: true });
-      if (error) throw new Error(`Failed to store ${path}: ${error.message}`);
-      return supabase!.storage.from(bucketName).getPublicUrl(path).data?.publicUrl;
-    };
-
+    // Every file gets a key of its own, so a second trail never overwrites the
+    // first. The canonical keys are written only for a verified upload — a
+    // file still waiting for approval must not be what the download routes and
+    // the welcome email serve.
     const stamp = Date.now();
     const stored: Array<{ kind: string; file: File; path: string; url: string | undefined; index: number }> = [];
     for (const [i, u] of uploads.entries()) {
       const path = `agreements/${dealerId}/files/${stamp}-${i + 1}-${u.kind}.pdf`;
-      stored.push({ kind: u.kind, file: u.file, path, url: await store(path, u.buffer), index: i });
+      stored.push({ kind: u.kind, file: u.file, path, url: await storeAgreementPdf(path, u.buffer), index: i });
+    }
+    const documentRows = (status: "accepted" | "pending_approval", overrideRequestId: string | null) =>
+      stored.map((f) => ({
+        application_id: dealerId,
+        kind: f.kind,
+        file_name: f.file.name,
+        byte_size: f.file.size,
+        storage_bucket: AGREEMENT_BUCKET,
+        storage_path: f.path,
+        file_url: f.url ?? null,
+        extracted: extracted[f.index] ?? {},
+        verdict: check.verdict,
+        reasons: check.reasons,
+        uploaded_by: auth.user.id,
+        status,
+        override_request_id: overrideRequestId,
+      }));
+    const actorEmail = auth.user.email ?? null;
+    const eventBase = {
+      source: "admin_manual_upload",
+      actorEmail,
+      signedAgreementFiles: signedFiles.map((f) => f.name),
+      auditTrailFiles: auditFiles.map((f) => f.name),
+      // E-225 — distinguishes "this dealer type always signs on paper" from
+      // "a Digio e-sign that had to be finished by hand".
+      agreementMode: isManualMode ? "manual" : "esign",
+      dealerType: application.dealer_type ?? null,
+    };
+
+    // ─── not verified → ask for a second approval (E-318) ─────────────────
+    if (check.verdict !== "verified") {
+      let requestId: string;
+      try {
+        requestId = await db.transaction(async (tx) => {
+          const [request] = await tx
+            .insert(dealerAgreementOverrideRequests)
+            .values({
+              application_id: dealerId,
+              add_only: alreadyCompleted,
+              provider_document_id: application.provider_document_id,
+              verdict: check.verdict,
+              reasons: check.reasons,
+              read_values: read,
+              typed_signed_on: typedSignedOn,
+              typed_ref: typedRef,
+              request_reason: requestReason,
+              requested_by: auth.user.id,
+            })
+            .returning({ id: dealerAgreementOverrideRequests.id });
+          await tx.insert(dealerAgreementDocuments).values(documentRows("pending_approval", request.id));
+          await tx.insert(dealerAgreementEvents).values({
+            application_id: application.id,
+            provider_document_id: application.provider_document_id,
+            request_id: application.request_id,
+            event_type: "manual_override_requested",
+            event_status: "pending_approval",
+            event_payload: {
+              ...eventBase,
+              overrideRequestId: request.id,
+              requestedBy: auth.user.id,
+              requestReason,
+              typed: { signedOn: typedSignedOn, referenceNumber: typedRef },
+              verification: { verdict: check.verdict, reasons: check.reasons, ...read },
+            },
+          });
+          return request.id;
+        });
+      } catch (err) {
+        if (isMissingSchemaError(err)) {
+          return NextResponse.json({ success: false, message: MIGRATION_MISSING_MESSAGE }, { status: 503 });
+        }
+        if (hasPgCode(err, "23505")) {
+          return NextResponse.json(
+            {
+              success: false,
+              message:
+                "An upload for this dealer is already waiting for a second approval. It has to be approved, rejected or withdrawn first.",
+            },
+            { status: 409 }
+          );
+        }
+        throw err;
+      }
+
+      // Bell + email to every other active Sales Head / CEO — the only people
+      // who can decide it. The request is already committed and shows on the
+      // review page; emit() never throws, and the cap keeps a slow mail
+      // gateway from stalling the response.
+      await Promise.race([
+        notifyAgreementApprovalRequested({
+          dealerId,
+          businessName: application.company_name,
+          requestId,
+          requesterId: auth.user.id,
+          requestReason,
+          reasons: check.reasons,
+        }),
+        new Promise((resolve) => setTimeout(resolve, 10_000)),
+      ]);
+
+      return NextResponse.json(
+        {
+          success: true,
+          pendingApproval: true,
+          overrideRequestId: requestId,
+          message:
+            "Sent for a second approval. The documents are stored, but the agreement is not marked completed until another Sales Head or the CEO approves them.",
+          agreementStatus: application.agreement_status,
+          verification: { verdict: check.verdict, reasons: check.reasons },
+        },
+        { status: 202 }
+      );
     }
 
+    // ─── verified → on record now ─────────────────────────────────────────
     const firstSigned = uploads.find((u) => u.kind === "signed_agreement");
     const firstAudit = uploads.find((u) => u.kind === "audit_trail");
     let signedAgreementUrl: string | undefined;
@@ -297,140 +403,109 @@ export async function POST(req: NextRequest, context: RouteContext) {
     // Canonical copies: always on first completion; afterwards only to fill a
     // gap (a paper dealer adding their first trail), never to overwrite.
     if (firstSigned && !alreadyCompleted) {
-      signedAgreementUrl = await store(signedPath, firstSigned.buffer);
+      signedAgreementUrl = await storeAgreementPdf(signedAgreementPath(dealerId), firstSigned.buffer);
     }
     const fillAudit = !!firstAudit && (!alreadyCompleted || !application.audit_trail_storage_path);
     if (fillAudit && firstAudit) {
-      auditTrailUrl = await store(auditPath, firstAudit.buffer);
+      auditTrailUrl = await storeAgreementPdf(auditTrailPath(dealerId), firstAudit.buffer);
     }
 
     const now = new Date();
-    // Dates and reference from the documents; what the admin typed wins.
-    const signedOn = typedSignedOn ?? check.signedOn;
-    const agreementRef = typedRef ?? check.referenceNumber;
+    // Verified means the documents carry the date, and that anything typed
+    // agrees with them — so the documents are what gets written. A typed
+    // reference is used only when the paper shows none.
+    const signedOn = check.signedOn;
+    const agreementRef = check.referenceNumber ?? typedRef;
+    const agreementRefSource = check.referenceNumber ? "document" : typedRef ? "typed" : null;
 
-    if (!alreadyCompleted) {
-      // ─── flip agreement to completed (mirrors refresh-agreement) ────────
-      await db
-        .update(dealerOnboardingApplications)
-        .set({
-          agreement_status: "completed",
-          // An already-approved dealer completing their agreement via the
-          // post-approval finance-enablement flow stays "approved" — rewinding
-          // review_status would put a live dealer back in the pending queue.
-          ...(application.onboarding_status === "approved"
-            ? {}
-            : {
-                review_status: "agreement_completed",
-                completion_status: "completed",
-              }),
-          signed_agreement_url: signedAgreementUrl || application.signed_agreement_url,
-          signed_agreement_storage_path: signedPath,
-          audit_trail_url: auditTrailUrl || application.audit_trail_url,
-          // Only claim an audit trail when one was actually stored — otherwise a
-          // manual-mode row would advertise a path the download route then 404s on.
-          ...(fillAudit ? { audit_trail_storage_path: auditPath } : {}),
-          // E-225 — record HOW this was executed, and the paper's own provenance.
-          agreement_mode: isManualMode ? "manual" : application.agreement_mode ?? "esign",
-          ...(agreementRef ? { agreement_ref: agreementRef } : {}),
-          ...(signedOn ? { agreement_signed_on: signedOn } : {}),
-          agreement_completed_at: application.agreement_completed_at || now,
-          // The day the documents show the last party signed, over "when an
-          // admin got round to uploading it" — signed_at is what the rest of
-          // the app displays.
-          signed_at:
-            application.signed_at ||
-            (signedOn ? new Date(`${signedOn}T00:00:00+05:30`) : now),
-          agreement_failure_reason: null,
-          last_action_timestamp: now,
-          updated_at: now,
-        })
-        .where(eq(dealerOnboardingApplications.id, dealerId));
-      // ID 84.2: the lead's agreement milestone. Best-effort — never throws.
-      await markAgreementOutcome({ applicationId: dealerId }, "completed");
-    } else if (fillAudit) {
-      await db
-        .update(dealerOnboardingApplications)
-        .set({
-          audit_trail_url: auditTrailUrl || application.audit_trail_url,
-          audit_trail_storage_path: auditPath,
-          updated_at: now,
-        })
-        .where(eq(dealerOnboardingApplications.id, dealerId));
-    }
-
-    // ─── per-file record (E-313) — fail-tolerant ──────────────────────────
-    const confirmedBy = check.verdict !== "verified" ? auth.user.id : null;
-    for (const f of stored) {
-      try {
-        await db.execute(sql`
-          INSERT INTO dealer_agreement_documents
-            (application_id, kind, file_name, byte_size, storage_bucket, storage_path, file_url,
-             extracted, verdict, reasons, mismatch_confirmed_by, mismatch_reason, uploaded_by)
-          VALUES (${dealerId}, ${f.kind}, ${f.file.name}, ${f.file.size}, ${bucketName}, ${f.path},
-                  ${f.url ?? null}, ${JSON.stringify(extracted[f.index] ?? {})}::jsonb, ${check.verdict},
-                  ${JSON.stringify(check.reasons)}::jsonb, ${confirmedBy},
-                  ${confirmedBy ? mismatchReason : null}, ${auth.user.id})
-        `);
-      } catch (docErr) {
-        console.warn("[UPLOAD SIGNED AGREEMENT] document row insert failed (E-313 applied?):", docErr);
-      }
-    }
-
-    // Audit breadcrumb in the agreement timeline so it's visible that the
-    // completion was a manual upload, not a Digio-synced event.
     try {
-      const actorEmail = auth.user.email ?? null;
-      await db.insert(dealerAgreementEvents).values({
-        application_id: application.id,
-        provider_document_id: application.provider_document_id,
-        request_id: application.request_id,
-        event_type: alreadyCompleted ? "manual_documents_added" : "manual_completion",
-        event_status: "completed",
-        event_payload: {
-          source: "admin_manual_upload",
-          actorEmail,
-          signedAgreementFiles: signedFiles.map((f) => f.name),
-          auditTrailFiles: auditFiles.map((f) => f.name),
-          // E-225 — distinguishes "this dealer type always signs on paper" from
-          // "a Digio e-sign that had to be finished by hand".
-          agreementMode: isManualMode ? "manual" : "esign",
-          dealerType: application.dealer_type ?? null,
-          agreementRef,
-          agreementSignedOn: signedOn,
-          // ID 55 — what the system read and whether it matched.
-          verification: {
-            verdict: check.verdict,
-            reasons: check.reasons,
-            documentId: check.documentId,
-            signers: check.signers,
-            mismatchConfirmedBy: confirmedBy,
-            mismatchReason: confirmedBy ? mismatchReason : null,
+      await db.transaction(async (tx) => {
+        if (!alreadyCompleted) {
+          await tx
+            .update(dealerOnboardingApplications)
+            .set(
+              agreementCompletionValues(application, {
+                manualMode: isManualMode,
+                signedOn,
+                agreementRef,
+                signedAgreementUrl,
+                auditTrailUrl,
+                auditStored: fillAudit,
+                now,
+              })
+            )
+            .where(eq(dealerOnboardingApplications.id, dealerId));
+        } else if (fillAudit) {
+          await tx
+            .update(dealerOnboardingApplications)
+            .set({
+              audit_trail_url: auditTrailUrl || application.audit_trail_url,
+              audit_trail_storage_path: auditTrailPath(dealerId),
+              updated_at: now,
+            })
+            .where(eq(dealerOnboardingApplications.id, dealerId));
+        }
+
+        await tx.insert(dealerAgreementDocuments).values(documentRows("accepted", null));
+
+        // Timeline breadcrumb: the completion was a manual upload, not a
+        // Digio-synced event.
+        await tx.insert(dealerAgreementEvents).values({
+          application_id: application.id,
+          provider_document_id: application.provider_document_id,
+          request_id: application.request_id,
+          event_type: alreadyCompleted ? "manual_documents_added" : "manual_completion",
+          event_status: "completed",
+          event_payload: {
+            ...eventBase,
+            agreementRef,
+            agreementRefSource,
+            agreementSignedOn: signedOn,
+            // ID 55 — what the system read and that it matched.
+            verification: { verdict: check.verdict, reasons: check.reasons, ...read },
           },
-        },
+        });
       });
-    } catch (eventErr) {
-      console.warn("[UPLOAD SIGNED AGREEMENT] timeline event insert failed (non-blocking):", eventErr);
+    } catch (err) {
+      if (isMissingSchemaError(err)) {
+        return NextResponse.json({ success: false, message: MIGRATION_MISSING_MESSAGE }, { status: 503 });
+      }
+      throw err;
+    }
+
+    // ID 84.2: the lead's agreement milestone, once the completion has
+    // committed. Best-effort — never throws.
+    if (!alreadyCompleted) {
+      await markAgreementOutcome({ applicationId: dealerId }, "completed");
     }
 
     return NextResponse.json({
       success: true,
       message: alreadyCompleted
-        ? `${uploads.length} document(s) added to the agreement.`
-        : check.verdict === "verified"
-          ? `Documents read and matched${signedOn ? ` — signed on ${signedOn}` : ""}. Agreement marked completed — you can now approve the dealer.`
-          : "Documents saved with your confirmation. Agreement marked completed — you can now approve the dealer.",
+        ? `${uploads.length} document(s) read, matched and added to the agreement.`
+        : `Documents read and matched${signedOn ? ` — signed on ${signedOn}` : ""}. Agreement marked completed — you can now approve the dealer.`,
       agreementStatus: "completed",
       agreementMode: isManualMode ? "manual" : "esign",
       verification: { verdict: check.verdict, reasons: check.reasons, signedOn, documentId: check.documentId },
       signedAgreementUrl,
       auditTrailUrl,
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("UPLOAD SIGNED AGREEMENT ERROR:", error);
     return NextResponse.json(
-      { success: false, message: error?.message || "Failed to save documents" },
+      { success: false, message: (error instanceof Error && error.message) || "Failed to save documents" },
       { status: 500 }
     );
   }
+}
+
+function hasPgCode(err: unknown, code: string): boolean {
+  const seen = new Set<unknown>();
+  let e = err as { code?: string; cause?: unknown } | null | undefined;
+  while (e && !seen.has(e)) {
+    seen.add(e);
+    if (e.code === code) return true;
+    e = e.cause as typeof e;
+  }
+  return false;
 }

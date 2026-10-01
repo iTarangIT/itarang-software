@@ -27,7 +27,7 @@ export const METRIC_DEFINITIONS: Readonly<Record<string, string>> = Object.freez
     interest: "open leads you own, by current temperature",
     calls_per_day: "your logged inside-sales calls (AI-dialer calls NOT counted) per working day so far",
     hot_to_ground: "leads you transferred to an ASM that were Hot at the moment of transfer",
-    dealer_visits: "visits you logged this month, new and existing dealers",
+    dealer_visits: "distinct dealers you visited this month, new and existing (two visits to one dealer count once)",
     new_dealer_visits: "dealers visited for the first time ever",
     batteries_sold: "batteries to dealers this month",
     kyc_submitted: "KYC files submitted this month",

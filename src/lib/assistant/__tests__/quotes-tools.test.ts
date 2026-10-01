@@ -30,6 +30,11 @@ vi.mock("@/lib/leads/quoteSendGate", async (orig) => ({
 }));
 const sendApprovedQuotation = vi.fn();
 vi.mock("@/lib/leads/sendQuotation", () => ({ sendApprovedQuotation }));
+const withdrawWriter = vi.fn();
+vi.mock("@/lib/leads/withdrawQuote", async (orig) => ({
+    ...(await orig<typeof import("@/lib/leads/withdrawQuote")>()),
+    withdrawQuote: withdrawWriter,
+}));
 const afterCommit = vi.fn(async () => ({ quote_number: "ITQ-2026-0007" }));
 const createLeadCommercial = vi.fn();
 vi.mock("@/lib/leads/createCommercial", () => ({ createLeadCommercial }));
@@ -96,18 +101,20 @@ beforeEach(() => {
 });
 
 describe("registry", () => {
-    it("both roles get all four quote tools; off the pilot list only the two reads", () => {
+    it("both roles get the quote tools; off the pilot list only the two reads", () => {
         for (const u of [ISR, ASM]) {
             const names = toolNamesFor(u.role, true);
-            for (const n of ["product_catalogue", "quote_status", "create_quote", "send_quote"]) expect(names, `${u.role} ${n}`).toContain(n);
+            for (const n of ["product_catalogue", "quote_status", "create_quote", "send_quote", "withdraw_quote"]) expect(names, `${u.role} ${n}`).toContain(n);
             const readOnly = toolNamesFor(u.role, false);
             expect(readOnly).toContain("product_catalogue");
             expect(readOnly).toContain("quote_status");
             expect(readOnly).not.toContain("create_quote");
             expect(readOnly).not.toContain("send_quote");
+            expect(readOnly).not.toContain("withdraw_quote");
         }
         expect(APPLIERS.create_quote).toBeDefined();
         expect(APPLIERS.send_quote).toBeDefined();
+        expect(APPLIERS.withdraw_quote).toBeDefined();
     });
 });
 
@@ -283,6 +290,18 @@ describe("send_quote", () => {
         expect(createPending).not.toHaveBeenCalled();
     });
 
+    it("ID 60: a revision still at the CEO replaces nothing — the last approved version is the one sent", async () => {
+        const v1 = quoteView({ commercial_id: "com-1", version_no: 1, quote_number: "ITQ-2026-0001" });
+        const v2 = quoteView({ commercial_id: "com-2", version_no: 2, approval_status: "pending", quote_number: null, pdf_ready: false });
+        loadLatestQuote.mockImplementation(async (_lead: string, pick?: string) => (pick === "live" ? v1 : v2));
+        loadQuote.mockResolvedValue(sendRow({ commercial_id: "com-1", version_no: 1, quote_number: "ITQ-2026-0001" }));
+        const r = await run(ISR, "send_quote", { lead_id: "DL-7" });
+        expect(r.kind).toBe("preview");
+        expect(loadQuote).toHaveBeenCalledWith("DL-7", "com-1");
+        expect(stored().plan).toMatchObject({ commercial_id: "com-1", quote_number: "ITQ-2026-0001" });
+        expect(previewText(stored().preview)).toMatch(/v2 is waiting for ceo approval, so v1 is still the current quote/);
+    });
+
     it("the applier writes nothing in the tx; afterCommit sends and reports per channel", async () => {
         const plan = APPLIERS.send_quote.schema.parse({ lead_id: "DL-7", commercial_id: "com-3", quote_number: "ITQ-2026-0003", channels: ["whatsapp", "email"] });
         sendApprovedQuotation.mockResolvedValue({
@@ -301,6 +320,98 @@ describe("send_quote", () => {
         // The gate closed between preview and Confirm: nothing went, and it says why.
         sendApprovedQuotation.mockRejectedValue(new QuotationNotSendableError("not_approved", "This quotation is pending and cannot be sent to a dealer."));
         expect(await out.afterCommit!()).toMatchObject({ sent: [], failed: ["whatsapp", "email"], error: expect.stringMatching(/pending/) });
+    });
+});
+
+describe("withdraw_quote (ID 78)", () => {
+    it("the latest quote + a reason → a preview naming the quote, the reason and the consequence", async () => {
+        loadLatestQuote.mockResolvedValue(quoteView());
+        const r = await run(ISR, "withdraw_quote", { lead_id: "DL-7", reason: "OEM price went up" });
+        expect(r.kind).toBe("preview");
+        const s = stored();
+        expect(s.tool).toBe("withdraw_quote");
+        expect(s.plan).toEqual({
+            lead_id: "DL-7", commercial_id: "com-3", quote_number: "ITQ-2026-0003", version_no: 3, reason: "OEM price went up",
+        });
+        const text = previewText(s.preview);
+        expect(text).toMatch(/ITQ-2026-0003 \(v3\)/);
+        expect(text).toMatch(/OEM price went up/);
+        expect(text).toMatch(/can no longer answer/);
+    });
+
+    it("a quote still waiting for the CEO can be withdrawn", async () => {
+        loadLatestQuote.mockResolvedValue(quoteView({ approval_status: "pending", quote_number: null, pdf_ready: false }));
+        const r = await run(ASM, "withdraw_quote", { lead_id: "DL-7", reason: "wrong quantity" });
+        expect(r.kind).toBe("preview");
+        expect(previewText(stored().preview)).toMatch(/Waiting for CEO approval/);
+    });
+
+    it("a rejected revision above a live quote: the live quote is the one withdrawn", async () => {
+        const v1 = quoteView({ commercial_id: "com-1", version_no: 1, quote_number: "ITQ-2026-0001" });
+        const v2 = quoteView({ commercial_id: "com-2", version_no: 2, approval_status: "rejected" });
+        loadLatestQuote.mockImplementation(async (_lead: string, pick?: string) => (pick === "in_play" ? v1 : v2));
+        const r = await run(ISR, "withdraw_quote", { lead_id: "DL-7", reason: "dealer went quiet" });
+        expect(r.kind).toBe("preview");
+        expect(stored().plan).toMatchObject({ commercial_id: "com-1", version_no: 1 });
+    });
+
+    it("no reason, or one too short → a question, nothing proposed", async () => {
+        loadLatestQuote.mockResolvedValue(quoteView());
+        expect((await run(ISR, "withdraw_quote", { lead_id: "DL-7" })).kind).toBe("question");
+        expect((await run(ISR, "withdraw_quote", { lead_id: "DL-7", reason: " no " })).kind).toBe("question");
+        expect(createPending).not.toHaveBeenCalled();
+    });
+
+    it("no quote / rejected / dealer approved / closed lead → declined, nothing proposed", async () => {
+        loadLatestQuote.mockResolvedValue(null);
+        expect(await run(ISR, "withdraw_quote", { lead_id: "DL-7", reason: "price changed" })).toMatchObject({ kind: "declined", reason: expect.stringMatching(/no open quote/) });
+
+        loadLatestQuote.mockResolvedValue(quoteView({ approval_status: "rejected" }));
+        expect(await run(ISR, "withdraw_quote", { lead_id: "DL-7", reason: "price changed" })).toMatchObject({ reason: expect.stringMatching(/rejected by the CEO/) });
+
+        // After the dealer's yes only Mark Won / Mark Lost close the lead.
+        loadLatestQuote.mockResolvedValue(quoteView({ dealer_decision: "approved" }));
+        expect(await run(ISR, "withdraw_quote", { lead_id: "DL-7", reason: "price changed" })).toMatchObject({ reason: expect.stringMatching(/Mark the lead Won or Lost/) });
+
+        loadLatestQuote.mockResolvedValue(quoteView());
+        findLeadInScope.mockResolvedValue(lead({ lead_status: "Won" }));
+        expect(await run(ISR, "withdraw_quote", { lead_id: "DL-7", reason: "price changed" })).toMatchObject({ reason: expect.stringMatching(/lead is Won/) });
+        expect(createPending).not.toHaveBeenCalled();
+    });
+
+    it("not owned / pilot off → no pending action", async () => {
+        loadLatestQuote.mockResolvedValue(quoteView());
+        findLeadInScope.mockResolvedValue(lead({ current_owner_id: "isr-2", owned: false }));
+        expect((await run(ISR, "withdraw_quote", { lead_id: "DL-7", reason: "price changed" })).kind).toBe("declined");
+        const t = tool(ISR, "withdraw_quote");
+        const off = await t.run({ ...ctx(ISR), writesEnabled: false }, t.schema.parse({ lead_id: "DL-7", reason: "price changed" }));
+        expect(off.kind).toBe("declined");
+        expect(createPending).not.toHaveBeenCalled();
+    });
+
+    it("the applier withdraws through the shared writer on the executor's tx", async () => {
+        withdrawWriter.mockResolvedValue({ quoteNumber: "ITQ-2026-0003", leadStatus: "Under_Discussion", liveQuote: null });
+        const plan = APPLIERS.withdraw_quote.schema.parse({
+            lead_id: "DL-7", commercial_id: "com-3", quote_number: "ITQ-2026-0003", version_no: 3, reason: "OEM price went up",
+        });
+        const out = await APPLIERS.withdraw_quote.apply({ tx: TX, user: ISR, step: 1 }, plan);
+        expect(withdrawWriter).toHaveBeenCalledWith(
+            { leadId: "DL-7", commercialId: "com-3", actorId: "isr-1", reason: "OEM price went up" },
+            { tx: TX },
+        );
+        expect(out).toEqual({ quote_number: "ITQ-2026-0003", lead_status: "Under_Discussion", live_quote_version: null });
+        expect(APPLIERS.withdraw_quote.needsSecondConfirm(plan)).toBe(false);
+    });
+
+    it("the reply says what happened to the lead", () => {
+        const confirmed = (after: Record<string, unknown>): ExecOutcome => ({
+            kind: "confirmed", actionId: "act-1", tool: "withdraw_quote", leadId: "DL-7",
+            title: "Withdraw quote — ABC Traders", after, crmUrl: "https://crm/l/DL-7", extra: null,
+        });
+        const back = renderTapOutcome(confirmed({ quote_number: "ITQ-2026-0003", lead_status: "Under_Discussion", live_quote_version: null }));
+        expect(back).toMatchObject({ kind: "text", body: expect.stringMatching(/ITQ-2026-0003 withdrawn[\s\S]*back to Under discussion/) });
+        const stay = renderTapOutcome(confirmed({ quote_number: "ITQ-2026-0003", lead_status: "Awaiting_Customer_Decision", live_quote_version: 2 }));
+        expect(stay).toMatchObject({ kind: "text", body: expect.stringMatching(/v2 is still live[\s\S]*status is unchanged/) });
     });
 });
 

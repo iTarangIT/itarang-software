@@ -128,12 +128,30 @@ function toView(r: QuoteDbRow): QuoteView {
 }
 
 /**
+ * Which of a lead's quote versions a tool is asking about (ID 60 / 78):
+ *
+ *   "any"     — the newest quote not withdrawn, whatever the CEO said: what
+ *               quote_status reports and a revision builds on.
+ *   "live"    — the newest APPROVED one: the only version a dealer can be sent
+ *               (quoteSendGate's LIVE_QUOTE_VERSION). A revision still at the
+ *               CEO, or rejected, replaces nothing.
+ *   "in_play" — the newest approved or still waiting for the CEO: the version a
+ *               withdrawal closes. A rejected one is already closed.
+ */
+export type QuotePick = "any" | "live" | "in_play";
+
+/**
  * The lead's latest QUOTE (quote_issue / quote_revision) — the row a send or a
  * revision is about. Not simply is_current: a later terms_update or brochure
- * share becomes current without being a quote. Rejected quotes are rolled back
- * by the CEO decision route, so the latest one is still the one to report.
+ * share becomes current without being a quote.
  */
-export async function loadLatestQuote(leadId: string): Promise<QuoteView | null> {
+export async function loadLatestQuote(leadId: string, pick: QuotePick = "any"): Promise<QuoteView | null> {
+    const state =
+        pick === "live"
+            ? sql`AND approval_status = 'approved'`
+            : pick === "in_play"
+              ? sql`AND approval_status IN ('approved', 'pending')`
+              : sql``;
     const rows = await db.execute<QuoteDbRow>(sql`
         SELECT commercial_id::text AS commercial_id, version_no, event_type, approval_status,
                approval_mode, rejection_reason,
@@ -144,6 +162,7 @@ export async function loadLatestQuote(leadId: string): Promise<QuoteView | null>
          WHERE dealer_lead_id = ${leadId}
            AND event_type IN ('quote_issue', 'quote_revision')
            AND withdrawn_at IS NULL
+           ${state}
          ORDER BY version_no DESC
          LIMIT 1
     `);

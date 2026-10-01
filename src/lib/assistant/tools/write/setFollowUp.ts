@@ -5,22 +5,19 @@
 //          so it appears in Today's Schedule on that day.
 // PROPOSES only; setFollowUpApplier writes, from the executor, in one tx.
 //
-// When the rep actually spoke to the dealer (spoke_with_dealer), the shared
-// auto rule (lib/leads/autoProgress.ts) moves the status forward to Under
-// Discussion, marked "(auto)" on the preview. The touchpoint is then logged as
-// the call it was: only a conversation may ask for first contact (ID 115.2,
-// logTouchpoint.ts). A bare reminder stays a note and moves nothing.
+// A follow-up is a note and a date. It NEVER moves the lead's status
+// (tracker ID 80): "I spoke to the dealer" on a reminder is not an event. If
+// the rep did speak to the dealer, that is a call — log_call records it with
+// its outcome, and the outcome moves the status.
 
 import { z } from "zod";
 import { and, eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { leadVisits } from "@/lib/db/schema";
 import { logLeadTouchpoint } from "@/lib/inside-sales/logTouchpoint";
-import { autoProgressForFollowUp } from "@/lib/leads/autoProgress";
-import { LEAD_STATUS } from "@/lib/lifecycle/transitions";
 import { scheduleVisit } from "@/lib/asm/recordVisit";
 import { createPending } from "../../actions";
-import { fmtDate, statusLabel } from "../../format";
+import { fmtDate } from "../../format";
 import type { Preview, ToolContext, ToolResult } from "../../types";
 import { defineTool, LeadId, ownedLeadOr, type ToolFactory } from "../spec";
 import { leadUrl } from "../leads";
@@ -28,21 +25,15 @@ import { defineApplier } from "../../applierSpec";
 import { dayToInstant, futureDay, futureInstant } from "./when";
 import { IsoDate, IsoDateTime, Remarks } from "./vocabSchemas";
 
-/** Auto status change (spoke with the dealer → Under Discussion), recorded on the note touchpoint. */
-const StatusTo = z.enum(LEAD_STATUS).nullable().default(null);
-
+// No status_to: a plan stored before ID 80 may still carry one — zod drops
+// the unknown key, so an old card confirmed after the deploy moves nothing.
 export const SetFollowUpPlan = z.discriminatedUnion("kind", [
-    z.object({ kind: z.literal("isr_follow_up"), lead_id: z.string().min(1), follow_up_at: z.string(), note: z.string(), status_to: StatusTo }),
-    z.object({ kind: z.literal("asm_visit"), lead_id: z.string().min(1), visit_date: z.string(), note: z.string(), status_to: StatusTo }),
+    z.object({ kind: z.literal("isr_follow_up"), lead_id: z.string().min(1), follow_up_at: z.string(), note: z.string() }),
+    z.object({ kind: z.literal("asm_visit"), lead_id: z.string().min(1), visit_date: z.string(), note: z.string() }),
 ]);
 export type SetFollowUpPlan = z.infer<typeof SetFollowUpPlan>;
 
 const ask = (question: string): ToolResult => ({ kind: "question", question });
-
-const SpokeWithDealer = z
-    .boolean()
-    .optional()
-    .describe("true ONLY if the user says they actually spoke to the dealer (not just a reminder)");
 
 async function propose(
     ctx: ToolContext,
@@ -50,20 +41,16 @@ async function propose(
     plan: SetFollowUpPlan,
     lines: Preview["lines"],
     warning: string | null,
-    spokeWithDealer: boolean,
 ) {
     const owned = await ownedLeadOr(ctx, leadId);
     if (owned.result) return owned.result;
     const lead = owned.lead;
     const name = lead.shop_name || lead.dealer_name || lead.id;
-    const { statusTo } = autoProgressForFollowUp({ spokeWithDealer, currentStatus: lead.lead_status });
-    plan = { ...plan, status_to: statusTo };
-    if (statusTo) lines = [...lines, { label: "Status", value: `${statusLabel(lead.lead_status)} → ${statusLabel(statusTo)} (auto)` }];
     const preview: Preview = {
         title: `${plan.kind === "asm_visit" ? "Schedule visit" : "Set follow-up"} — ${name}`,
         lines,
-        // A note is not work (isWorkedTouchpoint) — unless it carries a status change.
-        resets_idle_clock: !!statusTo,
+        // A note is not work (isWorkedTouchpoint), and a follow-up moves no status.
+        resets_idle_clock: false,
         warning,
         needs_second_confirm: false,
         crm_url: leadUrl(ctx.user, lead.id),
@@ -88,8 +75,9 @@ export const setFollowUp: ToolFactory = (role) =>
               kind: "write",
               description:
                   "Propose scheduling the next visit to a lead the ASM owns (it appears in Today's Schedule on that day). " +
+                  "It never changes the lead's status — a visit that happened is logged with log_visit. " +
                   "Nothing is saved until Confirm.",
-              schema: z.object({ lead_id: LeadId, visit_date: IsoDate, note: Remarks.min(1), spoke_with_dealer: SpokeWithDealer }),
+              schema: z.object({ lead_id: LeadId, visit_date: IsoDate, note: Remarks.min(1) }),
               run: async (ctx, input): Promise<ToolResult> => {
                   // Pilot flag, scope and ownership BEFORE reading anything about the lead.
                   const scoped = await ownedLeadOr(ctx, input.lead_id);
@@ -119,13 +107,12 @@ export const setFollowUp: ToolFactory = (role) =>
                   return propose(
                       ctx,
                       input.lead_id,
-                      { kind: "asm_visit", lead_id: input.lead_id, visit_date: day.value, note: input.note.trim(), status_to: null },
+                      { kind: "asm_visit", lead_id: input.lead_id, visit_date: day.value, note: input.note.trim() },
                       [
                           { label: "Visit", value: `${fmtDate(day.value)} (goes to Today's Schedule)` },
                           { label: "Note", value: input.note.trim() },
                       ],
                       warning,
-                      input.spoke_with_dealer === true,
                   );
               },
           })
@@ -133,21 +120,21 @@ export const setFollowUp: ToolFactory = (role) =>
               name: "set_follow_up",
               kind: "write",
               description:
-                  "Propose setting the next follow-up date and time on a lead the user owns. Nothing is saved until Confirm.",
-              schema: z.object({ lead_id: LeadId, follow_up_at: IsoDateTime, note: Remarks.min(1), spoke_with_dealer: SpokeWithDealer }),
+                  "Propose setting the next follow-up date and time on a lead the user owns. It never changes the lead's " +
+                  "status — if the user spoke to the dealer, log that call with log_call instead. Nothing is saved until Confirm.",
+              schema: z.object({ lead_id: LeadId, follow_up_at: IsoDateTime, note: Remarks.min(1) }),
               run: async (ctx, input): Promise<ToolResult> => {
                   const when = futureInstant(input.follow_up_at, ctx.now);
                   if (!when.ok) return ask(when.question);
                   return propose(
                       ctx,
                       input.lead_id,
-                      { kind: "isr_follow_up", lead_id: input.lead_id, follow_up_at: when.value, note: input.note.trim(), status_to: null },
+                      { kind: "isr_follow_up", lead_id: input.lead_id, follow_up_at: when.value, note: input.note.trim() },
                       [
                           { label: "Follow-up", value: fmtDate(when.value)! },
                           { label: "Note", value: input.note.trim() },
                       ],
                       null,
-                      input.spoke_with_dealer === true,
                   );
               },
           });
@@ -164,11 +151,10 @@ export const setFollowUpApplier = defineApplier<SetFollowUpPlan>({
                     leadId: p.lead_id,
                     actorId: user.id,
                     body: {
-                        touchpoint_type: p.status_to ? "inside_sales_call" : "status_change_note",
+                        touchpoint_type: "status_change_note",
                         remarks: `Visit scheduled for ${p.visit_date}: ${p.note}`,
                         next_action: "follow_up",
                         next_action_at: dayToInstant(p.visit_date),
-                        status_change: p.status_to ? { to: p.status_to } : undefined,
                     },
                 },
                 { tx },
@@ -180,12 +166,11 @@ export const setFollowUpApplier = defineApplier<SetFollowUpPlan>({
                 leadId: p.lead_id,
                 actorId: user.id,
                 body: {
-                    touchpoint_type: p.status_to ? "inside_sales_call" : "status_change_note",
+                    touchpoint_type: "status_change_note",
                     remarks: `Follow-up: ${p.note}`,
                     next_action: "follow_up",
                     next_action_at: p.follow_up_at,
                     follow_up_at: p.follow_up_at,
-                    status_change: p.status_to ? { to: p.status_to } : undefined,
                 },
             },
             { tx },

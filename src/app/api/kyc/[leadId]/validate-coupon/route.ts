@@ -3,6 +3,7 @@ import { db } from '@/lib/db';
 import { couponCodes, leads } from '@/lib/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { calculateDiscount } from '@/lib/razorpay';
+import { requireLeadAccess } from "@/lib/auth/requireLeadAccess";
 
 const BASE_FEE = Number(process.env.FACILITATION_FEE_BASE_AMOUNT) || 1500;
 
@@ -12,6 +13,9 @@ const BASE_FEE = Number(process.env.FACILITATION_FEE_BASE_AMOUNT) || 1500;
 const HARDCODED_FREE_COUPON = 'ITARANG-FREE';
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
+    // ID 118: signed in, and this lead is the caller's to touch (a dealer's own lead, or back office).
+    const leadGate = await requireLeadAccess((await params).leadId);
+    if (!leadGate.ok) return leadGate.response;
     try {
         const { leadId } = await params;
         const { couponCode } = await req.json();

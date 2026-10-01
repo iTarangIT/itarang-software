@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { submitCoBorrowerVerification } from '@/lib/kyc/coborrower-submit';
+import { requireLeadAccess } from "@/lib/auth/requireLeadAccess";
 
 // BRD §2.9.3 step 5 — When dealer submits Step 3 (co-borrower KYC), the
 // lead must move to 'pending_itarang_reverification' and a high-priority
@@ -11,6 +12,9 @@ import { submitCoBorrowerVerification } from '@/lib/kyc/coborrower-submit';
 // route — drives exactly the same writes. This handler is now the HTTP wrapper.
 
 export async function POST(_req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
+    // ID 118: signed in, and this lead is the caller's to touch (a dealer's own lead, or back office).
+    const leadGate = await requireLeadAccess((await params).leadId);
+    if (!leadGate.ok) return leadGate.response;
     try {
         const { leadId } = await params;
         const result = await submitCoBorrowerVerification(leadId);

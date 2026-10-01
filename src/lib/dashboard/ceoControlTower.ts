@@ -34,7 +34,13 @@ import { summarizeNeedsAttention } from "@/lib/leads/needsAttention";
 import { listDealerHealth } from "@/lib/dealers/accountHealth";
 import type { AccountBucket } from "@/lib/dealers/accountHealthRules";
 import { businessTypeLabel } from "@/lib/leads/businessType";
-import { engagedCall, humanCall } from "@/lib/reports/metricDefinitions";
+import {
+    AWAITING_ASSIGNMENT_OVERDUE_DAYS,
+    awaitingAssignment,
+    daysAwaitingAssignment,
+} from "@/lib/leads/salesReady";
+import { getEngagedCallRule } from "@/lib/reports/engagedCallRule";
+import { engagedCall, humanCall, measuredCall } from "@/lib/reports/metricDefinitions";
 import { scrapKgSourced } from "@/lib/buyback/scrapKgSourced";
 
 export type Compare = { now: number; prev: number | null };
@@ -44,6 +50,8 @@ export type ControlTower = {
     exceptions: null | {
         quotes_pending: number;
         unassigned_over_7d: number;
+        /** Every sales-ready lead with no owner, whatever its wait (ID 82). */
+        awaiting_assignment_total: number;
         idle_over_7d: number;
         red_dormant_dealers: number;
         at_risk_90d: number;
@@ -70,6 +78,8 @@ export type ControlTower = {
     };
     people: null | {
         basis: "target" | "converted";
+        /** The engaged-call threshold in force (a setting — ID 59), for the column header. */
+        engaged_min_seconds: number;
         rows: Array<{
             spoc_id: string;
             name: string;
@@ -146,14 +156,16 @@ export async function buildControlTower(w: { startStr: string | null; endStr: st
 async function exceptionsTile(): Promise<NonNullable<ControlTower["exceptions"]>> {
     const [q] = await rows(sql`
         SELECT
-          (SELECT COUNT(*) FROM dealer_lead_commercials WHERE approval_status = 'pending') AS quotes_pending,
+          (SELECT COUNT(*) FROM dealer_lead_commercials WHERE approval_status = 'pending' AND withdrawn_at IS NULL) AS quotes_pending,
           -- ID 82: "Sales-ready leads awaiting assignment" — the clock runs
-          -- from the Sales-ready event (E-314, read via to_jsonb so a DB
-          -- without it reads 0), not from creation.
+          -- from the Sales-ready event, not from creation, and WHO is awaiting
+          -- is the one rule the Ready to assign page lists by
+          -- (awaitingAssignment: dead numbers are not awaiting anyone). The
+          -- card opens that page filtered to the same 7+ days.
           (SELECT COUNT(*) FROM dealer_leads dl
-            WHERE dl.current_owner_id IS NULL AND dl.is_active IS NOT FALSE
-              AND COALESCE(dl.lead_status, '') NOT IN ('Won', 'Converted', 'Lost')
-              AND (to_jsonb(dl) ->> 'sales_ready_at')::timestamptz < now() - INTERVAL '7 days') AS unassigned
+            WHERE ${awaitingAssignment()}
+              AND ${daysAwaitingAssignment()} >= ${AWAITING_ASSIGNMENT_OVERDUE_DAYS}) AS unassigned,
+          (SELECT COUNT(*) FROM dealer_leads dl WHERE ${awaitingAssignment()}) AS awaiting_total
     `);
     const [idle, dealers, below] = await Promise.all([
         summarizeNeedsAttention({ minDays: 7 }),
@@ -175,6 +187,7 @@ async function exceptionsTile(): Promise<NonNullable<ControlTower["exceptions"]>
     return {
         quotes_pending: n(q.quotes_pending),
         unassigned_over_7d: n(q.unassigned),
+        awaiting_assignment_total: n(q.awaiting_total),
         idle_over_7d: idle.reduce((a, h) => a + h.idle, 0),
         red_dormant_dealers: risky.length,
         at_risk_90d: risky.reduce((a, d) => a + d.revenue_90d, 0),
@@ -328,17 +341,19 @@ async function baseTile(from: string, toExcl: string, prevFrom: string | null, p
 // ── 5 People ─────────────────────────────────────────────────────────────────
 async function peopleTile(from: string, toIncl: string) {
     const { buildSalesDashboard } = await import("@/lib/admin/salesDashboard");
-    const [dash, idle, engaged, pct] = await Promise.all([
+    const [dash, idle, rule, engaged, pct] = await Promise.all([
         buildSalesDashboard({ from, to: toIncl, granularity: "month" }),
         summarizeNeedsAttention({ minDays: 7 }),
+        getEngagedCallRule(),
         rows(sql`
-            -- ID 59: human calls counted once, engaged = connected and >= 30 s
+            -- ID 59: human calls counted once, engaged = connected and at least
+            -- the threshold of measured duration (the engaged-call setting)
             -- (metricDefinitions.ts) — the same call the dashboard and the
             -- daily email count, not the is_engaged flag (any connected call).
             SELECT t.performed_by AS u,
                    COUNT(*) FILTER (WHERE ${humanCall()}) AS calls,
                    COUNT(*) FILTER (WHERE ${engagedCall()}) AS engaged,
-                   COUNT(*) FILTER (WHERE t.call_duration_sec IS NOT NULL) AS timed
+                   COUNT(*) FILTER (WHERE ${measuredCall()}) AS timed
               FROM lead_touchpoints t
              WHERE t.touchpoint_type = 'inside_sales_call' AND t.performed_by IS NOT NULL
                AND (t.performed_at AT TIME ZONE 'Asia/Kolkata')::date BETWEEN ${from}::date AND ${toIncl}::date
@@ -357,8 +372,9 @@ async function peopleTile(from: string, toIncl: string) {
         }),
     ]);
     const idleBy = new Map(idle.map((h) => [h.holder_id, h.idle]));
-    // No call in the window carries a duration (NeoDove sends none today) →
-    // the 30-second rule cannot be measured: show "—", never a column of 0%.
+    // No call in the window carries a MEASURED duration (NeoDove sends none
+    // today, and a duration a rep typed does not count — measuredCall) → the
+    // 30-second rule cannot be measured: show "—", never a column of 0%.
     const anyTimed = engaged.some((e) => n(e.timed) > 0);
     const engBy = new Map(
         engaged.map((e) => [
@@ -383,5 +399,9 @@ async function peopleTile(from: string, toIncl: string) {
             ? (b.pct_of_target ?? -1) - (a.pct_of_target ?? -1)
             : b.converted - a.converted || b.revenue - a.revenue,
     );
-    return { basis: hasTargets ? ("target" as const) : ("converted" as const), rows: list };
+    return {
+        basis: hasTargets ? ("target" as const) : ("converted" as const),
+        engaged_min_seconds: rule.minSeconds,
+        rows: list,
+    };
 }
