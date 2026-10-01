@@ -56,6 +56,13 @@ export type QueueRow = {
      */
     neodove_sync_status: string | null;
     /**
+     * ID 74 (E-314) — Mark Won happened with no dealer-approved quote. Allowed,
+     * and flagged. Only meaningful while the lead is Won / Converted: a lead
+     * re-opened later keeps the old value until its next Mark Won, so readers
+     * gate on status (see wonWithoutQuote()). Null without E-314.
+     */
+    won_without_approved_quote?: boolean | null;
+    /**
      * Who handed this lead to its current owner — the "sent by CEO Test [CEO]"
      * stamp. Decorated onto the page in the route, not selected in the queue
      * query (see fetchAssignedByForLeads), which is why it is OPTIONAL: every
@@ -117,7 +124,36 @@ export type LeadDetailLead = QueueRow & {
     source_door?: string | null;
     source_origin?: string | null;
     acquisition_campaign_id?: string | null;
+    /** ID 74 (E-314): when the rep marked the lead Won. */
+    won_at?: string | null;
 };
+
+/** ID 74 — the "Won without an approved quote" flag, gated on the status it describes. */
+export function wonWithoutQuote(row: {
+    lead_status: string | null;
+    won_without_approved_quote?: boolean | null;
+}): boolean {
+    return (
+        row.won_without_approved_quote === true &&
+        (row.lead_status === "Won" || row.lead_status === "Converted")
+    );
+}
+
+/**
+ * ID 74 — the lead has a dealer-approved quote that was not withdrawn. The
+ * same test markLeadConverted runs in SQL to set won_without_approved_quote;
+ * the Mark Won modal uses it to warn BEFORE the click.
+ */
+export function hasApprovedQuote(
+    history: ReadonlyArray<{ event_type: string; dealer_decision: string | null; withdrawn_at: string | null }>,
+): boolean {
+    return history.some(
+        (c) =>
+            (c.event_type === "quote_issue" || c.event_type === "quote_revision") &&
+            c.dealer_decision === "approved" &&
+            !c.withdrawn_at,
+    );
+}
 
 export type LeadDetailTouchpoint = {
     touchpoint_id: string;

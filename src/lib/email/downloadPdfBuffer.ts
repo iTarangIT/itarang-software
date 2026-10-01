@@ -1,5 +1,8 @@
 import { isS3Backend, getObject } from "@/lib/storage/s3";
-import { parseFilesProxyPath } from "@/lib/storage/readStoredDocument";
+import {
+  parseFilesProxyPath,
+  parseSupabaseStorageUrl,
+} from "@/lib/storage/readStoredDocument";
 
 /**
  * Fetch a public URL into a Node Buffer suitable for use as an email
@@ -32,6 +35,21 @@ export async function downloadPdfBuffer(
       } catch (err) {
         console.error("[downloadPdfBuffer] S3 getObject failed:", err);
         return null;
+      }
+    }
+
+    // Rows written before the S3 migration still hold an absolute URL on the
+    // old Supabase project, which has since been deleted — fetching it fails
+    // with ENOTFOUND, and dealer approval then blocked forever on "could not
+    // get the audit trail". The bytes were copied to S3 under the same
+    // bucket + key, so read them there. Not in S3 → fall through to the fetch.
+    const legacy = parseSupabaseStorageUrl(url);
+    if (legacy) {
+      try {
+        const buf = await getObject(legacy.bucket, legacy.key);
+        if (buf && buf.byteLength >= 100) return buf;
+      } catch (err) {
+        console.error("[downloadPdfBuffer] S3 getObject failed:", err);
       }
     }
   }

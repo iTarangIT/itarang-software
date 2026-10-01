@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { CheckCircle2, Globe, MessageCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Globe, MessageCircle } from "lucide-react";
 import { Modal } from "../Modal";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
@@ -15,9 +15,15 @@ type Props = {
     onClose: () => void;
     leadId: string;
     onSuccess: () => void;
+    /**
+     * ID 74 — false when the lead has no dealer-approved quote. Mark Won is
+     * still allowed; the lead is flagged "Won without an approved quote" and
+     * the rep is told so before they confirm. Absent = no warning.
+     */
+    hasApprovedQuote?: boolean;
 };
 
-export function MarkConvertedModal({ open, onClose, leadId, onSuccess }: Props) {
+export function MarkConvertedModal({ open, onClose, leadId, onSuccess, hasApprovedQuote = true }: Props) {
     const router = useRouter();
     const [notes, setNotes] = useState("");
     // Required (review R-11): the GSTIN is what links this dealer's invoices —
@@ -231,6 +237,16 @@ export function MarkConvertedModal({ open, onClose, leadId, onSuccess }: Props) 
                             </p>
                         </div>
                     </div>
+                    {!hasApprovedQuote && (
+                        <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                            <span>
+                                No dealer-approved quote on this lead. You can still mark it Won; it will be
+                                flagged <span className="font-semibold">Won without an approved quote</span> for
+                                the admin and sales head.
+                            </span>
+                        </div>
+                    )}
                     <div>
                         <Label htmlFor="convert-gstin">Dealer GSTIN</Label>
                         <input

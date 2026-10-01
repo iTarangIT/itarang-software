@@ -205,6 +205,12 @@ export function LogTouchpointModal({
             // ID 80 / 114: no manual status — the server applies the outcome
             // rule (autoProgress) in the status writer itself.
             if (followUpAt) body.follow_up_at = new Date(followUpAt).toISOString();
+            // Temperature rides with the touchpoint and commits with it: the
+            // value on the form (auto-filled or changed by the rep), or null
+            // for "leave as is" so the server does not derive one the rep
+            // cleared.
+            body.interest_level = toInterest || null;
+            body.interest_auto = auto.interest;
 
             const res = await fetch(`/api/inside-sales/lead/${encodeURIComponent(leadId)}/touchpoint`, {
                 method: "POST",
@@ -221,19 +227,6 @@ export function LogTouchpointModal({
                     return;
                 }
                 throw new Error(json?.error?.message ?? "Failed to log touchpoint");
-            }
-            // Temperature is its own audited write (interest_level_overrides).
-            // The touchpoint already saved, so a failure here is reported, not rolled back.
-            if (toInterest && toInterest !== lead.interest_level) {
-                const ir = await fetch(`/api/inside-sales/lead/${encodeURIComponent(leadId)}/interest-level`, {
-                    method: "PATCH",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                        interest_level: toInterest,
-                        reason: auto.interest ? "Auto: from call outcome" : "Set with touchpoint",
-                    }),
-                });
-                if (!ir.ok) toast.error("Touchpoint logged, but the temperature could not be updated.");
             }
             toast.success("Touchpoint logged.");
             // ID 76: a Lost-type outcome prompts Mark Lost, reason pre-filled —

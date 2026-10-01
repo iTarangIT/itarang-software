@@ -46,11 +46,36 @@ export function humanCall(t: SQL = sql`t`): SQL {
         )`;
 }
 
-/** An engaged human call: connected and at least 30 seconds. */
+/**
+ * An engaged human call: connected and at least 30 seconds.
+ *
+ * humanCall() keeps the EARLIEST row of a NeoDove call, but the connect and
+ * the duration can arrive on a later re-disposition of that same call — so the
+ * kept row also counts as engaged when a later twin (same lead, same
+ * performer, within the merge window) qualifies. Still at most one per call,
+ * so engaged <= calls always holds.
+ */
 export function engagedCall(t: SQL = sql`t`): SQL {
     return sql`${humanCall(t)}
-        AND ${t}.call_status = 'connected'
-        AND COALESCE(${t}.call_duration_sec, 0) >= ${ENGAGED_CALL_MIN_SECONDS}`;
+        AND (
+            (${t}.call_status = 'connected'
+             AND COALESCE(${t}.call_duration_sec, 0) >= ${ENGAGED_CALL_MIN_SECONDS})
+            OR (
+                ${t}.external_system = 'neodove'
+                AND EXISTS (
+                    SELECT 1 FROM lead_touchpoints twin
+                     WHERE twin.dealer_lead_id = ${t}.dealer_lead_id
+                       AND twin.touchpoint_type = 'inside_sales_call'
+                       AND twin.external_system = 'neodove'
+                       AND twin.touchpoint_id <> ${t}.touchpoint_id
+                       AND twin.performed_by IS NOT DISTINCT FROM ${t}.performed_by
+                       AND twin.performed_at >= ${t}.performed_at
+                       AND twin.performed_at <= ${t}.performed_at + ${sql.raw(`INTERVAL '${NEODOVE_CALL_MERGE_WINDOW}'`)}
+                       AND twin.call_status = 'connected'
+                       AND COALESCE(twin.call_duration_sec, 0) >= ${ENGAGED_CALL_MIN_SECONDS}
+                )
+            )
+        )`;
 }
 
 /**

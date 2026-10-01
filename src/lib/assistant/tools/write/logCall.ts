@@ -276,6 +276,10 @@ export const logCallApplier = defineApplier<LogCallPlan>({
                     next_action: p.follow_up_at ? "follow_up" : null,
                     next_action_at: p.follow_up_at,
                     status_change: p.status_to ? { to: p.status_to } : undefined,
+                    // The temperature is whatever the rep CONFIRMED on the
+                    // preview (p.interest, written below) — null here stops the
+                    // writer deriving one the preview never showed.
+                    interest_level: null,
                     ...(p.follow_up_at ? { follow_up_at: p.follow_up_at } : {}),
                 },
             },
