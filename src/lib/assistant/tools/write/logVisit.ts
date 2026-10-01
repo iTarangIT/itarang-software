@@ -25,6 +25,7 @@ import { applyVisitStatus } from "@/lib/asm/visitStatus";
 import { markLeadLost } from "@/lib/leads/markLost";
 import { setInterestLevel } from "@/lib/leads/interestLevel";
 import { autoProgressForVisit } from "@/lib/leads/autoProgress";
+import { statusAfterVisit } from "@/lib/leads/outcomeRule";
 import { checkVisitProposal, NO_CHANGE, type StatusChoice } from "../../vocab";
 import { createPending } from "../../actions";
 import { istNow } from "../../prompt";
@@ -198,9 +199,36 @@ export const logVisit: ToolFactory = () =>
                     currentStatus: lead.lead_status,
                     currentInterest: lead.interest_level,
                 });
-                if (input.status === undefined && !statusTo && derived.statusTo) {
-                    statusTo = derived.statusTo;
-                    auto.status = true;
+                // ID 80: the card shows what the writer will do — the rule's
+                // status, whatever the rep asked for ("no change" included).
+                // statusAfterVisit is the writer's own function: a done visit
+                // on a lead Awaiting field visit ends that status whatever the
+                // outcome (ID 77), going back to the stage it had before the
+                // transfer when that is further along — so the card needs the
+                // pre-transfer stage, read only in that case.
+                //
+                // A stated status the rule does not produce is dropped, not
+                // shown: the visit route sends no status to the writer, so a
+                // card saying "Commercials explained → Under discussion" would
+                // promise a move that never happens.
+                statusTo = null;
+                if (visited) {
+                    let preTransfer: string | null = null;
+                    if (lead.lead_status === "Transferred_to_ASM") {
+                        const [row] = await db.execute<{ pre_transfer_status: string | null }>(
+                            sql`SELECT pre_transfer_status FROM dealer_leads WHERE id = ${lead.id}`,
+                        );
+                        preTransfer = row?.pre_transfer_status ?? null;
+                    }
+                    const after = statusAfterVisit({
+                        current: lead.lead_status,
+                        preTransfer,
+                        requested: derived.statusTo,
+                    });
+                    if (after) {
+                        statusTo = after;
+                        auto.status = true;
+                    }
                 }
                 if (!input.interest && derived.interestTo) {
                     interest = derived.interestTo;
@@ -352,13 +380,18 @@ export const logVisitApplier = defineApplier<LogVisitPlan>({
         }
         let statusHistoryId: string | null = null;
         // ID 77: a DONE visit ends Awaiting field visit (restoring the
-        // pre-transfer stage when further along); otherwise the rep's choice
-        // moves the lead forward. Same writer as the visit route.
+        // pre-transfer stage when further along); otherwise the visit OUTCOME
+        // moves the lead, by the shared rule, derived on the server exactly as
+        // the visit route does (ID 80 / 114) — p.status_to is what the card
+        // previewed, not an instruction. The temperature was written above
+        // from what the rep confirmed, so the rule is told to leave it.
         if (p.visit_status === "visited" && !p.lost) {
             const r = await applyVisitStatus(tx, {
                 leadId: p.lead_id,
                 actorId: user.id,
-                requested: p.status_to ?? null,
+                requested: null,
+                outcome: p.visit_outcome,
+                interest: null,
                 remarks: `After the visit on ${p.visit_date}: ${p.remarks}`,
             });
             statusHistoryId = r.historyId;

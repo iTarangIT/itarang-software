@@ -10,8 +10,9 @@
 // Status and temperature after a done visit are derived HERE from the visit
 // outcome by the shared rule (lib/leads/outcomeRule.ts, ID 114) — the form's
 // pre-fill is a preview of the same rule, as is the WhatsApp Assistant's.
-// Optional status_to (first contact only) and interest_level (a level, or null
-// for "leave as is") are the ASM's own choices. All of it is written in the
+// status_to in the body is NOT acted on (ID 80) — no status can be asked for;
+// the form still sends the rule's own preview there. interest_level (a level,
+// or null for "leave as is") is the ASM's own choice. All of it is written in the
 // SAME transaction as the visit: a status_change_note touchpoint + history,
 // and an audited setInterestLevel.
 
@@ -87,7 +88,9 @@ export const POST = withErrorHandler(
 
         await assertOwner(id, user.id);
 
-        const { status_to, interest_level, interest_auto, ...visit } = body;
+        // status_to is dropped here on purpose — see the header.
+        const { status_to: _ignoredStatusTo, interest_level, interest_auto, ...visit } = body;
+        void _ignoredStatusTo;
         const visited = visit.visit_status === "visited";
         const { visitId } = await withLeadActor(user.id, async (tx) => {
             const recorded = await recordVisit({ ...visit, leadId: id, asmId: user.id }, { tx });
@@ -95,13 +98,14 @@ export const POST = withErrorHandler(
             // ends Awaiting field visit and restores the pre-transfer stage
             // when that is further along (ID 77, applyVisitStatus).
             // Status AND temperature come from the visit outcome, derived on the
-            // server by the shared rule (ID 114) — status_to / interest_level
-            // from the form are the ASM's own choices on top of it.
+            // server by the shared rule (ID 114). status_to from the request is
+            // deliberately not passed on (ID 80); interest_level is the ASM's
+            // own choice on top of the rule.
             if (visited) {
                 await applyVisitStatus(tx, {
                     leadId: id,
                     actorId: user.id,
-                    requested: status_to ?? null,
+                    requested: null,
                     remarks: `Status after visit: ${visit.visit_remarks}`,
                     outcome: visit.visit_outcome ?? null,
                     // Absent stays absent (derive); null = leave; a level = set.

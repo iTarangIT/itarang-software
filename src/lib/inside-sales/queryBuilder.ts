@@ -58,6 +58,12 @@ type BuildArgs = {
     filters?: QueueFilterInput;
     /** User-chosen column + direction; the tab order stays as the tiebreak. */
     sort?: QueueSort;
+    /**
+     * Only leads this user currently owns, whatever the tab (ID 58 — a rep's
+     * export). Applied IN the query, so the row cap and the count are taken
+     * over the rep's own leads rather than over the whole tab.
+     */
+    ownedBy?: string | null;
 };
 
 /**
@@ -111,8 +117,10 @@ function extraFilters({
     neodoveOnly,
     callbackOnly,
     filters,
-}: Pick<BuildArgs, "q" | "neodoveOnly" | "callbackOnly" | "filters">) {
+    ownedBy,
+}: Pick<BuildArgs, "q" | "neodoveOnly" | "callbackOnly" | "filters" | "ownedBy">) {
     const parts: SQL[] = [];
+    if (ownedBy) parts.push(sql` AND dl.current_owner_id = ${ownedBy}`);
     if (q) parts.push(leadSearchClause(q));
     if (neodoveOnly) {
         parts.push(sql` AND ${NEODOVE_STATUS} IN (${NEODOVE_LINKED_LIST})`);
@@ -174,11 +182,12 @@ export async function fetchQueueRows({
     callbackOnly,
     filters,
     sort,
+    ownedBy,
 }: BuildArgs): Promise<QueueRow[]> {
     const offset = (page - 1) * limit;
     const where = tabFilter(tab, userId);
     const order = queueSortOrder(sort, tabOrder(tab));
-    const search = extraFilters({ q, neodoveOnly, callbackOnly, filters });
+    const search = extraFilters({ q, neodoveOnly, callbackOnly, filters, ownedBy });
 
     const rows = await db.execute<QueueRow>(sql`
         SELECT
@@ -249,12 +258,13 @@ export async function countQueueRows({
     neodoveOnly,
     callbackOnly,
     filters,
+    ownedBy,
 }: Pick<
     BuildArgs,
-    "tab" | "userId" | "q" | "neodoveOnly" | "callbackOnly" | "filters"
+    "tab" | "userId" | "q" | "neodoveOnly" | "callbackOnly" | "filters" | "ownedBy"
 >): Promise<number> {
     const where = tabFilter(tab, userId);
-    const search = extraFilters({ q, neodoveOnly, callbackOnly, filters });
+    const search = extraFilters({ q, neodoveOnly, callbackOnly, filters, ownedBy });
     const rows = await db.execute<{ c: string }>(sql`
         SELECT COUNT(*)::text AS c FROM dealer_leads dl WHERE ${where} ${search}
     `);

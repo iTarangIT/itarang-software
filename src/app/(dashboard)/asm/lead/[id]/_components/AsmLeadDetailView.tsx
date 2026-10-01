@@ -19,6 +19,7 @@ import { EscalateModal } from "@/app/(dashboard)/inside-sales/_components/modals
 import { LogVisitModal } from "@/app/(dashboard)/asm/_components/modals/LogVisitModal";
 import { AsmLeadActionBar } from "./AsmLeadActionBar";
 import type { VisitNextAction } from "@/lib/asm/types";
+import { canExportLeadHistory } from "@/lib/leads/access";
 
 type ActiveModal =
     | null
@@ -151,7 +152,15 @@ export function AsmLeadDetailView({ leadId, viewerId, viewerRole }: Props) {
                 {/* leadId now reaches the pane, which it did not before — the
                     Export-to-Excel href in Touchpoint History was being built
                     against `undefined` on this view. */}
-                <LeadActivityPanes leadId={leadId} bundle={bundle} />
+                <LeadActivityPanes
+                    leadId={leadId}
+                    bundle={bundle}
+                    canExportHistory={canExportLeadHistory({
+                        role: viewerRole,
+                        userId: viewerId,
+                        currentOwnerId: lead.current_owner_id,
+                    })}
+                />
                 <LeadDetailRightPane bundle={bundle} />
             </div>
 

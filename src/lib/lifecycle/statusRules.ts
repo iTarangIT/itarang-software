@@ -20,8 +20,11 @@
 //                 only events that end Transferred_to_ASM ("Awaiting field
 //                 visit", ID 77). Otherwise a forward move like progress.
 //   quote_withdrawn
-//                 Withdraw quote (ID 78): a commercials-stage lead goes back to
-//                 Under_Discussion - the one backward move an event may make.
+//                 Withdraw quote (ID 78): a lead at Commercials explained or
+//                 Awaiting customer decision goes back to Under_Discussion - the
+//                 one backward move an event may make. NOT from Commercials
+//                 finalised: the dealer said yes, and only Mark Won / Mark Lost
+//                 leave that stage.
 //   reactivation  a closed lead re-enters the pipeline at New_Unassigned or
 //                 Assigned_Not_Contacted (BRD §0.9 reactivation, drop-out re-engage).
 //   dropout_lost  admin drop-out resolution: Converted → Lost.
@@ -135,7 +138,10 @@ export function checkStatusMove(input: {
             }
             return { ok: true };
         case "quote_withdrawn": {
-            const commercials = ["Commercials_Explained", "Awaiting_Customer_Decision", "Commercials_Finalised"];
+            if (from === "Commercials_Finalised") {
+                return { ok: false, reason: "The dealer approved the quote; from Commercials finalised use Mark Won or Mark Lost." };
+            }
+            const commercials = ["Commercials_Explained", "Awaiting_Customer_Decision"];
             if (to !== "Under_Discussion" || !commercials.includes(from ?? "")) {
                 return { ok: false, reason: "Withdrawing a quote moves a commercials-stage lead back to Under discussion only." };
             }

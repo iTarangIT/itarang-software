@@ -7,10 +7,11 @@
  * into iTarang's CANONICAL agreement states before posting; the provider raw
  * layer is retained for display/audit only.
  *
- * Authenticity: if the tenant has an `esign_webhook_secret` configured AND the
- * caller sent `X-iTarang-Signature`, the HMAC must match (else 401). When no
- * secret is set the rail is match-by-ref (mirrors the E-NACH callback). We
- * otherwise always 200 so the NBFC integration never retries endlessly.
+ * Authenticity: a callback that sends `X-iTarang-Signature` must match the
+ * tenant's `esign_webhook_secret` (else 401). An unsigned callback is still
+ * accepted by ref and logged, until WEBHOOK_AUTH_STRICT=1 refuses it
+ * (inboundCallbackAllowed). We otherwise always 200 so the NBFC integration
+ * never retries endlessly.
  *
  * Document storage honours §17.4: signed_document_url is stored only when the
  * NBFC opted into `store_loan_agreement`; the audit_trail_url is always kept.
@@ -21,7 +22,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { nbfcLoanAgreements, nbfcServiceConfig } from "@/lib/db/schema";
 import { AGREEMENT_STATES, type AgreementState } from "@/lib/nbfc/agreement";
-import { verifyInboundSignature } from "@/lib/nbfc/handoff";
+import { inboundCallbackAllowed } from "@/lib/nbfc/handoff";
 import { notifyLoanAgreementEvent } from "@/lib/notifications/events";
 import { tenantDisplayName } from "@/lib/notifications/emit";
 
@@ -70,7 +71,14 @@ export async function POST(req: NextRequest) {
       .from(nbfcServiceConfig)
       .where(eq(nbfcServiceConfig.tenant_id, row.tenant_id))
       .limit(1);
-    if (!verifyInboundSignature(cfg?.secret, raw, req.headers.get("x-itarang-signature"))) {
+    if (
+      !inboundCallbackAllowed({
+        route: "/api/nbfc/agreement/callback",
+        secret: cfg?.secret,
+        rawBody: raw,
+        signatureHeader: req.headers.get("x-itarang-signature"),
+      })
+    ) {
       return new NextResponse("Invalid signature", { status: 401 });
     }
 

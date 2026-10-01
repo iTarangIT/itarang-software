@@ -6,17 +6,37 @@
  * status; the SHARED forward-only state machine applies it to nbfc_loan_agreements.
  * The signed-PDF fetch (when storage is opted in) uses the NBFC's own credentials.
  *
- * Public — matched by the opaque agreement_ref / provider document id. Always
- * 200-ish so the provider doesn't retry forever.
+ * Public — matched by the opaque agreement_ref / provider document id. A
+ * genuine event always gets a 200-ish answer so the provider doesn't retry.
+ *
+ * Who is calling (tracker ID 118): the proof is the PROVIDER's own signing, with
+ * the secret of whichever account created the document — so it is checked after
+ * the agreement is matched, against that NBFC's stored webhook secret:
+ *   - digio      X-Digio-Checksum (HMAC-SHA256 of the body). The NBFC saves its
+ *                Digio webhook secret key next to its API keys in Settings.
+ *   - leegality  no verified scheme yet (the adapter's webhook shape is still
+ *                unconfirmed) — accepted and logged as UNVERIFIED.
+ * Until a secret is saved the event is accepted as before and logged; under
+ * WEBHOOK_AUTH_STRICT=1 it is refused.
  */
 import { NextRequest, NextResponse } from "next/server";
 
 import { applyAgreementWebhookEvent } from "@/lib/nbfc/agreement-webhook";
 import { getEsignProvider, isKnownEsignProvider } from "@/lib/nbfc/esign/registry";
 import { loadProviderCredentials } from "@/lib/nbfc/esign/credentials";
+import type { EsignCreds } from "@/lib/nbfc/esign/provider";
+import { checkWebhook, checksumProof } from "@/lib/security/webhookAuth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+/** The secret that signs this provider's webhooks for the account that owns the document. */
+function webhookSecretFor(provider: string, creds: EsignCreds | null): string | undefined {
+  if (provider !== "digio") return undefined;
+  // No vault row ⇒ the document was created on iTarang's own Digio account.
+  if (!creds || creds.source === "global") return process.env.DIGIO_WEBHOOK_SECRET;
+  return creds.secrets.webhookSecret || undefined;
+}
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ provider: string }> }) {
   const { provider } = await params;
@@ -42,15 +62,35 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ pro
     return NextResponse.json({ ok: false, error: "VALIDATION" }, { status: 400 });
   }
 
-  const result = await applyAgreementWebhookEvent(parsed, async (row) => {
-    const creds = await loadProviderCredentials(row.tenant_id, row.provider_type ?? provider);
-    if (!creds) return { signedPdfUrl: null, auditTrailUrl: null };
-    return adapter.fetchSignedDocuments(
-      { leadId: row.lead_id, providerDocumentId: row.digio_document_id ?? parsed.providerDocumentId ?? "" },
-      creds,
-    );
-  });
+  const result = await applyAgreementWebhookEvent(
+    parsed,
+    async (row) => {
+      const creds = await loadProviderCredentials(row.tenant_id, row.provider_type ?? provider);
+      if (!creds) return { signedPdfUrl: null, auditTrailUrl: null };
+      return adapter.fetchSignedDocuments(
+        { leadId: row.lead_id, providerDocumentId: row.digio_document_id ?? parsed.providerDocumentId ?? "" },
+        creds,
+      );
+    },
+    async (row) => {
+      const creds = await loadProviderCredentials(row.tenant_id, row.provider_type ?? provider);
+      const secret = webhookSecretFor(provider, creds);
+      const verdict = checkWebhook({
+        route: `/api/esign/${provider}/webhook`,
+        secret,
+        proof: checksumProof(secret, rawText, headers["x-digio-checksum"]),
+        configure:
+          provider === "digio"
+            ? "The NBFC must save its Digio webhook secret key in Settings → e-sign credentials."
+            : `No webhook verification is implemented for ${provider} yet.`,
+      });
+      return verdict !== "refuse";
+    },
+  );
 
+  if (result.unauthorized) {
+    return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
+  }
   if (!result.matched) {
     return NextResponse.json({ ok: true, idempotent: true, reason: result.reason });
   }

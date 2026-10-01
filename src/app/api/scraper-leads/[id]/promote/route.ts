@@ -4,6 +4,8 @@ import { db } from "@/lib/db";
 import { dealerLeads, scraperLeads } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { nanoid } from "nanoid";
+import { requireRole } from "@/lib/auth-utils";
+import { LEADS_PAGE_ROLES } from "@/lib/leads/access";
 import {
   findExistingLeadByPhone,
   recordLeadCreated,
@@ -17,6 +19,15 @@ import {
 } from "@/lib/scraper-enrichment";
 
 export async function POST(req: NextRequest, { params }: any) {
+  // ID 118: this route had no login check at all (middleware does not gate
+  // /api/*) — an anonymous POST could create a dealer lead from any scraper
+  // record. Same roles as the other single-lead create, POST /api/dealer-leads.
+  let user: { id: string };
+  try {
+    user = await requireRole([...LEADS_PAGE_ROLES]);
+  } catch {
+    return NextResponse.json({ success: false, error: "Forbidden" }, { status: 403 });
+  }
   try {
     const { id } = await params;
 
@@ -33,7 +44,7 @@ export async function POST(req: NextRequest, { params }: any) {
     //    Re-inquiry on the existing lead, never a second copy.
     const existingId = await findExistingLeadByPhone(scraperLead.phone);
     if (existingId) {
-      await recordReinquiry({ leadId: existingId, door: "scraper", actorId: null, note: scraperLead.name ?? null });
+      await recordReinquiry({ leadId: existingId, door: "scraper", actorId: user.id, note: scraperLead.name ?? null });
       return NextResponse.json({ success: true, dealerLeadId: existingId, alreadyExisted: true });
     }
 
@@ -62,7 +73,7 @@ export async function POST(req: NextRequest, { params }: any) {
 
     // ID 81: source + "Lead created".
     await stampLeadSource(db, newId, { door: "scraper", origin: "scraped_listing" });
-    await recordLeadCreated(db, { leadId: newId, actorId: null, door: "scraper", ownerId: null });
+    await recordLeadCreated(db, { leadId: newId, actorId: user.id, door: "scraper", ownerId: null });
 
     // 4. Update scraper lead status to promoted
     await db

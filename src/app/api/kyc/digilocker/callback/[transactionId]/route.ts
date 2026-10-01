@@ -2,19 +2,14 @@ import { NextRequest, NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 
 import { db } from "@/lib/db";
-import {
-  dealerLeads,
-  digilockerTransactions,
-  kycVerifications,
-  personalDetails,
-} from "@/lib/db/schema";
-import { crossMatchAadhaarData } from "@/lib/kyc/cross-match";
+import { digilockerTransactions } from "@/lib/db/schema";
 import { publicOrigin, PublicOriginError } from "@/lib/public-origin";
 
 /**
  * DigiLocker Callback — PUBLIC endpoint (no auth).
  * GET: Browser redirect from DigiLocker after customer consent.
- * POST: Webhook from Decentro with document data.
+ * POST: acknowledged and ignored (see the handler) — the document comes from
+ *       Decentro through the status poll, never from a request.
  */
 export async function GET(
   req: NextRequest,
@@ -90,154 +85,42 @@ export async function GET(
 }
 
 export async function POST(
-  req: NextRequest,
+  _req: NextRequest,
   { params }: { params: Promise<{ transactionId: string }> },
 ) {
+  // ID 118 — this handler used to take the Aadhaar fields FROM THE REQUEST BODY,
+  // cross-match them against the lead and mark the KYC verification "success".
+  // Nothing proves who is calling: the transaction id is in the redirect URL the
+  // customer's own browser sees, so anyone holding it could post made-up Aadhaar
+  // details and pass the check.
+  //
+  // Decentro does not call it either — the session is initiated with a
+  // redirect_url only (lib/kyc/digilocker.ts), which is the GET above. The real
+  // e-Aadhaar is fetched from Decentro by the status poll, with our own
+  // credentials (digilockerCheckStatus), and that is the only thing that writes
+  // the document, the cross-match and the verification result.
+  //
+  // So a POST is acknowledged and changes nothing.
   try {
     const { transactionId } = await params;
-    const body = await req.json();
-
-    // Validate transaction exists
     const txnRows = await db
-      .select()
+      .select({ id: digilockerTransactions.id })
       .from(digilockerTransactions)
       .where(eq(digilockerTransactions.id, transactionId))
       .limit(1);
-
-    const txn = txnRows[0];
-    if (!txn) {
+    if (!txnRows[0]) {
       return NextResponse.json(
         { success: false, error: "Invalid transaction ID" },
         { status: 400 },
       );
     }
-
-    // Prevent duplicate processing
-    if (txn.status === "document_fetched") {
-      return NextResponse.json({ success: true, message: "Already processed" });
-    }
-
-    const now = new Date();
-
-    // Extract Aadhaar data from callback payload
-    const documents = body.documents || [];
-    const aadhaarDoc = documents.find(
-      (d: { type?: string }) => d.type === "aadhaar",
+    console.warn(
+      "[DigiLocker Callback] POST ignored — e-Aadhaar is read from Decentro, never from a request body",
+      { transactionId },
     );
-    const rawData = aadhaarDoc?.data || body.data || body;
-
-    const aadhaarData = {
-      uid: rawData.uid || rawData.aadhaar_number || null,
-      name: rawData.name || null,
-      gender: rawData.gender || null,
-      dob: rawData.dob || rawData.date_of_birth || null,
-      careof: rawData.careof || rawData.care_of || null,
-      house: rawData.house || null,
-      street: rawData.street || null,
-      landmark: rawData.landmark || null,
-      locality: rawData.locality || null,
-      vtc: rawData.vtc || null,
-      district: rawData.dist || rawData.district || null,
-      state: rawData.state || null,
-      pincode: rawData.pincode || rawData.zip || null,
-      address: rawData.address || rawData.full_address || null,
-      photo_base64: rawData.photo_base64 || rawData.photo || null,
-      mobile: rawData.mobile || rawData.phone || null,
-    };
-
-    // Build full address if individual components provided
-    if (!aadhaarData.address && (aadhaarData.house || aadhaarData.street)) {
-      aadhaarData.address = [
-        aadhaarData.house,
-        aadhaarData.street,
-        aadhaarData.landmark,
-        aadhaarData.locality,
-        aadhaarData.vtc,
-        aadhaarData.district,
-        aadhaarData.state,
-        aadhaarData.pincode,
-      ]
-        .filter(Boolean)
-        .join(", ");
-    }
-
-    // Cross-match with lead data
-    const leadId = txn.lead_id;
-    const [leadRows, personalRows] = await Promise.all([
-      db
-        .select()
-        .from(dealerLeads)
-        .where(eq(dealerLeads.id, leadId))
-        .limit(1),
-      db
-        .select()
-        .from(personalDetails)
-        .where(eq(personalDetails.lead_id, leadId))
-        .limit(1),
-    ]);
-
-    const lead = leadRows[0];
-    const personal = personalRows[0];
-    let crossMatchResult = null;
-
-    if (lead) {
-      crossMatchResult = crossMatchAadhaarData(
-        {
-          name: aadhaarData.name,
-          dob: aadhaarData.dob,
-          phone: aadhaarData.mobile,
-          address: aadhaarData.address,
-          gender: aadhaarData.gender,
-          fatherOrHusbandName: aadhaarData.careof,
-        },
-        {
-          name: lead.dealer_name,
-          dob: personal?.dob
-            ? new Date(personal.dob).toISOString().slice(0, 10)
-            : null,
-          phone: lead.phone,
-          address: personal?.local_address || lead.location,
-          gender: null,
-          fatherOrHusbandName: personal?.father_husband_name,
-        },
-      );
-    }
-
-    // Update DigiLocker transaction
-    await db
-      .update(digilockerTransactions)
-      .set({
-        status: "document_fetched",
-        customer_authorized_at: body.consent_given_at
-          ? new Date(body.consent_given_at)
-          : now,
-        digilocker_raw_response: body,
-        aadhaar_extracted_data: aadhaarData,
-        cross_match_result: crossMatchResult,
-        updated_at: now,
-      })
-      .where(eq(digilockerTransactions.id, transactionId));
-
-    // Update verification record
-    if (txn.verification_id) {
-      await db
-        .update(kycVerifications)
-        .set({
-          status: crossMatchResult?.overallPass ? "success" : "failed",
-          api_response: body,
-          match_score: crossMatchResult?.nameSimilarity
-            ? String(crossMatchResult.nameSimilarity)
-            : null,
-          completed_at: now,
-          updated_at: now,
-        })
-        .where(eq(kycVerifications.id, txn.verification_id));
-    }
-
-    return NextResponse.json({ success: true, message: "Callback processed" });
+    return NextResponse.json({ success: true, message: "Acknowledged" });
   } catch (error) {
     console.error("[DigiLocker Callback] Error:", error);
-    // Return 200 to prevent Decentro from retrying on our error
     return NextResponse.json(
       { success: false, error: "Internal processing error" },
       { status: 200 },

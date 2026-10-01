@@ -23,6 +23,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { runRiskWorkflow } from "@/lib/ai/langgraph/risk-hypothesis-graph";
 import { RunInFlightError, listActiveTenants } from "@/lib/nbfc/risk-run";
+import { fromVercelCron } from "@/lib/security/cronAuth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -30,7 +31,7 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 800;
 
 function isAuthorised(req: NextRequest): boolean {
-  if (req.headers.get("x-vercel-cron")) return true;
+  if (fromVercelCron(req)) return true;
 
   const auth = req.headers.get("authorization") ?? "";
   const expected = process.env.CRON_SECRET;

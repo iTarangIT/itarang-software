@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { consentRecords, kycVerifications } from '@/lib/db/schema';
 import { and, desc, eq, notInArray, notLike } from 'drizzle-orm';
+import { requireLeadAccess } from "@/lib/auth/requireLeadAccess";
 
 // esign_consent / esign_consent_sync rows in kyc_verifications are raw DigiO
 // audit logs written by send-consent and consent/sync. They are not
@@ -24,6 +25,9 @@ const HIDDEN_VERIFICATION_TYPES = [
 const ADMIN_VERIFIED_CONSENT_STATUSES = ['admin_verified', 'manual_verified', 'verified'];
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
+    // ID 118: signed in, and this lead is the caller's to touch (a dealer's own lead, or back office).
+    const leadGate = await requireLeadAccess((await params).leadId);
+    if (!leadGate.ok) return leadGate.response;
     try {
         const { leadId } = await params;
         const verificationFor = req.nextUrl.searchParams.get('verification_for') || 'customer';

@@ -11,13 +11,14 @@
  * (`nbfc_service_config.{vkyc,enach,esign}_webhook_secret`):
  *   - OUTBOUND: every handoff POST is signed with `X-iTarang-Signature: sha256=…`
  *     so the NBFC can verify the request really came from iTarang.
- *   - INBOUND: the result callback can be verified with the same secret. To stay
- *     backward-compatible with the existing match-by-ref callbacks (E-NACH ships
- *     ref-only today), verification is ENFORCED only when a secret is configured
- *     AND a signature header is present; otherwise the callback is accepted by
- *     ref as before.
+ *   - INBOUND: the result callback is verified with the same secret
+ *     (inboundCallbackAllowed below). A wrong signature is always refused. An
+ *     UNSIGNED callback is still accepted by ref — and logged — until
+ *     WEBHOOK_AUTH_STRICT=1, because NBFCs integrated before signing existed.
  */
-import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes } from "node:crypto";
+
+import { checkWebhook, checksumProof } from "@/lib/security/webhookAuth";
 
 const SIGNATURE_HEADER = "x-itarang-signature";
 
@@ -33,21 +34,33 @@ export function signBody(secret: string, body: string): string {
 }
 
 /**
- * Constant-time check of an inbound `X-iTarang-Signature` against the raw body.
- * Returns true when no secret is configured (ref-only mode) OR no signature was
- * sent (legacy caller) — callers should still match by their opaque ref.
+ * Check an NBFC's result callback (tracker ID 118). Returns true when the
+ * callback may be applied.
+ *
+ *   signature present   it must match the rail's secret, or the call is refused;
+ *   signature missing   accepted by ref and logged as UNVERIFIED — the ref
+ *                       travels in the hand-off URL, so anyone who saw that URL
+ *                       can post a result. Refused under WEBHOOK_AUTH_STRICT=1.
+ *
+ * The old helper accepted every unsigned call silently, which made the
+ * signature optional for an attacker too; this one at least says so in the log
+ * and gives a switch to close it once the NBFCs sign.
  */
-export function verifyInboundSignature(
-  secret: string | null | undefined,
-  rawBody: string,
-  signatureHeader: string | null | undefined,
-): boolean {
-  if (!secret) return true; // ref-only rail (no secret configured) — accept
-  if (!signatureHeader) return true; // legacy/unsigned caller — accept by ref
-  const expected = signBody(secret, rawBody);
-  const a = Buffer.from(expected);
-  const b = Buffer.from(signatureHeader);
-  return a.length === b.length && timingSafeEqual(a, b);
+export function inboundCallbackAllowed(args: {
+  route: string;
+  secret: string | null | undefined;
+  rawBody: string;
+  signatureHeader: string | null | undefined;
+}): boolean {
+  const verdict = checkWebhook({
+    route: args.route,
+    secret: args.secret,
+    proof: checksumProof(args.secret, args.rawBody, args.signatureHeader),
+    allowUnsigned: true,
+    configure:
+      "The NBFC must sign its callback with X-iTarang-Signature: sha256=<HMAC of the body> using the webhook secret shown in its Settings.",
+  });
+  return verdict !== "refuse";
 }
 
 export interface HandoffResult {

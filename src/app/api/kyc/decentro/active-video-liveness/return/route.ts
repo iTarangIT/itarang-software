@@ -6,12 +6,24 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
+// `message` comes straight off the query string of a public URL, so it is
+// escaped before it goes into the page (tracker ID 118) — unescaped, a crafted
+// link ran script on our domain in the customer's browser.
+function escapeHtml(text: string): string {
+    return text
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
 function htmlPage(opts: { ok: boolean; reason?: string }): string {
     const colour = opts.ok ? '#0a7d3b' : '#a32020';
     const heading = opts.ok ? 'Video Verification Complete' : 'Video Verification Incomplete';
     const detail = opts.ok
         ? 'Thanks! Please return to your dealer to finish the loan KYC.'
-        : (opts.reason || 'Please return to your dealer — they\'ll help you re-record.');
+        : (opts.reason ? escapeHtml(opts.reason.slice(0, 300)) : 'Please return to your dealer — they\'ll help you re-record.');
     return `<!doctype html>
 <html lang="en">
 <head>

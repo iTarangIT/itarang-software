@@ -32,6 +32,7 @@
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { writeTouchpoint } from "@/lib/touchpoints/write";
+import { markSalesReady } from "@/lib/leads/salesReady";
 import type { TouchpointType } from "@/lib/lifecycle/touchpointTypes";
 import { checkStatusMove } from "@/lib/lifecycle/statusRules";
 import {
@@ -160,6 +161,19 @@ export type AssignLeadOwnerInput = {
 export async function assignLeadOwner(
     input: AssignLeadOwnerInput,
 ): Promise<AssignOutcome> {
+    const outcome = await assignOwner(input);
+    // ID 82: giving a lead an owner is a Sales-ready event when nothing made it
+    // sales-ready before (first event wins, so this is a no-op otherwise) — a
+    // bulk-assigned or NeoDove-pushed lead used to have an owner and no
+    // Sales-ready date, so it never counted and, once released, never came
+    // back to Ready to assign. After the assignment has committed; never throws.
+    if (outcome.assigned) {
+        await markSalesReady(db, { leadId: input.leadId, reason: "admin_assigned", actorId: input.actorId });
+    }
+    return outcome;
+}
+
+async function assignOwner(input: AssignLeadOwnerInput): Promise<AssignOutcome> {
     const {
         leadId,
         fromStatus,

@@ -16,7 +16,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertTriangle, CheckCircle, Loader2, Plus, X } from "lucide-react";
 import { BUSINESS_TYPE_OPTIONS } from "@/lib/leads/businessType";
-import { LEAD_ORIGIN_LABEL, LEAD_ORIGINS } from "@/lib/leads/leadSourceVocab";
+import { LEAD_ORIGIN_LABEL, LEAD_ORIGINS, campaignRequired } from "@/lib/leads/leadSourceVocab";
+import { CampaignPicker } from "@/components/leads/CampaignPicker";
 
 type DuplicateCheck = {
     valid: boolean;
@@ -45,6 +46,8 @@ const EMPTY = {
     // ID 81: required at creation, with city.
     business_type: "",
     origin: "",
+    // Acquisition campaign — required for Trade event / Digital ad.
+    campaign_id: "",
 };
 
 export function AddLeadModal({
@@ -104,6 +107,7 @@ export function AddLeadModal({
         form.city.trim().length > 0 &&
         !!form.business_type &&
         !!form.origin &&
+        (!campaignRequired(form.origin) || !!form.campaign_id) &&
         !saving;
 
     const handleSubmit = async () => {
@@ -281,6 +285,13 @@ export function AddLeadModal({
                                 options={LEAD_ORIGINS.map((o) => ({ value: o, label: LEAD_ORIGIN_LABEL[o] }))}
                             />
                         </div>
+
+                        <CampaignPicker
+                            origin={form.origin}
+                            value={form.campaign_id}
+                            onChange={(v) => set("campaign_id", v)}
+                            labelClassName="block text-xs font-medium text-gray-600"
+                        />
 
                         <div className="min-h-[24px]">{banner}</div>
 

@@ -33,6 +33,7 @@
 
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
+import { markSalesReady } from "@/lib/leads/salesReady";
 import {
   bandOutcome,
   bandToStatus,
@@ -114,6 +115,13 @@ export async function applyIntentOverride(
 
   const rows = (result as { rows?: unknown[] }).rows ?? (result as unknown[]);
   const applied = Array.isArray(rows) && rows.length > 0;
+
+  // ID 82: a reviewer correcting the band to qualified makes the lead
+  // sales-ready exactly as the AI call's own "qualified" does — without this
+  // it never reached Ready to assign. First event wins; never throws.
+  if (applied && status === "qualified") {
+    await markSalesReady(db, { leadId, reason: "admin_marked", actorId: reviewerId });
+  }
 
   return {
     applied,

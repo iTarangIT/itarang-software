@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { guardApi } from "@/lib/auth/apiGuard";
 
 function cleanEnv(value?: string) {
   return value?.trim().replace(/^[\"']|[\"']$/g, "");
@@ -129,6 +130,9 @@ async function fetchDigioStatus(
 }
 
 export async function GET(req: NextRequest) {
+  // ID 118: signed in, with a role that reaches this screen.
+  const authGate = await guardApi(["admin", "ceo", "business_head", "sales_head"]);
+  if (!authGate.ok) return authGate.response;
   try {
     const clientId = cleanEnv(process.env.DIGIO_CLIENT_ID);
     const clientSecret = cleanEnv(process.env.DIGIO_CLIENT_SECRET);

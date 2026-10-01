@@ -35,6 +35,12 @@ type BuildArgs = {
     visitOutcome?: string | null;
     /** User-chosen column + direction; the tab order stays as the tiebreak. */
     sort?: QueueSort;
+    /**
+     * Only leads this user currently owns, whatever the tab (ID 58 — an ASM's
+     * export). Applied IN the query, so the row cap and the count are taken
+     * over the ASM's own leads rather than over the whole tab.
+     */
+    ownedBy?: string | null;
 };
 
 /**
@@ -150,8 +156,10 @@ function extraFilters({
     filters,
     visitStatus,
     visitOutcome,
-}: Pick<BuildArgs, "q" | "filters" | "visitStatus" | "visitOutcome">): SQL {
+    ownedBy,
+}: Pick<BuildArgs, "q" | "filters" | "visitStatus" | "visitOutcome" | "ownedBy">): SQL {
     const parts: SQL[] = [];
+    if (ownedBy) parts.push(sql` AND dl.current_owner_id = ${ownedBy}`);
     if (q) parts.push(leadSearchClause(q));
     if (filters) parts.push(...queueFilterClauses(filters, ASM_DATE_COLUMN));
     // The LATEST visit's state, which is what the row's Visit column shows. A
@@ -173,11 +181,12 @@ export async function fetchAsmQueueRows({
     visitStatus,
     visitOutcome,
     sort,
+    ownedBy,
 }: BuildArgs): Promise<AsmQueueRow[]> {
     const offset = (page - 1) * limit;
     const where = tabFilter(tab, asmId);
     const order = queueSortOrder(sort, tabOrder(tab));
-    const search = extraFilters({ q, filters, visitStatus, visitOutcome });
+    const search = extraFilters({ q, filters, visitStatus, visitOutcome, ownedBy });
 
     const rows = await db.execute<AsmQueueRow>(sql`
         SELECT
@@ -219,12 +228,13 @@ export async function countAsmQueueRows({
     filters,
     visitStatus,
     visitOutcome,
+    ownedBy,
 }: Pick<
     BuildArgs,
-    "tab" | "asmId" | "q" | "filters" | "visitStatus" | "visitOutcome"
+    "tab" | "asmId" | "q" | "filters" | "visitStatus" | "visitOutcome" | "ownedBy"
 >): Promise<number> {
     const where = tabFilter(tab, asmId);
-    const search = extraFilters({ q, filters, visitStatus, visitOutcome });
+    const search = extraFilters({ q, filters, visitStatus, visitOutcome, ownedBy });
     const rows = await db.execute<{ c: string }>(sql`
         SELECT COUNT(*)::text AS c FROM dealer_leads dl ${LATEST_VISIT_JOIN} WHERE ${where} ${search}
     `);

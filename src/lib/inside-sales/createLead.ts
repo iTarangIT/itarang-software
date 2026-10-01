@@ -10,11 +10,12 @@
 import { nanoid } from "nanoid";
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
+import { keepsCreatedLead } from "@/lib/inside-sales/types";
 import { dealerLeads } from "@/lib/db/schema";
 import { recordLeadCapture } from "@/lib/leads/lead-registry";
 import type { BusinessType } from "@/lib/leads/businessType";
 import { loadExistingByPhone, normalizePhone } from "@/lib/leads/dedupe";
-import { markSalesReady } from "@/lib/leads/salesReady";
+import { createdByHandReason, markSalesReady } from "@/lib/leads/salesReady";
 import {
     recordLeadCreated,
     recordReinquiry,
@@ -22,6 +23,7 @@ import {
     type LeadDoor,
     type LeadOrigin,
 } from "@/lib/leads/leadSource";
+import { resolveLeadCampaign } from "@/lib/leads/acquisitionCampaigns";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -49,7 +51,7 @@ export type CreateLeadInput = {
     door?: LeadDoor;
     /** ID 81: where the dealer came from (fixed list). */
     origin?: LeadOrigin | null;
-    /** ID 81: acquisition campaign. */
+    /** ID 81: acquisition campaign — required for Trade event / Digital ad. */
     campaignId?: string | null;
 };
 
@@ -64,10 +66,11 @@ export type CreateLeadResult = {
 /** Does the creator own the new lead, and is it their field ASM lead? */
 export function creationOwnership(role: string): { selfAssigns: boolean; isAsm: boolean } {
     const isAsm = role === "asm";
-    // The partner login also keeps what it creates — same lift as the ASM so
-    // the lead lands in /partner/leads "My Open" — but it is not an ASM, so
-    // asm_id stays null.
-    return { selfAssigns: isAsm || role === "partner", isAsm };
+    // ASM, partner and inside-sales rep keep what they create
+    // (KEEPS_CREATED_LEAD_ROLES) — it lands in their "My Open" with an
+    // ownership hop. Only an ASM's lead is a field lead, so asm_id is set for
+    // the ASM alone. Anyone else (admin) creates into the unassigned pool.
+    return { selfAssigns: keepsCreatedLead(role), isAsm };
 }
 
 async function phoneExists(exec: Tx | typeof db, phone: string): Promise<boolean> {
@@ -79,8 +82,18 @@ async function phoneExists(exec: Tx | typeof db, phone: string): Promise<boolean
     return existing.length > 0;
 }
 
-/** The id of the lead that already has this phone, if any. */
+/**
+ * The id of the lead that already has this phone, if any — the SHARED check
+ * (last 10 digits, dedupe.ts), so a dealer stored as +91XXXXXXXXXX is found
+ * from a bare 10-digit number too. Falls back to the exact text for a number
+ * the shared normaliser does not accept.
+ */
 export async function findLeadIdByPhone(phone: string): Promise<string | null> {
+    const normalised = normalizePhone(phone);
+    if (normalised) {
+        const hit = (await loadExistingByPhone([normalised])).get(normalised);
+        if (hit) return hit.id;
+    }
     const rows = await db
         .select({ id: dealerLeads.id })
         .from(dealerLeads)
@@ -106,6 +119,11 @@ export async function createInsideSalesLead(
         throw new DuplicatePhoneError(existing.id);
     }
     if (await phoneExists(exec, input.phone)) throw new DuplicatePhoneError();
+
+    // ID 81: a Trade event / Digital ad lead needs its campaign, and a campaign
+    // that is given must exist and be open (CampaignError, 400). After the
+    // duplicate check — no questions about a dealer we already have.
+    const campaignId = await resolveLeadCampaign(exec, { origin: input.origin, campaignId: input.campaignId });
 
     const id = `DL-${Date.now()}-${nanoid(8)}`;
     const now = new Date();
@@ -162,7 +180,7 @@ export async function createInsideSalesLead(
 
     // ID 81 / 83: source stamp, and "Lead created" with the ownership hop when
     // the creator keeps the lead.
-    await stampLeadSource(exec, id, { door, origin: input.origin ?? null, campaignId: input.campaignId ?? null });
+    await stampLeadSource(exec, id, { door, origin: input.origin ?? null, campaignId });
     await recordLeadCreated(exec, {
         leadId: id,
         actorId: input.actor.id,
@@ -171,7 +189,7 @@ export async function createInsideSalesLead(
     });
 
     // ID 82: a lead a rep created is sales-ready from creation.
-    await markSalesReady(exec, { leadId: id, reason: "rep_created", actorId: input.actor.id });
+    await markSalesReady(exec, { leadId: id, reason: createdByHandReason(input.origin), actorId: input.actor.id });
 
     // E-179 central registry — dealer prospect captured by Inside Sales / ASM.
     const afterCommit = () =>

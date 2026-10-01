@@ -14,6 +14,7 @@ import { BulkClaimBar } from "./BulkClaimBar";
 import { ClaimByNumberPanel } from "@/components/leads/ClaimByNumberPanel";
 import { claimsByNumberOnly, ISR_POOL_TABS } from "@/lib/leads/claimScope";
 import { CreateLeadModal } from "./modals/CreateLeadModal";
+import { keepsCreatedLead } from "@/lib/inside-sales/types";
 import { QueueFilterBar } from "@/components/leads/QueueFilterBar";
 import { QueueCsvButton } from "@/components/leads/QueueCsvButton";
 import {
@@ -475,9 +476,10 @@ export function QueueView({
                     setCreateOpen(false);
                     queryClient.invalidateQueries({ queryKey: ["inside-sales-queue"] });
                     queryClient.invalidateQueries({ queryKey: ["inside-sales-counts"] });
-                    // Roles that keep what they create (asm, partner) land in My Open;
-                    // everyone else's new lead goes to the claim pool.
-                    setTab(viewerRole === "asm" || viewerRole === "partner" ? "my_open" : "unassigned");
+                    // Roles that keep what they create (KEEPS_CREATED_LEAD_ROLES —
+                    // rep, ASM, partner) land in My Open; an admin's new lead goes
+                    // to the claim pool.
+                    setTab(keepsCreatedLead(viewerRole) ? "my_open" : "unassigned");
                     setPage(1);
                 }}
             />

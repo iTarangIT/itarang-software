@@ -222,7 +222,7 @@ export async function writeTouchpoint(
     // E-300 — the idle clock moves only for work (isWorkedTouchpoint), and only
     // forward: a visit logged today for last week must not rewind a call made
     // yesterday. GREATEST ignores the NULL of a never-worked lead.
-    const workedStamp = input.countsAsWork || isWorkedTouchpoint(input.touchpointType, !!statusChange)
+    const workedStamp = input.countsAsWork || isWorkedTouchpoint(input.touchpointType, !!statusChange, statusChange?.event)
       ? {
           last_worked_at: sql`GREATEST(${dealerLeads.last_worked_at}, ${performedAt.toISOString()}::timestamptz)`,
         }

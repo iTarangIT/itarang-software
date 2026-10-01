@@ -23,6 +23,7 @@ import {
 } from "@/lib/leads/access";
 import { buildLeadTracking, canViewLeadTracking } from "@/lib/leads/tracking";
 import { trackingCsvResponse } from "@/lib/leads/trackingCsv";
+import { logDataDownload } from "@/lib/exports/downloadLog";
 
 export const dynamic = "force-dynamic";
 
@@ -50,6 +51,17 @@ export const GET = withErrorHandler(
             const safe = (tracking.lead.dealer_name || tracking.lead.phone || id)
                 .replace(/[^a-zA-Z0-9_-]/g, "_")
                 .slice(0, 60);
+            // ID 58 — every lead download is logged. The scope is this
+            // route's own (a rep: a lead they have handled), so own_only says
+            // whether the caller was held to that.
+            await logDataDownload({
+                userId: user.id,
+                role: user.role,
+                dataset: "lead_tracking_csv",
+                rowCount: 1,
+                ownOnly: (LEAD_TRACKING_OWN_ONLY_ROLES as readonly string[]).includes(user.role),
+                filters: { lead_id: id },
+            });
             return trackingCsvResponse([tracking], `lead-tracking-${safe}`);
         }
         return successResponse(tracking);

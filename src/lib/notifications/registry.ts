@@ -162,6 +162,8 @@ export const TYPE_LABELS: Record<string, string> = {
   "lead.discarded": "Lead discarded",
   "lead.closed": "Lead closed",
   "lead.qualified": "Lead qualified",
+  "lead.reinquiry": "Known dealer came in again (re-inquiry)",
+  "lead.called_on_behalf": "Your lead was called on your behalf (after Call now)",
 
   // --- Dealer onboarding ---
   "onboarding.chat_started": "Dealer started the WhatsApp onboarding chat",
@@ -169,6 +171,8 @@ export const TYPE_LABELS: Record<string, string> = {
   "onboarding.submitted": "Dealer submitted their onboarding application",
   "onboarding.agreement_initiated": "Dealer agreement sent for signature",
   "onboarding.agreement_signed": "Dealer agreement signed",
+  "onboarding.agreement_approval_requested": "Uploaded dealer agreement needs a second approval",
+  "onboarding.agreement_approval_decided": "Second approval of an uploaded dealer agreement decided",
   "onboarding.approved": "Dealer onboarding approved",
   "onboarding.rejected": "Dealer onboarding rejected",
   "onboarding.correction_requested": "Corrections requested on a dealer application",

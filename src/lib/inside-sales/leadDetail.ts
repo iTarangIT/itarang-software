@@ -6,10 +6,13 @@
 // Not scope-checked — callers are. The route is role-gated; the Assistant
 // checks the user's scope predicate first and then projects an allowlist.
 
+import { campaignName } from "@/lib/leads/acquisitionCampaigns";
 import { loadLiveOemPrices } from "@/lib/leads/oemPrices";
 import { quotePriceChanged } from "@/lib/leads/oemPricing";
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
+import { callerNotLinkedFor } from "@/lib/neodove/ownerFromCall";
+import { engagedState } from "@/lib/reports/metricDefinitions";
 import { fetchAssignedByForLeads } from "@/lib/leads/leadAssignedBy";
 import type {
     LeadDetailBundle,
@@ -98,6 +101,9 @@ export async function fetchLeadDetailBundle(leadId: string): Promise<LeadDetailB
     `);
     const lead = leadRows[0];
     if (!lead) return null;
+    // ID 81: the campaign name, in a statement of its own that may fail —
+    // acquisition_campaigns is E-314 and not on every database.
+    lead.acquisition_campaign_name = await campaignName(lead.acquisition_campaign_id);
 
     const [commercialsHistory, touchpoints, statusHistory] = await Promise.all([
         db.execute<LeadDetailCommercials>(sql`
@@ -129,9 +135,13 @@ export async function fetchLeadDetailBundle(leadId: string): Promise<LeadDetailB
             SELECT
                 t.touchpoint_id, t.touchpoint_type, t.performed_by,
                 u.name AS performed_by_name,
-                t.performed_at, t.call_status, t.call_duration_sec, t.is_engaged,
+                t.performed_at, t.call_status, t.call_duration_sec,
+                ${engagedState()} AS is_engaged,
                 t.remarks, COALESCE(t.attachments, '[]'::jsonb) AS attachments,
-                t.next_action, t.next_action_at
+                t.next_action, t.next_action_at,
+                -- ID 83 (E-314, not in schema.ts): read through to_jsonb so a
+                -- database without the column shows no chip instead of failing.
+                COALESCE((to_jsonb(t) ->> 'called_on_behalf')::boolean, false) AS called_on_behalf
             FROM lead_touchpoints t
             LEFT JOIN users u ON u.id::text = t.performed_by
             WHERE t.dealer_lead_id = ${leadId}
@@ -214,6 +224,9 @@ export async function fetchLeadDetailBundle(leadId: string): Promise<LeadDetailB
         touchpoints: touchpoints as LeadDetailTouchpoint[],
         status_history: statusHistory as LeadDetailStatusHistory[],
         onboarding: onboardingRows[0] ?? null,
+        // ID 83: an unowned lead whose first human call was by a NeoDove agent
+        // nobody has linked to a CRM user — it is waiting on that link.
+        caller_not_linked: (lead as LeadDetailLead).current_owner_id ? null : await callerNotLinkedFor(leadId),
     };
     return bundle;
 }

@@ -17,6 +17,7 @@ import {
     withErrorHandler,
 } from "@/lib/api-utils";
 import { writeTouchpoint } from "@/lib/touchpoints/write";
+import { markSalesReady } from "@/lib/leads/salesReady";
 import { ONBOARDING_DROPOUT_REASONS } from "@/lib/admin/types";
 
 const MUTATE_ROLES = ["admin", "sales_head", "partner"];
@@ -144,6 +145,14 @@ export const POST = withErrorHandler(
                     },
                     { tx },
                 );
+                // ID 82: back in sales it is sales-ready — with its originator,
+                // or in Ready to assign when there is nobody to return to. A
+                // no-op for a lead that already has the event (first one wins).
+                await markSalesReady(tx, {
+                    leadId: id,
+                    reason: newOwnerId ? "admin_assigned" : "reactivated",
+                    actorId: user.id,
+                });
             });
         }
 

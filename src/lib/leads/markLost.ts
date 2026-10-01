@@ -60,6 +60,8 @@ export type MarkLostInput = {
     confirmedHighImpact?: boolean;
     /** Required for lost_to_competition (ID 76); stored in dealer_leads.competitor_name (E-314). */
     competitorName?: string | null;
+    /** Who closed it, when the actor's role does not say — the admin bulk action is always "admin". */
+    closingRole?: "is_phone" | "asm_visit" | "admin";
 };
 
 /** The same refusals the route has always made, before anything is written. */
@@ -108,7 +110,7 @@ export async function markLeadLost(input: MarkLostInput, opts?: { tx?: Tx }): Pr
                     to: "Lost",
                     toLostReason: input.reason,
                     reasonNotes: input.notes ?? null,
-                    closingRole: deriveClosingRole(input.actor.role),
+                    closingRole: input.closingRole ?? deriveClosingRole(input.actor.role),
                     event: "mark_lost",
                 },
             },

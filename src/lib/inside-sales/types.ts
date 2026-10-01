@@ -124,6 +124,8 @@ export type LeadDetailLead = QueueRow & {
     source_door?: string | null;
     source_origin?: string | null;
     acquisition_campaign_id?: string | null;
+    /** The acquisition campaign's name, resolved after the main read. */
+    acquisition_campaign_name?: string | null;
     /** ID 74 (E-314): when the rep marked the lead Won. */
     won_at?: string | null;
 };
@@ -163,11 +165,13 @@ export type LeadDetailTouchpoint = {
     performed_at: string;
     call_status: CallStatus | null;
     call_duration_sec: number | null;
-    is_engaged: boolean;
+    is_engaged: boolean | null;
     remarks: string | null;
     attachments: unknown[];
     next_action: NextAction | null;
     next_action_at: string | null;
+    /** ID 83: a NeoDove call made after the owner's "Call now" request, by someone else. */
+    called_on_behalf?: boolean;
 };
 
 // One product line-item on a commercials quote (E-128). asset_type maps to
@@ -274,6 +278,12 @@ export type LeadDetailBundle = {
      * lead — null when there is none.
      */
     onboarding?: LeadOnboardingMilestones | null;
+    /**
+     * ID 83 "caller not linked": set on an UNOWNED lead whose first human call
+     * was by a NeoDove agent not linked to a CRM user. Linking the agent
+     * (NeoDove › Agents) assigns the lead, dated at that call.
+     */
+    caller_not_linked?: { agent_name: string | null; first_call_at: string } | null;
 };
 
 export type LeadOnboardingMilestones = {
@@ -379,6 +389,20 @@ export type AsmOption = {
  */
 // B3: ASMs claim from their territory pool too (Unclaimed tab on /asm).
 export const CLAIM_ROLES = ["inside_sales_rep", "admin", "partner", "asm"] as const;
+
+/**
+ * Roles that KEEP a lead they create — it is born owned by them, at Assigned
+ * not contacted, with an ownership hop (tracker ID 83; the inside-sales rep was
+ * added on the business decision of 01 Oct 2026, so a rep no longer has to
+ * search their own number to claim what they just entered). Everyone else's new
+ * lead (admin) goes to the unassigned pool. Client-safe: the queue screens read
+ * it to open the right tab after "Create lead"; createLead.ts enforces it.
+ */
+export const KEEPS_CREATED_LEAD_ROLES = ["asm", "partner", "inside_sales_rep"] as const;
+
+export function keepsCreatedLead(role: string | null | undefined): boolean {
+    return (KEEPS_CREATED_LEAD_ROLES as readonly string[]).includes(role ?? "");
+}
 
 /** Most leads one bulk claim accepts. Zod max on the API, guard in the bar. */
 export const BULK_CLAIM_CAP = 100;

@@ -3407,6 +3407,72 @@ export const dealerAgreementEvents = pgTable(
   }),
 );
 
+// E-313 + E-318 — every file of a manually executed dealer agreement (tracker
+// ID 55): what the system read from it, whether it verified, and whether it is
+// on record ('accepted'), waiting for a second approver, or refused.
+export const dealerAgreementDocuments = pgTable(
+  "dealer_agreement_documents",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    application_id: text("application_id").notNull(),
+    kind: varchar("kind", { length: 30 }).notNull(), // signed_agreement | audit_trail
+    file_name: text("file_name"),
+    byte_size: integer("byte_size"),
+    storage_bucket: varchar("storage_bucket", { length: 60 }).notNull(),
+    storage_path: text("storage_path").notNull(),
+    file_url: text("file_url"),
+    extracted: jsonb("extracted").default({}).notNull(),
+    verdict: varchar("verdict", { length: 20 }), // verified | mismatch | unreadable
+    reasons: jsonb("reasons").default([]).notNull(),
+    // Pre-E-318 rows only: the uploader confirmed their own mismatch.
+    mismatch_confirmed_by: text("mismatch_confirmed_by"),
+    mismatch_reason: text("mismatch_reason"),
+    uploaded_by: text("uploaded_by"),
+    uploaded_at: timestamp("uploaded_at", { withTimezone: true }).defaultNow().notNull(),
+    status: varchar("status", { length: 20 }).default("accepted").notNull(), // accepted | pending_approval | rejected
+    override_request_id: uuid("override_request_id"),
+  },
+  (table) => ({
+    appIdx: index("dealer_agreement_documents_app_idx").on(
+      table.application_id,
+      table.uploaded_at,
+    ),
+  }),
+);
+
+// E-318 — a mismatched manual agreement upload waits here for a SECOND
+// approver. The uploader can only request; the DB refuses a decision by the
+// requester and a second pending request for the same application.
+export const dealerAgreementOverrideRequests = pgTable(
+  "dealer_agreement_override_requests",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    application_id: text("application_id").notNull(),
+    status: varchar("status", { length: 20 }).default("pending").notNull(), // pending | approved | rejected | withdrawn
+    add_only: boolean("add_only").default(false).notNull(),
+    // The Digio document the upload was made against; a re-initiated
+    // agreement voids the request.
+    provider_document_id: text("provider_document_id"),
+    verdict: varchar("verdict", { length: 20 }).notNull(),
+    reasons: jsonb("reasons").default([]).notNull(),
+    read_values: jsonb("read_values").default({}).notNull(),
+    typed_signed_on: date("typed_signed_on"),
+    typed_ref: text("typed_ref"),
+    request_reason: text("request_reason").notNull(),
+    requested_by: text("requested_by").notNull(),
+    requested_at: timestamp("requested_at", { withTimezone: true }).defaultNow().notNull(),
+    decided_by: text("decided_by"),
+    decided_at: timestamp("decided_at", { withTimezone: true }),
+    decision_note: text("decision_note"),
+  },
+  (table) => ({
+    appIdx: index("dealer_agreement_override_requests_app_idx").on(
+      table.application_id,
+      table.requested_at,
+    ),
+  }),
+);
+
 export const dealerOnboardingDocuments = pgTable(
   "dealer_onboarding_documents",
   {

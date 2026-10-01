@@ -10,7 +10,8 @@ import { Button } from "@/components/ui/button";
 import { Dropdown } from "@/components/ui/select-dropdown";
 import type { RegionsResponse } from "@/app/api/locations/regions/route";
 import { BUSINESS_TYPE_OPTIONS } from "@/lib/leads/businessType";
-import { LEAD_ORIGIN_LABEL, LEAD_ORIGINS } from "@/lib/leads/leadSourceVocab";
+import { CAMPAIGN_REQUIRED_MESSAGE, LEAD_ORIGIN_LABEL, LEAD_ORIGINS, campaignRequired } from "@/lib/leads/leadSourceVocab";
+import { CampaignPicker } from "@/components/leads/CampaignPicker";
 
 type Props = {
     open: boolean;
@@ -37,6 +38,8 @@ export function CreateLeadModal({ open, onClose, onSuccess }: Props) {
     const [businessType, setBusinessType] = useState("");
     // ID 81: where the dealer came from (fixed list). The door is automatic.
     const [origin, setOrigin] = useState("");
+    // ID 81: the acquisition campaign — required for Trade event / Digital ad.
+    const [campaignId, setCampaignId] = useState("");
     const [submitting, setSubmitting] = useState(false);
 
     // Canonical state + city reference lists (E-108/E-110/E-111). Loaded once
@@ -72,6 +75,7 @@ export function CreateLeadModal({ open, onClose, onSuccess }: Props) {
         setInterest("");
         setBusinessType("");
         setOrigin("");
+        setCampaignId("");
     };
 
     const handleClose = () => {
@@ -103,6 +107,10 @@ export function CreateLeadModal({ open, onClose, onSuccess }: Props) {
             toast.error("Pick how the dealer was found.");
             return;
         }
+        if (campaignRequired(origin) && !campaignId) {
+            toast.error(CAMPAIGN_REQUIRED_MESSAGE);
+            return;
+        }
         setSubmitting(true);
         try {
             const res = await fetch("/api/inside-sales/lead/create", {
@@ -117,11 +125,16 @@ export function CreateLeadModal({ open, onClose, onSuccess }: Props) {
                     interest_level: interest || null,
                     business_type: businessType,
                     origin,
+                    campaign_id: campaignId || null,
                 }),
             });
             const json = await res.json();
             if (!res.ok) throw new Error(json?.error?.message ?? "Failed to create lead");
-            toast.success("Lead created — find it in the Unassigned (Claim) tab.");
+            toast.success(
+                json?.data?.owned_by_you
+                    ? "Lead created — it is yours. Find it in your open leads."
+                    : "Lead created — find it in the Unassigned (Claim) tab.",
+            );
             if (json?.data?.business_type_saved === false) {
                 toast.warning("Type of Business could not be saved on this database.");
             }
@@ -139,7 +152,7 @@ export function CreateLeadModal({ open, onClose, onSuccess }: Props) {
             open={open}
             onClose={handleClose}
             title="Create Lead"
-            subtitle="Adds an unassigned lead to the claim queue"
+            subtitle="Adds a new dealer lead"
             width="md"
             closeOnBackdrop={!submitting}
             footer={
@@ -234,6 +247,7 @@ export function CreateLeadModal({ open, onClose, onSuccess }: Props) {
                         ))}
                     </select>
                 </div>
+                <CampaignPicker origin={origin} value={campaignId} onChange={setCampaignId} />
             </form>
         </Modal>
     );

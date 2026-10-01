@@ -21,6 +21,11 @@
  *   Sales POC            dealer_leads.current_owner_id → users.name. The spec
  *                        says "from lead_assignments"; that table is EMPTY on
  *                        sandbox and every screen reads current_owner_id.
+ *   Closed by            dealer_leads.closing_owner_id → users.name, on a Won /
+ *                        Converted / Lost lead (tracker ID 117). Sales POC is
+ *                        whoever holds the lead TODAY; a conversion belongs to
+ *                        this person and does not move when the lead is
+ *                        reassigned — count conversions on this column.
  *   Last visit           MAX(lead_visits.actual_visit_date)
  *   Next visit           MIN(lead_visits.scheduled_date) on/after today (IST),
  *                        visit still open
@@ -74,6 +79,8 @@ export type LeadsExportRow = {
     won_without_approved_quote: boolean | null;
     interest_level: string | null;
     owner_name: string | null;
+    /** ID 117: who held the lead when it was won / lost; null on an open lead. */
+    closed_by_name: string | null;
     last_visit_date: string | null;
     next_visit_date: string | null;
     last_call_at: string | null;
@@ -167,6 +174,9 @@ export async function fetchLeadsForExport(
                     THEN (to_jsonb(dl) ->> 'won_without_approved_quote')::boolean END AS won_without_approved_quote,
                dl.interest_level,
                owner.name                             AS owner_name,
+               -- ID 117: the closing owner, reported only on a closed lead.
+               CASE WHEN dl.lead_status IN ('Won', 'Converted', 'Lost')
+                    THEN closer.name END              AS closed_by_name,
                vi.last_visit_date::text               AS last_visit_date,
                vi.next_visit_date::text               AS next_visit_date,
                c.last_call_at::text                   AS last_call_at,
@@ -178,6 +188,7 @@ export async function fetchLeadsForExport(
                CASE WHEN b.dealer_lead_id IS NULL THEN 'none' ELSE 'name' END AS billing_match
           FROM dealer_leads dl
           LEFT JOIN users owner ON owner.id::text = dl.current_owner_id
+          LEFT JOIN users closer ON closer.id::text = dl.closing_owner_id
           LEFT JOIN visits vi ON vi.dealer_lead_id = dl.id
           LEFT JOIN calls c ON c.dealer_lead_id = dl.id
           LEFT JOIN remarks r ON r.dealer_lead_id = dl.id

@@ -100,6 +100,12 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
     if (isPoolTabFor(user.role, parsed.tab)) {
         return errorResponse("Search by mobile number to find and claim a lead.", 403);
     }
+    // ID 58: a rep's (or partner's) sheet holds only the leads they own — never
+    // the unowned pool or the team's leads, whatever tab it came from. The
+    // owner filter is part of the QUERY, not applied to the rows afterwards: a
+    // filter after the row cap would drop a rep's own leads that sort below the
+    // first QUEUE_EXPORT_ROW_CAP rows of a big tab.
+    const ownOnly = exportsOwnLeadsOnly(user.role);
     const common = {
         tab: parsed.tab,
         userId: user.id,
@@ -107,9 +113,10 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
         neodoveOnly: parsed.neodove === "1",
         callbackOnly: parsed.callback === "1",
         filters: readQueueFilters(url.searchParams),
+        ownedBy: ownOnly ? user.id : null,
     };
 
-    const [allRows, matched] = await Promise.all([
+    const [rows, total] = await Promise.all([
         // The sheet is ordered the way the screen is — same params, same builder.
         fetchQueueRows({
             ...common,
@@ -120,11 +127,6 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
         countQueueRows(common),
     ]);
 
-    // ID 58: a rep's (or partner's) sheet holds only the leads they own — never
-    // the unowned pool or the team's leads, whatever tab it came from.
-    const ownOnly = exportsOwnLeadsOnly(user.role);
-    const rows = ownOnly ? allRows.filter((r) => r.current_owner_id === user.id) : allRows;
-    const total = ownOnly ? rows.length : matched;
     await logDataDownload({
         userId: user.id,
         role: user.role,

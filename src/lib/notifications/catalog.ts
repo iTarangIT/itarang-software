@@ -120,6 +120,10 @@ export const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   "lead.discarded": "Leads",
   "lead.closed": "Leads",
   "lead.qualified": "Leads",
+  // ID 81 — a dealer we already hold arrived again through one of the doors.
+  "lead.reinquiry": "Leads",
+  // ID 83 — a NeoDove agent called the owner's lead after their "Call now".
+  "lead.called_on_behalf": "Leads",
   // E-242 — filed under Leads, not Inventory, because the recipient is the rep
   // or sales manager working the lead and the action is "review and send this
   // to your dealer". The OEM price types sit under Inventory for the mirror
@@ -136,6 +140,10 @@ export const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   "onboarding.submitted": "Onboarding",
   "onboarding.agreement_initiated": "Onboarding",
   "onboarding.agreement_signed": "Onboarding",
+  // E-318 — a manually uploaded agreement did not verify and waits for a
+  // second approver; then that person's decision, back to the uploader.
+  "onboarding.agreement_approval_requested": "Onboarding",
+  "onboarding.agreement_approval_decided": "Onboarding",
   "onboarding.approved": "Onboarding",
   "onboarding.rejected": "Onboarding",
   "onboarding.correction_requested": "Onboarding",
@@ -412,6 +420,8 @@ const WARNING = new Set([
   "kyc.coborrower_requested",
   "step_3_dealer_action_required",
   "onboarding.correction_requested",
+  // E-318 — the agreement stays incomplete until the recipient decides.
+  "onboarding.agreement_approval_requested",
   "nbfc.request_raised",
   "nbfc.request_forwarded",
   "nbfc.doc_uploaded",
@@ -507,6 +517,9 @@ const WARNING = new Set([
  * than an extra message.
  */
 const NO_EMAIL = new Set([
+  // ID 81 — a re-inquiry is a prompt to look at a lead, and a scrape or an
+  // upload can raise it for many dealers at once; the bell carries it.
+  "lead.reinquiry",
   "inventory_assigned",
   "inventory_transfer_incoming",
   "inventory_transfer_acknowledged",

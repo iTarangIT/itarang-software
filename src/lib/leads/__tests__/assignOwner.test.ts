@@ -11,6 +11,8 @@ const execute = vi.fn(async (q: SQL) => {
 vi.mock("@/lib/db", () => ({ db: { execute } }));
 const writeTouchpoint = vi.fn(async () => ({ touchpointId: "tp", historyId: null }));
 vi.mock("@/lib/touchpoints/write", () => ({ writeTouchpoint }));
+const markSalesReady = vi.fn(async () => true);
+vi.mock("@/lib/leads/salesReady", () => ({ markSalesReady }));
 
 const { assignLeadOwner } = await import("../assignOwner");
 
@@ -30,6 +32,29 @@ beforeEach(() => {
     statements.length = 0;
     execute.mockClear();
     writeTouchpoint.mockClear();
+    markSalesReady.mockClear();
+});
+
+// Tracker ID 82: giving a lead an owner is a Sales-ready event (first one
+// wins) — on every path, and only after the assignment itself is written.
+describe("assignLeadOwner → Sales-ready", () => {
+    it("every assignment path records the Sales-ready event, after the owner is written", async () => {
+        for (const [status, target] of [
+            ["Under_Discussion", asm],
+            ["Transferred_to_ASM", asm],
+            ["Won", asm],
+            [null, { id: "isr-1", role: "inside_sales_rep" }],
+            ["Under_Discussion", { id: "isr-1", role: "inside_sales_rep" }],
+        ] as const) {
+            markSalesReady.mockClear();
+            writeTouchpoint.mockClear();
+            const out = await assign(status, target as never);
+            expect(out.assigned, `${status} → ${target.role}`).toBe(true);
+            expect(markSalesReady).toHaveBeenCalledTimes(1);
+            expect(markSalesReady).toHaveBeenCalledWith(expect.anything(), { leadId: "DL-1", reason: "admin_assigned", actorId: "admin-1" });
+            expect(writeTouchpoint.mock.invocationCallOrder[0]).toBeLessThan(markSalesReady.mock.invocationCallOrder[0]!);
+        }
+    });
 });
 
 describe("assignLeadOwner → ASM", () => {
