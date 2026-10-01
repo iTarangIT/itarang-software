@@ -76,6 +76,12 @@ export type RepBlock = { id: string; name: string; metrics: RepMetric[] };
 
 export const REP_BLOCK_COLUMNS = ["Metric", "Yesterday", "MTD", "MTD target", "% of target"];
 
+/**
+ * Index of "% of target" in REP_BLOCK_COLUMNS. Blocks B and C colour it with
+ * the same red / amber / green thresholds as Block A (rag.ts, toneColumns).
+ */
+export const REP_BLOCK_PCT_COLUMN = REP_BLOCK_COLUMNS.indexOf("% of target");
+
 export const NO_OWNER = "(no owner)";
 /** Map key for counts that belong to nobody. */
 export const NO_OWNER_KEY = "__no_owner__";

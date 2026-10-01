@@ -54,7 +54,8 @@ export interface EcofyApiResponse<T> {
     headers: Headers;
 }
 
-export async function callEcofyApi<T = unknown>(req: EcofyApiRequest): Promise<EcofyApiResponse<T>> {
+/** Signs and sends one request; returns the raw Response (no envelope parsing). */
+async function sendSigned(req: EcofyApiRequest): Promise<Response> {
     const { secret, apiBase } = getEcofyConfig();
     if (!secret) throw new EcofyNotConfiguredError("ECOFY_SYNC_SECRET");
     if (!apiBase) throw new EcofyNotConfiguredError("ECOFY_API_BASE");
@@ -78,13 +79,26 @@ export async function callEcofyApi<T = unknown>(req: EcofyApiRequest): Promise<E
     // `itarang-crm (iTarang CRM)` in audit_log.user_agent.
     headers["x-itarang-actor-name"] = ECOFY_OUTBOUND_ACTOR;
 
-    const res = await fetch(url, {
+    return fetch(url, {
         method: req.method,
         headers,
         body: raw || undefined,
         signal: AbortSignal.timeout(req.timeoutMs ?? 15_000),
         cache: "no-store",
     });
+}
+
+/**
+ * A signed call whose success body is NOT Ecofy's JSON envelope — the lead
+ * upload template and an import's report.csv (OpenAPI: `200 OK`, no schema).
+ * The caller streams the Response on; errors still come back as `{ error }`.
+ */
+export function callEcofyApiRaw(req: EcofyApiRequest): Promise<Response> {
+    return sendSigned(req);
+}
+
+export async function callEcofyApi<T = unknown>(req: EcofyApiRequest): Promise<EcofyApiResponse<T>> {
+    const res = await sendSigned(req);
 
     const text = await res.text();
     let parsed: { data?: T; error?: EcofyApiError } | null = null;

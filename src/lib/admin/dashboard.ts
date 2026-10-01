@@ -26,6 +26,7 @@ import type {
 import { ALERT_PANELS } from "./types";
 import { countOnboardingDropouts } from "./listQueries";
 import { nonResponsiveSql } from "@/lib/leads/nonResponsive";
+import { finalisedNotWonSql } from "@/lib/leads/finalisedNotWon";
 import {
     TRANSFER_AT_EXPR,
     TRANSFER_VISIT_OVERDUE_SQL,
@@ -101,15 +102,9 @@ const ONBOARDING_STALLED = sql`dl.lead_status IN (${OPEN_LIST}) AND dl.is_active
     AND NOT ${IN_DROPOUT_REVIEW}`;
 
 // ID 75.4 — the dealer approved the quote 2+ days ago and the lead still sits
-// at Commercials finalised: nobody pressed Mark Won.
-const FINALISED_NOT_WON = sql`dl.lead_status = 'Commercials_Finalised'
-    AND dl.is_active IS NOT FALSE
-    AND EXISTS (SELECT 1 FROM dealer_lead_commercials c
-        WHERE c.dealer_lead_id = dl.id
-          AND c.dealer_decision = 'approved'
-          AND COALESCE(c.approval_status, 'approved') = 'approved'
-          AND c.withdrawn_at IS NULL
-          AND c.dealer_decision_at < NOW() - INTERVAL '2 days')`;
+// at Commercials finalised: nobody pressed Mark Won. The predicate is shared
+// with the reps' own "Finalised, not Won" queue chip (no age floor there).
+const FINALISED_NOT_WON = finalisedNotWonSql({ minAgeDays: 2 });
 const FINALISED_APPROVED_AT = sql`(SELECT MAX(c.dealer_decision_at) FROM dealer_lead_commercials c
     WHERE c.dealer_lead_id = dl.id AND c.dealer_decision = 'approved' AND c.withdrawn_at IS NULL)`;
 

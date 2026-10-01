@@ -269,6 +269,8 @@ function ecofySubnav() {
       { id: "sh-ecofy-dashboard", label: "Dashboard", icon: LayoutDashboard, href: "/sales-head/ecofy" },
       { id: "sh-ecofy-queue", label: "Pickup Queue", icon: Inbox, href: "/sales-head/ecofy/queue" },
       { id: "sh-ecofy-leads", label: "All Leads", icon: Users, href: "/sales-head/ecofy/leads" },
+      // Tracker ID 51 gap 11 — single lead + bulk import into Ecofy (M03).
+      { id: "sh-ecofy-upload", label: "Upload Leads", icon: Upload, href: "/sales-head/ecofy/upload" },
       { id: "sh-ecofy-eligibility", label: "Eligibility Queue", icon: ClipboardCheck, href: "/sales-head/ecofy/eligibility" },
       { id: "sh-ecofy-financing", label: "Financing Queue", icon: Landmark, href: "/sales-head/ecofy/financing" },
       { id: "sh-ecofy-assets", label: "Assets", icon: Battery, href: "/sales-head/ecofy/assets" },

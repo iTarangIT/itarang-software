@@ -6,9 +6,11 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { ecofyCalculatorHref } from "@/lib/ecofy/access";
+import { ecofyCalculatorHref, ecofyLeadHref } from "@/lib/ecofy/access";
 import { formatIst, inr } from "../badges";
 import { ecofyGet, ecofyUpload, todayIso, useLeadData, useLookup, type Financier } from "../client";
+import { CalculatorAssessmentSave } from "../CalculatorAssessmentSave";
+import { EcofyCalculator, type CalcSegment, type CalculatorComputed } from "../EcofyCalculator";
 import { EpcPartnerPicker } from "../EpcPartnerPicker";
 import { Btn, Chip, Empty, ErrorNote, Field, FormBox, inputCls, KV, Loading, Panel, fileInputCls } from "../ui";
 import { pretty, useCan, useRunner, type TabProps } from "./shared";
@@ -26,11 +28,18 @@ export type Assessment = {
     result?: { steps?: Record<string, number | null>; texts?: { message?: string } };
 };
 
-/** The calculator screen for this viewer's role, prefilled from the lead. */
-function calculatorHref(p: Pick<TabProps, "viewer" | "c">): string {
+/**
+ * The calculator screen for this viewer's role, prefilled from the lead. It
+ * also carries the lead (leadId + back link) so the page can offer "Save to
+ * this lead's assessment"; the actions route re-checks access and segment.
+ */
+function calculatorHref(p: Pick<TabProps, "viewer" | "c" | "leadId">): string {
     const q = new URLSearchParams({ segment: p.c.segment });
     if (p.c.productInterest) q.set("productInterest", p.c.productInterest);
     if (p.c.sanctionedLoadKw != null) q.set("sanctionedLoadKw", String(p.c.sanctionedLoadKw));
+    q.set("leadId", p.leadId);
+    if (p.c.caseNo) q.set("caseNo", p.c.caseNo);
+    q.set("back", ecofyLeadHref(p.viewer.role, p.leadId));
     return `${ecofyCalculatorHref(p.viewer.role)}?${q.toString()}`;
 }
 
@@ -38,29 +47,70 @@ function calculatorHref(p: Pick<TabProps, "viewer" | "c">): string {
 // Assessment
 // ---------------------------------------------------------------------------
 
-/** Save a manual / EPC assessment. Renders nothing when the viewer may not. */
+const methodBtn = (on: boolean) =>
+    `rounded-md px-3 py-1.5 text-sm font-medium ${
+        on ? "bg-gray-900 text-white" : "border border-gray-300 bg-white text-gray-800 hover:bg-gray-50"
+    }`;
+
+/**
+ * Save an assessment: by calculator (RESI / ESS — Ecofy stores the release,
+ * inputs and every step, FR-07.2) or manual / EPC sizing. C&I has no
+ * calculator (FR-07.11). Renders nothing when the viewer may not.
+ */
 export function NewAssessmentForm(p: TabProps) {
     const can = useCan(p);
     const { busy, run } = useRunner(p.leadId, p.onDone);
-    const [f, setF] = useState({ method: "MANUAL", batteryKwh: "", inverterKva: "", solarKwp: "", sourceNote: "" });
+    const isCi = p.c.segment === "CI";
+    const [f, setF] = useState({ method: isCi ? "MANUAL" : "CALCULATOR", batteryKwh: "", inverterKva: "", solarKwp: "", sourceNote: "" });
+    const [computed, setComputed] = useState<CalculatorComputed | null>(null);
     const num = (v: string) => (v ? Number(v) : undefined);
     if (!can("save_assessment")) return null;
+    const method = isCi && f.method === "CALCULATOR" ? "MANUAL" : f.method;
 
     return (
         <div>
+            <div className="mb-3 flex flex-wrap items-center gap-1">
+                {!isCi && (
+                    <button type="button" className={methodBtn(method === "CALCULATOR")} onClick={() => setF((x) => ({ ...x, method: "CALCULATOR" }))}>
+                        Calculator
+                    </button>
+                )}
+                <button type="button" className={methodBtn(method === "MANUAL")} onClick={() => setF((x) => ({ ...x, method: "MANUAL" }))}>
+                    Manual entry
+                </button>
+                <button type="button" className={methodBtn(method === "EPC")} onClick={() => setF((x) => ({ ...x, method: "EPC" }))}>
+                    EPC sizing
+                </button>
+                {!isCi && (
+                    <Link href={calculatorHref(p)} className="ml-auto text-xs text-blue-700 hover:underline">
+                        Open the full calculator →
+                    </Link>
+                )}
+            </div>
+            {isCi && (
+                <p className="mb-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">
+                    C&amp;I: the calculator is off — <b>EPC quote required</b>. Record a manual or EPC sizing.
+                </p>
+            )}
+            {method === "CALCULATOR" ? (
+                <div className="space-y-3">
+                    <EcofyCalculator
+                        segment={p.c.segment as CalcSegment}
+                        defaults={{ productInterest: p.c.productInterest ?? undefined, sanctionedLoadKw: p.c.sanctionedLoadKw ?? undefined }}
+                        onComputed={setComputed}
+                    />
+                    <CalculatorAssessmentSave leadId={p.leadId} computed={computed} onSaved={p.onDone} label="Save calculator assessment" />
+                </div>
+            ) : (
+            <>
             <p className="mb-3 text-xs text-gray-500">
-                Record a manual or EPC sizing. To size it first, open the{" "}
-                <Link href={calculatorHref(p)} className="text-blue-700 hover:underline">
-                    Ecofy calculator
-                </Link>{" "}
-                (quick estimates are not stored; the calculator-driven assessment itself is saved in Ecofy). No size at all is
-                saved as “pending technical data”.{p.c.segment === "CI" ? " C&I: EPC sizing required." : ""}
+                Record a manual or EPC sizing with its source. No size at all is saved as “pending technical data”.
             </p>
             <FormBox
                 onSubmit={() =>
                     run("Assessment saved", {
                         action: "save_assessment",
-                        method: f.method,
+                        method,
                         batteryKwh: num(f.batteryKwh),
                         inverterKva: num(f.inverterKva),
                         solarKwp: num(f.solarKwp),
@@ -68,12 +118,6 @@ export function NewAssessmentForm(p: TabProps) {
                     })
                 }
             >
-                <Field label="Method">
-                    <select className={inputCls} value={f.method} onChange={(e) => setF((x) => ({ ...x, method: e.target.value }))}>
-                        <option value="MANUAL">Manual entry</option>
-                        <option value="EPC">EPC sizing</option>
-                    </select>
-                </Field>
                 <Field label="Battery (kWh)">
                     <input type="number" step="0.1" min={0} className={inputCls} value={f.batteryKwh} onChange={(e) => setF((x) => ({ ...x, batteryKwh: e.target.value }))} />
                 </Field>
@@ -88,10 +132,12 @@ export function NewAssessmentForm(p: TabProps) {
                 </Field>
                 <div className="flex justify-end sm:col-span-2">
                     <Btn type="submit" variant="primary" disabled={busy || f.sourceNote.trim().length < 3}>
-                        Save assessment
+                        Save {method === "EPC" ? "EPC" : "manual"} assessment
                     </Btn>
                 </div>
             </FormBox>
+            </>
+            )}
         </div>
     );
 }

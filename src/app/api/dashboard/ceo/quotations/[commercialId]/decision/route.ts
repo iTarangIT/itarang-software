@@ -4,7 +4,8 @@
  * The CEO's approve / reject on a pending lead quotation.
  *
  * APPROVE
- *   Stamps the decision and writes the `quote_sent` touchpoint — this is the
+ *   Stamps the decision and writes the `quote_released` touchpoint (legacy
+ *   name `quote_sent`, ID 75) — this is the
  *   moment the quote is actually released to the dealer, so it is the moment
  *   the send is recorded. The issuing route writes `quote_submitted` instead,
  *   precisely so nothing claims a send before this point.
@@ -195,7 +196,7 @@ export async function POST(
 
       await writeTouchpoint({
         dealerLeadId: outcome.leadId,
-        touchpointType: "quote_sent",
+        touchpointType: "quote_released",
         performedBy: user.id,
         remarks:
           `Quote approved by CEO and released${money}` +

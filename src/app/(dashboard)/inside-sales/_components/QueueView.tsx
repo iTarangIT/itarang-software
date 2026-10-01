@@ -89,6 +89,9 @@ export function QueueView({
     // disposition work; it had no control until now, so the one queue that most
     // needs it — a rep's own open list — could not ask the question.
     const [callbackOnly, setCallbackOnly] = useState(params.get("callback") === "1");
+    // ID 75.4: the rep's own "Finalised, not Won" list — the dealer approved the
+    // quote and nobody pressed Mark Won. A chip, not a sixth tab.
+    const [finalisedOnly, setFinalisedOnly] = useState(params.get("finalised") === "1");
     const [createOpen, setCreateOpen] = useState(false);
     // Seeded from the URL so a filtered view survives a reload and can be pasted
     // to a colleague — the same contract the tab and page already had.
@@ -122,11 +125,12 @@ export function QueueView({
         if (searchDebounced) p.set("q", searchDebounced);
         if (neodoveOnly) p.set("neodove", "1");
         if (callbackOnly) p.set("callback", "1");
+        if (finalisedOnly) p.set("finalised", "1");
         // The sort rides along: the rows and the CSV honour it, the counts and
         // facets simply never read it.
         writeQueueSort(p, sort);
         return writeQueueFilters(p, filters);
-    }, [searchDebounced, neodoveOnly, callbackOnly, filters, sort]);
+    }, [searchDebounced, neodoveOnly, callbackOnly, finalisedOnly, filters, sort]);
 
     const filterKey = filterParams.toString();
 
@@ -395,6 +399,40 @@ export function QueueView({
                             }`}
                         />
                         Callback
+                    </button>
+                    {/* ID 75.4 — same reason as Callback: an ACTION list. The
+                        badge counts the rep's own My open leads waiting for
+                        Mark Won, whatever else is filtered. */}
+                    <button
+                        type="button"
+                        onClick={() => {
+                            setFinalisedOnly((v) => !v);
+                            setPage(1);
+                        }}
+                        aria-pressed={finalisedOnly}
+                        title={
+                            finalisedOnly
+                                ? "Showing only leads the dealer approved that are not marked Won yet — click to show all"
+                                : "Show only leads the dealer approved that are not marked Won yet"
+                        }
+                        className={`inline-flex h-10 shrink-0 items-center gap-1.5 rounded-lg border px-3 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-emerald-500 ${
+                            finalisedOnly
+                                ? "border-emerald-300 bg-emerald-50 text-emerald-700"
+                                : "border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
+                        }`}
+                    >
+                        <span
+                            aria-hidden
+                            className={`h-1.5 w-1.5 rounded-full ${
+                                finalisedOnly ? "bg-emerald-500" : "bg-gray-300"
+                            }`}
+                        />
+                        Finalised, not Won
+                        {counts?.finalised_not_won ? (
+                            <span className="ml-0.5 rounded-full bg-emerald-600 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white">
+                                {counts.finalised_not_won}
+                            </span>
+                        ) : null}
                     </button>
                     <QueueFilterBar
                         values={filters}

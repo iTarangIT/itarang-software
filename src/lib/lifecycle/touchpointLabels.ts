@@ -29,7 +29,8 @@ export const TOUCHPOINT_TYPE_LABEL: Record<TouchpointType, string> = {
     brochure_sent: "Brochure sent",
     // "Released", not "Delivered": this is the quote clearing the approval gate.
     // Whether it reached the dealer is `quote_dispatched`.
-    // ID 75: shown as "Quote released" (stored value quote_sent kept for history).
+    // ID 75: renamed to quote_released; legacy quote_sent rows read the same.
+    quote_released: "Quote released",
     quote_sent: "Quote released",
     quote_submitted: "Quote sent for approval",
     quote_rejected: "Quote rejected",

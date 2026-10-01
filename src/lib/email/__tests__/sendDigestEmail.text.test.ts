@@ -60,3 +60,38 @@ describe("buildDigestEmail plain text", () => {
         expect(text).not.toContain("Sales-ready, no owner");
     });
 });
+
+describe("buildDigestEmail % of target tones (ID 9)", () => {
+    it("colours only the toneColumns cells, by the shared thresholds", () => {
+        const { html } = buildDigestEmail({
+            kind,
+            to: ["x@y.z"],
+            slot: "morning",
+            istDay: "2026-09-30",
+            figures: {
+                activity: [],
+                backlog: [],
+                tables: [
+                    {
+                        key: "block_b",
+                        title: "B · Field team (ASM)",
+                        columns: ["Metric", "MTD", "% of target"],
+                        textColumns: 1,
+                        toneColumns: [2],
+                        rows: [
+                            ["Revenue", "45%", "45%"],
+                            ["Visits", "90%", "90%"],
+                            ["Calls", "100%", "100%"],
+                            ["Quotes", "—", "—"],
+                        ],
+                    },
+                ],
+            },
+        });
+        expect(html).toContain("#b91c1c;background:#fee2e2");
+        expect(html).toContain("#b45309;background:#fef3c7");
+        expect(html).toContain("#15803d;background:#dcfce7");
+        // The MTD column carries the same text but is not a tone column.
+        expect(html.match(/background:#fee2e2/g)).toHaveLength(1);
+    });
+});

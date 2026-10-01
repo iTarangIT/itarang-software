@@ -31,9 +31,12 @@ const COLUMNS: QueueColumn[] = [
     { key: "lifecycle", label: "Lifecycle", filter: "select" },
 ];
 
-// E-307 — active assets (financed, installed systems). Read-only: EMI status
-// and buyback / redeployment are recorded by Ecofy Admin. Search, filters,
-// date range and CSV are client-side (EcofyQueueGrid).
+// E-307 — active assets (financed, installed systems). Read-only by contract:
+// EMI status and buyback / redeployment are recorded by Ecofy Admin only
+// (BRD FR-13.2/FR-13.3; OpenAPI POST /assets/{id}/emi-status and /events are
+// x-roles ECOFY_ADMIN). GET /assets declares no paging parameters, so the CRM
+// sends none and lists every asset Ecofy returns. Search, filters, date range
+// and CSV are client-side (EcofyQueueGrid); the customer opens the asset detail.
 export default async function EcofyAssetsPage() {
     await requireRole([...ECOFY_MANAGER_ROLES]);
     let rows: Asset[] = [];
@@ -54,7 +57,7 @@ export default async function EcofyAssetsPage() {
             cells: {
                 case: { text: a.caseNo, href: leadId ? `/sales-head/ecofy/leads/${leadId}` : undefined },
                 file: { text: a.systemSnapshot?.fileNo ?? "" },
-                customer: { text: a.customerName ?? "" },
+                customer: { text: a.customerName || "Asset details", href: `/sales-head/ecofy/assets/${a.id}` },
                 city: { text: a.city ?? "" },
                 system: { text: a.systemSnapshot?.system ?? "" },
                 commissioned: { text: a.commissionedOn, node: <span className="text-xs">{a.commissionedOn}</span> },
@@ -86,7 +89,11 @@ export default async function EcofyAssetsPage() {
         <div className="mx-auto max-w-[1600px] space-y-5 px-4 py-6 sm:px-6 md:px-8">
             <header>
                 <h1 className="text-2xl font-semibold tracking-tight text-gray-900">Ecofy — Assets</h1>
-                <p className="mt-1 text-sm text-gray-600">Financed, installed systems. Read-only here — Ecofy Admin records EMI status, buyback and redeployment.</p>
+                <p className="mt-1 text-sm text-gray-600">
+                    Financed, installed systems{error ? "" : ` — ${rows.length} asset${rows.length === 1 ? "" : "s"}, all that Ecofy returned`}. Read-only by contract: EMI
+                    status, buyback and redeployment are recorded in Ecofy by Ecofy Admin (BRD FR-13.2/13.3); no IoT or risk data (FR-13.4). Open a
+                    customer for the asset detail.
+                </p>
             </header>
             {error && <p className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">Ecofy could not be reached: {error}</p>}
             {!error && (

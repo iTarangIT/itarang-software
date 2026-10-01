@@ -120,6 +120,9 @@ export const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   "lead.discarded": "Leads",
   "lead.closed": "Leads",
   "lead.qualified": "Leads",
+  // ID 75.2 — a one-off "System correction" telling an owner which of their
+  // leads' commercials stages were recomputed from quote events.
+  "lead.system_correction": "Leads",
   // E-242 — filed under Leads, not Inventory, because the recipient is the rep
   // or sales manager working the lead and the action is "review and send this
   // to your dealer". The OEM price types sit under Inventory for the mirror

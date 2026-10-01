@@ -141,3 +141,32 @@ describe("Block D (position)", () => {
         expect(rows).toEqual([["Zed", 0, 0, 1, 0, 0, "—"]]);
     });
 });
+
+describe("% of target red / amber / green (ID 9)", async () => {
+    const { ragTone, ragToneOfCell } = await import("../rag");
+    const { BLOCK_A_COLUMNS, BLOCK_A_PCT_COLUMN } = await import("../salesDailyBlockA");
+    const { REP_BLOCK_PCT_COLUMN } = await import("../salesDailyBlocks");
+
+    it("uses Block A's thresholds: green ≥100, amber 80–99, red <80", () => {
+        expect(ragTone(100)).toBe("green");
+        expect(ragTone(140)).toBe("green");
+        expect(ragTone(99)).toBe("amber");
+        expect(ragTone(80)).toBe("amber");
+        expect(ragTone(79)).toBe("red");
+        expect(ragTone(0)).toBe("red");
+        expect(ragTone(null)).toBeNull();
+    });
+
+    it("tones only plain percentage cells", () => {
+        expect(ragToneOfCell("85%")).toBe("amber");
+        expect(ragToneOfCell("120%")).toBe("green");
+        expect(ragToneOfCell("—")).toBeNull();
+        expect(ragToneOfCell(NOT_MEASURED)).toBeNull();
+        expect(ragToneOfCell("")).toBeNull();
+    });
+
+    it("points at the % of target column in Blocks A, B and C", () => {
+        expect(BLOCK_A_COLUMNS[BLOCK_A_PCT_COLUMN]).toBe("% of target");
+        expect(REP_BLOCK_COLUMNS[REP_BLOCK_PCT_COLUMN]).toBe("% of target");
+    });
+});

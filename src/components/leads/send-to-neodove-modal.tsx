@@ -21,6 +21,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { X, Send, AlertTriangle, ExternalLink, UserPlus2 } from "lucide-react";
+import { ASSIGN_ON_PUSH } from "@/lib/neodove/assignPolicy";
 
 type Campaign = {
     id: string;
@@ -64,13 +65,8 @@ type SingleResult = {
 /** Sentinel for "don't assign" — distinct from "" (nothing chosen yet). */
 const NO_ASSIGNEE = "__none__";
 
-/**
- * Tracker ID 63 — mirrors ASSIGN_ON_PUSH in src/lib/neodove/assignAfterPush.ts,
- * which cannot be imported here (that module pulls in the db client). While it
- * is false a push gives no CRM owner, so the "assign in CRM" picker is hidden.
- * Flip BOTH together.
- */
-const ASSIGN_ON_PUSH: boolean = false;
+// Tracker ID 63: while ASSIGN_ON_PUSH is false a push gives no CRM owner, so
+// the "assign in CRM" picker is hidden. Shared with the push routes.
 const OWNER_ON_FIRST_CALL_COPY =
     "Owner is set by the first call of a linked NeoDove agent.";
 

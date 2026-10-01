@@ -18,6 +18,27 @@ const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const id = z.string().min(1).max(100);
 const money = z.number().nonnegative();
 
+/**
+ * CalcInput (OpenAPI components.schemas.CalcInput) — the quick estimate, the
+ * designer's test bench and a CALCULATOR assessment all send this. Ecofy
+ * validates again.
+ */
+export const ecofyCalcInputSchema = z.object({
+    segment: z.enum(["RESI", "ESS", "CI"]),
+    productInterest: z.enum(["SOLAR_STORAGE", "STORAGE_ONLY", "SOLAR_ONLY", "NOT_SURE"]).optional(),
+    method: z.enum(["APPLIANCES", "MONTHLY_UNITS", "RUNNING_LOAD", "NONE"]),
+    appliances: z
+        .array(z.object({ applianceName: z.string().min(1), watts: z.number().int().min(1), quantity: z.number().int().min(1) }))
+        .max(100)
+        .optional(),
+    monthlyUnits: z.number().min(0).optional(),
+    runningLoadKw: z.number().min(0).optional(),
+    sanctionedLoadKw: z.number().min(0).optional(),
+    backupHours: z.number().min(0).max(24).optional(),
+    phase: z.enum(["SINGLE", "THREE"]),
+});
+export type EcofyCalcInput = z.infer<typeof ecofyCalcInputSchema>;
+
 export const ecofyActionSchema = z.discriminatedUnion("action", [
     z
         .object({
@@ -58,14 +79,36 @@ export const ecofyActionSchema = z.discriminatedUnion("action", [
         epcFeedback: note,
     }),
     z.object({ action: z.literal("advance"), version }),
-    z.object({
-        action: z.literal("save_assessment"),
-        method: z.enum(["MANUAL", "EPC"]),
-        batteryKwh: z.number().nonnegative().optional(),
-        inverterKva: z.number().nonnegative().optional(),
-        solarKwp: z.number().nonnegative().optional(),
-        sourceNote: z.string().trim().min(3).max(2000),
-    }),
+    // AssessmentCreate (OpenAPI): CALCULATOR needs `calculator`; MANUAL / EPC
+    // need the manual sizes + source note. selectedSystemCode / overrideReason
+    // implement FR-07.8 ("caller may pick another system; reason mandatory").
+    // recommendedSystemCode is CRM-only (what the estimate recommended when the
+    // user picked) — it is checked here and never sent to Ecofy.
+    z
+        .object({
+            action: z.literal("save_assessment"),
+            method: z.enum(["CALCULATOR", "MANUAL", "EPC"]),
+            calculator: ecofyCalcInputSchema.optional(),
+            batteryKwh: z.number().nonnegative().optional(),
+            inverterKva: z.number().nonnegative().optional(),
+            solarKwp: z.number().nonnegative().optional(),
+            sourceNote: z.string().trim().min(3).max(2000).optional(),
+            selectedSystemCode: z.string().trim().min(1).max(100).optional(),
+            recommendedSystemCode: z.string().trim().min(1).max(100).nullish(),
+            overrideReason: z.string().trim().min(3).max(500).optional(),
+        })
+        .superRefine((v, ctx) => {
+            if (v.method === "CALCULATOR") {
+                if (!v.calculator) ctx.addIssue({ code: "custom", message: "A calculator assessment needs the calculator inputs", path: ["calculator"] });
+                // FR-07.11: C&I has no calculator — manual or EPC sizing only.
+                else if (v.calculator.segment === "CI") ctx.addIssue({ code: "custom", message: "C&I: the calculator is off — record a manual or EPC assessment", path: ["calculator", "segment"] });
+            } else if (!v.sourceNote) {
+                ctx.addIssue({ code: "custom", message: "A manual or EPC assessment needs a source note", path: ["sourceNote"] });
+            }
+            if (v.selectedSystemCode && v.selectedSystemCode !== (v.recommendedSystemCode ?? null) && !v.overrideReason) {
+                ctx.addIssue({ code: "custom", message: "Choosing a system other than the recommendation needs a reason", path: ["overrideReason"] });
+            }
+        }),
     z.object({ action: z.literal("confirm_assessment"), version, assessmentId: id }),
     z.object({ action: z.literal("request_eligibility"), financierId: id.optional() }),
     z.object({
@@ -160,6 +203,49 @@ export const ecofyActionSchema = z.discriminatedUnion("action", [
 
 export type EcofyActionInput = z.infer<typeof ecofyActionSchema>;
 
+type SaveAssessmentInput = Extract<EcofyActionInput, { action: "save_assessment" }>;
+
+/**
+ * The AssessmentCreate body Ecofy takes (additionalProperties: false): only
+ * the block the method needs, plus the selected system and override reason.
+ * recommendedSystemCode stays in the CRM.
+ */
+export function toAssessmentCreate(input: SaveAssessmentInput): Record<string, unknown> {
+    const pick = input.selectedSystemCode
+        ? {
+              selectedSystemCode: input.selectedSystemCode,
+              overrideReason:
+                  input.selectedSystemCode !== (input.recommendedSystemCode ?? null) ? input.overrideReason : undefined,
+          }
+        : {};
+    if (input.method === "CALCULATOR") return { method: "CALCULATOR", calculator: input.calculator, ...pick };
+    return {
+        method: input.method,
+        manual: {
+            batteryKwh: input.batteryKwh,
+            inverterKva: input.inverterKva,
+            solarKwp: input.solarKwp,
+            sourceNote: input.sourceNote,
+        },
+        ...pick,
+    };
+}
+
+/**
+ * Server-side check for a CALCULATOR assessment against the lead it is saved
+ * on: the inputs must be for the lead's own segment, and never for C&I
+ * (FR-07.11). Returns the refusal reason, or null when fine.
+ */
+export function calculatorAssessmentRefusal(leadSegment: string | null | undefined, input: EcofyActionInput): string | null {
+    if (input.action !== "save_assessment" || input.method !== "CALCULATOR" || !input.calculator) return null;
+    const seg = (leadSegment ?? "").toUpperCase();
+    if (seg === "CI") return "C&I: the calculator is off — record a manual or EPC assessment";
+    if (seg && input.calculator.segment !== seg) {
+        return `The calculator inputs are for ${input.calculator.segment} but this lead is ${seg}`;
+    }
+    return null;
+}
+
 /** Read-only data the lead detail screen loads per tab. */
 export const ECOFY_LEAD_READS = [
     "case",
@@ -186,6 +272,13 @@ export const ECOFY_LOOKUPS = [
     "return_reason",
     "meeting_type",
     "document_type",
+    // lead intake (single-lead form) — Ecofy list codes, seed v1.1
+    "consent_source",
+    "language",
+    "property_type",
+    "product_interest",
+    "existing_backup",
+    "call_time",
     "epc-partners",
     "financiers",
 ] as const;

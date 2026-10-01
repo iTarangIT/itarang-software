@@ -10,7 +10,7 @@ const findLeadInScope = vi.fn();
 vi.mock("../scope", async (orig) => ({ ...(await orig<typeof import("../scope")>()), findLeadInScope }));
 
 const { toolNamesFor, toolsFor, ROLE_TOOLS } = await import("../registry");
-const { scopePredicate, scopeJoin, claimPoolPredicate, ownScopePredicate } = await import("../scope");
+const { scopePredicate, scopeJoin, claimPoolPredicate, ownScopePredicate, readScopePredicate } = await import("../scope");
 const { tabFilter: isrTab } = await import("@/lib/inside-sales/queryBuilder");
 const { tabFilter: asmTab } = await import("@/lib/asm/queryBuilder");
 const { runAgentTurn, sanitizeResult, AGENT_LIMITS } = await import("../agent");
@@ -120,6 +120,17 @@ describe("scope predicate (INV1)", () => {
         expect(shape(ownScopePredicate(ASM))).toBe(`(${asm.map((t) => `(${t})`).join(" OR ")})`);
         expect(render(ownScopePredicate(ISR)).sql).not.toMatch(/current_owner_id IS NULL/);
         expect(render(ownScopePredicate({ id: "x", role: "admin" })).sql).toBe("FALSE");
+    });
+
+    it("read scope (findLeadInScope, ID 45) = own tabs + ISR team — never a pool tab", () => {
+        const isr = (["my_open", "follow_ups", "my_closed", "team"] as const).map((t) => shape(isrTab(t, ISR.id)));
+        expect(shape(readScopePredicate(ISR))).toBe(`(${isr.map((t) => `(${t})`).join(" OR ")})`);
+        expect(shape(readScopePredicate(ISR))).not.toContain(shape(isrTab("unassigned", ISR.id)));
+        const asm = (["my_visits", "today", "my_closed"] as const).map((t) => shape(asmTab(t, ASM.id)));
+        expect(shape(readScopePredicate(ASM))).toBe(`(${asm.map((t) => `(${t})`).join(" OR ")})`);
+        expect(shape(readScopePredicate(ASM))).not.toContain(shape(asmTab("territory", ASM.id)));
+        expect(shape(readScopePredicate(ASM))).not.toContain(shape(asmTab("unclaimed", ASM.id)));
+        expect(render(readScopePredicate({ id: "x", role: "admin" })).sql).toBe("FALSE");
     });
 
     it("any other role matches nothing", () => {

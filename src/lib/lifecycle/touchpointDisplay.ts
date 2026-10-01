@@ -34,7 +34,8 @@ export const TOUCHPOINT_ICONS: Record<TouchpointType | "default", TouchpointIcon
     neodove_dial_request: PhoneForwarded,
     whatsapp: MessageSquare,
     brochure_sent: FileText,
-    quote_sent: Receipt,
+    quote_released: Receipt,
+    quote_sent: Receipt, // legacy name of quote_released (ID 75)
     quote_submitted: FileCheck2,
     quote_rejected: FileX2,
     quote_dispatched: Send,

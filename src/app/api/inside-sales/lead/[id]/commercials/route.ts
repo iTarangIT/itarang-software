@@ -1,7 +1,8 @@
 // POST /api/inside-sales/lead/[id]/commercials
 // Create a new versioned commercials row (BRD §0.10). Flips prior is_current
 // to false and inserts version_no = max+1 atomically. If event_type is a
-// quote_issue/quote_revision, also writes a touchpoint of type 'quote_sent';
+// quote_issue/quote_revision, also writes a touchpoint ('quote_released' when
+// auto-approved, else 'quote_submitted'; 'quote_released' was 'quote_sent');
 // if brochure_share, sets dealer_leads.brochure_sent_at on first event.
 //
 // The write itself lives in lib/leads/createCommercial.ts — shared with the

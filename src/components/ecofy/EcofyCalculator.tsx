@@ -5,8 +5,10 @@
 // A port of Ecofy's Calculator.tsx (FR-07.1 … FR-07.7): appliance list / bill /
 // running-load inputs, backup hours + phase always asked, three outcomes,
 // price ranges only, no EMI. Every number comes from Ecofy's published release
-// via /api/ecofy/calculator; nothing typed here is stored anywhere. To attach a
-// sizing to a lead, open the lead's Assessment tab.
+// via /api/ecofy/calculator; a quick estimate is never stored (FR-07.1). With
+// `onComputed`, the parent gets each input + Ecofy result pair so it can save a
+// CALCULATOR assessment on a lead (FR-07.2) — the lead's Assessment tab and
+// the standalone page opened from a lead.
 
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -50,6 +52,22 @@ export type CalcResultView = {
     texts: { disclaimer: string; financingLine: string; message: string | null };
     pending: string[];
 };
+
+/** The CalcInput the calculator last sent and the result Ecofy computed for exactly that input. */
+export interface CalculatorComputed {
+    input: {
+        segment: CalcSegment;
+        productInterest?: string;
+        method: Method;
+        appliances?: Line[];
+        monthlyUnits?: number;
+        runningLoadKw?: number;
+        sanctionedLoadKw?: number;
+        backupHours?: number;
+        phase: string;
+    };
+    result: CalcResultView;
+}
 
 export interface CalculatorDefaults {
     productInterest?: string;
@@ -96,10 +114,13 @@ export function EcofyCalculator({
     segment,
     defaults = {},
     releaseId,
+    onComputed,
 }: {
     segment: CalcSegment;
     defaults?: CalculatorDefaults;
     releaseId?: string;
+    /** Called with the current input + its result, or null while the result is stale / missing. */
+    onComputed?: (c: CalculatorComputed | null) => void;
 }) {
     const rel = useQuery({
         queryKey: ["ecofy-calculator-release", releaseId ?? "published"],
@@ -134,6 +155,7 @@ export function EcofyCalculator({
         phase: "SINGLE",
     });
     const [result, setResult] = useState<CalcResultView | null>(null);
+    const [resultFor, setResultFor] = useState<unknown>(null);
     const [err, setErr] = useState<string | null>(null);
     const [computing, setComputing] = useState(false);
 
@@ -157,7 +179,7 @@ export function EcofyCalculator({
         if (inputs.length && !inputs.includes(method)) setMethod(inputs[0] as Method);
     }, [inputs, method]);
 
-    const input = useMemo(
+    const input = useMemo<CalculatorComputed["input"]>(
         () => ({
             segment,
             productInterest: f.productInterest,
@@ -181,6 +203,7 @@ export function EcofyCalculator({
                 const r = await ecofyPost<CalcResultView>(estimateUrl, input);
                 if (!cancelled) {
                     setResult(r);
+                    setResultFor(input);
                     setErr(null);
                 }
             } catch (e) {
@@ -194,6 +217,12 @@ export function EcofyCalculator({
             clearTimeout(t);
         };
     }, [input, segment, rel.data, estimateUrl]);
+
+    // Hand the parent a result only while it belongs to the inputs on screen.
+    useEffect(() => {
+        if (!onComputed) return;
+        onComputed(result && resultFor === input && segment !== "CI" ? { input, result } : null);
+    }, [onComputed, result, resultFor, input, segment]);
 
     if (segment === "CI") {
         return (
@@ -405,7 +434,7 @@ export function EcofyCalculator({
                         }`}
                     >
                         <b>{result.recommendationStatus.replace(/_/g, " ")}.</b> {result.texts.message}
-                        {result.pending.length ? ` (missing: ${result.pending.join(", ")})` : ""}
+                        {result.pending?.length ? ` (missing: ${result.pending.join(", ")})` : ""}
                     </p>
                 )}
 
