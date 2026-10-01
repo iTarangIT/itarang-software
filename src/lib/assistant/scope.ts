@@ -12,6 +12,11 @@
 // In scope but not owned = read-only; the write tools check ownership again.
 // Anything else (including a role outside Phase 1) matches nothing.
 //
+// ID 45 (reps cannot browse the pool): LISTING and SEARCHING use only the
+// user's OWN tabs (ownScopePredicate / OWN_TABS) — the pool tabs (unassigned,
+// team, territory, unclaimed) are not browsable from the Assistant. A pool lead
+// is claimed by its exact phone (claim_lead), never found by name.
+//
 // ⚠ The ASM `today` clause reads the `lv` lateral (latest visit), so every ASM
 // query must carry LATEST_VISIT_JOIN — scopeFrom() does it for you.
 
@@ -19,8 +24,8 @@ import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { tabFilter as isrTab } from "@/lib/inside-sales/queryBuilder";
 import { tabFilter as asmTab, LATEST_VISIT_JOIN } from "@/lib/asm/queryBuilder";
-import { QUEUE_TABS } from "@/lib/inside-sales/types";
-import { ASM_QUEUE_TABS } from "@/lib/asm/types";
+import { QUEUE_TABS, type QueueTab } from "@/lib/inside-sales/types";
+import { ASM_QUEUE_TABS, type AsmQueueTab } from "@/lib/asm/types";
 import type { AssistantUser } from "./types";
 
 type ScopeUser = Pick<AssistantUser, "id"> & { role: string };
@@ -39,6 +44,26 @@ export function scopePredicate(user: ScopeUser): SQL {
             return union(QUEUE_TABS.map((t) => isrTab(t, user.id)));
         case "asm":
             return union(ASM_QUEUE_TABS.map((t) => asmTab(t, user.id)));
+        default:
+            return sql`FALSE`;
+    }
+}
+
+/** ID 45: the tabs that hold only the user's OWN leads — what my_queue lists. */
+export const ISR_OWN_TABS = ["my_open", "follow_ups", "my_closed"] as const satisfies readonly QueueTab[];
+export const ASM_OWN_TABS = ["my_visits", "today", "my_closed"] as const satisfies readonly AsmQueueTab[];
+
+/**
+ * ID 45: WHERE fragment for the user's OWN tabs only (no pool / team /
+ * territory) — what search_lead searches. Same joins as scopePredicate
+ * (scopeJoin). Unknown role → FALSE.
+ */
+export function ownScopePredicate(user: ScopeUser): SQL {
+    switch (user.role) {
+        case "inside_sales_rep":
+            return union(ISR_OWN_TABS.map((t) => isrTab(t, user.id)));
+        case "asm":
+            return union(ASM_OWN_TABS.map((t) => asmTab(t, user.id)));
         default:
             return sql`FALSE`;
     }

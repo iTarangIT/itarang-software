@@ -92,7 +92,10 @@ export function tabFilter(tab: QueueTab, userId: string) {
             // to every queue. Owner-IS-NULL + not-terminal surfaces them here.
             return sql`dl.current_owner_id IS NULL AND dl.lead_status IS DISTINCT FROM 'Converted' AND dl.lead_status IS DISTINCT FROM 'Lost' AND dl.is_active IS NOT FALSE`;
         case "team":
-            return sql`dl.lead_status IN (${OPEN_LIST}) AND dl.is_active IS NOT FALSE`;
+            // ID 45: the team's OWNED leads only — the unowned pool is the
+            // Unassigned tab (claim there), not something to browse here.
+            // ID 36: dead / non-responsive numbers are in Number Repair.
+            return sql`dl.current_owner_id IS NOT NULL AND dl.lead_status IN (${OPEN_LIST}) AND dl.is_active IS NOT FALSE AND (to_jsonb(dl) ->> 'contactability') IS NULL`;
         case "my_closed":
             return sql`dl.current_owner_id = ${userId} AND dl.lead_status IN (${TERMINAL_LIST}) AND dl.closed_at >= NOW() - INTERVAL '90 days' AND dl.is_active IS NOT FALSE`;
     }

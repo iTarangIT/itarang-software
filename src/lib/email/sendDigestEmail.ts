@@ -315,14 +315,21 @@ export function buildDigestEmail(
     copy.eyebrow.toUpperCase(),
     `${p.kind.label} — ${copy.period(dayLabel)}`,
   ];
-  if (activity.length) {
-    if (on("summary") && p.figures.headline?.length) textParts.push("", ...p.figures.headline);
-  for (const t of p.figures.tables ?? []) {
-    if (t.footer && on(t.key) && on(t.footer.key)) {
-      textParts.push("", ...t.footer.items.map((it) => `${it.label}: ${it.value}${it.hint ? ` (${it.hint})` : ""}`));
+  // The headline and the table footers ("Right now") do not depend on there
+  // being activity lines — Sales Daily has none, all tables — so they sit
+  // outside that guard, mirroring the HTML body.
+  if (on("summary") && p.figures.headline?.length) textParts.push("", ...p.figures.headline);
+  for (const t of tables) {
+    if (t.footer && on(t.footer.key)) {
+      textParts.push(
+        "",
+        `${t.footer.label.toUpperCase()}`,
+        ...t.footer.items.map((it) => `${it.label}: ${it.value}${it.hint ? ` (${it.hint})` : ""}`),
+      );
     }
   }
-  textParts.push("", ...activity.map((l) => `${l.indent ? "  " : ""}${l.label}: ${l.display ?? l.value}`));
+  if (activity.length) {
+    textParts.push("", ...activity.map((l) => `${l.indent ? "  " : ""}${l.label}: ${l.display ?? l.value}`));
   }
   for (const t of tables) {
     textParts.push("", t.title.toUpperCase());

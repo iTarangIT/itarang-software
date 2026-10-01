@@ -77,7 +77,10 @@ function baseQuery(opts: Opts): SQL {
                    dl.last_worked_at,
                    dl.last_disposition,
                    dl.last_disposition_bucket,
-                   ${nonResponsiveSql(sql`dl.id`)}               AS non_responsive,
+                   -- ID 36: a contactability flag (dead number / non-responsive,
+                   -- E-314) counts as not idle — the lead is in Number Repair.
+                   (${nonResponsiveSql(sql`dl.id`)}
+                    OR (to_jsonb(dl)->>'contactability') IS NOT NULL) AS non_responsive,
                    ${threshold}                                  AS threshold
               FROM dealer_leads dl
               LEFT JOIN users u ON u.id::text = dl.current_owner_id

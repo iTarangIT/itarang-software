@@ -29,6 +29,7 @@ import {
   deriveDurationSeconds,
 } from "@/lib/ai-dialer/call-duration/derive";
 import { resolveDurationBucketConfig } from "@/lib/ai-dialer/call-duration/config-store";
+import { ownedByCondition, requireCampaignReader } from "@/lib/ai-dialer/campaignAccess";
 
 const PAGE_SIZE = 50;
 const BANNER_LIMIT = 100; // per bucket on bucket=all
@@ -196,6 +197,13 @@ const detailSelectShape = {
 
 export const GET = withErrorHandler(
   async (req: Request, ctx: { params: Promise<{ id: string }> }) => {
+    // ID 45: was unauthenticated. A rep (asm / inside_sales_rep / partner) sees
+    // only the campaign leads they own — the rows carry names and numbers and a
+    // campaign spans the unowned pool.
+    const { user, ownOnly } = await requireCampaignReader();
+    const scoped = (cond: ReturnType<typeof and>) =>
+      ownOnly ? and(cond, ownedByCondition(user.id)) : cond;
+
     const { id: campaignId } = await ctx.params;
     if (!campaignId) return errorResponse("Campaign id required", 400);
 
@@ -235,9 +243,11 @@ export const GET = withErrorHandler(
             eq(dealerLeads.id, dialerCampaignLeads.lead_id),
           )
           .where(
-            and(
-              eq(dialerCampaignLeads.campaign_id, campaignId),
-              eq(dialerCampaignLeads.status, "pending"),
+            scoped(
+              and(
+                eq(dialerCampaignLeads.campaign_id, campaignId),
+                eq(dialerCampaignLeads.status, "pending"),
+              ),
             ),
           )
           .orderBy(asc(dialerCampaignLeads.queue_position))
@@ -250,9 +260,11 @@ export const GET = withErrorHandler(
             eq(dealerLeads.id, dialerCampaignLeads.lead_id),
           )
           .where(
-            and(
-              eq(dialerCampaignLeads.campaign_id, campaignId),
-              eq(dialerCampaignLeads.status, "calling"),
+            scoped(
+              and(
+                eq(dialerCampaignLeads.campaign_id, campaignId),
+                eq(dialerCampaignLeads.status, "calling"),
+              ),
             ),
           )
           .orderBy(asc(dialerCampaignLeads.queue_position))
@@ -265,9 +277,11 @@ export const GET = withErrorHandler(
             eq(dealerLeads.id, dialerCampaignLeads.lead_id),
           )
           .where(
-            and(
-              eq(dialerCampaignLeads.campaign_id, campaignId),
-              eq(dialerCampaignLeads.status, "completed"),
+            scoped(
+              and(
+                eq(dialerCampaignLeads.campaign_id, campaignId),
+                eq(dialerCampaignLeads.status, "completed"),
+              ),
             ),
           )
           .orderBy(desc(dialerCampaignLeads.completed_at))
@@ -280,9 +294,11 @@ export const GET = withErrorHandler(
             eq(dealerLeads.id, dialerCampaignLeads.lead_id),
           )
           .where(
-            and(
-              eq(dialerCampaignLeads.campaign_id, campaignId),
-              inArray(dialerCampaignLeads.status, NOT_CONNECTED_STATUSES),
+            scoped(
+              and(
+                eq(dialerCampaignLeads.campaign_id, campaignId),
+                inArray(dialerCampaignLeads.status, NOT_CONNECTED_STATUSES),
+              ),
             ),
           )
           .orderBy(desc(dialerCampaignLeads.completed_at))
@@ -305,6 +321,7 @@ export const GET = withErrorHandler(
         : desc(dialerCampaignLeads.completed_at);
 
     const conditions = [eq(dialerCampaignLeads.campaign_id, campaignId)];
+    if (ownOnly) conditions.push(ownedByCondition(user.id));
 
     // A duration bucket REPLACES the status filter rather than narrowing it.
     // The histogram counts every call that reached a dealer, and a call can

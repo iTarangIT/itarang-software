@@ -10,7 +10,7 @@ const findLeadInScope = vi.fn();
 vi.mock("../scope", async (orig) => ({ ...(await orig<typeof import("../scope")>()), findLeadInScope }));
 
 const { toolNamesFor, toolsFor, ROLE_TOOLS } = await import("../registry");
-const { scopePredicate, scopeJoin, claimPoolPredicate } = await import("../scope");
+const { scopePredicate, scopeJoin, claimPoolPredicate, ownScopePredicate } = await import("../scope");
 const { tabFilter: isrTab } = await import("@/lib/inside-sales/queryBuilder");
 const { tabFilter: asmTab } = await import("@/lib/asm/queryBuilder");
 const { runAgentTurn, sanitizeResult, AGENT_LIMITS } = await import("../agent");
@@ -69,13 +69,13 @@ describe("registry", () => {
         expect(catalogue.schema.parse({ lead_id: "DL-1", query: "105ah" })).toEqual({ query: "105ah" });
     });
 
-    it("my_queue's tab enum is the role's own tabs", () => {
+    it("my_queue's tab enum is the role's own tabs — never a pool tab (ID 45)", () => {
         const asmQueue = toolsFor("asm", false).find((t) => t.name === "my_queue")!;
-        expect(asmQueue.schema.safeParse({ tab: "today" }).success).toBe(true);
-        expect(asmQueue.schema.safeParse({ tab: "follow_ups" }).success).toBe(false);
+        for (const tab of ["my_visits", "today", "my_closed"]) expect(asmQueue.schema.safeParse({ tab }).success).toBe(true);
+        for (const tab of ["follow_ups", "territory", "unclaimed"]) expect(asmQueue.schema.safeParse({ tab }).success).toBe(false);
         const isrQueue = toolsFor("inside_sales_rep", false).find((t) => t.name === "my_queue")!;
-        expect(isrQueue.schema.safeParse({ tab: "follow_ups" }).success).toBe(true);
-        expect(isrQueue.schema.safeParse({ tab: "today" }).success).toBe(false);
+        for (const tab of ["my_open", "follow_ups", "my_closed"]) expect(isrQueue.schema.safeParse({ tab }).success).toBe(true);
+        for (const tab of ["today", "unassigned", "team"]) expect(isrQueue.schema.safeParse({ tab }).success).toBe(false);
     });
 
     it("INV6: write schemas accept only the closed vocabulary", () => {
@@ -111,6 +111,15 @@ describe("scope predicate (INV1)", () => {
         const tabs = (["my_visits", "today", "territory", "unclaimed", "my_closed"] as const).map((t) => shape(asmTab(t, ASM.id)));
         expect(q).toBe(`(${tabs.map((t) => `(${t})`).join(" OR ")})`);
         expect(render(scopeJoin(ASM)).sql).toMatch(/LEFT JOIN LATERAL/);
+    });
+
+    it("own scope (search_lead, ID 45) is the union of the OWN tabs only — no pool / team / territory", () => {
+        const isr = (["my_open", "follow_ups", "my_closed"] as const).map((t) => shape(isrTab(t, ISR.id)));
+        expect(shape(ownScopePredicate(ISR))).toBe(`(${isr.map((t) => `(${t})`).join(" OR ")})`);
+        const asm = (["my_visits", "today", "my_closed"] as const).map((t) => shape(asmTab(t, ASM.id)));
+        expect(shape(ownScopePredicate(ASM))).toBe(`(${asm.map((t) => `(${t})`).join(" OR ")})`);
+        expect(render(ownScopePredicate(ISR)).sql).not.toMatch(/current_owner_id IS NULL/);
+        expect(render(ownScopePredicate({ id: "x", role: "admin" })).sql).toBe("FALSE");
     });
 
     it("any other role matches nothing", () => {

@@ -2,7 +2,7 @@
 //
 // Until now the status only moved while someone had the dealer review page open
 // (its 10 s poll) or pressed Refresh Status. This sweep asks Digio about every
-// initiated, still-open agreement (newest first), through the SAME
+// initiated, still-open agreement (least recently checked first), through the SAME
 // refreshDealerAgreementFromDigio the button uses — so a sweep and a click can
 // never record different things, and the per-application throttle ("auto")
 // keeps it from racing the page's own poll.
@@ -10,7 +10,7 @@
 // Run in-process by startDealerAgreementRefreshTicker (instrumentation-node.ts),
 // with /api/cron/dealer-agreement-refresh as the backstop.
 
-import { and, desc, eq, isNotNull, isNull, notInArray, or } from "drizzle-orm";
+import { and, asc, eq, isNotNull, isNull, notInArray, or, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { dealerOnboardingApplications } from "@/lib/db/schema";
 import { refreshDealerAgreementFromDigio } from "@/lib/agreement/refresh-dealer-agreement";
@@ -39,7 +39,14 @@ export async function runDealerAgreementRefreshSweep(): Promise<AgreementSweepRe
                 ),
             ),
         )
-        .orderBy(desc(dealerOnboardingApplications.created_at))
+        // Least recently checked first (tracker ID 53): every successful
+        // refresh stamps updated_at, so a batch that cannot cover the whole
+        // backlog rotates through it instead of re-asking about the newest
+        // 100 forever. Ties (never refreshed) go oldest first.
+        .orderBy(
+            sql`${dealerOnboardingApplications.updated_at} ASC NULLS FIRST`,
+            asc(dealerOnboardingApplications.created_at),
+        )
         .limit(AGREEMENT_SWEEP_BATCH);
 
     const result: AgreementSweepResult = { checked: 0, changed: 0, failed: 0 };

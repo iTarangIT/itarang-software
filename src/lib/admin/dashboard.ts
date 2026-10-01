@@ -58,7 +58,10 @@ const LAST_TOUCH = "COALESCE(dl.last_worked_at, dl.assigned_at, dl.created_at)";
 // R-16 — a lead whose number never answers (6 unanswered call days in 45) is not
 // "idle": nobody can work it. It is counted in its own panel and kept OUT of
 // every stale / no-touch count, which it would otherwise inflate forever.
-const NON_RESPONSIVE = nonResponsiveSql(sql`dl.id`);
+// ID 36: a lead flagged dead_number / non_responsive (contactability, E-314) is
+// out of idle too — it sits in Number Repair. to_jsonb so a DB without E-314
+// reads NULL instead of erroring.
+const NON_RESPONSIVE = sql`(${nonResponsiveSql(sql`dl.id`)} OR (to_jsonb(dl) ->> 'contactability') IS NOT NULL)`;
 const NOT_NON_RESPONSIVE = sql`NOT ${NON_RESPONSIVE}`;
 
 // Lead-scoped filter fragment (Zone 4). AND-prefixed; empty when no filters.

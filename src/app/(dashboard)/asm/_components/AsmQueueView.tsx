@@ -17,7 +17,6 @@ import { QueueCsvButton } from "@/components/leads/QueueCsvButton";
 import { BulkClaimBar } from "@/components/leads/BulkClaimBar";
 import { ClaimLeadConfirm } from "@/components/leads/ClaimLeadConfirm";
 import { ClaimByNumberPanel } from "@/components/leads/ClaimByNumberPanel";
-import { OutsideTerritoryClaims } from "@/components/leads/OutsideTerritoryClaims";
 import { ASM_POOL_TABS, claimsByNumberOnly } from "@/lib/leads/claimScope";
 import { CLAIM_ROLES } from "@/lib/inside-sales/types";
 import {
@@ -303,7 +302,6 @@ export function AsmQueueView({ viewerId, viewerRole }: Props) {
                     <ClaimByNumberPanel onClaimed={() => void queryClient.invalidateQueries()} />
                 </div>
             )}
-            {!numberOnly && <OutsideTerritoryClaims />}
             <AsmQueueTabs
                 active={tab}
                 counts={counts ?? null}

@@ -8,8 +8,12 @@ import { dialerCampaigns, users } from "@/lib/db/schema";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
 import { and, desc, eq, sql, type SQL } from "drizzle-orm";
 import { DURATION_SECONDS_SQL } from "@/lib/ai-dialer/call-duration/derive";
+import { requireCampaignReader } from "@/lib/ai-dialer/campaignAccess";
 
 export const GET = withErrorHandler(async (req: Request) => {
+  // ID 45: was unauthenticated. Campaign-level rows only (no lead names or
+  // numbers), so reps still see every campaign — the lead tables are scoped.
+  await requireCampaignReader();
   const { searchParams } = new URL(req.url);
   const page = Math.max(1, Number(searchParams.get("page") || 1));
   // Default 10 keeps the existing CampaignsTable pagination unchanged.

@@ -4,8 +4,10 @@
 // so claim eligibility replaces the ownership check — here, and again on the
 // locked row in the executor (assertClaimable).
 //
-// Input is a lead id OR a name: a name is resolved INSIDE the pool, never across
-// the user's whole scope, and two matches come back as candidates — the tool
+// Input is a lead id OR the dealer's exact phone number(s) (ID 45: reps cannot
+// browse the pool, so there is NO name search in it — "Sharma" must not list
+// every unowned Sharma). A phone list ("98…, 97…") is matched on the last 10
+// digits, inside the pool only; two matches come back as candidates — the tool
 // never picks. On Confirm, claimLeadApplier runs claimLead() (the claim route's
 // own writer) on the executor's transaction.
 
@@ -13,14 +15,13 @@ import { z } from "zod";
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { claimLead as claimLeadWrite } from "@/lib/inside-sales/claimLead";
-import { leadSearchClause } from "@/lib/leads/queueFilterSql";
+import { parseMobileList } from "@/lib/leads/claimScope";
 import { claimPoolPredicate, findLeadInScope, scopeJoin } from "../../scope";
 import { createPending } from "../../actions";
 import { statusLabel } from "../../format";
 import { MAX_TOOL_ROWS, type AssistantUser, type Preview, type ToolResult } from "../../types";
 import { defineTool, LeadId, NOT_FOUND, WRITES_OFF, type ToolFactory } from "../spec";
 import { leadUrl, toLeadSummary } from "../leads";
-import { normalizeSearch } from "../read/searchLead";
 import { ActionRejected, defineApplier, type Tx } from "../../applierSpec";
 
 export const ClaimLeadPlan = z.object({ lead_id: z.string().min(1) });
@@ -37,9 +38,12 @@ type PoolRow = {
     total: number;
 };
 
-/** Pool leads matching an id or a search text — at most MAX_TOOL_ROWS. */
-async function findInPool(user: AssistantUser, by: { id: string } | { q: string }): Promise<PoolRow[]> {
-    const match = "id" in by ? sql`AND dl.id = ${by.id}` : leadSearchClause(by.q);
+/** Pool leads matching an id or exact mobile numbers (last 10 digits) — at most MAX_TOOL_ROWS. */
+async function findInPool(user: AssistantUser, by: { id: string } | { mobiles: string[] }): Promise<PoolRow[]> {
+    const match =
+        "id" in by
+            ? sql`AND dl.id = ${by.id}`
+            : sql`AND right(regexp_replace(dl.phone, '[^0-9]', '', 'g'), 10) IN (SELECT jsonb_array_elements_text(${JSON.stringify(by.mobiles)}::jsonb))`;
     return db.execute<PoolRow>(sql`
         SELECT dl.id, dl.shop_name, dl.dealer_name, dl.city, dl.lead_status, dl.interest_level, dl.updated_at,
                count(*) OVER ()::int AS total
@@ -67,25 +71,39 @@ export const claimLead: ToolFactory = () =>
         kind: "write",
         description:
             "Propose claiming ONE unowned lead from the user's claim pool (any unowned, open lead; an ASM may claim outside their territory — it is flagged for the Sales Head). " +
-            "Pass lead_id when you have it, otherwise the name the user gave — it is searched in the pool only. " +
+            "Pass lead_id when you have it, otherwise the dealer's exact 10-digit mobile number (several comma-separated are allowed). " +
+            "Names are NOT searched: the unowned pool cannot be browsed — ask the user for the number. " +
             "Nothing is saved until Confirm.",
         schema: z
             .object({
                 lead_id: LeadId.optional(),
-                name: z.string().trim().min(2).max(60).optional().describe("Dealer / shop name or phone, as the user wrote it"),
+                phone: z
+                    .string()
+                    .trim()
+                    .min(10)
+                    .max(200)
+                    .optional()
+                    .describe("The dealer's exact mobile number(s), as the user wrote them; comma-separated for several"),
             })
-            .refine((v) => !!v.lead_id || !!v.name, { message: "lead_id or name is required", path: ["name"] }),
+            .refine((v) => !!v.lead_id || !!v.phone, { message: "lead_id or phone is required", path: ["phone"] }),
         run: async (ctx, input): Promise<ToolResult> => {
             if (!ctx.writesEnabled) return WRITES_OFF;
-            const rows = input.lead_id
-                ? await findInPool(ctx.user, { id: input.lead_id })
-                : await findInPool(ctx.user, { q: normalizeSearch(input.name!) });
+            let rows: PoolRow[];
+            if (input.lead_id) {
+                rows = await findInPool(ctx.user, { id: input.lead_id });
+            } else {
+                const { mobiles } = parseMobileList(input.phone!);
+                if (mobiles.length === 0) {
+                    return { kind: "question", question: "Which number? I need the dealer's exact 10-digit mobile number to find the lead in the pool." };
+                }
+                rows = await findInPool(ctx.user, { mobiles });
+            }
 
             if (rows.length === 0) return input.lead_id ? whyNotClaimable(ctx.user, input.lead_id) : NOT_FOUND;
             if (rows.length > 1) {
                 return {
                     kind: "candidates",
-                    question: `${rows[0]!.total} leads in your claim pool match "${input.name}". Which one do you mean?`,
+                    question: `${rows[0]!.total} leads in your claim pool match "${input.phone ?? input.lead_id}". Which one do you mean?`,
                     rows: rows.map((r) => toLeadSummary(r, ctx.user)),
                 };
             }

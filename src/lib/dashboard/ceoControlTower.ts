@@ -35,6 +35,7 @@ import { listDealerHealth } from "@/lib/dealers/accountHealth";
 import type { AccountBucket } from "@/lib/dealers/accountHealthRules";
 import { businessTypeLabel } from "@/lib/leads/businessType";
 import { engagedCall, humanCall } from "@/lib/reports/metricDefinitions";
+import { scrapKgSourced } from "@/lib/buyback/scrapKgSourced";
 
 export type Compare = { now: number; prev: number | null };
 
@@ -111,6 +112,10 @@ const n = (v: unknown) => Number(v ?? 0);
 /** [from, toExcl) as IST dates on a timestamptz column. */
 const inWin = (col: ReturnType<typeof sql>, from: string, toExcl: string) =>
     sql`(${col} AT TIME ZONE 'Asia/Kolkata')::date >= ${from}::date AND (${col} AT TIME ZONE 'Asia/Kolkata')::date < ${toExcl}::date`;
+// Same window for a timestamp WITHOUT time zone holding UTC (dealer_leads.created_at):
+// read it as UTC first, or leads created 00:00–05:30 IST land on the previous day.
+const inWinNaive = (col: ReturnType<typeof sql>, from: string, toExcl: string) =>
+    sql`((${col} AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Kolkata')::date >= ${from}::date AND ((${col} AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Kolkata')::date < ${toExcl}::date`;
 
 export async function buildControlTower(w: { startStr: string | null; endStr: string | null }): Promise<ControlTower> {
     const [{ today }] = (await rows(sql`SELECT (now() AT TIME ZONE 'Asia/Kolkata')::date::text AS today`)) as Array<{ today: string }>;
@@ -225,7 +230,7 @@ async function engineTile(from: string, toExcl: string, prevFrom: string | null,
     const counts = async (a: string, b: string) => {
         const [r] = await rows(sql`
             SELECT
-              (SELECT COUNT(*) FROM dealer_leads dl WHERE dl.is_active IS NOT FALSE AND ${inWin(sql`dl.created_at`, a, b)}) AS leads_in,
+              (SELECT COUNT(*) FROM dealer_leads dl WHERE dl.is_active IS NOT FALSE AND ${inWinNaive(sql`dl.created_at`, a, b)}) AS leads_in,
               (SELECT COUNT(*) FROM dealer_leads dl WHERE dl.lead_status = 'Converted' AND ${inWin(sql`dl.closed_at`, a, b)}) AS converted,
               (SELECT COUNT(*) FROM (
                   SELECT r.dealer_lead_id, MIN(r.invoice_date) AS first_d
@@ -242,8 +247,8 @@ async function engineTile(from: string, toExcl: string, prevFrom: string | null,
                    COUNT(*) FILTER (WHERE created_at >= now() - INTERVAL '60 days' AND created_at < now() - INTERVAL '30 days') AS c30,
                    COUNT(*) FILTER (WHERE created_at >= now() - INTERVAL '60 days' AND created_at < now() - INTERVAL '30 days'
                                       AND lead_status = 'Converted' AND closed_at <= created_at + INTERVAL '30 days') AS c30_conv,
-                   COUNT(*) FILTER (WHERE ${inWin(sql`created_at`, from, toExcl)}) AS coh,
-                   COUNT(*) FILTER (WHERE ${inWin(sql`created_at`, from, toExcl)} AND lead_status = 'Converted') AS coh_conv
+                   COUNT(*) FILTER (WHERE ${inWinNaive(sql`created_at`, from, toExcl)}) AS coh,
+                   COUNT(*) FILTER (WHERE ${inWinNaive(sql`created_at`, from, toExcl)} AND lead_status = 'Converted') AS coh_conv
               FROM dealer_leads WHERE is_active IS NOT FALSE`),
         rows(sql`
             WITH called AS (
@@ -295,15 +300,8 @@ async function baseTile(from: string, toExcl: string, prevFrom: string | null, p
     const by = {} as Record<AccountBucket, number>;
     for (const d of dealers) by[d.bucket] = (by[d.bucket] ?? 0) + 1;
 
-    const kg = async (a: string, b: string) => {
-        const [r] = await rows(sql`
-            SELECT COALESCE(SUM(l.quantity * l.unit_weight_kg), 0) AS kg
-              FROM (SELECT DISTINCT al.request_id FROM buyback_activity_log al
-                     WHERE al.action = 'complete_pickup' AND ${inWin(sql`al.created_at`, a, b)}) p
-              JOIN buyback_batches bt ON bt.request_id = p.request_id
-              JOIN buyback_lines l ON l.batch_id = bt.id`);
-        return n(r.kg);
-    };
+    // One definition with the Daily Sales email's "Scrap sourced (kg)" row.
+    const kg = (a: string, b: string) => scrapKgSourced(a, b);
     const [kgNow, kgPrev, money] = await Promise.all([
         kg(from, toExcl),
         prevFrom && prevTo ? kg(prevFrom, prevTo) : Promise.resolve(null),
