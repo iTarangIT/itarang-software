@@ -236,12 +236,13 @@ export async function createLeadCommercial(
         // Paired touchpoint (BRD §0.10 — quote events auto-log a touchpoint).
         //
         // E-221 — a quote awaiting the CEO logs 'quote_submitted', NOT
-        // 'quote_sent'. Nothing has been sent: the dealer sees nothing until
-        // it is approved, and the decision route writes 'quote_sent' at the
-        // moment of release.
+        // 'quote_released'. Nothing has been sent: the dealer sees nothing
+        // until it is approved, and the decision route writes
+        // 'quote_released' at the moment of release.
         //
         // E-226 — an auto-approved quote IS released, right here. So it logs
-        // 'quote_sent' for the same reason the decision route does.
+        // 'quote_released' for the same reason the decision route does.
+        // (ID 75: 'quote_released' was 'quote_sent' before the rename.)
         if (body.event_type === "quote_issue" || body.event_type === "quote_revision") {
             // Surface the deal total (product roll-up = final_price) on the
             // touchpoint so the history log shows the value at a glance.
@@ -260,7 +261,7 @@ export async function createLeadCommercial(
 
             await writeTouchpoint({
                 dealerLeadId: id,
-                touchpointType: outcome.autoApproved ? "quote_sent" : "quote_submitted",
+                touchpointType: outcome.autoApproved ? "quote_released" : "quote_submitted",
                 performedBy: actor.id,
                 remarks: outcome.autoApproved
                     ? `Quote ${verb}${money} — auto-approved and released (at or above OEM reference)` +

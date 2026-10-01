@@ -37,6 +37,8 @@ const QuerySchema = z.object({
     neodove: z.literal("1").optional(),
     // Leads who asked to be called back — the AI cannot, so they need a person.
     callback: z.literal("1").optional(),
+    // ID 75.4: "Finalised, not Won" — approved by the dealer, not marked Won.
+    finalised: z.literal("1").optional(),
     ids_only: z.literal("1").optional(),
 });
 
@@ -50,6 +52,7 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
         q: url.searchParams.get("q") ?? undefined,
         neodove: url.searchParams.get("neodove") ?? undefined,
         callback: url.searchParams.get("callback") ?? undefined,
+        finalised: url.searchParams.get("finalised") ?? undefined,
         ids_only: url.searchParams.get("ids_only") ?? undefined,
     });
 
@@ -59,6 +62,7 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
     }
     const neodoveOnly = parsed.neodove === "1";
     const callbackOnly = parsed.callback === "1";
+    const finalisedOnly = parsed.finalised === "1";
     // Stage / interest / region / created-date. Validated against their closed
     // vocabularies inside readQueueFilters, so an unknown value is dropped
     // rather than reaching the SQL builder.
@@ -75,6 +79,7 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
             q: parsed.q ?? null,
             neodoveOnly,
             callbackOnly,
+            finalisedOnly,
             filters,
             sort,
         });
@@ -90,6 +95,7 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
             q: parsed.q ?? null,
             neodoveOnly,
             callbackOnly,
+            finalisedOnly,
             filters,
             sort,
         }),
@@ -99,6 +105,7 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
             q: parsed.q ?? null,
             neodoveOnly,
             callbackOnly,
+            finalisedOnly,
             filters,
         }),
     ]);

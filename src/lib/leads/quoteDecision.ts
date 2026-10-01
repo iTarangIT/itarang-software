@@ -303,6 +303,8 @@ export async function recordDealerDecision(
       // `performedBy` carries the owner — the person on our side the entry
       // belongs to — and the remark says plainly who actually acted.
       performedBy: row.current_owner_id ?? "system",
+      // ID 75.5: the dealer acted, not the owner — never the owner's work.
+      countsAsWork: false,
       remarks:
         `Dealer ${label} quotation${ref} ${channel}` +
         (value > 0 ? ` — ₹${value.toLocaleString("en-IN")}` : "") +
@@ -316,8 +318,26 @@ export async function recordDealerDecision(
   }
 
   // ID 75: the dealer's yes finalises the commercials (never fails the answer).
+  // ID 75.5: the move is the system's (actor null), not the owner's work —
+  // advanceLeadOnQuoteEvent never stamps last_worked_at.
+  let awaitingVisit = false;
   if (input.decision === "approved") {
-    await advanceLeadOnQuoteEvent(row.dealer_lead_id, "dealer_approved", row.current_owner_id);
+    const advanced = await advanceLeadOnQuoteEvent(row.dealer_lead_id, "dealer_approved", null);
+    awaitingVisit = advanced.awaitingVisit === true;
+
+    // ID 74.1: an approved quote clears the "Won without an approved quote"
+    // flag on a lead that was marked Won (or already Converted) before it.
+    try {
+      await db.execute(sql`
+        UPDATE dealer_leads
+           SET won_without_approved_quote = false
+         WHERE id = ${row.dealer_lead_id}
+           AND lead_status IN ('Won', 'Converted')
+           AND won_without_approved_quote IS TRUE
+      `);
+    } catch (e) {
+      console.error("[quoteDecision] won_without_approved_quote not cleared", e);
+    }
   }
 
   await notifyQuotationDealerDecision({
@@ -330,6 +350,7 @@ export async function recordDealerDecision(
     decision: input.decision,
     via: input.via,
     note: input.note ?? null,
+    awaitingVisit,
   });
 
   return {

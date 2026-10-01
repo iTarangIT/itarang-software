@@ -24,6 +24,7 @@ import {
   storeAgreementPdf,
 } from "@/lib/agreement/executedAgreementStore";
 import { notifyAgreementApprovalRequested } from "@/lib/notifications/events";
+import { markAgreementOutcome } from "@/lib/onboarding/leadMilestones";
 
 type RouteContext = {
   params: Promise<{ dealerId: string }>;
@@ -470,6 +471,12 @@ export async function POST(req: NextRequest, context: RouteContext) {
         return NextResponse.json({ success: false, message: MIGRATION_MISSING_MESSAGE }, { status: 503 });
       }
       throw err;
+    }
+
+    // ID 84.2: the lead's agreement milestone, once the completion has
+    // committed. Best-effort — never throws.
+    if (!alreadyCompleted) {
+      await markAgreementOutcome({ applicationId: dealerId }, "completed");
     }
 
     return NextResponse.json({

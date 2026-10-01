@@ -14,6 +14,7 @@ import { db } from "@/lib/db";
 import { callerNotLinkedFor } from "@/lib/neodove/ownerFromCall";
 import { engagedState } from "@/lib/reports/metricDefinitions";
 import { fetchAssignedByForLeads } from "@/lib/leads/leadAssignedBy";
+import { onboardingStall, STALL_LABEL } from "@/lib/onboarding/stall";
 import type {
     LeadDetailBundle,
     LeadDetailCommercials,
@@ -199,21 +200,65 @@ export async function fetchLeadDetailBundle(leadId: string): Promise<LeadDetailB
         }
     }
 
-    // ID 84: onboarding milestones on the lead.
-    const onboardingRows = (await db.execute<LeadOnboardingMilestones>(sql`
+    // ID 84: onboarding milestones on the lead. docs_submitted_at prefers the
+    // lead's own E-314 milestone (first submission) over the application's
+    // submitted_at, which a resubmission overwrites.
+    const onboardingRaw = (await db.execute(sql`
         SELECT oa.id::text AS application_id, oa.onboarding_status,
-               oa.submitted_at::text AS docs_submitted_at, oa.agreement_status,
+               COALESCE(to_jsonb(dl) ->> 'onboarding_docs_submitted_at',
+                        oa.submitted_at::text) AS docs_submitted_at,
+               oa.agreement_status,
                oa.approved_at::text AS approved_at,
                COALESCE(oa.last_action_at, oa.updated_at)::text AS last_activity_at,
-               (oa.onboarding_status NOT IN ('approved', 'rejected')
-                AND COALESCE(oa.last_action_at, oa.updated_at) < NOW() - INTERVAL '14 days') AS stalled
+               (oa.id = dl.dealer_onboarding_application_id
+                OR dl.lead_status IN ('Won', 'Converted')) AS linked
           FROM dealer_onboarding_applications oa
           JOIN dealer_leads dl ON dl.id = ${leadId}
          WHERE oa.id = dl.dealer_onboarding_application_id
             OR oa.originating_dealer_lead_id = ${leadId}
          ORDER BY oa.created_at DESC
          LIMIT 1
-    `)) as unknown as LeadOnboardingMilestones[];
+    `)) as unknown as Array<
+        Omit<LeadOnboardingMilestones, "stalled" | "stalled_waiting_on" | "stalled_label"> & { linked: boolean | null }
+    >;
+
+    // ID 84.1: stalled = waiting on the dealer 7+ days, or on us 2+ working
+    // days (holiday_calendar excluded). Holidays only matter for the "us" side,
+    // so they are read only when there is an open onboarding.
+    let onboarding: LeadOnboardingMilestones | null = null;
+    if (onboardingRaw[0]) {
+        const { linked, ...o } = onboardingRaw[0];
+        let holidays = new Set<string>();
+        // An application the lead was unlinked from (re-engaged after a
+        // drop-out, ID 84.4) is history: shown, never "stalled".
+        const live = Boolean(linked);
+        if (live && ["draft", "submitted", "correction_requested"].includes(o.onboarding_status)) {
+            try {
+                const h = (await db.execute(sql`
+                    SELECT holiday_date::text AS d FROM holiday_calendar WHERE is_active IS NOT FALSE
+                `)) as unknown as Array<{ d: string }>;
+                holidays = new Set(h.map((r) => r.d));
+            } catch {
+                // No calendar: Sundays alone are skipped.
+            }
+        }
+        const waitingOn = live
+            ? onboardingStall(
+                  {
+                      onboarding_status: o.onboarding_status,
+                      agreement_status: o.agreement_status,
+                      last_activity_at: o.last_activity_at,
+                  },
+                  holidays,
+              )
+            : null;
+        onboarding = {
+            ...o,
+            stalled: waitingOn !== null,
+            stalled_waiting_on: waitingOn,
+            stalled_label: waitingOn ? STALL_LABEL[waitingOn] : null,
+        };
+    }
 
     const bundle: LeadDetailBundle = {
         lead: { ...(lead as LeadDetailLead), assigned_by: assignedBy[leadId] ?? null },
@@ -223,7 +268,7 @@ export async function fetchLeadDetailBundle(leadId: string): Promise<LeadDetailB
         commercials_history: commercialsHistory as LeadDetailCommercials[],
         touchpoints: touchpoints as LeadDetailTouchpoint[],
         status_history: statusHistory as LeadDetailStatusHistory[],
-        onboarding: onboardingRows[0] ?? null,
+        onboarding,
         // ID 83: an unowned lead whose first human call was by a NeoDove agent
         // nobody has linked to a CRM user — it is waiting on that link.
         caller_not_linked: (lead as LeadDetailLead).current_owner_id ? null : await callerNotLinkedFor(leadId),

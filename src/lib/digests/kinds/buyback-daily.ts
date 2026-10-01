@@ -23,10 +23,13 @@
  *   Dealers called (unique)  distinct dealer_lead_id on HUMAN calls performed
  *                            by the SPOC — humanCall() in metricDefinitions.ts,
  *                            the Sales Daily rule (ID 59): no AI-dialer calls,
- *                            a NeoDove re-disposition counted once. It is the
- *                            person's CRM call log: a buyback request has no
- *                            link to a CRM lead, so calls cannot be narrowed to
- *                            "about buyback".
+ *                            a NeoDove re-disposition counted once — narrowed
+ *                            to BUYBACK leads (tracker ID 10): the lead's Type
+ *                            of Business is 'buyback' (E-296), or the lead is
+ *                            the CRM lead of a dealer with a buyback request
+ *                            (request → accounts.gstin → dealerLeadByGstin,
+ *                            the rule that sets the request's owner). A call
+ *                            about a battery sale is not buyback effort.
  *   Images received          requests whose FIRST photo (MIN created_at over
  *                            every photo on every line of the request) fell in
  *                            the period — a request counts once, never once per
@@ -65,6 +68,7 @@
 
 import { sql } from "drizzle-orm";
 
+import { dealerLeadByGstin, GSTIN_KEY } from "@/lib/leads/gstinMatch";
 import { humanCall } from "@/lib/reports/metricDefinitions";
 import { monthEnd, workingDaysBetween } from "@/lib/targets/rules";
 
@@ -198,6 +202,14 @@ async function periodRows(from: string, to: string): Promise<BuybackSpocRow[]> {
          AND st.txn_date BETWEEN ${from}::date AND ${to}::date
        GROUP BY d.request_id
     ),
+    buyback_leads AS (
+      -- CRM leads of dealers with a buyback request (GSTIN match, owner.ts).
+      SELECT DISTINCT m.dealer_lead_id
+        FROM buyback_requests br
+        JOIN accounts a ON a.id = br.dealer_entity_id
+        JOIN ${dealerLeadByGstin(GSTIN_KEY(sql`a.gstin`))} m ON TRUE
+       WHERE m.dealer_lead_id IS NOT NULL
+    ),
     margin AS (
       -- Deals whose recycler sale was booked in the period: all that came in
       -- from the recycler minus all that went out to the dealer, on that deal.
@@ -249,11 +261,15 @@ async function periodRows(from: string, to: string): Promise<BuybackSpocRow[]> {
         LEFT JOIN request_spoc rs ON rs.request_id = mg.request_id
       UNION ALL
       -- ID 59: human calls only, a NeoDove re-disposition counted once.
+      -- ID 10: only calls on buyback leads.
       SELECT t.performed_by, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, COUNT(DISTINCT t.dealer_lead_id)
         FROM lead_touchpoints t
+        JOIN dealer_leads dl ON dl.id = t.dealer_lead_id
        WHERE ${humanCall()}
          AND t.performed_by IS NOT NULL
          AND ${istRangeTz(sql`t.performed_at`, from, to)}
+         AND ((to_jsonb(dl) ->> 'business_type') = 'buyback'
+              OR t.dealer_lead_id IN (SELECT dealer_lead_id FROM buyback_leads))
        GROUP BY t.performed_by
     ),
     summed AS (
@@ -475,8 +491,8 @@ async function collect(
               targets.byUser,
             ),
             note:
-              "The SPOC is the request's owner. Dealers called is the person's own CRM call log " +
-              "(human calls; a buyback request has no link to a CRM lead).",
+              "The SPOC is the request's owner. Dealers called counts the person's human calls on buyback " +
+              "leads only: Type of Business = Buyback, or the CRM lead of a dealer with a buyback request (GSTIN match).",
             empty: "No buyback activity this month.",
           },
           {

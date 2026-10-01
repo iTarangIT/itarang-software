@@ -3,6 +3,7 @@ import { dealerOnboardingApplications } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { createClient } from "@supabase/supabase-js";
 import { syncSignersFromDigio } from "@/lib/agreement/sync-signers";
+import { markAgreementOutcome, type AgreementOutcome } from "@/lib/onboarding/leadMilestones";
 import { mergeProviderRawResponse } from "@/lib/agreement/providerRaw";
 import { extractStampCertificateIds } from "@/lib/digio/parse-status";
 import { isS3Backend, putObject, filesProxyPath } from "@/lib/storage/s3";
@@ -486,6 +487,22 @@ async function runRefresh(
       updated_at: new Date(),
     })
     .where(eq(dealerOnboardingApplications.id, dealerId));
+
+  // ID 84.2: a terminal Digio status is the lead's agreement milestone. This is
+  // where a dealer's e-sign result lands (manual refresh + the auto-refresh
+  // tick); /api/webhooks/digio only handles NBFC LSP agreements and consents.
+  // Best-effort — never throws.
+  const terminalOutcome: AgreementOutcome | null =
+    normalizedStatus === "completed"
+      ? "completed"
+      : normalizedStatus === "expired"
+        ? "expired"
+        : normalizedStatus === "failed" || aadhaarMismatchReason
+          ? "failed"
+          : null;
+  if (terminalOutcome) {
+    await markAgreementOutcome({ applicationId: dealerId }, terminalOutcome);
+  }
 
   return {
     ok: true,

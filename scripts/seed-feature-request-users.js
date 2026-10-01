@@ -6,7 +6,7 @@
  *   apoorv@itarangjosh.com     tech_head     → tech_reviewer
  *   aditya@itarangjosh.com     developer     → developer
  *   rushikesh@itarangjosh.com  developer     → developer
- *   <CEO account>              ceo (untouched) → requester
+ *   every active role=ceo user   ceo (untouched) → requester
  *
  * Password for the four new logins: "password". The CEO account's password
  * and role are NOT touched — it only gets its seat.
@@ -16,7 +16,8 @@
  * "account is inactive"). Idempotent.
  *
  * Usage:
- *   node scripts/seed-feature-request-users.js [--ceo-email ceo@itarang.com]
+ *   node scripts/seed-feature-request-users.js
+ *   node --env-file=.env.production scripts/seed-feature-request-users.js   (prod)
  * Requires (.env.local): NEXT_PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY,
  * DATABASE_URL. Needs E-316 applied to that database first.
  */
@@ -45,8 +46,6 @@ const USERS = [
     { email: 'rushikesh@itarangjosh.com', name: 'Rushikesh', role: 'developer', seat: 'developer' },
 ];
 
-const argIdx = process.argv.indexOf('--ceo-email');
-const CEO_EMAIL = (argIdx > -1 ? process.argv[argIdx + 1] : 'ceo@itarang.com').toLowerCase();
 
 async function findAuthUser(email) {
     for (let page = 1; page < 50; page++) {
@@ -117,12 +116,14 @@ async function run() {
 
     for (const u of USERS) await seedUser(u);
 
-    // The CEO: seat only. Their password and role stay as they are.
-    const ceo = await sql`SELECT id, name, role FROM users WHERE lower(email) = ${CEO_EMAIL} LIMIT 1`;
-    if (!ceo[0]) throw new Error(`No users row for CEO ${CEO_EMAIL} — pass --ceo-email`);
-    if (ceo[0].role !== 'ceo') console.warn(`  ! ${CEO_EMAIL} has role "${ceo[0].role}", not "ceo"`);
-    await upsertSeat(ceo[0].id, 'requester');
-    console.log(`  ${CEO_EMAIL} (${ceo[0].name}): seat requester ready`);
+    // Every active CEO login (Sanchit + the CEO test account) can raise
+    // requests: seat only — their password and role stay as they are.
+    const ceos = await sql`SELECT id, email, name FROM users WHERE lower(role) = 'ceo' AND is_active = true`;
+    if (ceos.length === 0) throw new Error('No active users with role "ceo" on this database');
+    for (const c of ceos) {
+        await upsertSeat(c.id, 'requester');
+        console.log(`  ${c.email} (${c.name}): seat requester ready`);
+    }
 
     console.table(await sql`
         SELECT u.email, u.name, u.role, m.seat, m.is_active

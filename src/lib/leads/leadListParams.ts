@@ -11,6 +11,10 @@
  * Owner / ASM / assigned-date filters ride on `caps.canSeeOwnerAsm`: a role
  * that cannot see who owns a lead on screen cannot filter by it here either
  * and learn the answer by inference.
+ *
+ * `viewer` (ID 45): when given, a rep role (exportsOwnLeadsOnly — asm,
+ * inside_sales_rep, partner) is scoped to the leads it owns via ownerScopeId.
+ * Every list / export route passes it, so a rep cannot browse the pool.
  */
 
 import type { LeadsCapabilities } from "@/lib/leads/access";
@@ -20,10 +24,12 @@ import type { LeadListFilters } from "@/lib/leads/leadListQuery";
 import { IDLE_RANGES, isIdleRangeKey } from "@/lib/leads/idle";
 import { neodoveTablesPresent } from "@/lib/leads/leadCampaign";
 import { isBusinessTypeFilter } from "@/lib/leads/businessType";
+import { exportsOwnLeadsOnly } from "@/lib/exports/downloadLog";
 
 export async function parseLeadListFilters(
     searchParams: URLSearchParams,
     caps: LeadsCapabilities,
+    viewer?: { id: string; role: string | null | undefined },
 ): Promise<LeadListFilters> {
     const intentParam = searchParams.get("intent");
     const connectStatusParam = searchParams.get("connect_status");
@@ -53,6 +59,9 @@ export async function parseLeadListFilters(
         city: searchParams.get("city")?.trim() || null,
         search: searchParams.get("search")?.trim() || null,
         contactability: (["include", "only"] as const).find((v) => v === searchParams.get("contactability")) ?? null,
+        // ID 36: "Hide dead & disqualified" — on unless the URL says hide_dead=0.
+        hideDead: searchParams.get("hide_dead") !== "0",
+        ownerScopeId: viewer && exportsOwnLeadsOnly(viewer.role) ? viewer.id : null,
         from: searchParams.get("from")?.trim() || null,
         to: searchParams.get("to")?.trim() || null,
         connectStatus: isConnectStatus(connectStatusParam) ? connectStatusParam : null,

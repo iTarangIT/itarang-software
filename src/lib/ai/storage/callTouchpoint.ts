@@ -13,6 +13,7 @@
 import { db } from "@/lib/db";
 import { sql } from "drizzle-orm";
 import { writeTouchpoint } from "@/lib/touchpoints/write";
+import { reviewLeadContactability } from "@/lib/leads/contactability";
 import {
     aiExternalTag,
     mapAiCallToDisposition,
@@ -223,6 +224,22 @@ export async function writeAiCallTouchpoint(
                     err,
                 );
             }
+        }
+
+        // ID 36: contactability after every AI call, like the CRM call form and
+        // NeoDove. A connect clears the flag; "Incorrect / Invalid number" sets
+        // dead_number; otherwise the non-responsive rule is re-checked. Its own
+        // try/catch (reviewLeadContactability already swallows DB errors) so the
+        // call write above can never be undone by it. actorId null = system.
+        try {
+            await reviewLeadContactability({
+                leadId: input.leadId,
+                connected,
+                reasonLabel: d.disposition ?? null,
+                actorId: null,
+            });
+        } catch (err) {
+            console.warn("[callTouchpoint] contactability not reviewed:", err);
         }
 
         return touchpointId;

@@ -95,6 +95,9 @@ export const POST = withErrorHandler(
                     touchpointType: "status_change_note",
                     performedBy: user.id,
                     remarks: `Status corrected by admin — ${reason}`,
+                    // ID 115.5: an admin's correction is not the owner working
+                    // the lead — it must not reset the idle clock.
+                    countsAsWork: false,
                     statusChange: {
                         from: lead.lead_status as LeadStatus | null,
                         to,

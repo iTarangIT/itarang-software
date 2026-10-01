@@ -20,6 +20,9 @@
 
 import { sql } from "drizzle-orm";
 import { z } from "zod";
+import { and, eq, inArray, isNull } from "drizzle-orm";
+import { db } from "@/lib/db";
+import { dealerLeadCommercials } from "@/lib/db/schema";
 import { CONNECT_STATUS, DISPOSITION_BUCKETS } from "@/lib/leads/dispositions";
 import { LEAD_STATUS, LOST_REASON, isHighImpactLostReason, type LostReason } from "@/lib/lifecycle/transitions";
 import { isWorkedTouchpoint } from "@/lib/lifecycle/touchpointTypes";
@@ -27,7 +30,7 @@ import { INTEREST_LEVELS } from "@/lib/admin/salesDashboardTypes";
 import { logLeadTouchpoint } from "@/lib/inside-sales/logTouchpoint";
 import { markLeadLost } from "@/lib/leads/markLost";
 import { setInterestLevel } from "@/lib/leads/interestLevel";
-import { autoProgressForCall } from "@/lib/leads/autoProgress";
+import { autoProgressForCall, COMMERCIALS_CALL_LABELS } from "@/lib/leads/autoProgress";
 import {
     recordWhatsappContact,
     screenshotAlreadyUsed,
@@ -112,6 +115,35 @@ const HIGH_IMPACT_CONSEQUENCE: Partial<Record<LostReason, string>> = {
 /** What a high-impact Lost reason does — shown on the first preview. */
 export function highImpactConsequence(reason: LostReason): string {
     return `⚠ High-impact: Lost as "${reasonLabel(reason)}" — ${HIGH_IMPACT_CONSEQUENCE[reason] ?? "this closes the lead"}.`;
+}
+
+/**
+ * ID 75.3: the hint on a commercials-type call outcome when the lead has no
+ * live quote — the stage moves only with a quote, so point the rep at
+ * create_quote instead of letting them think the call moved it.
+ */
+export const NO_QUOTE_HINT =
+    "No quote in the system — this call does not move the commercials stage. " +
+    "To raise one, ask me to create a quote (create_quote).";
+
+/** Does the lead have a live (not withdrawn) quote? Errs towards "yes" — a hint, never a block. */
+async function hasLiveQuote(leadId: string): Promise<boolean> {
+    try {
+        const rows = await db
+            .select({ id: dealerLeadCommercials.commercial_id })
+            .from(dealerLeadCommercials)
+            .where(
+                and(
+                    eq(dealerLeadCommercials.dealer_lead_id, leadId),
+                    inArray(dealerLeadCommercials.event_type, ["quote_issue", "quote_revision"]),
+                    isNull(dealerLeadCommercials.withdrawn_at),
+                ),
+            )
+            .limit(1);
+        return rows.length > 0;
+    } catch {
+        return true;
+    }
 }
 
 /** The second (final) confirmation's warning. */
@@ -247,6 +279,13 @@ export const logCall: ToolFactory = () =>
                 }
             }
 
+            // ID 115.4: Won → Lost only through the admin onboarding drop-out review.
+            if (lost && lead.lead_status === "Won") {
+                return {
+                    kind: "declined",
+                    reason: "This lead is Won. Only an admin can close a Won lead (onboarding drop-out review). I can log the call without closing it.",
+                };
+            }
             if (lost?.reason === "other" && !lost.notes) return ask("Why was it lost? I need a short note for 'other'.");
             if (lost && input.follow_up_at) {
                 return ask("A lost lead can't have a follow-up. Should I mark it Lost, or keep it open with the follow-up?");
@@ -335,11 +374,16 @@ export const logCall: ToolFactory = () =>
             if (remarks) lines.push({ label: "Remarks", value: remarks });
 
             const secondConfirm = !!lost && isHighImpactLostReason(lost.reason);
+            const noQuote =
+                !lost &&
+                !!disposition &&
+                COMMERCIALS_CALL_LABELS.includes(disposition.label) &&
+                !(await hasLiveQuote(lead.id));
             const preview: Preview = {
                 title: `Log ${input.channel === "call" ? "call" : input.channel === "whatsapp" ? "WhatsApp" : "note"} — ${name}`,
                 lines,
                 resets_idle_clock: isWorkedTouchpoint(touchpointType, !!statusTo) || !!lost || counts,
-                warning: secondConfirm ? highImpactConsequence(lost!.reason) : whatsappWarning,
+                warning: secondConfirm ? highImpactConsequence(lost!.reason) : noQuote ? NO_QUOTE_HINT : whatsappWarning,
                 needs_second_confirm: secondConfirm,
                 crm_url: leadUrl(ctx.user, lead.id),
             };

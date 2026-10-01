@@ -110,7 +110,10 @@ export type AsmQueueResponse = {
     tab: AsmQueueTab;
 };
 
-export type AsmQueueCounts = Record<AsmQueueTab, number>;
+export type AsmQueueCounts = Record<AsmQueueTab, number> & {
+    /** ID 75.4: the ASM's own "Finalised, not Won" leads on My visits (chip badge). */
+    finalised_not_won?: number;
+};
 
 export type VisitInput = {
     visit_status: VisitStatus;

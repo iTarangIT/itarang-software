@@ -153,6 +153,24 @@ export async function handleEcofyEvent(
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
+/**
+ * Upsert a lead snapshot the CRM itself fetched from Ecofy (not a pushed
+ * event) — e.g. the Case returned by POST /cases when the Sales Head creates
+ * a lead (src/lib/ecofy/intake.ts caseToLeadSnapshot). Same version-guarded
+ * upsert as a push, so a later push from Ecofy simply supersedes it. No
+ * inbound ledger row: the write itself is already in ecofy_sync_events as an
+ * outbound api: row. Returns the CRM lead id.
+ */
+export async function upsertEcofyLeadSnapshot(lead: unknown, eventType: string): Promise<string> {
+    const parsed = ecofyLeadSchema.parse(lead);
+    const event = {
+        eventId: `crm-${eventType}-${parsed.ecofyCaseId}`.slice(0, 200),
+        type: eventType.slice(0, 60),
+        occurredAt: new Date().toISOString(),
+    } as EcofyInboundEvent;
+    return db.transaction((tx) => upsertLead(tx, event, parsed));
+}
+
 async function upsertLead(
     tx: Tx,
     event: EcofyInboundEvent,

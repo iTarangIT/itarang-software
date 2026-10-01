@@ -3,29 +3,16 @@
 // GET  → the published release (appliance catalogue, per-segment inputs).
 // POST → a quick estimate; Ecofy computes it on its published release and
 //        stores nothing. Same audience as the rest of the Ecofy workspace.
-import { z } from "zod";
 import { requireRole } from "@/lib/auth-utils";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
 import { ECOFY_ALL_ROLES } from "@/lib/ecofy/access";
+import { ecofyCalcInputSchema } from "@/lib/ecofy/actionSchemas";
 import { EcofyCallError, readCalculatorRelease, runCalculatorEstimate } from "@/lib/ecofy/service";
 
 export const dynamic = "force-dynamic";
 
-// Mirrors Ecofy's CalcInput (m07-assessment/schemas.ts); Ecofy validates again.
-const EstimateInput = z.object({
-    segment: z.enum(["RESI", "ESS", "CI"]),
-    productInterest: z.enum(["SOLAR_STORAGE", "STORAGE_ONLY", "SOLAR_ONLY", "NOT_SURE"]).optional(),
-    method: z.enum(["APPLIANCES", "MONTHLY_UNITS", "RUNNING_LOAD", "NONE"]),
-    appliances: z
-        .array(z.object({ applianceName: z.string().min(1), watts: z.number().int().min(1), quantity: z.number().int().min(1) }))
-        .max(100)
-        .optional(),
-    monthlyUnits: z.number().min(0).optional(),
-    runningLoadKw: z.number().min(0).optional(),
-    sanctionedLoadKw: z.number().min(0).optional(),
-    backupHours: z.number().min(0).max(24).optional(),
-    phase: z.enum(["SINGLE", "THREE"]),
-});
+// CalcInput — shared with the CALCULATOR assessment (actionSchemas.ts); Ecofy validates again.
+const EstimateInput = ecofyCalcInputSchema;
 
 function ecofyStatus(err: unknown): number {
     return err instanceof EcofyCallError ? (err.status >= 400 && err.status < 600 ? err.status : 502) : 500;

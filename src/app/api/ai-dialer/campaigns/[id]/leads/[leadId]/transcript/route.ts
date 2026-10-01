@@ -24,8 +24,7 @@ import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-util
 import { and, desc, eq } from "drizzle-orm";
 import { deriveDurationSeconds } from "@/lib/ai-dialer/call-duration/derive";
 import { loadLeadCallAttempts } from "@/lib/ai-dialer/leadCallAttempts";
-import { LEADS_PAGE_ROLES } from "@/lib/leads/access";
-import { requireRole } from "@/lib/auth-utils";
+import { leadOwnedBy, requireCampaignReader } from "@/lib/ai-dialer/campaignAccess";
 
 type SubScores = {
   next_step_commitment: number;
@@ -182,11 +181,17 @@ export const GET = withErrorHandler(
     _req: Request,
     ctx: { params: Promise<{ id: string; leadId: string }> },
   ) => {
-    // ID 118: signed in, with a role that reaches this screen.
-    await requireRole([...LEADS_PAGE_ROLES]);
+    // ID 45: was unauthenticated. A rep (asm / inside_sales_rep / partner)
+    // reads only the transcripts of leads they own; anything else is a 404,
+    // the same answer as a missing lead.
+    const { user, ownOnly } = await requireCampaignReader();
+
     const { id: campaignId, leadId } = await ctx.params;
     if (!campaignId || !leadId) {
       return errorResponse("Campaign id and lead id required", 400);
+    }
+    if (ownOnly && !(await leadOwnedBy(leadId, user.id))) {
+      return errorResponse("Lead not found", 404);
     }
 
     // Pull campaign-lead row + lead identity in one query.

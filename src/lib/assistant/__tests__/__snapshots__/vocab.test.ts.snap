@@ -66,7 +66,7 @@ exports[`INV6_closed_vocabulary: §9.3 map is a subset of the existing enums > m
         "Hot",
       ],
       "connect": "connected",
-      "extra": "Ask temperature (warm or hot) if not stated",
+      "extra": "Ask temperature (warm or hot) if not stated; no quote yet → offer create_quote (ID 75)",
       "id": "commercials_explained",
       "interest": null,
       "labels": [
@@ -115,7 +115,7 @@ exports[`INV6_closed_vocabulary: §9.3 map is a subset of the existing enums > m
         "Hot",
       ],
       "connect": "connected",
-      "extra": "Interest hot; link to Transfer or Mark Won",
+      "extra": "Interest hot; link to Transfer or Mark Won; no quote yet → offer create_quote (ID 75)",
       "id": "quote_negotiation",
       "interest": "hot",
       "labels": [
@@ -145,6 +145,7 @@ exports[`INV6_closed_vocabulary: §9.3 map is a subset of the existing enums > m
       "labels": [
         "Not Interested",
         "Lost to Competition",
+        "Some other Business",
         "Business Closed",
       ],
       "lostReasonByLabel": {
@@ -157,8 +158,11 @@ exports[`INV6_closed_vocabulary: §9.3 map is a subset of the existing enums > m
         "Not Interested": [
           "not_interested",
         ],
+        "Some other Business": [
+          "moved_to_other_business",
+        ],
       },
-      "said": "not interested; went elsewhere; shop closed",
+      "said": "not interested; went elsewhere; moved to another business; shop closed",
       "status": {
         "options": [
           "Lost",

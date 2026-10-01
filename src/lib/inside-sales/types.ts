@@ -80,7 +80,10 @@ export type QueueResponse = {
     tab: QueueTab;
 };
 
-export type QueueCounts = Record<QueueTab, number>;
+export type QueueCounts = Record<QueueTab, number> & {
+    /** ID 75.4: the rep's own "Finalised, not Won" leads on My open (chip badge). */
+    finalised_not_won?: number;
+};
 
 // Lead Detail bundle returned by GET /api/inside-sales/lead/[id].
 // Shape kept flat-ish so each pane component reads one branch.
@@ -293,8 +296,15 @@ export type LeadOnboardingMilestones = {
     agreement_status: string | null;
     approved_at: string | null;
     last_activity_at: string | null;
-    /** No onboarding activity for 14+ days and not yet approved / rejected. */
+    /**
+     * ID 84.1: open and stalled — waiting on the dealer for 7+ days, or on us
+     * for 2+ working days (src/lib/onboarding/stall.ts).
+     */
     stalled: boolean;
+    /** Whose move the stall is waiting on; null when not stalled. */
+    stalled_waiting_on?: "dealer" | "us" | null;
+    /** "Stalled · waiting on dealer" / "Stalled · waiting on us"; null when not stalled. */
+    stalled_label?: string | null;
 };
 
 // ───────────────────────────── action payloads ────────────────────────────

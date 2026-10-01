@@ -72,8 +72,13 @@ export function __resetTranscriptTurnsProbe(): void {
  */
 export function buildCallQualitySql(
     campaignId: string,
-    opts: { withTurns?: boolean } = {},
+    opts: { withTurns?: boolean; ownerId?: string } = {},
 ): SQL {
+    // ID 45: own-only readers see only their owned leads (the /leads route's
+    // ownedByCondition rule, current_owner_id).
+    const ownerFilter = opts.ownerId
+        ? sql` AND dcl.lead_id IN (SELECT dl.id FROM dealer_leads dl WHERE dl.current_owner_id = ${opts.ownerId})`
+        : sql``;
     // Two literal fragments rather than one interpolated column name. Neither
     // is caller-controlled, so nothing reaches the statement that a boolean
     // did not choose.
@@ -96,7 +101,7 @@ export function buildCallQualitySql(
          ORDER BY a.updated_at DESC NULLS LAST
          LIMIT 1
       ) acl ON TRUE
-     WHERE dcl.campaign_id = ${campaignId}`;
+     WHERE dcl.campaign_id = ${campaignId}${ownerFilter}`;
 }
 
 /** Driver rows are untyped at the boundary; assert once, here. */

@@ -23,8 +23,13 @@ export const ConnectStatus = z.enum(CONNECT_STATUS);
 export const Bucket = z
     .enum(DISPOSITION_BUCKETS)
     .describe("Cold / Warm / Hot / Converted / Lost — only when the rep said it");
+// ID 115: Won, Converted and Transferred to ASM are set only by their own
+// actions (mark_won / onboarding approval / transfer), never by a logged call or
+// visit — so the schema refuses them outright. (LEAD_STATUS gained "Won" with
+// ID 74; building this enum straight from it had quietly let it through.)
+const EVENT_ONLY_STATUSES: readonly string[] = ["Won", "Converted", "Transferred_to_ASM"];
 export const StatusChoice = z
-    .enum(tuple([...LEAD_STATUS, NO_CHANGE]))
+    .enum(tuple([...LEAD_STATUS.filter((s) => !EVENT_ONLY_STATUSES.includes(s)), NO_CHANGE]))
     .describe(`A lead status, or "${NO_CHANGE}". Omit when the rep did not say.`);
 export const LostReason = z.enum(LOST_REASON);
 export const Interest = z.enum(INTEREST_LEVELS);

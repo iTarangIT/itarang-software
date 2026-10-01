@@ -52,6 +52,11 @@ type Props = {
     onLostOutcome?: (reason: LostReason | null) => void;
     /** ID 75: whether the lead has a live quote — a commercials outcome without one is flagged. */
     hasQuote?: boolean;
+    /**
+     * ID 75.3: open the lead page's Update Commercials (quote) modal from the
+     * "No quote in the system" hint. Absent = the hint is text only.
+     */
+    onOpenCommercials?: () => void;
 };
 
 // ID 80 (29 Sep 2026): no "Status change" entry — every status change has an
@@ -74,6 +79,7 @@ export function LogTouchpointModal({
     onVisitSuccess,
     onLostOutcome,
     hasQuote = false,
+    onOpenCommercials,
 }: Props) {
     const [type, setType] = useState<TouchpointType>("inside_sales_call");
     // The rep now picks the CC team's L1/L2/L3 disposition; call_status is
@@ -159,7 +165,9 @@ export function LogTouchpointModal({
         onClose();
     };
 
-    const submit = async (e: React.FormEvent) => {
+    // `openCommercials` (ID 75.3): after the call is saved, go straight to the
+    // quote form — the hint's button, so the rep's call is never thrown away.
+    const submit = async (e: React.SyntheticEvent, opts?: { openCommercials?: boolean }) => {
         e.preventDefault();
         if (!remarks.trim()) {
             toast.error("Remarks are required.");
@@ -238,10 +246,14 @@ export function LogTouchpointModal({
                           ? disposition.bucket
                           : bucketForLabel(disposition.disposition))
                     : null;
-            const lostLabel = savedBucket === "Lost" ? disposition.disposition : null;
+            // ID 115.4: a Won lead goes to Lost only through the admin drop-out
+            // review, so a Lost-type outcome on it does not open Mark Lost.
+            const lostLabel =
+                savedBucket === "Lost" && lead.lead_status !== "Won" ? disposition.disposition : null;
             reset();
             onSuccess();
-            if (lostLabel && onLostOutcome) onLostOutcome(lostReasonForLabel(lostLabel));
+            if (opts?.openCommercials && onOpenCommercials) onOpenCommercials();
+            else if (lostLabel && onLostOutcome) onLostOutcome(lostReasonForLabel(lostLabel));
         } catch (err) {
             toast.error((err as Error).message);
         } finally {
@@ -375,10 +387,24 @@ export function LogTouchpointModal({
                         )}
                         {type === "inside_sales_call" && COMMERCIALS_CALL_LABELS.includes(disposition.disposition) &&
                             !hasQuote && (
-                                <p className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                                    No quote in the system — this call does not move the commercials stage.
-                                    Create the quote with <strong>Update Commercials</strong>.
-                                </p>
+                                <div className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                                    <span>No quote in the system — this call does not move the commercials stage.</span>
+                                    {onOpenCommercials ? (
+                                        <button
+                                            type="button"
+                                            onClick={(e) => void submit(e, { openCommercials: true })}
+                                            disabled={busy}
+                                            title="Save this call, then open Update Commercials to create the quote"
+                                            className="shrink-0 rounded-md border border-amber-300 bg-white px-2.5 py-1 font-semibold text-amber-900 hover:bg-amber-100 disabled:opacity-50"
+                                        >
+                                            Save &amp; Update Commercials
+                                        </button>
+                                    ) : (
+                                        <span>
+                                            Create the quote with <strong>Update Commercials</strong>.
+                                        </span>
+                                    )}
+                                </div>
                             )}
 
                         {type === "whatsapp" && (

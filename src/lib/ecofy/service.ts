@@ -13,8 +13,23 @@ import { eq, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { ecofyLeads } from "@/lib/db/schema";
 import { errorMessage } from "@/lib/api-utils";
-import { callEcofyApi, type EcofyHttpMethod } from "./api";
-import { toEcofyEpcPartner, type EcofyActionInput, type EcofyLeadRead, type EcofyLookup, type EpcPartnerInput } from "./actionSchemas";
+import { callEcofyApi, callEcofyApiRaw, type EcofyHttpMethod } from "./api";
+import {
+    toAssessmentCreate,
+    toEcofyEpcPartner,
+    type EcofyActionInput,
+    type EcofyLeadRead,
+    type EcofyLookup,
+    type EpcPartnerInput,
+} from "./actionSchemas";
+import { upsertEcofyLeadSnapshot } from "./inbound";
+import {
+    caseToLeadSnapshot,
+    type CaseCreateInput,
+    type EcofyImport,
+    type EcofyImportPreview,
+    type EcofyUploadTicket,
+} from "./intake";
 import { notifyEcofySyncFailed } from "./notify";
 
 export class EcofyCallError extends Error {
@@ -201,8 +216,19 @@ const QUEUE_PATHS: Record<EcofyQueueKind, string> = {
     assets: "/assets",
 };
 
+/**
+ * The eligibility and financing queues declare cursor/limit (OpenAPI
+ * get_eligibility_queue / get_financing_queue); GET /assets declares no
+ * parameters at all, so nothing is sent and the page shows exactly what Ecofy
+ * returns.
+ */
 export function readQueue(kind: EcofyQueueKind): Promise<unknown> {
-    return ecofyCall("GET", QUEUE_PATHS[kind], { query: { limit: 100 } });
+    return ecofyCall("GET", QUEUE_PATHS[kind], kind === "assets" ? {} : { query: { limit: 100 } });
+}
+
+/** GET /assets/{assetId} — asset detail (ECOFY_ADMIN / ITARANG_ADMIN read; writes are Ecofy Admin only). */
+export function readAsset(assetId: string): Promise<Record<string, unknown> | null> {
+    return ecofyCall<Record<string, unknown> | null>("GET", `/assets/${encodeURIComponent(assetId)}`);
 }
 
 export async function readDashboards(): Promise<{ funnel: unknown; ageing: unknown }> {
@@ -441,18 +467,8 @@ export async function runEcofyAction(lead: EcofyLeadRef, input: EcofyActionInput
         case "advance":
             return ecofyCall("POST", `/cases/${c}/advance`, { ...base, ifMatch: input.version });
         case "save_assessment":
-            return ecofyCall("POST", `/cases/${c}/assessments`, {
-                ...base,
-                body: {
-                    method: input.method,
-                    manual: {
-                        batteryKwh: input.batteryKwh,
-                        inverterKva: input.inverterKva,
-                        solarKwp: input.solarKwp,
-                        sourceNote: input.sourceNote,
-                    },
-                },
-            });
+            // AssessmentCreate: CALCULATOR carries `calculator`, MANUAL/EPC carry `manual`.
+            return ecofyCall("POST", `/cases/${c}/assessments`, { ...base, body: toAssessmentCreate(input) });
         case "confirm_assessment":
             return ecofyCall("POST", `/assessments/${input.assessmentId}/confirm`, { ...base, ifMatch: input.version });
         case "request_eligibility":
@@ -654,6 +670,120 @@ export async function uploadQuote(
         idempotencyKey,
         body: { documentId: doc.id, ...fields },
     });
+}
+
+// ---------------------------------------------------------------------------
+// Lead intake (M03, gap 11): single lead + bulk import. Managers only — the
+// routes gate that; Ecofy takes POST /cases from ECOFY_USER / ECOFY_ADMIN /
+// ITARANG_ADMIN and /imports* from ECOFY_ADMIN / ITARANG_ADMIN.
+// ---------------------------------------------------------------------------
+
+/**
+ * POST /cases as iTarang Admin → the case starts at S1, owned by iTarang
+ * (OpenAPI CaseCreate; BRD FR-03.8). The returned Case is upserted into
+ * ecofy_leads with the same version-guarded upsert the inbound push uses, so
+ * the lead is in the pickup queue at once. Returns the case and the CRM lead id.
+ */
+export async function createEcofyCase(
+    input: CaseCreateInput,
+    idempotencyKey: string,
+    actorName: string,
+): Promise<{ case: Record<string, unknown>; leadId: string | null }> {
+    const created = await ecofyCall<Record<string, unknown>>("POST", "/cases", { body: input, idempotencyKey, actorName });
+    if (!created || typeof created.id !== "string") {
+        throw new EcofyCallError("Ecofy created the lead but returned no case id.", 502);
+    }
+    let leadId: string | null = null;
+    try {
+        leadId = await upsertEcofyLeadSnapshot(caseToLeadSnapshot(created, input), "crm.case_created");
+    } catch (err) {
+        // The case exists in Ecofy; its push brings it into the CRM later.
+        console.error("[Ecofy] local upsert after create failed:", errorMessage(err));
+    }
+    return { case: created, leadId };
+}
+
+/**
+ * Start an import and upload the file: POST /imports {fileName, sizeBytes} →
+ * UploadTicket → PUT the bytes to its presigned URL, server-side like
+ * uploadToEcofy, so the browser never talks to Ecofy or its storage.
+ */
+export async function startEcofyImport(
+    file: { bytes: Buffer; fileName: string; mimeType: string },
+    actorName: string,
+): Promise<EcofyUploadTicket> {
+    const ticket = await ecofyCall<EcofyUploadTicket>("POST", "/imports", {
+        body: { fileName: file.fileName, sizeBytes: file.bytes.length },
+        actorName,
+    });
+    const put = await fetch(ticket.uploadUrl, {
+        method: "PUT",
+        body: new Uint8Array(file.bytes),
+        headers: { "Content-Type": file.mimeType },
+        signal: AbortSignal.timeout(60_000),
+    });
+    if (!put.ok) throw new EcofyCallError(`Upload to Ecofy storage failed (${put.status})`, 502);
+    return ticket;
+}
+
+export function saveEcofyImportMapping(
+    importId: string,
+    body: { mapping: Record<string, string>; saveAs?: string },
+    actorName: string,
+): Promise<EcofyImport> {
+    return ecofyCall<EcofyImport>("POST", `/imports/${encodeURIComponent(importId)}/mapping`, { body, actorName });
+}
+
+/** Dry run: counts and sample row errors; nothing is created (BRD FR-03.4). */
+export function validateEcofyImport(importId: string, actorName: string): Promise<EcofyImportPreview> {
+    return ecofyCall<EcofyImportPreview>("POST", `/imports/${encodeURIComponent(importId)}/validate`, { actorName });
+}
+
+/** Commit with the consent attestation; Ecofy runs it as a background job (202, BRD FR-03.5). */
+export function commitEcofyImport(
+    importId: string,
+    attestationText: string,
+    idempotencyKey: string,
+    actorName: string,
+): Promise<EcofyImport> {
+    return ecofyCall<EcofyImport>("POST", `/imports/${encodeURIComponent(importId)}/commit`, {
+        body: { consentAttested: true, attestationText },
+        idempotencyKey,
+        actorName,
+    });
+}
+
+export function readEcofyImport(importId: string): Promise<EcofyImport> {
+    return ecofyCall<EcofyImport>("GET", `/imports/${encodeURIComponent(importId)}`);
+}
+
+/**
+ * The upload template or an import's row report, as Ecofy sends it (no JSON
+ * envelope; OpenAPI declares only `200 OK`). Throws EcofyCallError on a
+ * non-2xx, like every other call.
+ */
+export async function fetchEcofyImportFile(
+    what: { kind: "template" } | { kind: "report"; importId: string },
+): Promise<Response> {
+    const path =
+        what.kind === "template" ? "/imports/template" : `/imports/${encodeURIComponent(what.importId)}/report.csv`;
+    let res: Response;
+    try {
+        res = await callEcofyApiRaw({ method: "GET", path, timeoutMs: 30_000 });
+    } catch (err) {
+        throw new EcofyCallError(`Could not reach Ecofy: ${errorMessage(err)}`, 502);
+    }
+    if (!res.ok) {
+        let msg = `Ecofy answered ${res.status}`;
+        try {
+            const j = (await res.json()) as { error?: { message?: string; code?: string } };
+            msg = friendly(res.status, j.error?.code, undefined, j.error?.message);
+        } catch {
+            /* non-JSON error body */
+        }
+        throw new EcofyCallError(msg, res.status);
+    }
+    return res;
 }
 
 // ---------------------------------------------------------------------------

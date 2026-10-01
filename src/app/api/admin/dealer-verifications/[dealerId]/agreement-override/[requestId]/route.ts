@@ -14,6 +14,7 @@ import { requireSalesHead } from "@/lib/auth/requireSalesHead";
 import { normalizeAgreementStatus } from "@/lib/agreement/status";
 import { usesManualAgreement } from "@/lib/dealer/dealer-capabilities";
 import { notifyAgreementApprovalDecided } from "@/lib/notifications/events";
+import { markAgreementOutcome } from "@/lib/onboarding/leadMilestones";
 import {
   MIGRATION_MISSING_MESSAGE,
   agreementCompletionValues,
@@ -302,6 +303,12 @@ export async function POST(req: NextRequest, context: RouteContext) {
         })
       );
     });
+
+    // ID 84.2: the lead's agreement milestone, as on a verified upload.
+    // Best-effort — never throws.
+    if (!alreadyCompleted) {
+      await markAgreementOutcome({ applicationId: dealerId }, "completed");
+    }
 
     await notifyAgreementApprovalDecided({
       dealerId,

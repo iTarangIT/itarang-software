@@ -281,6 +281,7 @@ async function handleDisposition(
             reasonLabel: classifyDisposition(event.disposition ?? event.tag ?? "", {
                 callConnected: event.callConnected ?? false,
             })?.label ?? null,
+            actorId: agentUserId,
         });
     }
 

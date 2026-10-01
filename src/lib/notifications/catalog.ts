@@ -124,6 +124,9 @@ export const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   "lead.reinquiry": "Leads",
   // ID 83 — a NeoDove agent called the owner's lead after their "Call now".
   "lead.called_on_behalf": "Leads",
+  // ID 75.2 — a one-off "System correction" telling an owner which of their
+  // leads' commercials stages were recomputed from quote events.
+  "lead.system_correction": "Leads",
   // E-242 — filed under Leads, not Inventory, because the recipient is the rep
   // or sales manager working the lead and the action is "review and send this
   // to your dealer". The OEM price types sit under Inventory for the mirror
@@ -153,6 +156,8 @@ export const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   // and, worse, was invisible to the admin Notification Access screen. Mapped
   // here so it is both filed correctly and governable.
   onboarding_initiated: "Onboarding",
+  // ID 74.7: an approved onboarding whose lead could NOT be moved to Converted.
+  lead_conversion_failed: "Onboarding",
 
   // --- KYC & consent ---
   "kyc.submitted": "KYC & Consent",

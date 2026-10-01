@@ -256,6 +256,7 @@ export async function logLeadTouchpoint(
                     leadId,
                     connected: input.callStatus === "connected",
                     reasonLabel: input.disposition?.label ?? null,
+                    actorId,
                 },
                 { tx },
             );

@@ -46,8 +46,9 @@ describe("sumFigures / avgPerKg / hasBuybackFigure", () => {
     expect(avgPerKg(7500, 0)).toBeNull();
   });
 
-  it("a row with only calls is not a buyback row", () => {
-    expect(hasBuybackFigure(spoc("u1", "A", { dealers_called: 40 }))).toBe(false);
+  it("a row with only (buyback-lead) calls is a buyback row — ID 10", () => {
+    expect(hasBuybackFigure(spoc("u1", "A", { dealers_called: 40 }))).toBe(true);
+    expect(hasBuybackFigure(spoc("u1", "A"))).toBe(false);
     expect(hasBuybackFigure(fig({ requests: 1 }))).toBe(true);
     expect(hasBuybackFigure(fig({ missing_weight: 2 }))).toBe(true);
     expect(hasBuybackFigure(fig({ margin: 0 }))).toBe(true);
@@ -114,9 +115,15 @@ describe("Block B — per SPOC", () => {
     for (const r of rows) expect(r).toHaveLength(12);
   });
 
-  it("lists each SPOC by name with (unassigned) last, and leaves out people with no buyback figure", () => {
+  it("lists each SPOC by name with (unassigned) last, including a rep whose only activity is buyback calls", () => {
     const order = [...new Set(rows.map((r) => r[1]))];
-    expect(order).toEqual(["Amit", "Zara", UNASSIGNED]);
+    expect(order).toEqual(["Amit", "Caller only", "Zara", UNASSIGNED]);
+    expect(rows.find((r) => r[1] === "Caller only" && r[0] === "MTD")!.slice(2, 4)).toEqual([0, 30]);
+  });
+
+  it("leaves out people with no buyback figure and no buyback calls", () => {
+    const quiet = blockBRows({ yesterday: [], last7: [], mtd: [spoc("u5", "Idle")] }, new Map());
+    expect(quiet).toEqual([]);
   });
 
   it("gives every SPOC a Yesterday, Last 7 days and MTD row — zeros where nothing happened", () => {

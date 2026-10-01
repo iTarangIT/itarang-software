@@ -164,6 +164,7 @@ export const TYPE_LABELS: Record<string, string> = {
   "lead.qualified": "Lead qualified",
   "lead.reinquiry": "Known dealer came in again (re-inquiry)",
   "lead.called_on_behalf": "Your lead was called on your behalf (after Call now)",
+  "lead.system_correction": "System correction to your leads' stages",
 
   // --- Dealer onboarding ---
   "onboarding.chat_started": "Dealer started the WhatsApp onboarding chat",
@@ -178,6 +179,7 @@ export const TYPE_LABELS: Record<string, string> = {
   "onboarding.correction_requested": "Corrections requested on a dealer application",
   dealer_onboarding_submitted: "Dealer application submitted (legacy)",
   onboarding_initiated: "Onboarding started from a converted lead",
+  lead_conversion_failed: "Onboarding approved but its lead was not moved to Converted",
   "vendor.registered": "Scrap vendor registered",
 
   // --- KYC & consent ---
