@@ -33,6 +33,7 @@ import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { writeTouchpoint } from "@/lib/touchpoints/write";
 import type { TouchpointType } from "@/lib/lifecycle/touchpointTypes";
+import { checkStatusMove } from "@/lib/lifecycle/statusRules";
 import {
     canTransition,
     isOpen,
@@ -203,7 +204,17 @@ export async function assignLeadOwner(
             });
             return { assigned: true, path: "asm_swap", statusLiftedTo: null };
         }
-        if ((fromStatus && isOpen(fromStatus)) || !inPipeline) {
+        // Ask the S3 guard BEFORE the owner swap, with the same question
+        // writeTouchpoint will ask after it. swapOwner commits on its own, so a
+        // move the guard refuses (a Won lead: open, but past transfer) used to
+        // leave the new owner in place and then fail with a 409 and no
+        // touchpoint. Won now takes the plain swap below, like Converted / Lost.
+        const canLift = checkStatusMove({
+            from: fromStatus,
+            to: "Transferred_to_ASM",
+            event: "transfer",
+        }).ok;
+        if (canLift) {
             // Open lead — or a not-yet-in-pipeline manual / scraped lead
             // (NULL / legacy status) — admin override flip to Transferred_to_ASM
             // so it lands on the ASM's queue.
@@ -232,7 +243,7 @@ export async function assignLeadOwner(
                 statusLiftedTo: "Transferred_to_ASM",
             };
         }
-        // Terminal lead (Converted / Lost) — leave lead_status alone and fall
+        // Won or terminal lead (Converted / Lost) — leave lead_status alone and fall
         // through to the plain ownership swap below, which still records the
         // audit touchpoint (no silent reactivation).
     }

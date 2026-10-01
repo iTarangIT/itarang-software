@@ -69,6 +69,8 @@ export const ALERT_PANELS = [
     // R-16 — 6 unanswered calls on 6 days in 45 days. Its own bucket, and
     // excluded from the no-touch panels above.
     "non_responsive",
+    // ID 74 — Mark Won with no dealer-approved quote: allowed, and flagged.
+    "won_without_quote",
 ] as const;
 export type AlertPanelKey = (typeof ALERT_PANELS)[number];
 
@@ -85,6 +87,7 @@ export const ALERT_PANEL_LABELS: Record<AlertPanelKey, string> = {
     duplicate_merge_requests: "Duplicate Merge Requests",
     out_of_territory_handoffs: "Out-of-Territory Handoffs",
     non_responsive: "Non-responsive (6 unanswered call days in 45)",
+    won_without_quote: "Won without an approved quote",
 };
 
 // Generic drill-down row used by every alert panel.

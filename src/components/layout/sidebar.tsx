@@ -1643,6 +1643,20 @@ const roleNavigation: Record<string, any[]> = {
           href: "/admin/reports/sales-dashboard",
         },
         {
+          // ID 12 — the Funnel tab (onboarded / KYC / disbursed / rejected).
+          id: "bh-reports",
+          label: "Reports",
+          icon: BarChart3,
+          href: "/admin/reports",
+        },
+        {
+          // R-18 — converted dealers' re-order health.
+          id: "bh-dealer-health",
+          label: "Dealer Health",
+          icon: TrendingUp,
+          href: "/admin/reports/dealer-health",
+        },
+        {
           // R-17 — monthly targets: set, approve, push, track.
           id: "bh-targets",
           label: "Targets",
@@ -1707,6 +1721,18 @@ const roleNavigation: Record<string, any[]> = {
           label: "Credits",
           icon: Briefcase,
           href: "/finance-controller/credits",
+        },
+      ],
+    },
+    {
+      section: "REPORTS",
+      items: [
+        {
+          // ID 12 — the Funnel tab; the only tab this role is shown there.
+          id: "fc-funnel",
+          label: "Funnel Counts",
+          icon: BarChart3,
+          href: "/admin/reports",
         },
       ],
     },

@@ -74,7 +74,7 @@ export function OnboardingDropoutTable({
                             <th className="text-left px-4 py-3 font-semibold">Region</th>
                             <th className="text-left px-4 py-3 font-semibold">Dropout</th>
                             <th className="text-left px-4 py-3 font-semibold">Onboarding</th>
-                            <th className="text-left px-4 py-3 font-semibold">Converted</th>
+                            <th className="text-left px-4 py-3 font-semibold">Won on</th>
                             <th className="text-left px-4 py-3 font-semibold">Owner</th>
                             <th className="px-4 py-3"></th>
                         </tr>

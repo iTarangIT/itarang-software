@@ -23,7 +23,6 @@ import { TOUCHPOINT_TYPE, CALL_STATUS, NEXT_ACTION, shouldAutoEngage } from "@/l
 import { LEAD_STATUS, type LeadStatus } from "@/lib/lifecycle/transitions";
 import { isForward } from "@/lib/lifecycle/statusRules";
 import { reviewLeadContactability } from "@/lib/leads/contactability";
-import { autoProgressForCall } from "@/lib/leads/autoProgress";
 import type { DispositionBucket } from "@/lib/leads/dispositions";
 import {
     callStatusForDisposition,
@@ -72,6 +71,12 @@ export const TouchpointBodySchema = z.object({
         })
         .optional(),
     follow_up_at: z.string().datetime().nullable().optional(),
+    // Temperature saved WITH the touchpoint (ID 114), in the same transaction:
+    // a level = the rep chose it; null = leave it; absent = the server derives
+    // it from the call outcome (see writeTouchpoint's `interest`).
+    interest_level: z.enum(["hot", "warm", "cold"]).nullable().optional(),
+    /** True when interest_level is the auto rule's value, untouched (audit reason). */
+    interest_auto: z.boolean().optional(),
 });
 export type TouchpointBody = z.infer<typeof TouchpointBodySchema>;
 
@@ -132,40 +137,35 @@ export function planTouchpoint(
         body.is_engaged ??
         shouldAutoEngage(body.touchpoint_type, { callStatus: derivedCallStatus, visitOutcome: null });
 
-    // ID 80 / 114 (29 Sep 2026): no manual status. The status comes from the
-    // call outcome by the shared rule (autoProgress), here in the server so the
-    // API, the forms and the Assistant all apply it. A caller may still ask for
-    // FIRST CONTACT (Under_Discussion — e.g. a follow-up where the rep spoke to
-    // the dealer); commercials stages come only from quote events (ID 75), Won /
-    // Lost / transfer from their own actions. writeTouchpoint's S3 guard has
-    // the final word; an unforward request is dropped here, not refused.
-    let statusTo: LeadStatus | null = null;
-    if (classified && body.touchpoint_type === "inside_sales_call") {
-        statusTo = autoProgressForCall({
-            connected: classified.connectStatus === "connected",
-            label: classified.label,
-            bucket: classified.bucket as DispositionBucket | null,
-            currentStatus: fromStatus,
-            currentInterest: null,
-        }).statusTo;
-    }
+    // ID 80 / 114: no manual status. The status (and the temperature) come
+    // from the call outcome by the shared rule — applied by writeTouchpoint
+    // itself, against the row it locks, so the API, the forms, the Assistant
+    // and NeoDove cannot disagree. A caller may still ask for FIRST CONTACT
+    // (Under_Discussion — e.g. a follow-up where the rep spoke to the dealer);
+    // commercials stages come only from quote events (ID 75), Won / Lost /
+    // transfer from their own actions. The S3 guard has the final word; an
+    // unforward request is dropped here, not refused.
+    const outcome: WriteTouchpointInput["outcome"] =
+        classified && body.touchpoint_type === "inside_sales_call"
+            ? {
+                  kind: "call",
+                  connected: classified.connectStatus === "connected",
+                  label: classified.label,
+                  bucket: classified.bucket as DispositionBucket | null,
+              }
+            : undefined;
     const requested = body.status_change?.to ?? null;
-    if (
-        !statusTo &&
+    const statusChange: WriteTouchpointInput["statusChange"] =
         requested === "Under_Discussion" &&
         fromStatus !== "Transferred_to_ASM" &&
         isForward(fromStatus, requested)
-    ) {
-        statusTo = requested;
-    }
-    const statusChange: WriteTouchpointInput["statusChange"] = statusTo
-        ? {
-              from: fromStatus,
-              to: statusTo,
-              reasonNotes: body.status_change?.reason_notes ?? null,
-              event: "progress",
-          }
-        : undefined;
+            ? {
+                  from: fromStatus,
+                  to: requested,
+                  reasonNotes: body.status_change?.reason_notes ?? null,
+                  event: "progress",
+              }
+            : undefined;
 
     return {
         dealerLeadId: leadId,
@@ -184,6 +184,14 @@ export function planTouchpoint(
         nextAction: body.next_action ?? null,
         nextActionAt: body.next_action_at ? new Date(body.next_action_at) : null,
         statusChange,
+        outcome,
+        // Absent stays absent (derive); null and a level pass through.
+        ...(body.interest_level !== undefined
+            ? {
+                  interest: body.interest_level,
+                  interestReason: body.interest_auto ? "Auto: from call outcome" : "Set with touchpoint",
+              }
+            : {}),
     };
 }
 

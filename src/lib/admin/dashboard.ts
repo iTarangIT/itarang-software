@@ -15,7 +15,7 @@
 
 import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { OPEN_STATUSES } from "@/lib/lifecycle/transitions";
+import { OPEN_STATUSES, WORKABLE_STATUSES } from "@/lib/lifecycle/transitions";
 import type {
     AdminKpis,
     AlertPanelKey,
@@ -28,6 +28,17 @@ import { countOnboardingDropouts } from "./listQueries";
 import { nonResponsiveSql } from "@/lib/leads/nonResponsive";
 
 const OPEN_LIST = sql.raw(OPEN_STATUSES.map((s) => `'${s}'`).join(", "));
+// ID 74 — the idle / no-touch lists count only leads the rep can still work;
+// a Won lead is waiting on onboarding (see WORKABLE_STATUSES).
+const WORKABLE_LIST = sql.raw(WORKABLE_STATUSES.map((s) => `'${s}'`).join(", "));
+
+// ID 74 — Mark Won with no dealer-approved quote: allowed, and flagged. The
+// flag (E-314, read through to_jsonb so a DB without it counts 0) only means
+// something while the lead is Won / Converted; a re-opened lead keeps the old
+// value until its next Mark Won.
+const WON_WITHOUT_QUOTE = sql`dl.lead_status IN ('Won', 'Converted')
+    AND dl.is_active IS NOT FALSE
+    AND (to_jsonb(dl) ->> 'won_without_approved_quote')::boolean IS TRUE`;
 
 // Working days (Mon–Sat) elapsed since a timestamp expression, as a SQL scalar.
 function workingDaysSince(expr: string): SQL {
@@ -117,7 +128,8 @@ export async function fetchKpis(f: DashboardFilters): Promise<AdminKpis> {
                 FROM dealer_leads dl
                 JOIN dealer_onboarding_applications oa
                     ON oa.id = dl.dealer_onboarding_application_id
-                WHERE dl.lead_status = 'Converted'
+                -- Won + Converted, the same rows the stale_converted panel lists.
+                WHERE dl.lead_status IN ('Won', 'Converted')
                   AND COALESCE(oa.last_action_at, oa.updated_at)
                       < NOW() - INTERVAL '3 days' ${lf}
             `),
@@ -293,13 +305,13 @@ export async function fetchTeamPerformance(
                  AND dl.closed_at >= NOW() - INTERVAL '30 days') AS closed_win_rate_30d,
             (SELECT COUNT(*) FROM dealer_leads dl
                WHERE dl.current_owner_id = u.id::text
-                 AND dl.lead_status IN (${OPEN_LIST})
+                 AND dl.lead_status IN (${WORKABLE_LIST})
                  AND dl.is_active IS NOT FALSE
                  AND ${workingDaysSince(LAST_TOUCH)} > 5
                  AND ${NOT_NON_RESPONSIVE}) AS stale_leads,
             (SELECT COUNT(*) FROM dealer_leads dl
                WHERE dl.current_owner_id = u.id::text
-                 AND dl.lead_status IN (${OPEN_LIST})
+                 AND dl.lead_status IN (${WORKABLE_LIST})
                  AND dl.is_active IS NOT FALSE
                  AND ${workingDaysSince(LAST_TOUCH)} > 10
                  AND ${NOT_NON_RESPONSIVE}) AS critical_stale,
@@ -340,11 +352,11 @@ function panelCountSql(key: AlertPanelKey, lf: SQL): SQL {
     switch (key) {
         case "no_touch_5d":
             return sql`SELECT COUNT(*)::text AS c FROM dealer_leads dl
-                WHERE dl.lead_status IN (${OPEN_LIST}) AND dl.is_active IS NOT FALSE
+                WHERE dl.lead_status IN (${WORKABLE_LIST}) AND dl.is_active IS NOT FALSE
                   AND ${workingDaysSince(LAST_TOUCH)} > 5 AND ${NOT_NON_RESPONSIVE} ${lf}`;
         case "no_touch_10d":
             return sql`SELECT COUNT(*)::text AS c FROM dealer_leads dl
-                WHERE dl.lead_status IN (${OPEN_LIST}) AND dl.is_active IS NOT FALSE
+                WHERE dl.lead_status IN (${WORKABLE_LIST}) AND dl.is_active IS NOT FALSE
                   AND ${workingDaysSince(LAST_TOUCH)} > 10 AND ${NOT_NON_RESPONSIVE} ${lf}`;
         case "non_responsive":
             return sql`SELECT COUNT(*)::text AS c FROM dealer_leads dl
@@ -369,6 +381,9 @@ function panelCountSql(key: AlertPanelKey, lf: SQL): SQL {
                            AND COALESCE(oa.last_action_at, oa.updated_at) < NOW() - INTERVAL '21 days'))
                   AND COALESCE((to_jsonb(dl) ->> 'onboarding_stalled_at')::timestamptz, 'epoch'::timestamptz)
                       < NOW() - INTERVAL '21 days'`;
+        case "won_without_quote":
+            return sql`SELECT COUNT(*)::text AS c FROM dealer_leads dl
+                WHERE ${WON_WITHOUT_QUOTE} ${lf}`;
         case "stale_converted":
             return sql`SELECT COUNT(*)::text AS c FROM dealer_leads dl
                 JOIN dealer_onboarding_applications oa
@@ -449,7 +464,7 @@ export async function fetchAlertPanel(
             const statusFilter =
                 key === "awaiting_decision_14d"
                     ? sql`dl.lead_status = 'Awaiting_Customer_Decision'`
-                    : sql`dl.lead_status IN (${OPEN_LIST})`;
+                    : sql`dl.lead_status IN (${WORKABLE_LIST})`;
             const rows = await leadPanel(
                 sql`${statusFilter} AND dl.is_active IS NOT FALSE
                     AND ${workingDaysSince(LAST_TOUCH)} > ${sql.raw(String(threshold))}
@@ -490,6 +505,16 @@ export async function fetchAlertPanel(
                           AND (at.active_to IS NULL OR at.active_to >= CURRENT_DATE)) ${lf}`,
                 sql`'out of ASM territory'`,
                 sql`dl.assigned_at DESC NULLS LAST`,
+            );
+            return rows as unknown as AlertPanelRow[];
+        }
+        case "won_without_quote": {
+            const rows = await leadPanel(
+                sql`${WON_WITHOUT_QUOTE} ${lf}`,
+                sql`CONCAT(REPLACE(dl.lead_status, '_', ' '), ' on ',
+                        TO_CHAR((to_jsonb(dl) ->> 'won_at')::timestamptz AT TIME ZONE 'Asia/Kolkata', 'DD Mon'),
+                        ' · no dealer-approved quote')`,
+                sql`(to_jsonb(dl) ->> 'won_at')::timestamptz DESC NULLS LAST`,
             );
             return rows as unknown as AlertPanelRow[];
         }

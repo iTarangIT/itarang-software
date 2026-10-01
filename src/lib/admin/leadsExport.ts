@@ -68,6 +68,10 @@ export type LeadsExportRow = {
     state: string | null;
     business_type: string | null;
     lead_status: string | null;
+    /** ID 74 (E-314): when the rep marked it Won; null if never, or without E-314. */
+    won_at: string | null;
+    /** ID 74: Won with no dealer-approved quote. Only true while Won / Converted. */
+    won_without_approved_quote: boolean | null;
     interest_level: string | null;
     owner_name: string | null;
     last_visit_date: string | null;
@@ -154,6 +158,13 @@ export async function fetchLeadsForExport(
                dl.state,
                to_jsonb(dl) ->> 'business_type'      AS business_type,
                dl.lead_status,
+               -- ID 74 (E-314), same to_jsonb guard as business_type. The flag
+               -- is reported only while the lead is Won / Converted: a
+               -- re-opened lead keeps the old value until its next Mark Won.
+               CASE WHEN dl.lead_status IN ('Won', 'Converted')
+                    THEN to_jsonb(dl) ->> 'won_at' END AS won_at,
+               CASE WHEN dl.lead_status IN ('Won', 'Converted')
+                    THEN (to_jsonb(dl) ->> 'won_without_approved_quote')::boolean END AS won_without_approved_quote,
                dl.interest_level,
                owner.name                             AS owner_name,
                vi.last_visit_date::text               AS last_visit_date,

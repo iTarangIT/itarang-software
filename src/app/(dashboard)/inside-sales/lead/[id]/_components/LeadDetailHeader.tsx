@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { ArrowLeft, Phone, MapPin, AlarmCheck, AlertCircle, RotateCcw, ShieldAlert, CheckCircle2 } from "lucide-react";
-import type { LeadDetailBundle } from "@/lib/inside-sales/types";
+import { wonWithoutQuote, type LeadDetailBundle } from "@/lib/inside-sales/types";
+import { WonWithoutQuoteChip } from "@/components/leads/won-without-quote-chip";
 import { IntentBadge } from "../../../_components/IntentBadge";
 import { InterestLevelEditor } from "../../../_components/InterestLevelEditor";
 import { LeadStatusEditor, type StatusModalAction } from "../../../_components/LeadStatusEditor";
@@ -70,8 +71,10 @@ export function LeadDetailHeader({
     const isUnassigned = !lead.current_owner_id;
     const isEscalated = lead.escalation_status === "pending_review";
     const wasReactivated = Boolean(lead.previous_lost_reason);
+    // ID 74: Mark Won is what opens the onboarding application, so a Won lead is
+    // the one actually onboarding; Converted keeps the banner as its record.
     const onboardingInitiated =
-        lead.lead_status === "Converted" &&
+        (lead.lead_status === "Won" || lead.lead_status === "Converted") &&
         Boolean(lead.dealer_onboarding_application_id);
 
     return (
@@ -105,6 +108,7 @@ export function LeadDetailHeader({
                         {/* Same chip as the queue row, so a lead does not gain or
                             lose its NeoDove provenance by being opened. */}
                         <NeodoveTag syncStatus={lead.neodove_sync_status} />
+                        {wonWithoutQuote(lead) && <WonWithoutQuoteChip />}
                     </div>
                     {lead.shop_name && lead.dealer_name && (
                         <div className="text-xs text-gray-500 mt-0.5">{lead.shop_name}</div>
