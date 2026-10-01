@@ -6,6 +6,7 @@ import { supabaseAdmin } from "@/lib/supabase/admin";
 import { hashPassword } from "@/lib/auth/hashPassword";
 import { log } from "@/lib/log";
 import { hashResetToken, maskEmail } from "@/lib/auth/reset-token";
+import { findAuthUserByEmail } from "@/lib/buyback/vendor-auth";
 
 /**
  * GET  /api/auth/reset-password?token=<raw>  — validate a link on page load.
@@ -25,6 +26,15 @@ type TokenError =
   | "EXPIRED"
   | "USED"
   | "SUPERSEDED";
+
+/** GoTrue's answer when the id passed to an admin call is not an auth user. */
+function isAuthUserNotFound(err: { status?: number; code?: string; message: string }) {
+  return (
+    err.status === 404 ||
+    err.code === "user_not_found" ||
+    /user not found/i.test(err.message)
+  );
+}
 
 /** Read-only classification of a token, shared by GET and POST's failure path. */
 async function classify(rawToken: string): Promise<
@@ -174,14 +184,33 @@ export async function POST(req: NextRequest) {
     // still leaves the user ABLE TO SIGN IN (worst case a stale bcrypt mirror).
     // RDS-first would mean a Supabase failure locks them out entirely while the
     // mirror claims the new password works.
-    const { error: supabaseError } = await supabaseAdmin.auth.admin.updateUserById(
-      claimed.user_id,
+    let authUserId = claimed.user_id;
+    let { error: supabaseError } = await supabaseAdmin.auth.admin.updateUserById(
+      authUserId,
       { password: newPassword },
     );
+
+    // claimed.user_id is users.id, which for older accounts is NOT the Supabase
+    // auth id (those rows were created with a random UUID — see
+    // findAppUserForAuth in src/lib/supabase/identity.ts). Supabase then answers
+    // "User not found" and the reset dead-ends for a perfectly valid account.
+    // Fall back to the auth user that owns the token's email: the link was
+    // mailed to that address, so mailbox control is already proven.
+    if (supabaseError && isAuthUserNotFound(supabaseError)) {
+      const authUser = await findAuthUserByEmail(claimed.email);
+      if (authUser) {
+        authUserId = authUser.id;
+        ({ error: supabaseError } = await supabaseAdmin.auth.admin.updateUserById(
+          authUserId,
+          { password: newPassword },
+        ));
+      }
+    }
 
     if (supabaseError) {
       log.error("[RESET-PASSWORD] supabase update failed", {
         userId: claimed.user_id,
+        authId: authUserId,
         err: supabaseError.message,
       });
       if (/at least|password/i.test(supabaseError.message)) {
