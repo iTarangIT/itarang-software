@@ -8,6 +8,7 @@ import {
 } from "@/lib/digio/parse-status";
 import { isS3Backend, putObject, filesProxyPath } from "@/lib/storage/s3";
 import { DEALER_AGREEMENT_EXPIRE_IN_DAYS, DIGIO_MAX_EXPIRE_IN_DAYS } from "@/lib/agreement/constants";
+import { guardApi } from "@/lib/auth/apiGuard";
 
 type AgreementPayload = {
   company?: any;
@@ -320,6 +321,9 @@ function normalizeDigioAgreementStatus(parsed: any) {
 }
 
 export async function POST(req: NextRequest) {
+  // ID 118: signed in, with a role that reaches this screen.
+  const authGate = await guardApi(["admin", "ceo", "business_head", "sales_head"]);
+  if (!authGate.ok) return authGate.response;
   try {
     const body = (await req.json()) as AgreementPayload;
 

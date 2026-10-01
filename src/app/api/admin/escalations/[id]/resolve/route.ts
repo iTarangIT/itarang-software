@@ -14,6 +14,7 @@ import {
     withErrorHandler,
 } from "@/lib/api-utils";
 import { writeTouchpoint } from "@/lib/touchpoints/write";
+import { markSalesReady } from "@/lib/leads/salesReady";
 import type { TouchpointType } from "@/lib/lifecycle/touchpointTypes";
 
 const MUTATE_ROLES = ["admin", "sales_head", "partner"];
@@ -96,6 +97,9 @@ export const POST = withErrorHandler(
                 fromOwnerId: swapped[0]?.from_owner_id ?? null,
                 toOwnerId: body.target_user_id ?? null,
             };
+            // ID 82: an owner given by an admin is a Sales-ready event (a no-op
+            // when the lead already has one — the first event wins).
+            await markSalesReady(db, { leadId: esc.dealer_lead_id, reason: "admin_assigned", actorId: user.id });
         }
 
         // Mark the escalation resolved.

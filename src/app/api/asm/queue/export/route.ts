@@ -108,7 +108,15 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
     }
     const filters = readAsmQueueFilters(url.searchParams);
 
-    const [allRows, matched] = await Promise.all([
+    // ID 58: a rep's sheet holds only the leads they own — never the unowned
+    // pool or a colleague's leads, whatever tab it came from. The owner filter
+    // is part of the QUERY, not applied to the rows afterwards: a filter after
+    // the row cap would drop an ASM's own leads that sort below the first
+    // QUEUE_EXPORT_ROW_CAP rows of the Territory Feed.
+    const ownOnly = exportsOwnLeadsOnly(user.role);
+    const ownedBy = ownOnly ? user.id : null;
+
+    const [rows, total] = await Promise.all([
         fetchAsmQueueRows({
             tab: parsed.tab,
             asmId: user.id,
@@ -116,20 +124,17 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
             limit: QUEUE_EXPORT_ROW_CAP,
             q: parsed.q ?? null,
             ...filters,
+            ownedBy,
         }),
         countAsmQueueRows({
             tab: parsed.tab,
             asmId: user.id,
             q: parsed.q ?? null,
             ...filters,
+            ownedBy,
         }),
     ]);
 
-    // ID 58: a rep's sheet holds only the leads they own — never the unowned
-    // pool or a colleague's leads, whatever tab it came from.
-    const ownOnly = exportsOwnLeadsOnly(user.role);
-    const rows = ownOnly ? allRows.filter((r) => r.current_owner_id === user.id) : allRows;
-    const total = ownOnly ? rows.length : matched;
     await logDataDownload({
         userId: user.id,
         role: user.role,

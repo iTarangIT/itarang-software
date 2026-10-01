@@ -29,7 +29,8 @@ import {
   Download,
 } from "lucide-react";
 import { SendToNeodoveModal } from "@/components/leads/send-to-neodove-modal";
-import { LEAD_ORIGIN_LABEL, LEAD_ORIGINS } from "@/lib/leads/leadSourceVocab";
+import { LEAD_ORIGIN_LABEL, LEAD_ORIGINS, campaignRequired } from "@/lib/leads/leadSourceVocab";
+import { CampaignPicker } from "@/components/leads/CampaignPicker";
 import { toast } from "sonner";
 import { INTENT_THRESHOLDS } from "@/lib/ai/scoring/thresholds";
 import { ScraperDashboard } from "@/components/scraper/ScraperDashboard";
@@ -331,6 +332,8 @@ function UploadModal({
   const [status, setStatus] = useState<UploadStatus>("idle");
   // ID 81 — Found via for the whole file, required.
   const [origin, setOrigin] = useState("");
+  // ID 81 — acquisition campaign; required for Trade event / Digital ad.
+  const [campaignId, setCampaignId] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<any[]>([]);
   const [result, setResult] = useState<{
@@ -386,7 +389,7 @@ function UploadModal({
       const res = await fetch("/api/leads/import", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ leads: rows, origin }),
+        body: JSON.stringify({ leads: rows, origin, campaign_id: campaignId || null }),
       });
       const data = await res.json();
       if (!res.ok || !data.success) {
@@ -632,6 +635,15 @@ function UploadModal({
                 </label>
               )}
               {file && preview.length > 0 && status !== "uploading" && (
+                <CampaignPicker
+                  origin={origin}
+                  value={campaignId}
+                  onChange={setCampaignId}
+                  labelClassName="block text-xs font-medium text-gray-600"
+                  controlClassName="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm"
+                />
+              )}
+              {file && preview.length > 0 && status !== "uploading" && (
                 <div className="flex gap-2">
                   <button
                     onClick={() => {
@@ -647,7 +659,7 @@ function UploadModal({
                   </button>
                   <button
                     onClick={handleUpload}
-                    disabled={!origin}
+                    disabled={!origin || (campaignRequired(origin) && !campaignId)}
                     className="flex-1 px-4 py-2 text-sm font-medium bg-gray-900 text-white rounded-lg hover:bg-gray-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     Import {(window as any).__uploadRows?.length ?? 0} leads

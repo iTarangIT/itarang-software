@@ -35,6 +35,7 @@ import {
 } from "@/lib/db/schema";
 import { createPaymentQr, createRecurringDebit, razorpayErrorMessage } from "@/lib/razorpay";
 import { applyEmiPayment } from "@/lib/nbfc/servicing/applyEmiPayment";
+import { fromVercelCron } from "@/lib/security/cronAuth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -44,7 +45,7 @@ const MAX_PAISE_CEILING = process.env.EMI_AUTODEBIT_MAX_PAISE
   : null;
 
 function isAuthorised(req: NextRequest): boolean {
-  if (req.headers.get("x-vercel-cron")) return true;
+  if (fromVercelCron(req)) return true;
   const auth = req.headers.get("authorization") ?? "";
   const expected = process.env.CRON_SECRET;
   if (expected && auth === `Bearer ${expected}`) return true;

@@ -8,9 +8,9 @@ import { requireRole } from "@/lib/auth-utils";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
 import { assertOwner } from "@/lib/leads/ownership";
 import {
+    isManualTouchpointType,
     LeadNotFoundError,
     logLeadTouchpoint,
-    StatusRequestNotAllowedError,
     TouchpointBodySchema,
     UnknownDispositionError,
 } from "@/lib/inside-sales/logTouchpoint";
@@ -23,6 +23,12 @@ export const POST = withErrorHandler(
         const { id } = await ctx.params;
         if (!id) return errorResponse("Lead id required", 400);
         const body = TouchpointBodySchema.parse(await req.json());
+        if (!isManualTouchpointType(body.touchpoint_type)) {
+            return errorResponse(
+                "Only a call, a WhatsApp note or a note can be logged here. Visits, transfers and quotes have their own actions.",
+                400,
+            );
+        }
 
         await assertOwner(id, user.id);
 
@@ -32,7 +38,6 @@ export const POST = withErrorHandler(
         } catch (err) {
             if (err instanceof LeadNotFoundError) return errorResponse("Lead not found", 404);
             if (err instanceof UnknownDispositionError) return errorResponse(err.message, 400);
-            if (err instanceof StatusRequestNotAllowedError) return errorResponse(err.message, 400);
             // 42703 = undefined_column. Only reachable when a disposition was
             // sent AND this database has not applied E-236. A legible 503 beats
             // a 500 the rep cannot act on.

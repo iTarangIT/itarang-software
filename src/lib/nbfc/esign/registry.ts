@@ -14,6 +14,8 @@ export interface CredentialField {
   label: string;
   secret: boolean;
   placeholder?: string;
+  /** May be left blank; every other field is required to save. */
+  optional?: boolean;
 }
 
 export interface EsignAdapterMeta {
@@ -39,6 +41,14 @@ export const ESIGN_ADAPTERS: EsignAdapterMeta[] = [
     credentialSchema: [
       { key: "clientId", label: "Client ID", secret: false },
       { key: "clientSecret", label: "Client Secret", secret: true },
+      // Signs Digio's webhooks (X-Digio-Checksum). With it saved, a signing
+      // result is only believed when Digio's checksum matches (ID 118).
+      {
+        key: "webhookSecret",
+        label: "Webhook secret key (optional — Digio dashboard → Profile → Webhook)",
+        secret: true,
+        optional: true,
+      },
     ],
   },
   {

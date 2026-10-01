@@ -42,6 +42,9 @@
  *                    the NeoDove agent to their CRM user (review R-03,
  *                    /leads/neodove-campaigns/agents); unmapped agents' calls
  *                    carry no performer and appear on nobody's row.
+ *   engaged /        Block C, per caller: engagedCall() and Hot AT THE MOMENT
+ *   hot to field     of transfer (wasHotAt) — ID 59, metricDefinitions.ts;
+ *                    counted in salesDailyBlocks.ts (loadRepExtras).
  *   new visits       dealers whose first-ever visit fell in the period
  *   converted        leads that reached Converted in the period, keyed on
  *                    closing_owner_id — the same rule as the dashboard and every
@@ -167,16 +170,12 @@ async function scheduledPerSpoc(
 
 async function rightNow(): Promise<{ waiting: number; oldestDays: number | null }> {
   try {
-    const { db } = await import("@/lib/db");
-    const [r] = (await db.execute(sql`
-      SELECT COUNT(*)::int AS waiting,
-             MAX(FLOOR(EXTRACT(EPOCH FROM (now() - (to_jsonb(dl) ->> 'sales_ready_at')::timestamptz)) / 86400))::int AS oldest
-        FROM dealer_leads dl
-       WHERE dl.current_owner_id IS NULL AND dl.is_active IS NOT FALSE
-         AND COALESCE(dl.lead_status, '') NOT IN ('Won', 'Converted', 'Lost')
-         AND (to_jsonb(dl) ->> 'sales_ready_at') IS NOT NULL
-    `)) as unknown as Array<{ waiting: number; oldest: number | null }>;
-    return { waiting: Number(r?.waiting ?? 0), oldestDays: r?.oldest ?? null };
+    // ID 82: the one "awaiting assignment" rule — the Ready to assign page
+    // and the CEO card count the same leads. Imported here, not at module
+    // scope: listing the digest kinds must not need DATABASE_URL.
+    const { countAwaitingAssignment } = await import("@/lib/leads/salesReady");
+    const c = await countAwaitingAssignment();
+    return { waiting: c.total, oldestDays: c.oldestDays };
   } catch {
     return { waiting: 0, oldestDays: null };
   }

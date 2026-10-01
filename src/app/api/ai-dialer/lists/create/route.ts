@@ -11,6 +11,7 @@ import { successResponse, errorResponse, withErrorHandler } from "@/lib/api-util
 import { requireAuth } from "@/lib/auth-utils";
 import { createCampaign } from "@/lib/queue/campaignTracker";
 import { importListRows } from "@/lib/ai-dialer/listImport";
+import { LEAD_ORIGINS, type LeadOrigin } from "@/lib/leads/leadSourceVocab";
 import Papa from "papaparse";
 import * as XLSX from "xlsx";
 
@@ -33,6 +34,14 @@ export const POST = withErrorHandler(async (req: Request) => {
 
   if (!name) return errorResponse("Campaign name is required", 400);
   if (!file) return errorResponse("No file uploaded", 400);
+
+  // ID 81 — Found via for the new leads on this list. Left out, they take the
+  // calling-list default; a value that is given must be one of the fixed list.
+  const originRaw = String(formData.get("origin") ?? "").trim();
+  if (originRaw && !(LEAD_ORIGINS as readonly string[]).includes(originRaw)) {
+    return errorResponse("Pick how these dealers were found (Found via).", 400);
+  }
+  const origin = (originRaw || null) as LeadOrigin | null;
 
   const fileName = file.name.toLowerCase();
   if (
@@ -71,7 +80,7 @@ export const POST = withErrorHandler(async (req: Request) => {
     return errorResponse("The file has no data rows", 400);
   }
 
-  const summary = await importListRows(rawRows, { listName: name });
+  const summary = await importListRows(rawRows, { listName: name, origin, actorId: triggeredBy });
 
   if (summary.queueIds.length === 0) {
     return errorResponse(

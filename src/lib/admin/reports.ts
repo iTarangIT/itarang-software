@@ -5,8 +5,10 @@
 import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { LOST_REASON, OPEN_STATUSES } from "@/lib/lifecycle/transitions";
+import { connectedCall } from "@/lib/reports/metricDefinitions";
 import { ONBOARDING_DROPOUT_REASONS, OWNER_DRILL_METRICS } from "./types";
-import { isUndefinedColumn, roleLabel } from "./reportHelpers";
+import { isUndefinedColumn, ownerConversionRate, roleLabel } from "./reportHelpers";
+import { asmTransferRecipientFromVisitSql } from "@/lib/leads/closingOwner";
 import type {
     DashboardFilters,
     OwnerDrillLead,
@@ -50,7 +52,9 @@ async function dailyActivity(f: DashboardFilters): Promise<ReportResult> {
             t.performed_at::date AS day,
             u.name AS rep_name,
             COUNT(*)::text AS total_touchpoints,
-            COUNT(*) FILTER (WHERE t.call_status = 'connected')::text AS connected_calls,
+            -- ID 59: a human call counted once — a NeoDove call the agent
+            -- re-dispositioned is one connected call, not two.
+            COUNT(*) FILTER (WHERE ${connectedCall()})::text AS connected_calls,
             COUNT(*) FILTER (WHERE t.touchpoint_type = 'status_change_note')::text AS status_changes,
             COUNT(DISTINCT t.dealer_lead_id)::text AS leads_worked
         FROM lead_touchpoints t
@@ -318,6 +322,20 @@ async function sourcePerformance(f: DashboardFilters): Promise<ReportResult> {
 }
 
 // Report 6 — ASM Handoff. asm_transfer touchpoints, grouped by recipient ASM.
+//
+// WHO GETS THE ROW (tracker ID 117). The ASM the lead was handed TO at the
+// time — the transfer's own to_owner_id (E-295) — not dealer_leads.asm_id,
+// which is whoever holds the lead today: reassign a converted lead and the
+// handoff, and its conversion, used to move to the new ASM, months already
+// reported included. A transfer from before the recipient was recorded is
+// read from the ASM's visit row the transfer wrote alongside it
+// (asmTransferRecipientFromVisitSql); only when that is missing too does it
+// fall back to the lead's ASM today.
+//
+// Converted / closed / days-to-close count a handed-off lead only when that
+// ASM is its CLOSING owner. A lead handed to one ASM and closed by someone
+// else is a handoff for the first and a conversion for the second, never both.
+// Each lead is counted once however many times it was handed to the same ASM.
 async function asmHandoff(f: DashboardFilters): Promise<ReportResult> {
     const rows = await db.execute<{
         asm_name: string | null;
@@ -327,21 +345,45 @@ async function asmHandoff(f: DashboardFilters): Promise<ReportResult> {
         avg_days_to_close: string | null;
         escalations: string;
     }>(sql`
+        WITH handoff AS (
+            SELECT t.dealer_lead_id,
+                   t.performed_at,
+                   -- to_jsonb: the column is E-295 and not in schema.ts, so a
+                   -- database without it reads NULL and falls back.
+                   COALESCE(to_jsonb(t) ->> 'to_owner_id',
+                            ${sql.raw(asmTransferRecipientFromVisitSql("t"))},
+                            dl.asm_id) AS asm_id,
+                   dl.lead_status, dl.closed_at, dl.closing_owner_id
+            FROM lead_touchpoints t
+            JOIN dealer_leads dl ON dl.id = t.dealer_lead_id
+            WHERE t.touchpoint_type = 'asm_transfer' ${dateRange("t.performed_at", f)}
+        ),
+        per_lead AS (
+            -- One row per (ASM, lead): the first handoff in the period carries
+            -- the clock; the count keeps every handoff.
+            SELECT h.asm_id, h.dealer_lead_id,
+                   COUNT(*) AS handoffs,
+                   MIN(h.performed_at) AS first_handoff_at,
+                   BOOL_OR(h.closing_owner_id = h.asm_id) AS closed_by_asm,
+                   MAX(h.lead_status) AS lead_status,
+                   MAX(h.closed_at) AS closed_at
+            FROM handoff h
+            GROUP BY h.asm_id, h.dealer_lead_id
+        )
         SELECT
             u.name AS asm_name,
-            COUNT(*)::text AS handoffs,
-            COUNT(*) FILTER (WHERE dl.lead_status = 'Converted')::text AS converted,
-            COUNT(*) FILTER (WHERE dl.lead_status IN ('Converted','Lost'))::text AS closed,
-            ROUND(AVG(EXTRACT(EPOCH FROM (dl.closed_at - t.performed_at)) / 86400)
-                  FILTER (WHERE dl.closed_at IS NOT NULL)::numeric, 1)::text AS avg_days_to_close,
+            SUM(p.handoffs)::text AS handoffs,
+            COUNT(*) FILTER (WHERE p.closed_by_asm AND p.lead_status = 'Converted')::text AS converted,
+            COUNT(*) FILTER (WHERE p.closed_by_asm AND p.lead_status IN ('Converted','Lost'))::text AS closed,
+            ROUND(AVG(EXTRACT(EPOCH FROM (p.closed_at - p.first_handoff_at)) / 86400)
+                  FILTER (WHERE p.closed_by_asm AND p.closed_at IS NOT NULL
+                            AND p.lead_status IN ('Converted','Lost'))::numeric, 1)::text AS avg_days_to_close,
             SUM((SELECT COUNT(*) FROM lead_escalations e
-                 WHERE e.dealer_lead_id = dl.id))::text AS escalations
-        FROM lead_touchpoints t
-        JOIN dealer_leads dl ON dl.id = t.dealer_lead_id
-        LEFT JOIN users u ON u.id::text = dl.asm_id
-        WHERE t.touchpoint_type = 'asm_transfer' ${dateRange("t.performed_at", f)}
-        GROUP BY u.name
-        ORDER BY handoffs DESC
+                 WHERE e.dealer_lead_id = p.dealer_lead_id))::text AS escalations
+        FROM per_lead p
+        LEFT JOIN users u ON u.id::text = p.asm_id
+        GROUP BY p.asm_id, u.name
+        ORDER BY SUM(p.handoffs) DESC, u.name
     `);
     return {
         type: "asm_handoff",
@@ -525,6 +567,17 @@ async function meetingsMtd(f: DashboardFilters): Promise<ReportResult> {
  * report, the Sales dashboard and both daily emails use (metric M15, review
  * R-01). The AI's `qualified` rating is "AI band: Qualified", never converted.
  *
+ * WHO A CONVERSION BELONGS TO (tracker ID 117): the lead's CLOSING owner
+ * (dealer_leads.closing_owner_id — who held it when it was won), and it counts
+ * in the period it CLOSED (closed_at). It used to be every worked lead that
+ * happens to be Converted today, which credited the same conversion to each
+ * person who logged anything on the lead in the period — a rep who made one
+ * follow-up call on a dealer converted months ago "converted" it again. The
+ * rule is the Sales dashboard's (salesDashboard.ts, `conv`), so the two agree.
+ * A person with a conversion and no other activity in the period still gets a
+ * row. Position counts (Hot / Warm / Cold, open leads) stay with the work and
+ * the current owner.
+ *
  * "Leads Touched" is ACTIVITY (what the person worked in the period); the rep's
  * own "My Open Leads" tab is BACKLOG (what they own right now). The two never
  * reconcile on their own, so the backlog is shown beside the activity:
@@ -552,11 +605,10 @@ const OWNER_RATING_FILTERS = {
     ai_qualified: sql`lower(dl.current_status) IN ('qualified','ai_qualified')`,
     ai_warm: sql`lower(dl.current_status) = 'warm'`,
     ai_cold: sql`lower(dl.current_status) = 'cold'`,
-    converted: sql`dl.lead_status = 'Converted'`,
 } satisfies Partial<Record<OwnerDrillMetric, SQL>>;
 
-// worked / connected / owned — the three lead sets every Funnel-by-Owner
-// number is counted from.
+// worked / connected / owned / closed_by — the four lead sets every
+// Funnel-by-Owner number is counted from.
 function ownerCtes(f: DashboardFilters): SQL {
     return sql`
         WITH worked AS (
@@ -592,6 +644,16 @@ function ownerCtes(f: DashboardFilters): SQL {
             WHERE dl.current_owner_id IS NOT NULL
               AND dl.lead_status IN (${OPEN_LIST})
               AND dl.is_active IS NOT FALSE
+        ),
+        closed_by AS (
+            -- ID 117: a conversion belongs to its closing owner, in the period
+            -- it closed — not to whoever touched the lead.
+            SELECT dl.closing_owner_id AS person_id, dl.id AS dealer_lead_id
+            FROM dealer_leads dl
+            WHERE dl.lead_status = 'Converted'
+              AND dl.closing_owner_id IS NOT NULL
+              AND dl.closed_at IS NOT NULL
+              ${dateRange("dl.closed_at", f)}
         )`;
 }
 
@@ -638,16 +700,20 @@ async function funnelByOwner(f: DashboardFilters): Promise<ReportResult> {
                COUNT(*) FILTER (WHERE ${rf.cold})         AS cold,
                COUNT(*) FILTER (WHERE ${rf.ai_qualified}) AS ai_qualified,
                COUNT(*) FILTER (WHERE ${rf.ai_warm})      AS ai_warm,
-               COUNT(*) FILTER (WHERE ${rf.ai_cold})      AS ai_cold,
-               COUNT(*) FILTER (WHERE ${rf.converted})    AS converted
+               COUNT(*) FILTER (WHERE ${rf.ai_cold})      AS ai_cold
             FROM worked w
             LEFT JOIN dealer_leads dl ON dl.id = w.dealer_lead_id
             GROUP BY w.performed_by
+        ),
+        conversions AS (
+            SELECT person_id, COUNT(*) AS converted FROM closed_by GROUP BY person_id
         ),
         people AS (
             SELECT person_id FROM activity
             UNION
             SELECT person_id FROM backlog
+            UNION
+            SELECT person_id FROM conversions
         )
         SELECT p.person_id                             AS person_id,
                COALESCE(u.name, '(unknown)')          AS person,
@@ -662,11 +728,12 @@ async function funnelByOwner(f: DashboardFilters): Promise<ReportResult> {
                COALESCE(a.ai_qualified, 0)::text       AS ai_qualified,
                COALESCE(a.ai_warm, 0)::text            AS ai_warm,
                COALESCE(a.ai_cold, 0)::text            AS ai_cold,
-               COALESCE(a.converted, 0)::text          AS converted
+               COALESCE(c.converted, 0)::text          AS converted
         FROM people p
-        LEFT JOIN activity a ON a.person_id = p.person_id
-        LEFT JOIN backlog  b ON b.person_id = p.person_id
-        LEFT JOIN users    u ON u.id::text  = p.person_id
+        LEFT JOIN activity    a ON a.person_id = p.person_id
+        LEFT JOIN backlog     b ON b.person_id = p.person_id
+        LEFT JOIN conversions c ON c.person_id = p.person_id
+        LEFT JOIN users       u ON u.id::text  = p.person_id
         ORDER BY COALESCE(a.touched, 0) DESC, COALESCE(b.owned_open, 0) DESC, person
     `);
 
@@ -694,7 +761,6 @@ async function funnelByOwner(f: DashboardFilters): Promise<ReportResult> {
             const conv = num(r.converted);
             // Against leads touched, not against connected — the question is
             // what share of the work turned into a dealer.
-            const rate = ratio(conv, touched);
             return {
                 person_id: r.person_id,
                 person: r.person ?? "(unknown)",
@@ -710,7 +776,7 @@ async function funnelByOwner(f: DashboardFilters): Promise<ReportResult> {
                 ai_warm: num(r.ai_warm),
                 ai_cold: num(r.ai_cold),
                 converted: conv,
-                conversion_rate: rate != null ? Math.round(rate * 100) : null,
+                conversion_rate: ownerConversionRate(conv, touched),
             };
         }),
     };
@@ -748,6 +814,13 @@ export async function funnelByOwnerLeads(
             where = sql`EXISTS (SELECT 1 FROM connected c
                                  WHERE c.performed_by::text = ${personId}
                                    AND c.dealer_lead_id = dl.id)`;
+            break;
+        case "converted":
+            // ID 117: the leads this person CLOSED in the period — not the
+            // converted leads they happened to touch.
+            where = sql`EXISTS (SELECT 1 FROM closed_by cb
+                                 WHERE cb.person_id = ${personId}
+                                   AND cb.dealer_lead_id = dl.id)`;
             break;
         default:
             where = sql`${inWorked} AND ${OWNER_RATING_FILTERS[metric]}`;

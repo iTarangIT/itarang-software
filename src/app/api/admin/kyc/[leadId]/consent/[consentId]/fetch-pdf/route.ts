@@ -4,6 +4,7 @@ import { consentRecords } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { fetchAndStoreSignedConsent } from "@/lib/digio/fetch-signed-consent";
 import { getDigioBaseUrl, getDigioBasicAuth } from "@/lib/digio/client";
+import { guardApi } from "@/lib/auth/apiGuard";
 
 const SIGNED_STATES = new Set(["signed", "completed", "executed", "success"]);
 const PENDING_STATES = new Set([
@@ -34,6 +35,9 @@ export async function POST(
     _req: NextRequest,
     { params }: { params: Promise<{ leadId: string; consentId: string }> }
 ) {
+    // ID 118: signed in, with a role that reaches this screen.
+    const authGate = await guardApi(["admin", "ceo", "business_head", "sales_head", "sales_manager", "sales_executive"]);
+    if (!authGate.ok) return authGate.response;
     try {
         const { leadId, consentId } = await params;
 

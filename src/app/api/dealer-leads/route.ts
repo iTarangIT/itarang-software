@@ -33,6 +33,7 @@ import {
   inferStateFromCity,
 } from "@/lib/scraper-enrichment";
 import { recordLeadCapture } from "@/lib/leads/lead-registry";
+import { createdByHandReason, markSalesReady } from "@/lib/leads/salesReady";
 import {
   LEAD_ORIGINS,
   recordLeadCreated,
@@ -45,6 +46,7 @@ import {
   loadExistingByPhone,
   normalizePhone,
 } from "@/lib/leads/dedupe";
+import { CampaignError, resolveLeadCampaign } from "@/lib/leads/acquisitionCampaigns";
 import { normalizeBusinessType } from "@/lib/leads/businessType";
 
 export async function POST(req: NextRequest) {
@@ -73,6 +75,7 @@ export async function POST(req: NextRequest) {
       pincode,
       business_type,
       origin,
+      campaign_id,
     } = body;
 
     if (!dealer_name || !phone) {
@@ -173,6 +176,21 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // ID 81: a Trade event / Digital ad lead needs its campaign, and a campaign
+    // that is given must exist and be open. After the duplicate check.
+    let campaignId: string | null;
+    try {
+      campaignId = await resolveLeadCampaign(db, {
+        origin: leadOrigin,
+        campaignId: typeof campaign_id === "string" ? campaign_id : null,
+      });
+    } catch (e) {
+      if (e instanceof CampaignError) {
+        return NextResponse.json({ success: false, error: e.message }, { status: e.status });
+      }
+      throw e;
+    }
+
     const id = `DL-${Date.now()}-${nanoid(8)}`;
 
     await db.insert(dealerLeads).values({
@@ -211,12 +229,17 @@ export async function POST(req: NextRequest) {
 
     // ID 81: Entered via = Rep-created, Found via = what the rep picked, and
     // the "Lead created" event. Best-effort — the lead exists either way.
-    await stampLeadSource(db, id, { door: "rep_create", origin: leadOrigin });
+    await stampLeadSource(db, id, { door: "rep_create", origin: leadOrigin, campaignId });
     try {
       await recordLeadCreated(db, { leadId: id, actorId: user.id, door: "rep_create", ownerId: null });
     } catch (e) {
       console.warn("[DEALER-LEADS] Lead created not recorded:", e);
     }
+
+    // ID 82: a lead a person created by hand is sales-ready from creation — the
+    // same event the Inside Sales / ASM form and the Assistant write. Without
+    // it the lead never reached Ready to assign. Best-effort (never throws).
+    await markSalesReady(db, { leadId: id, reason: createdByHandReason(leadOrigin), actorId: user.id });
 
     // E-179 central registry — manually captured dealer prospect.
     await recordLeadCapture({

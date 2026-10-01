@@ -323,8 +323,10 @@ describe("gate 5 appliers (run inside the executor's transaction)", () => {
     });
 
     it("status change and Lost go on the same tx, AFTER the visit; high-impact only at step 2", async () => {
-        await apply("log_visit", ASM, { ...visitPlan, interest: null, status_to: "Under_Discussion" });
-        expect(applyVisitStatus).toHaveBeenCalledWith(TX, expect.objectContaining({ requested: "Under_Discussion" }));
+        // ID 80: the card's status_to is a preview, never an instruction — the
+        // applier hands the visit OUTCOME to the shared rule and asks for nothing.
+        await apply("log_visit", ASM, { ...visitPlan, interest: null, status_to: "Commercials_Finalised" });
+        expect(applyVisitStatus).toHaveBeenCalledWith(TX, expect.objectContaining({ requested: null, outcome: "productive", interest: null }));
         vi.clearAllMocks();
         const lost = { ...visitPlan, next_action: "lost", next_visit_date: null, lost: { reason: "not_interested", notes: "x" } };
         await apply("log_visit", ASM, lost);

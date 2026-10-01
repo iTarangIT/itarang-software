@@ -22,6 +22,8 @@ type AgentRow = {
     name: string;
     calls: number;
     unattributed: number;
+    /** ID 83 "caller not linked": unowned leads this agent called first. */
+    leads_waiting?: number;
     last_call_at: string | null;
     user_id: string | null;
     user_name: string | null;
@@ -144,6 +146,12 @@ export default function NeodoveAgentsPage() {
                                 <th className="px-4 py-3 text-left font-semibold">NeoDove agent</th>
                                 <th className="px-4 py-3 text-right font-semibold">Calls</th>
                                 <th className="px-4 py-3 text-right font-semibold">Not credited</th>
+                                <th
+                                    className="px-4 py-3 text-right font-semibold"
+                                    title="Caller not linked: unowned leads this agent called first. Linking the agent assigns them to that CRM user, dated at the original call."
+                                >
+                                    Leads waiting
+                                </th>
                                 <th className="px-4 py-3 text-left font-semibold">Last call</th>
                                 <th className="px-4 py-3 text-left font-semibold">CRM user</th>
                             </tr>
@@ -232,6 +240,18 @@ function AgentRowView({
                 }`}
             >
                 {agent.unattributed.toLocaleString("en-IN")}
+            </td>
+            <td
+                className={`px-4 py-3 text-right tabular-nums ${
+                    (agent.leads_waiting ?? 0) > 0 ? "text-amber-700 font-semibold" : "text-gray-400"
+                }`}
+                title={
+                    (agent.leads_waiting ?? 0) > 0
+                        ? "Caller not linked — these leads have no owner until this agent is linked."
+                        : undefined
+                }
+            >
+                {(agent.leads_waiting ?? 0).toLocaleString("en-IN")}
             </td>
             <td className="px-4 py-3 text-gray-600">{fmtDate(agent.last_call_at)}</td>
             <td className="px-4 py-3">

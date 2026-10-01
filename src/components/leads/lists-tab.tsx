@@ -7,6 +7,7 @@
 // pipeline as region campaigns.
 
 import { useRef, useState } from "react";
+import { LEAD_ORIGIN_LABEL, LEAD_ORIGINS, LIST_DEFAULT_ORIGIN } from "@/lib/leads/leadSourceVocab";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   CampaignWindowPicker,
@@ -83,6 +84,8 @@ export function ListsTab({
 
   const [panelOpen, setPanelOpen] = useState(false);
   const [name, setName] = useState("");
+  // ID 81 — Found via for the NEW leads on this list (known dealers keep theirs).
+  const [origin, setOrigin] = useState<string>(LIST_DEFAULT_ORIGIN);
   const [file, setFile] = useState<File | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -138,6 +141,7 @@ export function ListsTab({
     try {
       const fd = new FormData();
       fd.append("name", name.trim());
+      fd.append("origin", origin);
       fd.append("file", file);
       const res = await fetch("/api/ai-dialer/lists/create", {
         method: "POST",
@@ -547,6 +551,20 @@ export function ListsTab({
                 onChange={(e) => setName(e.target.value)}
                 autoFocus
               />
+            </div>
+            <div>
+              <label className="lists-input-label">Found via</label>
+              <select
+                className="lists-input"
+                value={origin}
+                onChange={(e) => setOrigin(e.target.value)}
+              >
+                {LEAD_ORIGINS.map((o) => (
+                  <option key={o} value={o}>
+                    {LEAD_ORIGIN_LABEL[o]}
+                  </option>
+                ))}
+              </select>
             </div>
 
             <input

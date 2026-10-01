@@ -66,6 +66,47 @@ export type MarkConvertedResult = {
     notify: () => Promise<void>;
 };
 
+/**
+ * What a won lead carries besides its status: the won-without-quote flag and
+ * its onboarding application, GST number pre-filled. Run AFTER the status is
+ * written (the application copies the closing owner). Shared with admin
+ * "Correct status" (ID 57), so a lead corrected to Won / Converted is never
+ * left without an application. Idempotent — an existing application is reused.
+ */
+export async function attachOnboardingToWonLead(
+    tx: Tx,
+    leadId: string,
+    gstin: string,
+): Promise<{ applicationId: string; created: boolean }> {
+    // ID 74: flag a Won with no dealer-approved, not-withdrawn quote.
+    await tx.execute(sql`
+        UPDATE dealer_leads
+           SET won_without_approved_quote = NOT EXISTS (
+                 SELECT 1 FROM dealer_lead_commercials c
+                  WHERE c.dealer_lead_id = ${leadId}
+                    AND c.event_type IN ('quote_issue', 'quote_revision')
+                    AND c.dealer_decision = 'approved'
+                    AND c.withdrawn_at IS NULL)
+         WHERE id = ${leadId}
+    `);
+
+    const { applicationId, created } = await createOnboardingApplicationForConvertedLead(leadId, tx);
+    if (!applicationId) {
+        throw new Error("Failed to create dealer onboarding application");
+    }
+
+    // Pre-fill the onboarding form's GST number so the dealer is not asked
+    // again. Never overwrites a number the application already carries.
+    await tx.execute(sql`
+        UPDATE dealer_onboarding_applications
+           SET gst_number = ${gstin}
+         WHERE id = ${applicationId}::uuid
+           AND NULLIF(btrim(gst_number), '') IS NULL
+    `);
+
+    return { applicationId, created };
+}
+
 export async function markLeadConverted(
     input: MarkConvertedInput,
     opts?: { tx?: Tx },
@@ -107,31 +148,7 @@ export async function markLeadConverted(
             { tx },
         );
 
-        // ID 74: flag a Won with no dealer-approved, not-withdrawn quote.
-        await tx.execute(sql`
-            UPDATE dealer_leads
-               SET won_without_approved_quote = NOT EXISTS (
-                     SELECT 1 FROM dealer_lead_commercials c
-                      WHERE c.dealer_lead_id = ${leadId}
-                        AND c.event_type IN ('quote_issue', 'quote_revision')
-                        AND c.dealer_decision = 'approved'
-                        AND c.withdrawn_at IS NULL)
-             WHERE id = ${leadId}
-        `);
-
-        const { applicationId } = await createOnboardingApplicationForConvertedLead(leadId, tx);
-        if (!applicationId) {
-            throw new Error("Failed to create dealer onboarding application");
-        }
-
-        // Pre-fill the onboarding form's GST number so the dealer is not asked
-        // again. Never overwrites a number the application already carries.
-        await tx.execute(sql`
-            UPDATE dealer_onboarding_applications
-               SET gst_number = ${input.gstin}
-             WHERE id = ${applicationId}::uuid
-               AND NULLIF(btrim(gst_number), '') IS NULL
-        `);
+        const { applicationId } = await attachOnboardingToWonLead(tx, leadId, input.gstin);
 
         // BRD §0.13 audit — record the onboarding initiation event (once).
         if (!repeat) await tx.insert(auditLogs).values({

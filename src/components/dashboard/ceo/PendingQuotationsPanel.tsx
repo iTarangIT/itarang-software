@@ -119,6 +119,10 @@ interface Quotation {
   /** E-243 — the DEALER's answer, not iTarang's. Null until they respond. */
   dealer_decision: "approved" | "declined" | null;
   dealer_decision_at: string | null;
+  /** ID 78 — withdrawn by the sales team after release. Optional: a cached page may predate it. */
+  withdrawn_at?: string | null;
+  /** ID 78 — an open quote whose product reference price changed since issue. */
+  price_changed_since_issue?: boolean;
 }
 
 interface QueueResponse {
@@ -596,6 +600,26 @@ export function QuotationApprovalsPanel() {
                         }
                       >
                         Dealer {q.dealer_decision === "approved" ? "approved" : "declined"}
+                      </span>
+                    )}
+                    {/* ID 78 — a released quote the sales team has since closed:
+                        the dealer can no longer answer it. */}
+                    {decided && q.withdrawn_at && (
+                      <span
+                        className="text-[11px] font-medium px-1.5 py-0.5 rounded-md bg-gray-200 text-gray-700"
+                        title={`Withdrawn ${waitedFor(q.withdrawn_at)} ago`}
+                      >
+                        Withdrawn
+                      </span>
+                    )}
+                    {/* ID 78 — still open with the dealer at a price that is no
+                        longer the reference: revise it or withdraw it. */}
+                    {decided && q.price_changed_since_issue && (
+                      <span
+                        className="text-[11px] font-medium px-1.5 py-0.5 rounded-md bg-amber-100 text-amber-800"
+                        title="A product's reference price changed since this quote was issued. Revise or withdraw it."
+                      >
+                        Price changed since issue
                       </span>
                     )}
                   </div>

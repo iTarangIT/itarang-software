@@ -38,6 +38,12 @@ type BuildArgs = {
     finalisedOnly?: boolean;
     /** User-chosen column + direction; the tab order stays as the tiebreak. */
     sort?: QueueSort;
+    /**
+     * Only leads this user currently owns, whatever the tab (ID 58 — an ASM's
+     * export). Applied IN the query, so the row cap and the count are taken
+     * over the ASM's own leads rather than over the whole tab.
+     */
+    ownedBy?: string | null;
 };
 
 /**
@@ -155,8 +161,10 @@ function extraFilters({
     visitStatus,
     visitOutcome,
     finalisedOnly,
-}: Pick<BuildArgs, "q" | "filters" | "visitStatus" | "visitOutcome" | "finalisedOnly">): SQL {
+    ownedBy,
+}: Pick<BuildArgs, "q" | "filters" | "visitStatus" | "visitOutcome" | "finalisedOnly" | "ownedBy">): SQL {
     const parts: SQL[] = [];
+    if (ownedBy) parts.push(sql` AND dl.current_owner_id = ${ownedBy}`);
     if (q) parts.push(leadSearchClause(q));
     if (filters) parts.push(...queueFilterClauses(filters, ASM_DATE_COLUMN));
     // The LATEST visit's state, which is what the row's Visit column shows. A
@@ -180,11 +188,12 @@ export async function fetchAsmQueueRows({
     visitOutcome,
     finalisedOnly,
     sort,
+    ownedBy,
 }: BuildArgs): Promise<AsmQueueRow[]> {
     const offset = (page - 1) * limit;
     const where = tabFilter(tab, asmId);
     const order = queueSortOrder(sort, tabOrder(tab));
-    const search = extraFilters({ q, filters, visitStatus, visitOutcome, finalisedOnly });
+    const search = extraFilters({ q, filters, visitStatus, visitOutcome, finalisedOnly, ownedBy });
 
     const rows = await db.execute<AsmQueueRow>(sql`
         SELECT
@@ -227,12 +236,13 @@ export async function countAsmQueueRows({
     visitStatus,
     visitOutcome,
     finalisedOnly,
+    ownedBy,
 }: Pick<
     BuildArgs,
-    "tab" | "asmId" | "q" | "filters" | "visitStatus" | "visitOutcome" | "finalisedOnly"
+    "tab" | "asmId" | "q" | "filters" | "visitStatus" | "visitOutcome" | "finalisedOnly" | "ownedBy"
 >): Promise<number> {
     const where = tabFilter(tab, asmId);
-    const search = extraFilters({ q, filters, visitStatus, visitOutcome, finalisedOnly });
+    const search = extraFilters({ q, filters, visitStatus, visitOutcome, finalisedOnly, ownedBy });
     const rows = await db.execute<{ c: string }>(sql`
         SELECT COUNT(*)::text AS c FROM dealer_leads dl ${LATEST_VISIT_JOIN} WHERE ${where} ${search}
     `);

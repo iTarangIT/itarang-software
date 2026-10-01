@@ -18,6 +18,7 @@ import { enachMandates, fieldInvestigations, leads, manualHandoffs, nbfcWallets,
 import { sendManualHandoffNudge } from "@/lib/email/sendManualHandoffEmail";
 import { ENACH_STALE_RISK_DAYS } from "@/lib/nbfc/enach";
 import { getWalletFundsProvider } from "@/lib/nbfc/wallet/provider";
+import { fromVercelCron } from "@/lib/security/cronAuth";
 
 /** §16.3 lockout: once an auto-recharge fires, no re-fire for this many hours. */
 const WALLET_AUTORECHARGE_LOCKOUT_HOURS = Number(process.env.WALLET_AUTORECHARGE_LOCKOUT_HOURS ?? 6);
@@ -26,7 +27,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 function isAuthorised(req: NextRequest): boolean {
-  if (req.headers.get("x-vercel-cron")) return true;
+  if (fromVercelCron(req)) return true;
   const auth = req.headers.get("authorization") ?? "";
   const expected = process.env.CRON_SECRET;
   if (expected && auth === `Bearer ${expected}`) return true;

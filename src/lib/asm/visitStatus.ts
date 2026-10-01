@@ -8,12 +8,13 @@
 //   at Commercials finalised no longer drops back to Under discussion.
 //   Any other lead moves forward to what the ASM chose, if anything.
 //
-// ID 114 (01 Oct 2026): pass `outcome` and the status AND the temperature are
-// derived here, on the server, from the visit outcome by the shared rule
-// (outcomeRule.ts) — the visit route does; the browser's pre-fill is only a
-// preview. Without `outcome` (the Assistant, which applies what the rep
-// confirmed on its preview; "Visit not needed") only `requested` is applied,
-// as before.
+// ID 114 / 80 (01 Oct 2026): pass `outcome` and the status AND the
+// temperature are derived here, on the server, from the visit outcome by the
+// shared rule (outcomeRule.ts). The visit route and the WhatsApp Assistant's
+// log_visit both do; a form's pre-fill or a card's preview is only a preview,
+// and no caller can ASK for a status — `requested` is ignored when the outcome
+// is given. Without `outcome` ("Visit not needed") only `requested` is
+// applied, and that caller passes null.
 //
 // Runs on the caller's transaction; the S3 guard in writeTouchpoint still
 // applies (event "visit").
@@ -78,7 +79,7 @@ export async function applyVisitStatus(
     let interestTo: Interest | null = null;
     if (derive) {
         const plan = planOutcome({
-            outcome: { kind: "visit", visited: true, outcome: input.outcome ?? null, requested: input.requested },
+            outcome: { kind: "visit", visited: true, outcome: input.outcome ?? null },
             hasExplicitStatus: false,
             interest: input.interest,
             actorId: input.actorId,

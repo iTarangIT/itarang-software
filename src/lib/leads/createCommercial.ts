@@ -40,6 +40,16 @@ export const COMMERCIAL_EVENT_TYPES = [
 ] as const;
 export type CommercialEventType = (typeof COMMERCIAL_EVENT_TYPES)[number];
 
+/** A commercial event the lead's quotes do not allow. Carries its HTTP status (withErrorHandler). */
+export class CommercialInputError extends Error {
+    readonly status: number;
+    constructor(message: string, status = 409) {
+        super(message);
+        this.name = "CommercialInputError";
+        this.status = status;
+    }
+}
+
 export type CommercialInput = {
     event_type: CommercialEventType;
     price_quoted?: number | null;
@@ -132,11 +142,22 @@ export async function createLeadCommercial(
                  WHERE dealer_lead_id = ${id}
                    AND event_type IN ('quote_issue', 'quote_revision')
                    AND withdrawn_at IS NULL
+                   -- A quote the CEO rejected is not a price anyone agreed to.
+                   AND approval_status IS DISTINCT FROM 'rejected'
                    ${body.event_type === "final_terms" ? sql`AND dealer_decision = 'approved'` : sql``}
                  ORDER BY version_no DESC
                  LIMIT 1
             `);
             const q = source[0];
+            // ID 61: final terms ARE the dealer-approved quote's terms. With no
+            // such quote there is no final price to record — the row would be
+            // saved priceless and become the lead's current commercial.
+            if (!q && body.event_type === "final_terms") {
+                throw new CommercialInputError(
+                    "Final terms need a quote the dealer has approved. Send the quote and record the dealer's " +
+                        "approval first, or save a Terms update instead.",
+                );
+            }
             price = {
                 price_quoted: q?.price_quoted != null ? Number(q.price_quoted) : null,
                 final_price: q?.final_price != null ? Number(q.final_price) : null,

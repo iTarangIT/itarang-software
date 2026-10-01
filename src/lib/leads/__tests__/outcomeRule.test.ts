@@ -124,10 +124,14 @@ describe("resolveOutcome — visits", () => {
         expect(resolveOutcome(visit(), lead({ status: "Transferred_to_ASM" })).statusTo).toBe("Under_Discussion");
     });
 
-    it("the ASM can ask for first contact only", () => {
+    // Tracker ID 80: nobody can ASK for a status on a visit — not even first
+    // contact. A visit whose outcome earns nothing moves nothing.
+    it("a requested status is not acted on; only the outcome moves the lead", () => {
         const quiet = visit({ outcome: "dealer_uninterested" });
-        expect(resolveOutcome({ ...quiet, requested: "Under_Discussion" } as TouchpointOutcome, lead()).statusTo).toBe("Under_Discussion");
-        expect(resolveOutcome({ ...quiet, requested: "Commercials_Explained" } as TouchpointOutcome, lead()).statusTo).toBeNull();
+        expect(resolveOutcome({ ...quiet, requested: "Under_Discussion" } as unknown as TouchpointOutcome, lead()).statusTo).toBeNull();
+        expect(resolveOutcome({ ...quiet, requested: "Commercials_Explained" } as unknown as TouchpointOutcome, lead()).statusTo).toBeNull();
+        expect(resolveOutcome(visit({ outcome: "dealer_not_present" }), lead()).statusTo).toBeNull();
+        expect(resolveOutcome(visit({ outcome: "productive" }), lead({ status: "Assigned_Not_Contacted" })).statusTo).toBe("Under_Discussion");
     });
 
     it("a visit that did not happen moves nothing", () => {
@@ -167,7 +171,7 @@ describe("a derived move always passes the S3 guard", () => {
             for (const status of [null, ...LEAD_STATUS]) {
                 for (const preTransferStatus of [null, "Under_Discussion", "Commercials_Finalised"]) {
                     const r = resolveOutcome(
-                        { kind: "visit", visited: true, outcome, requested: "Under_Discussion" },
+                        { kind: "visit", visited: true, outcome },
                         lead({ status, preTransferStatus }),
                     );
                     if (!r.statusTo) continue;

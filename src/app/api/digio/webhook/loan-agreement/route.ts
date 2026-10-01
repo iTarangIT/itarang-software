@@ -8,14 +8,16 @@
  * state machine applies it, so there is one code path for all providers.
  *
  * Public — Digio cannot carry a session cookie; matched by the opaque
- * agreement_ref (AGR_<ref>) then the eSign document id. Always returns a stable
- * 200-ish status so Digio doesn't retry forever.
+ * agreement_ref (AGR_<ref>) then the eSign document id. The caller is proven by
+ * Digio's X-Digio-Checksum (src/lib/security/webhookAuth.ts). A verified event
+ * always gets a stable 200-ish status so Digio doesn't retry forever.
  */
 import { NextRequest, NextResponse } from "next/server";
 
 import { DigioEsignAdapter } from "@/lib/nbfc/esign/adapters/digio-adapter";
 import { applyAgreementWebhookEvent } from "@/lib/nbfc/agreement-webhook";
 import { fetchSignedLoanAgreementPdfAndAuditTrail } from "@/lib/nbfc/fetchSignedAgreementPdf";
+import { guardDigioWebhook } from "@/lib/security/webhookAuth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -27,6 +29,10 @@ export async function POST(req: NextRequest) {
   } catch {
     return NextResponse.json({ ok: false, error: "Invalid body" }, { status: 400 });
   }
+
+  // ID 118: X-Digio-Checksum is required once DIGIO_WEBHOOK_SECRET is set.
+  const denied = guardDigioWebhook(req.headers, rawText, "/api/digio/webhook/loan-agreement");
+  if (denied) return denied;
 
   const adapter = new DigioEsignAdapter();
   const parsed = await adapter.parseWebhookStatus(rawText);

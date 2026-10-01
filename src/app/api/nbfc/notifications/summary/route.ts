@@ -6,7 +6,7 @@
  */
 import { NextResponse } from "next/server";
 
-import { getCurrentTenant } from "@/lib/nbfc/tenant";
+import { getCurrentTenant, requireNbfcAccess } from "@/lib/nbfc/tenant";
 import { getNbfcWorkQueueCounts } from "@/lib/nbfc/work-queue";
 
 export const runtime = "nodejs";
@@ -15,12 +15,16 @@ export const dynamic = "force-dynamic";
 export async function GET() {
   try {
     const tenant = await getCurrentTenant();
+    // ID 118: getCurrentTenant falls back to a default tenant when nobody is
+    // signed in, so on its own it answered an anonymous caller with a real
+    // tenant's work-queue counts. requireNbfcAccess is the login + membership
+    // check every other /api/nbfc route makes.
+    await requireNbfcAccess(tenant.id);
     const counts = await getNbfcWorkQueueCounts(tenant.id, Date.now());
     return NextResponse.json({ ok: true, ...counts });
   } catch (e) {
-    return NextResponse.json(
-      { ok: false, error: e instanceof Error ? e.message : String(e) },
-      { status: 500 },
-    );
+    const message = e instanceof Error ? e.message : String(e);
+    const status = message.startsWith("UNAUTHORIZED") ? 401 : message.startsWith("FORBIDDEN") ? 403 : 500;
+    return NextResponse.json({ ok: false, error: message }, { status });
   }
 }

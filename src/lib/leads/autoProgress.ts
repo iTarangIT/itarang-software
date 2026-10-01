@@ -148,11 +148,5 @@ export function autoProgressForVisit(input: {
     }
 }
 
-export function autoProgressForFollowUp(input: {
-    /** Did the rep actually speak to the dealer? A reminder alone moves nothing. */
-    spokeWithDealer: boolean;
-    currentStatus: string | null;
-}): AutoProgress {
-    if (!input.spokeWithDealer) return NONE;
-    return { statusTo: forward(input.currentStatus, "Under_Discussion"), interestTo: null };
-}
+// There is no rule for a follow-up: a reminder or a note moves nothing
+// (tracker ID 80). "Spoke to the dealer" is a call, logged as one.

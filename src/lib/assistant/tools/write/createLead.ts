@@ -1,6 +1,6 @@
 // create_lead — add a new dealer lead (the Inside Sales "New lead" form).
-// PROPOSES only. Where it lands is the screen's rule: an ISR's lead goes to the
-// unassigned claim pool, an ASM's is owned by them. A phone that already exists
+// PROPOSES only. Where it lands is the screen's rule (creationOwnership): a rep's
+// and an ASM's lead is owned by them (ID 83). A phone that already exists
 // is refused up front (the existing lead is named only if the user can see it)
 // and again inside the transaction. On Confirm, createLeadApplier runs
 // createInsideSalesLead() — the route's own writer — on the executor's
@@ -25,7 +25,9 @@ import { dealerLeads } from "@/lib/db/schema";
 import { AttachmentId, DOC_TYPE_LABEL, DOC_TYPES, PlannedFile, plannedFile, resolveAttachments } from "../attachments";
 import { fileDocuments } from "./attachDocument";
 import { GSTIN_RE } from "./updateLead";
-import { LEAD_ORIGIN_LABEL, LEAD_ORIGINS } from "@/lib/leads/leadSourceVocab";
+import { LEAD_ORIGIN_LABEL, LEAD_ORIGINS, campaignRequired } from "@/lib/leads/leadSourceVocab";
+import { recordReinquiry } from "@/lib/leads/leadSource";
+import { findCampaignByName, listCampaigns } from "@/lib/leads/acquisitionCampaigns";
 
 const INTEREST = ["hot", "warm", "cold"] as const;
 
@@ -40,6 +42,9 @@ export const CreateLeadPlan = z.object({
     business_type: z.enum(BUSINESS_TYPES).nullable(),
     /** ID 81 — Found via. Default keeps older pending plans parseable. */
     origin: z.enum(LEAD_ORIGINS).nullable().default(null),
+    /** ID 81 — acquisition campaign (required for Trade event / Digital ad). */
+    campaign_id: z.string().nullable().default(null),
+    campaign_name: z.string().nullable().default(null),
     /** E-311 — details read off a visiting card / GST certificate, set on the new lead in the same transaction. */
     extra: z
         .object({
@@ -75,6 +80,7 @@ export const createLead: ToolFactory = () =>
         description:
             "Propose creating a NEW dealer lead. Needs the dealer's name, 10-digit mobile number, city, business type and " +
             "origin (how the dealer was found: " + LEAD_ORIGINS.join(", ") + ") — ask for any the user did not say, never guess. " +
+            "A trade_event or digital_ad lead also needs campaign: the name of the event or ad campaign, as the user said it. " +
             "Shop name, state, interest level and language are optional — only what the user said. From a visiting card or " +
             "GST certificate (read_document) also area, pincode, email and GSTIN, and source_attachment_id + " +
             "source_doc_type to save the card on the new lead. Nothing is saved until Confirm.",
@@ -88,6 +94,7 @@ export const createLead: ToolFactory = () =>
             language: opt(40),
             business_type: z.enum(BUSINESS_TYPES).optional(),
             origin: z.enum(LEAD_ORIGINS).optional().describe("How the dealer was found — only what the user said"),
+            campaign: opt(200).describe("Acquisition campaign name (the trade event / ad) — only what the user said"),
             area: opt(120),
             pincode: opt(10),
             email: opt(120),
@@ -112,8 +119,16 @@ export const createLead: ToolFactory = () =>
                 source = plannedFile(found.rows[0]);
             }
 
+            // ID 81: a known dealer the rep tries to add again is a Re-inquiry
+            // on the lead we hold (findLeadIdByPhone is the shared check).
             const existingId = await findLeadIdByPhone(phone);
             if (existingId) {
+                await recordReinquiry({
+                    leadId: existingId,
+                    door: "whatsapp_assistant",
+                    actorId: ctx.user.id,
+                    note: input.dealer_name.trim(),
+                });
                 const visible = await findLeadInScope(ctx.user, existingId);
                 return {
                     kind: "declined",
@@ -134,6 +149,30 @@ export const createLead: ToolFactory = () =>
             if (!input.origin) {
                 return ask(`How did we find this dealer? (${LEAD_ORIGINS.map((o) => LEAD_ORIGIN_LABEL[o]).join(", ")})`);
             }
+            // ID 81: a Trade event / Digital ad lead needs its campaign. Only a
+            // campaign that already exists — the Assistant never makes one up
+            // from a typo.
+            let campaign: { id: string; name: string } | null = null;
+            if (input.campaign || campaignRequired(input.origin)) {
+                campaign = input.campaign ? await findCampaignByName(input.campaign) : null;
+                if (!campaign) {
+                    const open = (await listCampaigns({ origin: input.origin, activeOnly: true, manualOnly: true }))
+                        .slice(0, 8)
+                        .map((c) => c.name);
+                    const which = LEAD_ORIGIN_LABEL[input.origin].toLowerCase();
+                    if (open.length === 0) {
+                        return ask(
+                            `A ${which} lead needs its campaign, and none is set up yet. ` +
+                                "Add it on the Acquisition campaigns page in the CRM, then tell me its name.",
+                        );
+                    }
+                    return ask(
+                        (input.campaign
+                            ? `I don't have a campaign called "${input.campaign}". `
+                            : `Which campaign is this ${which} lead from? `) + `Open ones: ${open.join(", ")}.`,
+                    );
+                }
+            }
             const plan: CreateLeadPlan = {
                 dealer_name: input.dealer_name.trim(),
                 phone,
@@ -144,6 +183,8 @@ export const createLead: ToolFactory = () =>
                 language: input.language || null,
                 business_type: input.business_type ?? null,
                 origin: input.origin ?? null,
+                campaign_id: campaign?.id ?? null,
+                campaign_name: campaign?.name ?? null,
                 extra:
                     input.area || pincode || email || gstin
                         ? { area: input.area || null, pincode, contact_email: email, gstin }
@@ -163,6 +204,7 @@ export const createLead: ToolFactory = () =>
             if (plan.language) lines.push({ label: "Language", value: plan.language });
             if (plan.business_type) lines.push({ label: "Business", value: plan.business_type.replace(/_/g, " ") });
             if (plan.origin) lines.push({ label: "Found via", value: LEAD_ORIGIN_LABEL[plan.origin] });
+            if (plan.campaign_name) lines.push({ label: "Campaign", value: plan.campaign_name });
             if (plan.extra?.area || plan.extra?.pincode) {
                 lines.push({ label: "Area", value: [plan.extra.area, plan.extra.pincode].filter(Boolean).join(" · ") });
             }
@@ -212,6 +254,7 @@ export const createLeadApplier = defineApplier<CreateLeadPlan>({
                     language: p.language,
                     businessType: p.business_type,
                     origin: p.origin,
+                    campaignId: p.campaign_id,
                     door: "whatsapp_assistant",
                 },
                 { tx },

@@ -5,6 +5,7 @@
 
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
+import { engagedState } from "@/lib/reports/metricDefinitions";
 import type {
     EscalationQueueRow,
     EscalationThreadBundle,
@@ -140,7 +141,7 @@ export async function fetchEscalationThread(
             t.performed_at,
             t.call_status,
             t.call_duration_sec,
-            t.is_engaged,
+            ${engagedState()} AS is_engaged,
             t.remarks,
             t.attachments,
             t.next_action,

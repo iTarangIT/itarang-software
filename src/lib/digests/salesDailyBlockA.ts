@@ -18,7 +18,7 @@
 
 import { sql } from "drizzle-orm";
 import type { SalesDashboard } from "@/lib/admin/salesDashboardTypes";
-import { engagedCall, wasHotAt } from "@/lib/reports/metricDefinitions";
+import { engagedCallCount, wasHotAt } from "@/lib/reports/metricDefinitions";
 import { monthEnd, workingDaysBetween } from "@/lib/targets/rules";
 import { scrapKgSourced } from "@/lib/buyback/scrapKgSourced";
 import { istRangeNaive, istRangeTz } from "./window";
@@ -39,7 +39,20 @@ export type BlockARow = {
     values: RowValues;
     /** Company MTD target, or null when none is set. */
     target: number | null;
+    /**
+     * The MTD figure measured the way the TARGET is, when that differs from the
+     * figure shown. "Dealers visited" shows distinct dealers company-wide, but
+     * its target is the sum of personal targets, each counting that person's
+     * own dealers — a dealer two people visited is one dealer here and one
+     * toward each of their targets. % of target uses this; the cell does not.
+     */
+    targetBasisMtd?: number | null;
 };
+
+/** % of target for a row, on the target's own basis. */
+export function rowPctOfTarget(r: BlockARow): number | null {
+    return pctOfTarget(r.targetBasisMtd ?? r.values.mtd, r.target);
+}
 
 // ─────────────────────────────── pure formatting ────────────────────────────
 
@@ -92,7 +105,7 @@ export function blockATableRows(rows: BlockARow[]): Array<Array<string | number>
             out.push([r.label, NOT_MEASURED, "", "", "", "", "", ""]);
             continue;
         }
-        const p = pctOfTarget(r.values.mtd, r.target);
+        const p = rowPctOfTarget(r);
         const d = deltaPct(r.values.mtd, r.values.lm);
         out.push([
             r.label,
@@ -120,7 +133,7 @@ export function blockAHeadline(rows: BlockARow[]): string {
         `${dealers(y("Dealers called") ?? 0)} called`,
     ];
     const withTarget = rows
-        .map((r) => ({ r, p: pctOfTarget(r.values.mtd, r.target) }))
+        .map((r) => ({ r, p: rowPctOfTarget(r) }))
         .filter((x) => x.p != null) as Array<{ r: BlockARow; p: number }>;
     const behind = withTarget.filter((x) => x.p < RAG_AMBER_MIN).map((x) => `${x.r.label.toLowerCase()} at ${x.p}%`);
     const tail = withTarget.length
@@ -138,6 +151,9 @@ type Exec = { execute: (q: ReturnType<typeof sql>) => Promise<unknown> };
 async function count(db: Exec, q: ReturnType<typeof sql>): Promise<number | null> {
     try {
         const r = (await db.execute(q)) as Array<{ n: string | number | null }>;
+        // A query that answers NULL is saying "not measurable in this period"
+        // (engagedCallCount) — kept as null, shown as "Not measured yet".
+        if (r[0] && r[0].n === null) return null;
         return Number(r[0]?.n ?? 0);
     } catch (e) {
         console.warn("[salesDailyBlockA] metric not measured:", e instanceof Error ? e.message : e);
@@ -279,7 +295,10 @@ export async function buildBlockA(
                                                WHERE e.dealer_lead_id = t.dealer_lead_id AND e.to_owner_id IS NOT NULL
                                                  AND e.performed_at < t.performed_at)`,
             ),
-            perPeriod(db, periods, (p) => sql`SELECT COUNT(*) AS n FROM lead_touchpoints t WHERE ${engagedCall()} AND ${inRange(sql`t.performed_at`, p)}`),
+            // ID 59: NULL — "Not measured yet" — for a period in which no call
+            // carries a measured duration, never a 0 that reads as "no real
+            // conversations".
+            perPeriod(db, periods, (p) => sql`SELECT ${engagedCallCount()} AS n FROM lead_touchpoints t WHERE ${inRange(sql`t.performed_at`, p)}`),
             perPeriod(
                 db,
                 periods,
@@ -319,6 +338,12 @@ export async function buildBlockA(
 
     const tgt = (metric: string) => (t.map.has(metric) ? Math.round(t.map.get(metric)!) : null);
 
+    // "Dealers visited" against its target: each person's distinct dealers,
+    // summed — what the personal targets (targets/service.ts) add up from.
+    const visitedCompany = dash.mtd.totals.unique_visits;
+    const visitedPerPerson = (dash.mtd.per_spoc ?? []).reduce((sum, b) => sum + b.totals.unique_visits, 0);
+    const visitedDiffers = (dash.mtd.per_spoc ?? []).length > 0 && visitedPerPerson !== visitedCompany;
+
     const rows: BlockARow[] = [
         { group: "INTAKE", label: "Leads in", kind: "count", values: leadsIn, target: null },
         { group: "INTAKE", label: "Became sales-ready", kind: "count", values: hasSalesReady ? salesReady : NONE, target: null },
@@ -327,7 +352,14 @@ export async function buildBlockA(
         { group: "EFFORT", label: "Dealers called", kind: "count", values: fromDash((d) => d.totals.dealers_called), target: null },
         { group: "EFFORT", label: "Engaged calls", kind: "count", values: engaged, target: null },
         { group: "EFFORT", label: "Hot handed to field", kind: "count", values: hotToField, target: tgt("hot_to_ground") },
-        { group: "EFFORT", label: "Dealers visited", kind: "count", values: fromDash((d) => d.totals.unique_visits), target: tgt("dealer_visits") },
+        {
+            group: "EFFORT",
+            label: "Dealers visited",
+            kind: "count",
+            values: fromDash((d) => d.totals.unique_visits),
+            target: tgt("dealer_visits"),
+            targetBasisMtd: visitedDiffers ? visitedPerPerson : null,
+        },
         { group: "EFFORT", label: "New dealers visited", kind: "count", values: fromDash((d) => d.totals.new_visits), target: tgt("new_dealer_visits") },
         { group: "COMMERCIALS", label: "Quotes created", kind: "count", values: fromDash((d) => d.outcome.quotes_issued), target: null },
         { group: "COMMERCIALS", label: "Quotes delivered", kind: "count", values: delivered, target: null },
@@ -347,9 +379,13 @@ export async function buildBlockA(
         { group: "DISCIPLINE", label: "Time limits missed", kind: "count", values: NONE, target: null },
     ];
 
+    const visitsNote =
+        visitedDiffers && t.map.has("dealer_visits")
+            ? ` Dealers visited: % of target counts each person's own dealers (${visitedPerPerson} in total), as their targets do; the figure shown counts a dealer once however many people visited.`
+            : "";
     const targetsNote =
         t.total > 0
-            ? `Month to date is ${t.elapsed} of ${t.total} working days, so targets are ${t.elapsed}/${t.total} of the monthly target. Targets set for ${t.withTarget} of ${t.reps} people.`
+            ? `Month to date is ${t.elapsed} of ${t.total} working days, so targets are ${t.elapsed}/${t.total} of the monthly target. Targets set for ${t.withTarget} of ${t.reps} people.${visitsNote}`
             : "No targets are set for this month.";
     return { rows, targetsNote, userTargets: t.perUser };
 }

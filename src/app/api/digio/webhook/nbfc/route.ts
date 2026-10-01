@@ -23,11 +23,9 @@
  *   5. Always persist the raw incoming Digio payload to
  *      `last_webhook_payload.last_event` for replay/debug.
  *
- * Auth: public — Digio cannot carry a Supabase cookie. Production should
- * verify the Digio webhook signature; the dealer-side handler at
- * `/api/webhooks/digio` currently relies on payload shape + correlation,
- * and we mirror that here for parity. Signature verification is tracked
- * separately by the shared verifier slot in the dealer flow.
+ * Auth: public — Digio cannot carry a Supabase cookie. The caller is proven by
+ * Digio's X-Digio-Checksum header, the same check as `/api/webhooks/digio`
+ * (src/lib/security/webhookAuth.ts): required once DIGIO_WEBHOOK_SECRET is set.
  */
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
@@ -35,6 +33,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { nbfc, nbfcLspAgreements } from "@/lib/db/schema";
 import { fetchSignedLspPdfAndAuditTrail } from "@/lib/queue/jobs/fetchSignedLspPdfJob";
+import { guardDigioWebhook } from "@/lib/security/webhookAuth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -86,12 +85,17 @@ function isAtOrAhead(current: string | null | undefined, incoming: string): bool
 export async function POST(req: NextRequest) {
   // Parse JSON body. Malformed JSON → 400.
   let bodyJson: unknown = {};
+  let text = "";
   try {
-    const text = await req.text();
+    text = await req.text();
     bodyJson = text ? JSON.parse(text) : {};
   } catch {
     return NextResponse.json({ ok: false, error: "Invalid JSON body" }, { status: 400 });
   }
+
+  // ID 118: X-Digio-Checksum is required once DIGIO_WEBHOOK_SECRET is set.
+  const denied = guardDigioWebhook(req.headers, text, "/api/digio/webhook/nbfc");
+  if (denied) return denied;
 
   const parsed = WebhookBody.safeParse(bodyJson);
   if (!parsed.success) {

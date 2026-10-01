@@ -16,6 +16,10 @@ const transaction = vi.fn(async (fn: (t: typeof tx) => Promise<unknown>) => fn(t
 vi.mock("@/lib/db", () => ({ db: { execute, transaction } }));
 const writeTouchpoint = vi.fn(async () => ({ touchpointId: "tp", historyId: "h" }));
 vi.mock("@/lib/touchpoints/write", () => ({ writeTouchpoint }));
+// ID 82: assignLeadOwner marks the lead sales-ready after the assignment; that
+// write has its own tests and must not count against the transaction asserts.
+const markSalesReady = vi.fn(async () => true);
+vi.mock("@/lib/leads/salesReady", () => ({ markSalesReady }));
 
 const { assignLeadOwner, statusBeforeTransfer } = await import("../assignOwner");
 

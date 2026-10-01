@@ -2,6 +2,7 @@ import { db } from "@/lib/db";
 import { products, productCategories } from "@/lib/db/schema";
 import { eq, and, ilike, or, sql } from "drizzle-orm";
 import { NextRequest, NextResponse } from "next/server";
+import { guardBolnaCall } from "@/lib/security/webhookAuth";
 
 /**
  * Bolna Tool Endpoint — Price Lookup
@@ -13,6 +14,11 @@ import { NextRequest, NextResponse } from "next/server";
  *   3. List all products in a category / asset type
  */
 export async function POST(req: NextRequest) {
+  // ID 118: the price list is not public. Once BOLNA_TOOL_SECRET is set the
+  // agent's tool call must send it as a bearer (the tool's api_token in Bolna).
+  const denied = guardBolnaCall(req.headers, "/api/bolna/tools/price-lookup", "BOLNA_TOOL_SECRET");
+  if (denied) return denied;
+
   try {
     const body = await req.json();
     console.log("[BOLNA TOOL] price-lookup hit:", JSON.stringify(body));

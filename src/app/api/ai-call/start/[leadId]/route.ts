@@ -1,11 +1,15 @@
 import { startCallSession } from '@/lib/ai-call-service';
 import { withErrorHandler, successResponse, errorResponse } from '@/lib/api-utils';
 import { NextResponse } from 'next/server';
+import { LEADS_OVERSIGHT_ROLES } from "@/lib/leads/access";
+import { requireRole } from "@/lib/auth-utils";
 
 export const POST = withErrorHandler(async (
     req: Request,
     { params }: { params: { leadId: string } }
 ) => {
+    // ID 118: signed in, with a role that reaches this screen.
+    await requireRole([...LEADS_OVERSIGHT_ROLES]);
     try {
         const { leadId } = await params;
 

@@ -66,6 +66,7 @@ import {
   Inbox,
   SlidersHorizontal,
   PhoneOff,
+  Image as ImageIcon,
   Lightbulb,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -586,6 +587,20 @@ const roleNavigation: Record<string, any[]> = {
           href: "/admin/targets",
         },
         {
+          // ID 82 — sales-ready leads nobody owns, longest wait first.
+          id: "ceo-ready-to-assign",
+          label: "Ready to Assign",
+          icon: UserPlus,
+          href: "/admin/ready-to-assign",
+        },
+        {
+          // ID 81 — the event / ad / list a lead came in on.
+          id: "ceo-acquisition-campaigns",
+          label: "Acquisition Campaigns",
+          icon: Radar,
+          href: "/admin/acquisition-campaigns",
+        },
+        {
           // R-15 — idle leads, oldest first, reassign from the row.
           id: "ceo-needs-attention",
           label: "Needs Attention",
@@ -599,6 +614,13 @@ const roleNavigation: Record<string, any[]> = {
           label: "Number Repair",
           icon: PhoneOff,
           href: "/admin/number-repair",
+        },
+        {
+          // ID 79 — WhatsApp chat screenshots reps logged; reused images flagged.
+          id: "ceo-whatsapp-screenshots",
+          label: "WhatsApp Screenshots",
+          icon: ImageIcon,
+          href: "/admin/whatsapp-screenshots",
         },
         {
           // R-18 — converted dealers' re-order health.
@@ -819,6 +841,13 @@ const roleNavigation: Record<string, any[]> = {
           href: "/admin/upload",
         },
         {
+          // ID 81 — the event / ad / list a lead came in on.
+          id: "sh-acquisition-campaigns",
+          label: "Acquisition Campaigns",
+          icon: Radar,
+          href: "/admin/acquisition-campaigns",
+        },
+        {
           id: "sh-reports",
           label: "Reports",
           icon: BarChart3,
@@ -838,6 +867,13 @@ const roleNavigation: Record<string, any[]> = {
           href: "/admin/targets",
         },
         {
+          // ID 82 — sales-ready leads nobody owns, longest wait first.
+          id: "sh-ready-to-assign",
+          label: "Ready to Assign",
+          icon: UserPlus,
+          href: "/admin/ready-to-assign",
+        },
+        {
           // R-15 — idle leads, oldest first, reassign from the row.
           id: "sh-needs-attention",
           label: "Needs Attention",
@@ -851,6 +887,13 @@ const roleNavigation: Record<string, any[]> = {
           label: "Number Repair",
           icon: PhoneOff,
           href: "/admin/number-repair",
+        },
+        {
+          // ID 79 — WhatsApp chat screenshots reps logged; reused images flagged.
+          id: "sh-whatsapp-screenshots",
+          label: "WhatsApp Screenshots",
+          icon: ImageIcon,
+          href: "/admin/whatsapp-screenshots",
         },
         {
           // R-18 — converted dealers' re-order health.
@@ -1177,6 +1220,13 @@ const roleNavigation: Record<string, any[]> = {
           href: "/admin/upload",
         },
         {
+          // ID 81 — the event / ad / list a lead came in on.
+          id: "partner-acquisition-campaigns",
+          label: "Acquisition Campaigns",
+          icon: Radar,
+          href: "/admin/acquisition-campaigns",
+        },
+        {
           id: "partner-reports",
           label: "Reports",
           icon: BarChart3,
@@ -1187,6 +1237,13 @@ const roleNavigation: Record<string, any[]> = {
           label: "Sales Dashboard",
           icon: TrendingUp,
           href: "/admin/reports/sales-dashboard",
+        },
+        {
+          // ID 82 — sales-ready leads nobody owns, longest wait first.
+          id: "partner-ready-to-assign",
+          label: "Ready to Assign",
+          icon: UserPlus,
+          href: "/admin/ready-to-assign",
         },
         {
           // R-15 — idle leads, oldest first, reassign from the row.
@@ -1224,6 +1281,20 @@ const roleNavigation: Record<string, any[]> = {
       section: "SALES",
       items: [
         { id: "leads", label: "My Leads", icon: Users, href: "/leads" },
+        {
+          // ID 82 — sales-ready leads nobody owns, longest wait first.
+          id: "sm-ready-to-assign",
+          label: "Ready to Assign",
+          icon: UserPlus,
+          href: "/admin/ready-to-assign",
+        },
+        {
+          // ID 81 — the event / ad / list a lead came in on.
+          id: "sm-acquisition-campaigns",
+          label: "Acquisition Campaigns",
+          icon: Radar,
+          href: "/admin/acquisition-campaigns",
+        },
         { id: "deals", label: "My Deals", icon: FileCheck, href: "/deals" },
         {
           id: "ai-calls",
@@ -1238,6 +1309,13 @@ const roleNavigation: Record<string, any[]> = {
           label: "Number Repair",
           icon: PhoneOff,
           href: "/admin/number-repair",
+        },
+        {
+          // ID 79 — WhatsApp chat screenshots reps logged; reused images flagged.
+          id: "sm-whatsapp-screenshots",
+          label: "WhatsApp Screenshots",
+          icon: ImageIcon,
+          href: "/admin/whatsapp-screenshots",
         },
       ],
     },
@@ -1355,6 +1433,13 @@ const roleNavigation: Record<string, any[]> = {
           href: "/admin/upload",
         },
         {
+          // ID 81 — the event / ad / list a lead came in on.
+          id: "admin-acquisition-campaigns",
+          label: "Acquisition Campaigns",
+          icon: Radar,
+          href: "/admin/acquisition-campaigns",
+        },
+        {
           id: "admin-reports",
           label: "Reports",
           icon: BarChart3,
@@ -1374,6 +1459,13 @@ const roleNavigation: Record<string, any[]> = {
           href: "/admin/targets",
         },
         {
+          // ID 82 — sales-ready leads nobody owns, longest wait first.
+          id: "admin-ready-to-assign",
+          label: "Ready to Assign",
+          icon: UserPlus,
+          href: "/admin/ready-to-assign",
+        },
+        {
           // R-15 — idle leads, oldest first, reassign from the row.
           id: "admin-needs-attention",
           label: "Needs Attention",
@@ -1387,6 +1479,13 @@ const roleNavigation: Record<string, any[]> = {
           label: "Number Repair",
           icon: PhoneOff,
           href: "/admin/number-repair",
+        },
+        {
+          // ID 79 — WhatsApp chat screenshots reps logged; reused images flagged.
+          id: "admin-whatsapp-screenshots",
+          label: "WhatsApp Screenshots",
+          icon: ImageIcon,
+          href: "/admin/whatsapp-screenshots",
         },
         {
           // R-18 — converted dealers' re-order health.
@@ -1645,6 +1744,20 @@ const roleNavigation: Record<string, any[]> = {
           href: "/admin/reports/sales-dashboard",
         },
         {
+          // ID 82 — sales-ready leads nobody owns, longest wait first.
+          id: "bh-ready-to-assign",
+          label: "Ready to Assign",
+          icon: UserPlus,
+          href: "/admin/ready-to-assign",
+        },
+        {
+          // ID 81 — the event / ad / list a lead came in on.
+          id: "bh-acquisition-campaigns",
+          label: "Acquisition Campaigns",
+          icon: Radar,
+          href: "/admin/acquisition-campaigns",
+        },
+        {
           // ID 12 — the Funnel tab (onboarded / KYC / disbursed / rejected).
           id: "bh-reports",
           label: "Reports",
@@ -1672,6 +1785,13 @@ const roleNavigation: Record<string, any[]> = {
           label: "Number Repair",
           icon: PhoneOff,
           href: "/admin/number-repair",
+        },
+        {
+          // ID 79 — WhatsApp chat screenshots reps logged; reused images flagged.
+          id: "bh-whatsapp-screenshots",
+          label: "WhatsApp Screenshots",
+          icon: ImageIcon,
+          href: "/admin/whatsapp-screenshots",
         },
         {
           id: "kyc-review",

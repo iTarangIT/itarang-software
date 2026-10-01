@@ -23,6 +23,17 @@ import {
     extractStructuredAadhaar,
 } from "@/lib/kyc/aadhaarNormalize";
 
+// The error text can carry the `status` query parameter or a provider message,
+// so it is escaped before it goes into the page (tracker ID 118).
+function escapeHtml(text: string): string {
+    return text
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+}
+
 function renderResultHtml(opts: {
     ok: boolean;
     error?: string;
@@ -46,7 +57,7 @@ function renderResultHtml(opts: {
   <div class="card">
     <div class="icon ${opts.ok ? "ok" : "err"}">${opts.ok ? "✓" : "!"}</div>
     <h1>${opts.ok ? "Aadhaar verified" : "Verification failed"}</h1>
-    <p>${opts.ok ? "You can close this window — the form will update shortly." : opts.error ?? "Please try again."}</p>
+    <p>${opts.ok ? "You can close this window — the form will update shortly." : escapeHtml(opts.error ?? "Please try again.")}</p>
   </div>
 <script>
 setTimeout(function () { try { window.close(); } catch (e) {} }, 1000);

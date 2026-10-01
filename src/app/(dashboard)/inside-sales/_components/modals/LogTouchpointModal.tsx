@@ -180,6 +180,7 @@ export function LogTouchpointModal({
                 fd.append("remarks", remarks.trim());
                 fd.append("dealer_replied", waReplied ? "true" : "false");
                 if (waScreenshot) fd.append("screenshot", waScreenshot);
+                if (followUpAt) fd.append("follow_up_at", new Date(followUpAt).toISOString());
                 const wr = await fetch(`/api/inside-sales/lead/${encodeURIComponent(leadId)}/whatsapp-contact`, {
                     method: "POST",
                     body: fd,
@@ -363,15 +364,20 @@ export function LogTouchpointModal({
                             />
                         </div>
 
-                        <label className="flex items-center gap-2 text-sm text-gray-700">
-                            <input
-                                type="checkbox"
-                                checked={isEngaged}
-                                onChange={(e) => setIsEngaged(e.target.checked)}
-                            />
-                            Mark as engaged touchpoint
-                            <span className="text-[11px] text-gray-500">(qualifies a lead to advance from Assigned_Not_Contacted → Under_Discussion)</span>
-                        </label>
+                        {/* ID 59: a call is engaged by rule (connected, at least the
+                            threshold of measured duration), never by a tick — the
+                            server ignores one, so it is not offered. */}
+                        {type !== "inside_sales_call" && type !== "whatsapp" && (
+                            <label className="flex items-center gap-2 text-sm text-gray-700">
+                                <input
+                                    type="checkbox"
+                                    checked={isEngaged}
+                                    onChange={(e) => setIsEngaged(e.target.checked)}
+                                />
+                                Mark as engaged touchpoint
+                                <span className="text-[11px] text-gray-500">(the dealer responded in this interaction)</span>
+                            </label>
+                        )}
 
                         {type === "inside_sales_call" && changeStatus && toStatus && (
                             <p className="rounded-md bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
