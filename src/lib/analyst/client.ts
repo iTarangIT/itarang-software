@@ -130,8 +130,14 @@ async function serviceToken(cfg: Config, force = false): Promise<string> {
 // ── Calls ─────────────────────────────────────────────────────────────────────
 
 type Options = {
-  method?: "GET" | "POST";
+  method?: "GET" | "POST" | "PUT" | "DELETE";
+  /** Sent as JSON. */
   body?: unknown;
+  /**
+   * Sent as-is instead of `body` — a browser upload streamed through with its own multipart
+   * content-type (the boundary lives in that header, so it must travel with the bytes).
+   */
+  raw?: { stream: ReadableStream<Uint8Array>; contentType: string; length?: string | null };
   signal?: AbortSignal;
   /** Streaming calls pass their own signal and no timeout; JSON calls get the default. */
   timeoutMs?: number | null;
@@ -149,9 +155,18 @@ async function send(cfg: Config, path: string, options: Options, bearer: string)
       headers: {
         accept: options.accept ?? "application/json",
         authorization: `Bearer ${bearer}`,
-        ...(options.body !== undefined ? { "content-type": "application/json" } : {}),
+        ...(options.raw
+          ? {
+              "content-type": options.raw.contentType,
+              ...(options.raw.length ? { "content-length": options.raw.length } : {}),
+            }
+          : options.body !== undefined
+            ? { "content-type": "application/json" }
+            : {}),
       },
-      body: options.body === undefined ? undefined : JSON.stringify(options.body),
+      body: options.raw ? options.raw.stream : options.body === undefined ? undefined : JSON.stringify(options.body),
+      // Node's fetch refuses a streamed request body without this.
+      ...(options.raw ? { duplex: "half" } : {}),
       signal: signals.length ? AbortSignal.any(signals) : undefined,
       // Per-request reads; caching one would serve a stale thread or connection list.
       cache: "no-store",
@@ -173,7 +188,9 @@ async function send(cfg: Config, path: string, options: Options, bearer: string)
 export async function agentFetch(path: string, options: Options = {}): Promise<Response> {
   const cfg = config();
   let response = await send(cfg, path, options, await serviceToken(cfg));
-  if (response.status === 401) {
+  // A streamed upload has been consumed by the first attempt and cannot be sent twice; the
+  // token is refreshed ahead of expiry, so a 401 there is a real login problem anyway.
+  if (response.status === 401 && !options.raw) {
     response = await send(cfg, path, options, await serviceToken(cfg, true));
   }
   return response;
