@@ -8,8 +8,12 @@ import { dialerCampaigns, users } from "@/lib/db/schema";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
 import { and, desc, eq, sql, type SQL } from "drizzle-orm";
 import { DURATION_SECONDS_SQL } from "@/lib/ai-dialer/call-duration/derive";
+import { LEADS_PAGE_ROLES } from "@/lib/leads/access";
+import { requireRole } from "@/lib/auth-utils";
 
 export const GET = withErrorHandler(async (req: Request) => {
+  // ID 118: signed in, with a role that reaches this screen.
+  await requireRole([...LEADS_PAGE_ROLES]);
   const { searchParams } = new URL(req.url);
   const page = Math.max(1, Number(searchParams.get("page") || 1));
   // Default 10 keeps the existing CampaignsTable pagination unchanged.

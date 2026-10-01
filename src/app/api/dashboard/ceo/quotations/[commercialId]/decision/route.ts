@@ -73,9 +73,11 @@ export async function POST(
         price_quoted: string | null;
         final_price: string | null;
         quote_document_url: string | null;
+        withdrawn_at: string | null;
       }>(sql`
         SELECT commercial_id, dealer_lead_id, version_no, approval_status,
-               price_quoted, final_price, quote_document_url
+               price_quoted, final_price, quote_document_url,
+               withdrawn_at::text AS withdrawn_at
           FROM dealer_lead_commercials
          WHERE commercial_id = ${commercialId}
          FOR UPDATE
@@ -87,6 +89,15 @@ export async function POST(
       // here would put every quotation decision behind the same row as every
       // ownership change on that lead, for two display fields.
       if (!row) return { status: 404 as const, message: "Quotation not found." };
+      // ID 78: the sales team withdrew it while it waited here. Approving it
+      // now would release — and draft a document for — a quote nobody wants
+      // sent; rejecting it would only add noise. It is closed either way.
+      if (row.withdrawn_at) {
+        return {
+          status: 409 as const,
+          message: "This quotation was withdrawn by the sales team and can no longer be decided.",
+        };
+      }
       if (row.approval_status !== "pending") {
         // Already decided — by another CEO, or a double-click.
         return {

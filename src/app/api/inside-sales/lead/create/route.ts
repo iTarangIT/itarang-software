@@ -1,14 +1,14 @@
 // POST /api/inside-sales/lead/create
 // Lightweight manual lead entry for the Inside Sales workspace. The write lives
 // in lib/inside-sales/createLead.ts, shared with the WhatsApp Assistant:
-// Inside Sales / admin → New_Unassigned in the claim pool; ASM / partner →
-// owned by the creator.
+// ASM / partner / inside-sales rep → owned by the creator (ID 83, decision of
+// 01 Oct 2026); admin → New_Unassigned in the claim pool.
 
 import { z } from "zod";
 import { requireRole } from "@/lib/auth-utils";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
 import { BusinessTypeSchema } from "@/lib/leads/businessType";
-import { createInsideSalesLead, DuplicatePhoneError } from "@/lib/inside-sales/createLead";
+import { createInsideSalesLead, creationOwnership, DuplicatePhoneError } from "@/lib/inside-sales/createLead";
 import { LEAD_ORIGINS } from "@/lib/leads/leadSource";
 
 const MUTATE_ROLES = ["inside_sales_rep", "asm", "admin", "partner"];
@@ -67,6 +67,8 @@ export const POST = withErrorHandler(async (req: Request) => {
 
     return successResponse({
         id: created.id,
+        // Whether the creator kept it — the modal says where to find the lead.
+        owned_by_you: creationOwnership(user.role).selfAssigns,
         ...(created.businessTypeSaved !== undefined ? { business_type_saved: created.businessTypeSaved } : {}),
     });
 });

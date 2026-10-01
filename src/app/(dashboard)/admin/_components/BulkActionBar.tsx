@@ -47,6 +47,9 @@ export function BulkActionBar({
     const [targetUserId, setTargetUserId] = useState("");
     const [lostReason, setLostReason] = useState<string>(LOST_REASON[0]);
     const [reason, setReason] = useState("");
+    // ID 57 — the two answers the single-lead Mark Lost asks for.
+    const [competitorName, setCompetitorName] = useState("");
+    const [confirmedHighImpact, setConfirmedHighImpact] = useState(false);
     const [busy, setBusy] = useState(false);
     // Which download is in flight, so the spinner lands on the button that was
     // actually clicked — `busy` alone is shared with the modal and would spin
@@ -128,6 +131,14 @@ export function BulkActionBar({
             toast.error("Enter a reason (min 5 characters).");
             return;
         }
+        if (mode === "mark_lost" && lostReason === "lost_to_competition" && !competitorName.trim()) {
+            toast.error("Name the competitor.");
+            return;
+        }
+        if (mode === "mark_lost" && highImpact && !confirmedHighImpact) {
+            toast.error("Tick the confirmation for this high-impact reason.");
+            return;
+        }
         setBusy(true);
         try {
             const res = await fetch("/api/admin/leads/bulk", {
@@ -139,6 +150,12 @@ export function BulkActionBar({
                     target_user_id:
                         mode === "reassign" ? targetUserId : undefined,
                     lost_reason: mode === "mark_lost" ? lostReason : undefined,
+                    competitor_name:
+                        mode === "mark_lost" && lostReason === "lost_to_competition"
+                            ? competitorName.trim()
+                            : undefined,
+                    confirmed_high_impact:
+                        mode === "mark_lost" && highImpact ? confirmedHighImpact : undefined,
                     reason: reason.trim(),
                 }),
             });
@@ -154,6 +171,8 @@ export function BulkActionBar({
             setMode(null);
             setReason("");
             setTargetUserId("");
+            setCompetitorName("");
+            setConfirmedHighImpact(false);
             onActionDone();
         } catch (e) {
             toast.error((e as Error).message);
@@ -328,11 +347,29 @@ export function BulkActionBar({
                                 ))}
                             </select>
                             {highImpact && (
-                                <p className="mt-1.5 text-[11px] text-danger">
-                                    High-impact reason — applies to every
-                                    selected lead. Already-terminal leads are
-                                    skipped.
-                                </p>
+                                <label className="mt-1.5 flex items-start gap-2 text-[11px] text-danger">
+                                    <input
+                                        type="checkbox"
+                                        className="mt-0.5"
+                                        checked={confirmedHighImpact}
+                                        onChange={(e) => setConfirmedHighImpact(e.target.checked)}
+                                    />
+                                    <span>
+                                        High-impact reason — applies to every
+                                        selected lead. Already-terminal leads are
+                                        skipped. I confirm.
+                                    </span>
+                                </label>
+                            )}
+                            {lostReason === "lost_to_competition" && (
+                                <input
+                                    type="text"
+                                    value={competitorName}
+                                    onChange={(e) => setCompetitorName(e.target.value)}
+                                    maxLength={200}
+                                    placeholder="Competitor name"
+                                    className="mt-2 w-full h-9 rounded-md border border-border px-2 text-sm"
+                                />
                             )}
                         </div>
                     )}

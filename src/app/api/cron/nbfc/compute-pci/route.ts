@@ -20,6 +20,7 @@ import {
   resolveAdminActor,
   ADMIN_ROLES,
 } from "@/lib/nbfc/admin/auth";
+import { fromVercelCron } from "@/lib/security/cronAuth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -37,7 +38,7 @@ async function isAuthorised(req: NextRequest): Promise<{
   error?: string;
 }> {
   // Vercel cron — automatic header.
-  if (req.headers.get("x-vercel-cron")) return { ok: true };
+  if (fromVercelCron(req)) return { ok: true };
 
   // Manual: Bearer CRON_SECRET.
   const auth = req.headers.get("authorization") ?? "";

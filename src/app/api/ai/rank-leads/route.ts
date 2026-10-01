@@ -5,6 +5,8 @@ import { withErrorHandler, successResponse } from '@/lib/api-utils';
 import { sql, desc, and, or, isNull, lte } from 'drizzle-orm';
 
 export const POST = withErrorHandler(async (req: Request) => {
+    // ID 118: signed in, with a role that reaches this screen.
+    await requireRole([...LEADS_OVERSIGHT_ROLES]);
     // Logic:
     // Skip do_not_call = true
     // Skip next_call_after > now
@@ -55,3 +57,5 @@ export const POST = withErrorHandler(async (req: Request) => {
 
 // Helper for 'eq' which might not be imported from drizzle-orm but is standard
 import { eq } from 'drizzle-orm';
+import { LEADS_OVERSIGHT_ROLES } from "@/lib/leads/access";
+import { requireRole } from "@/lib/auth-utils";

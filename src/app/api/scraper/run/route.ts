@@ -8,6 +8,7 @@ import {
   errorResponse,
 } from "@/lib/api-utils";
 import { requireRole } from "@/lib/auth-utils";
+import { LEADS_PAGE_ROLES } from "@/lib/leads/access";
 import { startChunkedRun } from "@/lib/scraper/chunkedPipeline";
 import { reapStuckRuns } from "@/lib/scraper/storage/runStore";
 import { assertQStashConfigured } from "@/lib/queue/scheduler";
@@ -77,6 +78,8 @@ export const POST = withErrorHandler(async (req: Request) => {
 });
 
 export const GET = withErrorHandler(async (req: Request) => {
+  // ID 118: signed in, with a role that reaches this screen.
+  await requireRole([...LEADS_PAGE_ROLES]);
   const { searchParams } = new URL(req.url);
 
   const page = Number(searchParams.get("page") || 1);

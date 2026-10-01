@@ -6,8 +6,14 @@ import { withErrorHandler, successResponse, errorResponse, generateId } from '@/
 import { triggerBolnaCall } from '@/lib/bolna';
 import { after } from 'next/server';
 import { handleBolnaWebhook } from '@/lib/ai/bolna_ai';
+import { guardBolnaCall } from '@/lib/security/webhookAuth';
 
 export const POST = withErrorHandler(async (req: Request) => {
+    // ID 118: this legacy URL takes the same bearer as /api/bolna/webhook once
+    // BOLNA_WEBHOOK_SECRET is set — it writes call records and lead status.
+    const denied = guardBolnaCall(req.headers, '/api/webhooks/bolna', 'BOLNA_WEBHOOK_SECRET');
+    if (denied) return denied;
+
     const body = await req.json();
 
     // Belt-and-suspenders: this legacy route still serves the v1 callRecords /

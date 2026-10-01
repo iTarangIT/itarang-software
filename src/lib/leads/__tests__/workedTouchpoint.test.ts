@@ -22,6 +22,18 @@ describe("isWorkedTouchpoint", () => {
         expect(isWorkedTouchpoint("status_change_note", false)).toBe(false);
     });
 
+    // Tracker ID 80: an admin's Correct status repairs the record — nobody
+    // spoke to the dealer, so the idle clock must not move.
+    it("does not count an admin correction, though it is a status_change_note with a status change", () => {
+        expect(isWorkedTouchpoint("status_change_note", true, "correction")).toBe(false);
+        // Mark Won / Mark Lost are the same touchpoint type and still count.
+        expect(isWorkedTouchpoint("status_change_note", true, "mark_won")).toBe(true);
+        expect(isWorkedTouchpoint("status_change_note", true, "mark_lost")).toBe(true);
+        expect(isWorkedTouchpoint("status_change_note", true, null)).toBe(true);
+        // A call is work whatever rides on it.
+        expect(isWorkedTouchpoint("inside_sales_call", true, "correction")).toBe(true);
+    });
+
     it("does not count hand-offs, even though they move lead_status", () => {
         expect(isWorkedTouchpoint("lead_claimed", true)).toBe(false);
         expect(isWorkedTouchpoint("lead_assigned", true)).toBe(false);

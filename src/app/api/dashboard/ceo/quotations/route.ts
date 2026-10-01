@@ -35,7 +35,9 @@ import { dealerLeadCommercials, dealerLeads, users } from "@/lib/db/schema";
 import { requireAuth } from "@/lib/auth-utils";
 import { errorMessage, isNextRedirectError } from "@/lib/api-utils";
 import { GATED_QUOTE_EVENTS } from "@/lib/leads/quoteApproval";
-import { linesNeedingAttention, type OemEvaluation } from "@/lib/leads/oemPricing";
+import { linesNeedingAttention, quotePriceChanged, type OemEvaluation } from "@/lib/leads/oemPricing";
+import { loadLiveOemPrices } from "@/lib/leads/oemPrices";
+import type { CommercialsProductLine } from "@/lib/inside-sales/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -145,6 +147,9 @@ export async function GET(req: NextRequest) {
       ...GATED_QUOTE_EVENTS,
     ]);
 
+    // withdrawn_at is E-314 and not in schema.ts, so it is named raw.
+    const notWithdrawn = sql`${dealerLeadCommercials}.withdrawn_at IS NULL`;
+
     const where = history
       ? and(
           inArray(dealerLeadCommercials.approval_status, ["approved", "rejected"]),
@@ -153,7 +158,9 @@ export async function GET(req: NextRequest) {
         )
       : approved
         ? and(eq(dealerLeadCommercials.approval_status, "approved"), gatedOnly)
-        : eq(dealerLeadCommercials.approval_status, "pending");
+        : // ID 78: a quote withdrawn while it waited is no longer a decision
+          // to make, so it leaves the queue (and the count below).
+          and(eq(dealerLeadCommercials.approval_status, "pending"), notWithdrawn);
 
     const rows = await db
       .select({
@@ -192,6 +199,8 @@ export async function GET(req: NextRequest) {
         // between "we sent a number" and "they took it".
         dealer_decision: dealerLeadCommercials.dealer_decision,
         dealer_decision_at: dealerLeadCommercials.dealer_decision_at,
+        // ID 78 — a released quote the sales team later withdrew.
+        withdrawn_at: sql<string | null>`${dealerLeadCommercials}.withdrawn_at::text`,
         raised_by: users.name,
         dealer_name: dealerLeads.dealer_name,
         city: dealerLeads.city,
@@ -233,6 +242,34 @@ export async function GET(req: NextRequest) {
       .where(where);
 
     const total = Number(totals?.n || 0);
+
+    // ID 78: flag an OPEN quote — released, unanswered, not withdrawn — whose
+    // product reference price changed since it was issued, so the manager sees
+    // it here and not only by opening each lead. Same rule as the lead detail
+    // (leadDetail.ts). One price lookup for the whole page; a failure leaves
+    // the flags off rather than failing the list.
+    const isOpen = (r: (typeof rows)[number]) =>
+      r.approval_status === "approved" &&
+      (GATED_QUOTE_EVENTS as readonly string[]).includes(r.event_type) &&
+      !r.dealer_decision &&
+      !r.withdrawn_at;
+    const priceChanged = new Set<string>();
+    try {
+      const openRows = rows.filter(isOpen);
+      const lines = openRows.flatMap((r) =>
+        Array.isArray(r.product_lines) ? (r.product_lines as CommercialsProductLine[]) : [],
+      );
+      if (lines.length > 0) {
+        const live = await loadLiveOemPrices(lines);
+        for (const r of openRows) {
+          if (quotePriceChanged((r.oem_evaluation as OemEvaluation | null) ?? null, live)) {
+            priceChanged.add(r.commercial_id);
+          }
+        }
+      }
+    } catch (e) {
+      console.warn("[ceo/quotations] price-changed flag skipped:", errorMessage(e));
+    }
 
     return NextResponse.json({
       success: true,
@@ -284,6 +321,8 @@ export async function GET(req: NextRequest) {
           quote_pdf_url: r.quote_pdf_url ?? null,
           dealer_decision: r.dealer_decision ?? null,
           dealer_decision_at: r.dealer_decision_at ?? null,
+          withdrawn_at: r.withdrawn_at ?? null,
+          price_changed_since_issue: priceChanged.has(r.commercial_id),
         })),
       },
     });

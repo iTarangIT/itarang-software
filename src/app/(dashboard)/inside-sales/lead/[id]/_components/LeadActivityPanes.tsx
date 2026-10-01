@@ -25,9 +25,12 @@ type Tab = "touchpoints" | "calls" | "tracking" | "documents";
 export function LeadActivityPanes({
     leadId,
     bundle,
+    canExportHistory,
 }: {
     leadId: string;
     bundle: LeadDetailBundle;
+    /** canExportLeadHistory() for the viewer — hides the history export otherwise (ID 58). */
+    canExportHistory: boolean;
 }) {
     const [tab, setTab] = useState<Tab>("touchpoints");
 
@@ -64,6 +67,7 @@ export function LeadActivityPanes({
                         leadId={leadId}
                         touchpoints={bundle.touchpoints}
                         statusHistory={bundle.status_history}
+                        canExport={canExportHistory}
                     />
                 ) : tab === "calls" ? (
                     <AiCallHistoryPane leadId={leadId} />

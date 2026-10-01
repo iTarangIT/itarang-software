@@ -24,8 +24,11 @@ import {
 } from "@/lib/admin/csvUpload";
 import { reactivateLead } from "@/lib/leads/reactivation";
 import { writeTouchpoint } from "@/lib/touchpoints/write";
+import { markSalesReady } from "@/lib/leads/salesReady";
 import type { UploadBatchSummary } from "@/lib/admin/types";
 import { LEAD_ORIGINS } from "@/lib/leads/leadSourceVocab";
+import { recordLeadsCreatedBulk, recordReinquiries, stampLeadSourceBulk } from "@/lib/leads/leadSource";
+import { campaignForUploadBatch, resolveLeadCampaign } from "@/lib/leads/acquisitionCampaigns";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -38,6 +41,9 @@ const BodySchema = z.object({
     // ID 81 — Found via, for every lead in the file. Required: source can only
     // be captured at creation. Entered via (bulk_upload) comes from the batch id.
     origin: z.enum(LEAD_ORIGINS, { message: "Pick how these dealers were found (Found via)." }),
+    // ID 81 — the acquisition campaign for the file. Required for Trade event /
+    // Digital ad; left out otherwise, the batch gets a campaign of its own.
+    campaign_id: z.string().uuid().optional().nullable(),
 });
 
 export const POST = withErrorHandler(async (req: Request) => {
@@ -54,6 +60,10 @@ export const POST = withErrorHandler(async (req: Request) => {
             400,
         );
     }
+
+    // ID 81: refused before anything is written — a Trade event / Digital ad
+    // file with no campaign, or a campaign that is closed or not there.
+    const pickedCampaignId = await resolveLeadCampaign(db, { origin: b.origin, campaignId: b.campaign_id });
 
     const result = await validateUpload(parsed, parseHeaders(b.csv_text));
 
@@ -75,6 +85,10 @@ export const POST = withErrorHandler(async (req: Request) => {
     const leadStatus = b.routing_to_ai ? null : "New_Unassigned";
     const aiRecall = b.routing_to_ai ? "awaiting_re_dial" : "qualified";
     const interest = b.routing_to_ai ? null : "warm";
+
+    // ID 81: the leads this batch created, and the dealers it found again.
+    const insertedIds: string[] = [];
+    const known: { id: string; note: string }[] = [];
 
     for (const row of result.rows) {
         if (row.status === "error" || !row.payload) continue;
@@ -104,7 +118,7 @@ export const POST = withErrorHandler(async (req: Request) => {
             const rowAiRecall = owner ? "qualified" : aiRecall;
             const rowInterest = owner ? "warm" : interest;
 
-            await db.execute(sql`
+            const inserted = await db.execute<{ id: string }>(sql`
                 INSERT INTO dealer_leads
                     (id, phone, dealer_name, city, state, language, segments,
                      preliminary_payment_intent, source, upload_batch_id,
@@ -121,14 +135,28 @@ export const POST = withErrorHandler(async (req: Request) => {
                     ${isAsm ? owner : null}, ${owner ? sql`NOW()` : null},
                     NOW(), NOW())
                 ON CONFLICT (phone) DO NOTHING
+                RETURNING id
             `);
+            // The phone landed between validation and this insert — nothing
+            // was created, so there is nothing to log on this row.
+            if (inserted.length === 0) continue;
+            insertedIds.push(id);
             if (owner) {
                 await writeTouchpoint({
                     dealerLeadId: id,
                     touchpointType: "ownership_transfer",
                     performedBy: user.id,
                     remarks: `Assigned via bulk upload (batch ${batchId}).`,
+                    // ID 83: every owner has a dated reason — the hop (nobody →
+                    // the assignee) is what lead tracking and the first-owner
+                    // reports read; without it this owner had no start.
+                    fromOwnerId: null,
+                    toOwnerId: owner,
                 });
+                // ID 82: an upload that names an owner is an admin assignment —
+                // a Sales-ready event, as on every other path that gives a lead
+                // an owner. Rows uploaded with no owner are not sales-ready yet.
+                await markSalesReady(db, { leadId: id, reason: "admin_assigned", actorId: user.id });
             }
             if (p.prior_call_notes) {
                 await db.execute(sql`
@@ -141,6 +169,7 @@ export const POST = withErrorHandler(async (req: Request) => {
                 `);
             }
         } else if (row.status === "reactivate" && row.duplicate_lead_id) {
+            known.push({ id: row.duplicate_lead_id, note: p.dealer_name });
             await reactivateLead({
                 leadId: row.duplicate_lead_id,
                 trigger: "upload",
@@ -159,6 +188,7 @@ export const POST = withErrorHandler(async (req: Request) => {
                 `);
             }
         } else if (row.status === "duplicate_skip" && row.duplicate_lead_id) {
+            known.push({ id: row.duplicate_lead_id, note: p.dealer_name });
             if (p.prior_call_notes) {
                 await db.execute(sql`
                     INSERT INTO lead_touchpoints
@@ -171,6 +201,7 @@ export const POST = withErrorHandler(async (req: Request) => {
                 `);
             }
         } else if (row.status === "address_mismatch" && row.duplicate_lead_id) {
+            known.push({ id: row.duplicate_lead_id, note: p.dealer_name });
             await db.execute(sql`
                 INSERT INTO duplicate_merge_requests
                     (request_type, source_lead_id, target_lead_id, requested_by,
@@ -191,16 +222,26 @@ export const POST = withErrorHandler(async (req: Request) => {
         WHERE batch_id = ${batchId}
     `);
 
-    // ID 81: Found via on every lead this batch created. Best-effort (E-314
-    // columns); the E-317 lock keeps a value already there.
-    try {
-        await db.execute(sql`
-            UPDATE dealer_leads SET source_origin = COALESCE(source_origin, ${b.origin})
-             WHERE upload_batch_id = ${batchId}
-        `);
-    } catch (e) {
-        console.warn("[upload/commit] Found via not stamped (E-314 applied?):", e);
-    }
+    // ID 81. Every lead this batch created gets its source — Entered via Bulk
+    // upload (the trigger already set it from the batch id), Found via, and the
+    // batch's campaign — and a "Lead created" line. Every dealer the file found
+    // again gets a Re-inquiry on the lead it already has. All best-effort and
+    // after the import: the leads exist either way. A file that created
+    // nothing (every row a known dealer) does not get a campaign of its own.
+    const campaignId =
+        insertedIds.length > 0 || pickedCampaignId
+            ? await campaignForUploadBatch({
+                  batchId,
+                  fileName: b.file_name,
+                  label: b.source_label ?? null,
+                  origin: b.origin,
+                  uploadedBy: user.id,
+                  pickedCampaignId,
+              })
+            : null;
+    await stampLeadSourceBulk(insertedIds, { door: "bulk_upload", origin: b.origin, campaignId });
+    await recordLeadsCreatedBulk(insertedIds, { door: "bulk_upload", actorId: user.id });
+    await recordReinquiries(known, { door: "bulk_upload", actorId: user.id });
 
     const summaryRows = await db.execute<UploadBatchSummary>(sql`
         SELECT batch_id, file_name, uploaded_by, NULL AS uploaded_by_name,

@@ -29,6 +29,8 @@ import {
   deriveDurationSeconds,
 } from "@/lib/ai-dialer/call-duration/derive";
 import { resolveDurationBucketConfig } from "@/lib/ai-dialer/call-duration/config-store";
+import { LEADS_PAGE_ROLES } from "@/lib/leads/access";
+import { requireRole } from "@/lib/auth-utils";
 
 const PAGE_SIZE = 50;
 const BANNER_LIMIT = 100; // per bucket on bucket=all
@@ -196,6 +198,8 @@ const detailSelectShape = {
 
 export const GET = withErrorHandler(
   async (req: Request, ctx: { params: Promise<{ id: string }> }) => {
+    // ID 118: signed in, with a role that reaches this screen.
+    await requireRole([...LEADS_PAGE_ROLES]);
     const { id: campaignId } = await ctx.params;
     if (!campaignId) return errorResponse("Campaign id required", 400);
 

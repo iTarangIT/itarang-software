@@ -5,13 +5,16 @@
 // (GSTIN), Mark Lost (reason), Transfer to ASM — via onModalAction. Every other
 // move comes from an event (calls, quotes, visits, approvals).
 // An admin gets "Correct status": any status, a required reason, logged
-// (POST /api/admin/leads/[id]/correct-status) — the only override.
+// (POST /api/admin/leads/[id]/correct-status) — the only override. It still
+// asks for what Mark Lost / Mark Won enforce (ID 57): a lost reason for Lost,
+// the dealer's GSTIN for Won / Converted.
 
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Pencil } from "lucide-react";
 import { StatusChip } from "./StatusChip";
-import { LEAD_STATUS, TRANSITION_MAP, type LeadStatus } from "@/lib/lifecycle/transitions";
+import { LOST_REASON_LABELS } from "./modals/MarkLostModal";
+import { LEAD_STATUS, LOST_REASON, TRANSITION_MAP, type LeadStatus, type LostReason } from "@/lib/lifecycle/transitions";
 
 export type StatusModalAction = "mark_converted" | "mark_lost" | "transfer_asm";
 
@@ -21,12 +24,15 @@ const MODAL_TARGETS: Partial<Record<LeadStatus, StatusModalAction>> = {
     Transferred_to_ASM: "transfer_asm",
 };
 
+// ID 57: corrections that need a detail before they can be saved.
+const NEEDS_DETAILS: readonly LeadStatus[] = ["Lost", "Won", "Converted"];
+
 
 type Props = {
     leadId: string;
     status: string | null | undefined;
     editable: boolean;
-    /** Admin / CEO: "Correct status" with a reason (ID 80). */
+    /** Admin only: "Correct status" with a reason (ID 80). */
     canCorrect?: boolean;
     // Dedicated-flow modals the parent view can open (ASM has no transfer_asm).
     modalActions?: StatusModalAction[];
@@ -46,6 +52,11 @@ export function LeadStatusEditor({
     const [open, setOpen] = useState(false);
     const [reason, setReason] = useState("");
     const [saving, setSaving] = useState(false);
+    // Admin correction to Lost / Won / Converted: picked, waiting for its detail.
+    const [pending, setPending] = useState<LeadStatus | null>(null);
+    const [lostReason, setLostReason] = useState<LostReason | "">("");
+    const [competitor, setCompetitor] = useState("");
+    const [gstin, setGstin] = useState("");
     const ref = useRef<HTMLSpanElement>(null);
 
     useEffect(() => {
@@ -78,9 +89,25 @@ export function LeadStatusEditor({
         return <StatusChip status={from} />;
     }
 
+    const resetCorrection = () => {
+        setReason("");
+        setPending(null);
+        setLostReason("");
+        setCompetitor("");
+        setGstin("");
+    };
+
     const saveDirect = async (to: LeadStatus) => {
         if (reason.trim().length < 5) {
             toast.error("Correct status needs a reason (at least 5 characters).");
+            return;
+        }
+        if (to === "Lost" && !lostReason) {
+            toast.error("Pick a Lost reason.");
+            return;
+        }
+        if (to === "Lost" && lostReason === "lost_to_competition" && !competitor.trim()) {
+            toast.error("Name the competitor.");
             return;
         }
         setSaving(true);
@@ -90,14 +117,23 @@ export function LeadStatusEditor({
                 {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ to, reason: reason.trim() }),
+                    body: JSON.stringify({
+                        to,
+                        reason: reason.trim(),
+                        lost_reason: to === "Lost" ? lostReason : undefined,
+                        competitor_name:
+                            to === "Lost" && lostReason === "lost_to_competition" ? competitor.trim() : undefined,
+                        // Blank = keep the GSTIN already on the lead; the server
+                        // refuses if there is none.
+                        gstin: (to === "Won" || to === "Converted") && gstin.trim() ? gstin.trim() : undefined,
+                    }),
                 },
             );
             const json = await res.json();
             if (!res.ok) throw new Error(json?.error?.message ?? "Failed to update status");
             toast.success("Status corrected");
             setOpen(false);
-            setReason("");
+            resetCorrection();
             onUpdated?.();
         } catch (e) {
             toast.error((e as Error).message);
@@ -110,7 +146,7 @@ export function LeadStatusEditor({
         const action = MODAL_TARGETS[to];
         if (!action) return;
         setOpen(false);
-        setReason("");
+        resetCorrection();
         onModalAction?.(action);
     };
 
@@ -145,12 +181,67 @@ export function LeadStatusEditor({
                                 key={t}
                                 type="button"
                                 disabled={saving}
-                                onClick={() => saveDirect(t)}
-                                className="flex items-center rounded-md border border-gray-200 px-2 py-1.5 text-left transition-colors hover:bg-gray-50 disabled:opacity-50"
+                                onClick={() => (NEEDS_DETAILS.includes(t) ? setPending(t) : saveDirect(t))}
+                                className={`flex items-center justify-between rounded-md border px-2 py-1.5 text-left transition-colors hover:bg-gray-50 disabled:opacity-50 ${
+                                    pending === t ? "border-gray-400 bg-gray-50" : "border-gray-200"
+                                }`}
                             >
                                 <StatusChip status={t} size="sm" />
+                                {NEEDS_DETAILS.includes(t) && (
+                                    <span className="text-[10px] text-gray-400">
+                                        {t === "Lost" ? "needs reason" : "needs GSTIN"}
+                                    </span>
+                                )}
                             </button>
                         ))}
+                        {pending && (
+                            <div className="my-1 space-y-2 rounded-md border border-gray-200 bg-gray-50 p-2">
+                                {pending === "Lost" ? (
+                                    <>
+                                        <select
+                                            value={lostReason}
+                                            onChange={(e) => setLostReason(e.target.value as LostReason | "")}
+                                            className="w-full rounded-md border border-gray-200 bg-white px-2 py-1 text-xs focus:border-gray-400 focus:outline-none"
+                                        >
+                                            <option value="">Lost reason (required)</option>
+                                            {LOST_REASON.map((r) => (
+                                                <option key={r} value={r}>{LOST_REASON_LABELS[r]}</option>
+                                            ))}
+                                        </select>
+                                        {lostReason === "lost_to_competition" && (
+                                            <input
+                                                value={competitor}
+                                                onChange={(e) => setCompetitor(e.target.value)}
+                                                placeholder="Competitor (required)"
+                                                className="w-full rounded-md border border-gray-200 bg-white px-2 py-1 text-xs focus:border-gray-400 focus:outline-none"
+                                            />
+                                        )}
+                                    </>
+                                ) : (
+                                    <>
+                                        <input
+                                            value={gstin}
+                                            onChange={(e) => setGstin(e.target.value)}
+                                            placeholder="Dealer GSTIN"
+                                            maxLength={40}
+                                            className="w-full rounded-md border border-gray-200 bg-white px-2 py-1 text-xs uppercase focus:border-gray-400 focus:outline-none"
+                                        />
+                                        <p className="text-[10px] text-gray-500">
+                                            Leave blank if the lead already has a GSTIN. An onboarding
+                                            application is created if there is none.
+                                        </p>
+                                    </>
+                                )}
+                                <button
+                                    type="button"
+                                    disabled={saving}
+                                    onClick={() => saveDirect(pending)}
+                                    className="w-full rounded-md bg-gray-900 px-2 py-1.5 text-xs font-medium text-white transition-colors hover:bg-gray-800 disabled:opacity-50"
+                                >
+                                    {saving ? "Saving…" : `Correct to ${pending.replace(/_/g, " ")}`}
+                                </button>
+                            </div>
+                        )}
                         {visibleModal.map((t) => (
                             <button
                                 key={t}

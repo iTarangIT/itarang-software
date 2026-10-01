@@ -1,9 +1,10 @@
-// Log a touchpoint on a lead, optionally with a status change and a follow-up
-// date (BRD §0.5 — the primary action on Lead Detail). Extracted from
+// Log a touchpoint on a lead, optionally with a follow-up date (BRD §0.5 — the
+// primary action on Lead Detail). The lead's status is never taken from the
+// request (ID 80): it follows the call outcome, by the shared rule. Extracted from
 // POST /api/inside-sales/lead/[id]/touchpoint so the screen and the WhatsApp
 // Assistant's log_call / set_follow_up log a call exactly the same way.
 //
-// ONE transaction: the touchpoint, any status change, and next_follow_up_at
+// ONE transaction: the touchpoint, the status its outcome earns, and next_follow_up_at
 // commit or roll back together. (The route used to set next_follow_up_at in a
 // separate statement after the touchpoint had committed.) Pass `opts.tx` to
 // fold it into a larger atomic write.
@@ -19,9 +20,15 @@ import {
     type WriteTouchpointInput,
     type WriteTouchpointResult,
 } from "@/lib/touchpoints/write";
-import { TOUCHPOINT_TYPE, CALL_STATUS, NEXT_ACTION, shouldAutoEngage } from "@/lib/lifecycle/touchpointTypes";
+import {
+    TOUCHPOINT_TYPE,
+    CALL_STATUS,
+    NEXT_ACTION,
+    shouldAutoEngage,
+    type EngagedCallRule,
+} from "@/lib/lifecycle/touchpointTypes";
+import { getEngagedCallRule } from "@/lib/reports/engagedCallRule";
 import { LEAD_STATUS, type LeadStatus } from "@/lib/lifecycle/transitions";
-import { isForward } from "@/lib/lifecycle/statusRules";
 import { reviewLeadContactability } from "@/lib/leads/contactability";
 import type { DispositionBucket } from "@/lib/leads/dispositions";
 import {
@@ -34,6 +41,20 @@ import {
 } from "@/lib/leads/dispositions";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/**
+ * The touchpoint types a person may log by hand through POST …/touchpoint.
+ * Every other value of TOUCHPOINT_TYPE is written by its own action — a visit
+ * by the visit form (with its lead_visits row), an ownership hop by claim /
+ * assign / transfer, a quote event by the commercials writers — and a
+ * hand-crafted request must not be able to fabricate one: a bare "visit" would
+ * count as work and reset the idle clock with no visit behind it (ID 80).
+ */
+export const MANUAL_TOUCHPOINT_TYPES = ["inside_sales_call", "whatsapp", "status_change_note"] as const;
+
+export function isManualTouchpointType(type: string): boolean {
+    return (MANUAL_TOUCHPOINT_TYPES as readonly string[]).includes(type);
+}
 
 export const TouchpointBodySchema = z.object({
     touchpoint_type: z.enum(TOUCHPOINT_TYPE),
@@ -57,8 +78,11 @@ export const TouchpointBodySchema = z.object({
     attachments: z.array(z.unknown()).max(20).optional(),
     next_action: z.enum(NEXT_ACTION).nullable().optional(),
     next_action_at: z.string().datetime().nullable().optional(),
-    // Converted / Lost / Transferred_to_ASM are not settable here (ID 57):
-    // Mark Converted, Mark Lost and Transfer are the only ways in.
+    // NOT ACTED ON (ID 80): no status is settable from a touchpoint. The field
+    // is still parsed so a caller that sends it gets its touchpoint saved —
+    // the status simply follows the outcome — and so asking for Converted /
+    // Lost / Transferred_to_ASM keeps its explicit refusal (ID 57): Mark
+    // Converted, Mark Lost and Transfer are the only ways in.
     status_change: z
         .object({
             to: z.enum(LEAD_STATUS).refine(
@@ -100,8 +124,10 @@ export class LeadNotFoundError extends Error {
 export function planTouchpoint(
     body: TouchpointBody,
     lead: { leadId: string; fromStatus: LeadStatus | null; actorId: string },
+    /** The saved engaged-call rule; the default (30 s, NeoDove durations) when omitted. */
+    opts: { engagedRule?: EngagedCallRule } = {},
 ): WriteTouchpointInput {
-    const { leadId, fromStatus, actorId } = lead;
+    const { leadId, actorId } = lead;
     // Classify the disposition BEFORE isEngaged, which depends on the derived
     // call status, which depends on this.
     //
@@ -132,19 +158,36 @@ export function planTouchpoint(
     // timings — and 2,445 historical rows already have it.
     const derivedCallStatus = callStatusForDisposition(classified) ?? body.call_status ?? null;
 
-    // Auto-engage when applicable (BRD §0.1 Glossary).
+    // Auto-engage when applicable (BRD §0.1 Glossary). A CALL is never engaged
+    // by a tick: it follows the ID 59 rule (connected, at least the threshold
+    // of measured duration — a hand-logged call has no measured duration
+    // unless the saved rule counts rep-entered ones). Other types keep the
+    // rep's tick.
+    const autoEngaged = shouldAutoEngage(body.touchpoint_type, {
+        callStatus: derivedCallStatus,
+        visitOutcome: null,
+        callDurationSec: body.call_duration_sec ?? null,
+        externalSystem: null,
+        engagedRule: opts.engagedRule,
+    });
+    // Nor is a WhatsApp entry logged here (ID 79): a chat counts as contact only
+    // with its screenshot, through recordWhatsappContact — this path saves a note.
     const isEngaged =
-        body.is_engaged ??
-        shouldAutoEngage(body.touchpoint_type, { callStatus: derivedCallStatus, visitOutcome: null });
+        body.touchpoint_type === "inside_sales_call"
+            ? autoEngaged
+            : body.touchpoint_type === "whatsapp"
+              ? false
+              : body.is_engaged ?? autoEngaged;
 
-    // ID 80 / 114: no manual status. The status (and the temperature) come
-    // from the call outcome by the shared rule — applied by writeTouchpoint
-    // itself, against the row it locks, so the API, the forms, the Assistant
-    // and NeoDove cannot disagree. A caller may still ask for FIRST CONTACT
-    // (Under_Discussion — e.g. a follow-up where the rep spoke to the dealer);
-    // commercials stages come only from quote events (ID 75), Won / Lost /
-    // transfer from their own actions. The S3 guard has the final word; an
-    // unforward request is dropped here, not refused.
+    // ID 80 / 114: no manual status — at all. The status (and the temperature)
+    // come from the call outcome by the shared rule, applied by writeTouchpoint
+    // itself against the row it locks, so the API, the forms, the Assistant and
+    // NeoDove cannot disagree. `status_change` in the request is NOT read: a
+    // note saying "spoke to the dealer" is not an event, and first contact is
+    // earned by a logged call (here), a visit, or a WhatsApp chat with its
+    // screenshot (recordWhatsappContact). Commercials stages come only from
+    // quote events (ID 75); Won / Lost / transfer from their own actions; an
+    // admin can use Correct status.
     const outcome: WriteTouchpointInput["outcome"] =
         classified && body.touchpoint_type === "inside_sales_call"
             ? {
@@ -152,18 +195,6 @@ export function planTouchpoint(
                   connected: classified.connectStatus === "connected",
                   label: classified.label,
                   bucket: classified.bucket as DispositionBucket | null,
-              }
-            : undefined;
-    const requested = body.status_change?.to ?? null;
-    const statusChange: WriteTouchpointInput["statusChange"] =
-        requested === "Under_Discussion" &&
-        fromStatus !== "Transferred_to_ASM" &&
-        isForward(fromStatus, requested)
-            ? {
-                  from: fromStatus,
-                  to: requested,
-                  reasonNotes: body.status_change?.reason_notes ?? null,
-                  event: "progress",
               }
             : undefined;
 
@@ -183,7 +214,6 @@ export function planTouchpoint(
         attachments: body.attachments ?? null,
         nextAction: body.next_action ?? null,
         nextActionAt: body.next_action_at ? new Date(body.next_action_at) : null,
-        statusChange,
         outcome,
         // Absent stays absent (derive); null and a level pass through.
         ...(body.interest_level !== undefined
@@ -211,11 +241,11 @@ export async function logLeadTouchpoint(
         `);
         const state = rows[0];
         if (!state) throw new LeadNotFoundError();
-        const input = planTouchpoint(body, {
-            leadId,
-            fromStatus: (state.lead_status as LeadStatus | null) ?? null,
-            actorId,
-        });
+        const input = planTouchpoint(
+            body,
+            { leadId, fromStatus: (state.lead_status as LeadStatus | null) ?? null, actorId },
+            { engagedRule: await getEngagedCallRule() },
+        );
         const result = await writeTouchpoint(input, { tx });
 
         // ID 36: every logged call re-checks contactability (dead number from

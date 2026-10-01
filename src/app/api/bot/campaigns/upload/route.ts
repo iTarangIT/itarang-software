@@ -65,7 +65,7 @@ export const POST = withBotAuth(async (req: Request) => {
     return errorResponse("The file has no data rows", 400);
   }
 
-  const summary = await importListRows(rawRows, { listName: name });
+  const summary = await importListRows(rawRows, { listName: name, actorId: DISCORD_BOT_USER_ID });
 
   if (summary.queueIds.length === 0) {
     return errorResponse(

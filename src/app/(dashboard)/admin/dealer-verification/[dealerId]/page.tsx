@@ -7,6 +7,7 @@ import RequestCorrectionDialog from "@/components/admin/dealer-verification/Requ
 import DealerTypeBadge from "@/components/admin/dealer-verification/DealerTypeBadge";
 import { dealerTypeLabel } from "@/lib/dealer/dealer-type";
 import { usesManualAgreement } from "@/lib/dealer/dealer-capabilities";
+import { OVERRIDE_REASON_MIN } from "@/lib/agreement/executedAgreementCheck";
 import CorrectionResponsePanel, {
   type CorrectionRound,
 } from "@/components/admin/dealer-verification/CorrectionResponsePanel";
@@ -226,6 +227,40 @@ type AgreementTimelineItem = {
   signerRole?: string | null;
   eventStatus?: string | null;
   createdAt?: string | null;
+};
+
+// ID 55 / E-318 — GET …/agreement-documents.
+type AgreementDocumentsResponse = {
+  documents: Array<{
+    id: string;
+    kind: string;
+    fileName: string | null;
+    verdict: string | null;
+    status: string;
+    overrideRequestId: string | null;
+    uploadedBy: string | null;
+    uploadedAt: string;
+    selfConfirmedReason: string | null;
+  }>;
+  overrideRequests: Array<{
+    id: string;
+    status: string;
+    addOnly: boolean;
+    reasons: string[];
+    read?: { signedOn?: string | null } | null;
+    typedSignedOn: string | null;
+    typedRef: string | null;
+    requestReason: string;
+    requestedBy: string | null;
+    requestedAt: string;
+    canDecide: boolean;
+    canWithdraw: boolean;
+  }>;
+};
+
+const AGREEMENT_DOC_KIND: Record<string, string> = {
+  signed_agreement: "Signed agreement",
+  audit_trail: "Audit trail",
 };
 
 type AgreementTrackingResponse = {
@@ -1104,6 +1139,11 @@ export default function DealerReviewPage() {
     read?: { signedOn?: string | null; documentId?: string | null; signers?: Array<{ name: string | null; signedAt: string | null }> };
   } | null>(null);
   const [manualMismatchReason, setManualMismatchReason] = useState("");
+  // ID 55 / E-318 — every uploaded agreement file, and the uploads waiting for
+  // a second approver.
+  const [agreementDocs, setAgreementDocs] = useState<AgreementDocumentsResponse | null>(null);
+  const [overrideNote, setOverrideNote] = useState("");
+  const [overrideBusy, setOverrideBusy] = useState(false);
   // E-225 — provenance of a manually signed (paper) agreement.
   const [manualAgreementRef, setManualAgreementRef] = useState("");
   const [manualSignedOn, setManualSignedOn]         = useState("");
@@ -1136,6 +1176,16 @@ export default function DealerReviewPage() {
       if (!silent) setTracking(null);
     } finally {
       if (!silent) setTrackingLoading(false);
+    }
+  };
+
+  const loadAgreementDocuments = async () => {
+    try {
+      const res  = await fetch(`/api/admin/dealer-verifications/${dealerId}/agreement-documents`, { cache: "no-store" });
+      const json = await res.json();
+      if (json.success) setAgreementDocs(json.data);
+    } catch (error) {
+      console.error("Failed to load agreement documents", error);
     }
   };
 
@@ -1195,6 +1245,7 @@ export default function DealerReviewPage() {
 
       // Agreement tracking — own loading state (trackingLoading); fire-and-forget.
       loadAgreementTracking();
+      loadAgreementDocuments();
 
       // Duplicate detection — non-blocking. If this errors we still show the
       // review page, just without the alert card.
@@ -1529,6 +1580,7 @@ export default function DealerReviewPage() {
     } catch (error) {
       console.error("Failed to refresh", error);
     }
+    await loadAgreementDocuments();
   };
 
   // ─── live agreement status ────────────────────────────────────────────────
@@ -1683,9 +1735,11 @@ export default function DealerReviewPage() {
   };
 
   // ID 55: the system reads the files and checks them against the dealer and
-  // Digio. A mismatch comes back 422 with the reasons; the admin can confirm it
-  // with a reason, which resends the same files. After completion the same
-  // handler ADDS files (more audit trails) without touching the status.
+  // Digio. Anything that does not verify comes back 422 with the reasons; the
+  // admin can then send the same files for a SECOND approval with a reason
+  // (E-318) — they cannot complete the agreement on their own word. After
+  // completion the same handler ADDS files (more audit trails) without touching
+  // the status.
   const handleManualUpload = async (opts: { confirm?: boolean; addOnly?: boolean } = {}) => {
     if (!opts.addOnly && !manualSignedFile) {
       toast.error("Select the signed agreement PDF.");
@@ -1701,8 +1755,8 @@ export default function DealerReviewPage() {
       toast.error("Select at least one file to add.");
       return;
     }
-    if (opts.confirm && manualMismatchReason.trim().length < 5) {
-      toast.error("Give a reason (at least 5 characters) to save documents that do not match.");
+    if (opts.confirm && manualMismatchReason.trim().length < OVERRIDE_REASON_MIN) {
+      toast.error(`Give a reason (at least ${OVERRIDE_REASON_MIN} characters) to send these documents for approval.`);
       return;
     }
     setManualUploading(true);
@@ -1713,7 +1767,7 @@ export default function DealerReviewPage() {
       if (manualAgreementRef.trim()) fd.append("agreementRef", manualAgreementRef.trim());
       if (manualSignedOn) fd.append("agreementSignedOn", manualSignedOn);
       if (opts.confirm) {
-        fd.append("confirmMismatch", "true");
+        fd.append("requestApproval", "true");
         fd.append("mismatchReason", manualMismatchReason.trim());
       }
 
@@ -1725,14 +1779,14 @@ export default function DealerReviewPage() {
       try { json = await res.json(); } catch { /* non-JSON body */ }
       if (res.status === 422 && json?.needsConfirmation) {
         setManualCheck({ verdict: json.verdict, reasons: json.reasons ?? [], read: json.read });
-        toast.error(json.message || "The documents do not match this dealer.");
+        toast.error(json.message || "The documents could not be verified for this dealer.");
         return;
       }
       if (!res.ok || !json?.success) {
         toast.error(json?.message || `Upload failed (HTTP ${res.status})`);
         return;
       }
-      toast.success(json.message || "Agreement marked completed.");
+      toast.success(json.message || (json.pendingApproval ? "Sent for a second approval." : "Agreement marked completed."));
       setManualSignedFile(null);
       setManualAuditFiles([]);
       setManualAgreementRef("");
@@ -1747,12 +1801,195 @@ export default function DealerReviewPage() {
     }
   };
 
+  // E-318 — approve / reject (a second person) or withdraw (the uploader).
+  const handleOverrideDecision = async (requestId: string, action: "approve" | "reject" | "withdraw") => {
+    if (action === "reject" && overrideNote.trim().length < 5) {
+      toast.error("Give a reason for rejecting (at least 5 characters).");
+      return;
+    }
+    setOverrideBusy(true);
+    try {
+      const res = await fetch(
+        `/api/admin/dealer-verifications/${dealerId}/agreement-override/${requestId}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action, note: overrideNote.trim() || undefined }),
+        },
+      );
+      let json: { success?: boolean; message?: string } | null = null;
+      try { json = await res.json(); } catch { /* non-JSON body */ }
+      if (!res.ok || !json?.success) {
+        toast.error(json?.message || `Could not record the decision (HTTP ${res.status})`);
+        if (res.status === 409) await reloadDealer();
+        return;
+      }
+      toast.success(json.message || "Decision recorded.");
+      setOverrideNote("");
+      await reloadDealer();
+    } catch (err) {
+      toast.error((err instanceof Error && err.message) || "Something went wrong while recording the decision");
+    } finally {
+      setOverrideBusy(false);
+    }
+  };
+
+  const agreementDocuments = agreementDocs?.documents ?? [];
+  const pendingOverride = agreementDocs?.overrideRequests.find((r) => r.status === "pending") ?? null;
+  const fmtDocTime = (v: string) =>
+    new Date(v).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "medium", timeStyle: "short" });
+
+  const pendingOverridePanel = pendingOverride && (
+    <div className="mt-6 rounded-2xl border border-amber-300 bg-amber-50 p-5">
+      <p className="text-sm font-semibold text-amber-900">
+        {pendingOverride.addOnly
+          ? "Documents waiting for a second approval"
+          : "Agreement upload waiting for a second approval"}
+      </p>
+      <p className="mt-1 text-xs text-amber-800">
+        Sent by <strong>{pendingOverride.requestedBy ?? "—"}</strong> on {fmtDocTime(pendingOverride.requestedAt)}.
+        The system could not verify these documents
+        {pendingOverride.addOnly ? "" : ", so the agreement is not marked completed"} until someone else approves them.
+      </p>
+      <ul className="mt-2 list-disc pl-5 text-xs text-red-700">
+        {pendingOverride.reasons.map((r) => <li key={r}>{r}</li>)}
+      </ul>
+      <p className="mt-2 text-xs text-slate-700">
+        <span className="font-semibold">Uploader&apos;s reason:</span> {pendingOverride.requestReason}
+      </p>
+      {(pendingOverride.typedSignedOn || pendingOverride.typedRef || pendingOverride.read?.signedOn) && (
+        <p className="mt-1 text-xs text-slate-600">
+          {pendingOverride.read?.signedOn ? `Read from the documents: signed ${pendingOverride.read.signedOn}. ` : "No signing date was read. "}
+          {pendingOverride.typedSignedOn ? `Entered by the uploader: signed ${pendingOverride.typedSignedOn}. ` : ""}
+          {pendingOverride.typedRef ? `Entered reference: ${pendingOverride.typedRef}. ` : ""}
+          {pendingOverride.typedSignedOn || pendingOverride.typedRef ? "Approving records the entered values." : ""}
+        </p>
+      )}
+      <div className="mt-2 flex flex-wrap gap-2">
+        {agreementDocuments
+          .filter((d) => d.overrideRequestId === pendingOverride.id)
+          .map((d) => (
+            <a
+              key={d.id}
+              href={`/api/admin/dealer-verifications/${dealerId}/agreement-documents/${d.id}`}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-amber-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-amber-100"
+            >
+              <FileText className="h-3.5 w-3.5" />
+              {d.fileName || AGREEMENT_DOC_KIND[d.kind] || d.kind}
+            </a>
+          ))}
+      </div>
+      {pendingOverride.canDecide ? (
+        <>
+          <input
+            type="text"
+            value={overrideNote}
+            onChange={(e) => setOverrideNote(e.target.value)}
+            placeholder="Note (required to reject)"
+            className="mt-3 h-9 w-full rounded-lg border border-amber-200 bg-white px-3 text-sm outline-none focus:border-amber-400"
+          />
+          <div className="mt-2 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => handleOverrideDecision(pendingOverride.id, "approve")}
+              disabled={overrideBusy || isRejected}
+              className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
+            >
+              {pendingOverride.addOnly ? "Approve and add documents" : "Approve and mark completed"}
+            </button>
+            <button
+              type="button"
+              onClick={() => handleOverrideDecision(pendingOverride.id, "reject")}
+              disabled={overrideBusy || overrideNote.trim().length < 5}
+              className="inline-flex items-center gap-2 rounded-xl bg-red-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-700 disabled:opacity-50"
+            >
+              Reject
+            </button>
+          </div>
+        </>
+      ) : (
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+          <p className="text-xs text-amber-800">
+            You sent this — another Sales Head or the CEO has to approve it.
+          </p>
+          {pendingOverride.canWithdraw && (
+            <button
+              type="button"
+              onClick={() => handleOverrideDecision(pendingOverride.id, "withdraw")}
+              disabled={overrideBusy}
+              className="inline-flex items-center gap-2 rounded-xl border border-amber-300 bg-white px-3 py-1.5 text-xs font-semibold text-amber-900 hover:bg-amber-100 disabled:opacity-50"
+            >
+              Withdraw
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+
+  // ID 55 point 7 — every uploaded file is listed and downloadable, not only
+  // the first signed agreement / audit trail the buttons above serve.
+  const agreementDocumentsPanel = agreementDocuments.length > 0 && (
+    <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-5">
+      <p className="text-sm font-semibold text-slate-900">Uploaded agreement documents</p>
+      <p className="mt-1 text-xs text-slate-500">
+        Every file uploaded by hand for this agreement, with what the system made of it.
+      </p>
+      <div className="mt-3 divide-y divide-slate-100">
+        {agreementDocuments.map((d) => (
+          <div key={d.id} className="flex flex-wrap items-center gap-x-4 gap-y-1 py-2.5">
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-medium text-slate-800">
+                {d.fileName || AGREEMENT_DOC_KIND[d.kind] || d.kind}
+              </p>
+              <p className="text-xs text-slate-500">
+                {AGREEMENT_DOC_KIND[d.kind] || d.kind} · {d.uploadedBy ?? "—"} · {fmtDocTime(d.uploadedAt)}
+                {d.selfConfirmedReason ? ` · saved by the uploader with reason: ${d.selfConfirmedReason}` : ""}
+              </p>
+            </div>
+            <span
+              className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
+                d.status === "pending_approval"
+                  ? "border-amber-200 bg-amber-50 text-amber-700"
+                  : d.status === "rejected"
+                    ? "border-red-200 bg-red-50 text-red-700"
+                    : d.verdict === "verified"
+                      ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                      : "border-slate-200 bg-slate-50 text-slate-600"
+              }`}
+            >
+              {d.status === "pending_approval"
+                ? "Waiting for approval"
+                : d.status === "rejected"
+                  ? "Not accepted"
+                  : d.verdict === "verified"
+                    ? "Verified"
+                    : d.overrideRequestId
+                      ? "Accepted on second approval"
+                      : "Accepted — not verified"}
+            </span>
+            <a
+              href={`/api/admin/dealer-verifications/${dealerId}/agreement-documents/${d.id}`}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+            >
+              <Download className="h-3.5 w-3.5" /> Download
+            </a>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+
   const manualCheckPanel = manualCheck && (
     <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-4">
       <p className="text-sm font-semibold text-red-800">
         {manualCheck.verdict === "unreadable"
           ? "The system could not read these files"
-          : "These documents do not match this dealer"}
+          : "These documents could not be verified for this dealer"}
       </p>
       <ul className="mt-1.5 list-disc pl-5 text-xs text-red-700">
         {manualCheck.reasons.map((r) => <li key={r}>{r}</li>)}
@@ -1763,24 +2000,42 @@ export default function DealerReviewPage() {
           {manualCheck.read.documentId ? ` · document ${manualCheck.read.documentId}` : ""}
         </p>
       )}
-      <label className="mt-3 block text-[11px] font-semibold uppercase tracking-[0.14em] text-red-700">
-        Save anyway — reason
-      </label>
-      <input
-        type="text"
-        value={manualMismatchReason}
-        onChange={(e) => setManualMismatchReason(e.target.value)}
-        placeholder="e.g. scan is of the signed copy; GSTIN changed after onboarding"
-        className="mt-1 h-9 w-full rounded-lg border border-red-200 bg-white px-3 text-sm outline-none focus:border-red-400"
-      />
-      <button
-        type="button"
-        onClick={() => handleManualUpload({ confirm: true, addOnly: isAgreementCompleted })}
-        disabled={manualUploading || manualMismatchReason.trim().length < 5}
-        className="mt-2 inline-flex items-center gap-2 rounded-xl bg-red-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-700 disabled:opacity-50"
-      >
-        Confirm and save
-      </button>
+      {pendingOverride ? (
+        <p className="mt-3 text-xs text-red-700">
+          Another upload for this dealer is already waiting for a second approval. It has to be decided or
+          withdrawn before a new one can be sent.
+        </p>
+      ) : (
+        <>
+          <label className="mt-3 block text-[11px] font-semibold uppercase tracking-[0.14em] text-red-700">
+            Send for a second approval — reason
+          </label>
+          <p className="mt-1 text-xs text-slate-600">
+            You cannot save these on your own. Another Sales Head or the CEO will see the files, what did not
+            verify and your reason, and decide. The agreement status does not change until they approve.
+          </p>
+          <input
+            type="text"
+            value={manualMismatchReason}
+            onChange={(e) => setManualMismatchReason(e.target.value)}
+            placeholder="e.g. scan is of the signed copy; GSTIN changed after onboarding"
+            className="mt-1 h-9 w-full rounded-lg border border-red-200 bg-white px-3 text-sm outline-none focus:border-red-400"
+          />
+          <button
+            type="button"
+            onClick={() => handleManualUpload({ confirm: true, addOnly: isAgreementCompleted })}
+            disabled={manualUploading || manualMismatchReason.trim().length < OVERRIDE_REASON_MIN}
+            className="mt-2 inline-flex items-center gap-2 rounded-xl bg-red-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-700 disabled:opacity-50"
+          >
+            Send for approval
+          </button>
+          {manualMismatchReason.trim().length < OVERRIDE_REASON_MIN && (
+            <span className="ml-2 text-[11px] text-slate-500">
+              At least {OVERRIDE_REASON_MIN} characters.
+            </span>
+          )}
+        </>
+      )}
     </div>
   );
 
@@ -2605,6 +2860,8 @@ export default function DealerReviewPage() {
                 )}
               </div>
 
+              {pendingOverridePanel}
+
               {/* Manual agreement completion — for agreements whose completion
                   can't be synced from Digio: an expired signer link, signing
                   finished out-of-band on the Digio dashboard, or a document
@@ -2627,7 +2884,8 @@ export default function DealerReviewPage() {
                             Upload the <strong>signed agreement</strong> PDF once both parties have
                             signed the paper copy. This stores the document and marks the agreement{" "}
                             <strong>completed</strong>. The reference number and signing date are
-                            optional but make the executed agreement traceable later.
+                            optional — the system reads them from the paper, and anything you enter
+                            here has to agree with it.
                           </>
                         ) : (
                           <>
@@ -2705,8 +2963,9 @@ export default function DealerReviewPage() {
                       </div>
 
                       <p className="mt-3 text-xs text-amber-800">
-                        The system reads the files — signers, signing dates, document ID, dealer name and
-                        GSTIN — checks them against this dealer and Digio, and fills in the signed date.
+                        The system reads every file — signers, signing dates, document ID, dealer name and
+                        GSTIN — checks each against this dealer and Digio, and fills in the signed date.
+                        If a file cannot be verified, it needs a second person&apos;s approval.
                       </p>
                       {manualCheckPanel}
                       <button
@@ -2776,6 +3035,8 @@ export default function DealerReviewPage() {
                   </button>
                 </div>
               )}
+
+              {agreementDocumentsPanel}
 
               {/* iTarang Signer 1 — entered by the reviewing admin. Required to
                   initiate; the dealer signer is auto-filled from the owner

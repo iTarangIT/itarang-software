@@ -51,6 +51,7 @@ export const WRITE_TOOL_NAMES = [
     "create_lead",
     "create_quote",
     "send_quote",
+    "withdraw_quote",
     "attach_document",
     "update_lead",
 ] as const;

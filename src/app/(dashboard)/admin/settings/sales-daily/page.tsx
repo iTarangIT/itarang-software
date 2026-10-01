@@ -1,6 +1,7 @@
 import { requireRole } from "@/lib/auth-utils";
 import { digestKind } from "@/lib/digests/registry";
 import { DigestSettingsForm } from "../_components/DigestSettingsForm";
+import { EngagedCallRuleForm } from "../_components/EngagedCallRuleForm";
 
 export const dynamic = "force-dynamic";
 
@@ -27,6 +28,15 @@ export default async function DigestSettingsPage() {
             <div className="rounded-xl border border-border bg-surface shadow-card">
                 <div className="p-5">
                     <DigestSettingsForm kind={KIND} />
+                </div>
+            </div>
+
+            {/* ID 59 — the definition behind the email's "Engaged calls" (and
+                every other report's). Here because this is the Sales Head's
+                reporting screen; it is not specific to the email. */}
+            <div className="rounded-xl border border-border bg-surface shadow-card">
+                <div className="p-5">
+                    <EngagedCallRuleForm />
                 </div>
             </div>
         </div>

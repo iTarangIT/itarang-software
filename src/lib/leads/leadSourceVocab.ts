@@ -57,6 +57,56 @@ export const LEAD_ORIGIN_LABEL: Record<LeadOrigin, string> = {
     digital_ad: "Digital ad",
 };
 
+/**
+ * Origins that mean nothing without the campaign: WHICH trade event, WHICH ad.
+ * A lead with one of these cannot be created without a campaign.
+ */
+export const CAMPAIGN_REQUIRED_ORIGINS: readonly LeadOrigin[] = ["trade_event", "digital_ad"];
+
+export function campaignRequired(origin: string | null | undefined): boolean {
+    return (CAMPAIGN_REQUIRED_ORIGINS as readonly string[]).includes(origin ?? "");
+}
+
+export const CAMPAIGN_REQUIRED_MESSAGE = "Pick the campaign — a Trade event or Digital ad lead needs one.";
+
+/**
+ * Found via for a lead that arrives on a calling list with nobody to ask —
+ * NeoDove-born leads, and an AI-dialer list uploaded without a choice. The
+ * E-319 trigger and the E-320 backfill write the same value.
+ */
+export const LIST_DEFAULT_ORIGIN: LeadOrigin = "purchased_list";
+
+/** How an acquisition campaign came to exist (acquisition_campaigns.kind, E-319). */
+export const CAMPAIGN_KINDS = ["manual", "upload_batch", "scrape_run", "dialer_list"] as const;
+export type CampaignKind = (typeof CAMPAIGN_KINDS)[number];
+
+export const CAMPAIGN_KIND_LABEL: Record<CampaignKind, string> = {
+    manual: "Named by a person",
+    upload_batch: "Bulk upload",
+    scrape_run: "Scrape run",
+    dialer_list: "AI-dialer list",
+};
+
+const day = (d: Date) =>
+    d.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric", timeZone: "Asia/Kolkata" });
+
+/**
+ * Names for the campaigns the system makes itself. Each ends in a piece of the
+ * batch / run id, so two uploads of the same file on one day stay apart
+ * (campaign names are unique).
+ */
+export function uploadCampaignName(p: { label: string | null; fileName: string; at: Date; batchId: string }): string {
+    return `Upload · ${p.label?.trim() || p.fileName} · ${day(p.at)} · ${p.batchId.slice(0, 8)}`;
+}
+
+export function scrapeCampaignName(p: { query: string | null; at: Date; runId: string }): string {
+    return `Scrape · ${(p.query?.trim() || "run").slice(0, 80)} · ${day(p.at)} · ${p.runId.slice(-8)}`;
+}
+
+export function listCampaignName(listName: string): string {
+    return `List · ${listName.trim()}`;
+}
+
 /** Label for a stored door; older rows may hold a value outside the list. */
 export function doorLabel(v: string | null | undefined): string | null {
     if (!v) return null;

@@ -15,6 +15,7 @@
 
 import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
+import { engagedState } from "@/lib/reports/metricDefinitions";
 import { OPEN_STATUSES, WORKABLE_STATUSES } from "@/lib/lifecycle/transitions";
 import type {
     AdminKpis,
@@ -201,9 +202,13 @@ async function closedWinRate(days: number, lf: SQL): Promise<number | null> {
  *                               days of creation — a full, fixed observation
  *                               window, so months compare fairly.
  *   engaged_to_conversion_rate  created in the last 30 days AND had at least
- *                               one engaged touchpoint (connected call /
- *                               productive visit), converted so far — sales
- *                               effectiveness on leads we actually worked.
+ *                               one engaged touchpoint, converted so far —
+ *                               sales effectiveness on leads we actually
+ *                               worked. Engaged is the ID 59 definition
+ *                               (engagedState): a connected call of 30 s or
+ *                               more by measured duration, or a productive
+ *                               visit — NOT any connected call, which is what
+ *                               the stored is_engaged flag used to mean.
  */
 async function conversionMeasures(lf: SQL): Promise<{
     cohort_conversion_to_date: number | null;
@@ -226,7 +231,7 @@ async function conversionMeasures(lf: SQL): Promise<{
                        AND dl.closed_at <= dl.created_at + INTERVAL '30 days' AS converted_in_30d,
                    EXISTS (SELECT 1 FROM lead_touchpoints t
                             WHERE t.dealer_lead_id = dl.id
-                              AND t.is_engaged IS TRUE) AS engaged
+                              AND ${engagedState()} IS TRUE) AS engaged
             FROM dealer_leads dl
             WHERE dl.is_active IS NOT FALSE
               AND dl.created_at >= NOW() - INTERVAL '60 days' ${lf}

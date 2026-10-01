@@ -3,8 +3,12 @@ import { db } from '@/lib/db';
 import { facilitationPayments } from '@/lib/db/schema';
 import { eq, desc } from 'drizzle-orm';
 import { fetchQrStatus, fetchQrPayments } from '@/lib/razorpay';
+import { requireLeadAccess } from "@/lib/auth/requireLeadAccess";
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
+    // ID 118: signed in, and this lead is the caller's to touch (a dealer's own lead, or back office).
+    const leadGate = await requireLeadAccess((await params).leadId);
+    if (!leadGate.ok) return leadGate.response;
     try {
         const { leadId } = await params;
 

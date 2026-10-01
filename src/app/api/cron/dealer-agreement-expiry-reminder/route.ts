@@ -23,6 +23,7 @@ import {
 import { sendDealerAgreementExpiryReminderEmail } from "@/lib/email/sendDealerAgreementExpiryReminderEmail";
 import { getAdapter } from "@/lib/whatsapp";
 import { logOutbound } from "@/lib/whatsapp/notifications";
+import { fromVercelCron } from "@/lib/security/cronAuth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -32,7 +33,7 @@ const AGREEMENT_LIFETIME_DAYS = DEALER_AGREEMENT_EXPIRE_IN_DAYS; // Digio expire
 const DONE_STATUSES = new Set(["signed", "expired", "failed"]);
 
 function isAuthorised(req: NextRequest): boolean {
-  if (req.headers.get("x-vercel-cron")) return true;
+  if (fromVercelCron(req)) return true;
   const auth = req.headers.get("authorization") ?? "";
   const expected = process.env.CRON_SECRET;
   if (expected && auth === `Bearer ${expected}`) return true;

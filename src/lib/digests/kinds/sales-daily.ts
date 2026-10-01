@@ -42,6 +42,10 @@
  *                    the NeoDove agent to their CRM user (review R-03,
  *                    /leads/neodove-campaigns/agents); unmapped agents' calls
  *                    carry no performer and appear on nobody's row.
+ *   connected /      Block C, month to date, per caller: connectedCall() and
+ *   engaged /        engagedCallCount() ("—" when none of their calls has a
+ *   hot to field     measured duration) and Hot AT THE MOMENT of transfer
+ *                    (wasHotAt) — all ID 59, metricDefinitions.ts.
  *   new visits       dealers whose first-ever visit fell in the period
  *   converted        leads that reached Converted in the period, keyed on
  *                    closing_owner_id — the same rule as the dashboard and every
@@ -62,6 +66,7 @@
 import { sql } from "drizzle-orm";
 
 import type { SalesDashboard, SalesSpocBlock } from "@/lib/admin/salesDashboardTypes";
+import { connectedCall, engagedCallCount, wasHotAt } from "@/lib/reports/metricDefinitions";
 import { BLOCK_A_COLUMNS, blockAHeadline, blockATableRows, buildBlockA, fmtValue } from "../salesDailyBlockA";
 import type {
   DigestDetail,
@@ -172,11 +177,57 @@ function pipelineRows(d: SalesDashboard): DigestTable["rows"] {
     ]);
 }
 
+type CallQuality = { connected: number; engaged: number | null; hot: number };
+
+/**
+ * Block C's call-quality columns, month to date per caller (ID 59 definitions):
+ * connected calls counted once, engaged calls (null = no call of theirs has a
+ * measured duration → "—"), and leads handed to the field that were Hot at the
+ * moment of transfer. Fail-tolerant: on any error the columns read "—".
+ */
+async function callQualityPerRep(from: string, to: string): Promise<Map<string, CallQuality> | null> {
+  try {
+    const { db } = await import("@/lib/db");
+    const rows = (await db.execute(sql`
+      WITH calls AS (
+        SELECT t.performed_by AS u,
+               COUNT(*) FILTER (WHERE ${connectedCall()}) AS connected,
+               ${engagedCallCount()} AS engaged
+          FROM lead_touchpoints t
+         WHERE t.touchpoint_type = 'inside_sales_call' AND t.performed_by IS NOT NULL
+           AND (t.performed_at AT TIME ZONE 'Asia/Kolkata')::date BETWEEN ${from}::date AND ${to}::date
+         GROUP BY t.performed_by
+      ),
+      hot AS (
+        SELECT t.performed_by AS u, COUNT(*) AS hot
+          FROM lead_touchpoints t
+          JOIN dealer_leads dl ON dl.id = t.dealer_lead_id
+         WHERE t.touchpoint_type = 'asm_transfer' AND t.performed_by IS NOT NULL
+           AND (t.performed_at AT TIME ZONE 'Asia/Kolkata')::date BETWEEN ${from}::date AND ${to}::date
+           AND ${wasHotAt(sql`t.dealer_lead_id`, sql`t.performed_at`, sql`dl.interest_level`)}
+         GROUP BY t.performed_by
+      )
+      SELECT COALESCE(c.u, h.u) AS u, COALESCE(c.connected, 0) AS connected, c.engaged, COALESCE(h.hot, 0) AS hot
+        FROM calls c FULL OUTER JOIN hot h ON h.u = c.u
+    `)) as unknown as Array<{ u: string; connected: string | number; engaged: string | number | null; hot: string | number }>;
+    return new Map(
+      rows.map((r) => [
+        String(r.u),
+        { connected: Number(r.connected), engaged: r.engaged == null ? null : Number(r.engaged), hot: Number(r.hot) },
+      ]),
+    );
+  } catch (e) {
+    console.warn("[sales-daily] call quality per rep not measured:", e instanceof Error ? e.message : e);
+    return null;
+  }
+}
+
 /** Blocks B / C: per rep of one role, Yesterday + MTD side by side. */
 function repRows(
   role: "asm" | "inside_sales_rep",
   y: SalesDashboard,
   mtd: SalesDashboard,
+  quality: Map<string, CallQuality> | null = null,
 ): DigestTable["rows"] {
   const yBy = new Map((y.per_spoc ?? []).map((b) => [b.spoc_id, b]));
   return (mtd.per_spoc ?? [])
@@ -201,6 +252,7 @@ function repRows(
             m.totals.calls,
             d?.totals.dealers_called ?? 0,
             m.totals.dealers_called,
+            ...callQualityCells(quality, m.spoc_id, m.totals.calls),
             d?.outcome.quotes_issued ?? 0,
             m.outcome.quotes_issued,
             m.totals.converted,
@@ -208,18 +260,30 @@ function repRows(
     });
 }
 
+/** Connected · Connect % · Engaged · Hot to field, MTD. "—" = not measured. */
+function callQualityCells(
+  quality: Map<string, CallQuality> | null,
+  spocId: string,
+  calls: number,
+): Array<string | number> {
+  if (!quality) return ["—", "—", "—", "—"];
+  const q = quality.get(spocId) ?? { connected: 0, engaged: calls > 0 ? null : 0, hot: 0 };
+  return [
+    q.connected,
+    calls > 0 ? `${Math.round((q.connected / calls) * 100)}%` : "—",
+    q.engaged == null ? "—" : q.engaged,
+    q.hot,
+  ];
+}
+
 async function rightNow(): Promise<{ waiting: number; oldestDays: number | null }> {
   try {
-    const { db } = await import("@/lib/db");
-    const [r] = (await db.execute(sql`
-      SELECT COUNT(*)::int AS waiting,
-             MAX(FLOOR(EXTRACT(EPOCH FROM (now() - (to_jsonb(dl) ->> 'sales_ready_at')::timestamptz)) / 86400))::int AS oldest
-        FROM dealer_leads dl
-       WHERE dl.current_owner_id IS NULL AND dl.is_active IS NOT FALSE
-         AND COALESCE(dl.lead_status, '') NOT IN ('Won', 'Converted', 'Lost')
-         AND (to_jsonb(dl) ->> 'sales_ready_at') IS NOT NULL
-    `)) as unknown as Array<{ waiting: number; oldest: number | null }>;
-    return { waiting: Number(r?.waiting ?? 0), oldestDays: r?.oldest ?? null };
+    // ID 82: the one "awaiting assignment" rule — the Ready to assign page
+    // and the CEO card count the same leads. Imported here, not at module
+    // scope: listing the digest kinds must not need DATABASE_URL.
+    const { countAwaitingAssignment } = await import("@/lib/leads/salesReady");
+    const c = await countAwaitingAssignment();
+    return { waiting: c.total, oldestDays: c.oldestDays };
   } catch {
     return { waiting: 0, oldestDays: null };
   }
@@ -290,7 +354,7 @@ async function collect(
       lastMonth: sameSpanLastMonth(istDay),
     };
 
-    const [yesterday, last7, mtd, lastMonth, scheduled, followUps, now, overdue] = await Promise.all([
+    const [yesterday, last7, mtd, lastMonth, scheduled, followUps, now, overdue, quality] = await Promise.all([
       buildSalesDashboard({ ...periods.yesterday, granularity: "day" }),
       buildSalesDashboard({ ...periods.last7, granularity: "day" }),
       buildSalesDashboard({ ...periods.mtd, granularity: "day" }),
@@ -299,6 +363,7 @@ async function collect(
       followUpsPerOwner(sendDay, dayAfter),
       rightNow(),
       oldestOverdue(),
+      callQualityPerRep(periods.mtd.from, periods.mtd.to),
     ]);
     const blockA = await buildBlockA(db as never, periods, { yesterday, last7, mtd, lastMonth });
 
@@ -363,9 +428,23 @@ async function collect(
           {
             key: "block_c",
             title: "C · Inside sales (ISR / CC)",
-            columns: ["ISR", "Calls · Yesterday", "MTD", "Dealers called · Yesterday", "MTD", "Quotes created · Yesterday", "MTD", "Converted MTD"],
-            rows: repRows("inside_sales_rep", yesterday, mtd),
+            columns: [
+              "ISR",
+              "Calls · Yesterday",
+              "MTD",
+              "Dealers called · Yesterday",
+              "MTD",
+              "Connected MTD",
+              "Connect % MTD",
+              "Engaged MTD",
+              "Hot to field MTD",
+              "Quotes created · Yesterday",
+              "MTD",
+              "Converted MTD",
+            ],
+            rows: repRows("inside_sales_rep", yesterday, mtd, quality),
             textColumns: 1,
+            note: "Connected = calls that connected, each counted once. Engaged = connected and long enough by measured call length; “—” = not measured yet (NeoDove sends no call length). Hot to field = leads handed to an ASM that were Hot at that moment.",
             empty: "No inside-sales activity this month.",
           },
           {

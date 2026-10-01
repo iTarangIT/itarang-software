@@ -4,8 +4,12 @@ import { callSessions, callRecords, leads } from '@/lib/db/schema';
 import { withErrorHandler, successResponse, errorResponse, generateId } from '@/lib/api-utils';
 import { triggerBolnaCall } from '@/lib/bolna';
 import { sql, desc, and, or, isNull, lte, eq } from 'drizzle-orm';
+import { LEADS_OVERSIGHT_ROLES } from "@/lib/leads/access";
+import { requireRole } from "@/lib/auth-utils";
 
 export const POST = withErrorHandler(async (req: Request) => {
+    // ID 118: signed in, with a role that reaches this screen.
+    await requireRole([...LEADS_OVERSIGHT_ROLES]);
     // 1. Create call_sessions row
     const sessionId = `SESS-${Date.now()}`;
     await db.insert(callSessions).values({

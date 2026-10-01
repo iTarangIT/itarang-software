@@ -34,6 +34,19 @@ vi.mock("@/lib/inside-sales/createLead", async (orig) => ({
     findLeadIdByPhone,
     createInsideSalesLead,
 }));
+// ID 81 — the Re-inquiry writer and the campaign register (both hit the DB).
+const recordReinquiry = vi.fn<(...a: unknown[]) => Promise<void>>(async () => {});
+vi.mock("@/lib/leads/leadSource", async (orig) => ({
+    ...(await orig<typeof import("@/lib/leads/leadSource")>()),
+    recordReinquiry,
+}));
+const findCampaignByName = vi.fn<(...a: unknown[]) => Promise<{ id: string; name: string } | null>>(async () => null);
+const listCampaigns = vi.fn<(...a: unknown[]) => Promise<{ name: string }[]>>(async () => []);
+vi.mock("@/lib/leads/acquisitionCampaigns", async (orig) => ({
+    ...(await orig<typeof import("@/lib/leads/acquisitionCampaigns")>()),
+    findCampaignByName,
+    listCampaigns,
+}));
 
 const { toolsFor } = await import("../registry");
 const { APPLIERS } = await import("../appliers");
@@ -267,16 +280,16 @@ describe("create_lead", () => {
         expect(tenDigitPhone("98765")).toBeNull();
     });
 
-    it("ISR → claim pool; ASM → owned by them; no lead id on the pending action", async () => {
-        const REQUIRED = { city: "Nashik", business_type: "battery_sale", origin: "trade_event" } as const;
+    it("ISR and ASM both keep the lead they create (ID 83); no lead id on the pending action", async () => {
+        const REQUIRED = { city: "Nashik", business_type: "battery_sale", origin: "dealer_referral" } as const;
         await run(ISR, "create_lead", { dealer_name: "Suresh", phone: "+91 98765 43210", ...REQUIRED });
         expect(stored()).toMatchObject({
             tool: "create_lead",
             leadId: null,
-            plan: { phone: "9876543210", city: "Nashik", origin: "trade_event" },
+            plan: { phone: "9876543210", city: "Nashik", origin: "dealer_referral" },
         });
-        expect(stored().preview.lines).toContainEqual({ label: "Found via", value: "Trade event" });
-        expect(stored().preview.lines).toContainEqual({ label: "Goes to", value: "the unassigned claim pool" });
+        expect(stored().preview.lines).toContainEqual({ label: "Found via", value: "Dealer referral" });
+        expect(stored().preview.lines).toContainEqual({ label: "Goes to", value: "your queue — owned by you" });
         await run(ASM, "create_lead", { dealer_name: "Suresh", phone: "9876543210", ...REQUIRED });
         expect(stored().preview.lines).toContainEqual({ label: "Goes to", value: "your queue — owned by you" });
     });
@@ -303,6 +316,47 @@ describe("create_lead", () => {
         const seen = await run(ISR, "create_lead", { dealer_name: "Suresh", phone: "9876543210" });
         expect((seen as { reason: string }).reason).toMatch(/ABC Traders/);
         expect(createPending).not.toHaveBeenCalled();
+        // ID 81: adding a dealer we already hold is a Re-inquiry on that lead.
+        expect(recordReinquiry).toHaveBeenCalledWith({
+            leadId: "DL-99",
+            door: "whatsapp_assistant",
+            actorId: ISR.id,
+            note: "Suresh",
+        });
+    });
+
+    it("ID 81: a Trade event / Digital ad lead needs a campaign that exists", async () => {
+        findLeadIdByPhone.mockResolvedValue(null);
+        const base = { dealer_name: "Suresh", phone: "9876543210", city: "Nashik", business_type: "finance" };
+
+        // No campaign said, none set up → told where to add one.
+        expect(await run(ISR, "create_lead", { ...base, origin: "trade_event" })).toMatchObject({
+            kind: "question",
+            question: expect.stringMatching(/Acquisition campaigns/i),
+        });
+
+        // A name that matches nothing → the open ones are offered.
+        listCampaigns.mockResolvedValue([{ name: "Auto Expo 2026" }]);
+        expect(await run(ISR, "create_lead", { ...base, origin: "trade_event", campaign: "Expo" })).toMatchObject({
+            kind: "question",
+            question: expect.stringMatching(/Auto Expo 2026/),
+        });
+        expect(createPending).not.toHaveBeenCalled();
+
+        // The campaign exists → proposed, with the campaign on the plan and the preview.
+        findCampaignByName.mockResolvedValue({ id: "c-1", name: "Auto Expo 2026" });
+        await run(ISR, "create_lead", { ...base, origin: "trade_event", campaign: "auto expo 2026" });
+        expect(stored().plan).toMatchObject({ origin: "trade_event", campaign_id: "c-1", campaign_name: "Auto Expo 2026" });
+        expect(stored().preview.lines).toContainEqual({ label: "Campaign", value: "Auto Expo 2026" });
+    });
+
+    it("ID 81: other origins need no campaign", async () => {
+        findLeadIdByPhone.mockResolvedValue(null);
+        findCampaignByName.mockResolvedValue(null);
+        await run(ISR, "create_lead", {
+            dealer_name: "Suresh", phone: "9876543210", city: "Nashik", business_type: "finance", origin: "field_walk_in",
+        });
+        expect(stored().plan).toMatchObject({ origin: "field_walk_in", campaign_id: null });
     });
 
     it("applier: a duplicate created meanwhile → duplicate_phone; otherwise returns the new lead", async () => {

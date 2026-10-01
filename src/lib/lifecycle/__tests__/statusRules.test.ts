@@ -60,8 +60,17 @@ describe("checkStatusMove", () => {
     });
 
     it("a withdrawn quote sends a commercials-stage lead back to Under discussion (ID 78)", () => {
-        expect(checkStatusMove({ from: "Commercials_Finalised", to: "Under_Discussion", event: "quote_withdrawn" }).ok).toBe(true);
+        for (const from of ["Commercials_Explained", "Awaiting_Customer_Decision"] as const) {
+            expect(checkStatusMove({ from, to: "Under_Discussion", event: "quote_withdrawn" }).ok, from).toBe(true);
+        }
         expect(checkStatusMove({ from: "Under_Discussion", to: "Assigned_Not_Contacted", event: "quote_withdrawn" }).ok).toBe(false);
+    });
+
+    it("but never out of Commercials finalised — after the dealer's yes only Mark Won / Mark Lost leave it", () => {
+        const verdict = checkStatusMove({ from: "Commercials_Finalised", to: "Under_Discussion", event: "quote_withdrawn" });
+        expect(verdict.ok).toBe(false);
+        expect(checkStatusMove({ from: "Commercials_Finalised", to: "Won", event: "mark_won" }).ok).toBe(true);
+        expect(checkStatusMove({ from: "Commercials_Finalised", to: "Lost", event: "mark_lost" }).ok).toBe(true);
     });
 
     it("refuses a no-op", () => {
