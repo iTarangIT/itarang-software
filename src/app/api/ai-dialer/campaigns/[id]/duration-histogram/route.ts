@@ -13,13 +13,13 @@
 // sibling [id]/route.ts, which keeps it clear of the in-flight campaign-schedule
 // edits on that file.
 //
-// AUTH: none beyond the session, matching the sibling [id]/leads route. This
-// endpoint returns strictly less than the lead table already rendered on the
-// same page — counts and reasons, no names, no phone numbers, no transcripts —
-// and src/middleware.ts already requires an authenticated session for /api/*.
-// (export.xlsx does gate by role, because a downloaded file leaves the building.)
+// AUTH (ID 45): the campaign readers (requireCampaignReader — the /leads
+// roles). It used to be "none beyond the session", but middleware does NOT gate
+// /api/*. Counts and reasons only — no names, numbers or transcripts — so it
+// stays campaign-wide for reps, like the campaign stat tiles.
 import { db } from "@/lib/db";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
+import { requireCampaignReader } from "@/lib/ai-dialer/campaignAccess";
 import { resolveDurationBucketConfig } from "@/lib/ai-dialer/call-duration/config-store";
 import {
     buildDurationHistogramSql,
@@ -35,6 +35,7 @@ import {
 
 export const GET = withErrorHandler(
     async (_req: Request, ctx: { params: Promise<{ id: string }> }) => {
+        await requireCampaignReader();
         const { id: campaignId } = await ctx.params;
         if (!campaignId) return errorResponse("Campaign id required", 400);
 

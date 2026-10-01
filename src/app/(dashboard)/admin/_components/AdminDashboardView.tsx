@@ -12,6 +12,7 @@ import { DashboardFilterBar } from "./DashboardFilterBar";
 import { KpiStrip } from "./KpiStrip";
 import { TeamPerformanceTable } from "./TeamPerformanceTable";
 import { AlertPanels } from "./AlertPanels";
+import { OutsideTerritoryClaims } from "@/components/leads/OutsideTerritoryClaims";
 
 export function buildFilterQuery(f: DashboardFilters): string {
     const p = new URLSearchParams();
@@ -50,6 +51,9 @@ export function AdminDashboardView({ readOnly }: { readOnly: boolean }) {
     return (
         <div className="space-y-5">
             <DashboardFilterBar filters={filters} onApply={setFilters} />
+
+            {/* ID 45: ASM claims outside their territory (renders nothing when none). */}
+            <OutsideTerritoryClaims />
 
             {query.isLoading && <DashboardSkeleton />}
 

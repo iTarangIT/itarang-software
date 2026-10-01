@@ -53,7 +53,8 @@ export function tabFilter(tab: AsmQueueTab, asmId: string) {
             // ID 36: dead / non-responsive numbers are in Number Repair, not here.
             return sql`dl.current_owner_id = ${asmId} AND dl.lead_status NOT IN (${TERMINAL_LIST}) AND dl.is_active IS NOT FALSE AND (to_jsonb(dl) ->> 'contactability') IS NULL`;
         case "today":
-            return sql`dl.asm_id = ${asmId} AND lv.scheduled_date = CURRENT_DATE AND lv.visit_status IN ('scheduled','pending_scheduling') AND dl.is_active IS NOT FALSE`;
+            // ID 36: a dead / non-responsive number is in Number Repair, not on today's route.
+            return sql`dl.asm_id = ${asmId} AND lv.scheduled_date = CURRENT_DATE AND lv.visit_status IN ('scheduled','pending_scheduling') AND dl.is_active IS NOT FALSE AND (to_jsonb(dl) ->> 'contactability') IS NULL`;
         case "territory":
             // In-territory leads, OR any lead nobody owns yet — so the ASM sees
             // the same unassigned pool the Inside Sales claim queue surfaces

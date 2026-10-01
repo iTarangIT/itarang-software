@@ -64,7 +64,8 @@ export const GET = withErrorHandler(async (req: Request) => {
     const fullPhone = FULL_PHONE_ROLES.has((user.role ?? "").toLowerCase());
 
     const searchParams = new URL(req.url).searchParams;
-    const filters = await parseLeadListFilters(searchParams, caps);
+    // ID 45: partner (a rep role) is scoped to its own leads, as on /leads.
+    const filters = await parseLeadListFilters(searchParams, caps, user);
 
     const total = await countLeadsForExport(filters);
     if (total > LEADS_EXPORT_ROW_CAP) {

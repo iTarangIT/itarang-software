@@ -33,6 +33,24 @@ import {
   GET as leadScopedGET,
   POST as leadScopedPOST,
 } from "@/app/api/dealer-leads/[id]/intent-feedback/route";
+import { errorResponse, withErrorHandler } from "@/lib/api-utils";
+import { leadOwnedBy, requireCampaignReader } from "@/lib/ai-dialer/campaignAccess";
+
+/**
+ * ID 45: a rep (asm / inside_sales_rep / partner) may only read or correct the
+ * intent of a lead they OWN. Anything else is a 404 — the same answer as "no
+ * such lead", so the pool cannot be probed id by id. null = allowed.
+ */
+async function denyUnlessOwned(ctx: {
+  params: Promise<{ id: string; leadId: string }>;
+}): Promise<Response | null> {
+  const { user, ownOnly } = await requireCampaignReader();
+  if (!ownOnly) return null;
+  const { leadId } = await ctx.params;
+  return leadId && (await leadOwnedBy(leadId, user.id))
+    ? null
+    : errorResponse("Lead not found", 404);
+}
 
 /**
  * Re-key the params. The delegate is lead-scoped and names the lead `id`; this
@@ -47,12 +65,16 @@ function asLeadScopedCtx(ctx: {
   return { params: ctx.params.then(({ leadId }) => ({ id: leadId })) };
 }
 
-export const POST = async (
-  req: NextRequest,
-  ctx: { params: Promise<{ id: string; leadId: string }> },
-) => leadScopedPOST(req, asLeadScopedCtx(ctx));
+export const POST = withErrorHandler(
+  async (
+    req: NextRequest,
+    ctx: { params: Promise<{ id: string; leadId: string }> },
+  ) => (await denyUnlessOwned(ctx)) ?? leadScopedPOST(req, asLeadScopedCtx(ctx)),
+);
 
-export const GET = async (
-  req: NextRequest,
-  ctx: { params: Promise<{ id: string; leadId: string }> },
-) => leadScopedGET(req, asLeadScopedCtx(ctx));
+export const GET = withErrorHandler(
+  async (
+    req: NextRequest,
+    ctx: { params: Promise<{ id: string; leadId: string }> },
+  ) => (await denyUnlessOwned(ctx)) ?? leadScopedGET(req, asLeadScopedCtx(ctx)),
+);

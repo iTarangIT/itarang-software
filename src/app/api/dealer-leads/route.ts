@@ -5,12 +5,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireRole } from "@/lib/auth-utils";
 import { withErrorHandler } from "@/lib/api-utils";
 import { LEADS_PAGE_ROLES, capabilitiesFor } from "@/lib/leads/access";
-import {
-  isIntentBucket,
-  normalizeScoreRange,
-  parseScoreBound,
-} from "@/lib/leads/intentBucket";
-import { isConnectStatus, isDispositionBucket } from "@/lib/leads/dispositions";
+import { parseLeadListFilters } from "@/lib/leads/leadListParams";
 import {
   BULK_ID_CAP,
   fetchBusinessTypeCounts,
@@ -25,10 +20,8 @@ import {
 import {
   fetchCampaignFacets,
   fetchCampaignForLeads,
-  neodoveTablesPresent,
   type LeadCampaign,
 } from "@/lib/leads/leadCampaign";
-import { IDLE_RANGES, isIdleRangeKey } from "@/lib/leads/idle";
 import {
   fetchAssignedByForLeads,
   type LeadAssignedBy,
@@ -52,10 +45,7 @@ import {
   loadExistingByPhone,
   normalizePhone,
 } from "@/lib/leads/dedupe";
-import {
-  isBusinessTypeFilter,
-  normalizeBusinessType,
-} from "@/lib/leads/businessType";
+import { normalizeBusinessType } from "@/lib/leads/businessType";
 
 export async function POST(req: NextRequest) {
   // ⚠ SECURITY: this create had no auth check (middleware does not gate
@@ -287,98 +277,14 @@ export const GET = withErrorHandler(async (req: Request) => {
   // is kept purely so no unknown caller starts truncating.
   const limit = Math.min(500, Math.max(1, parseInt(searchParams.get("limit") ?? "25") || 25));
 
-  const intentParam = searchParams.get("intent");
-  const connectStatusParam = searchParams.get("connect_status");
-  const bucketParam = searchParams.get("disposition_bucket");
-  // L3 is NOT validated against the CC sheet. A disposition NeoDove sent from a
-  // campaign configured with a different vocabulary is legitimately filterable —
-  // the facets query offers exactly those under "Other (seen in NeoDove)" — and
-  // rejecting them here would make the dropdown offer options it then ignored.
-  // It is safe unvalidated: the predicate is an equality against a parameterised
-  // placeholder, so an unknown string matches nothing rather than doing harm.
-  const dispositionParam = searchParams.get("disposition")?.trim() || null;
-
-  // Idle band. Validated against the closed vocabulary — an unrecognised value
-  // is dropped rather than queried for, so a stale bookmark shows everything
-  // instead of silently returning zero rows.
-  const idleParam = searchParams.get("idle");
-  const idleRange = isIdleRangeKey(idleParam) ? IDLE_RANGES[idleParam] : null;
-
-  // The campaign filter names neodove_lead_links, which does not exist on every
-  // database — the branch has to be omitted from the SQL, so the answer is
-  // needed before the statement is built.
-  const campaignParam = searchParams.get("campaign")?.trim() || null;
-  const hasNeodoveTables = campaignParam ? await neodoveTablesPresent() : false;
-
-  // Explicit intent-score range. Same axis as `intent`; see LeadListFilters.
-  const scoreRange = normalizeScoreRange(
-    parseScoreBound(searchParams.get("score_min")),
-    parseScoreBound(searchParams.get("score_max")),
-  );
-
-  const filters: LeadListFilters = {
-    status: searchParams.get("status") || null,
-    intent: isIntentBucket(intentParam) ? intentParam : null,
-    scoreMin: scoreRange.min,
-    scoreMax: scoreRange.max,
-    source: searchParams.get("source") || null,
-    // Sync state, not `source` — a scraped lead we pushed to NeoDove keeps
-    // source = 'scraper'. See LeadFilters.neodove.
-    neodoveOnly: searchParams.get("neodove") === "1",
-    idleMinDays: idleRange?.min ?? null,
-    idleMaxDays: idleRange?.max ?? null,
-    idleNeverTouched: idleParam === "never",
-    campaign: campaignParam,
-    hasNeodoveTables,
-    state: searchParams.get("state")?.trim() || null,
-    city: searchParams.get("city")?.trim() || null,
-    search: searchParams.get("search")?.trim() || null,
-    from: searchParams.get("from")?.trim() || null,
-    to: searchParams.get("to")?.trim() || null,
-    // E-236. L1 and L2 come from closed vocabularies, so an unrecognised value
-    // is dropped rather than queried for — it can only be a stale bookmark or a
-    // hand-edited URL, and silently returning zero rows for it reads as "no such
-    // leads" when the truth is "no such filter".
-    connectStatus: isConnectStatus(connectStatusParam) ? connectStatusParam : null,
-    dispositionBucket: isDispositionBucket(bucketParam) ? bucketParam : null,
-    disposition: dispositionParam,
-    // AI call state + signals. Validated against closed vocabularies; anything
-    // else is treated as unset rather than passed through to SQL.
-    aiCalled: ["connected", "attempted", "never"].includes(
-      searchParams.get("ai_called") ?? "",
-    )
-      ? searchParams.get("ai_called")
-      : null,
-    aiBand: ["Qualified", "Warm", "Cold", "Disqualified"].includes(
-      searchParams.get("ai_band") ?? "",
-    )
-      ? searchParams.get("ai_band")
-      : null,
-    signalsMin: (() => {
-      const n = Number(searchParams.get("signals_min"));
-      return Number.isInteger(n) && n >= 1 && n <= 5 ? n : null;
-    })(),
-    callback: searchParams.get("callback") === "1",
-    // E-296. Closed vocabulary plus the "unset" sentinel; anything else is
-    // dropped rather than queried for, same as the other closed filters.
-    businessType: isBusinessTypeFilter(searchParams.get("business_type"))
-      ? searchParams.get("business_type")
-      : null,
-    // Owner / ASM are oversight-only (they were visible solely on the
-    // admin+sales_head-gated Leads Info page). The params are IGNORED rather
-    // than merely hidden in the UI, so a hand-crafted request can't filter by a
-    // field the caller isn't allowed to see.
-    ownerId: caps.canSeeOwnerAsm ? searchParams.get("owner_id") || null : null,
-    asmId: caps.canSeeOwnerAsm ? searchParams.get("asm_id") || null : null,
-    // Assigned-date range rides on the same gate: it is only meaningful
-    // beside the Owner column, and the UI only offers it to those roles.
-    assignedFrom: caps.canSeeOwnerAsm
-      ? searchParams.get("assigned_from")?.trim() || null
-      : null,
-    assignedTo: caps.canSeeOwnerAsm
-      ? searchParams.get("assigned_to")?.trim() || null
-      : null,
-  };
+  // ONE reader for the list and both exports (src/lib/leads/leadListParams.ts):
+  // the export routes say they parse "exactly as GET", and now they literally
+  // do — including the ID 36 "Hide dead & disqualified" toggle (hide_dead=0
+  // shows them) and the contactability filter. Owner / ASM / assigned-date stay
+  // gated on caps.canSeeOwnerAsm there. Passing `user` scopes a rep role
+  // (asm, inside_sales_rep, partner) to the leads it owns — ID 45: a rep cannot
+  // browse the pool here, in ids_only, or in the stats.
+  const filters: LeadListFilters = await parseLeadListFilters(searchParams, caps, user);
 
   // ?ids_only=1 — every id matching these filters, for "select all N matching".
   // Returned on its own: the caller wants ids to feed a bulk action, not rows,

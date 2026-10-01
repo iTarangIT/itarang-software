@@ -65,6 +65,13 @@ export type LeadListFilters = {
     /** lead_status pipeline stage, or the UNASSIGNED_FILTER sentinel. */
     status?: string | null;
     ownerId?: string | null;
+    /**
+     * ID 45: ACCESS scope, not a filter the user picks. Set by the route to the
+     * caller's own id for the rep roles (exportsOwnLeadsOnly), so a rep cannot
+     * browse the pool — rows, stats, ids_only and the export all honour it.
+     * ANDed with ownerId (which reps cannot set anyway).
+     */
+    ownerScopeId?: string | null;
     asmId?: string | null;
     source?: string | null;
     /**
@@ -80,6 +87,12 @@ export type LeadListFilters = {
      * non-responsive leads are hidden unless "include" (all) or "only".
      */
     contactability?: "include" | "only" | null;
+    /**
+     * ID 36: the "Hide dead & disqualified" checkbox. Default (undefined/true)
+     * hides contactability-flagged leads AND current_status = 'disqualified';
+     * false shows both. `contactability: "only"` still narrows to flagged.
+     */
+    hideDead?: boolean | null;
     /** Display bucket over final_intent_score. See intentBucket.ts. */
     intent?: IntentBucket | null;
     /**
@@ -352,6 +365,7 @@ function buildWhere(f: LeadListFilters, opts?: { ignoreIntent?: boolean }) {
         conds.push(sql`dl.lead_status = ${f.status}`);
     }
     if (f.ownerId) conds.push(sql`dl.current_owner_id = ${f.ownerId}`);
+    if (f.ownerScopeId) conds.push(sql`dl.current_owner_id = ${f.ownerScopeId}`);
     if (f.asmId) conds.push(sql`dl.asm_id = ${f.asmId}`);
     if (f.source) conds.push(sql`dl.source = ${f.source}`);
     if (f.neodoveOnly) {
@@ -466,10 +480,17 @@ function buildWhere(f: LeadListFilters, opts?: { ignoreIntent?: boolean }) {
         conds.push(sql`dl.assigned_at::date <= ${f.assignedTo}`);
     }
     // ID 36 — read via to_jsonb so a DB without E-314 shows everything.
+    // "Hide dead & disqualified" (default on): flagged numbers AND AI-
+    // disqualified leads (current_status) are out unless the user unticks it.
+    const hideDead = f.hideDead !== false && f.contactability !== "include";
     if (f.contactability === "only") {
         conds.push(sql`(to_jsonb(dl) ->> 'contactability') IS NOT NULL`);
-    } else if (f.contactability !== "include") {
+    } else if (hideDead) {
         conds.push(sql`(to_jsonb(dl) ->> 'contactability') IS NULL`);
+    }
+    // An explicit "AI band: Disqualified" filter is asking for exactly those.
+    if (hideDead && f.contactability !== "only" && f.aiBand !== "Disqualified") {
+        conds.push(sql`dl.current_status IS DISTINCT FROM 'disqualified'`);
     }
 
     // ID 46: "9876543210, 9123456789" selects exactly those leads by mobile

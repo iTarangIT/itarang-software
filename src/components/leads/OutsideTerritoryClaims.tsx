@@ -2,6 +2,8 @@
 
 // Sales Head view of ASM claims made outside the ASM's territory (tracker
 // ID 45): allowed, and listed here. Renders nothing when there are none.
+// Mounted on the Sales Head dashboard and the admin dashboard (its API is
+// manager-only — it used to sit in the ASM queue, where it always 403'd).
 
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
@@ -28,14 +30,14 @@ export function OutsideTerritoryClaims() {
     if (rows.length === 0) return null;
 
     return (
-        <div className="border-b border-gray-100 bg-amber-50/60 px-4 py-3">
+        <div className="rounded-xl border border-amber-200 bg-amber-50/60 px-4 py-3">
             <p className="text-xs font-semibold text-amber-800">
                 Claimed outside territory — last 30 days ({rows.length})
             </p>
             <ul className="mt-1.5 space-y-1">
                 {rows.slice(0, 10).map((r) => (
                     <li key={`${r.lead_id}-${r.claimed_at}`} className="text-xs text-amber-900">
-                        <Link href={`/asm/lead/${encodeURIComponent(r.lead_id)}`} className="font-medium underline">
+                        <Link href={`/leads/${encodeURIComponent(r.lead_id)}`} className="font-medium underline">
                             {r.dealer_name ?? r.lead_id}
                         </Link>{" "}
                         · {[r.city, r.state].filter(Boolean).join(", ") || "no location"} · by {r.claimed_by ?? "—"} ·{" "}

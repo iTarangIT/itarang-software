@@ -1493,10 +1493,47 @@ export async function startDriveSalesTicker() {
   const interval = setInterval(tick, SCAN_INTERVAL_MS);
   if (typeof interval.unref === "function") interval.unref();
 
+  // Tracker ID 9 — one extra scan per IST day from 08:30, so the 09:00 Daily
+  // Sales email reads Revenue at most ~30 minutes old instead of up to six
+  // hours. A 5-minute tick that claims a digest_runs row per IST day (the
+  // monitor-morning pattern), so it is ~1 cheap claim attempt per tick and
+  // one scan per day across every process. Shares `inFlight` with the
+  // interval scan so the two never overlap in this process.
+  const DAILY_TICK_MS = 5 * 60_000;
+  const dailyTick = async () => {
+    if (inFlight) return;
+    inFlight = true;
+    try {
+      const { runDailySalesScan } = await import("@/lib/sales/driveSalesScanDaily");
+      const r = await runDailySalesScan({ maxFiles: MAX_FILES, triggeredBy: "ticker" });
+      // "not_due" / "already_claimed" are the normal case and stay silent.
+      if (r.ran) {
+        const line = `[instrumentation:drive-sales] daily 08:30 scan for ${r.istDate}: ${r.status} — ${r.detail}`;
+        if (r.status === "failed") console.error(line);
+        else console.log(line);
+      }
+    } catch (err) {
+      console.error(
+        "[instrumentation:drive-sales] daily tick failed:",
+        err instanceof Error ? err.message : err,
+      );
+    } finally {
+      inFlight = false;
+    }
+  };
+  // Off outside production unless opted in: a dev process on a shared DB
+  // would otherwise take the day's claim and the real box would skip it.
+  const dailyEnabled =
+    process.env.NODE_ENV === "production" || process.env.ENABLE_DRIVE_SALES_DAILY === "1";
+  if (dailyEnabled) {
+    const daily = setInterval(dailyTick, DAILY_TICK_MS);
+    if (typeof daily.unref === "function") daily.unref();
+  }
+
   console.log(
     `[instrumentation] drive-sales-scan (${Math.round(
       SCAN_INTERVAL_MS / 60_000,
-    )}m) started in-process`,
+    )}m + daily 08:30 IST) started in-process`,
   );
 }
 
@@ -1806,4 +1843,48 @@ export async function startDealerAgreementRefreshTicker() {
   if (typeof interval.unref === "function") interval.unref();
 
   console.log("[instrumentation] dealer agreement refresh sweep (15 min) started in-process");
+}
+
+// ---------------------------------------------------------------------------
+// Dealer agreement expiry reminder (tracker ID 53).
+// ---------------------------------------------------------------------------
+// /api/cron/dealer-agreement-expiry-reminder was only ever a Vercel cron, and
+// those do not fire on the pm2 boxes — so no signer was ever reminded. This
+// runs the same runner hourly in-process; it is idempotent per signer per ~20h
+// through dealer_agreement_events, so hourly ticks (and the cron route as the
+// backstop) still send at most one reminder a day.
+export async function startAgreementExpiryReminderTicker() {
+  if (process.env.VERCEL === "1") return;
+
+  const TICK_INTERVAL_MS = 60 * 60_000;
+  let inFlight = false;
+
+  const tick = async () => {
+    if (inFlight) return;
+    inFlight = true;
+    try {
+      const { runAgreementExpiryReminders } = await import("@/lib/agreement/expiryReminder");
+      const r = await runAgreementExpiryReminders();
+      if (r.emailsSent || r.whatsappSent || r.errors.length) {
+        console.log(
+          `[instrumentation:agreement-expiry] considered=${r.signersConsidered} ` +
+            `emails=${r.emailsSent} whatsapp=${r.whatsappSent} errors=${r.errors.length}`,
+        );
+      }
+    } catch (err) {
+      console.error(
+        "[instrumentation:agreement-expiry] tick failed:",
+        err instanceof Error ? err.message : err,
+      );
+    } finally {
+      inFlight = false;
+    }
+  };
+
+  const kickoff = setTimeout(tick, 215_000);
+  if (typeof kickoff.unref === "function") kickoff.unref();
+  const interval = setInterval(tick, TICK_INTERVAL_MS);
+  if (typeof interval.unref === "function") interval.unref();
+
+  console.log("[instrumentation] dealer agreement expiry reminder (hourly) started in-process");
 }

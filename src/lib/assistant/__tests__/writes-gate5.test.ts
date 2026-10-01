@@ -222,9 +222,9 @@ const poolLead = (over: Record<string, unknown> = {}) => ({
 });
 
 describe("claim_lead proposals (UC-05)", () => {
-    it("UC-05: a name resolved in the POOL → one preview (owner you, Assigned Not Contacted)", async () => {
+    it("UC-05: an exact phone resolved in the POOL → one preview (owner you, Assigned Not Contacted)", async () => {
         poolRows.push(poolLead());
-        const r = await run(ISR, "claim_lead", { name: "Sharma Battery House" });
+        const r = await run(ISR, "claim_lead", { phone: "+91 98123 45678" });
         expect(r.kind).toBe("preview");
         expect(stored().plan).toEqual({ lead_id: "DL-7" });
         expect(stored().leadVersion).toEqual(new Date("2026-09-24T09:00:00Z"));
@@ -234,7 +234,10 @@ describe("claim_lead proposals (UC-05)", () => {
         // The lookup is the claim pool, never the whole scope.
         const q = sqlText(execute.mock.calls[0]![0]);
         expect(q).toContain("dl.current_owner_id IS NULL");
-        expect(q).toMatch(/ILIKE/);
+        // ID 45: exact last-10-digit match, never a name search over the pool.
+        expect(q).not.toMatch(/ILIKE/);
+        expect(q).toMatch(/jsonb_array_elements_text/);
+        expect(new PgDialect().sqlToQuery(execute.mock.calls[0]![0]).params).toContain('["9812345678"]');
     });
 
     it("an ASM may claim in any territory (ID 45); the preview makes them the field ASM", async () => {
@@ -246,13 +249,18 @@ describe("claim_lead proposals (UC-05)", () => {
         expect(stored().preview.lines).toContainEqual({ label: "Field ASM", value: "you (visits go to your Today's Schedule)" });
     });
 
-    it("two matches → candidates, never a pick; no match by name → not_found", async () => {
+    it("a comma list matching two leads → candidates, never a pick; no match → not_found; a name is not a phone", async () => {
         poolRows.push(poolLead({ total: 2 }), poolLead({ id: "DL-8", shop_name: "Sharma Battery House 2", total: 2 }));
-        const r = await run(ISR, "claim_lead", { name: "Sharma" });
+        const r = await run(ISR, "claim_lead", { phone: "9812345678, 9876543210" });
         expect(r.kind).toBe("candidates");
         if (r.kind === "candidates") expect(r.rows.map((x) => x.id)).toEqual(["DL-7", "DL-8"]);
         poolRows.length = 0;
-        expect(await run(ISR, "claim_lead", { name: "Nobody" })).toEqual({ kind: "not_found" });
+        expect(await run(ISR, "claim_lead", { phone: "9000000000" })).toEqual({ kind: "not_found" });
+        // ID 45: a name is not resolved in the pool — the tool asks for the number, no query runs.
+        execute.mockClear();
+        expect(tool(ISR, "claim_lead").schema.safeParse({ name: "Sharma" }).success).toBe(false);
+        expect((await run(ISR, "claim_lead", { phone: "Sharma Battery House" })).kind).toBe("question");
+        expect(execute).not.toHaveBeenCalled();
         expect(createPending).not.toHaveBeenCalled();
     });
 
@@ -268,10 +276,10 @@ describe("claim_lead proposals (UC-05)", () => {
         expect(createPending).not.toHaveBeenCalled();
     });
 
-    it("needs a lead id or a name; pilot off → declined before any lookup", async () => {
+    it("needs a lead id or a phone; pilot off → declined before any lookup", async () => {
         expect(tool(ISR, "claim_lead").schema.safeParse({}).success).toBe(false);
         const t = tool(ISR, "claim_lead");
-        expect((await t.run({ ...ctx(ISR), writesEnabled: false }, t.schema.parse({ name: "Sharma" }))).kind).toBe("declined");
+        expect((await t.run({ ...ctx(ISR), writesEnabled: false }, t.schema.parse({ phone: "9812345678" }))).kind).toBe("declined");
         expect(execute).not.toHaveBeenCalled();
     });
 });
