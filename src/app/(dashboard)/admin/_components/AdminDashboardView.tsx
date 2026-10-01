@@ -74,6 +74,7 @@ export function AdminDashboardView({ readOnly }: { readOnly: boolean }) {
                         <AlertPanels
                             counts={data.alert_counts}
                             filterQs={qs}
+                            transferVisitLimitDays={data.transfer_visit_limit_days}
                         />
                     </div>
                 </>

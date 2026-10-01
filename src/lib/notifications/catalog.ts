@@ -145,6 +145,8 @@ export const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   // and, worse, was invisible to the admin Notification Access screen. Mapped
   // here so it is both filed correctly and governable.
   onboarding_initiated: "Onboarding",
+  // ID 74.7: an approved onboarding whose lead could NOT be moved to Converted.
+  lead_conversion_failed: "Onboarding",
 
   // --- KYC & consent ---
   "kyc.submitted": "KYC & Consent",

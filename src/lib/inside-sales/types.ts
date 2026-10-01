@@ -283,8 +283,15 @@ export type LeadOnboardingMilestones = {
     agreement_status: string | null;
     approved_at: string | null;
     last_activity_at: string | null;
-    /** No onboarding activity for 14+ days and not yet approved / rejected. */
+    /**
+     * ID 84.1: open and stalled — waiting on the dealer for 7+ days, or on us
+     * for 2+ working days (src/lib/onboarding/stall.ts).
+     */
     stalled: boolean;
+    /** Whose move the stall is waiting on; null when not stalled. */
+    stalled_waiting_on?: "dealer" | "us" | null;
+    /** "Stalled · waiting on dealer" / "Stalled · waiting on us"; null when not stalled. */
+    stalled_label?: string | null;
 };
 
 // ───────────────────────────── action payloads ────────────────────────────

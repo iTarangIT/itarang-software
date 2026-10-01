@@ -101,6 +101,21 @@ export function isWorkedTouchpoint(
   return type === "status_change_note" && hasStatusChange;
 }
 
+/**
+ * ID 115.2: the touchpoints that are a conversation with the dealer — a call, a
+ * visit or a WhatsApp chat. Only these may ask for first contact
+ * (Under_Discussion) on the touchpoint form; a note cannot.
+ */
+export const CONVERSATION_TOUCHPOINT_TYPES: readonly TouchpointType[] = [
+  "inside_sales_call",
+  "visit",
+  "whatsapp",
+];
+
+export function isConversationTouchpoint(type: TouchpointType): boolean {
+  return CONVERSATION_TOUCHPOINT_TYPES.includes(type);
+}
+
 export const CALL_STATUS = [
   "connected",
   "not_reachable",

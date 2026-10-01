@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/db", () => ({ db: {} }));
-const { planTouchpoint, UnknownDispositionError, TouchpointBodySchema } = await import("../logTouchpoint");
+const { planTouchpoint, UnknownDispositionError, StatusRequestNotAllowedError, TouchpointBodySchema } = await import("../logTouchpoint");
 const { resolveOutcome } = await import("@/lib/leads/outcomeRule");
 
 const lead = { leadId: "DL-1", fromStatus: "Under_Discussion" as const, actorId: "isr-1" };
@@ -55,6 +55,16 @@ describe("planTouchpoint (extracted from POST /api/inside-sales/lead/[id]/touchp
             reasonNotes: null,
             event: "progress",
         });
+    });
+
+    it("first contact is honoured only on a call, visit or WhatsApp touchpoint (ID 115.2)", () => {
+        const fresh = { ...lead, fromStatus: "Assigned_Not_Contacted" as const };
+        expect(planTouchpoint(body({ touchpoint_type: "whatsapp", status_change: { to: "Under_Discussion" } }), fresh).statusChange?.to)
+            .toBe("Under_Discussion");
+        expect(() => planTouchpoint(body({ touchpoint_type: "status_change_note", status_change: { to: "Under_Discussion" } }), fresh))
+            .toThrow(StatusRequestNotAllowedError);
+        // A note without a status request is still fine.
+        expect(planTouchpoint(body({ touchpoint_type: "status_change_note" }), fresh).statusChange).toBeUndefined();
     });
 
     it("a non-call touchpoint, or a call with no disposition, carries no outcome", () => {

@@ -1974,6 +1974,12 @@ export async function notifyQuotationDealerDecision(p: {
   decision: "approved" | "declined";
   via: "link" | "whatsapp";
   note?: string | null;
+  /**
+   * ID 75.1: the approval did not move the lead because it is Awaiting field
+   * visit (Transferred_to_ASM) — its pre_transfer_status was raised instead,
+   * and the visit restores Commercials finalised.
+   */
+  awaitingVisit?: boolean;
 }) {
   const dealer = p.dealerName?.trim() || "The dealer";
   const money = p.value > 0 ? ` (₹${p.value.toLocaleString("en-IN")})` : "";
@@ -1982,8 +1988,11 @@ export async function notifyQuotationDealerDecision(p: {
 
   const message =
     p.decision === "approved"
-      ? `${dealer} APPROVED quotation${ref}${money} ${channel}. The lead is now Commercials ` +
-        `finalised — open it and Mark Won.`
+      ? p.awaitingVisit
+        ? `${dealer} APPROVED quotation${ref}${money} ${channel}. The lead returns to ` +
+          `Commercials finalised after the field visit.`
+        : `${dealer} APPROVED quotation${ref}${money} ${channel}. The lead is now Commercials ` +
+          `finalised — open it and Mark Won.`
       : `${dealer} DECLINED quotation${ref}${money} ${channel}.` +
         (p.note ? ` They said: "${p.note}"` : "") +
         ` Follow up or raise a revision.`;

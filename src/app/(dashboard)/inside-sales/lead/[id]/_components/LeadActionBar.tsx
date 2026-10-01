@@ -96,13 +96,17 @@ export function LeadActionBar({ bundle, isOwner, viewerRole, onAction }: Props) 
             >
                 Mark Won
             </ActionButton>
-            <ActionButton
-                icon={XCircle}
-                tone="rose"
-                onClick={() => onAction("mark_lost")}
-            >
-                Mark Lost
-            </ActionButton>
+            {/* ID 115.4: a Won lead goes to Lost only through the admin
+                onboarding drop-out review — the server refuses it here. */}
+            {status !== "Won" && (
+                <ActionButton
+                    icon={XCircle}
+                    tone="rose"
+                    onClick={() => onAction("mark_lost")}
+                >
+                    Mark Lost
+                </ActionButton>
+            )}
             <ActionButton icon={Repeat} onClick={() => onAction("reassign")}>
                 Reassign
             </ActionButton>

@@ -64,6 +64,11 @@ export type StatusChange = {
    * read INSIDE this transaction — `from` above is only the caller's view.
    */
   event?: StatusEvent;
+  /**
+   * An admin-driven move (ID 115.4): lets `mark_lost` take a Won lead to Lost.
+   * Only the admin onboarding drop-out resolution passes it.
+   */
+  adminOverride?: boolean;
 };
 
 export type WriteTouchpointInput = {
@@ -142,8 +147,14 @@ export type WriteTouchpointInput = {
   fromOwnerId?: string | null;
   toOwnerId?: string | null;
   /**
-   * Force the idle clock (last_worked_at) for a touchpoint type that is not
-   * work by default. ID 79: a WhatsApp reply proven by a screenshot is work.
+   * The idle clock (last_worked_at), tri-state:
+   *   undefined — the default rule (isWorkedTouchpoint on type + status move);
+   *   true      — force it for a type that is not work by default (ID 79: a
+   *               WhatsApp reply proven by a screenshot is work);
+   *   false     — never stamp it, even for a type or status move that would
+   *               count (ID 115.5): system events — a dealer's quote decision,
+   *               onboarding approval, admin corrections, backfill scripts —
+   *               are not the owner's work and must not reset the idle clock.
    */
   countsAsWork?: boolean;
 };
@@ -219,10 +230,27 @@ export async function writeTouchpoint(
       interestTo = plan.interestTo;
     }
 
+    // S3 guard (ID 115), against the row locked in step 0 — BEFORE anything is
+    // written. A same-status move is a no-op (ID 115.6): the touchpoint is still
+    // recorded, the move and its history row are skipped.
+    const fromStatus = current?.lead_status ?? null;
+    if (statusChange) {
+      const verdict = checkStatusMove({
+        from: fromStatus,
+        to: statusChange.to,
+        event: statusChange.event ?? "progress",
+        reason: statusChange.reasonNotes,
+        adminOverride: statusChange.adminOverride,
+      });
+      if (!verdict.ok) throw new StatusGuardError(verdict.reason);
+      if (verdict.noop) statusChange = undefined;
+    }
+
     // E-300 — the idle clock moves only for work (isWorkedTouchpoint), and only
     // forward: a visit logged today for last week must not rewind a call made
     // yesterday. GREATEST ignores the NULL of a never-worked lead.
-    const workedStamp = input.countsAsWork || isWorkedTouchpoint(input.touchpointType, !!statusChange)
+    const workedStamp = input.countsAsWork !== false &&
+      (input.countsAsWork === true || isWorkedTouchpoint(input.touchpointType, !!statusChange))
       ? {
           last_worked_at: sql`GREATEST(${dealerLeads.last_worked_at}, ${performedAt.toISOString()}::timestamptz)`,
         }
@@ -299,15 +327,6 @@ export async function writeTouchpoint(
     //    without a history row.
     if (statusChange) {
       const sc = statusChange;
-      // S3 guard (ID 115), against the row locked in step 0.
-      const fromStatus = current?.lead_status ?? null;
-      const verdict = checkStatusMove({
-        from: fromStatus,
-        to: sc.to,
-        event: sc.event ?? "progress",
-        reason: sc.reasonNotes,
-      });
-      if (!verdict.ok) throw new StatusGuardError(verdict.reason);
 
       const [history] = await tx
         .insert(dealerLeadStatusHistory)

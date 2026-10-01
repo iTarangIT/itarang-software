@@ -53,6 +53,13 @@ export async function applyVisitStatus(
         /** Temperature with the visit: a level, null = leave it, absent = derive from `outcome`. */
         interest?: Interest | null;
         interestReason?: string | null;
+        /** ID 77.4: written to the status-history row's reason_notes. */
+        reasonNotes?: string | null;
+        /**
+         * ID 77.4: false = this move is not rep work and must not reset the
+         * idle clock ("Visit not needed"). Absent = writeTouchpoint's default.
+         */
+        countsAsWork?: boolean;
     },
 ): Promise<{ historyId: string | null; status: LeadStatus | null }> {
     const derive = input.outcome !== undefined;
@@ -102,7 +109,13 @@ export async function applyVisitStatus(
                 touchpointType: "status_change_note",
                 performedBy: input.actorId,
                 remarks: input.remarks,
-                statusChange: { from: lead.lead_status as LeadStatus | null, to, event: "visit" },
+                statusChange: {
+                    from: lead.lead_status as LeadStatus | null,
+                    to,
+                    event: "visit",
+                    reasonNotes: input.reasonNotes ?? null,
+                },
+                ...(input.countsAsWork !== undefined ? { countsAsWork: input.countsAsWork } : {}),
             },
             { tx },
         );

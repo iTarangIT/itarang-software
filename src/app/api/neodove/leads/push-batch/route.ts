@@ -217,15 +217,16 @@ export const POST = withErrorHandler(async (req: Request) => {
         skipped,
         // Intent, not outcome — the assignment runs in the drain, after this
         // response is already sent. The Sync Activity screen carries the
-        // authoritative count (see logAssignmentSummary).
-        assignTo: assignee.target
+        // authoritative count (see logAssignmentSummary). ID 63: nothing is
+        // assigned while ASSIGN_ON_PUSH is off, so nothing is promised.
+        assignTo: ASSIGN_ON_PUSH && assignee.target
             ? {
                   id: assignee.target.id,
                   name: assignee.target.name,
                   role: assignee.target.role,
               }
             : null,
-        willAssign: assignee.target ? eligible.length : 0,
+        willAssign: ASSIGN_ON_PUSH && assignee.target ? eligible.length : 0,
         status: "pushing",
     });
 });

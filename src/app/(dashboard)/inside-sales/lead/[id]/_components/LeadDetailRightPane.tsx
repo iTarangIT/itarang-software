@@ -103,7 +103,7 @@ export function LeadDetailRightPane({ bundle }: Props) {
                             Dealer onboarding
                             {bundle.onboarding.stalled && (
                                 <span className="ml-2 rounded bg-amber-200 px-1.5 py-0.5 text-[10px] font-bold text-amber-900">
-                                    STALLED
+                                    {bundle.onboarding.stalled_label ?? "Stalled"}
                                 </span>
                             )}
                         </p>
