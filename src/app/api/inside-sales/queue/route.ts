@@ -6,7 +6,8 @@
 import { NextRequest } from "next/server";
 import { z } from "zod";
 import { requireRole } from "@/lib/auth-utils";
-import { successResponse, withErrorHandler } from "@/lib/api-utils";
+import { isPoolTabFor } from "@/lib/leads/claimScope";
+import { successResponse, withErrorHandler, errorResponse } from "@/lib/api-utils";
 import { fetchQueueRows, countQueueRows, fetchQueueIds } from "@/lib/inside-sales/queryBuilder";
 import { fetchAssignedByForLeads } from "@/lib/leads/leadAssignedBy";
 import { BULK_CLAIM_CAP, QUEUE_TABS, type QueueResponse } from "@/lib/inside-sales/types";
@@ -51,6 +52,11 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
         callback: url.searchParams.get("callback") ?? undefined,
         ids_only: url.searchParams.get("ids_only") ?? undefined,
     });
+
+    // ID 45: reps never list the unowned pool — they claim by number search.
+    if (isPoolTabFor(user.role, parsed.tab)) {
+        return errorResponse("Search by mobile number to find and claim a lead.", 403);
+    }
     const neodoveOnly = parsed.neodove === "1";
     const callbackOnly = parsed.callback === "1";
     // Stage / interest / region / created-date. Validated against their closed

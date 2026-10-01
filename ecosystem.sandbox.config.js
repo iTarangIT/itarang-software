@@ -15,7 +15,11 @@ module.exports = {
       // Atomic symlink swap on deploy means pm2 reload re-execs server.js from
       // the new release without ever seeing a broken state.
       script: "node",
-      args: "current/server.js",
+      // Heap ceiling for the Next server. Kept in `args` (not `node_args`) on
+      // purpose: the deploy's hash guard (deploy-sandbox.yml B.9) only watches
+      // script/args/env/cwd, so a change here forces pm2 delete+start and the
+      // new max_memory_restart below is read at the same time.
+      args: "--max-old-space-size=1024 current/server.js",
       instances: 1,
       exec_mode: "fork",
       env: {
@@ -42,7 +46,12 @@ module.exports = {
         // --update-env` to take effect.
         OPS_APP_NAME: "sandbox-web",
       },
-      max_memory_restart: "700M",
+      // 2026-09-25: the server idles at ~600 MB RSS right after boot (Next 16
+      // standalone + every in-process ticker), so a 700M cap killed it every
+      // 30-90 s under real use (~40 memory restarts/hour in ~/.pm2/pm2.log since
+      // 22 Sep; each one is a 502 for whoever is clicking). The VPS has 8 GB
+      // with ~3 GB free; 1400M leaves the cap as a leak backstop, not a tripwire.
+      max_memory_restart: "1400M",
       // Give Next 8s to close its listener gracefully before SIGKILL. The
       // default 1.6s isn't enough — partial shutdowns leak the port and the
       // next restart EADDRINUSEs, which is how the stale-process bug got a

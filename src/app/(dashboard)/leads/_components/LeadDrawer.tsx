@@ -357,6 +357,17 @@ export function LeadDrawer({ lead, caps, onClose, onDone }: Props) {
                         <ExternalLink className="h-3 w-3" />
                         Open full lead &amp; timeline
                     </Link>
+                    {/* The working page: status, Correct status, Withdraw quote.
+                        Managers had no link to it from the leads list. */}
+                    {caps.canOpenLeadPage && (
+                        <Link
+                            href={`/inside-sales/lead/${encodeURIComponent(lead.id)}`}
+                            className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-md bg-gray-900 px-3 py-2 text-xs font-semibold text-white transition hover:bg-gray-800"
+                        >
+                            <ExternalLink className="h-3.5 w-3.5" />
+                            Open lead page
+                        </Link>
+                    )}
                 </div>
 
                 {/* Middle column: Lead tracking (E-295) above the reassign

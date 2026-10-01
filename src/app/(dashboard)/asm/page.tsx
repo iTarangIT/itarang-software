@@ -1,4 +1,5 @@
 import { requireRole } from "@/lib/auth-utils";
+import { EcofyMyLeadsCard } from "@/components/ecofy/pages";
 import { AsmQueueView } from "./_components/AsmQueueView";
 import { AsmPerformanceStrip } from "@/components/dashboard/sales/AsmPerformanceStrip";
 
@@ -31,6 +32,8 @@ export default async function AsmQueuePage() {
             </header>
             {/* B7 — the rep's own visits / calls / hot-warm-cold at a glance. */}
             <AsmPerformanceStrip />
+            {/* E-307 — Ecofy leads the Sales Head assigned to this rep. */}
+            <EcofyMyLeadsCard href="/asm/ecofy-leads" />
             <AsmQueueView viewerId={user.id} viewerRole={user.role} />
         </div>
     );

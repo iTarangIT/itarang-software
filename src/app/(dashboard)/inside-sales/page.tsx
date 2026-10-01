@@ -1,4 +1,5 @@
 import { requireRole } from "@/lib/auth-utils";
+import { EcofyMyLeadsCard } from "@/components/ecofy/pages";
 import { QueueView } from "./_components/QueueView";
 
 export const dynamic = "force-dynamic";
@@ -29,6 +30,8 @@ export default async function InsideSalesQueuePage() {
                     </p>
                 </div>
             </header>
+            {/* E-307 — Ecofy leads the Sales Head assigned to this rep. */}
+            <EcofyMyLeadsCard href="/inside-sales/ecofy-leads" />
             <QueueView viewerId={user.id} viewerRole={user.role} />
         </div>
     );

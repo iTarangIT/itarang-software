@@ -15,11 +15,12 @@ import type { TabItem } from "@/components/ui/tabs";
 import type { LeadDetailBundle } from "@/lib/inside-sales/types";
 
 import { LeadTrackingPanel } from "@/components/leads/lead-tracking-panel";
+import { LeadDocumentsPanel } from "@/components/leads/lead-documents-panel";
 
 import { AiCallHistoryPane } from "./AiCallHistoryPane";
 import { TouchpointHistoryPane } from "./TouchpointHistoryPane";
 
-type Tab = "touchpoints" | "calls" | "tracking";
+type Tab = "touchpoints" | "calls" | "tracking" | "documents";
 
 export function LeadActivityPanes({
     leadId,
@@ -41,6 +42,8 @@ export function LeadActivityPanes({
         // its CSV. The rep / ASM is on their own lead here, so the endpoint's
         // own-only scope passes.
         { value: "tracking", label: "Lead Tracking" },
+        // E-311 — documents filed on the lead + its visit photos.
+        { value: "documents", label: "Documents & photos" },
     ];
 
     return (
@@ -63,13 +66,14 @@ export function LeadActivityPanes({
                         statusHistory={bundle.status_history}
                     />
                 ) : tab === "calls" ? (
-                    <AiCallHistoryPane
-                        leadId={leadId}
-                        campaignId={bundle.latest_campaign_id}
-                    />
-                ) : (
+                    <AiCallHistoryPane leadId={leadId} />
+                ) : tab === "tracking" ? (
                     <div className="overflow-y-auto border-r border-gray-100 bg-white">
                         <LeadTrackingPanel leadId={leadId} canDownload />
+                    </div>
+                ) : (
+                    <div className="overflow-y-auto border-r border-gray-100 bg-white">
+                        <LeadDocumentsPanel leadId={leadId} />
                     </div>
                 )}
             </div>

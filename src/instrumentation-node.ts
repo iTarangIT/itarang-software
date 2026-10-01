@@ -922,6 +922,46 @@ export async function startKycAutoApprovalTicker() {
 // runNbfcRequestSlaTick() returns immediately when the feature is disabled,
 // which is the shipped default — inert until an admin turns it on at
 // /admin/settings/nbfc-request-sla.
+/**
+ * E-307 — Ecofy follow-up / meeting reminders. Every 5 minutes; each reminder
+ * is claimed with UPDATE … RETURNING so it fires exactly once even with two
+ * app instances. A database without E-307 throws on every tick ("column
+ * next_follow_up_at does not exist") — logged, nothing else breaks.
+ */
+export async function startEcofyReminderTicker() {
+  if (process.env.VERCEL === "1") return;
+
+  const TICK_INTERVAL_MS = 5 * 60_000;
+  let inFlight = false;
+
+  const tick = async () => {
+    if (inFlight) return;
+    inFlight = true;
+    try {
+      const { runEcofyReminderTick } = await import("@/lib/ecofy/reminders");
+      const r = await runEcofyReminderTick();
+      if (r.followUps || r.appointments || r.synced) {
+        console.log(`[instrumentation:ecofy-reminders] sent ${r.followUps} follow-up, ${r.appointments} meeting reminder(s); synced ${r.synced} CRM-kept entr(ies) to Ecofy`);
+      }
+    } catch (err) {
+      console.error(
+        "[instrumentation:ecofy-reminders] tick failed:",
+        err instanceof Error ? err.message : err,
+      );
+    } finally {
+      inFlight = false;
+    }
+  };
+
+  const kickoff = setTimeout(tick, 170_000);
+  if (typeof kickoff.unref === "function") kickoff.unref();
+
+  const interval = setInterval(tick, TICK_INTERVAL_MS);
+  if (typeof interval.unref === "function") interval.unref();
+
+  console.log("[instrumentation] Ecofy reminder sweep (5m) started in-process");
+}
+
 export async function startNbfcRequestSlaTicker() {
   // Skip on Vercel — /api/cron/nbfc-request-sla owns it there.
   if (process.env.VERCEL === "1") return;
@@ -1601,4 +1641,169 @@ export async function startMonitorMorningTicker() {
   if (typeof interval.unref === "function") interval.unref();
 
   console.log("[instrumentation] monitor-morning (5m, 08:00 IST slot) started in-process");
+}
+
+// ---------------------------------------------------------------------------
+// Green Energy News (E-306) — the CEO dashboard's news aggregator.
+//
+// Every 30 minutes this ASKS for a refresh; runGreenNewsRefresh itself refuses
+// to run again within 2 h of the last successful run, so the effective cadence
+// is 2-hourly and a second process (or the /api/cron/green-news backstop) only
+// ever splits work. The morning brief is written by the first run after
+// 06:00 IST and is unique per IST day.
+//
+// Dark outside production unless ENABLE_GREEN_NEWS=1: a dev box pointed at the
+// shared DB would otherwise spend Gemini quota and fill the shared table.
+// ---------------------------------------------------------------------------
+export async function startGreenNewsTicker() {
+  if (process.env.VERCEL === "1") return;
+
+  if (process.env.ENABLE_GREEN_NEWS === "0") {
+    console.log("[instrumentation:green-news] disabled via ENABLE_GREEN_NEWS=0");
+    return;
+  }
+
+  if (process.env.NODE_ENV !== "production" && process.env.ENABLE_GREEN_NEWS !== "1") {
+    console.log(
+      "[instrumentation:green-news] not production — ticker dark. " +
+        "Set ENABLE_GREEN_NEWS=1 to run it here (it writes to the shared news tables and calls Gemini).",
+    );
+    return;
+  }
+
+  const TICK_INTERVAL_MS = 30 * 60_000;
+
+  let inFlight = false;
+  const tick = async () => {
+    if (inFlight) return;
+    inFlight = true;
+    try {
+      const { runGreenNewsRefresh } = await import("@/lib/news/run");
+      const r = await runGreenNewsRefresh({ triggeredBy: "ticker" });
+      if (r.ran) {
+        console.log(
+          `[instrumentation:green-news] run ${r.runId}: fetched ${r.fetched}, inserted ${r.inserted}, ` +
+            `classified ${r.classified}, brief ${r.briefWritten ? "written" : "not due"}` +
+            (r.failedSources.length ? `, ${r.failedSources.length} source(s) failed` : ""),
+        );
+      } else if (r.reason === "failed") {
+        console.error(`[instrumentation:green-news] FAILED: ${r.error}`);
+      }
+    } catch (err) {
+      console.error("[instrumentation:green-news] tick failed:", err instanceof Error ? err.message : err);
+    } finally {
+      inFlight = false;
+    }
+  };
+
+  // 240s out — behind every other kickoff; a news fetch is the least urgent
+  // thing a freshly-booted process could be doing.
+  const kickoff = setTimeout(tick, 240_000);
+  if (typeof kickoff.unref === "function") kickoff.unref();
+
+  const interval = setInterval(tick, TICK_INTERVAL_MS);
+  if (typeof interval.unref === "function") interval.unref();
+
+  console.log("[instrumentation] green-news (30m ask, 2h effective) started in-process");
+}
+
+/**
+ * WhatsApp Sales Assistant (docs/wa-assistant/PLAN.md) — every 60s:
+ *   • pending previews past their 10-minute expiry → `expired` (the executor's
+ *     own `expires_at > now()` check is the authority; this keeps the table and
+ *     the log-review queries honest);
+ *   • actions stuck in `executing` for 5 minutes → `failed` (the process died
+ *     mid-write; its transaction rolled back, so nothing was written).
+ * Also reports a WA_ASSIST_* misconfiguration ONCE at boot instead of throwing
+ * at module load, which would break `next build` (plan (c)17). The rest of the
+ * CRM is unaffected by a missing WA config — the webhook just answers 503.
+ * Dark until E-309 is applied (the first tick finds no table and says so).
+ */
+export async function startWaAssistantSweepTicker() {
+  if (process.env.VERCEL === "1") return;
+  if (process.env.ENABLE_WA_ASSIST_SWEEP === "0") {
+    console.log("[instrumentation:wa-assist] sweep disabled via ENABLE_WA_ASSIST_SWEEP=0");
+    return;
+  }
+
+  const { readWaAssistEnv } = await import("@/lib/wa-assistant/env");
+  const cfg = readWaAssistEnv();
+  if (!cfg.ok) {
+    console.warn(`[instrumentation:wa-assist] WhatsApp Assistant not configured (webhook will answer 503): ${cfg.problems.join("; ")}`);
+  }
+
+  const TICK_INTERVAL_MS = 60_000;
+  let inFlight = false;
+  let tableMissingLogged = false;
+  const tick = async () => {
+    if (inFlight) return; // a slow tick must not stack
+    inFlight = true;
+    try {
+      const { sweepActions } = await import("@/lib/assistant/executor");
+      const r = await sweepActions();
+      if (r.expired || r.failed) {
+        console.log(`[instrumentation:wa-assist] sweep: ${r.expired} expired, ${r.failed} stuck → failed`);
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // 42P01 = undefined_table: E-309 not applied on this database yet.
+      if (/assistant_actions/.test(msg) && /does not exist/.test(msg)) {
+        if (!tableMissingLogged) console.log("[instrumentation:wa-assist] assistant_actions missing (apply E-309) — sweep idle");
+        tableMissingLogged = true;
+      } else {
+        console.error("[instrumentation:wa-assist] sweep failed:", msg);
+      }
+    } finally {
+      inFlight = false;
+    }
+  };
+  // After every other kickoff (last one is 225s).
+  const kickoff = setTimeout(tick, 240_000);
+  if (typeof kickoff.unref === "function") kickoff.unref();
+  const interval = setInterval(tick, TICK_INTERVAL_MS);
+  if (typeof interval.unref === "function") interval.unref();
+  console.log("[instrumentation] wa-assistant action sweep (60s) started in-process");
+}
+
+// ---------------------------------------------------------------------------
+// Dealer agreement status refresh (tracker ID 53, 29 Sep 2026).
+// ---------------------------------------------------------------------------
+// The agreement status only moved while someone had the dealer review page
+// open. This asks Digio about every open, initiated agreement every 15 minutes
+// through the same refresh the button uses. Same shape and reasoning as the
+// tickers above: the vercel.json crons do not fire on the pm2 boxes;
+// /api/cron/dealer-agreement-refresh is the backstop.
+export async function startDealerAgreementRefreshTicker() {
+  if (process.env.VERCEL === "1") return;
+
+  const TICK_INTERVAL_MS = 15 * 60_000;
+  let inFlight = false;
+
+  const tick = async () => {
+    if (inFlight) return;
+    inFlight = true;
+    try {
+      const { runDealerAgreementRefreshSweep } = await import("@/lib/agreement/autoRefreshSweep");
+      const r = await runDealerAgreementRefreshSweep();
+      if (r.changed || r.failed) {
+        console.log(
+          `[instrumentation:agreement-refresh] checked=${r.checked} changed=${r.changed} failed=${r.failed}`,
+        );
+      }
+    } catch (err) {
+      console.error(
+        "[instrumentation:agreement-refresh] tick failed:",
+        err instanceof Error ? err.message : err,
+      );
+    } finally {
+      inFlight = false;
+    }
+  };
+
+  const kickoff = setTimeout(tick, 210_000);
+  if (typeof kickoff.unref === "function") kickoff.unref();
+  const interval = setInterval(tick, TICK_INTERVAL_MS);
+  if (typeof interval.unref === "function") interval.unref();
+
+  console.log("[instrumentation] dealer agreement refresh sweep (15 min) started in-process");
 }

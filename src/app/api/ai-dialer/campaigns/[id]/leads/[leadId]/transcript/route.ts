@@ -18,18 +18,12 @@ import {
   aiCallLogs,
   dealerLeads,
   dialerCampaignLeads,
-  dialerCampaigns,
   intentScoreFeedback,
 } from "@/lib/db/schema";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
-import { and, asc, desc, eq, inArray } from "drizzle-orm";
-import { INTENT_THRESHOLDS } from "@/lib/ai/scoring";
+import { and, desc, eq } from "drizzle-orm";
 import { deriveDurationSeconds } from "@/lib/ai-dialer/call-duration/derive";
-
-// Intent score at/above which the dialer considers a lead "qualified" — the
-// single central threshold (INTENT_THRESHOLDS), shared with routing/status. The
-// first attempt to reach it is treated as the converting attempt.
-const QUALIFIED_INTENT = INTENT_THRESHOLDS.QUALIFIED;
+import { loadLeadCallAttempts } from "@/lib/ai-dialer/leadCallAttempts";
 
 type SubScores = {
   next_step_commitment: number;
@@ -259,88 +253,12 @@ export const GET = withErrorHandler(
     const latest = calls[0] ?? null;
     const lastHistory = readLastHistory(cl.followUpHistory);
 
-    // Cross-campaign attempt timeline for this lead. Each dialer_campaign_leads
-    // row is one attempt; recall campaigns re-enrol the same lead_id, so
-    // ordering every row (across original + recalls) by campaign start gives the
-    // full journey. The converting attempt is the first to reach QUALIFIED_INTENT.
-    const attemptRows = await db
-      .select({
-        campaignId: dialerCampaignLeads.campaign_id,
-        campaignName: dialerCampaigns.name,
-        regionFilter: dialerCampaigns.region_filter,
-        campaignStartedAt: dialerCampaigns.started_at,
-        status: dialerCampaignLeads.status,
-        callOutcome: dialerCampaignLeads.call_outcome,
-        intentScore: dialerCampaignLeads.intent_score,
-        startedAt: dialerCampaignLeads.started_at,
-        completedAt: dialerCampaignLeads.completed_at,
-        bolnaCallId: dialerCampaignLeads.bolna_call_id,
-      })
-      .from(dialerCampaignLeads)
-      .leftJoin(
-        dialerCampaigns,
-        eq(dialerCampaigns.id, dialerCampaignLeads.campaign_id),
-      )
-      .where(eq(dialerCampaignLeads.lead_id, leadId))
-      .orderBy(
-        asc(dialerCampaigns.started_at),
-        asc(dialerCampaignLeads.created_at),
-      );
-
-    // Per-attempt recording: each attempt's bolna_call_id (the provider call id
-    // for BOTH Bolna and ElevenLabs — the column doubles for both, see
-    // elevenlabs/webhookHandler.ts) maps 1:1 to ai_call_logs.call_id. Resolve
-    // them in one extra query rather than joining into attemptRows above, which
-    // would risk duplicating rows and corrupting the i+1 attempt ordinal.
-    const callIds = attemptRows
-      .map((a) => a.bolnaCallId)
-      .filter((c): c is string => !!c);
-    const recordingByCall = new Map<string, string | null>();
-    if (callIds.length > 0) {
-      const recRows = await db
-        .select({
-          callId: aiCallLogs.call_id,
-          recordingUrl: aiCallLogs.recording_url,
-        })
-        .from(aiCallLogs)
-        .where(inArray(aiCallLogs.call_id, callIds));
-      for (const r of recRows) recordingByCall.set(r.callId, r.recordingUrl);
-    }
-
-    const attempts = attemptRows.map((a, i) => {
-      const intentScore = a.intentScore ?? null;
-      const isRecall =
-        a.regionFilter && typeof a.regionFilter === "object"
-          ? (a.regionFilter as { recall?: unknown }).recall === true
-          : false;
-      const callId = a.bolnaCallId ?? null;
-      const stored = callId ? recordingByCall.get(callId) ?? null : null;
-      // Stored URL when present; else the self-healing proxy (re-hosts + backfills
-      // ElevenLabs audio on first hit, 302s to Bolna's URL); else null — a
-      // no-answer/failed attempt with no call id simply has no recording.
-      const recordingUrl = stored
-        ? stored
-        : callId
-          ? `/api/ai-dialer/recording/${encodeURIComponent(callId)}`
-          : null;
-      return {
-        attempt: i + 1,
-        campaignId: a.campaignId,
-        campaignName: a.campaignName ?? null,
-        isRecall,
-        status: a.status,
-        callOutcome: a.callOutcome,
-        intentScore,
-        startedAt: a.startedAt ?? a.campaignStartedAt ?? null,
-        completedAt: a.completedAt ?? null,
-        converted: intentScore != null && intentScore >= QUALIFIED_INTENT,
-        isCurrent: a.campaignId === campaignId,
-        callId,
-        recordingUrl,
-      };
+    // Cross-campaign attempt timeline for this lead (shared with the lead
+    // page AI Call History tab, which also adds one-off calls).
+    const { attempts, convertedOnAttempt } = await loadLeadCallAttempts({
+      leadId,
+      currentCampaignId: campaignId,
     });
-    const convertedOnAttempt =
-      attempts.find((a) => a.converted)?.attempt ?? null;
 
     // Latest human correction for this lead (E-159) — drives the "Corrected"
     // flag in the drawer header. Lead-level: any attempt's correction flags it.

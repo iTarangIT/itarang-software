@@ -19,6 +19,7 @@ const statusMap: Record<string, { type: StatusType, label: string }> = {
     'new': { type: 'info', label: 'New' },
     'contacted': { type: 'info', label: 'Contacted' },
     'qualified': { type: 'success', label: 'Qualified' },
+    'won': { type: 'success', label: 'Won' },
     'converted': { type: 'success', label: 'Converted' },
     'lost': { type: 'error', label: 'Lost' },
 

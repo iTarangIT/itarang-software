@@ -124,7 +124,7 @@ export async function ensureDealerSignedAgreementUrl(
           method: "GET",
           headers: {
             Authorization: authHeader,
-            Accept: "application/pdf",
+            Accept: "*/*",
           },
           cache: "no-store",
         });

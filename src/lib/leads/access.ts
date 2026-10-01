@@ -132,6 +132,23 @@ export const LEAD_TRACKING_ROLES = [
  * (lead_touchpoints.to_owner_id, or a lead_claimed they performed). Enforced
  * server-side in canViewLeadTracking() — src/lib/leads/tracking.ts.
  */
+/**
+ * Roles that may open the lead working page (/inside-sales/lead/[id]) — status,
+ * Correct status, Withdraw quote, the full history. Must match the
+ * "/inside-sales/lead" row of sharedRouteAccess in src/middleware.ts; a role
+ * missing there would get a button to a page that bounces it.
+ */
+export const LEAD_WORKSPACE_ROLES = [
+  "inside_sales_rep",
+  "asm",
+  "admin",
+  "ceo",
+  "sales_manager",
+  "sales_head",
+  "business_head",
+  "partner",
+] as const;
+
 export const LEAD_TRACKING_OWN_ONLY_ROLES = ["inside_sales_rep", "asm"] as const;
 
 /**
@@ -228,6 +245,8 @@ export type LeadsCapabilities = {
   canCurateIntent: boolean;
   /** May open the "Lead tracking" section and download a single lead's CSV. */
   canTrackLeads: boolean;
+  /** May open the lead working page (LEAD_WORKSPACE_ROLES). */
+  canOpenLeadPage: boolean;
 };
 
 // Mirrors NEODOVE_ADMIN_ROLES (src/lib/neodove/roles.ts) and the server gate on
@@ -261,6 +280,7 @@ export function capabilitiesFor(role: string | null | undefined): LeadsCapabilit
     canReviewIntent: (INTENT_REVIEW_ROLES as readonly string[]).includes(r),
     canCurateIntent: (INTENT_CURATOR_ROLES as readonly string[]).includes(r),
     canTrackLeads: (LEAD_TRACKING_ROLES as readonly string[]).includes(r),
+    canOpenLeadPage: (LEAD_WORKSPACE_ROLES as readonly string[]).includes(r),
   };
 }
 
@@ -273,4 +293,5 @@ export const NO_CAPABILITIES: LeadsCapabilities = {
   canReviewIntent: false,
   canCurateIntent: false,
   canTrackLeads: false,
+  canOpenLeadPage: false,
 };

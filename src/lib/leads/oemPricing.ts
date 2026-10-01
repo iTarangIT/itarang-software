@@ -70,6 +70,25 @@ export interface OemEvaluation {
     lines: OemLineVerdict[];
 }
 
+/**
+ * ID 78: did any product's OEM reference price change since the quote was
+ * issued? Compares the reference each line was judged against (the quote's
+ * stored evaluation) with the live reference now. A quote with no stored
+ * evaluation cannot be judged and reports false.
+ */
+export function quotePriceChanged(
+    evaluation: { lines?: Array<{ asset_type: string; product_id: string; oem_price: number | null; price_id: string | null }> } | null,
+    live: Map<string, OemPriceRef>,
+): boolean {
+    const lines = evaluation?.lines ?? [];
+    return lines.some((l) => {
+        const now = live.get(refKey(l.asset_type, l.product_id));
+        if (!now) return false;
+        if (l.price_id && now.price_id !== l.price_id) return Number(now.oem_price) !== Number(l.oem_price);
+        return l.oem_price != null && Number(now.oem_price) !== Number(l.oem_price);
+    });
+}
+
 /** The map key. Product ids are only unique within their own master table. */
 export function refKey(assetType: string, productId: string): string {
     return `${assetType}:${productId}`;

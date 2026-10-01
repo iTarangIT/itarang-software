@@ -1,4 +1,5 @@
 import { db } from "@/lib/db";
+import { recordLeadCreated, stampLeadSource } from "@/lib/leads/leadSource";
 import { dealerLeads, scraperLeads } from "@/lib/db/schema";
 import { eq, inArray } from "drizzle-orm";
 import { nanoid } from "nanoid";
@@ -104,6 +105,13 @@ async function promoteScraperLead(phone: string): Promise<any | null> {
     created_at: new Date(),
     provider: "elevenlabs",
   });
+
+  // ID 81: a scraper record promoted on dial — Entered via Scraper, Found via
+  // Scraped listing, and "Lead created". Best-effort; the lead exists either way.
+  await stampLeadSource(db, newId, { door: "scraper", origin: "scraped_listing" });
+  await recordLeadCreated(db, { leadId: newId, actorId: null, door: "scraper", ownerId: null }).catch((e) =>
+    console.warn("[triggerCall] Lead created not recorded:", e),
+  );
 
   await db
     .update(scraperLeads)

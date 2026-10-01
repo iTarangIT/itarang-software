@@ -16,7 +16,9 @@ export type QuoteApprovalStatus = (typeof QUOTE_APPROVAL_STATUSES)[number];
  * `terms_update` and `final_terms` are deliberately NOT here. The agreed scope
  * was "every quote", meaning the two quote events; gating a terms edit would
  * stall routine follow-up work behind the same queue for no commercial gain.
- * `brochure_share` carries no price at all.
+ * Neither can set a price (ID 61): createLeadCommercial copies it from the
+ * dealer-approved (final terms) or latest (terms update) quote, so every price
+ * a dealer sees has passed this gate. `brochure_share` carries no price at all.
  */
 export const GATED_QUOTE_EVENTS = ["quote_issue", "quote_revision"] as const;
 

@@ -35,6 +35,8 @@ export interface InboundEvent {
   deliveryStatus?: string;
   /** Conversation/contact thread id, when the provider exposes one. */
   conversationId?: string;
+  /** Meta `metadata.phone_number_id` — which of our numbers the event was for. */
+  phoneNumberId?: string;
   /** The raw provider object for this event, for logging/debugging. */
   raw: unknown;
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Modal } from "../Modal";
 import { Input } from "@/components/ui/input";
@@ -12,13 +12,24 @@ import {
     EMPTY_DISPOSITION_VALUE,
     type DispositionValue,
 } from "@/components/leads/DispositionPicker";
-import { LEAD_STATUS, type LeadStatus } from "@/lib/lifecycle/transitions";
+import type { LeadStatus, LostReason } from "@/lib/lifecycle/transitions";
 import type { LeadDetailLead } from "@/lib/inside-sales/types";
 import {
     useVisitForm,
     VisitFields,
 } from "@/app/(dashboard)/asm/_components/VisitFields";
 import type { VisitNextAction } from "@/lib/asm/types";
+import {
+    autoProgressForCall,
+    bucketForLabel,
+    COMMERCIALS_CALL_LABELS,
+    lostReasonForLabel,
+    type Interest,
+} from "@/lib/leads/autoProgress";
+import { LEAD_STATUS_LABEL } from "@/lib/leads/queueFilters";
+import { DISPOSITION_BUCKETS, type DispositionBucket } from "@/lib/leads/dispositions";
+
+const INTERESTS: Interest[] = ["hot", "warm", "cold"];
 
 type Props = {
     open: boolean;
@@ -37,12 +48,18 @@ type Props = {
     /** Called after a "visit"-type save so the caller can chain into the
      *  Convert / Lost / Escalate modal (same contract as LogVisitModal). */
     onVisitSuccess?: (result: { next_action: VisitNextAction }) => void;
+    /** ID 76: a Lost-type call outcome was saved — open Mark Lost with this reason. */
+    onLostOutcome?: (reason: LostReason | null) => void;
+    /** ID 75: whether the lead has a live quote — a commercials outcome without one is flagged. */
+    hasQuote?: boolean;
 };
 
+// ID 80 (29 Sep 2026): no "Status change" entry — every status change has an
+// event behind it (calls, quotes, visits, approvals). Admin "Correct status"
+// is the only override.
 const REP_TYPES: TouchpointType[] = [
     "inside_sales_call",
     "whatsapp",
-    "status_change_note",
 ];
 
 export function LogTouchpointModal({
@@ -55,6 +72,8 @@ export function LogTouchpointModal({
     updatedAt,
     context = "inside_sales",
     onVisitSuccess,
+    onLostOutcome,
+    hasQuote = false,
 }: Props) {
     const [type, setType] = useState<TouchpointType>("inside_sales_call");
     // The rep now picks the CC team's L1/L2/L3 disposition; call_status is
@@ -67,36 +86,68 @@ export function LogTouchpointModal({
     );
     const [duration, setDuration] = useState("");
     const [remarks, setRemarks] = useState("");
+    // ID 79: a WhatsApp chat counts as contact only with a screenshot.
+    const [waScreenshot, setWaScreenshot] = useState<File | null>(null);
+    const [waReplied, setWaReplied] = useState(false);
     const [isEngaged, setIsEngaged] = useState(false);
     const [changeStatus, setChangeStatus] = useState(false);
     const [toStatus, setToStatus] = useState<LeadStatus | "">("");
     const [followUpAt, setFollowUpAt] = useState("");
     const [submitting, setSubmitting] = useState(false);
+    // Temperature change to save with this touchpoint ("" = leave as is).
+    const [toInterest, setToInterest] = useState<Interest | "">("");
+    // Which of status / temperature were filled by the shared auto rule and
+    // not touched by the rep since — the rep's own choice always wins.
+    const [auto, setAuto] = useState({ status: false, interest: false });
+    const [touched, setTouched] = useState({ status: false, interest: false });
+
+    // Pre-fill status + temperature from the call outcome with the SAME rule
+    // the WhatsApp Assistant proposes with (lib/leads/autoProgress.ts).
+    useEffect(() => {
+        if (type !== "inside_sales_call" || !disposition.disposition) return;
+        const derived = autoProgressForCall({
+            connected: disposition.connectStatus === "connected",
+            label: disposition.disposition,
+            bucket: (DISPOSITION_BUCKETS as readonly string[]).includes(disposition.bucket)
+                ? (disposition.bucket as DispositionBucket)
+                : null,
+            currentStatus: lead.lead_status,
+            currentInterest: lead.interest_level,
+        });
+        if (!touched.status) {
+            setChangeStatus(!!derived.statusTo);
+            setToStatus(derived.statusTo ?? "");
+        }
+        if (!touched.interest) setToInterest(derived.interestTo ?? "");
+        setAuto({
+            status: !touched.status && !!derived.statusTo,
+            interest: !touched.interest && !!derived.interestTo,
+        });
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- re-derive only when the outcome changes
+    }, [type, disposition.disposition, disposition.connectStatus, disposition.bucket]);
 
     // ASM-only "visit" branch — owns the visit form state independently.
-    const visitForm = useVisitForm(open);
+    const visitForm = useVisitForm(open, lead);
     const isVisit = type === "visit";
 
     const typeOptions: TouchpointType[] =
         context === "asm" ? [...REP_TYPES, "visit"] : REP_TYPES;
 
-    // Every lead status except New_Unassigned — the pre-assignment state,
-    // which would strand an owned lead outside every queue. Any of these can
-    // be picked from any current status: the server no longer validates the
-    // transition.
-    const statusTargets: LeadStatus[] = LEAD_STATUS.filter(
-        (s) => s !== "New_Unassigned",
-    );
 
     const reset = () => {
         setType("inside_sales_call");
         setDisposition(EMPTY_DISPOSITION_VALUE);
         setDuration("");
         setRemarks("");
+        setWaScreenshot(null);
+        setWaReplied(false);
         setIsEngaged(false);
         setChangeStatus(false);
         setToStatus("");
         setFollowUpAt("");
+        setToInterest("");
+        setAuto({ status: false, interest: false });
+        setTouched({ status: false, interest: false });
         setSubmitting(false);
     };
 
@@ -116,6 +167,24 @@ export function LogTouchpointModal({
         }
         setSubmitting(true);
         try {
+            if (type === "whatsapp") {
+                const fd = new FormData();
+                fd.append("remarks", remarks.trim());
+                fd.append("dealer_replied", waReplied ? "true" : "false");
+                if (waScreenshot) fd.append("screenshot", waScreenshot);
+                const wr = await fetch(`/api/inside-sales/lead/${encodeURIComponent(leadId)}/whatsapp-contact`, {
+                    method: "POST",
+                    body: fd,
+                });
+                const wj = await wr.json();
+                if (!wr.ok) throw new Error(wj?.error?.message ?? "Failed to log WhatsApp contact");
+                if (wj?.data?.reused) toast.warning("That screenshot was already used — saved as a note, not counted.");
+                else if (wj?.data?.countedAsContact) toast.success("WhatsApp contact logged.");
+                else toast.success("Saved as a note (a reply needs a screenshot to count).");
+                reset();
+                onSuccess();
+                return;
+            }
             const body: Record<string, unknown> = {
                 touchpoint_type: type,
                 remarks: remarks.trim(),
@@ -133,9 +202,8 @@ export function LogTouchpointModal({
             }
             if (duration) body.call_duration_sec = Math.max(0, parseInt(duration, 10) || 0);
             if (isEngaged) body.is_engaged = true;
-            if (changeStatus && toStatus) {
-                body.status_change = { to: toStatus };
-            }
+            // ID 80 / 114: no manual status — the server applies the outcome
+            // rule (autoProgress) in the status writer itself.
             if (followUpAt) body.follow_up_at = new Date(followUpAt).toISOString();
 
             const res = await fetch(`/api/inside-sales/lead/${encodeURIComponent(leadId)}/touchpoint`, {
@@ -154,9 +222,32 @@ export function LogTouchpointModal({
                 }
                 throw new Error(json?.error?.message ?? "Failed to log touchpoint");
             }
+            // Temperature is its own audited write (interest_level_overrides).
+            // The touchpoint already saved, so a failure here is reported, not rolled back.
+            if (toInterest && toInterest !== lead.interest_level) {
+                const ir = await fetch(`/api/inside-sales/lead/${encodeURIComponent(leadId)}/interest-level`, {
+                    method: "PATCH",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        interest_level: toInterest,
+                        reason: auto.interest ? "Auto: from call outcome" : "Set with touchpoint",
+                    }),
+                });
+                if (!ir.ok) toast.error("Touchpoint logged, but the temperature could not be updated.");
+            }
             toast.success("Touchpoint logged.");
+            // ID 76: a Lost-type outcome prompts Mark Lost, reason pre-filled —
+            // the call alone never closes the lead.
+            const savedBucket =
+                type === "inside_sales_call" && disposition.disposition
+                    ? ((DISPOSITION_BUCKETS as readonly string[]).includes(disposition.bucket)
+                          ? disposition.bucket
+                          : bucketForLabel(disposition.disposition))
+                    : null;
+            const lostLabel = savedBucket === "Lost" ? disposition.disposition : null;
             reset();
             onSuccess();
+            if (lostLabel && onLostOutcome) onLostOutcome(lostReasonForLabel(lostLabel));
         } catch (err) {
             toast.error((err as Error).message);
         } finally {
@@ -277,30 +368,63 @@ export function LogTouchpointModal({
                             <span className="text-[11px] text-gray-500">(qualifies a lead to advance from Assigned_Not_Contacted → Under_Discussion)</span>
                         </label>
 
-                        <label className="flex items-center gap-2 text-sm text-gray-700 pt-1">
-                            <input
-                                type="checkbox"
-                                checked={changeStatus}
-                                onChange={(e) => setChangeStatus(e.target.checked)}
-                            />
-                            Update lead status with this touchpoint
-                        </label>
-                        {changeStatus && (
+                        {type === "inside_sales_call" && changeStatus && toStatus && (
+                            <p className="rounded-md bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
+                                This outcome moves the lead to <strong>{LEAD_STATUS_LABEL[toStatus as LeadStatus] ?? toStatus}</strong>.
+                                Commercials stages move only with quotes; Won and Lost have their own buttons.
+                            </p>
+                        )}
+                        {type === "inside_sales_call" && COMMERCIALS_CALL_LABELS.includes(disposition.disposition) &&
+                            !hasQuote && (
+                                <p className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                                    No quote in the system — this call does not move the commercials stage.
+                                    Create the quote with <strong>Update Commercials</strong>.
+                                </p>
+                            )}
+
+                        {type === "whatsapp" && (
+                            <div className="space-y-2 rounded-md border border-gray-200 p-3">
+                                <Label>Screenshot of the chat</Label>
+                                <input
+                                    type="file"
+                                    accept="image/jpeg,image/png,image/webp"
+                                    onChange={(e) => setWaScreenshot(e.target.files?.[0] ?? null)}
+                                    className="block w-full cursor-pointer text-xs text-gray-700 file:mr-3 file:cursor-pointer file:rounded-md file:border file:border-solid file:border-gray-300 file:bg-white file:px-3 file:py-1.5 file:text-xs file:font-medium file:text-gray-800 hover:file:bg-gray-50"
+                                />
+                                <label className="flex items-center gap-2 text-sm text-gray-700">
+                                    <input
+                                        type="checkbox"
+                                        checked={waReplied}
+                                        onChange={(e) => setWaReplied(e.target.checked)}
+                                    />
+                                    Dealer replied
+                                </label>
+                                <p className="text-[11px] text-gray-500">
+                                    Counts as contact only with &ldquo;Dealer replied&rdquo; and a screenshot. Without one it is saved as a note.
+                                </p>
+                            </div>
+                        )}
+
+                        {type === "inside_sales_call" && (
                             <div>
-                                <Label>New status</Label>
+                                <Label>
+                                    Temperature{" "}
+                                    {auto.interest && <span className="text-[11px] text-emerald-700">(auto from call outcome)</span>}
+                                </Label>
                                 <select
                                     className="mt-1 w-full rounded-md border border-gray-200 px-3 py-2 text-sm bg-white"
-                                    value={toStatus}
-                                    onChange={(e) => setToStatus(e.target.value as LeadStatus | "")}
+                                    value={toInterest}
+                                    onChange={(e) => {
+                                        setToInterest(e.target.value as Interest | "");
+                                        setTouched((t) => ({ ...t, interest: true }));
+                                        setAuto((a) => ({ ...a, interest: false }));
+                                    }}
                                 >
-                                    <option value="">— select —</option>
-                                    {statusTargets.map((s) => (
-                                        <option key={s} value={s}>{s}</option>
+                                    <option value="">— leave as {lead.interest_level ?? "not set"} —</option>
+                                    {INTERESTS.map((i) => (
+                                        <option key={i} value={i}>{i}</option>
                                     ))}
                                 </select>
-                                <p className="text-[11px] text-gray-500 mt-1">
-                                    Any status can be set from any other — no transition restrictions.
-                                </p>
                             </div>
                         )}
 

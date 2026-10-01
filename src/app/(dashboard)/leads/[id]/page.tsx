@@ -6,10 +6,13 @@ import {
   LEADS_PAGE_ROLES,
   LEAD_HISTORY_EXPORT_ROLES,
   LEAD_TRACKING_ROLES,
+  LEAD_WORKSPACE_ROLES,
 } from "@/lib/leads/access";
+import { StatusChip } from "@/app/(dashboard)/inside-sales/_components/StatusChip";
+import type { LeadStatus } from "@/lib/lifecycle/transitions";
 import { LeadTrackingPanel } from "@/components/leads/lead-tracking-panel";
 import Link from "next/link";
-import { ArrowLeft, Phone, MapPin, User } from "lucide-react";
+import { ArrowLeft, ExternalLink, Phone, MapPin, User } from "lucide-react";
 import { redirect } from "next/navigation";
 import { LeadDetailClient } from "@/components/leads/lead-detail-client";
 import {
@@ -164,7 +167,20 @@ export default async function LeadDetailPage({ params }: any) {
               </h1>
               <p className="text-xs text-gray-400 mt-0.5 font-mono">{lead.id}</p>
             </div>
-            <StatusBadge status={lead.current_status} />
+            {/* The pipeline status (lead_status). This read current_status, an
+                old AI-dialer field that stays "new" — so every lead showed New. */}
+            <div className="flex shrink-0 flex-col items-end gap-2">
+              <StatusChip status={lead.lead_status as LeadStatus | null} />
+              {(LEAD_WORKSPACE_ROLES as readonly string[]).includes(user.role) && (
+                <Link
+                  href={`/inside-sales/lead/${encodeURIComponent(lead.id)}`}
+                  className="inline-flex items-center gap-1.5 rounded-md bg-gray-900 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-gray-800"
+                >
+                  <ExternalLink className="h-3.5 w-3.5" />
+                  Open lead page
+                </Link>
+              )}
+            </div>
           </div>
 
           <div className="flex flex-wrap gap-x-5 gap-y-2 mt-4 text-sm text-gray-600">
@@ -210,22 +226,3 @@ export default async function LeadDetailPage({ params }: any) {
   );
 }
 
-function StatusBadge({ status }: { status: string | null }) {
-  const map: Record<string, { label: string; cls: string }> = {
-    hot: { label: "Hot", cls: "bg-red-50 text-red-700 border-red-200" },
-    warm: { label: "Warm", cls: "bg-amber-50 text-amber-700 border-amber-200" },
-    cold: { label: "Cold", cls: "bg-blue-50 text-blue-700 border-blue-200" },
-    qualified: { label: "Qualified", cls: "bg-emerald-50 text-emerald-700 border-emerald-200" },
-    disqualified: { label: "Disqualified", cls: "bg-gray-100 text-gray-500 border-gray-200" },
-    new: { label: "New", cls: "bg-gray-100 text-gray-600 border-gray-200" },
-  };
-  const s = map[status?.toLowerCase() ?? ""] ?? {
-    label: status ?? "Unknown",
-    cls: "bg-gray-100 text-gray-500 border-gray-200",
-  };
-  return (
-    <span className={`shrink-0 text-xs px-3 py-1 rounded-full border font-medium ${s.cls}`}>
-      {s.label}
-    </span>
-  );
-}

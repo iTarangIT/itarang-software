@@ -1,15 +1,16 @@
 // PATCH /api/inside-sales/lead/[id]/interest-level
-// BRD §0.7 — lets an owner (or ASM/admin) override a lead's interest level
-// (hot/warm/cold) independent of the lifecycle status. Each change is recorded
-// in interest_level_overrides for audit (E-123). Reason is optional from the
-// UI; a default is stored so the audit row's NOT NULL reason is satisfied.
+// BRD §0.7 — lets the lead's OWNER override its interest level (hot/warm/cold)
+// independent of the lifecycle status. Owner-only since the WhatsApp Assistant
+// BRD §2.3-3: this was the one mutate route on a dealer_lead without
+// assertOwner, so any ISR/ASM/admin could re-rate anyone's lead. Each change is recorded
+// in interest_level_overrides for audit (E-123) — see setInterestLevel(), shared
+// with the WhatsApp Assistant.
 
-import { sql } from "drizzle-orm";
 import { z } from "zod";
-import { db } from "@/lib/db";
-import { dealerLeads, interestLevelOverrides } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
+import { setInterestLevel } from "@/lib/leads/interestLevel";
+import { assertOwner, ForbiddenLeadAccessError } from "@/lib/leads/ownership";
 
 const MUTATE_ROLES = ["inside_sales_rep", "asm", "admin", "partner"];
 
@@ -25,39 +26,25 @@ export const PATCH = withErrorHandler(
         if (!id) return errorResponse("Lead id required", 400);
         const body = BodySchema.parse(await req.json());
 
-        const existing = await db
-            .select({ interest_level: dealerLeads.interest_level })
-            .from(dealerLeads)
-            .where(sql`${dealerLeads.id} = ${id}`)
-            .limit(1);
-        if (existing.length === 0) return errorResponse("Lead not found", 404);
-
-        const fromValue = existing[0].interest_level;
-        if (fromValue === body.interest_level) {
-            // No-op: already at this level. Return success without an audit row.
-            return successResponse({ interest_level: body.interest_level, changed: false });
+        try {
+            await assertOwner(id, user.id);
+        } catch (err) {
+            // ForbiddenLeadAccessError carries no HTTP status, so withErrorHandler
+            // would turn it into a 500. It is a permission refusal.
+            if (err instanceof ForbiddenLeadAccessError) {
+                return errorResponse("Only the lead's owner can change its interest level.", 403);
+            }
+            throw err;
         }
 
-        const now = new Date();
-        await db.transaction(async (tx) => {
-            // E-304 — the audit trigger records this change in the interest
-            // history; this names who made it (local to the transaction).
-            await tx.execute(sql`SELECT set_config('app.actor_id', ${user.id}, true)`);
-            await tx
-                .update(dealerLeads)
-                .set({ interest_level: body.interest_level, updated_at: now })
-                .where(sql`${dealerLeads.id} = ${id}`);
-
-            await tx.insert(interestLevelOverrides).values({
-                dealer_lead_id: id,
-                from_value: fromValue ?? null,
-                to_value: body.interest_level,
-                reason: body.reason?.trim() || "Manual temperature change",
-                changed_by: user.id,
-                changed_at: now,
-            });
+        const result = await setInterestLevel({
+            leadId: id,
+            actorId: user.id,
+            level: body.interest_level,
+            reason: body.reason,
         });
+        if (!result) return errorResponse("Lead not found", 404);
 
-        return successResponse({ interest_level: body.interest_level, changed: true });
+        return successResponse({ interest_level: body.interest_level, changed: result.changed });
     },
 );

@@ -14,6 +14,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { and, eq, gte, inArray, isNotNull } from "drizzle-orm";
 import { db } from "@/lib/db";
+import { DEALER_AGREEMENT_EXPIRE_IN_DAYS } from "@/lib/agreement/constants";
 import {
   dealerAgreementEvents,
   dealerAgreementSigners,
@@ -27,7 +28,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const AGREEMENT_LIFETIME_DAYS = 30; // Digio expire_in_days
+const AGREEMENT_LIFETIME_DAYS = DEALER_AGREEMENT_EXPIRE_IN_DAYS; // Digio expire_in_days, shared with initiate-agreement
 const DONE_STATUSES = new Set(["signed", "expired", "failed"]);
 
 function isAuthorised(req: NextRequest): boolean {
@@ -40,7 +41,7 @@ function isAuthorised(req: NextRequest): boolean {
 }
 
 // Best per-signer expiry: prefer Digio's `expire_on` from the signer raw
-// response, else the agreement's creation + 30 days.
+// response, else the agreement's creation + DEALER_AGREEMENT_EXPIRE_IN_DAYS.
 function signerExpiry(
   rawResponse: unknown,
   signerCreatedAt: Date | null,

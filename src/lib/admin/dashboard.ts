@@ -362,16 +362,18 @@ function panelCountSql(key: AlertPanelKey, lf: SQL): SQL {
             return sql`SELECT COUNT(*)::text AS c FROM dealer_leads dl
                 JOIN dealer_onboarding_applications oa
                     ON oa.id = dl.dealer_onboarding_application_id
-                WHERE dl.lead_status = 'Converted' AND dl.is_active IS NOT FALSE
+                WHERE dl.lead_status IN ('Won', 'Converted') AND dl.is_active IS NOT FALSE
                   AND dl.onboarding_dropout_reason IS NULL
                   AND (oa.onboarding_status IN ('rejected','withdrawn')
                        OR (oa.onboarding_status IN ('draft','submitted','correction_requested')
-                           AND COALESCE(oa.last_action_at, oa.updated_at) < NOW() - INTERVAL '30 days'))`;
+                           AND COALESCE(oa.last_action_at, oa.updated_at) < NOW() - INTERVAL '21 days'))
+                  AND COALESCE((to_jsonb(dl) ->> 'onboarding_stalled_at')::timestamptz, 'epoch'::timestamptz)
+                      < NOW() - INTERVAL '21 days'`;
         case "stale_converted":
             return sql`SELECT COUNT(*)::text AS c FROM dealer_leads dl
                 JOIN dealer_onboarding_applications oa
                     ON oa.id = dl.dealer_onboarding_application_id
-                WHERE dl.lead_status = 'Converted'
+                WHERE dl.lead_status IN ('Won', 'Converted')
                   AND COALESCE(oa.last_action_at, oa.updated_at) < NOW() - INTERVAL '3 days' ${lf}`;
         case "onboarding_stalled":
             return sql`SELECT COUNT(*)::text AS c FROM dealer_onboarding_applications oa
@@ -502,7 +504,7 @@ export async function fetchAlertPanel(
                 FROM dealer_leads dl
                 JOIN dealer_onboarding_applications oa
                     ON oa.id = dl.dealer_onboarding_application_id
-                WHERE dl.lead_status = 'Converted'
+                WHERE dl.lead_status IN ('Won', 'Converted')
                   AND COALESCE(oa.last_action_at, oa.updated_at) < NOW() - INTERVAL '3 days' ${lf}
                 ORDER BY COALESCE(oa.last_action_at, oa.updated_at) ASC
                 LIMIT ${limit}
@@ -519,11 +521,13 @@ export async function fetchAlertPanel(
                 FROM dealer_leads dl
                 JOIN dealer_onboarding_applications oa
                     ON oa.id = dl.dealer_onboarding_application_id
-                WHERE dl.lead_status = 'Converted' AND dl.is_active IS NOT FALSE
+                WHERE dl.lead_status IN ('Won', 'Converted') AND dl.is_active IS NOT FALSE
                   AND dl.onboarding_dropout_reason IS NULL
                   AND (oa.onboarding_status IN ('rejected','withdrawn')
                        OR (oa.onboarding_status IN ('draft','submitted','correction_requested')
-                           AND COALESCE(oa.last_action_at, oa.updated_at) < NOW() - INTERVAL '30 days'))
+                           AND COALESCE(oa.last_action_at, oa.updated_at) < NOW() - INTERVAL '21 days'))
+                  AND COALESCE((to_jsonb(dl) ->> 'onboarding_stalled_at')::timestamptz, 'epoch'::timestamptz)
+                      < NOW() - INTERVAL '21 days'
                 ORDER BY dl.closed_at ASC NULLS LAST
                 LIMIT ${limit}
             `);

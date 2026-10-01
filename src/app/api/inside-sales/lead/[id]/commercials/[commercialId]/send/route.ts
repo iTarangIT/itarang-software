@@ -23,18 +23,16 @@
  * a lead they do not own is the entire point of notifying them.
  */
 import { NextRequest, NextResponse } from "next/server";
-import { sql } from "drizzle-orm";
 import { z } from "zod";
-import { db } from "@/lib/db";
 import { requireAuth } from "@/lib/auth-utils";
 import { isNextRedirectError } from "@/lib/api-utils";
-import { writeTouchpoint } from "@/lib/touchpoints/write";
-import {
-  dispatchQuotation,
-  listDispatches,
-  QUOTE_DISPATCH_CHANNELS,
-} from "@/lib/leads/quoteDispatch";
+import { listDispatches, QUOTE_DISPATCH_CHANNELS } from "@/lib/leads/quoteDispatch";
 import { MAX_EXTRA_CC, resolveQuotationCc } from "@/lib/leads/quotationCc";
+import {
+  loadQuote,
+  QuotationNotSendableError,
+  sendApprovedQuotation,
+} from "@/lib/leads/sendQuotation";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -62,50 +60,6 @@ const BodySchema = z.object({
     .max(MAX_EXTRA_CC, `At most ${MAX_EXTRA_CC} extra CC addresses.`)
     .optional(),
 });
-
-type QuoteRow = {
-  commercial_id: string;
-  dealer_lead_id: string;
-  approval_status: string | null;
-  quote_number: string | null;
-  quote_pdf_url: string | null;
-  quote_pdf_error: string | null;
-  version_no: number;
-  dealer_name: string | null;
-  dealer_phone: string | null;
-  dealer_email: string | null;
-  /** Grand total of the rendered quotation (snapshot), else the row's price. */
-  quote_total: string | null;
-  // E-243 — what the dealer said back, if anything yet.
-  dealer_decision: string | null;
-  dealer_decision_at: string | null;
-  dealer_decision_via: string | null;
-  dealer_decision_note: string | null;
-}
-
-async function loadQuote(
-  leadId: string,
-  commercialId: string,
-): Promise<QuoteRow | null> {
-  const rows = await db.execute<QuoteRow>(sql`
-    SELECT c.commercial_id::text AS commercial_id,
-           c.dealer_lead_id, c.approval_status, c.quote_number,
-           c.quote_pdf_url, c.quote_pdf_error, c.version_no,
-           c.dealer_decision, c.dealer_decision_at, c.dealer_decision_via,
-           c.dealer_decision_note,
-           COALESCE((c.quote_snapshot->>'total')::numeric,
-                    c.final_price, c.price_quoted)::text AS quote_total,
-           l.dealer_name, l.phone AS dealer_phone, l.contact_email AS dealer_email
-      FROM dealer_lead_commercials c
-      LEFT JOIN dealer_leads l ON l.id = c.dealer_lead_id
-     WHERE c.commercial_id = ${commercialId}::uuid
-       -- Scoped to the lead in the path: a commercial id from another lead must
-       -- not be sendable by pairing it with a lead the caller can see.
-       AND c.dealer_lead_id = ${leadId}
-     LIMIT 1
-  `);
-  return (rows as unknown as QuoteRow[])[0] ?? null;
-}
 
 function forbidden() {
   return NextResponse.json(
@@ -187,129 +141,37 @@ export async function POST(
     if (!ALLOWED_ROLES.has((user.role || "").toLowerCase())) return forbidden();
 
     const body = BodySchema.parse(await req.json());
-    const row = await loadQuote(id, commercialId);
-
-    if (!row) {
-      return NextResponse.json(
-        { success: false, error: { message: "Quotation not found." } },
-        { status: 404 },
-      );
-    }
-
-    // ── The gate ────────────────────────────────────────────────────────────
-    if (row.approval_status !== "approved") {
-      return NextResponse.json(
-        {
-          success: false,
-          error: {
-            message: `This quotation is ${row.approval_status ?? "undecided"} and cannot be sent to a dealer.`,
-          },
-        },
-        { status: 409 },
-      );
-    }
-    if (!row.quote_pdf_url || !row.quote_number) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: {
-            message:
-              "The quotation draft has not been generated yet. Regenerate it before sending.",
-          },
-        },
-        { status: 409 },
-      );
-    }
-
-    const email = body.email ?? row.dealer_email;
-    const phone = body.phone ?? row.dealer_phone;
-
-    // E-297 — resolved server-side, never trusted from the client: owner,
-    // the sender (B4) and the admin fixed list, plus any validated extras.
-    // Resolved for every send: CC'd on the email, or — WhatsApp having no CC —
-    // sent a separate internal notice on a WhatsApp-only send.
-    const cc = (
-      await resolveQuotationCc(id, commercialId, {
-        dealerEmail: email,
-        extra: body.extraCc ?? [],
-        actorId: user.id,
-      })
-    ).cc;
-    const quoteTotal = row.quote_total == null ? null : Number(row.quote_total);
-
-    const outcomes = await dispatchQuotation({
-      commercialId,
-      dealerLeadId: row.dealer_lead_id,
-      // E-243 — signed into the approval token, so a link can only ever open
-      // the exact document version the dealer was sent.
-      versionNo: row.version_no,
-      quoteNumber: row.quote_number,
-      pdfUrl: row.quote_pdf_url,
-      dealerName: row.dealer_name,
-      channels: body.channels,
-      email,
-      phone,
-      message: body.message,
-      cc,
-      quoteTotal: Number.isFinite(quoteTotal) ? quoteTotal : null,
-      senderName: user.name ?? null,
-      sentBy: user.id,
-    });
-
-    const sent = outcomes.filter((o) => o.status === "sent");
-    const failed = outcomes.filter((o) => o.status === "failed");
-    const notice = outcomes.find((o) => o.ccNotice);
-
-    // Remember a corrected address so the next revision does not need it typed
-    // again — but only when the email actually went, so a typo that bounced at
-    // the provider is not saved over a working address.
-    if (
-      body.email &&
-      body.email !== row.dealer_email &&
-      sent.some((o) => o.channel === "email")
-    ) {
-      try {
-        await db.execute(sql`
-          UPDATE dealer_leads
-             SET contact_email = ${body.email}, updated_at = NOW()
-           WHERE id = ${row.dealer_lead_id}
-        `);
-      } catch (e) {
-        console.error("[commercials/send] could not save dealer email", e);
-      }
-    }
-
-    // One touchpoint for the send, and only when something actually went. A
-    // history entry for a send where every channel failed would put a delivery
-    // that never happened into the lead timeline — the same mistake E-221
-    // avoided by not writing `quote_sent` on submission.
-    if (sent.length) {
-      await writeTouchpoint({
-        dealerLeadId: row.dealer_lead_id,
-        touchpointType: "quote_dispatched",
-        performedBy: user.id,
-        remarks:
-          `Quotation ${row.quote_number} sent to dealer via ` +
-          sent.map((o) => `${o.channel} (${o.recipient})`).join(", ") +
-          (failed.length
-            ? ` — failed on ${failed.map((o) => o.channel).join(", ")}`
-            : "") +
-          (notice?.ccNotice === "sent"
-            ? ` — internal team notified by email (${notice.cc?.length ?? 0})`
-            : notice?.ccNotice === "failed"
-              ? " — internal team notice email failed"
-              : ""),
-        attachments: [{ url: row.quote_pdf_url, type: "quote" }],
+    // The gate, the send, the email write-back and the touchpoint all live in
+    // sendApprovedQuotation — shared with the WhatsApp Assistant's send_quote.
+    let result;
+    try {
+      result = await sendApprovedQuotation({
+        leadId: id,
+        commercialId,
+        channels: body.channels,
+        email: body.email,
+        phone: body.phone,
+        message: body.message,
+        extraCc: body.extraCc ?? [],
+        actor: { id: user.id, name: user.name ?? null },
       });
+    } catch (e) {
+      if (e instanceof QuotationNotSendableError) {
+        return NextResponse.json(
+          { success: false, error: { message: e.message } },
+          { status: e.reason === "not_found" ? 404 : 409 },
+        );
+      }
+      throw e;
     }
 
     return NextResponse.json({
       success: true,
       data: {
-        quote_number: row.quote_number,
-        outcomes,
-        sent_count: sent.length,
-        failed_count: failed.length,
+        quote_number: result.quote_number,
+        outcomes: result.outcomes,
+        sent_count: result.sent_count,
+        failed_count: result.failed_count,
       },
       // 200 even on a partial send: the successful channel is a fact the caller
       // must not be able to mistake for a total failure and retry blindly.

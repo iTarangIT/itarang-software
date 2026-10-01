@@ -104,7 +104,11 @@ export function CeoControlTower({ windowQs }: { windowQs: string }) {
                 {x ? (
                     <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6">
                         <Exception label="Quotes waiting for your approval" count={x.quotes_pending} />
-                        <Exception label="Leads unassigned over 7 days" count={x.unassigned_over_7d} href="/leads" />
+                        <Exception
+                            label="Sales-ready leads awaiting assignment (7+ days)"
+                            count={x.unassigned_over_7d}
+                            href="/admin/ready-to-assign"
+                        />
                         <Exception label="Leads idle over 7 working days" count={x.idle_over_7d} href="/admin/reports/needs-attention" />
                         <Exception
                             label="Dealers in Red / Dormant"

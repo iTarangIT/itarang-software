@@ -1,0 +1,3 @@
+{ "extends": "./tsconfig.check.json", "compilerOptions": { "incremental": false },
+  "include": ["next-env.d.ts", "src/types/**/*.d.ts"],
+  "files": ["src/lib/leads/access.ts", "src/app/(dashboard)/leads/_components/LeadDrawer.tsx", "src/app/(dashboard)/leads/[id]/page.tsx", "src/app/(dashboard)/leads/page.tsx"] }

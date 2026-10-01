@@ -22,6 +22,17 @@ import { BUSINESS_TYPE_UNSET, isBusinessTypeFilter } from "@/lib/leads/businessT
 /** Every field optional and nullable — routes pass whatever the request carried. */
 export type QueueFilterInput = Partial<Record<keyof QueueFilters, string | null>>;
 
+/**
+ * The queue search box: dealer name, phone or shop name contains `q`
+ * (case-insensitive). One definition for the Inside Sales queue, the ASM queue
+ * and the WhatsApp Assistant's search_lead — they used to carry the same text
+ * twice. Starts with " AND" so it appends to a tab's WHERE clause.
+ */
+export function leadSearchClause(q: string): SQL {
+    const like = `%${q}%`;
+    return sql` AND (dl.dealer_name ILIKE ${like} OR dl.phone ILIKE ${like} OR dl.shop_name ILIKE ${like})`;
+}
+
 /** YYYY-MM-DD, enforced before the value reaches a `::date` cast. */
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
