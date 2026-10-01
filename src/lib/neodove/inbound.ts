@@ -18,15 +18,13 @@ import crypto from "crypto";
 import { db } from "@/lib/db";
 import { dealerLeads } from "@/lib/db/schema";
 import { errorMessage } from "@/lib/api-utils";
-import { isForward } from "@/lib/lifecycle/statusRules";
 import { StatusGuardError, writeTouchpoint } from "@/lib/touchpoints/write";
 import { reactivateLead } from "@/lib/leads/reactivation";
 import { classifyAgainstExisting, loadExistingByPhone } from "@/lib/leads/dedupe";
-import type { LeadStatus } from "@/lib/lifecycle/transitions";
 import {
+    callOutcomeFor,
     callStatusFor,
     dispositionFor,
-    leadStatusFor,
     remarksFor,
     touchpointTypeFor,
 } from "./mapper";
@@ -205,25 +203,12 @@ async function handleDisposition(
 
     // A connected call is first contact (ID 116): it lifts the lead to
     // Under_Discussion only when the lead is earlier than that. Anything else —
-    // a later stage, a closed lead — is recorded as a plain touchpoint: the call
-    // still happened, and an inbound event must never be refused (S3 guard in
-    // writeTouchpoint would throw on a backward move).
-    const target = leadStatusFor(event);
-    let statusChange: Parameters<typeof writeTouchpoint>[0]["statusChange"];
-
-    if (target) {
-        const current = await db.execute<{ lead_status: string | null }>(sql`
-            SELECT lead_status FROM dealer_leads WHERE id = ${dealerLeadId} LIMIT 1
-        `);
-        const from = (current[0]?.lead_status ?? null) as LeadStatus | null;
-        // Awaiting field visit (Transferred_to_ASM) ranks just below
-        // Under_Discussion, so isForward() says yes — but only a visit ends it
-        // (ID 77) and the guard refuses the move. Asking for it made the whole
-        // write throw and the call record was lost.
-        if (from !== "Transferred_to_ASM" && isForward(from, target)) {
-            statusChange = { from, to: target, closingRole: "system", event: "progress" };
-        }
-    }
+    // a later stage, Awaiting field visit (only a visit ends it, ID 77), a
+    // closed lead — is recorded as a plain touchpoint: the call still happened.
+    // The rule is the shared one (ID 114): the outcome goes to writeTouchpoint,
+    // which derives the move — and the temperature — against the row it locks,
+    // so there is no read-then-write gap here any more.
+    const outcome = callOutcomeFor(event);
 
     const callStatus = callStatusFor(event);
     const agentUserId = await resolveAgentUserId(event.agentName);
@@ -246,18 +231,19 @@ async function handleDisposition(
         externalSystem: "neodove",
         externalEventId: event.externalEventId,
         syncMethod: "api",
-        statusChange,
+        outcome,
+        interestReason: "Auto: from NeoDove call outcome",
     };
-    // An inbound call is never refused: if the S3 guard rejects the status move
-    // (a race — the lead moved between the read above and this write), the call
-    // is still recorded, without the move.
+    // An inbound call is never refused. A derived move is computed from the
+    // locked row, so the S3 guard should never reject it — but if it ever does,
+    // the call is still recorded, without the move.
     let touchpointId: string;
     try {
         ({ touchpointId } = await writeTouchpoint(callTouchpoint));
     } catch (err) {
-        if (!(err instanceof StatusGuardError) || !statusChange) throw err;
+        if (!(err instanceof StatusGuardError)) throw err;
         console.warn(`[neodove/inbound] status move skipped for ${dealerLeadId}: ${err.message}`);
-        ({ touchpointId } = await writeTouchpoint({ ...callTouchpoint, statusChange: undefined }));
+        ({ touchpointId } = await writeTouchpoint({ ...callTouchpoint, outcome: undefined }));
     }
 
     await attachCallEvidence(touchpointId, event);

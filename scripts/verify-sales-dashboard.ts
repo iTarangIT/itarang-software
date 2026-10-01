@@ -55,12 +55,28 @@ async function handSql(spoc: string, day: string) {
           LEFT JOIN first_visit fv ON fv.dealer_lead_id = v.dealer_lead_id
          WHERE v.asm_id = ${spoc} AND v.actual_visit_date = ${day}::date
     `);
+    // ID 59, written out by hand (NOT imported from metricDefinitions.ts, so the
+    // check stays independent of the builder): human calls only, and a NeoDove
+    // call re-dispositioned within 3 minutes on the same lead counts once.
     const c = await db.execute<{ calls: string }>(sql`
         SELECT COUNT(*)::text AS calls
           FROM lead_touchpoints t
          WHERE t.performed_by = ${spoc}
-           AND t.touchpoint_type IN ('inside_sales_call', 'ai_call')
+           AND t.touchpoint_type = 'inside_sales_call'
            AND (t.performed_at AT TIME ZONE 'Asia/Kolkata')::date = ${day}::date
+           AND NOT (
+               t.external_system = 'neodove'
+               AND EXISTS (
+                   SELECT 1 FROM lead_touchpoints p
+                    WHERE p.dealer_lead_id = t.dealer_lead_id
+                      AND p.touchpoint_type = 'inside_sales_call'
+                      AND p.external_system = 'neodove'
+                      AND p.touchpoint_id <> t.touchpoint_id
+                      AND p.performed_by IS NOT DISTINCT FROM t.performed_by
+                      AND p.performed_at BETWEEN t.performed_at - INTERVAL '3 minutes' AND t.performed_at
+                      AND (p.performed_at < t.performed_at OR p.touchpoint_id < t.touchpoint_id)
+               )
+           )
     `);
     const r = (v as unknown as { visits: string; uniq: string; nw: string }[])[0]!;
     return {

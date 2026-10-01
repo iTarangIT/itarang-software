@@ -19,6 +19,7 @@ import {
     ChevronRight,
     Clock,
     Copy,
+    FileWarning,
     Hourglass,
     Loader2,
     Map,
@@ -68,6 +69,7 @@ const PANEL_META: Record<
     duplicate_merge_requests: { icon: Copy, severity: "warning" },
     out_of_territory_handoffs: { icon: Map, severity: "warning" },
     non_responsive: { icon: PhoneOff, severity: "warning" },
+    won_without_quote: { icon: FileWarning, severity: "warning" },
 };
 
 // Tailwind classes per severity, applied only when count > 0.

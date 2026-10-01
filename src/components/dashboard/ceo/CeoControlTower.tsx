@@ -242,7 +242,7 @@ export function CeoControlTower({ windowQs }: { windowQs: string }) {
                                                     <th className="text-right font-medium">Converted</th>
                                                     <th className="text-right font-medium">Revenue</th>
                                                     <th className="text-right font-medium">Idle</th>
-                                                    <th className="text-right font-medium">Engaged %</th>
+                                                    <th className="text-right font-medium">Engaged % (≥30 s)</th>
                                                 </tr>
                                             </thead>
                                             <tbody>

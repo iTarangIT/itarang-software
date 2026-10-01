@@ -87,6 +87,8 @@ export const GET = withErrorHandler(async (req: Request) => {
         // type, and a blank cell reads as missing data, not as a bucket.
         { header: "Type of business", width: 16, value: (r) => businessTypeLabel(r.business_type) },
         { header: "Status", width: 22, value: (r) => r.lead_status ?? null },
+        { header: "Won on", width: 14, value: (r) => excelDateTimeIst(r.won_at), numFmt: "dd-mmm-yyyy" },
+        { header: "Won without approved quote", width: 14, value: (r) => (r.won_without_approved_quote ? "Yes" : null) },
         { header: "Interest", width: 10, value: (r) => r.interest_level ?? null },
         { header: "Sales POC", width: 22, value: (r) => r.owner_name ?? null },
         { header: "Last visit date", width: 14, value: (r) => excelDate(r.last_visit_date), numFmt: "dd-mmm-yyyy" },
@@ -124,6 +126,7 @@ export const GET = withErrorHandler(async (req: Request) => {
     styleHeader(notes.getRow(1));
     [
         ["Sales POC", "The lead's current owner in the CRM."],
+        ["Won on / Won without approved quote", "Won = the rep's Mark Won; Converted = the dealer's onboarding approved. 'Yes' means Mark Won happened with no dealer-approved quote on the lead (allowed, and flagged). Blank on leads that are not Won or Converted."],
         ["Last / next visit", "From logged field visits: latest actual visit; earliest open scheduled visit on or after today (IST)."],
         ["Last / next calling date", "From inside-sales and AI-dialer call touchpoints: latest call; earliest planned next action on or after now (IST)."],
         ["Latest remarks", "Remarks on the most recent touchpoint of any type."],

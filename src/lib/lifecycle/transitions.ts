@@ -36,6 +36,14 @@ export const OPEN_STATUSES: LeadStatus[] = [
   "Won",
 ];
 
+/**
+ * Open statuses the REP still has to work (ID 74). Won is open but waiting on
+ * the dealer's onboarding, not on a call or a visit — so idle / no-touch lists
+ * leave it out. It is chased by the onboarding panels instead (stale
+ * onboarding at 3 days, drop-outs at 21, stalled at 30).
+ */
+export const WORKABLE_STATUSES: LeadStatus[] = OPEN_STATUSES.filter((s) => s !== "Won");
+
 export const TERMINAL_STATUSES: LeadStatus[] = ["Converted", "Lost"];
 
 export const LOST_REASON = [

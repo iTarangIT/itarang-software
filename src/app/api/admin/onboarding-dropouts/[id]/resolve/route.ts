@@ -114,10 +114,6 @@ export const POST = withErrorHandler(
             await db.transaction(async (tx) => {
                 await tx.execute(sql`
                     UPDATE dealer_leads SET
-                        lead_status = ${newStatus},
-                        closed_at = NULL,
-                        closing_owner_id = NULL,
-                        closing_role = NULL,
                         current_owner_id = ${newOwnerId},
                         assigned_at = ${newOwnerId ? sql`NOW()` : sql`assigned_at`},
                         onboarding_dropout_reason = ${body.onboarding_dropout_reason},
@@ -125,25 +121,29 @@ export const POST = withErrorHandler(
                         updated_at = NOW()
                     WHERE id = ${id}
                 `);
-                await tx.execute(sql`
-                    INSERT INTO dealer_lead_status_history
-                        (dealer_lead_id, from_status, to_status, changed_by,
-                         changed_at, reason_notes)
-                    VALUES (${id}, ${lead.lead_status}, ${newStatus}, ${user.id}, NOW(),
-                        ${body.onboarding_dropout_notes})
-                `);
-                // E-295: from/to owner recorded so Lead Tracking sees the hop
-                // (the closer keeps current_owner_id on a Converted lead; the
-                // re-engage hands it to the originator or back to the pool).
-                await tx.execute(sql`
-                    INSERT INTO lead_touchpoints
-                        (dealer_lead_id, touchpoint_type, performed_by,
-                         performed_at, remarks, sync_method,
-                         from_owner_id, to_owner_id)
-                    VALUES (${id}, 'onboarding_dropout_action', ${user.id}, NOW(),
-                        ${`Re-engaged after onboarding dropout — ${body.onboarding_dropout_notes}`},
-                        'manual', ${lead.current_owner_id}, ${newOwnerId})
-                `);
+                // The status move goes through the guarded writer (event
+                // "reactivation"), which also writes the history row and clears
+                // closed_at / closing_*. E-295: from/to owner recorded so Lead
+                // Tracking sees the hop (the closer keeps current_owner_id on a
+                // Won / Converted lead; the re-engage hands it to the originator
+                // or back to the pool).
+                await writeTouchpoint(
+                    {
+                        dealerLeadId: id,
+                        touchpointType: "onboarding_dropout_action",
+                        performedBy: user.id,
+                        remarks: `Re-engaged after onboarding dropout — ${body.onboarding_dropout_notes}`,
+                        fromOwnerId: lead.current_owner_id,
+                        toOwnerId: newOwnerId,
+                        statusChange: {
+                            from: fromWon ? "Won" : "Converted",
+                            to: newStatus,
+                            reasonNotes: body.onboarding_dropout_notes,
+                            event: "reactivation",
+                        },
+                    },
+                    { tx },
+                );
             });
         }
 

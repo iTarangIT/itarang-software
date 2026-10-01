@@ -646,7 +646,24 @@ export async function middleware(request: NextRequest) {
     // and nothing else under the bare "/admin" prefix below. The page and API
     // gates for each carry "partner" too.
     "/admin/upload": ["admin", "sales_head", "ceo", "partner"],
-    "/admin/reports": ["admin", "sales_head", "ceo", "partner"],
+    // IDs 8 / 12 — each row is the page's own requireRole list. The three
+    // sub-pages sit ABOVE "/admin/reports" (first prefix match wins), so
+    // finance_controller reaches the Funnel tab on the Reports page and
+    // nothing under it, and business_head never reaches Needs Attention.
+    // Before these rows the bare "/admin" entry bounced business_head and
+    // finance_controller off pages their sidebar and APIs already admitted.
+    "/admin/reports/sales-dashboard": ["admin", "sales_head", "ceo", "partner", "business_head"],
+    "/admin/reports/dealer-health": ["admin", "sales_head", "ceo", "partner", "business_head"],
+    "/admin/reports/needs-attention": ["admin", "sales_head", "ceo", "partner"],
+    "/admin/reports": [
+      "admin",
+      "sales_head",
+      "ceo",
+      "partner",
+      "business_head",
+      "finance_controller",
+    ],
+    "/admin/targets": ["admin", "sales_head", "ceo", "business_head"],
     "/admin/escalations": ["admin", "sales_head", "ceo", "partner"],
     "/admin/merge-requests": ["admin", "sales_head", "ceo", "partner"],
     "/admin/onboarding-dropouts": ["admin", "sales_head", "ceo", "partner"],
