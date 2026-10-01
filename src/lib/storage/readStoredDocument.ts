@@ -81,7 +81,7 @@ export function parseFilesProxyPath(
  * or authenticated) to a logical bucket + key.
  * Format: …/storage/v1/object/(public|sign|authenticated)/<bucket>/<path>
  */
-function parseSupabaseStorageUrl(
+export function parseSupabaseStorageUrl(
     url: string,
 ): { bucket: string; key: string } | null {
     let pathname: string;

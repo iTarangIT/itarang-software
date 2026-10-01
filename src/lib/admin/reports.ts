@@ -148,6 +148,9 @@ async function leadFunnel(f: DashboardFilters): Promise<ReportResult> {
         "Commercials_Finalised",
         "Awaiting_Customer_Decision",
         "Transferred_to_ASM",
+        // ID 74 — without this row a Won lead counted in "All leads created"
+        // and appeared in no stage.
+        "Won",
         "Converted",
         "Lost",
     ];

@@ -5,7 +5,7 @@ import { useState, useCallback } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, AlertTriangle, ArrowLeft } from "lucide-react";
 import Link from "next/link";
-import type { LeadDetailBundle } from "@/lib/inside-sales/types";
+import { hasApprovedQuote, type LeadDetailBundle } from "@/lib/inside-sales/types";
 import { LeadDetailHeader } from "./LeadDetailHeader";
 import { LeadActivityPanes } from "./LeadActivityPanes";
 import { LeadDetailRightPane } from "./LeadDetailRightPane";
@@ -191,6 +191,7 @@ export function LeadDetailView({ leadId, viewerId, viewerRole, backHref = "/insi
                 onClose={() => setActiveModal(null)}
                 leadId={leadId}
                 onSuccess={onActionSuccess}
+                hasApprovedQuote={hasApprovedQuote(bundle.commercials_history)}
             />
             <ReassignLeadModal
                 open={activeModal === "reassign"}

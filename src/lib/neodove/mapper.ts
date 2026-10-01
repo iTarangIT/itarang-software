@@ -26,7 +26,7 @@ import {
     type ClassifiedDisposition,
 } from "@/lib/leads/dispositions";
 import type { CallStatus, TouchpointType } from "@/lib/lifecycle/touchpointTypes";
-import type { LeadStatus } from "@/lib/lifecycle/transitions";
+import type { TouchpointOutcome } from "@/lib/leads/outcomeRule";
 import type {
     NeodoveEventType,
     NeodoveInboundEvent,
@@ -524,15 +524,33 @@ export function callStatusFor(event: NeodoveInboundEvent): CallStatus | null {
     return event.eventType === "call_connected" ? "connected" : null;
 }
 
-// NeoDove → our LeadStatus (ID 116, 29 Sep 2026). A NeoDove call is a CALL
-// EVENT only: a connected call is first contact, so it proposes
-// Under_Discussion; the inbound writer applies it only when the lead is earlier
-// than that (S3, forward only). Stages and dispositions never set a status —
-// commercials stages come only from quote events in the CRM, and Converted /
-// Lost need Mark Converted (onboarding record) / Mark Lost (reason). The stage
-// and disposition stay on the touchpoint as the call outcome and temperature.
-export function leadStatusFor(event: NeodoveInboundEvent): LeadStatus | null {
-    return callStatusFor(event) === "connected" ? "Under_Discussion" : null;
+// NeoDove → the shared outcome rule (ID 116, 29 Sep 2026; ID 114, 01 Oct 2026).
+// A NeoDove call is a CALL EVENT only. This states what the call came to; the
+// status writer applies the same rule as every other entry point
+// (src/lib/leads/outcomeRule.ts) against the lead row it locks:
+//
+//   status       a connected call is first contact — it lifts the lead to
+//                Under_Discussion only when the lead is earlier than that (S3,
+//                forward only). `firstContactOnConnect` keeps that true for a
+//                connected call with a Lost-type label or no label at all:
+//                nobody is at the CRM to be asked Mark Lost. Stages and
+//                dispositions never set a status — commercials stages come only
+//                from quote events, Converted / Lost from their own actions.
+//   temperature  from the sheet's bucket (Cold / Warm / Hot) of a KNOWN
+//                disposition, and only where the linked agent's own work
+//                produced it (autoInterestAllowed).
+export function callOutcomeFor(
+    event: NeodoveInboundEvent,
+): Extract<TouchpointOutcome, { kind: "call" }> {
+    const classified = dispositionFor(event);
+    const known = classified?.isKnown ? classified : null;
+    return {
+        kind: "call",
+        connected: callStatusFor(event) === "connected",
+        label: known?.label ?? null,
+        bucket: known?.bucket ?? null,
+        firstContactOnConnect: true,
+    };
 }
 
 /**

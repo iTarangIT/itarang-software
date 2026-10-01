@@ -14,15 +14,23 @@
 
 import { describe, expect, it } from "vitest";
 import {
+    callOutcomeFor,
     callStatusFor,
     dealerLeadToNeodove,
     dispositionFor,
-    leadStatusFor,
     parseInboundEvent,
     remarksFor,
     touchpointTypeFor,
     type PushableLead,
 } from "../mapper";
+import { resolveOutcome } from "@/lib/leads/outcomeRule";
+import type { NeodoveInboundEvent } from "../types";
+
+// The status a NeoDove event moves a lead to (ID 116 / ID 114): the event's
+// outcome through the SHARED rule, for a lead with no status yet — the furthest
+// any call can move anything.
+const leadStatusFor = (event: NeodoveInboundEvent, status: string | null = null) =>
+    resolveOutcome(callOutcomeFor(event), { status, interest: null, preTransferStatus: null, ownerId: null }).statusTo;
 
 // NeoDove's REAL fixed webhook payload, copied verbatim from the "Example Url
 // (Curl)" block on their Integrations > Webhook screen, 2026-08-03. This is no
@@ -482,7 +490,7 @@ describe("callStatusFor", () => {
     });
 });
 
-describe("leadStatusFor (ID 116: a call event only)", () => {
+describe("callOutcomeFor through the shared rule (ID 116: a call event only)", () => {
     it("a connected call proposes first contact (Under_Discussion)", () => {
         expect(leadStatusFor(parseInboundEvent({ call_connected: "true" }))).toBe("Under_Discussion");
     });
@@ -493,6 +501,22 @@ describe("leadStatusFor (ID 116: a call event only)", () => {
         }
         expect(leadStatusFor(parseInboundEvent({ stage: "quote sent", call_connected: "true" }))).toBe("Under_Discussion");
         expect(leadStatusFor(parseInboundEvent({}))).toBeNull();
+    });
+
+    it("first contact only: never backwards, never out of Awaiting field visit, never on a closed lead", () => {
+        const connected = parseInboundEvent({ call_connected: "true" });
+        expect(leadStatusFor(connected, "Assigned_Not_Contacted")).toBe("Under_Discussion");
+        for (const status of ["Under_Discussion", "Commercials_Finalised", "Transferred_to_ASM", "Won", "Converted", "Lost"]) {
+            expect(leadStatusFor(connected, status), status).toBeNull();
+        }
+    });
+
+    it("temperature comes from a KNOWN disposition's bucket, nothing else", () => {
+        const lead = { status: "Under_Discussion", interest: "cold", preTransferStatus: null, ownerId: null };
+        const hot = callOutcomeFor(parseInboundEvent({ call_connected: "true", lead_tag_name: "Commercials Finalised" }));
+        expect(hot.firstContactOnConnect).toBe(true);
+        expect(resolveOutcome(hot, lead).interestTo).toBe("hot");
+        expect(resolveOutcome(callOutcomeFor(parseInboundEvent({ call_connected: "true" })), lead).interestTo).toBeNull();
     });
 
     // Lost needs a lost_reason from a fixed vocabulary NeoDove has no

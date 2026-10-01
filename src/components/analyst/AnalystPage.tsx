@@ -6,7 +6,7 @@ import "server-only";
 
 import { randomUUID } from "node:crypto";
 
-import { newThreadId, ownsThread, requireAnalystUser } from "@/lib/analyst/access";
+import { canManageSources, newThreadId, ownsThread, requireAnalystUser } from "@/lib/analyst/access";
 import { agentAwake, agentJson, analystConfigured } from "@/lib/analyst/client";
 import { AnalystError } from "@/lib/analyst/errors";
 import { ownThreads } from "@/lib/analyst/threads";
@@ -83,6 +83,7 @@ export async function AnalystPage({
       threads={ownThreads(user, threads)}
       unreachable={false}
       problem={null}
+      canManage={canManageSources(user.role)}
     />
   );
 }
