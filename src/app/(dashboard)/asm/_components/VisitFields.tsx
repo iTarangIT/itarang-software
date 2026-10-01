@@ -189,8 +189,12 @@ export function useVisitForm(open: boolean, lead?: VisitLeadState) {
             if (lng != null) body.gps_check_in_lng = lng;
             if (nextAction === "next_visit") body.next_visit_date = nextVisitDate;
             if (visitStatus === "visited" && statusTo) body.status_to = statusTo;
-            if (visitStatus === "visited" && interestTo && interestTo !== lead?.interest_level) {
-                body.interest_level = interestTo;
+            // The server derives status and temperature from the outcome itself
+            // (ID 114). What the form adds is the ASM's own choice: a level, or
+            // null for "leave as is" — sent only when the form showed the
+            // control (it had the lead), so an unseen default is never refused.
+            if (visitStatus === "visited" && lead) {
+                body.interest_level = interestTo || null;
                 body.interest_auto = auto.interest;
             }
 

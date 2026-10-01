@@ -6,9 +6,12 @@
 //   1. totals (group_by=none) == Σ rows (group_by=city), for every count
 //   2. files_rejected == Σ rejection_reasons
 //   3. filtering by one NBFC changes ONLY files_disbursed / files_rejected
+//   4. the four headline numbers == independent hand SQL on the base tables
 // and prints the totals, the by-city rows and the reasons so they can be
 // eyeballed against SQL. Exits 1 on any mismatch.
 
+import { sql } from "drizzle-orm";
+import { db } from "@/lib/db";
 import { buildFunnelCounts, type FunnelCounts } from "@/lib/admin/funnelCounts";
 
 function arg(name: string): string | undefined {
@@ -78,6 +81,38 @@ async function main() {
         const bad = KEYS.filter((k) => r.rows.reduce((a, x) => a + x[k], 0) !== none.totals[k]);
         line(`by ${g}: ${r.rows.length} rows  ${bad.length ? "MISMATCH on " + bad.join(", ") : "sums OK"}`);
         if (bad.length) failed = true;
+    }
+
+    // 4. The four headline numbers against INDEPENDENT hand SQL (ID 12) — plain
+    //    counts on the base tables, no joins, dates cast to the IST day. This is
+    //    what finance can re-run for one week (--from / --to) and compare by
+    //    hand; it also catches a join in the builder that multiplies rows.
+    const lo = none.filters.from;
+    const hi = none.filters.to;
+    const istDay = (col: ReturnType<typeof sql>) => sql`(${col} AT TIME ZONE 'Asia/Kolkata')::date BETWEEN ${lo}::date AND ${hi}::date`;
+    const one = async (q: ReturnType<typeof sql>) =>
+        Number(((await db.execute(q)) as unknown as Array<{ n: string }>)[0]?.n ?? 0);
+    const hand = {
+        // approved_at / rejected_at are NAIVE timestamps holding UTC wall-clock.
+        dealers_onboarded: await one(sql`
+            SELECT COUNT(*)::text AS n FROM dealer_onboarding_applications
+             WHERE approved_at IS NOT NULL AND ${istDay(sql`(approved_at AT TIME ZONE 'UTC')`)}`),
+        kyc_shared: await one(sql`
+            SELECT COUNT(*)::text AS n
+              FROM (SELECT lead_id, MIN(created_at) AS first_at FROM admin_verification_queue GROUP BY lead_id) q
+             WHERE ${istDay(sql`q.first_at`)}`),
+        files_disbursed: await one(sql`
+            SELECT COUNT(*)::text AS n FROM loan_sanctions
+             WHERE disbursed_at IS NOT NULL AND ${istDay(sql`disbursed_at`)}`),
+        files_rejected: await one(sql`
+            SELECT COUNT(*)::text AS n FROM loan_sanctions
+             WHERE lower(status) = 'rejected' AND ${istDay(sql`COALESCE(updated_at, created_at)`)}`),
+    };
+    line(`hand SQL ${lo} → ${hi}: ${JSON.stringify(hand)}`);
+    for (const k of Object.keys(hand) as (keyof typeof hand)[]) {
+        const ok = hand[k] === none.totals[k];
+        line(`   ${k}: builder ${none.totals[k]} vs hand ${hand[k]}  ${ok ? "MATCH" : "MISMATCH"}`);
+        if (!ok) failed = true;
     }
 
     process.exit(failed ? 1 : 0);

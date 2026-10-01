@@ -7,11 +7,13 @@
 // the response to chain into Mark Converted / Mark Lost / Escalate. Convert /
 // Lost / Transfer still go through their dedicated routes.
 //
-// Optional status_to (an OPEN progress status) and interest_level: the form
-// pre-fills them from the shared auto rule (lib/leads/autoProgress.ts) — the
-// same one the WhatsApp Assistant uses — and they are written in the SAME
-// transaction as the visit: a status_change_note touchpoint + history, and an
-// audited setInterestLevel.
+// Status and temperature after a done visit are derived HERE from the visit
+// outcome by the shared rule (lib/leads/outcomeRule.ts, ID 114) — the form's
+// pre-fill is a preview of the same rule, as is the WhatsApp Assistant's.
+// Optional status_to (first contact only) and interest_level (a level, or null
+// for "leave as is") are the ASM's own choices. All of it is written in the
+// SAME transaction as the visit: a status_change_note touchpoint + history,
+// and an audited setInterestLevel.
 
 import { z } from "zod";
 import { requireRole } from "@/lib/auth-utils";
@@ -20,7 +22,6 @@ import { recordVisit } from "@/lib/asm/recordVisit";
 import { applyVisitStatus } from "@/lib/asm/visitStatus";
 import { assertOwner } from "@/lib/leads/ownership";
 import { withLeadActor } from "@/lib/leads/actorContext";
-import { setInterestLevel } from "@/lib/leads/interestLevel";
 import {
     VISIT_NEXT_ACTION,
     VISIT_OUTCOME,
@@ -93,24 +94,24 @@ export const POST = withErrorHandler(
             // A visit that didn't happen can't move the lead. A visit that DID
             // ends Awaiting field visit and restores the pre-transfer stage
             // when that is further along (ID 77, applyVisitStatus).
+            // Status AND temperature come from the visit outcome, derived on the
+            // server by the shared rule (ID 114) — status_to / interest_level
+            // from the form are the ASM's own choices on top of it.
             if (visited) {
                 await applyVisitStatus(tx, {
                     leadId: id,
                     actorId: user.id,
                     requested: status_to ?? null,
                     remarks: `Status after visit: ${visit.visit_remarks}`,
+                    outcome: visit.visit_outcome ?? null,
+                    // Absent stays absent (derive); null = leave; a level = set.
+                    ...(interest_level !== undefined
+                        ? {
+                              interest: interest_level,
+                              interestReason: interest_auto ? "Auto: from visit outcome" : "Set with visit",
+                          }
+                        : {}),
                 });
-            }
-            if (visited && interest_level) {
-                await setInterestLevel(
-                    {
-                        leadId: id,
-                        actorId: user.id,
-                        level: interest_level,
-                        reason: interest_auto ? "Auto: from visit outcome" : "Set with visit",
-                    },
-                    { tx },
-                );
             }
             return recorded;
         });

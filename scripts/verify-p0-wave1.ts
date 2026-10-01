@@ -16,7 +16,7 @@ import { buildSalesDashboard } from "../src/lib/admin/salesDashboard";
 import { listTargets } from "../src/lib/targets/service";
 import { StatusGuardError, writeTouchpoint } from "../src/lib/touchpoints/write";
 import { loadQuotationForDealer, staleQuoteReason } from "../src/lib/leads/quoteDecision";
-import { humanCall, wasHotAt } from "../src/lib/reports/metricDefinitions";
+import { engagedCall, humanCall, isFirstQuote, wasHotAt } from "../src/lib/reports/metricDefinitions";
 import { aiInterestLevelSql } from "../src/lib/ai/storage/aiInterest";
 
 type Outcome = "PASS" | "FAIL" | "SKIP";
@@ -124,6 +124,89 @@ await check("P0-4 targets list builds (hot at transfer, human calls)", async () 
          WHERE t.touchpoint_type = 'asm_transfer'
     `)) as unknown as Array<{ now_hot: string; at_transfer: string }>;
     return `${rows.length} target rows; ASM transfers Hot now=${h.now_hot}, Hot at transfer=${h.at_transfer}`;
+});
+
+await check("P0-4 engaged call: a NeoDove call whose connect + duration sit on the later twin counts once, and engaged", async () => {
+    const [seed] = (await db.execute<{ lead: string; uid: string }>(sql`
+        SELECT (SELECT id FROM dealer_leads ORDER BY created_at LIMIT 1) AS lead,
+               (SELECT id::text FROM users WHERE is_active IS NOT FALSE ORDER BY created_at LIMIT 1) AS uid
+    `)) as unknown as Array<{ lead: string | null; uid: string | null }>;
+    if (!seed?.lead || !seed.uid) throw new Error("SKIP: no lead / user to write the two test calls on");
+    // Far in the future, so no real call can be a twin of these two.
+    const first = new Date("2090-01-01T06:00:00Z");
+    const second = new Date("2090-01-01T06:01:00Z");
+    let human = -1;
+    let engaged = -1;
+    await rolledBack(async (tx) => {
+        const base = {
+            dealerLeadId: seed.lead!,
+            touchpointType: "inside_sales_call" as const,
+            performedBy: seed.uid!,
+            externalSystem: "neodove",
+            syncMethod: "api" as const,
+        };
+        await writeTouchpoint({ ...base, performedAt: first, callStatus: "not_responding", externalEventId: "verify-p0-twin-1" }, { tx });
+        await writeTouchpoint(
+            { ...base, performedAt: second, callStatus: "connected", callDurationSec: 45, externalEventId: "verify-p0-twin-2" },
+            { tx },
+        );
+        const [r] = (await tx.execute<{ human: string; engaged: string }>(sql`
+            SELECT COUNT(*) FILTER (WHERE ${humanCall()})::text AS human,
+                   COUNT(*) FILTER (WHERE ${engagedCall()})::text AS engaged
+              FROM lead_touchpoints t
+             WHERE t.dealer_lead_id = ${seed.lead} AND t.performed_at >= '2090-01-01'::date
+        `)) as unknown as Array<{ human: string; engaged: string }>;
+        human = Number(r.human);
+        engaged = Number(r.engaged);
+    });
+    assert(human === 1, `two NeoDove events of one call counted as ${human} calls`);
+    assert(engaged === 1, `the call (connected 45 s on the later twin) counted as ${engaged} engaged`);
+    const [g] = (await db.execute<{ human: string; engaged: string }>(sql`
+        SELECT COUNT(*) FILTER (WHERE ${humanCall()})::text AS human,
+               COUNT(*) FILTER (WHERE ${engagedCall()})::text AS engaged
+          FROM lead_touchpoints t
+    `)) as unknown as Array<{ human: string; engaged: string }>;
+    assert(Number(g.engaged) <= Number(g.human), `engaged ${g.engaged} > calls ${g.human}`);
+    return `twin pair → 1 call, 1 engaged; all time: ${g.human} human calls, ${g.engaged} engaged (≥30 s)`;
+});
+
+await check("P0-4 Hot handed to field reads the rating AT the transfer, not now", async () => {
+    const [t] = (await db.execute<{ ok: boolean }>(sql`SELECT to_regclass('public.dealer_lead_interest_history') IS NOT NULL AS ok`)) as unknown as Array<{ ok: boolean }>;
+    if (!t.ok) throw new Error("SKIP: E-304 not applied (no interest history)");
+    const [lead] = (await db.execute<{ id: string }>(sql`SELECT id FROM dealer_leads ORDER BY created_at LIMIT 1`)) as unknown as Array<{ id: string }>;
+    if (!lead) throw new Error("SKIP: no lead");
+    let atTransfer: boolean | null = null;
+    let after: boolean | null = null;
+    await rolledBack(async (tx) => {
+        // Explicit, far-future timestamps: now() is constant inside a transaction.
+        await tx.execute(sql`
+            INSERT INTO dealer_lead_interest_history (dealer_lead_id, from_level, to_level, changed_by, changed_at)
+            VALUES (${lead.id}, 'warm', 'hot',  'verify-p0-wave1', '2090-01-01T06:00:00Z'),
+                   (${lead.id}, 'hot',  'cold', 'verify-p0-wave1', '2090-01-03T06:00:00Z')
+        `);
+        const [r] = (await tx.execute<{ at_transfer: boolean; after: boolean }>(sql`
+            SELECT ${wasHotAt(sql`dl.id`, sql`'2090-01-02T06:00:00Z'::timestamptz`, sql`dl.interest_level`)} AS at_transfer,
+                   ${wasHotAt(sql`dl.id`, sql`'2090-01-04T06:00:00Z'::timestamptz`, sql`dl.interest_level`)} AS after
+              FROM dealer_leads dl WHERE dl.id = ${lead.id}
+        `)) as unknown as Array<{ at_transfer: boolean; after: boolean }>;
+        atTransfer = r.at_transfer;
+        after = r.after;
+    });
+    assert(atTransfer === true, "a transfer made while the lead was Hot was not counted as Hot");
+    assert(after === false, "a transfer made after the lead cooled was still counted as Hot");
+    return "Hot at the transfer = counted; cooled before the transfer = not counted";
+});
+
+await check("P0-4 quotes created = one first quote per lead, revisions apart", async () => {
+    const [r] = (await db.execute<{ first: string; leads: string; all_quotes: string }>(sql`
+        SELECT COUNT(*) FILTER (WHERE ${isFirstQuote()})::text AS first,
+               COUNT(DISTINCT c.dealer_lead_id)::text AS leads,
+               COUNT(*)::text AS all_quotes
+          FROM dealer_lead_commercials c
+         WHERE c.event_type IN ('quote_issue', 'quote_revision')
+    `)) as unknown as Array<{ first: string; leads: string; all_quotes: string }>;
+    assert(r.first === r.leads, `${r.first} first quotes for ${r.leads} leads with a quote`);
+    return `${r.all_quotes} quote events = ${r.first} first quotes + ${Number(r.all_quotes) - Number(r.first)} revisions, over ${r.leads} leads`;
 });
 
 await check("P0-6 a replaced quote version is refused", async () => {

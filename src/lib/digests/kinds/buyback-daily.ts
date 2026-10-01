@@ -1,53 +1,72 @@
 /**
- * Buyback Daily digest (B9) — per SPOC: yesterday, month to date, last 7 days,
- * plus pickups scheduled today and tomorrow. Same shape and slot rules as the
- * Sales Daily mail (B8); reuses its table block.
+ * Buyback Daily digest (B9) — revised Format B (Reporting Review v1.0, sheet
+ * 4_Email_Buyback; tracker ID 10, 01 Oct 2026). One mail every morning:
+ *
+ *   A · Company headline   nine metrics × Yesterday / Last 7 days / MTD /
+ *                          MTD target / % of target / same period last month
+ *   B · Per SPOC           the same activity per request owner and period
+ *   C · Pipeline           open requests per owner by where they are stuck
+ *   D · Pickups            today and tomorrow, with expected kg today
+ *
+ * This file is the queries; the row shaping is ./buyback-daily-shape.ts (pure,
+ * unit-tested).
  *
  * WHO THE SPOC IS. `buyback_requests.owner_id` (E-302, review R-12) — set at
  * creation from the dealer's CRM owner (GSTIN match) and by Claim / Assign on
- * the admin request page. Every figure about a request, quotes included, is
- * credited to that owner; a request nobody owns shows as "(unassigned)" so the
- * gap is visible rather than hidden. This replaced a guess — "the latest admin
- * to act on the request" — under which the Sales Head was 136 of 153 actions
- * and so owned almost everything.
+ * the admin request page. Every figure about a request, quotes and money
+ * included, is credited to that owner; a request nobody owns shows as
+ * "(unassigned)" so the gap is visible rather than hidden.
  *
  * DEFINITIONS, per period [from, to] in IST, per SPOC:
- *   Battery sourced (kg)     Σ quantity × unit_weight_kg over the lines of every
- *                            request whose deal logged `complete_pickup` in the
- *                            period (`buyback_lines.unit_weight_kg` is already
- *                            kilograms; the ₹/unit column in LineInputTable is
- *                            price, not weight). Lines with no weight count 0
- *                            — so "Lines missing weight" sits beside kg (review
- *                            R-13): the under-count is shown, never silent.
- *                            New pickups can no longer complete without a
- *                            weight on every collected line.
- *   Count of dealers called  distinct dealer_lead_id on inside_sales_call /
- *                            ai_call touchpoints performed by the SPOC — the same
- *                            CRM call log the Sales Daily mail uses (NeoDove
- *                            calls count once the agent is linked, review R-03).
- *   Dealers who shared images  requests whose FIRST photo (MIN created_at over
+ *   Requests received        requests submitted in the period (submitted_at,
+ *                            else created_at), drafts excluded.
+ *   Dealers called (unique)  distinct dealer_lead_id on HUMAN calls performed
+ *                            by the SPOC — humanCall() in metricDefinitions.ts,
+ *                            the Sales Daily rule (ID 59): no AI-dialer calls,
+ *                            a NeoDove re-disposition counted once. It is the
+ *                            person's CRM call log: a buyback request has no
+ *                            link to a CRM lead, so calls cannot be narrowed to
+ *                            "about buyback".
+ *   Images received          requests whose FIRST photo (MIN created_at over
  *                            every photo on every line of the request) fell in
- *                            the period — so a request counts once, never once
- *                            per photo.
- *   Converted                deals that logged `dealer_accept` in the period.
- *   Count of quotes shared   final_offers.sent_at in the period, credited to the
- *                            request's owner (not to whoever pressed Send).
+ *                            the period — a request counts once, never once per
+ *                            photo.
+ *   Quotes shared            final_offers.sent_at in the period.
+ *   Quotes accepted          deals that logged `dealer_accept` in the period —
+ *                            the "Scrap deals" target metric, and the only
+ *                            buyback metric the targets register carries.
+ *   Pickups completed        deals that logged `complete_pickup` in the period.
+ *   Kg sourced               Σ quantity × unit_weight_kg over the lines of those
+ *                            picked-up requests (`unit_weight_kg` is kilograms).
+ *                            Lines with no weight count 0 — so "Lines missing
+ *                            weight" sits beside kg (review R-13): the
+ *                            under-count is shown, never silent.
+ *   ₹ paid                   settlement_transactions on the DEALER leg dated
+ *                            (txn_date) in the period — the CEO control tower's
+ *                            buyback tile reads the same rows.
+ *   Avg ₹ / kg               ₹ paid ÷ kg sourced, "—" when nothing was weighed.
+ *   Gross margin             for each deal whose recycler sale (a VENDOR-leg
+ *                            settlement) was booked in the period: everything
+ *                            received from the recycler minus everything paid to
+ *                            the dealer on that deal. "—" when none was booked.
  *
- * PIPELINE (as of now, one row per owner — replaces Hot / Cold / Warm, which
- * were copied from SALES leads and meant nothing for a scrap request):
- *   Under review             SUBMITTED, UNDER_REVIEW, INFO_REQUESTED
- *   Negotiating              NEGOTIATING, FINAL_OFFER_SENT, DEALER_REOPENED
- *   Accepted, no pickup yet  DEALER_ACCEPTED … PO_EXCHANGED (vendor leg)
- *   Pickup scheduled         PICKUP_SCHEDULED
- *   Picked up, settling      PICKED_UP, INVOICE_RAISED, INVOICE_APPROVED
- *   Scheduled today / tomorrow  `pickups.scheduled_at` on that IST day and not
- *                            yet completed.
+ * PIPELINE (as of the send, one row per owner; open deals only):
+ *   Awaiting images              under review, no photo on any line yet
+ *   Images in, quote not sent    photos in, no final offer sent yet
+ *   Quote sent, no reply > 2d    FINAL_OFFER_SENT, latest offer sent > 2 days ago
+ *   Accepted, pickup not scheduled   DEALER_ACCEPTED … PO_EXCHANGED (vendor leg)
+ *   Pickup scheduled             PICKUP_SCHEDULED
+ *   Aged > 3d in any stage       the deal has not moved (updated_at) for 3 days
+ *   Oldest open request (days)   since it was submitted
  *
  * `db` is imported inside the queries, never at module scope — listing the
  * registry must not require DATABASE_URL (see kyc-review.ts).
  */
 
 import { sql } from "drizzle-orm";
+
+import { humanCall } from "@/lib/reports/metricDefinitions";
+import { monthEnd, workingDaysBetween } from "@/lib/targets/rules";
 
 import { istRangeTz } from "../window";
 import type {
@@ -57,48 +76,50 @@ import type {
   DigestSection,
   DigestTable,
 } from "../types";
+import {
+  BLOCK_A_COLUMNS,
+  BLOCK_B_COLUMNS,
+  UNASSIGNED,
+  blockARows,
+  blockBRows,
+  buybackHeadline,
+  hasBuybackFigure,
+  sumFigures,
+  type BuybackSpocRow,
+} from "./buyback-daily-shape";
 
 const SECTIONS: DigestSection[] = [
   {
     key: "summary",
     label: "Headline",
-    hint: "Kilograms sourced yesterday and quotes shared yesterday, one line at the top.",
+    hint: "One line at the top: kg sourced, requests, quotes, pickups and ₹ paid yesterday.",
     group: "activity",
   },
   {
-    key: "yesterday",
-    label: "Yesterday",
-    hint: "Per SPOC (request owner): kg sourced, dealers called, dealers who shared images, converted, quotes.",
+    key: "company",
+    label: "A · Company headline",
+    hint: "Nine metrics — yesterday, last 7 days, month to date, MTD target, % of target, same period last month.",
     group: "activity",
   },
-  { key: "mtd", label: "Month to date", hint: "The same columns from the 1st of the month to yesterday.", group: "activity" },
-  { key: "last7", label: "Last 7 days", hint: "The same columns over the seven days ending yesterday.", group: "activity" },
+  {
+    key: "per_spoc",
+    label: "B · Per SPOC",
+    hint: "Per request owner: requests, dealers called, images, quotes, pickups, kg and ₹ paid — yesterday, last 7 days and month to date.",
+    group: "activity",
+  },
   {
     key: "pipeline",
-    label: "Buyback pipeline",
-    hint: "Per owner, once: open requests by stage as of this morning.",
+    label: "C · Buyback pipeline",
+    hint: "Per owner, once: open requests by where they are waiting, as of this morning.",
     group: "backlog",
   },
   {
     key: "today",
-    label: "Scheduled today",
-    hint: "Pickups each SPOC has scheduled for today, and for tomorrow.",
+    label: "D · Pickups today and tomorrow",
+    hint: "Pickups each SPOC has scheduled for today and tomorrow, and the kg expected today.",
     group: "backlog",
   },
 ];
-
-const COLUMNS = [
-  "Period",
-  "Name of SPOC",
-  "Battery sourced (kg)",
-  "Lines missing weight",
-  "Count of dealers called",
-  "Dealers who shared images",
-  "Converted",
-  "Count of quotes shared",
-];
-
-const UNASSIGNED = "(unassigned)";
 
 function addDays(iso: string, n: number): string {
   const d = new Date(`${iso}T00:00:00Z`);
@@ -106,34 +127,39 @@ function addDays(iso: string, n: number): string {
   return d.toISOString().slice(0, 10);
 }
 const firstOfMonth = (iso: string) => `${iso.slice(0, 7)}-01`;
+/** 1st of last month → the same day of last month (capped at its last day). */
+function sameSpanLastMonth(iso: string): { from: string; to: string } {
+  const d = new Date(`${iso}T00:00:00Z`);
+  const first = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() - 1, 1));
+  const lastDay = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 0)).getUTCDate();
+  const to = new Date(Date.UTC(first.getUTCFullYear(), first.getUTCMonth(), Math.min(d.getUTCDate(), lastDay)));
+  return { from: first.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10) };
+}
 const num = (v: unknown) => {
   const n = Number(v);
   return Number.isFinite(n) ? n : 0;
 };
 
-type PeriodRow = {
-  spoc: string | null;
-  name: string | null;
-  kg: number;
-  missing_weight: number;
-  dealers_called: number;
-  photo_requests: number;
-  converted: number;
-  quotes: number;
-};
-
 /**
  * One row per SPOC for one period. Every figure is grouped on its own natural
- * key first (request → SPOC, offer → sender, touchpoint → performer, lead →
- * owner) and the groups are unioned and summed, so a SPOC with only quotes
- * still appears.
+ * key first (request → owner, touchpoint → performer) and the groups are
+ * unioned and summed, so a SPOC with only quotes still appears. Rows with no
+ * buyback figure at all (a person who only made calls) are returned too — the
+ * caller decides what to show.
  */
-async function periodRows(from: string, to: string): Promise<PeriodRow[]> {
+async function periodRows(from: string, to: string): Promise<BuybackSpocRow[]> {
   const { db } = await import("@/lib/db");
   const rows = (await db.execute(sql`
     WITH request_spoc AS (
       -- The request's owner (E-302). NULL = unassigned.
       SELECT br.id AS request_id, br.owner_id AS spoc FROM buyback_requests br
+    ),
+    received AS (
+      SELECT br.id AS request_id
+        FROM buyback_requests br
+        LEFT JOIN buyback_deals d ON d.request_id = br.id
+       WHERE COALESCE(d.status::text, '') <> 'DRAFT'
+         AND ${istRangeTz(sql`COALESCE(br.submitted_at, br.created_at)`, from, to)}
     ),
     request_kg AS (
       SELECT b.request_id,
@@ -163,140 +189,239 @@ async function periodRows(from: string, to: string): Promise<PeriodRow[]> {
         JOIN buyback_batches b ON b.id = l.batch_id
        GROUP BY b.request_id
     ),
+    paid AS (
+      -- Money OUT to the supplier, by the date on the settlement.
+      SELECT d.request_id, SUM(st.amount) AS amount
+        FROM settlement_transactions st
+        JOIN buyback_deals d ON d.id = st.deal_id
+       WHERE st.leg = 'DEALER'
+         AND st.txn_date BETWEEN ${from}::date AND ${to}::date
+       GROUP BY d.request_id
+    ),
+    margin AS (
+      -- Deals whose recycler sale was booked in the period: all that came in
+      -- from the recycler minus all that went out to the dealer, on that deal.
+      SELECT d.request_id,
+             COALESCE(SUM(st.amount) FILTER (WHERE st.leg = 'VENDOR'), 0)
+           - COALESCE(SUM(st.amount) FILTER (WHERE st.leg = 'DEALER'), 0) AS amount
+        FROM buyback_deals d
+        JOIN settlement_transactions st ON st.deal_id = d.id
+       WHERE EXISTS (SELECT 1 FROM settlement_transactions v
+                      WHERE v.deal_id = d.id AND v.leg = 'VENDOR'
+                        AND v.txn_date BETWEEN ${from}::date AND ${to}::date)
+       GROUP BY d.request_id
+    ),
     parts AS (
-      SELECT rs.spoc, rk.kg AS kg, COALESCE(rk.missing_weight, 0)::bigint AS missing_weight,
-             0::bigint AS dealers_called, 0::bigint AS photo_requests,
-             0::bigint AS converted, 0::bigint AS quotes
+      SELECT rs.spoc,
+             1::bigint AS requests, 0::numeric AS kg, 0::bigint AS missing_weight,
+             0::bigint AS pickups, 0::bigint AS images, 0::bigint AS accepted,
+             0::bigint AS quotes, 0::numeric AS paid, 0::numeric AS margin,
+             0::bigint AS margin_deals, 0::bigint AS dealers_called
+        FROM received rc
+        LEFT JOIN request_spoc rs ON rs.request_id = rc.request_id
+      UNION ALL
+      SELECT rs.spoc, 0, COALESCE(rk.kg, 0), COALESCE(rk.missing_weight, 0), 1, 0, 0, 0, 0, 0, 0, 0
         FROM picked pk
         LEFT JOIN request_spoc rs ON rs.request_id = pk.request_id
         LEFT JOIN request_kg rk ON rk.request_id = pk.request_id
       UNION ALL
-      SELECT rs.spoc, 0, 0, 0, 1, 0, 0
+      SELECT rs.spoc, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0
         FROM first_photo fp
         LEFT JOIN request_spoc rs ON rs.request_id = fp.request_id
        WHERE ${istRangeTz(sql`fp.first_at`, from, to)}
       UNION ALL
-      SELECT rs.spoc, 0, 0, 0, 0, 1, 0
+      SELECT rs.spoc, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0
         FROM accepted ac
         LEFT JOIN request_spoc rs ON rs.request_id = ac.request_id
       UNION ALL
-      SELECT rs.spoc, 0, 0, 0, 0, 0, 1
+      SELECT rs.spoc, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0
         FROM final_offers fo
         JOIN buyback_deals d ON d.id = fo.deal_id
         LEFT JOIN request_spoc rs ON rs.request_id = d.request_id
        WHERE fo.sent_at IS NOT NULL AND ${istRangeTz(sql`fo.sent_at`, from, to)}
       UNION ALL
-      SELECT t.performed_by, 0, 0, COUNT(DISTINCT t.dealer_lead_id), 0, 0, 0
+      SELECT rs.spoc, 0, 0, 0, 0, 0, 0, 0, pd.amount, 0, 0, 0
+        FROM paid pd
+        LEFT JOIN request_spoc rs ON rs.request_id = pd.request_id
+      UNION ALL
+      SELECT rs.spoc, 0, 0, 0, 0, 0, 0, 0, 0, mg.amount, 1, 0
+        FROM margin mg
+        LEFT JOIN request_spoc rs ON rs.request_id = mg.request_id
+      UNION ALL
+      -- ID 59: human calls only, a NeoDove re-disposition counted once.
+      SELECT t.performed_by, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, COUNT(DISTINCT t.dealer_lead_id)
         FROM lead_touchpoints t
-       WHERE t.touchpoint_type IN ('inside_sales_call', 'ai_call')
+       WHERE ${humanCall()}
          AND t.performed_by IS NOT NULL
          AND ${istRangeTz(sql`t.performed_at`, from, to)}
        GROUP BY t.performed_by
     ),
     summed AS (
       SELECT spoc,
-             SUM(kg)::numeric        AS kg,
-             SUM(missing_weight)     AS missing_weight,
-             SUM(dealers_called)     AS dealers_called,
-             SUM(photo_requests)     AS photo_requests,
-             SUM(converted)          AS converted,
-             SUM(quotes)             AS quotes
+             SUM(requests)       AS requests,
+             SUM(kg)             AS kg,
+             SUM(missing_weight) AS missing_weight,
+             SUM(pickups)        AS pickups,
+             SUM(images)         AS images,
+             SUM(accepted)       AS accepted,
+             SUM(quotes)         AS quotes,
+             SUM(paid)           AS paid,
+             SUM(margin)         AS margin,
+             SUM(margin_deals)   AS margin_deals,
+             SUM(dealers_called) AS dealers_called
         FROM parts
        GROUP BY spoc
     )
-    SELECT s.spoc, u.name, s.kg::text AS kg, s.missing_weight::text AS missing_weight,
-           s.dealers_called::text AS dealers_called,
-           s.photo_requests::text AS photo_requests,
-           s.converted::text AS converted, s.quotes::text AS quotes
+    SELECT s.spoc, u.name,
+           s.requests::text AS requests, s.kg::text AS kg, s.missing_weight::text AS missing_weight,
+           s.pickups::text AS pickups, s.images::text AS images, s.accepted::text AS accepted,
+           s.quotes::text AS quotes, s.paid::text AS paid, s.margin::text AS margin,
+           s.margin_deals::text AS margin_deals, s.dealers_called::text AS dealers_called
       FROM summed s
       LEFT JOIN users u ON u.id::text = s.spoc
-     -- A SPOC whose only figures are the CRM-wide lead / call counts is noise
-     -- in a buyback mail: keep rows that have at least one BUYBACK figure.
-     WHERE s.kg > 0 OR s.missing_weight > 0 OR s.photo_requests > 0 OR s.converted > 0 OR s.quotes > 0
      ORDER BY u.name NULLS LAST
   `)) as unknown as Array<Record<string, unknown>>;
 
   return rows.map((r) => ({
     spoc: r.spoc == null ? null : String(r.spoc),
     name: r.name == null ? null : String(r.name),
+    requests: num(r.requests),
+    images: num(r.images),
+    quotes: num(r.quotes),
+    accepted: num(r.accepted),
+    pickups: num(r.pickups),
     kg: num(r.kg),
     missing_weight: num(r.missing_weight),
+    paid: num(r.paid),
+    // No recycler sale booked in the period → not measurable, not ₹0.
+    margin: num(r.margin_deals) > 0 ? num(r.margin) : null,
     dealers_called: num(r.dealers_called),
-    photo_requests: num(r.photo_requests),
-    converted: num(r.converted),
-    quotes: num(r.quotes),
   }));
 }
 
-type Scheduled = { name: string | null; today: number; tomorrow: number };
-
-/**
- * Open requests per owner, by stage, as of now (review R-12 — replaces the
- * Hot / Cold / Warm columns that were copied from sales leads).
- */
+/** Open requests per owner by where they are waiting, as of now (sheet 4, Block C). */
 async function pipelineRows(): Promise<DigestTable["rows"]> {
   const { db } = await import("@/lib/db");
   const rows = (await db.execute(sql`
+    WITH open_deals AS (
+      SELECT br.owner_id, d.status::text AS status, d.updated_at,
+             COALESCE(br.submitted_at, br.created_at) AS received_at,
+             EXISTS (SELECT 1 FROM buyback_photos p
+                       JOIN buyback_lines l ON l.id = p.line_id
+                       JOIN buyback_batches b ON b.id = l.batch_id
+                      WHERE b.request_id = br.id) AS has_photo,
+             (SELECT MAX(fo.sent_at) FROM final_offers fo WHERE fo.deal_id = d.id) AS last_offer_at
+        FROM buyback_requests br
+        JOIN buyback_deals d ON d.request_id = br.id
+       WHERE d.status NOT IN ('DRAFT', 'SETTLED', 'CLOSED', 'REJECTED', 'CANCELLED')
+    )
     SELECT u.name,
-           COUNT(*) FILTER (WHERE d.status IN ('SUBMITTED', 'UNDER_REVIEW', 'INFO_REQUESTED'))::int AS review,
-           COUNT(*) FILTER (WHERE d.status IN ('NEGOTIATING', 'FINAL_OFFER_SENT', 'DEALER_REOPENED'))::int AS negotiating,
-           COUNT(*) FILTER (WHERE d.status IN ('DEALER_ACCEPTED', 'MARGIN_SET', 'VENDOR_ROUTED',
-                                              'VENDOR_NEGOTIATING', 'VENDOR_AGREED', 'PO_EXCHANGED'))::int AS accepted,
-           COUNT(*) FILTER (WHERE d.status = 'PICKUP_SCHEDULED')::int AS pickup,
-           COUNT(*) FILTER (WHERE d.status IN ('PICKED_UP', 'INVOICE_RAISED', 'INVOICE_APPROVED'))::int AS settling
-      FROM buyback_requests br
-      JOIN buyback_deals d ON d.request_id = br.id
-      LEFT JOIN users u ON u.id::text = br.owner_id
-     WHERE d.status NOT IN ('DRAFT', 'SETTLED', 'CLOSED', 'REJECTED', 'CANCELLED')
-     GROUP BY br.owner_id, u.name
+           COUNT(*) FILTER (WHERE NOT o.has_photo
+                              AND o.status IN ('SUBMITTED', 'UNDER_REVIEW', 'INFO_REQUESTED'))::int AS awaiting_images,
+           COUNT(*) FILTER (WHERE o.has_photo AND o.last_offer_at IS NULL
+                              AND o.status IN ('SUBMITTED', 'UNDER_REVIEW', 'INFO_REQUESTED',
+                                               'NEGOTIATING', 'DEALER_REOPENED'))::int AS no_quote,
+           COUNT(*) FILTER (WHERE o.status = 'FINAL_OFFER_SENT'
+                              AND o.last_offer_at < now() - INTERVAL '2 days')::int AS no_reply,
+           COUNT(*) FILTER (WHERE o.status IN ('DEALER_ACCEPTED', 'MARGIN_SET', 'VENDOR_ROUTED',
+                                               'VENDOR_NEGOTIATING', 'VENDOR_AGREED', 'PO_EXCHANGED'))::int AS accepted,
+           COUNT(*) FILTER (WHERE o.status = 'PICKUP_SCHEDULED')::int AS pickup,
+           COUNT(*) FILTER (WHERE o.updated_at < now() - INTERVAL '3 days')::int AS aged,
+           MAX(FLOOR(EXTRACT(EPOCH FROM (now() - o.received_at)) / 86400))::int AS oldest_days
+      FROM open_deals o
+      LEFT JOIN users u ON u.id::text = o.owner_id
+     GROUP BY o.owner_id, u.name
      ORDER BY u.name NULLS LAST
   `)) as unknown as Array<Record<string, unknown>>;
   return rows.map((r) => [
     r.name == null ? UNASSIGNED : String(r.name),
-    num(r.review),
-    num(r.negotiating),
+    num(r.awaiting_images),
+    num(r.no_quote),
+    num(r.no_reply),
     num(r.accepted),
     num(r.pickup),
-    num(r.settling),
+    num(r.aged),
+    num(r.oldest_days),
   ]);
 }
 
-/** Open pickups per request SPOC for two IST days. */
-async function scheduledPerSpoc(today: string, tomorrow: string): Promise<Map<string, Scheduled>> {
+/** Open pickups per request SPOC for two IST days, with the kg expected on the first. */
+async function pickupRows(today: string, tomorrow: string): Promise<DigestTable["rows"]> {
   const { db } = await import("@/lib/db");
   const rows = (await db.execute(sql`
-    WITH request_spoc AS (
-      SELECT br.id AS request_id, br.owner_id AS spoc FROM buyback_requests br
+    WITH open_pickups AS (
+      SELECT br.owner_id, p.scheduled_at,
+             -- The lines this pickup covers: its own batch, or the whole request.
+             (SELECT COALESCE(SUM(l.quantity * l.unit_weight_kg), 0)
+                FROM buyback_batches b
+                JOIN buyback_lines l ON l.batch_id = b.id
+               WHERE b.request_id = d.request_id
+                 AND (p.batch_id IS NULL OR b.id = p.batch_id)) AS kg
+        FROM pickups p
+        JOIN buyback_deals d ON d.id = p.deal_id
+        JOIN buyback_requests br ON br.id = d.request_id
+       WHERE p.completed_at IS NULL
+         AND ${istRangeTz(sql`p.scheduled_at`, today, tomorrow)}
     )
-    SELECT COALESCE(rs.spoc, '') AS spoc, u.name,
-           COUNT(*) FILTER (WHERE ${istRangeTz(sql`p.scheduled_at`, today, today)})::int    AS today,
-           COUNT(*) FILTER (WHERE ${istRangeTz(sql`p.scheduled_at`, tomorrow, tomorrow)})::int AS tomorrow
-      FROM pickups p
-      JOIN buyback_deals d ON d.id = p.deal_id
-      LEFT JOIN request_spoc rs ON rs.request_id = d.request_id
-      LEFT JOIN users u ON u.id::text = rs.spoc
-     WHERE p.completed_at IS NULL
-       AND ${istRangeTz(sql`p.scheduled_at`, today, tomorrow)}
-     GROUP BY rs.spoc, u.name
-  `)) as unknown as Array<{ spoc: string; name: string | null; today: number; tomorrow: number }>;
-  const out = new Map<string, Scheduled>();
-  for (const r of rows) out.set(r.spoc, { name: r.name, today: num(r.today), tomorrow: num(r.tomorrow) });
-  return out;
+    SELECT u.name,
+           COUNT(*) FILTER (WHERE ${istRangeTz(sql`o.scheduled_at`, today, today)})::int       AS today,
+           COUNT(*) FILTER (WHERE ${istRangeTz(sql`o.scheduled_at`, tomorrow, tomorrow)})::int AS tomorrow,
+           COALESCE(SUM(o.kg) FILTER (WHERE ${istRangeTz(sql`o.scheduled_at`, today, today)}), 0)::text AS kg_today
+      FROM open_pickups o
+      LEFT JOIN users u ON u.id::text = o.owner_id
+     GROUP BY o.owner_id, u.name
+     ORDER BY u.name NULLS LAST
+  `)) as unknown as Array<Record<string, unknown>>;
+  return rows.map((r) => [
+    r.name == null ? UNASSIGNED : String(r.name),
+    num(r.today),
+    num(r.tomorrow),
+    Math.round(num(r.kg_today) * 10) / 10,
+  ]);
 }
 
-// Pickups scheduled tomorrow used to be a column here, repeated identically in
-// every period (review R-23); it lives only in the "Scheduled today" table.
-function toTableRows(period: string, rows: PeriodRow[]): DigestTable["rows"] {
-  return rows.map((r) => [
-    period,
-    r.name ?? UNASSIGNED,
-    Math.round(r.kg * 10) / 10,
-    r.missing_weight,
-    r.dealers_called,
-    r.photo_requests,
-    r.converted,
-    r.quotes,
-  ]);
+type Targets = { byUser: Map<string, number>; company: number | null; note: string };
+
+/**
+ * MTD targets for "Scrap deals" (= quotes accepted), pro-rated over working
+ * days exactly as the Sales Daily mail and the targets page do. It is the only
+ * buyback metric in the targets register (src/lib/targets/rules.ts). A database
+ * without the register (E-303) simply has no targets.
+ */
+async function scrapDealTargets(monthFirst: string, upTo: string): Promise<Targets> {
+  const none = (note: string): Targets => ({ byUser: new Map(), company: null, note });
+  try {
+    const { db } = await import("@/lib/db");
+    const hol = (await db.execute(sql`
+      SELECT holiday_date::text AS d FROM holiday_calendar
+       WHERE is_active IS NOT FALSE AND holiday_date BETWEEN ${monthFirst}::date AND ${monthEnd(monthFirst)}::date
+    `)) as unknown as Array<{ d: string }>;
+    const holidays = new Set(hol.map((h) => h.d));
+    const total = workingDaysBetween(monthFirst, monthEnd(monthFirst), holidays);
+    const elapsed = workingDaysBetween(monthFirst, upTo, holidays);
+    const rows = (await db.execute(sql`
+      SELECT user_id, SUM(ceo_target + admin_addon)::float8 AS monthly
+        FROM sales_targets
+       WHERE month = ${monthFirst}::date AND metric = 'scrap_deals' AND status IN ('pushed', 'accepted')
+       GROUP BY user_id
+    `)) as unknown as Array<{ user_id: string; monthly: number }>;
+    if (rows.length === 0 || total <= 0) {
+      return none("No buyback targets are set for this month, so the target cells read “—”.");
+    }
+    const byUser = new Map<string, number>();
+    for (const r of rows) byUser.set(String(r.user_id), (num(r.monthly) * elapsed) / total);
+    const company = [...byUser.values()].reduce((a, b) => a + b, 0);
+    return {
+      byUser,
+      company,
+      note:
+        `Targets: the only buyback target in the register is Scrap deals, shown against Quotes accepted ` +
+        `(${rows.length} ${rows.length === 1 ? "person" : "people"} this month). Month to date is ${elapsed} of ` +
+        `${total} working days, so it is ${elapsed}/${total} of the monthly target. Other rows have no target yet.`,
+    };
+  } catch {
+    return none("Targets are not available on this database, so the target cells read “—”.");
+  }
 }
 
 async function collect(
@@ -305,64 +430,79 @@ async function collect(
   try {
     const sendDay = addDays(istDay, 1);
     const dayAfter = addDays(istDay, 2);
-    const [yesterday, mtd, last7, sched, pipeline] = await Promise.all([
+    const monthFirst = firstOfMonth(istDay);
+    const lm = sameSpanLastMonth(istDay);
+    const [yesterday, last7, mtd, lastMonth, pipeline, pickups, targets] = await Promise.all([
       periodRows(istDay, istDay),
-      periodRows(firstOfMonth(istDay), istDay),
       periodRows(addDays(istDay, -6), istDay),
-      scheduledPerSpoc(sendDay, dayAfter),
+      periodRows(monthFirst, istDay),
+      periodRows(lm.from, lm.to),
       pipelineRows(),
+      pickupRows(sendDay, dayAfter),
+      scrapDealTargets(monthFirst, istDay),
     ]);
 
-    const kgYesterday = yesterday.reduce((a, r) => a + r.kg, 0);
-    const missingYesterday = yesterday.reduce((a, r) => a + r.missing_weight, 0);
-    const quotesYesterday = yesterday.reduce((a, r) => a + r.quotes, 0);
-
-    const todayRows: DigestTable["rows"] = [...sched.entries()]
-      .filter(([, s]) => s.today > 0 || s.tomorrow > 0)
-      .map(([, s]) => [s.name ?? UNASSIGNED, s.today, s.tomorrow])
-      .sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+    const company = {
+      y: sumFigures(yesterday),
+      d7: sumFigures(last7),
+      mtd: sumFigures(mtd),
+      lm: sumFigures(lastMonth),
+    };
+    const buybackOnly = (rows: BuybackSpocRow[]) => rows.filter(hasBuybackFigure);
 
     return {
       ok: true,
       figures: {
-        activity: [
-          {
-            key: "summary",
-            label: "Battery sourced yesterday (kg)",
-            value: Math.round(kgYesterday * 10) / 10,
-            // R-13 — never let an under-count read as the real number.
-            display:
-              `${(Math.round(kgYesterday * 10) / 10).toLocaleString("en-IN")} kg` +
-              (missingYesterday > 0
-                ? ` (+ ${missingYesterday} line${missingYesterday === 1 ? "" : "s"} with no weight, not counted)`
-                : ""),
-          },
-          { key: "summary", label: "Quotes shared yesterday", value: quotesYesterday },
-        ],
+        activity: [],
+        headline: [buybackHeadline(company.y)],
+        wide: true,
         backlog: [],
         tables: [
-          { key: "yesterday", title: "Yesterday", columns: COLUMNS, rows: toTableRows("Yesterday", yesterday), empty: "No pickups, photos, quotes or acceptances yesterday." },
-          { key: "mtd", title: "Month to date", columns: COLUMNS, rows: toTableRows("MTD", mtd), empty: "Nothing recorded so far this month." },
-          { key: "last7", title: "Last 7 days", columns: COLUMNS, rows: toTableRows("Last 7 days", last7), empty: "Nothing recorded in the last seven days." },
+          {
+            key: "company",
+            title: "A · Company headline",
+            columns: BLOCK_A_COLUMNS,
+            rows: blockARows(company, targets.company),
+            textColumns: 1,
+            note: targets.note,
+          },
+          {
+            key: "per_spoc",
+            title: "B · Per SPOC",
+            columns: BLOCK_B_COLUMNS,
+            rows: blockBRows(
+              { yesterday: buybackOnly(yesterday), last7: buybackOnly(last7), mtd: buybackOnly(mtd) },
+              targets.byUser,
+            ),
+            note:
+              "The SPOC is the request's owner. Dealers called is the person's own CRM call log " +
+              "(human calls; a buyback request has no link to a CRM lead).",
+            empty: "No buyback activity this month.",
+          },
           {
             key: "pipeline",
-            title: "Buyback pipeline — as of this morning",
+            title: "C · Buyback pipeline — as of this morning",
             columns: [
-              "Owner",
-              "Under review",
-              "Negotiating",
-              "Accepted, no pickup yet",
+              "SPOC",
+              "Awaiting images",
+              "Images in, quote not sent",
+              "Quote sent, no reply > 2d",
+              "Accepted, pickup not scheduled",
               "Pickup scheduled",
-              "Picked up, settling",
+              "Aged > 3d in any stage",
+              "Oldest open request (days)",
             ],
             rows: pipeline,
+            textColumns: 1,
+            note: "Aged > 3d: the request has not moved for three days (the deal's last update).",
             empty: "No open buyback requests.",
           },
           {
             key: "today",
-            title: "Scheduled today",
-            columns: ["Name of SPOC", "Pickups scheduled today", "Pickups scheduled tomorrow"],
-            rows: todayRows,
+            title: "D · Pickups today and tomorrow",
+            columns: ["SPOC", "Pickups today", "Pickups tomorrow", "Expected kg today"],
+            rows: pickups,
+            textColumns: 1,
             empty: "No pickups scheduled for today or tomorrow.",
           },
         ],
@@ -383,11 +523,11 @@ export const buybackDailyDigest: DigestKindDescriptor = {
   id: "buyback_daily",
   label: "Buyback Daily",
   description:
-    "One mail every morning, per SPOC (the request's owner): kilograms of batteries " +
-    "sourced, dealers called, dealers who shared photos, deals accepted and quotes shared — " +
-    "yesterday, month to date and over the last seven days — then the open buyback " +
-    "pipeline by stage, and pickups scheduled for today and tomorrow. Nothing is sent " +
-    "until recipients are added here.",
+    "One mail every morning: A · the company headline (requests, quotes, pickups, kg, ₹ paid, " +
+    "₹/kg and gross margin — yesterday, last 7 days, month to date, target and the same period " +
+    "last month), B · the same activity per SPOC (the request's owner), C · the open buyback " +
+    "pipeline by where each request is waiting, and D · pickups for today and tomorrow with the " +
+    "kg expected today. Nothing is sent until recipients are added here.",
   settingsKey: "buyback_daily_digest",
   settingsHref: "/admin/settings/buyback-daily",
   ctaHref: "/admin/buyback/dashboard",
