@@ -2,6 +2,7 @@ import { createServerClient } from "@supabase/ssr";
 import { type NextRequest, NextResponse } from "next/server";
 
 import { BUYBACK_ADMIN_ROLES } from "@/lib/buyback/roles";
+import { staffPageRolesFor } from "@/lib/auth/staffPageRoles";
 import { detectThreat, detectBodyThreat, type ThreatSignal } from "@/lib/security/detect";
 import { trackRequest, type RateSignal } from "@/lib/security/rate-watch";
 import { postSecurityEvent, SECURITY_INGEST_PATH } from "@/lib/security/report-event";
@@ -632,6 +633,16 @@ export async function middleware(request: NextRequest) {
   // bottom of this function and render for any signed-in user. The API 403s
   // either way — this stops the page from rendering at all.
   if (path.startsWith("/oem-pricing") && role !== "ceo" && role !== "admin") {
+    return finalize(NextResponse.redirect(new URL(myDashboard, request.url)));
+  }
+
+  // /orders, /provisions and /deals have the same shape as /oem-pricing above:
+  // protected, but under no roleDashboards prefix, so they fell through to the
+  // permissive default and rendered for every signed-in role — dealers and
+  // NBFC partners included — and those pages read every row. The lists live in
+  // staffPageRoles.ts because the pages re-check them with requireRole.
+  const staffPageRoles = staffPageRolesFor(path);
+  if (staffPageRoles && !staffPageRoles.includes(role)) {
     return finalize(NextResponse.redirect(new URL(myDashboard, request.url)));
   }
 

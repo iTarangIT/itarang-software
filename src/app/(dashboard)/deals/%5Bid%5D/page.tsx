@@ -1,7 +1,8 @@
 import { db } from '@/lib/db';
 import { deals, leads, approvals, users } from '@/lib/db/schema';
 import { eq, and } from 'drizzle-orm';
-import { requireAuth } from '@/lib/auth-utils';
+import { requireRole } from '@/lib/auth-utils';
+import { DEALS_PAGE_ROLES } from '@/lib/auth/staffPageRoles';
 import { Button } from '@/components/ui/button';
 import Link from 'next/link';
 import { ArrowLeft, CheckCircle2, Clock, XCircle, FileText } from 'lucide-react';
@@ -11,7 +12,7 @@ export const dynamic = 'force-dynamic';
 
 export default async function DealDetailPage({ params }: { params: Promise<{ id: string }> }) {
     const { id: dealId } = await params;
-    const user = await requireAuth();
+    const user = await requireRole([...DEALS_PAGE_ROLES]);
 
     // Fetch Deal with Lead
     const [deal] = await db.select().from(deals).where(eq(deals.id, dealId)).limit(1);

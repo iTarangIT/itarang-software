@@ -5,6 +5,7 @@ import { db } from "@/lib/db";
 import { leads } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { requireRole } from "@/lib/auth-utils";
+import { requireLeadAccess } from "@/lib/auth/requireLeadAccess";
 
 type RouteContext = {
     params: Promise<{ leadId: string }>;
@@ -12,7 +13,7 @@ type RouteContext = {
 
 export async function GET(_req: NextRequest, { params }: RouteContext) {
     try {
-        const user = await requireRole(["dealer"]);
+        await requireRole(["dealer"]);
         const { leadId } = await params;
 
         if (!leadId) {
@@ -37,13 +38,11 @@ export async function GET(_req: NextRequest, { params }: RouteContext) {
             );
         }
 
-        const ownerUserId = (lead as any)?.created_by ?? (lead as any)?.uploader_id ?? null;
-        if (ownerUserId && ownerUserId !== user.id) {
-            return NextResponse.json(
-                { success: false, error: { message: "Access denied" } },
-                { status: 403 }
-            );
-        }
+        // On the lead's dealership (leads.dealer_id), not its creator: the old
+        // created_by comparison was skipped whenever the lead had no recorded
+        // creator, which let any dealer through.
+        const leadGate = await requireLeadAccess(leadId);
+        if (!leadGate.ok) return leadGate.response;
 
         // Borrower details are stored independently of the customer. The
         // borrower draft lives in leads.kyc_draft_data.borrowerForm (written by
