@@ -4,7 +4,8 @@ import { desc } from 'drizzle-orm';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Plus, Package, Clock, CheckCircle, Truck, AlertCircle } from 'lucide-react';
-import { requireAuth } from '@/lib/auth-utils';
+import { requireRole } from '@/lib/auth-utils';
+import { PROVISIONS_PAGE_ROLES } from '@/lib/auth/staffPageRoles';
 
 export const dynamic = 'force-dynamic';
 
@@ -18,7 +19,7 @@ const STATUS_CONFIG: Record<string, { label: string, color: string, icon: any }>
 };
 
 export default async function ProvisionsPage() {
-    await requireAuth();
+    await requireRole([...PROVISIONS_PAGE_ROLES]);
 
     const allProvisions = await db.select()
         .from(provisions)
