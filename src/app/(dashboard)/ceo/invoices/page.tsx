@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Loader2,
@@ -13,7 +13,13 @@ import {
   AlertTriangle,
   FileText,
   IndianRupee,
+  Link2,
+  Ban,
+  Undo2,
+  UserPlus,
+  X,
 } from "lucide-react";
+import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
@@ -52,9 +58,32 @@ interface InvoiceRow {
   gstin_key: string | null;
   dealer_lead_id: string | null;
   dealer_name: string | null;
+  /** E-321 — the dealer account matched, and a hand decision if any. */
+  account_id?: string | null;
+  link_kind?: string | null;
+  match_status?: MatchStatus;
 }
 
 type DealerMatch = "" | "linked" | "unlinked";
+
+// Tracker ID 69 / P1-6 — the unmatched-invoices work list. Every invoice not
+// credited to a salesperson carries one of these labels and an action.
+type MatchStatus = "credited" | "no_owner" | "unknown" | "not_dealer";
+type UnmatchedStatus = Exclude<MatchStatus, "credited">;
+const UNMATCHED_STATUSES: UnmatchedStatus[] = ["unknown", "no_owner", "not_dealer"];
+const MATCH_LABEL: Record<UnmatchedStatus, string> = {
+  unknown: "Unknown customer",
+  no_owner: "Dealer account with no owner",
+  not_dealer: "Not a dealer sale",
+};
+type View = "all" | "unmatched";
+
+interface AccountOption {
+  id: string;
+  business_entity_name: string;
+  gstin: string | null;
+  city: string | null;
+}
 
 interface ApiResponse {
   success: boolean;
@@ -101,6 +130,191 @@ function StatusBadge({ status }: { status: string | null }) {
   );
 }
 
+function MatchBadge({ status }: { status: MatchStatus | undefined }) {
+  if (!status || status === "credited") return null;
+  const styles: Record<UnmatchedStatus, string> = {
+    unknown: "bg-rose-50 text-rose-700 border-rose-200",
+    no_owner: "bg-amber-50 text-amber-700 border-amber-200",
+    not_dealer: "bg-gray-50 text-gray-600 border-gray-200",
+  };
+  return (
+    <span
+      data-testid={`match-${status}`}
+      className={`inline-flex items-center px-2 py-0.5 rounded-full border text-[10px] font-bold whitespace-nowrap ${styles[status]}`}
+    >
+      {MATCH_LABEL[status]}
+    </span>
+  );
+}
+
+/**
+ * "Link to account" — pick the dealer account an invoice belongs to. Linking
+ * also records the invoice's GSTIN on the account, so the dealer's next
+ * invoices match without coming back here.
+ */
+function LinkAccountDialog({
+  invoice,
+  onClose,
+  onLinked,
+}: {
+  invoice: InvoiceRow;
+  onClose: () => void;
+  onLinked: () => void;
+}) {
+  const [q, setQ] = useState(invoice.customer_name ?? "");
+  const [debounced, setDebounced] = useState(q.trim());
+  const [note, setNote] = useState("");
+  const [picked, setPicked] = useState<AccountOption | null>(null);
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(q.trim()), 250);
+    return () => clearTimeout(t);
+  }, [q]);
+
+  const search = useQuery({
+    queryKey: ["ceo-invoices-account-search", debounced],
+    queryFn: async () => {
+      const r = await fetch(
+        `/api/dashboard/ceo/invoices/accounts-search?q=${encodeURIComponent(debounced)}`,
+        { cache: "no-store" },
+      );
+      return readJsonData<AccountOption[]>(r, "Could not search accounts");
+    },
+  });
+
+  const link = useMutation({
+    mutationFn: async (accountId: string) => {
+      const r = await fetch(`/api/dashboard/ceo/invoices/${invoice.id}/link`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          source: invoice.source,
+          action: "link",
+          account_id: accountId,
+          note: note.trim() || null,
+        }),
+      });
+      return readJsonData<{ gstin_added: string | null }>(r, "Could not link the invoice");
+    },
+    onSuccess: () => onLinked(),
+  });
+
+  return (
+    <div
+      data-testid="link-account-dialog"
+      role="dialog"
+      aria-modal="true"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-xl space-y-4"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h2 className="text-base font-bold text-gray-900">Link to account</h2>
+            <p className="text-xs text-gray-500 mt-0.5">
+              {invoice.invoice_number || "—"} · {invoice.customer_name || "—"} ·{" "}
+              {formatINR(Number(invoice.total || 0))}
+            </p>
+          </div>
+          <button onClick={onClose} aria-label="Close" className="text-gray-400 hover:text-gray-700">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        <div className="relative">
+          <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+          <input
+            data-testid="account-search"
+            autoFocus
+            type="text"
+            value={q}
+            onChange={(e) => {
+              setQ(e.target.value);
+              setPicked(null);
+            }}
+            placeholder="Dealer name, GSTIN or account id"
+            className="w-full pl-9 pr-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
+          />
+        </div>
+
+        <div className="max-h-64 overflow-y-auto rounded-xl border border-gray-100 divide-y divide-gray-50">
+          {search.isLoading ? (
+            <div className="flex justify-center py-6">
+              <Loader2 className="w-5 h-5 animate-spin text-gray-400" />
+            </div>
+          ) : search.isError ? (
+            <p className="text-xs text-rose-600 p-3">{(search.error as Error).message}</p>
+          ) : (search.data ?? []).length === 0 ? (
+            <p className="text-xs text-gray-400 italic p-3">No dealer account matches.</p>
+          ) : (
+            (search.data ?? []).map((a) => (
+              <button
+                key={a.id}
+                data-testid="account-option"
+                onClick={() => setPicked(a)}
+                className={cn(
+                  "w-full text-left px-3 py-2 text-xs hover:bg-gray-50",
+                  picked?.id === a.id && "bg-brand-50",
+                )}
+              >
+                <div className="font-semibold text-gray-900">{a.business_entity_name}</div>
+                <div className="text-[10px] text-gray-500">
+                  {a.id}
+                  {a.gstin ? ` · ${a.gstin}` : ""}
+                  {a.city ? ` · ${a.city}` : ""}
+                </div>
+              </button>
+            ))
+          )}
+        </div>
+
+        <input
+          data-testid="link-note"
+          type="text"
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          placeholder="Note (optional)"
+          className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm"
+        />
+
+        {invoice.gstin_key && (
+          <p className="text-[11px] text-gray-500">
+            GSTIN <span className="font-mono">{invoice.gstin_key}</span> will be added to the
+            account, so this dealer&apos;s future invoices match on their own.
+          </p>
+        )}
+
+        {link.isError && (
+          <p data-testid="link-error" className="text-[11px] font-semibold text-rose-600">
+            {(link.error as Error).message}
+          </p>
+        )}
+
+        <div className="flex justify-end gap-2">
+          <Button variant="outline" size="sm" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            data-testid="link-save"
+            size="sm"
+            disabled={!picked || link.isPending}
+            onClick={() => picked && link.mutate(picked.id)}
+          >
+            {link.isPending
+              ? "Linking…"
+              : picked
+                ? `Link to ${picked.business_entity_name}`
+                : "Pick an account"}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SourceBadge({ source }: { source: "zoho" | "drive" }) {
   const drive = source === "drive";
   return (
@@ -128,6 +342,9 @@ export default function CEOInvoicesPage() {
   const [selectedStatuses, setSelectedStatuses] = useState<string[]>([]);
   const [customer, setCustomer] = useState("");
   const [dealerMatch, setDealerMatch] = useState<DealerMatch>("");
+  const [view, setView] = useState<View>("all");
+  const [matchFilter, setMatchFilter] = useState<UnmatchedStatus[]>(UNMATCHED_STATUSES);
+  const [linking, setLinking] = useState<InvoiceRow | null>(null);
   const [page, setPage] = useState(0);
   const PAGE_SIZE = 50;
 
@@ -138,10 +355,11 @@ export default function CEOInvoicesPage() {
     if (selectedStatuses.length > 0) p.set("status", selectedStatuses.join(","));
     if (customer.trim()) p.set("customer", customer.trim());
     if (dealerMatch) p.set("dealer_match", dealerMatch);
+    if (view === "unmatched") p.set("match_status", matchFilter.join(","));
     p.set("limit", String(PAGE_SIZE));
     p.set("offset", String(page * PAGE_SIZE));
     return p.toString();
-  }, [from, to, selectedStatuses, customer, dealerMatch, page]);
+  }, [from, to, selectedStatuses, customer, dealerMatch, view, matchFilter, page]);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["ceo-invoices", queryString],
@@ -213,8 +431,27 @@ export default function CEOInvoicesPage() {
     },
   });
 
+  // Tracker ID 69 — "Not a dealer sale" and "Undo" on the work list. Linking
+  // goes through LinkAccountDialog.
+  const decide = useMutation({
+    mutationFn: async (args: { row: InvoiceRow; action: "not_dealer" | "clear" }) => {
+      const r = await fetch(`/api/dashboard/ceo/invoices/${args.row.id}/link`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ source: args.row.source, action: args.action }),
+      });
+      return readJsonData(r, "Could not save the decision");
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["ceo-invoices"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard-metrics"] });
+    },
+  });
+
   const rows = data?.data || [];
   const summary = data?.summary;
+  const unmatchedView = view === "unmatched";
+  const colCount = unmatchedView ? 10 : 9;
   const scanResult = scanDrive.data;
   // False when sales_invoices is absent (E-280 not applied on this database).
   // Worth saying out loud: the page otherwise looks like a working Zoho-only
@@ -235,6 +472,7 @@ export default function CEOInvoicesPage() {
     p.set("to", to);
     if (selectedStatuses.length > 0) p.set("status", selectedStatuses.join(","));
     if (customer.trim()) p.set("customer", customer.trim());
+    if (view === "unmatched") p.set("match_status", matchFilter.join(","));
     p.set("format", "csv");
     const a = document.createElement("a");
     a.href = `/api/dashboard/ceo/invoices?${p.toString()}`;
@@ -255,6 +493,33 @@ export default function CEOInvoicesPage() {
           Zoho invoices up to the move to Vyapar, and everything filed in Google
           Drive since. One row per invoice — no line-item duplication.
         </p>
+      </div>
+
+      {/* Tracker ID 69 — the unmatched-invoices work list is a preset over the
+          same table: every invoice not credited to a salesperson. */}
+      <div className="flex items-center gap-1 rounded-xl bg-gray-100 p-1 w-fit">
+        {(
+          [
+            ["all", "All invoices"],
+            ["unmatched", "Unmatched"],
+          ] as const
+        ).map(([v, label]) => (
+          <button
+            key={v}
+            data-testid={`view-${v}`}
+            data-active={view === v ? "true" : "false"}
+            onClick={() => {
+              setView(v);
+              setPage(0);
+            }}
+            className={cn(
+              "px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors",
+              view === v ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-800",
+            )}
+          >
+            {label}
+          </button>
+        ))}
       </div>
 
       {/* Filters */}
@@ -543,6 +808,58 @@ export default function CEOInvoicesPage() {
         </div>
       </div>
 
+      {unmatchedView && (
+        <div
+          data-testid="unmatched-panel"
+          className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-amber-100 bg-amber-50/40 px-5 py-3"
+        >
+          <p className="text-sm text-gray-700">
+            {summary ? (
+              <>
+                <span data-testid="unmatched-count" className="font-semibold text-amber-900">
+                  {summary.count.toLocaleString("en-IN")} unmatched invoice
+                  {summary.count === 1 ? "" : "s"} ({formatINR(summary.total)})
+                </span>{" "}
+                in this view. Link each to its dealer account, assign the account an
+                owner, or mark it as not a dealer sale.
+              </>
+            ) : null}
+          </p>
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {UNMATCHED_STATUSES.map((st) => {
+              const active = matchFilter.includes(st);
+              return (
+                <button
+                  key={st}
+                  data-testid={`match-chip-${st}`}
+                  data-active={active ? "true" : "false"}
+                  onClick={() => {
+                    setMatchFilter((prev) => {
+                      const next = prev.includes(st) ? prev.filter((x) => x !== st) : [...prev, st];
+                      // Never send an empty set: the API reads that as "everything".
+                      return next.length > 0 ? next : UNMATCHED_STATUSES;
+                    });
+                    setPage(0);
+                  }}
+                  className={`px-2.5 py-1 rounded-full text-[10px] font-bold border transition-colors ${
+                    active
+                      ? "bg-amber-600 text-white border-amber-600"
+                      : "bg-white text-gray-600 border-gray-200 hover:bg-gray-50"
+                  }`}
+                >
+                  {MATCH_LABEL[st]}
+                </button>
+              );
+            })}
+          </div>
+          {decide.isError && (
+            <p data-testid="decide-error" className="w-full text-[11px] font-semibold text-rose-600">
+              {(decide.error as Error).message}
+            </p>
+          )}
+        </div>
+      )}
+
       {/* Table */}
       <div className="p-6 rounded-2xl bg-white border border-gray-100 shadow-sm">
         {isLoading ? (
@@ -555,7 +872,9 @@ export default function CEOInvoicesPage() {
           </p>
         ) : rows.length === 0 ? (
           <p data-testid="empty-state" className="text-sm text-gray-400 italic py-6 text-center">
-            No invoices match these filters.
+            {unmatchedView
+              ? "Every invoice in this view is credited to a salesperson."
+              : "No invoices match these filters."}
           </p>
         ) : (
           <>
@@ -568,6 +887,7 @@ export default function CEOInvoicesPage() {
                     <th className="py-2 font-semibold">Date</th>
                     <th className="py-2 font-semibold">Customer</th>
                     <th className="py-2 font-semibold">Status</th>
+                    {unmatchedView && <th className="py-2 font-semibold">Match</th>}
                     <th className="py-2 font-semibold">Transaction ID</th>
                     <th className="py-2 font-semibold text-right">Total</th>
                     <th className="py-2 font-semibold text-right">Balance</th>
@@ -619,11 +939,13 @@ export default function CEOInvoicesPage() {
                           <div className="truncate">{r.customer_name || "—"}</div>
                           <div
                             data-testid="invoice-dealer-link"
-                            className={`truncate text-[10px] ${r.dealer_lead_id ? "text-emerald-700" : "text-amber-700"}`}
+                            className={`truncate text-[10px] ${r.dealer_lead_id || r.account_id ? "text-emerald-700" : "text-amber-700"}`}
                             title={r.gstin_key ?? undefined}
                           >
-                            {r.dealer_lead_id
-                              ? `→ ${r.dealer_name || r.dealer_lead_id}`
+                            {r.dealer_lead_id || r.account_id
+                              ? `→ ${r.dealer_name || r.account_id || r.dealer_lead_id}`
+                              : r.link_kind === "not_dealer"
+                                ? "Marked: not a dealer sale"
                               : r.gstin_key
                                 ? `Not linked · GSTIN ${r.gstin_key} not on any CRM lead`
                                 : "Not linked · no GSTIN on this invoice"}
@@ -632,6 +954,57 @@ export default function CEOInvoicesPage() {
                         <td className="py-3">
                           <StatusBadge status={r.status} />
                         </td>
+                        {unmatchedView && (
+                          <td className="py-3">
+                            <div className="flex flex-col items-start gap-1.5">
+                              <MatchBadge status={r.match_status} />
+                              <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+                                {r.match_status === "no_owner" && r.account_id && (
+                                  <Link
+                                    data-testid="assign-owner"
+                                    href={`/admin/accounts/${encodeURIComponent(r.account_id)}`}
+                                    className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-amber-700 hover:underline whitespace-nowrap"
+                                  >
+                                    <UserPlus className="w-3 h-3" />
+                                    Assign owner
+                                  </Link>
+                                )}
+                                {r.link_kind !== "linked" && (
+                                  <button
+                                    data-testid="link-account"
+                                    onClick={() => setLinking(r)}
+                                    className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-brand-700 hover:underline whitespace-nowrap"
+                                  >
+                                    <Link2 className="w-3 h-3" />
+                                    Link to account
+                                  </button>
+                                )}
+                                {r.link_kind !== "not_dealer" && (
+                                  <button
+                                    data-testid="mark-not-dealer"
+                                    disabled={decide.isPending}
+                                    onClick={() => decide.mutate({ row: r, action: "not_dealer" })}
+                                    className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-gray-600 hover:underline whitespace-nowrap disabled:opacity-50"
+                                  >
+                                    <Ban className="w-3 h-3" />
+                                    Not a dealer sale
+                                  </button>
+                                )}
+                                {r.link_kind && (
+                                  <button
+                                    data-testid="clear-link"
+                                    disabled={decide.isPending}
+                                    onClick={() => decide.mutate({ row: r, action: "clear" })}
+                                    className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-gray-500 hover:underline whitespace-nowrap disabled:opacity-50"
+                                  >
+                                    <Undo2 className="w-3 h-3" />
+                                    Undo
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          </td>
+                        )}
                         <td className="py-3 text-xs text-gray-600 font-mono">
                           {r.payment_reference || "—"}
                         </td>
@@ -664,7 +1037,7 @@ export default function CEOInvoicesPage() {
                       </tr>
                       {payingId === r.id && (
                         <tr data-testid="payment-editor" className="bg-brand-50/40">
-                          <td colSpan={9} className="py-3 px-2">
+                          <td colSpan={colCount} className="py-3 px-2">
                             <div className="flex flex-wrap items-end gap-3">
                               <div>
                                 <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-1">
@@ -763,6 +1136,18 @@ export default function CEOInvoicesPage() {
           </>
         )}
       </div>
+
+      {linking && (
+        <LinkAccountDialog
+          invoice={linking}
+          onClose={() => setLinking(null)}
+          onLinked={() => {
+            setLinking(null);
+            queryClient.invalidateQueries({ queryKey: ["ceo-invoices"] });
+            queryClient.invalidateQueries({ queryKey: ["dashboard-metrics"] });
+          }}
+        />
+      )}
     </div>
   );
 }

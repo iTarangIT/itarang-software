@@ -21,6 +21,7 @@ import {
     notifyQuotationPendingApproval,
 } from "@/lib/notifications/events";
 import { loadLiveOemPrices } from "@/lib/leads/oemPrices";
+import { loadLiveListPrices, snapshotListPrices } from "@/lib/leads/listPrices";
 import {
     evaluateAgainstOemPrices,
     linesNeedingAttention,
@@ -107,6 +108,10 @@ export async function createLeadCommercial(
         let approvalStatus: string = initialApprovalStatus(body.event_type);
         let approvalMode: string | null = null;
         let oemEvaluation: OemEvaluation | null = null;
+        // E-321 — gated quote lines with their printed list price snapshotted.
+        // null = not a gated event; the lines are written as sent (terms events
+        // carry over the quote's already-snapshotted lines below).
+        let snapshottedLines: CommercialsProductLine[] | null = null;
 
         if (isGatedQuoteEvent(body.event_type)) {
             const lines = body.product_lines ?? [];
@@ -118,6 +123,14 @@ export async function createLeadCommercial(
             const resolved = resolveQuoteApproval(oemEvaluation);
             approvalStatus = resolved.status;
             approvalMode = resolved.mode;
+
+            // ── E-321 list price snapshot (display only, approval untouched) ──
+            // Live list price at performedAt, else the live OEM price, else
+            // null. Frozen on the row so a later list-price change never
+            // alters a quote's document.
+            const listRefs = await loadLiveListPrices(lines, tx, performedAt);
+            snapshottedLines = snapshotListPrices(lines, listRefs, refs);
+            // ── end E-321 ──
         }
 
         // ID 61: terms rows carry no price of their own. A price change is a
@@ -127,7 +140,7 @@ export async function createLeadCommercial(
         let price = {
             price_quoted: body.price_quoted ?? null,
             final_price: body.final_price ?? null,
-            product_lines: body.product_lines ?? [],
+            product_lines: snapshottedLines ?? body.product_lines ?? [],
         };
         if (body.event_type === "final_terms" || body.event_type === "terms_update") {
             const source = await tx.execute<{

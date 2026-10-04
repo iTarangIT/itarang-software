@@ -629,6 +629,13 @@ const roleNavigation: Record<string, any[]> = {
           icon: TrendingUp,
           href: "/admin/reports/dealer-health",
         },
+        {
+          // P1-1 / P1-2 — dealer accounts: owner, onboarded by, GSTIN.
+          id: "ceo-accounts",
+          label: "Accounts",
+          icon: Building,
+          href: "/admin/accounts",
+        },
       ],
     },
     {
@@ -1493,6 +1500,13 @@ const roleNavigation: Record<string, any[]> = {
           label: "Dealer Health",
           icon: TrendingUp,
           href: "/admin/reports/dealer-health",
+        },
+        {
+          // P1-1 / P1-2 — dealer accounts: owner, onboarded by, GSTIN.
+          id: "admin-accounts",
+          label: "Accounts",
+          icon: Building,
+          href: "/admin/accounts",
         },
         {
           id: "admin-settings",

@@ -33,7 +33,12 @@
  */
 import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { dealerLeadByGstin, GSTIN_KEY } from "@/lib/leads/gstinMatch";
+import {
+  dealerAccountByGstin,
+  dealerLeadByGstin,
+  GSTIN_KEY,
+} from "@/lib/leads/gstinMatch";
+import { hasAccountOwnershipTables } from "@/lib/accounts/tables";
 
 export type RevenueInvoiceSource = "zoho" | "drive";
 
@@ -66,7 +71,15 @@ export interface RevenueInvoiceRow {
   dealer_lead_id?: string | null;
   dealer_name?: string | null;
   dealer_owner_id?: string | null;
+  /** E-321: the dealer account the invoice matched (accounts.id), if any. */
+  account_id?: string | null;
+  /** E-321: 'linked' | 'not_dealer' when decided by hand. */
+  link_kind?: string | null;
+  /** E-321 work-list status — see matchedUnion(). */
+  match_status?: InvoiceMatchStatus;
 }
+
+export type InvoiceMatchStatus = "credited" | "no_owner" | "unknown" | "not_dealer";
 
 /**
  * Whether `sales_invoices` exists, cached so the probe is not one extra round
@@ -171,31 +184,77 @@ async function revenueUnion(): Promise<SQL> {
 }
 
 /**
- * The union with each invoice linked to a CRM dealer on GSTIN (review R-11).
+ * The union with each invoice linked to a CRM dealer (review R-11, E-321).
  *
  * An invoice carries only a typed customer name, which cannot be joined to
- * anything reliably; the GSTIN can. The matching rule lives in
- * src/lib/leads/gstinMatch.ts, shared with the Sales dashboard's battery and
- * KYC attribution, so one dealer can never credit two salespeople.
+ * anything reliably; the GSTIN can. Two matchers, in order (tracker ID 68 /
+ * handover P1-5):
+ *   1. the dealer ACCOUNT — a hand link (invoice_account_links), else the
+ *      account's GSTIN or one of its account_gstins aliases. Credit goes to the
+ *      account owner ON THE INVOICE DATE (account_owner_history), so
+ *      reassigning a dealer never moves revenue already reported.
+ *   2. only when no account matches: the lead / onboarding GSTIN rule in
+ *      src/lib/leads/gstinMatch.ts, credited to that lead's current owner.
  *
- * The SPOC an invoice counts for is that lead's CURRENT owner — the metric
- * dictionary's "owner at invoice date" needs ownership history per day, which
- * E-295's episodes could supply later.
+ * match_status (tracker ID 69 / P1-6 work list):
+ *   credited    — matched, and someone owned it on the invoice date
+ *   no_owner    — matched to a dealer account / lead that had no owner
+ *   unknown     — has a GSTIN that matches no account and no lead
+ *   not_dealer  — marked "not a dealer sale" by hand, or carries no GSTIN
  *
- * Kept separate from revenueUnion(): company totals and the chart never need
- * the match, and must not move because of it. Exported for the Sales
- * dashboard, which joins it to dealer_leads so its city / state /
- * business-type filters apply to revenue too.
+ * Without E-321 applied the account matcher is skipped and the result is the
+ * pre-E-321 lead-only match. Kept separate from revenueUnion(): company totals
+ * and the chart never need the match, and must not move because of it.
  */
 export async function matchedUnion(): Promise<SQL> {
   const src = await revenueUnion();
+  const lead = dealerLeadByGstin(sql`u.gstin_key`);
+  if (!(await hasAccountOwnershipTables())) {
+    return sql`(
+      SELECT u.*,
+             m.dealer_lead_id,
+             m.dealer_name,
+             m.dealer_owner_id,
+             NULL::text AS account_id,
+             NULL::text AS link_kind,
+             CASE WHEN m.dealer_lead_id IS NOT NULL AND m.dealer_owner_id IS NOT NULL THEN 'credited'
+                  WHEN m.dealer_lead_id IS NOT NULL THEN 'no_owner'
+                  WHEN u.gstin_key IS NULL THEN 'not_dealer'
+                  ELSE 'unknown' END AS match_status
+        FROM ${src} AS u
+        LEFT JOIN ${lead} m ON TRUE
+    )`;
+  }
+  const account = dealerAccountByGstin(
+    sql`u.gstin_key`,
+    sql`u.invoice_date`,
+    sql`u.source`,
+    sql`u.id`,
+  );
   return sql`(
-    SELECT u.*,
-           m.dealer_lead_id,
-           m.dealer_name,
-           m.dealer_owner_id
-      FROM ${src} AS u
-      LEFT JOIN ${dealerLeadByGstin(sql`u.gstin_key`)} m ON TRUE
+    SELECT x.*,
+           CASE WHEN x.link_kind = 'not_dealer'
+                  OR (x.gstin_key IS NULL AND x.account_id IS NULL) THEN 'not_dealer'
+                WHEN x.account_id IS NULL AND x.dealer_lead_id IS NULL THEN 'unknown'
+                WHEN x.dealer_owner_id IS NULL THEN 'no_owner'
+                ELSE 'credited' END AS match_status
+      FROM (
+        SELECT u.*,
+               CASE WHEN a.link_kind = 'not_dealer' THEN NULL
+                    ELSE COALESCE(ao.source_dealer_lead_id, m.dealer_lead_id) END AS dealer_lead_id,
+               CASE WHEN a.link_kind = 'not_dealer' THEN NULL
+                    ELSE COALESCE(a.account_name, m.dealer_name) END            AS dealer_name,
+               CASE WHEN a.link_kind = 'not_dealer' THEN NULL
+                    WHEN a.account_id IS NOT NULL THEN a.account_owner_id::text
+                    ELSE m.dealer_owner_id::text END                            AS dealer_owner_id,
+               CASE WHEN a.link_kind = 'not_dealer' THEN NULL
+                    ELSE a.account_id END                                       AS account_id,
+               a.link_kind                                                      AS link_kind
+          FROM ${src} AS u
+          LEFT JOIN ${account} a ON TRUE
+          LEFT JOIN account_ownership ao ON ao.account_id = a.account_id
+          LEFT JOIN ${lead} m ON a.account_id IS NULL AND a.link_kind IS NULL
+      ) x
   )`;
 }
 
@@ -350,9 +409,17 @@ export interface RevenueListFilters {
   source?: RevenueInvoiceSource | null;
   /** R-11 reconciliation: only invoices linked / not linked to a CRM dealer. */
   dealerMatch?: InvoiceDealerMatch | null;
+  /**
+   * E-321 work list (tracker ID 69): restrict to these match statuses, e.g.
+   * everything not 'credited' for the unmatched-invoices list.
+   */
+  matchStatuses?: InvoiceMatchStatus[] | null;
   limit?: number;
   offset?: number;
 }
+
+/** Matched to a dealer account or lead (on a matchedUnion() row `r`). */
+const MATCHED_TO_DEALER = sql`(r.account_id IS NOT NULL OR r.dealer_lead_id IS NOT NULL)`;
 
 function listWhere(f: RevenueListFilters): SQL {
   const parts: SQL[] = [];
@@ -371,8 +438,13 @@ function listWhere(f: RevenueListFilters): SQL {
     parts.push(sql`r.customer_name ILIKE ${"%" + f.customer.trim() + "%"}`);
   }
   if (f.source) parts.push(sql`r.source = ${f.source}`);
-  if (f.dealerMatch === "linked") parts.push(sql`r.dealer_lead_id IS NOT NULL`);
-  if (f.dealerMatch === "unlinked") parts.push(sql`r.dealer_lead_id IS NULL`);
+  if (f.dealerMatch === "linked") parts.push(MATCHED_TO_DEALER);
+  if (f.dealerMatch === "unlinked") parts.push(sql`NOT ${MATCHED_TO_DEALER}`);
+  if (f.matchStatuses && f.matchStatuses.length > 0) {
+    parts.push(
+      sql`r.match_status IN (${sql.join(f.matchStatuses.map((s) => sql`${s}`), sql`, `)})`,
+    );
+  }
 
   if (parts.length === 0) return sql`TRUE`;
   return sql.join(parts, sql` AND `);
@@ -416,8 +488,8 @@ export async function revenueSummary(f: RevenueListFilters): Promise<{
       COUNT(*)                    AS count,
       COALESCE(SUM(r.total), 0)   AS total,
       COALESCE(SUM(r.balance), 0) AS balance,
-      COUNT(*) FILTER (WHERE r.dealer_lead_id IS NULL)                  AS unlinked_count,
-      COALESCE(SUM(r.total) FILTER (WHERE r.dealer_lead_id IS NULL), 0) AS unlinked_total
+      COUNT(*) FILTER (WHERE NOT ${MATCHED_TO_DEALER})                  AS unlinked_count,
+      COALESCE(SUM(r.total) FILTER (WHERE NOT ${MATCHED_TO_DEALER}), 0) AS unlinked_total
     FROM ${src} AS r
     WHERE ${listWhere(f)}
   `);
