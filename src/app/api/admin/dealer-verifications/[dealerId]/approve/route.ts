@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { convertLeadOnOnboardingApproval } from "@/lib/leads/convertOnApproval";
+import { onDealerAccountApproved } from "@/lib/accounts/onApproval";
 import { db } from "@/lib/db";
 import {
   dealerOnboardingApplications,
@@ -826,6 +827,11 @@ export async function POST(req: NextRequest, context: RouteContext) {
       }
       throw txError;
     });
+
+    // ID 67 / P1-4 + P1-1: link this onboarding to its lead by phone (before
+    // the conversion below, so a WhatsApp / self-service onboarding converts
+    // its lead too), and record how the account came in. Best-effort.
+    await onDealerAccountApproved({ applicationId: application.id, accountId: dealerCode });
 
     // ID 74: the lead this onboarding came from becomes Converted now — the
     // rep's Mark Won only set Won. Post-commit and best-effort.

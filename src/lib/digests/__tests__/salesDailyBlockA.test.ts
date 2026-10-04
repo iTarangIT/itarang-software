@@ -1,7 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/db", () => ({ db: {} }));
-const { blockATableRows, blockAHeadline, deltaPct, fmtValue, pctOfTarget, NOT_MEASURED } = await import("../salesDailyBlockA");
+const {
+    blockATableRows,
+    blockAHeadline,
+    deltaPct,
+    fmtValue,
+    pctOfTarget,
+    NOT_MEASURED,
+    UNMATCHED_REVENUE_LABEL,
+    withUnmatchedRevenue,
+} = await import("../salesDailyBlockA");
 
 const row = (over: Record<string, unknown> = {}) => ({
     group: "EFFORT" as const,
@@ -13,6 +22,22 @@ const row = (over: Record<string, unknown> = {}) => ({
 });
 
 describe("Block A (ID 9)", () => {
+    // ID 69 / P1-6: "₹X not matched to a dealer" right under Revenue, hidden at 0.
+    it("puts the not-matched line right under Revenue, and hides it when 0", () => {
+        const base = [
+            row({ group: "OUTCOME", label: "Revenue", kind: "money", values: { y: 100000, d7: 500000, mtd: 1140000, lm: 900000 }, target: null }),
+            row({ group: "OUTCOME", label: "KYC submitted", target: null }),
+        ];
+        const zero = { y: 0, d7: 0, mtd: 0, lm: null };
+        expect(withUnmatchedRevenue(base, zero)).toBe(base);
+        expect(withUnmatchedRevenue(base, null)).toBe(base);
+
+        const out = withUnmatchedRevenue(base, { y: 0, d7: 25000, mtd: 210000, lm: 0 });
+        expect(out.map((r) => r.label)).toEqual(["Revenue", UNMATCHED_REVENUE_LABEL, "KYC submitted"]);
+        const table = blockATableRows(out);
+        expect(table[2]).toEqual([UNMATCHED_REVENUE_LABEL, "₹0", "₹25,000", "₹2.1 L", "—", "—", "₹0", "—"]);
+    });
+
     it("formats money in lakh / crore", () => {
         expect(fmtValue(1140000, "money")).toBe("₹11.4 L");
         expect(fmtValue(27100000, "money")).toBe("₹2.71 Cr");

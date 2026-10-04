@@ -704,6 +704,9 @@ export async function middleware(request: NextRequest) {
     // ID 82 — the page's own requireRole list. Without this row the bare
     // "/admin" entry bounces business_head, sales_manager and partner.
     "/admin/ready-to-assign": ["admin", "sales_head", "ceo", "business_head", "sales_manager", "partner"],
+    // P1-1 / P1-2 — Accounts tab (owner / GSTIN). Admin and CEO only; without
+    // this row the bare "/admin" entry below would also admit sales_head.
+    "/admin/accounts": ["admin", "ceo"],
     "/admin/escalations": ["admin", "sales_head", "ceo", "partner"],
     "/admin/merge-requests": ["admin", "sales_head", "ceo", "partner"],
     "/admin/onboarding-dropouts": ["admin", "sales_head", "ceo", "partner"],

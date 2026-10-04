@@ -188,6 +188,10 @@ export type CommercialsProductLine = {
     model_id: string;
     unit_price: number | null;
     quantity: number;
+    // E-321 — the list price (MRP) printed on the quotation, snapshotted when
+    // the quote is written: the live list price, else the live OEM price, else
+    // null. Absent on lines written before E-321. Never part of approval.
+    list_price?: number | null;
 };
 
 // One product-master option for the picker dropdown.

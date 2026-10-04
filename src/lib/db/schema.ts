@@ -243,6 +243,37 @@ export const oemReferencePrices = pgTable(
   }),
 );
 
+// E-321 — the optional list price printed on quotations (tracker ID 4 /
+// handover P1-14). Same append-only windowed shape as oem_reference_prices;
+// never below the OEM price in any overlapping window (src/lib/leads/listPrices.ts).
+export const productListPrices = pgTable(
+  "product_list_prices",
+  {
+    price_id: uuid("price_id").primaryKey().defaultRandom(),
+    asset_type: varchar("asset_type", { length: 30 }).notNull(),
+    product_id: text("product_id").notNull(),
+    model_id: varchar("model_id", { length: 100 }),
+    product_name: varchar("product_name", { length: 200 }),
+    list_price: numeric("list_price", { precision: 14, scale: 2 }).notNull(),
+    effective_from: timestamp("effective_from", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    effective_to: timestamp("effective_to", { withTimezone: true }),
+    valid_until: timestamp("valid_until", { withTimezone: true }),
+    note: text(),
+    created_by: text("created_by").notNull(),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    listPriceProductIdx: index("product_list_prices_product_idx").on(
+      table.product_id,
+      table.effective_from,
+    ),
+  }),
+);
+
 export const oems = pgTable("oems", {
   id: varchar({ length: 255 }).primaryKey().notNull(),
   business_entity_name: text("business_entity_name").notNull(),
@@ -982,6 +1013,88 @@ export const accounts = pgTable(
       t.business_entity_name.op("gin_trgm_ops"),
     ),
     gstinTrgmIdx: index("accounts_gstin_trgm_idx").using("gin", t.gstin.op("gin_trgm_ops")),
+  }),
+);
+
+// E-321 — dealer account ownership (tracker P1 IDs 5, 67, 68, 69). New tables,
+// not columns on `accounts`, so an environment without E-321 keeps working:
+// readers probe with to_regclass (src/lib/accounts/tables.ts).
+export const accountOwnership = pgTable(
+  "account_ownership",
+  {
+    account_id: varchar("account_id", { length: 255 }).primaryKey().notNull(),
+    // Current iTarang owner. NULL until Admin / CEO assigns one.
+    owner_user_id: uuid("owner_user_id"),
+    onboarded_by_user_id: uuid("onboarded_by_user_id"),
+    // 'lead' | 'direct'
+    came_through: varchar("came_through", { length: 10 }),
+    source_dealer_lead_id: text("source_dealer_lead_id"),
+    source_application_id: text("source_application_id"),
+    updated_by: uuid("updated_by"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    ownerIdx: index("account_ownership_owner_idx").on(t.owner_user_id),
+  }),
+);
+
+// E-321 — append-only owner windows [effective_from, effective_to). Revenue is
+// credited to the owner whose window holds the invoice date.
+export const accountOwnerHistory = pgTable(
+  "account_owner_history",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    account_id: varchar("account_id", { length: 255 }).notNull(),
+    owner_user_id: uuid("owner_user_id"),
+    effective_from: timestamp("effective_from", { withTimezone: true }).notNull(),
+    effective_to: timestamp("effective_to", { withTimezone: true }),
+    reason: text(),
+    changed_by: uuid("changed_by"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    accountIdx: index("account_owner_history_account_idx").on(t.account_id, t.effective_from),
+    // Partial (WHERE effective_to IS NULL) in the migration.
+    openUniq: uniqueIndex("account_owner_history_open_uniq").on(t.account_id),
+  }),
+);
+
+// E-321 — extra GSTINs that identify an account (corrected predecessor, or
+// learned via "Link to account"). Normalised: upper-case, no spaces.
+export const accountGstins = pgTable(
+  "account_gstins",
+  {
+    gstin: varchar({ length: 15 }).primaryKey().notNull(),
+    account_id: varchar("account_id", { length: 255 }).notNull(),
+    // 'correction' | 'invoice_link'
+    source: varchar({ length: 20 }).notNull(),
+    added_by: uuid("added_by"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    accountIdx: index("account_gstins_account_idx").on(t.account_id),
+  }),
+);
+
+// E-321 — a person's decision about one invoice: linked to an account, or
+// "not a dealer sale". invoice_id = zoho_invoices.id / sales_invoices.id.
+export const invoiceAccountLinks = pgTable(
+  "invoice_account_links",
+  {
+    // 'zoho' | 'drive'
+    source: varchar({ length: 10 }).notNull(),
+    invoice_id: text("invoice_id").notNull(),
+    account_id: varchar("account_id", { length: 255 }),
+    // 'linked' | 'not_dealer'
+    kind: varchar({ length: 12 }).notNull(),
+    note: text(),
+    linked_by: uuid("linked_by"),
+    linked_at: timestamp("linked_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.source, t.invoice_id] }),
+    accountIdx: index("invoice_account_links_account_idx").on(t.account_id),
   }),
 );
 

@@ -21,6 +21,7 @@ import { db } from "@/lib/db";
 import { oemReferencePrices } from "@/lib/db/schema";
 import type { CommercialsProductLine } from "@/lib/inside-sales/types";
 import { refKey, type OemPriceRef } from "./oemPricing";
+import { lockProductPrices, oemAboveListPriceMessage } from "./listPrices";
 
 // A live transaction handle, taken from db.transaction's callback signature so
 // the quote write path can read prices inside the transaction that writes the
@@ -241,6 +242,15 @@ export async function setOemPrice(input: SetOemPriceInput): Promise<string> {
 
     return db.transaction(async (tx) => {
         const now = new Date();
+
+        // E-321 — the list price is never below the OEM price in any window, so
+        // an OEM line ABOVE an overlapping open list-price line is refused. The
+        // advisory lock is shared with setListPrice (listPrices.ts) so the two
+        // writers cannot each pass the cross-table check concurrently. A no-op
+        // where product_list_prices does not exist yet.
+        await lockProductPrices(tx, input.asset_type, input.product_id);
+        const aboveList = await oemAboveListPriceMessage(tx, input);
+        if (aboveList) throw new OemPriceOverlapError(aboveList);
 
         // Lock this product's open rows for the length of the transaction, so
         // two admins saving at once cannot each pass their own overlap check

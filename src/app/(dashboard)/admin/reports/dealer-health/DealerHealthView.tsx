@@ -119,13 +119,27 @@ export function DealerHealthView() {
                             </tr>
                         )}
                         {visible.map((r) => (
-                            <tr key={r.lead_id}>
+                            <tr key={r.key}>
                                 <td className="px-3 py-2">
-                                    <Link href={`/leads/${encodeURIComponent(r.lead_id)}`} className="font-medium text-ink hover:underline">
-                                        {r.dealer}
-                                    </Link>
+                                    {r.account_id ? (
+                                        <Link href={`/admin/accounts/${encodeURIComponent(r.account_id)}`} className="font-medium text-ink hover:underline">
+                                            {r.dealer}
+                                        </Link>
+                                    ) : r.lead_id ? (
+                                        <Link href={`/leads/${encodeURIComponent(r.lead_id)}`} className="font-medium text-ink hover:underline">
+                                            {r.dealer}
+                                        </Link>
+                                    ) : (
+                                        <span className="font-medium text-ink">{r.dealer}</span>
+                                    )}
                                     <div className="text-[11px] text-ink-muted">
-                                        {[r.city, r.gstin ?? "no GSTIN"].filter(Boolean).join(" · ")}
+                                        {[
+                                            r.city,
+                                            r.gstin ?? "no GSTIN",
+                                            r.came_through === "direct" ? "direct onboarding" : null,
+                                        ]
+                                            .filter(Boolean)
+                                            .join(" · ")}
                                     </div>
                                 </td>
                                 <td className="px-3 py-2 text-ink">{r.owner_name ?? "—"}</td>

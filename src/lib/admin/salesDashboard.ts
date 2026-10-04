@@ -59,7 +59,8 @@ import {
     BusinessTypeSchema,
     isBusinessTypeFilter,
 } from "@/lib/leads/businessType";
-import { dealerLeadByGstin, GSTIN_KEY } from "@/lib/leads/gstinMatch";
+import { accountOwnerOn, dealerLeadByGstin, GSTIN_KEY } from "@/lib/leads/gstinMatch";
+import { hasAccountOwnershipTables } from "@/lib/accounts/tables";
 import { matchedUnion, REVENUE_NOT_VOID } from "@/lib/dashboard/revenueSource";
 import { humanCall, isFirstQuote } from "@/lib/reports/metricDefinitions";
 import {
@@ -592,6 +593,24 @@ async function queryOutcome(
 ): Promise<Map<string | null, SalesOutcome>> {
     const invoices = await matchedUnion();
     const owner = sql`dl.current_owner_id`;
+    // E-321 (ID 68): with account ownership in place, money and stock are
+    // credited to the ACCOUNT owner on the day it happened; the lead / its
+    // current owner is only the fallback for an environment without E-321.
+    const accountsOn = await hasAccountOwnershipTables();
+    const revOwner = sql`r.dealer_owner_id`;
+    const batOwner = accountsOn
+        ? accountOwnerOn(sql`a.id`, sql`(i.allocated_to_dealer_at AT TIME ZONE ${IST})::date`)
+        : owner;
+    const kycOwner = accountsOn
+        ? accountOwnerOn(sql`a.id`, sql`(q.first_at AT TIME ZONE ${IST})::date`)
+        : owner;
+    // Lead scope (city / state / business type) still filters on the lead the
+    // account's GSTIN matches; with accounts on, an account with no lead stays in.
+    const accountLeadJoin = accountsOn
+        ? sql`LEFT JOIN ${dealerLeadByGstin(GSTIN_KEY(sql`a.gstin`))} m ON TRUE
+              LEFT JOIN dealer_leads dl ON dl.id = m.dealer_lead_id`
+        : sql`JOIN ${dealerLeadByGstin(GSTIN_KEY(sql`a.gstin`))} m ON TRUE
+              JOIN dealer_leads dl ON dl.id = m.dealer_lead_id`;
     const rows = await db.execute<OutcomeRow>(sql`
         WITH quotes AS (
             -- ID 59: quotes created = the FIRST quote per lead; revisions apart.
@@ -607,41 +626,42 @@ async function queryOutcome(
              GROUP BY 1
         ),
         revenue AS (
-            SELECT ${spocKey(owner, bySpoc)} AS spoc, COALESCE(SUM(r.total), 0) AS n
+            -- E-321 (ID 68): credited to the matched account's owner ON THE
+            -- INVOICE DATE (r.dealer_owner_id), never the current owner.
+            SELECT ${spocKey(revOwner, bySpoc)} AS spoc, COALESCE(SUM(r.total), 0) AS n
               FROM ${invoices} AS r
-              JOIN dealer_leads dl ON dl.id = r.dealer_lead_id
+              LEFT JOIN dealer_leads dl ON dl.id = r.dealer_lead_id
              WHERE ${REVENUE_NOT_VOID}
+               AND (r.account_id IS NOT NULL OR r.dealer_lead_id IS NOT NULL)
                AND r.invoice_date >= ${f.from}::date
                AND r.invoice_date <= ${f.to}::date
-               ${leadScope(f)} ${spocClause(owner, f)}
+               ${leadScope(f)} ${spocClause(revOwner, f)}
              GROUP BY 1
         ),
         batteries AS (
-            SELECT ${spocKey(owner, bySpoc)} AS spoc, COUNT(*) AS n
+            SELECT ${spocKey(batOwner, bySpoc)} AS spoc, COUNT(*) AS n
               FROM inventory i
               JOIN accounts a ON a.id = i.dealer_id
-              JOIN ${dealerLeadByGstin(GSTIN_KEY(sql`a.gstin`))} m ON TRUE
-              JOIN dealer_leads dl ON dl.id = m.dealer_lead_id
+              ${accountLeadJoin}
              WHERE i.asset_type = 'battery'
                AND i.allocated_to_dealer_at IS NOT NULL
                AND (i.allocated_to_dealer_at AT TIME ZONE ${IST})::date >= ${f.from}::date
                AND (i.allocated_to_dealer_at AT TIME ZONE ${IST})::date <= ${f.to}::date
-               ${leadScope(f)} ${spocClause(owner, f)}
+               ${leadScope(f)} ${spocClause(batOwner, f)}
              GROUP BY 1
         ),
         kyc AS (
             -- One lead, one file, however many queue rows — the funnel report's
             -- rule (funnelCounts.ts kycSharedQuery).
-            SELECT ${spocKey(owner, bySpoc)} AS spoc, COUNT(*) AS n
+            SELECT ${spocKey(kycOwner, bySpoc)} AS spoc, COUNT(*) AS n
               FROM (SELECT lead_id, MIN(created_at) AS first_at
                       FROM admin_verification_queue GROUP BY lead_id) q
               JOIN leads l ON l.id::text = q.lead_id
               JOIN accounts a ON a.id = l.dealer_id
-              JOIN ${dealerLeadByGstin(GSTIN_KEY(sql`a.gstin`))} m ON TRUE
-              JOIN dealer_leads dl ON dl.id = m.dealer_lead_id
+              ${accountLeadJoin}
              WHERE (q.first_at AT TIME ZONE ${IST})::date >= ${f.from}::date
                AND (q.first_at AT TIME ZONE ${IST})::date <= ${f.to}::date
-               ${leadScope(f)} ${spocClause(owner, f)}
+               ${leadScope(f)} ${spocClause(kycOwner, f)}
              GROUP BY 1
         ),
         spocs AS (

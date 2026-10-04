@@ -202,17 +202,19 @@ async function moneyTile(from: string, toExcl: string, prevFrom: string | null, 
     const win = (a: string, b: string) => sql`r.invoice_date >= ${a}::date AND r.invoice_date < ${b}::date`;
     const [typeRows, spocRows, cityRows, prev] = await Promise.all([
         rows(sql`
-            SELECT CASE WHEN r.dealer_lead_id IS NULL THEN '__unlinked'
+            SELECT CASE WHEN r.dealer_lead_id IS NULL AND r.account_id IS NULL THEN '__unlinked'
                         ELSE COALESCE(to_jsonb(dl) ->> 'business_type', '__unset') END AS t,
                    COALESCE(SUM(r.total), 0) AS v
               FROM ${inv} r LEFT JOIN dealer_leads dl ON dl.id = r.dealer_lead_id
              WHERE ${REVENUE_NOT_VOID} AND ${win(from, toExcl)}
              GROUP BY 1`),
         rows(sql`
+            -- E-321 (ID 68): the owner on the invoice date, not today's owner.
             SELECT COALESCE(u.name, '(no owner)') AS name, COALESCE(SUM(r.total), 0) AS v
-              FROM ${inv} r JOIN dealer_leads dl ON dl.id = r.dealer_lead_id
-              LEFT JOIN users u ON u.id::text = dl.current_owner_id
+              FROM ${inv} r
+              LEFT JOIN users u ON u.id::text = r.dealer_owner_id::text
              WHERE ${REVENUE_NOT_VOID} AND ${win(from, toExcl)}
+               AND (r.dealer_lead_id IS NOT NULL OR r.account_id IS NOT NULL)
              GROUP BY 1 ORDER BY v DESC LIMIT 10`),
         rows(sql`
             SELECT COALESCE(NULLIF(btrim(dl.city), ''), 'Unknown city') AS city, COALESCE(SUM(r.total), 0) AS v
