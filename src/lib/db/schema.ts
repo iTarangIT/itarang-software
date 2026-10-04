@@ -9560,6 +9560,9 @@ export const salesInvoiceFolders = pgTable(
     // "Sales", "Sale Invoices" and "Sales Invoices".
     include_names: text("include_names").default("sale").notNull(),
     exclude_names: text("exclude_names").default("purchase").notNull(),
+    // E-322 (tracker ID 71): 'sale' | 'credit_note' — a credit-note folder's
+    // PDFs land in credit_notes, not sales_invoices.
+    doc_kind: varchar("doc_kind", { length: 20 }).default("sale").notNull(),
     last_scanned_at: timestamp("last_scanned_at", { withTimezone: true }),
     created_by: uuid("created_by"),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
@@ -9573,6 +9576,154 @@ export const salesInvoiceFolders = pgTable(
     salesInvoiceFoldersActiveIdx: index("sales_invoice_folders_active_idx").on(
       table.is_active,
     ),
+  }),
+);
+
+// E-322 — SALES invoice line items for any source (tracker IDs 39, 70). Not
+// `invoice_lines`, which is the buyback vendor-invoice table (E-187). Batteries
+// sold are counted from these lines (HSN 8507), never from stock allocation.
+export const invoiceLineItems = pgTable(
+  "invoice_line_items",
+  {
+    // 'zoho' | 'drive' | 'vyapar'
+    source: varchar({ length: 10 }).notNull(),
+    // zoho_invoices.id / sales_invoices.id
+    invoice_id: text("invoice_id").notNull(),
+    line_no: integer("line_no").notNull(),
+    item_name: text("item_name"),
+    hsn: varchar({ length: 12 }),
+    // 'battery' | 'charger' | 'other' (src/lib/sales/invoiceLines.ts)
+    product_class: varchar("product_class", { length: 10 }).notNull(),
+    asset_type: varchar("asset_type", { length: 30 }),
+    product_id: text("product_id"),
+    quantity: numeric({ precision: 14, scale: 3 }),
+    rate: numeric({ precision: 14, scale: 2 }),
+    amount_excl_gst: numeric("amount_excl_gst", { precision: 14, scale: 2 }),
+    import_id: uuid("import_id"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.source, t.invoice_id, t.line_no] }),
+    classIdx: index("invoice_line_items_class_idx").on(t.product_class),
+    productIdx: index("invoice_line_items_product_idx").on(t.product_id),
+  }),
+);
+
+// E-322 — each Zoho customer's GSTIN, fetched once (tracker ID 70). Separate
+// from zoho_invoices because the hourly sync rewrites that table's columns.
+export const zohoCustomerGstins = pgTable(
+  "zoho_customer_gstins",
+  {
+    organization_id: text("organization_id").notNull(),
+    customer_id: text("customer_id").notNull(),
+    // NULL = fetched, the customer has none.
+    gstin: varchar({ length: 15 }),
+    fetched_at: timestamp("fetched_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.organization_id, t.customer_id] }),
+  }),
+);
+
+// E-322 — Vyapar item name → CRM product (tracker ID 39).
+export const vyaparItemMap = pgTable("vyapar_item_map", {
+  // lower-cased, single-spaced item name (invoiceLines.itemKey)
+  item_key: text("item_key").primaryKey().notNull(),
+  item_name: text("item_name").notNull(),
+  asset_type: varchar("asset_type", { length: 30 }),
+  product_id: text("product_id"),
+  mapped_by: uuid("mapped_by"),
+  updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+// E-322 — one row per uploaded Vyapar register / GSTR-1 file.
+export const invoiceImports = pgTable("invoice_imports", {
+  id: uuid().defaultRandom().primaryKey().notNull(),
+  // 'vyapar_register' | 'gstr1'
+  kind: varchar({ length: 20 }).notNull(),
+  file_name: text("file_name"),
+  storage_key: text("storage_key"),
+  period_from: date("period_from"),
+  period_to: date("period_to"),
+  summary: jsonb(),
+  imported_by: uuid("imported_by"),
+  created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+// E-322 — a voided invoice (tracker ID 71): finance's void with a reason, or a
+// cancellation from the Vyapar import. Revenue reads it as status 'void'.
+export const invoiceVoids = pgTable(
+  "invoice_voids",
+  {
+    // 'zoho' | 'drive' | 'vyapar'
+    source: varchar({ length: 10 }).notNull(),
+    invoice_id: text("invoice_id").notNull(),
+    reason: text().notNull(),
+    // 'manual' | 'vyapar'
+    origin: varchar({ length: 10 }).notNull(),
+    voided_by: uuid("voided_by"),
+    voided_at: timestamp("voided_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.source, t.invoice_id] }),
+  }),
+);
+
+// E-322 — credit notes (tracker ID 71), read from their own Drive folder and
+// subtracted from revenue in the month they are issued.
+export const creditNotes = pgTable(
+  "credit_notes",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    note_number: text("note_number"),
+    note_number_key: text("note_number_key"),
+    issue_date: date("issue_date"),
+    customer_name: text("customer_name"),
+    customer_gstin: varchar("customer_gstin", { length: 20 }),
+    organization_id: text("organization_id"),
+    seller_gstin: varchar("seller_gstin", { length: 20 }),
+    against_invoice_number: text("against_invoice_number"),
+    sub_total: numeric("sub_total", { precision: 14, scale: 2 }),
+    tax_total: numeric("tax_total", { precision: 14, scale: 2 }),
+    total: numeric({ precision: 14, scale: 2 }),
+    drive_file_id: text("drive_file_id"),
+    file_name: text("file_name"),
+    document_url: text("document_url"),
+    ai_raw: jsonb("ai_raw"),
+    needs_attention: boolean("needs_attention").default(false).notNull(),
+    attention_reason: text("attention_reason"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    // Both partial (WHERE … IS NOT NULL) in the migration.
+    numberKeyUniq: uniqueIndex("credit_notes_number_key_uniq").on(t.note_number_key),
+    driveFileUniq: uniqueIndex("credit_notes_drive_file_uniq").on(t.drive_file_id),
+    issueDateIdx: index("credit_notes_issue_date_idx").on(t.issue_date),
+  }),
+);
+
+// E-322 — filed GSTR-1 rows, for the monthly revenue reconciliation (ID 71).
+export const gstr1Entries = pgTable(
+  "gstr1_entries",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    import_id: uuid("import_id").notNull(),
+    // first day of the return period
+    month: date().notNull(),
+    // 'invoice' | 'credit_note'
+    doc_type: varchar("doc_type", { length: 12 }).notNull(),
+    doc_number: text("doc_number").notNull(),
+    doc_number_key: text("doc_number_key").notNull(),
+    doc_date: date("doc_date"),
+    gstin: varchar({ length: 20 }),
+    taxable_value: numeric("taxable_value", { precision: 14, scale: 2 }),
+    tax: numeric({ precision: 14, scale: 2 }),
+    total: numeric({ precision: 14, scale: 2 }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    monthIdx: index("gstr1_entries_month_idx").on(t.month, t.doc_number_key),
   }),
 );
 
@@ -9834,7 +9985,14 @@ export const dealerLeadCommercials = pgTable(
     delivery_terms: text("delivery_terms"),
     warranty_terms: text("warranty_terms"),
     final_price: numeric("final_price", { precision: 14, scale: 2 }),
+    // Legacy mirror since E-322: customer_finance ? 'finance' : 'cash'.
     payment_method: varchar("payment_method", { length: 20 }),
+    // E-322 (tracker ID 73): dealer payment terms 'cash' | 'credit'; any
+    // credit sends the quote to approval. credit_days set only for credit.
+    dealer_payment_terms: varchar("dealer_payment_terms", { length: 10 }),
+    credit_days: integer("credit_days"),
+    // E-322: NBFC finance for END customers (Yes / No) — feeds onboarding.
+    customer_finance: boolean("customer_finance"),
     deal_notes: text("deal_notes"),
     // Structured product line-items (E-128): array of
     // { asset_type, product_id, product_name, model_id, unit_price, quantity }

@@ -29,6 +29,16 @@ import {
     type OemEvaluation,
 } from "@/lib/leads/oemPricing";
 import type { CommercialsProductLine } from "@/lib/inside-sales/types";
+import {
+    applyTermsHold,
+    getStandardQuoteTerms,
+    resolveQuoteTerms,
+    termsHold,
+    type DealerPaymentTerms,
+    type QuoteTerms,
+    type ResolvedQuoteTerms,
+    type TermsHold,
+} from "@/lib/leads/quoteTerms";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -56,10 +66,21 @@ export type CommercialInput = {
     price_quoted?: number | null;
     quote_document_url?: string | null;
     brochure_url?: string | null;
+    /**
+     * E-322 (ID 73): the structured terms. Required on a quote issue /
+     * revision. Terms events take the payment terms of the quote they follow
+     * (only customer_finance may change there). Warranty and delivery are
+     * never taken from the caller — they are the admin's standard terms.
+     */
+    terms?: QuoteTerms | null;
+    /** @deprecated ignored since E-322 — derived from `terms`. */
     credit_terms?: string | null;
+    /** @deprecated ignored since E-322 — standard terms from settings. */
     delivery_terms?: string | null;
+    /** @deprecated ignored since E-322 — standard terms from settings. */
     warranty_terms?: string | null;
     final_price?: number | null;
+    /** @deprecated ignored since E-322 — mirrored from terms.customer_finance. */
     payment_method?: "cash" | "finance" | null;
     deal_notes?: string | null;
     product_lines?: CommercialsProductLine[];
@@ -80,6 +101,8 @@ export type CreateCommercialResult = {
     approvalStatus: string;
     autoApproved: boolean;
     evaluation: OemEvaluation | null;
+    /** E-322: set when the quote waits because of credit terms. */
+    termsHold: TermsHold | null;
     /** Draft PDF, touchpoint, notifications. Run after COMMIT. Never throws past a draft failure. */
     afterCommit: () => Promise<{ quote_number: string | null }>;
 };
@@ -108,6 +131,27 @@ export async function createLeadCommercial(
         let approvalStatus: string = initialApprovalStatus(body.event_type);
         let approvalMode: string | null = null;
         let oemEvaluation: OemEvaluation | null = null;
+        let hold: TermsHold | null = null;
+
+        // ── E-322 terms (ID 73) ──
+        // Brochures carry no terms. Quotes must state payment terms; terms
+        // events inherit them from the quote they follow (below), so moving a
+        // deal onto credit always goes through a quote revision — the gated
+        // event — and can never slip past approval as a "terms update".
+        const standard =
+            body.event_type === "brochure_share" ? null : await getStandardQuoteTerms(tx);
+        let terms: ResolvedQuoteTerms | null = null;
+        if (isGatedQuoteEvent(body.event_type)) {
+            if (!body.terms) {
+                throw new CommercialInputError(
+                    "Choose the dealer payment terms (Cash or Credit with days) for this quote.",
+                    400,
+                );
+            }
+            terms = resolveQuoteTerms(body.terms, standard!);
+            hold = termsHold(terms);
+        }
+        // ── end E-322 ──
         // E-321 — gated quote lines with their printed list price snapshotted.
         // null = not a gated event; the lines are written as sent (terms events
         // carry over the quote's already-snapshotted lines below).
@@ -120,9 +164,13 @@ export async function createLeadCommercial(
             // the instant the quote is stamped.
             const refs = await loadLiveOemPrices(lines, tx, performedAt);
             oemEvaluation = evaluateAgainstOemPrices(lines, refs, performedAt);
-            const resolved = resolveQuoteApproval(oemEvaluation);
+            // E-322: credit terms hold the quote for approval even when every
+            // line clears the price check. Recorded on the evaluation so the
+            // CEO panel can say why it is waiting.
+            const resolved = applyTermsHold(resolveQuoteApproval(oemEvaluation), hold);
             approvalStatus = resolved.status;
             approvalMode = resolved.mode;
+            oemEvaluation = { ...oemEvaluation, terms_hold: hold };
 
             // ── E-321 list price snapshot (display only, approval untouched) ──
             // Live list price at performedAt, else the live OEM price, else
@@ -147,10 +195,14 @@ export async function createLeadCommercial(
                 price_quoted: string | null;
                 final_price: string | null;
                 product_lines: CommercialsProductLine[] | null;
+                dealer_payment_terms: string | null;
+                credit_days: number | null;
+                customer_finance: boolean | null;
             }>(sql`
                 SELECT price_quoted::text AS price_quoted,
                        final_price::text AS final_price,
-                       product_lines
+                       product_lines,
+                       dealer_payment_terms, credit_days, customer_finance
                   FROM dealer_lead_commercials
                  WHERE dealer_lead_id = ${id}
                    AND event_type IN ('quote_issue', 'quote_revision')
@@ -176,6 +228,20 @@ export async function createLeadCommercial(
                 final_price: q?.final_price != null ? Number(q.final_price) : null,
                 product_lines: q?.product_lines ?? [],
             };
+            // E-322: payment terms come from the quote; customer finance may
+            // be updated here (it feeds onboarding, not approval). A pre-E-322
+            // quote has no structured terms — those rows read as Cash.
+            const quoteTerms: DealerPaymentTerms =
+                q?.dealer_payment_terms === "credit" ? "credit" : "cash";
+            terms = resolveQuoteTerms(
+                {
+                    dealer_payment_terms: quoteTerms,
+                    credit_days: quoteTerms === "credit" ? (q?.credit_days ?? null) : null,
+                    customer_finance:
+                        body.terms?.customer_finance ?? q?.customer_finance ?? null,
+                },
+                standard!,
+            );
         }
 
         await tx.execute(sql`
@@ -195,11 +261,16 @@ export async function createLeadCommercial(
                 quote_document_url: body.quote_document_url ?? null,
                 brochure_url: body.brochure_url ?? null,
                 brochure_sent_at: body.event_type === "brochure_share" ? performedAt : null,
-                credit_terms: body.credit_terms ?? null,
-                delivery_terms: body.delivery_terms ?? null,
-                warranty_terms: body.warranty_terms ?? null,
+                // E-322: all terms from `terms` (structured, standard
+                // warranty / delivery); never the caller's free text.
+                credit_terms: terms?.credit_terms ?? null,
+                delivery_terms: terms?.delivery_terms ?? null,
+                warranty_terms: terms?.warranty_terms ?? null,
                 final_price: price.final_price != null ? String(price.final_price) : null,
-                payment_method: body.payment_method ?? null,
+                payment_method: terms?.payment_method ?? null,
+                dealer_payment_terms: terms?.dealer_payment_terms ?? null,
+                credit_days: terms?.credit_days ?? null,
+                customer_finance: terms?.customer_finance ?? null,
                 deal_notes: body.deal_notes ?? null,
                 product_lines: price.product_lines,
                 notes: body.notes ?? null,
@@ -240,6 +311,7 @@ export async function createLeadCommercial(
             approvalStatus,
             autoApproved: approvalMode === "auto",
             evaluation: oemEvaluation,
+            termsHold: hold,
         };
     };
 
@@ -279,7 +351,10 @@ export async function createLeadCommercial(
                 remarks: outcome.autoApproved
                     ? `Quote ${verb}${money} — auto-approved and released (at or above OEM reference)` +
                       (draft ? ` — draft ${draft.quote_number}` : "")
-                    : `Quote ${verb}${money} — awaiting CEO approval`,
+                    : `Quote ${verb}${money} — awaiting CEO approval` +
+                      (outcome.termsHold
+                          ? ` (credit ${outcome.termsHold.credit_days ?? "?"} days)`
+                          : ""),
                 attachments: [
                     ...(draft ? [{ url: draft.quote_pdf_url, type: "quote" }] : []),
                     ...(body.quote_document_url ? [{ url: body.quote_document_url, type: "quote" }] : []),
@@ -317,16 +392,21 @@ export async function createLeadCommercial(
                     .limit(1);
 
                 const flagged = outcome.evaluation ? linesNeedingAttention(outcome.evaluation) : 0;
+                const reasons = [
+                    flagged > 0
+                        ? `${flagged} line${flagged === 1 ? "" : "s"} below OEM reference, unpriced, or without a reference price`
+                        : null,
+                    outcome.termsHold
+                        ? `credit terms (${outcome.termsHold.credit_days ?? "?"} days) need approval`
+                        : null,
+                ].filter(Boolean);
 
                 await notifyQuotationPendingApproval({
                     leadId: id,
                     commercialId: outcome.commercialId,
                     dealerName: lead?.dealerName ?? null,
                     value: Number(total ?? 0),
-                    reason:
-                        flagged > 0
-                            ? `${flagged} line${flagged === 1 ? "" : "s"} below OEM reference, unpriced, or without a reference price`
-                            : null,
+                    reason: reasons.length ? reasons.join("; ") : null,
                     raisedByName: actor.name,
                 });
             }

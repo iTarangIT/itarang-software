@@ -12,9 +12,9 @@ export default async function DealerHealthPage() {
             <header>
                 <h1 className="text-2xl font-semibold tracking-tight text-ink">Dealer Health</h1>
                 <p className="mt-1 text-sm text-ink-muted">
-                    Converted dealers by how recently they last ordered. Orders are their invoices,
-                    matched on GSTIN — a dealer with no GSTIN on its lead shows as never ordered until
-                    one is added. Orange is the time to pitch; Red means billing must happen.
+                    Every live dealer account — including dealers onboarded directly — by how recently
+                    it last ordered. Orders are its invoices, matched to the account&apos;s GSTIN; the
+                    owner is the account owner. Orange is the time to pitch; Red means billing must happen.
                 </p>
             </header>
             <DealerHealthView />

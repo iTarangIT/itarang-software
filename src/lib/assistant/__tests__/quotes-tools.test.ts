@@ -37,7 +37,12 @@ vi.mock("@/lib/leads/withdrawQuote", async (orig) => ({
 }));
 const afterCommit = vi.fn(async () => ({ quote_number: "ITQ-2026-0007" }));
 const createLeadCommercial = vi.fn();
-vi.mock("@/lib/leads/createCommercial", () => ({ createLeadCommercial }));
+class CommercialInputError extends Error {
+    constructor(message: string, readonly status = 409) {
+        super(message);
+    }
+}
+vi.mock("@/lib/leads/createCommercial", () => ({ createLeadCommercial, CommercialInputError }));
 
 const { toolsFor, toolNamesFor } = await import("../registry");
 const { APPLIERS } = await import("../appliers");
@@ -143,9 +148,10 @@ describe("product_catalogue", () => {
 
 describe("create_quote", () => {
     const LINES = [{ product_id: "b-105", quantity: 2, unit_price: 42000 }];
+    const CASH = { payment_terms: "cash" as const };
 
     it("first quote, every line at or above reference → quote_issue, auto-approve forecast, no floor price shown", async () => {
-        const r = await run(ISR, "create_quote", { lead_id: "DL-7", lines: LINES, credit_terms: "30 days", payment_method: "cash" });
+        const r = await run(ISR, "create_quote", { lead_id: "DL-7", lines: LINES, payment_terms: "cash", customer_finance: true });
         expect(r).toMatchObject({ kind: "preview", action_id: "act-1" });
         const s = stored();
         expect(s.tool).toBe("create_quote");
@@ -153,8 +159,7 @@ describe("create_quote", () => {
             lead_id: "DL-7",
             event_type: "quote_issue",
             final_price: 84000,
-            credit_terms: "30 days",
-            payment_method: "cash",
+            terms: { dealer_payment_terms: "cash", credit_days: null, customer_finance: true },
             // Name, model and asset type are the catalogue's, not the model's.
             product_lines: [{ asset_type: "battery", product_id: "b-105", product_name: "LFP 51.2V 105Ah", model_id: "ITB-51105", unit_price: 42000, quantity: 2 }],
         });
@@ -163,6 +168,11 @@ describe("create_quote", () => {
         expect(text).toContain("2 × LFP 51.2V 105Ah @ ₹42,000 = ₹84,000");
         expect(text).toContain("Total (before GST): ₹84,000");
         expect(text).toMatch(/Auto-approved on Confirm/);
+        expect(text).toContain("Payment terms: Cash");
+        expect(text).toContain("Customer finance (NBFC): Yes");
+        // Warranty / delivery are the admin's standard terms, not the rep's.
+        expect(text).toMatch(/Warranty: .+/);
+        expect(text).toMatch(/Delivery: .+/);
         expect(s.preview.warning).toBeNull();
         expect(s.preview.resets_idle_clock).toBe(false);
         expect(text).not.toMatch(/41,000|41000/);
@@ -170,8 +180,29 @@ describe("create_quote", () => {
         expect(loadLiveOemPrices).toHaveBeenCalledWith(s.plan.product_lines, undefined, NOW);
     });
 
+    it("credit terms → CEO approval even when every price clears (ID 73)", async () => {
+        await run(ISR, "create_quote", { lead_id: "DL-7", lines: LINES, payment_terms: "credit", credit_days: 30 });
+        const s = stored();
+        expect(s.plan.terms).toEqual({ dealer_payment_terms: "credit", credit_days: 30, customer_finance: null });
+        expect(previewText(s.preview)).toMatch(/Goes to the CEO for approval/);
+        expect(previewText(s.preview)).toContain("Payment terms: Credit — 30 days");
+        expect(s.preview.warning).toMatch(/Needs CEO approval: credit terms \(30 days\)/);
+    });
+
+    it("payment terms are asked for, never assumed; credit needs its days", async () => {
+        expect(await run(ISR, "create_quote", { lead_id: "DL-7", lines: LINES })).toEqual({
+            kind: "question",
+            question: "Payment terms for the dealer — cash, or credit (how many days)?",
+        });
+        expect(await run(ISR, "create_quote", { lead_id: "DL-7", lines: LINES, payment_terms: "credit" })).toEqual({
+            kind: "question",
+            question: "How many days of credit (1–180)?",
+        });
+        expect(createPending).not.toHaveBeenCalled();
+    });
+
     it("a line below reference → CEO warning, still without the reference figure", async () => {
-        await run(ASM, "create_quote", { lead_id: "DL-7", lines: [{ product_id: "b-105", quantity: 1, unit_price: 39000 }] });
+        await run(ASM, "create_quote", { lead_id: "DL-7", lines: [{ product_id: "b-105", quantity: 1, unit_price: 39000 }], ...CASH });
         const { preview } = stored();
         expect(previewText(preview)).toMatch(/Goes to the CEO for approval/);
         expect(preview.warning).toMatch(/Needs CEO approval: 1 line is below the reference price/);
@@ -179,13 +210,13 @@ describe("create_quote", () => {
     });
 
     it("a product with no reference price also goes to the CEO", async () => {
-        await run(ISR, "create_quote", { lead_id: "DL-7", lines: [{ product_id: "b-80", quantity: 1, unit_price: 99999 }] });
+        await run(ISR, "create_quote", { lead_id: "DL-7", lines: [{ product_id: "b-80", quantity: 1, unit_price: 99999 }], ...CASH });
         expect(stored().preview.warning).toMatch(/Needs CEO approval/);
     });
 
     it("an existing quote → quote_revision, titled and naming what it replaces", async () => {
         loadLatestQuote.mockResolvedValue(quoteView({ approval_status: "pending" }));
-        await run(ISR, "create_quote", { lead_id: "DL-7", lines: LINES });
+        await run(ISR, "create_quote", { lead_id: "DL-7", lines: LINES, ...CASH });
         const s = stored();
         expect(s.plan.event_type).toBe("quote_revision");
         expect(s.preview.title).toBe("Revised quote — ABC Traders");
@@ -229,14 +260,18 @@ describe("create_quote", () => {
     });
 
     it("the applier writes through createLeadCommercial on the executor's tx and defers the PDF to afterCommit", async () => {
-        await run(ISR, "create_quote", { lead_id: "DL-7", lines: LINES, warranty_terms: "36 months" });
+        await run(ISR, "create_quote", { lead_id: "DL-7", lines: LINES, payment_terms: "credit", credit_days: 45 });
         const plan = APPLIERS.create_quote.schema.parse(stored().plan);
         const out = await APPLIERS.create_quote.apply({ tx: TX, user: ISR, step: 1 }, plan);
         expect(createLeadCommercial).toHaveBeenCalledWith(
             {
                 leadId: "DL-7",
                 actor: { id: "isr-1", name: "Priya" },
-                body: expect.objectContaining({ event_type: "quote_issue", final_price: 84000, warranty_terms: "36 months" }),
+                body: expect.objectContaining({
+                    event_type: "quote_issue",
+                    final_price: 84000,
+                    terms: { dealer_payment_terms: "credit", credit_days: 45, customer_finance: null },
+                }),
             },
             { tx: TX },
         );

@@ -636,6 +636,13 @@ const roleNavigation: Record<string, any[]> = {
           icon: Building,
           href: "/admin/accounts",
         },
+        {
+          // E-322 (IDs 39, 71) — Vyapar / GSTR-1 import, SKUs, reconciliation.
+          id: "ceo-invoice-ledger",
+          label: "Invoice Ledger",
+          icon: Receipt,
+          href: "/admin/reports/invoice-ledger",
+        },
       ],
     },
     {
@@ -1509,6 +1516,13 @@ const roleNavigation: Record<string, any[]> = {
           href: "/admin/accounts",
         },
         {
+          // E-322 (IDs 39, 71) — Vyapar / GSTR-1 import, SKUs, reconciliation.
+          id: "admin-invoice-ledger",
+          label: "Invoice Ledger",
+          icon: Receipt,
+          href: "/admin/reports/invoice-ledger",
+        },
+        {
           id: "admin-settings",
           label: "Notifications",
           icon: Bell,
@@ -1857,6 +1871,13 @@ const roleNavigation: Record<string, any[]> = {
           label: "Credits",
           icon: Briefcase,
           href: "/finance-controller/credits",
+        },
+        {
+          // E-322 (IDs 39, 71) — Vyapar / GSTR-1 import, voids, reconciliation.
+          id: "invoice-ledger",
+          label: "Invoice Ledger",
+          icon: Receipt,
+          href: "/admin/reports/invoice-ledger",
         },
       ],
     },

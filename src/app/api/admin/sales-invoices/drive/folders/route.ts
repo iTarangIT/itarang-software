@@ -43,6 +43,9 @@ const CreateSchema = z.object({
   // 'sale' default, which is what keeps supplier bills out of revenue.
   include_names: z.string().trim().max(512).optional(),
   exclude_names: z.string().trim().max(512).optional(),
+  // E-322 (ID 71): a folder of credit notes. Defaults include_names to
+  // "credit" so the walk keeps credit-note files, not "sale" ones.
+  doc_kind: z.enum(["sale", "credit_note"]).optional(),
 });
 
 const PatchSchema = z
@@ -165,7 +168,10 @@ export async function POST(req: NextRequest) {
         recursive: parsed.data.recursive ?? true,
         ...(parsed.data.include_names !== undefined
           ? { include_names: parsed.data.include_names }
-          : {}),
+          : parsed.data.doc_kind === "credit_note"
+            ? { include_names: "credit" }
+            : {}),
+        ...(parsed.data.doc_kind ? { doc_kind: parsed.data.doc_kind } : {}),
         ...(parsed.data.exclude_names !== undefined
           ? { exclude_names: parsed.data.exclude_names }
           : {}),

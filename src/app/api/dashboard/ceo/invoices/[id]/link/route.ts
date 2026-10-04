@@ -21,6 +21,7 @@
  *
  * Every action writes one audit_logs row (entity_type 'invoice').
  */
+import { hasInvoiceLedgerTables } from "@/lib/sales/ledgerTables";
 import { NextRequest, NextResponse } from "next/server";
 import { and, eq, sql } from "drizzle-orm";
 import { z } from "zod";
@@ -45,7 +46,8 @@ const ALLOWED_ROLES = new Set(["ceo", "admin", "finance_controller"]);
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const BodySchema = z.object({
-  source: z.enum(["zoho", "drive"]),
+  // "credit" = a credit note (E-322, tracker ID 71).
+  source: z.enum(["zoho", "drive", "credit"]),
   action: z.enum(["link", "not_dealer", "clear"]),
   account_id: z.string().trim().min(1).max(255).optional(),
   note: z.string().trim().max(1000).nullable().optional(),
@@ -70,17 +72,31 @@ function rowsOf<T>(res: unknown): T[] {
 
 /** The invoice's number and raw GSTIN, or null when no such invoice exists. */
 async function loadInvoice(
-  source: "zoho" | "drive",
+  source: "zoho" | "drive" | "credit",
   id: string,
 ): Promise<{ invoice_number: string | null; gstin: string | null } | null> {
+  const ledger = await hasInvoiceLedgerTables();
+  if (source === "credit" && !ledger) return null;
   const res =
     source === "zoho"
-      ? await db.execute(sql`
-          SELECT invoice_number, raw_json->>'gst_no' AS gstin
-            FROM zoho_invoices WHERE id = ${id}::uuid`)
-      : await db.execute(sql`
-          SELECT invoice_number, customer_gstin AS gstin
-            FROM sales_invoices WHERE id = ${id}::uuid`);
+      ? // E-322 (ID 70): the backfilled customer GSTIN first.
+        await db.execute(sql`
+          SELECT zi.invoice_number,
+                 ${ledger ? sql`COALESCE(zcg.gstin, zi.raw_json->>'gst_no')` : sql`zi.raw_json->>'gst_no'`} AS gstin
+            FROM zoho_invoices zi
+            ${ledger
+              ? sql`LEFT JOIN zoho_customer_gstins zcg
+                           ON zcg.organization_id = COALESCE(zi.organization_id, '')
+                          AND zcg.customer_id = zi.customer_id`
+              : sql``}
+           WHERE zi.id = ${id}::uuid`)
+      : source === "credit"
+        ? await db.execute(sql`
+            SELECT note_number AS invoice_number, customer_gstin AS gstin
+              FROM credit_notes WHERE id = ${id}::uuid`)
+        : await db.execute(sql`
+            SELECT invoice_number, customer_gstin AS gstin
+              FROM sales_invoices WHERE id = ${id}::uuid`);
   return rowsOf<{ invoice_number: string | null; gstin: string | null }>(res)[0] ?? null;
 }
 

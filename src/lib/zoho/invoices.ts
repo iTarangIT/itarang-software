@@ -54,7 +54,38 @@ export interface ZohoInvoiceLineItem {
   description?: string;
   quantity: number;
   rate?: number;
+  /** Line amount before tax. */
   item_total?: number;
+  /** E-322 (ID 70): HSN / SAC code — what classifies a line as a battery. */
+  hsn_or_sac?: string;
+  item_id?: string;
+}
+
+/** E-322 (ID 70): the invoice detail fields the one-time backfill reads. */
+export interface ZohoInvoiceDetail {
+  /** The customer's GSTIN as printed on the invoice; '' when none. */
+  gst_no: string | null;
+  customer_id: string | null;
+  line_items: ZohoInvoiceLineItem[];
+}
+
+/** Full invoice detail (lines + customer GSTIN) — one call. */
+export async function fetchInvoiceDetail(
+  invoiceId: string,
+  organizationId?: string,
+): Promise<ZohoInvoiceDetail> {
+  const res = await zohoFetch(`/invoices/${invoiceId}`, {
+    method: "GET",
+    organizationId,
+  });
+  const json = (await res.json()) as {
+    invoice?: { gst_no?: string; customer_id?: string; line_items?: ZohoInvoiceLineItem[] };
+  };
+  return {
+    gst_no: json.invoice?.gst_no?.trim() || null,
+    customer_id: json.invoice?.customer_id ?? null,
+    line_items: json.invoice?.line_items ?? [],
+  };
 }
 
 // Fetch a single invoice's full JSON detail — the ONLY place Zoho returns

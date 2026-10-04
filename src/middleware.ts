@@ -692,6 +692,8 @@ export async function middleware(request: NextRequest) {
     "/admin/reports/sales-dashboard": ["admin", "sales_head", "ceo", "partner", "business_head"],
     "/admin/reports/dealer-health": ["admin", "sales_head", "ceo", "partner", "business_head"],
     "/admin/reports/needs-attention": ["admin", "sales_head", "ceo", "partner"],
+    // E-322 (IDs 39, 71) — the invoice ledger: finance, CEO, Admin only.
+    "/admin/reports/invoice-ledger": ["admin", "ceo", "finance_controller"],
     "/admin/reports": [
       "admin",
       "sales_head",
