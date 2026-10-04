@@ -35,13 +35,16 @@ const STATUS_OPTIONS = [
   "paid",
   "partially_paid",
   "void",
+  // E-322 (ID 71): credit notes, negative amounts in their issue month.
+  "credit_note",
 ] as const;
 
 // E-280 — one row of the UNION of zoho_invoices and the sales invoices read out
 // of Google Drive. `source` says which side it came from; everything else is
 // normalised by src/lib/dashboard/revenueSource.ts.
 interface InvoiceRow {
-  source: "zoho" | "drive";
+  // 'credit' = a credit note (E-322, ID 71), shown as a negative amount.
+  source: "zoho" | "drive" | "credit";
   id: string;
   invoice_number: string | null;
   customer_name: string | null;
@@ -315,7 +318,18 @@ function LinkAccountDialog({
   );
 }
 
-function SourceBadge({ source }: { source: "zoho" | "drive" }) {
+function SourceBadge({ source }: { source: "zoho" | "drive" | "credit" }) {
+  if (source === "credit") {
+    return (
+      <span
+        data-testid="source-credit"
+        title="Credit note — subtracted from revenue in the month it was issued"
+        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[10px] font-bold uppercase tracking-wider bg-rose-50 text-rose-700 border-rose-200"
+      >
+        Credit note
+      </span>
+    );
+  }
   const drive = source === "drive";
   return (
     <span
@@ -409,6 +423,27 @@ export default function CEOInvoicesPage() {
   const [payingId, setPayingId] = useState<string | null>(null);
   const [payAmount, setPayAmount] = useState("");
   const [payRef, setPayRef] = useState("");
+
+  // E-322 (tracker ID 71): finance voids a cancelled invoice with a reason
+  // (logged); a voided invoice stops counting in revenue. Restore undoes it.
+  const [voidingId, setVoidingId] = useState<string | null>(null);
+  const [voidReason, setVoidReason] = useState("");
+  const voidInvoice = useMutation({
+    mutationFn: async (args: { row: InvoiceRow; action: "void" | "restore"; reason: string }) => {
+      const r = await fetch(`/api/dashboard/ceo/invoices/${args.row.id}/void`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ source: args.row.source, action: args.action, reason: args.reason }),
+      });
+      return readJsonData(r, "Could not update the invoice");
+    },
+    onSuccess: () => {
+      setVoidingId(null);
+      setVoidReason("");
+      queryClient.invalidateQueries({ queryKey: ["ceo-invoices"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard-metrics"] });
+    },
+  });
 
   const recordPayment = useMutation({
     mutationFn: async (args: { id: string; amount: number; reference: string }) => {
@@ -1033,8 +1068,65 @@ export default function CEOInvoicesPage() {
                               {payingId === r.id ? "Cancel" : "Payment"}
                             </button>
                           )}
+                          <button
+                            data-testid="void-toggle"
+                            onClick={() => {
+                              setVoidingId(voidingId === r.id ? null : r.id);
+                              setVoidReason("");
+                              voidInvoice.reset();
+                            }}
+                            className="ml-2 text-[10px] font-bold uppercase tracking-wider text-rose-700 hover:underline whitespace-nowrap"
+                          >
+                            {voidingId === r.id ? "Cancel" : r.status === "void" ? "Restore" : "Void"}
+                          </button>
                         </td>
                       </tr>
+                      {voidingId === r.id && (
+                        <tr data-testid="void-editor" className="bg-rose-50/40">
+                          <td colSpan={colCount} className="py-3 px-2">
+                            <div className="flex flex-wrap items-end gap-3">
+                              <div>
+                                <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-1">
+                                  {r.status === "void" ? "Why restore it?" : "Why is it void?"}
+                                </label>
+                                <input
+                                  data-testid="void-reason"
+                                  type="text"
+                                  value={voidReason}
+                                  onChange={(e) => setVoidReason(e.target.value)}
+                                  placeholder={r.status === "void" ? "e.g. voided by mistake" : "e.g. cancelled in Vyapar, re-issued as …"}
+                                  className="w-96 max-w-full px-2 py-1.5 rounded-lg border border-gray-200 text-sm"
+                                />
+                                <p className="text-[10px] text-gray-500 mt-1">
+                                  {r.status === "void"
+                                    ? "The invoice counts in revenue again. Logged."
+                                    : "A void invoice stops counting in revenue everywhere. Logged."}
+                                </p>
+                              </div>
+                              <Button
+                                data-testid="void-save"
+                                size="sm"
+                                variant={r.status === "void" ? "primary" : "danger"}
+                                disabled={voidInvoice.isPending || voidReason.trim().length < 3}
+                                onClick={() =>
+                                  voidInvoice.mutate({
+                                    row: r,
+                                    action: r.status === "void" ? "restore" : "void",
+                                    reason: voidReason,
+                                  })
+                                }
+                              >
+                                {voidInvoice.isPending ? "Saving…" : r.status === "void" ? "Restore" : "Void invoice"}
+                              </Button>
+                              {voidInvoice.isError && (
+                                <span className="text-[11px] font-semibold text-rose-600">
+                                  {(voidInvoice.error as Error).message}
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
                       {payingId === r.id && (
                         <tr data-testid="payment-editor" className="bg-brand-50/40">
                           <td colSpan={colCount} className="py-3 px-2">

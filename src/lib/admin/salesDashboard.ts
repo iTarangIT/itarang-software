@@ -61,7 +61,7 @@ import {
 } from "@/lib/leads/businessType";
 import { accountOwnerOn, dealerLeadByGstin, GSTIN_KEY } from "@/lib/leads/gstinMatch";
 import { hasAccountOwnershipTables } from "@/lib/accounts/tables";
-import { matchedUnion, REVENUE_NOT_VOID } from "@/lib/dashboard/revenueSource";
+import { matchedLinesUnion, matchedUnion, REVENUE_NOT_VOID } from "@/lib/dashboard/revenueSource";
 import { humanCall, isFirstQuote } from "@/lib/reports/metricDefinitions";
 import {
     INTEREST_LEVELS,
@@ -592,6 +592,7 @@ async function queryOutcome(
     bySpoc: boolean,
 ): Promise<Map<string | null, SalesOutcome>> {
     const invoices = await matchedUnion();
+    const lines = await matchedLinesUnion();
     const owner = sql`dl.current_owner_id`;
     // E-321 (ID 68): with account ownership in place, money and stock are
     // credited to the ACCOUNT owner on the day it happened; the lead / its
@@ -638,7 +639,23 @@ async function queryOutcome(
                ${leadScope(f)} ${spocClause(revOwner, f)}
              GROUP BY 1
         ),
-        batteries AS (
+        batteries AS (${lines
+            ? sql`
+            -- E-322 (ID 39, Kartik 26 Sep): batteries sold = invoice LINES
+            -- with HSN 8507, never stock allocation. Same match and owner-on-
+            -- the-invoice-date credit as revenue; void invoices excluded.
+            SELECT ${spocKey(revOwner, bySpoc)} AS spoc, COALESCE(SUM(r.quantity), 0) AS n
+              FROM ${lines} AS r
+              LEFT JOIN dealer_leads dl ON dl.id = r.dealer_lead_id
+             WHERE r.product_class = 'battery'
+               AND ${REVENUE_NOT_VOID}
+               AND (r.account_id IS NOT NULL OR r.dealer_lead_id IS NOT NULL)
+               AND r.invoice_date >= ${f.from}::date
+               AND r.invoice_date <= ${f.to}::date
+               ${leadScope(f)} ${spocClause(revOwner, f)}
+             GROUP BY 1`
+            : sql`
+            -- Pre-E-322 fallback: batteries allocated to a dealer account.
             SELECT ${spocKey(batOwner, bySpoc)} AS spoc, COUNT(*) AS n
               FROM inventory i
               JOIN accounts a ON a.id = i.dealer_id
@@ -648,7 +665,7 @@ async function queryOutcome(
                AND (i.allocated_to_dealer_at AT TIME ZONE ${IST})::date >= ${f.from}::date
                AND (i.allocated_to_dealer_at AT TIME ZONE ${IST})::date <= ${f.to}::date
                ${leadScope(f)} ${spocClause(batOwner, f)}
-             GROUP BY 1
+             GROUP BY 1`}
         ),
         kyc AS (
             -- One lead, one file, however many queue rows — the funnel report's

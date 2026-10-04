@@ -224,6 +224,11 @@ export type LeadDetailCommercials = {
     warranty_terms: string | null;
     final_price: string | null;
     payment_method: string | null;
+    /** E-322 (ID 73): 'cash' | 'credit'; NULL on pre-E-322 rows. */
+    dealer_payment_terms: string | null;
+    credit_days: number | null;
+    /** E-322: NBFC finance for the end customer. */
+    customer_finance: boolean | null;
     deal_notes: string | null;
     product_lines: CommercialsProductLine[];
     notes: string | null;

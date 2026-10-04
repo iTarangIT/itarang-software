@@ -102,6 +102,8 @@ function summariseEvaluation(raw: unknown) {
     reason: e.reason,
     shortfall_total: Number(e.shortfall_total ?? 0),
     lines_flagged: linesNeedingAttention(e as OemEvaluation),
+    // E-322 (ID 73): waiting because of credit terms, not price.
+    terms_hold: e.terms_hold ?? null,
     lines: e.lines.map((l) => ({
       product_name: l.product_name,
       asset_type: l.asset_type,
@@ -179,6 +181,7 @@ export async function GET(req: NextRequest) {
         // warranty or delivery it commits us to. They print on the dealer's
         // document, so they belong in front of whoever approves it.
         payment_method: dealerLeadCommercials.payment_method,
+        customer_finance: dealerLeadCommercials.customer_finance,
         credit_terms: dealerLeadCommercials.credit_terms,
         delivery_terms: dealerLeadCommercials.delivery_terms,
         warranty_terms: dealerLeadCommercials.warranty_terms,
@@ -302,6 +305,7 @@ export async function GET(req: NextRequest) {
           oem: summariseEvaluation(r.oem_evaluation),
           terms: {
             payment_method: r.payment_method ?? null,
+            customer_finance: r.customer_finance ?? null,
             credit_terms: r.credit_terms ?? null,
             delivery_terms: r.delivery_terms ?? null,
             warranty_terms: r.warranty_terms ?? null,
