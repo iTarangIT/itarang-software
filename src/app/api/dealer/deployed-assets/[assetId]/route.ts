@@ -1,23 +1,28 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { deployedAssets, deploymentHistory, serviceTickets } from "@/lib/db/schema";
-import { eq, desc } from "drizzle-orm";
+import { eq, and, desc } from "drizzle-orm";
 import { guardApi } from "@/lib/auth/apiGuard";
 
 export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ assetId: string }> }
 ) {
-  // ID 118: signed in.
-  const authGate = await guardApi();
+  // ID 118: a dealer, and only that dealer's own assets — the row carries the
+  // customer's name, phone and GPS. Same rule as /api/dealer/assets.
+  const authGate = await guardApi(["dealer"]);
   if (!authGate.ok) return authGate.response;
+  const dealerId = authGate.user.dealer_id;
+  if (!dealerId) {
+    return NextResponse.json({ success: false, message: "Asset not found" }, { status: 404 });
+  }
   try {
     const { assetId } = await params;
 
     const [asset] = await db
       .select()
       .from(deployedAssets)
-      .where(eq(deployedAssets.id, assetId))
+      .where(and(eq(deployedAssets.id, assetId), eq(deployedAssets.dealer_id, dealerId)))
       .limit(1);
 
     if (!asset) {

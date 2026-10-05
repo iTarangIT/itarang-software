@@ -17,7 +17,6 @@ import { sql } from "drizzle-orm";
 import crypto from "crypto";
 import { db } from "@/lib/db";
 import { isEngagedCall } from "@/lib/lifecycle/touchpointTypes";
-import { getEngagedCallRule } from "@/lib/reports/engagedCallRule";
 import { dealerLeads } from "@/lib/db/schema";
 import { errorMessage } from "@/lib/api-utils";
 import { StatusGuardError, writeTouchpoint } from "@/lib/touchpoints/write";
@@ -234,13 +233,8 @@ async function handleDisposition(
         performedAt: callAt,
         callStatus,
         callDurationSec: event.callDurationSec,
-        // ID 59: connected AND at least the threshold by NeoDove's own
-        // duration — false while NeoDove sends none. "Connected" stays on
-        // call_status.
-        isEngaged: isEngagedCall(
-            { callStatus, durationSec: event.callDurationSec, externalSystem: "neodove" },
-            await getEngagedCallRule(),
-        ),
+        // ID 59 (3 Oct 2026): engaged = the call connected. Duration never counts.
+        isEngaged: isEngagedCall({ callStatus }),
         remarks: remarksFor(event),
         externalSystem: "neodove",
         externalEventId: event.externalEventId,

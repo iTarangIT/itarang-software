@@ -9,15 +9,14 @@ const body = (b: Record<string, unknown>) => TouchpointBodySchema.parse({ touchp
 
 // The rules below were the touchpoint route's; they must survive the extraction unchanged.
 describe("planTouchpoint (extracted from POST /api/inside-sales/lead/[id]/touchpoint)", () => {
-    // ID 59: connected is not engaged. A hand-logged call has no MEASURED
-    // duration, so it stays connected-only.
-    it("a connected disposition → call_status connected, not engaged, sheet casing and bucket", () => {
+    // ID 59 (3 Oct 2026): a connected call is engaged, hand-logged or not.
+    it("a connected disposition → call_status connected, engaged, sheet casing and bucket", () => {
         const p = planTouchpoint(body({ disposition: { connect_status: "connected", label: "price high" } }), lead);
         expect(p).toMatchObject({
             dealerLeadId: "DL-1",
             performedBy: "isr-1",
             callStatus: "connected",
-            isEngaged: false,
+            isEngaged: true,
             disposition: { label: "Price High", bucket: "Warm", connectStatus: "connected" },
             dispositionSource: "inside_sales",
         });
@@ -82,17 +81,20 @@ describe("planTouchpoint (extracted from POST /api/inside-sales/lead/[id]/touchp
         }
     });
 
-    it("explicit is_engaged and call_status win when no disposition says otherwise", () => {
+    it("an explicit call_status is kept when no disposition says otherwise; a call's is_engaged is not read", () => {
         const p = planTouchpoint(body({ is_engaged: false, call_status: "connected" }), lead);
-        expect(p).toMatchObject({ isEngaged: false, callStatus: "connected" });
+        expect(p).toMatchObject({ isEngaged: true, callStatus: "connected" });
     });
 
     describe("engaged (ID 59)", () => {
         const call = { call_status: "connected", call_duration_sec: 120 };
 
-        it("a call is never engaged by the rep's tick or by a duration they typed", () => {
-            expect(planTouchpoint(body({ ...call, is_engaged: true }), lead).isEngaged).toBe(false);
-            expect(planTouchpoint(body(call), lead).isEngaged).toBe(false);
+        it("a call is engaged exactly when it connected — never by the rep's tick, whatever the duration", () => {
+            expect(planTouchpoint(body(call), lead).isEngaged).toBe(true);
+            expect(planTouchpoint(body({ call_status: "connected" }), lead).isEngaged).toBe(true);
+            expect(planTouchpoint(body({ call_status: "connected", call_duration_sec: 3 }), lead).isEngaged).toBe(true);
+            expect(planTouchpoint(body({ call_status: "not_reachable", call_duration_sec: 120, is_engaged: true }), lead).isEngaged).toBe(false);
+            expect(planTouchpoint(body({ is_engaged: true }), lead).isEngaged).toBe(false);
         });
 
         it("a note keeps the rep's tick", () => {
@@ -110,17 +112,6 @@ describe("planTouchpoint (extracted from POST /api/inside-sales/lead/[id]/touchp
             for (const t of ["visit", "lead_claimed", "ownership_transfer", "quote_dealer_approved", "sales_ready", "ai_call"]) {
                 expect(isManualTouchpointType(t)).toBe(false);
             }
-        });
-
-        it("when the saved rule counts rep-entered durations: connected and at least the threshold", () => {
-            const reported = { engagedRule: { minSeconds: 30, durationSource: "reported" as const } };
-            expect(planTouchpoint(body(call), lead, reported).isEngaged).toBe(true);
-            expect(planTouchpoint(body({ ...call, call_duration_sec: 29 }), lead, reported).isEngaged).toBe(false);
-            expect(planTouchpoint(body({ call_status: "not_reachable", call_duration_sec: 120 }), lead, reported).isEngaged).toBe(false);
-            expect(planTouchpoint(body({ call_status: "connected" }), lead, reported).isEngaged).toBe(false);
-            // The threshold is the setting's, not a constant.
-            const strict = { engagedRule: { minSeconds: 180, durationSource: "reported" as const } };
-            expect(planTouchpoint(body(call), lead, strict).isEngaged).toBe(false);
         });
     });
 

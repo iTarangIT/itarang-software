@@ -355,3 +355,19 @@ export async function canViewLeadTracking(
     `)) as unknown as { ok: boolean }[];
     return rows[0]?.ok === true;
 }
+
+/**
+ * ID 58: may an own-only role DOWNLOAD this lead's tracking CSV? The file
+ * carries the dealer's phone, so it follows the export rule — the lead's
+ * CURRENT owner only. A former owner, the originator or the ASM can still read
+ * the journey on screen (canViewLeadTracking) but cannot take it away.
+ */
+export async function ownsLeadForExport(userId: string, leadId: string): Promise<boolean> {
+    const rows = (await db.execute<{ ok: boolean }>(sql`
+        SELECT EXISTS (
+            SELECT 1 FROM dealer_leads dl
+             WHERE dl.id = ${leadId} AND dl.current_owner_id = ${userId}
+        ) AS ok
+    `)) as unknown as { ok: boolean }[];
+    return rows[0]?.ok === true;
+}

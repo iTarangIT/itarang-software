@@ -107,9 +107,23 @@ async function fromSupabase(bucket: string, key: string): Promise<Buffer | null>
 }
 
 /**
- * Read an object's bytes from the active storage backend, falling back to the
- * other backend (migration safety — same semantics as the files-proxy route).
- * Returns null when the object exists in neither.
+ * Reading the OTHER backend when the active one has no such object was
+ * migration safety. It is off unless STORAGE_SUPABASE_FALLBACK=1 (tracker
+ * ID 128): on a miss the fallback asked Supabase storage with the service-role
+ * key, which ignores bucket policies — so a path the active backend rightly
+ * could not find was retried somewhere with no access rules. Checked on
+ * 2026-10-05: the CRM's Supabase project holds no storage buckets, so there is
+ * nothing left for it to find.
+ */
+export function storageFallbackEnabled(raw: string | undefined = process.env.STORAGE_SUPABASE_FALLBACK): boolean {
+    const v = (raw ?? "").trim().toLowerCase();
+    return v === "1" || v === "true" || v === "yes";
+}
+
+/**
+ * Read an object's bytes from the active storage backend (and, only with
+ * STORAGE_SUPABASE_FALLBACK=1, from the other one on a miss). Returns null when
+ * the object is not found.
  */
 export async function readBucketObject(
     bucket: string,
@@ -118,7 +132,9 @@ export async function readBucketObject(
     let buf: Buffer | null = null;
     try {
         buf = isS3Backend ? await getObject(bucket, key) : await fromSupabase(bucket, key);
-        if (!buf) buf = isS3Backend ? await fromSupabase(bucket, key) : await getObject(bucket, key);
+        if (!buf && storageFallbackEnabled()) {
+            buf = isS3Backend ? await fromSupabase(bucket, key) : await getObject(bucket, key);
+        }
     } catch (e) {
         console.error(`[readBucketObject] read failed for ${bucket}/${key}:`, e);
         buf = null;

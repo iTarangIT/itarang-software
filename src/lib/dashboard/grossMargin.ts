@@ -14,7 +14,7 @@
  *
  * What is NOT guessed:
  *   * Lines are used only when they add up to the invoice's taxable value
- *     (the SQL twin of linesAddUp() in src/lib/sales/invoiceLines.ts).
+ *     (the SQL twin of linesAddUp() in src/lib/sales/salesInvoiceLines.ts).
  *   * A line whose item is not mapped to a product, or whose product has no
  *     cost anywhere, has no margin. Its revenue is reported as "not costed",
  *     never as 100% margin.
@@ -26,7 +26,7 @@
 
 import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { LINES_TOLERANCE_MIN, LINES_TOLERANCE_PCT, LINE_TYPES, type LineType } from "@/lib/sales/invoiceLines";
+import { LINES_TOLERANCE_MIN, LINES_TOLERANCE_PCT, LINE_TYPES, type LineType } from "@/lib/sales/salesInvoiceLines";
 
 export const RECENT_COST_DAYS = 180;
 

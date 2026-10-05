@@ -971,7 +971,7 @@ export default function CEODashboard() {
         <DashCard
           title={haveDealers ? `Dealer base: ${num(liveDealers)} live dealers` : "Dealer base"}
           caption="By days since their last invoice, as of today."
-          action={<CardLink href="/admin/account-management">Account management</CardLink>}
+          action={<CardLink href="/admin/accounts">Account management</CardLink>}
         >
           {!haveDealers ? (
             dealers.isLoading ? <LoadingBlock /> : <NotAvailable />
@@ -1086,8 +1086,8 @@ export default function CEODashboard() {
             </div>
           )}
           <span className="text-xs leading-relaxed text-ink-muted">
-            The black tick is 100% of target. Engaged = share of calls connected
-            for {people?.engaged_min_seconds ?? 30} seconds or more.
+            The black tick is 100% of target. Engaged = share of calls where
+            the rep spoke with the dealer.
             {money && money.unlinked_revenue > 0
               ? ` ${inr(money.unlinked_revenue)} of this period's revenue is credited to no one: its invoices are not linked to a dealer account.`
               : ""}

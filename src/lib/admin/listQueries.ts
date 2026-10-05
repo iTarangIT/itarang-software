@@ -15,7 +15,11 @@ import type {
 import type {
     LeadDetailStatusHistory,
     LeadDetailTouchpoint,
-} from "@/lib/inside-sales/types";
+} from "@/lib/inside-sales/types";
+import { onboardingClockSql } from "@/lib/onboarding/clock";
+
+// ID 122: the one onboarding clock (src/lib/onboarding/clock.ts).
+const ONBOARDING_CLOCK = sql.raw(onboardingClockSql("oa"));
 
 type PageArgs = { page: number; limit: number; q?: string | null };
 
@@ -246,7 +250,8 @@ export async function fetchMergeRequests(
 
 // BRD §0.13 Point B — a Converted lead is a "dropout pending review" when its
 // onboarding application is rejected/withdrawn OR stalled (still in an early
-// status with no action for 30+ calendar days), and admin has not yet acted
+// status with no action for 21+ calendar days — see src/lib/onboarding/clock.ts
+// for what counts as an action), and admin has not yet acted
 // (onboarding_dropout_reason still NULL).
 export const DROPOUT_WHERE = sql`
     dl.lead_status IN ('Won', 'Converted')  -- ID 74: Won = onboarding under way
@@ -257,7 +262,7 @@ export const DROPOUT_WHERE = sql`
         oa.onboarding_status IN ('rejected', 'withdrawn')
         OR (
             oa.onboarding_status IN ('draft', 'submitted', 'correction_requested')
-            AND COALESCE(oa.last_action_at, oa.updated_at)
+            AND ${ONBOARDING_CLOCK}
                 < NOW() - INTERVAL '21 days'
         )
     )
@@ -304,7 +309,7 @@ export async function fetchOnboardingDropouts({
             ${DROPOUT_WON_OR_CLOSED_AT} AS closed_at,
             oa.id AS onboarding_application_id,
             oa.onboarding_status,
-            COALESCE(oa.last_action_at, oa.updated_at) AS onboarding_last_action_at,
+            ${ONBOARDING_CLOCK} AS onboarding_last_action_at,
             CASE
                 WHEN oa.onboarding_status = 'rejected' THEN 'rejected'
                 WHEN oa.onboarding_status = 'withdrawn' THEN 'withdrawn'

@@ -3,6 +3,7 @@ import { db } from '@/lib/db';
 import { orders, inventory, provisions, slas } from '@/lib/db/schema';
 import { eq, inArray, desc } from 'drizzle-orm';
 import { requireRole } from '@/lib/auth-utils';
+import { ORDERS_PAGE_ROLES } from '@/lib/auth/staffPageRoles';
 import { successResponse, withErrorHandler, generateId } from '@/lib/api-utils';
 import { triggerN8nWebhook } from '@/lib/n8n';
 
@@ -95,7 +96,8 @@ export const POST = withErrorHandler(async (req: Request) => {
 });
 
 export const GET = withErrorHandler(async (req: Request) => {
-    await requireRole(['inventory_manager', 'ceo', 'business_head', 'finance_controller', 'sales_head']);
+    // Same list as the /orders page (ID 143), so a role the page admits is not refused here.
+    await requireRole([...ORDERS_PAGE_ROLES]);
 
     const results = await db.select()
         .from(orders)

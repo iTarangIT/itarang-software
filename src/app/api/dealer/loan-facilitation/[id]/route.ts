@@ -4,9 +4,9 @@ import { and, eq, sql } from 'drizzle-orm';
 import { successResponse, errorResponse, withErrorHandler } from '@/lib/api-utils';
 import { requireRole } from '@/lib/auth-utils';
 
-export const GET = withErrorHandler(async (_req: Request, ctx: { params: { id: string } }) => {
+export const GET = withErrorHandler(async (_req: Request, ctx: { params: Promise<{ id: string }> }) => {
     const user = await requireRole(['dealer']);
-    const id = ctx.params.id;
+    const id = (await ctx.params).id;
 
     const rows = await db
         .select({

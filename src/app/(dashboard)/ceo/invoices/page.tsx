@@ -61,16 +61,10 @@ interface InvoiceRow {
   gstin_key: string | null;
   dealer_lead_id: string | null;
   dealer_name: string | null;
-<<<<<<< HEAD
-  /** A lead OR a dealer account matched this invoice's GSTIN. */
-  dealer_linked?: boolean;
-  acct_id?: string | null;
-=======
   /** E-321 — the dealer account matched, and a hand decision if any. */
   account_id?: string | null;
   link_kind?: string | null;
   match_status?: MatchStatus;
->>>>>>> fac2a80905456e04c4d89ee14f26fdf80ae34f9e
 }
 
 type DealerMatch = "" | "linked" | "unlinked";
@@ -822,7 +816,7 @@ export default function CEOInvoicesPage() {
                 {summary.unlinked_count === 1 ? "" : "s"} ({formatINR(summary.unlinked_total)})
               </span>{" "}
               in this view aren&apos;t linked to a CRM dealer, so no salesperson gets credit for them.
-              Linking needs the same GSTIN on the invoice and on the dealer&apos;s lead or account.
+              Linking needs the same GSTIN on the invoice and on the dealer&apos;s lead.
             </>
           ) : summary ? (
             <span className="text-emerald-700">Every invoice in this view is linked to a CRM dealer.</span>
@@ -980,13 +974,6 @@ export default function CEOInvoicesPage() {
                           <div className="truncate">{r.customer_name || "—"}</div>
                           <div
                             data-testid="invoice-dealer-link"
-<<<<<<< HEAD
-                            className={`truncate text-[10px] ${r.dealer_linked ? "text-emerald-700" : "text-amber-700"}`}
-                            title={r.gstin_key ?? undefined}
-                          >
-                            {r.dealer_linked
-                              ? `→ ${r.dealer_name || r.dealer_lead_id || r.acct_id}`
-=======
                             className={`truncate text-[10px] ${r.dealer_lead_id || r.account_id ? "text-emerald-700" : "text-amber-700"}`}
                             title={r.gstin_key ?? undefined}
                           >
@@ -994,9 +981,8 @@ export default function CEOInvoicesPage() {
                               ? `→ ${r.dealer_name || r.account_id || r.dealer_lead_id}`
                               : r.link_kind === "not_dealer"
                                 ? "Marked: not a dealer sale"
->>>>>>> fac2a80905456e04c4d89ee14f26fdf80ae34f9e
                               : r.gstin_key
-                                ? `Not linked · GSTIN ${r.gstin_key} not on any CRM lead or dealer account`
+                                ? `Not linked · GSTIN ${r.gstin_key} not on any CRM lead`
                                 : "Not linked · no GSTIN on this invoice"}
                           </div>
                         </td>

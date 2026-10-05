@@ -155,77 +155,21 @@ export const NEXT_ACTION = [
 ] as const;
 export type NextAction = (typeof NEXT_ACTION)[number];
 
-// ── Engaged call (tracker ID 59, decided 26 Sep 2026) ───────────────────────
-// Connected AND at least N seconds (30) of MEASURED duration. By default only
-// NeoDove's recorded duration is a measurement: one a rep types into the log
-// form is their own estimate and does not make a call engaged.
+// ── Engaged call (tracker ID 59, decided 3 Oct 2026) ────────────────────────
+// A connected human call where the rep spoke with the dealer — through NeoDove
+// or logged by the rep, any outcome. Duration never counts and neither does the
+// lead's temperature. (26 Sep – 3 Oct the rule was "connected and 30 s or more
+// of NeoDove-recorded duration", with a setting for the threshold; both are
+// gone.)
 //
-// NeoDove sends no duration today, so under the default no live call qualifies
-// and every report shows engaged calls as "Not measured yet". Whether to count
-// rep-entered durations in the meantime is tracker question 6, still open.
-//
-// Both choices — the threshold and whose duration counts — are a SETTING, not
-// code: app_settings['engaged_call_rule'], edited by the Sales Head / Admin on
-// the Sales Daily settings page (src/lib/reports/engagedCallRule.ts). This
-// file is the pure rule the writers store in is_engaged; the SQL fragments
-// every report reads (reports/metricDefinitions.ts) look the same setting up
-// inline, so the two cannot disagree.
-export const ENGAGED_CALL_RULE_KEY = "engaged_call_rule";
-export const ENGAGED_CALL_MIN_SECONDS = 30;
-/** Bounds on the threshold a setting may hold; outside them the default applies. */
-export const ENGAGED_CALL_MIN_SECONDS_FLOOR = 5;
-export const ENGAGED_CALL_MIN_SECONDS_CEILING = 600;
-
-export type EngagedDurationSource = "neodove" | "reported";
-
-export type EngagedCallRule = {
-  /** A connected call of at least this many measured seconds is engaged. */
-  minSeconds: number;
-  /** "neodove" = only NeoDove-recorded durations count; "reported" = typed ones too. */
-  durationSource: EngagedDurationSource;
-};
-
-export const DEFAULT_ENGAGED_CALL_RULE: EngagedCallRule = Object.freeze({
-  minSeconds: ENGAGED_CALL_MIN_SECONDS,
-  durationSource: "neodove",
-});
-
-/** Whatever is stored (or posted) → a complete, in-bounds rule. Never throws. */
-export function normalizeEngagedCallRule(raw: unknown): EngagedCallRule {
-  const v = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
-  const n = Number(v.min_seconds ?? v.minSeconds);
-  const inBounds =
-    Number.isInteger(n) && n >= ENGAGED_CALL_MIN_SECONDS_FLOOR && n <= ENGAGED_CALL_MIN_SECONDS_CEILING;
-  const source = v.duration_source ?? v.durationSource;
-  return {
-    minSeconds: inBounds ? n : ENGAGED_CALL_MIN_SECONDS,
-    durationSource: source === "reported" ? "reported" : "neodove",
-  };
-}
-
-/** Does the rule accept this call's duration as a measurement? */
-export function isTimedCall(
-  ctx: { durationSec?: number | null; externalSystem?: string | null },
-  rule: EngagedCallRule = DEFAULT_ENGAGED_CALL_RULE,
-): boolean {
-  if (ctx.durationSec == null) return false;
-  return rule.durationSource === "reported" || ctx.externalSystem === "neodove";
-}
-
-export function isEngagedCall(
-  ctx: { callStatus?: string | null; durationSec?: number | null; externalSystem?: string | null },
-  rule: EngagedCallRule = DEFAULT_ENGAGED_CALL_RULE,
-): boolean {
-  return (
-    ctx.callStatus === "connected" &&
-    isTimedCall(ctx, rule) &&
-    (ctx.durationSec ?? 0) >= rule.minSeconds
-  );
+// This is what the writers store in is_engaged; the SQL fragments every report
+// reads (reports/metricDefinitions.ts) state the same rule.
+export function isEngagedCall(ctx: { callStatus?: string | null }): boolean {
+  return ctx.callStatus === "connected";
 }
 
 // Touchpoint types that are auto-engaged per BRD §0.1 Glossary:
-//   * an engaged inside_sales_call — isEngagedCall() above, not merely a
-//     connected one
+//   * a connected inside_sales_call — isEngagedCall() above
 //   * visit with outcome productive / commercials_progressed
 // Other types require manual is_engaged flag (rep's judgment).
 export function shouldAutoEngage(
@@ -233,21 +177,10 @@ export function shouldAutoEngage(
   ctx: {
     callStatus?: CallStatus | null;
     visitOutcome?: string | null;
-    callDurationSec?: number | null;
-    externalSystem?: string | null;
-    /** The saved rule; the default (30 s, NeoDove durations) when omitted. */
-    engagedRule?: EngagedCallRule;
   },
 ): boolean {
   if (type === "inside_sales_call") {
-    return isEngagedCall(
-      {
-        callStatus: ctx.callStatus,
-        durationSec: ctx.callDurationSec,
-        externalSystem: ctx.externalSystem,
-      },
-      ctx.engagedRule,
-    );
+    return isEngagedCall({ callStatus: ctx.callStatus });
   }
   if (
     type === "visit" &&

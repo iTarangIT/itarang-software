@@ -11,7 +11,7 @@
  * use the lines only when they add up to the invoice's taxable value.
  */
 
-import type { InvoiceLineCandidate } from "@/lib/sales/invoiceLines";
+import type { InvoiceLineCandidate } from "@/lib/sales/salesInvoiceLines";
 import { getOpenAI, INVOICE_MODEL } from "./client";
 import { salesInvoiceMediaParts } from "./extractSalesInvoice";
 

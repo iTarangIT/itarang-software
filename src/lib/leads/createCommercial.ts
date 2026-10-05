@@ -21,12 +21,7 @@ import {
     notifyQuotationPendingApproval,
 } from "@/lib/notifications/events";
 import { loadLiveOemPrices } from "@/lib/leads/oemPrices";
-<<<<<<< HEAD
-import { snapshotListPrices } from "@/lib/leads/listPrices";
-import type { ListPriceSnapshot } from "@/lib/leads/listPricing";
-=======
 import { loadLiveListPrices, snapshotListPrices } from "@/lib/leads/listPrices";
->>>>>>> fac2a80905456e04c4d89ee14f26fdf80ae34f9e
 import {
     evaluateAgainstOemPrices,
     linesNeedingAttention,
@@ -136,10 +131,6 @@ export async function createLeadCommercial(
         let approvalStatus: string = initialApprovalStatus(body.event_type);
         let approvalMode: string | null = null;
         let oemEvaluation: OemEvaluation | null = null;
-<<<<<<< HEAD
-        // E-323: the list price each line is quoted against, frozen with the quote.
-        let listPriceSnapshot: ListPriceSnapshot | null = null;
-=======
         let hold: TermsHold | null = null;
 
         // ── E-322 terms (ID 73) ──
@@ -165,7 +156,6 @@ export async function createLeadCommercial(
         // null = not a gated event; the lines are written as sent (terms events
         // carry over the quote's already-snapshotted lines below).
         let snapshottedLines: CommercialsProductLine[] | null = null;
->>>>>>> fac2a80905456e04c4d89ee14f26fdf80ae34f9e
 
         if (isGatedQuoteEvent(body.event_type)) {
             const lines = body.product_lines ?? [];
@@ -174,15 +164,10 @@ export async function createLeadCommercial(
             // the instant the quote is stamped.
             const refs = await loadLiveOemPrices(lines, tx, performedAt);
             oemEvaluation = evaluateAgainstOemPrices(lines, refs, performedAt);
-<<<<<<< HEAD
-            listPriceSnapshot = await snapshotListPrices(lines, tx, performedAt);
-            const resolved = resolveQuoteApproval(oemEvaluation);
-=======
             // E-322: credit terms hold the quote for approval even when every
             // line clears the price check. Recorded on the evaluation so the
             // CEO panel can say why it is waiting.
             const resolved = applyTermsHold(resolveQuoteApproval(oemEvaluation), hold);
->>>>>>> fac2a80905456e04c4d89ee14f26fdf80ae34f9e
             approvalStatus = resolved.status;
             approvalMode = resolved.mode;
             oemEvaluation = { ...oemEvaluation, terms_hold: hold };
@@ -299,7 +284,6 @@ export async function createLeadCommercial(
                 approval_status: approvalStatus,
                 approval_mode: approvalMode,
                 oem_evaluation: oemEvaluation,
-                list_price_snapshot: listPriceSnapshot,
                 // Auto-approval stamps the time but leaves approved_by NULL: no
                 // human approved this, and NULL says so exactly. A 'system'
                 // sentinel would be a non-uuid string in the column the CEO
