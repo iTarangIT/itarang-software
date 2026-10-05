@@ -17,7 +17,6 @@ import { QueueCsvButton } from "@/components/leads/QueueCsvButton";
 import { BulkClaimBar } from "@/components/leads/BulkClaimBar";
 import { ClaimLeadConfirm } from "@/components/leads/ClaimLeadConfirm";
 import { ClaimByNumberPanel } from "@/components/leads/ClaimByNumberPanel";
-import { OutsideTerritoryClaims } from "@/components/leads/OutsideTerritoryClaims";
 import { ASM_POOL_TABS, claimsByNumberOnly } from "@/lib/leads/claimScope";
 import { CLAIM_ROLES } from "@/lib/inside-sales/types";
 import {
@@ -102,6 +101,9 @@ export function AsmQueueView({ viewerId, viewerRole }: Props) {
         const v = params.get("visit_outcome") ?? "";
         return (VISIT_OUTCOME as readonly string[]).includes(v) ? v : "";
     });
+    // ID 75.4: the ASM's own "Finalised, not Won" list — the dealer approved
+    // the quote and nobody pressed Mark Won. A chip, not a sixth tab.
+    const [finalisedOnly, setFinalisedOnly] = useState(params.get("finalised") === "1");
     // Open on load when ANY filter arrived in the URL, so a filter inherited
     // from a pasted link is never doing invisible work. Derived from the parsed
     // values rather than from param names, so it cannot fall out of step with
@@ -128,11 +130,12 @@ export function AsmQueueView({ viewerId, viewerRole }: Props) {
         if (searchDebounced) p.set("q", searchDebounced);
         if (visitStatus) p.set("visit_status", visitStatus);
         if (visitOutcome) p.set("visit_outcome", visitOutcome);
+        if (finalisedOnly) p.set("finalised", "1");
         // The sort rides along: the rows and the CSV honour it, the counts and
         // facets simply never read it.
         writeQueueSort(p, sort);
         return writeQueueFilters(p, filters);
-    }, [searchDebounced, visitStatus, visitOutcome, filters, sort]);
+    }, [searchDebounced, visitStatus, visitOutcome, finalisedOnly, filters, sort]);
 
     const filterKey = filterParams.toString();
 
@@ -303,7 +306,6 @@ export function AsmQueueView({ viewerId, viewerRole }: Props) {
                     <ClaimByNumberPanel onClaimed={() => void queryClient.invalidateQueries()} />
                 </div>
             )}
-            {!numberOnly && <OutsideTerritoryClaims />}
             <AsmQueueTabs
                 active={tab}
                 counts={counts ?? null}
@@ -323,6 +325,40 @@ export function AsmQueueView({ viewerId, viewerRole }: Props) {
                         className="pl-9"
                     />
                 </div>
+                {/* ID 75.4 — beside the search box, not behind the filter
+                    disclosure: an ACTION list (go mark these Won). The badge
+                    counts the ASM's own My visits leads waiting for Mark Won. */}
+                <button
+                    type="button"
+                    onClick={() => {
+                        setFinalisedOnly((v) => !v);
+                        setPage(1);
+                    }}
+                    aria-pressed={finalisedOnly}
+                    title={
+                        finalisedOnly
+                            ? "Showing only leads the dealer approved that are not marked Won yet — click to show all"
+                            : "Show only leads the dealer approved that are not marked Won yet"
+                    }
+                    className={`inline-flex h-10 shrink-0 items-center gap-1.5 rounded-lg border px-3 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-emerald-500 ${
+                        finalisedOnly
+                            ? "border-emerald-300 bg-emerald-50 text-emerald-700"
+                            : "border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
+                    }`}
+                >
+                    <span
+                        aria-hidden
+                        className={`h-1.5 w-1.5 rounded-full ${
+                            finalisedOnly ? "bg-emerald-500" : "bg-gray-300"
+                        }`}
+                    />
+                    Finalised, not Won
+                    {counts?.finalised_not_won ? (
+                        <span className="ml-0.5 rounded-full bg-emerald-600 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white">
+                            {counts.finalised_not_won}
+                        </span>
+                    ) : null}
+                </button>
                 <QueueFilterBar
                     values={filters}
                     onChange={patchFilter}

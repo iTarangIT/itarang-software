@@ -44,8 +44,8 @@ export type TouchpointOutcome =
           /** False for a postponed / cancelled / no-show visit. */
           visited: boolean;
           outcome: VisitOutcome | null;
-          /** What the ASM asked for; only first contact is honoured (ID 75 / 80). */
-          requested?: LeadStatus | null;
+          // No "requested" status (ID 80): the visit's outcome decides, nothing
+          // the caller asks for.
       };
 
 /** The lead as read under the writer's row lock. */
@@ -85,8 +85,9 @@ export function statusAfterVisit(input: {
     if (current === "Transferred_to_ASM") {
         const candidates: LeadStatus[] = ["Under_Discussion"];
         if (preTransfer && RESTORABLE.has(preTransfer)) candidates.push(preTransfer as LeadStatus);
-        // ID 75 / 80: the ASM can ask for first contact only; commercials
-        // stages come from quote events (the pre-transfer stage is restored).
+        // ID 75 / 80: `requested` is what the visit outcome earned (first
+        // contact), never a status someone asked for; commercials stages come
+        // from quote events (the pre-transfer stage is restored).
         if (requested === "Under_Discussion") candidates.push(requested);
         return candidates.reduce((a, b) => ((STATUS_RANK[b] ?? 0) > (STATUS_RANK[a] ?? 0) ? b : a));
     }
@@ -128,7 +129,7 @@ export function resolveOutcome(outcome: TouchpointOutcome, lead: OutcomeLead): R
     const statusTo = statusAfterVisit({
         current: lead.status,
         preTransfer: lead.preTransferStatus,
-        requested: auto.statusTo ?? (outcome.requested === "Under_Discussion" ? outcome.requested : null),
+        requested: auto.statusTo,
     });
     return { statusTo, event: "visit", interestTo: auto.interestTo };
 }

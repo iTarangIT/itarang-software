@@ -75,6 +75,8 @@ interface OemSummary {
   shortfall_total: number;
   lines_flagged: number;
   lines: OemLine[];
+  /** E-322 (ID 73): held for approval because of credit terms. */
+  terms_hold?: { reason: "credit_terms"; credit_days: number | null } | null;
 }
 
 interface Quotation {
@@ -95,6 +97,8 @@ interface Quotation {
    */
   terms?: {
     payment_method: string | null;
+    /** E-322: NBFC finance for the end customer. NULL on pre-E-322 quotes. */
+    customer_finance?: boolean | null;
     credit_terms: string | null;
     delivery_terms: string | null;
     warranty_terms: string | null;
@@ -119,6 +123,10 @@ interface Quotation {
   /** E-243 — the DEALER's answer, not iTarang's. Null until they respond. */
   dealer_decision: "approved" | "declined" | null;
   dealer_decision_at: string | null;
+  /** ID 78 — withdrawn by the sales team after release. Optional: a cached page may predate it. */
+  withdrawn_at?: string | null;
+  /** ID 78 — an open quote whose product reference price changed since issue. */
+  price_changed_since_issue?: boolean;
 }
 
 interface QueueResponse {
@@ -153,6 +161,16 @@ function waitedFor(iso: string): string {
  * queue, and conflating them would make the CEO read every row the same way.
  */
 function oemCause(oem: OemSummary): string {
+  // E-322 (ID 73): any credit term needs approval, whatever the price did.
+  const credit = oem.terms_hold
+    ? `Credit terms (${oem.terms_hold.credit_days ?? "?"} days) — any credit needs approval`
+    : null;
+  const price = priceCause(oem);
+  if (credit && oem.reason === "at_or_above_reference") return credit;
+  return credit ? `${price} · ${credit}` : price;
+}
+
+function priceCause(oem: OemSummary): string {
   const n = oem.lines_flagged;
   const lines = `${n} line${n === 1 ? "" : "s"}`;
   switch (oem.reason) {
@@ -190,7 +208,7 @@ function headroomOf(oem: OemSummary): number {
 /** Why this quote was released, in one line. Mirrors oemCause on the queue. */
 function releaseCause(q: Quotation): string | null {
   if (!q.oem) return null;
-  if (q.oem.reason !== "at_or_above_reference") {
+  if (q.oem.reason !== "at_or_above_reference" || q.oem.terms_hold) {
     // Released by the CEO despite failing a check — the concession they signed
     // off is the most important thing on the row, so it keeps its own wording.
     return `Released over: ${oemCause(q.oem)}`;
@@ -220,8 +238,16 @@ const LINE_STATUS_LABEL: Record<OemLine["status"], string> = {
  */
 function TermsStrip({ terms }: { terms: Quotation["terms"] }) {
   if (!terms) return null;
+  // Since E-322 payment_method only mirrors customer finance; show that
+  // under its own name. Older quotes keep their "Payment" chip.
+  const finance =
+    terms.customer_finance == null
+      ? null
+      : terms.customer_finance
+        ? "Yes"
+        : "No";
   const chips = [
-    ["Payment", terms.payment_method],
+    finance ? ["Customer finance", finance] : ["Payment", terms.payment_method],
     ["Credit", terms.credit_terms],
     ["Delivery", terms.delivery_terms],
     ["Warranty", terms.warranty_terms],
@@ -553,7 +579,9 @@ export function QuotationApprovalsPanel() {
                 ? oemCause(q.oem)
                 : null;
           const overridden =
-            approved && q.oem != null && q.oem.reason !== "at_or_above_reference";
+            approved &&
+            q.oem != null &&
+            (q.oem.reason !== "at_or_above_reference" || !!q.oem.terms_hold);
           return (
             <li key={q.commercial_id} className="py-3">
               <div className="flex items-start justify-between gap-3 flex-wrap">
@@ -596,6 +624,26 @@ export function QuotationApprovalsPanel() {
                         }
                       >
                         Dealer {q.dealer_decision === "approved" ? "approved" : "declined"}
+                      </span>
+                    )}
+                    {/* ID 78 — a released quote the sales team has since closed:
+                        the dealer can no longer answer it. */}
+                    {decided && q.withdrawn_at && (
+                      <span
+                        className="text-[11px] font-medium px-1.5 py-0.5 rounded-md bg-gray-200 text-gray-700"
+                        title={`Withdrawn ${waitedFor(q.withdrawn_at)} ago`}
+                      >
+                        Withdrawn
+                      </span>
+                    )}
+                    {/* ID 78 — still open with the dealer at a price that is no
+                        longer the reference: revise it or withdraw it. */}
+                    {decided && q.price_changed_since_issue && (
+                      <span
+                        className="text-[11px] font-medium px-1.5 py-0.5 rounded-md bg-amber-100 text-amber-800"
+                        title="A product's reference price changed since this quote was issued. Revise or withdraw it."
+                      >
+                        Price changed since issue
                       </span>
                     )}
                   </div>

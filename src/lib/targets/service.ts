@@ -121,7 +121,9 @@ async function actualsFor(monthFirst: string, upTo: string, elapsedWorkingDays: 
         const b = byUser.get(userId);
         switch (metric) {
             case "dealer_visits":
-                return b?.totals.visits ?? 0;
+                // ID 59: DISTINCT dealers visited (M08) — the figure the daily
+                // email puts against this target — not the number of visits.
+                return b?.totals.unique_visits ?? 0;
             case "new_dealer_visits":
                 return b?.totals.new_visits ?? 0;
             case "batteries_sold":

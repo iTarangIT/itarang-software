@@ -2,19 +2,37 @@
 //
 // Deterministic (no LLM): map columns via a small alias map, normalize phones
 // with the shared E.164 helper, dedupe within the file, REUSE any existing
-// dealer_leads row by phone (phone is UNIQUE — we never create a duplicate),
+// dealer_leads row by phone — the SHARED duplicate check (last 10 digits,
+// dedupe.ts), so a dealer stored as a bare 10-digit number is found too —
 // and bulk-insert the rest as AI-dialable leads. New leads are written with
 // lead_status = NULL / ai_recall_status = NULL so the exclusion filter
 // (src/lib/ai-dialer/exclusionFilter.ts) lets advanceCampaign dial them.
+//
+// ID 81 (source on every lead):
+//   - a new lead gets Entered via AI-dialer list, Found via (what the uploader
+//     picked, else the calling-list default), the list's acquisition campaign
+//     and a "Lead created" line;
+//   - a dealer we already hold gets a Re-inquiry on the existing lead, and the
+//     file only FILLS BLANKS on it. It used to overwrite the name and city of
+//     an existing lead with whatever the sheet said, so a shop name a rep had
+//     corrected was lost to a stale calling list.
 //
 // Returns the campaign queue (dealer_leads.id) in original file order plus an
 // import summary the create route surfaces to the user.
 
 import crypto from "crypto";
-import { eq, inArray } from "drizzle-orm";
+import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { dealerLeads } from "@/lib/db/schema";
-import { normalizePhone } from "@/lib/admin/csvUpload";
+import { loadExistingByPhone, normalizePhone } from "@/lib/leads/dedupe";
+import {
+  LIST_DEFAULT_ORIGIN,
+  recordLeadsCreatedBulk,
+  recordReinquiries,
+  stampLeadSourceBulk,
+  type LeadOrigin,
+} from "@/lib/leads/leadSource";
+import { campaignForDialerList } from "@/lib/leads/acquisitionCampaigns";
 import {
   normalizeCity,
   normalizeState,
@@ -69,7 +87,7 @@ export interface ListImportResult {
   imported: number;
   /** Existing dealer_leads matched by phone and reused. */
   reused: number;
-  /** Reused leads whose name/location was (re)written from the file. */
+  /** Reused leads that had a blank name/location filled from the file. */
   updated: number;
   /** Rows dropped — no valid phone, or an in-file duplicate phone. */
   invalid: number;
@@ -115,7 +133,13 @@ function mapRow(row: Record<string, unknown>): {
 
 export async function importListRows(
   rows: Record<string, unknown>[],
-  opts?: { listName?: string },
+  opts?: {
+    listName?: string;
+    /** ID 81 — Found via for the new leads. Defaults to the calling-list origin. */
+    origin?: LeadOrigin | null;
+    /** Who uploaded the list (null for a system context). */
+    actorId?: string | null;
+  },
 ): Promise<ListImportResult> {
   const capped = rows.slice(0, MAX_LIST_ROWS);
   const total = capped.length;
@@ -152,20 +176,14 @@ export async function importListRows(
   const phones = mapped.map((m) => m.phone);
 
   // 2. Which phones already exist? Those leads are reused, not re-inserted.
-  const existingRows = (await db
-    .select({ id: dealerLeads.id, phone: dealerLeads.phone })
-    .from(dealerLeads)
-    .where(inArray(dealerLeads.phone, phones))) as {
-    id: string;
-    phone: string | null;
-  }[];
-  const existingPhones = new Set(
-    existingRows.map((e) => e.phone).filter((p): p is string => !!p),
-  );
+  //    The shared check matches on the last 10 digits: dealer_leads.phone is
+  //    stored both bare and +91-prefixed, and the exact compare this replaced
+  //    missed every lead in the other format and inserted a second copy.
+  const existingByPhone = await loadExistingByPhone(phones);
 
   // 3. Insert new leads as AI-dialable. Chunked to stay within bind limits.
-  const toInsert = mapped.filter((m) => !existingPhones.has(m.phone));
-  let imported = 0;
+  const toInsert = mapped.filter((m) => !existingByPhone.has(m.phone));
+  const insertedIds: string[] = [];
   const CHUNK = 500;
   for (let i = 0; i < toInsert.length; i += CHUNK) {
     const slice = toInsert.slice(i, i + CHUNK);
@@ -197,52 +215,78 @@ export async function importListRows(
       .values(values)
       .onConflictDoNothing({ target: dealerLeads.phone })
       .returning({ id: dealerLeads.id });
-    imported += insertedRows.length;
+    insertedIds.push(...insertedRows.map((r) => r.id));
   }
+  const imported = insertedIds.length;
 
-  // 3b. Backfill reused leads. The freshly-uploaded file is the source of truth,
-  //     so overwrite name/location with any value the file provides — but a blank
-  //     file cell never clears existing data (only non-empty values are written).
-  //     Without this, re-uploading a phone that already exists as a bare row keeps
-  //     its null name and the campaign UI falls back to "Lead N".
-  const toUpdate = mapped.filter((m) => existingPhones.has(m.phone));
+  // 3a. ID 81 — source and "Lead created" on the new leads. Entered via is
+  //     already set by the insert trigger (memory.list_import); best-effort.
+  const actorId = opts?.actorId ?? null;
+  const origin = opts?.origin ?? LIST_DEFAULT_ORIGIN;
+  const campaignId =
+    insertedIds.length > 0 && opts?.listName
+      ? await campaignForDialerList({ listName: opts.listName, origin, createdBy: actorId })
+      : null;
+  await stampLeadSourceBulk(insertedIds, { door: "ai_dialer", origin, campaignId });
+  await recordLeadsCreatedBulk(insertedIds, { door: "ai_dialer", actorId });
+
+  // 3b. Reused leads: fill what is BLANK on the lead from the file, never
+  //     replace what is there. A re-uploaded phone that exists as a bare row
+  //     still gets its name (so the campaign UI does not fall back to
+  //     "Lead N"), but a name or city someone has since corrected stays.
+  //     The state is filled only alongside the sheet's city — a lead that
+  //     already sits in another city must not get the sheet city's state.
+  const reusedRows = mapped.filter((m) => existingByPhone.has(m.phone));
   let updated = 0;
-  for (const m of toUpdate) {
-    const city = normalizeCity(m.city ?? undefined) ?? m.city ?? null;
-    const state =
-      normalizeState(m.state ?? undefined) ??
-      inferStateFromCity(city) ??
-      null;
+  if (reusedRows.length > 0) {
+    const fills = reusedRows.map((m) => {
+      const city = normalizeCity(m.city ?? undefined) ?? m.city ?? null;
+      const state =
+        normalizeState(m.state ?? undefined) ??
+        inferStateFromCity(city) ??
+        null;
+      return {
+        id: existingByPhone.get(m.phone)!.id,
+        name: m.name,
+        shop_name: m.shop_name,
+        city,
+        state,
+      };
+    });
+    const filled = await db.execute<{ id: string }>(sql`
+      UPDATE dealer_leads dl SET
+          dealer_name = COALESCE(NULLIF(btrim(dl.dealer_name), ''), x.name),
+          shop_name   = COALESCE(NULLIF(btrim(dl.shop_name), ''), x.shop_name),
+          city        = COALESCE(NULLIF(btrim(dl.city), ''), x.city),
+          location    = COALESCE(NULLIF(btrim(dl.location), ''), x.city),
+          state       = CASE WHEN NULLIF(btrim(dl.city), '') IS NULL
+                                   OR lower(btrim(dl.city)) = lower(x.city)
+                                 THEN COALESCE(NULLIF(btrim(dl.state), ''), x.state)
+                                 ELSE dl.state END
+        FROM jsonb_to_recordset(${JSON.stringify(fills)}::jsonb)
+             AS x(id text, name text, shop_name text, city text, state text)
+       WHERE dl.id = x.id
+         AND (   (NULLIF(btrim(dl.dealer_name), '') IS NULL AND x.name IS NOT NULL)
+              OR (NULLIF(btrim(dl.shop_name), '') IS NULL AND x.shop_name IS NOT NULL)
+              OR (NULLIF(btrim(dl.city), '') IS NULL AND x.city IS NOT NULL)
+              OR (NULLIF(btrim(dl.state), '') IS NULL AND x.state IS NOT NULL
+                  AND (NULLIF(btrim(dl.city), '') IS NULL OR lower(btrim(dl.city)) = lower(x.city))))
+      RETURNING dl.id
+    `);
+    updated = filled.length;
 
-    const set: Partial<typeof dealerLeads.$inferInsert> = {};
-    if (m.name) set.dealer_name = m.name;
-    if (m.shop_name) set.shop_name = m.shop_name;
-    if (city) {
-      set.city = city;
-      set.location = city;
-    }
-    if (state) set.state = state;
-    if (m.language) set.language = m.language;
-
-    if (Object.keys(set).length === 0) continue;
-
-    await db.update(dealerLeads).set(set).where(eq(dealerLeads.phone, m.phone));
-    updated++;
+    // ID 81 — a known dealer on a new list is a Re-inquiry on the lead we hold.
+    await recordReinquiries(
+      fills.map((f) => ({ id: f.id, note: opts?.listName ?? null })),
+      { door: "ai_dialer", actorId },
+    );
   }
 
   // 4. Re-resolve every phone → id. Covers reused leads, freshly inserted
   //    leads, and any that lost an insert race to onConflictDoNothing.
-  const resolvedRows = (await db
-    .select({ id: dealerLeads.id, phone: dealerLeads.phone })
-    .from(dealerLeads)
-    .where(inArray(dealerLeads.phone, phones))) as {
-    id: string;
-    phone: string | null;
-  }[];
+  const resolved = await loadExistingByPhone(phones);
   const idByPhone = new Map<string, string>();
-  for (const r of resolvedRows) {
-    if (r.phone) idByPhone.set(r.phone, r.id);
-  }
+  for (const [phone, lead] of resolved) idByPhone.set(phone, lead.id);
 
   // 5. Build queueIds in original (deduped) file order.
   const queueIds: string[] = [];
@@ -251,6 +295,5 @@ export async function importListRows(
     if (id) queueIds.push(id);
   }
 
-  const reused = mapped.length - imported;
-  return { queueIds, total, imported, reused, updated, invalid };
+  return { queueIds, total, imported, reused: mapped.length - imported, updated, invalid };
 }

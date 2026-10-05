@@ -17,7 +17,9 @@ type Props = {
     defaultReason?: LostReason | null;
 };
 
-const LABELS: Record<LostReason, string> = {
+// Exported for admin "Correct status" (LeadStatusEditor), which asks for the
+// same reason when it corrects a lead to Lost.
+export const LOST_REASON_LABELS: Record<LostReason, string> = {
     not_interested: "Not interested",
     price_high: "Price too high",
     bad_experience_with_trontek: "Bad experience with Trontek",
@@ -126,7 +128,7 @@ export function MarkLostModal({ open, onClose, leadId, onSuccess, defaultReason 
                         >
                             <option value="">— select —</option>
                             {LOST_REASON.filter((r) => r !== "onboarding_dropout").map((r) => (
-                                <option key={r} value={r}>{LABELS[r]}</option>
+                                <option key={r} value={r}>{LOST_REASON_LABELS[r]}</option>
                             ))}
                         </select>
                     </div>

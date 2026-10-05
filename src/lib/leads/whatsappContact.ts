@@ -11,7 +11,13 @@
 //      REUSED: saved and shown, flagged on the Sales Head view, never counted.
 //
 // Screenshots are shown on the lead timeline (the attachment) and on the Sales
-// Head view (listWhatsappScreenshots). Runs on the caller's transaction.
+// Head view (/admin/whatsapp-screenshots, listWhatsappScreenshots). Runs on the
+// caller's transaction.
+//
+// The generic touchpoint API cannot do what this does: a "whatsapp" touchpoint
+// logged there never moves the status (planTouchpoint drops its status
+// change), so a chat reaches Under discussion only through here, with a
+// screenshot.
 
 import { createHash } from "node:crypto";
 import { sql } from "drizzle-orm";
@@ -33,6 +39,26 @@ export type WhatsappContactResult = {
     statusTo: LeadStatus | null;
 };
 
+/**
+ * Has this exact image already been used on a touchpoint? The same check
+ * recordWhatsappContact makes when it writes — exported so the WhatsApp
+ * Assistant can say so on its preview instead of after Confirm.
+ */
+export async function screenshotAlreadyUsed(sha256: string, executor: Pick<typeof db, "execute"> = db): Promise<boolean> {
+    const seen = (await executor.execute<{ n: number }>(sql`
+        SELECT COUNT(*)::int AS n FROM lead_touchpoints WHERE screenshot_sha256 = ${sha256}
+    `)) as unknown as Array<{ n: number }>;
+    return (seen[0]?.n ?? 0) > 0;
+}
+
+/**
+ * Does a WhatsApp entry count as contact? Only "dealer replied" with a fresh
+ * screenshot. Pure — the one rule for the writer and for any preview of it.
+ */
+export function whatsappCounts(input: { dealerReplied: boolean; hasScreenshot: boolean; reused: boolean }): boolean {
+    return input.dealerReplied && input.hasScreenshot && !input.reused;
+}
+
 export async function recordWhatsappContact(
     tx: Tx,
     input: {
@@ -41,20 +67,20 @@ export async function recordWhatsappContact(
         remarks: string;
         dealerReplied: boolean;
         screenshot: { url: string; sha256: string } | null;
+        /** A follow-up agreed in the chat — recorded on the touchpoint as its next action. */
+        nextActionAt?: Date | null;
     },
 ): Promise<WhatsappContactResult> {
     const { screenshot } = input;
-    let reused = false;
-    if (screenshot) {
-        const seen = (await tx.execute<{ n: number }>(sql`
-            SELECT COUNT(*)::int AS n FROM lead_touchpoints WHERE screenshot_sha256 = ${screenshot.sha256}
-        `)) as unknown as Array<{ n: number }>;
-        reused = (seen[0]?.n ?? 0) > 0;
-    }
-    const counts = input.dealerReplied && !!screenshot && !reused;
+    const reused = screenshot ? await screenshotAlreadyUsed(screenshot.sha256, tx) : false;
+    const counts = whatsappCounts({ dealerReplied: input.dealerReplied, hasScreenshot: !!screenshot, reused });
 
+    // Read under the row lock the writer takes anyway: a call or a quote event
+    // that lifts the lead to Under discussion at the same moment must be seen
+    // here, or this entry would ask for a move the guard then refuses — and
+    // the whole entry, screenshot included, would roll back.
     const rows = (await tx.execute<{ lead_status: string | null }>(sql`
-        SELECT lead_status FROM dealer_leads WHERE id = ${input.leadId} LIMIT 1
+        SELECT lead_status FROM dealer_leads WHERE id = ${input.leadId} LIMIT 1 FOR UPDATE
     `)) as unknown as Array<{ lead_status: string | null }>;
     const from = rows[0]?.lead_status ?? null;
     // Awaiting field visit ends only with a visit (ID 77).
@@ -74,10 +100,12 @@ export async function recordWhatsappContact(
             dealerLeadId: input.leadId,
             touchpointType: "whatsapp",
             performedBy: input.actorId,
-            remarks: `${prefix}: ${input.remarks}`,
+            remarks: input.remarks.trim() ? `${prefix}: ${input.remarks.trim()}` : prefix,
             attachments: screenshot ? [{ url: screenshot.url, type: "whatsapp_screenshot", reused }] : [],
             isEngaged: counts,
             countsAsWork: counts,
+            nextAction: input.nextActionAt ? "follow_up" : null,
+            nextActionAt: input.nextActionAt ?? null,
             statusChange: statusTo ? { from: from as LeadStatus | null, to: statusTo, event: "progress" } : undefined,
         },
         { tx },
@@ -92,37 +120,65 @@ export async function recordWhatsappContact(
     return { touchpointId: r.touchpointId, countedAsContact: counts, reused, statusTo };
 }
 
-/** Sales Head view: recent WhatsApp screenshots, reused ones flagged. */
-export async function listWhatsappScreenshots(days = 7) {
-    return (await db.execute<{
-        touchpoint_id: string;
-        dealer_lead_id: string;
-        dealer_name: string | null;
-        performed_by_name: string | null;
-        performed_at: string;
-        url: string | null;
-        reused: boolean;
-    }>(sql`
-        SELECT t.touchpoint_id, t.dealer_lead_id,
+export type WhatsappScreenshotRow = {
+    touchpoint_id: string;
+    dealer_lead_id: string;
+    dealer_name: string | null;
+    city: string | null;
+    performed_by_name: string | null;
+    performed_at: string;
+    url: string | null;
+    remarks: string | null;
+    /** Counted as contact (dealer replied + a fresh screenshot). */
+    counted: boolean;
+    reused: boolean;
+    /** For a reused image: the earlier entry that used it first. */
+    first_used_by_name: string | null;
+    first_used_dealer_name: string | null;
+    first_used_at: string | null;
+};
+
+/** The view's cap; the page says so when it is reached. */
+export const WHATSAPP_SCREENSHOT_LIMIT = 200;
+
+/**
+ * Sales Head view: recent WhatsApp screenshots, reused ones first and flagged,
+ * each with the entry that used the image before it.
+ */
+export async function listWhatsappScreenshots(days = 7): Promise<WhatsappScreenshotRow[]> {
+    return (await db.execute<WhatsappScreenshotRow>(sql`
+        SELECT t.touchpoint_id::text AS touchpoint_id, t.dealer_lead_id,
                COALESCE(dl.dealer_name, dl.shop_name) AS dealer_name,
+               dl.city,
                u.name AS performed_by_name, t.performed_at::text AS performed_at,
                t.attachments -> 0 ->> 'url' AS url,
-               COALESCE((t.attachments -> 0 ->> 'reused')::boolean, false) AS reused
+               t.remarks,
+               COALESCE(t.is_engaged, false) AS counted,
+               COALESCE((t.attachments -> 0 ->> 'reused')::boolean, false) AS reused,
+               f.by_name AS first_used_by_name,
+               f.dealer_name AS first_used_dealer_name,
+               f.performed_at AS first_used_at
           FROM lead_touchpoints t
           JOIN dealer_leads dl ON dl.id = t.dealer_lead_id
           LEFT JOIN users u ON u.id::text = t.performed_by
+          -- The EARLIER entry that carries the same image, if any.
+          LEFT JOIN LATERAL (
+            SELECT fu.name AS by_name,
+                   COALESCE(fl.dealer_name, fl.shop_name) AS dealer_name,
+                   ft.performed_at::text AS performed_at
+              FROM lead_touchpoints ft
+              JOIN dealer_leads fl ON fl.id = ft.dealer_lead_id
+              LEFT JOIN users fu ON fu.id::text = ft.performed_by
+             WHERE ft.screenshot_sha256 = t.screenshot_sha256
+               AND ft.touchpoint_id <> t.touchpoint_id
+               AND ft.performed_at <= t.performed_at
+             ORDER BY ft.performed_at ASC
+             LIMIT 1
+          ) f ON TRUE
          WHERE t.touchpoint_type = 'whatsapp'
            AND t.screenshot_sha256 IS NOT NULL
            AND t.performed_at >= NOW() - make_interval(days => ${days})
          ORDER BY reused DESC, t.performed_at DESC
-         LIMIT 200
-    `)) as unknown as Array<{
-        touchpoint_id: string;
-        dealer_lead_id: string;
-        dealer_name: string | null;
-        performed_by_name: string | null;
-        performed_at: string;
-        url: string | null;
-        reused: boolean;
-    }>;
+         LIMIT ${WHATSAPP_SCREENSHOT_LIMIT}
+    `)) as unknown as WhatsappScreenshotRow[];
 }

@@ -20,6 +20,8 @@
 
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
+import { isEngagedCall } from "@/lib/lifecycle/touchpointTypes";
+import { getEngagedCallRule } from "@/lib/reports/engagedCallRule";
 import { requireRole } from "@/lib/auth-utils";
 import {
     errorMessage,
@@ -134,7 +136,10 @@ export const POST = withErrorHandler(async (req: Request) => {
                 performedAt: event.occurredAt ?? new Date(),
                 callStatus,
                 callDurationSec: event.callDurationSec,
-                isEngaged: callStatus === "connected",
+                isEngaged: isEngagedCall(
+                    { callStatus, durationSec: event.callDurationSec, externalSystem: "neodove" },
+                    await getEngagedCallRule(),
+                ),
                 remarks: `${remarksFor(event)} (backfilled from CSV by ${user.email ?? user.id})`,
                 externalSystem: "neodove",
                 externalEventId: event.externalEventId,

@@ -1,16 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { leads, facilitationPayments } from '@/lib/db/schema';
+import { facilitationPayments } from '@/lib/db/schema';
 import { eq, desc } from 'drizzle-orm';
-import { createClient } from '@/lib/supabase/server';
+import { requireLeadAccess } from '@/lib/auth/requireLeadAccess';
 
 // POST - Record manual payment (UTR / screenshot)
 export async function POST(req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
     try {
         const { leadId } = await params;
-        const supabase = await createClient();
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+        // ID 118: signed in, and this lead is the caller's to touch (a dealer's own lead, or back office).
+        const leadGate = await requireLeadAccess(leadId);
+        if (!leadGate.ok) return leadGate.response;
 
         const body = await req.json();
         const { utr_number, screenshot_url } = body;
@@ -68,6 +68,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
     try {
         const { leadId } = await params;
+        // ID 118: the GET had no check at all — same rule as the POST.
+        const leadGate = await requireLeadAccess(leadId);
+        if (!leadGate.ok) return leadGate.response;
 
         const rows = await db.select()
             .from(facilitationPayments)

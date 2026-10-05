@@ -42,6 +42,9 @@
  *                    the NeoDove agent to their CRM user (review R-03,
  *                    /leads/neodove-campaigns/agents); unmapped agents' calls
  *                    carry no performer and appear on nobody's row.
+ *   engaged /        Block C, per caller: engagedCall() and Hot AT THE MOMENT
+ *   hot to field     of transfer (wasHotAt) — ID 59, metricDefinitions.ts;
+ *                    counted in salesDailyBlocks.ts (loadRepExtras).
  *   new visits       dealers whose first-ever visit fell in the period
  *   converted        leads that reached Converted in the period, keyed on
  *                    closing_owner_id — the same rule as the dashboard and every
@@ -61,8 +64,25 @@
 
 import { sql } from "drizzle-orm";
 
-import type { SalesDashboard, SalesSpocBlock } from "@/lib/admin/salesDashboardTypes";
-import { BLOCK_A_COLUMNS, blockAHeadline, blockATableRows, buildBlockA, fmtValue } from "../salesDailyBlockA";
+import {
+  BLOCK_A_COLUMNS,
+  BLOCK_A_PCT_COLUMN,
+  blockAHeadline,
+  blockATableRows,
+  buildBlockA,
+} from "../salesDailyBlockA";
+import {
+  BLOCK_D_COLUMNS,
+  NO_OWNER_KEY,
+  REP_BLOCK_COLUMNS,
+  REP_BLOCK_PCT_COLUMN,
+  blockDRows,
+  buildRepBlocks,
+  loadAwaitingFieldVisit,
+  loadRepExtras,
+  repBlockTableRows,
+} from "../salesDailyBlocks";
+import { formatSlotTime } from "../schedule";
 import type {
   DigestDetail,
   DigestFigures,
@@ -73,23 +93,27 @@ import type {
 
 // Daily Sales email v1.1 (tracker ID 9, handover P4-6; decided 26 / 29 Sep
 // 2026). ONE management email — no personal emails to ASMs and ISRs, who see
-// their own numbers on their performance pages. Sent 09:00 IST (morning slot).
+// their own numbers on their performance pages. Sent at the morning slot time
+// set on /admin/settings/sales-daily (default 09:00 IST); the "as of" labels
+// below read that time, never a fixed one.
 //   Headline   one line: yesterday's outcome and what is behind target.
 //   A Company  22 rows × Yesterday · Last 7 days · MTD · MTD target · % of
 //              target · same period last month · Δ (salesDailyBlockA.ts).
 //   Right now  sales-ready leads with no owner and the oldest wait.
-//   B Field team (ASM)          per ASM, Yesterday + MTD.
-//   C Inside sales (ISR / CC)   per ISR, Yesterday + MTD.
-//   D Position at 08:00         open Hot / Warm / Cold per owner.
+//   B Field team (ASM)          per ASM, Block A's field metrics: Yesterday,
+//                               MTD, MTD target, % of target (salesDailyBlocks.ts).
+//   C Inside sales (ISR / CC)   per ISR, Block A's calling metrics, same columns.
+//   D Position this morning     open Hot / Warm / Cold per owner, awaiting
+//                               field visit, and sales-ready leads with no owner.
 //   E Today and tomorrow        scheduled visits and follow-ups per owner.
-//   F Oldest overdue            the 10 oldest overdue items, by name — no phone numbers.
+//   F Oldest overdue            the 10 oldest overdue items, by name and city — no phone numbers.
 const SECTIONS: DigestSection[] = [
   { key: "summary", label: "Headline", hint: "One line: yesterday's outcome and what is behind target.", group: "activity" },
   { key: "block_a", label: "A · Company", hint: "22 metrics: yesterday, last 7 days, MTD, MTD target, % of target, same period last month, Δ.", group: "activity" },
   { key: "right_now", label: "Right now", hint: "Sales-ready leads with no owner, and the oldest wait.", group: "backlog" },
-  { key: "block_b", label: "B · Field team (ASM)", hint: "Per ASM, yesterday and MTD.", group: "activity" },
-  { key: "block_c", label: "C · Inside sales (ISR / CC)", hint: "Per ISR, yesterday and MTD.", group: "activity" },
-  { key: "block_d", label: "D · Position at 08:00", hint: "Open Hot / Warm / Cold per owner, and Hot rated 8+ days ago.", group: "backlog" },
+  { key: "block_b", label: "B · Field team (ASM)", hint: "Per ASM: visits, hot received, quotes, approvals, Won, converted, revenue — yesterday, MTD, MTD target, % of target.", group: "activity" },
+  { key: "block_c", label: "C · Inside sales (ISR / CC)", hint: "Per ISR: calls, dealers called, engaged calls, hot handed to field, quotes, Won, converted — yesterday, MTD, MTD target, % of target.", group: "activity" },
+  { key: "block_d", label: "D · Position this morning", hint: "Open Hot / Warm / Cold per owner, Hot rated 8+ days ago, awaiting field visit, and sales-ready leads with no owner — as of the send time.", group: "backlog" },
   { key: "block_e", label: "E · Today and tomorrow", hint: "Scheduled visits and follow-ups due, per owner.", group: "backlog" },
   { key: "block_f", label: "F · Oldest overdue", hint: "The 10 oldest overdue follow-ups and visits, by name.", group: "backlog" },
 ];
@@ -144,82 +168,42 @@ async function scheduledPerSpoc(
   return out;
 }
 
-function level(b: SalesSpocBlock, l: "hot" | "warm" | "cold"): number {
-  return b.interest.rows.find((r) => r.interest_level === l)?.total ?? 0;
-}
-
-/** Hot leads whose rating is more than 7 days old (interest_changed_at, E-301). */
-function hotOverAWeek(b: SalesSpocBlock): number {
-  const r = b.interest.rows.find((x) => x.interest_level === "hot");
-  return r ? r.age_8_14 + r.age_15_30 + r.age_30_plus : 0;
-}
-
 /**
- * The as-of-now position, one row per SPOC holding any open rated lead. Built
- * from ONE builder run: the interest section ignores the date range, so which
- * period's run it comes from does not matter.
+ * Tracker ID 69 / P1-6: invoiced in each period but matched to no dealer — the
+ * "₹X not matched to a dealer" line under Block A's Revenue. Same inclusive
+ * invoice_date window as the Revenue row (salesDashboard queryOutcome), and
+ * the same void-excluded rule, so Revenue + this = everything invoiced. A
+ * period that fails is left unmeasured rather than failing the email.
  */
-function pipelineRows(d: SalesDashboard): DigestTable["rows"] {
-  return (d.per_spoc ?? [])
-    .filter((b) => level(b, "hot") + level(b, "warm") + level(b, "cold") > 0)
-    .sort((a, b) => (a.name ?? "").localeCompare(b.name ?? ""))
-    .map((b) => [
-      b.name ?? "(unknown user)",
-      level(b, "hot"),
-      level(b, "warm"),
-      level(b, "cold"),
-      hotOverAWeek(b),
-    ]);
-}
-
-/** Blocks B / C: per rep of one role, Yesterday + MTD side by side. */
-function repRows(
-  role: "asm" | "inside_sales_rep",
-  y: SalesDashboard,
-  mtd: SalesDashboard,
-): DigestTable["rows"] {
-  const yBy = new Map((y.per_spoc ?? []).map((b) => [b.spoc_id, b]));
-  return (mtd.per_spoc ?? [])
-    .filter((b) => b.role === role)
-    .sort((a, b) => (a.name ?? "").localeCompare(b.name ?? ""))
-    .map((m) => {
-      const d = yBy.get(m.spoc_id);
-      return role === "asm"
-        ? [
-            m.name ?? "(unknown user)",
-            d?.totals.unique_visits ?? 0,
-            m.totals.unique_visits,
-            d?.totals.new_visits ?? 0,
-            m.totals.new_visits,
-            d?.totals.converted ?? 0,
-            m.totals.converted,
-            fmtValue(m.outcome.revenue, "money"),
-          ]
-        : [
-            m.name ?? "(unknown user)",
-            d?.totals.calls ?? 0,
-            m.totals.calls,
-            d?.totals.dealers_called ?? 0,
-            m.totals.dealers_called,
-            d?.outcome.quotes_issued ?? 0,
-            m.outcome.quotes_issued,
-            m.totals.converted,
-          ];
-    });
+async function unmatchedRevenuePerPeriod(
+  periods: Record<"yesterday" | "last7" | "mtd" | "lastMonth", { from: string; to: string }>,
+): Promise<{ y: number | null; d7: number | null; mtd: number | null; lm: number | null }> {
+  const { revenueSummary } = await import("@/lib/dashboard/revenueSource");
+  const one = async (p: { from: string; to: string }): Promise<number | null> => {
+    try {
+      return (await revenueSummary({ from: p.from, to: p.to })).unlinked_total;
+    } catch (e) {
+      console.warn("[digest:sales_daily] unmatched revenue not measured:", e instanceof Error ? e.message : e);
+      return null;
+    }
+  };
+  const [y, d7, mtd, lm] = await Promise.all([
+    one(periods.yesterday),
+    one(periods.last7),
+    one(periods.mtd),
+    one(periods.lastMonth),
+  ]);
+  return { y, d7, mtd, lm };
 }
 
 async function rightNow(): Promise<{ waiting: number; oldestDays: number | null }> {
   try {
-    const { db } = await import("@/lib/db");
-    const [r] = (await db.execute(sql`
-      SELECT COUNT(*)::int AS waiting,
-             MAX(FLOOR(EXTRACT(EPOCH FROM (now() - (to_jsonb(dl) ->> 'sales_ready_at')::timestamptz)) / 86400))::int AS oldest
-        FROM dealer_leads dl
-       WHERE dl.current_owner_id IS NULL AND dl.is_active IS NOT FALSE
-         AND COALESCE(dl.lead_status, '') NOT IN ('Won', 'Converted', 'Lost')
-         AND (to_jsonb(dl) ->> 'sales_ready_at') IS NOT NULL
-    `)) as unknown as Array<{ waiting: number; oldest: number | null }>;
-    return { waiting: Number(r?.waiting ?? 0), oldestDays: r?.oldest ?? null };
+    // ID 82: the one "awaiting assignment" rule — the Ready to assign page
+    // and the CEO card count the same leads. Imported here, not at module
+    // scope: listing the digest kinds must not need DATABASE_URL.
+    const { countAwaitingAssignment } = await import("@/lib/leads/salesReady");
+    const c = await countAwaitingAssignment();
+    return { waiting: c.total, oldestDays: c.oldestDays };
   } catch {
     return { waiting: 0, oldestDays: null };
   }
@@ -242,19 +226,19 @@ async function followUpsPerOwner(today: string, tomorrow: string): Promise<Map<s
   return new Map(rows.map((r) => [r.spoc, { today: Number(r.today), tomorrow: Number(r.tomorrow) }]));
 }
 
-/** Block F: the 10 oldest overdue follow-ups and visits, by name — never a phone number. */
+/** Block F: the 10 oldest overdue follow-ups and visits, by name and city — never a phone number. */
 async function oldestOverdue(): Promise<DigestTable["rows"]> {
   const { db } = await import("@/lib/db");
   const rows = (await db.execute(sql`
     SELECT * FROM (
-      SELECT COALESCE(dl.dealer_name, dl.shop_name, dl.id) AS dealer, u.name AS owner,
+      SELECT COALESCE(dl.dealer_name, dl.shop_name, dl.id) AS dealer, dl.city AS city, u.name AS owner,
              'Follow-up' AS what, (dl.next_follow_up_at AT TIME ZONE 'Asia/Kolkata')::date AS due
         FROM dealer_leads dl
         LEFT JOIN users u ON u.id::text = dl.current_owner_id
        WHERE dl.next_follow_up_at < now() AND dl.is_active IS NOT FALSE
          AND COALESCE(dl.lead_status, '') NOT IN ('Won', 'Converted', 'Lost')
       UNION ALL
-      SELECT COALESCE(dl.dealer_name, dl.shop_name, dl.id), u.name, 'Visit', v.scheduled_date
+      SELECT COALESCE(dl.dealer_name, dl.shop_name, dl.id), dl.city, u.name, 'Visit', v.scheduled_date
         FROM lead_visits v
         JOIN dealer_leads dl ON dl.id = v.dealer_lead_id
         LEFT JOIN users u ON u.id::text = v.asm_id
@@ -264,12 +248,12 @@ async function oldestOverdue(): Promise<DigestTable["rows"]> {
     ) x
     ORDER BY due ASC
     LIMIT 10
-  `)) as unknown as Array<{ dealer: string; owner: string | null; what: string; due: string }>;
+  `)) as unknown as Array<{ dealer: string; city: string | null; owner: string | null; what: string; due: string }>;
   const today = new Date().toISOString().slice(0, 10);
   return rows.map((r) => {
     const due = String(r.due).slice(0, 10);
     const days = Math.max(0, Math.round((Date.parse(`${today}T00:00:00Z`) - Date.parse(`${due}T00:00:00Z`)) / 86400000));
-    return [r.dealer, r.owner ?? "(no owner)", r.what, due, days];
+    return [r.dealer, r.city?.trim() || "—", r.owner ?? "(no owner)", r.what, due, days];
   });
 }
 
@@ -290,7 +274,8 @@ async function collect(
       lastMonth: sameSpanLastMonth(istDay),
     };
 
-    const [yesterday, last7, mtd, lastMonth, scheduled, followUps, now, overdue] = await Promise.all([
+    const { getDigestSettings } = await import("../settings");
+    const [yesterday, last7, mtd, lastMonth, scheduled, followUps, now, overdue, settings, extrasY, extrasMtd, awaiting, unmatched] = await Promise.all([
       buildSalesDashboard({ ...periods.yesterday, granularity: "day" }),
       buildSalesDashboard({ ...periods.last7, granularity: "day" }),
       buildSalesDashboard({ ...periods.mtd, granularity: "day" }),
@@ -299,13 +284,22 @@ async function collect(
       followUpsPerOwner(sendDay, dayAfter),
       rightNow(),
       oldestOverdue(),
+      getDigestSettings(salesDailyDigest),
+      loadRepExtras(db as never, periods.yesterday),
+      loadRepExtras(db as never, periods.mtd),
+      loadAwaitingFieldVisit(db as never),
+      unmatchedRevenuePerPeriod(periods),
     ]);
-    const blockA = await buildBlockA(db as never, periods, { yesterday, last7, mtd, lastMonth });
+    const blockA = await buildBlockA(db as never, periods, { yesterday, last7, mtd, lastMonth }, unmatched);
+    // The "as of" time is the configured morning send time (default 09:00).
+    const asOf = formatSlotTime(settings.morningHour, settings.morningMinute);
+    const extras = { y: extrasY, mtd: extrasMtd };
 
     // Names for Block E: the builder's per-rep blocks, then users for the rest.
     const names = new Map<string, string>();
     for (const d of [yesterday, mtd]) for (const b of d.per_spoc ?? []) names.set(b.spoc_id, b.name ?? b.spoc_id);
-    const missing = [...new Set([...scheduled.keys(), ...followUps.keys()])].filter((id) => !names.has(id));
+    const awaitingIds = [...(awaiting?.keys() ?? [])].filter((id) => id !== NO_OWNER_KEY);
+    const missing = [...new Set([...scheduled.keys(), ...followUps.keys(), ...awaitingIds])].filter((id) => !names.has(id));
     if (missing.length) {
       const rows = (await db.execute(sql`
         SELECT id::text AS id, name FROM users
@@ -338,11 +332,12 @@ async function collect(
             rows: blockATableRows(blockA.rows),
             textColumns: 1,
             groupHeaders: true,
+            toneColumns: [BLOCK_A_PCT_COLUMN],
             note: blockA.targetsNote,
             // "Right now" sits right after the table, as in the mockup.
             footer: {
               key: "right_now",
-              label: "Right now · 08:00",
+              label: `Right now · ${asOf}`,
               items: [
                 {
                   label: "Sales-ready, no owner",
@@ -355,26 +350,35 @@ async function collect(
           {
             key: "block_b",
             title: "B · Field team (ASM)",
-            columns: ["ASM", "Dealers visited · Yesterday", "MTD", "New dealers visited · Yesterday", "MTD", "Converted · Yesterday", "MTD", "Revenue ₹ MTD"],
-            rows: repRows("asm", yesterday, mtd),
+            columns: REP_BLOCK_COLUMNS,
+            rows: repBlockTableRows(buildRepBlocks("asm", yesterday, mtd, extras, blockA.userTargets)),
             textColumns: 1,
-            empty: "No ASM activity this month.",
+            groupHeaders: true,
+            toneColumns: [REP_BLOCK_PCT_COLUMN],
+            note: "One block per ASM. MTD target and % of target only where the ASM has a target for that metric.",
+            empty: "No ASMs on the Sales dashboard this month.",
           },
           {
             key: "block_c",
             title: "C · Inside sales (ISR / CC)",
-            columns: ["ISR", "Calls · Yesterday", "MTD", "Dealers called · Yesterday", "MTD", "Quotes created · Yesterday", "MTD", "Converted MTD"],
-            rows: repRows("inside_sales_rep", yesterday, mtd),
+            columns: REP_BLOCK_COLUMNS,
+            rows: repBlockTableRows(buildRepBlocks("inside_sales_rep", yesterday, mtd, extras, blockA.userTargets)),
             textColumns: 1,
-            empty: "No inside-sales activity this month.",
+            groupHeaders: true,
+            toneColumns: [REP_BLOCK_PCT_COLUMN],
+            note: "One block per ISR / CC. MTD target and % of target only where the rep has a target for that metric.",
+            empty: "No inside-sales reps on the Sales dashboard this month.",
           },
           {
             key: "block_d",
-            title: "D · Position at 08:00",
-            columns: ["Owner", "Hot", "Warm", "Cold", "Hot, rated 8+ days ago"],
-            rows: pipelineRows(yesterday),
+            title: `D · Position at ${asOf}`,
+            columns: BLOCK_D_COLUMNS,
+            rows: blockDRows(yesterday, awaiting ?? new Map(), names, now.waiting),
             textColumns: 1,
-            empty: "No open hot, warm or cold leads.",
+            note: awaiting
+              ? "Awaiting field visit: transferred to an ASM and not yet visited. Sales-ready, no owner: on the (no owner) row."
+              : "Awaiting field visit could not be measured on this database.",
+            empty: "No open hot, warm or cold leads, and nothing awaiting a field visit.",
           },
           {
             key: "block_e",
@@ -387,9 +391,9 @@ async function collect(
           {
             key: "block_f",
             title: "F · Oldest overdue",
-            columns: ["Dealer", "Owner", "What", "Was due", "Days overdue"],
+            columns: ["Dealer", "City", "Owner", "What", "Was due", "Days overdue"],
             rows: overdue,
-            textColumns: 4,
+            textColumns: 5,
             empty: "Nothing overdue.",
           },
         ],
@@ -411,10 +415,11 @@ export const salesDailyDigest: DigestKindDescriptor = {
   id: "sales_daily",
   label: "Sales Daily",
   description:
-    "Daily Sales email v1.1 — one management email at 09:00 IST: a one-line headline, " +
+    "Daily Sales email v1.1 — one management email every morning at the time set below " +
+    "(default 09:00 IST): a one-line headline, " +
     "A · Company (22 metrics with MTD target, % of target and the same period last month), " +
     "sales-ready leads waiting for an owner, B · Field team, C · Inside sales, D · Position " +
-    "at 08:00, E · Today and tomorrow, and F · the 10 oldest overdue items. No personal " +
+    "as of the send time, E · Today and tomorrow, and F · the 10 oldest overdue items. No personal " +
     "emails to reps. Nothing is sent until recipients are added here.",
   settingsKey: "sales_daily_digest",
   settingsHref: "/admin/settings/sales-daily",

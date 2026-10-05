@@ -14,13 +14,14 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { runSalesScan } from "@/lib/sales/driveSalesScan";
+import { fromVercelCron } from "@/lib/security/cronAuth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
 function isAuthorised(req: NextRequest): boolean {
-  if (req.headers.get("x-vercel-cron")) return true;
+  if (fromVercelCron(req)) return true;
 
   const auth = req.headers.get("authorization") ?? "";
   const expected = process.env.CRON_SECRET;

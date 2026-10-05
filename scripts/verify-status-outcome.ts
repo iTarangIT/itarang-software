@@ -13,6 +13,7 @@ import { sql } from "drizzle-orm";
 import { db } from "../src/lib/db";
 import { writeTouchpoint } from "../src/lib/touchpoints/write";
 import { applyVisitStatus } from "../src/lib/asm/visitStatus";
+import { logLeadTouchpoint } from "../src/lib/inside-sales/logTouchpoint";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type Outcome = "PASS" | "FAIL" | "SKIP";
@@ -241,6 +242,90 @@ async function main() {
         assert(after!.lead_status !== "Transferred_to_ASM", "the visit did not end Awaiting field visit");
         assert(!expectHot || after!.interest_level === "hot", `temperature is ${after!.interest_level}, expected hot`);
         return `${lead.id}: Awaiting field visit → ${after!.lead_status} (was ${lead.pre_transfer_status ?? "—"} before transfer), temperature ${after!.interest_level}`;
+    });
+
+    // ── Review of 30 Sep, the three open points, through the services the routes call ──
+
+    await check("ID 114 review 1: a productive visit on an Assigned lead moves it with NO status sent", async () => {
+        const lead = await findLead(sql`dl.lead_status = 'Assigned_Not_Contacted' AND ${OWNED}`);
+        if (!lead) throw new Error("SKIP: no owned Assigned_Not_Contacted lead");
+        let after: Lead | null = null;
+        let history: string | null = null;
+        await rolledBack(async (tx) => {
+            // Exactly what POST /api/asm/lead/[id]/visit passes: requested null,
+            // the outcome, and no interest — nothing from the client decides.
+            const r = await applyVisitStatus(tx, {
+                leadId: lead.id,
+                actorId: lead.current_owner_id!,
+                requested: null,
+                remarks: "verify-status-outcome",
+                outcome: "productive",
+            });
+            history = r.historyId;
+            after = await reread(tx, lead.id);
+        });
+        assert(after!.lead_status === "Under_Discussion", `status is ${after!.lead_status}, expected Under_Discussion`);
+        assert(history, "no status history row");
+        assert(after!.interest_level === lead.interest_level, "a productive visit changed the temperature");
+        return `${lead.id}: Assigned → Under discussion from the outcome alone; temperature left as it was`;
+    });
+
+    await check("ID 114 review 2: an API call that sends no temperature gets one, in the same transaction", async () => {
+        const lead = await findLead(sql`dl.lead_status = 'Assigned_Not_Contacted' AND ${OWNED}`);
+        if (!lead) throw new Error("SKIP: no owned Assigned_Not_Contacted lead");
+        const o = outcomeFor(lead.interest_level);
+        let after: Lead | null = null;
+        await rolledBack(async (tx) => {
+            // The touchpoints API body with no interest_level and no status_change —
+            // an API client or the Assistant, not the form.
+            await logLeadTouchpoint(
+                {
+                    leadId: lead.id,
+                    actorId: lead.current_owner_id!,
+                    body: {
+                        touchpoint_type: "inside_sales_call",
+                        disposition: { connect_status: "connected", label: o.label },
+                        remarks: "verify-status-outcome",
+                    },
+                },
+                { tx },
+            );
+            after = await reread(tx, lead.id);
+        });
+        assert(after!.lead_status === "Under_Discussion", `status is ${after!.lead_status}, expected Under_Discussion`);
+        assert(after!.interest_level === o.to, `temperature is ${after!.interest_level}, expected ${o.to}`);
+        const gone = await findLead(sql`dl.id = ${lead.id}`);
+        assert(
+            gone!.lead_status === lead.lead_status && gone!.interest_level === lead.interest_level,
+            "status / temperature did not roll back together",
+        );
+        return `${lead.id}: one write set Under discussion and ${o.to}; rolled back together`;
+    });
+
+    await check("ID 114 review 3 / ID 115: a rep asking for Under discussion on a note is not obeyed", async () => {
+        const lead = await findLead(sql`dl.lead_status = 'Assigned_Not_Contacted' AND ${OWNED}`);
+        if (!lead) throw new Error("SKIP: no owned Assigned_Not_Contacted lead");
+        let after: Lead | null = null;
+        let history: string | null = null;
+        await rolledBack(async (tx) => {
+            const r = await logLeadTouchpoint(
+                {
+                    leadId: lead.id,
+                    actorId: lead.current_owner_id!,
+                    body: {
+                        touchpoint_type: "status_change_note",
+                        remarks: "verify-status-outcome: spoke to the dealer",
+                        status_change: { to: "Under_Discussion", reason_notes: "asked for by hand" },
+                    },
+                },
+                { tx },
+            );
+            history = r.historyId;
+            after = await reread(tx, lead.id);
+        });
+        assert(after!.lead_status === "Assigned_Not_Contacted", `status is ${after!.lead_status}, expected no move`);
+        assert(!history, "a status history row was written");
+        return `${lead.id}: the note was saved, the status stayed Assigned`;
     });
 
     await check("ID 115 reactivation goes through the guard: Lost → Assigned clears the closing fields", async () => {

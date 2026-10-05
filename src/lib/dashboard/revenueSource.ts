@@ -33,9 +33,20 @@
  */
 import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { dealerLeadByGstin, GSTIN_KEY } from "@/lib/leads/gstinMatch";
+import {
+  accountOwnerOn,
+  accountsByGstinKey,
+  GSTIN_KEY,
+  leadsByGstinKey,
+} from "@/lib/leads/gstinMatch";
+import { hasAccountOwnershipTables } from "@/lib/accounts/tables";
+import { hasInvoiceLedgerTables } from "@/lib/sales/ledgerTables";
 
-export type RevenueInvoiceSource = "zoho" | "drive";
+/**
+ * 'credit' (E-322, tracker ID 71) is a credit note: a NEGATIVE amount dated on
+ * the day it was issued, so it reduces revenue in the month it is issued.
+ */
+export type RevenueInvoiceSource = "zoho" | "drive" | "credit";
 
 export interface RevenueInvoiceRow {
   source: RevenueInvoiceSource;
@@ -66,7 +77,15 @@ export interface RevenueInvoiceRow {
   dealer_lead_id?: string | null;
   dealer_name?: string | null;
   dealer_owner_id?: string | null;
+  /** E-321: the dealer account the invoice matched (accounts.id), if any. */
+  account_id?: string | null;
+  /** E-321: 'linked' | 'not_dealer' when decided by hand. */
+  link_kind?: string | null;
+  /** E-321 work-list status — see matchedUnion(). */
+  match_status?: InvoiceMatchStatus;
 }
+
+export type InvoiceMatchStatus = "credited" | "no_owner" | "unknown" | "not_dealer";
 
 /**
  * Whether `sales_invoices` exists, cached so the probe is not one extra round
@@ -121,6 +140,9 @@ export async function isDriveRevenueAvailable(): Promise<boolean> {
  * every value after it.
  */
 async function revenueUnion(): Promise<SQL> {
+  // E-322 (IDs 70, 71): GSTIN backfill, voids and credit notes. Without it the
+  // union is exactly the pre-E-322 shape.
+  const ledger = await hasInvoiceLedgerTables();
   const zoho = sql`
     SELECT
       'zoho'::text                                                   AS source,
@@ -131,16 +153,24 @@ async function revenueUnion(): Promise<SQL> {
       zi.customer_name                                               AS customer_name,
       zi.total                                                       AS total,
       zi.balance                                                     AS balance,
-      zi.status                                                      AS status,
+      ${ledger ? sql`CASE WHEN zv.invoice_id IS NOT NULL THEN 'void' ELSE zi.status END` : sql`zi.status`} AS status,
       zi.organization_id                                             AS organization_id,
       ('/api/admin/zoho/invoices/' || zi.zoho_invoice_id || '/pdf')  AS document_url,
       zi.payment_reference                                           AS payment_reference,
       false                                                          AS needs_attention,
       NULL::text                                                     AS attention_reason,
-      -- Zoho's invoice LIST payload (what the sync stores) carries no GSTIN
-      -- today; read gst_no anyway so a richer sync starts matching unaided.
-      ${GSTIN_KEY(sql`zi.raw_json->>'gst_no'`)}                      AS gstin_key
+      -- Zoho's invoice LIST payload (what the sync stores) carries no GSTIN.
+      -- E-322 (ID 70): the one-time backfill's zoho_customer_gstins first,
+      -- then raw_json's gst_no in case a richer sync ever stores it.
+      ${GSTIN_KEY(ledger ? sql`COALESCE(zcg.gstin, zi.raw_json->>'gst_no')` : sql`zi.raw_json->>'gst_no'`)} AS gstin_key
     FROM zoho_invoices zi
+    ${ledger
+      ? sql`LEFT JOIN zoho_customer_gstins zcg
+                   ON zcg.organization_id = COALESCE(zi.organization_id, '')
+                  AND zcg.customer_id = zi.customer_id
+            LEFT JOIN invoice_voids zv
+                   ON zv.source = 'zoho' AND zv.invoice_id = zi.id::text`
+      : sql``}
   `;
 
   if (!(await hasSalesInvoicesTable())) {
@@ -157,7 +187,7 @@ async function revenueUnion(): Promise<SQL> {
       si.customer_name                                               AS customer_name,
       si.total                                                       AS total,
       (COALESCE(si.total, 0) - si.amount_paid)                       AS balance,
-      si.status                                                      AS status,
+      ${ledger ? sql`CASE WHEN dv.invoice_id IS NOT NULL THEN 'void' ELSE si.status END` : sql`si.status`} AS status,
       si.organization_id                                             AS organization_id,
       si.document_url                                                AS document_url,
       si.payment_reference                                           AS payment_reference,
@@ -165,37 +195,130 @@ async function revenueUnion(): Promise<SQL> {
       si.attention_reason                                            AS attention_reason,
       ${GSTIN_KEY(sql`si.customer_gstin`)}                           AS gstin_key
     FROM sales_invoices si
+    ${ledger
+      ? sql`LEFT JOIN invoice_voids dv ON dv.source = 'drive' AND dv.invoice_id = si.id::text`
+      : sql``}
   `;
 
-  return sql`(${zoho} UNION ALL ${drive})`;
+  if (!ledger) return sql`(${zoho} UNION ALL ${drive})`;
+
+  // E-322 (ID 71): credit notes reduce revenue in the month they are issued —
+  // a negative amount on the issue date, matched to a dealer like an invoice.
+  // Status 'credit_note' keeps them out of the outstanding rule (balance 0).
+  const credit = sql`
+    SELECT
+      'credit'::text                                                 AS source,
+      cn.id::text                                                    AS id,
+      cn.note_number                                                 AS invoice_number,
+      cn.issue_date                                                  AS invoice_date,
+      NULL::date                                                     AS due_date,
+      cn.customer_name                                               AS customer_name,
+      -(COALESCE(cn.total, 0))                                       AS total,
+      0::numeric                                                     AS balance,
+      CASE WHEN cv.invoice_id IS NOT NULL THEN 'void' ELSE 'credit_note' END AS status,
+      cn.organization_id                                             AS organization_id,
+      cn.document_url                                                AS document_url,
+      NULL::text                                                     AS payment_reference,
+      cn.needs_attention                                             AS needs_attention,
+      cn.attention_reason                                            AS attention_reason,
+      ${GSTIN_KEY(sql`cn.customer_gstin`)}                           AS gstin_key
+    FROM credit_notes cn
+    LEFT JOIN invoice_voids cv ON cv.source = 'credit' AND cv.invoice_id = cn.id::text
+  `;
+
+  return sql`(${zoho} UNION ALL ${drive} UNION ALL ${credit})`;
 }
 
 /**
- * The union with each invoice linked to a CRM dealer on GSTIN (review R-11).
+ * The union with each invoice linked to a CRM dealer (review R-11, E-321).
  *
  * An invoice carries only a typed customer name, which cannot be joined to
- * anything reliably; the GSTIN can. The matching rule lives in
- * src/lib/leads/gstinMatch.ts, shared with the Sales dashboard's battery and
- * KYC attribution, so one dealer can never credit two salespeople.
+ * anything reliably; the GSTIN can. Two matchers, in order (tracker ID 68 /
+ * handover P1-5):
+ *   1. the dealer ACCOUNT — a hand link (invoice_account_links), else the
+ *      account's GSTIN or one of its account_gstins aliases. Credit goes to the
+ *      account owner ON THE INVOICE DATE (account_owner_history), so
+ *      reassigning a dealer never moves revenue already reported.
+ *   2. only when no account matches: the lead / onboarding GSTIN rule in
+ *      src/lib/leads/gstinMatch.ts, credited to that lead's current owner.
  *
- * The SPOC an invoice counts for is that lead's CURRENT owner — the metric
- * dictionary's "owner at invoice date" needs ownership history per day, which
- * E-295's episodes could supply later.
+ * match_status (tracker ID 69 / P1-6 work list):
+ *   credited    — matched, and someone owned it on the invoice date
+ *   no_owner    — matched to a dealer account / lead that had no owner
+ *   unknown     — has a GSTIN that matches no account and no lead
+ *   not_dealer  — marked "not a dealer sale" by hand, or carries no GSTIN
  *
- * Kept separate from revenueUnion(): company totals and the chart never need
- * the match, and must not move because of it. Exported for the Sales
- * dashboard, which joins it to dealer_leads so its city / state /
- * business-type filters apply to revenue too.
+ * Without E-321 applied the account matcher is skipped and the result is the
+ * pre-E-321 lead-only match. Kept separate from revenueUnion(): company totals
+ * and the chart never need the match, and must not move because of it.
  */
 export async function matchedUnion(): Promise<SQL> {
   const src = await revenueUnion();
+  // Both matchers are keyed sets built once and hash-joined (see
+  // gstinMatch.ts) — not a search per invoice.
+  if (!(await hasAccountOwnershipTables())) {
+    return sql`(
+      WITH lead_keys AS (${leadsByGstinKey()})
+      SELECT u.*,
+             m.dealer_lead_id,
+             m.dealer_name,
+             m.dealer_owner_id,
+             NULL::text AS account_id,
+             NULL::text AS link_kind,
+             CASE WHEN m.dealer_lead_id IS NOT NULL AND m.dealer_owner_id IS NOT NULL THEN 'credited'
+                  WHEN m.dealer_lead_id IS NOT NULL THEN 'no_owner'
+                  WHEN u.gstin_key IS NULL THEN 'not_dealer'
+                  ELSE 'unknown' END AS match_status
+        FROM ${src} AS u
+        LEFT JOIN lead_keys m ON m.k = u.gstin_key
+    )`;
+  }
   return sql`(
-    SELECT u.*,
-           m.dealer_lead_id,
-           m.dealer_name,
-           m.dealer_owner_id
-      FROM ${src} AS u
-      LEFT JOIN ${dealerLeadByGstin(sql`u.gstin_key`)} m ON TRUE
+    WITH lead_keys AS (${leadsByGstinKey()}),
+         account_keys AS (${accountsByGstinKey()}),
+         matched AS (
+           SELECT u.*,
+                  lk.kind AS link_kind,
+                  -- A hand link wins; otherwise the account owning the GSTIN.
+                  CASE WHEN lk.kind = 'linked' THEN la.id ELSE ak.account_id END AS m_account_id,
+                  CASE WHEN lk.kind = 'linked' THEN la.business_entity_name ELSE ak.account_name END AS m_account_name
+             FROM ${src} AS u
+             LEFT JOIN invoice_account_links lk ON lk.source = u.source AND lk.invoice_id = u.id
+             LEFT JOIN accounts la ON lk.kind = 'linked' AND la.id = lk.account_id
+             LEFT JOIN account_keys ak ON lk.kind IS NULL AND ak.k = u.gstin_key
+         ),
+         credited AS (
+           SELECT mt.*,
+                  -- Past revenue never moves: the owner whose window holds the
+                  -- invoice date (IST day), not today's owner.
+                  ${accountOwnerOn(sql`mt.m_account_id`, sql`mt.invoice_date`)} AS m_account_owner_id
+             FROM matched mt
+         )
+    SELECT x.*,
+           CASE WHEN x.link_kind = 'not_dealer'
+                  OR (x.gstin_key IS NULL AND x.account_id IS NULL) THEN 'not_dealer'
+                WHEN x.account_id IS NULL AND x.dealer_lead_id IS NULL THEN 'unknown'
+                WHEN x.dealer_owner_id IS NULL THEN 'no_owner'
+                ELSE 'credited' END AS match_status
+      FROM (
+        SELECT c.source, c.id, c.invoice_number, c.invoice_date, c.due_date, c.customer_name,
+               c.total, c.balance, c.status, c.organization_id, c.document_url,
+               c.payment_reference, c.needs_attention, c.attention_reason, c.gstin_key,
+               CASE WHEN c.link_kind = 'not_dealer' THEN NULL
+                    ELSE COALESCE(ao.source_dealer_lead_id, m.dealer_lead_id) END AS dealer_lead_id,
+               CASE WHEN c.link_kind = 'not_dealer' THEN NULL
+                    ELSE COALESCE(c.m_account_name, m.dealer_name) END          AS dealer_name,
+               CASE WHEN c.link_kind = 'not_dealer' THEN NULL
+                    WHEN c.m_account_id IS NOT NULL THEN c.m_account_owner_id
+                    ELSE m.dealer_owner_id::text END                            AS dealer_owner_id,
+               CASE WHEN c.link_kind = 'not_dealer' THEN NULL
+                    ELSE c.m_account_id END                                     AS account_id,
+               c.link_kind                                                      AS link_kind
+          FROM credited c
+          LEFT JOIN account_ownership ao ON ao.account_id = c.m_account_id
+          -- The lead / onboarding GSTIN only when no account matched.
+          LEFT JOIN lead_keys m ON c.m_account_id IS NULL AND c.link_kind IS NULL AND m.k = c.gstin_key
+      ) x
   )`;
 }
 
@@ -350,9 +473,17 @@ export interface RevenueListFilters {
   source?: RevenueInvoiceSource | null;
   /** R-11 reconciliation: only invoices linked / not linked to a CRM dealer. */
   dealerMatch?: InvoiceDealerMatch | null;
+  /**
+   * E-321 work list (tracker ID 69): restrict to these match statuses, e.g.
+   * everything not 'credited' for the unmatched-invoices list.
+   */
+  matchStatuses?: InvoiceMatchStatus[] | null;
   limit?: number;
   offset?: number;
 }
+
+/** Matched to a dealer account or lead (on a matchedUnion() row `r`). */
+const MATCHED_TO_DEALER = sql`(r.account_id IS NOT NULL OR r.dealer_lead_id IS NOT NULL)`;
 
 function listWhere(f: RevenueListFilters): SQL {
   const parts: SQL[] = [];
@@ -371,8 +502,13 @@ function listWhere(f: RevenueListFilters): SQL {
     parts.push(sql`r.customer_name ILIKE ${"%" + f.customer.trim() + "%"}`);
   }
   if (f.source) parts.push(sql`r.source = ${f.source}`);
-  if (f.dealerMatch === "linked") parts.push(sql`r.dealer_lead_id IS NOT NULL`);
-  if (f.dealerMatch === "unlinked") parts.push(sql`r.dealer_lead_id IS NULL`);
+  if (f.dealerMatch === "linked") parts.push(MATCHED_TO_DEALER);
+  if (f.dealerMatch === "unlinked") parts.push(sql`NOT ${MATCHED_TO_DEALER}`);
+  if (f.matchStatuses && f.matchStatuses.length > 0) {
+    parts.push(
+      sql`r.match_status IN (${sql.join(f.matchStatuses.map((s) => sql`${s}`), sql`, `)})`,
+    );
+  }
 
   if (parts.length === 0) return sql`TRUE`;
   return sql.join(parts, sql` AND `);
@@ -416,8 +552,8 @@ export async function revenueSummary(f: RevenueListFilters): Promise<{
       COUNT(*)                    AS count,
       COALESCE(SUM(r.total), 0)   AS total,
       COALESCE(SUM(r.balance), 0) AS balance,
-      COUNT(*) FILTER (WHERE r.dealer_lead_id IS NULL)                  AS unlinked_count,
-      COALESCE(SUM(r.total) FILTER (WHERE r.dealer_lead_id IS NULL), 0) AS unlinked_total
+      COUNT(*) FILTER (WHERE NOT ${MATCHED_TO_DEALER})                  AS unlinked_count,
+      COALESCE(SUM(r.total) FILTER (WHERE NOT ${MATCHED_TO_DEALER}), 0) AS unlinked_total
     FROM ${src} AS r
     WHERE ${listWhere(f)}
   `);
@@ -473,3 +609,28 @@ export async function drillDownRows(
   return rowsOf<RevenueInvoiceRow>(res);
 }
 
+
+/**
+ * E-322 (tracker ID 39) — invoice LINES joined to their matched invoice, as a
+ * SQL fragment: every column of matchedUnion() (`r`) plus the line's
+ * product_class, product_id, asset_type, item_name, hsn, quantity and
+ * amount_excl_gst. Sales-invoice lines come from the Vyapar register (source
+ * 'vyapar'), Zoho lines from the one-time backfill. NULL when E-322 is not
+ * applied — callers then have no line data and must say so.
+ *
+ * Batteries sold are counted from these lines only (Kartik, 26 Sep), never
+ * from stock allocation.
+ */
+export async function matchedLinesUnion(): Promise<SQL | null> {
+  if (!(await hasInvoiceLedgerTables())) return null;
+  const src = await matchedUnion();
+  return sql`(
+    SELECT r.*,
+           l.product_class, l.product_id, l.asset_type, l.item_name, l.hsn,
+           l.quantity, l.amount_excl_gst
+      FROM ${src} AS r
+      JOIN invoice_line_items l
+        ON l.invoice_id = r.id
+       AND (l.source = r.source OR (r.source = 'drive' AND l.source IN ('vyapar', 'drive')))
+  )`;
+}

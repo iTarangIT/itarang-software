@@ -1,5 +1,5 @@
 /**
- * Public, UN-authenticated VKYC callback (§10).
+ * Public (no session) VKYC callback (§10).
  *
  *  - iTarang mode (Q1b): Decentro posts `decentroTxnId` server-to-server when
  *    the customer finishes the hosted session. We match the attempt by
@@ -8,13 +8,22 @@
  *  - Own mode (Q1a): the NBFC posts `vkyc_ref` + a CANONICAL status (§9.3); we
  *    map it onto the track directly.
  *
- * Always 200 so neither integration retries endlessly.
+ * Who is calling (tracker ID 118):
+ *  - Decentro has no signature on this product, so that path only FLAGS the
+ *    attempt; the verdict is fetched from Decentro by the /status route. A
+ *    forged call cannot set a result.
+ *  - The NBFC's own path sets the verdict directly, so it must be signed with
+ *    X-iTarang-Signature against the tenant's vkyc_webhook_secret — see
+ *    inboundCallbackAllowed.
+ *
+ * Always 200 to a genuine caller so neither integration retries endlessly.
  */
 import { NextRequest, NextResponse } from "next/server";
 import { desc, eq } from "drizzle-orm";
 
 import { db } from "@/lib/db";
-import { videoKycAttempts, videoKycVerifications } from "@/lib/db/schema";
+import { nbfcServiceConfig, videoKycAttempts, videoKycVerifications } from "@/lib/db/schema";
+import { inboundCallbackAllowed } from "@/lib/nbfc/handoff";
 import { VKYC_STATES, type VkycState } from "@/lib/nbfc/vkyc";
 import { tenantDisplayName } from "@/lib/notifications/emit";
 import { notifyVkycEvent } from "@/lib/notifications/events";
@@ -30,7 +39,10 @@ function pickStr(body: Record<string, unknown>, ...keys: string[]): string | nul
   return null;
 }
 
-async function process(body: Record<string, unknown>): Promise<{ code: number; msg: string }> {
+async function process(
+  body: Record<string, unknown>,
+  sent: { rawBody: string; signature: string | null },
+): Promise<{ code: number; msg: string }> {
   const decentroTxnId = pickStr(body, "decentroTxnId", "decentro_txn_id");
   const vkycRef = pickStr(body, "vkyc_ref", "reference_id", "ref");
   const rawStatus = pickStr(body, "status", "responseStatus");
@@ -71,6 +83,22 @@ async function process(body: Record<string, unknown>): Promise<{ code: number; m
       console.warn("[NBFC VKYC callback] No track for vkyc_ref:", vkycRef);
       return { code: 200, msg: "No matching track" };
     }
+    // The vkyc_ref travels in the hand-off URL, so the ref alone is not proof.
+    const [cfg] = await db
+      .select({ secret: nbfcServiceConfig.vkyc_webhook_secret })
+      .from(nbfcServiceConfig)
+      .where(eq(nbfcServiceConfig.tenant_id, track.tenant_id))
+      .limit(1);
+    if (
+      !inboundCallbackAllowed({
+        route: "/api/nbfc/vkyc/callback",
+        secret: cfg?.secret,
+        rawBody: sent.rawBody,
+        signatureHeader: sent.signature,
+      })
+    ) {
+      return { code: 401, msg: "Invalid signature" };
+    }
     const canonical = (rawStatus ?? "").toLowerCase();
     const next: VkycState = (VKYC_STATES as readonly string[]).includes(canonical)
       ? (canonical as VkycState)
@@ -106,9 +134,11 @@ async function process(body: Record<string, unknown>): Promise<{ code: number; m
 
 export async function POST(req: NextRequest) {
   try {
+    // Read as text: the NBFC's signature is over the exact bytes it sent.
+    const rawBody = await req.text();
     let body: Record<string, unknown> = {};
     try {
-      body = (await req.json()) as Record<string, unknown>;
+      body = rawBody ? (JSON.parse(rawBody) as Record<string, unknown>) : {};
     } catch {
       body = {};
     }
@@ -116,7 +146,7 @@ export async function POST(req: NextRequest) {
     url.searchParams.forEach((v, k) => {
       if (!(k in body)) body[k] = v;
     });
-    const r = await process(body);
+    const r = await process(body, { rawBody, signature: req.headers.get("x-itarang-signature") });
     return new NextResponse(r.msg, { status: r.code, headers: { "Content-Type": "text/plain; charset=utf-8" } });
   } catch (error) {
     console.error("[NBFC VKYC callback] Error:", error);
@@ -128,7 +158,8 @@ export async function GET(req: NextRequest) {
   const body: Record<string, unknown> = {};
   new URL(req.url).searchParams.forEach((v, k) => (body[k] = v));
   if (body.decentroTxnId || body.vkyc_ref || body.reference_id) {
-    const r = await process(body);
+    // A GET has no body to sign: the signature (if any) is over the empty string.
+    const r = await process(body, { rawBody: "", signature: req.headers.get("x-itarang-signature") });
     return new NextResponse(r.msg, { status: r.code, headers: { "Content-Type": "text/plain; charset=utf-8" } });
   }
   return new NextResponse("NBFC VKYC callback endpoint", { status: 200, headers: { "Content-Type": "text/plain; charset=utf-8" } });

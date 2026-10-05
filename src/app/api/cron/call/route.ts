@@ -9,10 +9,14 @@ import {
   aiDialableCondition,
 } from "@/lib/ai-dialer/exclusionFilter";
 import { retireAiConnectedFollowUps } from "@/lib/ai-dialer/aiConnection";
+import { checkCronAuth } from "@/lib/cron-auth";
 
 const MAX_CONSECUTIVE_5XX = 3;
 
-export async function GET() {
+export async function GET(req: Request) {
+  // ID 118: a cron runs with the CRON_SECRET bearer, like every other /api/cron route.
+  const cronDenied = checkCronAuth(req);
+  if (cronDenied) return cronDenied;
   const now = new Date();
 
   const candidates = await db.query.dealerLeads.findMany({

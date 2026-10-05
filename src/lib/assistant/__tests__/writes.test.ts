@@ -91,7 +91,7 @@ describe("log_call proposals (UC-02, UC-03)", () => {
         const cases: Record<string, unknown>[] = [
             { channel: "call", connect_status: "connected", disposition: "Commercials Explained" }, // warm or hot?
             { channel: "call", connect_status: "connected", disposition: "Price High", bucket: "Warm" }, // still talking or lost?
-            { channel: "call", connect_status: "connected", disposition: "As to Call Back", bucket: "Cold", status: "Converted" },
+            { channel: "call", connect_status: "connected", disposition: "As to Call Back", bucket: "Cold", status: "Commercials_Finalised" },
             { channel: "call", connect_status: "not_connected", disposition: "Switch off", status: "Lost" },
             { channel: "call", connect_status: "connected", disposition: "REJECTED BY US", bucket: "Lost", status: "Lost" },
             { channel: "call", connect_status: "not_connected", disposition: "Did not pick", follow_up_at: "2026-09-20T11:00:00+05:30" }, // past
@@ -144,15 +144,25 @@ describe("set_follow_up proposals (UC-07)", () => {
     it("ISR: follow-up instant → isr_follow_up plan", async () => {
         const r = await run(ISR, "set_follow_up", { lead_id: "DL-1", follow_up_at: "2026-09-28T10:00:00+05:30", note: "send brochure" });
         expect(r.kind).toBe("preview");
-        expect(stored().plan).toEqual({ kind: "isr_follow_up", lead_id: "DL-1", follow_up_at: "2026-09-28T04:30:00.000Z", note: "send brochure", status_to: null });
+        // ID 80: a follow-up plan carries no status at all.
+        expect(stored().plan).toEqual({ kind: "isr_follow_up", lead_id: "DL-1", follow_up_at: "2026-09-28T04:30:00.000Z", note: "send brochure" });
         expect(stored().preview.resets_idle_clock).toBe(false);
+    });
+
+    // ID 80: a card proposed BEFORE the deploy may still say "→ Under Discussion".
+    // Confirmed afterwards, its plan is re-validated and the status is dropped.
+    it("a stored plan that still carries status_to loses it when it is applied", async () => {
+        const { SetFollowUpPlan } = await import("../tools/write/setFollowUp");
+        const old = { kind: "isr_follow_up", lead_id: "DL-1", follow_up_at: "2026-09-28T04:30:00.000Z", note: "talked", status_to: "Under_Discussion" };
+        expect(SetFollowUpPlan.parse(old)).toEqual({ kind: "isr_follow_up", lead_id: "DL-1", follow_up_at: "2026-09-28T04:30:00.000Z", note: "talked" });
+        expect(SetFollowUpPlan.parse({ kind: "asm_visit", lead_id: "DL-1", visit_date: "2026-09-28", note: "x", status_to: "Under_Discussion" })).not.toHaveProperty("status_to");
     });
 
     it("UC-07 ASM: 'Schedule Gupta Motors for Monday' → a scheduled visit that goes to Today's Schedule", async () => {
         findLeadInScope.mockResolvedValue(lead({ current_owner_id: "asm-1", asm_id: "asm-1", shop_name: "Gupta Motors" }));
         const r = await run(ASM, "set_follow_up", { lead_id: "DL-1", visit_date: "2026-09-28", note: "discuss quote" });
         expect(r.kind).toBe("preview");
-        expect(stored().plan).toEqual({ kind: "asm_visit", lead_id: "DL-1", visit_date: "2026-09-28", note: "discuss quote", status_to: null });
+        expect(stored().plan).toEqual({ kind: "asm_visit", lead_id: "DL-1", visit_date: "2026-09-28", note: "discuss quote" });
         expect(stored().preview).toMatchObject({ title: "Schedule visit — Gupta Motors", warning: null });
         expect(stored().preview.lines[0]).toEqual({ label: "Visit", value: "Mon 28 Sep (goes to Today's Schedule)" });
     });
@@ -220,6 +230,7 @@ describe("appliers (run inside the executor's transaction)", () => {
         // The executor parses the stored plan before it opens the transaction.
         expect(() => APPLIERS.log_call!.schema.parse({ ...callPlan, lost: { reason: "because", notes: null } })).toThrow();
         expect(() => APPLIERS.log_call!.schema.parse({ ...callPlan, touchpoint_type: "quote_sent" })).toThrow();
+        expect(() => APPLIERS.log_call!.schema.parse({ ...callPlan, touchpoint_type: "quote_released" })).toThrow();
         expect(logLeadTouchpoint).not.toHaveBeenCalled();
     });
 });

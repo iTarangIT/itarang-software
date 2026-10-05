@@ -11,6 +11,7 @@ import { AlertTriangle, Loader2, PhoneOff } from "lucide-react";
 
 import { BulkActionBar } from "@/app/(dashboard)/admin/_components/BulkActionBar";
 import type { NeedsAttentionHolderSummary, NeedsAttentionRow } from "@/lib/leads/needsAttention";
+import { LEAD_STATUS_LABEL } from "@/lib/leads/queueFilters";
 
 const QUERY_KEY = ["needs-attention"];
 
@@ -121,9 +122,16 @@ export function NeedsAttentionView() {
                                 </div>
                             </td>
                             <td className="px-3 py-2 text-ink-muted">
-                                {(r.lead_status ?? "—").replace(/_/g, " ")}
+                                {(r.lead_status && (LEAD_STATUS_LABEL as Record<string, string>)[r.lead_status]) || (r.lead_status ?? "—").replace(/_/g, " ")}
                                 {r.interest_level && (
                                     <span className="ml-1 text-[11px] uppercase">· {r.interest_level}</span>
+                                )}
+                                {r.visit_overdue && (
+                                    <div className="mt-0.5">
+                                        <span className="rounded bg-rose-100 px-1.5 py-0.5 text-[10px] font-semibold text-rose-700">
+                                            Field visit overdue
+                                        </span>
+                                    </div>
                                 )}
                             </td>
                             <td className={`px-3 py-2 text-right tabular-nums ${idleTone(r.days_idle)}`}>

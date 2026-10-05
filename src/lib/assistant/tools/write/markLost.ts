@@ -65,6 +65,14 @@ export const markLost: ToolFactory = () =>
                     crm_url: crmUrl,
                 };
             }
+            // ID 115.4: Won → Lost only through the admin onboarding drop-out review.
+            if (lead.lead_status === "Won") {
+                return {
+                    kind: "declined",
+                    reason: "This lead is Won. Only an admin can close a Won lead (onboarding drop-out review).",
+                    crm_url: crmUrl,
+                };
+            }
             const notes = input.notes?.trim() || null;
             if (input.lost_reason === "other" && !notes) return ask("Why was it lost? I need a short note for 'other'.");
 

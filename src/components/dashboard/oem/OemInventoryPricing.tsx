@@ -35,6 +35,7 @@ import {
     type SortSpec,
 } from "@/components/shared/TableSort";
 import { OemPriceScheduleDrawer } from "./OemPriceScheduleDrawer";
+import { ListPriceDrawer } from "./ListPriceDrawer";
 
 export interface OemCatalogueRow {
     asset_type: "battery" | "charger" | "paraphernalia";
@@ -52,6 +53,15 @@ export interface OemCatalogueRow {
     next_price_id: string | null;
     next_effective_from: string | null;
     next_valid_until: string | null;
+}
+
+/** E-321 — the live / next list price for a product that has one. */
+interface ListPriceEntry {
+    asset_type: string;
+    product_id: string;
+    list_price: number | null;
+    next_list_price: number | null;
+    next_effective_from: string | null;
 }
 
 interface CatalogueResponse {
@@ -153,6 +163,7 @@ export function OemInventoryPricing() {
     const [draft, setDraft] = React.useState<Draft | null>(null);
     const [error, setError] = React.useState<string | null>(null);
     const [scheduleFor, setScheduleFor] = React.useState<OemCatalogueRow | null>(null);
+    const [listPriceFor, setListPriceFor] = React.useState<OemCatalogueRow | null>(null);
     // One clock reading per mount — see daysUntil above.
     const [now] = React.useState(() => Date.now());
 
@@ -164,6 +175,22 @@ export function OemInventoryPricing() {
             return (await r.json()).data as CatalogueResponse;
         },
     });
+
+    // E-321 — list prices, joined client-side. Optional: a failure or an
+    // unmigrated database just leaves the column reading "prints OEM".
+    const { data: listData } = useQuery<{ available: boolean; prices: ListPriceEntry[] }>({
+        queryKey: ["list-price-catalogue"],
+        queryFn: async () => {
+            const r = await fetch("/api/dashboard/ceo/list-prices", { cache: "no-store" });
+            if (!r.ok) throw new Error("Failed to load list prices");
+            return (await r.json()).data;
+        },
+    });
+    const listByKey = React.useMemo(() => {
+        const m = new Map<string, ListPriceEntry>();
+        for (const p of listData?.prices ?? []) m.set(`${p.asset_type}:${p.product_id}`, p);
+        return m;
+    }, [listData]);
 
     const save = useMutation({
         mutationFn: async (vars: { row: OemCatalogueRow; draft: Draft }) => {
@@ -335,6 +362,7 @@ export function OemInventoryPricing() {
                                 <SortableTh label="Model ID" sortKey="model_id" sort={sort} onToggle={toggle} />
                                 <SortableTh label="Category" sortKey="asset_type" sort={sort} onToggle={toggle} />
                                 <SortableTh label="OEM Price" sortKey="oem_price" sort={sort} onToggle={toggle} align="right" />
+                                <th className="py-2 px-2 font-semibold text-right">List Price</th>
                                 <SortableTh label="Valid Until" sortKey="valid_until" sort={sort} onToggle={toggle} />
                                 <th className="py-2 px-2 font-semibold">Next Scheduled</th>
                                 <SortableTh label="Set By" sortKey="set_by_name" sort={sort} onToggle={toggle} />
@@ -349,6 +377,7 @@ export function OemInventoryPricing() {
                                     save.isPending && rowKey(save.variables!.row) === key;
                                 const lapsing = isLapsing(row, now);
                                 const left = daysUntil(row.valid_until, now);
+                                const list = listByKey.get(key);
 
                                 return (
                                     <React.Fragment key={key}>
@@ -379,6 +408,31 @@ export function OemInventoryPricing() {
                                                         not set
                                                     </span>
                                                 )}
+                                            </td>
+                                            <td className="py-2 px-2 text-right tabular-nums whitespace-nowrap">
+                                                <button
+                                                    type="button"
+                                                    title="Set the list price printed on quotations"
+                                                    disabled={listData?.available === false}
+                                                    onClick={() => setListPriceFor(row)}
+                                                    className="rounded px-1 hover:bg-gray-50 disabled:cursor-not-allowed"
+                                                >
+                                                    {list?.list_price != null ? (
+                                                        <span className="font-semibold text-gray-900">
+                                                            {formatINRExact(list.list_price)}
+                                                        </span>
+                                                    ) : (
+                                                        <span className="text-[10px] text-gray-400">
+                                                            — (prints OEM)
+                                                        </span>
+                                                    )}
+                                                    {list?.next_list_price != null && (
+                                                        <span className="block text-[10px] text-blue-600 font-medium">
+                                                            {formatINRExact(list.next_list_price)} from{" "}
+                                                            {fmtDate(list.next_effective_from)}
+                                                        </span>
+                                                    )}
+                                                </button>
                                             </td>
                                             <td className="py-2 px-2 whitespace-nowrap">
                                                 {row.oem_price == null ? (
@@ -458,7 +512,7 @@ export function OemInventoryPricing() {
 
                                         {editing && (
                                             <tr className="border-b border-gray-100 bg-gray-50/60">
-                                                <td colSpan={8} className="py-3 px-2">
+                                                <td colSpan={9} className="py-3 px-2">
                                                     <PriceEditor
                                                         row={row}
                                                         draft={editing}
@@ -496,6 +550,16 @@ export function OemInventoryPricing() {
                     productId={scheduleFor.product_id}
                     productName={scheduleFor.product_name}
                     onClose={() => setScheduleFor(null)}
+                />
+            )}
+
+            {listPriceFor && (
+                <ListPriceDrawer
+                    assetType={listPriceFor.asset_type}
+                    productId={listPriceFor.product_id}
+                    productName={listPriceFor.product_name}
+                    oemPrice={listPriceFor.oem_price}
+                    onClose={() => setListPriceFor(null)}
                 />
             )}
         </Shell>

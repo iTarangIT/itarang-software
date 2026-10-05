@@ -93,7 +93,7 @@ export function LeadDetailHeader({
                             leadId={lead.id}
                             status={lead.lead_status}
                             editable={isOwner}
-                            canCorrect={viewerRole === "admin" || viewerRole === "ceo"}
+                            canCorrect={viewerRole === "admin"}
                             modalActions={statusModalActions}
                             onModalAction={onStatusModal}
                             onUpdated={onUpdated}
@@ -150,6 +150,23 @@ export function LeadDetailHeader({
                 {isEscalated && (
                     <Banner tone="amber" icon={AlertCircle}>
                         Escalated — pending admin review.
+                    </Banner>
+                )}
+                {/* ID 83 "caller not linked": the lead has no owner because the
+                    NeoDove agent who called it first is not linked to a CRM
+                    user — it is waiting on that link, not on a rep. */}
+                {isUnassigned && bundle.caller_not_linked && (
+                    <Banner tone="amber" icon={AlertCircle}>
+                        <span className="font-medium">Caller not linked.</span> First called by NeoDove agent{" "}
+                        <span className="font-medium">{bundle.caller_not_linked.agent_name ?? "(no name)"}</span> on{" "}
+                        {formatDateTime(bundle.caller_not_linked.first_call_at)}, who is not linked to a CRM user. Link the
+                        agent and this lead becomes theirs, dated at that call.{" "}
+                        <Link
+                            href="/leads/neodove-campaigns/agents"
+                            className="font-semibold underline underline-offset-2 hover:text-amber-900"
+                        >
+                            NeoDove agents →
+                        </Link>
                     </Banner>
                 )}
                 {wasReactivated && (

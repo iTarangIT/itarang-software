@@ -325,6 +325,15 @@ describe("buildDurationHistogramSql", () => {
         expect(query.params).toContain("camp_'; DROP TABLE users; --");
     });
 
+    it("is campaign-wide by default and owner-scoped (bound, current_owner_id) for own-only readers", () => {
+        expect(render()).not.toContain("current_owner_id");
+        const query = new PgDialect().sqlToQuery(
+            buildDurationHistogramSql("camp_1", BUCKETS, { ownerId: "user-9" }),
+        );
+        expect(query.sql).toContain("dl.current_owner_id = $");
+        expect(query.params).toContain("user-9");
+    });
+
     it("carries every configured bucket into the bound json", () => {
         expect(render()).toContain("jsonb_array_elements");
         const query = new PgDialect().sqlToQuery(buildDurationHistogramSql("camp_1", BUCKETS));

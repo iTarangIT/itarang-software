@@ -6,12 +6,10 @@
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 
-/** Roles whose lead exports are limited to the leads they own (ID 58). */
-export const OWN_LEADS_EXPORT_ROLES = ["asm", "inside_sales_rep", "partner"] as const;
-
-export function exportsOwnLeadsOnly(role: string | null | undefined): boolean {
-    return (OWN_LEADS_EXPORT_ROLES as readonly string[]).includes((role ?? "").toLowerCase());
-}
+// The own-leads rule lives in lib/leads/access.ts (client-safe — the screens
+// read it to decide whether to show an export button); re-exported here so the
+// export routes keep one import for "who is limited" and "log it".
+export { OWN_LEADS_EXPORT_ROLES, exportsOwnLeadsOnly } from "@/lib/leads/access";
 
 export async function logDataDownload(entry: {
     userId: string;

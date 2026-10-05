@@ -15,20 +15,27 @@
 //                 from Won, or from any open stage for a lead that was never
 //                 marked Won (direct onboardings, legacy rows).
 //   mark_lost     the Mark Lost action (reason enforced by its writer) — from
-//                 any open stage, Won included (a dealer who drops out).
+//                 any open stage before Won. Won → Lost only with
+//                 `adminOverride` (the admin onboarding drop-out resolution,
+//                 ID 115.4 / 74.5): a rep cannot un-win a dealer.
 //   visit         an ASM visit DONE, or "Visit not needed" with a reason — the
 //                 only events that end Transferred_to_ASM ("Awaiting field
 //                 visit", ID 77). Otherwise a forward move like progress.
 //   quote_withdrawn
-//                 Withdraw quote (ID 78): a commercials-stage lead goes back to
-//                 Under_Discussion - the one backward move an event may make.
+//                 Withdraw quote (ID 78): a lead at Commercials explained or
+//                 Awaiting customer decision goes back to Under_Discussion - the
+//                 one backward move an event may make. NOT from Commercials
+//                 finalised: the dealer said yes, and only Mark Won / Mark Lost
+//                 leave that stage.
 //   reactivation  a closed lead re-enters the pipeline at New_Unassigned or
 //                 Assigned_Not_Contacted (BRD §0.9 reactivation, drop-out re-engage).
 //   dropout_lost  admin drop-out resolution: Converted → Lost.
 //   correction    admin "Correct status" with a reason — the only override.
 //
-// A status equal to the current one is refused for every event: it would write
-// a history row that records nothing.
+// A status equal to the current one is a no-op for every event (ID 115.6): the
+// verdict is ok with `noop: true`, and the writer records the touchpoint but
+// skips the move — two reps logging the same move a second apart must not see
+// a 409 for a change that has, in fact, happened.
 
 import type { LeadStatus } from "@/lib/lifecycle/transitions";
 
@@ -66,7 +73,9 @@ export const STATUS_RANK: Readonly<Partial<Record<LeadStatus, number>>> = {
 const CLOSED = new Set<string>(["Converted", "Lost"]);
 const REOPEN_TARGETS = new Set<string>(["New_Unassigned", "Assigned_Not_Contacted"]);
 
-export type StatusGuardVerdict = { ok: true } | { ok: false; reason: string };
+export type StatusGuardVerdict =
+    | { ok: true; noop?: true }
+    | { ok: false; reason: string };
 
 /** Rank of a stored status; null / legacy values count as the start of the funnel. */
 export function rankOf(status: string | null): number | null {
@@ -90,10 +99,15 @@ export function checkStatusMove(input: {
     event: StatusEvent;
     /** Required for `correction`. */
     reason?: string | null;
+    /**
+     * An admin-driven move (the onboarding drop-out resolution). Only `mark_lost`
+     * reads it: Won → Lost is refused without it.
+     */
+    adminOverride?: boolean;
 }): StatusGuardVerdict {
     const { from, to, event } = input;
     const open = from == null || !CLOSED.has(from);
-    if (from === to) return { ok: false, reason: `The lead is already ${label(to)}.` };
+    if (from === to) return { ok: true, noop: true };
 
     switch (event) {
         case "progress":
@@ -124,6 +138,9 @@ export function checkStatusMove(input: {
         case "mark_lost":
             if (to !== "Lost") return { ok: false, reason: "Mark Lost can only set Lost." };
             if (!open) return { ok: false, reason: `The lead is already ${label(from)}.` };
+            if (from === "Won" && !input.adminOverride) {
+                return { ok: false, reason: "A Won lead can only be marked Lost by an admin, through the onboarding drop-out review." };
+            }
             return { ok: true };
         case "visit":
             if (!open) return { ok: false, reason: `The lead is ${label(from)}; it is closed.` };
@@ -135,7 +152,10 @@ export function checkStatusMove(input: {
             }
             return { ok: true };
         case "quote_withdrawn": {
-            const commercials = ["Commercials_Explained", "Awaiting_Customer_Decision", "Commercials_Finalised"];
+            if (from === "Commercials_Finalised") {
+                return { ok: false, reason: "The dealer approved the quote; from Commercials finalised use Mark Won or Mark Lost." };
+            }
+            const commercials = ["Commercials_Explained", "Awaiting_Customer_Decision"];
             if (to !== "Under_Discussion" || !commercials.includes(from ?? "")) {
                 return { ok: false, reason: "Withdrawing a quote moves a commercials-stage lead back to Under discussion only." };
             }

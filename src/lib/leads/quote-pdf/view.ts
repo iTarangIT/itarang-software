@@ -159,6 +159,18 @@ export function buildQuotationView(input: BuildQuotationViewInput): QuotationVie
     const quantity = Number(l.quantity) || 0;
     const amount = toPaise((Number.isFinite(rate) ? rate : 0) * quantity);
     const gstRatePct = ref?.gstRatePct ?? fallback?.gstRatePct ?? null;
+    const netRate = Number.isFinite(rate) ? rate : 0;
+
+    // E-321 — the snapshotted list price, and the discount down to the quoted
+    // rate, both before GST. A discount only when the list price is genuinely
+    // above the rate; an unpriced line (rate 0 because none was entered) gets
+    // none, since "discounted to nothing" is not what the rep said.
+    const rawList = l.list_price == null ? null : Number(l.list_price);
+    const listPrice = rawList != null && Number.isFinite(rawList) ? rawList : null;
+    const discount =
+      listPrice != null && l.unit_price != null && listPrice > netRate
+        ? toPaise((listPrice - netRate) * quantity)
+        : 0;
 
     // The model id earns its place under the name only when it says something
     // the name does not already contain.
@@ -178,7 +190,9 @@ export function buildQuotationView(input: BuildQuotationViewInput): QuotationVie
       // Paraphernalia is counted, not measured; the reference document prints
       // "pcs" on goods lines and nothing on the subscription line.
       unit: l.asset_type === "paraphernalia" ? null : "pcs",
-      rate: Number.isFinite(rate) ? rate : 0,
+      rate: netRate,
+      listPrice,
+      discount,
       amount,
       gstRatePct,
       gstAmount: lineGstAmount(amount, gstRatePct),
@@ -190,6 +204,8 @@ export function buildQuotationView(input: BuildQuotationViewInput): QuotationVie
     sellerStateCode: config.seller.stateCode,
     placeOfSupplyStateCode: placeOfSupply.stateCode,
   });
+
+  const totalDiscount = toPaise(lineViews.reduce((s, l) => s + l.discount, 0));
 
   return {
     documentTitle: config.documentTitle,
@@ -205,6 +221,8 @@ export function buildQuotationView(input: BuildQuotationViewInput): QuotationVie
     },
     lines: lineViews,
     subTotal: totals.subTotal,
+    totalDiscount,
+    hasDiscount: totalDiscount > 0,
     taxRows: totals.taxRows,
     total: totals.total,
     totalInWords: amountInWords(totals.total),

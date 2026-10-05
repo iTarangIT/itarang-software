@@ -40,7 +40,8 @@ export const OPEN_STATUSES: LeadStatus[] = [
  * Open statuses the REP still has to work (ID 74). Won is open but waiting on
  * the dealer's onboarding, not on a call or a visit — so idle / no-touch lists
  * leave it out. It is chased by the onboarding panels instead (stale
- * onboarding at 3 days, drop-outs at 21, stalled at 30).
+ * onboarding at 3 days, drop-outs at 21, stalled at 7 days waiting on the
+ * dealer or 2 working days waiting on us — ID 84).
  */
 export const WORKABLE_STATUSES: LeadStatus[] = OPEN_STATUSES.filter((s) => s !== "Won");
 
@@ -107,6 +108,8 @@ export const TRANSITION_MAP: Record<LeadStatus, LeadStatus[]> = Object.fromEntri
   LEAD_STATUS.map((from) => [
     from,
     LEAD_STATUS.filter((to) => {
+      // A same-status move is a no-op for the writer (ID 115.6), never a menu entry.
+      if (to === from) return false;
       if (to === "Transferred_to_ASM") return checkStatusMove({ from, to, event: "transfer" }).ok;
       if (to === "Won") return checkStatusMove({ from, to, event: "mark_won" }).ok;
       if (to === "Converted") return false; // onboarding approval only, never a rep's menu

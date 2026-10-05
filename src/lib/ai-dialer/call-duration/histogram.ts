@@ -231,8 +231,20 @@ export function bucketDefsJson(buckets: DurationBucket[]): string {
 export const BUCKET_MATCH_PREDICATE =
     "c.duration_seconds >= bd.lo AND (bd.hi IS NULL OR c.duration_seconds < bd.hi)";
 
-export function buildDurationHistogramSql(campaignId: string, buckets: DurationBucket[]): SQL {
+/**
+ * `ownerId` (ID 45): set for own-only campaign readers so the histogram covers
+ * just the leads they own — the same current_owner_id rule as the /leads
+ * route's ownedByCondition. Omitted = campaign-wide.
+ */
+export function buildDurationHistogramSql(
+    campaignId: string,
+    buckets: DurationBucket[],
+    opts: { ownerId?: string } = {},
+): SQL {
     const defs = bucketDefsJson(buckets);
+    const ownerFilter = opts.ownerId
+        ? sql` AND dcl.lead_id IN (SELECT dl.id FROM dealer_leads dl WHERE dl.current_owner_id = ${opts.ownerId})`
+        : sql``;
 
     return sql`
 WITH lead_call AS (
@@ -253,7 +265,7 @@ WITH lead_call AS (
        ORDER BY a.updated_at DESC NULLS LAST
        LIMIT 1
     ) acl ON TRUE
-   WHERE dcl.campaign_id = ${campaignId}
+   WHERE dcl.campaign_id = ${campaignId}${ownerFilter}
 ),
 connected AS (
   SELECT * FROM lead_call WHERE is_connected

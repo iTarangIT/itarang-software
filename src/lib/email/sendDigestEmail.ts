@@ -30,6 +30,7 @@ import type {
   DigestTable,
 } from "@/lib/digests/types";
 import type { DigestDetailLevel, DigestSections } from "@/lib/digests/schedule";
+import { RAG_CELL_STYLE, ragToneOfCell } from "@/lib/digests/rag";
 import { getMailer } from "./mailer";
 
 function esc(v: unknown): string {
@@ -175,6 +176,15 @@ export function buildDigestEmail(
         .join("");
       const isGroup = (r: Array<string | number>) =>
         !!t.groupHeaders && r.slice(1).every((v) => v === "" || v == null);
+      // ID 9: red / amber / green on the "% of target" columns (toneColumns).
+      const cellColor = (v: string | number, i: number): string => {
+        const tone = t.toneColumns?.includes(i) ? ragToneOfCell(v) : null;
+        if (tone) {
+          const c = RAG_CELL_STYLE[tone];
+          return `${c.color};background:${c.background};font-weight:700`;
+        }
+        return v === "Not measured yet" ? "#94a3b8" : SLATE;
+      };
       const body = t.rows
         .map((r) =>
           isGroup(r)
@@ -183,7 +193,7 @@ export function buildDigestEmail(
                 border-bottom:1px solid #e2e8f0">${esc(r[0])}</td></tr>`
             : `<tr>${r
                 .map(
-                  (v, i) => `<td style="padding:6px 6px;color:${v === "Not measured yet" ? "#94a3b8" : SLATE};
+                  (v, i) => `<td style="padding:6px 6px;color:${cellColor(v, i)};
                   font-size:13px;${i === 0 && t.groupHeaders ? "font-weight:600;" : ""}
                   text-align:${i < textCols ? "left" : "right"};border-bottom:1px solid #f1f5f9;
                   white-space:${i < textCols ? "normal" : "nowrap"};
@@ -315,14 +325,21 @@ export function buildDigestEmail(
     copy.eyebrow.toUpperCase(),
     `${p.kind.label} — ${copy.period(dayLabel)}`,
   ];
-  if (activity.length) {
-    if (on("summary") && p.figures.headline?.length) textParts.push("", ...p.figures.headline);
-  for (const t of p.figures.tables ?? []) {
-    if (t.footer && on(t.key) && on(t.footer.key)) {
-      textParts.push("", ...t.footer.items.map((it) => `${it.label}: ${it.value}${it.hint ? ` (${it.hint})` : ""}`));
+  // The headline and the table footers ("Right now") do not depend on there
+  // being activity lines — Sales Daily has none, all tables — so they sit
+  // outside that guard, mirroring the HTML body.
+  if (on("summary") && p.figures.headline?.length) textParts.push("", ...p.figures.headline);
+  for (const t of tables) {
+    if (t.footer && on(t.footer.key)) {
+      textParts.push(
+        "",
+        `${t.footer.label.toUpperCase()}`,
+        ...t.footer.items.map((it) => `${it.label}: ${it.value}${it.hint ? ` (${it.hint})` : ""}`),
+      );
     }
   }
-  textParts.push("", ...activity.map((l) => `${l.indent ? "  " : ""}${l.label}: ${l.display ?? l.value}`));
+  if (activity.length) {
+    textParts.push("", ...activity.map((l) => `${l.indent ? "  " : ""}${l.label}: ${l.display ?? l.value}`));
   }
   for (const t of tables) {
     textParts.push("", t.title.toUpperCase());

@@ -3,8 +3,12 @@ import { db } from '@/lib/db';
 import { couponCodes } from '@/lib/db/schema';
 import { and, lt, inArray, sql } from 'drizzle-orm';
 import { logCouponActionsBulk } from '@/lib/coupon-audit';
+import { checkCronAuth } from "@/lib/cron-auth";
 
-export async function GET() {
+export async function GET(req: Request) {
+    // ID 118: a cron runs with the CRON_SECRET bearer, like every other /api/cron route.
+    const cronDenied = checkCronAuth(req);
+    if (cronDenied) return cronDenied;
     try {
         const now = new Date();
 

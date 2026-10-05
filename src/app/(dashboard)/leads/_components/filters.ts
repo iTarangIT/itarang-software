@@ -81,6 +81,12 @@ export type LeadFilters = {
      * with none recorded. "" = any.
      */
     businessType: string;
+    /**
+     * ID 36: "Hide dead & disqualified" is ON by default. "" = hide (the
+     * default, so it counts as no filter); "1" = the user unticked it and wants
+     * dead-number / non-responsive / AI-disqualified leads shown. URL: hide_dead=0.
+     */
+    showDead: "" | "1";
 };
 
 export const EMPTY_FILTERS: LeadFilters = {
@@ -109,6 +115,7 @@ export const EMPTY_FILTERS: LeadFilters = {
     signalsMin: "",
     callback: "",
     businessType: "",
+    showDead: "",
 };
 
 // Filters tucked behind the "More filters" disclosure. Counted for the badge so
@@ -187,6 +194,7 @@ export function toSearchParams(
     if (f.signalsMin) p.set("signals_min", f.signalsMin);
     if (f.callback) p.set("callback", f.callback);
     if (f.businessType) p.set("business_type", f.businessType);
+    if (f.showDead) p.set("hide_dead", "0");
     return p;
 }
 
@@ -250,5 +258,6 @@ export function fromSearchParams(sp: URLSearchParams): LeadFilters {
         businessType: isBusinessTypeFilter(sp.get("business_type"))
             ? (sp.get("business_type") as string)
             : "",
+        showDead: sp.get("hide_dead") === "0" ? "1" : "",
     };
 }

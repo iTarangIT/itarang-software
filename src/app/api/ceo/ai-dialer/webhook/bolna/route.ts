@@ -4,9 +4,14 @@ import { aiCallLogs, leads } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
 import { runPostCallUpdate } from '@/lib/ai/langgraph/lead-qualification-graph';
 import { handleBolnaWebhook } from '@/lib/ai/bolna_ai';
+import { guardBolnaCall } from '@/lib/security/webhookAuth';
 
-// Webhook endpoint — no auth required (Bolna callback)
+// Webhook endpoint — no session (Bolna callback). ID 118: the caller is proven
+// by the same bearer as /api/bolna/webhook once BOLNA_WEBHOOK_SECRET is set.
 export async function POST(req: NextRequest) {
+    const denied = guardBolnaCall(req.headers, '/api/ceo/ai-dialer/webhook/bolna', 'BOLNA_WEBHOOK_SECRET');
+    if (denied) return denied;
+
     try {
         const body = await req.json();
         console.log('[Bolna Webhook] Received:', JSON.stringify(body).slice(0, 500));

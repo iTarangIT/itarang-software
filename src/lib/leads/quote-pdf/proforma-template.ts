@@ -73,6 +73,11 @@ export function renderProformaHtml(view: QuotationView): string {
   // anyone reading one quotation.
   const taxHeaderLabel = "GST";
 
+  // E-321 — List price and Discount columns only when some line is genuinely
+  // discounted. Rate stays the NET rate either way, and GST / totals are
+  // computed on it, so the columns explain the price without changing it.
+  const showDiscount = view.hasDiscount;
+
   const lineRows = view.lines
     .map((line) => {
       const rateCell =
@@ -91,6 +96,12 @@ export function renderProformaHtml(view: QuotationView): string {
         </td>
         <td class="hsn">${line.hsnCode ? esc(line.hsnCode) : "—"}</td>
         <td class="num">${esc(qty(line.quantity))}${line.unit ? `<span class="unit">${esc(line.unit)}</span>` : ""}</td>
+        ${
+          showDiscount
+            ? `<td class="num">${esc(money(line.discount > 0 && line.listPrice != null ? line.listPrice : line.rate))}</td>
+        <td class="num">${line.discount > 0 ? esc(money(line.discount)) : "—"}</td>`
+            : ""
+        }
         <td class="num">${esc(money(line.rate))}</td>
         <td class="num pct">${rateCell}</td>
         <td class="num">${taxAmountCell}</td>
@@ -292,6 +303,8 @@ ${
       <th>Item &amp; Description</th>
       <th>HSN/SAC</th>
       <th class="num">Qty</th>
+      ${showDiscount ? `<th class="num">List price</th>
+      <th class="num">Discount</th>` : ""}
       <th class="num">Rate</th>
       <th class="num">${esc(taxHeaderLabel)} %</th>
       <th class="num">${esc(taxHeaderLabel)} Amt</th>
@@ -303,6 +316,14 @@ ${
 
 <div class="totalswrap">
   <table class="totals">
+    ${
+      showDiscount
+        ? `<tr>
+      <td class="tlabel">Total discount</td>
+      <td class="num">${esc(money(view.totalDiscount))}</td>
+    </tr>`
+        : ""
+    }
     <tr class="sub">
       <td class="tlabel">Sub Total</td>
       <td class="num">${esc(money(view.subTotal))}</td>

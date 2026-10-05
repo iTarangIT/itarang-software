@@ -1,3 +1,4 @@
+import { linkOnboardingToLead } from "@/lib/onboarding/linkToLead";
 import { NextRequest, NextResponse } from "next/server";
 import { desc, eq } from "drizzle-orm";
 
@@ -12,6 +13,7 @@ import { recordLeadCapture } from "@/lib/leads/lead-registry";
 import { readDocument } from "@/lib/whatsapp/extraction";
 import { buildGstAddresses } from "@/lib/onboarding/gst-addresses";
 import { notifyOnboardingSubmitted } from "@/lib/notifications/events";
+import { markDocsSubmitted } from "@/lib/onboarding/leadMilestones";
 
 type UploadLike = {
   id?: string;
@@ -706,6 +708,12 @@ export async function POST(req: NextRequest) {
         await tx.insert(dealerOnboardingDocuments).values(documentRows);
       }
     });
+
+    // ID 84.2: stamp the lead's "docs submitted" milestone (first submission
+    // only). Best-effort — never throws.
+    // ID 67 / P1-4: link this onboarding to its lead by phone. Never throws.
+    await linkOnboardingToLead(finalApplicationId!);
+    await markDocsSubmitted(finalApplicationId);
 
     // Notify the Dealer Validation team that an application has arrived.
     // Widened from sales_head alone to the full admin audience: sales_head

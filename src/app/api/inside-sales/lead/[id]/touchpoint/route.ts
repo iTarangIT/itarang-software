@@ -8,6 +8,7 @@ import { requireRole } from "@/lib/auth-utils";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
 import { assertOwner } from "@/lib/leads/ownership";
 import {
+    isManualTouchpointType,
     LeadNotFoundError,
     logLeadTouchpoint,
     TouchpointBodySchema,
@@ -22,6 +23,12 @@ export const POST = withErrorHandler(
         const { id } = await ctx.params;
         if (!id) return errorResponse("Lead id required", 400);
         const body = TouchpointBodySchema.parse(await req.json());
+        if (!isManualTouchpointType(body.touchpoint_type)) {
+            return errorResponse(
+                "Only a call, a WhatsApp note or a note can be logged here. Visits, transfers and quotes have their own actions.",
+                400,
+            );
+        }
 
         await assertOwner(id, user.id);
 

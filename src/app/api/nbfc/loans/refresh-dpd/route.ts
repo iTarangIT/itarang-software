@@ -11,11 +11,15 @@
 import { NextResponse } from "next/server";
 import { clientError } from "@/lib/nbfc/http-error";
 import { runEmiAging } from "@/lib/nbfc/servicing/runEmiAging";
+import { guardApi } from "@/lib/auth/apiGuard";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function POST() {
+  // ID 118: signed in, with a role that reaches this screen.
+  const authGate = await guardApi(["admin", "ceo", "nbfc_partner"]);
+  if (!authGate.ok) return authGate.response;
   try {
     const result = await runEmiAging();
     return NextResponse.json({

@@ -1,15 +1,19 @@
 import { db } from "@/lib/db";
 import { dealerLeads, scrapedDealerLeads } from "@/lib/db/schema";
-import { inArray, sql } from "drizzle-orm";
+import { inArray } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { toTenDigits } from "@/lib/ai/phone";
 import { normalizeRegion } from "@/lib/locations/normalize";
 import type { PlaceComponents } from "@/lib/scraper/query/sources/googlePlaces";
 import { loadExistingByPhone, normalizePhone } from "@/lib/leads/dedupe";
-import { recordLeadCreated, recordReinquiry } from "@/lib/leads/leadSource";
+import {
+  recordLeadsCreatedBulk,
+  recordReinquiries,
+  stampLeadSourceBulk,
+} from "@/lib/leads/leadSource";
+import { campaignForScrapeRun } from "@/lib/leads/acquisitionCampaigns";
 
 const CHUNK_SIZE = 100;
-const REINQUIRY_WINDOW_DAYS = 30;
 
 export interface PromotionResult {
   // Rows that actually landed in dealer_leads on this run.
@@ -31,7 +35,8 @@ export interface PromotionResult {
 //   - the SHARED duplicate check (last 10 digits, dedupe.ts). The phone UNIQUE
 //     constraint compares raw text, so a dealer stored as +91XXXXXXXXXX was
 //     not seen and got a second copy.
-//   - door = scraper, origin = scraped_listing, and "Lead created".
+//   - door = scraper, origin = scraped_listing, the RUN's acquisition
+//     campaign (one per scrape run, made on first use), and "Lead created".
 //   - "Re-inquiry via scraper" on a dealer we already have — at most once per
 //     REINQUIRY_WINDOW_DAYS, so a weekly re-scrape of one city does not write
 //     a line on every known dealer every week.
@@ -47,6 +52,10 @@ export async function promoteLeadsToDealerLeads(
     address?: string | null;
     components?: PlaceComponents;
   }[],
+  opts?: {
+    /** The scrape run these leads came from — its campaign goes on each lead. */
+    runId?: string;
+  },
 ): Promise<PromotionResult> {
   const rows: {
     id: string;
@@ -134,7 +143,10 @@ export async function promoteLeadsToDealerLeads(
     if (hit) known.push({ id: hit.id, name: r.dealer_name });
     return !hit;
   });
-  await logScraperReinquiries(known);
+  await recordReinquiries(
+    known.map((k) => ({ id: k.id, note: k.name })),
+    { door: "scraper", actorId: null },
+  );
   rows.splice(0, rows.length, ...fresh);
 
   if (!rows.length) {
@@ -144,6 +156,10 @@ export async function promoteLeadsToDealerLeads(
       skippedDuplicate: skippedInBatchDup + known.length,
     };
   }
+
+  // One campaign per run. Best-effort — null when there is no run id or the
+  // E-319 columns are not there; the leads promote either way.
+  const campaignId = opts?.runId ? await campaignForScrapeRun(opts.runId) : null;
 
   let promoted = 0;
   for (let i = 0; i < rows.length; i += CHUNK_SIZE) {
@@ -155,7 +171,11 @@ export async function promoteLeadsToDealerLeads(
         .onConflictDoNothing({ target: dealerLeads.phone })
         .returning({ id: dealerLeads.id });
       promoted += res.length;
-      await stampScraperSource(res.map((r) => r.id));
+      // ID 81: door + origin + the run's campaign, then "Lead created".
+      // Best-effort: a failed stamp must never lose a promoted lead.
+      const ids = res.map((r) => r.id);
+      await stampLeadSourceBulk(ids, { door: "scraper", origin: "scraped_listing", campaignId });
+      await recordLeadsCreatedBulk(ids, { door: "scraper", actorId: null });
     } catch (err) {
       console.error(
         `[LEAD_STORE] promote chunk ${i}–${i + chunk.length} failed:`,
@@ -172,58 +192,6 @@ export async function promoteLeadsToDealerLeads(
     skippedInvalidPhone,
     skippedDuplicate: skippedInBatchDup + known.length + dbDuplicates,
   };
-}
-
-/**
- * ID 81: door + origin on the rows a run just inserted, then "Lead created" on
- * each. Best-effort: E-314 columns are not in schema.ts, and a failed stamp
- * must never lose a promoted lead.
- */
-async function stampScraperSource(ids: string[]): Promise<void> {
-  if (ids.length === 0) return;
-  try {
-    await db.execute(sql`
-      UPDATE dealer_leads
-         SET source_door = COALESCE(source_door, 'scraper'),
-             source_origin = COALESCE(source_origin, 'scraped_listing')
-       WHERE id IN (SELECT jsonb_array_elements_text(${JSON.stringify(ids)}::jsonb))
-    `);
-  } catch (err) {
-    console.warn("[LEAD_STORE] source not stamped (E-314 applied?):", err instanceof Error ? err.message : err);
-  }
-  for (const id of ids) {
-    try {
-      await recordLeadCreated(db, { leadId: id, actorId: null, door: "scraper", ownerId: null });
-    } catch (err) {
-      console.warn(`[LEAD_STORE] "Lead created" not recorded for ${id}:`, err instanceof Error ? err.message : err);
-    }
-  }
-}
-
-/** ID 81: "Re-inquiry via scraper" on known dealers, once per window per lead. */
-async function logScraperReinquiries(known: { id: string; name: string | null }[]): Promise<void> {
-  const ids = [...new Set(known.map((k) => k.id))];
-  if (ids.length === 0) return;
-  let recent = new Set<string>();
-  try {
-    const rows = (await db.execute<{ id: string }>(sql`
-      SELECT DISTINCT dealer_lead_id AS id
-        FROM lead_touchpoints
-       WHERE touchpoint_type = 'lead_reinquiry'
-         AND performed_at >= NOW() - make_interval(days => ${REINQUIRY_WINDOW_DAYS})
-         AND dealer_lead_id IN (SELECT jsonb_array_elements_text(${JSON.stringify(ids)}::jsonb))
-    `)) as unknown as Array<{ id: string }>;
-    recent = new Set(rows.map((r) => r.id));
-  } catch (err) {
-    console.warn("[LEAD_STORE] re-inquiry window check failed:", err instanceof Error ? err.message : err);
-    return;
-  }
-  const seen = new Set<string>();
-  for (const k of known) {
-    if (recent.has(k.id) || seen.has(k.id)) continue;
-    seen.add(k.id);
-    await recordReinquiry({ leadId: k.id, door: "scraper", actorId: null, note: k.name });
-  }
 }
 
 export async function saveCleanLeads(leads: any[], runId: string): Promise<number> {

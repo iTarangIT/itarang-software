@@ -26,6 +26,8 @@ const CANONICAL_ORDER: Record<string, number> = {
 
 export interface AgreementWebhookResult {
   matched: boolean;
+  /** The caller could not prove it is the provider; nothing was written. */
+  unauthorized?: boolean;
   idempotent?: boolean;
   status?: string;
   agreementRef?: string;
@@ -36,11 +38,13 @@ export interface AgreementWebhookResult {
 /**
  * Match the agreement (by ref, then provider doc-id), then apply the canonical
  * event forward-only. `fetchSigned` is called on the signed transition only when
- * storage is opted in; it never fails the webhook.
+ * storage is opted in; it never fails the webhook. `authorize`, when given,
+ * must return true for the matched row or nothing is applied.
  */
 export async function applyAgreementWebhookEvent(
   parsed: ParsedWebhookStatus,
   fetchSigned: (row: AgreementRow) => Promise<FetchSignedResult>,
+  authorize?: (row: AgreementRow) => Promise<boolean>,
 ): Promise<AgreementWebhookResult> {
   let row: AgreementRow | undefined;
   if (parsed.matchRef) {
@@ -63,6 +67,13 @@ export async function applyAgreementWebhookEvent(
       docId: parsed.providerDocumentId,
     });
     return { matched: false, reason: "no matching agreement" };
+  }
+
+  // The caller's proof can depend on WHOSE agreement this is (an NBFC on its
+  // own provider account has its own webhook secret), so it is checked here —
+  // after the match, before anything is written.
+  if (authorize && !(await authorize(row))) {
+    return { matched: true, unauthorized: true, agreementRef: row.agreement_ref };
   }
 
   const existing = (row.provider_raw_payload as Record<string, unknown>) ?? {};

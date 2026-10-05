@@ -116,6 +116,11 @@ export type DigestTable = {
    * its own section key, so it can be switched off without hiding the table.
    */
   footer?: { key: string; label: string; items: Array<{ label: string; value: string; hint?: string }> };
+  /**
+   * Column indexes whose "NN%" cells are coloured red / amber / green by
+   * ragToneOfCell (src/lib/digests/rag.ts) — the "% of target" columns.
+   */
+  toneColumns?: number[];
 };
 
 /** What a kind reports for one IST day. */

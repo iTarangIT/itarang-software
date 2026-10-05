@@ -131,7 +131,12 @@ export interface SalesOutcome {
     quote_revisions: number;
     /** Non-void invoices dated in the range, linked to a lead on GSTIN. ₹. */
     revenue: number;
-    /** Batteries allocated to a dealer account in the range (inventory.allocated_to_dealer_at). */
+    /**
+     * Batteries sold in the range: quantity on invoice lines with HSN 8507
+     * (E-322, tracker ID 39 — invoices only, never stock allocation), matched
+     * to a dealer and credited like revenue. Falls back to batteries allocated
+     * to a dealer account where E-322 is not applied.
+     */
     batteries_to_dealers: number;
     /** Customer KYC files first queued in the range, from dealers linked on GSTIN. */
     kyc_submitted: number;

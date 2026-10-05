@@ -243,6 +243,37 @@ export const oemReferencePrices = pgTable(
   }),
 );
 
+// E-321 — the optional list price printed on quotations (tracker ID 4 /
+// handover P1-14). Same append-only windowed shape as oem_reference_prices;
+// never below the OEM price in any overlapping window (src/lib/leads/listPrices.ts).
+export const productListPrices = pgTable(
+  "product_list_prices",
+  {
+    price_id: uuid("price_id").primaryKey().defaultRandom(),
+    asset_type: varchar("asset_type", { length: 30 }).notNull(),
+    product_id: text("product_id").notNull(),
+    model_id: varchar("model_id", { length: 100 }),
+    product_name: varchar("product_name", { length: 200 }),
+    list_price: numeric("list_price", { precision: 14, scale: 2 }).notNull(),
+    effective_from: timestamp("effective_from", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    effective_to: timestamp("effective_to", { withTimezone: true }),
+    valid_until: timestamp("valid_until", { withTimezone: true }),
+    note: text(),
+    created_by: text("created_by").notNull(),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    listPriceProductIdx: index("product_list_prices_product_idx").on(
+      table.product_id,
+      table.effective_from,
+    ),
+  }),
+);
+
 export const oems = pgTable("oems", {
   id: varchar({ length: 255 }).primaryKey().notNull(),
   business_entity_name: text("business_entity_name").notNull(),
@@ -982,6 +1013,88 @@ export const accounts = pgTable(
       t.business_entity_name.op("gin_trgm_ops"),
     ),
     gstinTrgmIdx: index("accounts_gstin_trgm_idx").using("gin", t.gstin.op("gin_trgm_ops")),
+  }),
+);
+
+// E-321 — dealer account ownership (tracker P1 IDs 5, 67, 68, 69). New tables,
+// not columns on `accounts`, so an environment without E-321 keeps working:
+// readers probe with to_regclass (src/lib/accounts/tables.ts).
+export const accountOwnership = pgTable(
+  "account_ownership",
+  {
+    account_id: varchar("account_id", { length: 255 }).primaryKey().notNull(),
+    // Current iTarang owner. NULL until Admin / CEO assigns one.
+    owner_user_id: uuid("owner_user_id"),
+    onboarded_by_user_id: uuid("onboarded_by_user_id"),
+    // 'lead' | 'direct'
+    came_through: varchar("came_through", { length: 10 }),
+    source_dealer_lead_id: text("source_dealer_lead_id"),
+    source_application_id: text("source_application_id"),
+    updated_by: uuid("updated_by"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    ownerIdx: index("account_ownership_owner_idx").on(t.owner_user_id),
+  }),
+);
+
+// E-321 — append-only owner windows [effective_from, effective_to). Revenue is
+// credited to the owner whose window holds the invoice date.
+export const accountOwnerHistory = pgTable(
+  "account_owner_history",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    account_id: varchar("account_id", { length: 255 }).notNull(),
+    owner_user_id: uuid("owner_user_id"),
+    effective_from: timestamp("effective_from", { withTimezone: true }).notNull(),
+    effective_to: timestamp("effective_to", { withTimezone: true }),
+    reason: text(),
+    changed_by: uuid("changed_by"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    accountIdx: index("account_owner_history_account_idx").on(t.account_id, t.effective_from),
+    // Partial (WHERE effective_to IS NULL) in the migration.
+    openUniq: uniqueIndex("account_owner_history_open_uniq").on(t.account_id),
+  }),
+);
+
+// E-321 — extra GSTINs that identify an account (corrected predecessor, or
+// learned via "Link to account"). Normalised: upper-case, no spaces.
+export const accountGstins = pgTable(
+  "account_gstins",
+  {
+    gstin: varchar({ length: 15 }).primaryKey().notNull(),
+    account_id: varchar("account_id", { length: 255 }).notNull(),
+    // 'correction' | 'invoice_link'
+    source: varchar({ length: 20 }).notNull(),
+    added_by: uuid("added_by"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    accountIdx: index("account_gstins_account_idx").on(t.account_id),
+  }),
+);
+
+// E-321 — a person's decision about one invoice: linked to an account, or
+// "not a dealer sale". invoice_id = zoho_invoices.id / sales_invoices.id.
+export const invoiceAccountLinks = pgTable(
+  "invoice_account_links",
+  {
+    // 'zoho' | 'drive'
+    source: varchar({ length: 10 }).notNull(),
+    invoice_id: text("invoice_id").notNull(),
+    account_id: varchar("account_id", { length: 255 }),
+    // 'linked' | 'not_dealer'
+    kind: varchar({ length: 12 }).notNull(),
+    note: text(),
+    linked_by: uuid("linked_by"),
+    linked_at: timestamp("linked_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.source, t.invoice_id] }),
+    accountIdx: index("invoice_account_links_account_idx").on(t.account_id),
   }),
 );
 
@@ -3403,6 +3516,72 @@ export const dealerAgreementEvents = pgTable(
     ),
     createdIdx: index("dealer_agreement_events_created_at_idx").on(
       table.created_at,
+    ),
+  }),
+);
+
+// E-313 + E-318 — every file of a manually executed dealer agreement (tracker
+// ID 55): what the system read from it, whether it verified, and whether it is
+// on record ('accepted'), waiting for a second approver, or refused.
+export const dealerAgreementDocuments = pgTable(
+  "dealer_agreement_documents",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    application_id: text("application_id").notNull(),
+    kind: varchar("kind", { length: 30 }).notNull(), // signed_agreement | audit_trail
+    file_name: text("file_name"),
+    byte_size: integer("byte_size"),
+    storage_bucket: varchar("storage_bucket", { length: 60 }).notNull(),
+    storage_path: text("storage_path").notNull(),
+    file_url: text("file_url"),
+    extracted: jsonb("extracted").default({}).notNull(),
+    verdict: varchar("verdict", { length: 20 }), // verified | mismatch | unreadable
+    reasons: jsonb("reasons").default([]).notNull(),
+    // Pre-E-318 rows only: the uploader confirmed their own mismatch.
+    mismatch_confirmed_by: text("mismatch_confirmed_by"),
+    mismatch_reason: text("mismatch_reason"),
+    uploaded_by: text("uploaded_by"),
+    uploaded_at: timestamp("uploaded_at", { withTimezone: true }).defaultNow().notNull(),
+    status: varchar("status", { length: 20 }).default("accepted").notNull(), // accepted | pending_approval | rejected
+    override_request_id: uuid("override_request_id"),
+  },
+  (table) => ({
+    appIdx: index("dealer_agreement_documents_app_idx").on(
+      table.application_id,
+      table.uploaded_at,
+    ),
+  }),
+);
+
+// E-318 — a mismatched manual agreement upload waits here for a SECOND
+// approver. The uploader can only request; the DB refuses a decision by the
+// requester and a second pending request for the same application.
+export const dealerAgreementOverrideRequests = pgTable(
+  "dealer_agreement_override_requests",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    application_id: text("application_id").notNull(),
+    status: varchar("status", { length: 20 }).default("pending").notNull(), // pending | approved | rejected | withdrawn
+    add_only: boolean("add_only").default(false).notNull(),
+    // The Digio document the upload was made against; a re-initiated
+    // agreement voids the request.
+    provider_document_id: text("provider_document_id"),
+    verdict: varchar("verdict", { length: 20 }).notNull(),
+    reasons: jsonb("reasons").default([]).notNull(),
+    read_values: jsonb("read_values").default({}).notNull(),
+    typed_signed_on: date("typed_signed_on"),
+    typed_ref: text("typed_ref"),
+    request_reason: text("request_reason").notNull(),
+    requested_by: text("requested_by").notNull(),
+    requested_at: timestamp("requested_at", { withTimezone: true }).defaultNow().notNull(),
+    decided_by: text("decided_by"),
+    decided_at: timestamp("decided_at", { withTimezone: true }),
+    decision_note: text("decision_note"),
+  },
+  (table) => ({
+    appIdx: index("dealer_agreement_override_requests_app_idx").on(
+      table.application_id,
+      table.requested_at,
     ),
   }),
 );
@@ -9381,6 +9560,9 @@ export const salesInvoiceFolders = pgTable(
     // "Sales", "Sale Invoices" and "Sales Invoices".
     include_names: text("include_names").default("sale").notNull(),
     exclude_names: text("exclude_names").default("purchase").notNull(),
+    // E-322 (tracker ID 71): 'sale' | 'credit_note' — a credit-note folder's
+    // PDFs land in credit_notes, not sales_invoices.
+    doc_kind: varchar("doc_kind", { length: 20 }).default("sale").notNull(),
     last_scanned_at: timestamp("last_scanned_at", { withTimezone: true }),
     created_by: uuid("created_by"),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
@@ -9394,6 +9576,154 @@ export const salesInvoiceFolders = pgTable(
     salesInvoiceFoldersActiveIdx: index("sales_invoice_folders_active_idx").on(
       table.is_active,
     ),
+  }),
+);
+
+// E-322 — SALES invoice line items for any source (tracker IDs 39, 70). Not
+// `invoice_lines`, which is the buyback vendor-invoice table (E-187). Batteries
+// sold are counted from these lines (HSN 8507), never from stock allocation.
+export const invoiceLineItems = pgTable(
+  "invoice_line_items",
+  {
+    // 'zoho' | 'drive' | 'vyapar'
+    source: varchar({ length: 10 }).notNull(),
+    // zoho_invoices.id / sales_invoices.id
+    invoice_id: text("invoice_id").notNull(),
+    line_no: integer("line_no").notNull(),
+    item_name: text("item_name"),
+    hsn: varchar({ length: 12 }),
+    // 'battery' | 'charger' | 'other' (src/lib/sales/invoiceLines.ts)
+    product_class: varchar("product_class", { length: 10 }).notNull(),
+    asset_type: varchar("asset_type", { length: 30 }),
+    product_id: text("product_id"),
+    quantity: numeric({ precision: 14, scale: 3 }),
+    rate: numeric({ precision: 14, scale: 2 }),
+    amount_excl_gst: numeric("amount_excl_gst", { precision: 14, scale: 2 }),
+    import_id: uuid("import_id"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.source, t.invoice_id, t.line_no] }),
+    classIdx: index("invoice_line_items_class_idx").on(t.product_class),
+    productIdx: index("invoice_line_items_product_idx").on(t.product_id),
+  }),
+);
+
+// E-322 — each Zoho customer's GSTIN, fetched once (tracker ID 70). Separate
+// from zoho_invoices because the hourly sync rewrites that table's columns.
+export const zohoCustomerGstins = pgTable(
+  "zoho_customer_gstins",
+  {
+    organization_id: text("organization_id").notNull(),
+    customer_id: text("customer_id").notNull(),
+    // NULL = fetched, the customer has none.
+    gstin: varchar({ length: 15 }),
+    fetched_at: timestamp("fetched_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.organization_id, t.customer_id] }),
+  }),
+);
+
+// E-322 — Vyapar item name → CRM product (tracker ID 39).
+export const vyaparItemMap = pgTable("vyapar_item_map", {
+  // lower-cased, single-spaced item name (invoiceLines.itemKey)
+  item_key: text("item_key").primaryKey().notNull(),
+  item_name: text("item_name").notNull(),
+  asset_type: varchar("asset_type", { length: 30 }),
+  product_id: text("product_id"),
+  mapped_by: uuid("mapped_by"),
+  updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+// E-322 — one row per uploaded Vyapar register / GSTR-1 file.
+export const invoiceImports = pgTable("invoice_imports", {
+  id: uuid().defaultRandom().primaryKey().notNull(),
+  // 'vyapar_register' | 'gstr1'
+  kind: varchar({ length: 20 }).notNull(),
+  file_name: text("file_name"),
+  storage_key: text("storage_key"),
+  period_from: date("period_from"),
+  period_to: date("period_to"),
+  summary: jsonb(),
+  imported_by: uuid("imported_by"),
+  created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+// E-322 — a voided invoice (tracker ID 71): finance's void with a reason, or a
+// cancellation from the Vyapar import. Revenue reads it as status 'void'.
+export const invoiceVoids = pgTable(
+  "invoice_voids",
+  {
+    // 'zoho' | 'drive' | 'vyapar'
+    source: varchar({ length: 10 }).notNull(),
+    invoice_id: text("invoice_id").notNull(),
+    reason: text().notNull(),
+    // 'manual' | 'vyapar'
+    origin: varchar({ length: 10 }).notNull(),
+    voided_by: uuid("voided_by"),
+    voided_at: timestamp("voided_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.source, t.invoice_id] }),
+  }),
+);
+
+// E-322 — credit notes (tracker ID 71), read from their own Drive folder and
+// subtracted from revenue in the month they are issued.
+export const creditNotes = pgTable(
+  "credit_notes",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    note_number: text("note_number"),
+    note_number_key: text("note_number_key"),
+    issue_date: date("issue_date"),
+    customer_name: text("customer_name"),
+    customer_gstin: varchar("customer_gstin", { length: 20 }),
+    organization_id: text("organization_id"),
+    seller_gstin: varchar("seller_gstin", { length: 20 }),
+    against_invoice_number: text("against_invoice_number"),
+    sub_total: numeric("sub_total", { precision: 14, scale: 2 }),
+    tax_total: numeric("tax_total", { precision: 14, scale: 2 }),
+    total: numeric({ precision: 14, scale: 2 }),
+    drive_file_id: text("drive_file_id"),
+    file_name: text("file_name"),
+    document_url: text("document_url"),
+    ai_raw: jsonb("ai_raw"),
+    needs_attention: boolean("needs_attention").default(false).notNull(),
+    attention_reason: text("attention_reason"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    // Both partial (WHERE … IS NOT NULL) in the migration.
+    numberKeyUniq: uniqueIndex("credit_notes_number_key_uniq").on(t.note_number_key),
+    driveFileUniq: uniqueIndex("credit_notes_drive_file_uniq").on(t.drive_file_id),
+    issueDateIdx: index("credit_notes_issue_date_idx").on(t.issue_date),
+  }),
+);
+
+// E-322 — filed GSTR-1 rows, for the monthly revenue reconciliation (ID 71).
+export const gstr1Entries = pgTable(
+  "gstr1_entries",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    import_id: uuid("import_id").notNull(),
+    // first day of the return period
+    month: date().notNull(),
+    // 'invoice' | 'credit_note'
+    doc_type: varchar("doc_type", { length: 12 }).notNull(),
+    doc_number: text("doc_number").notNull(),
+    doc_number_key: text("doc_number_key").notNull(),
+    doc_date: date("doc_date"),
+    gstin: varchar({ length: 20 }),
+    taxable_value: numeric("taxable_value", { precision: 14, scale: 2 }),
+    tax: numeric({ precision: 14, scale: 2 }),
+    total: numeric({ precision: 14, scale: 2 }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    monthIdx: index("gstr1_entries_month_idx").on(t.month, t.doc_number_key),
   }),
 );
 
@@ -9655,7 +9985,14 @@ export const dealerLeadCommercials = pgTable(
     delivery_terms: text("delivery_terms"),
     warranty_terms: text("warranty_terms"),
     final_price: numeric("final_price", { precision: 14, scale: 2 }),
+    // Legacy mirror since E-322: customer_finance ? 'finance' : 'cash'.
     payment_method: varchar("payment_method", { length: 20 }),
+    // E-322 (tracker ID 73): dealer payment terms 'cash' | 'credit'; any
+    // credit sends the quote to approval. credit_days set only for credit.
+    dealer_payment_terms: varchar("dealer_payment_terms", { length: 10 }),
+    credit_days: integer("credit_days"),
+    // E-322: NBFC finance for END customers (Yes / No) — feeds onboarding.
+    customer_finance: boolean("customer_finance"),
     deal_notes: text("deal_notes"),
     // Structured product line-items (E-128): array of
     // { asset_type, product_id, product_name, model_id, unit_price, quantity }

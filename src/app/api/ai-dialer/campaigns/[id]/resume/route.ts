@@ -18,7 +18,7 @@ import { startDraftCampaign } from "@/lib/queue/startCampaign";
 import type { DialerProvider } from "@/lib/queue/dialerSession";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
 import { requireAuth } from "@/lib/auth-utils";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, isNotNull, or, sql } from "drizzle-orm";
 
 export const POST = withErrorHandler(
   async (_req: Request, ctx: { params: Promise<{ id: string }> }) => {
@@ -74,18 +74,26 @@ export const POST = withErrorHandler(
 
     // Nothing left to dial → nothing to resume. The UI hides the button in this
     // case, but guard the route too (direct hits / stale UI).
+    //
+    // E-315 — "left to dial" includes automatic retries booked on the rows
+    // (next_attempt_at). A campaign stopped after its first pass has 0 pending
+    // rows but may have dozens of retries waiting; refusing those made the
+    // "resume to continue" banner a dead end.
     const pendingRes = await db
       .select({ n: sql<number>`count(*)::int` })
       .from(dialerCampaignLeads)
       .where(
         and(
           eq(dialerCampaignLeads.campaign_id, campaignId),
-          eq(dialerCampaignLeads.status, "pending"),
+          or(
+            eq(dialerCampaignLeads.status, "pending"),
+            isNotNull(dialerCampaignLeads.next_attempt_at),
+          ),
         ),
       );
     const pending = pendingRes[0]?.n ?? 0;
     if (pending === 0) {
-      return errorResponse("No pending leads to resume", 400);
+      return errorResponse("No pending leads or booked retries to resume", 400);
     }
 
     const result = await startDraftCampaign(

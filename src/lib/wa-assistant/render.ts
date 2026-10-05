@@ -143,8 +143,20 @@ function renderConfirmed(o: Extract<ExecOutcome, { kind: "confirmed" }>): WaPayl
             body: fit(`⚠️ The invite could not be sent (${why}). Try again, or use Invite on WhatsApp in the CRM.\n${o.crmUrl}`, RENDER_LIMITS.text),
         };
     }
+    // ID 79: the writer found the screenshot already used when it saved (the
+    // card may have been built before the other entry was).
+    if (o.tool === "log_call" && o.after.screenshot_reused === true) {
+        return {
+            kind: "text",
+            body: withLink(
+                "⚠️ Saved as a note. That screenshot was already used on another entry, so this chat is NOT counted as contact.",
+                o.crmUrl,
+            ),
+        };
+    }
     if (o.tool === "create_quote") return { kind: "text", body: renderQuoteSaved(o) };
     if (o.tool === "send_quote") return { kind: "text", body: renderQuoteSent(o) };
+    if (o.tool === "withdraw_quote") return { kind: "text", body: renderQuoteWithdrawn(o) };
     if (o.tool === "mark_converted" && o.leadId) {
         return {
             kind: "buttons",
@@ -171,6 +183,19 @@ function renderQuoteSaved(o: Extract<ExecOutcome, { kind: "confirmed" }>): strin
                 : `✅ Quote${v} saved and auto-approved, but the PDF could not be made yet. Regenerate it on the CRM screen before sending.`
             : `⏳ Quote${v} saved — waiting for CEO approval. It can be sent once approved; ask "quote status" to check.`;
     return withLink(body, o.crmUrl);
+}
+
+/** withdraw_quote confirmed: what was closed, and what it did to the lead (ID 78). */
+function renderQuoteWithdrawn(o: Extract<ExecOutcome, { kind: "confirmed" }>): string {
+    const qn = typeof o.after.quote_number === "string" ? `${o.after.quote_number} ` : "";
+    const live = o.after.live_quote_version;
+    const tail =
+        typeof live === "number"
+            ? ` v${live} is still live, so the lead's status is unchanged.`
+            : o.after.lead_status === "Under_Discussion"
+              ? " The lead is back to Under discussion."
+              : "";
+    return withLink(`✅ Quote ${qn}withdrawn. The dealer can no longer answer it.${tail}`, o.crmUrl);
 }
 
 /** send_quote confirmed: per-channel delivery, never "sent" for a channel that failed. */

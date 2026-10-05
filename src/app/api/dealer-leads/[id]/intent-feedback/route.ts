@@ -33,6 +33,8 @@ import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-util
 import { INTENT_REVIEW_ROLES } from "@/lib/leads/access";
 import { QualificationSignalsSchema } from "@/lib/ai/scoring/signals";
 import { statusToBand } from "@/lib/ai/scoring";
+import { exportsOwnLeadsOnly } from "@/lib/exports/downloadLog";
+import { leadOwnedBy } from "@/lib/ai-dialer/campaignAccess";
 import {
   applyIntentOverride,
   stampHumanBandOnCall,
@@ -64,6 +66,10 @@ export const POST = withErrorHandler(
   async (req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
     const user = await requireRole([...INTENT_REVIEW_ROLES]);
     const { id: leadId } = await ctx.params;
+    // ID 45: a rep corrects only leads they own; anything else is "no such lead".
+    if (exportsOwnLeadsOnly(user.role) && !(await leadOwnedBy(leadId, user.id))) {
+      return errorResponse("Lead not found", 404);
+    }
 
     const body = FeedbackBody.parse(await req.json());
 
@@ -193,9 +199,12 @@ export const GET = withErrorHandler(
     // ⚠ E-159's GET had NO auth check at all — it sat outside the handler's
     // auth block, and middleware early-exits on every /api path, so reviewer
     // notes on any lead were readable by anyone who could guess a lead id.
-    await requireRole([...INTENT_REVIEW_ROLES]);
+    const user = await requireRole([...INTENT_REVIEW_ROLES]);
 
     const { id: leadId } = await ctx.params;
+    if (exportsOwnLeadsOnly(user.role) && !(await leadOwnedBy(leadId, user.id))) {
+      return errorResponse("Lead not found", 404);
+    }
     const callId = new URL(req.url).searchParams.get("callId");
 
     const rows = await db

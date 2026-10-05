@@ -32,6 +32,7 @@ import { db } from "@/lib/db";
 import { notifyQuotationDealerDecision } from "@/lib/notifications/events";
 import { writeTouchpoint } from "@/lib/touchpoints/write";
 import { advanceLeadOnQuoteEvent } from "@/lib/leads/quoteStatus";
+import { LIVE_QUOTE_VERSION } from "@/lib/leads/quoteSendGate";
 
 // The vocabulary lives in ./quoteDecision.types so pure consumers (the button
 // parser, route zod schemas) can name it without importing a DB connection.
@@ -67,7 +68,13 @@ export type RecordDealerDecisionResult =
       decidedAt: string | null;
     }
   | { outcome: "not_found" }
-  | { outcome: "not_sendable"; reason: string }
+  | {
+      outcome: "not_sendable";
+      reason: string;
+      /** The lead's current quote, when this one was withdrawn and another is live. */
+      latestCommercialId?: string | null;
+      latestVersionNo?: number | null;
+    }
   | {
       /** ID 60: a later version replaced this one; the dealer answers only the latest. */
       outcome: "replaced";
@@ -90,7 +97,11 @@ type QuoteRow = {
   final_price: string | null;
   price_quoted: string | null;
   withdrawn_at: string | null;
-  /** The lead's newest quote version (quote_issue / quote_revision), which may be this row. */
+  /**
+   * The lead's current quote: its newest APPROVED, NOT-WITHDRAWN quote version
+   * (LIVE_QUOTE_VERSION in quoteSendGate.ts). May be this row; null when the
+   * lead has no such version.
+   */
   latest_commercial_id: string | null;
   latest_version_no: number | null;
   latest_quote_number: string | null;
@@ -98,13 +109,37 @@ type QuoteRow = {
 
 /**
  * Why a dealer may not answer this version (ID 60), or null when they may:
- * withdrawn, or replaced by a later quote version.
+ * withdrawn, or replaced by a different current version. A newer version that
+ * is pending, rejected or withdrawn is not "current", so it replaces nothing.
  */
 export function staleQuoteReason(
   row: Pick<QuoteRow, "commercial_id" | "withdrawn_at" | "latest_commercial_id">,
 ): "withdrawn" | "replaced" | null {
   if (row.withdrawn_at) return "withdrawn";
   if (row.latest_commercial_id && row.latest_commercial_id !== row.commercial_id) return "replaced";
+  return null;
+}
+
+/** The refusal for a stale version (ID 60), or null when the dealer may answer it. */
+function staleOutcome(row: QuoteRow): RecordDealerDecisionResult | null {
+  const stale = staleQuoteReason(row);
+  if (stale === "withdrawn") {
+    return {
+      outcome: "not_sendable",
+      reason: "This quotation has been withdrawn.",
+      // A withdrawn version with another one live still points the dealer there.
+      latestCommercialId: row.latest_commercial_id,
+      latestVersionNo: row.latest_version_no,
+    };
+  }
+  if (stale === "replaced") {
+    return {
+      outcome: "replaced",
+      latestCommercialId: row.latest_commercial_id,
+      latestVersionNo: row.latest_version_no,
+      latestQuoteNumber: row.latest_quote_number,
+    };
+  }
   return null;
 }
 
@@ -126,13 +161,15 @@ export async function loadQuotationForDealer(
            latest.quote_number AS latest_quote_number
       FROM dealer_lead_commercials c
       LEFT JOIN dealer_leads l ON l.id = c.dealer_lead_id
-      -- ID 60: the newest QUOTE version of this lead. Terms / final-terms rows
-      -- are versions too but not quotes, so they never "replace" a quote.
+      -- ID 60: the lead's CURRENT quote — the newest approved, not-withdrawn
+      -- quote version (LIVE_QUOTE_VERSION), not simply the highest version_no.
+      -- A revision still at the CEO, rejected or withdrawn replaces nothing.
+      -- Terms / final-terms rows are versions too but not quotes.
       LEFT JOIN LATERAL (
         SELECT q.commercial_id, q.version_no, q.quote_number
           FROM dealer_lead_commercials q
          WHERE q.dealer_lead_id = c.dealer_lead_id
-           AND q.event_type IN ('quote_issue', 'quote_revision')
+           AND ${LIVE_QUOTE_VERSION}
          ORDER BY q.version_no DESC
          LIMIT 1
       ) latest ON TRUE
@@ -140,6 +177,49 @@ export async function loadQuotationForDealer(
      LIMIT 1
   `);
   return (rows as unknown as QuoteRow[])[0] ?? null;
+}
+
+/**
+ * The write itself: stamp the dealer's answer on the quotation, if it is still
+ * theirs to answer. True when this call recorded it.
+ *
+ * WHERE dealer_decision IS NULL is the whole idempotency guarantee — two
+ * concurrent taps race here and exactly one updates a row.
+ *
+ * The ID 60 gate is restated in the WHERE too: a newer version approved, or
+ * this one withdrawn or rejected, between the caller's read and this write must
+ * not let a yes through at the superseded price.
+ *
+ * Exported for the verifier (scripts/verify-p0-followups.ts), which exercises
+ * this statement without the notifications recordDealerDecision sends.
+ */
+export async function claimDealerAnswer(
+  input: Pick<RecordDealerDecisionInput, "commercialId" | "decision" | "via" | "actor" | "note">,
+): Promise<boolean> {
+  // ISO string, never a Date — a raw sql`` template is serialised by
+  // postgres.js unsafe() with no column type and throws on a Date object.
+  const nowIso = new Date().toISOString();
+  const updated = await db.execute<{ commercial_id: string }>(sql`
+    UPDATE dealer_lead_commercials AS c
+       SET dealer_decision       = ${input.decision},
+           dealer_decision_at    = ${nowIso},
+           dealer_decision_via   = ${input.via},
+           dealer_decision_actor = ${input.actor},
+           dealer_decision_note  = ${input.note ?? null},
+           updated_at            = NOW()
+     WHERE c.commercial_id = ${input.commercialId}::uuid
+       AND c.dealer_decision IS NULL
+       AND c.withdrawn_at IS NULL
+       AND c.approval_status = 'approved'
+       AND NOT EXISTS (
+             SELECT 1 FROM dealer_lead_commercials q
+              WHERE q.dealer_lead_id = c.dealer_lead_id
+                AND ${LIVE_QUOTE_VERSION}
+                AND q.version_no > c.version_no
+           )
+    RETURNING c.commercial_id::text AS commercial_id
+  `);
+  return (updated as unknown as unknown[]).length > 0;
 }
 
 /**
@@ -172,18 +252,8 @@ export async function recordDealerDecision(
   }
   // ID 60: only the current, not-withdrawn version can be answered — a yes on
   // an old link must never record a deal at a superseded price.
-  const stale = staleQuoteReason(row);
-  if (stale === "withdrawn") {
-    return { outcome: "not_sendable", reason: "This quotation has been withdrawn." };
-  }
-  if (stale === "replaced") {
-    return {
-      outcome: "replaced",
-      latestCommercialId: row.latest_commercial_id,
-      latestVersionNo: row.latest_version_no,
-      latestQuoteNumber: row.latest_quote_number,
-    };
-  }
+  const refused = staleOutcome(row);
+  if (refused) return refused;
 
   // Fast path for a link opened twice — saves the UPDATE, though the WHERE
   // clause below is what actually guarantees it.
@@ -196,29 +266,19 @@ export async function recordDealerDecision(
     };
   }
 
-  // ISO string, never a Date — a raw sql`` template is serialised by
-  // postgres.js unsafe() with no column type and throws on a Date object.
-  const nowIso = new Date().toISOString();
-
-  // WHERE dealer_decision IS NULL is the whole idempotency guarantee. Two
-  // concurrent taps race here and exactly one updates a row.
-  const updated = await db.execute<{ commercial_id: string }>(sql`
-    UPDATE dealer_lead_commercials
-       SET dealer_decision       = ${input.decision},
-           dealer_decision_at    = ${nowIso},
-           dealer_decision_via   = ${input.via},
-           dealer_decision_actor = ${input.actor},
-           dealer_decision_note  = ${input.note ?? null},
-           updated_at            = NOW()
-     WHERE commercial_id = ${input.commercialId}::uuid
-       AND dealer_decision IS NULL
-       AND withdrawn_at IS NULL
-    RETURNING commercial_id::text AS commercial_id
-  `);
-
-  if ((updated as unknown as unknown[]).length === 0) {
-    // Lost the race. Re-read so the caller reports what actually stands.
+  if (!(await claimDealerAnswer(input))) {
+    // Lost the race. Re-read so the caller reports what actually stands —
+    // replaced or withdrawn in the meantime, or answered by another tap.
     const fresh = await loadQuotationForDealer(input.commercialId);
+    if (!fresh) return { outcome: "not_found" };
+    if (fresh.approval_status !== "approved") {
+      return {
+        outcome: "not_sendable",
+        reason: `This quotation is ${fresh.approval_status ?? "undecided"} and is no longer open for a response.`,
+      };
+    }
+    const refusedNow = staleOutcome(fresh);
+    if (refusedNow) return refusedNow;
     return {
       outcome: "already_answered",
       quoteNumber: row.quote_number,
@@ -243,6 +303,8 @@ export async function recordDealerDecision(
       // `performedBy` carries the owner — the person on our side the entry
       // belongs to — and the remark says plainly who actually acted.
       performedBy: row.current_owner_id ?? "system",
+      // ID 75.5: the dealer acted, not the owner — never the owner's work.
+      countsAsWork: false,
       remarks:
         `Dealer ${label} quotation${ref} ${channel}` +
         (value > 0 ? ` — ₹${value.toLocaleString("en-IN")}` : "") +
@@ -256,8 +318,26 @@ export async function recordDealerDecision(
   }
 
   // ID 75: the dealer's yes finalises the commercials (never fails the answer).
+  // ID 75.5: the move is the system's (actor null), not the owner's work —
+  // advanceLeadOnQuoteEvent never stamps last_worked_at.
+  let awaitingVisit = false;
   if (input.decision === "approved") {
-    await advanceLeadOnQuoteEvent(row.dealer_lead_id, "dealer_approved", row.current_owner_id);
+    const advanced = await advanceLeadOnQuoteEvent(row.dealer_lead_id, "dealer_approved", null);
+    awaitingVisit = advanced.awaitingVisit === true;
+
+    // ID 74.1: an approved quote clears the "Won without an approved quote"
+    // flag on a lead that was marked Won (or already Converted) before it.
+    try {
+      await db.execute(sql`
+        UPDATE dealer_leads
+           SET won_without_approved_quote = false
+         WHERE id = ${row.dealer_lead_id}
+           AND lead_status IN ('Won', 'Converted')
+           AND won_without_approved_quote IS TRUE
+      `);
+    } catch (e) {
+      console.error("[quoteDecision] won_without_approved_quote not cleared", e);
+    }
   }
 
   await notifyQuotationDealerDecision({
@@ -270,6 +350,7 @@ export async function recordDealerDecision(
     decision: input.decision,
     via: input.via,
     note: input.note ?? null,
+    awaitingVisit,
   });
 
   return {

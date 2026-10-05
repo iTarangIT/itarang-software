@@ -26,10 +26,29 @@ export type QuoteRow = {
   dealer_decision_at: string | null;
   dealer_decision_via: string | null;
   dealer_decision_note: string | null;
-  /** ID 60: withdrawn, or replaced by a later quote version. */
+  /** ID 60: withdrawn, or replaced by a later LIVE quote version (LIVE_QUOTE_VERSION). */
   withdrawn_at: string | null;
   is_latest_quote: boolean | null;
 };
+
+/**
+ * ID 60 — which rows count as "a quote version a dealer could be answering":
+ * a quote (not a terms row), approved, and not withdrawn. Written against the
+ * alias `q`.
+ *
+ * "The latest version" always means the newest row matching THIS, never simply
+ * the highest version_no. A revision that is still waiting for the CEO, was
+ * rejected, or has been withdrawn replaces nothing: the last approved version
+ * stays the one the dealer can answer and the rep can re-send. Without that, a
+ * lead with v2 held at the CEO had no answerable quote at all — v1's link said
+ * "replaced", v2 could not be sent — until someone raised a v3.
+ *
+ * One definition, shared with loadQuotationForDealer (quoteDecision.ts), so the
+ * send gate and the answer gate cannot disagree about which version is current.
+ */
+export const LIVE_QUOTE_VERSION = sql`q.event_type IN ('quote_issue', 'quote_revision')
+                AND q.approval_status = 'approved'
+                AND q.withdrawn_at IS NULL`;
 
 export async function loadQuote(
   leadId: string,
@@ -45,7 +64,7 @@ export async function loadQuote(
            NOT EXISTS (
              SELECT 1 FROM dealer_lead_commercials q
               WHERE q.dealer_lead_id = c.dealer_lead_id
-                AND q.event_type IN ('quote_issue', 'quote_revision')
+                AND ${LIVE_QUOTE_VERSION}
                 AND q.version_no > c.version_no
            ) AS is_latest_quote,
            COALESCE((c.quote_snapshot->>'total')::numeric,
@@ -85,14 +104,15 @@ export function assertSendable(row: QuoteRow | null): asserts row is QuoteRow & 
       `This quotation is ${row.approval_status ?? "undecided"} and cannot be sent to a dealer.`,
     );
   }
-  // ID 60: a dealer is only ever sent the current, not-withdrawn version.
+  // ID 60: a dealer is only ever sent the current, not-withdrawn version —
+  // "current" being the newest approved, not-withdrawn one (LIVE_QUOTE_VERSION).
   if (row.withdrawn_at) {
     throw new QuotationNotSendableError("stale", "This quotation has been withdrawn and cannot be sent.");
   }
   if (row.is_latest_quote === false) {
     throw new QuotationNotSendableError(
       "stale",
-      "A newer version of this quotation exists. Send the latest version instead.",
+      "A newer approved version of this quotation exists. Send the latest version instead.",
     );
   }
   if (!row.quote_pdf_url || !row.quote_number) {

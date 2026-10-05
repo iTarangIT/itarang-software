@@ -18,6 +18,8 @@ export type AsmQueueFilterParams = {
     filters: QueueFilters;
     visitStatus: string | null;
     visitOutcome: string | null;
+    /** ID 75.4: `?finalised=1` — only "Finalised, not Won" leads. */
+    finalisedOnly: boolean;
     /** Order, not a filter — the list and the CSV honour it, the counts ignore it. */
     sort: QueueSort;
 };
@@ -40,5 +42,6 @@ export function readAsmQueueFilters(sp: URLSearchParams): AsmQueueFilterParams {
         visitOutcome: (VISIT_OUTCOME as readonly string[]).includes(visitOutcome)
             ? visitOutcome
             : null,
+        finalisedOnly: sp.get("finalised") === "1",
     };
 }

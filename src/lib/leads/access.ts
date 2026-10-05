@@ -100,6 +100,35 @@ export const LEAD_HISTORY_EXPORT_ROLES = [
 ] as const;
 
 /**
+ * Roles whose lead exports are limited to the leads they OWN (tracker ID 58,
+ * decision 26 Sep 2026) — queue sheets, the /leads export, the AI-dialer
+ * campaign sheet and a single lead's history. Everyone else in an export's
+ * role list is a manager and exports what they can see.
+ */
+export const OWN_LEADS_EXPORT_ROLES = ["asm", "inside_sales_rep", "partner"] as const;
+
+export function exportsOwnLeadsOnly(role: string | null | undefined): boolean {
+  return (OWN_LEADS_EXPORT_ROLES as readonly string[]).includes((role ?? "").toLowerCase());
+}
+
+/**
+ * May this user download THIS lead's history workbook? The role must be in
+ * LEAD_HISTORY_EXPORT_ROLES, and a rep / ASM / partner must also be the lead's
+ * current owner (ID 58). One rule for the export route and for both screens
+ * that show the button, so a visible button never 403s.
+ */
+export function canExportLeadHistory(input: {
+  role: string | null | undefined;
+  userId: string | null | undefined;
+  currentOwnerId: string | null | undefined;
+}): boolean {
+  const role = input.role ?? "";
+  if (!(LEAD_HISTORY_EXPORT_ROLES as readonly string[]).includes(role)) return false;
+  if (!exportsOwnLeadsOnly(role)) return true;
+  return Boolean(input.userId) && input.currentOwnerId === input.userId;
+}
+
+/**
  * Roles that may open a lead's TRACKING view — the journey (who held it, for
  * how long, what they did) — and download it as CSV (E-295).
  *

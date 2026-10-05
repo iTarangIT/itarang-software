@@ -132,3 +132,10 @@ ops-agent/logs/
 /scripts/check-iot-agent-role.mjs
 /scripts/intellicar-iot-uptime-report.ts
 /scripts/telemetry-temperature-eda.ts
+# old-value snapshots written by scripts/backfill-call-engaged-flag.ts --apply
+# (row ids from a live database; kept locally for --restore, never committed)
+/scripts/_backfill-call-engaged-flag.*.json
+# ids written by scripts/backfill-sales-ready.ts --apply (kept locally for --undo)
+/scripts/_backfill-sales-ready.*.json
+# run records written by scripts/backfill-closing-owner.ts --apply (ID 117)
+/scripts/_backfill-closing-owner.*.json

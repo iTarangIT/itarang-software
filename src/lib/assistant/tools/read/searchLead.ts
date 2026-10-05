@@ -1,7 +1,7 @@
-// search_lead — find leads the user can see by dealer name, shop or phone
+// search_lead — find the user's OWN leads by dealer name, shop or phone
 // (BRD §9.1, UC-08). The queue's own search clause (leadSearchClause) under the
-// user's scope predicate: a rep finds here exactly what their tabs' search box
-// would find across all their tabs, and nothing else. Several matches come back
+// user's OWN-tabs predicate (ID 45: reps cannot browse the pool): a rep finds
+// here what their own tabs' search box would find, and nothing else. Several matches come back
 // as candidates for the user to pick from — the tool never picks one.
 
 import { z } from "zod";
@@ -9,7 +9,7 @@ import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { leadSearchClause } from "@/lib/leads/queueFilterSql";
 import { MAX_TOOL_ROWS, type ToolResult } from "../../types";
-import { scopeJoin, scopePredicate } from "../../scope";
+import { ownScopePredicate, scopeJoin } from "../../scope";
 import { defineTool, type ToolFactory } from "../spec";
 import { queueUrl, toLeadSummary } from "../leads";
 
@@ -32,7 +32,7 @@ export const searchLead: ToolFactory = () =>
         name: "search_lead",
         kind: "read",
         description:
-            "Find leads the user can see by dealer name, shop name or phone number (max 10). " +
+            "Find the user's OWN leads (their own queue tabs, not the unowned pool) by dealer name, shop name or phone number (max 10). " +
             "If more than one lead matches, show the candidates and ask which one — never pick one yourself.",
         schema: z.object({
             query: z.string().trim().min(2).max(60).describe("Name, shop or phone digits, as the user wrote them"),
@@ -59,7 +59,7 @@ export const searchLead: ToolFactory = () =>
                   FROM dealer_leads dl
                   ${scopeJoin(ctx.user)}
                   LEFT JOIN users owner ON owner.id::text = dl.current_owner_id
-                 WHERE ${scopePredicate(ctx.user)} ${leadSearchClause(q)}
+                 WHERE ${ownScopePredicate(ctx.user)} ${leadSearchClause(q)}
                  ORDER BY COALESCE(dl.last_touchpoint_at, dl.assigned_at, dl.created_at) DESC NULLS LAST
                  LIMIT ${MAX_TOOL_ROWS}
             `);

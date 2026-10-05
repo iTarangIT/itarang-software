@@ -61,9 +61,14 @@ export const EMPTY_FIGURES: BuybackFigures = {
     margin: null,
 };
 
-/** A SPOC row belongs in a buyback mail only when it has a BUYBACK figure — calls alone are CRM-wide noise. */
-export function hasBuybackFigure(r: BuybackFigures): boolean {
+/**
+ * A SPOC row belongs in a buyback mail only when it has a BUYBACK figure.
+ * ID 10: dealers_called now counts calls on buyback leads only, so a rep whose
+ * only activity is those calls is buyback work and is listed too.
+ */
+export function hasBuybackFigure(r: BuybackFigures & { dealers_called?: number }): boolean {
     return (
+        (r.dealers_called ?? 0) > 0 ||
         r.requests > 0 ||
         r.images > 0 ||
         r.quotes > 0 ||

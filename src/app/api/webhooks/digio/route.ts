@@ -20,6 +20,7 @@ import {
   normalizeDigioDoc,
 } from "@/lib/digio/signer-aadhaar";
 import { ensureAdminKycQueueEntry } from "@/lib/kyc/admin-workflow";
+import { guardDigioWebhook } from "@/lib/security/webhookAuth";
 import { fetchSignedLspPdfAndAuditTrail } from "@/lib/queue/jobs/fetchSignedLspPdfJob";
 import {
   pushConsentFailureToWhatsApp,
@@ -286,8 +287,20 @@ async function syncApplicantConsentStatus(
 }
 
 export async function POST(req: NextRequest) {
+  // ID 118: the event must carry Digio's X-Digio-Checksum once
+  // DIGIO_WEBHOOK_SECRET is set. Read as text — the checksum is over the exact
+  // bytes Digio sent. Outside the try below, which answers 200 to everything.
+  let rawBody = "";
   try {
-    const body = await req.json();
+    rawBody = await req.text();
+  } catch {
+    return NextResponse.json({ received: true });
+  }
+  const denied = guardDigioWebhook(req.headers, rawBody, "/api/webhooks/digio");
+  if (denied) return denied;
+
+  try {
+    const body = JSON.parse(rawBody);
 
     console.log("[DigiO Webhook] Received:", JSON.stringify(body, null, 2));
 

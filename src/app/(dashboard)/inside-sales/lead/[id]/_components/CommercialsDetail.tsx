@@ -58,10 +58,15 @@ export function Field({ label, value }: { label: string; value: React.ReactNode 
  * until E-242 was stored and never displayed anywhere.
  *
  * `onSend` is omitted for a superseded version, which is what removes the
- * button there. Sending an older approved quote is not a capability being taken
- * away — it never existed — and the case it would enable is the one that bites:
- * the sandbox lead where v1 (₹40,000) was approved after v2 (₹51,000) had
- * already gone to the dealer.
+ * button there: a quote replaced by a newer approved one must never go out —
+ * the case that bites is the sandbox lead where v1 (₹40,000) was approved after
+ * v2 (₹51,000) had already gone to the dealer.
+ *
+ * It is passed for the lead's LIVE quote — the newest approved, not-withdrawn
+ * quote (lib/leads/liveQuote.ts) — even when that is not the newest row. Final
+ * terms, a terms update, a brochure or a revision still at the CEO sit above a
+ * quote without replacing it (ID 60 / 61); LeadDetailRightPane renders this
+ * block for it separately so it keeps Send and Withdraw.
  */
 export function QuoteApprovalBlock({
     cc,
@@ -115,6 +120,20 @@ export function QuoteApprovalBlock({
                 <p className="mt-1.5 whitespace-pre-wrap opacity-90">
                     <span className="font-medium">Reason:</span> {cc.rejection_reason}
                 </p>
+            )}
+
+            {/* ID 78: a quote still waiting for the CEO can be withdrawn — it
+                then leaves his queue. (An approved one has its Withdraw below.) */}
+            {status === "pending" && onWithdraw && !cc.withdrawn_at && (
+                <div className="mt-2 flex items-center gap-2">
+                    <span className="opacity-80">Not sent to the dealer yet.</span>
+                    <button
+                        onClick={onWithdraw}
+                        className="ml-auto rounded-md border border-gray-300 bg-white px-2.5 py-1 text-[11px] font-semibold text-gray-700 hover:bg-gray-50"
+                    >
+                        Withdraw
+                    </button>
+                </div>
             )}
 
             {status === "approved" && (

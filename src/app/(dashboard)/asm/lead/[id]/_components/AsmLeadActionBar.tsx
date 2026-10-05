@@ -14,6 +14,7 @@ import { toast } from "sonner";
 import { Ban } from "lucide-react";
 import type { LeadDetailBundle } from "@/lib/inside-sales/types";
 import { isOpen, type LeadStatus } from "@/lib/lifecycle/transitions";
+import { CallNowButton } from "@/components/leads/call-now-button";
 
 type ActiveModal =
     | null
@@ -97,6 +98,14 @@ export function AsmLeadActionBar({ bundle, isOwner, viewerRole, onAction, onChan
             <Btn icon={Receipt} onClick={() => onAction("commercials")}>
                 Update Commercials
             </Btn>
+            {/* ID 83: the owner asks the NeoDove calling team to ring this dealer
+                next. The call that follows is marked "called on your behalf". */}
+            <CallNowButton
+                leadId={lead.id}
+                leadName={lead.shop_name || lead.dealer_name || "this lead"}
+                disabled={!open}
+                onQueued={onChanged}
+            />
             <Btn
                 tone="emerald"
                 icon={CheckCircle2}
@@ -104,13 +113,17 @@ export function AsmLeadActionBar({ bundle, isOwner, viewerRole, onAction, onChan
             >
                 Mark Won
             </Btn>
-            <Btn
-                tone="rose"
-                icon={XCircle}
-                onClick={() => onAction("mark_lost")}
-            >
-                Mark Lost
-            </Btn>
+            {/* ID 115.4: a Won lead goes to Lost only through the admin
+                onboarding drop-out review — the server refuses it here. */}
+            {status !== "Won" && (
+                <Btn
+                    tone="rose"
+                    icon={XCircle}
+                    onClick={() => onAction("mark_lost")}
+                >
+                    Mark Lost
+                </Btn>
+            )}
             <Btn icon={Repeat} onClick={() => onAction("reassign")}>
                 Reassign
             </Btn>

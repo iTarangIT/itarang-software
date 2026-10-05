@@ -8,6 +8,7 @@ import {
 import { eq } from "drizzle-orm";
 
 import { checkAadhaarMatch } from "@/lib/digio/aadhaar-match";
+import { markAgreementOutcome } from "@/lib/onboarding/leadMilestones";
 
 function pickString(...values: unknown[]): string | null {
   for (const v of values) {
@@ -226,6 +227,8 @@ export async function syncSignersFromDigio(
         updated_at: new Date(),
       })
       .where(eq(dealerOnboardingApplications.id, applicationId));
+    // ID 84.2: the lead's agreement milestone. Best-effort — never throws.
+    await markAgreementOutcome({ applicationId }, "failed");
   }
 
   return { updated, transitions, dealerAadhaarMismatch, mismatchReason };

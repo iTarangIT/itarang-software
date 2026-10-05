@@ -14,6 +14,12 @@ type Props = {
     leadId: string;
     touchpoints: LeadDetailTouchpoint[];
     statusHistory: LeadDetailStatusHistory[];
+    /**
+     * Offer "Export to Excel". Defaults to true for the admin-only escalation
+     * view; the lead pages pass canExportLeadHistory() so a rep sees the button
+     * only on a lead they own (ID 58) — the route refuses the rest.
+     */
+    canExport?: boolean;
 };
 
 type Attachment = { url: string; type: string | null; reused: boolean };
@@ -84,7 +90,7 @@ function formatTime(iso: string): string {
     });
 }
 
-export function TouchpointHistoryPane({ leadId, touchpoints }: Props) {
+export function TouchpointHistoryPane({ leadId, touchpoints, canExport = true }: Props) {
     return (
         <div className="overflow-y-auto border-r border-gray-100 bg-white">
             <div className="px-6 py-4 sticky top-0 bg-white border-b border-gray-100 z-[1] flex items-start justify-between gap-3">
@@ -94,13 +100,15 @@ export function TouchpointHistoryPane({ leadId, touchpoints }: Props) {
                         {touchpoints.length} {touchpoints.length === 1 ? "entry" : "entries"} · newest first
                     </p>
                 </div>
-                <a
-                    href={`/api/inside-sales/lead/${encodeURIComponent(leadId)}/history/export.xlsx`}
-                    className="shrink-0 inline-flex items-center gap-1.5 rounded-md border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
-                >
-                    <Download className="h-3.5 w-3.5" />
-                    Export to Excel
-                </a>
+                {canExport && (
+                    <a
+                        href={`/api/inside-sales/lead/${encodeURIComponent(leadId)}/history/export.xlsx`}
+                        className="shrink-0 inline-flex items-center gap-1.5 rounded-md border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                    >
+                        <Download className="h-3.5 w-3.5" />
+                        Export to Excel
+                    </a>
+                )}
             </div>
             <div className="px-6 py-4">
                 {touchpoints.length === 0 ? (
@@ -130,6 +138,16 @@ export function TouchpointHistoryPane({ leadId, touchpoints }: Props) {
                                                 {t.is_engaged && (
                                                     <span className="ml-2 text-[10px] uppercase tracking-wide text-emerald-700 bg-emerald-100 px-1.5 py-0.5 rounded">
                                                         engaged
+                                                    </span>
+                                                )}
+                                                {/* ID 83: made by the calling team after the
+                                                    owner's "Call now" — not the owner's own call. */}
+                                                {t.called_on_behalf && (
+                                                    <span
+                                                        className="ml-2 text-[10px] uppercase tracking-wide text-sky-800 bg-sky-100 px-1.5 py-0.5 rounded"
+                                                        title="Made by the NeoDove calling team after the owner's Call now request"
+                                                    >
+                                                        called on owner&apos;s behalf
                                                     </span>
                                                 )}
                                             </div>
