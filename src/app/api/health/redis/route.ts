@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { checkCronAuth } from "@/lib/cron-auth";
 import { quotaCircuit } from "@/lib/queue/connection";
 
 /**
@@ -14,10 +15,9 @@ import { quotaCircuit } from "@/lib/queue/connection";
  * monitors hitting it on demand.
  */
 export async function GET(req: Request) {
-  const authHeader = req.headers.get("authorization");
-  if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  // ID 130: fails closed — an unset CRON_SECRET is a 500, never an open route.
+  const cronDenied = checkCronAuth(req);
+  if (cronDenied) return cronDenied;
 
   // Refresh circuit state so a stale open flag auto-closes once the
   // cooldown window passes.

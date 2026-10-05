@@ -19,6 +19,7 @@ import {
   guardBolnaCall,
   guardDigioWebhook,
   hmacSha256Hex,
+  leegalityMacProof,
   webhookAuthStrict,
   webhookVerdict,
 } from "../webhookAuth";
@@ -213,5 +214,28 @@ describe("guardBolnaCall", () => {
   it("with no secret configured the callback URL is left as it was", () => {
     vi.stubEnv("BOLNA_WEBHOOK_SECRET", "");
     expect(bolnaCallbackUrl("https://crm.test/hook")).toBe("https://crm.test/hook");
+  });
+});
+
+describe("leegalityMacProof (ID 130)", () => {
+  const SALT = "salt_abc";
+  const DOC = "01KC8ZWZ7ZWNAFTZRYMYMWV84B";
+  const mac = (salt: string) => createHmac("sha1", salt).update(DOC, "utf8").digest("hex");
+  const body = (m?: string) => JSON.stringify({ documentId: DOC, documentStatus: "Completed", ...(m ? { mac: m } : {}) });
+
+  it("accepts HMAC-SHA1(documentId, privateSalt), any case", () => {
+    expect(leegalityMacProof(SALT, body(mac(SALT)))).toBe("valid");
+    expect(leegalityMacProof(SALT, body(mac(SALT).toUpperCase()))).toBe("valid");
+  });
+
+  it("refuses a wrong mac, a missing salt, or a mac with no documentId", () => {
+    expect(leegalityMacProof(SALT, body(mac("other")))).toBe("invalid");
+    expect(leegalityMacProof(undefined, body(mac(SALT)))).toBe("invalid");
+    expect(leegalityMacProof(SALT, JSON.stringify({ mac: mac(SALT) }))).toBe("invalid");
+  });
+
+  it("no mac or unparsable body is absent", () => {
+    expect(leegalityMacProof(SALT, body())).toBe("absent");
+    expect(leegalityMacProof(SALT, "not json")).toBe("absent");
   });
 });

@@ -79,6 +79,26 @@ export function checksumProof(
   return safeEqual(hex, hmacSha256Hex(secret, rawBody)) ? "valid" : "invalid";
 }
 
+/**
+ * Leegality puts the proof in the BODY: every webhook carries
+ * `mac` = HMAC-SHA1 hex of `documentId`, keyed with the account's Private Salt
+ * (knowledge.leegality.com → Webhooks → Verify Webhook Request).
+ */
+export function leegalityMacProof(salt: string | null | undefined, rawBody: string): WebhookProof {
+  let body: Record<string, unknown>;
+  try {
+    body = JSON.parse(rawBody) as Record<string, unknown>;
+  } catch {
+    return "absent";
+  }
+  const mac = typeof body?.mac === "string" ? body.mac.trim().toLowerCase() : "";
+  if (!mac) return "absent";
+  const documentId = typeof body.documentId === "string" ? body.documentId : "";
+  if (!salt || !documentId) return "invalid";
+  const expected = createHmac("sha1", salt).update(documentId, "utf8").digest("hex");
+  return safeEqual(mac, expected) ? "valid" : "invalid";
+}
+
 /** A shared secret sent as `Authorization: Bearer <secret>` (Bolna, NeoDove style). */
 export function bearerProof(
   secret: string | null | undefined,

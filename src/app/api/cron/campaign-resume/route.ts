@@ -18,19 +18,14 @@
 
 import { runCampaignWindowTick } from "@/lib/queue/resumeCampaigns";
 import { NextResponse } from "next/server";
+import { checkCronAuth } from "@/lib/cron-auth";
 
 export const maxDuration = 60;
 
 export async function GET(req: Request) {
-  // Vercel-style cron auth: shared bearer in CRON_SECRET. Same pattern as
-  // /api/cron/dialer-watchdog.
-  const authHeader = req.headers.get("authorization");
-  if (
-    process.env.CRON_SECRET &&
-    authHeader !== `Bearer ${process.env.CRON_SECRET}`
-  ) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  // ID 130: fails closed — an unset CRON_SECRET is a 500, never an open route.
+  const cronDenied = checkCronAuth(req);
+  if (cronDenied) return cronDenied;
 
   try {
     const { parked, resumed, advanced } = await runCampaignWindowTick();
