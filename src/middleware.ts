@@ -710,7 +710,14 @@ export async function middleware(request: NextRequest) {
       "partner",
       "business_head",
       "finance_controller",
+      // ID 13 — these three reach the page for Data downloads only (their own
+      // rows, or inventory); ReportsView shows them no other tab.
+      "asm",
+      "inside_sales_rep",
+      "inventory_manager",
     ],
+    // ID 65 — Account management (dealer accounts, owners, GSTIN).
+    "/admin/account-management": ["admin", "sales_head", "ceo"],
     "/admin/targets": ["admin", "sales_head", "ceo", "business_head"],
     // ID 82 — the page's own requireRole list. Without this row the bare
     // "/admin" entry bounces business_head, sales_manager and partner.

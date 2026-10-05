@@ -151,7 +151,7 @@ const ZOD_PATH_TO_INPUT_NAME: Record<string, string> = {
 // "Required") read as noise. Keyed by the input `name`.
 const FRIENDLY_FIELD_ERROR: Record<string, string> = {
   cin: "CIN must be 21 characters (e.g. L65910MH1987PLC042961)",
-  gstNumber: "GSTIN must be 15 chars (e.g. 27AABCB1518L1ZS)",
+  gstNumber: "Enter a valid 15-character GSTIN (e.g. 27AABCB1518L1ZS) - check the last character",
   panNumber: "PAN must be 10 chars (e.g. AABCB1518L)",
   rbiRegistrationNo: RBI_REG_ERROR,
   primaryContactEmail: "Enter a valid email address",

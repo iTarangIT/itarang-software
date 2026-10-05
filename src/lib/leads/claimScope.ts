@@ -27,32 +27,100 @@ export function isPoolTabFor(role: string | null | undefined, tab: string): bool
     return (ASM_POOL_TABS as readonly string[]).includes(tab) || (ISR_POOL_TABS as readonly string[]).includes(tab);
 }
 
-/** Most numbers one search accepts. */
+/** Most numbers one claim search accepts. */
 export const CLAIM_SEARCH_MAX_NUMBERS = 50;
+/** ID 46: most numbers the Admin / Sales Head leads-list search accepts. */
+export const LIST_SEARCH_MAX_NUMBERS = 200;
+
+export type MobileList = {
+    mobiles: string[];
+    invalid: string[];
+    /** Valid numbers past the cap — not searched, so the screen must say so. */
+    overLimit: number;
+};
+
+/** One entry → its last 10 digits when it is a valid Indian mobile, else null. */
+function toMobile(entry: string): string | null {
+    const digits = entry.replace(/\D/g, "");
+    let ten: string | null = null;
+    if (digits.length === 10) ten = digits;
+    else if (digits.length === 12 && digits.startsWith("91")) ten = digits.slice(2);
+    else if (digits.length === 11 && digits.startsWith("0")) ten = digits.slice(1);
+    return ten && /^[6-9]\d{9}$/.test(ten) ? ten : null;
+}
+
+/**
+ * An entry that is not one number may be several with no comma between them —
+ * a column pasted from Excel arrives space-separated ("9876543210 9123456789")
+ * or run together. Returns null when it cannot be read as numbers at all.
+ */
+function splitRun(entry: string): { mobiles: string[]; invalid: string[] } | null {
+    const tokens = entry.split(/\s+/).filter((t) => t && !/^(\+?91|0)$/.test(t));
+    if (tokens.length > 1) {
+        const mobiles: string[] = [];
+        const invalid: string[] = [];
+        for (const t of tokens) {
+            const m = toMobile(t);
+            if (m) mobiles.push(m);
+            else invalid.push(t);
+        }
+        if (mobiles.length > 0) return { mobiles, invalid };
+    }
+    // "98765 43210 91234 56789" or "98765432109123456789": whole 10-digit runs.
+    if (/^[\d\s]+$/.test(entry)) {
+        const digits = entry.replace(/\s/g, "");
+        if (digits.length > 10 && digits.length % 10 === 0) {
+            const runs = digits.match(/\d{10}/g) ?? [];
+            if (runs.every((r) => /^[6-9]\d{9}$/.test(r))) return { mobiles: runs, invalid: [] };
+        }
+    }
+    return null;
+}
 
 /**
  * "98765 43210, +91 9123456789; 09988776655" → the last 10 digits of each valid
- * Indian mobile, de-duplicated, in the order typed. Invalid entries are
- * returned separately so the screen can say which ones it could not read.
+ * Indian mobile, de-duplicated, in the order typed. Numbers may be separated by
+ * commas, semicolons, new lines, tabs or spaces. Invalid entries are returned
+ * separately so the screen can say which ones it could not read, and
+ * `overLimit` counts the valid numbers dropped past `max`.
  */
-export function parseMobileList(input: string): { mobiles: string[]; invalid: string[] } {
+export function parseMobileList(input: string, max: number = CLAIM_SEARCH_MAX_NUMBERS): MobileList {
     const mobiles: string[] = [];
     const invalid: string[] = [];
-    for (const raw of input.split(/[,;\n]+/)) {
+    const add = (m: string) => {
+        if (!mobiles.includes(m)) mobiles.push(m);
+    };
+    for (const raw of input.split(/[,;\n\r\t]+/)) {
         const t = raw.trim();
         if (!t) continue;
-        const digits = t.replace(/\D/g, "");
-        let ten: string | null = null;
-        if (digits.length === 10) ten = digits;
-        else if (digits.length === 12 && digits.startsWith("91")) ten = digits.slice(2);
-        else if (digits.length === 11 && digits.startsWith("0")) ten = digits.slice(1);
-        if (ten && /^[6-9]\d{9}$/.test(ten)) {
-            if (!mobiles.includes(ten)) mobiles.push(ten);
+        const one = toMobile(t);
+        if (one) {
+            add(one);
+            continue;
+        }
+        const run = splitRun(t);
+        if (run) {
+            run.mobiles.forEach(add);
+            invalid.push(...run.invalid);
         } else {
             invalid.push(t);
         }
     }
-    return { mobiles: mobiles.slice(0, CLAIM_SEARCH_MAX_NUMBERS), invalid };
+    return { mobiles: mobiles.slice(0, max), invalid, overLimit: Math.max(0, mobiles.length - max) };
+}
+
+/**
+ * ID 46: does a leads-list search box hold mobile numbers rather than a name?
+ * True when the text is only digits and number punctuation and at least one
+ * entry is a valid mobile — so "9876543210," and "9876543210, 12345" select by
+ * number instead of falling through to a text match on the raw string. A
+ * partial number ("98765") stays a text search.
+ */
+export function numberSearchMode(search: string | null | undefined): MobileList | null {
+    const s = (search ?? "").trim();
+    if (!s || !/^[\d\s,;+()-]+$/.test(s)) return null;
+    const parsed = parseMobileList(s, LIST_SEARCH_MAX_NUMBERS);
+    return parsed.mobiles.length > 0 ? parsed : null;
 }
 
 /** Marker written into the claim touchpoint's remarks; the Sales Head list keys on it. */

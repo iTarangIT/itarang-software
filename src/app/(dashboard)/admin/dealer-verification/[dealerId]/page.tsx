@@ -39,6 +39,7 @@ import {
   Zap,
 } from "lucide-react";
 import { toast } from "sonner";
+import { SalespersonSelect } from "@/components/onboarding/SalespersonSelect";
 
 type DuplicateFlag = "none" | "branch" | "duplicate" | "pan-mismatch";
 
@@ -183,6 +184,8 @@ type DealerReviewData = {
   salesManagerName?: string;
   salesManagerEmail?: string;
   salesManagerMobile?: string;
+  /** ID 66 (E-321) — users.id of the salesperson; approval is blocked while empty. */
+  salespersonUserId?: string | null;
   partners?: OwnershipPerson[];
   directors?: OwnershipPerson[];
   agreementLanguage?: string;   // ✅ NEW
@@ -322,6 +325,7 @@ type CompanyEditForm = {
   salesManagerName: string;
   salesManagerEmail: string;
   salesManagerMobile: string;
+  salespersonUserId: string;
 };
 
 
@@ -832,6 +836,7 @@ function ActionCard({
   duplicate,
   onboardingStatus,
   branchAck, setBranchAck,
+  hasSalesperson,
 }: {
   remarks: string;
   setRemarks: (value: string) => void;
@@ -847,6 +852,8 @@ function ActionCard({
   hasSignedAgreement?: boolean;
   duplicate?: DuplicateCheckResult | null;
   onboardingStatus?: string;
+  /** ID 66 — false blocks approval. */
+  hasSalesperson: boolean;
   branchAck: boolean;
   setBranchAck: (value: boolean) => void;
 }) {
@@ -868,8 +875,10 @@ function ActionCard({
   // Branch approvals must be explicitly acknowledged — the server rejects
   // them with 409 otherwise.
   const branchAckBlock = duplicate?.conflict === "branch" && !branchAck;
+  // ID 66 — every onboarding names its salesperson before approval.
+  const salespersonBlock = !hasSalesperson;
   const approvalBlocked =
-    financeGateBlock || duplicateBlock || submissionGateBlock || branchAckBlock;
+    financeGateBlock || duplicateBlock || submissionGateBlock || branchAckBlock || salespersonBlock;
 
   return (
     <motion.aside
@@ -925,6 +934,18 @@ function ActionCard({
                 approving.
               </p>
             )}
+          </div>
+        </div>
+      )}
+
+      {salespersonBlock && !submissionGateBlock && (
+        <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-4">
+          <div className="flex items-start gap-3">
+            <Clock3 className="mt-0.5 h-4 w-4 text-amber-600" />
+            <p className="text-sm text-amber-800">
+              Approval is blocked until a salesperson is set. Edit the application and pick
+              one under <span className="font-semibold">Salesperson</span>.
+            </p>
           </div>
         </div>
       )}
@@ -1076,7 +1097,7 @@ export default function DealerReviewPage() {
     ownerEmail: "", ownerAadhaarNo: "", bankName: "", accountNumber: "", beneficiaryName: "", ifscCode: "",
     bankBranch: "", accountType: "",
     ownerAddressLine1: "", ownerCity: "", ownerDistrict: "", ownerState: "", ownerPinCode: "",
-    salesManagerName: "", salesManagerEmail: "", salesManagerMobile: "",
+    salesManagerName: "", salesManagerEmail: "", salesManagerMobile: "", salespersonUserId: "",
   });
 
   // GST Places of Business (principal + additional) with billing/dispatch/other
@@ -1225,6 +1246,7 @@ export default function DealerReviewPage() {
             salesManagerName:   d.salesManagerName   || "",
             salesManagerEmail:  d.salesManagerEmail  || "",
             salesManagerMobile: d.salesManagerMobile || "",
+            salespersonUserId:  d.salespersonUserId  || "",
           });
           setGstAddresses(d.gstAddresses ?? null);
           setAgreementLanguage(d.agreementLanguage || "english");
@@ -1413,6 +1435,7 @@ export default function DealerReviewPage() {
       salesManagerName:   data.salesManagerName   || "",
       salesManagerEmail:  data.salesManagerEmail  || "",
       salesManagerMobile: data.salesManagerMobile || "",
+      salespersonUserId:  data.salespersonUserId  || "",
     });
     setGstAddresses(data.gstAddresses ?? null);
     setIsEditing(false);
@@ -1426,11 +1449,25 @@ export default function DealerReviewPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           ...editForm,
+          // Sent only when picked — the server then fills name / email / mobile.
+          salespersonUserId: editForm.salespersonUserId || undefined,
           ...(gstAddresses ? { gstAddresses } : {}),
         }),
       });
       const json = await res.json();
       if (!json.success) { toast.error(json.message || "Failed to save"); return; }
+
+      // A newly picked salesperson's email and mobile come from the server.
+      if (editForm.salespersonUserId && editForm.salespersonUserId !== (data?.salespersonUserId || "")) {
+        const fresh = await fetch(`/api/admin/dealer-verifications/${dealerId}`)
+          .then((r) => r.json())
+          .catch(() => null);
+        if (fresh?.success) {
+          editForm.salesManagerName = fresh.data.salesManagerName || "";
+          editForm.salesManagerEmail = fresh.data.salesManagerEmail || "";
+          editForm.salesManagerMobile = fresh.data.salesManagerMobile || "";
+        }
+      }
 
       // optimistic local update so UI reflects new values immediately
       setData((prev) =>
@@ -2595,14 +2632,31 @@ export default function DealerReviewPage() {
               )}
             </div>
 
-            <SubsectionHeading label="Sales Manager" />
+            <SubsectionHeading label="Salesperson" />
+            {!data.salespersonUserId && (
+              <p className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                No salesperson is set on this onboarding. Click Edit and pick one — approval is blocked until then.
+              </p>
+            )}
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
               {isEditing ? (
-                <>
-                  <EditableField label="Name"   value={editForm.salesManagerName}   onChange={handleEditField("salesManagerName")} />
-                  <EditableField label="Email"  value={editForm.salesManagerEmail}  onChange={handleEditField("salesManagerEmail")} />
-                  <EditableField label="Mobile" value={editForm.salesManagerMobile} onChange={handleEditField("salesManagerMobile")} />
-                </>
+                <div>
+                  <label className="mb-1.5 block text-xs font-medium uppercase tracking-wide text-slate-500">
+                    Salesperson
+                  </label>
+                  <SalespersonSelect
+                    value={editForm.salespersonUserId}
+                    typedName={editForm.salespersonUserId ? undefined : editForm.salesManagerName}
+                    onPick={(o) =>
+                      setEditForm((prev) => ({
+                        ...prev,
+                        salespersonUserId: o?.id ?? "",
+                        ...(o ? { salesManagerName: o.name } : {}),
+                      }))
+                    }
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none focus:border-slate-400"
+                  />
+                </div>
               ) : (
                 <>
                   <InfoField label="Name"   value={data.salesManagerName} />
@@ -3362,6 +3416,7 @@ export default function DealerReviewPage() {
           onboardingStatus={data.onboardingStatus}
           branchAck={branchAck}
           setBranchAck={setBranchAck}
+          hasSalesperson={!!data.salespersonUserId}
         />
 
         {/* Finance enablement for a dealer already approved WITHOUT it. Not

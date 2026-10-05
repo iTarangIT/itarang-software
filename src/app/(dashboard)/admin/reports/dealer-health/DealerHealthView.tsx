@@ -30,9 +30,14 @@ const BUCKET_TONE: Record<AccountBucket, string> = {
 const inr = (n: number) => `₹${n.toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
 const pct = (r: number | null) => (r == null ? "—" : `${Math.round(r * 100)}%`);
 
-export function DealerHealthView() {
+const NO_OWNER = "__none";
+
+export function DealerHealthView({ canManageAccounts = false }: { canManageAccounts?: boolean }) {
     const [group, setGroup] = useState<Group>("owner");
     const [bucket, setBucket] = useState<AccountBucket | "">("");
+    const [search, setSearch] = useState("");
+    const [owner, setOwner] = useState("");
+    const [city, setCity] = useState("");
 
     const { data, isLoading, error } = useQuery<{
         rows: DealerHealthRow[];
@@ -57,15 +62,71 @@ export function DealerHealthView() {
     }
     if (error) return <p className="text-sm text-rose-600">{(error as Error).message}</p>;
 
-    const rows = data?.rows ?? [];
+    const all = data?.rows ?? [];
+    const owners = [...new Map(all.filter((r) => r.owner_id).map((r) => [r.owner_id!, r.owner_name ?? "(unnamed)"])).entries()].sort(
+        (a, b) => a[1].localeCompare(b[1]),
+    );
+    const cities = [...new Set(all.map((r) => r.city?.trim()).filter((c): c is string => !!c))].sort((a, b) => a.localeCompare(b));
+
+    // Owner, city and search narrow the list and the bucket counts; the bucket
+    // chips then pick within what is left.
+    const q = search.trim().toLowerCase();
+    const rows = all.filter(
+        (r) =>
+            (!owner || (owner === NO_OWNER ? !r.owner_id : r.owner_id === owner)) &&
+            (!city || r.city?.trim() === city) &&
+            (!q || [r.dealer, r.gstin, r.city, r.account_id].some((v) => v?.toLowerCase().includes(q))),
+    );
     const counts = Object.fromEntries(
         ACCOUNT_BUCKETS.map((b) => [b, rows.filter((r) => r.bucket === b).length]),
     ) as Record<AccountBucket, number>;
     const visible = bucket ? rows.filter((r) => r.bucket === bucket) : rows;
-    const noGstin = rows.filter((r) => !r.gstin).length;
+    const noGstin = all.filter((r) => !r.gstin).length;
+    const unmatchable = all.filter((r) => r.invoices_unmatchable).length;
+    const filtered = !!(owner || city || q);
+    const selectCls = "rounded-lg border border-border bg-surface px-2 py-1.5 text-sm";
 
     return (
         <div className="space-y-5">
+            <div className="flex flex-wrap items-center gap-2">
+                <input
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    placeholder="Search dealer, GSTIN or city…"
+                    className={`${selectCls} min-w-[220px] flex-1`}
+                />
+                <select value={owner} onChange={(e) => setOwner(e.target.value)} className={selectCls} aria-label="Account owner">
+                    <option value="">All owners</option>
+                    <option value={NO_OWNER}>No owner</option>
+                    {owners.map(([id, name]) => (
+                        <option key={id} value={id}>
+                            {name}
+                        </option>
+                    ))}
+                </select>
+                <select value={city} onChange={(e) => setCity(e.target.value)} className={selectCls} aria-label="City">
+                    <option value="">All cities</option>
+                    {cities.map((c) => (
+                        <option key={c} value={c}>
+                            {c}
+                        </option>
+                    ))}
+                </select>
+                {filtered && (
+                    <button
+                        type="button"
+                        onClick={() => {
+                            setSearch("");
+                            setOwner("");
+                            setCity("");
+                        }}
+                        className="text-sm text-ink-muted underline"
+                    >
+                        Clear
+                    </button>
+                )}
+            </div>
+
             <div className="flex flex-wrap gap-2">
                 <button
                     type="button"
@@ -88,9 +149,17 @@ export function DealerHealthView() {
 
             {noGstin > 0 && (
                 <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                    {noGstin} of {rows.length} converted dealers have no GSTIN on their lead, so none of
-                    their invoices can be seen here. GSTIN is now required at Mark Converted; older leads
-                    can have it added from the lead&apos;s contact details.
+                    {noGstin} of {all.length} dealer accounts have no GSTIN recorded. Where the dealer
+                    came through a lead, the lead&apos;s GSTIN is used to find its invoices.
+                    {unmatchable > 0 &&
+                        ` ${unmatchable} came in directly, so none of their invoices can be seen and they show as never ordered.`}{" "}
+                    {canManageAccounts ? (
+                        <Link href="/admin/account-management?gstin_missing=1" className="font-semibold underline">
+                            Set the GSTIN in Account management
+                        </Link>
+                    ) : (
+                        "Admin, the CEO or the Sales Head can set the GSTIN in Account management."
+                    )}
                 </p>
             )}
 
@@ -101,7 +170,7 @@ export function DealerHealthView() {
                             <th className="px-3 py-2 text-left font-semibold">Dealer</th>
                             <th className="px-3 py-2 text-left font-semibold">Owner</th>
                             <th className="px-3 py-2 text-left font-semibold">Bucket</th>
-                            <th className="px-3 py-2 text-left font-semibold">Converted</th>
+                            <th className="px-3 py-2 text-left font-semibold">Activated</th>
                             <th className="px-3 py-2 text-left font-semibold">Last order</th>
                             <th className="px-3 py-2 text-right font-semibold">Days since</th>
                             <th className="px-3 py-2 text-right font-semibold">Orders</th>
@@ -114,19 +183,35 @@ export function DealerHealthView() {
                         {visible.length === 0 && (
                             <tr>
                                 <td colSpan={10} className="px-3 py-8 text-center text-ink-muted">
-                                    No dealers in this bucket.
+                                    {filtered ? "No dealers match these filters." : "No dealers in this bucket."}
                                 </td>
                             </tr>
                         )}
                         {visible.map((r) => (
-                            <tr key={r.lead_id}>
+                            <tr key={r.account_id}>
                                 <td className="px-3 py-2">
-                                    <Link href={`/leads/${encodeURIComponent(r.lead_id)}`} className="font-medium text-ink hover:underline">
-                                        {r.dealer}
-                                    </Link>
+                                    {r.lead_id ? (
+                                        <Link href={`/leads/${encodeURIComponent(r.lead_id)}`} className="font-medium text-ink hover:underline">
+                                            {r.dealer}
+                                        </Link>
+                                    ) : canManageAccounts ? (
+                                        <Link
+                                            href={`/admin/account-management?search=${encodeURIComponent(r.account_id)}`}
+                                            className="font-medium text-ink hover:underline"
+                                        >
+                                            {r.dealer}
+                                        </Link>
+                                    ) : (
+                                        <span className="font-medium text-ink">{r.dealer}</span>
+                                    )}
                                     <div className="text-[11px] text-ink-muted">
                                         {[r.city, r.gstin ?? "no GSTIN"].filter(Boolean).join(" · ")}
                                     </div>
+                                    {r.invoices_unmatchable && (
+                                        <div className="text-[11px] font-medium text-amber-700">
+                                            Invoices cannot be matched until a GSTIN is set
+                                        </div>
+                                    )}
                                 </td>
                                 <td className="px-3 py-2 text-ink">{r.owner_name ?? "—"}</td>
                                 <td className="px-3 py-2">
@@ -154,6 +239,7 @@ export function DealerHealthView() {
                     <div>
                         <h2 className="text-sm font-semibold text-ink">Summary</h2>
                         <p className="text-[11px] text-ink-muted">
+                            All dealer accounts; the filters above do not apply here.{" "}
                             Reorder rate = dealers who ordered in the last 30 days and also before ÷ dealers
                             who had ordered before. ₹ at risk = last-90-day revenue of Red and Dormant dealers.
                         </p>

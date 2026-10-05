@@ -228,9 +228,9 @@ describe("escalate_lead", () => {
 
 describe("mark_converted", () => {
     it("a valid GSTIN (normalised) → preview; creates the onboarding application", async () => {
-        const r = await run(ISR, "mark_converted", { lead_id: "DL-7", gstin: " 27aaacb1234c1z5 " });
+        const r = await run(ISR, "mark_converted", { lead_id: "DL-7", gstin: " 27aaacb1234c1zf " });
         expect(r.kind).toBe("preview");
-        expect(stored().plan).toEqual({ lead_id: "DL-7", gstin: "27AAACB1234C1Z5", notes: null });
+        expect(stored().plan).toEqual({ lead_id: "DL-7", gstin: "27AAACB1234C1ZF", notes: null });
         // ID 74: the rep's action sets Won; Converted comes with onboarding approval.
         expect(stored().preview.lines).toContainEqual({ label: "Status", value: "Under Discussion → Won" });
         expect(stored().preview.warning).toMatch(/CRM screen/);
@@ -239,12 +239,12 @@ describe("mark_converted", () => {
     it("a bad GSTIN → asks, never guesses; already Converted → declined", async () => {
         expect((await run(ISR, "mark_converted", { lead_id: "DL-7", gstin: "27AAACB" })).kind).toBe("question");
         findLeadInScope.mockResolvedValue(lead({ lead_status: "Converted" }));
-        expect((await run(ISR, "mark_converted", { lead_id: "DL-7", gstin: "27AAACB1234C1Z5" })).kind).toBe("declined");
+        expect((await run(ISR, "mark_converted", { lead_id: "DL-7", gstin: "27AAACB1234C1ZF" })).kind).toBe("declined");
         expect(createPending).not.toHaveBeenCalled();
     });
 
     it("applier: markLeadConverted on the tx with the user's role; notify after commit", async () => {
-        const plan = APPLIERS.mark_converted.schema.parse({ lead_id: "DL-7", gstin: "27AAACB1234C1Z5", notes: null });
+        const plan = APPLIERS.mark_converted.schema.parse({ lead_id: "DL-7", gstin: "27AAACB1234C1ZF", notes: null });
         const out = await APPLIERS.mark_converted.apply({ tx: TX, user: ASM, step: 1 }, plan);
         expect(markLeadConverted).toHaveBeenCalledWith(expect.objectContaining({ actor: { id: "asm-1", name: "Rahul", role: "asm" } }), { tx: TX });
         expect(out).toMatchObject({ onboarding_application_id: "app-1", afterCommit: notify });

@@ -164,6 +164,8 @@ export type AgreementData = {
   dealerSigningMethod: SigningMethod;
 
   salesManager: {
+    /** users.id of the picked ISR / ASM / Sales Head (ID 66). */
+    userId?: string;
     name: string;
     email: string;
     mobile: string;

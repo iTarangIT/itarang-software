@@ -7,6 +7,7 @@
  * what an unpriced line does, how a description is composed, what happens when
  * a lead has no state — is testable without a database.
  */
+import { printedListPrice } from "../listPricing";
 import type { CommercialsProductLine } from "@/lib/inside-sales/types";
 import { amountInWords } from "./amount-in-words";
 import type { QuotationDocConfig } from "./config";
@@ -64,6 +65,12 @@ export interface BuildQuotationViewInput {
   config: QuotationDocConfig;
   lines: CommercialsProductLine[];
   taxRefs: Map<string, LineTaxRef>;
+  /**
+   * E-323 — the list price per product, keyed like taxRefs: the admin list
+   * price, else the OEM price. Absent (older quotes, every existing test) = no
+   * List price / Discount columns at all.
+   */
+  listRefs?: Map<string, number>;
   placeOfSupply: PlaceOfSupply;
   dealer: {
     name: string | null;
@@ -159,6 +166,14 @@ export function buildQuotationView(input: BuildQuotationViewInput): QuotationVie
     const quantity = Number(l.quantity) || 0;
     const amount = toPaise((Number.isFinite(rate) ? rate : 0) * quantity);
     const gstRatePct = ref?.gstRatePct ?? fallback?.gstRatePct ?? null;
+    // Discount = list − net, per unit, before GST. GST stays on the net price.
+    const list = input.listRefs
+      ? printedListPrice({
+          listPrice: input.listRefs.get(taxRefKey(l.asset_type, l.product_id)),
+          oemPrice: null,
+          netPrice: Number.isFinite(rate) ? rate : 0,
+        })
+      : null;
 
     // The model id earns its place under the name only when it says something
     // the name does not already contain.
@@ -179,11 +194,17 @@ export function buildQuotationView(input: BuildQuotationViewInput): QuotationVie
       // "pcs" on goods lines and nothing on the subscription line.
       unit: l.asset_type === "paraphernalia" ? null : "pcs",
       rate: Number.isFinite(rate) ? rate : 0,
+      listPrice: list?.listPrice ?? null,
+      discount: list?.discount ?? null,
       amount,
       gstRatePct,
       gstAmount: lineGstAmount(amount, gstRatePct),
     };
   });
+
+  const totalDiscount = toPaise(
+    lineViews.reduce((sum, l) => sum + (l.discount ?? 0) * l.quantity, 0),
+  );
 
   const totals = computeTotals({
     lines: lineViews,
@@ -204,6 +225,10 @@ export function buildQuotationView(input: BuildQuotationViewInput): QuotationVie
       phone: (dealer.phone ?? "").trim() || null,
     },
     lines: lineViews,
+    // The List price / Discount columns print only when a discount is being
+    // given — a quote at list price reads exactly as it did before.
+    showListPrice: totalDiscount > 0,
+    totalDiscount,
     subTotal: totals.subTotal,
     taxRows: totals.taxRows,
     total: totals.total,

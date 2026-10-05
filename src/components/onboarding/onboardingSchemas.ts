@@ -1,4 +1,5 @@
 import { usesManualAgreement } from "@/lib/dealer/dealer-capabilities";
+import { checkCustomerGstin, GSTIN_CHECK_MESSAGE } from "@/lib/leads/gstin";
 import { DealerOnboardingState } from "./onboardingTypes";
 
 /**
@@ -27,8 +28,6 @@ export function skipsAgreementStep(state: {
   );
 }
 
-const GST_REGEX =
-  /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/;
 const PAN_REGEX = /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/;
 const PHONE_REGEX = /^[6-9]\d{9}$/;
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -83,8 +82,10 @@ export function validateStep(
 
     if (!state.company.gstNumber.trim()) {
       errors.gstNumber = "GST number is required";
-    } else if (!GST_REGEX.test(state.company.gstNumber.trim().toUpperCase())) {
-      errors.gstNumber = "Enter a valid GST number";
+    } else {
+      // ID 62: shape, check digit, and never iTarang's own registration.
+      const gst = checkCustomerGstin(state.company.gstNumber);
+      if (gst !== "ok") errors.gstNumber = GSTIN_CHECK_MESSAGE[gst];
     }
 
     if (!state.company.companyPanNumber.trim()) {
@@ -410,26 +411,16 @@ export function validateStep(
     // manager block moves into step 4 and must be fully validated here.
     if (state.finance.enableFinance === "no") {
       const sm = (state.agreement?.salesManager || {}) as {
+        userId?: string;
         name?: string;
         email?: string;
         mobile?: string;
         age?: string;
       };
 
-      if (!sm.name?.trim()) {
-        errors.salesManager_name = "Sales manager name is required";
-      }
-
-      if (!sm.email?.trim()) {
-        errors.salesManager_email = "Sales manager email is required";
-      } else if (!EMAIL_REGEX.test(sm.email.trim())) {
-        errors.salesManager_email = "Enter a valid sales manager email";
-      }
-
-      if (!sm.mobile?.trim()) {
-        errors.salesManager_mobile = "Sales manager mobile is required";
-      } else if (!PHONE_REGEX.test(sm.mobile.trim())) {
-        errors.salesManager_mobile = "Enter a valid sales manager mobile";
+      // ID 66: a salesperson picked from the list, stored as a user id.
+      if (!sm.userId?.trim()) {
+        errors.salesManager_name = "Select the salesperson";
       }
 
       {
@@ -514,26 +505,16 @@ export function validateStep(
     // Sales Manager — required when the agreement step is active (finance = yes).
     {
       const sm = (state.agreement.salesManager || {}) as {
+        userId?: string;
         name?: string;
         email?: string;
         mobile?: string;
         age?: string;
       };
 
-      if (!sm.name?.trim()) {
-        errors.salesManager_name = "Sales manager name is required";
-      }
-
-      if (!sm.email?.trim()) {
-        errors.salesManager_email = "Sales manager email is required";
-      } else if (!EMAIL_REGEX.test(sm.email.trim())) {
-        errors.salesManager_email = "Enter a valid sales manager email";
-      }
-
-      if (!sm.mobile?.trim()) {
-        errors.salesManager_mobile = "Sales manager mobile is required";
-      } else if (!PHONE_REGEX.test(sm.mobile.trim())) {
-        errors.salesManager_mobile = "Enter a valid sales manager mobile";
+      // ID 66: a salesperson picked from the list, stored as a user id.
+      if (!sm.userId?.trim()) {
+        errors.salesManager_name = "Select the salesperson";
       }
 
       const ageMsg = validateAge(sm.age);

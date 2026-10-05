@@ -33,7 +33,7 @@
  */
 import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { dealerLeadByGstin, GSTIN_KEY } from "@/lib/leads/gstinMatch";
+import { dealerAccountByGstin, dealerLeadByGstin, GSTIN_KEY } from "@/lib/leads/gstinMatch";
 
 export type RevenueInvoiceSource = "zoho" | "drive";
 
@@ -64,8 +64,18 @@ export interface RevenueInvoiceRow {
    * list / export / summary rows only — see matchedUnion(). NULL = not linked.
    */
   dealer_lead_id?: string | null;
+  /** The matched lead's name, else the matched account's. */
   dealer_name?: string | null;
   dealer_owner_id?: string | null;
+  /**
+   * The activated dealer ACCOUNT with this GSTIN, when there is one — most
+   * dealers are onboarded with no lead behind them. NULL = no such account.
+   */
+  acct_id?: string | null;
+  acct_owner_id?: string | null;
+  acct_city?: string | null;
+  /** Linked to a CRM dealer: a lead OR an account matched. */
+  dealer_linked?: boolean;
 }
 
 /**
@@ -182,6 +192,13 @@ async function revenueUnion(): Promise<SQL> {
  * dictionary's "owner at invoice date" needs ownership history per day, which
  * E-295's episodes could supply later.
  *
+ * An invoice is also matched to the dealer ACCOUNT with that GSTIN
+ * (dealerAccountByGstin): a dealer onboarded directly has no lead, and its
+ * invoices used to read "not linked" for that reason alone. `dealer_linked`
+ * is true when either matched, and is what every "linked / not linked" count
+ * reads. `dealer_lead_id` keeps its meaning — per-person credit and the
+ * lead-keyed joins still go through it.
+ *
  * Kept separate from revenueUnion(): company totals and the chart never need
  * the match, and must not move because of it. Exported for the Sales
  * dashboard, which joins it to dealer_leads so its city / state /
@@ -192,10 +209,15 @@ export async function matchedUnion(): Promise<SQL> {
   return sql`(
     SELECT u.*,
            m.dealer_lead_id,
-           m.dealer_name,
-           m.dealer_owner_id
+           COALESCE(m.dealer_name, ma.acct_name)                   AS dealer_name,
+           m.dealer_owner_id,
+           ma.acct_id,
+           ma.acct_owner_id,
+           ma.acct_city,
+           (m.dealer_lead_id IS NOT NULL OR ma.acct_id IS NOT NULL) AS dealer_linked
       FROM ${src} AS u
       LEFT JOIN ${dealerLeadByGstin(sql`u.gstin_key`)} m ON TRUE
+      LEFT JOIN ${dealerAccountByGstin(sql`u.gstin_key`)} ma ON TRUE
   )`;
 }
 
@@ -371,8 +393,8 @@ function listWhere(f: RevenueListFilters): SQL {
     parts.push(sql`r.customer_name ILIKE ${"%" + f.customer.trim() + "%"}`);
   }
   if (f.source) parts.push(sql`r.source = ${f.source}`);
-  if (f.dealerMatch === "linked") parts.push(sql`r.dealer_lead_id IS NOT NULL`);
-  if (f.dealerMatch === "unlinked") parts.push(sql`r.dealer_lead_id IS NULL`);
+  if (f.dealerMatch === "linked") parts.push(sql`r.dealer_linked`);
+  if (f.dealerMatch === "unlinked") parts.push(sql`NOT r.dealer_linked`);
 
   if (parts.length === 0) return sql`TRUE`;
   return sql.join(parts, sql` AND `);
@@ -416,8 +438,8 @@ export async function revenueSummary(f: RevenueListFilters): Promise<{
       COUNT(*)                    AS count,
       COALESCE(SUM(r.total), 0)   AS total,
       COALESCE(SUM(r.balance), 0) AS balance,
-      COUNT(*) FILTER (WHERE r.dealer_lead_id IS NULL)                  AS unlinked_count,
-      COALESCE(SUM(r.total) FILTER (WHERE r.dealer_lead_id IS NULL), 0) AS unlinked_total
+      COUNT(*) FILTER (WHERE NOT r.dealer_linked)                  AS unlinked_count,
+      COALESCE(SUM(r.total) FILTER (WHERE NOT r.dealer_linked), 0) AS unlinked_total
     FROM ${src} AS r
     WHERE ${listWhere(f)}
   `);
