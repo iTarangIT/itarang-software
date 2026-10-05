@@ -159,6 +159,7 @@ import {
 // without importing this module (and its whole dependency tree) at eval time.
 // Re-exported here because three call sites already import it from here.
 import { PLACEHOLDER_COMPANY } from "./labels";
+import { checkCustomerGstin, normalizeGstin } from "@/lib/leads/gstin";
 export { PLACEHOLDER_COMPANY };
 
 const MIN_CONFIDENCE = Number(process.env.WHATSAPP_MIN_CONFIDENCE ?? 0.55);
@@ -3028,7 +3029,10 @@ async function fillFromDoc(
   const patch: Record<string, unknown> = {};
   switch (docType) {
     case "gst": {
-      if (str(fields.gstin)) patch.gst_number = str(fields.gstin);
+      // ID 62: a misread GSTIN (bad check digit) or iTarang's own is not stored;
+      // the field stays empty for the admin to fill at verification.
+      const gstin = normalizeGstin(str(fields.gstin));
+      if (gstin && checkCustomerGstin(gstin) === "ok") patch.gst_number = gstin;
       // Company name = the TRADE name (the business), preferring it over the
       // legal name. For a sole proprietorship the GST legal name is the
       // PROPRIETOR (a person) — using it as the company name shows the dealer's

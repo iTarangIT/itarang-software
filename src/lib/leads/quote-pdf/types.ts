@@ -30,6 +30,13 @@ export interface QuotationLineView {
   unit: string | null;
   /** Per-unit price before tax. */
   rate: number;
+  /**
+   * E-323 — the list price per unit and the discount per unit (list − rate),
+   * both before tax. NULL when the quote carries no list price for this line.
+   * A line sold at or above list has discount 0.
+   */
+  listPrice: number | null;
+  discount: number | null;
   /** quantity x rate, before tax. */
   amount: number;
   /**
@@ -138,6 +145,11 @@ export interface QuotationView {
   billTo: BillToBlock;
 
   lines: QuotationLineView[];
+
+  /** True when any line carries a discount — the template then adds the List price and Discount columns. */
+  showListPrice: boolean;
+  /** Σ discount × quantity, before tax. 0 when no discount is given. */
+  totalDiscount: number;
 
   subTotal: number;
   taxRows: TaxRow[];

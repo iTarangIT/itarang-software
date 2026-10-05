@@ -8,7 +8,7 @@ import { Modal } from "../Modal";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { whatsappOnboardingChatUrl } from "@/lib/whatsapp/chat-link";
-import { isValidGstin, normalizeGstin } from "@/lib/leads/gstin";
+import { checkCustomerGstin, GSTIN_CHECK_MESSAGE, normalizeGstin } from "@/lib/leads/gstin";
 
 type Props = {
     open: boolean;
@@ -40,7 +40,10 @@ export function MarkConvertedModal({ open, onClose, leadId, onSuccess, hasApprov
     // on a stray click).
     const [channel, setChannel] = useState<"web" | "whatsapp" | null>(null);
 
-    const gstinOk = isValidGstin(gstin);
+    // ID 62: shape, check digit, and never iTarang's own — the same rule the
+    // route applies, so the rep sees why before submitting.
+    const gstinCheck = checkCustomerGstin(gstin);
+    const gstinOk = gstinCheck === "ok";
 
     const reset = () => {
         setNotes("");
@@ -254,7 +257,7 @@ export function MarkConvertedModal({ open, onClose, leadId, onSuccess, hasApprov
                             className={`mt-1 w-full rounded-md border px-3 py-2 text-sm font-mono uppercase tracking-wide ${
                                 gstinTouched && !gstinOk ? "border-red-400" : "border-gray-200"
                             }`}
-                            placeholder="07AAACB1234C1Z5"
+                            placeholder="07AAACB1234C1ZH"
                             maxLength={20}
                             autoComplete="off"
                             value={gstin}
@@ -263,7 +266,9 @@ export function MarkConvertedModal({ open, onClose, leadId, onSuccess, hasApprov
                         />
                         {gstinTouched && !gstinOk ? (
                             <p className="mt-1 text-xs text-red-600">
-                                Enter the dealer&apos;s 15-character GSTIN.
+                                {gstin.trim()
+                                    ? GSTIN_CHECK_MESSAGE[gstinCheck]
+                                    : "Enter the dealer's 15-character GSTIN."}
                             </p>
                         ) : (
                             <p className="mt-1 text-xs text-gray-500">

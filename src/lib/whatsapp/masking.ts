@@ -7,7 +7,7 @@ function maskMiddle(value: string, head: number, tail: number): string {
   return `${v.slice(0, head)}${"*".repeat(Math.max(2, v.length - head - tail))}${v.slice(-tail)}`;
 }
 
-/** 27ABCDE1234F1Z5 → 27ABCDE****1Z5 */
+/** 27ABCDE1234F1Z0 → 27ABCDE****1Z5 */
 export function maskGstin(gstin?: string | null): string {
   if (!gstin) return "—";
   return maskMiddle(gstin, 7, 3);

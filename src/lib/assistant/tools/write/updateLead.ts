@@ -13,6 +13,7 @@ import { z } from "zod";
 import { eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { dealerLeads } from "@/lib/db/schema";
+import { checkCustomerGstin } from "@/lib/leads/gstin";
 import { canonicalRegionUpdates } from "@/lib/leads/regionFields";
 import { createPending } from "../../actions";
 import type { Preview, ToolResult } from "../../types";
@@ -35,7 +36,14 @@ const LABEL: Record<ProfileField, string> = {
     gstin: "GSTIN",
 };
 
-export const GSTIN_RE = /^\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/;
+/** ID 62: what to ask when a dealer's GSTIN fails the shared check; null when it passes. */
+export function gstinQuestion(gstin: string): string | null {
+    const c = checkCustomerGstin(gstin);
+    if (c === "ok") return null;
+    if (c === "own_gstin") return "That is iTarang's own GSTIN. What is the dealer's GSTIN?";
+    if (c === "bad_check_digit") return "That GSTIN's last character doesn't match the rest — one character is probably mistyped. What is it?";
+    return "That GSTIN doesn't look right (15 characters, like 27ABCDE1234F1Z0). What is it?";
+}
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i;
 const PIN_RE = /^[1-9]\d{5}$/;
 
@@ -81,7 +89,8 @@ export const updateLead: ToolFactory = () =>
             const lead = owned.lead;
 
             const gstin = input.gstin?.toUpperCase().replace(/[\s-]/g, "");
-            if (gstin && !GSTIN_RE.test(gstin)) return ask("That GSTIN doesn't look right (15 characters, like 27ABCDE1234F1Z5). What is it?");
+            const gstinAsk = gstin ? gstinQuestion(gstin) : null;
+            if (gstinAsk) return ask(gstinAsk);
             const email = input.email?.toLowerCase();
             if (email && !EMAIL_RE.test(email)) return ask("That email address doesn't look right. What is it?");
             const pincode = input.pincode?.replace(/\s/g, "");

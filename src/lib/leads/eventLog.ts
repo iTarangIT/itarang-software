@@ -58,6 +58,8 @@ export type EventLogRow = {
     city: string | null;
     state: string | null;
     business_type: string | null;
+    /** When the lead became sales-ready (E-314); NULL when it never did. */
+    sales_ready_at?: string | null;
     event_type: string;
     from_value: string | null;
     to_value: string | null;
@@ -238,6 +240,7 @@ export async function fetchEvents(f: EventLogFilters): Promise<EventLogRow[]> {
                COALESCE(dl.shop_name, dl.dealer_name)   AS dealer,
                dl.city, dl.state,
                to_jsonb(dl) ->> 'business_type'         AS business_type,
+               to_jsonb(dl) ->> 'sales_ready_at'        AS sales_ready_at,
                ev.event_type, ev.from_value, ev.to_value,
                COALESCE(u.name, ev.actor)               AS performed_by,
                u.role, ev.channel, ev.outcome, ev.duration_sec, ev.remarks

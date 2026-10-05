@@ -21,6 +21,8 @@ import {
     notifyQuotationPendingApproval,
 } from "@/lib/notifications/events";
 import { loadLiveOemPrices } from "@/lib/leads/oemPrices";
+import { snapshotListPrices } from "@/lib/leads/listPrices";
+import type { ListPriceSnapshot } from "@/lib/leads/listPricing";
 import {
     evaluateAgainstOemPrices,
     linesNeedingAttention,
@@ -107,6 +109,8 @@ export async function createLeadCommercial(
         let approvalStatus: string = initialApprovalStatus(body.event_type);
         let approvalMode: string | null = null;
         let oemEvaluation: OemEvaluation | null = null;
+        // E-323: the list price each line is quoted against, frozen with the quote.
+        let listPriceSnapshot: ListPriceSnapshot | null = null;
 
         if (isGatedQuoteEvent(body.event_type)) {
             const lines = body.product_lines ?? [];
@@ -115,6 +119,7 @@ export async function createLeadCommercial(
             // the instant the quote is stamped.
             const refs = await loadLiveOemPrices(lines, tx, performedAt);
             oemEvaluation = evaluateAgainstOemPrices(lines, refs, performedAt);
+            listPriceSnapshot = await snapshotListPrices(lines, tx, performedAt);
             const resolved = resolveQuoteApproval(oemEvaluation);
             approvalStatus = resolved.status;
             approvalMode = resolved.mode;
@@ -200,6 +205,7 @@ export async function createLeadCommercial(
                 approval_status: approvalStatus,
                 approval_mode: approvalMode,
                 oem_evaluation: oemEvaluation,
+                list_price_snapshot: listPriceSnapshot,
                 // Auto-approval stamps the time but leaves approved_by NULL: no
                 // human approved this, and NULL says so exactly. A 'system'
                 // sentinel would be a non-uuid string in the column the CEO

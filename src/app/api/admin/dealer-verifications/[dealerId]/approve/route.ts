@@ -21,7 +21,9 @@ import { ensureDealerSignedAgreementUrl } from "@/lib/digio/ensure-signed-agreem
 import { refreshDealerAgreementFromDigio } from "@/lib/agreement/refresh-dealer-agreement";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { requireSalesHead } from "@/lib/auth/requireSalesHead";
+import { leadMatchingPhone, stampAccountAtActivation } from "@/lib/accounts/ownership";
 import { classifyGstinConflict } from "@/lib/dealer/duplicate-check";
+import { checkCustomerGstin, GSTIN_CHECK_MESSAGE } from "@/lib/leads/gstin";
 import { usesManualAgreement } from "@/lib/dealer/dealer-capabilities";
 import {
   maskPhone,
@@ -84,6 +86,11 @@ function validateAccountFields(application: any): string[] {
     problems.push(
       `GSTIN "${gstin}" is ${gstin.length} characters — a GSTIN is exactly 15.`
     );
+  } else if (gstin) {
+    // ID 62: shape, check digit, and never iTarang's own registration — the
+    // value becomes accounts.gstin, the key invoices are matched on.
+    const gst = checkCustomerGstin(gstin);
+    if (gst !== "ok") problems.push(`GSTIN "${gstin}" — ${GSTIN_CHECK_MESSAGE[gst]}`);
   }
 
   const pan =
@@ -197,6 +204,19 @@ export async function POST(req: NextRequest, context: RouteContext) {
           message: "Dealer onboarding must be submitted before approval.",
         },
         { status: 400 }
+      );
+    }
+
+    // ID 66 (E-321): every onboarding names its salesperson — an active ISR,
+    // ASM or Sales Head — before it can be approved. Covers WhatsApp-bot and
+    // self-service onboardings, where nobody was asked.
+    if (!application.salesperson_user_id) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: "Set the salesperson on this onboarding before approving it.",
+        },
+        { status: 422 }
       );
     }
 
@@ -770,6 +790,25 @@ export async function POST(req: NextRequest, context: RouteContext) {
           onboarding_status: "approved",
           created_by: authUserId,
         });
+
+        // ID 65 (E-322): the account records who onboarded the dealer (fixed)
+        // and its first owner — both the onboarding's salesperson — and
+        // whether it came through a lead.
+        const linkedLead = (await tx.execute(sql`
+          SELECT id FROM dealer_leads
+           WHERE dealer_onboarding_application_id::text = ${String(application.id)}
+           ORDER BY created_at LIMIT 1
+        `)) as unknown as { id: string }[];
+        await stampAccountAtActivation(tx, {
+          accountId: dealerCode,
+          salespersonUserId: application.salesperson_user_id ?? null,
+          // Not started from a lead: link the lead with the same mobile, if any.
+          leadId:
+            application.originating_dealer_lead_id ||
+            linkedLead[0]?.id ||
+            (await leadMatchingPhone(application.owner_phone)),
+          changedBy: auth.user.id,
+        });
       }
       } // end: if (!isBranchDealer)
 
@@ -835,9 +874,12 @@ export async function POST(req: NextRequest, context: RouteContext) {
     let emailError: string | null = null;
 
     // Dealer gets the welcome email with credentials, not this one — includeDealer: false.
-    const signerRecipients = await getDealerNotificationRecipients(application, {
-      includeDealer: false,
-    });
+    // ID 65: `application` was read before this approval gave it a dealer
+    // code, so pass the code — that is how the account owner is found and copied.
+    const signerRecipients = await getDealerNotificationRecipients(
+      { ...application, dealer_code: dealerCode },
+      { includeDealer: false },
+    );
     // The Sales Head who approved, and every active Sales Head, get the
     // internal copy with the signed agreement + audit trail attached. Never the
     // dealer welcome email itself: that one carries the temporary password.

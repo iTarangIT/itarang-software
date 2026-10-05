@@ -14,6 +14,7 @@
 // key as the fallback. Pure HTTP with an injectable fetch, so it is unit-tested
 // without a network.
 
+import { checkCustomerGstin } from "@/lib/leads/gstin";
 import { assistantConfig } from "./config";
 
 export const DOC_KINDS = [
@@ -91,7 +92,6 @@ const GEMINI_SCHEMA = {
     required: ["doc_kind", "summary"],
 };
 
-const GSTIN_RE = /^\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i;
 
 /** "+91 98765-43210" → "9876543210"; anything that is not an Indian mobile → null. */
@@ -130,7 +130,7 @@ export function checkReadFields(raw: Record<string, unknown>): { fields: ReadFie
             phone: keep("phone", raw.phone, mobile10(text(raw.phone))),
             alt_phone: keep("alt_phone", raw.alt_phone, mobile10(text(raw.alt_phone))),
             email: keep("email", raw.email, email && EMAIL_RE.test(email) ? email : null),
-            gstin: keep("gstin", raw.gstin, gstin && GSTIN_RE.test(gstin) ? gstin : null),
+            gstin: keep("gstin", raw.gstin, gstin && checkCustomerGstin(gstin) === "ok" ? gstin : null),
             address: text(raw.address, 400),
             area: text(raw.area, 120),
             city: text(raw.city, 120),
