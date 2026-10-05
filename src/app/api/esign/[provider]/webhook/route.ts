@@ -14,8 +14,8 @@
  * the agreement is matched, against that NBFC's stored webhook secret:
  *   - digio      X-Digio-Checksum (HMAC-SHA256 of the body). The NBFC saves its
  *                Digio webhook secret key next to its API keys in Settings.
- *   - leegality  no verified scheme yet (the adapter's webhook shape is still
- *                unconfirmed) — accepted and logged as UNVERIFIED.
+ *   - leegality  `mac` in the body = HMAC-SHA1(documentId, Private Salt). The
+ *                NBFC saves its Private Salt next to its auth token (ID 130).
  * Until a secret is saved the event is accepted as before and logged; under
  * WEBHOOK_AUTH_STRICT=1 it is refused.
  */
@@ -25,17 +25,23 @@ import { applyAgreementWebhookEvent } from "@/lib/nbfc/agreement-webhook";
 import { getEsignProvider, isKnownEsignProvider } from "@/lib/nbfc/esign/registry";
 import { loadProviderCredentials } from "@/lib/nbfc/esign/credentials";
 import type { EsignCreds } from "@/lib/nbfc/esign/provider";
-import { checkWebhook, checksumProof } from "@/lib/security/webhookAuth";
+import { checkWebhook, checksumProof, leegalityMacProof, type WebhookProof } from "@/lib/security/webhookAuth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /** The secret that signs this provider's webhooks for the account that owns the document. */
 function webhookSecretFor(provider: string, creds: EsignCreds | null): string | undefined {
+  if (provider === "leegality") return creds?.secrets.privateSalt || undefined;
   if (provider !== "digio") return undefined;
   // No vault row ⇒ the document was created on iTarang's own Digio account.
   if (!creds || creds.source === "global") return process.env.DIGIO_WEBHOOK_SECRET;
   return creds.secrets.webhookSecret || undefined;
+}
+
+function proofFor(provider: string, secret: string | undefined, rawText: string, headers: Record<string, string>): WebhookProof {
+  if (provider === "leegality") return leegalityMacProof(secret, rawText);
+  return checksumProof(secret, rawText, headers["x-digio-checksum"]);
 }
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ provider: string }> }) {
@@ -78,11 +84,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ pro
       const verdict = checkWebhook({
         route: `/api/esign/${provider}/webhook`,
         secret,
-        proof: checksumProof(secret, rawText, headers["x-digio-checksum"]),
+        proof: proofFor(provider, secret, rawText, headers),
         configure:
           provider === "digio"
             ? "The NBFC must save its Digio webhook secret key in Settings → e-sign credentials."
-            : `No webhook verification is implemented for ${provider} yet.`,
+            : provider === "leegality"
+              ? "The NBFC must save its Leegality Private Salt in Settings → e-sign credentials."
+              : `No webhook verification is implemented for ${provider} yet.`,
       });
       return verdict !== "refuse";
     },

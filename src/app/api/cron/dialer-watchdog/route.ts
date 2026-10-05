@@ -26,6 +26,7 @@ import {
 import { advanceCampaign } from "@/lib/queue/advanceCampaign";
 import { and, desc, eq, isNotNull } from "drizzle-orm";
 import { NextResponse } from "next/server";
+import { checkCronAuth } from "@/lib/cron-auth";
 
 export const maxDuration = 60;
 
@@ -33,16 +34,9 @@ const STALL_FINALIZE_AGE_MS = 2 * 60 * 60 * 1000; // 2 hours
 const NO_PROGRESS_WINDOW_MS = 10 * 60 * 1000; // 10 minutes
 
 export async function GET(req: Request) {
-  // Vercel-style cron auth: shared bearer in CRON_SECRET. Same pattern as
-  // /api/bolna/call-scheduler. Manual ad-hoc runs from localhost bypass this
-  // by virtue of Vercel injecting the header on real cron firings.
-  const authHeader = req.headers.get("authorization");
-  if (
-    process.env.CRON_SECRET &&
-    authHeader !== `Bearer ${process.env.CRON_SECRET}`
-  ) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  // ID 130: fails closed — an unset CRON_SECRET is a 500, never an open route.
+  const cronDenied = checkCronAuth(req);
+  if (cronDenied) return cronDenied;
 
   const runStartedAt = new Date();
   const results: Array<{

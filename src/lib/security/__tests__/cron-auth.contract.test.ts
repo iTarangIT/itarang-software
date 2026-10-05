@@ -74,6 +74,26 @@ describe("checkCronAuth", () => {
   });
 });
 
+describe("no route fails OPEN when CRON_SECRET is missing (ID 130)", () => {
+  it("never uses the optional check or a raw `Bearer ${process.env.CRON_SECRET}` compare", () => {
+    // `if (CRON_SECRET && header !== …)` skips the check when the env var is
+    // unset; `header !== \`Bearer ${process.env.CRON_SECRET}\`` admits
+    // "Bearer undefined". Both are what checkCronAuth() exists to replace.
+    const open = walk(API_DIR)
+      .map((file) => ({
+        url: "/api/" + relative(API_DIR, file).split(sep).slice(0, -1).join("/"),
+        src: code(file),
+      }))
+      .filter(
+        (r) =>
+          /process\.env\.CRON_SECRET\s*&&/.test(r.src) ||
+          /`Bearer \$\{process\.env\.CRON_SECRET\}`/.test(r.src),
+      )
+      .map((r) => r.url);
+    expect(open).toEqual([]);
+  });
+});
+
 describe("KNOWN GAP: cron routes that skip the secret outside production", () => {
   it("finds the cron routes", () => {
     expect(cronRoutes.length).toBeGreaterThan(30);
