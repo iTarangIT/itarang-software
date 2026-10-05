@@ -19,6 +19,8 @@ interface RegionGroupRow {
   description: string | null;
   regions: { state: string; cities?: string[] }[];
   updated_at: string | null;
+  // Set by GET /api/region-groups: oversight roles and the group's creator.
+  can_edit?: boolean;
 }
 
 interface RegionTreeCity {
@@ -193,22 +195,27 @@ export function RegionGroupManager({
                     {g.description || summarizeRegions(g.regions)}
                   </div>
                 </div>
-                <button
-                  type="button"
-                  className="rg-icon-btn"
-                  onClick={() => setEditingId(g.id)}
-                  aria-label="Edit"
-                >
-                  <Pencil className="w-3.5 h-3.5" />
-                </button>
-                <button
-                  type="button"
-                  className="rg-icon-btn danger"
-                  onClick={() => remove(g.id)}
-                  aria-label="Delete"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
+                {/* The API refuses these for anyone else (canEditRegionGroup). */}
+                {g.can_edit && (
+                  <>
+                    <button
+                      type="button"
+                      className="rg-icon-btn"
+                      onClick={() => setEditingId(g.id)}
+                      aria-label="Edit"
+                    >
+                      <Pencil className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      className="rg-icon-btn danger"
+                      onClick={() => remove(g.id)}
+                      aria-label="Delete"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </>
+                )}
               </div>
             ))
           )}

@@ -1,11 +1,13 @@
 import { db } from '@/lib/db';
 import { provisions, oemInventoryForPDI, inventory } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
-import { requireAuth } from '@/lib/auth-utils';
+import { requireRole } from '@/lib/auth-utils';
+import { PROVISIONS_PAGE_ROLES } from '@/lib/auth/staffPageRoles';
 import { successResponse, withErrorHandler } from '@/lib/api-utils';
 
 export const GET = withErrorHandler(async (req: Request) => {
-    await requireAuth();
+    // ID 143: staff only — any signed-in dealer or NBFC partner could read this.
+    await requireRole([...PROVISIONS_PAGE_ROLES]);
     const { searchParams } = new URL(req.url);
     const provisionId = searchParams.get('provision_id');
 

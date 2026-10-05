@@ -1,18 +1,29 @@
 import { linkOnboardingToLead } from "@/lib/onboarding/linkToLead";
 import { NextRequest, NextResponse } from "next/server";
-import { desc, eq } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
+import { and, desc, eq, inArray, ne, or, sql } from "drizzle-orm";
 
 import { db } from "@/lib/db/index";
 import {
+  auditLogs,
   dealerOnboardingApplications,
   dealerOnboardingDocuments,
+  users,
 } from "@/lib/db/schema";
 import { createClient } from "@/lib/supabase/server";
 import { readStoredDocument } from "@/lib/storage/readStoredDocument";
 import { recordLeadCapture } from "@/lib/leads/lead-registry";
 import { readDocument } from "@/lib/whatsapp/extraction";
 import { buildGstAddresses } from "@/lib/onboarding/gst-addresses";
-import { notifyOnboardingSubmitted } from "@/lib/notifications/events";
+import { notifyOnboardingBankChanged, notifyOnboardingSubmitted } from "@/lib/notifications/events";
+import {
+  bankChanges,
+  callerFor,
+  decideSubmit,
+  maskAccountNumber,
+  planDocuments,
+  verifyResumeToken,
+} from "@/lib/onboarding/submitAccess";
 import { markDocsSubmitted } from "@/lib/onboarding/leadMilestones";
 import { checkCustomerGstin, GSTIN_CHECK_MESSAGE } from "@/lib/leads/gstin";
 import { resolveSalesperson, salespersonMobile } from "@/lib/onboarding/salesperson";
@@ -392,6 +403,24 @@ export async function POST(req: NextRequest) {
 
     const rawBody = (await req.json()) as SubmitPayload & Record<string, any>;
 
+    // ID 129: this form needs no login, so WHO is calling decides what it may
+    // touch — iTarang staff, a signed-in dealer, or nobody (submitAccess.ts).
+    let callerRole: string | null = null;
+    if (user) {
+      callerRole =
+        (
+          await db
+            .select({ role: users.role })
+            .from(users)
+            .where(eq(users.id, user.id))
+            .limit(1)
+        )[0]?.role ?? null;
+    }
+    const caller = callerFor(user ? { id: user.id, role: callerRole } : null);
+    const isStaff = caller.kind === "staff";
+    // A flag the browser sends; only a staff session makes it true.
+    const internalSubmission = isStaff && rawBody.internalSubmission === true;
+
     const company = rawBody.company || {
       companyName: rawBody.companyName,
       companyType: rawBody.companyType,
@@ -506,85 +535,81 @@ export async function POST(req: NextRequest) {
       provider_raw_response: dealerOnboardingApplications.provider_raw_response,
       onboarding_status: dealerOnboardingApplications.onboarding_status,
       salesperson_user_id: dealerOnboardingApplications.salesperson_user_id,
+      is_locked: dealerOnboardingApplications.is_locked,
+      bank_name: dealerOnboardingApplications.bank_name,
+      account_number: dealerOnboardingApplications.account_number,
+      beneficiary_name: dealerOnboardingApplications.beneficiary_name,
+      ifsc_code: dealerOnboardingApplications.ifsc_code,
+      provider_signing_url: dealerOnboardingApplications.provider_signing_url,
+      provider_document_id: dealerOnboardingApplications.provider_document_id,
+      request_id: dealerOnboardingApplications.request_id,
+      agreement_status: dealerOnboardingApplications.agreement_status,
+      stamp_status: dealerOnboardingApplications.stamp_status,
+      completion_status: dealerOnboardingApplications.completion_status,
     } as const;
 
-    let existingApplication:
-      | {
-          id: string;
-          dealer_user_id: string | null;
-          dealer_code: string | null;
-          provider_raw_response: unknown;
-          onboarding_status: string | null;
-          salesperson_user_id: string | null;
-        }
-      | null = null;
+    const firstRow = async (where: ReturnType<typeof eq> | ReturnType<typeof and>) =>
+      (
+        await db
+          .select(lookupColumns)
+          .from(dealerOnboardingApplications)
+          .where(where)
+          .orderBy(desc(dealerOnboardingApplications.updated_at))
+          .limit(1)
+      )[0] ?? null;
 
-    if (applicationId) {
-      existingApplication =
-        (
-          await db
-            .select(lookupColumns)
-            .from(dealerOnboardingApplications)
-            .where(eq(dealerOnboardingApplications.id, applicationId))
-            .limit(1)
-        )[0] ?? null;
-    }
+    // ID 129 — three DIFFERENT ways an application can be related to this
+    // request, kept apart because they do not carry the same weight:
+    //   byId        the application id the request names
+    //   byUser      a signed-in dealer's own application
+    //   byIdentity  an OPEN application with the same owner e-mail or dealer
+    //               code as the one typed into the form
+    // The old code tried them in turn and overwrote the first hit. A typed
+    // e-mail or dealer code is not proof of anything: decideSubmit() lets
+    // them point at an application only for a caller who proves it is theirs.
+    const byId = applicationId
+      ? await firstRow(eq(dealerOnboardingApplications.id, applicationId))
+      : null;
+    const byUser =
+      caller.kind === "dealer"
+        ? await firstRow(eq(dealerOnboardingApplications.dealer_user_id, caller.userId))
+        : null;
+    const identityMatches = [
+      primaryOwner.ownerEmail
+        ? sql`lower(btrim(${dealerOnboardingApplications.owner_email})) = ${primaryOwner.ownerEmail.trim().toLowerCase()}`
+        : null,
+      authEmail
+        ? sql`lower(btrim(${dealerOnboardingApplications.owner_email})) = ${authEmail.trim().toLowerCase()}`
+        : null,
+      dealerCode ? eq(dealerOnboardingApplications.dealer_code, dealerCode) : null,
+    ].filter((c): c is NonNullable<typeof c> => c !== null);
+    const byIdentity = identityMatches.length
+      ? await firstRow(
+          and(
+            or(...identityMatches),
+            // An earlier, approved application never blocks a new one.
+            sql`COALESCE(${dealerOnboardingApplications.onboarding_status}, 'draft') <> 'approved'`,
+          ),
+        )
+      : null;
 
-    if (!existingApplication && dealerUserId) {
-      existingApplication =
-        (
-          await db
-            .select(lookupColumns)
-            .from(dealerOnboardingApplications)
-            .where(eq(dealerOnboardingApplications.dealer_user_id, dealerUserId))
-            .orderBy(desc(dealerOnboardingApplications.updated_at))
-            .limit(1)
-        )[0] ?? null;
+    const decision = decideSubmit({
+      caller,
+      byId,
+      byUser,
+      byIdentity,
+      resumeApplicationId: verifyResumeToken(cleanString(rawBody.resumeToken)),
+    });
+    if (decision.action === "refuse") {
+      return NextResponse.json(
+        { success: false, code: decision.code, message: decision.message },
+        { status: decision.status },
+      );
     }
-
-    if (!existingApplication && primaryOwner.ownerEmail) {
-      existingApplication =
-        (
-          await db
-            .select(lookupColumns)
-            .from(dealerOnboardingApplications)
-            .where(
-              eq(dealerOnboardingApplications.owner_email, primaryOwner.ownerEmail)
-            )
-            .orderBy(desc(dealerOnboardingApplications.updated_at))
-            .limit(1)
-        )[0] ?? null;
-    }
-
-    if (!existingApplication && authEmail) {
-      existingApplication =
-        (
-          await db
-            .select(lookupColumns)
-            .from(dealerOnboardingApplications)
-            .where(eq(dealerOnboardingApplications.owner_email, authEmail))
-            .orderBy(desc(dealerOnboardingApplications.updated_at))
-            .limit(1)
-        )[0] ?? null;
-    }
-
-    if (!existingApplication && dealerCode) {
-      existingApplication =
-        (
-          await db
-            .select(lookupColumns)
-            .from(dealerOnboardingApplications)
-            .where(eq(dealerOnboardingApplications.dealer_code, dealerCode))
-            .orderBy(desc(dealerOnboardingApplications.updated_at))
-            .limit(1)
-        )[0] ?? null;
-    }
-
-    if (existingApplication?.onboarding_status === "approved") {
-      // Allow creating a brand-new application even if a previous one was approved.
-      // Reset so the code path below will INSERT instead of UPDATE.
-      existingApplication = null;
-    }
+    const existingApplication =
+      decision.action === "update"
+        ? [byId, byUser, byIdentity].find((a) => a?.id === decision.applicationId) ?? null
+        : null;
 
     // Web path GST OCR — reuse the WhatsApp Gemini extractor. Best-effort: a
     // failure leaves gstAddresses unset and the admin adds them manually.
@@ -630,9 +655,13 @@ export async function POST(req: NextRequest) {
       // Internal staff (sales/admin) completing a converted lead's onboarding
       // must NOT be stamped as the dealer — keep dealer_user_id NULL until the
       // real dealer login is provisioned at approval (BRD §0.13).
-      dealer_user_id: rawBody.internalSubmission
-        ? existingApplication?.dealer_user_id ?? null
-        : dealerUserId || existingApplication?.dealer_user_id || null,
+      // ID 129: `internalSubmission` is honoured only for a staff session, and
+      // an application that already has its dealer is never re-stamped to
+      // whoever happens to be submitting.
+      dealer_user_id:
+        internalSubmission || isStaff
+          ? existingApplication?.dealer_user_id ?? null
+          : existingApplication?.dealer_user_id || dealerUserId || null,
       dealer_code: dealerCode || existingApplication?.dealer_code || null,
       company_name: cleanString(company.companyName),
       company_type: cleanString(company.companyType) || null,
@@ -687,17 +716,33 @@ export async function POST(req: NextRequest) {
       beneficiary_name: toNullable(ownership.beneficiaryName),
       ifsc_code: toNullable(ownership.ifsc),
 
-      provider_signing_url: toNullable(agreement.providerSigningUrl),
-      provider_document_id: toNullable(agreement.providerDocumentId),
-      request_id: toNullable(agreement.requestId),
+      // ID 129: where the agreement stands is set by the agreement flow, not
+      // by whatever the browser posts. Staff may still pass these (the
+      // admin-initiated path); for everyone else an existing application keeps
+      // its own values and a new one starts clean.
+      provider_signing_url: isStaff
+        ? toNullable(agreement.providerSigningUrl)
+        : existingApplication?.provider_signing_url ?? null,
+      provider_document_id: isStaff
+        ? toNullable(agreement.providerDocumentId)
+        : existingApplication?.provider_document_id ?? null,
+      request_id: isStaff
+        ? toNullable(agreement.requestId)
+        : existingApplication?.request_id ?? null,
       provider_raw_response: providerRawResponse,
-      agreement_status: financeEnabled
-        ? cleanString(agreement.agreementStatus) || "not_generated"
-        : "not_generated",
-      stamp_status: cleanString(agreement.stampStatus) || "pending",
-      completion_status: financeEnabled
-        ? cleanString(agreement.completionStatus) || "pending"
-        : "completed",
+      agreement_status: !financeEnabled
+        ? "not_generated"
+        : isStaff
+          ? cleanString(agreement.agreementStatus) || "not_generated"
+          : existingApplication?.agreement_status || "not_generated",
+      stamp_status: isStaff
+        ? cleanString(agreement.stampStatus) || "pending"
+        : existingApplication?.stamp_status || "pending",
+      completion_status: !financeEnabled
+        ? "completed"
+        : isStaff
+          ? cleanString(agreement.completionStatus) || "pending"
+          : existingApplication?.completion_status || "pending",
       correction_remarks: null,
       rejection_remarks: null,
       rejected_at: null,
@@ -706,7 +751,23 @@ export async function POST(req: NextRequest) {
       last_action_timestamp: new Date(),
     };
 
-    let finalApplicationId = existingApplication?.id || applicationId || null;
+    // ID 129: ONLY the application decideSubmit() chose. This used to fall back
+    // to the id in the request, so naming an approved application's id updated
+    // it even though the lookup above had set it aside.
+    let finalApplicationId: string | null = existingApplication?.id ?? null;
+
+    const bankDiff = existingApplication
+      ? bankChanges(existingApplication, {
+          bank_name: applicationPayload.bank_name,
+          account_number: applicationPayload.account_number,
+          beneficiary_name: applicationPayload.beneficiary_name,
+          ifsc_code: applicationPayload.ifsc_code,
+        })
+      : [];
+    // Only a CHANGE to details that were already there is worth an alarm.
+    const bankWasSet =
+      !!existingApplication &&
+      !!(existingApplication.account_number || existingApplication.ifsc_code);
 
     await db.transaction(async (tx) => {
       if (finalApplicationId) {
@@ -730,20 +791,94 @@ export async function POST(req: NextRequest) {
         throw new Error("Unable to resolve application id during submit");
       }
 
-      await tx
-        .delete(dealerOnboardingDocuments)
-        .where(eq(dealerOnboardingDocuments.application_id, finalApplicationId));
-
+      // ID 129: this used to delete every document row and insert the new set.
+      // Now a file that is unchanged is left alone (its verification state
+      // with it), and one the submission replaces is written to the audit log
+      // before its row goes — the file itself stays in storage.
       const documentRows = collectDocuments(
         finalApplicationId,
         body,
         dealerUserId
       );
+      const storedDocuments = await tx
+        .select()
+        .from(dealerOnboardingDocuments)
+        .where(eq(dealerOnboardingDocuments.application_id, finalApplicationId));
+      const docPlan = planDocuments(storedDocuments, documentRows);
 
-      if (documentRows.length > 0) {
-        await tx.insert(dealerOnboardingDocuments).values(documentRows);
+      if (docPlan.replaced.length > 0) {
+        await tx.insert(auditLogs).values({
+          id: randomUUID(),
+          entity_type: "dealer_onboarding_application",
+          entity_id: finalApplicationId,
+          action: "onboarding_documents_replaced",
+          performed_by: dealerUserId,
+          old_data: { documents: docPlan.replaced },
+          new_data: {
+            caller: caller.kind,
+            replaced_by: docPlan.add.map((d) => ({
+              document_type: d.document_type,
+              storage_path: d.storage_path,
+            })),
+          },
+          timestamp: new Date(),
+        });
+        await tx
+          .delete(dealerOnboardingDocuments)
+          .where(
+            and(
+              eq(dealerOnboardingDocuments.application_id, finalApplicationId),
+              inArray(
+                dealerOnboardingDocuments.id,
+                docPlan.replaced.map((d) => d.id),
+              ),
+            ),
+          );
+      }
+      if (docPlan.add.length > 0) {
+        await tx.insert(dealerOnboardingDocuments).values(docPlan.add);
+      }
+
+      // ID 129: every change to bank details is recorded — who, when, old and
+      // new — in full here; the alert below carries only the last four digits.
+      if (bankDiff.length > 0 && existingApplication) {
+        await tx.insert(auditLogs).values({
+          id: randomUUID(),
+          entity_type: "dealer_onboarding_application",
+          entity_id: finalApplicationId,
+          action: "onboarding_bank_details_changed",
+          performed_by: dealerUserId,
+          old_data: {
+            bank_name: existingApplication.bank_name,
+            account_number: existingApplication.account_number,
+            beneficiary_name: existingApplication.beneficiary_name,
+            ifsc_code: existingApplication.ifsc_code,
+          },
+          new_data: {
+            bank_name: applicationPayload.bank_name ?? null,
+            account_number: applicationPayload.account_number ?? null,
+            beneficiary_name: applicationPayload.beneficiary_name ?? null,
+            ifsc_code: applicationPayload.ifsc_code ?? null,
+            caller: caller.kind,
+          },
+          changes: { fields: bankDiff.map((c) => c.field) },
+          timestamp: new Date(),
+        });
       }
     });
+
+    if (bankDiff.length > 0 && bankWasSet && finalApplicationId) {
+      // Best-effort — never break the submission.
+      await notifyOnboardingBankChanged({
+        applicationId: finalApplicationId,
+        businessName:
+          cleanString(company.companyName) || primaryOwner.ownerName || "A dealer",
+        fields: bankDiff.map((c) => c.field),
+        accountFrom: maskAccountNumber(existingApplication?.account_number),
+        accountTo: maskAccountNumber(applicationPayload.account_number),
+        changedBy: caller.kind,
+      }).catch((e) => console.error("[onboarding] bank-change alert failed", e));
+    }
 
     // ID 84.2: stamp the lead's "docs submitted" milestone (first submission
     // only). Best-effort — never throws.

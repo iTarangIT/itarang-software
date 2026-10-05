@@ -22,7 +22,6 @@ import { ensureDealerSignedAgreementUrl } from "@/lib/digio/ensure-signed-agreem
 import { refreshDealerAgreementFromDigio } from "@/lib/agreement/refresh-dealer-agreement";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { requireSalesHead } from "@/lib/auth/requireSalesHead";
-import { leadMatchingPhone, stampAccountAtActivation } from "@/lib/accounts/ownership";
 import { classifyGstinConflict } from "@/lib/dealer/duplicate-check";
 import { checkCustomerGstin, GSTIN_CHECK_MESSAGE } from "@/lib/leads/gstin";
 import { usesManualAgreement } from "@/lib/dealer/dealer-capabilities";
@@ -792,24 +791,6 @@ export async function POST(req: NextRequest, context: RouteContext) {
           created_by: authUserId,
         });
 
-        // ID 65 (E-322): the account records who onboarded the dealer (fixed)
-        // and its first owner — both the onboarding's salesperson — and
-        // whether it came through a lead.
-        const linkedLead = (await tx.execute(sql`
-          SELECT id FROM dealer_leads
-           WHERE dealer_onboarding_application_id::text = ${String(application.id)}
-           ORDER BY created_at LIMIT 1
-        `)) as unknown as { id: string }[];
-        await stampAccountAtActivation(tx, {
-          accountId: dealerCode,
-          salespersonUserId: application.salesperson_user_id ?? null,
-          // Not started from a lead: link the lead with the same mobile, if any.
-          leadId:
-            application.originating_dealer_lead_id ||
-            linkedLead[0]?.id ||
-            (await leadMatchingPhone(application.owner_phone)),
-          changedBy: auth.user.id,
-        });
       }
       } // end: if (!isBranchDealer)
 

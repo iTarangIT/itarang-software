@@ -1,11 +1,20 @@
-// What admin "Correct status" must carry (tracker ID 57 / 80). The override may
-// set any status, but a lead it closes has to be as complete as one closed
-// through Mark Lost / Mark Won: a Lost with no reason drops out of
-// Lost-by-reason, and a Won / Converted with no GSTIN never matches its
-// invoices. Pure — POST /api/admin/leads/[id]/correct-status does the writes.
+// What admin "Correct status" must carry (tracker ID 57 / 80). A lead it closes
+// has to be as complete as one closed through Mark Lost: a Lost with no reason
+// drops out of Lost-by-reason.
+//
+// ID 133 (3 Oct): it can no longer set Won or Converted. Converted comes only
+// from approval of the dealer's onboarding, Won only from Mark Won — a
+// correction to either skipped the onboarding path. Pure — POST
+// /api/admin/leads/[id]/correct-status does the writes.
 
-import { isOwnGstin, isValidGstin, normalizeGstin } from "@/lib/leads/gstin";
 import type { LeadStatus, LostReason } from "@/lib/lifecycle/transitions";
+
+/** The statuses Correct status may not set (ID 133). */
+export const CORRECTION_REFUSED_TARGETS: readonly LeadStatus[] = ["Won", "Converted"];
+
+export function correctionAllowedTo(to: LeadStatus): boolean {
+    return !CORRECTION_REFUSED_TARGETS.includes(to);
+}
 
 /** Refused before anything is written; withErrorHandler answers 400 with the sentence. */
 export class CorrectionInputError extends Error {
@@ -21,20 +30,21 @@ export type CorrectionPlan = {
     toLostReason?: LostReason;
     /** lost_to_competition only (ID 76). */
     competitorName?: string;
-    /** Won / Converted, when the admin typed one: normalised, to write on the lead. */
-    gstin?: string;
-    /** Won / Converted: the lead must have its onboarding application. */
-    needsOnboarding: boolean;
 };
 
 export function planCorrection(input: {
     to: LeadStatus;
     lostReason?: LostReason | null;
     competitorName?: string | null;
-    gstin?: string | null;
-    /** The GSTIN already on the lead, if any. */
-    existingGstin?: string | null;
 }): CorrectionPlan {
+    if (input.to === "Converted") {
+        throw new CorrectionInputError(
+            "A lead becomes Converted only when the dealer's onboarding is approved. Send it through onboarding.",
+        );
+    }
+    if (input.to === "Won") {
+        throw new CorrectionInputError("Use Mark Won — Correct status cannot set Won.");
+    }
     if (input.to === "Lost") {
         if (!input.lostReason) {
             throw new CorrectionInputError("Pick a Lost reason to correct a lead to Lost.");
@@ -46,25 +56,8 @@ export function planCorrection(input: {
         return {
             toLostReason: input.lostReason,
             ...(input.lostReason === "lost_to_competition" ? { competitorName: competitor } : {}),
-            needsOnboarding: false,
         };
     }
 
-    if (input.to === "Won" || input.to === "Converted") {
-        const typed = normalizeGstin(input.gstin);
-        if (typed && !isValidGstin(typed)) {
-            throw new CorrectionInputError("Enter the dealer's 15-character GSTIN (e.g. 07AAACB1234C1ZH) — check the last character.");
-        }
-        if (typed && isOwnGstin(typed)) {
-            throw new CorrectionInputError("This is iTarang's own GSTIN, not the dealer's.");
-        }
-        if (!typed && !isValidGstin(input.existingGstin)) {
-            throw new CorrectionInputError(
-                `This lead has no GSTIN. Enter the dealer's 15-character GSTIN to correct it to ${input.to}.`,
-            );
-        }
-        return { ...(typed ? { gstin: typed } : {}), needsOnboarding: true };
-    }
-
-    return { needsOnboarding: false };
+    return {};
 }

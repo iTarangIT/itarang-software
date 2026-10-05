@@ -166,16 +166,41 @@ export function guardDigioWebhook(headers: Headers, rawBody: string, route: stri
  * `envName` is BOLNA_WEBHOOK_SECRET for call webhooks and BOLNA_TOOL_SECRET for
  * the in-call tool endpoints, which are configured separately on the agent.
  */
+/** Derived, so the secret itself never sits in a URL (URLs end up in access logs). */
+export function bolnaCallbackToken(secret: string): string {
+  return hmacSha256Hex(secret, "bolna-callback");
+}
+
+/**
+ * The per-call callback URL to give Bolna: `base` plus the token guardBolnaCall
+ * accepts in place of the bearer. Unchanged when no secret is configured.
+ */
+export function bolnaCallbackUrl(
+  base: string,
+  secret: string | undefined = process.env.BOLNA_WEBHOOK_SECRET,
+): string {
+  return secret ? `${base}?cb=${bolnaCallbackToken(secret)}` : base;
+}
+
 export function guardBolnaCall(
   headers: Headers,
   route: string,
   envName: "BOLNA_WEBHOOK_SECRET" | "BOLNA_TOOL_SECRET",
+  url?: string,
 ): NextResponse | null {
   const secret = process.env[envName];
+  let proof = bearerProof(secret, headers.get("authorization"));
+  // The headers above are set on the AGENT's webhook in Bolna's dashboard. A
+  // per-call callback URL is one WE hand Bolna, and nothing says the agent's
+  // headers ride on it, so that URL carries its own token (bolnaCallbackUrl).
+  const cb = url ? new URL(url).searchParams.get("cb") : null;
+  if (proof !== "valid" && cb) {
+    proof = secret && safeEqual(cb, bolnaCallbackToken(secret)) ? "valid" : "invalid";
+  }
   return guardWebhook({
     route,
     secret,
-    proof: bearerProof(secret, headers.get("authorization")),
+    proof,
     configure: `Set ${envName} and configure Bolna to send "Authorization: Bearer <that value>" to this URL.`,
   });
 }
