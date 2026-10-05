@@ -121,6 +121,26 @@ export function blockATableRows(rows: BlockARow[]): Array<Array<string | number>
     return out;
 }
 
+/** Label of the line under Revenue (tracker ID 69 / handover P1-6). */
+export const UNMATCHED_REVENUE_LABEL = "Revenue not matched to a dealer";
+
+/**
+ * Tracker ID 69 / P1-6: "₹X not matched to a dealer", right under the company
+ * Revenue row. Revenue (salesDashboard queryOutcome) counts only invoices
+ * matched to a dealer account or lead; this line is the rest of the same
+ * window — revenueSummary().unlinked_total — so the two add up to everything
+ * invoiced. Hidden when it is 0 (or unmeasured) in every period. Pure.
+ */
+export function withUnmatchedRevenue(rows: BlockARow[], values: RowValues | null | undefined): BlockARow[] {
+    if (!values) return rows;
+    const any = [values.y, values.d7, values.mtd, values.lm].some((v) => v != null && v > 0);
+    if (!any) return rows;
+    const at = rows.findIndex((r) => r.label === "Revenue");
+    const line: BlockARow = { group: "OUTCOME", label: UNMATCHED_REVENUE_LABEL, kind: "money", values, target: null };
+    if (at < 0) return [...rows, line];
+    return [...rows.slice(0, at + 1), line, ...rows.slice(at + 1)];
+}
+
 /** The one-line headline. */
 export function blockAHeadline(rows: BlockARow[]): string {
     const get = (label: string) => rows.find((r) => r.label === label);
@@ -257,6 +277,8 @@ export async function buildBlockA(
     db: Exec,
     periods: Periods,
     dash: { yesterday: SalesDashboard; last7: SalesDashboard; mtd: SalesDashboard; lastMonth: SalesDashboard },
+    /** Invoiced but matched to no dealer, per period (ID 69); null = not measured. */
+    unmatchedRevenue?: RowValues | null,
 ): Promise<BlockA> {
     const t = await companyTargets(db, periods.mtd.from, periods.mtd.to);
     // E-314 absent → the Sales-ready row is "Not measured yet", not a false 0.
@@ -387,5 +409,5 @@ export async function buildBlockA(
         t.total > 0
             ? `Month to date is ${t.elapsed} of ${t.total} working days, so targets are ${t.elapsed}/${t.total} of the monthly target. Targets set for ${t.withTarget} of ${t.reps} people.${visitsNote}`
             : "No targets are set for this month.";
-    return { rows, targetsNote, userTargets: t.perUser };
+    return { rows: withUnmatchedRevenue(rows, unmatchedRevenue), targetsNote, userTargets: t.perUser };
 }

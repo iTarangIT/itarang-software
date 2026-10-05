@@ -168,6 +168,34 @@ async function scheduledPerSpoc(
   return out;
 }
 
+/**
+ * Tracker ID 69 / P1-6: invoiced in each period but matched to no dealer — the
+ * "₹X not matched to a dealer" line under Block A's Revenue. Same inclusive
+ * invoice_date window as the Revenue row (salesDashboard queryOutcome), and
+ * the same void-excluded rule, so Revenue + this = everything invoiced. A
+ * period that fails is left unmeasured rather than failing the email.
+ */
+async function unmatchedRevenuePerPeriod(
+  periods: Record<"yesterday" | "last7" | "mtd" | "lastMonth", { from: string; to: string }>,
+): Promise<{ y: number | null; d7: number | null; mtd: number | null; lm: number | null }> {
+  const { revenueSummary } = await import("@/lib/dashboard/revenueSource");
+  const one = async (p: { from: string; to: string }): Promise<number | null> => {
+    try {
+      return (await revenueSummary({ from: p.from, to: p.to })).unlinked_total;
+    } catch (e) {
+      console.warn("[digest:sales_daily] unmatched revenue not measured:", e instanceof Error ? e.message : e);
+      return null;
+    }
+  };
+  const [y, d7, mtd, lm] = await Promise.all([
+    one(periods.yesterday),
+    one(periods.last7),
+    one(periods.mtd),
+    one(periods.lastMonth),
+  ]);
+  return { y, d7, mtd, lm };
+}
+
 async function rightNow(): Promise<{ waiting: number; oldestDays: number | null }> {
   try {
     // ID 82: the one "awaiting assignment" rule — the Ready to assign page
@@ -247,7 +275,7 @@ async function collect(
     };
 
     const { getDigestSettings } = await import("../settings");
-    const [yesterday, last7, mtd, lastMonth, scheduled, followUps, now, overdue, settings, extrasY, extrasMtd, awaiting] = await Promise.all([
+    const [yesterday, last7, mtd, lastMonth, scheduled, followUps, now, overdue, settings, extrasY, extrasMtd, awaiting, unmatched] = await Promise.all([
       buildSalesDashboard({ ...periods.yesterday, granularity: "day" }),
       buildSalesDashboard({ ...periods.last7, granularity: "day" }),
       buildSalesDashboard({ ...periods.mtd, granularity: "day" }),
@@ -260,8 +288,9 @@ async function collect(
       loadRepExtras(db as never, periods.yesterday),
       loadRepExtras(db as never, periods.mtd),
       loadAwaitingFieldVisit(db as never),
+      unmatchedRevenuePerPeriod(periods),
     ]);
-    const blockA = await buildBlockA(db as never, periods, { yesterday, last7, mtd, lastMonth });
+    const blockA = await buildBlockA(db as never, periods, { yesterday, last7, mtd, lastMonth }, unmatched);
     // The "as of" time is the configured morning send time (default 09:00).
     const asOf = formatSlotTime(settings.morningHour, settings.morningMinute);
     const extras = { y: extrasY, mtd: extrasMtd };

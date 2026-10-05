@@ -188,6 +188,10 @@ export type CommercialsProductLine = {
     model_id: string;
     unit_price: number | null;
     quantity: number;
+    // E-321 — the list price (MRP) printed on the quotation, snapshotted when
+    // the quote is written: the live list price, else the live OEM price, else
+    // null. Absent on lines written before E-321. Never part of approval.
+    list_price?: number | null;
 };
 
 // One product-master option for the picker dropdown.
@@ -220,6 +224,11 @@ export type LeadDetailCommercials = {
     warranty_terms: string | null;
     final_price: string | null;
     payment_method: string | null;
+    /** E-322 (ID 73): 'cash' | 'credit'; NULL on pre-E-322 rows. */
+    dealer_payment_terms: string | null;
+    credit_days: number | null;
+    /** E-322: NBFC finance for the end customer. */
+    customer_finance: boolean | null;
     deal_notes: string | null;
     product_lines: CommercialsProductLine[];
     notes: string | null;

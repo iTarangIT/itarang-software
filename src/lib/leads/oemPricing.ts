@@ -68,6 +68,11 @@ export interface OemEvaluation {
     /** Σ max(0, reference − quoted) × qty — the rupee value being given up. */
     shortfall_total: number;
     lines: OemLineVerdict[];
+    /**
+     * E-322 (ID 73): set when the quote waits because of its terms, not its
+     * price — any credit term needs approval. Absent on older evaluations.
+     */
+    terms_hold?: { reason: "credit_terms"; credit_days: number | null } | null;
 }
 
 /**

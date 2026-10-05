@@ -575,10 +575,13 @@ export function CampaignDetailView({
   // which is precisely what this button is for. 'scheduled' is excluded on
   // purpose: it already has a resume armed and the ticker owns it, so a manual
   // resume would only park it again.
+  // E-315 — booked automatic retries are work left too; a campaign stopped
+  // after its first pass has 0 pending rows but may have retries waiting.
+  const resumableLeads = pendingLeads + (campaign?.retryScheduled ?? 0);
   const canResume =
     !isRunning &&
     (campaign?.status === "stopped" || campaign?.status === "paused") &&
-    pendingLeads > 0;
+    resumableLeads > 0;
 
   const { data: leadsData, isLoading: leadsLoading } = useQuery({
     queryKey: ["dialer-campaign-leads", campaignId, bucket, page, durationBucket?.key ?? null],
@@ -734,9 +737,9 @@ export function CampaignDetailView({
               onClick={() => {
                 if (
                   window.confirm(
-                    `Resume calling ${pendingLeads} pending lead${
-                      pendingLeads === 1 ? "" : "s"
-                    } from where this campaign stopped?`,
+                    `Resume calling ${resumableLeads} lead${
+                      resumableLeads === 1 ? "" : "s"
+                    } (queued + booked retries) from where this campaign stopped?`,
                   )
                 ) {
                   resumeMutation.mutate();
@@ -751,7 +754,7 @@ export function CampaignDetailView({
               ) : (
                 <PhoneOutgoing className="w-4 h-4" />
               )}
-              Resume calling ({pendingLeads})
+              Resume calling ({resumableLeads})
             </button>
           )}
           {!isRunning && retryCandidates > 0 && (

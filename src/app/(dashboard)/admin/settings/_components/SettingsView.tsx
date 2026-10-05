@@ -9,6 +9,7 @@ import { Tabs } from "@/components/ui/tabs";
 import { NotificationAccessManager } from "./NotificationAccessManager";
 import { EmailNotificationManager } from "./EmailNotificationManager";
 import { QuotationCcForm } from "./QuotationCcForm";
+import { QuotationTermsForm } from "./QuotationTermsForm";
 import { TerritoryManager } from "./TerritoryManager";
 import { AsmVisitLimitForm } from "./AsmVisitLimitForm";
 import type { SettingsBundle } from "@/lib/admin/types";
@@ -36,7 +37,14 @@ import type { SettingsBundle } from "@/lib/admin/types";
 
 // Quotation CC (E-297) sits here too: it is also "who gets which email".
 // ASM visit limit (ID 77.1) sits beside ASM Territories.
-const TAB_VALUES = ["access", "email", "quotation-cc", "territories", "asm-visit-limit"] as const;
+const TAB_VALUES = [
+    "access",
+    "email",
+    "quotation-cc",
+    "quotation-terms",
+    "territories",
+    "asm-visit-limit",
+] as const;
 type TabValue = (typeof TAB_VALUES)[number];
 
 export function SettingsView() {
@@ -79,6 +87,7 @@ export function SettingsView() {
                     { value: "access", label: "Notification Access" },
                     { value: "email", label: "Email Notification" },
                     { value: "quotation-cc", label: "Quotation CC" },
+                    { value: "quotation-terms", label: "Quotation terms" },
                     { value: "territories", label: "ASM Territories" },
                     { value: "asm-visit-limit", label: "ASM Visit Limit" },
                 ]}
@@ -89,6 +98,7 @@ export function SettingsView() {
                     {active === "access" && <NotificationAccessManager />}
                     {active === "email" && <EmailNotificationManager />}
                     {active === "quotation-cc" && <QuotationCcForm />}
+                    {active === "quotation-terms" && <QuotationTermsForm />}
                     {active === "asm-visit-limit" && <AsmVisitLimitForm />}
                     {active === "territories" &&
                         (bundleQuery.isLoading ? (

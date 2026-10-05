@@ -14,6 +14,7 @@
  *   offset      — JSON only (default 0)
  *   format      — "csv" returns CSV download; anything else returns JSON
  */
+import { hasInvoiceLedgerTables } from "@/lib/sales/ledgerTables";
 import { NextRequest, NextResponse } from "next/server";
 import { and, desc, gte, ilike, inArray, lte, ne, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
@@ -93,8 +94,14 @@ export async function GET(req: NextRequest) {
         .filter((s) => KNOWN_STATUSES.has(s));
       if (list.length > 0) conds.push(inArray(zohoInvoices.status, list));
     } else {
-      // Default: exclude void from totals (matches CEO MTD logic).
+      // Default: exclude void from totals (matches CEO MTD logic). E-322
+      // (ID 71): a void recorded in the CRM counts as void too.
       conds.push(ne(zohoInvoices.status, "void"));
+      if (await hasInvoiceLedgerTables()) {
+        conds.push(
+          sql`NOT EXISTS (SELECT 1 FROM invoice_voids v WHERE v.source = 'zoho' AND v.invoice_id = ${zohoInvoices.id}::text)`,
+        );
+      }
     }
     if (customer) conds.push(ilike(zohoInvoices.customer_name, `%${customer}%`));
 

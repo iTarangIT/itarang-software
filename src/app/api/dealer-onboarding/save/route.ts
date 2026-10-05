@@ -1,3 +1,4 @@
+import { linkOnboardingToLead } from "@/lib/onboarding/linkToLead";
 import { NextRequest, NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 import { createServerClient } from "@supabase/ssr";
@@ -445,6 +446,11 @@ export async function POST(req: NextRequest) {
       mergeCookies(cookieCollector, res);
       return res;
     }
+
+    // ID 67 / P1-4: link this onboarding to its lead by phone. The phone is
+    // typed partway through the wizard, so every save tries until it links
+    // (an already-linked application returns at once). Never throws.
+    await linkOnboardingToLead(application.id);
 
     // ID 84.2: the submission transition stamps the lead's "docs submitted"
     // milestone (first submission only; autosaves of a draft do not).

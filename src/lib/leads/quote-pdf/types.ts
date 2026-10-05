@@ -28,15 +28,28 @@ export interface QuotationLineView {
   quantity: number;
   /** "pcs" for goods; a subscription line prints no unit, as ITPI-35 does. */
   unit: string | null;
-  /** Per-unit price before tax. */
+  /** Per-unit price before tax — the NET rate, after any list-price discount. */
   rate: number;
   /**
+<<<<<<< HEAD
    * E-323 — the list price per unit and the discount per unit (list − rate),
    * both before tax. NULL when the quote carries no list price for this line.
    * A line sold at or above list has discount 0.
    */
   listPrice: number | null;
   discount: number | null;
+=======
+   * E-321 — per-unit list price (MRP) snapshotted on the quote line, before
+   * tax. NULL when the line carries none (a pre-E-321 quote). Printed only when
+   * the document has a discount somewhere — see `QuotationView.hasDiscount`.
+   */
+  listPrice: number | null;
+  /**
+   * E-321 — the line's discount before tax: max(0, listPrice − rate) × quantity,
+   * rounded to paise. 0 when there is no list price or it is not above the rate.
+   */
+  discount: number;
+>>>>>>> fac2a80905456e04c4d89ee14f26fdf80ae34f9e
   /** quantity x rate, before tax. */
   amount: number;
   /**
@@ -152,6 +165,13 @@ export interface QuotationView {
   totalDiscount: number;
 
   subTotal: number;
+  /**
+   * E-321 — Σ line discounts before tax. 0 = no discount anywhere, and then the
+   * document prints no List price / Discount columns and no discount row.
+   */
+  totalDiscount: number;
+  /** True exactly when totalDiscount > 0. */
+  hasDiscount: boolean;
   taxRows: TaxRow[];
   total: number;
   totalInWords: string;

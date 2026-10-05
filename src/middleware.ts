@@ -703,6 +703,8 @@ export async function middleware(request: NextRequest) {
     "/admin/reports/sales-dashboard": ["admin", "sales_head", "ceo", "partner", "business_head"],
     "/admin/reports/dealer-health": ["admin", "sales_head", "ceo", "partner", "business_head"],
     "/admin/reports/needs-attention": ["admin", "sales_head", "ceo", "partner"],
+    // E-322 (IDs 39, 71) — the invoice ledger: finance, CEO, Admin only.
+    "/admin/reports/invoice-ledger": ["admin", "ceo", "finance_controller"],
     "/admin/reports": [
       "admin",
       "sales_head",
@@ -722,6 +724,9 @@ export async function middleware(request: NextRequest) {
     // ID 82 — the page's own requireRole list. Without this row the bare
     // "/admin" entry bounces business_head, sales_manager and partner.
     "/admin/ready-to-assign": ["admin", "sales_head", "ceo", "business_head", "sales_manager", "partner"],
+    // P1-1 / P1-2 — Accounts tab (owner / GSTIN). Admin and CEO only; without
+    // this row the bare "/admin" entry below would also admit sales_head.
+    "/admin/accounts": ["admin", "ceo"],
     "/admin/escalations": ["admin", "sales_head", "ceo", "partner"],
     "/admin/merge-requests": ["admin", "sales_head", "ceo", "partner"],
     "/admin/onboarding-dropouts": ["admin", "sales_head", "ceo", "partner"],

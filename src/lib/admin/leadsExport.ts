@@ -43,24 +43,29 @@
  * real dates / timestamps so the workbook can store them as Excel dates.
  */
 
+import { hasInvoiceLedgerTables } from "@/lib/sales/ledgerTables";
 import { sql } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import { buildExportWhere, type LeadListFilters } from "@/lib/leads/leadListQuery";
 
 /** A12 — what "business" means. Change this one fragment to switch the source. */
-const BILLING_SOURCE = sql`
+const billingSource = (ledger: boolean) => sql`
     -- sales_invoices first (has GSTIN); zoho rows whose number is already
     -- present are skipped so a synced invoice that was also read as a PDF is
-    -- counted once.
+    -- counted once. Void invoices never count (E-322, tracker ID 71).
     SELECT lower(trim(si.customer_name)) AS customer_key,
            si.invoice_number, si.invoice_date::date AS invoice_date, si.total::numeric AS total
       FROM sales_invoices si
      WHERE si.invoice_date IS NOT NULL
+       AND (si.status IS NULL OR si.status <> 'void')
+       ${ledger ? sql`AND NOT EXISTS (SELECT 1 FROM invoice_voids v WHERE v.source = 'drive' AND v.invoice_id = si.id::text)` : sql``}
     UNION ALL
     SELECT lower(trim(z.customer_name)), z.invoice_number, z.invoice_date::date, z.total::numeric
       FROM zoho_invoices z
      WHERE z.invoice_date IS NOT NULL
+       AND (z.status IS NULL OR z.status <> 'void')
+       ${ledger ? sql`AND NOT EXISTS (SELECT 1 FROM invoice_voids v WHERE v.source = 'zoho' AND v.invoice_id = z.id::text)` : sql``}
        AND NOT EXISTS (SELECT 1 FROM sales_invoices s2 WHERE s2.invoice_number = z.invoice_number)
 `;
 
@@ -136,7 +141,7 @@ export async function fetchLeadsForExport(
              WHERE t.remarks IS NOT NULL AND trim(t.remarks) <> ''
              ORDER BY t.dealer_lead_id, t.performed_at DESC NULLS LAST, t.created_at DESC
         ),
-        inv AS (${BILLING_SOURCE}),
+        inv AS (${billingSource(await hasInvoiceLedgerTables())}),
         billing AS (
             -- BILLING_KEY: the lead ↔ invoice join. Name match today; see header.
             SELECT dl.id AS dealer_lead_id,

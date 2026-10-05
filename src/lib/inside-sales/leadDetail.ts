@@ -113,6 +113,7 @@ export async function fetchLeadDetailBundle(leadId: string): Promise<LeadDetailB
                 price_quoted::text, quote_document_url, brochure_url, brochure_sent_at,
                 credit_terms, delivery_terms, warranty_terms,
                 final_price::text, payment_method, deal_notes,
+                dealer_payment_terms, credit_days, customer_finance,
                 COALESCE(product_lines, '[]'::jsonb) AS product_lines, notes,
                 created_by, created_at, withdrawn_at,
                 -- E-221/E-226 approval state. Selected since E-242: the rep

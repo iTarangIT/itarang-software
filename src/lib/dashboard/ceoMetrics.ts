@@ -27,6 +27,7 @@
  * made here too.
  */
 
+import { hasInvoiceLedgerTables } from "@/lib/sales/ledgerTables";
 import { and, gte, lt, sql } from "drizzle-orm";
 
 import { db } from "@/lib/db";
@@ -91,6 +92,7 @@ export async function getCeoBusinessMetrics(
   window: MonthWindow = currentMonthWindow(),
 ): Promise<CeoBusinessMetrics> {
   const { start, end, startStr, endStr } = window;
+  const ledger = await hasInvoiceLedgerTables();
 
   const [
     leadsAgg,
@@ -124,6 +126,10 @@ export async function getCeoBusinessMetrics(
           gte(zohoInvoices.invoice_date, startStr),
           lt(zohoInvoices.invoice_date, endStr),
           sql`(${zohoInvoices.status} IS NULL OR ${zohoInvoices.status} NOT IN ('void'))`,
+          // E-322 (ID 71): a void recorded in the CRM.
+          ledger
+            ? sql`NOT EXISTS (SELECT 1 FROM invoice_voids v WHERE v.source = 'zoho' AND v.invoice_id = ${zohoInvoices.id}::text)`
+            : sql`TRUE`,
         ),
       ),
 
