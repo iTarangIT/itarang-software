@@ -6,7 +6,7 @@ import { z } from "zod";
 import { requireRole } from "@/lib/auth-utils";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
 import { ACCOUNT_MANAGE_ROLES } from "@/lib/accounts/access";
-import { moveLeaverAccounts } from "@/lib/accounts/ownership";
+import { moveLeaverAccounts } from "@/lib/accounts/accountOwner";
 
 const Body = z.object({
     from_owner_id: z.string().uuid(),

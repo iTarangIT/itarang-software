@@ -26,7 +26,7 @@
 
 import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { LINES_TOLERANCE_MIN, LINES_TOLERANCE_PCT, LINE_TYPES, type LineType } from "@/lib/sales/invoiceLines";
+import { LINES_TOLERANCE_MIN, LINES_TOLERANCE_PCT, LINE_TYPES, type LineType } from "@/lib/sales/salesInvoiceLines";
 
 export const RECENT_COST_DAYS = 180;
 

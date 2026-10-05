@@ -9,7 +9,7 @@ import { Fragment, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { AccountRow } from "@/lib/accounts/accountList";
-import type { OwnershipHistoryRow } from "@/lib/accounts/ownership";
+import type { OwnershipHistoryRow } from "@/lib/accounts/accountOwner";
 import type { AccountBucket } from "@/lib/dealers/accountHealthRules";
 
 type Option = { id: string; label: string };
@@ -87,7 +87,7 @@ export function AccountManagementTable({
 
     const assign = async () => {
         setBusy(true);
-        const r = await post("/api/admin/accounts/assign", {
+        const r = await post("/api/admin/account-management/assign", {
             account_ids: [...selected],
             owner_id: ownerId,
             reason,

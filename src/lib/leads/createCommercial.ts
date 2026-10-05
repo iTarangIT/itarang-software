@@ -21,12 +21,9 @@ import {
     notifyQuotationPendingApproval,
 } from "@/lib/notifications/events";
 import { loadLiveOemPrices } from "@/lib/leads/oemPrices";
-<<<<<<< HEAD
-import { snapshotListPrices } from "@/lib/leads/listPrices";
+import { snapshotListPrices as snapshotListPriceCatalogue } from "@/lib/leads/listPriceCatalogue";
 import type { ListPriceSnapshot } from "@/lib/leads/listPricing";
-=======
 import { loadLiveListPrices, snapshotListPrices } from "@/lib/leads/listPrices";
->>>>>>> fac2a80905456e04c4d89ee14f26fdf80ae34f9e
 import {
     evaluateAgainstOemPrices,
     linesNeedingAttention,
@@ -136,10 +133,8 @@ export async function createLeadCommercial(
         let approvalStatus: string = initialApprovalStatus(body.event_type);
         let approvalMode: string | null = null;
         let oemEvaluation: OemEvaluation | null = null;
-<<<<<<< HEAD
         // E-323: the list price each line is quoted against, frozen with the quote.
         let listPriceSnapshot: ListPriceSnapshot | null = null;
-=======
         let hold: TermsHold | null = null;
 
         // ── E-322 terms (ID 73) ──
@@ -165,7 +160,6 @@ export async function createLeadCommercial(
         // null = not a gated event; the lines are written as sent (terms events
         // carry over the quote's already-snapshotted lines below).
         let snapshottedLines: CommercialsProductLine[] | null = null;
->>>>>>> fac2a80905456e04c4d89ee14f26fdf80ae34f9e
 
         if (isGatedQuoteEvent(body.event_type)) {
             const lines = body.product_lines ?? [];
@@ -174,15 +168,13 @@ export async function createLeadCommercial(
             // the instant the quote is stamped.
             const refs = await loadLiveOemPrices(lines, tx, performedAt);
             oemEvaluation = evaluateAgainstOemPrices(lines, refs, performedAt);
-<<<<<<< HEAD
-            listPriceSnapshot = await snapshotListPrices(lines, tx, performedAt);
-            const resolved = resolveQuoteApproval(oemEvaluation);
-=======
+            // E-323: the list price each line is quoted against, frozen with the quote
+            // (list_price_snapshot — read by the data exports and quoteDraft).
+            listPriceSnapshot = await snapshotListPriceCatalogue(lines, tx, performedAt);
             // E-322: credit terms hold the quote for approval even when every
             // line clears the price check. Recorded on the evaluation so the
             // CEO panel can say why it is waiting.
             const resolved = applyTermsHold(resolveQuoteApproval(oemEvaluation), hold);
->>>>>>> fac2a80905456e04c4d89ee14f26fdf80ae34f9e
             approvalStatus = resolved.status;
             approvalMode = resolved.mode;
             oemEvaluation = { ...oemEvaluation, terms_hold: hold };

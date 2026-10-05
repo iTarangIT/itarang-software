@@ -243,16 +243,13 @@ export const oemReferencePrices = pgTable(
   }),
 );
 
-<<<<<<< HEAD
 // E-323 (IDs 4, 47) — the LIST price printed on the quotation. Same dated,
 // append-only shape as oem_reference_prices above, and always >= the OEM price
 // in the same window (checked in listPrices.ts and in setOemPrice). Optional:
 // a product with no list price prints its OEM price as the list price.
-=======
 // E-321 — the optional list price printed on quotations (tracker ID 4 /
 // handover P1-14). Same append-only windowed shape as oem_reference_prices;
 // never below the OEM price in any overlapping window (src/lib/leads/listPrices.ts).
->>>>>>> fac2a80905456e04c4d89ee14f26fdf80ae34f9e
 export const productListPrices = pgTable(
   "product_list_prices",
   {
@@ -1035,7 +1032,6 @@ export const accounts = pgTable(
   }),
 );
 
-<<<<<<< HEAD
 // E-322 (ID 65) — one row per change of a dealer account's owner. Reports read
 // the owner on a given date from here, so past revenue never moves.
 export const accountOwnershipHistory = pgTable(
@@ -1047,7 +1043,14 @@ export const accountOwnershipHistory = pgTable(
     to_owner_id: uuid("to_owner_id"),
     reason: text().notNull(),
     effective_date: date("effective_date").notNull(),
-=======
+    changed_by: uuid("changed_by"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    accountIdx: index("account_ownership_history_account_idx").on(t.account_id, t.effective_date, t.created_at),
+  }),
+);
+
 // E-321 — dealer account ownership (tracker P1 IDs 5, 67, 68, 69). New tables,
 // not columns on `accounts`, so an environment without E-321 keeps working:
 // readers probe with to_regclass (src/lib/accounts/tables.ts).
@@ -1082,14 +1085,10 @@ export const accountOwnerHistory = pgTable(
     effective_from: timestamp("effective_from", { withTimezone: true }).notNull(),
     effective_to: timestamp("effective_to", { withTimezone: true }),
     reason: text(),
->>>>>>> fac2a80905456e04c4d89ee14f26fdf80ae34f9e
     changed_by: uuid("changed_by"),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => ({
-<<<<<<< HEAD
-    accountIdx: index("account_ownership_history_account_idx").on(t.account_id, t.effective_date, t.created_at),
-=======
     accountIdx: index("account_owner_history_account_idx").on(t.account_id, t.effective_from),
     // Partial (WHERE effective_to IS NULL) in the migration.
     openUniq: uniqueIndex("account_owner_history_open_uniq").on(t.account_id),
@@ -1131,7 +1130,6 @@ export const invoiceAccountLinks = pgTable(
   (t) => ({
     pk: primaryKey({ columns: [t.source, t.invoice_id] }),
     accountIdx: index("invoice_account_links_account_idx").on(t.account_id),
->>>>>>> fac2a80905456e04c4d89ee14f26fdf80ae34f9e
   }),
 );
 

@@ -13,7 +13,7 @@ import { requireRole } from "@/lib/auth-utils";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
 import { ACCOUNT_MANAGE_ROLES } from "@/lib/accounts/access";
 import { accountApplicationId, readCertificateFile, saveAccountGstCertificate, type CertificateFile } from "@/lib/accounts/gstCertificate";
-import { AccountActionError, correctAccountGstin, gstCertificateOnFile } from "@/lib/accounts/ownership";
+import { AccountActionError, correctAccountGstin, gstCertificateOnFile } from "@/lib/accounts/accountOwner";
 
 const Gstin = z.string().min(1).max(20);
 

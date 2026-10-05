@@ -11,7 +11,7 @@
 
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { listListPriceCatalogue } from "@/lib/leads/listPrices";
+import { listListPriceCatalogue } from "@/lib/leads/listPriceCatalogue";
 import { firstOemAboveList, windowsOverlap } from "@/lib/leads/listPricing";
 
 type Line = { asset_type: string; product_id: string; price: string; effective_from: string; valid_until: string | null };

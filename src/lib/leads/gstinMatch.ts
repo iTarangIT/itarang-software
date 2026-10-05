@@ -85,7 +85,6 @@ export function dealerLeadByGstin(key: SQL): SQL {
 }
 
 /**
-<<<<<<< HEAD
  * `LATERAL (…)` yielding at most one row — acct_id, acct_name, acct_owner_id,
  * acct_city — for the activated dealer ACCOUNT whose GSTIN is `key` (an
  * already-normalised GSTIN_KEY expression). Use as
@@ -111,7 +110,9 @@ export function dealerAccountByGstin(key: SQL): SQL {
          ORDER BY gm_a.created_at ASC, gm_a.id ASC
          LIMIT 1
     )`;
-=======
+}
+
+/**
  * The lead rule above as ONE keyed set — GSTIN key → the winning lead — for
  * matching many rows at once (revenueSource.matchedUnion). Same candidates
  * (dealer_leads.gstin, the linked onboarding's GST number) and the same tie
@@ -181,5 +182,4 @@ export function accountOwnerOn(accountIdExpr: SQL, dateExpr: SQL): SQL {
                         OR (ao_h.effective_to AT TIME ZONE 'Asia/Kolkata')::date > ${dateExpr})
                  ORDER BY ao_h.effective_from DESC
                  LIMIT 1)`;
->>>>>>> fac2a80905456e04c4d89ee14f26fdf80ae34f9e
 }

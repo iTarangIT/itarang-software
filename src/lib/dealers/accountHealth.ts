@@ -3,27 +3,21 @@
  * M29). A dealer converts ONCE and orders many times; before this, a converted
  * dealer vanished from every report the day it converted.
  *
- * WHO (ID 41, 29 Sep 2026). Every activated dealer ACCOUNT — dealers onboarded
- * directly, with no lead behind them, included. Orders are the account's
- * invoices, matched on the account's GSTIN, non-void, drafts counted (the
- * revenue rule); while the account's GSTIN is still "PENDING" the originating
- * lead's GSTIN is used. The set and the matching live in
- * src/lib/accounts/accountList.ts, shared with Account management and the
- * Dealer accounts download, so the three cannot disagree.
+ * WHO. Every lead with lead_status = 'Converted'. Orders are its invoices —
+ * matched on GSTIN through revenueSource's matchedUnion() (R-11), non-void,
+ * drafts counted, exactly the revenue rule. No GSTIN on the lead = no orders
+ * can be seen, and the dealer reads "Never ordered" until one is added.
  *
  * BUCKET (M28, the #5 decision; 45-day overlap resolved as Orange 31–45, Red
  * 46–60 — flagged "confirm" in the review):
  *   ordered at least once, by days since the LAST invoice:
  *     Active 0–20 · Cooling 21–30 · Orange 31–45 · Red 46–60 · Dormant 60+
- *   never ordered, by days since activation:
+ *   never ordered, by days since conversion:
  *     Not ordered yet 0–30 · Never ordered 31+
  *
- * REORDER RATE (M29) over the last 30 days: dealers with ≥1 invoice in the
- * window AND ≥1 before it ÷ dealers with ≥1 invoice before it.
+ * REORDER RATE (M29) over a window: dealers with ≥1 invoice in the window AND
+ * ≥1 before it ÷ dealers with ≥1 invoice before it.
  *
-<<<<<<< HEAD
- * Calendar days in IST. The SPOC is the ACCOUNT OWNER.
-=======
  * Calendar days in IST. The SPOC is the lead's current owner.
  *
  * E-321 (tracker ID 5 / handover P1-11): with account ownership applied, the
@@ -32,13 +26,9 @@
  * orders are invoices matched to the account, and the "never ordered" clock
  * runs from the account's creation (approval). Without E-321 the lead-keyed
  * behaviour above is kept unchanged.
->>>>>>> fac2a80905456e04c4d89ee14f26fdf80ae34f9e
  */
-import { listAccounts } from "@/lib/accounts/accountList";
+import { sql } from "drizzle-orm";
 
-<<<<<<< HEAD
-import { ACCOUNT_BUCKETS, type AccountBucket } from "@/lib/dealers/accountHealthRules";
-=======
 import { db } from "@/lib/db";
 import { matchedUnion, REVENUE_NOT_VOID } from "@/lib/dashboard/revenueSource";
 import { hasAccountOwnershipTables } from "@/lib/accounts/tables";
@@ -48,16 +38,10 @@ import {
     accountBucket,
     type AccountBucket,
 } from "@/lib/dealers/accountHealthRules";
->>>>>>> fac2a80905456e04c4d89ee14f26fdf80ae34f9e
 
 export { ACCOUNT_BUCKETS, ACCOUNT_BUCKET_LABELS, accountBucket, type AccountBucket } from "@/lib/dealers/accountHealthRules";
 
 export type DealerHealthRow = {
-<<<<<<< HEAD
-    account_id: string;
-    /** The lead the dealer came through; null for a direct onboarding. */
-    lead_id: string | null;
-=======
     /** Stable row key: the account id (E-321) or, pre-E-321, the lead id. */
     key: string;
     /** E-321: dealer account (accounts.id). NULL in lead-keyed mode. */
@@ -66,7 +50,6 @@ export type DealerHealthRow = {
     lead_id: string | null;
     /** E-321: 'lead' | 'direct' | null (unknown). */
     came_through: string | null;
->>>>>>> fac2a80905456e04c4d89ee14f26fdf80ae34f9e
     dealer: string;
     gstin: string | null;
     /** No GSTIN and no lead: invoices cannot be matched, so the bucket is a guess. */
@@ -76,7 +59,6 @@ export type DealerHealthRow = {
     business_type: string | null;
     owner_id: string | null;
     owner_name: string | null;
-    /** The day the account was activated (admin approval). */
     converted_on: string | null;
     first_order: string | null;
     last_order: string | null;
@@ -86,39 +68,10 @@ export type DealerHealthRow = {
     revenue_90d: number;
     revenue_lifetime: number;
     avg_reorder_days: number | null;
-    ordered_last_30d: boolean;
-    ordered_before_30d: boolean;
     bucket: AccountBucket;
 };
 
 export async function listDealerHealth(): Promise<DealerHealthRow[]> {
-<<<<<<< HEAD
-    const accounts = await listAccounts();
-    return accounts.map((a) => ({
-        account_id: a.account_id,
-        lead_id: a.lead_id,
-        dealer: a.dealer,
-        gstin: a.gstin_missing ? null : a.gstin,
-        invoices_unmatchable: a.invoices_unmatchable,
-        city: a.city,
-        state: a.state,
-        business_type: a.business_type,
-        owner_id: a.owner_id,
-        owner_name: a.owner_name,
-        converted_on: a.activated_on,
-        first_order: a.first_order,
-        last_order: a.last_order,
-        days_since_last_order: a.days_since_last_order,
-        days_since_conversion: a.days_since_activation,
-        orders: a.orders,
-        revenue_90d: a.revenue_90d,
-        revenue_lifetime: a.revenue_lifetime,
-        avg_reorder_days: a.avg_reorder_days,
-        ordered_last_30d: a.ordered_last_30d,
-        ordered_before_30d: a.ordered_before_30d,
-        bucket: a.bucket,
-    }));
-=======
     const invoices = await matchedUnion();
     const accountsOn = await hasAccountOwnershipTables();
     const keyCol = accountsOn ? sql`r.account_id` : sql`r.dealer_lead_id`;
@@ -203,6 +156,8 @@ export async function listDealerHealth(): Promise<DealerHealthRow[]> {
             came_through: (r.came_through as string | null) ?? null,
             dealer: String(r.dealer),
             gstin: (r.gstin as string | null) ?? null,
+            invoices_unmatchable:
+                (!r.gstin || String(r.gstin).trim().toUpperCase() === "PENDING") && !r.lead_id,
             city: (r.city as string | null) ?? null,
             state: (r.state as string | null) ?? null,
             business_type: (r.business_type as string | null) ?? null,
@@ -220,7 +175,6 @@ export async function listDealerHealth(): Promise<DealerHealthRow[]> {
             bucket: accountBucket(sinceOrder, sinceConv),
         };
     });
->>>>>>> fac2a80905456e04c4d89ee14f26fdf80ae34f9e
 }
 
 export type DealerHealthGroup = {
@@ -233,14 +187,16 @@ export type DealerHealthGroup = {
 };
 
 /**
- * Section C — summary per account owner / city / business type. Reorder rate
- * (M29) over the last 30 days against everything before them; "₹ at risk" is
- * the last-90-day revenue of dealers now Red or Dormant.
+ * Section C — summary per SPOC / city / business type. Reorder rate (M29)
+ * over the last `windowDays` against everything before it; "₹ at risk" is the
+ * last-90-day revenue of dealers now Red or Dormant.
  */
-export async function summarizeDealerHealth(by: "owner" | "city" | "business_type"): Promise<DealerHealthGroup[]> {
+export async function summarizeDealerHealth(
+    by: "owner" | "city" | "business_type",
+    windowDays = 30,
+): Promise<DealerHealthGroup[]> {
+    const invoices = await matchedUnion();
     const rows = await listDealerHealth();
-<<<<<<< HEAD
-=======
     const keyCol = (await hasAccountOwnershipTables()) ? sql`r.account_id` : sql`r.dealer_lead_id`;
     const reorder = (await db.execute(sql`
         WITH w AS (SELECT (now() AT TIME ZONE 'Asia/Kolkata')::date - ${windowDays}::int AS start)
@@ -252,11 +208,10 @@ export async function summarizeDealerHealth(by: "owner" | "city" | "business_typ
          GROUP BY ${keyCol}
     `)) as unknown as Array<{ k: string; before: boolean; within: boolean }>;
     const re = new Map(reorder.map((x) => [x.k, x]));
->>>>>>> fac2a80905456e04c4d89ee14f26fdf80ae34f9e
 
     const keyOf = (r: DealerHealthRow) =>
         by === "owner"
-            ? (r.owner_name ?? "(no owner)")
+            ? (r.owner_name ?? "(unassigned)")
             : by === "city"
               ? (r.city?.trim() || "Unknown city")
               : (r.business_type ?? "Not set");
@@ -280,14 +235,10 @@ export async function summarizeDealerHealth(by: "owner" | "city" | "business_typ
         g.by_bucket[r.bucket] += 1;
         g.revenue_90d += r.revenue_90d;
         if (r.bucket === "red" || r.bucket === "dormant") g.at_risk_90d += r.revenue_90d;
-<<<<<<< HEAD
-        if (r.ordered_before_30d) {
-=======
         const x = re.get(r.key);
         if (x?.before) {
->>>>>>> fac2a80905456e04c4d89ee14f26fdf80ae34f9e
             g._before += 1;
-            if (r.ordered_last_30d) g._both += 1;
+            if (x.within) g._both += 1;
         }
         groups.set(k, g);
     }

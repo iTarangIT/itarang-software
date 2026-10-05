@@ -22,7 +22,7 @@ import { ensureDealerSignedAgreementUrl } from "@/lib/digio/ensure-signed-agreem
 import { refreshDealerAgreementFromDigio } from "@/lib/agreement/refresh-dealer-agreement";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { requireSalesHead } from "@/lib/auth/requireSalesHead";
-import { leadMatchingPhone, stampAccountAtActivation } from "@/lib/accounts/ownership";
+import { leadMatchingPhone, stampAccountAtActivation } from "@/lib/accounts/accountOwner";
 import { classifyGstinConflict } from "@/lib/dealer/duplicate-check";
 import { checkCustomerGstin, GSTIN_CHECK_MESSAGE } from "@/lib/leads/gstin";
 import { usesManualAgreement } from "@/lib/dealer/dealer-capabilities";

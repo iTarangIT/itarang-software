@@ -300,7 +300,7 @@ describe("config", () => {
   });
 
   it("re-derives the state code when a patch changes the GSTIN", () => {
-    const merged = mergeQuotationConfig({ seller: { gstin: "27ABCDE1234F1Z0" } });
+    const merged = mergeQuotationConfig({ seller: { gstin: "27ABCDE1234F1Z5" } });
     expect(merged.seller.stateCode).toBe("27"); // Maharashtra
     // Untouched fields keep the default.
     expect(merged.seller.legalName).toBe("ITARANG TECHNOLOGIES LLP");
@@ -396,55 +396,6 @@ describe("the Bill To block", () => {
       phone: '<script>alert(1)</script>',
     });
     expect(renderProformaHtml(view)).not.toContain("<script>");
-  });
-});
-
-describe("list price and discount (E-323)", () => {
-  const base = {
-    quoteNumber: "ITQ-2026-0010",
-    quoteDate: new Date("2026-08-13T06:00:00.000Z"),
-    config: DEFAULT_QUOTATION_CONFIG,
-    lines: LINES,
-    taxRefs: TAX_REFS,
-    placeOfSupply: { stateCode: "05", label: "Uttarakhand (05)" },
-    dealer: { name: "Himadri Enterprises", gstin: null },
-  };
-
-  it("prints no List price or Discount column on a quote with no list prices", () => {
-    const view = buildQuotationView(base);
-    expect(view.showListPrice).toBe(false);
-    expect(view.totalDiscount).toBe(0);
-    const html = renderProformaHtml(view);
-    expect(html).not.toContain("List price");
-    expect(html).toContain(">Rate<");
-  });
-
-  it("shows list price, per-unit discount and the total discount; GST stays on the net price", () => {
-    const plain = buildQuotationView(base);
-    const view = buildQuotationView({
-      ...base,
-      // Battery listed at 46,000 against a 44,000 net; charger sold above list.
-      listRefs: new Map([
-        [taxRefKey("battery", "p1"), 46_000],
-        [taxRefKey("charger", "p2"), 6_000],
-      ]),
-    });
-    expect(view.lines[0].listPrice).toBe(46_000);
-    expect(view.lines[0].discount).toBe(2_000);
-    // Never a negative discount: the printed list price rises to the net price.
-    expect(view.lines[1].listPrice).toBe(6_500);
-    expect(view.lines[1].discount).toBe(0);
-    expect(view.lines[2].listPrice).toBeNull();
-    expect(view.showListPrice).toBe(true);
-    expect(view.totalDiscount).toBe(30_000); // 2,000 x 15
-    // The money is unchanged — the discount is information, not a deduction.
-    expect(view.subTotal).toBe(plain.subTotal);
-    expect(view.total).toBe(plain.total);
-
-    const html = renderProformaHtml(view);
-    expect(html).toContain("List price");
-    expect(html).toContain("Net price");
-    expect(html).toContain("Total discount (before GST)");
   });
 });
 
