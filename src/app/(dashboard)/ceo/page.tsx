@@ -338,7 +338,8 @@ export default function CEODashboard() {
   });
 
   // ── Needs you today ──────────────────────────────────────────────────────
-  const signing: unknown[] = m.nbfcSigningQueue ?? [];
+  // The count the /admin/nbfc/approvals queue lists — the card opens that page.
+  const nbfcPending = Number(m.nbfcPendingApprovals ?? 0);
   type Need = React.ComponentProps<typeof ActionCard> & { key: string; n: number };
   const needs: Need[] = x
     ? [
@@ -400,12 +401,12 @@ export default function CEODashboard() {
         },
         {
           key: "nbfc",
-          n: signing.length,
+          n: nbfcPending,
           icon: FileSignature,
           tone: "warn",
-          label: "NBFC agreements out for signing",
-          count: num(signing.length),
-          sub: "Waiting on signatures",
+          label: "NBFCs waiting for your approval",
+          count: num(nbfcPending),
+          sub: "Onboarding submitted for your sign-off",
           href: "/admin/nbfc/approvals",
           cta: "Open list",
         },
