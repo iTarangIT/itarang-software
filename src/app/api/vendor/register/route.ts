@@ -35,6 +35,7 @@ import { createOrAdoptVendorAuthUser } from "@/lib/buyback/vendor-auth";
 import { HttpError, ValidationError } from "@/lib/buyback/errors";
 import { notifyVendorRegistered } from "@/lib/notifications/events";
 import { CHEMISTRIES } from "@/lib/buyback/line-spec";
+import { isValidGstin } from "@/lib/leads/gstin";
 
 export const runtime = "nodejs";
 
@@ -49,7 +50,13 @@ const bodySchema = z.object({
   // GSTIN is NOT NULL on accounts, and a vendor we cannot invoice is a vendor we
   // cannot sell to — so it is asked for now rather than patched in later. It is
   // NOT verified here; that is M18.
-  gstin: z.string().trim().length(15, "A GSTIN is 15 characters."),
+  // The shape and check digit ARE checked (ID 62) — that catches a typo, it is
+  // not a registry lookup.
+  gstin: z
+    .string()
+    .trim()
+    .length(15, "A GSTIN is 15 characters.")
+    .refine(isValidGstin, "That is not a valid GSTIN — check it for a typing mistake."),
   // PAN is OPTIONAL supplementary data at self-registration, not a gate — GSTIN
   // is what we invoice against. A strict length(10) hard-blocked a vendor from
   // creating a login over a non-critical field (and reported it as a cryptic

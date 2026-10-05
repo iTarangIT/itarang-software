@@ -15,6 +15,7 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
+import { isValidGstin } from "@/lib/leads/gstin";
 import { createClient } from "@/lib/supabase/server";
 import { db } from "@/lib/db";
 import {
@@ -114,7 +115,11 @@ const patchSchema = z
     legalName: z.string().min(1).max(200).optional(),
     shortName: z.string().min(1).max(100).optional(),
     cin: z.string().min(1).max(25).optional(),
-    gstNumber: z.string().optional(),
+    // ID 62: a GSTIN typed here passes the shared shape + check-digit rule.
+    gstNumber: z
+      .string()
+      .refine((g) => !g.trim() || isValidGstin(g), "That is not a valid GSTIN - check it for a typing mistake.")
+      .optional(),
     panNumber: z.string().optional(),
     nbfcType: z.string().optional(),
     registeredAddress: z.unknown().optional(),

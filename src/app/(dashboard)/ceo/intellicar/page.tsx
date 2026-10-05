@@ -4,6 +4,8 @@ import { Suspense, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { IntellicarTabBar, type IntellicarTab } from '@/components/intellicar/IntellicarTabBar';
+import { GreenKmCard } from '@/components/dashboard/ceo/GreenKmCard';
+import { CeoFilterBar, DEFAULT_CEO_WINDOW, type CeoWindow } from '@/components/dashboard/ceo/CeoFilterBar';
 
 // Only one tab is ever on screen, so loading all six eagerly makes every visitor pay for
 // five they are not looking at — including recharts (~100 KB), which two of them pull in at
@@ -28,6 +30,8 @@ function IntellicarDashboardContent() {
     const router = useRouter();
     const initialTab = (searchParams.get('tab') as IntellicarTab) || 'fleet';
     const [activeTab, setActiveTab] = useState<IntellicarTab>(initialTab);
+    // Window for the Green KM card only (moved here from the CEO overview).
+    const [kmWindow, setKmWindow] = useState<CeoWindow>(DEFAULT_CEO_WINDOW);
 
     const handleTabChange = (tab: IntellicarTab) => {
         setActiveTab(tab);
@@ -41,6 +45,13 @@ function IntellicarDashboardContent() {
             <div>
                 <h1 className="text-2xl font-bold text-gray-900 tracking-tight">IoT Dashboard</h1>
                 <p className="text-sm text-gray-500 mt-1">Battery fleet monitoring and telemetry analytics</p>
+            </div>
+
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start">
+                <div className="w-full sm:max-w-xs" data-testid="kpi-green-km">
+                    <GreenKmCard window={kmWindow} />
+                </div>
+                <CeoFilterBar value={kmWindow} onChange={setKmWindow} />
             </div>
 
             <IntellicarTabBar activeTab={activeTab} onTabChange={handleTabChange} />

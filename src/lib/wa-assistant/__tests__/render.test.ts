@@ -163,7 +163,7 @@ describe("tool helpers", () => {
         const row = {
             id: "DL-9", shop_name: "S", dealer_name: "D", city: "C", lead_status: "Lost", interest_level: "cold",
             current_owner_id: "isr-1", current_owner_name: "Priya", next_follow_up_at: "2026-09-26T05:30:00.000Z",
-            scheduled_date: "2026-09-27", pan_number: "ABCDE1234F", gstin: "27ABCDE1234F1Z5",
+            scheduled_date: "2026-09-27", pan_number: "ABCDE1234F", gstin: "27ABCDE1234F1Z0",
         };
         const isr = toLeadSummary(row, { id: "isr-1", name: "P", role: "inside_sales_rep" });
         expect(isr.owned_by_you).toBe(true);

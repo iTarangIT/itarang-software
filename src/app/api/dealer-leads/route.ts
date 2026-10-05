@@ -13,6 +13,7 @@ import {
   fetchLeadListFacets,
   fetchLeadListIds,
   fetchLeadListRows,
+  fetchNumberSearchMisses,
   fetchLeadListStats,
   type LeadListFilters,
   type LeadListRow,
@@ -326,7 +327,7 @@ export const GET = withErrorHandler(async (req: Request) => {
     });
   }
 
-  const [rows, stats, allFacets, campaignFacets, businessTypeCounts] =
+  const [rows, stats, allFacets, campaignFacets, businessTypeCounts, numberSearch] =
     await Promise.all([
       fetchLeadListRows(filters, page, limit),
       fetchLeadListStats(filters),
@@ -334,6 +335,8 @@ export const GET = withErrorHandler(async (req: Request) => {
       fetchCampaignFacets(),
       // Per-type chips (E-296). null when the column does not exist here.
       fetchBusinessTypeCounts(filters),
+      // ID 46: numbers typed in the search that were unreadable or matched nothing.
+      fetchNumberSearchMisses(filters),
     ]);
 
   // Same tiering on the way out: the source list is for everyone, the people
@@ -464,6 +467,8 @@ export const GET = withErrorHandler(async (req: Request) => {
     // { battery_sale: n, …, unset: n } under the current filters minus
     // business_type; null when E-296 is not applied here.
     business_type_counts: businessTypeCounts,
+    // null unless the search box held mobile numbers (ID 46).
+    number_search: numberSearch,
     stats: {
       hot: stats.hot,
       warm: stats.warm,

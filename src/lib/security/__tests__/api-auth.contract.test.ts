@@ -248,6 +248,7 @@ const OPEN_BY_DESIGN: Record<string, string> = {
   "/api/public/auctions": "the public auction window — published lots only",
   "/api/vendor/register": "scrap-vendor self-registration; creates a pending vendor for admin review",
   "/api/uploads/dealer-documents": "pre-login dealer onboarding and the correction link upload here",
+  "/api/dealer-onboarding/salespeople": "salesperson dropdown on the pre-login onboarding form; names and roles only (ID 66)",
   "/api/internal/log-client-error": "browser error log; a signed-out page can fail too",
   // No provider signature exists. These only FLAG a row or record consent; the
   // result itself is fetched from Decentro with our credentials, so a forged

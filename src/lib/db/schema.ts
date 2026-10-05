@@ -243,9 +243,16 @@ export const oemReferencePrices = pgTable(
   }),
 );
 
+<<<<<<< HEAD
+// E-323 (IDs 4, 47) — the LIST price printed on the quotation. Same dated,
+// append-only shape as oem_reference_prices above, and always >= the OEM price
+// in the same window (checked in listPrices.ts and in setOemPrice). Optional:
+// a product with no list price prints its OEM price as the list price.
+=======
 // E-321 — the optional list price printed on quotations (tracker ID 4 /
 // handover P1-14). Same append-only windowed shape as oem_reference_prices;
 // never below the OEM price in any overlapping window (src/lib/leads/listPrices.ts).
+>>>>>>> fac2a80905456e04c4d89ee14f26fdf80ae34f9e
 export const productListPrices = pgTable(
   "product_list_prices",
   {
@@ -1003,8 +1010,20 @@ export const accounts = pgTable(
     created_by: uuid("created_by"),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+    // ---- E-322 (ID 65) — the dealer account model. "Onboarded by" is fixed;
+    // the account owner changes with reassignment, every change recorded in
+    // account_ownership_history. Owner changes never edit the onboarding.
+    onboarded_by_user_id: uuid("onboarded_by_user_id"),
+    account_owner_id: uuid("account_owner_id"),
+    account_owner_since: date("account_owner_since"),
+    came_through: varchar("came_through", { length: 16 }), // lead | direct
+    originating_dealer_lead_id: text("originating_dealer_lead_id"),
+    activated_at: timestamp("activated_at", { withTimezone: true }),
+    gstin_corrected_at: timestamp("gstin_corrected_at", { withTimezone: true }),
+    gstin_corrected_by: uuid("gstin_corrected_by"),
   },
   (t) => ({
+    accountOwnerIdx: index("accounts_account_owner_idx").on(t.account_owner_id),
     // E-192 — GIN trigram, leading-wildcard admin buyback search (M23)
     // against business_entity_name/gstin. `accounts` is not a buyback table
     // and exists on every env — see drizzle/E-192_buyback_scale_indexes.sql.
@@ -1016,6 +1035,19 @@ export const accounts = pgTable(
   }),
 );
 
+<<<<<<< HEAD
+// E-322 (ID 65) — one row per change of a dealer account's owner. Reports read
+// the owner on a given date from here, so past revenue never moves.
+export const accountOwnershipHistory = pgTable(
+  "account_ownership_history",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    account_id: varchar("account_id", { length: 255 }).notNull(),
+    from_owner_id: uuid("from_owner_id"),
+    to_owner_id: uuid("to_owner_id"),
+    reason: text().notNull(),
+    effective_date: date("effective_date").notNull(),
+=======
 // E-321 — dealer account ownership (tracker P1 IDs 5, 67, 68, 69). New tables,
 // not columns on `accounts`, so an environment without E-321 keeps working:
 // readers probe with to_regclass (src/lib/accounts/tables.ts).
@@ -1050,10 +1082,14 @@ export const accountOwnerHistory = pgTable(
     effective_from: timestamp("effective_from", { withTimezone: true }).notNull(),
     effective_to: timestamp("effective_to", { withTimezone: true }),
     reason: text(),
+>>>>>>> fac2a80905456e04c4d89ee14f26fdf80ae34f9e
     changed_by: uuid("changed_by"),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => ({
+<<<<<<< HEAD
+    accountIdx: index("account_ownership_history_account_idx").on(t.account_id, t.effective_date, t.created_at),
+=======
     accountIdx: index("account_owner_history_account_idx").on(t.account_id, t.effective_from),
     // Partial (WHERE effective_to IS NULL) in the migration.
     openUniq: uniqueIndex("account_owner_history_open_uniq").on(t.account_id),
@@ -1095,6 +1131,7 @@ export const invoiceAccountLinks = pgTable(
   (t) => ({
     pk: primaryKey({ columns: [t.source, t.invoice_id] }),
     accountIdx: index("invoice_account_links_account_idx").on(t.account_id),
+>>>>>>> fac2a80905456e04c4d89ee14f26fdf80ae34f9e
   }),
 );
 
@@ -3374,6 +3411,9 @@ export const dealerOnboardingApplications = pgTable(
     sales_manager_name: text("sales_manager_name"),
     sales_manager_email: text("sales_manager_email"),
     sales_manager_mobile: text("sales_manager_mobile"),
+    // E-321 (ID 66) — the salesperson as a CRM user (active ISR / ASM / Sales
+    // Head). The three typed columns above stay, filled from this user's row.
+    salesperson_user_id: uuid("salesperson_user_id"),
     itarang_signatory_1_name: text("itarang_signatory_1_name"),
     itarang_signatory_1_email: text("itarang_signatory_1_email"),
     itarang_signatory_1_mobile: text("itarang_signatory_1_mobile"),
@@ -9545,6 +9585,45 @@ export const salesInvoices = pgTable(
   }),
 );
 
+// E-326 — line items of a sales invoice (tracker ID 72). `amount` is the
+// taxable value before GST. `item_key` joins to sales_invoice_item_products.
+export const salesInvoiceLines = pgTable(
+  "sales_invoice_lines",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    // 'drive' (read off the PDF); 'vyapar' / 'zoho' reserved for IDs 39 / 70.
+    source: varchar("source", { length: 16 }).default("drive").notNull(),
+    sales_invoice_id: uuid("sales_invoice_id").notNull(),
+    line_no: integer("line_no").notNull(),
+    description: text("description"),
+    item_key: text("item_key"),
+    hsn_code: varchar("hsn_code", { length: 16 }),
+    quantity: numeric("quantity", { precision: 12, scale: 3 }),
+    rate: numeric("rate", { precision: 14, scale: 2 }),
+    amount: numeric("amount", { precision: 14, scale: 2 }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    salesInvoiceLinesInvoiceLineUnique: uniqueIndex("sales_invoice_lines_invoice_line_unique").on(
+      table.sales_invoice_id,
+      table.line_no,
+    ),
+    salesInvoiceLinesItemKeyIdx: index("sales_invoice_lines_item_key_idx").on(table.item_key),
+  }),
+);
+
+// E-326 — invoice item name → CRM product, mapped once per item (ID 72).
+// product_id NULL = seen, not mapped; auto_matched = proposed, not confirmed.
+export const salesInvoiceItemProducts = pgTable("sales_invoice_item_products", {
+  item_key: text("item_key").primaryKey().notNull(),
+  item_name: text("item_name").notNull(),
+  product_id: uuid("product_id"),
+  auto_matched: boolean("auto_matched").default(false).notNull(),
+  mapped_by: uuid("mapped_by"),
+  created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
 export const salesInvoiceFolders = pgTable(
   "sales_invoice_folders",
   {
@@ -10016,6 +10095,9 @@ export const dealerLeadCommercials = pgTable(
     // quote stays auditable after the price book moves on.
     approval_mode: varchar("approval_mode", { length: 16 }),
     oem_evaluation: jsonb("oem_evaluation"),
+    // E-323 — the list price each line was quoted against, frozen on the quote
+    // (see ListPriceSnapshot in lib/leads/listPricing.ts). NULL on older quotes.
+    list_price_snapshot: jsonb("list_price_snapshot"),
     // E-242 — the generated quotation draft. Distinct from quote_document_url,
     // which is whatever file the rep attached by hand; these are written only
     // by generateQuotationDraft() and only after approval. quote_snapshot is

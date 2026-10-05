@@ -24,7 +24,7 @@ import { eq } from "drizzle-orm";
 import { dealerLeads } from "@/lib/db/schema";
 import { AttachmentId, DOC_TYPE_LABEL, DOC_TYPES, PlannedFile, plannedFile, resolveAttachments } from "../attachments";
 import { fileDocuments } from "./attachDocument";
-import { GSTIN_RE } from "./updateLead";
+import { gstinQuestion } from "./updateLead";
 import { LEAD_ORIGIN_LABEL, LEAD_ORIGINS, campaignRequired } from "@/lib/leads/leadSourceVocab";
 import { recordReinquiry } from "@/lib/leads/leadSource";
 import { findCampaignByName, listCampaigns } from "@/lib/leads/acquisitionCampaigns";
@@ -107,7 +107,8 @@ export const createLead: ToolFactory = () =>
             const phone = tenDigitPhone(input.phone);
             if (!phone) return ask("That number doesn't look like a 10-digit mobile number. What is the dealer's number?");
             const gstin = input.gstin?.toUpperCase().replace(/[\s-]/g, "") || null;
-            if (gstin && !GSTIN_RE.test(gstin)) return ask("That GSTIN doesn't look right (15 characters, like 27ABCDE1234F1Z5). What is it?");
+            const gstinAsk = gstin ? gstinQuestion(gstin) : null;
+            if (gstinAsk) return ask(gstinAsk);
             const email = input.email?.toLowerCase() || null;
             if (email && !/^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i.test(email)) return ask("That email address doesn't look right. What is it?");
             const pincode = input.pincode?.replace(/\s/g, "") || null;

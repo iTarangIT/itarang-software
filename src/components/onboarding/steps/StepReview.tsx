@@ -940,16 +940,8 @@ export default function StepReview() {
       >
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
           <InfoRow
-            label="Name"
+            label="Salesperson"
             value={state.agreement?.salesManager?.name || "—"}
-          />
-          <InfoRow
-            label="Email"
-            value={state.agreement?.salesManager?.email || "—"}
-          />
-          <InfoRow
-            label="Mobile"
-            value={state.agreement?.salesManager?.mobile || "—"}
           />
           <InfoRow
             label="Age"
