@@ -29,7 +29,8 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { requireRole } from "@/lib/auth-utils";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
-import { INTENT_REVIEW_ROLES } from "@/lib/leads/access";
+import { INTENT_REVIEW_ROLES, readsOwnLeadsOnly } from "@/lib/leads/access";
+import { leadOwnedBy } from "@/lib/ai-dialer/campaignAccess";
 import {
   filesProxyPath,
   getObject,
@@ -58,17 +59,28 @@ export const POST = withErrorHandler(
     const user = await requireRole([...INTENT_REVIEW_ROLES]);
     const { id: leadId } = await ctx.params;
     const { callId } = Body.parse(await req.json());
+    // ID 45: a rep re-analyses only leads they own; anything else is "no such lead".
+    if (readsOwnLeadsOnly(user.role) && !(await leadOwnedBy(leadId, user.id))) {
+      return errorResponse("Lead not found", 404);
+    }
 
-    const calls = rowsOf<{ recording_url: string | null; provider: string | null }>(
+    const calls = rowsOf<{
+      recording_url: string | null;
+      provider: string | null;
+      lead_id: string | null;
+    }>(
       await db.execute(sql`
-        SELECT recording_url, provider
+        SELECT recording_url, provider, lead_id
           FROM ai_call_logs
          WHERE call_id = ${callId}
          ORDER BY created_at DESC
          LIMIT 1
       `),
     );
-    if (calls.length === 0) {
+    // The call must belong to THIS lead. Otherwise any lead the caller can
+    // reach becomes a window onto any other lead's audio (ID 45), and the copy
+    // would be filed under the wrong lead.
+    if (calls.length === 0 || calls[0].lead_id !== leadId) {
       return errorResponse("No such call.", 404);
     }
 

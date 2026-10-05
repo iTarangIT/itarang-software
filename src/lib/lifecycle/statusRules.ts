@@ -21,6 +21,12 @@
 //   visit         an ASM visit DONE, or "Visit not needed" with a reason — the
 //                 only events that end Transferred_to_ASM ("Awaiting field
 //                 visit", ID 77). Otherwise a forward move like progress.
+//   quote_approved
+//                 the dealer approved the quote (quoteStatus.ts) — sets
+//                 Commercials_Finalised, forward only, and is the one event
+//                 besides a visit that ends Transferred_to_ASM (ID 77 option
+//                 A, 1 Oct): the lead moves at once and the ASM visit stays
+//                 scheduled.
 //   quote_withdrawn
 //                 Withdraw quote (ID 78): a lead at Commercials explained or
 //                 Awaiting customer decision goes back to Under_Discussion - the
@@ -48,6 +54,7 @@ export const STATUS_EVENTS = [
     "reactivation",
     "dropout_lost",
     "visit",
+    "quote_approved",
     "quote_withdrawn",
     "correction",
 ] as const;
@@ -148,6 +155,13 @@ export function checkStatusMove(input: {
                 return { ok: false, reason: `A visit cannot set ${label(to)}.` };
             }
             if (!isForward(from, to)) {
+                return { ok: false, reason: `A lead cannot move back from ${label(from)} to ${label(to)}.` };
+            }
+            return { ok: true };
+        case "quote_approved":
+            if (to !== "Commercials_Finalised") return { ok: false, reason: "A dealer approval can only set Commercials finalised." };
+            if (!open) return { ok: false, reason: `The lead is ${label(from)}; it is closed.` };
+            if (from !== "Transferred_to_ASM" && !isForward(from, to)) {
                 return { ok: false, reason: `A lead cannot move back from ${label(from)} to ${label(to)}.` };
             }
             return { ok: true };

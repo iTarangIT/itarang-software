@@ -2088,6 +2088,8 @@ export async function notifyQuotationDealerDecision(p: {
    * and the visit restores Commercials finalised.
    */
   awaitingVisit?: boolean;
+  /** ID 77 option A: the approval moved the lead out of Awaiting field visit; the ASM visit stays scheduled. */
+  visitStillScheduled?: boolean;
 }) {
   const dealer = p.dealerName?.trim() || "The dealer";
   const money = p.value > 0 ? ` (₹${p.value.toLocaleString("en-IN")})` : "";
@@ -2100,7 +2102,8 @@ export async function notifyQuotationDealerDecision(p: {
         ? `${dealer} APPROVED quotation${ref}${money} ${channel}. The lead returns to ` +
           `Commercials finalised after the field visit.`
         : `${dealer} APPROVED quotation${ref}${money} ${channel}. The lead is now Commercials ` +
-          `finalised — open it and Mark Won.`
+          `finalised — open it and Mark Won.` +
+          (p.visitStillScheduled ? ` The ASM field visit stays scheduled.` : ``)
       : `${dealer} DECLINED quotation${ref}${money} ${channel}.` +
         (p.note ? ` They said: "${p.note}"` : "") +
         ` Follow up or raise a revision.`;

@@ -1,9 +1,9 @@
 import { db } from "@/lib/db";
 import { dealerLeads } from "@/lib/db/schema";
-import { and, desc, ilike, or, sql } from "drizzle-orm";
+import { and, desc, eq, ilike, or, sql } from "drizzle-orm";
 import { NextRequest, NextResponse } from "next/server";
 import { requireRole } from "@/lib/auth-utils";
-import { LEADS_PAGE_ROLES } from "@/lib/leads/access";
+import { LEADS_PAGE_ROLES, readsOwnLeadsOnly } from "@/lib/leads/access";
 
 export async function GET(req: NextRequest) {
   // Was completely unauthenticated, like GET /api/dealer-leads before the
@@ -16,7 +16,7 @@ export async function GET(req: NextRequest) {
   // surface as "Internal error" instead of a redirect. (withErrorHandler
   // re-throws NEXT_REDIRECT for exactly this reason; this route predates it and
   // rolls its own try/catch.)
-  await requireRole([...LEADS_PAGE_ROLES]);
+  const user = await requireRole([...LEADS_PAGE_ROLES]);
 
   try {
     const { searchParams } = new URL(req.url);
@@ -51,9 +51,12 @@ export async function GET(req: NextRequest) {
         )
       : undefined;
 
-    const where = searchFilter
-      ? and(convertedFilter, searchFilter)
-      : convertedFilter;
+    // ID 45: a rep (asm, inside_sales_rep) sees only converted leads they own.
+    const ownerFilter = readsOwnLeadsOnly(user.role)
+      ? eq(dealerLeads.current_owner_id, user.id)
+      : undefined;
+
+    const where = and(convertedFilter, searchFilter, ownerFilter)!;
 
     const [rows, countResult] = await Promise.all([
       db

@@ -91,7 +91,7 @@ function roleLabel(role: string | null | undefined): string {
  */
 function liftedStatusFor(role: string | null | undefined): string {
     return (role ?? "").toLowerCase() === "asm"
-        ? "Transferred to ASM"
+        ? "Awaiting field visit"
         : "Assigned — not contacted";
 }
 

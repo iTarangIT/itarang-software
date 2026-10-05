@@ -2,7 +2,7 @@ import { db } from "@/lib/db";
 import { dealerLeads } from "@/lib/db/schema";
 import { eq, sql } from "drizzle-orm";
 import { requireRole } from "@/lib/auth-utils";
-import { LEADS_PAGE_ROLES } from "@/lib/leads/access";
+import { LEADS_PAGE_ROLES, readsOwnLeadsOnly } from "@/lib/leads/access";
 import { EditLeadForm } from "@/components/leads/edit-lead-form";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
@@ -18,7 +18,7 @@ export default async function EditLeadPage({
   // Same gate as the list and PATCH /api/dealer-leads/[id]. This was
   // requireAuth() — any signed-in user of any role, including dealers and
   // vendors, could open the edit form for any prospect.
-  await requireRole([...LEADS_PAGE_ROLES]);
+  const user = await requireRole([...LEADS_PAGE_ROLES]);
 
   const { id } = await params;
 
@@ -28,7 +28,9 @@ export default async function EditLeadPage({
     .where(eq(dealerLeads.id, id))
     .limit(1);
 
-  if (!lead) {
+  // ID 45: a rep (asm, inside_sales_rep) edits only leads they own — someone
+  // else's lead gets the same answer as no lead at all.
+  if (!lead || (readsOwnLeadsOnly(user.role) && lead.current_owner_id !== user.id)) {
     return (
       <div className="max-w-xl mx-auto mt-20 text-center text-gray-500">
         Lead not found

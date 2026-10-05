@@ -7,8 +7,12 @@
 //   quote withdrawn                   → Under_Discussion (ID 78, correction event)
 //
 // Forward only (S3). A lead Awaiting field visit (Transferred_to_ASM) keeps that
-// status — only a visit ends it (ID 77) — but its pre_transfer_status is raised,
-// so the visit restores the later stage (`awaitingVisit` in the result, ID 75.1).
+// status on a quote created or delivered — only a visit ends it (ID 77) — but
+// its pre_transfer_status is raised, so the visit restores the later stage
+// (`awaitingVisit` in the result, ID 75.1). The dealer's APPROVAL is the
+// exception (ID 77 option A, decided 1 Oct): the lead moves to
+// Commercials_Finalised at once (event "quote_approved") and the ASM visit
+// stays scheduled — the lead_visits row is untouched.
 // Best-effort: a quote event must never fail because the lead could not move;
 // the reason is logged. A rep creating or sending a quote IS work and resets
 // the idle clock as before; the dealer's approval (and any system-driven move,
@@ -41,6 +45,8 @@ export type QuoteEventResult = {
     status: string | null;
     /** True when the lead is Awaiting field visit: only pre_transfer_status was raised. */
     awaitingVisit?: boolean;
+    /** True when a dealer approval moved the lead out of Awaiting field visit; the visit stays scheduled. */
+    visitStillScheduled?: boolean;
 };
 
 export async function advanceLeadOnQuoteEvent(
@@ -56,7 +62,7 @@ export async function advanceLeadOnQuoteEvent(
         const lead = rows[0];
         if (!lead) return { moved: false, status: null };
 
-        if (lead.lead_status === "Transferred_to_ASM") {
+        if (lead.lead_status === "Transferred_to_ASM" && event !== "dealer_approved") {
             const pre = rankOf(lead.pre_transfer_status);
             if (pre !== null && isForward(lead.pre_transfer_status, target)) {
                 await db.execute(sql`
@@ -74,9 +80,17 @@ export async function advanceLeadOnQuoteEvent(
             performedBy: actorId,
             remarks: REMARK[event],
             countsAsWork: event === "dealer_approved" || actorId === null ? false : undefined,
-            statusChange: { from: lead.lead_status as LeadStatus | null, to: target, event: "progress" },
+            statusChange: {
+                from: lead.lead_status as LeadStatus | null,
+                to: target,
+                event: event === "dealer_approved" ? "quote_approved" : "progress",
+            },
         });
-        return { moved: true, status: target };
+        return {
+            moved: true,
+            status: target,
+            visitStillScheduled: lead.lead_status === "Transferred_to_ASM" ? true : undefined,
+        };
     } catch (err) {
         console.error(`[quoteStatus] ${leadId} ${event} → ${target} not applied:`, err instanceof Error ? err.message : err);
         return { moved: false, status: null };

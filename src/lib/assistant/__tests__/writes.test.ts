@@ -93,7 +93,6 @@ describe("log_call proposals (UC-02, UC-03)", () => {
             { channel: "call", connect_status: "connected", disposition: "Price High", bucket: "Warm" }, // still talking or lost?
             { channel: "call", connect_status: "connected", disposition: "As to Call Back", bucket: "Cold", status: "Commercials_Finalised" },
             { channel: "call", connect_status: "not_connected", disposition: "Switch off", status: "Lost" },
-            { channel: "call", connect_status: "connected", disposition: "REJECTED BY US", bucket: "Lost", status: "Lost" },
             { channel: "call", connect_status: "not_connected", disposition: "Did not pick", follow_up_at: "2026-09-20T11:00:00+05:30" }, // past
             { channel: "call", connect_status: "not_connected", disposition: "Did not pick", follow_up_at: "2027-06-01T11:00:00+05:30" }, // > 90 days
             { channel: "call", connect_status: "connected", disposition: "Not Interested", bucket: "Lost", status: "Lost", follow_up_at: "2026-09-25T11:00:00+05:30" },

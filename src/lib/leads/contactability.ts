@@ -1,7 +1,9 @@
 // Contactability is its own flag, not a status (tracker ID 36, handover P2-12,
 // 29 Sep 2026).
 //
-//   dead_number     a call outcome says the number is wrong / not in use.
+//   dead_number     a call outcome says the number is wrong / not in use —
+//                   once from a person, twice from the AI dialer (ID 36.1,
+//                   deadNumber.ts).
 //   non_responsive  6 calls on 6 different days within 45 days, none connected
 //                   (nonResponsive.ts — the same rule the reports use).
 //
@@ -19,6 +21,13 @@ import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { writeTouchpoint } from "@/lib/touchpoints/write";
 import { nonResponsiveSql } from "@/lib/leads/nonResponsive";
+import {
+    DEAD_NUMBER_REASONS,
+    aiDeadNumberSql,
+    contactabilityAction,
+    deadNumberReason,
+    type CallSource,
+} from "@/lib/leads/deadNumber";
 import { normalizePhone } from "@/lib/leads/dedupe-rules";
 import { loadExistingByPhone } from "@/lib/leads/dedupe";
 import { markLeadLost } from "@/lib/leads/markLost";
@@ -27,10 +36,7 @@ type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 export type Contactability = "dead_number" | "non_responsive";
 
-export const DEAD_NUMBER_REASONS: readonly string[] = [
-    "Incorrect / Invalid number",
-    "Number not in use / does not exist / out of service",
-];
+export { DEAD_NUMBER_REASONS };
 
 export const CONTACTABILITY_LABEL: Record<Contactability, string> = {
     dead_number: "Dead number",
@@ -106,6 +112,8 @@ export async function reviewLeadContactability(
         reasonLabel: string | null;
         /** Whose call this was (users.id); null for the AI dialer / system. */
         actorId?: string | null;
+        /** "ai" = the AI dialer: a dead number needs 2 such outcomes (ID 36.1). */
+        source?: CallSource;
     },
     opts?: { tx?: Tx },
 ): Promise<void> {
@@ -113,12 +121,31 @@ export async function reviewLeadContactability(
     // A SAVEPOINT inside a caller's transaction: a DB without E-314 must not
     // abort the call that is being logged.
     const run = async (tx: Tx) => {
-        if (input.connected) {
+        // Only an AI dead-number outcome needs the call log: one is not enough.
+        let aiDeadNumber = false;
+        if (
+            !input.connected &&
+            input.source === "ai" &&
+            input.reasonLabel &&
+            DEAD_NUMBER_REASONS.includes(input.reasonLabel)
+        ) {
+            const dn = (await tx.execute<{ yes: boolean }>(sql`
+                SELECT ${aiDeadNumberSql(sql`${input.leadId}`)} AS yes
+            `)) as unknown as Array<{ yes: boolean }>;
+            aiDeadNumber = dn[0]?.yes === true;
+        }
+        const action = contactabilityAction({
+            connected: input.connected,
+            reasonLabel: input.reasonLabel,
+            source: input.source,
+            aiDeadNumber,
+        });
+        if (action === "clear") {
             await clearFlag(tx, input.leadId, actorId);
             return;
         }
-        if (input.reasonLabel && DEAD_NUMBER_REASONS.includes(input.reasonLabel)) {
-            await setFlag(tx, input.leadId, "dead_number", input.reasonLabel, actorId);
+        if (action === "dead_number" && input.reasonLabel) {
+            await setFlag(tx, input.leadId, "dead_number", deadNumberReason(input.reasonLabel, input.source), actorId);
             return;
         }
         const nr = (await tx.execute<{ yes: boolean }>(sql`

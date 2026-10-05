@@ -5,10 +5,12 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/db", () => ({ db: {} }));
 const {
+    BLOCK_B_COLUMNS,
+    BLOCK_C_COLUMNS,
     BLOCK_D_COLUMNS,
     NO_OWNER,
     NO_OWNER_KEY,
-    REP_BLOCK_COLUMNS,
+    REP_NOT_MEASURED,
     blockDRows,
     buildRepBlocks,
     repBlockTableRows,
@@ -50,74 +52,134 @@ const spoc = (id: string, name: string, role: string, over: Record<string, numbe
     }) as unknown as Spoc;
 
 const noExtras = {
-    hot_received: new Map<string, number>(),
-    hot_handed: new Map<string, number>(),
-    engaged: new Map<string, number>(),
-    quotes_delivered: new Map<string, number>(),
-    dealer_approved: new Map<string, number>(),
-    won: new Map<string, number>(),
+    hot_received: new Map<string, number | null>(),
+    hot_handed: new Map<string, number | null>(),
+    connected: new Map<string, number | null>(),
+    engaged: new Map<string, number | null>(),
+    quotes_delivered: new Map<string, number | null>(),
+    dealer_approved: new Map<string, number | null>(),
+    won: new Map<string, number | null>(),
 };
 
-describe("Blocks B / C (per rep)", () => {
-    it("one block per rep of the role, metrics from the builder and the direct counts", () => {
-        const y = { per_spoc: [spoc("a1", "Zed", "asm", { unique_visits: 3, revenue: 150000 }), spoc("i1", "Ira", "inside_sales_rep", { calls: 9 })] };
-        const mtd = { per_spoc: [spoc("a1", "Zed", "asm", { unique_visits: 40, new_visits: 7, revenue: 2500000 }), spoc("a2", "Amy", "asm"), spoc("i1", "Ira", "inside_sales_rep", { calls: 210 })] };
-        const extras = {
-            y: { ...noExtras, hot_received: new Map([["a1", 2]]) },
-            mtd: { ...noExtras, hot_received: new Map([["a1", 11]]), won: null },
-        };
-        const targets = new Map([["a1", new Map([["dealer_visits", 50], ["revenue", 2000000]])]]);
+describe("Block B (ASM) — one row per rep", () => {
+    const y = { per_spoc: [spoc("a1", "Zed", "asm", { unique_visits: 3, quotes: 1, revenue: 150000 }), spoc("i1", "Ira", "inside_sales_rep", { calls: 9 })] };
+    const mtd = {
+        per_spoc: [
+            spoc("a1", "Zed", "asm", { unique_visits: 40, new_visits: 7, quotes: 6, converted: 2, revenue: 2500000 }),
+            spoc("a2", "Amy", "asm", { unique_visits: 10 }),
+            spoc("i1", "Ira", "inside_sales_rep", { calls: 210 }),
+        ],
+    };
+    const extras = {
+        y: { ...noExtras, hot_received: new Map<string, number | null>([["a1", 2]]) },
+        mtd: {
+            ...noExtras,
+            hot_received: new Map<string, number | null>([["a1", 11]]),
+            quotes_delivered: new Map<string, number | null>([["a1", 4]]),
+            dealer_approved: new Map<string, number | null>([["a1", 3]]),
+            won: null,
+        },
+    };
+    const targets = new Map([["a1", new Map([["dealer_visits", 50], ["revenue", 2000000]])]]);
 
-        const asm = buildRepBlocks("asm", y, mtd, extras, targets);
-        expect(asm.map((b) => b.name)).toEqual(["Amy", "Zed"]);
-        const zed = asm[1];
-        expect(zed.metrics.map((m) => m.label)).toEqual([
-            "Dealers visited",
-            "New dealers visited",
-            "Hot received",
-            "Quotes created",
-            "Quotes delivered",
-            "Dealer approved",
-            "Marked Won",
-            "Converted",
-            "Revenue",
+    it("columns: metrics across, Yesterday + MTD where it makes sense, one % of target", () => {
+        expect(BLOCK_B_COLUMNS).toEqual([
+            "ASM",
+            "Dealers visited · Yesterday",
+            "MTD",
+            "New dealers visited · Yesterday",
+            "MTD",
+            "Hot received · Yesterday",
+            "MTD",
+            "Quotes created · Yesterday",
+            "MTD",
+            "Quotes delivered MTD",
+            "Dealer approved MTD",
+            "Marked Won MTD",
+            "Converted MTD",
+            "Revenue ₹ MTD",
+            "% of target",
         ]);
-        expect(zed.metrics[0]).toMatchObject({ y: 3, mtd: 40, target: 50 });
-        expect(zed.metrics[2]).toMatchObject({ y: 2, mtd: 11, target: null });
-        // A failed direct query is "not measured", not 0.
-        expect(zed.metrics[6]).toMatchObject({ y: 0, mtd: null });
-
-        const isr = buildRepBlocks("inside_sales_rep", y, mtd, extras, targets);
-        expect(isr).toHaveLength(1);
-        expect(isr[0].metrics.map((m) => m.label)).toEqual([
-            "Calls made",
-            "Dealers called",
-            "Engaged calls",
-            "Hot handed to field",
-            "Quotes created",
-            "Marked Won",
-            "Converted",
-        ]);
-        expect(isr[0].metrics[0]).toMatchObject({ y: 9, mtd: 210 });
+        expect(BLOCK_B_COLUMNS.some((c) => /last 7/i.test(c))).toBe(false);
     });
 
-    it("renders a group header per rep, then Yesterday · MTD · target · %", () => {
-        expect(REP_BLOCK_COLUMNS).toEqual(["Metric", "Yesterday", "MTD", "MTD target", "% of target"]);
-        const rows = repBlockTableRows([
-            {
-                id: "a1",
-                name: "Zed",
-                metrics: [
-                    { label: "Dealers visited", kind: "count", y: 3, mtd: 40, target: 50 },
-                    { label: "Revenue", kind: "money", y: 150000, mtd: 2500000, target: null },
-                    { label: "Marked Won", kind: "count", y: 0, mtd: null, target: null },
-                ],
-            },
+    it("one row per ASM in name order, then a Total row", () => {
+        const blocks = buildRepBlocks("asm", y, mtd, extras, targets);
+        expect(blocks.map((b) => b.name)).toEqual(["Amy", "Zed"]);
+        const rows = repBlockTableRows("asm", blocks);
+        expect(rows).toHaveLength(3);
+        for (const r of rows) expect(r).toHaveLength(BLOCK_B_COLUMNS.length);
+        // Amy: no target → "—"; a failed direct query (Marked Won MTD) is not 0.
+        expect(rows[0]).toEqual(["Amy", 0, 10, 0, 0, 0, 0, 0, 0, 0, 0, REP_NOT_MEASURED, 0, "₹0", REP_NOT_MEASURED]);
+        // Zed: 40 dealers visited MTD against a target of 50 = 80%.
+        expect(rows[1]).toEqual(["Zed", 3, 40, 0, 7, 2, 11, 1, 6, 4, 3, REP_NOT_MEASURED, 2, "₹25.0 L", "80%"]);
+        // Total: sums of the reps; % of target only over reps that have one.
+        expect(rows[2]).toEqual(["Total", 3, 50, 0, 7, 2, 11, 1, 6, 4, 3, REP_NOT_MEASURED, 2, "₹25.0 L", "80%"]);
+    });
+
+    it("no Total row for a single rep, and none for no reps", () => {
+        const one = buildRepBlocks("asm", { per_spoc: [] }, { per_spoc: [spoc("a1", "Zed", "asm")] }, extras, new Map());
+        expect(repBlockTableRows("asm", one)).toHaveLength(1);
+        expect(repBlockTableRows("asm", [])).toEqual([]);
+    });
+});
+
+describe("Block C (ISR / CC) — one row per rep", () => {
+    it("columns follow the agreed layout (docs/neodove-contract.md, Block C)", () => {
+        expect(BLOCK_C_COLUMNS).toEqual([
+            "ISR",
+            "Calls · Yesterday",
+            "MTD",
+            "Dealers called · Yesterday",
+            "MTD",
+            "Connected MTD",
+            "Connect % MTD",
+            "Engaged MTD",
+            "Hot to field MTD",
+            "Quotes created MTD",
+            "Marked Won MTD",
+            "Converted MTD",
+            "% of target",
         ]);
-        expect(rows[0]).toEqual(["Zed", "", "", "", ""]);
-        expect(rows[1]).toEqual(["Dealers visited", "3", "40", "50", "80%"]);
-        expect(rows[2]).toEqual(["Revenue", "₹1.5 L", "₹25.0 L", "—", "—"]);
-        expect(rows[3]).toEqual(["Marked Won", "0", NOT_MEASURED, "—", "—"]);
+    });
+
+    it("connect % from connected / calls, engaged '—' when not measured, calls target %", () => {
+        const y = { per_spoc: [spoc("i1", "Ira", "inside_sales_rep", { calls: 9, dealers_called: 7 })] };
+        const mtd = {
+            per_spoc: [
+                spoc("i1", "Ira", "inside_sales_rep", { calls: 200, dealers_called: 120, quotes: 5, converted: 1 }),
+                spoc("i2", "Bo", "inside_sales_rep"),
+                spoc("a1", "Zed", "asm", { calls: 3 }),
+            ],
+        };
+        const extras = {
+            y: noExtras,
+            mtd: {
+                ...noExtras,
+                connected: new Map<string, number | null>([["i1", 50]]),
+                // Bo has calls but none of measured length → NULL from engagedCallCount.
+                engaged: new Map<string, number | null>([["i1", 20], ["i2", null]]),
+                hot_handed: new Map<string, number | null>([["i1", 4]]),
+                won: new Map<string, number | null>([["i1", 2]]),
+            },
+        };
+        const targets = new Map([["i1", new Map([["calls_per_day", 250]])]]);
+        const rows = repBlockTableRows("inside_sales_rep", buildRepBlocks("inside_sales_rep", y, mtd, extras, targets));
+        expect(rows).toEqual([
+            // Bo: 0 calls → Connect % "—"; engaged not measured → "—"; no target → "—".
+            ["Bo", 0, 0, 0, 0, 0, REP_NOT_MEASURED, REP_NOT_MEASURED, 0, 0, 0, 0, REP_NOT_MEASURED],
+            ["Ira", 9, 200, 7, 120, 50, "25%", 20, 4, 5, 2, 1, "80%"],
+            ["Total", 9, 200, 7, 120, 50, "25%", 20, 4, 5, 2, 1, "80%"],
+        ]);
+    });
+
+    it("a failed connected query reads '—' for Connected and Connect %", () => {
+        const mtd = { per_spoc: [spoc("i1", "Ira", "inside_sales_rep", { calls: 10 })] };
+        const rows = repBlockTableRows(
+            "inside_sales_rep",
+            buildRepBlocks("inside_sales_rep", { per_spoc: [] }, mtd, { y: noExtras, mtd: { ...noExtras, connected: null } }, new Map()),
+        );
+        expect(rows[0].slice(5, 7)).toEqual([REP_NOT_MEASURED, REP_NOT_MEASURED]);
     });
 });
 
@@ -145,7 +207,7 @@ describe("Block D (position)", () => {
 describe("% of target red / amber / green (ID 9)", async () => {
     const { ragTone, ragToneOfCell } = await import("../rag");
     const { BLOCK_A_COLUMNS, BLOCK_A_PCT_COLUMN } = await import("../salesDailyBlockA");
-    const { REP_BLOCK_PCT_COLUMN } = await import("../salesDailyBlocks");
+    const { BLOCK_B_PCT_COLUMN, BLOCK_C_PCT_COLUMN } = await import("../salesDailyBlocks");
 
     it("uses Block A's thresholds: green ≥100, amber 80–99, red <80", () => {
         expect(ragTone(100)).toBe("green");
@@ -167,6 +229,7 @@ describe("% of target red / amber / green (ID 9)", async () => {
 
     it("points at the % of target column in Blocks A, B and C", () => {
         expect(BLOCK_A_COLUMNS[BLOCK_A_PCT_COLUMN]).toBe("% of target");
-        expect(REP_BLOCK_COLUMNS[REP_BLOCK_PCT_COLUMN]).toBe("% of target");
+        expect(BLOCK_B_COLUMNS[BLOCK_B_PCT_COLUMN]).toBe("% of target");
+        expect(BLOCK_C_COLUMNS[BLOCK_C_PCT_COLUMN]).toBe("% of target");
     });
 });
