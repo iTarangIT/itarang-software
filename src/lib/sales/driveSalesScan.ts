@@ -48,6 +48,7 @@ import {
   type ExtractedSalesInvoice,
 } from "@/lib/ai/invoices/extractSalesInvoice";
 import { customerKey } from "@/lib/sales/customerKey";
+import { readAndSaveInvoiceLines } from "@/lib/sales/saveInvoiceLines";
 import { isTerminalModelFailure } from "@/lib/ai/invoices/terminalModelFailure";
 import { normalizeInvoiceNumber } from "@/lib/sales/normalizeInvoiceNumber";
 import { resolveSalesOrg } from "@/lib/sales/resolveSalesOrg";
@@ -92,6 +93,9 @@ const DEFAULT_MAX_FILES = 25;
  * property of the file's checksum, so the next run resumes where this stopped.
  */
 const DEFAULT_TIME_BUDGET_MS = 4 * 60_000;
+
+/** Longest the scan waits for an invoice's line items (ID 72) before moving on. */
+const LINES_READ_TIMEOUT_MS = 45_000;
 
 /**
  * The `drain` budget: keep going until the folder is actually finished.
@@ -711,6 +715,18 @@ async function processFile(
         attention_reason: formatSalesAttention(attention),
       })
       .returning({ id: salesInvoices.id });
+
+    // ID 72 (E-326): the line items, for gross margin. Best-effort and bounded:
+    // the invoice is already saved, so a slow or failed reading — or a database
+    // without E-326 — costs the margin figure, never the revenue.
+    try {
+      await Promise.race([
+        readAndSaveInvoiceLines(row.id, buffer, file.mimeType, file.name, value.sub_total),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("line-item read timed out")), LINES_READ_TIMEOUT_MS)),
+      ]);
+    } catch (e) {
+      console.warn(`[sales-scan] line items not stored for ${file.name}: ${errText(e)}`);
+    }
 
     // 'imported' even when flagged. The file-level status answers exactly one
     // question — did this file become an invoice row? — because that is what

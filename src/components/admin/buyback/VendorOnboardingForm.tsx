@@ -46,6 +46,7 @@ import Link from "next/link";
 
 import VendorDocUpload, { type VendorDocValue } from "./VendorDocUpload";
 import { VENDOR_DOC_LABELS } from "@/lib/buyback/vendor-docs";
+import { isValidGstin } from "@/lib/leads/gstin";
 
 /** Server zod paths → the label on this form, so an error names a box. */
 const FIELD_LABELS: Record<string, string> = {
@@ -68,7 +69,7 @@ const FIELD_LABELS: Record<string, string> = {
 // Deliberately the same expressions the route parses with, not looser ones — a
 // field that goes green here and red on the server is worse than no check.
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
-const GSTIN_RE = /^\d{2}[A-Z]{5}\d{4}[A-Z][A-Z\d]Z[A-Z\d]$/;
+// GSTIN: shape + check digit, shared with every other entry point (ID 62).
 const PAN_RE = /^[A-Z]{5}\d{4}[A-Z]$/;
 const UDYAM_RE = /^UDYAM-[A-Z]{2}-\d{2}-\d{7}$/;
 const PINCODE_RE = /^\d{6}$/;
@@ -153,7 +154,7 @@ const VALIDATORS: Record<FieldName, (raw: string) => string | null> = {
     const s = v.trim().toUpperCase();
     if (!s) return "Enter the GSTIN — we invoice against it.";
     if (s.length !== 15) return `A GSTIN is 15 characters; this one has ${s.length}.`;
-    if (!GSTIN_RE.test(s)) return "That is not a valid GSTIN. It should look like 27AABCB1518L1ZS.";
+    if (!isValidGstin(s)) return "That is not a valid GSTIN. It should look like 27AABCB1518L1ZS.";
     return null;
   },
   pan: (v) => {

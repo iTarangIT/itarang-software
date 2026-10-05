@@ -119,7 +119,7 @@ export async function createOnboardingApplicationForConvertedLead(
             proposed_deal_value, proposed_credit_terms, proposed_delivery_terms,
             proposed_warranty_terms, proposed_terms_notes, payment_method,
             deal_notes, quote_document_url, field_verification_status,
-            last_action_by, last_action_at
+            last_action_by, last_action_at, salesperson_user_id
         ) VALUES (
             ${companyName}, 'draft',
             ${leadId}, ${sponsoringAsmId}, ${r.closing_owner_id},
@@ -132,7 +132,13 @@ export async function createOnboardingApplicationForConvertedLead(
             ${r.c_final_price}, ${r.c_credit_terms}, ${r.c_delivery_terms},
             ${r.c_warranty_terms}, ${r.c_notes}, ${r.c_payment_method},
             ${r.c_deal_notes}, ${r.c_quote_url}, ${fieldVerification}::jsonb,
-            ${r.closing_owner_id}::uuid, NOW()
+            ${r.closing_owner_id}::uuid, NOW(),
+            -- ID 66 (E-321): the rep who closed the lead is the salesperson, when
+            -- they are an active ISR / ASM / Sales Head; otherwise Admin picks.
+            (SELECT u.id FROM users u
+              WHERE u.id::text = ${r.closing_owner_id}
+                AND u.is_active
+                AND LOWER(u.role) IN ('inside_sales_rep', 'asm', 'sales_head'))
         )
         ON CONFLICT (originating_dealer_lead_id)
             WHERE originating_dealer_lead_id IS NOT NULL

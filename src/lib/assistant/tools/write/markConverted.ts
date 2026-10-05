@@ -19,6 +19,7 @@ import { defineTool, LeadId, ownedLeadOr, type ToolFactory } from "../spec";
 import { leadUrl } from "../leads";
 import { defineApplier } from "../../applierSpec";
 import { Remarks } from "./vocabSchemas";
+import { gstinQuestion } from "./updateLead";
 
 export const MarkConvertedPlan = z.object({
     lead_id: z.string().min(1),
@@ -51,9 +52,8 @@ export const markConverted: ToolFactory = () =>
                 return { kind: "declined", reason: `This lead is already ${lead.lead_status}.`, crm_url: crmUrl };
             }
             const gstin = normalizeGstin(input.gstin);
-            if (!isValidGstin(gstin)) {
-                return ask("That GSTIN doesn't look right. What is the dealer's 15-character GSTIN (e.g. 07AAACB1234C1Z5)?");
-            }
+            const gstinAsk = gstinQuestion(gstin);
+            if (gstinAsk) return ask(gstinAsk);
 
             const plan: MarkConvertedPlan = { lead_id: lead.id, gstin, notes: input.notes?.trim() || null };
             const lines: Preview["lines"] = [

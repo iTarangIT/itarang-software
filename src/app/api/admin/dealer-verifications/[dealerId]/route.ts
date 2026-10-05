@@ -11,6 +11,7 @@ import { and, desc, eq, inArray, ne } from "drizzle-orm";
 import { approvalTagsFor } from "@/lib/dealer/approval-tag";
 import { z } from "zod";
 import { requireSalesHead } from "@/lib/auth/requireSalesHead";
+import { resolveSalesperson, salespersonMobile } from "@/lib/onboarding/salesperson";
 import {
   documentLabel,
   fieldLabel,
@@ -19,6 +20,7 @@ import { type CompanyType, requiredDocuments } from "@/lib/whatsapp/checklist";
 import { normalizeAccountType } from "@/lib/onboarding/account-type";
 import { viewableFileUrl } from "@/lib/storage/legacyUrl";
 import { extractAddress, gstPrincipalAddress } from "@/lib/onboarding/dealer-address";
+import { checkCustomerGstin, GSTIN_CHECK_MESSAGE } from "@/lib/leads/gstin";
 import {
   agreementModeFor,
   usesManualAgreement,
@@ -91,6 +93,8 @@ const PatchBodySchema = z.object({
   salesManagerName: z.string().optional(),
   salesManagerEmail: z.string().optional(),
   salesManagerMobile: z.string().optional(),
+  // ID 66 (E-321) — the salesperson as a CRM user; fills the three above.
+  salespersonUserId: z.string().optional(),
 
   // GST Places of Business + admin billing/dispatch/other role tags —
   // persisted whole into providerRawResponse.submissionSnapshot.gstAddresses
@@ -410,6 +414,8 @@ export async function GET(_req: NextRequest, context: RouteContext) {
         salesManagerName: row.sales_manager_name || salesManagerSnapshot?.name || "",
         salesManagerEmail: row.sales_manager_email || salesManagerSnapshot?.email || "",
         salesManagerMobile: row.sales_manager_mobile || salesManagerSnapshot?.mobile || "",
+        // ID 66 — null until someone picks; approval is blocked while null.
+        salespersonUserId: row.salesperson_user_id ?? null,
 
         // ✅ NEW — agreement language preference
         agreementLanguage: row.agreement_language,
@@ -557,11 +563,27 @@ export async function PATCH(req: NextRequest, context: RouteContext) {
       ownerPinCode,
       bankBranch,
       accountType,
-      salesManagerName,
-      salesManagerEmail,
-      salesManagerMobile,
       gstAddresses,
+      salespersonUserId,
     } = parsed.data;
+    let { salesManagerName, salesManagerEmail, salesManagerMobile } = parsed.data;
+
+    // ID 66: a picked salesperson must be an active ISR / ASM / Sales Head.
+    // Their name, email and mobile replace whatever was typed.
+    let salespersonId: string | undefined;
+    if (salespersonUserId !== undefined) {
+      const salesperson = await resolveSalesperson(salespersonUserId);
+      if (!salesperson) {
+        return NextResponse.json(
+          { success: false, message: "Pick the salesperson from the list (an active ISR, ASM or Sales Head)." },
+          { status: 400 }
+        );
+      }
+      salespersonId = salesperson.id;
+      salesManagerName = salesperson.name;
+      salesManagerEmail = salesperson.email;
+      salesManagerMobile = salespersonMobile(salesperson.phone) ?? "";
+    }
 
     // If this application is a branch dealer (approved against an existing
     // shared accounts row), legal-entity fields are read-only — they live
@@ -603,6 +625,18 @@ export async function PATCH(req: NextRequest, context: RouteContext) {
       }
     }
 
+    // ID 62: an admin-typed GSTIN gets the same check as every other entry
+    // point — shape, check digit, and never iTarang's own registration.
+    if (gstNumber !== undefined && gstNumber.trim()) {
+      const gst = checkCustomerGstin(gstNumber);
+      if (gst !== "ok") {
+        return NextResponse.json(
+          { success: false, message: GSTIN_CHECK_MESSAGE[gst] },
+          { status: 400 }
+        );
+      }
+    }
+
     // Only include fields that were actually sent. Keys must match the
     // snake_case Drizzle field names from the 10af73a schema rename, otherwise
     // .set() throws and the PATCH returns "Failed to update dealer details".
@@ -629,6 +663,7 @@ export async function PATCH(req: NextRequest, context: RouteContext) {
     if (salesManagerName   !== undefined) updatePayload.sales_manager_name   = salesManagerName;
     if (salesManagerEmail  !== undefined) updatePayload.sales_manager_email  = salesManagerEmail;
     if (salesManagerMobile !== undefined) updatePayload.sales_manager_mobile = salesManagerMobile;
+    if (salespersonId !== undefined) updatePayload.salesperson_user_id = salespersonId;
 
     // Fields that live inside providerRawResponse.submissionSnapshot.ownership
     // (bank branch, account type, owner residential address) or inside
@@ -703,6 +738,7 @@ export async function PATCH(req: NextRequest, context: RouteContext) {
       for (const [key, value] of Object.entries(salesManagerSnapshotKeys)) {
         if (value !== undefined) existingSalesManager[key] = value;
       }
+      if (salespersonId !== undefined) existingSalesManager.userId = salespersonId;
 
       // Keep the dealer signer in lock-step with the edited primary contact so
       // Section 3 and the Digio agreement always reflect the latest name/email.

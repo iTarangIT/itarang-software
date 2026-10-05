@@ -3,13 +3,14 @@ import { deals, leads } from '@/lib/db/schema';
 import { desc, eq } from 'drizzle-orm';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
-import { requireAuth } from '@/lib/auth-utils';
+import { requireRole } from '@/lib/auth-utils';
+import { DEALS_PAGE_ROLES } from '@/lib/auth/staffPageRoles';
 import { FileText, ChevronRight } from 'lucide-react';
 
 export const dynamic = 'force-dynamic';
 
 export default async function DealsPage() {
-    const user = await requireAuth();
+    const user = await requireRole([...DEALS_PAGE_ROLES]);
 
     // Fetch deals with lead info
     const allDeals = await db.select({
