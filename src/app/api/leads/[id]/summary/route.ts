@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { dealerLeads } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
-import { LEADS_PAGE_ROLES } from "@/lib/leads/access";
+import { LEADS_PAGE_ROLES, readsOwnLeadsOnly } from "@/lib/leads/access";
+import { leadOwnedBy } from "@/lib/ai-dialer/campaignAccess";
 import { guardApi } from "@/lib/auth/apiGuard";
 
 export async function POST(req: NextRequest, { params }: any) {
@@ -14,6 +15,12 @@ export async function POST(req: NextRequest, { params }: any) {
 
   if (!summary || !id) {
     return NextResponse.json({ success: false });
+  }
+
+  // ID 118 item 5: a rep / ASM writes only the summary of a lead they own;
+  // anything else is "no such lead", same as the read routes (ID 45).
+  if (readsOwnLeadsOnly(authGate.user.role) && !(await leadOwnedBy(id, authGate.user.id))) {
+    return NextResponse.json({ success: false, error: { message: "Lead not found" } }, { status: 404 });
   }
 
   await db

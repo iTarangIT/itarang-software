@@ -18,24 +18,13 @@ import {
   withErrorHandler,
 } from "@/lib/api-utils";
 import { requireRole } from "@/lib/auth-utils";
-
-const ALLOWED_ROLES = [
-  "admin",
-  "ceo",
-  "business_head",
-  "sales_head",
-  "sales_manager",
-  // The campaign detail view is now mounted on the inside-sales and ASM
-  // dashboards too, and it renders Call next unconditionally. Without these two
-  // the button is visible to the people who actually work these leads and 403s
-  // when they press it, which is worse than not offering it at all.
-  "inside_sales_rep",
-  "asm",
-] as const;
+import { CAMPAIGN_ACTION_ROLES } from "@/lib/leads/access";
 
 export const POST = withErrorHandler(
   async (_req: Request, ctx: { params: Promise<{ id: string }> }) => {
-    await requireRole([...ALLOWED_ROLES]);
+    // asm / inside_sales_rep see the campaign read-only; the detail view hides
+    // Call next for them (canRunCampaignActions).
+    await requireRole([...CAMPAIGN_ACTION_ROLES]);
 
     const { id: campaignId } = await ctx.params;
     if (!campaignId) return errorResponse("Campaign id required", 400);

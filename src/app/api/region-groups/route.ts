@@ -14,7 +14,7 @@ import { db } from "@/lib/db";
 import { regionGroups } from "@/lib/db/schema";
 import { desc } from "drizzle-orm";
 import { nanoid } from "nanoid";
-import { LEADS_PAGE_ROLES } from "@/lib/leads/access";
+import { LEADS_BULK_ROLES, LEADS_PAGE_ROLES } from "@/lib/leads/access";
 import { guardApi } from "@/lib/auth/apiGuard";
 
 type RegionEntry = { state: string; cities?: string[] };
@@ -57,8 +57,9 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  // ID 118: signed in, with a role that reaches this screen.
-  const authGate = await guardApi([...LEADS_PAGE_ROLES]);
+  // ID 118 item 5: reading groups is any leads-page role; changing the
+  // org-wide set is the managers' bulk list (same as the Manage groups button).
+  const authGate = await guardApi([...LEADS_BULK_ROLES]);
   if (!authGate.ok) return authGate.response;
   try {
     const body = await req.json();
@@ -66,7 +67,8 @@ export async function POST(req: NextRequest) {
     const description =
       typeof body?.description === "string" ? body.description.trim() : null;
     const regions = sanitizeRegions(body?.regions);
-    const createdBy = typeof body?.created_by === "string" ? body.created_by : null;
+    // Who created it comes from the session, never from the body.
+    const createdBy = authGate.user.id;
 
     if (!name) {
       return NextResponse.json(

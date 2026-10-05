@@ -22,7 +22,8 @@ import {
 } from "@/lib/queue/campaignTracker";
 import { dialerSession } from "@/lib/queue/dialerSession";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
-import { requireAuth } from "@/lib/auth-utils";
+import { requireRole } from "@/lib/auth-utils";
+import { CAMPAIGN_ACTION_ROLES } from "@/lib/leads/access";
 import { eq } from "drizzle-orm";
 
 export const POST = withErrorHandler(
@@ -30,14 +31,9 @@ export const POST = withErrorHandler(
     const { id: campaignId } = await ctx.params;
     if (!campaignId) return errorResponse("Campaign id required", 400);
 
-    let stoppedBy: string | null = null;
-    try {
-      const user = await requireAuth();
-      stoppedBy = (user as any)?.id ?? null;
-    } catch {
-      // Allow unauth in dev / system contexts — same posture as /start.
-      stoppedBy = null;
-    }
+    // asm / inside_sales_rep may view a campaign but not drive it.
+    const user = await requireRole([...CAMPAIGN_ACTION_ROLES]);
+    const stoppedBy: string | null = user?.id ?? null;
 
     const existing = await db
       .select({

@@ -16,7 +16,8 @@
  *      account's GSTIN (the lead's own, or its onboarding application's — the
  *      R-11 rule, GSTIN_KEY), else on the account's contact phone (last ten
  *      digits);
- *   3. a finance application from this dealer → finance.
+ *   3. a finance application from this dealer → battery_sale ("finance" was
+ *      retired as a business type in E-327 — a financed sale is a battery sale).
  * Never overwrites a value a person set. Re-run = no-op.
  *
  * AUDIT. The E-304 trigger logs every business_type change to
@@ -86,7 +87,7 @@ async function main() {
         else if (r.buyback_account) plan.push({ id: r.id, type: "buyback", why: "buyback request by its dealer account (dealer code)" });
         else if (r.buyback_gstin) plan.push({ id: r.id, type: "buyback", why: "buyback request by its dealer account (GSTIN)" });
         else if (r.buyback_phone) plan.push({ id: r.id, type: "buyback", why: "buyback request by its dealer account (phone)" });
-        else if (r.finance) plan.push({ id: r.id, type: "finance", why: "finance-enabled onboarding" });
+        else if (r.finance) plan.push({ id: r.id, type: "battery_sale", why: "finance-enabled onboarding" });
     }
     const byType = new Map<string, number>();
     for (const p of plan) byType.set(`${p.type} (${p.why})`, (byType.get(`${p.type} (${p.why})`) ?? 0) + 1);

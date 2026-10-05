@@ -83,7 +83,8 @@ export function RegionSelector({
 }: {
   value: RegionSelection;
   onChange: (next: RegionSelection) => void;
-  onManageGroups: () => void;
+  /** Absent → no "Manage groups" button (role may not edit groups, ID 118). */
+  onManageGroups?: () => void;
   // Fires when the user switches between the region tabs (saved/custom) and
   // the Lists tab, so the modal can hide its region-only segment + footer.
   onModeChange?: (mode: "region" | "list") => void;
@@ -398,10 +399,12 @@ export function RegionSelector({
                 ? "No regions selected — all callable leads will be dialed."
                 : `${selectionLabel(value, groups)} selected`}
             </span>
-            <button type="button" onClick={onManageGroups}>
-              <Pencil className="w-3 h-3" />
-              Manage groups
-            </button>
+            {onManageGroups && (
+              <button type="button" onClick={onManageGroups}>
+                <Pencil className="w-3 h-3" />
+                Manage groups
+              </button>
+            )}
           </div>
         </>
       )}

@@ -17,7 +17,8 @@ import { dialerCampaigns, dialerCampaignLeads } from "@/lib/db/schema";
 import { startDraftCampaign } from "@/lib/queue/startCampaign";
 import type { DialerProvider } from "@/lib/queue/dialerSession";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
-import { requireAuth } from "@/lib/auth-utils";
+import { requireRole } from "@/lib/auth-utils";
+import { CAMPAIGN_ACTION_ROLES } from "@/lib/leads/access";
 import { and, eq, isNotNull, or, sql } from "drizzle-orm";
 
 export const POST = withErrorHandler(
@@ -25,12 +26,8 @@ export const POST = withErrorHandler(
     const { id: campaignId } = await ctx.params;
     if (!campaignId) return errorResponse("Campaign id required", 400);
 
-    try {
-      // Auth is only for parity with stop/start; resume doesn't need the id.
-      await requireAuth();
-    } catch {
-      // Allow unauth in dev / system contexts — same posture as /stop.
-    }
+    // asm / inside_sales_rep may view a campaign but not drive it.
+    await requireRole([...CAMPAIGN_ACTION_ROLES]);
 
     const existing = await db
       .select({

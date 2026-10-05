@@ -7,7 +7,15 @@
 //   - header missing/wrong → 401 (legitimate auth failure)
 //   - header matches → null (proceed)
 
+import { timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
+
+// Constant-time: a plain !== leaks how many leading characters matched.
+function safeEqual(a: string, b: string): boolean {
+  const x = Buffer.from(a, "utf8");
+  const y = Buffer.from(b, "utf8");
+  return x.length === y.length && timingSafeEqual(x, y);
+}
 
 export function checkCronAuth(req: Request): NextResponse | null {
   const secret = process.env.CRON_SECRET;
@@ -22,7 +30,7 @@ export function checkCronAuth(req: Request): NextResponse | null {
     );
   }
   const authHeader = req.headers.get("authorization");
-  if (authHeader !== `Bearer ${secret}`) {
+  if (!safeEqual(authHeader ?? "", `Bearer ${secret}`)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   return null;
