@@ -9,6 +9,8 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { useAuth } from "@/components/auth/AuthProvider";
+import { canExportCampaign, canRunCampaignActions } from "@/lib/leads/access";
 import {
   ArrowLeft,
   Download,
@@ -393,6 +395,12 @@ export function CampaignDetailView({
   campaignId: string;
   onBack?: () => void;
 }) {
+  // asm / inside_sales_rep get this screen read-only: no calling, no export.
+  // Hidden until the profile loads so the buttons never flash. The API routes
+  // enforce the same role sets (CAMPAIGN_ACTION_ROLES / CAMPAIGN_EXPORT_ROLES).
+  const { user } = useAuth();
+  const canAct = canRunCampaignActions(user?.role);
+  const canExport = canExportCampaign(user?.role);
   const [bucket, setBucket] = useState<Bucket>("all");
   const [page, setPage] = useState(1);
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null);
@@ -690,7 +698,7 @@ export function CampaignDetailView({
           </Link>
         )}
         <div className="flex items-center gap-2">
-          {isRunning && (
+          {canAct && isRunning && (
             <button
               type="button"
               onClick={() => advanceMutation.mutate()}
@@ -706,7 +714,7 @@ export function CampaignDetailView({
               Call next
             </button>
           )}
-          {isRunning && (
+          {canAct && isRunning && (
             <button
               type="button"
               onClick={async () => {
@@ -731,7 +739,7 @@ export function CampaignDetailView({
               Force stop
             </button>
           )}
-          {canResume && (
+          {canAct && canResume && (
             <button
               type="button"
               onClick={() => {
@@ -757,7 +765,7 @@ export function CampaignDetailView({
               Resume calling ({resumableLeads})
             </button>
           )}
-          {!isRunning && retryCandidates > 0 && (
+          {canAct && !isRunning && retryCandidates > 0 && (
             <button
               type="button"
               onClick={async () => {
@@ -785,13 +793,15 @@ export function CampaignDetailView({
               Retry unreached ({retryCandidates})
             </button>
           )}
-          <a
-            href={`/api/ai-dialer/campaigns/${campaignId}/export.xlsx`}
-            download
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-emerald-600 hover:bg-emerald-700 text-white"
-          >
-            <Download className="w-4 h-4" /> Export Excel
-          </a>
+          {canExport && (
+            <a
+              href={`/api/ai-dialer/campaigns/${campaignId}/export.xlsx`}
+              download
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-emerald-600 hover:bg-emerald-700 text-white"
+            >
+              <Download className="w-4 h-4" /> Export Excel
+            </a>
+          )}
         </div>
       </div>
 

@@ -1,23 +1,25 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
 import { db } from "@/lib/db";
-import { deployedAssets, users } from "@/lib/db/schema";
-import { eq, and, or, ilike, desc, sql, count } from "drizzle-orm";
+import { deployedAssets } from "@/lib/db/schema";
+import { guardApi } from "@/lib/auth/apiGuard";
+import { deployedAssetScope } from "@/lib/dealer/deployedAssetsAccess";
+import { eq, and, or, ilike, desc, sql, count, type SQL } from "drizzle-orm";
 
 export async function GET(req: NextRequest) {
   try {
-    const supabase = await createClient();
-    const {
-      data: { user: authUser },
-      error: authError,
-    } = await supabase.auth.getUser();
-
-    if (authError || !authUser?.email) {
+    // ID 118: signed in; a dealer sees only its own assets (rows, total AND
+    // KPIs), outside parties none.
+    const authGate = await guardApi();
+    if (!authGate.ok) return authGate.response;
+    const scope = deployedAssetScope(authGate.user);
+    if (scope.kind === "deny") {
       return NextResponse.json(
-        { success: false, message: "Unauthorized" },
-        { status: 401 }
+        { success: false, message: "Forbidden: Insufficient permissions" },
+        { status: 403 }
       );
     }
+    const scopeCondition =
+      scope.kind === "dealer" ? eq(deployedAssets.dealer_id, scope.dealerId) : undefined;
 
     const { searchParams } = new URL(req.url);
     const status = searchParams.get("status") || "all";
@@ -28,7 +30,7 @@ export async function GET(req: NextRequest) {
     const limit = parseInt(searchParams.get("limit") || "20", 10);
     const offset = (page - 1) * limit;
 
-    const conditions = [];
+    const conditions: (SQL | undefined)[] = scopeCondition ? [scopeCondition] : [];
 
     if (status !== "all") {
       conditions.push(eq(deployedAssets.status, status));
@@ -82,7 +84,8 @@ export async function GET(req: NextRequest) {
         leaseCount: sql<number>`count(*) filter (where ${deployedAssets.payment_type} = 'lease')`,
         upfrontCount: sql<number>`count(*) filter (where ${deployedAssets.payment_type} = 'upfront')`,
       })
-      .from(deployedAssets);
+      .from(deployedAssets)
+      .where(scopeCondition);
 
     return NextResponse.json({
       success: true,

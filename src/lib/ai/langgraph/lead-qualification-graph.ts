@@ -7,6 +7,7 @@ import { triggerCall } from '@/lib/ai/bolna-client';
 import { getAICallerEnabled } from '@/lib/ai/settings';
 import { analyzeTranscript } from '@/lib/ai/analysis';
 import { INTENT_THRESHOLDS, leadStatusFor, bandToStatus } from '@/lib/ai/scoring';
+import { bolnaCallbackUrl } from '@/lib/security/webhookAuth';
 
 // ─── State Definition ────────────────────────────────────────────────────────
 
@@ -287,7 +288,9 @@ async function placeCallWithBolna(state: State): Promise<Partial<State>> {
     if (!phone) return { callResult: 'no_phone_number' };
 
     const callbackUrl = process.env.NEXT_PUBLIC_APP_URL
-        ? `${process.env.NEXT_PUBLIC_APP_URL}/api/ceo/ai-dialer/webhook/bolna`
+        // ID 118: carries the derived BOLNA_WEBHOOK_SECRET token — Bolna sends no
+        // Authorization header to a per-call callback_url.
+        ? bolnaCallbackUrl(`${process.env.NEXT_PUBLIC_APP_URL}/api/ceo/ai-dialer/webhook/bolna`)
         : undefined;
 
     const result = await triggerCall({

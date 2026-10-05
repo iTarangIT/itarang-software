@@ -19,7 +19,6 @@ import { z } from "zod";
 export const BUSINESS_TYPES = [
     "battery_sale",
     "buyback",
-    "finance",
     "scrap",
     "other",
 ] as const;
@@ -29,7 +28,6 @@ export type BusinessType = (typeof BUSINESS_TYPES)[number];
 export const BUSINESS_TYPE_LABELS: Record<BusinessType, string> = {
     battery_sale: "Battery Sale",
     buyback: "Buyback",
-    finance: "Finance",
     scrap: "Scrap",
     other: "Other",
 };
@@ -50,7 +48,6 @@ export const BUSINESS_TYPE_OPTIONS: { value: BusinessType; label: string }[] =
 export const BUSINESS_TYPE_TONE: Record<BusinessType, string> = {
     battery_sale: "border-emerald-200 bg-emerald-50 text-emerald-700",
     buyback: "border-violet-200 bg-violet-50 text-violet-700",
-    finance: "border-sky-200 bg-sky-50 text-sky-700",
     scrap: "border-amber-200 bg-amber-50 text-amber-700",
     other: "border-gray-200 bg-gray-50 text-gray-700",
 };
@@ -104,8 +101,12 @@ export function normalizeBusinessType(input: unknown): BusinessType | null {
         sales: "battery_sale",
         buy_back: "buyback",
         buybacks: "buyback",
-        financing: "finance",
-        loan: "finance",
+        // "Finance" was retired as a business type (E-327 folded every stored
+        // 'finance' row into battery_sale), so old sheets and habits that
+        // still say it land on Battery Sale instead of being rejected.
+        finance: "battery_sale",
+        financing: "battery_sale",
+        loan: "battery_sale",
         scrap_sale: "scrap",
         scrapping: "scrap",
         others: "other",

@@ -9,7 +9,7 @@ import { guardBolnaCall } from '@/lib/security/webhookAuth';
 // Webhook endpoint — no session (Bolna callback). ID 118: the caller is proven
 // by the same bearer as /api/bolna/webhook once BOLNA_WEBHOOK_SECRET is set.
 export async function POST(req: NextRequest) {
-    const denied = guardBolnaCall(req.headers, '/api/ceo/ai-dialer/webhook/bolna', 'BOLNA_WEBHOOK_SECRET');
+    const denied = guardBolnaCall(req.headers, '/api/ceo/ai-dialer/webhook/bolna', 'BOLNA_WEBHOOK_SECRET', req.url);
     if (denied) return denied;
 
     try {

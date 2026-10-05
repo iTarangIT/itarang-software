@@ -1982,6 +1982,7 @@ export default function LeadsUnifiedPage() {
         onClose={() => setDialerModalOpen(false)}
         onConfirm={confirmDialerStart}
         onStartListCampaign={startListCampaign}
+        canManageGroups={caps.canBulkAct}
       />
 
       {/* HEADER */}

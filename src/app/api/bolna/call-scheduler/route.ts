@@ -5,6 +5,7 @@ import { quotaCircuit } from "@/lib/queue/connection";
 import { log } from "@/lib/log";
 import { not, inArray, eq, isNotNull, isNull, and, or, ne } from "drizzle-orm";
 import { NextResponse } from "next/server";
+import { checkCronAuth } from "@/lib/cron-auth";
 import { AI_FOLLOWUP_LOOP_RETIRES_CONNECTED } from "@/lib/ai-dialer/exclusionFilter";
 import { retireAiConnectedFollowUps } from "@/lib/ai-dialer/aiConnection";
 
@@ -15,10 +16,9 @@ const MAX_CONSECUTIVE_5XX = 3;
 
 export async function GET(req: Request) {
   try {
-    const authHeader = req.headers.get("authorization");
-    if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+    // ID 130: fails closed — an unset CRON_SECRET is a 500, never an open route.
+    const cronDenied = checkCronAuth(req);
+    if (cronDenied) return cronDenied;
 
     const now = new Date();
 

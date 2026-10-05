@@ -13,10 +13,14 @@ import { inboundCallbackAllowed, signBody } from "@/lib/nbfc/handoff";
 
 import {
   bearerProof,
+  bolnaCallbackToken,
+  bolnaCallbackUrl,
+  callbackTokenProof,
   checksumProof,
   guardBolnaCall,
   guardDigioWebhook,
   hmacSha256Hex,
+  leegalityMacProof,
   webhookAuthStrict,
   webhookVerdict,
 } from "../webhookAuth";
@@ -184,5 +188,67 @@ describe("guardBolnaCall", () => {
     expect(
       guardBolnaCall(new Headers({ authorization: `Bearer ${SECRET}` }), "/test/bolna-hook", "BOLNA_WEBHOOK_SECRET"),
     ).toBeNull();
+  });
+});
+
+describe("Bolna per-call callback token (ID 118 item 8)", () => {
+  const HOOK = "https://crm.example/api/ceo/ai-dialer/webhook/bolna";
+
+  it("never puts the raw secret in the URL, and is stable per secret", () => {
+    const url = bolnaCallbackUrl(HOOK, SECRET);
+    expect(url).not.toContain(SECRET);
+    expect(new URL(url).searchParams.get("cb")).toBe(bolnaCallbackToken(SECRET));
+    expect(bolnaCallbackToken(SECRET)).not.toBe(bolnaCallbackToken("other"));
+  });
+
+  it("leaves the URL alone when no secret is configured", () => {
+    expect(bolnaCallbackUrl(HOOK, undefined)).toBe(HOOK);
+    expect(bolnaCallbackUrl(HOOK, "")).toBe(HOOK);
+  });
+
+  it("proof: valid / invalid / absent", () => {
+    expect(callbackTokenProof(SECRET, bolnaCallbackUrl(HOOK, SECRET))).toBe("valid");
+    expect(callbackTokenProof(SECRET, bolnaCallbackUrl(HOOK, "rotated"))).toBe("invalid");
+    expect(callbackTokenProof(SECRET, `${HOOK}?cb=nope`)).toBe("invalid");
+    expect(callbackTokenProof(SECRET, HOOK)).toBe("absent");
+    expect(callbackTokenProof(SECRET, undefined)).toBe("absent");
+    expect(callbackTokenProof(undefined, bolnaCallbackUrl(HOOK, SECRET))).toBe("invalid");
+  });
+
+  it("guardBolnaCall admits the token OR the bearer once the secret is set", () => {
+    vi.stubEnv("BOLNA_WEBHOOK_SECRET", SECRET);
+    vi.stubEnv("WEBHOOK_AUTH_STRICT", "");
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const none = new Headers();
+    expect(guardBolnaCall(none, "/t", "BOLNA_WEBHOOK_SECRET", bolnaCallbackUrl(HOOK, SECRET))).toBeNull();
+    expect(guardBolnaCall(none, "/t", "BOLNA_WEBHOOK_SECRET", `${HOOK}?cb=forged`)?.status).toBe(401);
+    expect(guardBolnaCall(none, "/t", "BOLNA_WEBHOOK_SECRET", HOOK)?.status).toBe(401);
+    // A valid bearer is enough even if the query carries junk.
+    expect(
+      guardBolnaCall(new Headers({ authorization: `Bearer ${SECRET}` }), "/t", "BOLNA_WEBHOOK_SECRET", `${HOOK}?cb=junk`),
+    ).toBeNull();
+  });
+});
+
+describe("leegalityMacProof (ID 130)", () => {
+  const SALT = "salt_abc";
+  const DOC = "01KC8ZWZ7ZWNAFTZRYMYMWV84B";
+  const mac = (salt: string) => createHmac("sha1", salt).update(DOC, "utf8").digest("hex");
+  const body = (m?: string) => JSON.stringify({ documentId: DOC, documentStatus: "Completed", ...(m ? { mac: m } : {}) });
+
+  it("accepts HMAC-SHA1(documentId, privateSalt), any case", () => {
+    expect(leegalityMacProof(SALT, body(mac(SALT)))).toBe("valid");
+    expect(leegalityMacProof(SALT, body(mac(SALT).toUpperCase()))).toBe("valid");
+  });
+
+  it("refuses a wrong mac, a missing salt, or a mac with no documentId", () => {
+    expect(leegalityMacProof(SALT, body(mac("other")))).toBe("invalid");
+    expect(leegalityMacProof(undefined, body(mac(SALT)))).toBe("invalid");
+    expect(leegalityMacProof(SALT, JSON.stringify({ mac: mac(SALT) }))).toBe("invalid");
+  });
+
+  it("no mac or unparsable body is absent", () => {
+    expect(leegalityMacProof(SALT, body())).toBe("absent");
+    expect(leegalityMacProof(SALT, "not json")).toBe("absent");
   });
 });
