@@ -72,10 +72,12 @@ import {
   buildBlockA,
 } from "../salesDailyBlockA";
 import {
+  BLOCK_B_COLUMNS,
+  BLOCK_B_PCT_COLUMN,
+  BLOCK_C_COLUMNS,
+  BLOCK_C_PCT_COLUMN,
   BLOCK_D_COLUMNS,
   NO_OWNER_KEY,
-  REP_BLOCK_COLUMNS,
-  REP_BLOCK_PCT_COLUMN,
   blockDRows,
   buildRepBlocks,
   loadAwaitingFieldVisit,
@@ -100,9 +102,11 @@ import type {
 //   A Company  22 rows × Yesterday · Last 7 days · MTD · MTD target · % of
 //              target · same period last month · Δ (salesDailyBlockA.ts).
 //   Right now  sales-ready leads with no owner and the oldest wait.
-//   B Field team (ASM)          per ASM, Block A's field metrics: Yesterday,
-//                               MTD, MTD target, % of target (salesDailyBlocks.ts).
-//   C Inside sales (ISR / CC)   per ISR, Block A's calling metrics, same columns.
+//   B Field team (ASM)          one row per ASM, Block A's field metrics as
+//                               columns, Yesterday + MTD (29 Sep: no Last 7 days
+//                               here), one % of target column (salesDailyBlocks.ts).
+//   C Inside sales (ISR / CC)   one row per ISR, Block A's calling metrics plus
+//                               Connected / Connect % / Engaged MTD, same shape.
 //   D Position this morning     open Hot / Warm / Cold per owner, awaiting
 //                               field visit, and sales-ready leads with no owner.
 //   E Today and tomorrow        scheduled visits and follow-ups per owner.
@@ -111,8 +115,8 @@ const SECTIONS: DigestSection[] = [
   { key: "summary", label: "Headline", hint: "One line: yesterday's outcome and what is behind target.", group: "activity" },
   { key: "block_a", label: "A · Company", hint: "22 metrics: yesterday, last 7 days, MTD, MTD target, % of target, same period last month, Δ.", group: "activity" },
   { key: "right_now", label: "Right now", hint: "Sales-ready leads with no owner, and the oldest wait.", group: "backlog" },
-  { key: "block_b", label: "B · Field team (ASM)", hint: "Per ASM: visits, hot received, quotes, approvals, Won, converted, revenue — yesterday, MTD, MTD target, % of target.", group: "activity" },
-  { key: "block_c", label: "C · Inside sales (ISR / CC)", hint: "Per ISR: calls, dealers called, engaged calls, hot handed to field, quotes, Won, converted — yesterday, MTD, MTD target, % of target.", group: "activity" },
+  { key: "block_b", label: "B · Field team (ASM)", hint: "One row per ASM: dealers visited, new dealers visited, hot received, quotes created (yesterday and MTD); quotes delivered, dealer approved, Won, converted, revenue (MTD); % of dealer-visit target.", group: "activity" },
+  { key: "block_c", label: "C · Inside sales (ISR / CC)", hint: "One row per ISR: calls, dealers called (yesterday and MTD); connected, connect %, engaged, hot to field, quotes created, Won, converted (MTD); % of calls target.", group: "activity" },
   { key: "block_d", label: "D · Position this morning", hint: "Open Hot / Warm / Cold per owner, Hot rated 8+ days ago, awaiting field visit, and sales-ready leads with no owner — as of the send time.", group: "backlog" },
   { key: "block_e", label: "E · Today and tomorrow", hint: "Scheduled visits and follow-ups due, per owner.", group: "backlog" },
   { key: "block_f", label: "F · Oldest overdue", hint: "The 10 oldest overdue follow-ups and visits, by name.", group: "backlog" },
@@ -350,23 +354,26 @@ async function collect(
           {
             key: "block_b",
             title: "B · Field team (ASM)",
-            columns: REP_BLOCK_COLUMNS,
-            rows: repBlockTableRows(buildRepBlocks("asm", yesterday, mtd, extras, blockA.userTargets)),
+            columns: BLOCK_B_COLUMNS,
+            rows: repBlockTableRows("asm", buildRepBlocks("asm", yesterday, mtd, extras, blockA.userTargets)),
             textColumns: 1,
-            groupHeaders: true,
-            toneColumns: [REP_BLOCK_PCT_COLUMN],
-            note: "One block per ASM. MTD target and % of target only where the ASM has a target for that metric.",
+            toneColumns: [BLOCK_B_PCT_COLUMN],
+            note:
+              "One row per ASM. % of target = dealers visited MTD against the ASM's MTD dealer-visit target (“—” = no target set). " +
+              "Total = the ASMs listed; Block A also counts work credited to nobody.",
             empty: "No ASMs on the Sales dashboard this month.",
           },
           {
             key: "block_c",
             title: "C · Inside sales (ISR / CC)",
-            columns: REP_BLOCK_COLUMNS,
-            rows: repBlockTableRows(buildRepBlocks("inside_sales_rep", yesterday, mtd, extras, blockA.userTargets)),
+            columns: BLOCK_C_COLUMNS,
+            rows: repBlockTableRows("inside_sales_rep", buildRepBlocks("inside_sales_rep", yesterday, mtd, extras, blockA.userTargets)),
             textColumns: 1,
-            groupHeaders: true,
-            toneColumns: [REP_BLOCK_PCT_COLUMN],
-            note: "One block per ISR / CC. MTD target and % of target only where the rep has a target for that metric.",
+            toneColumns: [BLOCK_C_PCT_COLUMN],
+            note:
+              "One row per ISR / CC. Connected = calls that connected, each counted once. Engaged = connected and long enough by measured call length; " +
+              "“—” = not measured yet (NeoDove sends no call length). Hot to field = leads handed to an ASM that were Hot at that moment. " +
+              "% of target = calls MTD against the rep's MTD calls target (“—” = no target set).",
             empty: "No inside-sales reps on the Sales dashboard this month.",
           },
           {

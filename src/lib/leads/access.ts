@@ -112,6 +112,20 @@ export function exportsOwnLeadsOnly(role: string | null | undefined): boolean {
 }
 
 /**
+ * Roles that may READ only the leads they own (dealer_leads.current_owner_id)
+ * — lead detail / edit pages, call logs, recordings, AI summaries (tracker ID
+ * 45). Anything else is a 404 "Lead not found", same as no such lead.
+ *
+ * partner is deliberately NOT here (unlike OWN_LEADS_EXPORT_ROLES): its read
+ * scope is open business question Q3, so it keeps today's access until decided.
+ */
+export const OWN_LEADS_READ_ROLES = ["asm", "inside_sales_rep"] as const;
+
+export function readsOwnLeadsOnly(role: string | null | undefined): boolean {
+  return (OWN_LEADS_READ_ROLES as readonly string[]).includes((role ?? "").toLowerCase());
+}
+
+/**
  * May this user download THIS lead's history workbook? The role must be in
  * LEAD_HISTORY_EXPORT_ROLES, and a rep / ASM / partner must also be the lead's
  * current owner (ID 58). One rule for the export route and for both screens

@@ -8,6 +8,7 @@ import {
   LEAD_TRACKING_ROLES,
   canExportLeadHistory,
   LEAD_WORKSPACE_ROLES,
+  readsOwnLeadsOnly,
 } from "@/lib/leads/access";
 import { StatusChip } from "@/app/(dashboard)/inside-sales/_components/StatusChip";
 import type { LeadStatus } from "@/lib/lifecycle/transitions";
@@ -44,7 +45,9 @@ export default async function LeadDetailPage({ params }: any) {
     where: (l, { eq }) => eq(l.id, id),
   });
 
-  if (!lead) {
+  // ID 45: a rep (asm, inside_sales_rep) reads only leads they own — someone
+  // else's lead gets the same answer as no lead at all.
+  if (!lead || (readsOwnLeadsOnly(user.role) && lead.current_owner_id !== user.id)) {
     return (
       <div className="p-10 text-center bg-white rounded-xl border m-8 text-gray-500">
         Lead not found

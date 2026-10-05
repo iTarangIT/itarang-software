@@ -474,9 +474,10 @@ export async function POST(req: NextRequest, context: RouteContext) {
     }
 
     // ID 84.2: the lead's agreement milestone, once the completion has
-    // committed. Best-effort — never throws.
+    // committed. A signed copy uploaded by hand reads "Manual agreement on
+    // file" (ID 84.1). Best-effort — never throws.
     if (!alreadyCompleted) {
-      await markAgreementOutcome({ applicationId: dealerId }, "completed");
+      await markAgreementOutcome({ applicationId: dealerId }, "manual_on_file");
     }
 
     return NextResponse.json({

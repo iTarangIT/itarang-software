@@ -30,7 +30,8 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { requireRole } from "@/lib/auth-utils";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
-import { INTENT_REVIEW_ROLES } from "@/lib/leads/access";
+import { INTENT_REVIEW_ROLES, readsOwnLeadsOnly } from "@/lib/leads/access";
+import { leadOwnedBy } from "@/lib/ai-dialer/campaignAccess";
 import { filesProxyPath, putObjectStream } from "@/lib/storage/s3";
 import {
   MAX_RECORDING_BYTES,
@@ -58,6 +59,10 @@ export const POST = withErrorHandler(
   async (req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
     const user = await requireRole([...INTENT_REVIEW_ROLES]);
     const { id: leadId } = await ctx.params;
+    // ID 45: a rep attaches audio only to leads they own; anything else is "no such lead".
+    if (readsOwnLeadsOnly(user.role) && !(await leadOwnedBy(leadId, user.id))) {
+      return errorResponse("Lead not found", 404);
+    }
 
     // Refuse an oversized body BEFORE parsing it.
     //
@@ -182,8 +187,12 @@ function iso(v: string | Date | null): string | null {
 
 export const GET = withErrorHandler(
   async (req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
-    await requireRole([...INTENT_REVIEW_ROLES]);
+    const user = await requireRole([...INTENT_REVIEW_ROLES]);
     const { id: leadId } = await ctx.params;
+    // ID 45: a rep reads only leads they own; anything else is "no such lead".
+    if (readsOwnLeadsOnly(user.role) && !(await leadOwnedBy(leadId, user.id))) {
+      return errorResponse("Lead not found", 404);
+    }
 
     // The transcript is large and the panel only renders it for the recording
     // the reviewer opened, so it is opt-in — the list stays small while a job

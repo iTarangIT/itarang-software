@@ -107,20 +107,33 @@ async function main() {
              WHERE c.event_type IN ('quote_issue', 'quote_revision')
                AND c.withdrawn_at IS NULL
              ORDER BY c.dealer_lead_id, c.created_at DESC
+        ),
+        -- ID 75.2: only an APPROVED version can be sent (quoteSendGate.ts), so
+        -- "delivered" is checked against the latest approved, not-withdrawn
+        -- version — a pending or CEO-rejected revision on top (no number, no
+        -- PDF yet) must not drop a lead whose approved quote really went out.
+        sendable AS (
+            SELECT DISTINCT ON (c.dealer_lead_id)
+                   c.dealer_lead_id, c.quote_number, c.quote_pdf_url
+              FROM dealer_lead_commercials c
+             WHERE c.event_type IN ('quote_issue', 'quote_revision')
+               AND c.withdrawn_at IS NULL
+               AND c.approval_status = 'approved'
+             ORDER BY c.dealer_lead_id, c.created_at DESC
         )
         SELECT dl.id, COALESCE(dl.dealer_name, dl.shop_name) AS dealer_name, dl.lead_status,
                dl.pre_transfer_status,
                u.id::text AS owner_id,
                u.name AS owner_name,
                (lq.dealer_lead_id IS NOT NULL) AS has_quote,
-               (lq.dealer_lead_id IS NOT NULL AND EXISTS (
+               (sq.dealer_lead_id IS NOT NULL AND EXISTS (
                     SELECT 1 FROM lead_touchpoints t
                      WHERE t.dealer_lead_id = dl.id
                        AND t.touchpoint_type = 'quote_dispatched'
-                       AND ((lq.quote_number IS NOT NULL
-                             AND t.remarks LIKE 'Quotation ' || lq.quote_number || ' sent%')
-                            OR (lq.quote_pdf_url IS NOT NULL
-                             AND t.attachments @> jsonb_build_array(jsonb_build_object('url', lq.quote_pdf_url))))
+                       AND ((sq.quote_number IS NOT NULL
+                             AND t.remarks LIKE 'Quotation ' || sq.quote_number || ' sent%')
+                            OR (sq.quote_pdf_url IS NOT NULL
+                             AND t.attachments @> jsonb_build_array(jsonb_build_object('url', sq.quote_pdf_url))))
                )) AS delivered,
                EXISTS (SELECT 1 FROM dealer_lead_commercials c
                         WHERE c.dealer_lead_id = dl.id AND c.event_type IN ('quote_issue', 'quote_revision')
@@ -128,6 +141,7 @@ async function main() {
                (lq.dealer_lead_id IS NOT NULL AND lq.created_at < (SELECT at FROM cutoff)) AS legacy
           FROM dealer_leads dl
           LEFT JOIN live lq ON lq.dealer_lead_id = dl.id
+          LEFT JOIN sendable sq ON sq.dealer_lead_id = dl.id
           LEFT JOIN users u ON u.id::text = dl.current_owner_id
          WHERE dl.is_active IS NOT FALSE
            AND (dl.lead_status IN ('Commercials_Explained', 'Awaiting_Customer_Decision', 'Commercials_Finalised')

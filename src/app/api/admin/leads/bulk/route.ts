@@ -15,7 +15,7 @@ import {
     successResponse,
     withErrorHandler,
 } from "@/lib/api-utils";
-import { writeTouchpoint } from "@/lib/touchpoints/write";
+import { StatusGuardError, writeTouchpoint } from "@/lib/touchpoints/write";
 import {
     CompetitorRequiredError,
     HighImpactUnconfirmedError,
@@ -280,18 +280,30 @@ export const POST = withErrorHandler(async (req: Request) => {
         }
         for (const lead of leads) {
             const status = lead.lead_status as LeadStatus | null;
-            if (!status || !isOpen(status)) {
+            // ID 115.1: Won is open but a Won lead is marked Lost only through the
+            // onboarding drop-out review — skip it rather than let the S3 guard
+            // abort the batch partway (each lead commits on its own).
+            if (!status || !isOpen(status) || status === "Won") {
                 skipped++;
                 continue;
             }
-            await markLeadLost({
-                leadId: lead.id,
-                actor: { id: user.id, role: user.role },
-                ...lost,
-                notes: body.reason ?? "Bulk mark lost (admin).",
-                closingRole: "admin",
-            });
-            affected++;
+            try {
+                await markLeadLost({
+                    leadId: lead.id,
+                    actor: { id: user.id, role: user.role },
+                    ...lost,
+                    notes: body.reason ?? "Bulk mark lost (admin).",
+                    closingRole: "admin",
+                });
+                affected++;
+            } catch (err) {
+                // The status moved under us (another writer); count it, keep going.
+                if (err instanceof StatusGuardError) {
+                    skipped++;
+                    continue;
+                }
+                throw err;
+            }
         }
     } else if (body.action === "push_to_ai") {
         // BRD §0.2 — only Lost leads enter the AI re-engagement queue.

@@ -139,7 +139,7 @@ exports[`INV6_closed_vocabulary: §9.3 map is a subset of the existing enums > m
         "Lost",
       ],
       "connect": "connected",
-      "extra": "Mark Lost preview; high-impact confirm for closed",
+      "extra": "Mark Lost preview; high-impact confirm for closed and rejected-by-us",
       "id": "lost",
       "interest": null,
       "labels": [
@@ -147,6 +147,7 @@ exports[`INV6_closed_vocabulary: §9.3 map is a subset of the existing enums > m
         "Lost to Competition",
         "Some other Business",
         "Business Closed",
+        "REJECTED BY US",
       ],
       "lostReasonByLabel": {
         "Business Closed": [
@@ -158,11 +159,15 @@ exports[`INV6_closed_vocabulary: §9.3 map is a subset of the existing enums > m
         "Not Interested": [
           "not_interested",
         ],
+        "REJECTED BY US": [
+          "rejected_by_us_credit",
+          "rejected_by_us_geography",
+        ],
         "Some other Business": [
           "moved_to_other_business",
         ],
       },
-      "said": "not interested; went elsewhere; moved to another business; shop closed",
+      "said": "not interested; went elsewhere; moved to another business; shop closed; we rejected them (credit or geography)",
       "status": {
         "options": [
           "Lost",

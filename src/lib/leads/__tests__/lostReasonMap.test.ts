@@ -25,9 +25,16 @@ describe("lost-reason map (ID 76)", () => {
     it("the Assistant's lost reasons are exactly the shared map's", () => {
         for (const row of CALL_VOCAB) {
             for (const [label, reasons] of Object.entries(row.lostReasonByLabel)) {
-                expect(reasons, `${row.id}/${label}`).toEqual([LOST_REASON_BY_LABEL[label]]);
+                // The shared reason is always the default (first); REJECTED BY US
+                // also lets the rep say geography, as Mark Lost does on the web.
+                expect(reasons[0], `${row.id}/${label}`).toBe(LOST_REASON_BY_LABEL[label]);
+                if (label !== "REJECTED BY US") expect(reasons, `${row.id}/${label}`).toHaveLength(1);
             }
         }
+        expect(CALL_VOCAB.find((r) => r.id === "lost")!.lostReasonByLabel["REJECTED BY US"]).toEqual([
+            "rejected_by_us_credit",
+            "rejected_by_us_geography",
+        ]);
         const lost = CALL_VOCAB.find((r) => r.id === "lost")!;
         expect(lost.labels).toContain("Some other Business");
         expect(lost.lostReasonByLabel["Some other Business"]).toEqual(["moved_to_other_business"]);
