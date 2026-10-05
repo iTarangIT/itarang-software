@@ -74,6 +74,7 @@ export const PUBLIC_API_RULES: readonly PublicApiRule[] = [
   // ── dealer / vendor onboarding: a prospective dealer has no account yet
   { pattern: /^\/api\/vendor\/register$/, why: "scrap-vendor self-registration" },
   { pattern: /^\/api\/dealer\/onboarding\/(submit|status)$/, why: "pre-login dealer onboarding form" },
+  { pattern: /^\/api\/dealer-onboarding\/salespeople$/, why: "salesperson dropdown on the pre-login onboarding form — names and roles only, no email or phone (ID 66)" },
   { pattern: /^\/api\/uploads\/dealer-documents$/, why: "uploads from the pre-login onboarding form and the correction link" },
   { pattern: /^\/api\/files\/dealer-documents\//, why: "reads of what the pre-login onboarding form uploaded (random keys)" },
 

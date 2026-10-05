@@ -13,7 +13,7 @@ const doc = (o: Partial<ExtractedAgreementDoc> = {}): ExtractedAgreementDoc => (
     documentType: "dealer_agreement",
     documentId: "DID2609A",
     dealerName: "Sharma Battery House Pvt Ltd",
-    gstin: "27ABCDE1234F1Z5",
+    gstin: "27ABCDE1234F1Z0",
     agreementDate: "2026-09-10",
     referenceNumber: null,
     signers: [
@@ -30,7 +30,7 @@ const trail = (o: Partial<ExtractedAgreementDoc> = {}): ExtractedAgreementDoc =>
 
 const app = {
     companyName: "Sharma Battery House",
-    gstNumber: "27ABCDE1234F1Z5",
+    gstNumber: "27ABCDE1234F1Z0",
     providerDocumentId: "DID2609A",
     manualMode: false,
 };

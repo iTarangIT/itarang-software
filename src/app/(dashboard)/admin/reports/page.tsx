@@ -14,6 +14,10 @@ export default async function AdminReportsPage() {
         "partner",
         "business_head",
         "finance_controller",
+        // ID 13 — Data downloads only (own rows, or inventory).
+        "asm",
+        "inside_sales_rep",
+        "inventory_manager",
     ]);
 
     return (
@@ -23,8 +27,7 @@ export default async function AdminReportsPage() {
                     Reports
                 </h1>
                 <p className="mt-1 text-sm text-ink-muted">
-                    Pre-canned operational reports. Pick a report, set a date
-                    range, and export to CSV.
+                    Analyses, data downloads and the scheduled email reports.
                 </p>
             </header>
             <ReportsView viewerRole={user.role} />

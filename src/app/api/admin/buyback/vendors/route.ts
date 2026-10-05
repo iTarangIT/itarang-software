@@ -49,6 +49,7 @@ import { CHEMISTRIES } from "@/lib/buyback/line-spec";
 import { issueVendorCredentials } from "@/lib/buyback/vendor-credentials";
 import { REQUIRED_VENDOR_DOC_TYPES, VENDOR_DOC_LABELS } from "@/lib/buyback/vendor-docs";
 import { listPendingVendors, listRoutableVendors } from "@/lib/buyback/vendors";
+import { isValidGstin } from "@/lib/leads/gstin";
 import { notifyVendorRegistered } from "@/lib/notifications/events";
 
 export const runtime = "nodejs";
@@ -108,7 +109,7 @@ export const GET = withErrorHandler(async (req: Request) => {
 // Reused from the NBFC master schema rather than the old bare `.length(15)` —
 // a 15-character string is not a GSTIN, and the vendor we cannot invoice is the
 // one whose GSTIN was wrong in a way length alone could not see.
-const GSTIN_RE = /^\d{2}[A-Z]{5}\d{4}[A-Z]{1}[A-Z\d]{1}Z[A-Z\d]{1}$/;
+// Shape + check digit — src/lib/leads/gstin.ts (ID 62).
 const PAN_RE = /^[A-Z]{5}\d{4}[A-Z]$/;
 
 const bodySchema = z.object({
@@ -116,7 +117,7 @@ const bodySchema = z.object({
   contact_name: z.string().trim().min(2).max(120),
   // GSTIN is NOT NULL on accounts, and a scrap vendor without one cannot be
   // invoiced — so it is required here rather than patched in later.
-  gstin: z.string().trim().length(15).regex(GSTIN_RE, "That is not a valid GSTIN."),
+  gstin: z.string().trim().length(15).refine(isValidGstin, "That is not a valid GSTIN."),
   // Required on THIS route, unlike the public /api/vendor/register (which keeps
   // PAN lenient so a non-critical field cannot block a sign-up). An admin
   // onboarding a vendor is already demanding the PAN card as a document; asking

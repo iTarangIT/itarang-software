@@ -164,6 +164,30 @@ describe("validateSalesInvoice", () => {
     expect(joined).toMatch(/seller GSTIN/i);
   });
 
+  it("keeps a customer GSTIN that passes the check digit (ID 62)", () => {
+    const r = validateSalesInvoice(candidate({ customer_gstin: " 06aaocp8906f1z4 " }));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.value.customer_gstin).toBe("06AAOCP8906F1Z4");
+    expect(r.attention).toEqual([]);
+  });
+
+  it("drops a customer GSTIN that fails the check digit, and says so", () => {
+    const r = validateSalesInvoice(candidate({ customer_gstin: "06AAOCP8906F1Z5" }));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.value.customer_gstin).toBeNull();
+    expect(r.attention.join(" ")).toMatch(/Customer GSTIN is not valid \(06AAOCP8906F1Z5\)/);
+  });
+
+  it("drops iTarang's own GSTIN read as the customer's", () => {
+    const r = validateSalesInvoice(candidate({ customer_gstin: "06AALFI7813E1ZE" }));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.value.customer_gstin).toBeNull();
+    expect(r.attention.join(" ")).toMatch(/Customer GSTIN is iTarang's own/);
+  });
+
   it("rejects a malformed date instead of storing it", () => {
     const r = validateSalesInvoice(candidate({ invoice_date: "02-07-2026" }));
     expect(r.ok).toBe(true);

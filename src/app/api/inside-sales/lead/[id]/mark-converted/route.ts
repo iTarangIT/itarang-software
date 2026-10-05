@@ -9,7 +9,7 @@ import { z } from "zod";
 import { requireRole } from "@/lib/auth-utils";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
 import { assertOwner } from "@/lib/leads/ownership";
-import { isValidGstin, normalizeGstin } from "@/lib/leads/gstin";
+import { isOwnGstin, isValidGstin, normalizeGstin } from "@/lib/leads/gstin";
 import { ConvertLeadNotFoundError, markLeadConverted } from "@/lib/leads/markConverted";
 
 const MUTATE_ROLES = ["inside_sales_rep", "asm", "admin", "partner"];
@@ -24,7 +24,8 @@ const BodySchema = z.object({
     gstin: z
         .string()
         .transform(normalizeGstin)
-        .refine(isValidGstin, "Enter the dealer's 15-character GSTIN (e.g. 07AAACB1234C1Z5)."),
+        .refine(isValidGstin, "Enter the dealer's 15-character GSTIN (e.g. 07AAACB1234C1ZH) — check the last character.")
+        .refine((g) => !isOwnGstin(g), "This is iTarang's own GSTIN, not the dealer's."),
 });
 
 export const POST = withErrorHandler(

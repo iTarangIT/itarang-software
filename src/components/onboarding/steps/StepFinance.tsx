@@ -1,6 +1,7 @@
 "use client";
 
 import { useOnboardingStore } from "@/store/onboardingStore";
+import { SalespersonSelect } from "@/components/onboarding/SalespersonSelect";
 
 export default function StepFinance() {
   const finance = useOnboardingStore((s) => s.finance);
@@ -16,13 +17,14 @@ export default function StepFinance() {
   const inputCls =
     "w-full rounded-2xl border border-[#E3E8EF] px-4 py-3.5 focus:border-[#1F5C8F] focus:outline-none focus:ring-2 focus:ring-blue-100";
 
-  const updateSalesManager = (patch: Partial<{ name: string; email: string; mobile: string; age: string }>) =>
+  const updateSalesManager = (patch: Partial<{ userId: string; name: string; email: string; mobile: string; age: string }>) =>
     setField("agreement", "salesManager", {
       ...(agreement.salesManager || { name: "", email: "", mobile: "" }),
       ...patch,
     });
 
   const sm = (agreement.salesManager || {}) as {
+    userId?: string;
     name?: string;
     email?: string;
     mobile?: string;
@@ -72,7 +74,7 @@ export default function StepFinance() {
             No, continue without finance
           </p>
           <p className="text-sm text-slate-500 mt-1">
-            Agreement step will be skipped. Sales manager details are captured below.
+            Agreement step will be skipped. The salesperson is captured below.
           </p>
         </button>
       </div>
@@ -87,68 +89,29 @@ export default function StepFinance() {
         <section className="rounded-2xl border border-[#E3E8EF] bg-[#FBFDFF] p-5 md:p-6 space-y-5">
           <div>
             <h3 className="text-lg font-semibold text-[#173F63]">
-              Sales Manager Information
+              Salesperson
             </h3>
             <p className="mt-1 text-sm text-slate-500">
-              Details of the sales manager handling this dealer relationship.
+              The iTarang salesperson handling this dealer relationship.
             </p>
           </div>
 
           <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
             <div>
-              <label htmlFor="smName" className={labelCls}>
-                Sales Manager Name{requiredMark}
+              <label htmlFor="smUser" className={labelCls}>
+                Salesperson{requiredMark}
               </label>
-              <input
-                id="smName"
-                value={sm.name || ""}
-                onChange={(e) =>
-                  updateSalesManager({
-                    name: e.target.value.replace(/[0-9]/g, ""),
-                  })
+              <SalespersonSelect
+                id="smUser"
+                value={sm.userId || ""}
+                typedName={sm.name}
+                onPick={(o) =>
+                  updateSalesManager({ userId: o?.id ?? "", name: o?.name ?? "", email: "", mobile: "" })
                 }
-                placeholder="Full name"
                 className={inputCls}
               />
               {errors.salesManager_name ? (
                 <p className="mt-1.5 text-sm text-red-600">{errors.salesManager_name}</p>
-              ) : null}
-            </div>
-
-            <div>
-              <label htmlFor="smEmail" className={labelCls}>
-                Sales Manager Email{requiredMark}
-              </label>
-              <input
-                id="smEmail"
-                type="email"
-                value={sm.email || ""}
-                onChange={(e) => updateSalesManager({ email: e.target.value })}
-                placeholder="name@example.com"
-                className={inputCls}
-              />
-              {errors.salesManager_email ? (
-                <p className="mt-1.5 text-sm text-red-600">{errors.salesManager_email}</p>
-              ) : null}
-            </div>
-
-            <div>
-              <label htmlFor="smMobile" className={labelCls}>
-                Sales Manager Contact Number{requiredMark}
-              </label>
-              <input
-                id="smMobile"
-                value={sm.mobile || ""}
-                onChange={(e) =>
-                  updateSalesManager({
-                    mobile: e.target.value.replace(/[^0-9]/g, "").slice(0, 10),
-                  })
-                }
-                placeholder="10-digit mobile number"
-                className={inputCls}
-              />
-              {errors.salesManager_mobile ? (
-                <p className="mt-1.5 text-sm text-red-600">{errors.salesManager_mobile}</p>
               ) : null}
             </div>
 

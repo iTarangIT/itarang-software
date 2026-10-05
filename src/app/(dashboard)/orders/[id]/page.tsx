@@ -2,7 +2,8 @@ import { db } from '@/lib/db';
 import { orders, approvals, inventory } from '@/lib/db/schema';
 import { eq, desc } from 'drizzle-orm';
 import { notFound } from 'next/navigation';
-import { requireAuth } from '@/lib/auth-utils';
+import { requireRole } from '@/lib/auth-utils';
+import { ORDERS_PAGE_ROLES } from '@/lib/auth/staffPageRoles';
 import OrderDetailsClient from './order-details-client';
 
 interface PageProps {
@@ -10,7 +11,7 @@ interface PageProps {
 }
 
 export default async function OrderDetailsPage({ params }: PageProps) {
-    const user = await requireAuth();
+    const user = await requireRole([...ORDERS_PAGE_ROLES]);
     const { id: orderId } = await params;
 
     // 1. Fetch Order

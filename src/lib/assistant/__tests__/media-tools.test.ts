@@ -192,16 +192,16 @@ describe("update_lead", () => {
     it("shows only real changes, old → new, and warns when a filled field is replaced", async () => {
         Object.assign(leadRow, { shop_name: "ABC Traders", area: null, city: "Pune", state: "Maharashtra", pincode: null, contact_email: null, gstin: null, location: "Pune" });
         const r = await run(ISR, "update_lead", {
-            lead_id: "DL-1042", shop_name: "ABC Battery Traders", city: "pune", gstin: "27abcde1234f1z5", pincode: "411 013",
+            lead_id: "DL-1042", shop_name: "ABC Battery Traders", city: "pune", gstin: "27abcde1234f1z0", pincode: "411 013",
         });
         expect(r.kind).toBe("preview");
         expect(stored().preview.lines).toEqual([
             { label: "Shop", value: "ABC Traders → ABC Battery Traders" },
             { label: "Pincode", value: "411013 (new)" },
-            { label: "GSTIN", value: "27ABCDE1234F1Z5 (new)" },
+            { label: "GSTIN", value: "27ABCDE1234F1Z0 (new)" },
         ]);
         expect(stored().preview.warning).toBe("Replaces what the lead has now: Shop.");
-        expect(stored().plan).toMatchObject({ set: { shop_name: "ABC Battery Traders", pincode: "411013", gstin: "27ABCDE1234F1Z5" } });
+        expect(stored().plan).toMatchObject({ set: { shop_name: "ABC Battery Traders", pincode: "411013", gstin: "27ABCDE1234F1Z0" } });
         expect((stored().plan.set as Record<string, unknown>).city).toBeUndefined();
     });
 
@@ -209,10 +209,10 @@ describe("update_lead", () => {
         Object.assign(leadRow, { shop_name: null, city: "Kanpur", state: "Uttar Pradesh", pincode: null, gstin: null, location: "Kanpur" });
         media.set("mgst01", file("mgst01", { kind: "document", mime_type: "application/pdf" }));
         await run(ISR, "update_lead", {
-            lead_id: "DL-1042", city: "Pune", state: "Maharashtra", pincode: "411013", gstin: "27ABCDE1234F1Z5",
+            lead_id: "DL-1042", city: "Pune", state: "Maharashtra", pincode: "411013", gstin: "27ABCDE1234F1Z0",
             source_attachment_id: "mgst01", source_doc_type: "gst_certificate",
         });
-        expect(stored().plan.set).toEqual({ pincode: "411013", gstin: "27ABCDE1234F1Z5" });
+        expect(stored().plan.set).toEqual({ pincode: "411013", gstin: "27ABCDE1234F1Z0" });
         expect(stored().preview.warning).toBe(
             "Kept what the lead has: City Kanpur (document says Pune); State Uttar Pradesh (document says Maharashtra) — check this is the right dealer's document.",
         );
@@ -237,12 +237,12 @@ describe("update_lead", () => {
     it("applier: writes only the planned fields and files the source document", async () => {
         Object.assign(leadRow, { gstin: null, location: "Pune" });
         media.set("mgst01", file("mgst01", { kind: "document", mime_type: "application/pdf" }));
-        await run(ISR, "update_lead", { lead_id: "DL-1042", gstin: "27ABCDE1234F1Z5", source_attachment_id: "mgst01", source_doc_type: "gst_certificate" });
+        await run(ISR, "update_lead", { lead_id: "DL-1042", gstin: "27ABCDE1234F1Z0", source_attachment_id: "mgst01", source_doc_type: "gst_certificate" });
         expect(stored().preview.lines.at(-1)).toEqual({ label: "📎 Save", value: "GST certificate on the lead" });
         const plan = APPLIERS.update_lead.schema.parse(stored().plan);
         const { tx, inserts, updates } = fakeTx();
         await APPLIERS.update_lead.apply({ tx, user: ISR, step: 1, actionId: "act-2" }, plan);
-        expect(updates[0]).toMatchObject({ gstin: "27ABCDE1234F1Z5", updated_at: expect.any(Date) });
+        expect(updates[0]).toMatchObject({ gstin: "27ABCDE1234F1Z0", updated_at: expect.any(Date) });
         expect(Object.keys(updates[0]).sort()).toEqual(["gstin", "updated_at"]);
         expect(inserts[0]).toEqual([expect.objectContaining({ doc_type: "gst_certificate", dealer_lead_id: "DL-1042" })]);
     });

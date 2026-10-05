@@ -14,6 +14,8 @@ import { readDocument } from "@/lib/whatsapp/extraction";
 import { buildGstAddresses } from "@/lib/onboarding/gst-addresses";
 import { notifyOnboardingSubmitted } from "@/lib/notifications/events";
 import { markDocsSubmitted } from "@/lib/onboarding/leadMilestones";
+import { checkCustomerGstin, GSTIN_CHECK_MESSAGE } from "@/lib/leads/gstin";
+import { resolveSalesperson, salespersonMobile } from "@/lib/onboarding/salesperson";
 
 type UploadLike = {
   id?: string;
@@ -435,6 +437,17 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // ID 62: shape, check digit, and never iTarang's own registration.
+    if (cleanString(company.gstNumber)) {
+      const gst = checkCustomerGstin(company.gstNumber);
+      if (gst !== "ok") {
+        return NextResponse.json(
+          { success: false, message: GSTIN_CHECK_MESSAGE[gst] },
+          { status: 400 }
+        );
+      }
+    }
+
     if (!cleanString(company.companyType)) {
       return NextResponse.json(
         { success: false, message: "Company type is required" },
@@ -492,6 +505,7 @@ export async function POST(req: NextRequest) {
       dealer_code: dealerOnboardingApplications.dealer_code,
       provider_raw_response: dealerOnboardingApplications.provider_raw_response,
       onboarding_status: dealerOnboardingApplications.onboarding_status,
+      salesperson_user_id: dealerOnboardingApplications.salesperson_user_id,
     } as const;
 
     let existingApplication:
@@ -501,6 +515,7 @@ export async function POST(req: NextRequest) {
           dealer_code: string | null;
           provider_raw_response: unknown;
           onboarding_status: string | null;
+          salesperson_user_id: string | null;
         }
       | null = null;
 
@@ -577,6 +592,26 @@ export async function POST(req: NextRequest) {
       company?.gstCertificate,
     );
 
+    // ID 66 (E-321): the salesperson is mandatory and is a CRM user, picked
+    // from a dropdown. Their name / email / mobile are read from the user row.
+    const salesperson = await resolveSalesperson(
+      cleanString(agreement?.salesManager?.userId) ||
+        existingApplication?.salesperson_user_id
+    );
+    if (!salesperson) {
+      return NextResponse.json(
+        { success: false, message: "Select the salesperson handling this dealer." },
+        { status: 400 }
+      );
+    }
+    agreement.salesManager = {
+      ...(agreement.salesManager || {}),
+      userId: salesperson.id,
+      name: salesperson.name,
+      email: salesperson.email,
+      mobile: salespersonMobile(salesperson.phone) ?? "",
+    };
+
     const providerRawResponse = {
       ...parseProviderRawResponse(existingApplication?.provider_raw_response),
       agreement,
@@ -629,6 +664,7 @@ export async function POST(req: NextRequest) {
       sales_manager_name: toNullable(agreement?.salesManager?.name),
       sales_manager_email: toNullableEmail(agreement?.salesManager?.email),
       sales_manager_mobile: toNullablePhone(agreement?.salesManager?.mobile),
+      salesperson_user_id: salesperson.id,
 
       itarang_signatory_1_name: toNullable(agreement?.itarangSignatory1?.name),
       itarang_signatory_1_email: toNullableEmail(

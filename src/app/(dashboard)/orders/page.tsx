@@ -4,7 +4,8 @@ import { desc } from 'drizzle-orm';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { ShoppingCart, FileText, IndianRupee, Truck, CheckCircle2, AlertCircle } from 'lucide-react';
-import { requireAuth } from '@/lib/auth-utils';
+import { requireRole } from '@/lib/auth-utils';
+import { ORDERS_PAGE_ROLES } from '@/lib/auth/staffPageRoles';
 
 export const dynamic = 'force-dynamic';
 
@@ -19,7 +20,7 @@ const STATUS_MAP: Record<string, { label: string, color: string, icon: any }> = 
 };
 
 export default async function OrdersPage() {
-    await requireAuth();
+    await requireRole([...ORDERS_PAGE_ROLES]);
 
     const allOrders = await db.select()
         .from(orders)

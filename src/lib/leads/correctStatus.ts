@@ -4,7 +4,7 @@
 // Lost-by-reason, and a Won / Converted with no GSTIN never matches its
 // invoices. Pure — POST /api/admin/leads/[id]/correct-status does the writes.
 
-import { isValidGstin, normalizeGstin } from "@/lib/leads/gstin";
+import { isOwnGstin, isValidGstin, normalizeGstin } from "@/lib/leads/gstin";
 import type { LeadStatus, LostReason } from "@/lib/lifecycle/transitions";
 
 /** Refused before anything is written; withErrorHandler answers 400 with the sentence. */
@@ -53,7 +53,10 @@ export function planCorrection(input: {
     if (input.to === "Won" || input.to === "Converted") {
         const typed = normalizeGstin(input.gstin);
         if (typed && !isValidGstin(typed)) {
-            throw new CorrectionInputError("Enter the dealer's 15-character GSTIN (e.g. 07AAACB1234C1Z5).");
+            throw new CorrectionInputError("Enter the dealer's 15-character GSTIN (e.g. 07AAACB1234C1ZH) — check the last character.");
+        }
+        if (typed && isOwnGstin(typed)) {
+            throw new CorrectionInputError("This is iTarang's own GSTIN, not the dealer's.");
         }
         if (!typed && !isValidGstin(input.existingGstin)) {
             throw new CorrectionInputError(

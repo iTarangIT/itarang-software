@@ -5,6 +5,7 @@ import { db } from "@/lib/db";
 import { consentRecords, leads } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { requireRole } from "@/lib/auth-utils";
+import { requireLeadAccess } from "@/lib/auth/requireLeadAccess";
 
 type RouteContext = {
     params: Promise<{ leadId: string }>;
@@ -17,7 +18,7 @@ function isConsentVerified(status?: string | null) {
 
 export async function POST(_req: NextRequest, { params }: RouteContext) {
     try {
-        const user = await requireRole(["dealer"]);
+        await requireRole(["dealer"]);
         const { leadId } = await params;
 
         if (!leadId) {
@@ -43,14 +44,11 @@ export async function POST(_req: NextRequest, { params }: RouteContext) {
             );
         }
 
-        // Ownership check
-        const ownerUserId = (lead as any)?.created_by ?? (lead as any)?.uploader_id ?? null;
-        if (ownerUserId && ownerUserId !== user.id) {
-            return NextResponse.json(
-                { success: false, error: { message: "You do not have access to this lead" } },
-                { status: 403 }
-            );
-        }
+        // Ownership check — on the lead's dealership (leads.dealer_id), not its
+        // creator: the old created_by comparison was skipped whenever the lead
+        // had no recorded creator, which let any dealer through.
+        const leadGate = await requireLeadAccess(leadId);
+        if (!leadGate.ok) return leadGate.response;
 
         // Step 3 access rule: must be hot + non-cash
         const paymentMethod = String(lead.payment_method || "").toLowerCase();

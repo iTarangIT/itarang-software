@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { CorrectionInputError, planCorrection } from "../correctStatus";
 
-const GSTIN = "07AAACB1234C1Z5";
+const GSTIN = "07AAACB1234C1ZH";
 
 describe("admin Correct status — what a closing correction must carry (ID 57 / 80)", () => {
     it("Lost needs a lost reason", () => {
@@ -34,7 +34,7 @@ describe("admin Correct status — what a closing correction must carry (ID 57 /
             expect(() => planCorrection({ to }), to).toThrow(CorrectionInputError);
             expect(() => planCorrection({ to, existingGstin: "not-a-gstin" }), to).toThrow(CorrectionInputError);
             expect(planCorrection({ to, existingGstin: GSTIN }), to).toEqual({ needsOnboarding: true });
-            expect(planCorrection({ to, gstin: " 07aaacb1234c1z5 " }), to).toEqual({
+            expect(planCorrection({ to, gstin: " 07aaacb1234c1zh " }), to).toEqual({
                 gstin: GSTIN,
                 needsOnboarding: true,
             });
