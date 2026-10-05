@@ -39,8 +39,7 @@ import {
     awaitingAssignment,
     daysAwaitingAssignment,
 } from "@/lib/leads/salesReady";
-import { getEngagedCallRule } from "@/lib/reports/engagedCallRule";
-import { engagedCall, humanCall, measuredCall } from "@/lib/reports/metricDefinitions";
+import { engagedCall, humanCall } from "@/lib/reports/metricDefinitions";
 import { scrapKgSourced } from "@/lib/buyback/scrapKgSourced";
 
 export type Compare = { now: number; prev: number | null };
@@ -78,8 +77,6 @@ export type ControlTower = {
     };
     people: null | {
         basis: "target" | "converted";
-        /** The engaged-call threshold in force (a setting — ID 59), for the column header. */
-        engaged_min_seconds: number;
         rows: Array<{
             spoc_id: string;
             name: string;
@@ -202,37 +199,24 @@ async function moneyTile(from: string, toExcl: string, prevFrom: string | null, 
     const win = (a: string, b: string) => sql`r.invoice_date >= ${a}::date AND r.invoice_date < ${b}::date`;
     const [typeRows, spocRows, cityRows, prev] = await Promise.all([
         rows(sql`
-<<<<<<< HEAD
-            SELECT CASE WHEN NOT r.dealer_linked THEN '__unlinked'
-=======
             SELECT CASE WHEN r.dealer_lead_id IS NULL AND r.account_id IS NULL THEN '__unlinked'
->>>>>>> fac2a80905456e04c4d89ee14f26fdf80ae34f9e
                         ELSE COALESCE(to_jsonb(dl) ->> 'business_type', '__unset') END AS t,
                    COALESCE(SUM(r.total), 0) AS v
               FROM ${inv} r LEFT JOIN dealer_leads dl ON dl.id = r.dealer_lead_id
              WHERE ${REVENUE_NOT_VOID} AND ${win(from, toExcl)}
              GROUP BY 1`),
         rows(sql`
-<<<<<<< HEAD
-            -- The lead's current owner; for a dealer with no lead, the
-            -- account's owner (gstinMatch.ts — accounts are matched too).
-            SELECT COALESCE(u.name, '(no owner)') AS name, COALESCE(SUM(r.total), 0) AS v
-              FROM ${inv} r LEFT JOIN dealer_leads dl ON dl.id = r.dealer_lead_id
-              LEFT JOIN users u ON u.id::text = COALESCE(dl.current_owner_id, r.acct_owner_id)
-             WHERE ${REVENUE_NOT_VOID} AND ${win(from, toExcl)} AND r.dealer_linked
-=======
             -- E-321 (ID 68): the owner on the invoice date, not today's owner.
             SELECT COALESCE(u.name, '(no owner)') AS name, COALESCE(SUM(r.total), 0) AS v
               FROM ${inv} r
               LEFT JOIN users u ON u.id::text = r.dealer_owner_id::text
              WHERE ${REVENUE_NOT_VOID} AND ${win(from, toExcl)}
                AND (r.dealer_lead_id IS NOT NULL OR r.account_id IS NOT NULL)
->>>>>>> fac2a80905456e04c4d89ee14f26fdf80ae34f9e
              GROUP BY 1 ORDER BY v DESC LIMIT 10`),
         rows(sql`
-            SELECT COALESCE(NULLIF(btrim(dl.city), ''), r.acct_city, 'Unknown city') AS city, COALESCE(SUM(r.total), 0) AS v
-              FROM ${inv} r LEFT JOIN dealer_leads dl ON dl.id = r.dealer_lead_id
-             WHERE ${REVENUE_NOT_VOID} AND ${win(from, toExcl)} AND r.dealer_linked
+            SELECT COALESCE(NULLIF(btrim(dl.city), ''), 'Unknown city') AS city, COALESCE(SUM(r.total), 0) AS v
+              FROM ${inv} r JOIN dealer_leads dl ON dl.id = r.dealer_lead_id
+             WHERE ${REVENUE_NOT_VOID} AND ${win(from, toExcl)}
              GROUP BY 1 ORDER BY v DESC LIMIT 10`),
         prevFrom && prevTo
             ? rows(sql`SELECT COALESCE(SUM(r.total), 0) AS v FROM ${inv} r WHERE ${REVENUE_NOT_VOID} AND ${win(prevFrom, prevTo)}`)
@@ -261,9 +245,8 @@ async function engineTile(from: string, toExcl: string, prevFrom: string | null,
               (SELECT COUNT(*) FROM dealer_leads dl WHERE dl.is_active IS NOT FALSE AND ${inWinNaive(sql`dl.created_at`, a, b)}) AS leads_in,
               (SELECT COUNT(*) FROM dealer_leads dl WHERE dl.lead_status = 'Converted' AND ${inWin(sql`dl.closed_at`, a, b)}) AS converted,
               (SELECT COUNT(*) FROM (
-                  -- One dealer = its lead, or its account when it has no lead.
-                  SELECT COALESCE(r.dealer_lead_id, 'acct:' || r.acct_id) AS dealer, MIN(r.invoice_date) AS first_d
-                    FROM ${inv} r WHERE r.dealer_linked AND ${REVENUE_NOT_VOID}
+                  SELECT r.dealer_lead_id, MIN(r.invoice_date) AS first_d
+                    FROM ${inv} r WHERE r.dealer_lead_id IS NOT NULL AND ${REVENUE_NOT_VOID}
                    GROUP BY 1) f
                 WHERE f.first_d >= ${a}::date AND f.first_d < ${b}::date) AS first_orders`);
         return r;
@@ -357,19 +340,16 @@ async function baseTile(from: string, toExcl: string, prevFrom: string | null, p
 // ── 5 People ─────────────────────────────────────────────────────────────────
 async function peopleTile(from: string, toIncl: string) {
     const { buildSalesDashboard } = await import("@/lib/admin/salesDashboard");
-    const [dash, idle, rule, engaged, pct] = await Promise.all([
+    const [dash, idle, engaged, pct] = await Promise.all([
         buildSalesDashboard({ from, to: toIncl, granularity: "month" }),
         summarizeNeedsAttention({ minDays: 7 }),
-        getEngagedCallRule(),
         rows(sql`
-            -- ID 59: human calls counted once, engaged = connected and at least
-            -- the threshold of measured duration (the engaged-call setting)
-            -- (metricDefinitions.ts) — the same call the dashboard and the
-            -- daily email count, not the is_engaged flag (any connected call).
+            -- ID 59 (3 Oct 2026): human calls counted once; engaged = the call
+            -- connected, whatever its duration (metricDefinitions.ts) — the
+            -- same call the dashboard and the daily email count.
             SELECT t.performed_by AS u,
                    COUNT(*) FILTER (WHERE ${humanCall()}) AS calls,
-                   COUNT(*) FILTER (WHERE ${engagedCall()}) AS engaged,
-                   COUNT(*) FILTER (WHERE ${measuredCall()}) AS timed
+                   COUNT(*) FILTER (WHERE ${engagedCall()}) AS engaged
               FROM lead_touchpoints t
              WHERE t.touchpoint_type = 'inside_sales_call' AND t.performed_by IS NOT NULL
                AND (t.performed_at AT TIME ZONE 'Asia/Kolkata')::date BETWEEN ${from}::date AND ${toIncl}::date
@@ -388,14 +368,11 @@ async function peopleTile(from: string, toIncl: string) {
         }),
     ]);
     const idleBy = new Map(idle.map((h) => [h.holder_id, h.idle]));
-    // No call in the window carries a MEASURED duration (NeoDove sends none
-    // today, and a duration a rep typed does not count — measuredCall) → the
-    // 30-second rule cannot be measured: show "—", never a column of 0%.
-    const anyTimed = engaged.some((e) => n(e.timed) > 0);
+    // A person with no call in the window has no share to show: "—", not 0%.
     const engBy = new Map(
         engaged.map((e) => [
             String(e.u),
-            anyTimed && n(e.calls) > 0 ? Math.round((n(e.engaged) / n(e.calls)) * 100) : null,
+            n(e.calls) > 0 ? Math.round((n(e.engaged) / n(e.calls)) * 100) : null,
         ]),
     );
     const list = (dash.per_spoc ?? [])
@@ -417,7 +394,6 @@ async function peopleTile(from: string, toIncl: string) {
     );
     return {
         basis: hasTargets ? ("target" as const) : ("converted" as const),
-        engaged_min_seconds: rule.minSeconds,
         rows: list,
     };
 }

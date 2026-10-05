@@ -718,15 +718,14 @@ export async function middleware(request: NextRequest) {
       "inside_sales_rep",
       "inventory_manager",
     ],
-    // ID 65 — Account management (dealer accounts, owners, GSTIN).
-    "/admin/account-management": ["admin", "sales_head", "ceo"],
     "/admin/targets": ["admin", "sales_head", "ceo", "business_head"],
     // ID 82 — the page's own requireRole list. Without this row the bare
     // "/admin" entry bounces business_head, sales_manager and partner.
     "/admin/ready-to-assign": ["admin", "sales_head", "ceo", "business_head", "sales_manager", "partner"],
-    // P1-1 / P1-2 — Accounts tab (owner / GSTIN). Admin and CEO only; without
-    // this row the bare "/admin" entry below would also admit sales_head.
-    "/admin/accounts": ["admin", "ceo"],
+    // P1-1 / P1-2 — Accounts tab (owner / GSTIN): admin, CEO and, since the
+    // two account screens were merged on 5 Oct, sales head (see
+    // ACCOUNT_ADMIN_ROLES in api/admin/accounts/_lib.ts).
+    "/admin/accounts": ["admin", "ceo", "sales_head"],
     "/admin/escalations": ["admin", "sales_head", "ceo", "partner"],
     "/admin/merge-requests": ["admin", "sales_head", "ceo", "partner"],
     "/admin/onboarding-dropouts": ["admin", "sales_head", "ceo", "partner"],

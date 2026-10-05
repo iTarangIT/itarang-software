@@ -74,14 +74,14 @@ describe("Block A (ID 9)", () => {
         expect(h).toMatch(/dealers visited at 73%/);
     });
 
-    // ID 59: a period with no measured call answers NULL, shown as such — not 0.
+    // A period whose query answered NULL (e.g. a DB without E-314) is shown as such — not 0.
     it("a metric that is not measurable in any period reads Not measured yet, not 0", () => {
         const out = blockATableRows([
-            row({ label: "Engaged calls", values: { y: null, d7: null, mtd: null, lm: null }, target: null }),
-            row({ label: "Engaged calls", values: { y: null, d7: 3, mtd: 7, lm: null }, target: null }),
+            row({ label: "Sales-ready", values: { y: null, d7: null, mtd: null, lm: null }, target: null }),
+            row({ label: "Sales-ready", values: { y: null, d7: 3, mtd: 7, lm: null }, target: null }),
         ]);
-        expect(out[1]).toEqual(["Engaged calls", NOT_MEASURED, "", "", "", "", "", ""]);
-        expect(out[2].slice(0, 4)).toEqual(["Engaged calls", NOT_MEASURED, "3", "7"]);
+        expect(out[1]).toEqual(["Sales-ready", NOT_MEASURED, "", "", "", "", "", ""]);
+        expect(out[2].slice(0, 4)).toEqual(["Sales-ready", NOT_MEASURED, "3", "7"]);
     });
 
     it("headline names what is behind target", () => {

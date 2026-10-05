@@ -88,7 +88,7 @@ export const NAV_LAYOUTS: Record<string, Layout> = {
                 items: [
                     { id: "revenue-costs", label: "Revenue & costs", isNew: true },
                     { id: "sales-invoices", label: "Sales invoices" },
-                    { id: "ceo-account-management", label: "Account management", isNew: true },
+                    { id: "ceo-accounts", label: "Accounts", isNew: true },
                     "ceo-targets",
                     "deals",
                 ],

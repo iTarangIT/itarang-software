@@ -9,8 +9,15 @@ import { db } from "@/lib/db";
 import { hasAccountOwnershipTables } from "@/lib/accounts/tables";
 import { GSTIN_RE } from "@/lib/leads/gstin";
 
-/** Who can open the Accounts tab and change owners / GSTINs. */
-export const ACCOUNT_ADMIN_ROLES = ["admin", "ceo"];
+/**
+ * Who can open the Accounts tab and change owners / GSTINs.
+ *
+ * sales_head was added on 5 Oct 2026 when the two parallel account screens
+ * were merged into this one: the duplicate "Account management" screen it
+ * replaced admitted sales_head, and the sales-head dashboard sends them here
+ * to assign accounts that have no owner.
+ */
+export const ACCOUNT_ADMIN_ROLES = ["admin", "ceo", "sales_head"];
 
 /**
  * Roles an account can be owned by — the iTarang sales team: inside sales

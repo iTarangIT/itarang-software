@@ -10,11 +10,11 @@ import { requireRole } from '@/lib/auth-utils';
  */
 export const POST = withErrorHandler(async (
     req: Request,
-    { params }: { params: { id: string } }
+    { params }: { params: Promise<{ id: string }> }
 ) => {
     // 1. Authorization
     const user = await requireRole(['sales_manager', 'sales_head', 'business_head', 'ceo']);
-    const leadId = params.id;
+    const leadId = (await params).id;
     const { notes } = await req.json();
 
     // 2. Fetch Lead

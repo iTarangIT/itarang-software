@@ -14,13 +14,15 @@
  * to the other backend so nothing breaks mid-migration.
  *
  * AUTH: these include KYC PII, so a valid Supabase session is required (same as
- * /api/nbfc-uploads).
+ * /api/nbfc-uploads). `dealer-documents` is the exception — see below — except
+ * for its private folders (signed agreements, audit trails, buyback evidence),
+ * which need a session or a signed, expiring link (tracker ID 128).
  */
-import path from "node:path";
 import { NextRequest, NextResponse } from "next/server";
 
 import { createClient } from "@/lib/supabase/server";
 import { readBucketObject, contentTypeForName } from "@/lib/storage/readStoredDocument";
+import { fileLinkValid, isPrivateDealerDocument, safeStorageKey } from "@/lib/storage/fileAccess";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -39,6 +41,11 @@ const ALLOWED_BUCKETS = new Set(["documents", "dealer-documents", "call-recordin
 // "View uploaded file" and gets {"error":"Unauthorized"}. This bucket was also
 // a public Supabase bucket before the S3 migration, so anonymous reads here just
 // restore the prior behavior. Keys are random UUIDs (not enumerable).
+//
+// ID 128: that reasoning covers what a dealer uploads, not everything in the
+// bucket. Signed agreements, audit trails and buyback evidence live there too
+// and are not part of the public flow — isPrivateDealerDocument() — so they
+// need a session, or the signed link WhatsApp delivery uses.
 const AUTH_REQUIRED_BUCKETS = new Set(["documents", "call-recordings"]);
 
 export async function GET(
@@ -54,10 +61,23 @@ export async function GET(
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
+  // Reject path traversal before anything else reads the path: `..` in any
+  // encoding, slashes or control characters inside a segment (ID 128 — only a
+  // plainly written ".." was refused before).
+  const key = safeStorageKey(segments);
+  if (!key) {
+    return NextResponse.json({ error: "Invalid path" }, { status: 400 });
+  }
+
   // Require an authenticated session for PII buckets. `dealer-documents` is
   // served without a session because its write side is anonymous (public
-  // onboarding) — see AUTH_REQUIRED_BUCKETS above.
-  if (AUTH_REQUIRED_BUCKETS.has(bucket)) {
+  // onboarding) — see AUTH_REQUIRED_BUCKETS above — apart from its private
+  // folders, which a signed link may also open.
+  const privateDealerFile = bucket === "dealer-documents" && isPrivateDealerDocument(key);
+  const signedLink =
+    privateDealerFile &&
+    fileLinkValid(bucket, key, req.nextUrl.searchParams.get("exp"), req.nextUrl.searchParams.get("sig"));
+  if ((AUTH_REQUIRED_BUCKETS.has(bucket) || privateDealerFile) && !signedLink) {
     try {
       const supabase = await createClient();
       const { data: { user } } = await supabase.auth.getUser();
@@ -67,14 +87,9 @@ export async function GET(
     }
   }
 
-  // Reject path traversal / absolute segments.
-  if (segments.some((s) => s === ".." || s.includes("\0") || path.isAbsolute(s))) {
-    return NextResponse.json({ error: "Invalid path" }, { status: 400 });
-  }
-  const key = segments.join("/");
   const contentType = contentTypeForName(key);
 
-  // Primary backend, then fall back to the other (migration safety).
+  // The active backend (plus the other one only when STORAGE_SUPABASE_FALLBACK=1).
   const buf = await readBucketObject(bucket, key);
   if (!buf) return notFound(req, key);
 

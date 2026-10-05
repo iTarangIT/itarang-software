@@ -184,6 +184,37 @@ export async function notifyOnboardingDocsUploaded(p: {
   });
 }
 
+/**
+ * Bank details on a dealer's onboarding application were changed (tracker
+ * ID 129). Goes to the admins who verify dealers, because a swapped account
+ * that is approved unnoticed sends payouts to the wrong place. Carries only
+ * the last four digits; the full before/after is in audit_logs.
+ */
+export async function notifyOnboardingBankChanged(p: {
+  applicationId: string;
+  businessName: string;
+  fields: string[];
+  accountFrom: string | null;
+  accountTo: string | null;
+  changedBy: "staff" | "dealer" | "anonymous";
+}) {
+  const who =
+    p.changedBy === "staff" ? "iTarang staff" : p.changedBy === "dealer" ? "the dealer's login" : "the onboarding form (email-verified, no login)";
+  const account =
+    p.fields.includes("account_number")
+      ? ` Account ${p.accountFrom ?? "(none)"} → ${p.accountTo ?? "(none)"}.`
+      : "";
+  await emit({
+    type: "onboarding.bank_changed",
+    title: "Dealer bank details changed",
+    message: `${p.businessName}: bank details were changed through ${who}.${account} Check them against the cancelled cheque before approving.`,
+    stage: "Onboarding",
+    from: dealerParty(p.businessName),
+    data: { application_id: p.applicationId, fields: p.fields },
+    to: [toAdmins({ href: `/admin/dealer-verification/${p.applicationId}` })],
+  });
+}
+
 /** A dealer submitted their onboarding application for verification. */
 export async function notifyOnboardingSubmitted(p: {
   dealerId?: string | null;

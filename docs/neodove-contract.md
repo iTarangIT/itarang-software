@@ -625,7 +625,13 @@ telephony adapter would write the same two fields.
 
 **What the CRM does:** the raw touchpoints are kept (each carries the disposition the agent picked). Reports count calls through `humanCall()` in `src/lib/reports/metricDefinitions.ts`: a NeoDove call touchpoint with an earlier one on the same lead, by the same agent, within 3 minutes is the same call and is not counted again. AI dialer calls are not counted as calls.
 
-## Engaged calls and dealers visited (tracker ID 59) — review points closed 2026-10-01
+## Engaged call — redefined 2026-10-03 (tracker ID 59)
+
+**Engaged call = a connected human call where the rep spoke with the dealer**, through NeoDove or logged by the rep, any outcome. Duration never counts and neither does the lead's temperature. The name stays "Engaged". This replaces the 26 Sep / 1 Oct rule described in the next section: the 30-second threshold, the "Not measured yet" display for engaged calls and the engaged-call setting (`app_settings['engaged_call_rule']`, the Sales Daily settings control and `/api/admin/settings/engaged-call`) are all removed. A leftover `engaged_call_rule` row in `app_settings` is ignored.
+
+One rule, two forms: `isEngagedCall()` in `src/lib/lifecycle/touchpointTypes.ts` (what writers store in `is_engaged`) and `engagedCall()` / `engagedState()` in `src/lib/reports/metricDefinitions.ts` (what every report reads; `engagedCall()` is `connectedCall()`). The daily email's Block A "Engaged calls" row and Block C's per-caller "Engaged" column count the same predicate. Call rows written 1–5 Oct carry the retired rule in `is_engaged`; readers do not use the stored flag for calls, and `scripts/backfill-call-engaged-flag.ts` (dry run by default) re-aligns the column if something reads it directly.
+
+## Engaged calls and dealers visited (tracker ID 59) — review points closed 2026-10-01 (engaged rule SUPERSEDED 2026-10-03, see above)
 
 **Engaged call = connected AND 30 s or more, by NeoDove's recorded duration.** A duration a rep types into the log form is their estimate, not a measurement, and no longer makes a call engaged (review point 1). One rule, two forms that cannot drift: `isEngagedCall()` in `src/lib/lifecycle/touchpointTypes.ts` (what writers store in `is_engaged`) and `engagedCall()` / `engagedState()` / `engagedCallCount()` in `src/lib/reports/metricDefinitions.ts` (what every report reads).
 

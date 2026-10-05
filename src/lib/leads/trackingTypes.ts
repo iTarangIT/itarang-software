@@ -121,6 +121,12 @@ export type LeadTracking = {
     truncated: boolean;
     /** The server clock the durations were measured against. */
     as_of: string;
+    /**
+     * ID 58: false when the viewer may read the journey but not download it (a
+     * rep who is not the lead's current owner). Set by the single-lead tracking
+     * route; absent elsewhere.
+     */
+    can_export?: boolean;
 };
 
 /** `3d 4h 12m` / `4h 12m` / `12m` / `<1m`. */

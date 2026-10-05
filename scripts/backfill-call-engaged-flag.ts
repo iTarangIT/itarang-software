@@ -4,28 +4,25 @@
 //   node --import tsx --env-file=.env.local scripts/backfill-call-engaged-flag.ts            dry run
 //   node --import tsx --env-file=.env.local scripts/backfill-call-engaged-flag.ts --apply
 //
-// WHY. Until 01 Oct 2026 writers stored is_engaged = "the call connected" (or a
-// rep's tick). The CRM's own reports no longer read the flag for a call — they
-// compute engagedState() — so nothing in the app needs this. It is for anything
-// that reads the column DIRECTLY (a SQL export, a BI tool, a future query that
-// forgets the definition): after it, the column says what the reports say.
+// WHY. Writers stored "the call connected" until 01 Oct 2026, then the retired
+// duration rule (connected and 30 s or more of NeoDove duration) until the
+// 3 Oct decision shipped. The CRM's own reports do not read the flag for a call
+// — they compute engagedState() — so nothing in the app needs this. It is for
+// anything that reads the column DIRECTLY (a SQL export, a BI tool, a future
+// query that forgets the definition): after it, the column says what the
+// reports say.
 //
 // WHAT. Only touchpoint_type = 'inside_sales_call' rows. Visits, WhatsApp and
-// notes keep their flag. New value = engagedState() IS TRUE under the SAVED rule
-// (app_settings 'engaged_call_rule'): connected, a measured duration, at least
-// the threshold. A connected call with no measured duration becomes FALSE — the
-// column has no "not measured"; call_status still says it connected.
+// notes keep their flag. New value = engagedState(): the call connected.
 //
 // REVERSIBLE. --apply first writes every changed row's id and old value to
 // scripts/_backfill-call-engaged-flag.<database>.<timestamp>.json; --restore
-// <file> puts them back. If the rule is changed later (tracker question 6),
-// run this again: it moves only the rows the new rule judges differently.
+// <file> puts them back.
 // Idempotent — a second run changes nothing.
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { getEngagedCallRuleSettings } from "@/lib/reports/engagedCallRule";
 import { engagedState } from "@/lib/reports/metricDefinitions";
 
 type Row = Record<string, unknown>;
@@ -60,12 +57,7 @@ async function main() {
         return;
     }
 
-    const rule = await getEngagedCallRuleSettings();
-    console.log(
-        `rule: connected and at least ${rule.minSeconds} s; ${
-            rule.durationSource === "reported" ? "rep-entered durations count" : "NeoDove-recorded durations only"
-        }`,
-    );
+    console.log("rule: a call is engaged exactly when it connected (ID 59, 3 Oct 2026)");
 
     const WRONG = sql`t.touchpoint_type = 'inside_sales_call'
         AND COALESCE(t.is_engaged, FALSE) IS DISTINCT FROM COALESCE(${engagedState()}, FALSE)`;
@@ -101,7 +93,7 @@ async function main() {
             SELECT t.touchpoint_id::text AS id, t.is_engaged AS was
               FROM lead_touchpoints t WHERE ${WRONG} FOR UPDATE`)) as unknown as Array<{ id: string; was: boolean | null }>;
         const file = `scripts/_backfill-call-engaged-flag.${database}.${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
-        writeFileSync(file, JSON.stringify({ database, rule, written_at: new Date().toISOString(), rows: before }));
+        writeFileSync(file, JSON.stringify({ database, rule: "connected", written_at: new Date().toISOString(), rows: before }));
         console.log(`\nold values of ${before.length} rows saved to ${file}`);
         const out = (await tx.execute(sql`
             UPDATE lead_touchpoints t

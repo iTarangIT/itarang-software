@@ -218,8 +218,9 @@ async function main() {
         }
     };
     refuses("to Lost with no lost reason is refused", () => planCorrection({ to: "Lost" }));
-    refuses("to Won with no GSTIN on the lead is refused", () => planCorrection({ to: "Won", existingGstin: null }));
-    refuses("to Converted with a malformed GSTIN is refused", () => planCorrection({ to: "Converted", gstin: "123" }));
+    // ID 133: Correct status no longer reaches Won or Converted at all.
+    refuses("to Won is refused", () => planCorrection({ to: "Won" }));
+    refuses("to Converted is refused", () => planCorrection({ to: "Converted" }));
 
     console.log(failed ? `\n${failed} FAILED` : "\nall checks passed");
 }

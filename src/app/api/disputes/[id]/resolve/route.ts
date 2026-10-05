@@ -10,8 +10,9 @@ const resolveSchema = z.object({
     action_taken: z.string().min(5, 'Action taken must be at least 5 chars'),
 });
 
-export const POST = withErrorHandler(async (req: Request, { params }: { params: { id: string } }) => {
-    const disputeId = params.id;
+export const POST = withErrorHandler(async (req: Request, { params }: { params: Promise<{ id: string }> }) => {
+    const user = await requireRole(['inventory_manager', 'sales_head', 'business_head', 'ceo']);
+    const disputeId = (await params).id;
     const body = await req.json();
     const result = resolveSchema.safeParse(body);
     if (!result.success) return errorResponse(result.error.issues[0].message, 400);
@@ -25,7 +26,6 @@ export const POST = withErrorHandler(async (req: Request, { params }: { params: 
     }
 
     // 2. Validate Assignee (Only the assigned person can resolve)
-    const user = await requireRole(['inventory_manager', 'sales_head', 'business_head', 'ceo']);
     if (dispute.assigned_to !== user.id && user.role !== 'ceo' && user.role !== 'business_head') {
         return errorResponse('Only the assigned person can resolve this dispute', 403);
     }

@@ -15,17 +15,17 @@ const offerSchema = z.object({
     notes: z.string().optional(),
 });
 
-export const GET = withErrorHandler(async (req: Request, { params }: { params: { id: string } }) => {
+export const GET = withErrorHandler(async (req: Request, { params }: { params: Promise<{ id: string }> }) => {
     await requireRole(['sales_manager', 'sales_head', 'business_head', 'ceo']);
-    const leadId = params.id;
+    const leadId = (await params).id;
 
     const offers = await db.select().from(loanOffers).where(eq(loanOffers.lead_id, leadId));
     return successResponse({ offers });
 });
 
-export const POST = withErrorHandler(async (req: Request, { params }: { params: { id: string } }) => {
+export const POST = withErrorHandler(async (req: Request, { params }: { params: Promise<{ id: string }> }) => {
     const user = await requireRole(['sales_manager', 'sales_head', 'business_head', 'ceo']);
-    const leadId = params.id;
+    const leadId = (await params).id;
 
     const [lead] = await db.select({ id: leads.id, sm_review_status: leads.sm_review_status })
         .from(leads).where(eq(leads.id, leadId)).limit(1);
