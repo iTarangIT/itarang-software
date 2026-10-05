@@ -288,6 +288,14 @@ export const GET = withErrorHandler(
           : [];
       });
 
+      // NBFCs awaiting the CEO's sign-off — the same rule as the
+      // /admin/nbfc/approvals queue and its sidebar badge, so the "Needs you
+      // today" card cannot disagree with the list it opens.
+      const nbfcPendingApprovalsQ = db
+        .select({ n: count() })
+        .from(nbfc)
+        .where(eq(nbfc.status, "pending_admin_review"));
+
       // All CEO-dashboard queries fire together — they only depend on the
       // date strings computed above, and the pooled connection (max 5)
       // queues the overflow, so wall-clock is bounded by the slowest few
@@ -311,6 +319,7 @@ export const GET = withErrorHandler(
         topManagerRows,
         inFlightAgreements,
         signerCounts,
+        [nbfcPendingAgg],
       ] = await Promise.all([
         zohoRevenueQ,
         zohoBreakdownQ,
@@ -330,6 +339,7 @@ export const GET = withErrorHandler(
         topManagerRowsQ,
         inFlightAgreementsP,
         signerCountsQ,
+        nbfcPendingApprovalsQ,
       ]);
 
       const countsByAgreement = new Map<
@@ -428,6 +438,7 @@ export const GET = withErrorHandler(
         },
         topSalesManagers,
         nbfcSigningQueue,
+        nbfcPendingApprovals: Number(nbfcPendingAgg?.n ?? 0),
         lastUpdated: new Date().toISOString(),
       });
     }
