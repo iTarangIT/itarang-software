@@ -1,140 +1,308 @@
 "use client";
 
+// CEO overview — "How the business is doing" (CRM Reporting & Dashboards
+// redesign). One period control drives every figure. Each block reads the
+// module that owns its definition (control tower, overview, data health,
+// gross margin, snapshot summary, finance funnel, dealer health), so this
+// screen cannot disagree with the report a card opens.
+//
+// A figure the CRM cannot compute is said to be unavailable — never filled
+// with a placeholder number. The working panels that used to live here are on
+// their own pages: /ceo/quotations, /ceo/finance, /ceo/intellicar. The Green
+// Energy news card stays on this page; its full feed is /ceo/news.
+
 import React from "react";
+import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
-import { MetricsChart } from "@/components/shared/charts";
-import { BusinessSnapshotPanel } from "@/components/dashboard/ceo/BusinessSnapshotPanel";
-import { ExpenseBreakdownPanel } from "@/components/dashboard/ceo/ExpenseBreakdownPanel";
-import { ExpenseLedgerPanel } from "@/components/dashboard/ceo/ExpenseLedgerPanel";
-import { QuotationApprovalsPanel } from "@/components/dashboard/ceo/PendingQuotationsPanel";
-import {
-  CeoFilterBar,
-  ceoWindowParams,
-  DEFAULT_CEO_WINDOW,
-  type CeoWindow,
-} from "@/components/dashboard/ceo/CeoFilterBar";
-import {
-  BuybackCard,
-  LeadsCard,
-  RealizationCard,
-  type CeoOverviewData,
-} from "@/components/dashboard/ceo/CeoOverviewCards";
-import { GreenKmCard } from "@/components/dashboard/ceo/GreenKmCard";
-import { DataHealthPanel } from "@/components/dashboard/ceo/DataHealthPanel";
-import { GreenNewsCard } from "@/components/dashboard/ceo/GreenNewsCard";
-import { CeoControlTower } from "@/components/dashboard/ceo/CeoControlTower";
-import { RealizationDrillDown } from "@/components/dashboard/ceo/RealizationDrillDown";
-import {
-  DrillDownModal,
-  type DrillMetric,
-} from "@/components/dashboard/ceo/DrillDownModal";
-import { DashboardSkeleton } from "@/components/dashboard/ceo/DashboardSkeleton";
-import { formatINRCompact } from "@/lib/format";
 import {
   AlertCircle,
-  ArrowRight,
-  UserCheck,
-  Briefcase,
-  Users,
+  Check,
   FileSignature,
-  Clock,
+  FileText,
+  Hourglass,
   RefreshCw,
+  Target,
+  TrendingDown,
+  UserPlus,
 } from "lucide-react";
-import Link from "next/link";
-import { Button } from "@/components/ui/button";
-import { lspStatusToneClass } from "@/components/admin/nbfc/lspStatusTone";
 
-type NbfcSigningRow = {
-  nbfcId: number;
-  nbfcShortId: string;
-  legalName: string;
-  agreementStatus: string;
-  signed: number;
-  total: number;
+import type { ControlTower, Compare } from "@/lib/dashboard/ceoControlTower";
+import type { DataHealthCheck } from "@/lib/dashboard/dataHealth";
+import type { GrossMarginReport } from "@/lib/dashboard/grossMargin";
+import type { DealerHealthRow } from "@/lib/dealers/accountHealth";
+import {
+  ACCOUNT_BUCKETS,
+  ACCOUNT_BUCKET_LABELS,
+  type AccountBucket,
+} from "@/lib/dealers/accountHealthRules";
+import type { FunnelCountsResult } from "@/lib/admin/funnelCountsTypes";
+import type { ReportResult } from "@/lib/admin/types";
+import type { SalesDashboard } from "@/lib/admin/salesDashboardTypes";
+import type { CeoOverviewData } from "@/components/dashboard/ceo/CeoOverviewCards";
+import { DashboardSkeleton } from "@/components/dashboard/ceo/DashboardSkeleton";
+import { GreenNewsCard } from "@/components/dashboard/ceo/GreenNewsCard";
+import {
+  ActionCard,
+  CardLink,
+  DashCard,
+  DashPageHeader,
+  KpiTile,
+  LoadingBlock,
+  NotAvailable,
+  ProgressBar,
+  SectionHeading,
+  SegmentedControl,
+  StackedBand,
+  StatusPill,
+  TABLE_HEAD,
+  inr,
+  num,
+  toneForPct,
+  toneText,
+  type Tone,
+} from "@/components/dashboard/redesign/primitives";
+import {
+  GroupedBarChart,
+  RevenuePaceChart,
+  type PacePoint,
+} from "@/components/dashboard/redesign/charts";
+
+type Period = "mtd" | "last" | "qtd" | "fy";
+
+const PERIODS: ReadonlyArray<{ value: Period; label: string }> = [
+  { value: "mtd", label: "This month" },
+  { value: "last", label: "Last month" },
+  { value: "qtd", label: "Quarter" },
+  { value: "fy", label: "Financial year" },
+];
+
+const pad2 = (n: number) => String(n).padStart(2, "0");
+const ymd = (d: Date) =>
+  `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+const ym = (d: Date) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`;
+
+type Snapshot = {
+  purchases: number;
+  sales: number;
+  otherExpenses: number;
+  net: number;
+};
+type MonthSnapshot = Snapshot & { month: string; label: string };
+
+/**
+ * The selected period as (a) the CEO routes' window query, (b) inclusive
+ * from/to days for the routes that take a plain range, and (c) the calendar
+ * months it covers, for the per-month snapshot figures.
+ */
+function resolvePeriod(period: Period, now: Date) {
+  const y = now.getFullYear();
+  const m = now.getMonth();
+  const today = ymd(now);
+  const range = (from: string, to: string) =>
+    new URLSearchParams({ period: "range", from, to }).toString();
+
+  if (period === "last") {
+    const first = new Date(y, m - 1, 1);
+    const last = new Date(y, m, 0);
+    return {
+      from: ymd(first),
+      to: ymd(last),
+      ceoQs: range(ymd(first), ymd(last)),
+      months: [ym(first)],
+      slots: last.getDate(),
+      elapsed: last.getDate(),
+    };
+  }
+  if (period === "qtd") {
+    const first = new Date(y, m - (m % 3), 1);
+    const months = Array.from({ length: (m % 3) + 1 }, (_, i) =>
+      ym(new Date(y, first.getMonth() + i, 1)),
+    );
+    return {
+      from: ymd(first),
+      to: today,
+      ceoQs: range(ymd(first), today),
+      months,
+      slots: 0,
+      elapsed: 0,
+    };
+  }
+  if (period === "fy") {
+    const first = new Date(m >= 3 ? y : y - 1, 3, 1);
+    return {
+      from: ymd(first),
+      to: today,
+      ceoQs: "period=fy",
+      months: null,
+      slots: 0,
+      elapsed: 0,
+    };
+  }
+  // Sent as an explicit 1st → today range, not `period=mtd`: that keyword
+  // resolves to the WHOLE calendar month, so "previous period of the same
+  // length" became a full month and five days of October were compared with
+  // the thirty-one days before them. With the range, 1–5 Oct compares with
+  // the five days before the 1st.
+  return {
+    from: `${ym(now)}-01`,
+    to: today,
+    ceoQs: range(`${ym(now)}-01`, today),
+    months: [ym(now)],
+    slots: new Date(y, m + 1, 0).getDate(),
+    elapsed: now.getDate(),
+  };
+}
+
+async function getData<T>(url: string): Promise<T> {
+  const res = await fetch(url, { cache: "no-store" });
+  const json = await res.json().catch(() => null);
+  if (!res.ok || !json || json.success === false) {
+    throw new Error(json?.error?.message ?? "Could not load this section");
+  }
+  return json.data as T;
+}
+
+/** "▲ 9% vs previous period", coloured by whether up is good. */
+function changeOf(c: Compare | undefined, upIsGood = true) {
+  if (!c || c.prev == null || c.prev === 0) return null;
+  const pct = Math.round(((c.now - c.prev) / c.prev) * 100);
+  if (pct === 0) return { text: "Same as previous period", good: true };
+  const up = pct > 0;
+  return {
+    text: `${up ? "▲" : "▼"} ${Math.abs(pct)}% vs previous period`,
+    good: up === upIsGood,
+  };
+}
+
+const BUCKET_COLOR: Record<AccountBucket, string> = {
+  active: "#1e7e34",
+  cooling: "#e0a100",
+  orange: "#ec835a",
+  red: "#c0392b",
+  dormant: "#5a6877",
+  not_ordered_yet: "#86b6ef",
+  never_ordered: "#b8c2cc",
 };
 
+/** "Orange — pitch now (31–45 d)" → ["Orange — pitch now", "31–45 d"]. */
+function bucketParts(k: AccountBucket): [string, string] {
+  const full = ACCOUNT_BUCKET_LABELS[k];
+  const i = full.indexOf(" (");
+  return i < 0 ? [full, ""] : [full.slice(0, i), full.slice(i + 2, -1)];
+}
+
 export default function CEODashboard() {
-  const [drill, setDrill] = React.useState<{
-    metric: DrillMetric;
-    title: string;
-    params?: string;
-  } | null>(null);
-  const [realizationOpen, setRealizationOpen] = React.useState(false);
+  const [period, setPeriod] = React.useState<Period>("mtd");
+  const [mix, setMix] = React.useState<"type" | "city">("type");
 
-  // E-219 — one window for the whole page. The cards, the Realization
-  // drill-down and the chart all read it, so nothing on screen can be showing a
-  // different span from the control above it.
-  const [win, setWin] = React.useState<CeoWindow>(DEFAULT_CEO_WINDOW);
-  // Bucket size for the chart only. The window says how far back to look; this
-  // says how finely to slice it, and defaults to whatever suits the span.
-  const [granularity, setGranularity] = React.useState<
-    "day" | "week" | "month" | null
-  >(null);
+  // One clock for the page. Re-read on a period change so a tab left open
+  // overnight does not keep yesterday's "today".
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const now = React.useMemo(() => new Date(), [period]);
+  const win = React.useMemo(() => resolvePeriod(period, now), [period, now]);
+  const rangeQs = `from=${win.from}&to=${win.to}`;
 
-  const windowParams = ceoWindowParams(win);
-
-  const {
-    data: metrics,
-    isLoading,
-    error,
-    refetch,
-    isFetching,
-  } = useQuery({
+  const tower = useQuery<ControlTower & { label: string }>({
+    queryKey: ["ceo-control-tower", win.ceoQs],
+    queryFn: () => getData(`/api/dashboard/ceo/control-tower?${win.ceoQs}`),
+    placeholderData: (prev) => prev,
+    refetchInterval: 60_000,
+  });
+  const overview = useQuery<CeoOverviewData>({
+    queryKey: ["ceo-overview", win.ceoQs],
+    queryFn: () => getData(`/api/dashboard/ceo/overview?${win.ceoQs}`),
+    placeholderData: (prev) => prev,
+    refetchInterval: 60_000,
+  });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const base = useQuery<any>({
     queryKey: ["dashboard-metrics", "ceo"],
-    queryFn: async () => {
-      const response = await fetch(`/api/dashboard/ceo`);
-      if (!response.ok) throw new Error("Failed to fetch dashboard metrics");
-      const result = await response.json();
-      return result.data; // API returns { data: ... }
-    },
-    refetchInterval: 60000,
+    queryFn: () => getData(`/api/dashboard/ceo`),
+    refetchInterval: 60_000,
+  });
+  const health = useQuery<{ checks: DataHealthCheck[] }>({
+    queryKey: ["ceo-data-health"],
+    queryFn: () => getData("/api/dashboard/ceo/data-health"),
+    staleTime: 5 * 60 * 1000,
+  });
+  const margin = useQuery<{ report: GrossMarginReport }>({
+    queryKey: ["ceo-gross-margin-window", rangeQs],
+    queryFn: () => getData(`/api/dashboard/ceo/gross-margin?${rangeQs}`),
+    staleTime: 5 * 60 * 1000,
+  });
+  const sales = useQuery<SalesDashboard>({
+    queryKey: ["ceo-sales-outcome", rangeQs],
+    queryFn: () => getData(`/api/admin/reports/sales-dashboard?${rangeQs}`),
+    staleTime: 5 * 60 * 1000,
+  });
+  const funnel = useQuery<FunnelCountsResult>({
+    queryKey: ["ceo-finance-funnel", rangeQs],
+    queryFn: () => getData(`/api/admin/reports/funnel-counts?${rangeQs}`),
+    staleTime: 5 * 60 * 1000,
+  });
+  const stages = useQuery<ReportResult>({
+    queryKey: ["ceo-lead-funnel", rangeQs],
+    queryFn: () =>
+      getData(
+        `/api/admin/reports/lead_funnel?date_from=${win.from}&date_to=${win.to}`,
+      ),
+    staleTime: 5 * 60 * 1000,
+  });
+  const dealers = useQuery<{ rows: DealerHealthRow[] }>({
+    queryKey: ["ceo-dealer-health"],
+    queryFn: () => getData("/api/admin/dealer-health"),
+    staleTime: 5 * 60 * 1000,
   });
 
-  const overviewParams = new URLSearchParams(windowParams);
-  if (granularity) overviewParams.set("granularity", granularity);
-
-  const {
-    data: overview,
-    isLoading: overviewLoading,
-    error: overviewError,
-  } = useQuery<CeoOverviewData>({
-    queryKey: ["ceo-overview", overviewParams.toString()],
-    queryFn: async () => {
-      const res = await fetch(
-        `/api/dashboard/ceo/overview?${overviewParams.toString()}`,
-      );
-      if (!res.ok) {
-        const body = await res.json().catch(() => null);
-        throw new Error(body?.error?.message || "Failed to load overview");
-      }
-      const json = await res.json();
-      return json.data as CeoOverviewData;
-    },
-    refetchInterval: 60000,
+  // Revenue against costs, last six calendar months (the current one to date).
+  const sixMonths = React.useMemo(
+    () =>
+      Array.from({ length: 6 }, (_, i) =>
+        ym(new Date(now.getFullYear(), now.getMonth() - 5 + i, 1)),
+      ),
+    [now],
+  );
+  const history = useQuery<MonthSnapshot[]>({
+    queryKey: ["ceo-snapshot-history", sixMonths.join(",")],
+    queryFn: () =>
+      Promise.all(
+        sixMonths.map(async (month) => ({
+          month,
+          ...(await getData<Snapshot & { label: string }>(
+            `/api/dashboard/ceo/snapshot-summary?month=${month}`,
+          )),
+        })),
+      ),
+    staleTime: 5 * 60 * 1000,
+  });
+  const fySnapshot = useQuery<Snapshot>({
+    queryKey: ["ceo-snapshot-fy"],
+    queryFn: () => getData("/api/dashboard/ceo/snapshot-summary?period=fy"),
+    enabled: period === "fy",
+    staleTime: 5 * 60 * 1000,
   });
 
-  if (isLoading) {
-    return <DashboardSkeleton />;
-  }
+  if (tower.isLoading && !tower.data) return <DashboardSkeleton />;
 
-  if (error) {
+  if (tower.error || !tower.data) {
     return (
-      <div className="max-w-md mx-auto mt-16 p-8 rounded-2xl bg-white border border-gray-100 shadow-sm text-center">
-        <div className="w-12 h-12 rounded-full bg-rose-50 flex items-center justify-center mx-auto mb-4">
-          <AlertCircle className="w-6 h-6 text-rose-500" />
+      <div className="mx-auto mt-16 max-w-md rounded-2xl border border-border bg-surface p-8 text-center shadow-card">
+        <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-danger-bg">
+          <AlertCircle className="h-6 w-6 text-danger" />
         </div>
-        <h3 className="text-base font-bold text-gray-900">
+        <h3 className="text-base font-bold text-brand-navy">
           Couldn&apos;t load the dashboard
         </h3>
-        <p className="text-sm text-gray-500 mt-1.5">
-          We hit a problem fetching your metrics. This is usually temporary.
+        <p className="mt-1.5 text-sm text-ink-muted">
+          {(tower.error as Error | null)?.message ??
+            "We hit a problem fetching your metrics."}
         </p>
         <button
-          onClick={() => refetch()}
-          className="mt-5 inline-flex items-center gap-2 px-4 py-2 bg-brand-600 hover:bg-brand-700 text-white text-sm font-semibold rounded-lg transition-colors"
+          onClick={() => tower.refetch()}
+          className="mt-5 inline-flex min-h-10 items-center gap-2 rounded-[10px] bg-brand-navy px-4 text-sm font-semibold text-white hover:bg-brand-800"
         >
           <RefreshCw
-            className={`w-4 h-4 ${isFetching ? "animate-spin" : ""}`}
+            className={`h-4 w-4 ${tower.isFetching ? "animate-spin" : ""}`}
           />
           Retry
         </button>
@@ -142,413 +310,912 @@ export default function CEODashboard() {
     );
   }
 
-  const m = metrics || {};
-  const lastUpdatedLabel = m.lastUpdated
+  const { exceptions: x, money, engine, base: baseBlock, people } = tower.data;
+  const ov = overview.data;
+  const m = base.data ?? {};
+  const periodLabel = PERIODS.find((p) => p.value === period)!.label;
+  // A period change keeps the previous figures on screen until the new ones
+  // land; say so, and dim them, rather than show last period's numbers under
+  // this period's name.
+  const switching = tower.isPlaceholderData || overview.isPlaceholderData;
+
+  // ── Trust ────────────────────────────────────────────────────────────────
+  // Each check is the share of records that is INCOMPLETE (its label says
+  // what is missing), so 0 % is the good end: up to 5 % passes, up to 20 % is
+  // "fix soon", beyond that "fix now".
+  const checks = (health.data?.checks ?? []).map((c) => {
+    const tone: Tone =
+      c.pct == null ? "neutral" : c.pct <= 5 ? "good" : c.pct <= 20 ? "warn" : "bad";
+    const state =
+      c.pct == null
+        ? "Not checked"
+        : c.pct <= 5
+          ? "Good"
+          : c.pct <= 20
+            ? "Fix soon"
+            : "Fix now";
+    return { ...c, tone, state };
+  });
+
+  // ── Needs you today ──────────────────────────────────────────────────────
+  const signing: unknown[] = m.nbfcSigningQueue ?? [];
+  type Need = React.ComponentProps<typeof ActionCard> & { key: string; n: number };
+  const needs: Need[] = x
+    ? [
+        {
+          key: "quotes",
+          n: x.quotes_pending,
+          icon: FileText,
+          tone: "bad",
+          label: "Quotes waiting for your approval",
+          count: num(x.quotes_pending),
+          sub: "A rep cannot send a quote until you act on it",
+          href: "/ceo/quotations",
+          cta: x.quotes_pending === 1 ? "Review quote" : "Review quotes",
+          primary: true,
+        },
+        {
+          key: "unowned",
+          n: x.awaiting_assignment_total,
+          icon: UserPlus,
+          tone: "warn",
+          label: "Sales-ready leads with no owner",
+          count: num(x.awaiting_assignment_total),
+          sub: `${num(x.unassigned_over_7d)} waiting more than 7 days`,
+          href: "/admin/ready-to-assign",
+          cta: "Open list",
+        },
+        {
+          key: "idle",
+          n: x.idle_over_7d,
+          icon: Hourglass,
+          tone: "warn",
+          label: "Leads idle over 7 working days",
+          count: num(x.idle_over_7d),
+          sub: "No work logged by their owner",
+          href: "/admin/reports/needs-attention",
+          cta: "Open list",
+        },
+        {
+          key: "red",
+          n: x.red_dormant_dealers,
+          icon: TrendingDown,
+          tone: "bad",
+          label: "Dealers in Red or Dormant",
+          count: num(x.red_dormant_dealers),
+          sub: `${inr(x.at_risk_90d)} billed to them in the last 90 days`,
+          href: "/admin/reports/dealer-health",
+          cta: "Open list",
+        },
+        {
+          key: "below80",
+          n: x.spocs_below_80 ?? 0,
+          icon: Target,
+          tone: "bad",
+          label: "People below 80% of target",
+          count: num(x.spocs_below_80 ?? 0),
+          sub: "Against their target to date",
+          href: "#team",
+          cta: "See team",
+        },
+        {
+          key: "nbfc",
+          n: signing.length,
+          icon: FileSignature,
+          tone: "warn",
+          label: "NBFC agreements out for signing",
+          count: num(signing.length),
+          sub: "Waiting on signatures",
+          href: "/admin/nbfc/approvals",
+          cta: "Open list",
+        },
+      ]
+    : [];
+  const open = needs.filter((n) => n.n > 0);
+  const clear = needs.filter((n) => n.n === 0);
+
+  // ── Headline tiles ───────────────────────────────────────────────────────
+  const months = margin.data?.report.available
+    ? margin.data.report.months
+    : null;
+  const marginTotal = months
+    ? months.reduce(
+        (a, mo) => ({
+          margin: a.margin + mo.total.margin,
+          revenue: a.revenue + mo.total.revenue,
+        }),
+        { margin: 0, revenue: 0 },
+      )
+    : null;
+  const marginPct =
+    marginTotal && marginTotal.revenue > 0
+      ? (marginTotal.margin / marginTotal.revenue) * 100
+      : null;
+
+  // Receivables are a balance, not a flow: everything still unpaid today,
+  // whichever period the invoice is dated in.
+  const owed: number | null =
+    m.outstandingCredits == null ? null : Number(m.outstandingCredits);
+
+  const dealerRows = dealers.data?.rows ?? null;
+  const bucketCount = (k: AccountBucket) =>
+    dealerRows
+      ? dealerRows.filter((r) => r.bucket === k).length
+      : (baseBlock?.dealers[k] ?? 0);
+  const bucketRevenue = (k: AccountBucket) =>
+    dealerRows
+      ? dealerRows
+          .filter((r) => r.bucket === k)
+          .reduce((a, r) => a + Number(r.revenue_90d || 0), 0)
+      : null;
+  const haveDealers = Boolean(dealerRows || baseBlock);
+  const liveDealers = ACCOUNT_BUCKETS.reduce((a, k) => a + bucketCount(k), 0);
+  const ordering = bucketCount("active") + bucketCount("cooling");
+
+  // ── Revenue pace ─────────────────────────────────────────────────────────
+  const chart = ov?.chart ?? [];
+  const byDay = win.slots > 0 && ov?.granularity === "day";
+  const pacePoints: PacePoint[] = chart.map((c, i) => ({
+    x: byDay ? Number.parseInt(c.name, 10) || i + 1 : i + 1,
+    label: c.name,
+    value: c.revenue,
+  }));
+  const paceSlots = byDay ? win.slots : Math.max(pacePoints.length, 1);
+  const paceElapsed = byDay ? win.elapsed : paceSlots;
+  const revenueSoFar = pacePoints.reduce((a, p) => a + p.value, 0);
+  const paceOpen =
+    byDay && revenueSoFar > 0 && paceElapsed > 0 && paceElapsed < paceSlots;
+  const paceEnd = paceOpen ? (revenueSoFar / paceElapsed) * paceSlots : null;
+
+  // ── Revenue split ────────────────────────────────────────────────────────
+  const mixRows = money
+    ? [
+        ...(mix === "type"
+          ? money.by_type.map((t) => ({ label: t.type, value: t.revenue, muted: false }))
+          : money.by_city.map((c) => ({ label: c.city, value: c.revenue, muted: false }))),
+        ...(money.unlinked_revenue > 0
+          ? [
+              {
+                label: "Not linked to a dealer",
+                value: money.unlinked_revenue,
+                muted: true,
+              },
+            ]
+          : []),
+      ]
+    : [];
+  const mixMax = Math.max(1, ...mixRows.map((r) => r.value));
+
+  // ── Money in, money out ──────────────────────────────────────────────────
+  const hist = history.data ?? null;
+  const spent: Snapshot | null =
+    period === "fy"
+      ? (fySnapshot.data ?? null)
+      : hist && win.months
+        ? hist
+            .filter((h) => win.months!.includes(h.month))
+            .reduce<Snapshot>(
+              (a, h) => ({
+                purchases: a.purchases + h.purchases,
+                sales: a.sales + h.sales,
+                otherExpenses: a.otherExpenses + h.otherExpenses,
+                net: a.net + h.net,
+              }),
+              { purchases: 0, sales: 0, otherExpenses: 0, net: 0 },
+            )
+        : null;
+  const departments: Array<{ department: string; total: number | string }> =
+    period === "mtd" ? (m.expenses_by_department ?? []) : [];
+
+  // ── Sales engine ─────────────────────────────────────────────────────────
+  // The Lead Funnel report's stages when it loads (share of the period's leads
+  // that ever reached each stage); the control tower's three steps otherwise.
+  type FunnelRow = { label: string; count: number; pct: number | null; note: string };
+  const stageRows: FunnelRow[] = (stages.data?.rows ?? []).map((r, i) => {
+    const ever = r.ever_reached == null ? null : Number(r.ever_reached);
+    const pct = r.pct_reached == null ? null : Number(r.pct_reached);
+    return {
+      label: String(r.stage).replace(/_/g, " "),
+      count: ever ?? Number(r.count ?? 0),
+      pct: i === 0 ? null : pct,
+      note:
+        i === 0
+          ? "Created in the period"
+          : pct == null
+            ? "there now"
+            : `${pct}% of leads in`,
+    };
+  });
+  const rateOf = (a: number, b: number) => (b > 0 ? Math.round((a / b) * 100) : null);
+  const engineRows: FunnelRow[] = engine
+    ? [
+        { label: "Leads in", count: engine.leads_in.now, pct: null, note: "Created in the period" },
+        {
+          label: "Converted",
+          count: engine.converted.now,
+          pct: rateOf(engine.converted.now, engine.leads_in.now),
+          note: `${rateOf(engine.converted.now, engine.leads_in.now) ?? "—"}% of leads in`,
+        },
+        {
+          label: "First order",
+          count: engine.first_orders.now,
+          pct: rateOf(engine.first_orders.now, engine.converted.now),
+          note: `${rateOf(engine.first_orders.now, engine.converted.now) ?? "—"}% of converted`,
+        },
+      ]
+    : [];
+  const funnelRows = stageRows.length > 0 ? stageRows : engineRows;
+
+  // ── Team ─────────────────────────────────────────────────────────────────
+  const team = people
+    ? [...people.rows].sort(
+        (a, b) =>
+          (a.pct_of_target ?? Number.POSITIVE_INFINITY) -
+          (b.pct_of_target ?? Number.POSITIVE_INFINITY),
+      )
+    : [];
+
+  const asOf = m.lastUpdated
     ? new Date(m.lastUpdated).toLocaleTimeString("en-IN", {
         hour: "2-digit",
         minute: "2-digit",
       })
     : null;
-  const windowLabel = overview?.label ?? "this period";
 
   return (
-    <div className="space-y-8 pb-12">
-      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900 tracking-tight">
-            CEO Executive Overview
-          </h1>
-          <p className="text-sm text-gray-500 mt-1">
-            Real-time business performance and strategic metrics.
-          </p>
-        </div>
-        <div className="flex items-center gap-3">
-          {lastUpdatedLabel && (
-            <span className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-500 bg-gray-50 border border-gray-100 rounded-full px-3 py-1.5">
-              <Clock
-                className={`w-3.5 h-3.5 ${isFetching ? "animate-spin text-brand-600" : ""}`}
-              />
-              As of {lastUpdatedLabel} · auto-refreshes
-            </span>
-          )}
-          <Link href="/leads">
-            <Button className="bg-brand-600 hover:bg-brand-700 text-white flex items-center gap-2">
-              <Users className="w-4 h-4" />
-              Go to Leads
-            </Button>
-          </Link>
-        </div>
-      </div>
-
-      {/* E-219 — the window control every figure below reads. */}
-      <div className="flex items-center justify-between gap-4 flex-wrap">
-        <CeoFilterBar
-          value={win}
-          onChange={(next) => {
-            setWin(next);
-            // The new span picks its own bucket size; an override chosen for
-            // the previous window would otherwise persist onto one it suits
-            // badly (daily bars across a financial year).
-            setGranularity(null);
-          }}
+    <div className="flex flex-col gap-7 pb-12" data-testid="ceo-overview">
+      <DashPageHeader
+        eyebrow="CEO overview"
+        title="How the business is doing"
+        subtitle={
+          <>
+            {asOf ? `As of ${asOf} · ` : ""}
+            {switching
+              ? `Loading ${periodLabel.toLowerCase()}…`
+              : `${tower.data.label} · each figure compares with the previous period of the same length`}
+          </>
+        }
+      >
+        <SegmentedControl
+          label="Period"
+          options={PERIODS}
+          value={period}
+          onChange={setPeriod}
         />
-        {overview && (
-          <span className="text-xs font-medium text-gray-400">
-            Showing {overview.label}
-          </span>
-        )}
-      </div>
+      </DashPageHeader>
 
-      {/* Reporting Review sheet 6 — the one-screen view, exceptions first,
-          then money, engine, base, people; row 6 (trust) is Data health. Same
-          window as every card below. */}
-      <CeoControlTower windowQs={windowParams.toString()} />
-      <DataHealthPanel />
-
-      {/* KPI Section */}
-      {overviewError ? (
-        <div
-          data-testid="ceo-overview-error"
-          className="p-4 rounded-2xl bg-rose-50 border border-rose-100 text-sm text-rose-700"
-        >
-          Couldn&apos;t load the headline figures for this period:{" "}
-          {(overviewError as Error).message}
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-          <div data-testid="kpi-realization">
-            {overviewLoading || !overview ? (
-              <CardSkeleton />
-            ) : (
-              <RealizationCard
-                data={overview.realization}
-                windowLabel={windowLabel}
-                onClick={() => setRealizationOpen(true)}
-              />
-            )}
-          </div>
-          <div data-testid="kpi-leads">
-            {overviewLoading || !overview ? (
-              <CardSkeleton />
-            ) : (
-              <LeadsCard data={overview.leads} windowLabel={windowLabel} />
-            )}
-          </div>
-          <div data-testid="kpi-green-km">
-            <GreenKmCard window={win} />
-          </div>
-          <div data-testid="kpi-buyback">
-            {overviewLoading || !overview ? (
-              <CardSkeleton />
-            ) : (
-              <BuybackCard data={overview.buyback} windowLabel={windowLabel} />
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* E-306 — Green Energy Today: the morning brief + top headlines from
-          the news aggregator. Not window-driven: news is always "now". */}
-      <GreenNewsCard />
-
-      {/* Charts and Details Section */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 items-start">
-        {/* Left rail: revenue trend + operational cards */}
-        <div className="lg:col-span-2 space-y-6">
-          {/* E-219 — replaced "Revenue Performance Trend". Revenue and expense
-              as bars, realization as the line tracing the gap between them, all
-              on one ₹ axis. */}
-          <div className="h-[460px]" data-testid="realization-trend-chart">
-            <MetricsChart
-              title="Revenue, Expense & Realization"
-              data={overview?.chart ?? []}
-              dataKeys={["revenue", "expense", "realization"]}
-              lineKeys={["realization"]}
-              seriesLabels={{
-                revenue: "Revenue",
-                expense: "Expense",
-                realization: "Realization",
-              }}
-              categoryKey="name"
-              type="composed"
-              height={320}
-              valueFormatter={(v) => formatINRCompact(Number(v))}
-              headerActions={
-                <div className="inline-flex items-center gap-0.5 rounded-lg bg-gray-100 p-0.5">
-                  {(["day", "week", "month"] as const).map((g) => {
-                    // Null granularity means "whatever the window implies", so
-                    // the button the server actually used is the one that lights up.
-                    const active = (granularity ?? overview?.granularity) === g;
-                    return (
-                      <button
-                        key={g}
-                        type="button"
-                        onClick={() => setGranularity(g)}
-                        className={`px-3 h-7 text-xs font-semibold rounded-md transition-colors ${
-                          active
-                            ? "bg-white text-gray-900 shadow-sm"
-                            : "text-gray-500 hover:text-gray-700"
-                        }`}
-                      >
-                        {g === "day" ? "Daily" : g === "week" ? "Weekly" : "Monthly"}
-                      </button>
-                    );
-                  })}
-                </div>
-              }
-            />
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-            <div className="p-6 rounded-2xl bg-white border border-gray-100 shadow-sm flex flex-col">
-              <h3 className="text-sm font-semibold text-gray-900 mb-4 flex items-center gap-2">
-                <Briefcase className="w-4 h-4 text-brand-600" />
-                Procurement Overview
-              </h3>
-              <div className="space-y-4 flex-1 flex flex-col">
-                <div className="flex items-center justify-between p-3 rounded-xl bg-gray-50 border border-gray-100">
-                  <span className="text-xs font-medium text-gray-600">
-                    Pending Approvals
-                  </span>
-                  <span className="text-xs font-bold text-brand-700">
-                    {m.procurementStats?.pendingApprovals || 0} Items
-                  </span>
-                </div>
-                <div className="flex items-center justify-between p-3 rounded-xl bg-gray-50 border border-gray-100">
-                  <span className="text-xs font-medium text-gray-600">
-                    Active Procurement
-                  </span>
-                  <span className="text-xs font-bold text-blue-700">
-                    {formatINRCompact(
-                      Number(m.procurementStats?.activeValue ?? 0),
-                    )}
-                  </span>
-                </div>
-                <Link href="/procurement" className="mt-auto">
-                  <button className="w-full py-2.5 text-xs font-semibold text-brand-700 hover:bg-brand-50 rounded-xl transition-colors flex items-center justify-center gap-2 mt-2">
-                    Review Procurement <ArrowRight className="w-3 h-3" />
-                  </button>
-                </Link>
-              </div>
-            </div>
-
-            <div className="p-6 rounded-2xl bg-brand-600 shadow-lg shadow-brand-500/20 text-white relative overflow-hidden flex flex-col">
-              <div className="relative z-10 flex flex-col h-full">
-                <UserCheck className="w-8 h-8 opacity-40 mb-4" />
-                <h3 className="text-lg font-bold">HR Management</h3>
-                <p className="text-xs text-brand-100 mt-1 opacity-80 leading-relaxed">
-                  Monitor employee performance and manage sales head allocations
-                  directly from the HR console.
-                </p>
-                <Link href="/hr" className="mt-auto pt-4">
-                  <button className="px-4 py-2 bg-white text-brand-700 text-xs font-bold rounded-lg shadow-sm hover:bg-brand-50 transition-colors">
-                    Open Console
-                  </button>
-                </Link>
-              </div>
-              <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full -mr-16 -mt-16 blur-2xl"></div>
-            </div>
-          </div>
-
-          {/* Full expense ledger — every tracked expense, read-only. Takes the
-              page window rather than a row array: it fetches, filters and
-              totals server-side so its figures answer the period selected
-              above instead of the newest 200 invoices ever recorded. */}
-          <ExpenseLedgerPanel params={windowParams.toString()} />
-        </div>
-
-        {/* Right rail: quotation approvals + financial snapshot + signing queue */}
-        <div className="space-y-6">
-          {/* E-221 — first in the rail because it blocks someone else's work:
-              a rep cannot send a quote until the CEO acts on it here. */}
-          <QuotationApprovalsPanel />
-
-          <div data-testid="business-snapshot-panel-wrapper">
-            <BusinessSnapshotPanel
-              purchasesMtd={Number(m.purchases_mtd ?? 0)}
-              salesMtd={Number(m.revenue_mtd ?? 0)}
-              otherExpensesMtd={Number(m.other_expenses_mtd ?? 0)}
-              recentInvoices={m.recent_invoices || []}
-              recentExpenses={m.recent_expenses || []}
-              onTileClick={(metric, title, params) =>
-                setDrill({ metric, title, params })
-              }
-            />
-          </div>
-
-          <ExpenseBreakdownPanel
-            byDepartment={m.expenses_by_department || []}
-            byProject={m.expenses_by_project || []}
-          />
-
-          <NbfcSigningCard
-            rows={(m.nbfcSigningQueue ?? []) as NbfcSigningRow[]}
-          />
-        </div>
-      </div>
-
-      {/* NBFC Agreements in Signing — populated by the CEO dashboard
-                API once the CEO clicks "Approve & Send Agreement for Signing"
-                and Digio starts collecting signatures. Empty until any NBFC
-                has an agreement in flight. */}
-
-      {/* Sales Teams Overview */}
-      <div className="p-6 rounded-2xl bg-white border border-gray-100 shadow-sm">
-        <div className="flex items-center justify-between mb-6">
-          <h3 className="text-sm font-semibold text-gray-900">
-            Top Performing Sales Managers
-          </h3>
-          <Link href="/sales-head">
-            <button className="text-xs font-semibold text-brand-700 hover:underline">
-              View All Teams
-            </button>
-          </Link>
-        </div>
-        {(m.topSalesManagers || []).length === 0 ? (
-          <div className="py-10 text-center">
-            <Users className="w-8 h-8 text-gray-300 mx-auto mb-3" />
-            <p className="text-sm font-medium text-gray-500">
-              No ranked managers yet
-            </p>
-            <p className="text-xs text-gray-400 mt-1">
-              Rankings appear once leads are assigned and qualified.
-            </p>
+      <div
+        className={`flex flex-col gap-7 transition-opacity ${switching ? "opacity-50" : ""}`}
+        aria-busy={switching}
+      >
+      {/* Needs you today */}
+      <div className="flex flex-col gap-3">
+        <SectionHeading
+          title="Needs you today"
+          note="Only what needs a decision or has money at stake. Zero items stay out of the way."
+        />
+        {!x ? (
+          <NotAvailable reason="The exceptions could not be computed on this environment." />
+        ) : open.length === 0 ? (
+          <div className="flex items-center gap-2 rounded-2xl border border-border bg-surface px-5 py-4 text-sm font-semibold text-success shadow-card">
+            <Check className="h-4 w-4" aria-hidden /> Nothing needs you right
+            now.
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            {(m.topSalesManagers || []).map((manager: any) => (
-              <Link key={manager.id} href={`/sales-head/${manager.id}`}>
-                <div className="flex items-center gap-4 p-4 rounded-xl border border-gray-50 bg-gray-50/50 hover:bg-white hover:border-brand-100 transition-all cursor-pointer group">
-                  <div className="w-11 h-11 rounded-full bg-brand-100 text-brand-700 flex items-center justify-center font-bold text-sm shrink-0">
-                    {manager.name
-                      .split(" ")
-                      .map((n: string) => n[0])
-                      .join("")
-                      .slice(0, 2)}
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+            {needs.map(({ key, n, ...card }) =>
+              n > 0 ? <ActionCard key={key} {...card} /> : null,
+            )}
+          </div>
+        )}
+        {x && clear.length > 0 && open.length > 0 && (
+          <div className="flex items-start gap-2 text-[13px] text-ink-muted">
+            <Check className="mt-0.5 h-4 w-4 shrink-0 text-success" aria-hidden />
+            <span>
+              <span className="font-semibold text-success">All clear:</span>{" "}
+              {clear.map((c) => c.label.toLowerCase()).join(" · ")}
+            </span>
+          </div>
+        )}
+        {x && x.spocs_below_80 == null && (
+          <p className="text-xs text-ink-muted">
+            Targets are not set up, so &ldquo;people below 80% of target&rdquo;
+            cannot be counted.{" "}
+            <Link href="/admin/targets" className="font-semibold text-brand-sky hover:underline">
+              Set targets
+            </Link>
+          </p>
+        )}
+        <p className="text-xs text-ink-muted">
+          Not tracked yet: dealer said yes but not marked Won · orders claimed
+          without an invoice.
+        </p>
+      </div>
+
+      {/* Headline tiles */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+        <KpiTile
+          label="Revenue"
+          value={money ? inr(money.revenue.now) : "—"}
+          pill={{ text: "No target", tone: "neutral" }}
+          delta={changeOf(money?.revenue)}
+          spark={chart.map((c) => c.revenue)}
+          sub={
+            money && money.unlinked_revenue > 0
+              ? `${inr(money.unlinked_revenue)} not linked to a dealer`
+              : "Non-void invoices dated in the period"
+          }
+        />
+        <KpiTile
+          label="Gross margin"
+          value={
+            marginTotal && marginTotal.revenue > 0
+              ? inr(marginTotal.margin)
+              : "—"
+          }
+          pill={
+            marginPct != null
+              ? { text: `${marginPct.toFixed(1)}% of sales`, tone: "neutral" }
+              : undefined
+          }
+          sub={
+            margin.isLoading
+              ? "Loading…"
+              : marginTotal && marginTotal.revenue > 0
+                ? "Invoice lines at OEM cost, before GST · whole months"
+                : marginTotal
+                  ? "No costed invoice lines in this period yet"
+                  : "Not available yet — invoice lines are not costed on this database"
+          }
+        />
+        <KpiTile
+          label="Batteries to dealers"
+          value={sales.data ? num(sales.data.outcome.batteries_to_dealers) : "—"}
+          pill={{ text: "No target", tone: "neutral" }}
+          sub={
+            sales.isLoading
+              ? "Loading…"
+              : sales.data
+                ? "Allocated to dealer accounts in the period"
+                : "Not available yet"
+          }
+        />
+        <KpiTile
+          label="New dealers live"
+          value={funnel.data ? num(funnel.data.totals.dealers_onboarded) : "—"}
+          pill={{ text: "No target", tone: "neutral" }}
+          sub={
+            engine
+              ? `${num(engine.converted.now)} leads marked Converted`
+              : "Onboarding approved in the period"
+          }
+        />
+        <KpiTile
+          label="Dealers ordering"
+          value={haveDealers ? num(ordering) : "—"}
+          pill={
+            haveDealers && liveDealers > 0
+              ? {
+                  text: `${Math.round((ordering / liveDealers) * 100)}% of live`,
+                  tone: "neutral",
+                }
+              : undefined
+          }
+          sub="Ordered in the last 30 days · as of today"
+        />
+        <KpiTile
+          label="Money owed to us"
+          value={owed == null ? "—" : inr(owed)}
+          pill={owed ? { text: "Watch", tone: "bad" } : undefined}
+          sub="Unpaid on all invoices, as of now · not limited to the period · ageing not tracked yet"
+        />
+      </div>
+
+      {/* Revenue pace + mix */}
+      <div className="grid grid-cols-1 gap-5 xl:grid-cols-3">
+        <DashCard
+          className="xl:col-span-2"
+          title={`Revenue pace, ${periodLabel.toLowerCase()}`}
+          caption={
+            paceEnd != null ? (
+              <>
+                At this pace the month ends at{" "}
+                <span className="font-bold">{inr(paceEnd)}</span>, about{" "}
+                {inr(revenueSoFar / paceElapsed)} a day over {paceElapsed} days
+                so far.
+              </>
+            ) : (
+              <>
+                <span className="font-bold">{inr(revenueSoFar)}</span> invoiced
+                across the period.
+              </>
+            )
+          }
+          action={
+            <div className="flex flex-col gap-1.5 text-xs text-ink-muted">
+              <span className="flex items-center gap-2">
+                <span className="h-[3px] w-[22px] rounded bg-brand-royal" />
+                Actual, cumulative
+              </span>
+              {paceOpen && (
+                <span className="flex items-center gap-2">
+                  <span className="w-[22px] border-t-2 border-dashed border-brand-royal" />
+                  At current pace
+                </span>
+              )}
+            </div>
+          }
+        >
+          {overview.isLoading && !ov ? (
+            <LoadingBlock />
+          ) : overview.error ? (
+            <NotAvailable reason={(overview.error as Error).message} />
+          ) : pacePoints.length === 0 ? (
+            <NotAvailable empty reason="No invoices dated in this period." />
+          ) : (
+            <RevenuePaceChart
+              points={pacePoints}
+              slots={paceSlots}
+              elapsed={paceElapsed}
+            />
+          )}
+          <span className="text-xs text-ink-muted">
+            No company revenue target is set, so there is no target-pace line.
+            Pace is a straight line over calendar days.
+          </span>
+        </DashCard>
+
+        <DashCard title="Where revenue came from">
+          <SegmentedControl
+            label="Split revenue by"
+            size="sm"
+            options={[
+              { value: "type", label: "Business type" },
+              { value: "city", label: "City" },
+            ]}
+            value={mix}
+            onChange={setMix}
+          />
+          {!money ? (
+            <NotAvailable reason="Revenue could not be split on this environment." />
+          ) : mixRows.length === 0 ? (
+            <NotAvailable empty reason="No invoice is linked to a dealer account yet." />
+          ) : (
+            <div className="flex flex-col gap-3.5">
+              {mixRows.map((r) => (
+                <div key={r.label} className="flex flex-col gap-1.5">
+                  <div className="flex justify-between gap-2 text-[13.5px]">
+                    <span className="font-semibold text-ink">{r.label}</span>
+                    <span className="tabular-nums text-ink">
+                      <span className="font-bold">{inr(r.value)}</span>{" "}
+                      {money.revenue.now > 0 && (
+                        <span className="text-ink-muted">
+                          · {Math.round((r.value / money.revenue.now) * 100)}%
+                        </span>
+                      )}
+                    </span>
                   </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-bold text-gray-900 truncate">
-                      {manager.name}
-                    </p>
-                    <p className="text-[11px] text-gray-500 font-medium uppercase tracking-wider">
-                      {manager.region}
-                    </p>
-                  </div>
-                  <div className="text-right shrink-0">
-                    <p className="text-sm font-bold text-brand-700">
-                      {manager.conversion}
-                    </p>
-                    <p className="text-[10px] text-gray-400 font-medium uppercase tracking-wider">
-                      Conv.
-                    </p>
-                  </div>
+                  <ProgressBar pct={(r.value / mixMax) * 100} muted={r.muted} />
                 </div>
+              ))}
+            </div>
+          )}
+          <span className="mt-auto text-xs leading-relaxed text-ink-muted">
+            {mix === "type"
+              ? "Business type is that of the CRM lead the invoice matches on GSTIN; a dealer with an account but no lead reads “Not set”. Invoices that match no lead or dealer account are shown in grey."
+              : "City is that of the lead or dealer account the invoice matches on GSTIN. Invoices that match neither are shown in grey."}
+          </span>
+        </DashCard>
+      </div>
+
+      {/* Revenue against costs */}
+      <div className="grid grid-cols-1 gap-5 xl:grid-cols-3">
+        <DashCard
+          className="xl:col-span-2"
+          title="Revenue against total costs, last 6 months"
+          caption="Costs are stock bought from OEMs plus approved expenses. The current month is to date."
+          action={
+            <div className="flex flex-col gap-1.5 text-xs text-ink-muted">
+              <span className="flex items-center gap-2">
+                <span className="h-3 w-3 rounded-[3px] bg-brand-royal" />
+                Revenue
+              </span>
+              <span className="flex items-center gap-2">
+                <span className="h-3 w-3 rounded-[3px] bg-[#eb6834]" />
+                Total costs
+              </span>
+            </div>
+          }
+        >
+          {history.isLoading ? (
+            <LoadingBlock />
+          ) : !hist ? (
+            <NotAvailable reason={(history.error as Error | null)?.message} />
+          ) : (
+            <GroupedBarChart
+              rows={hist.map((h) => ({
+                label: h.label,
+                a: h.sales,
+                b: h.purchases + h.otherExpenses,
+              }))}
+            />
+          )}
+        </DashCard>
+
+        <DashCard title={`Where the money went, ${periodLabel.toLowerCase()}`}>
+          {!spent ? (
+            history.isLoading || fySnapshot.isLoading ? (
+              <LoadingBlock />
+            ) : (
+              <NotAvailable />
+            )
+          ) : (
+            <>
+              <div className="flex items-baseline justify-between border-b border-border pb-2.5">
+                <span className="text-sm font-semibold">Revenue</span>
+                <span className="text-lg font-bold text-brand-navy tabular-nums">
+                  {inr(spent.sales)}
+                </span>
+              </div>
+              <div className="flex items-baseline justify-between gap-2">
+                <span className="flex flex-col">
+                  <span className="text-sm font-semibold text-ink">
+                    Stock bought from OEMs
+                  </span>
+                  <span className="text-[11.5px] text-ink-muted">
+                    By OEM invoice date
+                  </span>
+                </span>
+                <span className="text-sm font-semibold tabular-nums">
+                  {inr(spent.purchases)}
+                </span>
+              </div>
+              <div className="flex items-baseline justify-between gap-2">
+                <span className="flex flex-col">
+                  <span className="text-sm font-semibold text-ink">
+                    Running expenses
+                  </span>
+                  <span className="text-[11.5px] text-ink-muted">
+                    Approved expenses
+                  </span>
+                </span>
+                <span className="text-sm font-semibold tabular-nums">
+                  {inr(spent.otherExpenses)}
+                </span>
+              </div>
+              {departments.map((d) => (
+                <div
+                  key={d.department}
+                  className="flex items-baseline justify-between gap-2 pl-3.5 text-[13px]"
+                >
+                  <span className="capitalize text-ink">
+                    {String(d.department).replace(/_/g, " ")}
+                  </span>
+                  <span className="tabular-nums">{inr(Number(d.total))}</span>
+                </div>
+              ))}
+              <div className="flex items-baseline justify-between border-t border-border pt-2.5">
+                <span className="text-sm font-semibold">Net of purchases</span>
+                <span
+                  className={`text-lg font-bold tabular-nums ${spent.net >= 0 ? "text-success" : "text-danger"}`}
+                >
+                  {spent.net >= 0 ? "+" : "−"}
+                  {inr(Math.abs(spent.net))}
+                </span>
+              </div>
+              <span className="text-xs leading-relaxed text-ink-muted">
+                This counts stock bought, not stock sold, so a month of heavy
+                stocking looks negative. Buyback payments are on the Battery
+                buyback card below.
+              </span>
+            </>
+          )}
+          <div className="mt-auto flex flex-col">
+            <CardLink href="/ceo/finance">Open Revenue &amp; costs</CardLink>
+          </div>
+        </DashCard>
+      </div>
+
+      {/* Engine + base */}
+      <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
+        <DashCard
+          title="Sales engine"
+          caption={
+            engine
+              ? `How far the period's ${num(engine.leads_in.now)} new leads have got. The bar is the share of them that reached each stage.`
+              : undefined
+          }
+        >
+          {!engine ? (
+            <NotAvailable reason="The lead funnel could not be computed on this environment." />
+          ) : (
+            <>
+              <div className="flex flex-col">
+                {funnelRows.map((f) => (
+                  <div
+                    key={f.label}
+                    className="grid min-h-[42px] grid-cols-[minmax(0,150px)_64px_minmax(0,1fr)_120px] items-center gap-3 border-t border-[#f1f4f7]"
+                  >
+                    <span className="truncate text-[13.5px] font-semibold text-ink">{f.label}</span>
+                    <span className="text-right text-[15px] font-bold text-brand-navy tabular-nums">
+                      {num(f.count)}
+                    </span>
+                    {f.pct == null ? <span /> : <ProgressBar pct={f.pct} height={12} />}
+                    <span className="text-[12.5px] text-ink-muted tabular-nums">{f.note}</span>
+                  </div>
+                ))}
+              </div>
+              <div className="flex flex-col gap-1 text-xs leading-relaxed text-ink-muted">
+                <span>
+                  {engine.headline.label}:{" "}
+                  <span className="font-semibold text-ink">
+                    {engine.headline.value == null
+                      ? "—"
+                      : `${(engine.headline.value * 100).toFixed(1)}%`}
+                  </span>
+                  . Recent leads are still moving, so the later steps will rise.
+                </span>
+                <span>
+                  AI dialler: {num(engine.ai.leads_called)} dealers called ·{" "}
+                  {engine.ai.connect_pct == null ? "—" : `${engine.ai.connect_pct}%`}{" "}
+                  connected · {num(engine.ai.ai_qualified)} qualified.
+                </span>
+                <span>
+                  First orders in the period: {num(engine.first_orders.now)}.
+                </span>
+              </div>
+            </>
+          )}
+        </DashCard>
+
+        <DashCard
+          title={haveDealers ? `Dealer base: ${num(liveDealers)} live dealers` : "Dealer base"}
+          caption="By days since their last invoice, as of today."
+          action={<CardLink href="/admin/account-management">Account management</CardLink>}
+        >
+          {!haveDealers ? (
+            dealers.isLoading ? <LoadingBlock /> : <NotAvailable />
+          ) : (
+            <>
+              <StackedBand
+                parts={ACCOUNT_BUCKETS.map((k) => ({
+                  key: k,
+                  n: bucketCount(k),
+                  color: BUCKET_COLOR[k],
+                }))}
+              />
+              <div className="flex flex-col">
+                {ACCOUNT_BUCKETS.map((k) => {
+                  const [label, rule] = bucketParts(k);
+                  const rev = bucketRevenue(k);
+                  return (
+                    <div
+                      key={k}
+                      className="grid min-h-9 grid-cols-[14px_minmax(0,1fr)_56px_96px] items-center gap-2.5 border-t border-[#f1f4f7]"
+                    >
+                      <span className="h-3 w-3 rounded-[3px]" style={{ background: BUCKET_COLOR[k] }} />
+                      <span className="text-[13.5px] text-ink">
+                        <span className="font-semibold">{label}</span>{" "}
+                        {rule && <span className="text-ink-muted">· {rule}</span>}
+                      </span>
+                      <span className="text-right text-sm font-bold text-brand-navy tabular-nums">
+                        {num(bucketCount(k))}
+                      </span>
+                      <span className="text-right text-[12.5px] text-ink-muted tabular-nums">
+                        {rev == null || rev === 0 ? "—" : inr(rev)}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+              <span className="text-xs text-ink-muted">
+                Right column: billed in the last 90 days.{" "}
+                <Link href="/admin/reports/dealer-health" className="font-semibold text-brand-sky hover:underline">
+                  Open dealer health
+                </Link>
+              </span>
+            </>
+          )}
+        </DashCard>
+      </div>
+
+      {/* Team + finance + buyback */}
+      <div className="grid grid-cols-1 gap-5 xl:grid-cols-3">
+        <DashCard
+          id="team"
+          className="xl:col-span-2"
+          title={`Team against target, ${periodLabel.toLowerCase()}`}
+          caption={
+            people?.basis === "target"
+              ? "Furthest behind first. Each person is measured against their target to date."
+              : "No targets are set for this period, so people are listed by what they converted."
+          }
+          action={<CardLink href="/sales-head">Sales Head view</CardLink>}
+        >
+          {!people ? (
+            <NotAvailable reason="The team figures could not be computed on this environment." />
+          ) : team.length === 0 ? (
+            <NotAvailable empty reason="No sales activity in this period." />
+          ) : (
+            <div className="overflow-x-auto">
+              <div className="min-w-[640px]">
+                <div
+                  className={`grid grid-cols-[minmax(0,1.3fr)_minmax(0,1.6fr)_100px_84px_84px_84px] gap-3 border-b border-border pb-2 ${TABLE_HEAD}`}
+                >
+                  <span>Person</span>
+                  <span>% of target to date</span>
+                  <span className="text-right">Revenue</span>
+                  <span className="text-right">Converted</span>
+                  <span className="text-right">Idle leads</span>
+                  <span className="text-right">Engaged</span>
+                </div>
+                {team.map((t) => {
+                  const tone = toneForPct(t.pct_of_target);
+                  return (
+                    <div
+                      key={t.spoc_id}
+                      className="grid min-h-11 grid-cols-[minmax(0,1.3fr)_minmax(0,1.6fr)_100px_84px_84px_84px] items-center gap-3 border-b border-[#f1f4f7] text-[13.5px] tabular-nums"
+                    >
+                      <span className="truncate font-semibold text-ink">{t.name}</span>
+                      {t.pct_of_target == null ? (
+                        <span className="text-[13px] text-ink-muted">No target</span>
+                      ) : (
+                        <div className="flex items-center gap-2.5">
+                          <ProgressBar
+                            pct={Math.min((t.pct_of_target / 120) * 100, 100)}
+                            tone={tone}
+                            tick={83.3}
+                          />
+                          <span className={`w-12 text-right text-[13px] font-bold ${toneText(tone)}`}>
+                            {t.pct_of_target}%
+                          </span>
+                        </div>
+                      )}
+                      <span className="text-right">{t.revenue ? inr(t.revenue) : "—"}</span>
+                      <span className="text-right">{num(t.converted)}</span>
+                      <span className={`text-right ${t.idle_leads >= 15 ? "font-semibold text-danger" : ""}`}>
+                        {num(t.idle_leads)}
+                      </span>
+                      <span className="text-right">
+                        {t.engaged_pct == null ? "—" : `${t.engaged_pct}%`}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+          <span className="text-xs leading-relaxed text-ink-muted">
+            The black tick is 100% of target. Engaged = share of calls connected
+            for {people?.engaged_min_seconds ?? 30} seconds or more.
+            {money && money.unlinked_revenue > 0
+              ? ` ${inr(money.unlinked_revenue)} of this period's revenue is credited to no one: its invoices are not linked to a dealer account.`
+              : ""}
+          </span>
+        </DashCard>
+
+        <div className="flex flex-col gap-5">
+          <DashCard
+            title="Customer finance (NBFC)"
+            caption={<span className="text-[12.5px] text-ink-muted">Loans for dealers&apos; customers, in the period</span>}
+          >
+            {!funnel.data ? (
+              funnel.isLoading ? <LoadingBlock /> : <NotAvailable />
+            ) : (
+              <div className="grid grid-cols-3 gap-2.5">
+                <MiniStat value={num(funnel.data.totals.kyc_shared)} label="KYC files shared" />
+                <MiniStat value={num(funnel.data.totals.files_disbursed)} label="Disbursed" />
+                <MiniStat value={num(funnel.data.totals.files_rejected)} label="Rejected" />
+              </div>
+            )}
+          </DashCard>
+          <DashCard
+            title="Battery buyback"
+            caption={<span className="text-[12.5px] text-ink-muted">Scrap sourced from dealers, in the period</span>}
+          >
+            {!baseBlock ? (
+              <NotAvailable />
+            ) : (
+              <div className="grid grid-cols-3 gap-2.5">
+                <MiniStat
+                  value={
+                    baseBlock.buyback.kg.now >= 1000
+                      ? `${(baseBlock.buyback.kg.now / 1000).toFixed(1)} t`
+                      : `${num(baseBlock.buyback.kg.now)} kg`
+                  }
+                  label="Sourced"
+                  delta={changeOf(baseBlock.buyback.kg)}
+                />
+                <MiniStat
+                  value={ov?.buyback.available ? num(ov.buyback.completed) : "—"}
+                  label="Deals closed"
+                />
+                <MiniStat
+                  value={baseBlock.buyback.per_kg == null ? "—" : inr(baseBlock.buyback.per_kg)}
+                  label="Paid per kg"
+                  note={`${inr(baseBlock.buyback.paid)} in total`}
+                />
+              </div>
+            )}
+          </DashCard>
+        </div>
+      </div>
+
+      </div>
+
+      {/* E-306 — Green Energy Today: the morning brief and top headlines. Not
+          period-driven: news is always "now". Full feed on /ceo/news. */}
+      <GreenNewsCard />
+
+      {/* Trust */}
+      <DashCard
+        id="trust"
+        title="Can you trust these numbers?"
+        action={
+          <span className="text-[13px] text-ink-muted">
+            Every number above is under-counted until these reach 0%. Each
+            opens its fix list.
+          </span>
+        }
+      >
+        {health.isLoading ? (
+          <LoadingBlock />
+        ) : checks.length === 0 ? (
+          <NotAvailable reason={(health.error as Error | null)?.message} />
+        ) : (
+          <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+            {checks.map((c) => (
+              <Link
+                key={c.key}
+                href={c.fix_href}
+                className="flex flex-col gap-1.5 rounded-xl border border-border bg-[#fbfcfd] p-3.5 text-ink transition-colors hover:border-brand-200"
+              >
+                <span className="min-h-[34px] text-[12.5px] leading-snug text-ink-muted">
+                  {c.label}
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="text-[22px] font-bold text-brand-navy tabular-nums">
+                    {c.pct == null ? "—" : `${c.pct}%`}
+                  </span>
+                  <StatusPill tone={c.tone}>{c.state}</StatusPill>
+                </span>
+                <span className="text-xs text-ink-muted">
+                  {c.bad == null
+                    ? "Could not be checked"
+                    : c.bad === 0
+                      ? "Nothing missing"
+                      : `${num(c.bad)} of ${num(c.total ?? 0)}`}
+                </span>
               </Link>
             ))}
           </div>
         )}
-      </div>
-
-      {realizationOpen && overview && (
-        <RealizationDrillDown
-          data={overview.realization}
-          windowLabel={windowLabel}
-          onOpenMetric={(metric, title) => {
-            // Hand off to the row-level list, carrying the SAME window — a
-            // drill-down that quietly reverted to this month would not add up
-            // to the figure that opened it.
-            setRealizationOpen(false);
-            setDrill({ metric, title, params: windowParams.toString() });
-          }}
-          onClose={() => setRealizationOpen(false)}
-        />
-      )}
-
-      {drill && (
-        <DrillDownModal
-          metric={drill.metric}
-          title={drill.title}
-          params={drill.params}
-          onClose={() => setDrill(null)}
-        />
-      )}
+      </DashCard>
     </div>
   );
 }
 
-/** Placeholder with the card's footprint, so the row doesn't reflow on load. */
-function CardSkeleton() {
+function MiniStat({
+  value,
+  label,
+  note,
+  delta,
+}: {
+  value: string;
+  label: string;
+  note?: string;
+  delta?: { text: string; good: boolean } | null;
+}) {
   return (
-    <div className="p-6 rounded-2xl bg-white/80 border border-gray-100 shadow-sm animate-pulse">
-      <div className="h-4 w-24 bg-gray-100 rounded" />
-      <div className="h-8 w-32 bg-gray-100 rounded mt-3" />
-      <div className="h-3 w-40 bg-gray-50 rounded mt-3" />
-    </div>
-  );
-}
-
-function NbfcSigningCard({ rows }: { rows: NbfcSigningRow[] }) {
-  const MAX_VISIBLE = 3;
-  const visibleRows = rows.slice(0, MAX_VISIBLE);
-  const hiddenCount = Math.max(0, rows.length - MAX_VISIBLE);
-
-  return (
-    <div className="p-6 rounded-2xl bg-white border border-gray-100 shadow-sm">
-      <h3 className="text-sm font-semibold text-gray-900 mb-4 flex items-center gap-2">
-        <FileSignature className="w-4 h-4 text-brand-600" />
-        NBFC Agreements in Signing
-        {rows.length > 0 && (
-          <span className="ml-auto text-[11px] font-bold text-brand-700 bg-brand-50 border border-brand-100 rounded-full px-2 py-0.5">
-            {rows.length} awaiting
-          </span>
-        )}
-      </h3>
-      {rows.length === 0 ? (
-        <p className="text-xs text-gray-500 leading-relaxed">
-          No agreements awaiting signatures. Approve a pending NBFC to send the
-          auto-filled agreement to its signers via Digio.
-        </p>
-      ) : (
-        <div className="space-y-3">
-          {visibleRows.map((row) => (
-            <Link
-              key={row.nbfcId}
-              href={`/admin/nbfc/${row.nbfcId}/review`}
-              className="block p-3 rounded-xl bg-gray-50 border border-gray-100 hover:bg-white hover:border-brand-100 transition-all"
-            >
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0 flex-1">
-                  <p className="text-xs font-semibold text-gray-900 truncate">
-                    {row.legalName}
-                  </p>
-                  <p className="text-[10px] font-mono text-gray-400 mt-0.5">
-                    {row.nbfcShortId}
-                  </p>
-                </div>
-                <ArrowRight className="w-3 h-3 text-gray-400 shrink-0 mt-1" />
-              </div>
-              <div className="flex items-center gap-2 mt-2">
-                <span className={lspStatusToneClass(row.agreementStatus)}>
-                  {row.agreementStatus}
-                </span>
-                {row.total > 0 && (
-                  <span className="text-[11px] text-gray-500 font-mono">
-                    Signed {row.signed}/{row.total}
-                  </span>
-                )}
-              </div>
-            </Link>
-          ))}
-        </div>
+    <div className="flex flex-col gap-0.5">
+      <span className="text-2xl font-bold text-brand-navy tabular-nums">{value}</span>
+      <span className="text-xs text-ink-muted">{label}</span>
+      {delta && (
+        <span className={`text-[11.5px] font-semibold ${delta.good ? "text-success" : "text-danger"}`}>
+          {delta.text}
+        </span>
       )}
-      <Link href="/admin/nbfc/approvals">
-        <button className="w-full py-2.5 text-xs font-semibold text-brand-700 hover:bg-brand-50 rounded-xl transition-colors flex items-center justify-center gap-2 mt-4">
-          {hiddenCount > 0
-            ? `View all (${rows.length})`
-            : "Pending NBFC Approvals"}{" "}
-          <ArrowRight className="w-3 h-3" />
-        </button>
-      </Link>
+      {note && <span className="text-[11.5px] text-ink-muted">{note}</span>}
     </div>
   );
 }

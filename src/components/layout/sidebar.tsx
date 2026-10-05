@@ -81,6 +81,11 @@ import {
 } from "@/lib/dealer/dealer-type";
 import { capabilitiesFor } from "@/lib/dealer/dealer-capabilities";
 import { readSnapshot, writeSnapshot } from "@/lib/session-snapshot";
+import {
+  NAV_LAYOUTS,
+  RedesignedSidebarNav,
+  applyNavLayout,
+} from "@/components/layout/SidebarRedesign";
 
 /**
  * Session snapshot of the two flags that decide which dealer menu items exist.
@@ -568,6 +573,13 @@ const roleNavigation: Record<string, any[]> = {
           href: "/admin/escalations",
         },
         {
+          // E-221 — quotes waiting for the CEO's decision (off the overview).
+          id: "ceo-quotations",
+          label: "Quote Approvals",
+          icon: FileCheck,
+          href: "/ceo/quotations",
+        },
+        {
           id: "ceo-reports",
           label: "Reports",
           icon: BarChart3,
@@ -630,6 +642,13 @@ const roleNavigation: Record<string, any[]> = {
           href: "/admin/reports/dealer-health",
         },
         {
+<<<<<<< HEAD
+          // ID 65 — dealer accounts: owner, onboarded by, GSTIN.
+          id: "ceo-account-management",
+          label: "Account Management",
+          icon: Briefcase,
+          href: "/admin/account-management",
+=======
           // P1-1 / P1-2 — dealer accounts: owner, onboarded by, GSTIN.
           id: "ceo-accounts",
           label: "Accounts",
@@ -642,6 +661,7 @@ const roleNavigation: Record<string, any[]> = {
           label: "Invoice Ledger",
           icon: Receipt,
           href: "/admin/reports/invoice-ledger",
+>>>>>>> fac2a80905456e04c4d89ee14f26fdf80ae34f9e
         },
       ],
     },
@@ -677,6 +697,13 @@ const roleNavigation: Record<string, any[]> = {
           label: "Sales Invoices",
           icon: Receipt,
           href: "/ceo/invoices",
+        },
+        // ID 72 — revenue and gross margin by month and business type.
+        {
+          id: "revenue-costs",
+          label: "Revenue & costs",
+          icon: TrendingUp,
+          href: "/ceo/finance",
         },
       ],
     },
@@ -915,6 +942,13 @@ const roleNavigation: Record<string, any[]> = {
           label: "Dealer Health",
           icon: TrendingUp,
           href: "/admin/reports/dealer-health",
+        },
+        {
+          // ID 65 — dealer accounts: owner, onboarded by, GSTIN.
+          id: "sh-account-management",
+          label: "Account Management",
+          icon: Briefcase,
+          href: "/admin/account-management",
         },
         // "Notifications" (formerly "Settings") used to sit here, buried in
         // LEAD MANAGEMENT. It now lives in ROLE_TRAILING_SECTIONS so it renders
@@ -1347,6 +1381,13 @@ const roleNavigation: Record<string, any[]> = {
           icon: LayoutDashboard,
           href: "/inventory-manager",
         },
+        // ID 13 — Reports › Data downloads (the Inventory dataset).
+        {
+          id: "im-data-downloads",
+          label: "Data Downloads",
+          icon: BarChart3,
+          href: "/admin/reports",
+        },
       ],
     },
     {
@@ -1509,6 +1550,13 @@ const roleNavigation: Record<string, any[]> = {
           href: "/admin/reports/dealer-health",
         },
         {
+<<<<<<< HEAD
+          // ID 65 — dealer accounts: owner, onboarded by, GSTIN.
+          id: "admin-account-management",
+          label: "Account Management",
+          icon: Briefcase,
+          href: "/admin/account-management",
+=======
           // P1-1 / P1-2 — dealer accounts: owner, onboarded by, GSTIN.
           id: "admin-accounts",
           label: "Accounts",
@@ -1521,6 +1569,7 @@ const roleNavigation: Record<string, any[]> = {
           label: "Invoice Ledger",
           icon: Receipt,
           href: "/admin/reports/invoice-ledger",
+>>>>>>> fac2a80905456e04c4d89ee14f26fdf80ae34f9e
         },
         {
           id: "admin-settings",
@@ -2001,6 +2050,13 @@ const roleNavigation: Record<string, any[]> = {
           icon: TrendingUp,
           href: "/inside-sales/performance",
         },
+        // ID 13 — Reports › Data downloads, this rep's own rows only.
+        {
+          id: "is-data-downloads",
+          label: "Data Downloads",
+          icon: BarChart3,
+          href: "/admin/reports",
+        },
         {
           id: "is-link-whatsapp",
           label: "Link WhatsApp",
@@ -2035,6 +2091,13 @@ const roleNavigation: Record<string, any[]> = {
           label: "My Performance",
           icon: TrendingUp,
           href: "/asm/performance",
+        },
+        // ID 13 — Reports › Data downloads, this ASM's own rows only.
+        {
+          id: "asm-data-downloads",
+          label: "Data Downloads",
+          icon: BarChart3,
+          href: "/admin/reports",
         },
         {
           id: "asm-link-whatsapp",
@@ -3090,6 +3153,29 @@ export function Sidebar() {
     };
   }, [inferredRole]);
 
+  // E-221 — count badge on the CEO "Quote approvals" link: quotes waiting for
+  // the CEO's decision. A rep is blocked until each is acted on, so it polls.
+  const [pendingQuoteCount, setPendingQuoteCount] = useState<number | null>(null);
+  useEffect(() => {
+    if (inferredRole !== "ceo") return;
+    let cancelled = false;
+    const load = () =>
+      fetch("/api/dashboard/ceo/quotations", { cache: "no-store" })
+        .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+        .then((j) => {
+          if (!cancelled) setPendingQuoteCount(Number(j?.data?.total ?? 0));
+        })
+        .catch(() => {
+          /* silent — badge stays absent on failure */
+        });
+    void load();
+    const t = setInterval(load, 60_000);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, [inferredRole]);
+
   // Live-attack badge (E-216) — count of NEW security events, polled so the
   // "Live Attacks" link lights up in near-real-time when the detector fires.
   const [securityEventCount, setSecurityEventCount] = useState<number | null>(null);
@@ -3210,6 +3296,17 @@ export function Sidebar() {
     }));
   }
 
+  if (pendingQuoteCount && pendingQuoteCount > 0) {
+    menuItems = menuItems.map((group: any) => ({
+      ...group,
+      items: group.items.map((item: any) =>
+        item.id === "ceo-quotations"
+          ? { ...item, badge: pendingQuoteCount > 99 ? "99+" : pendingQuoteCount }
+          : item,
+      ),
+    }));
+  }
+
   if (vendorInboxCount && vendorInboxCount > 0) {
     menuItems = menuItems.map((group: any) => ({
       ...group,
@@ -3249,6 +3346,13 @@ export function Sidebar() {
     }));
   }
 
+  // CRM Reporting & Dashboards redesign — the CEO and Sales Head get the
+  // regrouped, text-only menu. Applied AFTER every badge pass above, so the
+  // layout only moves finished items around (see SidebarRedesign.tsx).
+  const navLayout = NAV_LAYOUTS[inferredRole];
+  const redesignedGroups = navLayout ? applyNavLayout(navLayout, menuItems) : null;
+  const redesignedActiveId = redesignedGroups ? getActiveItemId(redesignedGroups, pathname) : null;
+
   // BRD §6.B sidebar — solid #02314e navy, 9px ALL CAPS section labels at
   // rgba(255,255,255,0.30), 13px DM Sans Medium nav items, 3px transparent
   // left border, active = `rgba(19,143,198,0.15)` bg + `#138fc6` left border
@@ -3257,13 +3361,23 @@ export function Sidebar() {
     <>
       {/* Desktop sidebar — fixed 256px, visible from md up. Unchanged output. */}
       <div className="sidebar-shell w-64 h-screen flex-col fixed left-0 top-0 z-10 hidden md:flex">
-        <SidebarNav
-          menuItems={menuItems}
-          pathname={pathname}
-          user={user}
-          loading={loading}
-          inferredRole={inferredRole}
-        />
+        {redesignedGroups && navLayout ? (
+          <RedesignedSidebarNav
+            groups={redesignedGroups}
+            activeItemId={redesignedActiveId}
+            roleLabel={navLayout.roleLabel}
+            user={user}
+            loading={loading}
+          />
+        ) : (
+          <SidebarNav
+            menuItems={menuItems}
+            pathname={pathname}
+            user={user}
+            loading={loading}
+            inferredRole={inferredRole}
+          />
+        )}
       </div>
 
       {/* Mobile drawer — phone-only (md:hidden), rendered on EVERY route this
@@ -3304,14 +3418,25 @@ export function Sidebar() {
           >
             <X className="w-5 h-5" />
           </button>
-          <SidebarNav
-            menuItems={menuItems}
-            pathname={pathname}
-            user={user}
-            loading={loading}
-            inferredRole={inferredRole}
-            onNavigate={closeSidebar}
-          />
+          {redesignedGroups && navLayout ? (
+            <RedesignedSidebarNav
+              groups={redesignedGroups}
+              activeItemId={redesignedActiveId}
+              roleLabel={navLayout.roleLabel}
+              user={user}
+              loading={loading}
+              onNavigate={closeSidebar}
+            />
+          ) : (
+            <SidebarNav
+              menuItems={menuItems}
+              pathname={pathname}
+              user={user}
+              loading={loading}
+              inferredRole={inferredRole}
+              onNavigate={closeSidebar}
+            />
+          )}
         </aside>
       </div>
     </>

@@ -117,6 +117,7 @@ function createInitialAgreementState(): DealerOnboardingState["agreement"] {
     dealerSigningMethod: "",
 
     salesManager: {
+      userId: "",
       name: "",
       email: "",
       mobile: "",

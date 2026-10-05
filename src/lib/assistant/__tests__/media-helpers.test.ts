@@ -62,11 +62,11 @@ describe("document reader (vision.ts)", () => {
     it("keeps well-formed values, drops malformed ones and names them", () => {
         const { fields, dropped } = V.checkReadFields({
             dealer_name: "  Rakesh   Sharma ", phone: "+91 98765-43210", alt_phone: "12345", email: "Sharma@Gmail.com",
-            gstin: "27 abcde1234f1z5", pincode: "411 013", city: "Pune", state: "null",
+            gstin: "27 abcde1234f1z0", pincode: "411 013", city: "Pune", state: "null",
         });
         expect(fields).toMatchObject({
             dealer_name: "Rakesh Sharma", phone: "9876543210", alt_phone: null, email: "sharma@gmail.com",
-            gstin: "27ABCDE1234F1Z5", pincode: "411013", city: "Pune", state: null,
+            gstin: "27ABCDE1234F1Z0", pincode: "411013", city: "Pune", state: null,
         });
         expect(dropped).toEqual(["alt_phone"]);
         expect(V.checkReadFields({ gstin: "27ABCDE1234" }).dropped).toEqual(["gstin"]);
@@ -79,7 +79,7 @@ describe("document reader (vision.ts)", () => {
     });
 
     it("OpenRouter first (image as image_url, PDF as file); falls back to the Gemini key on failure", async () => {
-        const answer = { doc_kind: "gst_certificate", summary: "GST", gstin: "27ABCDE1234F1Z5" };
+        const answer = { doc_kind: "gst_certificate", summary: "GST", gstin: "27ABCDE1234F1Z0" };
         const bodies: { url: string; body: Record<string, unknown> }[] = [];
         const fetchImpl = vi.fn(async (url: string, init: RequestInit) => {
             bodies.push({ url, body: JSON.parse(String(init.body)) });
@@ -88,7 +88,7 @@ describe("document reader (vision.ts)", () => {
         });
         const env = { OPENROUTER_API_KEY: "or", WA_ASSIST_GEMINI_API_KEY: "g", ASSISTANT_MODEL: "gemini-x" } as unknown as NodeJS.ProcessEnv;
         const r = await V.readDocument({ bytes: Buffer.from("%PDF"), mimeType: "application/pdf", fetchImpl: fetchImpl as never, env });
-        expect(r).toMatchObject({ kind: "ok", doc_kind: "gst_certificate", fields: { gstin: "27ABCDE1234F1Z5" } });
+        expect(r).toMatchObject({ kind: "ok", doc_kind: "gst_certificate", fields: { gstin: "27ABCDE1234F1Z0" } });
         const or = bodies[0].body as { model: string; messages: { content: { type: string }[] }[]; response_format: { json_schema: { strict: boolean } } };
         expect(or.model).toBe("google/gemini-3.5-flash-lite");
         expect(or.messages[0].content[0].type).toBe("file");

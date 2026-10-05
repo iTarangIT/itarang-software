@@ -156,8 +156,12 @@ export async function GET(req: NextRequest) {
           r.payment_reference,
           r.needs_attention ? r.attention_reason || "yes" : "",
           r.gstin_key,
+<<<<<<< HEAD
+          r.dealer_name ?? r.dealer_lead_id ?? r.acct_id ?? "Not linked",
+=======
           r.dealer_name ?? (r.dealer_lead_id ? r.dealer_lead_id : "Not linked"),
           r.match_status ? (MATCH_LABEL[r.match_status] ?? r.match_status) : "",
+>>>>>>> fac2a80905456e04c4d89ee14f26fdf80ae34f9e
         ]
           .map(csvCell)
           .join(","),

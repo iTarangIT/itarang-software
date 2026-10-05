@@ -202,24 +202,37 @@ async function moneyTile(from: string, toExcl: string, prevFrom: string | null, 
     const win = (a: string, b: string) => sql`r.invoice_date >= ${a}::date AND r.invoice_date < ${b}::date`;
     const [typeRows, spocRows, cityRows, prev] = await Promise.all([
         rows(sql`
+<<<<<<< HEAD
+            SELECT CASE WHEN NOT r.dealer_linked THEN '__unlinked'
+=======
             SELECT CASE WHEN r.dealer_lead_id IS NULL AND r.account_id IS NULL THEN '__unlinked'
+>>>>>>> fac2a80905456e04c4d89ee14f26fdf80ae34f9e
                         ELSE COALESCE(to_jsonb(dl) ->> 'business_type', '__unset') END AS t,
                    COALESCE(SUM(r.total), 0) AS v
               FROM ${inv} r LEFT JOIN dealer_leads dl ON dl.id = r.dealer_lead_id
              WHERE ${REVENUE_NOT_VOID} AND ${win(from, toExcl)}
              GROUP BY 1`),
         rows(sql`
+<<<<<<< HEAD
+            -- The lead's current owner; for a dealer with no lead, the
+            -- account's owner (gstinMatch.ts — accounts are matched too).
+            SELECT COALESCE(u.name, '(no owner)') AS name, COALESCE(SUM(r.total), 0) AS v
+              FROM ${inv} r LEFT JOIN dealer_leads dl ON dl.id = r.dealer_lead_id
+              LEFT JOIN users u ON u.id::text = COALESCE(dl.current_owner_id, r.acct_owner_id)
+             WHERE ${REVENUE_NOT_VOID} AND ${win(from, toExcl)} AND r.dealer_linked
+=======
             -- E-321 (ID 68): the owner on the invoice date, not today's owner.
             SELECT COALESCE(u.name, '(no owner)') AS name, COALESCE(SUM(r.total), 0) AS v
               FROM ${inv} r
               LEFT JOIN users u ON u.id::text = r.dealer_owner_id::text
              WHERE ${REVENUE_NOT_VOID} AND ${win(from, toExcl)}
                AND (r.dealer_lead_id IS NOT NULL OR r.account_id IS NOT NULL)
+>>>>>>> fac2a80905456e04c4d89ee14f26fdf80ae34f9e
              GROUP BY 1 ORDER BY v DESC LIMIT 10`),
         rows(sql`
-            SELECT COALESCE(NULLIF(btrim(dl.city), ''), 'Unknown city') AS city, COALESCE(SUM(r.total), 0) AS v
-              FROM ${inv} r JOIN dealer_leads dl ON dl.id = r.dealer_lead_id
-             WHERE ${REVENUE_NOT_VOID} AND ${win(from, toExcl)}
+            SELECT COALESCE(NULLIF(btrim(dl.city), ''), r.acct_city, 'Unknown city') AS city, COALESCE(SUM(r.total), 0) AS v
+              FROM ${inv} r LEFT JOIN dealer_leads dl ON dl.id = r.dealer_lead_id
+             WHERE ${REVENUE_NOT_VOID} AND ${win(from, toExcl)} AND r.dealer_linked
              GROUP BY 1 ORDER BY v DESC LIMIT 10`),
         prevFrom && prevTo
             ? rows(sql`SELECT COALESCE(SUM(r.total), 0) AS v FROM ${inv} r WHERE ${REVENUE_NOT_VOID} AND ${win(prevFrom, prevTo)}`)
@@ -248,8 +261,9 @@ async function engineTile(from: string, toExcl: string, prevFrom: string | null,
               (SELECT COUNT(*) FROM dealer_leads dl WHERE dl.is_active IS NOT FALSE AND ${inWinNaive(sql`dl.created_at`, a, b)}) AS leads_in,
               (SELECT COUNT(*) FROM dealer_leads dl WHERE dl.lead_status = 'Converted' AND ${inWin(sql`dl.closed_at`, a, b)}) AS converted,
               (SELECT COUNT(*) FROM (
-                  SELECT r.dealer_lead_id, MIN(r.invoice_date) AS first_d
-                    FROM ${inv} r WHERE r.dealer_lead_id IS NOT NULL AND ${REVENUE_NOT_VOID}
+                  -- One dealer = its lead, or its account when it has no lead.
+                  SELECT COALESCE(r.dealer_lead_id, 'acct:' || r.acct_id) AS dealer, MIN(r.invoice_date) AS first_d
+                    FROM ${inv} r WHERE r.dealer_linked AND ${REVENUE_NOT_VOID}
                    GROUP BY 1) f
                 WHERE f.first_d >= ${a}::date AND f.first_d < ${b}::date) AS first_orders`);
         return r;

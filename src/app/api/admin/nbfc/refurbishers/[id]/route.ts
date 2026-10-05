@@ -9,6 +9,7 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
+import { isValidGstin } from "@/lib/leads/gstin";
 import { clientError, validationError } from "@/lib/nbfc/http-error";
 import { resolveAdminActor, statusFromError } from "@/lib/nbfc/admin/auth";
 import { getRefurbisher, updateRefurbisher } from "@/lib/refurbisher/service";
@@ -28,7 +29,14 @@ const Patch = z
     address: z.string().trim().max(1000).nullable().optional(),
     city: z.string().trim().max(120).nullable().optional(),
     state: z.string().trim().max(120).nullable().optional(),
-    gstin: z.string().trim().max(20).nullable().optional(),
+    // Optional, but when given it passes the shared shape + check-digit rule (ID 62).
+    gstin: z
+      .string()
+      .trim()
+      .max(20)
+      .refine((g) => !g || isValidGstin(g), "That is not a valid GSTIN - check it for a typing mistake.")
+      .nullable()
+      .optional(),
     notes: z.string().trim().max(2000).nullable().optional(),
     is_active: z.boolean().optional(),
   })

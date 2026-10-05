@@ -10,6 +10,7 @@ import {
 } from "@/lib/db/schema";
 import { recordLeadCapture } from "@/lib/leads/lead-registry";
 import { markDocsSubmitted } from "@/lib/onboarding/leadMilestones";
+import { resolveSalesperson, salespersonMobile } from "@/lib/onboarding/salesperson";
 
 type NullableString = string | null;
 type SafeRecord = Record<string, unknown>;
@@ -178,22 +179,42 @@ export async function POST(req: NextRequest) {
       cleanObject(agreementConfig["itarangSignatory2"]) ||
       cleanObject(body["itarangSignatory2"]);
 
-    const salesManagerName = cleanString(
-      salesManager["name"] ?? salesManager["salesManagerName"]
-    );
+    // ID 66 (E-321): the salesperson is picked from a dropdown and arrives as a
+    // user id. Name, email and mobile then come from that user's row — the
+    // wizard no longer collects them — so the agreement, the emails and the
+    // exports that read the typed columns keep working.
+    const salesperson = await resolveSalesperson(cleanString(salesManager["userId"]));
 
-    const salesManagerEmail = cleanEmail(
-      salesManager["email"] ??
-        salesManager["emailId"] ??
-        salesManager["salesManagerEmail"]
-    );
+    const salesManagerName = salesperson
+      ? salesperson.name
+      : cleanString(salesManager["name"] ?? salesManager["salesManagerName"]);
 
-    const salesManagerMobile = cleanPhone(
-      salesManager["mobile"] ??
-        salesManager["phone"] ??
-        salesManager["contactNumber"] ??
-        salesManager["salesManagerMobile"]
-    );
+    const salesManagerEmail = salesperson
+      ? cleanEmail(salesperson.email)
+      : cleanEmail(
+          salesManager["email"] ??
+            salesManager["emailId"] ??
+            salesManager["salesManagerEmail"]
+        );
+
+    const salesManagerMobile = salesperson
+      ? salespersonMobile(salesperson.phone)
+      : cleanPhone(
+          salesManager["mobile"] ??
+            salesManager["phone"] ??
+            salesManager["contactNumber"] ??
+            salesManager["salesManagerMobile"]
+        );
+
+    if (salesperson) {
+      agreementConfig["salesManager"] = {
+        ...salesManager,
+        userId: salesperson.id,
+        name: salesManagerName,
+        email: salesManagerEmail ?? "",
+        mobile: salesManagerMobile ?? "",
+      };
+    }
 
     const itarangSignatory1Name = cleanString(itarangSignatory1["name"]);
     const itarangSignatory1Email = cleanEmail(itarangSignatory1["email"]);
@@ -344,6 +365,9 @@ export async function POST(req: NextRequest) {
       sales_manager_name: salesManagerName,
       sales_manager_email: salesManagerEmail,
       sales_manager_mobile: salesManagerMobile,
+      // Only ever set, never cleared, by an autosave: an Admin may have picked
+      // the salesperson at verification, and a later save must not undo it.
+      ...(salesperson ? { salesperson_user_id: salesperson.id } : {}),
       itarang_signatory_1_name: itarangSignatory1Name,
       itarang_signatory_1_email: itarangSignatory1Email,
       itarang_signatory_1_mobile: itarangSignatory1Mobile,

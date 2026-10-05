@@ -165,11 +165,16 @@ const SYSTEM_PROMPT = [
   "If a field is genuinely not present on the document, return null. Never guess an amount, a date or a GSTIN.",
 ].join(" ");
 
-export async function extractSalesInvoice(
+/**
+ * The invoice as the model sees it: each PDF page rendered, plus its enlarged
+ * strips. Shared with extractSalesInvoiceLines so both readings look at the
+ * same pixels.
+ */
+export async function salesInvoiceMediaParts(
   buffer: Buffer,
   mimeType: string,
   fileName: string,
-): Promise<ExtractedSalesInvoice> {
+): Promise<ChatCompletionContentPart[]> {
   const imagePart = (bytes: Buffer, type: string): ChatCompletionContentPart => ({
     type: "image_url",
     image_url: { url: `data:${type};base64,${bytes.toString("base64")}`, detail: "high" },
@@ -213,6 +218,15 @@ export async function extractSalesInvoice(
   } else {
     throw new Error(`Unsupported file type for extraction: ${mimeType}`);
   }
+  return mediaParts;
+}
+
+export async function extractSalesInvoice(
+  buffer: Buffer,
+  mimeType: string,
+  fileName: string,
+): Promise<ExtractedSalesInvoice> {
+  const mediaParts = await salesInvoiceMediaParts(buffer, mimeType, fileName);
 
   const openai = getOpenAI();
   const completion = await openai.chat.completions.create({
