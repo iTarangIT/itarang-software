@@ -18,7 +18,8 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { BUSINESS_TYPE_OPTIONS } from "@/lib/leads/businessType";
-import { LEAD_ORIGIN_LABEL, LEAD_ORIGINS } from "@/lib/leads/leadSourceVocab";
+import { CAMPAIGN_REQUIRED_MESSAGE, LEAD_ORIGIN_LABEL, LEAD_ORIGINS, campaignRequired } from "@/lib/leads/leadSourceVocab";
+import { CampaignPicker } from "@/components/leads/CampaignPicker";
 
 // ─── Constants ────────────────────────────────────────────────
 
@@ -69,6 +70,8 @@ export default function NewDealerLeadPage() {
     // E-296 "Type of Business" and ID 81 "Found via" — both required.
     business_type: "",
     origin: "",
+    // ID 81: acquisition campaign — required for Trade event / Digital ad.
+    campaign_id: "",
   });
 
   const update = (field: string, value: string) => {
@@ -90,6 +93,7 @@ export default function NewDealerLeadPage() {
     // ID 81: source can only be captured at creation.
     if (!form.business_type) e.business_type = "Pick the type of business";
     if (!form.origin) e.origin = "Pick how the dealer was found";
+    if (campaignRequired(form.origin) && !form.campaign_id) e.campaign_id = CAMPAIGN_REQUIRED_MESSAGE;
     setErrors(e);
     return Object.keys(e).length === 0;
   };
@@ -111,6 +115,7 @@ export default function NewDealerLeadPage() {
           current_status: form.current_status,
           business_type: form.business_type,
           origin: form.origin,
+          campaign_id: form.campaign_id || null,
         }),
       });
       const data = await res.json();
@@ -316,6 +321,20 @@ export default function NewDealerLeadPage() {
                 </div>
                 {errors.origin && <p className="mt-1.5 text-xs text-rose-600">{errors.origin}</p>}
               </div>
+
+              {/* Campaign (ID 81) — which event / ad / list; required for two origins. */}
+              {form.origin && (
+                <div>
+                  <CampaignPicker
+                    origin={form.origin}
+                    value={form.campaign_id}
+                    onChange={(v) => update("campaign_id", v)}
+                    labelClassName="flex items-center gap-1.5 text-xs font-semibold text-gray-600 mb-2.5"
+                    controlClassName="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm"
+                  />
+                  {errors.campaign_id && <p className="mt-1.5 text-xs text-rose-600">{errors.campaign_id}</p>}
+                </div>
+              )}
 
               {/* Language */}
               <div>

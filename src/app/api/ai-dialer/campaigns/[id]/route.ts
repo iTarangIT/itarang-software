@@ -16,9 +16,13 @@ import {
   CAMPAIGN_LEAD_STATUSES,
   type CampaignLeadStatus,
 } from "@/lib/ai-dialer/campaignLeadStatus";
+import { requireCampaignReader } from "@/lib/ai-dialer/campaignAccess";
 
 export const GET = withErrorHandler(
   async (_req: Request, ctx: { params: Promise<{ id: string }> }) => {
+    // ID 45: was unauthenticated. Campaign-wide counts only — the lead table
+    // (/leads) is what a rep sees scoped to their own leads.
+    await requireCampaignReader();
     const { id } = await ctx.params;
     if (!id) return errorResponse("Campaign id required", 400);
 

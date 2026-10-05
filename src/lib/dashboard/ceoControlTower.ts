@@ -34,7 +34,14 @@ import { summarizeNeedsAttention } from "@/lib/leads/needsAttention";
 import { listDealerHealth } from "@/lib/dealers/accountHealth";
 import type { AccountBucket } from "@/lib/dealers/accountHealthRules";
 import { businessTypeLabel } from "@/lib/leads/businessType";
-import { engagedCall, humanCall } from "@/lib/reports/metricDefinitions";
+import {
+    AWAITING_ASSIGNMENT_OVERDUE_DAYS,
+    awaitingAssignment,
+    daysAwaitingAssignment,
+} from "@/lib/leads/salesReady";
+import { getEngagedCallRule } from "@/lib/reports/engagedCallRule";
+import { engagedCall, humanCall, measuredCall } from "@/lib/reports/metricDefinitions";
+import { scrapKgSourced } from "@/lib/buyback/scrapKgSourced";
 
 export type Compare = { now: number; prev: number | null };
 
@@ -43,6 +50,8 @@ export type ControlTower = {
     exceptions: null | {
         quotes_pending: number;
         unassigned_over_7d: number;
+        /** Every sales-ready lead with no owner, whatever its wait (ID 82). */
+        awaiting_assignment_total: number;
         idle_over_7d: number;
         red_dormant_dealers: number;
         at_risk_90d: number;
@@ -69,6 +78,8 @@ export type ControlTower = {
     };
     people: null | {
         basis: "target" | "converted";
+        /** The engaged-call threshold in force (a setting — ID 59), for the column header. */
+        engaged_min_seconds: number;
         rows: Array<{
             spoc_id: string;
             name: string;
@@ -111,6 +122,10 @@ const n = (v: unknown) => Number(v ?? 0);
 /** [from, toExcl) as IST dates on a timestamptz column. */
 const inWin = (col: ReturnType<typeof sql>, from: string, toExcl: string) =>
     sql`(${col} AT TIME ZONE 'Asia/Kolkata')::date >= ${from}::date AND (${col} AT TIME ZONE 'Asia/Kolkata')::date < ${toExcl}::date`;
+// Same window for a timestamp WITHOUT time zone holding UTC (dealer_leads.created_at):
+// read it as UTC first, or leads created 00:00–05:30 IST land on the previous day.
+const inWinNaive = (col: ReturnType<typeof sql>, from: string, toExcl: string) =>
+    sql`((${col} AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Kolkata')::date >= ${from}::date AND ((${col} AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Kolkata')::date < ${toExcl}::date`;
 
 export async function buildControlTower(w: { startStr: string | null; endStr: string | null }): Promise<ControlTower> {
     const [{ today }] = (await rows(sql`SELECT (now() AT TIME ZONE 'Asia/Kolkata')::date::text AS today`)) as Array<{ today: string }>;
@@ -141,14 +156,16 @@ export async function buildControlTower(w: { startStr: string | null; endStr: st
 async function exceptionsTile(): Promise<NonNullable<ControlTower["exceptions"]>> {
     const [q] = await rows(sql`
         SELECT
-          (SELECT COUNT(*) FROM dealer_lead_commercials WHERE approval_status = 'pending') AS quotes_pending,
+          (SELECT COUNT(*) FROM dealer_lead_commercials WHERE approval_status = 'pending' AND withdrawn_at IS NULL) AS quotes_pending,
           -- ID 82: "Sales-ready leads awaiting assignment" — the clock runs
-          -- from the Sales-ready event (E-314, read via to_jsonb so a DB
-          -- without it reads 0), not from creation.
+          -- from the Sales-ready event, not from creation, and WHO is awaiting
+          -- is the one rule the Ready to assign page lists by
+          -- (awaitingAssignment: dead numbers are not awaiting anyone). The
+          -- card opens that page filtered to the same 7+ days.
           (SELECT COUNT(*) FROM dealer_leads dl
-            WHERE dl.current_owner_id IS NULL AND dl.is_active IS NOT FALSE
-              AND COALESCE(dl.lead_status, '') NOT IN ('Won', 'Converted', 'Lost')
-              AND (to_jsonb(dl) ->> 'sales_ready_at')::timestamptz < now() - INTERVAL '7 days') AS unassigned
+            WHERE ${awaitingAssignment()}
+              AND ${daysAwaitingAssignment()} >= ${AWAITING_ASSIGNMENT_OVERDUE_DAYS}) AS unassigned,
+          (SELECT COUNT(*) FROM dealer_leads dl WHERE ${awaitingAssignment()}) AS awaiting_total
     `);
     const [idle, dealers, below] = await Promise.all([
         summarizeNeedsAttention({ minDays: 7 }),
@@ -170,6 +187,7 @@ async function exceptionsTile(): Promise<NonNullable<ControlTower["exceptions"]>
     return {
         quotes_pending: n(q.quotes_pending),
         unassigned_over_7d: n(q.unassigned),
+        awaiting_assignment_total: n(q.awaiting_total),
         idle_over_7d: idle.reduce((a, h) => a + h.idle, 0),
         red_dormant_dealers: risky.length,
         at_risk_90d: risky.reduce((a, d) => a + d.revenue_90d, 0),
@@ -184,17 +202,19 @@ async function moneyTile(from: string, toExcl: string, prevFrom: string | null, 
     const win = (a: string, b: string) => sql`r.invoice_date >= ${a}::date AND r.invoice_date < ${b}::date`;
     const [typeRows, spocRows, cityRows, prev] = await Promise.all([
         rows(sql`
-            SELECT CASE WHEN r.dealer_lead_id IS NULL THEN '__unlinked'
+            SELECT CASE WHEN r.dealer_lead_id IS NULL AND r.account_id IS NULL THEN '__unlinked'
                         ELSE COALESCE(to_jsonb(dl) ->> 'business_type', '__unset') END AS t,
                    COALESCE(SUM(r.total), 0) AS v
               FROM ${inv} r LEFT JOIN dealer_leads dl ON dl.id = r.dealer_lead_id
              WHERE ${REVENUE_NOT_VOID} AND ${win(from, toExcl)}
              GROUP BY 1`),
         rows(sql`
+            -- E-321 (ID 68): the owner on the invoice date, not today's owner.
             SELECT COALESCE(u.name, '(no owner)') AS name, COALESCE(SUM(r.total), 0) AS v
-              FROM ${inv} r JOIN dealer_leads dl ON dl.id = r.dealer_lead_id
-              LEFT JOIN users u ON u.id::text = dl.current_owner_id
+              FROM ${inv} r
+              LEFT JOIN users u ON u.id::text = r.dealer_owner_id::text
              WHERE ${REVENUE_NOT_VOID} AND ${win(from, toExcl)}
+               AND (r.dealer_lead_id IS NOT NULL OR r.account_id IS NOT NULL)
              GROUP BY 1 ORDER BY v DESC LIMIT 10`),
         rows(sql`
             SELECT COALESCE(NULLIF(btrim(dl.city), ''), 'Unknown city') AS city, COALESCE(SUM(r.total), 0) AS v
@@ -225,7 +245,7 @@ async function engineTile(from: string, toExcl: string, prevFrom: string | null,
     const counts = async (a: string, b: string) => {
         const [r] = await rows(sql`
             SELECT
-              (SELECT COUNT(*) FROM dealer_leads dl WHERE dl.is_active IS NOT FALSE AND ${inWin(sql`dl.created_at`, a, b)}) AS leads_in,
+              (SELECT COUNT(*) FROM dealer_leads dl WHERE dl.is_active IS NOT FALSE AND ${inWinNaive(sql`dl.created_at`, a, b)}) AS leads_in,
               (SELECT COUNT(*) FROM dealer_leads dl WHERE dl.lead_status = 'Converted' AND ${inWin(sql`dl.closed_at`, a, b)}) AS converted,
               (SELECT COUNT(*) FROM (
                   SELECT r.dealer_lead_id, MIN(r.invoice_date) AS first_d
@@ -242,8 +262,8 @@ async function engineTile(from: string, toExcl: string, prevFrom: string | null,
                    COUNT(*) FILTER (WHERE created_at >= now() - INTERVAL '60 days' AND created_at < now() - INTERVAL '30 days') AS c30,
                    COUNT(*) FILTER (WHERE created_at >= now() - INTERVAL '60 days' AND created_at < now() - INTERVAL '30 days'
                                       AND lead_status = 'Converted' AND closed_at <= created_at + INTERVAL '30 days') AS c30_conv,
-                   COUNT(*) FILTER (WHERE ${inWin(sql`created_at`, from, toExcl)}) AS coh,
-                   COUNT(*) FILTER (WHERE ${inWin(sql`created_at`, from, toExcl)} AND lead_status = 'Converted') AS coh_conv
+                   COUNT(*) FILTER (WHERE ${inWinNaive(sql`created_at`, from, toExcl)}) AS coh,
+                   COUNT(*) FILTER (WHERE ${inWinNaive(sql`created_at`, from, toExcl)} AND lead_status = 'Converted') AS coh_conv
               FROM dealer_leads WHERE is_active IS NOT FALSE`),
         rows(sql`
             WITH called AS (
@@ -295,15 +315,8 @@ async function baseTile(from: string, toExcl: string, prevFrom: string | null, p
     const by = {} as Record<AccountBucket, number>;
     for (const d of dealers) by[d.bucket] = (by[d.bucket] ?? 0) + 1;
 
-    const kg = async (a: string, b: string) => {
-        const [r] = await rows(sql`
-            SELECT COALESCE(SUM(l.quantity * l.unit_weight_kg), 0) AS kg
-              FROM (SELECT DISTINCT al.request_id FROM buyback_activity_log al
-                     WHERE al.action = 'complete_pickup' AND ${inWin(sql`al.created_at`, a, b)}) p
-              JOIN buyback_batches bt ON bt.request_id = p.request_id
-              JOIN buyback_lines l ON l.batch_id = bt.id`);
-        return n(r.kg);
-    };
+    // One definition with the Daily Sales email's "Scrap sourced (kg)" row.
+    const kg = (a: string, b: string) => scrapKgSourced(a, b);
     const [kgNow, kgPrev, money] = await Promise.all([
         kg(from, toExcl),
         prevFrom && prevTo ? kg(prevFrom, prevTo) : Promise.resolve(null),
@@ -330,17 +343,19 @@ async function baseTile(from: string, toExcl: string, prevFrom: string | null, p
 // ── 5 People ─────────────────────────────────────────────────────────────────
 async function peopleTile(from: string, toIncl: string) {
     const { buildSalesDashboard } = await import("@/lib/admin/salesDashboard");
-    const [dash, idle, engaged, pct] = await Promise.all([
+    const [dash, idle, rule, engaged, pct] = await Promise.all([
         buildSalesDashboard({ from, to: toIncl, granularity: "month" }),
         summarizeNeedsAttention({ minDays: 7 }),
+        getEngagedCallRule(),
         rows(sql`
-            -- ID 59: human calls counted once, engaged = connected and >= 30 s
+            -- ID 59: human calls counted once, engaged = connected and at least
+            -- the threshold of measured duration (the engaged-call setting)
             -- (metricDefinitions.ts) — the same call the dashboard and the
             -- daily email count, not the is_engaged flag (any connected call).
             SELECT t.performed_by AS u,
                    COUNT(*) FILTER (WHERE ${humanCall()}) AS calls,
                    COUNT(*) FILTER (WHERE ${engagedCall()}) AS engaged,
-                   COUNT(*) FILTER (WHERE t.call_duration_sec IS NOT NULL) AS timed
+                   COUNT(*) FILTER (WHERE ${measuredCall()}) AS timed
               FROM lead_touchpoints t
              WHERE t.touchpoint_type = 'inside_sales_call' AND t.performed_by IS NOT NULL
                AND (t.performed_at AT TIME ZONE 'Asia/Kolkata')::date BETWEEN ${from}::date AND ${toIncl}::date
@@ -359,8 +374,9 @@ async function peopleTile(from: string, toIncl: string) {
         }),
     ]);
     const idleBy = new Map(idle.map((h) => [h.holder_id, h.idle]));
-    // No call in the window carries a duration (NeoDove sends none today) →
-    // the 30-second rule cannot be measured: show "—", never a column of 0%.
+    // No call in the window carries a MEASURED duration (NeoDove sends none
+    // today, and a duration a rep typed does not count — measuredCall) → the
+    // 30-second rule cannot be measured: show "—", never a column of 0%.
     const anyTimed = engaged.some((e) => n(e.timed) > 0);
     const engBy = new Map(
         engaged.map((e) => [
@@ -385,5 +401,9 @@ async function peopleTile(from: string, toIncl: string) {
             ? (b.pct_of_target ?? -1) - (a.pct_of_target ?? -1)
             : b.converted - a.converted || b.revenue - a.revenue,
     );
-    return { basis: hasTargets ? ("target" as const) : ("converted" as const), rows: list };
+    return {
+        basis: hasTargets ? ("target" as const) : ("converted" as const),
+        engaged_min_seconds: rule.minSeconds,
+        rows: list,
+    };
 }

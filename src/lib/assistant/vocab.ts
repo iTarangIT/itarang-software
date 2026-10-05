@@ -22,6 +22,20 @@ import {
 } from "@/lib/leads/dispositions";
 import type { LeadStatus, LostReason } from "@/lib/lifecycle/transitions";
 import type { VisitOutcome } from "@/lib/asm/types";
+import { LOST_REASON_BY_LABEL } from "@/lib/leads/autoProgress";
+
+/**
+ * ID 76: a row's lost reasons come from the forms' one map (autoProgress.ts),
+ * never a second copy — the Assistant and the Mark Lost pre-fill cannot drift.
+ */
+function lostReasonsFor(labels: readonly string[]): Record<string, readonly LostReason[]> {
+    const out: Record<string, readonly LostReason[]> = {};
+    for (const l of labels) {
+        const r = LOST_REASON_BY_LABEL[l];
+        if (r) out[l] = [r];
+    }
+    return out;
+}
 
 /** "Leave the status as it is" — distinct from a status the rep never mentioned. */
 export const NO_CHANGE = "no_change" as const;
@@ -111,7 +125,7 @@ export const CALL_VOCAB: readonly CallVocabRow[] = deepFreeze<CallVocabRow[]>([
         status: { options: ["Under_Discussion"], whenUnstated: "no_change", question: "" },
         lostReasonByLabel: {},
         interest: null,
-        extra: "Ask temperature (warm or hot) if not stated",
+        extra: "Ask temperature (warm or hot) if not stated; no quote yet → offer create_quote (ID 75)",
     },
     {
         id: "price_high",
@@ -125,7 +139,7 @@ export const CALL_VOCAB: readonly CallVocabRow[] = deepFreeze<CallVocabRow[]>([
             whenUnstated: "ask",
             question: "Is the dealer still considering it, or not interested at all (mark Lost — price too high)?",
         },
-        lostReasonByLabel: { "Price High": ["price_high"] },
+        lostReasonByLabel: lostReasonsFor(["Price High"]),
         interest: null,
         extra: "Follow-up / Mark Lost preview",
     },
@@ -144,13 +158,13 @@ export const CALL_VOCAB: readonly CallVocabRow[] = deepFreeze<CallVocabRow[]>([
         },
         lostReasonByLabel: {},
         interest: "hot",
-        extra: "Interest hot; link to Transfer or Mark Won",
+        extra: "Interest hot; link to Transfer or Mark Won; no quote yet → offer create_quote (ID 75)",
     },
     {
         id: "lost",
-        said: "not interested; went elsewhere; shop closed",
+        said: "not interested; went elsewhere; moved to another business; shop closed",
         connect: "connected",
-        labels: ["Not Interested", "Lost to Competition", "Business Closed"],
+        labels: ["Not Interested", "Lost to Competition", "Some other Business", "Business Closed"],
         buckets: ["Lost"],
         askBucket: false,
         status: {
@@ -158,11 +172,7 @@ export const CALL_VOCAB: readonly CallVocabRow[] = deepFreeze<CallVocabRow[]>([
             whenUnstated: "ask",
             question: "Should I mark this lead Lost?",
         },
-        lostReasonByLabel: {
-            "Not Interested": ["not_interested"],
-            "Lost to Competition": ["lost_to_competition"],
-            "Business Closed": ["business_closed"],
-        },
+        lostReasonByLabel: lostReasonsFor(["Not Interested", "Lost to Competition", "Some other Business", "Business Closed"]),
         interest: null,
         extra: "Mark Lost preview; high-impact confirm for closed",
     },

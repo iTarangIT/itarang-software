@@ -7,8 +7,13 @@ import {
   markCampaignLeadCalling,
 } from "@/lib/queue/campaignTracker";
 import { NextResponse } from "next/server";
+import { LEADS_PAGE_ROLES } from "@/lib/leads/access";
+import { guardApi } from "@/lib/auth/apiGuard";
 
 export async function GET() {
+  // ID 118: signed in, with a role that reaches this screen.
+  const authGate = await guardApi([...LEADS_PAGE_ROLES]);
+  if (!authGate.ok) return authGate.response;
   // If current call timed out (3 min), auto-advance to next lead using
   // whichever provider this dialer session was started with.
   if ((await dialerSession.isActive()) && (await dialerSession.isCallTimedOut())) {

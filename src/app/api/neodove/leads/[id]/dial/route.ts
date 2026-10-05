@@ -19,6 +19,14 @@
 // visible on the lead's timeline, and its failure modes are different — "no
 // priority campaign is configured" is a setup problem with a specific remedy,
 // not a push error.
+//
+// WHO MAY ASK (tracker ID 83). The NeoDove admin roles, for any lead — and the
+// lead's OWNER (a rep or an ASM), for their own lead only. The owner's request
+// is what "called on your behalf" hangs on: the call the agent then makes is
+// marked, and the owner notified, only when the dial request was written by the
+// owner (ownerFromCall.ts). With the route admin-only that could never happen.
+// An owner's request never reassigns the lead, and needs no "someone is already
+// working this" override — they are the someone.
 
 import { sql } from "drizzle-orm";
 import { z } from "zod";
@@ -32,6 +40,7 @@ import {
 import { getNeodoveConfig } from "@/lib/neodove/config";
 import { getPriorityDialCampaign, pushOneLead } from "@/lib/neodove/pushOne";
 import { NEODOVE_ADMIN_ROLES } from "@/lib/neodove/roles";
+import { assertOwner, ForbiddenLeadAccessError } from "@/lib/leads/ownership";
 import {
     ASSIGN_ON_PUSH,
     assignAfterPush,
@@ -40,6 +49,9 @@ import {
 import { writeTouchpoint } from "@/lib/touchpoints/write";
 
 export const runtime = "nodejs";
+
+/** Roles that may ask for a call on a lead THEY OWN (ID 83). */
+const OWNER_DIAL_ROLES = ["inside_sales_rep", "asm"];
 
 const bodySchema = z.object({
     // Same override as the push route, and for the same reason: handing a lead
@@ -53,8 +65,22 @@ const bodySchema = z.object({
 
 export const POST = withErrorHandler(
     async (req: Request, context: { params: Promise<{ id: string }> }) => {
-        const user = await requireRole(NEODOVE_ADMIN_ROLES);
+        const user = await requireRole([...NEODOVE_ADMIN_ROLES, ...OWNER_DIAL_ROLES]);
         const { id } = await context.params;
+
+        // A rep / ASM asks only for a lead they own. Checked before anything is
+        // pushed: a push spends NeoDove quota and cannot be undone.
+        const ownerRequest = !NEODOVE_ADMIN_ROLES.includes(user.role);
+        if (ownerRequest) {
+            try {
+                await assertOwner(id, user.id);
+            } catch (err) {
+                if (err instanceof ForbiddenLeadAccessError) {
+                    return errorResponse("Only the lead's owner can ask for it to be called now.", 403);
+                }
+                throw err;
+            }
+        }
 
         if (!getNeodoveConfig().enabled) {
             return errorResponse("NeoDove integration is disabled.", 409);
@@ -78,7 +104,9 @@ export const POST = withErrorHandler(
 
         const assignee = await resolveNeodoveAssignee({
             campaignId: campaign.id,
-            assignToUserId: parsed.data.assignToUserId,
+            // The owner keeps their lead: null = "do not assign", whatever the
+            // campaign's default owner is and whatever the body says.
+            assignToUserId: ownerRequest ? null : parsed.data.assignToUserId,
         });
         if (!assignee.ok) {
             return errorResponse(assignee.message, assignee.status);
@@ -87,7 +115,9 @@ export const POST = withErrorHandler(
         const result = await pushOneLead({
             leadId: id,
             campaignId: campaign.id,
-            force: parsed.data.force,
+            // The exclusion rule refuses a lead "someone is already working".
+            // For the owner's own request that someone is the owner.
+            force: ownerRequest ? true : parsed.data.force,
         });
 
         const destination =
@@ -123,7 +153,9 @@ export const POST = withErrorHandler(
                 dealerLeadId: id,
                 touchpointType: "neodove_dial_request",
                 performedBy: user.id,
-                remarks: `Priority dial requested — pushed to NeoDove campaign "${destination}" for immediate calling.${parsed.data.force ? " Exclusion rule overridden: someone here is already working this lead." : ""}`,
+                remarks: ownerRequest
+                    ? `Call now requested by the lead's owner — pushed to NeoDove campaign "${destination}". The call that follows is made on the owner's behalf.`
+                    : `Priority dial requested — pushed to NeoDove campaign "${destination}" for immediate calling.${parsed.data.force ? " Exclusion rule overridden: someone here is already working this lead." : ""}`,
                 externalSystem: "neodove",
                 syncMethod: "manual",
             });

@@ -88,7 +88,7 @@ export function KpiStrip({ kpis }: { kpis: AdminKpis }) {
             value: fmtPct(kpis.engaged_to_conversion_rate),
             icon: TrendingUp,
             tone: "neutral",
-            hint: "leads created last 30 days with a connected call or productive visit",
+            hint: "leads created last 30 days with an engaged call (connected, long enough by measured duration) or a productive visit",
         },
         {
             label: "Closed-Win · 7d",
@@ -120,7 +120,7 @@ export function KpiStrip({ kpis }: { kpis: AdminKpis }) {
             tone: flag(kpis.onboarding_dropouts_pending, "warning"),
         },
         {
-            label: "Stale Converted · 3d+",
+            label: "Stale Won / Converted · 3d+",
             value: kpis.stale_converted,
             icon: CalendarClock,
             tone: flag(kpis.stale_converted, "warning"),

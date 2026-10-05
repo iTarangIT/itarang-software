@@ -118,6 +118,27 @@ export default function QuoteResponsePage() {
       const j = await r.json();
       if (!j.success) {
         setError(j.error?.message ?? "Couldn't record your response.");
+        // ID 60: a 409 means the quotation stopped being answerable while this
+        // page was open — replaced by a newer version, or withdrawn. Leaving the
+        // Approve button up would only invite the same refusal again, so the
+        // page moves to the same state a fresh load would show, including the
+        // "Open the latest quotation" button when there is one.
+        if (r.status === 409) {
+          const replaced = j.data?.replaced === true;
+          setCtx((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  open: false,
+                  replaced,
+                  latest_url: j.data?.latest_url ?? null,
+                  withdrawn: !replaced,
+                }
+              : prev,
+          );
+          setPhase("unavailable");
+          return;
+        }
         setPhase("ready");
         return;
       }
@@ -158,10 +179,12 @@ export default function QuoteResponsePage() {
                 (ctx?.replaced
                   ? "A newer version was sent to you. Please review and respond to the latest one."
                   : ctx?.withdrawn
-                    ? "It has been withdrawn or revised. Your iTarang contact can send you the current one."
+                    ? ctx.latest_url
+                      ? "It has been withdrawn. A current quotation is open for your response."
+                      : "It has been withdrawn or revised. Your iTarang contact can send you the current one."
                     : "Please contact your iTarang representative.")}
             </p>
-            {ctx?.replaced && ctx.latest_url && (
+            {ctx?.latest_url && (
               <a
                 href={ctx.latest_url}
                 className="mt-4 inline-block rounded-xl bg-blue-600 px-5 py-3 text-sm font-bold text-white active:bg-blue-700"

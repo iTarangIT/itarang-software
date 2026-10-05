@@ -8,6 +8,19 @@ import { postSecurityEvent, SECURITY_INGEST_PATH } from "@/lib/security/report-e
 import { clientIp } from "@/lib/security/client-ip";
 import { fingerprintRequest } from "@/lib/security/fingerprint";
 import { checkBlocked, recordStrike, shouldEmitBlockEvent } from "@/lib/security/blocklist";
+import { apiGate } from "@/lib/security/publicApi";
+
+// One log line per path per minute: a scanner hammering one URL must not write
+// a line per request, and the report-mode log has to stay readable.
+const apiGateLastLogged = new Map<string, number>();
+function shouldLogApiGate(path: string): boolean {
+  const now = Date.now();
+  const last = apiGateLastLogged.get(path) ?? 0;
+  if (now - last < 60_000) return false;
+  if (apiGateLastLogged.size > 500) apiGateLastLogged.clear();
+  apiGateLastLogged.set(path, now);
+  return true;
+}
 
 // Prevents browsers from serving stale HTML across deploys. Applied to HTML
 // responses only — _next/static assets are excluded by the matcher and keep
@@ -382,6 +395,28 @@ export async function middleware(request: NextRequest) {
   // API call. Outcome is identical: these paths were public (unauthenticated)
   // and fell through to finalize() (authenticated) before this early exit.
   if (path.startsWith("/api") || path.startsWith("/_next") || path === "/favicon.ico") {
+    // ── API login gate (tracker ID 118). An /api request with no session, on
+    // a path that is not deliberately public (src/lib/security/publicApi.ts),
+    // is refused here before any route code runs — or only logged, in the
+    // default "report" mode. Each route still checks its own caller; this is
+    // the net under the route somebody forgets. See apiGateMode() for why it
+    // ships reporting and how to switch it to enforce.
+    const verdict = apiGate({ pathname: path, hasSession: !!user });
+    if (verdict !== "allow") {
+      if (shouldLogApiGate(path)) {
+        console.warn(
+          `[api-gate] ${verdict === "refuse" ? "refused" : "would refuse"} unauthenticated ${request.method} ${path}`,
+        );
+      }
+      if (verdict === "refuse") {
+        return finalize(
+          NextResponse.json(
+            { success: false, error: { message: "Unauthorized" } },
+            { status: 401 },
+          ),
+        );
+      }
+    }
     return finalize(response);
   }
 
@@ -646,6 +681,8 @@ export async function middleware(request: NextRequest) {
     // and nothing else under the bare "/admin" prefix below. The page and API
     // gates for each carry "partner" too.
     "/admin/upload": ["admin", "sales_head", "ceo", "partner"],
+    // ID 81 — the page's own requireRole list (CAMPAIGN_MANAGE_ROLES).
+    "/admin/acquisition-campaigns": ["admin", "ceo", "business_head", "sales_head", "sales_manager", "partner"],
     // IDs 8 / 12 — each row is the page's own requireRole list. The three
     // sub-pages sit ABOVE "/admin/reports" (first prefix match wins), so
     // finance_controller reaches the Funnel tab on the Reports page and
@@ -655,6 +692,8 @@ export async function middleware(request: NextRequest) {
     "/admin/reports/sales-dashboard": ["admin", "sales_head", "ceo", "partner", "business_head"],
     "/admin/reports/dealer-health": ["admin", "sales_head", "ceo", "partner", "business_head"],
     "/admin/reports/needs-attention": ["admin", "sales_head", "ceo", "partner"],
+    // E-322 (IDs 39, 71) — the invoice ledger: finance, CEO, Admin only.
+    "/admin/reports/invoice-ledger": ["admin", "ceo", "finance_controller"],
     "/admin/reports": [
       "admin",
       "sales_head",
@@ -664,6 +703,12 @@ export async function middleware(request: NextRequest) {
       "finance_controller",
     ],
     "/admin/targets": ["admin", "sales_head", "ceo", "business_head"],
+    // ID 82 — the page's own requireRole list. Without this row the bare
+    // "/admin" entry bounces business_head, sales_manager and partner.
+    "/admin/ready-to-assign": ["admin", "sales_head", "ceo", "business_head", "sales_manager", "partner"],
+    // P1-1 / P1-2 — Accounts tab (owner / GSTIN). Admin and CEO only; without
+    // this row the bare "/admin" entry below would also admit sales_head.
+    "/admin/accounts": ["admin", "ceo"],
     "/admin/escalations": ["admin", "sales_head", "ceo", "partner"],
     "/admin/merge-requests": ["admin", "sales_head", "ceo", "partner"],
     "/admin/onboarding-dropouts": ["admin", "sales_head", "ceo", "partner"],
@@ -681,6 +726,9 @@ export async function middleware(request: NextRequest) {
     // repair-number API; without this row the bare "/admin" entry below
     // bounced business_head and sales_manager.
     "/admin/number-repair": ["admin", "sales_head", "ceo", "business_head", "sales_manager"],
+    // WhatsApp Screenshots (tracker ID 79) — the Sales Head view; same five
+    // roles as the page, for the same reason as the row above.
+    "/admin/whatsapp-screenshots": ["admin", "sales_head", "ceo", "business_head", "sales_manager"],
     // The ISR lead-detail page is where quotation notifications deep-link
     // (src/lib/notifications/events.ts → /inside-sales/lead/{id}?quote=…). The
     // page already admits these roles; without this row middleware bounced

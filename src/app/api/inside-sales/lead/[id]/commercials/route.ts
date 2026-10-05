@@ -1,12 +1,14 @@
 // POST /api/inside-sales/lead/[id]/commercials
 // Create a new versioned commercials row (BRD §0.10). Flips prior is_current
 // to false and inserts version_no = max+1 atomically. If event_type is a
-// quote_issue/quote_revision, also writes a touchpoint of type 'quote_sent';
+// quote_issue/quote_revision, also writes a touchpoint ('quote_released' when
+// auto-approved, else 'quote_submitted'; 'quote_released' was 'quote_sent');
 // if brochure_share, sets dealer_leads.brochure_sent_at on first event.
 //
 // The write itself lives in lib/leads/createCommercial.ts — shared with the
 // WhatsApp Assistant's create_quote, so both go through one gate.
 
+import { QuoteTermsSchema } from "@/lib/leads/quoteTermsRules";
 import { z } from "zod";
 import { requireRole } from "@/lib/auth-utils";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
@@ -20,6 +22,11 @@ const BodySchema = z.object({
     price_quoted: z.number().nonnegative().nullable().optional(),
     quote_document_url: z.string().url().max(2000).nullable().optional(),
     brochure_url: z.string().url().max(2000).nullable().optional(),
+    // E-322 (ID 73): structured terms. Required for quote_issue /
+    // quote_revision (createLeadCommercial enforces it). Warranty and delivery
+    // are the admin's standard terms — the free-text fields below are still
+    // accepted from older clients but ignored.
+    terms: QuoteTermsSchema.nullable().optional(),
     credit_terms: z.string().max(2000).nullable().optional(),
     delivery_terms: z.string().max(2000).nullable().optional(),
     warranty_terms: z.string().max(2000).nullable().optional(),
@@ -68,6 +75,7 @@ export const POST = withErrorHandler(
             approval_status: outcome.approvalStatus,
             auto_approved: outcome.autoApproved,
             oem_evaluation: outcome.evaluation,
+            terms_hold: outcome.termsHold,
         });
     },
 );

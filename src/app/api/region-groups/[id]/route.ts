@@ -11,6 +11,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { regionGroups } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
+import { LEADS_PAGE_ROLES } from "@/lib/leads/access";
+import { guardApi } from "@/lib/auth/apiGuard";
 
 type RegionEntry = { state: string; cities?: string[] };
 
@@ -33,6 +35,9 @@ function sanitizeRegions(input: unknown): RegionEntry[] {
 }
 
 export async function PATCH(req: NextRequest, { params }: any) {
+  // ID 118: signed in, with a role that reaches this screen.
+  const authGate = await guardApi([...LEADS_PAGE_ROLES]);
+  if (!authGate.ok) return authGate.response;
   try {
     const { id } = await params;
     const body = await req.json();
@@ -88,6 +93,9 @@ export async function PATCH(req: NextRequest, { params }: any) {
 }
 
 export async function DELETE(_req: NextRequest, { params }: any) {
+  // ID 118: signed in, with a role that reaches this screen.
+  const authGate = await guardApi([...LEADS_PAGE_ROLES]);
+  if (!authGate.ok) return authGate.response;
   try {
     const { id } = await params;
     const deleted = await db

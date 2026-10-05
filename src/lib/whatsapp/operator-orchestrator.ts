@@ -26,6 +26,7 @@
 // This module imports orchestrator.ts statically; orchestrator.ts imports THIS
 // one lazily (`await import`) inside the gate, so there is no module-eval cycle.
 
+import { linkOnboardingToLead } from "@/lib/onboarding/linkToLead";
 import { and, desc, eq, inArray, notInArray } from "drizzle-orm";
 
 import { db } from "@/lib/db/index";
@@ -411,6 +412,9 @@ async function openFile(
     .update(dealerOnboardingApplications)
     .set({ wa_operator_session_id: fileSession.id, updated_at: new Date() })
     .where(eq(dealerOnboardingApplications.id, application.id));
+
+  // ID 67 / P1-4: link this onboarding to the dealer's lead by phone.
+  await linkOnboardingToLead(application.id);
 
   // One "chat started" signal per real dealer (the hub greeting fires none).
   await notifyOnboardingChatStarted({

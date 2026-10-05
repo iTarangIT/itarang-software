@@ -17,6 +17,7 @@ import {
     withErrorHandler,
 } from "@/lib/api-utils";
 import { writeTouchpoint } from "@/lib/touchpoints/write";
+import { markSalesReady } from "@/lib/leads/salesReady";
 import { ONBOARDING_DROPOUT_REASONS } from "@/lib/admin/types";
 
 const MUTATE_ROLES = ["admin", "sales_head", "partner"];
@@ -83,6 +84,9 @@ export const POST = withErrorHandler(
                     // Won → Lost is an ordinary Mark Lost; Converted → Lost is
                     // the admin drop-out loopback.
                     event: fromWon ? "mark_lost" : "dropout_lost",
+                    // ID 115.4: Won → Lost is refused for every other flow;
+                    // this admin drop-out review is the one that may do it.
+                    adminOverride: true,
                 },
             });
             await db.execute(sql`
@@ -112,12 +116,19 @@ export const POST = withErrorHandler(
                 : "New_Unassigned";
 
             await db.transaction(async (tx) => {
+                // ID 84.4: previous_lost_reason drives the "reactivated" banner
+                // (LeadDetailHeader wasReactivated) like any reactivation. The
+                // old application is unlinked so a later approval of it can no
+                // longer convert the reopened lead (convertOnApproval checks the
+                // application id against the lead's).
                 await tx.execute(sql`
                     UPDATE dealer_leads SET
                         current_owner_id = ${newOwnerId},
                         assigned_at = ${newOwnerId ? sql`NOW()` : sql`assigned_at`},
                         onboarding_dropout_reason = ${body.onboarding_dropout_reason},
                         onboarding_dropout_notes = ${body.onboarding_dropout_notes},
+                        previous_lost_reason = 'onboarding_dropout',
+                        dealer_onboarding_application_id = NULL,
                         updated_at = NOW()
                     WHERE id = ${id}
                 `);
@@ -132,18 +143,26 @@ export const POST = withErrorHandler(
                         dealerLeadId: id,
                         touchpointType: "onboarding_dropout_action",
                         performedBy: user.id,
-                        remarks: `Re-engaged after onboarding dropout — ${body.onboarding_dropout_notes}`,
+                        remarks: `Reopened after drop-out — ${body.onboarding_dropout_notes}`,
                         fromOwnerId: lead.current_owner_id,
                         toOwnerId: newOwnerId,
                         statusChange: {
                             from: fromWon ? "Won" : "Converted",
                             to: newStatus,
-                            reasonNotes: body.onboarding_dropout_notes,
+                            reasonNotes: `Reopened after drop-out: ${body.onboarding_dropout_notes}`,
                             event: "reactivation",
                         },
                     },
                     { tx },
                 );
+                // ID 82: back in sales it is sales-ready — with its originator,
+                // or in Ready to assign when there is nobody to return to. A
+                // no-op for a lead that already has the event (first one wins).
+                await markSalesReady(tx, {
+                    leadId: id,
+                    reason: newOwnerId ? "admin_assigned" : "reactivated",
+                    actorId: user.id,
+                });
             });
         }
 

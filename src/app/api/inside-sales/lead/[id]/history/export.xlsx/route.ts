@@ -8,6 +8,10 @@
  * Mirrors the ExcelJS styling used by the scraper run export. Timestamps are
  * rendered in IST. Used by the SI rep to hand off / archive a lead's history.
  *
+ * Who may download (ID 58): canExportLeadHistory — the role list below, and a
+ * rep / ASM / partner only for a lead they currently own. Every download is
+ * written to data_download_log.
+ *
  * The styling helpers now live in @/lib/excel/sheetStyle, shared with the
  * multi-lead version of this export (src/lib/leads/touchpointWorkbook.ts) so the
  * two files look identical whichever way a lead was exported.
@@ -16,10 +20,12 @@
 import { sql } from "drizzle-orm";
 import ExcelJS from "exceljs";
 import { db } from "@/lib/db";
+import { engagedState } from "@/lib/reports/metricDefinitions";
 import { withErrorHandler, errorResponse } from "@/lib/api-utils";
 import { requireRole } from "@/lib/auth-utils";
 import { fmtIst as fmt, styleHeader, zebra } from "@/lib/excel/sheetStyle";
-import { LEAD_HISTORY_EXPORT_ROLES } from "@/lib/leads/access";
+import { exportsOwnLeadsOnly, logDataDownload } from "@/lib/exports/downloadLog";
+import { LEAD_HISTORY_EXPORT_ROLES, canExportLeadHistory } from "@/lib/leads/access";
 import { LEAD_STATUS_LABEL } from "@/lib/leads/queueFilters";
 import {
     CALL_STATUS_LABEL,
@@ -32,6 +38,12 @@ import {
 // decides whether to render the button from it — one list, so a visible button
 // always corresponds to an endpoint that answers.
 const READ_ROLES = [...LEAD_HISTORY_EXPORT_ROLES];
+
+type LeadRow = {
+    dealer_name: string | null;
+    phone: string | null;
+    current_owner_id: string | null;
+};
 
 type TouchpointRow = {
     touchpoint_type: string | null;
@@ -56,14 +68,23 @@ type StatusRow = {
 
 export const GET = withErrorHandler(
     async (_req: Request, ctx: { params: Promise<{ id: string }> }) => {
-        await requireRole(READ_ROLES);
+        const user = await requireRole(READ_ROLES);
         const { id } = await ctx.params;
         if (!id) return errorResponse("Lead id required", 400);
 
-        const [leadRows, touchpoints, statusHistory] = await Promise.all([
-            db.execute<{ dealer_name: string | null; phone: string | null }>(sql`
-                SELECT dealer_name, phone FROM dealer_leads WHERE id = ${id} LIMIT 1
-            `),
+        // ID 58: the role alone is not enough. A rep / ASM / partner may take
+        // away the history of a lead they OWN, never a colleague's or an
+        // unowned one — checked before any history is read.
+        const leadRows = (await db.execute<LeadRow>(sql`
+            SELECT dealer_name, phone, current_owner_id FROM dealer_leads WHERE id = ${id} LIMIT 1
+        `)) as unknown as LeadRow[];
+        const lead = leadRows[0];
+        if (!lead) return errorResponse("Lead not found", 404);
+        if (!canExportLeadHistory({ role: user.role, userId: user.id, currentOwnerId: lead.current_owner_id })) {
+            return errorResponse("You can export the history of your own leads only.", 403);
+        }
+
+        const [touchpoints, statusHistory] = await Promise.all([
             db.execute<TouchpointRow>(sql`
                 SELECT
                     t.touchpoint_type,
@@ -71,7 +92,8 @@ export const GET = withErrorHandler(
                     t.performed_at::text AS performed_at,
                     t.call_status,
                     t.call_duration_sec,
-                    t.is_engaged,
+                    -- ID 59: the definition, not the stored flag (as the workbook).
+                    ${engagedState()} AS is_engaged,
                     t.remarks,
                     t.next_action,
                     t.next_action_at::text AS next_action_at
@@ -95,11 +117,19 @@ export const GET = withErrorHandler(
             `),
         ]);
 
-        const lead = (leadRows as unknown as { dealer_name: string | null; phone: string | null }[])[0];
-        if (!lead) return errorResponse("Lead not found", 404);
-
         const tpRows = touchpoints as unknown as TouchpointRow[];
         const shRows = statusHistory as unknown as StatusRow[];
+
+        // Logged like every other lead export (E-312).
+        const ownOnly = exportsOwnLeadsOnly(user.role);
+        await logDataDownload({
+            userId: user.id,
+            role: user.role,
+            dataset: `lead_history:${id}`,
+            rowCount: tpRows.length + shRows.length,
+            ownOnly,
+            filters: { lead_id: id },
+        });
 
         const workbook = new ExcelJS.Workbook();
         workbook.creator = "iTarang";

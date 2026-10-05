@@ -119,13 +119,11 @@ export const GET = withErrorHandler(async (req: Request) => {
     // Parsed EXACTLY as GET /api/dealer-leads parses it — one shared reader
     // (src/lib/leads/leadListParams.ts) for the list, this export and the
     // full-leads export (B11), so no two of them can disagree about a match.
-    const filters = await parseLeadListFilters(searchParams, caps);
-
-    // ID 58: a rep's (or partner's) export holds only the leads they own.
+    // ID 58 / ID 45: a rep's (or partner's) export holds only the leads they
+    // own — via filters.ownerScopeId, the same scope the list itself applies.
+    const filters = await parseLeadListFilters(searchParams, caps, user);
     const ownOnly = exportsOwnLeadsOnly(user.role);
-    const where = ownOnly
-        ? sql`${buildExportWhere(filters)} AND dl.current_owner_id = ${user.id}`
-        : buildExportWhere(filters);
+    const where = buildExportWhere(filters);
 
     const [{ n: total }] = (await db.execute<{ n: number }>(sql`
         SELECT COUNT(*)::int AS n FROM dealer_leads dl WHERE ${where}

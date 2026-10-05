@@ -19,6 +19,7 @@ import { capabilitiesFor } from "@/lib/leads/access";
 import { parseLeadListFilters } from "@/lib/leads/leadListParams";
 import { businessTypeLabel } from "@/lib/leads/businessType";
 import { maskPhone } from "@/lib/whatsapp/notifications";
+import { logDataDownload } from "@/lib/exports/downloadLog";
 import { styleHeader, zebra } from "@/lib/excel/sheetStyle";
 import {
     LEADS_EXPORT_ROW_CAP,
@@ -64,7 +65,8 @@ export const GET = withErrorHandler(async (req: Request) => {
     const fullPhone = FULL_PHONE_ROLES.has((user.role ?? "").toLowerCase());
 
     const searchParams = new URL(req.url).searchParams;
-    const filters = await parseLeadListFilters(searchParams, caps);
+    // ID 45: partner (a rep role) is scoped to its own leads, as on /leads.
+    const filters = await parseLeadListFilters(searchParams, caps, user);
 
     const total = await countLeadsForExport(filters);
     if (total > LEADS_EXPORT_ROW_CAP) {
@@ -75,6 +77,15 @@ export const GET = withErrorHandler(async (req: Request) => {
     }
 
     const rows = await fetchLeadsForExport(filters);
+    // ID 58 — every lead download is logged: who, which filters, how many rows.
+    await logDataDownload({
+        userId: user.id,
+        role: user.role,
+        dataset: "leads_xlsx",
+        rowCount: rows.length,
+        ownOnly: false,
+        filters: { ...Object.fromEntries(searchParams), phone_masked: !fullPhone },
+    });
 
     const COLUMNS: Col[] = [
         { header: "Lead ID", width: 24, value: (r) => r.lead_id },
@@ -91,6 +102,7 @@ export const GET = withErrorHandler(async (req: Request) => {
         { header: "Won without approved quote", width: 14, value: (r) => (r.won_without_approved_quote ? "Yes" : null) },
         { header: "Interest", width: 10, value: (r) => r.interest_level ?? null },
         { header: "Sales POC", width: 22, value: (r) => r.owner_name ?? null },
+        { header: "Closed by", width: 22, value: (r) => r.closed_by_name ?? null },
         { header: "Last visit date", width: 14, value: (r) => excelDate(r.last_visit_date), numFmt: "dd-mmm-yyyy" },
         { header: "Next visit date", width: 14, value: (r) => excelDate(r.next_visit_date), numFmt: "dd-mmm-yyyy" },
         { header: "Last calling date", width: 18, value: (r) => excelDateTimeIst(r.last_call_at), numFmt: "dd-mmm-yyyy hh:mm" },
@@ -126,6 +138,7 @@ export const GET = withErrorHandler(async (req: Request) => {
     styleHeader(notes.getRow(1));
     [
         ["Sales POC", "The lead's current owner in the CRM."],
+        ["Closed by", "Who held the lead when it was won or lost. A conversion is credited to this person and does not move when the lead is reassigned — count conversions on this column, not on Sales POC. Blank on an open lead."],
         ["Won on / Won without approved quote", "Won = the rep's Mark Won; Converted = the dealer's onboarding approved. 'Yes' means Mark Won happened with no dealer-approved quote on the lead (allowed, and flagged). Blank on leads that are not Won or Converted."],
         ["Last / next visit", "From logged field visits: latest actual visit; earliest open scheduled visit on or after today (IST)."],
         ["Last / next calling date", "From inside-sales and AI-dialer call touchpoints: latest call; earliest planned next action on or after now (IST)."],

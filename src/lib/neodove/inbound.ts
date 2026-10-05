@@ -16,6 +16,8 @@
 import { sql } from "drizzle-orm";
 import crypto from "crypto";
 import { db } from "@/lib/db";
+import { isEngagedCall } from "@/lib/lifecycle/touchpointTypes";
+import { getEngagedCallRule } from "@/lib/reports/engagedCallRule";
 import { dealerLeads } from "@/lib/db/schema";
 import { errorMessage } from "@/lib/api-utils";
 import { StatusGuardError, writeTouchpoint } from "@/lib/touchpoints/write";
@@ -33,6 +35,12 @@ import { resolveAgentUserId } from "./agentMap";
 import { applyNeodoveCallOwnership } from "./ownerFromCall";
 import { reviewLeadContactability } from "@/lib/leads/contactability";
 import { classifyDisposition } from "@/lib/leads/dispositions";
+import {
+    LIST_DEFAULT_ORIGIN,
+    recordLeadCreated,
+    recordReinquiry,
+    stampLeadSource,
+} from "@/lib/leads/leadSource";
 
 export type InboundOutcome = {
     handled: boolean;
@@ -226,7 +234,13 @@ async function handleDisposition(
         performedAt: callAt,
         callStatus,
         callDurationSec: event.callDurationSec,
-        isEngaged: callStatus === "connected",
+        // ID 59: connected AND at least the threshold by NeoDove's own
+        // duration — false while NeoDove sends none. "Connected" stays on
+        // call_status.
+        isEngaged: isEngagedCall(
+            { callStatus, durationSec: event.callDurationSec, externalSystem: "neodove" },
+            await getEngagedCallRule(),
+        ),
         remarks: remarksFor(event),
         externalSystem: "neodove",
         externalEventId: event.externalEventId,
@@ -253,7 +267,13 @@ async function handleDisposition(
     // unowned lead; a call after the owner's "Call this lead now" is marked
     // "called on your behalf". Only for call events, never lead create/delete.
     if (touchpointTypeFor(event.eventType) === "inside_sales_call") {
-        await applyNeodoveCallOwnership({ leadId: dealerLeadId, touchpointId, agentUserId, callAt });
+        await applyNeodoveCallOwnership({
+            leadId: dealerLeadId,
+            touchpointId,
+            agentUserId,
+            callAt,
+            agentName: event.agentName,
+        });
         // ID 36: contactability after every call.
         await reviewLeadContactability({
             leadId: dealerLeadId,
@@ -261,6 +281,7 @@ async function handleDisposition(
             reasonLabel: classifyDisposition(event.disposition ?? event.tag ?? "", {
                 callConnected: event.callConnected ?? false,
             })?.label ?? null,
+            actorId: agentUserId,
         });
     }
 
@@ -348,6 +369,7 @@ async function ensureDealerLead(
     }
 
     await markSynced(id, "inbound");
+    await recordNeodoveBorn(id);
     return { id, created: true };
 }
 
@@ -379,6 +401,7 @@ async function handleLeadCreated(
                 performedBy: null,
                 notes: `Reactivated by a NeoDove lead-created event (${event.campaignName ?? "unknown campaign"})`,
             });
+            await recordNeodoveReinquiry(duplicateLeadId!, event);
             await markSynced(duplicateLeadId!, "inbound");
             return {
                 handled: true,
@@ -396,6 +419,7 @@ async function handleLeadCreated(
                     ${`NeoDove lead-created: mobile ${event.mobile} matched an existing lead; NeoDove address "${event.city ?? "(none)"}" differs.`},
                     'pending')
             `);
+            await recordNeodoveReinquiry(duplicateLeadId!, event);
             return {
                 handled: true,
                 dealerLeadId: duplicateLeadId,
@@ -404,6 +428,7 @@ async function handleLeadCreated(
         }
 
         case "duplicate_skip":
+            await recordNeodoveReinquiry(duplicateLeadId!, event);
             await linkLead(duplicateLeadId!, event);
             return {
                 handled: true,
@@ -428,9 +453,60 @@ async function handleLeadCreated(
             // schema object so that ~20 unrelated bare selects on dealer_leads
             // don't hard-depend on E-224 having been applied. See schema.ts.
             await markSynced(id, "inbound");
+            await recordNeodoveBorn(id);
             await linkLead(id, event);
             return { handled: true, dealerLeadId: id, action: "lead_created" };
         }
+    }
+}
+
+// ── Source on a NeoDove lead (ID 81) ─────────────────────────────────────
+
+/**
+ * A lead born in NeoDove: Entered via NeoDove (the insert trigger has already
+ * said so from `source`), Found via the calling-list default — there is nobody
+ * to ask — and the "Lead created" line. Best-effort, after the insert: an
+ * inbound event must never be lost to its own bookkeeping.
+ */
+async function recordNeodoveBorn(dealerLeadId: string): Promise<void> {
+    try {
+        await stampLeadSource(db, dealerLeadId, { door: "neodove", origin: LIST_DEFAULT_ORIGIN });
+        await recordLeadCreated(db, { leadId: dealerLeadId, actorId: null, door: "neodove", ownerId: null });
+    } catch (err) {
+        console.warn("[NeoDove/inbound] lead source not recorded:", errorMessage(err));
+    }
+}
+
+/**
+ * NeoDove created a lead for a dealer we already hold → a Re-inquiry on our
+ * lead.
+ *
+ * EXCEPT THE ECHO OF OUR OWN PUSH. Every lead the CRM pushes comes straight
+ * back as a LEAD_CREATE (the round trip that made the duplicate rows described
+ * in dedupe.ts). That is not the dealer arriving again, and logging it would
+ * put a Re-inquiry — and a notification to the owner and the Sales Head — on
+ * every lead anyone sends to the calling team. Two signs it is an echo: the
+ * event carries our own id back, or we hold a link row for a push we made.
+ */
+async function recordNeodoveReinquiry(
+    dealerLeadId: string,
+    event: NeodoveInboundEvent,
+): Promise<void> {
+    try {
+        if (event.itarangLeadId && event.itarangLeadId === dealerLeadId) return;
+        const pushed = await db.execute<{ one: number }>(sql`
+            SELECT 1 AS one FROM neodove_lead_links
+             WHERE dealer_lead_id = ${dealerLeadId} AND push_status = 'pushed' LIMIT 1
+        `);
+        if (pushed.length > 0) return;
+        await recordReinquiry({
+            leadId: dealerLeadId,
+            door: "neodove",
+            actorId: null,
+            note: event.campaignName ?? event.name ?? null,
+        });
+    } catch (err) {
+        console.warn("[NeoDove/inbound] re-inquiry not recorded:", errorMessage(err));
     }
 }
 

@@ -15,6 +15,7 @@ import {
     type QueueFilterInput,
 } from "@/lib/leads/queueFilterSql";
 import type { QueueRegion } from "@/lib/leads/queueFilters";
+import { finalisedNotWonSql } from "@/lib/leads/finalisedNotWon";
 import type { QueueSort } from "@/lib/leads/queueSort";
 
 const TERMINAL_LIST = sql.raw(
@@ -33,8 +34,16 @@ type BuildArgs = {
     visitStatus?: string | null;
     /** The latest visit's outcome — ASM-only. */
     visitOutcome?: string | null;
+    /** ID 75.4: only "Finalised, not Won" leads (finalisedNotWonSql). */
+    finalisedOnly?: boolean;
     /** User-chosen column + direction; the tab order stays as the tiebreak. */
     sort?: QueueSort;
+    /**
+     * Only leads this user currently owns, whatever the tab (ID 58 — an ASM's
+     * export). Applied IN the query, so the row cap and the count are taken
+     * over the ASM's own leads rather than over the whole tab.
+     */
+    ownedBy?: string | null;
 };
 
 /**
@@ -53,7 +62,8 @@ export function tabFilter(tab: AsmQueueTab, asmId: string) {
             // ID 36: dead / non-responsive numbers are in Number Repair, not here.
             return sql`dl.current_owner_id = ${asmId} AND dl.lead_status NOT IN (${TERMINAL_LIST}) AND dl.is_active IS NOT FALSE AND (to_jsonb(dl) ->> 'contactability') IS NULL`;
         case "today":
-            return sql`dl.asm_id = ${asmId} AND lv.scheduled_date = CURRENT_DATE AND lv.visit_status IN ('scheduled','pending_scheduling') AND dl.is_active IS NOT FALSE`;
+            // ID 36: a dead / non-responsive number is in Number Repair, not on today's route.
+            return sql`dl.asm_id = ${asmId} AND lv.scheduled_date = CURRENT_DATE AND lv.visit_status IN ('scheduled','pending_scheduling') AND dl.is_active IS NOT FALSE AND (to_jsonb(dl) ->> 'contactability') IS NULL`;
         case "territory":
             // In-territory leads, OR any lead nobody owns yet — so the ASM sees
             // the same unassigned pool the Inside Sales claim queue surfaces
@@ -150,8 +160,11 @@ function extraFilters({
     filters,
     visitStatus,
     visitOutcome,
-}: Pick<BuildArgs, "q" | "filters" | "visitStatus" | "visitOutcome">): SQL {
+    finalisedOnly,
+    ownedBy,
+}: Pick<BuildArgs, "q" | "filters" | "visitStatus" | "visitOutcome" | "finalisedOnly" | "ownedBy">): SQL {
     const parts: SQL[] = [];
+    if (ownedBy) parts.push(sql` AND dl.current_owner_id = ${ownedBy}`);
     if (q) parts.push(leadSearchClause(q));
     if (filters) parts.push(...queueFilterClauses(filters, ASM_DATE_COLUMN));
     // The LATEST visit's state, which is what the row's Visit column shows. A
@@ -160,6 +173,7 @@ function extraFilters({
     // a question nobody looking at this queue is asking.
     if (visitStatus) parts.push(sql` AND lv.visit_status = ${visitStatus}`);
     if (visitOutcome) parts.push(sql` AND lv.visit_outcome = ${visitOutcome}`);
+    if (finalisedOnly) parts.push(sql` AND ${finalisedNotWonSql()}`);
     return parts.length ? sql.join(parts, sql``) : sql``;
 }
 
@@ -172,12 +186,14 @@ export async function fetchAsmQueueRows({
     filters,
     visitStatus,
     visitOutcome,
+    finalisedOnly,
     sort,
+    ownedBy,
 }: BuildArgs): Promise<AsmQueueRow[]> {
     const offset = (page - 1) * limit;
     const where = tabFilter(tab, asmId);
     const order = queueSortOrder(sort, tabOrder(tab));
-    const search = extraFilters({ q, filters, visitStatus, visitOutcome });
+    const search = extraFilters({ q, filters, visitStatus, visitOutcome, finalisedOnly, ownedBy });
 
     const rows = await db.execute<AsmQueueRow>(sql`
         SELECT
@@ -219,12 +235,14 @@ export async function countAsmQueueRows({
     filters,
     visitStatus,
     visitOutcome,
+    finalisedOnly,
+    ownedBy,
 }: Pick<
     BuildArgs,
-    "tab" | "asmId" | "q" | "filters" | "visitStatus" | "visitOutcome"
+    "tab" | "asmId" | "q" | "filters" | "visitStatus" | "visitOutcome" | "finalisedOnly" | "ownedBy"
 >): Promise<number> {
     const where = tabFilter(tab, asmId);
-    const search = extraFilters({ q, filters, visitStatus, visitOutcome });
+    const search = extraFilters({ q, filters, visitStatus, visitOutcome, finalisedOnly, ownedBy });
     const rows = await db.execute<{ c: string }>(sql`
         SELECT COUNT(*)::text AS c FROM dealer_leads dl ${LATEST_VISIT_JOIN} WHERE ${where} ${search}
     `);
@@ -249,11 +267,12 @@ export async function fetchAsmQueueIds({
     filters,
     visitStatus,
     visitOutcome,
+    finalisedOnly,
     sort,
 }: Omit<BuildArgs, "page">): Promise<string[]> {
     const where = tabFilter(tab, asmId);
     const order = queueSortOrder(sort, tabOrder(tab));
-    const search = extraFilters({ q, filters, visitStatus, visitOutcome });
+    const search = extraFilters({ q, filters, visitStatus, visitOutcome, finalisedOnly });
     const rows = await db.execute<{ id: string }>(sql`
         SELECT dl.id
         FROM dealer_leads dl
@@ -266,6 +285,19 @@ export async function fetchAsmQueueIds({
 }
 
 /**
+ * ID 75.4: the ASM's own "Finalised, not Won" leads on My visits — the count
+ * badge on the queue chip. Not narrowed by the other filters (same reason as
+ * the ISR countFinalisedNotWon).
+ */
+export async function countAsmFinalisedNotWon(asmId: string): Promise<number> {
+    const rows = await db.execute<{ c: string }>(sql`
+        SELECT COUNT(*)::text AS c FROM dealer_leads dl
+         WHERE ${tabFilter("my_visits", asmId)} AND ${finalisedNotWonSql()}
+    `);
+    return Number(rows[0]?.c ?? 0);
+}
+
+/**
  * Badge counts for all five tabs in one round trip.
  *
  * The filters are threaded through for the same reason the Inside Sales badges
@@ -275,12 +307,13 @@ export async function fetchAsmQueueIds({
  */
 export async function fetchAllAsmTabCounts(
     asmId: string,
-    opts?: Pick<BuildArgs, "filters" | "visitStatus" | "visitOutcome">,
+    opts?: Pick<BuildArgs, "filters" | "visitStatus" | "visitOutcome" | "finalisedOnly">,
 ): Promise<Record<AsmQueueTab, number>> {
     const extra = extraFilters({
         filters: opts?.filters,
         visitStatus: opts?.visitStatus,
         visitOutcome: opts?.visitOutcome,
+        finalisedOnly: opts?.finalisedOnly,
     });
     const rows = await db.execute<{
         my_visits: string;

@@ -32,12 +32,28 @@ const consumeMedia = vi.fn(async () => {});
 vi.mock("../media", async (orig) => ({ ...(await orig<typeof import("../media")>()), findMedia, mediaBytes, consumeMedia }));
 const readDocument = vi.fn();
 vi.mock("../vision", async (orig) => ({ ...(await orig<typeof import("../vision")>()), readDocument }));
+// ID 79 — the CRM's WhatsApp-contact writer and its reuse lookup (both hit the DB).
+const recordWhatsappContact = vi.fn<(...a: unknown[]) => Promise<unknown>>();
+const screenshotAlreadyUsed = vi.fn<(...a: unknown[]) => Promise<boolean>>();
+vi.mock("@/lib/leads/whatsappContact", async (orig) => ({
+    ...(await orig<typeof import("@/lib/leads/whatsappContact")>()),
+    recordWhatsappContact,
+    screenshotAlreadyUsed,
+}));
+const logLeadTouchpoint = vi.fn<(...a: unknown[]) => Promise<unknown>>(async () => ({ touchpointId: "tp-call", historyId: null }));
+vi.mock("@/lib/inside-sales/logTouchpoint", async (orig) => ({
+    ...(await orig<typeof import("@/lib/inside-sales/logTouchpoint")>()),
+    logLeadTouchpoint,
+}));
 const checkPinAgainstShop = vi.fn();
 vi.mock("../geo", async (orig) => ({ ...(await orig<typeof import("../geo")>()), checkPinAgainstShop }));
 
 const { toolsFor } = await import("../registry");
 const { APPLIERS } = await import("../appliers");
+const { renderTapOutcome } = await import("@/lib/wa-assistant/render");
+const { screenshotHash } = await import("@/lib/leads/whatsappContact");
 import type { AssistantUser, Preview, ToolContext } from "../types";
+import type { ExecOutcome } from "../executor";
 
 const ISR: AssistantUser = { id: "isr-1", name: "Priya", role: "inside_sales_rep" };
 const ASM: AssistantUser = { id: "asm-1", name: "Rahul", role: "asm" };
@@ -85,6 +101,8 @@ beforeEach(() => {
     media.clear();
     for (const k of Object.keys(leadRow)) delete leadRow[k];
     findLeadInScope.mockResolvedValue(lead({ current_owner_id: "isr-1", owned: true }));
+    screenshotAlreadyUsed.mockResolvedValue(false);
+    recordWhatsappContact.mockResolvedValue({ touchpointId: "tp-wa", countedAsContact: true, reused: false, statusTo: "Under_Discussion" });
 });
 
 describe("registry", () => {
@@ -315,5 +333,172 @@ describe("create_lead from a visiting card", () => {
     it("an old stored plan (before E-311) still parses: no extra, no source", () => {
         const old = { dealer_name: "Ramesh", phone: "9876543210", shop_name: null, city: null, state: null, interest_level: null, language: null, business_type: null };
         expect(APPLIERS.create_lead.schema.parse(old)).toMatchObject({ extra: null, source: null, source_doc_type: null });
+    });
+});
+
+describe("log_call on WhatsApp — a chat counts only with a screenshot (ID 79)", () => {
+    const SHA = screenshotHash(Buffer.from("img"));
+    const fresh = () => findLeadInScope.mockResolvedValue(lead({ current_owner_id: "isr-1", owned: true, lead_status: "Assigned_Not_Contacted" }));
+
+    it("dealer replied + a screenshot → counts as contact: Under discussion (auto), idle clock reset", async () => {
+        fresh();
+        media.set("mshot1", file("mshot1"));
+        const r = await run(ISR, "log_call", {
+            lead_id: "DL-1042", channel: "whatsapp", screenshot_attachment_id: "mshot1", dealer_replied: true,
+            remarks: "wants the 105Ah price",
+        });
+        expect(r.kind).toBe("preview");
+        const a = stored();
+        expect(a.plan).toMatchObject({
+            channel: "whatsapp",
+            touchpoint_type: "whatsapp",
+            status_to: null,
+            whatsapp: { dealer_replied: true, screenshot: { ref: "mshot1", sha256: SHA, storage_bucket: "documents" } },
+        });
+        expect(a.preview.lines).toContainEqual({ label: "WhatsApp", value: "dealer replied · screenshot mshot1 — counts as contact" });
+        expect(a.preview.lines).toContainEqual({ label: "Status", value: "Assigned Not Contacted → Under Discussion (auto)" });
+        expect(a.preview.resets_idle_clock).toBe(true);
+        expect(a.preview.warning).toBeNull();
+    });
+
+    it("no screenshot → a note: no status, no idle clock, and the card says a screenshot is needed", async () => {
+        fresh();
+        const r = await run(ISR, "log_call", { lead_id: "DL-1042", channel: "whatsapp", dealer_replied: true, remarks: "chatted on WhatsApp" });
+        expect(r.kind).toBe("preview");
+        const a = stored();
+        expect(a.plan).toMatchObject({ whatsapp: { dealer_replied: true, screenshot: null } });
+        expect(a.preview.lines).toContainEqual({ label: "WhatsApp", value: "note only (no screenshot)" });
+        expect(a.preview.lines).toContainEqual({ label: "Status", value: "no change" });
+        expect(a.preview.resets_idle_clock).toBe(false);
+        expect(a.preview.warning).toMatch(/No screenshot/);
+        expect(mediaBytes).not.toHaveBeenCalled();
+    });
+
+    it("a screenshot with no reply from the dealer is a note too", async () => {
+        fresh();
+        media.set("mshot1", file("mshot1"));
+        await run(ISR, "log_call", { lead_id: "DL-1042", channel: "whatsapp", screenshot_attachment_id: "mshot1", dealer_replied: false, remarks: "sent the brochure" });
+        const a = stored();
+        expect(a.preview.lines).toContainEqual({ label: "WhatsApp", value: "screenshot mshot1 · no reply from the dealer — a note" });
+        expect(a.preview.lines).toContainEqual({ label: "Status", value: "no change" });
+        expect(a.preview.resets_idle_clock).toBe(false);
+    });
+
+    it("an image already used on another entry is flagged on the card and never counted", async () => {
+        fresh();
+        media.set("mshot1", file("mshot1"));
+        screenshotAlreadyUsed.mockResolvedValue(true);
+        await run(ISR, "log_call", { lead_id: "DL-1042", channel: "whatsapp", screenshot_attachment_id: "mshot1", dealer_replied: true, remarks: "x" });
+        const a = stored();
+        expect(screenshotAlreadyUsed).toHaveBeenCalledWith(SHA);
+        expect(a.preview.lines).toContainEqual({ label: "WhatsApp", value: "screenshot mshot1 was used before — not counted" });
+        expect(a.preview.lines).toContainEqual({ label: "Status", value: "no change" });
+        expect(a.preview.resets_idle_clock).toBe(false);
+        expect(a.preview.warning).toMatch(/already used/);
+    });
+
+    it("a lead already past first contact, or awaiting a field visit, counts but does not move", async () => {
+        media.set("mshot1", file("mshot1"));
+        for (const lead_status of ["Under_Discussion", "Commercials_Explained", "Transferred_to_ASM"]) {
+            findLeadInScope.mockResolvedValue(lead({ current_owner_id: "isr-1", owned: true, lead_status }));
+            await run(ISR, "log_call", { lead_id: "DL-1042", channel: "whatsapp", screenshot_attachment_id: "mshot1", dealer_replied: true, remarks: "x" });
+            const a = stored();
+            expect(a.preview.lines, lead_status).toContainEqual({ label: "Status", value: "no change" });
+            expect(a.preview.resets_idle_clock, lead_status).toBe(true);
+        }
+    });
+
+    it("every doubtful case is a question or a refusal — nothing proposed", async () => {
+        media.set("mshot1", file("mshot1"));
+        // Whether the dealer replied decides the count: never assumed.
+        expect((await run(ISR, "log_call", { lead_id: "DL-1042", channel: "whatsapp", screenshot_attachment_id: "mshot1", remarks: "x" })).kind).toBe("question");
+        // A ref that is not theirs / does not exist.
+        expect((await run(ISR, "log_call", { lead_id: "DL-1042", channel: "whatsapp", screenshot_attachment_id: "mnope9", dealer_replied: true })).kind).toBe("question");
+        // A screenshot already filed by an earlier confirmed change.
+        media.set("mused1", file("mused1", { used_at: NOW }));
+        expect((await run(ISR, "log_call", { lead_id: "DL-1042", channel: "whatsapp", screenshot_attachment_id: "mused1", dealer_replied: true })).kind).toBe("declined");
+        // A PDF or a location pin is not a screenshot.
+        media.set("mpdf01", file("mpdf01", { kind: "document", mime_type: "application/pdf" }));
+        expect((await run(ISR, "log_call", { lead_id: "DL-1042", channel: "whatsapp", screenshot_attachment_id: "mpdf01", dealer_replied: true })).kind).toBe("declined");
+        // A screenshot on a plain note.
+        expect((await run(ISR, "log_call", { lead_id: "DL-1042", channel: "note", screenshot_attachment_id: "mshot1", remarks: "x" })).kind).toBe("question");
+        // The file is gone from storage.
+        mediaBytes.mockResolvedValueOnce(null as never);
+        expect((await run(ISR, "log_call", { lead_id: "DL-1042", channel: "whatsapp", screenshot_attachment_id: "mshot1", dealer_replied: true })).kind).toBe("question");
+        expect(createPending).not.toHaveBeenCalled();
+    });
+
+    it("applier: consumes the screenshot, then the CRM's WhatsApp writer on the same tx — never the call writer", async () => {
+        fresh();
+        media.set("mshot1", file("mshot1"));
+        await run(ISR, "log_call", {
+            lead_id: "DL-1042", channel: "whatsapp", screenshot_attachment_id: "mshot1", dealer_replied: true,
+            remarks: "wants the 105Ah price", follow_up_at: "2026-09-29T11:00:00+05:30",
+        });
+        const plan = APPLIERS.log_call.schema.parse(stored().plan);
+        const execute = vi.fn(async () => []);
+        const tx = { execute } as never;
+        const out = await APPLIERS.log_call.apply({ tx, user: ISR, step: 1, actionId: "act-9" }, plan);
+
+        expect(consumeMedia).toHaveBeenCalledWith(tx, [file("mshot1").id], "act-9");
+        expect(recordWhatsappContact).toHaveBeenCalledWith(tx, {
+            leadId: "DL-1042",
+            actorId: "isr-1",
+            remarks: "wants the 105Ah price",
+            dealerReplied: true,
+            screenshot: { url: "/api/files/documents/wa-assistant/isr-1/2026-09/mshot1.jpg", sha256: SHA },
+            nextActionAt: new Date("2026-09-29T05:30:00.000Z"),
+        });
+        // The follow-up the queue reads is set on the lead, same tx.
+        expect(execute).toHaveBeenCalledTimes(1);
+        expect(logLeadTouchpoint).not.toHaveBeenCalled();
+        expect(out).toMatchObject({ touchpoint_id: "tp-wa", counted_as_contact: true, screenshot_reused: false });
+    });
+
+    it("applier: a note (no screenshot) consumes nothing and is written as not replied", async () => {
+        fresh();
+        await run(ISR, "log_call", { lead_id: "DL-1042", channel: "whatsapp", remarks: "chatted on WhatsApp" });
+        const plan = APPLIERS.log_call.schema.parse(stored().plan);
+        recordWhatsappContact.mockResolvedValue({ touchpointId: "tp-wa", countedAsContact: false, reused: false, statusTo: null });
+        const tx = { execute: vi.fn(async () => []) } as never;
+        await APPLIERS.log_call.apply({ tx, user: ISR, step: 1, actionId: "act-9" }, plan);
+        expect(consumeMedia).not.toHaveBeenCalled();
+        expect(recordWhatsappContact).toHaveBeenCalledWith(tx, expect.objectContaining({ dealerReplied: false, screenshot: null, nextActionAt: null }));
+    });
+
+    it("a pending WhatsApp plan from before this field still parses, and is saved as a note", async () => {
+        const old = {
+            lead_id: "DL-1042", channel: "whatsapp", touchpoint_type: "whatsapp", disposition: null, call_duration_sec: null,
+            remarks: "old card", status_to: null, lost: null, follow_up_at: null, interest: null,
+        };
+        const plan = APPLIERS.log_call.schema.parse(old);
+        const tx = { execute: vi.fn(async () => []) } as never;
+        await APPLIERS.log_call.apply({ tx, user: ISR, step: 1 }, plan);
+        expect(recordWhatsappContact).toHaveBeenCalledWith(tx, expect.objectContaining({ dealerReplied: false, screenshot: null }));
+    });
+
+    it("a call still goes through the call writer, untouched", async () => {
+        const plan = APPLIERS.log_call.schema.parse({
+            lead_id: "DL-1042", channel: "call", touchpoint_type: "inside_sales_call",
+            disposition: { connect_status: "connected", label: "Price High", bucket: "Warm" }, call_duration_sec: null,
+            remarks: null, status_to: null, lost: null, follow_up_at: null, interest: null,
+        });
+        const out = await APPLIERS.log_call.apply({ tx: { execute: vi.fn() } as never, user: ISR, step: 1 }, plan);
+        expect(logLeadTouchpoint).toHaveBeenCalledTimes(1);
+        expect(recordWhatsappContact).not.toHaveBeenCalled();
+        expect(out).toEqual({ touchpoint_id: "tp-call", status_history_id: null });
+    });
+
+    it("the reply says so when the writer found the screenshot reused at Confirm", () => {
+        const confirmed = (after: Record<string, unknown>): ExecOutcome => ({
+            kind: "confirmed", actionId: "act-1", tool: "log_call", leadId: "DL-1042",
+            title: "Log WhatsApp — ABC Traders", after, crmUrl: "https://crm/l/DL-1042", extra: null,
+        });
+        expect(renderTapOutcome(confirmed({ counted_as_contact: false, screenshot_reused: true }))).toMatchObject({
+            kind: "text", body: expect.stringMatching(/already used on another entry/),
+        });
+        expect(renderTapOutcome(confirmed({ counted_as_contact: true, screenshot_reused: false }))).toMatchObject({
+            kind: "text", body: expect.stringMatching(/Saved: Log WhatsApp/),
+        });
     });
 });

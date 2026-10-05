@@ -214,13 +214,18 @@ await check("P0-6 a replaced quote version is refused", async () => {
         SELECT c.commercial_id::text AS commercial_id
           FROM dealer_lead_commercials c
          WHERE c.event_type IN ('quote_issue','quote_revision')
+           AND c.withdrawn_at IS NULL
+           -- Only a newer APPROVED, NOT-WITHDRAWN version replaces a quote
+           -- (ID 60 review, 30 Sep) — see scripts/verify-quote-current-version.ts.
            AND EXISTS (SELECT 1 FROM dealer_lead_commercials n
                         WHERE n.dealer_lead_id = c.dealer_lead_id
                           AND n.event_type IN ('quote_issue','quote_revision')
+                          AND n.approval_status = 'approved'
+                          AND n.withdrawn_at IS NULL
                           AND n.version_no > c.version_no)
          LIMIT 1
     `)) as unknown as Array<{ commercial_id: string }>;
-    if (!q) throw new Error("SKIP: no lead with two quote versions");
+    if (!q) throw new Error("SKIP: no lead with a quote under a newer approved version");
     const row = await loadQuotationForDealer(q.commercial_id);
     assert(row, "quote not loaded");
     assert(staleQuoteReason(row) === "replaced", `expected replaced, got ${staleQuoteReason(row)}`);

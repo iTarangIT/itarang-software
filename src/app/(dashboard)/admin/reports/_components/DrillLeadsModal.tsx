@@ -7,6 +7,7 @@ import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, Inbox, Loader2, X } from "lucide-react";
 import type { OwnerDrillLead } from "@/lib/admin/types";
+import { LEAD_STATUS_LABEL } from "@/lib/leads/queueFilters";
 
 export type DrillTarget = {
     personId: string;
@@ -147,7 +148,7 @@ export function DrillLeadsModal({
                                                 {[l.city, l.state].filter(Boolean).join(", ") || "—"}
                                             </td>
                                             <td className="px-4 py-2.5 text-ink">
-                                                {l.lead_status?.replace(/_/g, " ") || "—"}
+                                                {(l.lead_status && (LEAD_STATUS_LABEL as Record<string, string>)[l.lead_status]) || l.lead_status?.replace(/_/g, " ") || "—"}
                                             </td>
                                             <td className="px-4 py-2.5 text-ink capitalize">
                                                 {l.interest_level || "—"} / {l.current_status || "—"}

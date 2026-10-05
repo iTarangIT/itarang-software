@@ -100,10 +100,13 @@ export async function GET(
         // Only meaningful when `open` is false and no decision exists — i.e.
         // iTarang withdrew the quotation after sending it.
         withdrawn: row.approval_status !== "approved" || stale === "withdrawn",
-        // ID 60: a later version replaced this one — the page points there.
+        // ID 60: a later version replaced this one — the page points there. A
+        // withdrawn version points to the lead's live quote too, when it has one.
         replaced: stale === "replaced",
         latest_url:
-          stale === "replaced" ? latestUrl(row.latest_commercial_id, row.latest_version_no) : null,
+          stale && row.latest_commercial_id !== row.commercial_id
+            ? latestUrl(row.latest_commercial_id, row.latest_version_no)
+            : null,
       },
     });
   } catch (e) {
@@ -167,13 +170,26 @@ export async function POST(
             error: {
               message: `This quotation has been replaced${result.latestQuoteNumber ? ` by ${result.latestQuoteNumber}` : ""}. Please respond to the latest one.`,
             },
-            data: { latest_url: latestUrl(result.latestCommercialId, result.latestVersionNo) },
+            // The page switches to its "replaced" state and offers this link —
+            // the dealer may have had the old page open when the new version
+            // was approved, so the GET never told them.
+            data: {
+              replaced: true,
+              latest_url: latestUrl(result.latestCommercialId, result.latestVersionNo),
+            },
           },
           { status: 409 },
         );
       case "not_sendable":
         return NextResponse.json(
-          { success: false, error: { message: result.reason } },
+          {
+            success: false,
+            error: { message: result.reason },
+            data: {
+              replaced: false,
+              latest_url: latestUrl(result.latestCommercialId ?? null, result.latestVersionNo ?? null),
+            },
+          },
           { status: 409 },
         );
       default:

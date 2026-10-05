@@ -67,15 +67,23 @@ export const COMMERCIALS_CALL_LABELS: readonly string[] = [
 ];
 
 /**
- * ID 76: the Lost reason a Lost-type call outcome pre-fills in Mark Lost.
- * Null = the rep picks (the form still opens).
+ * ID 76: the ONE map from a call outcome label to its Lost reason. The forms
+ * pre-fill Mark Lost from it, and the WhatsApp Assistant's vocabulary
+ * (assistant/vocab.ts lostReasonByLabel) is built from it — so the two can
+ * never disagree. A label absent here = the rep picks (the form still opens).
+ *
+ *   REJECTED BY US  defaults to the credit reason (ID 76.2); Mark Lost keeps
+ *                   the credit / geography choice editable.
+ *   Price High      is a Warm label, Lost only when the rep says so.
  */
-const LOST_REASON_BY_LABEL: Readonly<Record<string, LostReason>> = {
+export const LOST_REASON_BY_LABEL: Readonly<Record<string, LostReason>> = Object.freeze({
     "Not Interested": "not_interested",
     "Lost to Competition": "lost_to_competition",
     "Some other Business": "moved_to_other_business",
     "Business Closed": "business_closed",
-};
+    "REJECTED BY US": "rejected_by_us_credit",
+    "Price High": "price_high",
+});
 
 export function lostReasonForLabel(label: string): LostReason | null {
     return LOST_REASON_BY_LABEL[label] ?? null;
@@ -140,11 +148,5 @@ export function autoProgressForVisit(input: {
     }
 }
 
-export function autoProgressForFollowUp(input: {
-    /** Did the rep actually speak to the dealer? A reminder alone moves nothing. */
-    spokeWithDealer: boolean;
-    currentStatus: string | null;
-}): AutoProgress {
-    if (!input.spokeWithDealer) return NONE;
-    return { statusTo: forward(input.currentStatus, "Under_Discussion"), interestTo: null };
-}
+// There is no rule for a follow-up: a reminder or a note moves nothing
+// (tracker ID 80). "Spoke to the dealer" is a call, logged as one.

@@ -19,8 +19,12 @@ export const TOUCHPOINT_TYPE = [
   "neodove_dial_request",
   // Commercials / collateral
   "brochure_sent",
-  // `quote_sent` means RELEASED — the quote cleared the approval gate. It has
-  // meant that since E-221 and is written by both approval paths.
+  // `quote_released` — the quote cleared the approval gate (ID 75 rename).
+  // Written by both approval paths since 1 Oct 2026. `quote_sent` is the SAME
+  // event under its old name (E-221 until the rename): never written again,
+  // kept so history still parses and renders. Readers must accept both —
+  // use QUOTE_RELEASED_TYPES / isQuoteReleased, never a bare literal.
+  "quote_released",
   "quote_sent",
   // E-242 registers three values that were already being WRITTEN and were never
   // listed here. `quote_submitted` (inside-sales commercials route) and
@@ -70,6 +74,17 @@ export const TOUCHPOINT_TYPE = [
 export type TouchpointType = (typeof TOUCHPOINT_TYPE)[number];
 
 /**
+ * ID 75: every stored value that means "quote released" — the new name first,
+ * then the legacy `quote_sent` rows (no data rewrite). SQL readers bind this
+ * array (e.g. `touchpoint_type = ANY(${[...QUOTE_RELEASED_TYPES]})`).
+ */
+export const QUOTE_RELEASED_TYPES = ["quote_released", "quote_sent"] as const satisfies readonly TouchpointType[];
+
+export function isQuoteReleased(type: string | null | undefined): boolean {
+  return type != null && (QUOTE_RELEASED_TYPES as readonly string[]).includes(type);
+}
+
+/**
  * Whether a touchpoint counts as WORK on a lead and resets its idle clock
  * (dealer_leads.last_worked_at, E-300). Requirement #6 point 7: "Only a logged
  * call, visit or status change — never just opening the lead, or people will
@@ -91,14 +106,35 @@ export type TouchpointType = (typeof TOUCHPOINT_TYPE)[number];
  * working it, and would hide neglect the same way. Nor dial requests,
  * WhatsApp, quotes, escalations or reactivation.
  *
+ * Nor an admin's "Correct status" (ID 80): it is a status_change_note that
+ * carries a status change, but it repairs the record — nobody spoke to the
+ * dealer. Pass the status event; "correction" never counts.
+ *
  * The E-300 backfill encodes the same rule in SQL; keep them in step.
  */
 export function isWorkedTouchpoint(
   type: TouchpointType,
   hasStatusChange: boolean,
+  /** The status change's event, when there is one (statusRules.ts). */
+  statusEvent?: string | null,
 ): boolean {
   if (type === "inside_sales_call" || type === "visit") return true;
-  return type === "status_change_note" && hasStatusChange;
+  return type === "status_change_note" && hasStatusChange && statusEvent !== "correction";
+}
+
+/**
+ * ID 115.2: the touchpoints that are a conversation with the dealer — a call, a
+ * visit or a WhatsApp chat. Only these may ask for first contact
+ * (Under_Discussion) on the touchpoint form; a note cannot.
+ */
+export const CONVERSATION_TOUCHPOINT_TYPES: readonly TouchpointType[] = [
+  "inside_sales_call",
+  "visit",
+  "whatsapp",
+];
+
+export function isConversationTouchpoint(type: TouchpointType): boolean {
+  return CONVERSATION_TOUCHPOINT_TYPES.includes(type);
 }
 
 export const CALL_STATUS = [
@@ -119,15 +155,100 @@ export const NEXT_ACTION = [
 ] as const;
 export type NextAction = (typeof NEXT_ACTION)[number];
 
+// ── Engaged call (tracker ID 59, decided 26 Sep 2026) ───────────────────────
+// Connected AND at least N seconds (30) of MEASURED duration. By default only
+// NeoDove's recorded duration is a measurement: one a rep types into the log
+// form is their own estimate and does not make a call engaged.
+//
+// NeoDove sends no duration today, so under the default no live call qualifies
+// and every report shows engaged calls as "Not measured yet". Whether to count
+// rep-entered durations in the meantime is tracker question 6, still open.
+//
+// Both choices — the threshold and whose duration counts — are a SETTING, not
+// code: app_settings['engaged_call_rule'], edited by the Sales Head / Admin on
+// the Sales Daily settings page (src/lib/reports/engagedCallRule.ts). This
+// file is the pure rule the writers store in is_engaged; the SQL fragments
+// every report reads (reports/metricDefinitions.ts) look the same setting up
+// inline, so the two cannot disagree.
+export const ENGAGED_CALL_RULE_KEY = "engaged_call_rule";
+export const ENGAGED_CALL_MIN_SECONDS = 30;
+/** Bounds on the threshold a setting may hold; outside them the default applies. */
+export const ENGAGED_CALL_MIN_SECONDS_FLOOR = 5;
+export const ENGAGED_CALL_MIN_SECONDS_CEILING = 600;
+
+export type EngagedDurationSource = "neodove" | "reported";
+
+export type EngagedCallRule = {
+  /** A connected call of at least this many measured seconds is engaged. */
+  minSeconds: number;
+  /** "neodove" = only NeoDove-recorded durations count; "reported" = typed ones too. */
+  durationSource: EngagedDurationSource;
+};
+
+export const DEFAULT_ENGAGED_CALL_RULE: EngagedCallRule = Object.freeze({
+  minSeconds: ENGAGED_CALL_MIN_SECONDS,
+  durationSource: "neodove",
+});
+
+/** Whatever is stored (or posted) → a complete, in-bounds rule. Never throws. */
+export function normalizeEngagedCallRule(raw: unknown): EngagedCallRule {
+  const v = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  const n = Number(v.min_seconds ?? v.minSeconds);
+  const inBounds =
+    Number.isInteger(n) && n >= ENGAGED_CALL_MIN_SECONDS_FLOOR && n <= ENGAGED_CALL_MIN_SECONDS_CEILING;
+  const source = v.duration_source ?? v.durationSource;
+  return {
+    minSeconds: inBounds ? n : ENGAGED_CALL_MIN_SECONDS,
+    durationSource: source === "reported" ? "reported" : "neodove",
+  };
+}
+
+/** Does the rule accept this call's duration as a measurement? */
+export function isTimedCall(
+  ctx: { durationSec?: number | null; externalSystem?: string | null },
+  rule: EngagedCallRule = DEFAULT_ENGAGED_CALL_RULE,
+): boolean {
+  if (ctx.durationSec == null) return false;
+  return rule.durationSource === "reported" || ctx.externalSystem === "neodove";
+}
+
+export function isEngagedCall(
+  ctx: { callStatus?: string | null; durationSec?: number | null; externalSystem?: string | null },
+  rule: EngagedCallRule = DEFAULT_ENGAGED_CALL_RULE,
+): boolean {
+  return (
+    ctx.callStatus === "connected" &&
+    isTimedCall(ctx, rule) &&
+    (ctx.durationSec ?? 0) >= rule.minSeconds
+  );
+}
+
 // Touchpoint types that are auto-engaged per BRD §0.1 Glossary:
-//   * connected inside_sales_call
+//   * an engaged inside_sales_call — isEngagedCall() above, not merely a
+//     connected one
 //   * visit with outcome productive / commercials_progressed
 // Other types require manual is_engaged flag (rep's judgment).
 export function shouldAutoEngage(
   type: TouchpointType,
-  ctx: { callStatus?: CallStatus | null; visitOutcome?: string | null },
+  ctx: {
+    callStatus?: CallStatus | null;
+    visitOutcome?: string | null;
+    callDurationSec?: number | null;
+    externalSystem?: string | null;
+    /** The saved rule; the default (30 s, NeoDove durations) when omitted. */
+    engagedRule?: EngagedCallRule;
+  },
 ): boolean {
-  if (type === "inside_sales_call" && ctx.callStatus === "connected") return true;
+  if (type === "inside_sales_call") {
+    return isEngagedCall(
+      {
+        callStatus: ctx.callStatus,
+        durationSec: ctx.callDurationSec,
+        externalSystem: ctx.externalSystem,
+      },
+      ctx.engagedRule,
+    );
+  }
   if (
     type === "visit" &&
     (ctx.visitOutcome === "productive" ||

@@ -22,6 +22,7 @@
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { writeTouchpoint } from "@/lib/touchpoints/write";
+import { markSalesReady } from "@/lib/leads/salesReady";
 import type { TouchpointType } from "@/lib/lifecycle/touchpointTypes";
 import type { LostReason } from "@/lib/lifecycle/transitions";
 
@@ -112,6 +113,13 @@ export async function reactivateLead(opts: {
             },
             { tx },
         );
+
+        // ID 82: a reactivated lead is back in the pipeline, so it must be
+        // sales-ready — a lead that never was (lost before the event existed)
+        // would otherwise sit at New / Unassigned outside Ready to assign.
+        // First event wins: an existing date is not moved; the WAIT restarts
+        // from this status change (awaitingSince). Savepoint; never throws.
+        await markSalesReady(tx, { leadId, reason: "reactivated", actorId: performedBy });
 
         return { new_status: newStatus, new_owner_id: newOwnerId };
     });

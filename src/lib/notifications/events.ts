@@ -17,10 +17,10 @@
  * notification can never be the reason a business action fails, so callers do
  * not need their own try/catch (though existing ones do no harm).
  */
-import { eq } from "drizzle-orm";
+import { and, eq, ne, sql } from "drizzle-orm";
 
 import { db } from "@/lib/db";
-import { leads } from "@/lib/db/schema";
+import { leads, users } from "@/lib/db/schema";
 import {
   ADMIN_AUDIENCE_ROLES,
   emit,
@@ -333,6 +333,114 @@ export async function notifyOnboardingDecision(p: {
         title: `Dealer ${p.decision.replace("_", " ")}`,
         message: `${p.businessName} was ${p.decision.replace("_", " ")}.`,
       }),
+    ],
+  });
+}
+
+/** Roles that can decide a second approval — the requireSalesHead() set. */
+const AGREEMENT_APPROVER_ROLES = ["sales_head", "ceo"];
+
+/**
+ * A manually uploaded dealer agreement did not verify and the uploader asked
+ * for it to be accepted (tracker ID 55, E-318). Goes to every active Sales Head
+ * and CEO EXCEPT the uploader — they are the only people who can decide it, and
+ * the agreement stays incomplete until one of them does.
+ *
+ * Addressed per person rather than by role: a "roles" audience would also
+ * notify the uploader, about a decision the route will not let them make.
+ */
+export async function notifyAgreementApprovalRequested(p: {
+  dealerId: string;
+  businessName: string;
+  requestId: string;
+  requesterId: string;
+  requestReason: string;
+  /** What the system found wrong with the upload. */
+  reasons: string[];
+}) {
+  let approverIds: string[] = [];
+  try {
+    const rows = await db
+      .select({ id: users.id })
+      .from(users)
+      .where(
+        and(
+          // LOWER(role): seeded roles are inconsistently cased (see emit.ts).
+          sql`LOWER(${users.role}) IN ${AGREEMENT_APPROVER_ROLES}`,
+          eq(users.is_active, true),
+          ne(users.id, p.requesterId),
+        ),
+      );
+    approverIds = rows.map((r) => r.id);
+  } catch (error) {
+    console.error("[notify] agreement approval: could not list approvers:", error);
+    return;
+  }
+  if (approverIds.length === 0) {
+    console.warn(`[notify] agreement approval for ${p.dealerId}: no second approver exists to notify`);
+    return;
+  }
+
+  const from = await actingParty();
+  const who = from.actor || from.label;
+  const found = p.reasons.slice(0, 3).join(" ");
+  const more = p.reasons.length > 3 ? ` (+${p.reasons.length - 3} more)` : "";
+  const href = `/admin/dealer-verification/${p.dealerId}`;
+  await emit({
+    type: "onboarding.agreement_approval_requested",
+    title: "Dealer agreement needs your approval",
+    message:
+      `${who} uploaded a signed agreement for ${p.businessName} that the system could not verify, and asked for it to be accepted. ` +
+      `The agreement is not marked completed until someone other than the uploader approves it. ` +
+      `What did not verify: ${found}${more} Uploader's reason: ${p.requestReason}`,
+    stage: "Onboarding · Agreement",
+    from,
+    data: { dealerId: p.dealerId, override_request_id: p.requestId, reasons: p.reasons },
+    emailSubject: `[iTarang] Second approval needed — dealer agreement for ${p.businessName}`,
+    to: approverIds.map((userId) => ({
+      audience: { kind: "user" as const, userId },
+      as: ADMIN_PARTY,
+      href,
+      // Deciding needs a look at the files (and a note to reject), so the
+      // button opens the page rather than approving from the dropdown.
+      actions: [{ label: "Review documents", endpoint: "", opensHref: true, variant: "primary" as const }],
+    })),
+  });
+}
+
+/** The second approver decided — told to the person who uploaded. */
+export async function notifyAgreementApprovalDecided(p: {
+  dealerId: string;
+  businessName: string;
+  requestId: string;
+  requesterId: string;
+  decision: "approved" | "rejected";
+  /** true = the agreement was already complete; the files were only added. */
+  addOnly: boolean;
+  note?: string | null;
+}) {
+  const from = await actingParty();
+  const who = from.actor || from.label;
+  const approved = p.decision === "approved";
+  await emit({
+    type: "onboarding.agreement_approval_decided",
+    title: approved ? "Agreement upload approved" : "Agreement upload rejected",
+    message: approved
+      ? `${who} approved the agreement documents you uploaded for ${p.businessName}. ${
+          p.addOnly ? "They were added to the agreement." : "The agreement is now marked completed."
+        }${p.note ? ` Note: ${p.note}` : ""}`
+      : `${who} rejected the agreement documents you uploaded for ${p.businessName}. The agreement is unchanged.${
+          p.note ? ` Reason: ${p.note}` : ""
+        }`,
+    stage: "Onboarding · Agreement",
+    from,
+    data: { dealerId: p.dealerId, override_request_id: p.requestId, decision: p.decision, note: p.note ?? null },
+    to: [
+      {
+        audience: { kind: "user", userId: p.requesterId },
+        as: ADMIN_PARTY,
+        href: `/admin/dealer-verification/${p.dealerId}`,
+      },
     ],
   });
 }
@@ -1974,6 +2082,12 @@ export async function notifyQuotationDealerDecision(p: {
   decision: "approved" | "declined";
   via: "link" | "whatsapp";
   note?: string | null;
+  /**
+   * ID 75.1: the approval did not move the lead because it is Awaiting field
+   * visit (Transferred_to_ASM) — its pre_transfer_status was raised instead,
+   * and the visit restores Commercials finalised.
+   */
+  awaitingVisit?: boolean;
 }) {
   const dealer = p.dealerName?.trim() || "The dealer";
   const money = p.value > 0 ? ` (₹${p.value.toLocaleString("en-IN")})` : "";
@@ -1982,8 +2096,11 @@ export async function notifyQuotationDealerDecision(p: {
 
   const message =
     p.decision === "approved"
-      ? `${dealer} APPROVED quotation${ref}${money} ${channel}. The lead is now Commercials ` +
-        `finalised — open it and Mark Won.`
+      ? p.awaitingVisit
+        ? `${dealer} APPROVED quotation${ref}${money} ${channel}. The lead returns to ` +
+          `Commercials finalised after the field visit.`
+        : `${dealer} APPROVED quotation${ref}${money} ${channel}. The lead is now Commercials ` +
+          `finalised — open it and Mark Won.`
       : `${dealer} DECLINED quotation${ref}${money} ${channel}.` +
         (p.note ? ` They said: "${p.note}"` : "") +
         ` Follow up or raise a revision.`;
@@ -2145,6 +2262,140 @@ export async function notifyLeadResubmitted(p: {
         message: `iTarang resubmitted ${who}'s file to the NBFC for review.`,
       }),
       toLeadNbfcs(p.leadId, { href: nbfcLead(p.leadId) }),
+    ],
+  });
+}
+
+/* ================================================================== *
+ * ID 81 — a known dealer came in again (Re-inquiry)
+ * ================================================================== */
+
+/** The lead page a recipient opens: an ASM has their own workspace. */
+const prospectHref = (leadId: string, role: string | null | undefined) =>
+  (role ?? "").toLowerCase() === "asm" ? `/asm/lead/${leadId}` : `/inside-sales/lead/${leadId}`;
+
+/**
+ * A dealer we already hold arrived again through one of the doors — a rep
+ * tried to add them, a scraper record was pushed, NeoDove created them. No
+ * second lead is made; the event goes on the existing one. Until now nobody
+ * was told, so the owner learned a prospect had resurfaced only by opening it.
+ *
+ * Goes to the lead's owner (skipped when the owner is the person who brought
+ * the dealer in again — they are looking at the message that says so) and to
+ * the Sales Head, who is the one to act when the lead has no owner at all.
+ */
+export async function notifyLeadReinquiry(p: {
+  /** dealer_leads.id */
+  leadId: string;
+  /** Door label — "Rep-created", "Scraper", "NeoDove"… */
+  via: string;
+  actorId: string | null;
+}) {
+  const rows = (await db.execute<{
+    name: string | null;
+    owner_id: string | null;
+    owner_name: string | null;
+    owner_role: string | null;
+    actor_name: string | null;
+  }>(sql`
+    SELECT COALESCE(NULLIF(dl.shop_name, ''), NULLIF(dl.dealer_name, ''), dl.phone) AS name,
+           dl.current_owner_id AS owner_id, o.name AS owner_name, o.role AS owner_role,
+           (SELECT a.name FROM users a WHERE a.id::text = ${p.actorId}::text) AS actor_name
+      FROM dealer_leads dl
+      LEFT JOIN users o ON o.id::text = dl.current_owner_id
+     WHERE dl.id = ${p.leadId}
+     LIMIT 1
+  `)) as unknown as Array<{
+    name: string | null;
+    owner_id: string | null;
+    owner_name: string | null;
+    owner_role: string | null;
+    actor_name: string | null;
+  }>;
+  const lead = rows[0];
+  if (!lead) return;
+
+  const dealer = lead.name?.trim() || "A dealer";
+  const by = lead.actor_name?.trim() ? ` (${lead.actor_name.trim()})` : "";
+  const holder = lead.owner_id
+    ? `It is with ${lead.owner_name?.trim() || "its owner"}.`
+    : "It has no owner — assign it.";
+
+  await emit({
+    type: "lead.reinquiry",
+    title: "A dealer you hold came in again",
+    message: `${dealer} came in again via ${p.via}${by}. No second lead was made — the re-inquiry is on the existing one.`,
+    leadId: p.leadId,
+    stage: "Lead source",
+    from: SYSTEM_PARTY,
+    data: { via: p.via, dealerLeadId: p.leadId },
+    to: [
+      ...(lead.owner_id && lead.owner_id !== p.actorId
+        ? [
+            {
+              audience: { kind: "user" as const, userId: lead.owner_id },
+              as: ADMIN_PARTY,
+              href: prospectHref(p.leadId, lead.owner_role),
+            },
+          ]
+        : []),
+      {
+        audience: { kind: "roles" as const, roles: ["sales_head"] },
+        as: ADMIN_PARTY,
+        href: `/leads?lead=${p.leadId}`,
+        title: "Re-inquiry on an existing lead",
+        message: `${dealer} came in again via ${p.via}${by}. ${holder}`,
+      },
+    ],
+  });
+}
+
+/**
+ * The same event from a path that brings in many dealers at once (bulk upload,
+ * /leads Import, a scrape run, an AI-dialer list). One summary per owner and
+ * one for the Sales Head — a re-scrape of a city would otherwise put several
+ * hundred rows in a bell.
+ */
+export async function notifyLeadReinquiryBatch(p: {
+  via: string;
+  actorId: string | null;
+  leads: { leadId: string; ownerUserId: string | null }[];
+}) {
+  if (p.leads.length === 0) return;
+  const n = p.leads.length;
+  const dealers = (k: number) => `${k} dealer${k === 1 ? "" : "s"}`;
+
+  const byOwner = new Map<string, string[]>();
+  for (const l of p.leads) {
+    if (!l.ownerUserId || l.ownerUserId === p.actorId) continue;
+    byOwner.set(l.ownerUserId, [...(byOwner.get(l.ownerUserId) ?? []), l.leadId]);
+  }
+  const unowned = p.leads.filter((l) => !l.ownerUserId).length;
+
+  await emit({
+    type: "lead.reinquiry",
+    title: `${dealers(n)} already in the CRM came in again`,
+    message:
+      `${dealers(n)} we already hold came in again via ${p.via}. No second leads were made — each has a Re-inquiry on its existing lead.` +
+      (unowned > 0 ? ` ${unowned} of them ${unowned === 1 ? "has" : "have"} no owner.` : ""),
+    leadId: n === 1 ? p.leads[0].leadId : null,
+    stage: "Lead source",
+    from: SYSTEM_PARTY,
+    data: { via: p.via, count: n, dealerLeadIds: p.leads.slice(0, 50).map((l) => l.leadId) },
+    to: [
+      ...[...byOwner].map(([ownerId, ids]) => ({
+        audience: { kind: "user" as const, userId: ownerId },
+        as: ADMIN_PARTY,
+        href: ids.length === 1 ? `/inside-sales/lead/${ids[0]}` : "/inside-sales",
+        title: `${dealers(ids.length)} you hold came in again`,
+        message: `${dealers(ids.length)} of yours came in again via ${p.via}. Each has a Re-inquiry on its lead.`,
+        data: { dealerLeadIds: ids.slice(0, 50) },
+      })),
+      {
+        audience: { kind: "roles" as const, roles: ["sales_head"] },
+        as: ADMIN_PARTY,
+        href: n === 1 ? `/leads?lead=${p.leads[0].leadId}` : "/leads",
+      },
     ],
   });
 }

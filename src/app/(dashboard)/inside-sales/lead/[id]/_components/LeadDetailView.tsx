@@ -19,6 +19,7 @@ import { MarkConvertedModal } from "../../../_components/modals/MarkConvertedMod
 import { ReassignLeadModal } from "../../../_components/modals/ReassignLeadModal";
 import { EscalateModal } from "../../../_components/modals/EscalateModal";
 import { ClaimLeadConfirm } from "../../../_components/modals/ClaimLeadConfirm";
+import { canExportLeadHistory } from "@/lib/leads/access";
 
 export type ActiveModal =
     | null
@@ -132,7 +133,15 @@ export function LeadDetailView({ leadId, viewerId, viewerRole, backHref = "/insi
             )}
 
             <div className="flex-1 overflow-hidden grid grid-cols-1 lg:grid-cols-[3fr_2fr] gap-0">
-                <LeadActivityPanes leadId={leadId} bundle={bundle} />
+                <LeadActivityPanes
+                    leadId={leadId}
+                    bundle={bundle}
+                    canExportHistory={canExportLeadHistory({
+                        role: viewerRole,
+                        userId: viewerId,
+                        currentOwnerId: lead.current_owner_id,
+                    })}
+                />
                 <LeadDetailRightPane bundle={bundle} />
             </div>
 
@@ -141,6 +150,7 @@ export function LeadDetailView({ leadId, viewerId, viewerRole, backHref = "/insi
                 isOwner={isOwner}
                 viewerRole={viewerRole}
                 onAction={setActiveModal}
+                onChanged={invalidate}
             />
 
             {/* Modals — render only when active to keep the tree small. */}
@@ -159,6 +169,7 @@ export function LeadDetailView({ leadId, viewerId, viewerRole, backHref = "/insi
                     setLostPrefill(r);
                     setActiveModal("mark_lost");
                 }}
+                onOpenCommercials={() => setActiveModal("commercials")}
             />
             <UpdateCommercialsModal
                 open={activeModal === "commercials"}

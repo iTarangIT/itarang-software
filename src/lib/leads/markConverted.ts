@@ -66,11 +66,55 @@ export type MarkConvertedResult = {
     notify: () => Promise<void>;
 };
 
+/**
+ * What a won lead carries besides its status: the won-without-quote flag and
+ * its onboarding application, GST number pre-filled. Run AFTER the status is
+ * written (the application copies the closing owner). Shared with admin
+ * "Correct status" (ID 57), so a lead corrected to Won / Converted is never
+ * left without an application. Idempotent — an existing application is reused.
+ */
+export async function attachOnboardingToWonLead(
+    tx: Tx,
+    leadId: string,
+    gstin: string,
+): Promise<{ applicationId: string; created: boolean }> {
+    // ID 74: flag a Won with no dealer-approved, not-withdrawn quote.
+    await tx.execute(sql`
+        UPDATE dealer_leads
+           SET won_without_approved_quote = NOT EXISTS (
+                 SELECT 1 FROM dealer_lead_commercials c
+                  WHERE c.dealer_lead_id = ${leadId}
+                    AND c.event_type IN ('quote_issue', 'quote_revision')
+                    AND c.dealer_decision = 'approved'
+                    AND c.withdrawn_at IS NULL)
+         WHERE id = ${leadId}
+    `);
+
+    const { applicationId, created } = await createOnboardingApplicationForConvertedLead(leadId, tx);
+    if (!applicationId) {
+        throw new Error("Failed to create dealer onboarding application");
+    }
+
+    // Pre-fill the onboarding form's GST number so the dealer is not asked
+    // again. Never overwrites a number the application already carries.
+    await tx.execute(sql`
+        UPDATE dealer_onboarding_applications
+           SET gst_number = ${gstin}
+         WHERE id = ${applicationId}::uuid
+           AND NULLIF(btrim(gst_number), '') IS NULL
+    `);
+
+    return { applicationId, created };
+}
+
 export async function markLeadConverted(
     input: MarkConvertedInput,
     opts?: { tx?: Tx },
 ): Promise<MarkConvertedResult> {
     const { leadId, actor } = input;
+    // ID 115.6: a second Mark Won (double tap, two reps) is a no-op move; it
+    // must not log a second "onboarding initiated" or notify twice.
+    let repeat = false;
     const run = async (tx: Tx): Promise<string> => {
         const rows = await tx.execute<{ lead_status: string | null; asm_id: string | null }>(sql`
             SELECT dl.lead_status, dl.asm_id FROM dealer_leads dl WHERE dl.id = ${leadId} LIMIT 1
@@ -78,6 +122,7 @@ export async function markLeadConverted(
         const state = rows[0];
         if (!state) throw new ConvertLeadNotFoundError();
         const fromStatus = state.lead_status as LeadStatus | null;
+        repeat = fromStatus === "Won";
 
         const closingRole = deriveConvertClosingRole(actor.role, state.asm_id);
         const remarks = input.notes?.trim() || "Lead marked Won. Dealer onboarding initiated.";
@@ -103,34 +148,10 @@ export async function markLeadConverted(
             { tx },
         );
 
-        // ID 74: flag a Won with no dealer-approved, not-withdrawn quote.
-        await tx.execute(sql`
-            UPDATE dealer_leads
-               SET won_without_approved_quote = NOT EXISTS (
-                     SELECT 1 FROM dealer_lead_commercials c
-                      WHERE c.dealer_lead_id = ${leadId}
-                        AND c.event_type IN ('quote_issue', 'quote_revision')
-                        AND c.dealer_decision = 'approved'
-                        AND c.withdrawn_at IS NULL)
-             WHERE id = ${leadId}
-        `);
+        const { applicationId } = await attachOnboardingToWonLead(tx, leadId, input.gstin);
 
-        const { applicationId } = await createOnboardingApplicationForConvertedLead(leadId, tx);
-        if (!applicationId) {
-            throw new Error("Failed to create dealer onboarding application");
-        }
-
-        // Pre-fill the onboarding form's GST number so the dealer is not asked
-        // again. Never overwrites a number the application already carries.
-        await tx.execute(sql`
-            UPDATE dealer_onboarding_applications
-               SET gst_number = ${input.gstin}
-             WHERE id = ${applicationId}::uuid
-               AND NULLIF(btrim(gst_number), '') IS NULL
-        `);
-
-        // BRD §0.13 audit — record the onboarding initiation event.
-        await tx.insert(auditLogs).values({
+        // BRD §0.13 audit — record the onboarding initiation event (once).
+        if (!repeat) await tx.insert(auditLogs).values({
             id: randomUUID(),
             entity_type: "dealer_lead",
             entity_id: leadId,
@@ -146,6 +167,7 @@ export async function markLeadConverted(
 
     // BRD §0.13 Step 7 — notify the closing owner + admins.
     const notify = async () => {
+        if (repeat) return;
         try {
             await notifyUser(actor.id, {
                 type: "onboarding_initiated",

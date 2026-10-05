@@ -2,11 +2,15 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { deployedAssets, deploymentHistory, serviceTickets } from "@/lib/db/schema";
 import { eq, desc } from "drizzle-orm";
+import { guardApi } from "@/lib/auth/apiGuard";
 
 export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ assetId: string }> }
 ) {
+  // ID 118: signed in.
+  const authGate = await guardApi();
+  if (!authGate.ok) return authGate.response;
   try {
     const { assetId } = await params;
 

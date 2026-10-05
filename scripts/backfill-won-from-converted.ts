@@ -107,6 +107,8 @@ async function main() {
                     performedBy: null,
                     remarks: "System correction (ID 74): Converted → Won — the dealer's onboarding is not approved yet.",
                     syncMethod: "reconciliation",
+                    // ID 115.5: a backfill is not the owner working the lead.
+                    countsAsWork: false,
                     statusChange: { from: "Converted", to: "Won", reasonNotes: REASON, event: "correction" },
                 },
                 { tx },

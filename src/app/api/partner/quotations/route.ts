@@ -26,6 +26,10 @@ import { dealerLeadCommercials, dealerLeads, users } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 import { errorMessage, isNextRedirectError } from "@/lib/api-utils";
 import { GATED_QUOTE_EVENTS, QUOTE_APPROVAL_STATUSES } from "@/lib/leads/quoteApproval";
+import { LIVE_QUOTE_VERSION } from "@/lib/leads/quoteSendGate";
+import { quotePriceChanged, type OemEvaluation } from "@/lib/leads/oemPricing";
+import { loadLiveOemPrices } from "@/lib/leads/oemPrices";
+import type { CommercialsProductLine } from "@/lib/inside-sales/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -56,10 +60,16 @@ export async function GET(req: NextRequest) {
     const mine = sql`${dealerLeadCommercials.created_by} = ${user.id}`;
     const gatedOnly = inArray(dealerLeadCommercials.event_type, [...GATED_QUOTE_EVENTS]);
     const base = and(mine, gatedOnly);
+    // ID 78: a quote withdrawn while it waited for the CEO is no longer waiting
+    // on anyone — it leaves the pending tab and its count. withdrawn_at is
+    // E-314 and not in schema.ts, so it is named raw.
+    const notWithdrawn = sql`${dealerLeadCommercials}.withdrawn_at IS NULL`;
     const where =
       status === "all"
         ? base
-        : and(base, eq(dealerLeadCommercials.approval_status, status));
+        : status === "pending"
+          ? and(base, eq(dealerLeadCommercials.approval_status, status), notWithdrawn)
+          : and(base, eq(dealerLeadCommercials.approval_status, status));
 
     // Pending is oldest first — it is a queue the CEO works front to back, so
     // the top row is the one that has waited longest. Decided rows are newest
@@ -86,6 +96,18 @@ export async function GET(req: NextRequest) {
         rejection_reason: dealerLeadCommercials.rejection_reason,
         dealer_decision: dealerLeadCommercials.dealer_decision,
         dealer_decision_at: dealerLeadCommercials.dealer_decision_at,
+        // ISO, so the browser's Date can read it ("…+00" from ::text cannot be).
+        withdrawn_at: sql<string | null>`to_char(${dealerLeadCommercials}.withdrawn_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')`,
+        // ID 60: sendable only while no NEWER approved, not-withdrawn version
+        // exists — the same rule as the send gate (quoteSendGate.loadQuote).
+        is_latest_quote: sql<boolean>`NOT EXISTS (
+          SELECT 1 FROM dealer_lead_commercials q
+           WHERE q.dealer_lead_id = ${dealerLeadCommercials.dealer_lead_id}
+             AND ${LIVE_QUOTE_VERSION}
+             AND q.version_no > ${dealerLeadCommercials.version_no}
+        )`,
+        product_lines: dealerLeadCommercials.product_lines,
+        oem_evaluation: dealerLeadCommercials.oem_evaluation,
         created_at: dealerLeadCommercials.created_at,
         payment_method: dealerLeadCommercials.payment_method,
         credit_terms: dealerLeadCommercials.credit_terms,
@@ -117,13 +139,41 @@ export async function GET(req: NextRequest) {
         n: sql<number>`count(*)::int`,
       })
       .from(dealerLeadCommercials)
-      .where(base)
+      .where(
+        and(
+          base,
+          sql`(${dealerLeadCommercials.approval_status} <> 'pending' OR ${notWithdrawn})`,
+        ),
+      )
       .groupBy(dealerLeadCommercials.approval_status);
 
     const counts = { pending: 0, approved: 0, rejected: 0 };
     for (const c of countRows) {
       const k = (c.approval_status ?? "approved") as keyof typeof counts;
       if (k in counts) counts[k] += Number(c.n ?? 0);
+    }
+
+    // ID 78: flag an OPEN quote — released, unanswered, not withdrawn — whose
+    // product reference price changed since it was issued. Same rule as the
+    // lead detail and the CEO panel; a lookup failure leaves the flags off.
+    const priceChanged = new Set<string>();
+    try {
+      const openRows = rows.filter(
+        (r) => r.approval_status === "approved" && !r.dealer_decision && !r.withdrawn_at,
+      );
+      const lines = openRows.flatMap((r) =>
+        Array.isArray(r.product_lines) ? (r.product_lines as CommercialsProductLine[]) : [],
+      );
+      if (lines.length > 0) {
+        const live = await loadLiveOemPrices(lines);
+        for (const r of openRows) {
+          if (quotePriceChanged((r.oem_evaluation as OemEvaluation | null) ?? null, live)) {
+            priceChanged.add(r.commercial_id);
+          }
+        }
+      }
+    } catch (e) {
+      console.warn("[partner/quotations] price-changed flag skipped:", errorMessage(e));
     }
 
     const quotations = rows.map((r) => ({
@@ -144,6 +194,9 @@ export async function GET(req: NextRequest) {
       rejection_reason: r.rejection_reason,
       dealer_decision: r.dealer_decision,
       dealer_decision_at: r.dealer_decision_at,
+      withdrawn_at: r.withdrawn_at ?? null,
+      is_latest_quote: Boolean(r.is_latest_quote),
+      price_changed_since_issue: priceChanged.has(r.commercial_id),
       created_at: r.created_at,
       dealer_name: r.dealer_name,
       shop_name: r.shop_name,

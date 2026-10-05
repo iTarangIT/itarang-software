@@ -19,10 +19,13 @@ import {
     CommercialsVersionHistory,
     Field,
     fmtDate,
+    QuoteApprovalBlock,
 } from "./CommercialsDetail";
+import { pickLiveQuote, pickPendingQuote } from "@/lib/leads/liveQuote";
 import { QuotationSendDialog } from "./QuotationSendDialog";
 import { businessTypeLabel, businessTypeTone } from "@/lib/leads/businessType";
 import { doorLabel, originLabel, SOURCE_LABELS } from "@/lib/leads/leadSourceVocab";
+import { SetLeadSource } from "@/components/leads/SetLeadSource";
 
 type GroupKey = "snapshot" | "business" | "commercials" | "workflow" | "attribution" | "ownership";
 
@@ -56,6 +59,19 @@ export function LeadDetailRightPane({ bundle }: Props) {
     const cc = bundle.current_commercials;
     const queryClient = useQueryClient();
 
+    // ID 60 / 61: the quote the dealer can answer is the newest approved,
+    // not-withdrawn QUOTE — which is not always the newest row. Final terms, a
+    // terms update, a brochure, or a revision still at the CEO all sit above
+    // it, and Send / Withdraw used to be offered on the newest row only, so the
+    // live quote lost both. When it is an older row it gets its own block.
+    const liveQuote = pickLiveQuote(bundle.commercials_history);
+    const liveQuoteBelow = liveQuote && cc && liveQuote.commercial_id !== cc.commercial_id ? liveQuote : null;
+    // ID 78: a revision still at the CEO can be withdrawn, and it too can sit
+    // under a newer row (a terms update saved after it). Without its own block
+    // it had no Withdraw button anywhere on the screen.
+    const pendingQuote = pickPendingQuote(bundle.commercials_history);
+    const pendingQuoteBelow = pendingQuote && cc && pendingQuote.commercial_id !== cc.commercial_id ? pendingQuote : null;
+
     // ID 78: Withdraw quote — the reason is required; the lead goes back to
     // Under discussion and the dealer's link closes.
     const withdraw = async (commercialId: string) => {
@@ -76,7 +92,15 @@ export function LeadDetailRightPane({ bundle }: Props) {
             );
             const json = await res.json();
             if (!res.ok) throw new Error(json?.error?.message ?? "Could not withdraw the quote");
-            toast.success("Quote withdrawn.");
+            // ID 78: withdrawing an old or pending version while another quote
+            // is live leaves the lead where it is — say so, or the unchanged
+            // status reads as a failed withdrawal.
+            const live = json?.data?.liveQuote as { versionNo: number } | null | undefined;
+            toast.success(
+                live
+                    ? `Quote withdrawn. v${live.versionNo} is still live, so the lead's status is unchanged.`
+                    : "Quote withdrawn.",
+            );
             await queryClient.invalidateQueries();
         } catch (err) {
             toast.error((err as Error).message);
@@ -103,7 +127,7 @@ export function LeadDetailRightPane({ bundle }: Props) {
                             Dealer onboarding
                             {bundle.onboarding.stalled && (
                                 <span className="ml-2 rounded bg-amber-200 px-1.5 py-0.5 text-[10px] font-bold text-amber-900">
-                                    STALLED
+                                    {bundle.onboarding.stalled_label ?? "Stalled"}
                                 </span>
                             )}
                         </p>
@@ -156,7 +180,19 @@ export function LeadDetailRightPane({ bundle }: Props) {
                                             />
                                             {/* ID 81 — where the lead came from; locked at creation. */}
                                             <Field label={SOURCE_LABELS.door} value={doorLabel(lead.source_door) ?? "Not recorded"} />
-                                            <Field label={SOURCE_LABELS.origin} value={originLabel(lead.source_origin) ?? "Not recorded"} />
+                                            <Field
+                                                label={SOURCE_LABELS.origin}
+                                                value={
+                                                    originLabel(lead.source_origin) ?? (
+                                                        <SetLeadSource
+                                                            leadId={lead.id}
+                                                            hasCampaign={!!lead.acquisition_campaign_id}
+                                                            onSaved={() => void queryClient.invalidateQueries()}
+                                                        />
+                                                    )
+                                                }
+                                            />
+                                            <Field label={SOURCE_LABELS.campaign} value={lead.acquisition_campaign_name ?? "None"} />
                                             <Field label="Phone" value={lead.phone} />
                                             <Field label="Language" value={lead.language} />
                                             <Field label="City" value={lead.city} />
@@ -204,6 +240,35 @@ export function LeadDetailRightPane({ bundle }: Props) {
                                                         onSend={() => setSendFor(cc.commercial_id)}
                                                         onWithdraw={() => void withdraw(cc.commercial_id)}
                                                     />
+                                                    {liveQuoteBelow && (
+                                                        <div className="space-y-1.5">
+                                                            <p className="text-xs text-gray-500">
+                                                                Live quote:{" "}
+                                                                <span className="font-semibold text-gray-800">v{liveQuoteBelow.version_no}</span>
+                                                                {liveQuoteBelow.final_price ? ` · ₹${liveQuoteBelow.final_price}` : ""}
+                                                                {" — "}v{cc.version_no} above has not replaced it, so this is
+                                                                still the quote the dealer can answer.
+                                                            </p>
+                                                            <QuoteApprovalBlock
+                                                                cc={liveQuoteBelow}
+                                                                onSend={() => setSendFor(liveQuoteBelow.commercial_id)}
+                                                                onWithdraw={() => void withdraw(liveQuoteBelow.commercial_id)}
+                                                            />
+                                                        </div>
+                                                    )}
+                                                    {pendingQuoteBelow && (
+                                                        <div className="space-y-1.5">
+                                                            <p className="text-xs text-gray-500">
+                                                                Waiting for the CEO:{" "}
+                                                                <span className="font-semibold text-gray-800">v{pendingQuoteBelow.version_no}</span>
+                                                                {pendingQuoteBelow.final_price ? ` · ₹${pendingQuoteBelow.final_price}` : ""}
+                                                            </p>
+                                                            <QuoteApprovalBlock
+                                                                cc={pendingQuoteBelow}
+                                                                onWithdraw={() => void withdraw(pendingQuoteBelow.commercial_id)}
+                                                            />
+                                                        </div>
+                                                    )}
                                                     <CommercialsVersionHistory
                                                         history={bundle.commercials_history}
                                                     />
@@ -270,7 +335,8 @@ export function LeadDetailRightPane({ bundle }: Props) {
                 <QuotationSendDialog
                     leadId={lead.id}
                     commercialId={sendFor}
-                    terms={cc}
+                    // The terms of the quote being sent — not the newest row's.
+                    terms={bundle.commercials_history.find((c) => c.commercial_id === sendFor) ?? cc}
                     onClose={() => setSendFor(null)}
                 />
             )}

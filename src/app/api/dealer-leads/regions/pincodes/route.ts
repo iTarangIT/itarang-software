@@ -12,8 +12,12 @@ import { db } from "@/lib/db";
 import { dealerLeads } from "@/lib/db/schema";
 import { withErrorHandler, successResponse, errorResponse } from "@/lib/api-utils";
 import { and, eq, isNotNull, ne, sql, desc } from "drizzle-orm";
+import { LEADS_PAGE_ROLES } from "@/lib/leads/access";
+import { requireRole } from "@/lib/auth-utils";
 
 export const GET = withErrorHandler(async (req: Request) => {
+  // ID 118: signed in, with a role that reaches this screen.
+  await requireRole([...LEADS_PAGE_ROLES]);
   const url = new URL(req.url);
   const state = url.searchParams.get("state")?.trim();
   const city = url.searchParams.get("city")?.trim();

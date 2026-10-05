@@ -43,6 +43,20 @@ const ROLE_LABELS: Record<string, string> = {
  * rather than blank, so a role nobody has labelled yet looks unfamiliar instead
  * of looking like missing data.
  */
+/**
+ * Funnel by Owner's "Conversion %": conversions credited to the person ÷ leads
+ * they worked in the period (tracker ID 117).
+ *
+ * The two are counted from different sets since the conversion went to the
+ * CLOSING owner: a lead someone closed earlier can be approved in a period in
+ * which they logged nothing on it. So the share is null with no work to divide
+ * by, and capped at 100 — "150%" would read as a bug, not as a late approval.
+ */
+export function ownerConversionRate(converted: number, touched: number): number | null {
+    if (touched <= 0) return null;
+    return Math.min(100, Math.round((converted / touched) * 100));
+}
+
 export function roleLabel(role: string | null): string {
     if (!role) return "—";
     return ROLE_LABELS[role] ?? role;

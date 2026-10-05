@@ -5,6 +5,7 @@ import { eq } from "drizzle-orm";
 import { insertAgreementEvent } from "@/lib/agreement/tracking";
 import { mergeProviderRawResponse } from "@/lib/agreement/providerRaw";
 import { requireSalesHead } from "@/lib/auth/requireSalesHead";
+import { markAgreementOutcome } from "@/lib/onboarding/leadMilestones";
 
 type RouteContext = {
   params: Promise<{ dealerId: string }>;
@@ -110,6 +111,9 @@ export async function POST(_req: NextRequest, context: RouteContext) {
         updated_at: new Date(),
       })
       .where(eq(dealerOnboardingApplications.id, dealerId));
+
+    // ID 84.2: the lead's agreement milestone. Best-effort — never throws.
+    await markAgreementOutcome({ applicationId: dealerId }, "cancelled");
 
     await insertAgreementEvent({
       applicationId: dealerId,

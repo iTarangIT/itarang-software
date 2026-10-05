@@ -21,6 +21,11 @@
  *   Sales POC            dealer_leads.current_owner_id → users.name. The spec
  *                        says "from lead_assignments"; that table is EMPTY on
  *                        sandbox and every screen reads current_owner_id.
+ *   Closed by            dealer_leads.closing_owner_id → users.name, on a Won /
+ *                        Converted / Lost lead (tracker ID 117). Sales POC is
+ *                        whoever holds the lead TODAY; a conversion belongs to
+ *                        this person and does not move when the lead is
+ *                        reassigned — count conversions on this column.
  *   Last visit           MAX(lead_visits.actual_visit_date)
  *   Next visit           MIN(lead_visits.scheduled_date) on/after today (IST),
  *                        visit still open
@@ -38,24 +43,29 @@
  * real dates / timestamps so the workbook can store them as Excel dates.
  */
 
+import { hasInvoiceLedgerTables } from "@/lib/sales/ledgerTables";
 import { sql } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import { buildExportWhere, type LeadListFilters } from "@/lib/leads/leadListQuery";
 
 /** A12 — what "business" means. Change this one fragment to switch the source. */
-const BILLING_SOURCE = sql`
+const billingSource = (ledger: boolean) => sql`
     -- sales_invoices first (has GSTIN); zoho rows whose number is already
     -- present are skipped so a synced invoice that was also read as a PDF is
-    -- counted once.
+    -- counted once. Void invoices never count (E-322, tracker ID 71).
     SELECT lower(trim(si.customer_name)) AS customer_key,
            si.invoice_number, si.invoice_date::date AS invoice_date, si.total::numeric AS total
       FROM sales_invoices si
      WHERE si.invoice_date IS NOT NULL
+       AND (si.status IS NULL OR si.status <> 'void')
+       ${ledger ? sql`AND NOT EXISTS (SELECT 1 FROM invoice_voids v WHERE v.source = 'drive' AND v.invoice_id = si.id::text)` : sql``}
     UNION ALL
     SELECT lower(trim(z.customer_name)), z.invoice_number, z.invoice_date::date, z.total::numeric
       FROM zoho_invoices z
      WHERE z.invoice_date IS NOT NULL
+       AND (z.status IS NULL OR z.status <> 'void')
+       ${ledger ? sql`AND NOT EXISTS (SELECT 1 FROM invoice_voids v WHERE v.source = 'zoho' AND v.invoice_id = z.id::text)` : sql``}
        AND NOT EXISTS (SELECT 1 FROM sales_invoices s2 WHERE s2.invoice_number = z.invoice_number)
 `;
 
@@ -74,6 +84,8 @@ export type LeadsExportRow = {
     won_without_approved_quote: boolean | null;
     interest_level: string | null;
     owner_name: string | null;
+    /** ID 117: who held the lead when it was won / lost; null on an open lead. */
+    closed_by_name: string | null;
     last_visit_date: string | null;
     next_visit_date: string | null;
     last_call_at: string | null;
@@ -129,7 +141,7 @@ export async function fetchLeadsForExport(
              WHERE t.remarks IS NOT NULL AND trim(t.remarks) <> ''
              ORDER BY t.dealer_lead_id, t.performed_at DESC NULLS LAST, t.created_at DESC
         ),
-        inv AS (${BILLING_SOURCE}),
+        inv AS (${billingSource(await hasInvoiceLedgerTables())}),
         billing AS (
             -- BILLING_KEY: the lead ↔ invoice join. Name match today; see header.
             SELECT dl.id AS dealer_lead_id,
@@ -167,6 +179,9 @@ export async function fetchLeadsForExport(
                     THEN (to_jsonb(dl) ->> 'won_without_approved_quote')::boolean END AS won_without_approved_quote,
                dl.interest_level,
                owner.name                             AS owner_name,
+               -- ID 117: the closing owner, reported only on a closed lead.
+               CASE WHEN dl.lead_status IN ('Won', 'Converted', 'Lost')
+                    THEN closer.name END              AS closed_by_name,
                vi.last_visit_date::text               AS last_visit_date,
                vi.next_visit_date::text               AS next_visit_date,
                c.last_call_at::text                   AS last_call_at,
@@ -178,6 +193,7 @@ export async function fetchLeadsForExport(
                CASE WHEN b.dealer_lead_id IS NULL THEN 'none' ELSE 'name' END AS billing_match
           FROM dealer_leads dl
           LEFT JOIN users owner ON owner.id::text = dl.current_owner_id
+          LEFT JOIN users closer ON closer.id::text = dl.closing_owner_id
           LEFT JOIN visits vi ON vi.dealer_lead_id = dl.id
           LEFT JOIN calls c ON c.dealer_lead_id = dl.id
           LEFT JOIN remarks r ON r.dealer_lead_id = dl.id

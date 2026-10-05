@@ -16,6 +16,7 @@
 // (max 5) pool for seconds. Rapid interleaved uploads are a Phase-2 concern.
 
 import { and, desc, eq, inArray, ne, notInArray, sql } from "drizzle-orm";
+import { linkOnboardingToLead } from "@/lib/onboarding/linkToLead";
 
 import { db } from "@/lib/db/index";
 import {
@@ -2809,6 +2810,9 @@ async function getOrCreateSession(
     .update(dealerOnboardingApplications)
     .set({ wa_session_id: session.id })
     .where(eq(dealerOnboardingApplications.id, application.id));
+
+  // ID 67 / P1-4: link this onboarding to the dealer's lead by phone.
+  await linkOnboardingToLead(application.id);
 
   // A brand-new WhatsApp onboarding conversation. Fires once per session, on
   // creation — the only signal iTarang gets that a dealer has walked in the

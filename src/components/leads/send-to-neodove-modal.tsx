@@ -21,6 +21,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { X, Send, AlertTriangle, ExternalLink, UserPlus2 } from "lucide-react";
+import { ASSIGN_ON_PUSH } from "@/lib/neodove/assignPolicy";
 
 type Campaign = {
     id: string;
@@ -63,6 +64,11 @@ type SingleResult = {
 
 /** Sentinel for "don't assign" — distinct from "" (nothing chosen yet). */
 const NO_ASSIGNEE = "__none__";
+
+// Tracker ID 63: while ASSIGN_ON_PUSH is false a push gives no CRM owner, so
+// the "assign in CRM" picker is hidden. Shared with the push routes.
+const OWNER_ON_FIRST_CALL_COPY =
+    "Owner is set by the first call of a linked NeoDove agent.";
 
 // Two roles can now receive pushed leads and they behave DIFFERENTLY, so the
 // picker has to name the role — "Nidhi" and "Rakesh" are indistinguishable
@@ -234,7 +240,7 @@ export function SendToNeodoveModal({
                         // campaign default", which is wrong when the operator
                         // has deliberately chosen "don't assign".
                         assignToUserId:
-                            assigneeId === NO_ASSIGNEE || !assigneeId
+                            !ASSIGN_ON_PUSH || assigneeId === NO_ASSIGNEE || !assigneeId
                                 ? null
                                 : assigneeId,
                     }),
@@ -316,6 +322,12 @@ export function SendToNeodoveModal({
                                     and the assignment runs with it — so no final
                                     count exists yet. Sync Activity carries the
                                     authoritative one. */}
+                                {!ASSIGN_ON_PUSH && (
+                                    <p className="flex items-start gap-1.5 rounded-lg bg-blue-50 px-3 py-2 text-xs text-blue-800">
+                                        <UserPlus2 className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                                        <span>{OWNER_ON_FIRST_CALL_COPY}</span>
+                                    </p>
+                                )}
                                 {batch.assignTo && (batch.willAssign ?? 0) > 0 && (
                                     <p className="flex items-start gap-1.5 rounded-lg bg-blue-50 px-3 py-2 text-xs text-blue-800">
                                         <UserPlus2 className="w-3.5 h-3.5 shrink-0 mt-0.5" />
@@ -450,7 +462,13 @@ export function SendToNeodoveModal({
                                 and no read API, so who calls the lead is set in
                                 NeoDove's own campaign settings. This only makes
                                 the CRM agree with that choice. */}
-                            {wiredCampaigns.length > 0 && (
+                            {wiredCampaigns.length > 0 && !ASSIGN_ON_PUSH && (
+                                <p className="flex items-start gap-1.5 rounded-lg bg-gray-50 px-3 py-2 text-xs text-gray-600">
+                                    <UserPlus2 className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                                    <span>{OWNER_ON_FIRST_CALL_COPY}</span>
+                                </p>
+                            )}
+                            {wiredCampaigns.length > 0 && ASSIGN_ON_PUSH && (
                                 <div>
                                     <label className="block text-sm font-medium text-gray-700">
                                         Also assign in CRM to

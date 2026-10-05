@@ -2,8 +2,12 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { couponCodes } from '@/lib/db/schema';
 import { eq, and } from 'drizzle-orm';
+import { guardApi } from "@/lib/auth/apiGuard";
 
 export async function POST(req: NextRequest) {
+    // ID 118: signed in, with a role that reaches this screen.
+    const authGate = await guardApi(["dealer", "admin", "ceo", "business_head", "sales_head", "sales_manager", "sales_executive", "finance_controller"]);
+    if (!authGate.ok) return authGate.response;
     try {
         const { couponCode, leadId } = await req.json();
 

@@ -7,6 +7,7 @@ import { createWorkflowId, determineCaseType, getOpenQueueEntryForLead } from '@
 import { notifyKycSubmitted } from '@/lib/notifications/events';
 import { dealerDisplayName } from '@/lib/notifications/emit';
 import { getKycAutoApprovalSettings, slaStampFor } from '@/lib/kyc/auto-approval-settings';
+import { requireLeadAccess } from "@/lib/auth/requireLeadAccess";
 
 const VERIFICATION_LABELS: Record<string, string> = {
     aadhaar: 'Aadhaar Verification',
@@ -55,6 +56,9 @@ async function upsertVerification(leadId: string, type: string, values: Record<s
 }
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
+    // ID 118: signed in, and this lead is the caller's to touch (a dealer's own lead, or back office).
+    const leadGate = await requireLeadAccess((await params).leadId);
+    if (!leadGate.ok) return leadGate.response;
     try {
         const { leadId } = await params;
         const { couponCode, pan_number, account_number, ifsc, account_holder_name } = await req.json();

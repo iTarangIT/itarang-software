@@ -24,6 +24,8 @@ import { db } from "@/lib/db";
 import { aiCallLogs } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { rehostElevenLabsRecording } from "@/lib/ai/storage/recordingStore";
+import { LEADS_PAGE_ROLES } from "@/lib/leads/access";
+import { guardApi } from "@/lib/auth/apiGuard";
 
 function redirectTo(url: string): Response {
   return new Response(null, { status: 302, headers: { Location: url } });
@@ -33,6 +35,9 @@ export async function GET(
   _req: Request,
   ctx: { params: Promise<{ callId: string }> },
 ) {
+  // ID 118: signed in, with a role that reaches this screen.
+  const authGate = await guardApi([...LEADS_PAGE_ROLES]);
+  if (!authGate.ok) return authGate.response;
   const { callId } = await ctx.params;
   if (!callId) {
     return new Response("callId required", { status: 400 });

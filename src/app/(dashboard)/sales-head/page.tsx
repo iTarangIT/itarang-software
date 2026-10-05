@@ -14,6 +14,7 @@ import {
     Search
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { OutsideTerritoryClaims } from '@/components/leads/OutsideTerritoryClaims';
 
 export default function SalesHeadDashboard() {
     const { user } = useAuth();
@@ -86,6 +87,9 @@ export default function SalesHeadDashboard() {
                     </button>
                 </div>
             </header>
+
+            {/* ID 45: ASM claims outside their territory (renders nothing when none). */}
+            <OutsideTerritoryClaims />
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                 {kpis.map((kpi, i) => (

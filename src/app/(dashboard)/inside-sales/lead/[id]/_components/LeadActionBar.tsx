@@ -13,15 +13,18 @@ import {
 import { CLAIM_ROLES, type LeadDetailBundle } from "@/lib/inside-sales/types";
 import { isOpen, isTerminal, type LeadStatus } from "@/lib/lifecycle/transitions";
 import type { ActiveModal } from "./LeadDetailView";
+import { CallNowButton } from "@/components/leads/call-now-button";
 
 type Props = {
     bundle: LeadDetailBundle;
     isOwner: boolean;
     viewerRole: string;
     onAction: (modal: ActiveModal) => void;
+    /** Refresh the lead after an action that has no modal (Call now). */
+    onChanged?: () => void;
 };
 
-export function LeadActionBar({ bundle, isOwner, viewerRole, onAction }: Props) {
+export function LeadActionBar({ bundle, isOwner, viewerRole, onAction, onChanged }: Props) {
     const lead = bundle.lead;
     const status = lead.lead_status as LeadStatus | null;
     const isUnassigned = !lead.current_owner_id && !(status && isTerminal(status));
@@ -83,6 +86,14 @@ export function LeadActionBar({ bundle, isOwner, viewerRole, onAction }: Props) 
             <ActionButton icon={Receipt} onClick={() => onAction("commercials")}>
                 Update Commercials
             </ActionButton>
+            {/* ID 83: the owner asks the NeoDove calling team to ring this dealer
+                next. The call that follows is marked "called on your behalf". */}
+            <CallNowButton
+                leadId={lead.id}
+                leadName={lead.shop_name || lead.dealer_name || "this lead"}
+                disabled={!open}
+                onQueued={onChanged}
+            />
             <ActionButton
                 icon={Send}
                 onClick={() => onAction("transfer_asm")}
@@ -96,13 +107,17 @@ export function LeadActionBar({ bundle, isOwner, viewerRole, onAction }: Props) 
             >
                 Mark Won
             </ActionButton>
-            <ActionButton
-                icon={XCircle}
-                tone="rose"
-                onClick={() => onAction("mark_lost")}
-            >
-                Mark Lost
-            </ActionButton>
+            {/* ID 115.4: a Won lead goes to Lost only through the admin
+                onboarding drop-out review — the server refuses it here. */}
+            {status !== "Won" && (
+                <ActionButton
+                    icon={XCircle}
+                    tone="rose"
+                    onClick={() => onAction("mark_lost")}
+                >
+                    Mark Lost
+                </ActionButton>
+            )}
             <ActionButton icon={Repeat} onClick={() => onAction("reassign")}>
                 Reassign
             </ActionButton>

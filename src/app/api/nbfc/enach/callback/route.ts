@@ -1,5 +1,6 @@
 /**
- * Public, UN-authenticated callback for the E-NACH B2-B contract (§9.5).
+ * Public (no session) callback for the E-NACH B2-B contract (§9.5). The NBFC
+ * proves itself with X-iTarang-Signature — see inboundCallbackAllowed.
  *
  * The NBFC's app posts the result here after mandate registration. We match by
  * the opaque `itarang_enach_ref` we issued at trigger time and update the latest
@@ -14,8 +15,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 
 import { db } from "@/lib/db";
-import { enachMandates } from "@/lib/db/schema";
+import { enachMandates, nbfcServiceConfig } from "@/lib/db/schema";
 import { ENACH_STATES, type EnachState } from "@/lib/nbfc/enach";
+import { inboundCallbackAllowed } from "@/lib/nbfc/handoff";
 import { tenantDisplayName } from "@/lib/notifications/emit";
 import { notifyEnachEvent } from "@/lib/notifications/events";
 
@@ -32,9 +34,11 @@ function pickStr(body: Record<string, unknown>, ...keys: string[]): string | nul
 
 export async function POST(req: NextRequest) {
   try {
+    // Read as text: the signature is over the exact bytes the NBFC sent.
+    const raw = await req.text();
     let body: Record<string, unknown> = {};
     try {
-      body = (await req.json()) as Record<string, unknown>;
+      body = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
     } catch {
       body = {};
     }
@@ -55,6 +59,25 @@ export async function POST(req: NextRequest) {
     if (!row) {
       console.warn("[E-NACH callback] No mandate for ref:", ref);
       return new NextResponse("No matching mandate", { status: 200 });
+    }
+
+    // ID 118: this callback can mark a mandate "registered". The ref travels in
+    // the hand-off URL, so the ref alone is not proof — check the NBFC's
+    // signature against the rail's secret (same rule as the agreement callback).
+    const [cfg] = await db
+      .select({ secret: nbfcServiceConfig.enach_webhook_secret })
+      .from(nbfcServiceConfig)
+      .where(eq(nbfcServiceConfig.tenant_id, row.tenant_id))
+      .limit(1);
+    if (
+      !inboundCallbackAllowed({
+        route: "/api/nbfc/enach/callback",
+        secret: cfg?.secret,
+        rawBody: raw,
+        signatureHeader: req.headers.get("x-itarang-signature"),
+      })
+    ) {
+      return new NextResponse("Invalid signature", { status: 401 });
     }
 
     const rawStatus = pickStr(body, "status", "canonical_status");
