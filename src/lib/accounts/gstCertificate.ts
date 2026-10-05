@@ -11,7 +11,7 @@ import { and, eq, inArray, notInArray } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { dealerOnboardingDocuments, dealers } from "@/lib/db/schema";
 import { removeMedia, saveMedia } from "@/lib/whatsapp/storage";
-import { AccountActionError } from "./ownership";
+import { AccountActionError } from "./accountOwner";
 
 const ALLOWED_MIME = new Set(["application/pdf", "image/jpeg", "image/jpg", "image/png", "image/webp"]);
 const MAX_BYTES = 20 * 1024 * 1024; // 20 MB

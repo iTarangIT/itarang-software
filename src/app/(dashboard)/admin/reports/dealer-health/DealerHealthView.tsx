@@ -188,19 +188,6 @@ export function DealerHealthView({ canManageAccounts = false }: { canManageAccou
                             </tr>
                         )}
                         {visible.map((r) => (
-<<<<<<< HEAD
-                            <tr key={r.account_id}>
-                                <td className="px-3 py-2">
-                                    {r.lead_id ? (
-                                        <Link href={`/leads/${encodeURIComponent(r.lead_id)}`} className="font-medium text-ink hover:underline">
-                                            {r.dealer}
-                                        </Link>
-                                    ) : canManageAccounts ? (
-                                        <Link
-                                            href={`/admin/account-management?search=${encodeURIComponent(r.account_id)}`}
-                                            className="font-medium text-ink hover:underline"
-                                        >
-=======
                             <tr key={r.key}>
                                 <td className="px-3 py-2">
                                     {r.account_id ? (
@@ -209,7 +196,6 @@ export function DealerHealthView({ canManageAccounts = false }: { canManageAccou
                                         </Link>
                                     ) : r.lead_id ? (
                                         <Link href={`/leads/${encodeURIComponent(r.lead_id)}`} className="font-medium text-ink hover:underline">
->>>>>>> fac2a80905456e04c4d89ee14f26fdf80ae34f9e
                                             {r.dealer}
                                         </Link>
                                     ) : (

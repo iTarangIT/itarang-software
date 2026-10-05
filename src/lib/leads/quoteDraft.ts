@@ -43,8 +43,7 @@ import {
   quoteNumberRoot,
 } from "./quote-pdf/numbering";
 import { renderProformaHtml } from "./quote-pdf/proforma-template";
-import { buildQuotationView, composeBillToAddress, taxRefKey } from "./quote-pdf/view";
-import type { ListPriceSnapshot } from "./listPricing";
+import { buildQuotationView, composeBillToAddress } from "./quote-pdf/view";
 import { resolvePlaceOfSupply } from "./quote-pdf/gst-states";
 import { loadLineTaxRefs } from "./quote-pdf/view-store";
 
@@ -143,26 +142,6 @@ type CommercialRow = {
   dealer_pincode: string | null;
 }
 
-/**
- * E-323 — the list price each line prints, read off what the quote froze when
- * it was written: the admin list price, else the OEM price it was judged
- * against (decision 5: with no list price set, the OEM price prints as list).
- * A quote with no snapshot predates list prices and prints as it always did.
- */
-function listRefsFromQuote(snapshot: unknown, evaluation: unknown): Map<string, number> | undefined {
-  const snapLines = (snapshot as ListPriceSnapshot | null)?.lines;
-  if (!Array.isArray(snapLines)) return undefined;
-  const oemLines = ((evaluation as { lines?: Array<{ asset_type: string; product_id: string; oem_price: number | null }> } | null)?.lines ?? []);
-  const refs = new Map<string, number>();
-  for (const o of oemLines) {
-    if (o.oem_price != null) refs.set(taxRefKey(o.asset_type, o.product_id), Number(o.oem_price));
-  }
-  for (const l of snapLines) {
-    if (l.list_price != null) refs.set(taxRefKey(l.asset_type, l.product_id), Number(l.list_price));
-  }
-  return refs;
-}
-
 export interface GenerateOptions {
   /** Re-render even when a document already exists, keeping the same number. */
   force?: boolean;
@@ -259,7 +238,6 @@ export async function generateQuotationDraft(
     ));
 
   const taxRefs = await loadLineTaxRefs(lines);
-  const listRefs = listRefsFromQuote(row.list_price_snapshot, row.oem_evaluation);
   // Pure since the GST codes moved into ./quote-pdf/gst-states — no lookup, and
   // the dealer's own GSTIN takes precedence over the lead's free-text state.
   const placeOfSupply = resolvePlaceOfSupply(row.dealer_state, row.dealer_gstin);
@@ -270,7 +248,6 @@ export async function generateQuotationDraft(
     config,
     lines,
     taxRefs,
-    listRefs,
     placeOfSupply,
     dealer: {
       name: row.dealer_name,

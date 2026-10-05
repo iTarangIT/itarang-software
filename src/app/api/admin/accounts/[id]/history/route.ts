@@ -4,7 +4,7 @@
 import { requireRole } from "@/lib/auth-utils";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
 import { ACCOUNT_MANAGE_ROLES } from "@/lib/accounts/access";
-import { gstinCorrection, listOwnershipHistory } from "@/lib/accounts/ownership";
+import { gstinCorrection, listOwnershipHistory } from "@/lib/accounts/accountOwner";
 
 export const dynamic = "force-dynamic";
 

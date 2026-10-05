@@ -16,7 +16,7 @@ import { requireRole } from "@/lib/auth-utils";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
 import { ACCOUNT_MANAGE_ROLES } from "@/lib/accounts/access";
 import { readCertificateFile, saveAccountGstCertificate } from "@/lib/accounts/gstCertificate";
-import { AccountActionError } from "@/lib/accounts/ownership";
+import { AccountActionError } from "@/lib/accounts/accountOwner";
 import { readDocument } from "@/lib/assistant/vision";
 
 export const POST = withErrorHandler(async (req: Request, context: { params: Promise<{ id: string }> }) => {

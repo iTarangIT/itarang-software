@@ -9,7 +9,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { TrendingUp } from "lucide-react";
 
 import type { GrossMarginReport, ItemMapping, MarginCell, ProductOption } from "@/lib/dashboard/grossMargin";
-import { LINE_TYPES, LINE_TYPE_LABELS } from "@/lib/sales/invoiceLines";
+import { LINE_TYPES, LINE_TYPE_LABELS } from "@/lib/sales/salesInvoiceLines";
 import { formatINRCompact } from "@/lib/format";
 
 type Payload = { report: GrossMarginReport; mappings?: ItemMapping[]; products?: ProductOption[] };

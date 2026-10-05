@@ -1,7 +1,7 @@
 import { db } from "@/lib/db";
 import { dealerAgreementSigners } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
-import { accountOwnerEmailForApplication } from "@/lib/accounts/ownership";
+import { accountOwnerEmailForApplication } from "@/lib/accounts/accountOwner";
 
 function cleanEmail(value: unknown) {
   return typeof value === "string" ? value.trim().toLowerCase() : "";
