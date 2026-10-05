@@ -81,3 +81,26 @@ describe("lead ownership checks do not fail open", () => {
     }
   });
 });
+
+describe("Edit Lead checks who owns the lead (ID 132)", () => {
+  it("the save and the page both go through canEditLead", () => {
+    const save = routes.find((r) => r.url === "/api/dealer-leads/[id]")!;
+    expect(save, "PATCH /api/dealer-leads/[id]").toBeDefined();
+    const patch = save.src.slice(save.src.search(/export const PATCH/));
+    const checkAt = patch.search(/canEditLead\s*\(/);
+    const writeAt = patch.search(/\.update\(dealerLeads\)|UPDATE dealer_leads/);
+    expect(checkAt, "PATCH must call canEditLead").toBeGreaterThan(-1);
+    expect(writeAt, "PATCH writes the lead").toBeGreaterThan(-1);
+    expect(checkAt, "the check must come before the write").toBeLessThan(writeAt);
+
+    const page = code(join(process.cwd(), "src", "app", "(dashboard)", "leads", "[id]", "edit", "page.tsx"));
+    expect(page).toMatch(/canEditLead\s*\(/);
+  });
+
+  it("the list hands the Edit link to the server's verdict, not to the role alone", () => {
+    const list = routes.find((r) => r.url === "/api/dealer-leads")!;
+    expect(list.src).toMatch(/can_edit:\s*canEditLead\s*\(/);
+    const table = code(join(process.cwd(), "src", "app", "(dashboard)", "leads", "_components", "LeadsTable.tsx"));
+    expect(table).toMatch(/row\.can_edit\s*&&/);
+  });
+});

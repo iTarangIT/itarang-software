@@ -113,8 +113,14 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
     // is part of the QUERY, not applied to the rows afterwards: a filter after
     // the row cap would drop an ASM's own leads that sort below the first
     // QUEUE_EXPORT_ROW_CAP rows of the Territory Feed.
+    //
+    // Today is the exception to "owner": the tab is already the ASM's own
+    // day plan (tabFilter: dl.asm_id = this ASM, a visit scheduled today), and
+    // a visit can be assigned to an ASM on a lead someone else still owns. The
+    // owner filter dropped exactly those from the sheet the ASM takes on the
+    // road, so there the scope is the assignment, not the ownership.
     const ownOnly = exportsOwnLeadsOnly(user.role);
-    const ownedBy = ownOnly ? user.id : null;
+    const ownedBy = ownOnly && parsed.tab !== "today" ? user.id : null;
 
     const [rows, total] = await Promise.all([
         fetchAsmQueueRows({
@@ -141,7 +147,11 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
         dataset: `asm_queue:${parsed.tab}`,
         rowCount: rows.length,
         ownOnly,
-        filters: { q: parsed.q ?? null, ...filters },
+        filters: {
+            q: parsed.q ?? null,
+            ...filters,
+            ...(ownOnly ? { scope: ownedBy ? "owned" : "assigned_visits_today" } : {}),
+        },
     });
 
     // Who handed each lead over. Decorated in a SEPARATE, fail-tolerant

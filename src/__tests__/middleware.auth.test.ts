@@ -320,8 +320,7 @@ describe("the procurement and deal pages", () => {
     // Middleware can be skipped (see the matcher gap below: /orders/x.pdf never
     // reaches it), so the server pages that read the database must not rely
     // on it. Read as source — the pages import the database.
-    // join(), not a URL: the deal page's folder is literally named "%5Bid%5D",
-    // which a URL would decode to "[id]".
+    // join(), not a URL: a URL would percent-encode the "[id]" folder name.
     const dashboardDir = fileURLToPath(new URL("../app/(dashboard)", import.meta.url));
     const page = (...parts: string[]) => readFileSync(join(dashboardDir, ...parts), "utf8");
 
@@ -329,7 +328,20 @@ describe("the procurement and deal pages", () => {
     expect(page("orders", "[id]", "page.tsx")).toMatch(/requireRole\(\[\.\.\.ORDERS_PAGE_ROLES\]\)/);
     expect(page("provisions", "page.tsx")).toMatch(/requireRole\(\[\.\.\.PROVISIONS_PAGE_ROLES\]\)/);
     expect(page("deals", "page.tsx")).toMatch(/requireRole\(\[\.\.\.DEALS_PAGE_ROLES\]\)/);
-    expect(page("deals", "%5Bid%5D", "page.tsx")).toMatch(/requireRole\(\[\.\.\.DEALS_PAGE_ROLES\]\)/);
+    expect(page("deals", "[id]", "page.tsx")).toMatch(/requireRole\(\[\.\.\.DEALS_PAGE_ROLES\]\)/);
+  });
+
+  it("the APIs those pages call use the same lists, not just a login (ID 143)", () => {
+    const apiDir = fileURLToPath(new URL("../app/api", import.meta.url));
+    const route = (...parts: string[]) => readFileSync(join(apiDir, ...parts, "route.ts"), "utf8");
+
+    expect(route("orders")).toMatch(/requireRole\(\[\.\.\.ORDERS_PAGE_ROLES\]\)/);
+    expect(route("orders", "[id]", "upload-pi")).toMatch(/requireRole\(\[\.\.\.ORDERS_PAGE_ROLES\]\)/);
+    expect(route("provisions")).toMatch(/requireRole\(\[\.\.\.PROVISIONS_PAGE_ROLES\]\)/);
+    expect(route("provisions", "inventory")).toMatch(/requireRole\(\[\.\.\.PROVISIONS_PAGE_ROLES\]\)/);
+    for (const r of [route("orders", "[id]", "upload-pi"), route("provisions", "inventory")]) {
+      expect(r).not.toMatch(/requireAuth\(/);
+    }
   });
 });
 

@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 // GSTIN. Admin and CEO only (middleware row "/admin/accounts"; the CEO also
 // reaches it at /ceo/accounts).
 export default async function AccountsPage() {
-    await requireRole(["admin", "ceo"]);
+    await requireRole(["admin", "ceo", "sales_head"]);
 
     return (
         <div className="px-4 sm:px-6 md:px-8 py-6 space-y-5 max-w-[1500px]">

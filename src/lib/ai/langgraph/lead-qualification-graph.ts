@@ -4,6 +4,7 @@ import { db } from '@/lib/db';
 import { leads, aiCallLogs } from '@/lib/db/schema';
 import { eq, desc } from 'drizzle-orm';
 import { triggerCall } from '@/lib/ai/bolna-client';
+import { bolnaCallbackUrl } from '@/lib/security/webhookAuth';
 import { getAICallerEnabled } from '@/lib/ai/settings';
 import { analyzeTranscript } from '@/lib/ai/analysis';
 import { INTENT_THRESHOLDS, leadStatusFor, bandToStatus } from '@/lib/ai/scoring';
@@ -287,7 +288,7 @@ async function placeCallWithBolna(state: State): Promise<Partial<State>> {
     if (!phone) return { callResult: 'no_phone_number' };
 
     const callbackUrl = process.env.NEXT_PUBLIC_APP_URL
-        ? `${process.env.NEXT_PUBLIC_APP_URL}/api/ceo/ai-dialer/webhook/bolna`
+        ? bolnaCallbackUrl(`${process.env.NEXT_PUBLIC_APP_URL}/api/ceo/ai-dialer/webhook/bolna`)
         : undefined;
 
     const result = await triggerCall({

@@ -6,13 +6,13 @@ import { successResponse, withErrorHandler } from '@/lib/api-utils';
 
 export const POST = withErrorHandler(async (
     req: Request,
-    { params }: { params: { id: string } }
+    { params }: { params: Promise<{ id: string }> }
 ) => {
     await requireRole(['inventory_manager', 'ceo']);
 
     const [product] = await db.update(products)
         .set({ status: 'disabled', is_active: false, updated_at: new Date() })
-        .where(eq(products.id, params.id))
+        .where(eq(products.id, (await params).id))
         .returning();
 
     if (!product) {

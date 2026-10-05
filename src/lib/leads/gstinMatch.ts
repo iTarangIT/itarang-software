@@ -85,33 +85,6 @@ export function dealerLeadByGstin(key: SQL): SQL {
 }
 
 /**
-<<<<<<< HEAD
- * `LATERAL (…)` yielding at most one row — acct_id, acct_name, acct_owner_id,
- * acct_city — for the activated dealer ACCOUNT whose GSTIN is `key` (an
- * already-normalised GSTIN_KEY expression). Use as
- * `LEFT JOIN ${dealerAccountByGstin(k)} ma ON TRUE`.
- *
- * Same set as src/lib/accounts/accountList.ts: an account with a `dealers`
- * row, its GSTIN not the "PENDING" placeholder. Several accounts with one
- * GSTIN (branches): the oldest wins — deterministic. The owner is read through
- * to_jsonb so a database without E-322 (no account_owner_id) still runs.
- */
-export function dealerAccountByGstin(key: SQL): SQL {
-    return sql`LATERAL (
-        SELECT gm_a.id                                  AS acct_id,
-               gm_a.business_entity_name                AS acct_name,
-               to_jsonb(gm_a) ->> 'account_owner_id'    AS acct_owner_id,
-               NULLIF(btrim(gm_a.city), '')             AS acct_city
-          FROM accounts gm_a
-         WHERE ${key} IS NOT NULL
-           AND ${gstinKeyIsMatchable(key)}
-           AND upper(btrim(gm_a.gstin)) <> 'PENDING'
-           AND ${GSTIN_KEY(sql`gm_a.gstin`)} = ${key}
-           AND EXISTS (SELECT 1 FROM dealers gm_d WHERE gm_d.dealer_id = gm_a.id)
-         ORDER BY gm_a.created_at ASC, gm_a.id ASC
-         LIMIT 1
-    )`;
-=======
  * The lead rule above as ONE keyed set — GSTIN key → the winning lead — for
  * matching many rows at once (revenueSource.matchedUnion). Same candidates
  * (dealer_leads.gstin, the linked onboarding's GST number) and the same tie
@@ -181,5 +154,4 @@ export function accountOwnerOn(accountIdExpr: SQL, dateExpr: SQL): SQL {
                         OR (ao_h.effective_to AT TIME ZONE 'Asia/Kolkata')::date > ${dateExpr})
                  ORDER BY ao_h.effective_from DESC
                  LIMIT 1)`;
->>>>>>> fac2a80905456e04c4d89ee14f26fdf80ae34f9e
 }

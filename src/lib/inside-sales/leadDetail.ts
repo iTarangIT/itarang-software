@@ -22,7 +22,11 @@ import type {
     LeadDetailLead,
     LeadDetailStatusHistory,
     LeadDetailTouchpoint,
-} from "@/lib/inside-sales/types";
+} from "@/lib/inside-sales/types";
+import { onboardingClockSql } from "@/lib/onboarding/clock";
+
+// ID 122: the one onboarding clock (src/lib/onboarding/clock.ts).
+const ONBOARDING_CLOCK = sql.raw(onboardingClockSql("oa"));
 
 /** null when the lead does not exist. */
 export async function fetchLeadDetailBundle(leadId: string): Promise<LeadDetailBundle | null> {
@@ -210,7 +214,7 @@ export async function fetchLeadDetailBundle(leadId: string): Promise<LeadDetailB
                         oa.submitted_at::text) AS docs_submitted_at,
                oa.agreement_status,
                oa.approved_at::text AS approved_at,
-               COALESCE(oa.last_action_at, oa.updated_at)::text AS last_activity_at,
+               ${ONBOARDING_CLOCK}::text AS last_activity_at,
                (oa.id = dl.dealer_onboarding_application_id
                 OR dl.lead_status IN ('Won', 'Converted')) AS linked
           FROM dealer_onboarding_applications oa

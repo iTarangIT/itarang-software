@@ -6,7 +6,9 @@
  *   1. link the onboarding to its lead by phone (linkOnboardingToLead);
  *   2. record how the account came in — onboarded by, lead vs direct — in
  *      account_ownership. The OWNER is left empty: a person assigns it from
- *      the Accounts tab ("nothing is assigned automatically");
+ *      the Accounts tab ("nothing is assigned automatically"). "Onboarded by"
+ *      is the salesperson named on the onboarding (tracker ID 66, column
+ *      salesperson_user_id) when there is one, else whoever keyed it in;
  *   3. write the verified GSTIN back to the linked lead when the lead has
  *      none, so the lead-side matcher agrees with the account.
  */
@@ -24,14 +26,21 @@ export async function onDealerAccountApproved(input: {
     try {
         const link = await linkOnboardingToLead(input.applicationId);
         const apps = (await db.execute(sql`
-            SELECT owner_id, onboarding_operator_id::text AS operator_id, gst_number
-              FROM dealer_onboarding_applications WHERE id = ${input.applicationId}
-        `)) as unknown as Array<{ owner_id: string | null; operator_id: string | null; gst_number: string | null }>;
+            SELECT app.owner_id, app.onboarding_operator_id::text AS operator_id, app.gst_number,
+                   -- read through to_jsonb: NULL, not an error, on a DB without the column
+                   to_jsonb(app) ->> 'salesperson_user_id' AS salesperson_id
+              FROM dealer_onboarding_applications app WHERE app.id = ${input.applicationId}
+        `)) as unknown as Array<{
+            owner_id: string | null;
+            operator_id: string | null;
+            gst_number: string | null;
+            salesperson_id: string | null;
+        }>;
         const app = apps[0];
 
         if (await hasAccountOwnershipTables()) {
             await recordAccountOrigin(input.accountId, {
-                onboardedBy: app?.owner_id ?? app?.operator_id ?? null,
+                onboardedBy: app?.salesperson_id ?? app?.owner_id ?? app?.operator_id ?? null,
                 cameThrough: link.leadId ? "lead" : "direct",
                 dealerLeadId: link.leadId,
                 applicationId: input.applicationId,

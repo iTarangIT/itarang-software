@@ -9,7 +9,7 @@
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { extractSalesInvoiceLines } from "@/lib/ai/invoices/extractSalesInvoiceLines";
-import { cleanInvoiceLines, linesAddUp, parseVoltAh, type InvoiceLine } from "@/lib/sales/invoiceLines";
+import { cleanInvoiceLines, linesAddUp, parseVoltAh, type InvoiceLine } from "@/lib/sales/salesInvoiceLines";
 
 export type StoredLines = { lines: InvoiceLine[]; addUp: boolean };
 

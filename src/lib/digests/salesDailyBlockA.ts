@@ -18,7 +18,7 @@
 
 import { sql } from "drizzle-orm";
 import type { SalesDashboard } from "@/lib/admin/salesDashboardTypes";
-import { engagedCallCount, wasHotAt } from "@/lib/reports/metricDefinitions";
+import { engagedCall, wasHotAt } from "@/lib/reports/metricDefinitions";
 import { monthEnd, workingDaysBetween } from "@/lib/targets/rules";
 import { scrapKgSourced } from "@/lib/buyback/scrapKgSourced";
 import { istRangeNaive, istRangeTz } from "./window";
@@ -172,7 +172,7 @@ async function count(db: Exec, q: ReturnType<typeof sql>): Promise<number | null
     try {
         const r = (await db.execute(q)) as Array<{ n: string | number | null }>;
         // A query that answers NULL is saying "not measurable in this period"
-        // (engagedCallCount) — kept as null, shown as "Not measured yet".
+        // — kept as null, shown as "Not measured yet".
         if (r[0] && r[0].n === null) return null;
         return Number(r[0]?.n ?? 0);
     } catch (e) {
@@ -317,10 +317,10 @@ export async function buildBlockA(
                                                WHERE e.dealer_lead_id = t.dealer_lead_id AND e.to_owner_id IS NOT NULL
                                                  AND e.performed_at < t.performed_at)`,
             ),
-            // ID 59: NULL — "Not measured yet" — for a period in which no call
-            // carries a measured duration, never a 0 that reads as "no real
-            // conversations".
-            perPeriod(db, periods, (p) => sql`SELECT ${engagedCallCount()} AS n FROM lead_touchpoints t WHERE ${inRange(sql`t.performed_at`, p)}`),
+            // ID 59 (3 Oct 2026): connected human calls — the predicate Block C
+            // groups per caller (salesDailyBlocks.loadRepExtras), so the two
+            // blocks of one email show the same count.
+            perPeriod(db, periods, (p) => sql`SELECT COUNT(*) AS n FROM lead_touchpoints t WHERE ${engagedCall()} AND ${inRange(sql`t.performed_at`, p)}`),
             perPeriod(
                 db,
                 periods,

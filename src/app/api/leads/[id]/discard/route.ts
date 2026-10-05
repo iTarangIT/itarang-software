@@ -4,9 +4,9 @@ import { eq, and } from 'drizzle-orm';
 import { successResponse, errorResponse, withErrorHandler } from '@/lib/api-utils';
 import { requireRole } from '@/lib/auth-utils';
 
-export const DELETE = withErrorHandler(async (req: Request, { params }: { params: { id: string } }) => {
+export const DELETE = withErrorHandler(async (req: Request, { params }: { params: Promise<{ id: string }> }) => {
     const user = await requireRole(['dealer']);
-    const { id } = params;
+    const { id } = await params;
 
     const [lead] = await db.select().from(leads).where(eq(leads.id, id)).limit(1);
 
