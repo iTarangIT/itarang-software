@@ -25,6 +25,7 @@ import {
   listRevenueInvoices,
   listRevenueInvoicesForExport,
   revenueSummary,
+  type InvoiceMatchStatus,
   type RevenueListFilters,
 } from "@/lib/dashboard/revenueSource";
 
@@ -41,6 +42,19 @@ const KNOWN_STATUSES = new Set([
   "partially_paid",
   "void",
 ]);
+/** E-321 work list (tracker ID 69): which match statuses a caller may ask for. */
+const KNOWN_MATCH_STATUSES = new Set<InvoiceMatchStatus>([
+  "credited",
+  "no_owner",
+  "unknown",
+  "not_dealer",
+]);
+const MATCH_LABEL: Record<string, string> = {
+  credited: "Credited",
+  no_owner: "Dealer account with no owner",
+  unknown: "Unknown customer",
+  not_dealer: "Not a dealer sale",
+};
 const CSV_ROW_CAP = 10_000;
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -94,10 +108,21 @@ export async function GET(req: NextRequest) {
     const dealerMatch =
       matchParam === "linked" || matchParam === "unlinked" ? matchParam : null;
 
+    // Tracker ID 69: `match_status=unknown,no_owner,not_dealer` is the
+    // unmatched-invoices work list. Unknown values are dropped, not rejected.
+    const matchStatusParam = sp.get("match_status");
+    const matchStatuses = matchStatusParam
+      ? (matchStatusParam
+          .split(",")
+          .map((s) => s.trim().toLowerCase())
+          .filter((s) => KNOWN_MATCH_STATUSES.has(s as InvoiceMatchStatus)) as InvoiceMatchStatus[])
+      : null;
+
     const filters: RevenueListFilters = {
       from,
       to,
       dealerMatch,
+      matchStatuses: matchStatuses && matchStatuses.length > 0 ? matchStatuses : null,
       statuses: statuses && statuses.length > 0 ? statuses : null,
       customer: sp.get("customer"),
       source,
@@ -117,6 +142,7 @@ export async function GET(req: NextRequest) {
         "Needs Attention",
         "Customer GSTIN",
         "Linked CRM Dealer",
+        "Match",
       ];
       const body = rows.map((r) =>
         [
@@ -130,7 +156,12 @@ export async function GET(req: NextRequest) {
           r.payment_reference,
           r.needs_attention ? r.attention_reason || "yes" : "",
           r.gstin_key,
+<<<<<<< HEAD
           r.dealer_name ?? r.dealer_lead_id ?? r.acct_id ?? "Not linked",
+=======
+          r.dealer_name ?? (r.dealer_lead_id ? r.dealer_lead_id : "Not linked"),
+          r.match_status ? (MATCH_LABEL[r.match_status] ?? r.match_status) : "",
+>>>>>>> fac2a80905456e04c4d89ee14f26fdf80ae34f9e
         ]
           .map(csvCell)
           .join(","),

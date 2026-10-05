@@ -466,3 +466,68 @@ describe("composeBillToAddress", () => {
     expect(composeBillToAddress({ pincode: "132103" })).toEqual(["132103"]);
   });
 });
+
+describe("E-321 list price and discount", () => {
+  function viewWith(lines: CommercialsProductLine[]) {
+    return buildQuotationView({
+      quoteNumber: "ITQ-2026-0321",
+      quoteDate: new Date("2026-08-13T06:00:00.000Z"),
+      config: DEFAULT_QUOTATION_CONFIG,
+      lines,
+      taxRefs: TAX_REFS,
+      placeOfSupply: { stateCode: "05", label: "Uttarakhand (05)" },
+      dealer: { name: "Himadri Enterprises", gstin: null },
+    });
+  }
+
+  it("shows list price, per-line discount and a total discount when list > rate", () => {
+    const view = viewWith([
+      { ...LINES[0], list_price: 46_000 }, // 2,000 off x 15
+      { ...LINES[1], list_price: 6_500 }, // list == rate: no discount
+    ]);
+    expect(view.lines[0].listPrice).toBe(46_000);
+    expect(view.lines[0].discount).toBe(30_000);
+    expect(view.lines[1].discount).toBe(0);
+    expect(view.totalDiscount).toBe(30_000);
+    expect(view.hasDiscount).toBe(true);
+    // GST and totals stay on the NET rate.
+    expect(view.lines[0].rate).toBe(44_000);
+    expect(view.lines[0].amount).toBe(660_000);
+    expect(view.subTotal).toBe(757_500);
+
+    const html = renderProformaHtml(view);
+    expect(html).toContain("List price");
+    expect(html).toContain("Discount");
+    expect(html).toContain("Total discount");
+    expect(html).toContain("46,000.00");
+    expect(html).toContain("30,000.00");
+  });
+
+  it("shows no discount when the list price is at or below the rate", () => {
+    const view = viewWith([
+      { ...LINES[0], list_price: 44_000 },
+      { ...LINES[1], list_price: 6_000 },
+    ]);
+    expect(view.lines.map((l) => l.discount)).toEqual([0, 0]);
+    expect(view.totalDiscount).toBe(0);
+    expect(view.hasDiscount).toBe(false);
+    const html = renderProformaHtml(view);
+    expect(html).not.toContain("List price");
+    expect(html).not.toContain("Total discount");
+  });
+
+  it("shows no discount when the line carries no list price", () => {
+    const view = viewWith([LINES[0], { ...LINES[1], list_price: null }]);
+    expect(view.lines.map((l) => l.listPrice)).toEqual([null, null]);
+    expect(view.hasDiscount).toBe(false);
+    const html = renderProformaHtml(view);
+    expect(html).not.toContain("List price");
+    expect(html).not.toContain("Discount");
+  });
+
+  it("gives an unpriced line no discount even with a list price", () => {
+    const view = viewWith([{ ...LINES[0], unit_price: null, list_price: 46_000 }]);
+    expect(view.lines[0].discount).toBe(0);
+    expect(view.hasDiscount).toBe(false);
+  });
+});

@@ -188,6 +188,7 @@ export function DealerHealthView({ canManageAccounts = false }: { canManageAccou
                             </tr>
                         )}
                         {visible.map((r) => (
+<<<<<<< HEAD
                             <tr key={r.account_id}>
                                 <td className="px-3 py-2">
                                     {r.lead_id ? (
@@ -199,13 +200,29 @@ export function DealerHealthView({ canManageAccounts = false }: { canManageAccou
                                             href={`/admin/account-management?search=${encodeURIComponent(r.account_id)}`}
                                             className="font-medium text-ink hover:underline"
                                         >
+=======
+                            <tr key={r.key}>
+                                <td className="px-3 py-2">
+                                    {r.account_id ? (
+                                        <Link href={`/admin/accounts/${encodeURIComponent(r.account_id)}`} className="font-medium text-ink hover:underline">
+                                            {r.dealer}
+                                        </Link>
+                                    ) : r.lead_id ? (
+                                        <Link href={`/leads/${encodeURIComponent(r.lead_id)}`} className="font-medium text-ink hover:underline">
+>>>>>>> fac2a80905456e04c4d89ee14f26fdf80ae34f9e
                                             {r.dealer}
                                         </Link>
                                     ) : (
                                         <span className="font-medium text-ink">{r.dealer}</span>
                                     )}
                                     <div className="text-[11px] text-ink-muted">
-                                        {[r.city, r.gstin ?? "no GSTIN"].filter(Boolean).join(" · ")}
+                                        {[
+                                            r.city,
+                                            r.gstin ?? "no GSTIN",
+                                            r.came_through === "direct" ? "direct onboarding" : null,
+                                        ]
+                                            .filter(Boolean)
+                                            .join(" · ")}
                                     </div>
                                     {r.invoices_unmatchable && (
                                         <div className="text-[11px] font-medium text-amber-700">

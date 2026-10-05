@@ -642,11 +642,26 @@ const roleNavigation: Record<string, any[]> = {
           href: "/admin/reports/dealer-health",
         },
         {
+<<<<<<< HEAD
           // ID 65 — dealer accounts: owner, onboarded by, GSTIN.
           id: "ceo-account-management",
           label: "Account Management",
           icon: Briefcase,
           href: "/admin/account-management",
+=======
+          // P1-1 / P1-2 — dealer accounts: owner, onboarded by, GSTIN.
+          id: "ceo-accounts",
+          label: "Accounts",
+          icon: Building,
+          href: "/admin/accounts",
+        },
+        {
+          // E-322 (IDs 39, 71) — Vyapar / GSTR-1 import, SKUs, reconciliation.
+          id: "ceo-invoice-ledger",
+          label: "Invoice Ledger",
+          icon: Receipt,
+          href: "/admin/reports/invoice-ledger",
+>>>>>>> fac2a80905456e04c4d89ee14f26fdf80ae34f9e
         },
       ],
     },
@@ -1535,11 +1550,26 @@ const roleNavigation: Record<string, any[]> = {
           href: "/admin/reports/dealer-health",
         },
         {
+<<<<<<< HEAD
           // ID 65 — dealer accounts: owner, onboarded by, GSTIN.
           id: "admin-account-management",
           label: "Account Management",
           icon: Briefcase,
           href: "/admin/account-management",
+=======
+          // P1-1 / P1-2 — dealer accounts: owner, onboarded by, GSTIN.
+          id: "admin-accounts",
+          label: "Accounts",
+          icon: Building,
+          href: "/admin/accounts",
+        },
+        {
+          // E-322 (IDs 39, 71) — Vyapar / GSTR-1 import, SKUs, reconciliation.
+          id: "admin-invoice-ledger",
+          label: "Invoice Ledger",
+          icon: Receipt,
+          href: "/admin/reports/invoice-ledger",
+>>>>>>> fac2a80905456e04c4d89ee14f26fdf80ae34f9e
         },
         {
           id: "admin-settings",
@@ -1890,6 +1920,13 @@ const roleNavigation: Record<string, any[]> = {
           label: "Credits",
           icon: Briefcase,
           href: "/finance-controller/credits",
+        },
+        {
+          // E-322 (IDs 39, 71) — Vyapar / GSTR-1 import, voids, reconciliation.
+          id: "invoice-ledger",
+          label: "Invoice Ledger",
+          icon: Receipt,
+          href: "/admin/reports/invoice-ledger",
         },
       ],
     },

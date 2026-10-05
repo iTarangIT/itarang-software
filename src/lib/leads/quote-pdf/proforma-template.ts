@@ -73,6 +73,11 @@ export function renderProformaHtml(view: QuotationView): string {
   // anyone reading one quotation.
   const taxHeaderLabel = "GST";
 
+  // E-321 — List price and Discount columns only when some line is genuinely
+  // discounted. Rate stays the NET rate either way, and GST / totals are
+  // computed on it, so the columns explain the price without changing it.
+  const showDiscount = view.hasDiscount;
+
   const lineRows = view.lines
     .map((line) => {
       const rateCell =
@@ -92,9 +97,15 @@ export function renderProformaHtml(view: QuotationView): string {
         <td class="hsn">${line.hsnCode ? esc(line.hsnCode) : "—"}</td>
         <td class="num">${esc(qty(line.quantity))}${line.unit ? `<span class="unit">${esc(line.unit)}</span>` : ""}</td>
         ${
+<<<<<<< HEAD
           view.showListPrice
             ? `<td class="num">${line.listPrice == null ? "—" : esc(money(line.listPrice))}</td>
         <td class="num">${line.discount ? esc(money(line.discount)) : "—"}</td>`
+=======
+          showDiscount
+            ? `<td class="num">${esc(money(line.discount > 0 && line.listPrice != null ? line.listPrice : line.rate))}</td>
+        <td class="num">${line.discount > 0 ? esc(money(line.discount)) : "—"}</td>`
+>>>>>>> fac2a80905456e04c4d89ee14f26fdf80ae34f9e
             : ""
         }
         <td class="num">${esc(money(line.rate))}</td>
@@ -298,8 +309,14 @@ ${
       <th>Item &amp; Description</th>
       <th>HSN/SAC</th>
       <th class="num">Qty</th>
+<<<<<<< HEAD
       ${view.showListPrice ? `<th class="num">List price</th><th class="num">Discount</th>` : ""}
       <th class="num">${view.showListPrice ? "Net price" : "Rate"}</th>
+=======
+      ${showDiscount ? `<th class="num">List price</th>
+      <th class="num">Discount</th>` : ""}
+      <th class="num">Rate</th>
+>>>>>>> fac2a80905456e04c4d89ee14f26fdf80ae34f9e
       <th class="num">${esc(taxHeaderLabel)} %</th>
       <th class="num">${esc(taxHeaderLabel)} Amt</th>
       <th class="num">Sub Total</th>
@@ -311,9 +328,15 @@ ${
 <div class="totalswrap">
   <table class="totals">
     ${
+<<<<<<< HEAD
       view.showListPrice
         ? `<tr class="sub">
       <td class="tlabel">Total discount (before GST)</td>
+=======
+      showDiscount
+        ? `<tr>
+      <td class="tlabel">Total discount</td>
+>>>>>>> fac2a80905456e04c4d89ee14f26fdf80ae34f9e
       <td class="num">${esc(money(view.totalDiscount))}</td>
     </tr>`
         : ""

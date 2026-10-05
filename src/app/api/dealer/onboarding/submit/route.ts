@@ -1,3 +1,4 @@
+import { linkOnboardingToLead } from "@/lib/onboarding/linkToLead";
 import { NextRequest, NextResponse } from "next/server";
 import { desc, eq } from "drizzle-orm";
 
@@ -746,6 +747,8 @@ export async function POST(req: NextRequest) {
 
     // ID 84.2: stamp the lead's "docs submitted" milestone (first submission
     // only). Best-effort — never throws.
+    // ID 67 / P1-4: link this onboarding to its lead by phone. Never throws.
+    await linkOnboardingToLead(finalApplicationId!);
     await markDocsSubmitted(finalApplicationId);
 
     // Notify the Dealer Validation team that an application has arrived.

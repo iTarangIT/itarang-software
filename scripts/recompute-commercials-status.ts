@@ -27,6 +27,17 @@
  * owner (notifyUser, type lead.system_correction, titled "System correction"),
  * after their changes are written. Leads with no owner are only in the CSV.
  * Re-run = no-op.
+ *
+ * Legacy quotes (05 Oct 2026, prod dry run): the CRM only records the dealer's
+ * answer since E-243 (17 Aug 2026), so a lead whose live quote predates
+ * decision tracking is never moved DOWN —
+ * its missing dealer answer means "not recorded", not "not approved"
+ * (G.R.J. Trades: real June quote, Finalised by the rep, would have dropped
+ * to Explained). It can still be raised. quote_sent / quote_released is NOT
+ * delivery: it is logged when a quote is released internally (on creation, or
+ * by the CEO's approval), before it reaches the dealer.
+ * The cutoff is the first dealer decision recorded in THIS database, falling
+ * back to the E-243 ship date when there is none.
  */
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -47,6 +58,8 @@ type Row = {
     has_quote: boolean;
     delivered: boolean;
     approved: boolean;
+    /** Live quote predates dealer-decision tracking: never lowered. */
+    legacy: boolean;
 };
 
 type Change = {
@@ -59,6 +72,8 @@ type Change = {
 const COMMERCIALS = ["Commercials_Explained", "Awaiting_Customer_Decision", "Commercials_Finalised"];
 const EARLIER = ["New_Unassigned", "Assigned_Not_Contacted", "Under_Discussion"];
 const REASON = "System correction: commercials stages follow quote events (ID 75).";
+/** E-242 / E-243 (dealer decision on a quote) shipped this day. */
+const DECISION_TRACKING_FALLBACK = "2026-08-17";
 
 function target(r: Row): LeadStatus {
     if (r.approved) return "Commercials_Finalised";
@@ -81,9 +96,13 @@ async function main() {
     // quote_dispatched touchpoint for THAT quote: sendQuotation.ts names the
     // quote number in the remark and attaches its PDF.
     const rows = (await db.execute<Row>(sql`
-        WITH live AS (
+        WITH cutoff AS (
+            SELECT COALESCE(MIN(dealer_decision_at), ${DECISION_TRACKING_FALLBACK}::timestamptz) AS at
+              FROM dealer_lead_commercials WHERE dealer_decision_at IS NOT NULL
+        ),
+        live AS (
             SELECT DISTINCT ON (c.dealer_lead_id)
-                   c.dealer_lead_id, c.quote_number, c.quote_pdf_url
+                   c.dealer_lead_id, c.quote_number, c.quote_pdf_url, c.created_at
               FROM dealer_lead_commercials c
              WHERE c.event_type IN ('quote_issue', 'quote_revision')
                AND c.withdrawn_at IS NULL
@@ -105,7 +124,8 @@ async function main() {
                )) AS delivered,
                EXISTS (SELECT 1 FROM dealer_lead_commercials c
                         WHERE c.dealer_lead_id = dl.id AND c.event_type IN ('quote_issue', 'quote_revision')
-                          AND c.withdrawn_at IS NULL AND c.dealer_decision = 'approved') AS approved
+                          AND c.withdrawn_at IS NULL AND c.dealer_decision = 'approved') AS approved,
+               (lq.dealer_lead_id IS NOT NULL AND lq.created_at < (SELECT at FROM cutoff)) AS legacy
           FROM dealer_leads dl
           LEFT JOIN live lq ON lq.dealer_lead_id = dl.id
           LEFT JOIN users u ON u.id::text = dl.current_owner_id
@@ -124,7 +144,10 @@ async function main() {
         const to = target(r);
         if (COMMERCIALS.includes(r.lead_status)) {
             commercialsCount++;
-            if (to !== r.lead_status) changes.push({ r, kind: "status", from: r.lead_status, to });
+            // A legacy quote's missing dealer answer is "not recorded": raise only.
+            if (to !== r.lead_status && (!r.legacy || isForward(r.lead_status, to))) {
+                changes.push({ r, kind: "status", from: r.lead_status, to });
+            }
         } else if (r.lead_status === "Transferred_to_ASM") {
             transferredCount++;
             if (isForward(r.pre_transfer_status, to)) {
@@ -163,9 +186,9 @@ async function main() {
     mkdirSync(dir, { recursive: true });
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
     const file = join(dir, `recompute-commercials-status-${stamp}${apply ? "" : "-dryrun"}.csv`);
-    const header = "owner,lead_id,dealer_name,kind,from_status,to_status,has_quote,delivered,approved";
+    const header = "owner,lead_id,dealer_name,kind,from_status,to_status,has_quote,delivered,approved,legacy";
     const csvLines = changes.map(({ r, kind, from, to }) =>
-        [r.owner_name ?? "(no owner)", r.id, r.dealer_name, kind, from, to, String(r.has_quote), String(r.delivered), String(r.approved)]
+        [r.owner_name ?? "(no owner)", r.id, r.dealer_name, kind, from, to, String(r.has_quote), String(r.delivered), String(r.approved), String(r.legacy)]
             .map(csvCell)
             .join(","),
     );

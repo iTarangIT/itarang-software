@@ -21,6 +21,12 @@ import { defineTool, LeadId, ownedLeadOr, type ToolFactory } from "../spec";
 import { leadUrl } from "../leads";
 import { defineApplier } from "../../applierSpec";
 import { APPROVAL_LABEL, inr, loadCatalogue, loadLatestQuote } from "../quotes";
+import {
+    MAX_CREDIT_DAYS,
+    QuoteTermsSchema,
+    formatCreditTerms,
+    getStandardQuoteTerms,
+} from "@/lib/leads/quoteTerms";
 
 const Terms = z.string().trim().min(1).max(2000);
 
@@ -40,10 +46,14 @@ export const CreateQuotePlan = z.object({
         )
         .min(1),
     final_price: z.number().nonnegative(),
-    credit_terms: z.string().nullable(),
-    delivery_terms: z.string().nullable(),
-    warranty_terms: z.string().nullable(),
-    payment_method: z.enum(["cash", "finance"]).nullable(),
+    // E-322 (ID 73): structured terms. Optional only so a preview saved before
+    // E-322 still parses — the applier refuses it rather than guess.
+    terms: QuoteTermsSchema.optional(),
+    // Pre-E-322 free text; never written.
+    credit_terms: z.string().nullable().optional(),
+    delivery_terms: z.string().nullable().optional(),
+    warranty_terms: z.string().nullable().optional(),
+    payment_method: z.enum(["cash", "finance"]).nullable().optional(),
     deal_notes: z.string().nullable(),
 });
 export type CreateQuotePlan = z.infer<typeof CreateQuotePlan>;
@@ -62,8 +72,10 @@ export const createQuote: ToolFactory = () =>
         kind: "write",
         description:
             "Propose a quote (or a revised quote, when the lead already has one) on a lead the user owns: product lines " +
-            "from product_catalogue with the quantity and unit price (₹, before GST) the user gave, plus optional terms. " +
-            "Shows whether it will be auto-approved or needs CEO approval. Nothing is saved until Confirm.",
+            "from product_catalogue with the quantity and unit price (₹, before GST) the user gave, the dealer payment " +
+            "terms (cash, or credit with a number of days) and whether the END CUSTOMER needs NBFC finance. Warranty and " +
+            "delivery are standard and cannot be changed. Any credit needs CEO approval. Shows whether it will be " +
+            "auto-approved or needs CEO approval. Nothing is saved until Confirm.",
         schema: z.object({
             lead_id: LeadId,
             lines: z
@@ -81,10 +93,21 @@ export const createQuote: ToolFactory = () =>
                 )
                 .min(1)
                 .max(20),
-            credit_terms: Terms.optional(),
-            delivery_terms: Terms.optional(),
-            warranty_terms: Terms.optional(),
-            payment_method: z.enum(["cash", "finance"]).optional(),
+            payment_terms: z
+                .enum(["cash", "credit"])
+                .optional()
+                .describe("Dealer payment terms, exactly as the user said — never assumed"),
+            credit_days: z
+                .number()
+                .int()
+                .min(1)
+                .max(MAX_CREDIT_DAYS)
+                .optional()
+                .describe("Days of credit, only when payment_terms is credit"),
+            customer_finance: z
+                .boolean()
+                .optional()
+                .describe("Does the dealer's END CUSTOMER need NBFC finance? Not a dealer payment term."),
             deal_notes: Terms.optional(),
         }),
         run: async (ctx, input): Promise<ToolResult> => {
@@ -124,25 +147,36 @@ export const createQuote: ToolFactory = () =>
                 seen.add(k);
             }
 
+            // E-322: payment terms are a choice the rep makes, never a default.
+            if (!input.payment_terms) return ask("Payment terms for the dealer — cash, or credit (how many days)?");
+            if (input.payment_terms === "credit" && !input.credit_days) {
+                return ask(`How many days of credit (1–${MAX_CREDIT_DAYS})?`);
+            }
+
             const previous = await loadLatestQuote(lead.id);
             const plan: CreateQuotePlan = {
                 lead_id: lead.id,
                 event_type: previous ? "quote_revision" : "quote_issue",
                 product_lines: lines,
                 final_price: quoteTotal(lines),
-                credit_terms: input.credit_terms ?? null,
-                delivery_terms: input.delivery_terms ?? null,
-                warranty_terms: input.warranty_terms ?? null,
-                payment_method: input.payment_method ?? null,
+                terms: {
+                    dealer_payment_terms: input.payment_terms,
+                    credit_days: input.payment_terms === "credit" ? (input.credit_days ?? null) : null,
+                    customer_finance: input.customer_finance ?? null,
+                },
                 deal_notes: input.deal_notes ?? null,
             };
+            const credit = input.payment_terms === "credit";
+            const standard = await getStandardQuoteTerms();
 
             // A forecast only — the executor re-runs the gate inside its
             // transaction, against the prices live at that instant, and that is
             // the verdict that counts. No rupee figure leaves this block.
             const refs = await loadLiveOemPrices(lines, undefined, ctx.now);
             const evaluation = evaluateAgainstOemPrices(lines, refs, ctx.now);
-            const auto = evaluation.outcome === "auto_approved";
+            const priceOk = evaluation.outcome === "auto_approved";
+            // Any credit term goes to approval, however good the price.
+            const auto = priceOk && !credit;
             const flagged = linesNeedingAttention(evaluation);
 
             // Total and approval first: a long quote is cut from the END to fit
@@ -158,10 +192,15 @@ export const createQuote: ToolFactory = () =>
                     value: `${l.quantity} × ${l.product_name} @ ${inr(l.unit_price)} = ${inr(l.unit_price * l.quantity)}`,
                 })),
             ];
-            if (plan.payment_method) out.push({ label: "Payment", value: plan.payment_method === "cash" ? "Cash" : "Finance" });
-            if (plan.credit_terms) out.push({ label: "Credit terms", value: plan.credit_terms });
-            if (plan.delivery_terms) out.push({ label: "Delivery", value: plan.delivery_terms });
-            if (plan.warranty_terms) out.push({ label: "Warranty", value: plan.warranty_terms });
+            out.push({
+                label: "Payment terms",
+                value: formatCreditTerms(input.payment_terms, plan.terms?.credit_days ?? null),
+            });
+            if (input.customer_finance != null) {
+                out.push({ label: "Customer finance (NBFC)", value: input.customer_finance ? "Yes" : "No" });
+            }
+            out.push({ label: "Warranty", value: standard.warranty });
+            out.push({ label: "Delivery", value: standard.delivery });
             if (plan.deal_notes) out.push({ label: "Notes", value: plan.deal_notes });
             if (previous) {
                 out.push({
@@ -181,8 +220,16 @@ export const createQuote: ToolFactory = () =>
                 resets_idle_clock: false,
                 warning: auto
                     ? null
-                    : `Needs CEO approval: ${flagged} line${flagged === 1 ? " is" : "s are"} below the reference price or ` +
-                      "without one. It can't be sent to the dealer until approved.",
+                    : "Needs CEO approval: " +
+                      [
+                          priceOk
+                              ? null
+                              : `${flagged} line${flagged === 1 ? " is" : "s are"} below the reference price or without one`,
+                          credit ? `credit terms (${plan.terms?.credit_days} days)` : null,
+                      ]
+                          .filter(Boolean)
+                          .join("; ") +
+                      ". It can't be sent to the dealer until approved.",
                 needs_second_confirm: false,
                 crm_url: crmUrl,
             };
@@ -207,7 +254,15 @@ export const createQuoteApplier = defineApplier<CreateQuotePlan>({
     apply: async ({ tx, user }, p) => {
         // Loaded here, not at module scope: its post-commit half pulls the PDF /
         // storage stack, which the registry must not load per message.
-        const { createLeadCommercial } = await import("@/lib/leads/createCommercial");
+        const { createLeadCommercial, CommercialInputError } = await import("@/lib/leads/createCommercial");
+        if (!p.terms) {
+            // A preview saved before payment terms became structured (E-322):
+            // its free-text terms cannot be judged, so ask for the quote again.
+            throw new CommercialInputError(
+                "This quote was prepared before payment terms changed. Please ask for the quote again.",
+                409,
+            );
+        }
         const res = await createLeadCommercial(
             {
                 leadId: p.lead_id,
@@ -216,10 +271,7 @@ export const createQuoteApplier = defineApplier<CreateQuotePlan>({
                     event_type: p.event_type,
                     product_lines: p.product_lines,
                     final_price: p.final_price,
-                    credit_terms: p.credit_terms,
-                    delivery_terms: p.delivery_terms,
-                    warranty_terms: p.warranty_terms,
-                    payment_method: p.payment_method,
+                    terms: p.terms,
                     deal_notes: p.deal_notes,
                 },
             },

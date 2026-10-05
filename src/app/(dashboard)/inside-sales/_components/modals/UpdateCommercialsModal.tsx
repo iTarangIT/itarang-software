@@ -51,12 +51,23 @@ const inr = (n: number) => `₹${n.toLocaleString("en-IN")}`;
 
 export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercials, onSuccess }: Props) {
     const [eventType, setEventType] = useState<EventType>("quote_issue");
-    const [paymentMethod, setPaymentMethod] = useState<"cash" | "finance" | "">(
-        (currentCommercials?.payment_method as "cash" | "finance" | null) ?? "",
+    // E-322 (ID 73): dealer payment terms are a pick list; any credit sends the
+    // quote for approval. Customer finance is the END customer's NBFC need.
+    // Warranty and delivery are the admin's standard terms — shown, not typed.
+    const [payTerms, setPayTerms] = useState<"cash" | "credit" | "">(
+        (currentCommercials?.dealer_payment_terms as "cash" | "credit" | null) ?? "",
     );
-    const [creditTerms, setCreditTerms] = useState(currentCommercials?.credit_terms ?? "");
-    const [deliveryTerms, setDeliveryTerms] = useState(currentCommercials?.delivery_terms ?? "");
-    const [warrantyTerms, setWarrantyTerms] = useState(currentCommercials?.warranty_terms ?? "");
+    const [creditDays, setCreditDays] = useState(
+        currentCommercials?.credit_days != null ? String(currentCommercials.credit_days) : "",
+    );
+    const [customerFinance, setCustomerFinance] = useState<"yes" | "no" | "">(
+        currentCommercials?.customer_finance != null
+            ? currentCommercials.customer_finance
+                ? "yes"
+                : "no"
+            : "",
+    );
+    const [standardTerms, setStandardTerms] = useState<{ warranty: string; delivery: string } | null>(null);
     const [quoteUrl, setQuoteUrl] = useState(currentCommercials?.quote_document_url ?? "");
     const [quoteFileName, setQuoteFileName] = useState("");
     const [brochureUrl, setBrochureUrl] = useState(currentCommercials?.brochure_url ?? "");
@@ -79,6 +90,25 @@ export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercia
     // against re-fetching — note we deliberately do NOT use a cancellation
     // flag here: the setState it triggers would re-run this effect, run the
     // prior cleanup, and cancel its own still-in-flight request.
+    // The standard terms this quote will carry (read-only for reps).
+    useEffect(() => {
+        if (!open || standardTerms) return;
+        (async () => {
+            try {
+                const res = await fetch("/api/admin/settings/quotation-terms");
+                const json = await res.json();
+                if (res.ok && json?.success) {
+                    setStandardTerms({
+                        warranty: json.data.settings.warranty,
+                        delivery: json.data.settings.delivery,
+                    });
+                }
+            } catch {
+                // Display only — the server stamps the terms either way.
+            }
+        })();
+    }, [open, standardTerms]);
+
     const productsRequested = useRef(false);
     useEffect(() => {
         if (!open || productsRequested.current) return;
@@ -171,6 +201,16 @@ export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercia
 
     const submit = async (e: React.FormEvent) => {
         e.preventDefault();
+        const isQuote = eventType === "quote_issue" || eventType === "quote_revision";
+        const days = Number(creditDays);
+        if (isQuote && !payTerms) {
+            toast.error("Choose the dealer payment terms — Cash or Credit.");
+            return;
+        }
+        if (isQuote && payTerms === "credit" && !(Number.isInteger(days) && days >= 1 && days <= 180)) {
+            toast.error("Enter the credit period in days (1–180).");
+            return;
+        }
         setSubmitting(true);
         try {
             const body: Record<string, unknown> = { event_type: eventType };
@@ -178,10 +218,15 @@ export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercia
             // Final price is the product roll-up — no separate manual field.
             // Terms events send no price or lines (ID 61).
             if (!isTerms && linesSubtotal > 0) body.final_price = linesSubtotal;
-            if (paymentMethod) body.payment_method = paymentMethod;
-            if (creditTerms) body.credit_terms = creditTerms;
-            if (deliveryTerms) body.delivery_terms = deliveryTerms;
-            if (warrantyTerms) body.warranty_terms = warrantyTerms;
+            if (eventType !== "brochure_share") {
+                // Terms events keep the quote's payment terms (server-side);
+                // only customer finance can change there.
+                body.terms = {
+                    dealer_payment_terms: payTerms || "cash",
+                    credit_days: payTerms === "credit" ? days : null,
+                    customer_finance: customerFinance === "" ? null : customerFinance === "yes",
+                };
+            }
             if (quoteUrl) body.quote_document_url = quoteUrl;
             if (brochureUrl) body.brochure_url = brochureUrl;
             if (dealNotes) body.deal_notes = dealNotes;
@@ -201,6 +246,8 @@ export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercia
             const version = `v${(currentCommercials?.version_no ?? 0) + 1}`;
             if (json?.data?.auto_approved) {
                 toast.success(`Commercials ${version} saved — quote auto-approved and sent.`);
+            } else if (json?.data?.approval_status === "pending" && json?.data?.terms_hold) {
+                toast.success(`Commercials ${version} saved — credit terms, awaiting CEO approval.`);
             } else if (json?.data?.approval_status === "pending") {
                 toast.success(`Commercials ${version} saved — awaiting CEO approval.`);
             } else {
@@ -383,32 +430,61 @@ export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercia
                     )}
                 </div>
 
+                {eventType !== "brochure_share" && (
                 <div className="grid grid-cols-2 gap-3">
                     <div>
-                        <Label>Payment method</Label>
+                        <Label>Dealer payment terms</Label>
+                        <select
+                            className="mt-1 w-full rounded-md border border-gray-200 px-3 py-2 text-sm bg-white disabled:bg-gray-50"
+                            value={payTerms}
+                            disabled={TERMS_EVENTS.includes(eventType)}
+                            onChange={(e) => setPayTerms(e.target.value as "cash" | "credit" | "")}
+                        >
+                            <option value="">— choose —</option>
+                            <option value="cash">Cash</option>
+                            <option value="credit">Credit</option>
+                        </select>
+                        {TERMS_EVENTS.includes(eventType) && (
+                            <p className="mt-1 text-[11px] text-gray-500">From the quote. To change, create a Quote revision.</p>
+                        )}
+                    </div>
+                    <div>
+                        <Label>Credit period (days)</Label>
+                        <Input
+                            type="number"
+                            min={1}
+                            max={180}
+                            value={creditDays}
+                            disabled={payTerms !== "credit" || TERMS_EVENTS.includes(eventType)}
+                            onChange={(e) => setCreditDays(e.target.value)}
+                            placeholder={payTerms === "credit" ? "e.g. 30" : "Cash — no credit"}
+                            className="mt-1"
+                        />
+                    </div>
+                    <div>
+                        <Label>Customer finance (NBFC)</Label>
                         <select
                             className="mt-1 w-full rounded-md border border-gray-200 px-3 py-2 text-sm bg-white"
-                            value={paymentMethod}
-                            onChange={(e) => setPaymentMethod(e.target.value as "cash" | "finance" | "")}
+                            value={customerFinance}
+                            onChange={(e) => setCustomerFinance(e.target.value as "yes" | "no" | "")}
                         >
                             <option value="">—</option>
-                            <option value="cash">Cash</option>
-                            <option value="finance">Finance</option>
+                            <option value="yes">Yes — end customers need finance</option>
+                            <option value="no">No</option>
                         </select>
                     </div>
-                    <div>
-                        <Label>Credit terms</Label>
-                        <Input value={creditTerms ?? ""} onChange={(e) => setCreditTerms(e.target.value)} placeholder="e.g. 30 days" className="mt-1" />
+                    <div className="text-xs text-gray-600">
+                        <Label>Warranty &amp; delivery (standard)</Label>
+                        <p className="mt-1">{standardTerms?.warranty ?? "Loading…"}</p>
+                        <p>{standardTerms?.delivery ?? ""}</p>
                     </div>
-                    <div>
-                        <Label>Delivery terms</Label>
-                        <Input value={deliveryTerms ?? ""} onChange={(e) => setDeliveryTerms(e.target.value)} placeholder="e.g. 15 days FOB Faridabad" className="mt-1" />
-                    </div>
-                    <div>
-                        <Label>Warranty</Label>
-                        <Input value={warrantyTerms ?? ""} onChange={(e) => setWarrantyTerms(e.target.value)} placeholder="e.g. 24 months" className="mt-1" />
-                    </div>
+                    {payTerms === "credit" && !TERMS_EVENTS.includes(eventType) && (
+                        <p className="col-span-2 rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                            Credit terms always need CEO approval — this quote will wait in the approval queue.
+                        </p>
+                    )}
                 </div>
+                )}
 
                 <div className="grid grid-cols-2 gap-3">
                     <FileUploadField

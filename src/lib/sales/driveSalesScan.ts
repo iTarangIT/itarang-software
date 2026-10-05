@@ -400,6 +400,8 @@ export async function runSalesScan(
           const res = await processFile(file, {
             zohoKeys,
             dryRun: Boolean(opts.dryRun),
+            // E-322 (ID 71): a credit-note folder's PDFs become credit notes.
+            docKind: folder.doc_kind === "credit_note" ? "credit_note" : "sale",
           });
           outcome = res.outcome;
           proposal = res.proposal;
@@ -506,7 +508,7 @@ export async function runSalesScan(
 
 async function processFile(
   file: DriveFile,
-  ctx: { zohoKeys: Set<string>; dryRun: boolean },
+  ctx: { zohoKeys: Set<string>; dryRun: boolean; docKind?: "sale" | "credit_note" },
 ): Promise<{ outcome: FileOutcome; proposal: SalesProposal | null }> {
   if (!INVOICE_MIME_TYPES.has(file.mimeType)) {
     return {
@@ -560,6 +562,37 @@ async function processFile(
   }
 
   const { extracted, value, attention, org, numberKey } = read;
+
+  // E-322 (tracker ID 71): credit notes are read like invoices (same layout,
+  // same extractor) but booked in credit_notes, subtracted from revenue in
+  // the month they are issued. Deduped by note number and Drive file.
+  if (ctx.docKind === "credit_note") {
+    if (ctx.dryRun) {
+      return {
+        outcome: { status: "imported", reason: "credit note (dry run)", invoiceIds: [], storageKey: null },
+        proposal: null,
+      };
+    }
+    const inserted = (await db.execute(sql`
+      INSERT INTO credit_notes (note_number, note_number_key, issue_date, customer_name, customer_gstin,
+                                organization_id, seller_gstin, sub_total, tax_total, total, drive_file_id,
+                                file_name, document_url, ai_raw, needs_attention, attention_reason)
+      VALUES (${value.invoice_number}, ${numberKey}, ${value.invoice_date}, ${value.customer_name},
+              ${value.customer_gstin}, ${org.organizationId}, ${value.seller_gstin},
+              ${value.sub_total == null ? null : value.sub_total.toFixed(2)},
+              ${value.tax_total == null ? null : value.tax_total.toFixed(2)},
+              ${value.total.toFixed(2)}, ${file.id}, ${file.name.slice(0, 255)}, ${documentUrl},
+              ${JSON.stringify(extracted)}::jsonb, ${attention.length > 0}, ${formatSalesAttention(attention)})
+      ON CONFLICT DO NOTHING
+      RETURNING id::text AS id
+    `)) as unknown as Array<{ id: string }>;
+    return {
+      outcome: inserted.length
+        ? { status: "imported", reason: formatSalesAttention(attention), invoiceIds: [], storageKey }
+        : { status: "duplicate", reason: "Credit note already imported.", invoiceIds: [], storageKey },
+      proposal: null,
+    };
+  }
 
   // --- dedup ---------------------------------------------------------------
 
