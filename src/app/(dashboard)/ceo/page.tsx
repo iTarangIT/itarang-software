@@ -67,9 +67,13 @@ import {
   type PacePoint,
 } from "@/components/dashboard/redesign/charts";
 
-type Period = "mtd" | "last" | "qtd" | "fy";
+type Period = "today" | "week" | "mtd" | "last" | "qtd" | "fy";
 
+// "Today" and "This week" are the Sales Head screen's presets, with the same
+// meaning: today alone, and Monday → today.
 const PERIODS: ReadonlyArray<{ value: Period; label: string }> = [
+  { value: "today", label: "Today" },
+  { value: "week", label: "This week" },
   { value: "mtd", label: "This month" },
   { value: "last", label: "Last month" },
   { value: "qtd", label: "Quarter" },
@@ -101,6 +105,21 @@ function resolvePeriod(period: Period, now: Date) {
   const range = (from: string, to: string) =>
     new URLSearchParams({ period: "range", from, to }).toString();
 
+  if (period === "today" || period === "week") {
+    const monday = new Date(now);
+    monday.setDate(now.getDate() - ((now.getDay() + 6) % 7));
+    const from = period === "today" ? today : ymd(monday);
+    return {
+      from,
+      to: today,
+      ceoQs: range(from, today),
+      // The snapshot figures exist per whole month only, so a part-month
+      // window has none — the card says so instead of showing the month's.
+      months: null,
+      slots: 0,
+      elapsed: 0,
+    };
+  }
   if (period === "last") {
     const first = new Date(y, m - 1, 1);
     const last = new Date(y, m, 0);
@@ -338,7 +357,8 @@ export default function CEODashboard() {
   });
 
   // ── Needs you today ──────────────────────────────────────────────────────
-  const signing: unknown[] = m.nbfcSigningQueue ?? [];
+  // The count the /admin/nbfc/approvals queue lists — the card opens that page.
+  const nbfcPending = Number(m.nbfcPendingApprovals ?? 0);
   type Need = React.ComponentProps<typeof ActionCard> & { key: string; n: number };
   const needs: Need[] = x
     ? [
@@ -400,12 +420,12 @@ export default function CEODashboard() {
         },
         {
           key: "nbfc",
-          n: signing.length,
+          n: nbfcPending,
           icon: FileSignature,
           tone: "warn",
-          label: "NBFC agreements out for signing",
-          count: num(signing.length),
-          sub: "Waiting on signatures",
+          label: "NBFCs waiting for your approval",
+          count: num(nbfcPending),
+          sub: "Onboarding submitted for your sign-off",
           href: "/admin/nbfc/approvals",
           cta: "Open list",
         },
@@ -847,7 +867,13 @@ export default function CEODashboard() {
             history.isLoading || fySnapshot.isLoading ? (
               <LoadingBlock />
             ) : (
-              <NotAvailable />
+              <NotAvailable
+                reason={
+                  period === "today" || period === "week"
+                    ? "Costs are counted by whole month. Pick This month or a longer period."
+                    : undefined
+                }
+              />
             )
           ) : (
             <>
