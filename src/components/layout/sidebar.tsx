@@ -884,7 +884,9 @@ const roleNavigation: Record<string, any[]> = {
           id: "sh-reports",
           label: "Reports",
           icon: BarChart3,
-          href: "/admin/reports",
+          // The Sales Head's own Reports page (redesign, 6 Oct 2026); the
+          // shared /admin/reports stays for the other roles.
+          href: "/sales-head/reports",
         },
         {
           id: "sh-sales-dashboard",
