@@ -8,8 +8,9 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
-import { Eye, Loader2, Mail, X } from "lucide-react";
+import { Eye, Loader2, Mail } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { EmailPreviewModal, type EmailPreview } from "@/components/reports/EmailPreviewModal";
 
 type Report = {
     id: string;
@@ -39,7 +40,7 @@ export function ScheduledEmailsView() {
     });
 
     const [previewing, setPreviewing] = useState<string | null>(null);
-    const [preview, setPreview] = useState<{ label: string; subject: string; html: string; for_day: string } | null>(null);
+    const [preview, setPreview] = useState<EmailPreview | null>(null);
 
     const openPreview = async (id: string, label: string) => {
         setPreviewing(id);
@@ -90,25 +91,7 @@ export function ScheduledEmailsView() {
 
     return (
         <>
-        {preview && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setPreview(null)}>
-                <div className="flex h-[85vh] w-full max-w-4xl flex-col rounded-xl bg-surface shadow-card" onClick={(e) => e.stopPropagation()}>
-                    <div className="flex items-start justify-between gap-3 border-b border-border px-4 py-3">
-                        <div>
-                            <div className="text-sm font-semibold text-ink">{preview.subject}</div>
-                            <p className="text-xs text-ink-muted">
-                                Preview of {preview.label} for {preview.for_day}, with the figures as they stand now. Nothing was sent.
-                            </p>
-                        </div>
-                        <button type="button" aria-label="Close preview" onClick={() => setPreview(null)} className="text-ink-muted hover:text-ink">
-                            <X className="h-5 w-5" />
-                        </button>
-                    </div>
-                    {/* sandbox with no allowances: the email's HTML can run no script and reach nothing. */}
-                    <iframe title="Email preview" sandbox="" srcDoc={preview.html} className="w-full flex-1 rounded-b-xl bg-white" />
-                </div>
-            </div>
-        )}
+        {preview && <EmailPreviewModal preview={preview} onClose={() => setPreview(null)} />}
         <div className="overflow-x-auto rounded-xl border border-border bg-surface shadow-card">
             <table className="min-w-full text-sm">
                 <thead className="bg-bg text-left text-xs uppercase tracking-wide text-ink-muted">
