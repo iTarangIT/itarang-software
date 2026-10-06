@@ -109,7 +109,7 @@ export function SalesDashboardView({ mode }: { mode: SalesDashboardMode }) {
                             <SalesCharts series={d.series} averages={d.averages} granularity={granularity} />
                             <SalesInterestTable d={d.interest} />
                             {isAdmin && d.per_spoc && (
-                                <SalesPerRepTable reps={d.per_spoc} onPick={(id) => set("spoc_id", id)} />
+                                <SalesPerRepTable reps={d.per_spoc} unassigned={d.unassigned} onPick={(id) => set("spoc_id", id)} />
                             )}
                         </>
                     )}

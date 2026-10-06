@@ -10,6 +10,7 @@ import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { extractSalesInvoiceLines } from "@/lib/ai/invoices/extractSalesInvoiceLines";
 import { cleanInvoiceLines, linesAddUp, parseVoltAh, type InvoiceLine } from "@/lib/sales/salesInvoiceLines";
+import { saveDriveLedgerLines } from "@/lib/sales/driveLedgerLines";
 
 export type StoredLines = { lines: InvoiceLine[]; addUp: boolean };
 
@@ -86,5 +87,14 @@ export async function readAndSaveInvoiceLines(
 ): Promise<StoredLines> {
   const read = await readInvoiceLines(buffer, mimeType, fileName, subTotal);
   await saveInvoiceLines(invoiceId, read.lines);
+  // Same read, into the E-322 ledger the batteries-sold count uses — only when
+  // it checks out against the invoice (driveLedgerLines.ts). Best-effort: a
+  // failure here costs the battery count for this invoice, never the scan.
+  try {
+    const ledger = await saveDriveLedgerLines(invoiceId, read.lines, subTotal);
+    if (!ledger.saved) console.warn(`[sales-scan] ledger lines not stored for ${fileName}: ${ledger.reason}`);
+  } catch (e) {
+    console.warn(`[sales-scan] ledger lines failed for ${fileName}: ${e instanceof Error ? e.message : String(e)}`);
+  }
   return read;
 }
