@@ -38,8 +38,9 @@ const BodySchema = z.object({
 
 export const POST = withErrorHandler(
     async (req: Request, ctx: { params: Promise<{ id: string }> }) => {
-        // Admin only (ID 80, locked 26 Sep) — not the CEO.
-        const user = await requireRole(["admin"]);
+        // Admin and Sales Head (ID 80 locked it to admin on 26 Sep; the Sales
+        // Head was added on 6 Oct 2026 at the business's request) — not the CEO.
+        const user = await requireRole(["admin", "sales_head"]);
         const { id } = await ctx.params;
         const body = BodySchema.parse(await req.json());
         const { to, reason } = body;
@@ -77,8 +78,8 @@ export const POST = withErrorHandler(
                     dealerLeadId: id,
                     touchpointType: "status_change_note",
                     performedBy: user.id,
-                    remarks: `Status corrected by admin — ${reason}`,
-                    // ID 115.5: an admin's correction is not the owner working
+                    remarks: `Status corrected by ${user.role === "sales_head" ? "Sales Head" : "admin"} — ${reason}`,
+                    // ID 115.5: a correction is not the owner working
                     // the lead — it must not reset the idle clock.
                     countsAsWork: false,
                     statusChange: {
