@@ -30,6 +30,34 @@ export function checkDriveLines(lines: InvoiceLine[], subTotal: number | null | 
     return { ok: true };
 }
 
+export type Reconciled =
+    | { ok: true; basis: "amounts" | "qty_x_rate"; lines: InvoiceLine[] }
+    | { ok: false; reason: string };
+
+/**
+ * Lines fit to store, by one of two independent proofs:
+ *
+ *   amounts     the read amounts check out as they are (checkDriveLines).
+ *   qty_x_rate  every line has a price, and Σ quantity × price adds up to the
+ *               invoice's taxable value. Vyapar prints a GST-INCLUSIVE Amount
+ *               column beside a pre-tax Price/Unit, and the model copies the
+ *               printed Amount — so the amounts sum to the grand total while
+ *               quantities and prices are right (ITG/202627/059, by eye). The
+ *               taxable amount of each line is then quantity × price.
+ *
+ * Either way quantities are pinned by the invoice's own taxable total, which
+ * is what makes them safe to count batteries from.
+ */
+export function reconcileDriveLines(lines: InvoiceLine[], subTotal: number | null | undefined): Reconciled {
+    const direct = checkDriveLines(lines, subTotal);
+    if (direct.ok) return { ok: true, basis: "amounts", lines };
+    if (lines.length > 0 && lines.every((l) => l.rate != null && l.rate > 0)) {
+        const rebuilt = lines.map((l) => ({ ...l, amount: Math.round(l.quantity * (l.rate as number) * 100) / 100 }));
+        if (linesAddUp(rebuilt, subTotal)) return { ok: true, basis: "qty_x_rate", lines: rebuilt };
+    }
+    return { ok: false, reason: direct.reason };
+}
+
 export type LedgerRow = {
     line_no: number;
     item_name: string;

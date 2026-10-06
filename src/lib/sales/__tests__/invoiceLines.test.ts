@@ -6,6 +6,11 @@ describe("invoice line classification (ID 39)", () => {
         expect(classifyHsn("8507")).toBe("battery");
         expect(classifyHsn("8507.60.00")).toBe("battery");
         expect(classifyHsn(85076000)).toBe("battery");
+        // 850790 = PARTS of accumulators — "LCD Display with Box" is billed under
+        // 85079090 next to every battery and is not a battery (6 Oct 2026 audit:
+        // ITG/202627/035 sold 0 batteries but 20 LCD boxes).
+        expect(classifyHsn("85079090")).toBe("other");
+        expect(classifyHsn("8507.90")).toBe("other");
         expect(classifyHsn("8504.40")).toBe("charger");
         expect(classifyHsn("85044090")).toBe("charger");
         expect(classifyHsn("8504.31")).toBe("other");
