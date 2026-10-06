@@ -6,7 +6,9 @@
 // The counts come from ONE aggregate that shares the list's WHERE clause
 // (fetchLeadListStats), so a card can never disagree with the rows below it.
 // Hot/Warm/Cold are deliberately computed WITHOUT the intent filter applied, so
-// selecting one doesn't zero the other two and destroy the control.
+// selecting one doesn't zero the other two and destroy the control. They count
+// the rep-set temperature (interest_level), the same field the ASM / Inside Sales
+// queues use, so leads with no temperature yet are in none of the three.
 //
 // Replaces the old Total / Hot / Warm / Qualified / Scheduled strip:
 //   · Hot/Warm counted `current_status = 'hot' | 'warm'`, but nothing in the
@@ -75,7 +77,7 @@ export function LeadsStatCards({
             ring: "ring-rose-400",
             active: filters.intent === "hot",
             onClick: toggleIntent("hot"),
-            hint: "Intent score 75 or above",
+            hint: "Marked Hot by the rep (same as their queue)",
         },
         {
             label: "Warm",
@@ -84,7 +86,7 @@ export function LeadsStatCards({
             ring: "ring-amber-400",
             active: filters.intent === "warm",
             onClick: toggleIntent("warm"),
-            hint: "Intent score 31–74",
+            hint: "Marked Warm by the rep (same as their queue)",
         },
         {
             label: "Cold",
@@ -93,7 +95,7 @@ export function LeadsStatCards({
             ring: "ring-sky-400",
             active: filters.intent === "cold",
             onClick: toggleIntent("cold"),
-            hint: "Intent score 30 or below, including never-called leads",
+            hint: "Marked Cold by the rep (same as their queue)",
         },
         {
             label: "Unassigned",

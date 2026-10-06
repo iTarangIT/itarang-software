@@ -37,6 +37,7 @@ import {
 } from "@/lib/leads/campaign";
 import { formatIdle, idleDays, idleSeverity, type IdleSeverity } from "@/lib/leads/idle";
 import { StatusChip } from "@/app/(dashboard)/inside-sales/_components/StatusChip";
+import { InterestChip } from "@/app/(dashboard)/inside-sales/_components/InterestChip";
 import { LeadCallStatus } from "@/components/leads/lead-call-status";
 import type { LeadStatus } from "@/lib/lifecycle/transitions";
 import { VISIT_OUTCOME_LABELS, type VisitOutcome } from "@/lib/asm/types";
@@ -403,13 +404,24 @@ export function LeadsTable({
                                         </td>
 
                                         <td className="px-4 py-3 align-middle">
-                                            <span
-                                                className={`${CHIP_BASE} ${INTENT_BUCKET_TONE[bucket]}`}
-                                                title={`Intent score ${row.final_intent_score ?? 0}`}
-                                            >
-                                                {INTENT_BUCKET_LABEL[bucket]}
-                                                <span className="ml-1 tabular-nums opacity-70">
-                                                    {row.final_intent_score ?? 0}
+                                            {/* Intent = the rep-set temperature, the
+                                                same field the Intent filter and the
+                                                ASM / Inside Sales queues use. The AI
+                                                score sits beside it, labelled. */}
+                                            <span className="flex flex-wrap items-center gap-1">
+                                                {row.interest_level ? (
+                                                    <InterestChip level={row.interest_level} />
+                                                ) : (
+                                                    <span className="text-[11px] text-gray-400">—</span>
+                                                )}
+                                                <span
+                                                    className={`${CHIP_BASE} ${INTENT_BUCKET_TONE[bucket]}`}
+                                                    title={`AI intent score ${row.final_intent_score ?? 0} (${INTENT_BUCKET_LABEL[bucket]})`}
+                                                >
+                                                    AI
+                                                    <span className="ml-1 tabular-nums opacity-70">
+                                                        {row.final_intent_score ?? 0}
+                                                    </span>
                                                 </span>
                                             </span>
                                             {(row.total_attempts ?? 0) > 0 && (

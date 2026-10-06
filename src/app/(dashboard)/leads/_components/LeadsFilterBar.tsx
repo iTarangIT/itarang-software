@@ -16,7 +16,6 @@ import { UNASSIGNED_FILTER } from "@/lib/admin/leadsInfoFilters";
 import {
     INTENT_BUCKET_LABEL,
     INTENT_BUCKET_OPTIONS,
-    INTENT_BUCKET_RANGE,
     INTENT_SCORE_MAX,
     INTENT_SCORE_MIN,
 } from "@/lib/leads/intentBucket";
@@ -152,24 +151,14 @@ export function LeadsFilterBar({
         .map((d) => d.value)
         .filter((v) => !isKnownDisposition(v));
 
-    // ── Intent: bucket and exact range are one axis, so they replace each
-    // other. Same principle as the disposition cascade below — the UI must not
-    // let someone build a combination that can only return nothing.
+    // ── Intent is the rep-set temperature (interest_level, same as the ASM /
+    // Inside Sales queues); the score range is the AI intent score. Different
+    // columns, so they combine rather than replace each other.
     const setIntentBucket = (value: string) =>
-        onPatch({
-            intent: value as LeadFilters["intent"],
-            scoreMin: "",
-            scoreMax: "",
-        });
+        onPatch({ intent: value as LeadFilters["intent"] });
 
     const setScore = (key: "scoreMin" | "scoreMax", value: string) =>
-        onPatch({
-            [key]: value,
-            // Clearing the last populated box must NOT also clear the bucket —
-            // that would make deleting a digit silently drop an unrelated
-            // filter. Only a range that is actually being expressed wins.
-            ...(value ? { intent: "" as const } : {}),
-        });
+        onPatch({ [key]: value });
 
     // The "picking a level clears the narrower ones" cascade now lives inside
     // DispositionPicker, which owns it for every consumer.
@@ -285,7 +274,7 @@ export function LeadsFilterBar({
                     <option value="">All intent</option>
                     {INTENT_BUCKET_OPTIONS.map((b) => (
                         <option key={b} value={b}>
-                            {INTENT_BUCKET_LABEL[b]} ({INTENT_BUCKET_RANGE[b]})
+                            {INTENT_BUCKET_LABEL[b]}
                         </option>
                     ))}
                 </select>
@@ -307,17 +296,15 @@ export function LeadsFilterBar({
                     <option value={BUSINESS_TYPE_UNSET}>{BUSINESS_TYPE_UNSET_LABEL}</option>
                 </select>
 
-                {/* Exact score range — the same axis as the bucket above, which
-                    is why picking either one clears the other. A bucket IS a
-                    range, so holding both can only ever be redundant (Hot +
-                    75–100) or a contradiction (Hot + 0–30) that returns nothing
-                    and reads as a broken filter. */}
+                {/* AI intent score range (final_intent_score). A different
+                    column from the Intent select above, which is the rep-set
+                    temperature, so the two combine. */}
                 <div
                     className="inline-flex items-center gap-1 rounded-lg border border-gray-200 bg-white px-2 py-1 transition-colors focus-within:border-gray-400"
-                    title={`Filter by exact intent score (${INTENT_SCORE_MIN}–${INTENT_SCORE_MAX}). Overrides the bucket.`}
+                    title={`Filter by AI intent score (${INTENT_SCORE_MIN}–${INTENT_SCORE_MAX}).`}
                 >
                     <span className="text-[11px] font-semibold uppercase tracking-wider text-gray-400">
-                        Score
+                        AI score
                     </span>
                     <input
                         type="number"
