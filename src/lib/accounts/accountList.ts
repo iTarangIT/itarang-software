@@ -12,6 +12,10 @@
  *
  * Calendar days in IST; "today" comes from Postgres.
  */
+// Owner, onboarded-by and came-through are read from account_ownership /
+// account_owner_history (E-321, the account model kept after the 5 Oct merge) —
+// not from columns on `accounts`. One model, so this list and the Accounts
+// screens cannot disagree about who owns a dealer.
 import { sql, type SQL } from "drizzle-orm";
 
 import { db } from "@/lib/db";
@@ -88,11 +92,11 @@ const num = (v: unknown): number | null => (v == null ? null : Number(v));
 export async function listAccounts(f: AccountFilters = {}): Promise<AccountRow[]> {
     const invoices = await matchedUnion();
     const conds: SQL[] = [sql`TRUE`];
-    if (f.ownerId) conds.push(sql`a.account_owner_id::text = ${f.ownerId}`);
-    if (f.onboardedById) conds.push(sql`a.onboarded_by_user_id::text = ${f.onboardedById}`);
-    if (f.cameThrough) conds.push(sql`a.came_through = ${f.cameThrough}`);
+    if (f.ownerId) conds.push(sql`ao.owner_user_id::text = ${f.ownerId}`);
+    if (f.onboardedById) conds.push(sql`ao.onboarded_by_user_id::text = ${f.onboardedById}`);
+    if (f.cameThrough) conds.push(sql`ao.came_through = ${f.cameThrough}`);
     if (f.dealerType) conds.push(sql`d.dealer_type = ${f.dealerType}`);
-    if (f.noOwnerOnly) conds.push(sql`a.account_owner_id IS NULL`);
+    if (f.noOwnerOnly) conds.push(sql`ao.owner_user_id IS NULL`);
     if (f.gstinMissingOnly) conds.push(sql`upper(btrim(a.gstin)) = ${GSTIN_PENDING}`);
     if (f.search?.trim()) {
         const like = `%${f.search.trim()}%`;
@@ -110,8 +114,9 @@ export async function listAccounts(f: AccountFilters = {}): Promise<AccountRow[]
             SELECT a.id,
                    CASE WHEN upper(btrim(a.gstin)) = ${GSTIN_PENDING} THEN NULL
                         ELSE ${GSTIN_KEY(sql`a.gstin`)} END AS gkey,
-                   a.originating_dealer_lead_id AS lead_id
+                   ao.source_dealer_lead_id AS lead_id
               FROM accounts a
+                LEFT JOIN account_ownership ao ON ao.account_id = a.id
              WHERE EXISTS (SELECT 1 FROM dealers d WHERE d.dealer_id = a.id)
         ),
         orders AS (
@@ -148,21 +153,21 @@ export async function listAccounts(f: AccountFilters = {}): Promise<AccountRow[]
                         WHERE doc.application_id::text = app.id::text
                           AND doc.document_type IN ('gst_certificate', 'gst')
                           AND COALESCE(doc.doc_status, '') <> 'superseded') AS gst_certificate_on_file,
-               (COALESCE(a.activated_at, a.created_at) AT TIME ZONE 'Asia/Kolkata')::date AS activated_on,
-               a.came_through,
-               a.originating_dealer_lead_id                      AS lead_id,
-               a.onboarded_by_user_id::text                      AS onboarded_by_id,
+               (COALESCE((to_jsonb(a) ->> 'activated_at')::timestamptz, a.created_at) AT TIME ZONE 'Asia/Kolkata')::date AS activated_on,
+               ao.came_through,
+               ao.source_dealer_lead_id                      AS lead_id,
+               ao.onboarded_by_user_id::text                      AS onboarded_by_id,
                ob.name                                           AS onboarded_by_name,
-               a.account_owner_id::text                          AS owner_id,
+               ao.owner_user_id::text                          AS owner_id,
                ow.name                                           AS owner_name,
-               a.account_owner_since                             AS owner_since,
+               (SELECT (h.effective_from AT TIME ZONE 'Asia/Kolkata')::date FROM account_owner_history h WHERE h.account_id = a.id AND h.effective_to IS NULL LIMIT 1)                             AS owner_since,
                sug.user_id::text                                 AS suggested_owner_id,
                sug.name                                          AS suggested_owner_name,
                sug.why                                           AS suggested_owner_why,
                o.first_order, o.last_order,
                ((SELECT d FROM today) - o.last_order)            AS days_since_last_order,
                ((SELECT d FROM today)
-                  - (COALESCE(a.activated_at, a.created_at) AT TIME ZONE 'Asia/Kolkata')::date) AS days_since_activation,
+                  - (COALESCE((to_jsonb(a) ->> 'activated_at')::timestamptz, a.created_at) AT TIME ZONE 'Asia/Kolkata')::date) AS days_since_activation,
                COALESCE(o.n, 0)                                  AS orders,
                COALESCE(o.last_90d, 0)                           AS revenue_90d,
                COALESCE(o.this_fy, 0)                            AS revenue_fy,
@@ -173,11 +178,12 @@ export async function listAccounts(f: AccountFilters = {}): Promise<AccountRow[]
                COALESCE(o.within_30d, false)                     AS ordered_last_30d,
                COALESCE(o.before_30d, false)                     AS ordered_before_30d
           FROM accounts a
+            LEFT JOIN account_ownership ao ON ao.account_id = a.id
           JOIN dealers d ON d.dealer_id = a.id
           LEFT JOIN dealer_onboarding_applications app ON app.id::text = d.application_id
-          LEFT JOIN dealer_leads dl ON dl.id = a.originating_dealer_lead_id
-          LEFT JOIN users ob ON ob.id = a.onboarded_by_user_id
-          LEFT JOIN users ow ON ow.id = a.account_owner_id
+          LEFT JOIN dealer_leads dl ON dl.id = ao.source_dealer_lead_id
+          LEFT JOIN users ob ON ob.id = ao.onboarded_by_user_id
+          LEFT JOIN users ow ON ow.id = ao.owner_user_id
           LEFT JOIN orders o ON o.account_id = a.id
           -- The suggestion is only worked out for accounts with no owner. Order
           -- of trust: the onboarding's own salesperson, the staff member who
@@ -207,7 +213,7 @@ export async function listAccounts(f: AccountFilters = {}): Promise<AccountRow[]
                                 AND ${last10(sql`sl.phone`)} = ${last10(sql`a.contact_phone`)}))
                 ) s
                 JOIN users u ON u.id = s.user_id
-               WHERE a.account_owner_id IS NULL
+               WHERE ao.owner_user_id IS NULL
                  AND u.is_active
                  AND lower(u.role) IN (${ROLES})
                ORDER BY s.rank
@@ -267,9 +273,10 @@ export async function listAccounts(f: AccountFilters = {}): Promise<AccountRow[]
 export async function countAccounts(): Promise<{ total: number; no_owner: number; gstin_missing: number }> {
     const [r] = (await db.execute(sql`
         SELECT COUNT(*)                                                         AS total,
-               COUNT(*) FILTER (WHERE a.account_owner_id IS NULL)               AS no_owner,
+               COUNT(*) FILTER (WHERE ao.owner_user_id IS NULL)               AS no_owner,
                COUNT(*) FILTER (WHERE upper(btrim(a.gstin)) = ${GSTIN_PENDING}) AS gstin_missing
           FROM accounts a
+            LEFT JOIN account_ownership ao ON ao.account_id = a.id
          WHERE EXISTS (SELECT 1 FROM dealers d WHERE d.dealer_id = a.id)
     `)) as unknown as Array<Record<string, unknown>>;
     return { total: Number(r?.total ?? 0), no_owner: Number(r?.no_owner ?? 0), gstin_missing: Number(r?.gstin_missing ?? 0) };

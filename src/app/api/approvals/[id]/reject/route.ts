@@ -2,20 +2,23 @@ import { db } from '@/lib/db';
 import { approvals, deals, auditLogs } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
 import { withErrorHandler, successResponse, errorResponse, generateId } from '@/lib/api-utils';
-import { requireRole } from '@/lib/auth-utils';
+import { requireAuth, requireRole } from '@/lib/auth-utils';
 import { z } from 'zod';
 
 const rejectionSchema = z.object({
     rejection_reason: z.string().min(5, 'Rejection reason is required (min 5 chars)'),
 });
 
-export const POST = withErrorHandler(async (req: Request, { params }: { params: { id: string } }) => {
+export const POST = withErrorHandler(async (req: Request, { params }: { params: Promise<{ id: string }> }) => {
+    // Signed in before anything is read; the role is checked below, once the
+    // approval row says which role may decide it.
+    await requireAuth();
     const body = await req.json();
     const result = rejectionSchema.safeParse(body);
     if (!result.success) return errorResponse(result.error.issues[0].message, 400);
     const { rejection_reason } = result.data;
 
-    const approvalId = params.id;
+    const approvalId = (await params).id;
 
     // 1. Fetch Approval record
     const [approval] = await db.select().from(approvals).where(eq(approvals.id, approvalId)).limit(1);

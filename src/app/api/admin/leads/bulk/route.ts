@@ -33,6 +33,7 @@ import {
     isOpen,
     type LeadStatus,
 } from "@/lib/lifecycle/transitions";
+import { checkStatusMove } from "@/lib/lifecycle/statusRules";
 import { BusinessTypeSchema } from "@/lib/leads/businessType";
 import { exportsOwnLeadsOnly, logDataDownload } from "@/lib/exports/downloadLog";
 
@@ -221,6 +222,8 @@ export const POST = withErrorHandler(async (req: Request) => {
 
     let affected = 0;
     let skipped = 0;
+    // Of `skipped`: Won leads a bulk Mark Lost left alone (ID 115).
+    let skippedWon = 0;
 
     if (body.action === "reassign") {
         if (!body.target_user_id) {
@@ -280,11 +283,18 @@ export const POST = withErrorHandler(async (req: Request) => {
         }
         for (const lead of leads) {
             const status = lead.lead_status as LeadStatus | null;
-            // ID 115.1: Won is open but a Won lead is marked Lost only through the
-            // onboarding drop-out review — skip it rather than let the S3 guard
-            // abort the batch partway (each lead commits on its own).
-            if (!status || !isOpen(status) || status === "Won") {
+            if (!status || !isOpen(status)) {
                 skipped++;
+                continue;
+            }
+            // ID 115: ask the status guard BEFORE writing. A Won lead is open
+            // but can be marked Lost only through the onboarding drop-out
+            // review, so the writer refuses it — and a refusal thrown mid-loop
+            // left the leads before it Lost and the rest untouched. It is
+            // skipped and counted instead, and the batch carries on.
+            if (!checkStatusMove({ from: status, to: "Lost", event: "mark_lost" }).ok) {
+                skipped++;
+                if (status === "Won") skippedWon++;
                 continue;
             }
             try {
@@ -295,15 +305,18 @@ export const POST = withErrorHandler(async (req: Request) => {
                     notes: body.reason ?? "Bulk mark lost (admin).",
                     closingRole: "admin",
                 });
-                affected++;
             } catch (err) {
-                // The status moved under us (another writer); count it, keep going.
+                // The status was read before the loop; a lead marked Won (or
+                // closed) since then is refused by the writer on its locked
+                // row. Each lead is its own transaction, so that one is left
+                // as it was and the rest of the batch still runs.
                 if (err instanceof StatusGuardError) {
                     skipped++;
                     continue;
                 }
                 throw err;
             }
+            affected++;
         }
     } else if (body.action === "push_to_ai") {
         // BRD §0.2 — only Lost leads enter the AI re-engagement queue.
@@ -344,5 +357,5 @@ export const POST = withErrorHandler(async (req: Request) => {
         }
     }
 
-    return successResponse({ ok: true, affected, skipped });
+    return successResponse({ ok: true, affected, skipped, skipped_won: skippedWon });
 });

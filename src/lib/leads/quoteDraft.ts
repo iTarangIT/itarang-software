@@ -122,9 +122,6 @@ type CommercialRow = {
   version_no: number;
   approval_status: string | null;
   product_lines: unknown;
-  /** E-323 — NULL on quotes written before list prices existed. */
-  list_price_snapshot: unknown;
-  oem_evaluation: unknown;
   quote_number: string | null;
   quote_pdf_url: string | null;
   payment_method: string | null;
@@ -168,8 +165,6 @@ export async function generateQuotationDraft(
            c.version_no,
            c.approval_status,
            c.product_lines,
-           c.list_price_snapshot,
-           c.oem_evaluation,
            c.quote_number,
            c.quote_pdf_url,
            -- The terms the rep agreed. They print on the document and land in

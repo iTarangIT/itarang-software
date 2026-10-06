@@ -63,12 +63,14 @@ export function DashPageHeader({
 }) {
     return (
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between lg:gap-6">
-            <div className="flex flex-col gap-1.5">
+            {/* The controls keep their natural width at the right; the title takes
+                what is left, so a long subtitle wraps instead of squeezing them. */}
+            <div className="flex min-w-0 flex-col gap-1.5 lg:flex-1">
                 <span className="text-xs font-bold uppercase tracking-[0.12em] text-brand-teal">{eyebrow}</span>
                 <h1 className="text-[30px] font-bold leading-tight tracking-tight text-brand-navy">{title}</h1>
                 {subtitle && <p className="text-sm text-ink-muted">{subtitle}</p>}
             </div>
-            {children && <div className="flex flex-wrap items-center gap-3">{children}</div>}
+            {children && <div className="flex flex-wrap items-center gap-3 lg:shrink-0 lg:justify-end">{children}</div>}
         </div>
     );
 }

@@ -273,7 +273,7 @@ export function SalesHeadOpsView() {
             count: num(unowned),
             label: "Accounts with no owner",
             sub: "Live dealers nobody manages",
-            href: "/admin/account-management",
+            href: "/admin/accounts",
         },
     ];
     const openTiles = tiles.filter((t) => t.ready && t.n > 0);
@@ -669,7 +669,7 @@ export function SalesHeadOpsView() {
                         ]}
                     />
                     <span className="text-xs leading-relaxed text-ink-muted">
-                        Connected, engaged (30 seconds or more) and WhatsApp-contact shares per person are not available on this screen yet.
+                        Engaged (connected) and WhatsApp-contact shares per person are not available on this screen yet.
                     </span>
                 </DashCard>
 
@@ -722,7 +722,7 @@ export function SalesHeadOpsView() {
                     caption={<span className="text-[13px] text-ink-muted">Live dealer accounts each person manages, as of today</span>}
                     action={
                         unowned > 0 ? (
-                            <CardLink href="/admin/account-management" primary>
+                            <CardLink href="/admin/accounts" primary>
                                 Assign {num(unowned)} without owner
                             </CardLink>
                         ) : undefined

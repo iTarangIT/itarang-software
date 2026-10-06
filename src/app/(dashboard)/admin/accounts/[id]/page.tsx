@@ -5,7 +5,7 @@ export const dynamic = "force-dynamic";
 
 // Tracker P1-1 / P1-2 — one dealer account: owner + history, GSTIN correction.
 export default async function AccountDetailPage({ params }: { params: Promise<{ id: string }> }) {
-    await requireRole(["admin", "ceo"]);
+    await requireRole(["admin", "ceo", "sales_head"]);
     const { id } = await params;
 
     return (

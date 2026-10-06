@@ -14,7 +14,7 @@
  *
  * What is NOT guessed:
  *   * Lines are used only when they add up to the invoice's taxable value
- *     (the SQL twin of linesAddUp() in src/lib/sales/invoiceLines.ts).
+ *     (the SQL twin of linesAddUp() in src/lib/sales/salesInvoiceLines.ts).
  *   * A line whose item is not mapped to a product, or whose product has no
  *     cost anywhere, has no margin. Its revenue is reported as "not costed",
  *     never as 100% margin.

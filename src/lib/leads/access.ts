@@ -64,6 +64,51 @@ export const LEADS_OVERSIGHT_ROLES = [
 ] as const;
 
 /**
+ * May this user change or delete THIS saved region group (tracker ID 118)?
+ *
+ * Groups are org-wide: every /leads role can list them and save a new one. But
+ * one rep could rename or delete a group every dialer campaign relies on, so
+ * edit and delete are for the oversight roles and for whoever created the
+ * group. A group with no recorded creator (the seeds, and anything saved before
+ * created_by was taken from the session) is oversight-only.
+ */
+export function canEditRegionGroup(input: {
+  role: string | null | undefined;
+  userId: string | null | undefined;
+  createdBy: string | null | undefined;
+}): boolean {
+  if ((LEADS_OVERSIGHT_ROLES as readonly string[]).includes(input.role ?? "")) return true;
+  return Boolean(input.userId) && input.createdBy === input.userId;
+}
+
+/**
+ * May this user open the Edit Lead form for THIS lead and save it (tracker
+ * ID 132)?
+ *
+ * The form changes who the dealer is and how to reach them — name, phone,
+ * location. Until 5 Oct any /leads role could do that to any lead, so a rep
+ * could change the phone number of a dealer another rep was working. Now:
+ * the oversight roles may edit any lead; everyone else only a lead they
+ * currently own, or are the assigned ASM of.
+ *
+ * ⚠ This IS the rule PATCH /api/dealer-leads/[id] and /leads/[id]/edit
+ * enforce, and the one the list uses to show the Edit link, so the link never
+ * leads to a refusal.
+ */
+export function canEditLead(input: {
+  role: string | null | undefined;
+  userId: string | null | undefined;
+  currentOwnerId: string | null | undefined;
+  asmId: string | null | undefined;
+}): boolean {
+  const role = input.role ?? "";
+  if (!(LEADS_PAGE_ROLES as readonly string[]).includes(role)) return false;
+  if ((LEADS_OVERSIGHT_ROLES as readonly string[]).includes(role)) return true;
+  if (!input.userId) return false;
+  return input.currentOwnerId === input.userId || input.asmId === input.userId;
+}
+
+/**
  * Roles that may mutate leads in bulk: Reassign, Mark Lost, Export CSV.
  *
  * ⚠ MUST stay equal to MUTATE_ROLES in src/app/api/admin/leads/bulk/route.ts.

@@ -1,8 +1,9 @@
 /**
  * /api/region-groups
  *
- *   GET  → list every saved region group (org-wide; no owner filter).
- *   POST → create a new group.
+ *   GET  → list every saved region group (org-wide; no owner filter). Each
+ *          row carries `can_edit` for the caller (canEditRegionGroup).
+ *   POST → create a new group, owned by the caller.
  *
  * Groups are visible to every sales user — the user picked org-wide in
  * the design phase, so we don't filter on created_by. A future PR could
@@ -14,7 +15,7 @@ import { db } from "@/lib/db";
 import { regionGroups } from "@/lib/db/schema";
 import { desc } from "drizzle-orm";
 import { nanoid } from "nanoid";
-import { LEADS_BULK_ROLES, LEADS_PAGE_ROLES } from "@/lib/leads/access";
+import { LEADS_PAGE_ROLES, canEditRegionGroup } from "@/lib/leads/access";
 import { guardApi } from "@/lib/auth/apiGuard";
 
 type RegionEntry = { state: string; cities?: string[] };
@@ -46,7 +47,12 @@ export async function GET() {
       .select()
       .from(regionGroups)
       .orderBy(desc(regionGroups.updated_at));
-    return NextResponse.json({ success: true, data: rows });
+    const { user } = authGate;
+    const data = rows.map((g) => ({
+      ...g,
+      can_edit: canEditRegionGroup({ role: user.role, userId: user.id, createdBy: g.created_by }),
+    }));
+    return NextResponse.json({ success: true, data });
   } catch (err: any) {
     console.error("[region-groups] list error:", err);
     return NextResponse.json(
@@ -57,9 +63,8 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  // ID 118 item 5: reading groups is any leads-page role; changing the
-  // org-wide set is the managers' bulk list (same as the Manage groups button).
-  const authGate = await guardApi([...LEADS_BULK_ROLES]);
+  // ID 118: signed in, with a role that reaches this screen.
+  const authGate = await guardApi([...LEADS_PAGE_ROLES]);
   if (!authGate.ok) return authGate.response;
   try {
     const body = await req.json();
@@ -67,7 +72,7 @@ export async function POST(req: NextRequest) {
     const description =
       typeof body?.description === "string" ? body.description.trim() : null;
     const regions = sanitizeRegions(body?.regions);
-    // Who created it comes from the session, never from the body.
+    // From the session, never the body: created_by decides who may edit/delete.
     const createdBy = authGate.user.id;
 
     if (!name) {

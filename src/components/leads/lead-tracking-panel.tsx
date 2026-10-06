@@ -144,6 +144,10 @@ export function LeadTrackingPanel({ leadId, canDownload, compact = false }: Prop
         }
     }
 
+    // ID 58: a rep who has handled the lead but does not own it now can read
+    // the journey; the server says they cannot download it.
+    const canExport = !(q.data?.body.success && q.data.body.data.can_export === false);
+
     const pad = compact ? "px-5" : "px-6";
     const header = (
         <div className={`flex items-start justify-between gap-3 ${compact ? "" : "mb-3"}`}>
@@ -156,7 +160,7 @@ export function LeadTrackingPanel({ leadId, canDownload, compact = false }: Prop
                     Where the lead has travelled, who held it for how long, and what they did.
                 </p>
             </div>
-            {canDownload && (
+            {canDownload && canExport && (
                 <button
                     type="button"
                     onClick={download}

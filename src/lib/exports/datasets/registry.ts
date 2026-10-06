@@ -23,6 +23,10 @@ import { TARGET_METRIC_KEYS, TARGET_STATUSES } from "@/lib/targets/rules";
 import { listTargets } from "@/lib/targets/service";
 
 import { DOWNLOAD_ROW_CAP, initialsOf, TEAM_ROLES, type DatasetInfo, type DatasetSheet } from "./types";
+import { onboardingClockSql } from "@/lib/onboarding/clock";
+
+// ID 122: the one onboarding clock (src/lib/onboarding/clock.ts).
+const ONBOARDING_CLOCK = sql.raw(onboardingClockSql("app"));
 
 type SessionUser = Awaited<ReturnType<typeof import("@/lib/auth-utils").requireAuth>>;
 
@@ -171,7 +175,9 @@ async function leadExtras(ids: string[]): Promise<Map<string, Record<string, unk
                    WHERE c.dealer_lead_id = dl.id AND c.event_type IN ('quote_issue', 'quote_revision')
                    ORDER BY c.version_no DESC LIMIT 1) q ON TRUE
               LEFT JOIN LATERAL (
-                  SELECT a.activated_at FROM accounts a WHERE a.originating_dealer_lead_id = dl.id LIMIT 1) acct ON TRUE
+                  SELECT (to_jsonb(a) ->> 'activated_at')::timestamptz AS activated_at
+                    FROM accounts a JOIN account_ownership ao ON ao.account_id = a.id
+                   WHERE ao.source_dealer_lead_id = dl.id LIMIT 1) acct ON TRUE
              WHERE dl.id IN ${jsonIds(ids)}
         `);
         for (const r of data) {
@@ -473,7 +479,7 @@ const dealerOnboarding: Dataset = {
                    ab.name AS approved_by,
                    app.rejection_reason,
                    (SELECT COUNT(*) FROM dealer_correction_rounds cr WHERE cr.application_id::text = app.id::text) AS times_sent_back,
-                   (COALESCE(app.last_action_at, app.updated_at) AT TIME ZONE 'UTC') AS last_activity_at,
+                   (${ONBOARDING_CLOCK} AT TIME ZONE 'UTC') AS last_activity_at,
                    (SELECT dl.onboarding_dropout_reason FROM dealer_leads dl
                      WHERE dl.id = app.originating_dealer_lead_id
                         OR dl.dealer_onboarding_application_id::text = app.id::text
@@ -825,7 +831,7 @@ const calls: Dataset = {
                 { key: "disposition_bucket", header: "Outcome bucket", meaning: "The outcome's group (positive, negative, follow-up …)." },
                 { key: "disposition", header: "Outcome", meaning: "The call outcome the caller picked.", width: 26 },
                 { key: "call_duration_sec", header: "Seconds", meaning: "Recorded duration.", kind: "number" },
-                { key: "engaged", header: "Engaged", meaning: "Yes = connected and at least the engaged-call threshold of measured duration; blank = connected but the duration was not measured." },
+                { key: "engaged", header: "Engaged", meaning: "Yes = a connected call where the rep spoke with the dealer , any duration; on an AI call, the flag stored with the call." },
                 { key: "ai_band", header: "AI band", meaning: "On an AI call: Qualified, Warm, Cold or Disqualified." },
                 { key: "recording_url", header: "Recording", meaning: "Link to the recording, when there is one.", width: 40 },
                 { key: "remarks", header: "Remarks", meaning: "What the caller wrote; on an AI call, the AI's summary.", width: 50 },
@@ -970,7 +976,7 @@ const quoteFrom = sql`
                  SUM(${jnum(sql`pl ->> 'unit_price'`)} * ${jnum(sql`pl ->> 'quantity'`)}) AS quoted_total
             FROM jsonb_array_elements(${jarr(sql`c.product_lines`)}) pl
             LEFT JOIN LATERAL (
-                SELECT lp FROM jsonb_array_elements(${jarr(sql`c.list_price_snapshot -> 'lines'`)}) lp
+                SELECT lp FROM jsonb_array_elements(${jarr(sql`(to_jsonb(c) -> 'list_price_snapshot') -> 'lines'`)}) lp
                  WHERE lp ->> 'product_id' = pl ->> 'product_id' LIMIT 1) lpx ON TRUE
       ) lt ON TRUE
       LEFT JOIN LATERAL (
@@ -1082,8 +1088,8 @@ const quotes: Dataset = {
                        ${jnum(sql`c.quote_snapshot ->> 'subTotal'`)} AS sub_total,
                        ${jnum(sql`c.quote_snapshot ->> 'total'`)} - ${jnum(sql`c.quote_snapshot ->> 'subTotal'`)} AS gst,
                        ${jnum(sql`c.quote_snapshot ->> 'total'`)} AS total_with_gst,
-                       CASE WHEN c.list_price_snapshot IS NOT NULL THEN lt.list_total END AS list_total,
-                       CASE WHEN c.list_price_snapshot IS NOT NULL THEN lt.list_total - lt.quoted_total END AS discount,
+                       CASE WHEN (to_jsonb(c) -> 'list_price_snapshot') IS NOT NULL THEN lt.list_total END AS list_total,
+                       CASE WHEN (to_jsonb(c) -> 'list_price_snapshot') IS NOT NULL THEN lt.list_total - lt.quoted_total END AS discount,
                        oe.min_delta AS lowest_vs_oem,
                        c.credit_terms, c.payment_method,
                        c.approval_status, c.approval_mode, au.name AS approved_by, c.approved_at,
@@ -1100,7 +1106,7 @@ const quotes: Dataset = {
                 SELECT c.quote_number, c.dealer_lead_id AS lead_id, c.version_no,
                        pl ->> 'product_name' AS product_name, pl ->> 'asset_type' AS asset_type,
                        pl ->> 'quantity' AS quantity, pl ->> 'unit_price' AS unit_price,
-                       (SELECT lp ->> 'list_price' FROM jsonb_array_elements(${jarr(sql`c.list_price_snapshot -> 'lines'`)}) lp
+                       (SELECT lp ->> 'list_price' FROM jsonb_array_elements(${jarr(sql`(to_jsonb(c) -> 'list_price_snapshot') -> 'lines'`)}) lp
                          WHERE lp ->> 'product_id' = pl ->> 'product_id' LIMIT 1) AS list_price,
                        (SELECT ol ->> 'oem_price' FROM jsonb_array_elements(${jarr(sql`c.oem_evaluation -> 'lines'`)}) ol
                          WHERE ol ->> 'product_id' = pl ->> 'product_id' LIMIT 1) AS oem_price

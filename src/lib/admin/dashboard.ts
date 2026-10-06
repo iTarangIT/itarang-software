@@ -39,6 +39,10 @@ import {
     STALL_DEALER_DAYS,
     STALL_US_WORKING_DAYS,
 } from "@/lib/onboarding/stall";
+import { onboardingClockSql } from "@/lib/onboarding/clock";
+
+// ID 122: the one onboarding clock (src/lib/onboarding/clock.ts).
+const ONBOARDING_CLOCK = sql.raw(onboardingClockSql("oa"));
 
 const OPEN_LIST = sql.raw(OPEN_STATUSES.map((s) => `'${s}'`).join(", "));
 // ID 74 — the idle / no-touch lists count only leads the rep can still work;
@@ -70,7 +74,7 @@ function workingDaysSince(expr: string): SQL {
 // holiday matters. Only leads still open (Won included); a lead already in the
 // 21-day drop-out review is listed there instead.
 const sqlList = (xs: readonly string[]) => xs.map((x) => `'${x}'`).join(", ");
-const ONB_LAST = "COALESCE(oa.last_action_at, oa.updated_at)";
+const ONB_LAST = onboardingClockSql("oa");
 const ONB_WAITING_ON = sql.raw(`(CASE
     WHEN oa.onboarding_status IN (${sqlList(DEALER_ONBOARDING_STATUSES)}) THEN 'dealer'
     WHEN oa.onboarding_status = 'submitted'
@@ -193,7 +197,7 @@ export async function fetchKpis(f: DashboardFilters): Promise<AdminKpis> {
                     ON oa.id = dl.dealer_onboarding_application_id
                 -- Won + Converted, the same rows the stale_converted panel lists.
                 WHERE dl.lead_status IN ('Won', 'Converted')
-                  AND COALESCE(oa.last_action_at, oa.updated_at)
+                  AND ${ONBOARDING_CLOCK}
                       < NOW() - INTERVAL '3 days' ${lf}
             `),
             db.execute<{ c: string }>(sql`
@@ -267,10 +271,9 @@ async function closedWinRate(days: number, lf: SQL): Promise<number | null> {
  *                               one engaged touchpoint, converted so far —
  *                               sales effectiveness on leads we actually
  *                               worked. Engaged is the ID 59 definition
- *                               (engagedState): a connected call of 30 s or
- *                               more by measured duration, or a productive
- *                               visit — NOT any connected call, which is what
- *                               the stored is_engaged flag used to mean.
+ *                               (engagedState, decided 3 Oct 2026): a
+ *                               connected human call of any duration, or a
+ *                               productive visit.
  */
 async function conversionMeasures(lf: SQL): Promise<{
     cohort_conversion_to_date: number | null;
@@ -445,7 +448,7 @@ function panelCountSql(key: AlertPanelKey, lf: SQL): SQL {
                   AND dl.onboarding_dropout_reason IS NULL
                   AND (oa.onboarding_status IN ('rejected','withdrawn')
                        OR (oa.onboarding_status IN ('draft','submitted','correction_requested')
-                           AND COALESCE(oa.last_action_at, oa.updated_at) < NOW() - INTERVAL '21 days'))
+                           AND ${ONBOARDING_CLOCK} < NOW() - INTERVAL '21 days'))
                   AND COALESCE((to_jsonb(dl) ->> 'onboarding_stalled_at')::timestamptz, 'epoch'::timestamptz)
                       < NOW() - INTERVAL '21 days'`;
         case "won_without_quote":
@@ -456,7 +459,7 @@ function panelCountSql(key: AlertPanelKey, lf: SQL): SQL {
                 JOIN dealer_onboarding_applications oa
                     ON oa.id = dl.dealer_onboarding_application_id
                 WHERE dl.lead_status IN ('Won', 'Converted')
-                  AND COALESCE(oa.last_action_at, oa.updated_at) < NOW() - INTERVAL '3 days' ${lf}`;
+                  AND ${ONBOARDING_CLOCK} < NOW() - INTERVAL '3 days' ${lf}`;
         case "onboarding_stalled":
             return sql`SELECT COUNT(*)::text AS c FROM dealer_leads dl
                 JOIN dealer_onboarding_applications oa
@@ -598,14 +601,14 @@ export async function fetchAlertPanel(
                        COALESCE(dl.dealer_name, dl.shop_name, '(unnamed)') AS primary,
                        CONCAT_WS(', ', dl.city, dl.state) AS secondary,
                        CONCAT('onboarding idle since ',
-                           TO_CHAR(COALESCE(oa.last_action_at, oa.updated_at), 'DD Mon')) AS meta,
+                           TO_CHAR(${ONBOARDING_CLOCK}, 'DD Mon')) AS meta,
                        CONCAT('/inside-sales/lead/', dl.id) AS href
                 FROM dealer_leads dl
                 JOIN dealer_onboarding_applications oa
                     ON oa.id = dl.dealer_onboarding_application_id
                 WHERE dl.lead_status IN ('Won', 'Converted')
-                  AND COALESCE(oa.last_action_at, oa.updated_at) < NOW() - INTERVAL '3 days' ${lf}
-                ORDER BY COALESCE(oa.last_action_at, oa.updated_at) ASC
+                  AND ${ONBOARDING_CLOCK} < NOW() - INTERVAL '3 days' ${lf}
+                ORDER BY ${ONBOARDING_CLOCK} ASC
                 LIMIT ${limit}
             `);
             return rows as unknown as AlertPanelRow[];
@@ -624,7 +627,7 @@ export async function fetchAlertPanel(
                   AND dl.onboarding_dropout_reason IS NULL
                   AND (oa.onboarding_status IN ('rejected','withdrawn')
                        OR (oa.onboarding_status IN ('draft','submitted','correction_requested')
-                           AND COALESCE(oa.last_action_at, oa.updated_at) < NOW() - INTERVAL '21 days'))
+                           AND ${ONBOARDING_CLOCK} < NOW() - INTERVAL '21 days'))
                   AND COALESCE((to_jsonb(dl) ->> 'onboarding_stalled_at')::timestamptz, 'epoch'::timestamptz)
                       < NOW() - INTERVAL '21 days'
                 ORDER BY dl.closed_at ASC NULLS LAST

@@ -18,8 +18,7 @@
 
 import { and, eq, gt, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { oemReferencePrices, productListPrices } from "@/lib/db/schema";
-import { firstListBelowOem } from "./listPricing";
+import { oemReferencePrices } from "@/lib/db/schema";
 import type { CommercialsProductLine } from "@/lib/inside-sales/types";
 import { refKey, type OemPriceRef } from "./oemPricing";
 import { lockProductPrices, oemAboveListPriceMessage } from "./listPrices";
@@ -272,39 +271,6 @@ export async function setOemPrice(input: SetOemPriceInput): Promise<string> {
                 ),
             )
             .for("update");
-
-        // E-323 (IDs 4, 47): the list price printed on quotations is never below
-        // the OEM price. Raising the OEM price above a list price it overlaps
-        // — in force or scheduled — is refused; raise the list price first.
-        const listRows = await tx
-            .select({
-                list_price: productListPrices.list_price,
-                effective_from: productListPrices.effective_from,
-                valid_until: productListPrices.valid_until,
-            })
-            .from(productListPrices)
-            .where(
-                and(
-                    eq(productListPrices.asset_type, input.asset_type),
-                    eq(productListPrices.product_id, input.product_id),
-                    isNull(productListPrices.effective_to),
-                ),
-            );
-        const overtaken = firstListBelowOem(
-            { from: input.effective_from, until: input.valid_until, price: input.oem_price },
-            listRows.map((l) => ({
-                from: new Date(l.effective_from as unknown as string),
-                until: l.valid_until ? new Date(l.valid_until as unknown as string) : null,
-                price: Number(l.list_price),
-            })),
-        );
-        if (overtaken) {
-            throw new OemPriceOverlapError(
-                `This OEM price is above the list price ₹${overtaken.price.toLocaleString("en-IN")} ` +
-                    `in force from ${fmtDay(overtaken.from)}. Raise the list price first — ` +
-                    `a list price can never be below the OEM price.`,
-            );
-        }
 
         for (const row of openRows) {
             const rowFrom = new Date(row.effective_from as unknown as string);

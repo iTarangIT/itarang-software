@@ -816,7 +816,7 @@ export default function CEOInvoicesPage() {
                 {summary.unlinked_count === 1 ? "" : "s"} ({formatINR(summary.unlinked_total)})
               </span>{" "}
               in this view aren&apos;t linked to a CRM dealer, so no salesperson gets credit for them.
-              Linking needs the same GSTIN on the invoice and on the dealer&apos;s lead or account.
+              Linking needs the same GSTIN on the invoice and on the dealer&apos;s lead.
             </>
           ) : summary ? (
             <span className="text-emerald-700">Every invoice in this view is linked to a CRM dealer.</span>
@@ -982,7 +982,7 @@ export default function CEOInvoicesPage() {
                               : r.link_kind === "not_dealer"
                                 ? "Marked: not a dealer sale"
                               : r.gstin_key
-                                ? `Not linked · GSTIN ${r.gstin_key} not on any CRM lead or dealer account`
+                                ? `Not linked · GSTIN ${r.gstin_key} not on any CRM lead`
                                 : "Not linked · no GSTIN on this invoice"}
                           </div>
                         </td>

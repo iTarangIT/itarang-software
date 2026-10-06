@@ -4,7 +4,7 @@ import { inArray, sql } from "drizzle-orm";
 import { NextRequest, NextResponse } from "next/server";
 import { requireRole } from "@/lib/auth-utils";
 import { withErrorHandler } from "@/lib/api-utils";
-import { LEADS_PAGE_ROLES, capabilitiesFor } from "@/lib/leads/access";
+import { LEADS_PAGE_ROLES, canEditLead, capabilitiesFor } from "@/lib/leads/access";
 import { parseLeadListFilters } from "@/lib/leads/leadListParams";
 import {
   BULK_ID_CAP,
@@ -451,6 +451,14 @@ export const GET = withErrorHandler(async (req: Request) => {
     leads: rows.map((l) => ({
       ...maskOversight(l),
       _source: "dealer",
+      // ID 132: computed here, before the owner fields are masked, so the
+      // list can show the Edit link without being told who owns the lead.
+      can_edit: canEditLead({
+        role: user.role,
+        userId: user.id,
+        currentOwnerId: l.current_owner_id,
+        asmId: l.asm_id,
+      }),
       neodove_sync_status: neodoveStatus[l.id] ?? null,
       campaign: campaigns[l.id] ?? null,
       // Suppressed for non-oversight roles alongside owner/asm — naming the

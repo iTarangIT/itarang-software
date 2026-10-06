@@ -4,9 +4,9 @@ import { eq } from 'drizzle-orm';
 import { withErrorHandler, successResponse, errorResponse } from '@/lib/api-utils';
 import { requireRole } from '@/lib/auth-utils';
 
-export const POST = withErrorHandler(async (req: Request, { params }: { params: { id: string } }) => {
+export const POST = withErrorHandler(async (req: Request, { params }: { params: Promise<{ id: string }> }) => {
     const user = await requireRole(['sales_manager', 'sales_head', 'business_head', 'ceo']);
-    const leadId = params.id;
+    const leadId = (await params).id;
 
     const [lead] = await db.select({ id: leads.id, sm_review_status: leads.sm_review_status })
         .from(leads).where(eq(leads.id, leadId)).limit(1);

@@ -5,13 +5,16 @@
  *   DELETE → remove a group. The two seed groups (`rg_delhi_ncr`,
  *           `rg_mumbai_zone`) can be deleted too — they're seeded as
  *           examples, not pinned defaults.
+ *
+ * Both are for the oversight roles and the group's creator (canEditRegionGroup).
  */
 
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { regionGroups } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
-import { LEADS_BULK_ROLES } from "@/lib/leads/access";
+import { LEADS_PAGE_ROLES, canEditRegionGroup } from "@/lib/leads/access";
+import type { AppUser } from "@/lib/kyc/admin-workflow";
 import { guardApi } from "@/lib/auth/apiGuard";
 
 type RegionEntry = { state: string; cities?: string[] };
@@ -34,12 +37,31 @@ function sanitizeRegions(input: unknown): RegionEntry[] {
   return out;
 }
 
+// 403 when the caller may not change this group; null when they may, or when it
+// does not exist (the handler's own 404 answers that).
+async function refuseEdit(id: string, user: AppUser): Promise<NextResponse | null> {
+  const [group] = await db
+    .select({ created_by: regionGroups.created_by })
+    .from(regionGroups)
+    .where(eq(regionGroups.id, id))
+    .limit(1);
+  if (!group || canEditRegionGroup({ role: user.role, userId: user.id, createdBy: group.created_by })) {
+    return null;
+  }
+  return NextResponse.json(
+    { success: false, error: "Only the group's creator or a sales manager can change this group" },
+    { status: 403 },
+  );
+}
+
 export async function PATCH(req: NextRequest, { params }: any) {
-  // ID 118 item 5: editing / deleting the org-wide groups is the managers' bulk list.
-  const authGate = await guardApi([...LEADS_BULK_ROLES]);
+  // ID 118: signed in, with a role that reaches this screen.
+  const authGate = await guardApi([...LEADS_PAGE_ROLES]);
   if (!authGate.ok) return authGate.response;
   try {
     const { id } = await params;
+    const refused = await refuseEdit(id, authGate.user);
+    if (refused) return refused;
     const body = await req.json();
     const patch: Record<string, any> = {};
 
@@ -93,11 +115,13 @@ export async function PATCH(req: NextRequest, { params }: any) {
 }
 
 export async function DELETE(_req: NextRequest, { params }: any) {
-  // ID 118 item 5: editing / deleting the org-wide groups is the managers' bulk list.
-  const authGate = await guardApi([...LEADS_BULK_ROLES]);
+  // ID 118: signed in, with a role that reaches this screen.
+  const authGate = await guardApi([...LEADS_PAGE_ROLES]);
   if (!authGate.ok) return authGate.response;
   try {
     const { id } = await params;
+    const refused = await refuseEdit(id, authGate.user);
+    if (refused) return refused;
     const deleted = await db
       .delete(regionGroups)
       .where(eq(regionGroups.id, id))

@@ -186,6 +186,22 @@ export function guardDigioWebhook(headers: Headers, rawBody: string, route: stri
  * `envName` is BOLNA_WEBHOOK_SECRET for call webhooks and BOLNA_TOOL_SECRET for
  * the in-call tool endpoints, which are configured separately on the agent.
  */
+/** Derived, so the secret itself never sits in a URL (URLs end up in access logs). */
+export function bolnaCallbackToken(secret: string): string {
+  return hmacSha256Hex(secret, "bolna-callback");
+}
+
+/**
+ * The per-call callback URL to give Bolna: `base` plus the token guardBolnaCall
+ * accepts in place of the bearer. Unchanged when no secret is configured.
+ */
+export function bolnaCallbackUrl(
+  base: string,
+  secret: string | undefined = process.env.BOLNA_WEBHOOK_SECRET,
+): string {
+  return secret ? `${base}?cb=${bolnaCallbackToken(secret)}` : base;
+}
+
 export function guardBolnaCall(
   headers: Headers,
   route: string,
@@ -193,63 +209,18 @@ export function guardBolnaCall(
   url?: string,
 ): NextResponse | null {
   const secret = process.env[envName];
-  const bearer = bearerProof(secret, headers.get("authorization"));
-  // A per-call `callback_url` (set when we place the call) cannot carry the
-  // dashboard's custom headers, so it carries a derived token in the query
-  // instead (bolnaCallbackUrl below). Either proof is enough.
-  const proof = bearer === "valid" ? bearer : bestProof(bearer, callbackTokenProof(secret, url));
+  let proof = bearerProof(secret, headers.get("authorization"));
+  // The headers above are set on the AGENT's webhook in Bolna's dashboard. A
+  // per-call callback URL is one WE hand Bolna, and nothing says the agent's
+  // headers ride on it, so that URL carries its own token (bolnaCallbackUrl).
+  const cb = url ? new URL(url).searchParams.get("cb") : null;
+  if (proof !== "valid" && cb) {
+    proof = secret && safeEqual(cb, bolnaCallbackToken(secret)) ? "valid" : "invalid";
+  }
   return guardWebhook({
     route,
     secret,
     proof,
     configure: `Set ${envName} and configure Bolna to send "Authorization: Bearer <that value>" to this URL.`,
   });
-}
-
-/** valid beats invalid beats absent — a wrong proof is never hidden by an absent one. */
-function bestProof(a: WebhookProof, b: WebhookProof): WebhookProof {
-  if (a === "valid" || b === "valid") return "valid";
-  if (a === "invalid" || b === "invalid") return "invalid";
-  return "absent";
-}
-
-// ── Bolna per-call callback token (tracker ID 118, item 8) ──────────────────
-//
-// Calls placed with our own `callback_url` (lead-qualification-graph) are
-// answered at that URL, and Bolna sends no Authorization header on it. Rather
-// than put the raw secret in a URL (URLs land in provider dashboards and access
-// logs), the URL carries an HMAC of a fixed label keyed with the secret. It
-// proves the URL was minted by a holder of BOLNA_WEBHOOK_SECRET, and rotating
-// the secret revokes it.
-
-const CALLBACK_TOKEN_PARAM = "cb";
-const CALLBACK_TOKEN_LABEL = "itarang:bolna-callback:v1";
-
-export function bolnaCallbackToken(secret: string): string {
-  return hmacSha256Hex(secret, CALLBACK_TOKEN_LABEL);
-}
-
-/**
- * Append the callback token to a per-call Bolna callback URL. No secret
- * configured → the URL is returned unchanged (the route then accepts the call
- * as UNVERIFIED, exactly as before).
- */
-export function bolnaCallbackUrl(base: string, secret: string | undefined = process.env.BOLNA_WEBHOOK_SECRET): string {
-  if (!secret) return base;
-  const u = new URL(base);
-  u.searchParams.set(CALLBACK_TOKEN_PARAM, bolnaCallbackToken(secret));
-  return u.toString();
-}
-
-export function callbackTokenProof(secret: string | null | undefined, url: string | null | undefined): WebhookProof {
-  if (!url) return "absent";
-  let sent: string | null;
-  try {
-    sent = new URL(url).searchParams.get(CALLBACK_TOKEN_PARAM);
-  } catch {
-    return "absent";
-  }
-  if (!sent) return "absent";
-  if (!secret) return "invalid";
-  return safeEqual(sent.toLowerCase(), bolnaCallbackToken(secret)) ? "valid" : "invalid";
 }

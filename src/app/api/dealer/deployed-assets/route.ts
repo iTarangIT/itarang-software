@@ -1,25 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { deployedAssets } from "@/lib/db/schema";
+import { eq, and, or, ilike, desc, sql, count } from "drizzle-orm";
 import { guardApi } from "@/lib/auth/apiGuard";
-import { deployedAssetScope } from "@/lib/dealer/deployedAssetsAccess";
-import { eq, and, or, ilike, desc, sql, count, type SQL } from "drizzle-orm";
 
 export async function GET(req: NextRequest) {
   try {
-    // ID 118: signed in; a dealer sees only its own assets (rows, total AND
-    // KPIs), outside parties none.
-    const authGate = await guardApi();
+    // ID 118: a dealer, and only that dealer's own assets — this used to list
+    // every dealer's assets (customer name, phone) to anyone signed in.
+    const authGate = await guardApi(["dealer"]);
     if (!authGate.ok) return authGate.response;
-    const scope = deployedAssetScope(authGate.user);
-    if (scope.kind === "deny") {
-      return NextResponse.json(
-        { success: false, message: "Forbidden: Insufficient permissions" },
-        { status: 403 }
-      );
+    const dealerId = authGate.user.dealer_id;
+    if (!dealerId) {
+      return NextResponse.json({ success: false, message: "Unauthorized" }, { status: 401 });
     }
-    const scopeCondition =
-      scope.kind === "dealer" ? eq(deployedAssets.dealer_id, scope.dealerId) : undefined;
 
     const { searchParams } = new URL(req.url);
     const status = searchParams.get("status") || "all";
@@ -30,7 +24,7 @@ export async function GET(req: NextRequest) {
     const limit = parseInt(searchParams.get("limit") || "20", 10);
     const offset = (page - 1) * limit;
 
-    const conditions: (SQL | undefined)[] = scopeCondition ? [scopeCondition] : [];
+    const conditions: any[] = [eq(deployedAssets.dealer_id, dealerId)];
 
     if (status !== "all") {
       conditions.push(eq(deployedAssets.status, status));
@@ -53,8 +47,7 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    const whereClause =
-      conditions.length > 0 ? and(...conditions) : undefined;
+    const whereClause = and(...conditions);
 
     const [rows, totalResult] = await Promise.all([
       db
@@ -85,7 +78,7 @@ export async function GET(req: NextRequest) {
         upfrontCount: sql<number>`count(*) filter (where ${deployedAssets.payment_type} = 'upfront')`,
       })
       .from(deployedAssets)
-      .where(scopeCondition);
+      .where(eq(deployedAssets.dealer_id, dealerId));
 
     return NextResponse.json({
       success: true,

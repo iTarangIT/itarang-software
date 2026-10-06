@@ -37,8 +37,8 @@
 //                        else the lead's asm_id)
 //   Hot handed to field  the ISR who performed the asm_transfer
 //   Connected / Engaged  the caller (performed_by); connectedCall() and
-//                        engagedCallCount() — Engaged is null ("—") for a rep
-//                        with no call of measured length, as in Block A
+//                        engagedCall() — since ID 59 an engaged call is a
+//                        connected one, so the two match
 //   Quotes delivered     whoever dispatched the quote (performed_by)
 //   Dealer approved      the quote's creator (dealer_lead_commercials.created_by)
 //   Marked Won           whoever moved the lead to Won (changed_by)
@@ -49,7 +49,7 @@
 import { sql } from "drizzle-orm";
 
 import type { SalesDashboard, SalesSpocBlock } from "@/lib/admin/salesDashboardTypes";
-import { connectedCall, engagedCallCount, wasHotAt } from "@/lib/reports/metricDefinitions";
+import { connectedCall, engagedCall, wasHotAt } from "@/lib/reports/metricDefinitions";
 import { fmtValue, pctOfTarget, type Period } from "./salesDailyBlockA";
 import { istRangeTz } from "./window";
 
@@ -395,11 +395,11 @@ export async function loadRepExtras(db: Exec, p: Period): Promise<RepExtras> {
                  WHERE ${connectedCall()} AND ${win(sql`t.performed_at`)}
                  GROUP BY 1`,
         ),
-        // Engaged: NULL per caller with no call of measured length ("—"), as Block A.
+        // Engaged: a connected human call (ID 59), counted once.
         perRep(
             db,
-            sql`SELECT t.performed_by AS u, ${engagedCallCount()} AS n FROM lead_touchpoints t
-                 WHERE t.touchpoint_type = 'inside_sales_call' AND ${win(sql`t.performed_at`)}
+            sql`SELECT t.performed_by AS u, COUNT(*) AS n FROM lead_touchpoints t
+                 WHERE ${engagedCall()} AND ${win(sql`t.performed_at`)}
                  GROUP BY 1`,
         ),
         perRep(
