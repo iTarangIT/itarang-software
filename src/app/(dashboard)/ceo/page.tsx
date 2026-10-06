@@ -16,6 +16,7 @@ import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import {
   AlertCircle,
+  CalendarRange,
   Check,
   FileSignature,
   FileText,
@@ -67,13 +68,15 @@ import {
   type PacePoint,
 } from "@/components/dashboard/redesign/charts";
 
-type Period = "today" | "week" | "mtd" | "last" | "qtd" | "fy";
+// "custom" is the from–to pair beside the presets: picking a date leaves no
+// preset highlighted, because the dates say what the window is.
+type Period = "mtd" | "last" | "qtd" | "fy" | "custom";
+type Preset = Exclude<Period, "custom">;
+type CustomRange = { from: string; to: string };
 
-// "Today" and "This week" are the Sales Head screen's presets, with the same
-// meaning: today alone, and Monday → today.
-const PERIODS: ReadonlyArray<{ value: Period; label: string }> = [
-  { value: "today", label: "Today" },
-  { value: "week", label: "This week" },
+// No "Today" / "This week" presets here (CEO asked for them to go, 6 Oct
+// 2026): a shorter window is the from–to pair beside the chips.
+const PERIODS: ReadonlyArray<{ value: Preset; label: string }> = [
   { value: "mtd", label: "This month" },
   { value: "last", label: "Last month" },
   { value: "qtd", label: "Quarter" },
@@ -98,26 +101,45 @@ type MonthSnapshot = Snapshot & { month: string; label: string };
  * from/to days for the routes that take a plain range, and (c) the calendar
  * months it covers, for the per-month snapshot figures.
  */
-function resolvePeriod(period: Period, now: Date) {
+function resolvePeriod(period: Period, now: Date, custom: CustomRange) {
   const y = now.getFullYear();
   const m = now.getMonth();
   const today = ymd(now);
   const range = (from: string, to: string) =>
     new URLSearchParams({ period: "range", from, to }).toString();
 
-  if (period === "today" || period === "week") {
-    const monday = new Date(now);
-    monday.setDate(now.getDate() - ((now.getDay() + 6) % 7));
-    const from = period === "today" ? today : ymd(monday);
+  if (period === "custom") {
+    // Both days are set (the page only switches to "custom" once they are);
+    // a pair typed the wrong way round is read as the range it describes.
+    let [from, to] = [custom.from, custom.to];
+    if (from > to) [from, to] = [to, from];
+    const first = new Date(`${from}T00:00:00`);
+    const last = new Date(`${to}T00:00:00`);
+    const days = Math.round((last.getTime() - first.getTime()) / 86_400_000) + 1;
+    // Days of the range already behind us, for the pace projection: all of
+    // them when the range is in the past, none when it has not started.
+    const todayStart = new Date(now).setHours(0, 0, 0, 0);
+    const elapsedDays = Math.min(
+      days,
+      Math.max(0, Math.round((todayStart - first.getTime()) / 86_400_000) + 1),
+    );
+    // The snapshot figures exist per whole month only, so a range is covered
+    // when it runs from a 1st to a month's last day; otherwise the card says
+    // so rather than showing figures for days outside the range.
+    const wholeMonths =
+      first.getDate() === 1 &&
+      last.getDate() === new Date(last.getFullYear(), last.getMonth() + 1, 0).getDate();
+    const months: string[] = [];
+    if (wholeMonths) {
+      for (let d = new Date(first); d <= last; d.setMonth(d.getMonth() + 1)) months.push(ym(d));
+    }
     return {
       from,
-      to: today,
-      ceoQs: range(from, today),
-      // The snapshot figures exist per whole month only, so a part-month
-      // window has none — the card says so instead of showing the month's.
-      months: null,
-      slots: 0,
-      elapsed: 0,
+      to,
+      ceoQs: range(from, to),
+      months: wholeMonths ? months : null,
+      slots: days,
+      elapsed: elapsedDays,
     };
   }
   if (period === "last") {
@@ -212,13 +234,25 @@ function bucketParts(k: AccountBucket): [string, string] {
 
 export default function CEODashboard() {
   const [period, setPeriod] = React.useState<Period>("mtd");
+  const [custom, setCustom] = React.useState<CustomRange>({ from: "", to: "" });
   const [mix, setMix] = React.useState<"type" | "city">("type");
 
   // One clock for the page. Re-read on a period change so a tab left open
   // overnight does not keep yesterday's "today".
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const now = React.useMemo(() => new Date(), [period]);
-  const win = React.useMemo(() => resolvePeriod(period, now), [period, now]);
+  const now = React.useMemo(() => new Date(), [period, custom]);
+  const win = React.useMemo(
+    () => resolvePeriod(period, now, custom),
+    [period, now, custom],
+  );
+  const todayStr = ymd(now);
+  // A typed day becomes the window as soon as the pair is complete; until
+  // then the preset stays in charge and the half-typed pair just waits.
+  const pickCustom = (patch: Partial<CustomRange>) => {
+    const next = { ...custom, ...patch };
+    setCustom(next);
+    if (next.from && next.to) setPeriod("custom");
+  };
   const rangeQs = `from=${win.from}&to=${win.to}`;
 
   const tower = useQuery<ControlTower & { label: string }>({
@@ -332,7 +366,10 @@ export default function CEODashboard() {
   const { exceptions: x, money, engine, base: baseBlock, people } = tower.data;
   const ov = overview.data;
   const m = base.data ?? {};
-  const periodLabel = PERIODS.find((p) => p.value === period)!.label;
+  const periodLabel =
+    period === "custom"
+      ? `${win.from} to ${win.to}`
+      : PERIODS.find((p) => p.value === period)!.label;
   // A period change keeps the previous figures on screen until the new ones
   // land; say so, and dim them, rather than show last period's numbers under
   // this period's name.
@@ -600,8 +637,40 @@ export default function CEODashboard() {
           label="Period"
           options={PERIODS}
           value={period}
-          onChange={setPeriod}
+          onChange={(p) => {
+            setPeriod(p);
+            setCustom({ from: "", to: "" });
+          }}
         />
+        <div
+          role="group"
+          aria-label="Custom date range"
+          className={`inline-flex min-h-10 items-center gap-1.5 rounded-xl border px-3 text-[13px] font-semibold ${
+            period === "custom"
+              ? "border-brand-navy/30 bg-surface text-brand-navy shadow-sm"
+              : "border-transparent bg-[#e7edf3] text-ink-muted"
+          }`}
+        >
+          <CalendarRange className="h-4 w-4 shrink-0 opacity-70" aria-hidden />
+          <input
+            type="date"
+            value={custom.from}
+            max={custom.to || todayStr}
+            onChange={(e) => pickCustom({ from: e.target.value })}
+            aria-label="From date"
+            className="w-[118px] bg-transparent outline-none"
+          />
+          <span className="opacity-50">to</span>
+          <input
+            type="date"
+            value={custom.to}
+            min={custom.from || undefined}
+            max={todayStr}
+            onChange={(e) => pickCustom({ to: e.target.value })}
+            aria-label="To date"
+            className="w-[118px] bg-transparent outline-none"
+          />
+        </div>
       </DashPageHeader>
 
       <div
@@ -869,8 +938,8 @@ export default function CEODashboard() {
             ) : (
               <NotAvailable
                 reason={
-                  period === "today" || period === "week"
-                    ? "Costs are counted by whole month. Pick This month or a longer period."
+                  period === "custom" && !win.months
+                    ? "Costs are counted by whole month. Pick a range from the 1st to a month-end, or a preset."
                     : undefined
                 }
               />
