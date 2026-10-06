@@ -18,6 +18,7 @@
 // per-tick cost low.
 
 import { NextResponse } from "next/server";
+import { checkCronAuth } from "@/lib/cron-auth";
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { fetchAndPersistCallCost } from "@/lib/ai/storage/costStore";
@@ -38,13 +39,9 @@ function unwrapRows<T>(r: { rows: T[] } | T[]): T[] {
 }
 
 export async function GET(req: Request) {
-  const authHeader = req.headers.get("authorization");
-  if (
-    process.env.CRON_SECRET &&
-    authHeader !== `Bearer ${process.env.CRON_SECRET}`
-  ) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  // ID 130: fails closed — an unset CRON_SECRET is a 500, never an open route.
+  const cronDenied = checkCronAuth(req);
+  if (cronDenied) return cronDenied;
 
   const startedAt = new Date();
   try {

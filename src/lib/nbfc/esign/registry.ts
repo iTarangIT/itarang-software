@@ -56,7 +56,18 @@ export const ESIGN_ADAPTERS: EsignAdapterMeta[] = [
     label: "Leegality",
     description: "Sign on your own Leegality workspace.",
     environments: ["sandbox", "production"],
-    credentialSchema: [{ key: "authToken", label: "Auth Token (X-Auth-Token)", secret: true }],
+    credentialSchema: [
+      { key: "authToken", label: "Auth Token (X-Auth-Token)", secret: true },
+      // Verifies Leegality's webhooks: every payload carries
+      // mac = HMAC-SHA1(documentId, privateSalt). With it saved, a signing
+      // result is only believed when the mac matches (ID 130).
+      {
+        key: "privateSalt",
+        label: "Private Salt (optional — Leegality dashboard → API Settings)",
+        secret: true,
+        optional: true,
+      },
+    ],
   },
 ];
 

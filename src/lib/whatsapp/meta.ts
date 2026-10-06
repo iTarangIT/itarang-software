@@ -62,7 +62,14 @@ export class MetaWhatsAppAdapter implements WhatsAppAdapter {
   readonly provider = "meta";
 
   verifyInbound(headers: Headers, rawBody: string): boolean {
-    if (process.env.WHATSAPP_WEBHOOK_INSECURE === "true") {
+    // ID 130: the escape hatch is honoured off production only. On production
+    // it is ignored (and called out) so a stray env line can never open the
+    // inbound webhook to forged messages.
+    if (process.env.WHATSAPP_WEBHOOK_INSECURE === "true" && process.env.NODE_ENV === "production") {
+      console.error(
+        "[WhatsApp/meta] WHATSAPP_WEBHOOK_INSECURE=true is IGNORED in production — verifying the signature",
+      );
+    } else if (process.env.WHATSAPP_WEBHOOK_INSECURE === "true") {
       console.warn(
         "[WhatsApp/meta] WHATSAPP_WEBHOOK_INSECURE=true — skipping signature verification (dev only)",
       );
