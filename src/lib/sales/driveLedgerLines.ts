@@ -15,7 +15,9 @@
  *   * they add up to the invoice's taxable value (linesAddUp), AND
  *   * on every line with a printed rate, quantity × rate = amount — a
  *     misread quantity can still add up, because the amount column is read
- *     independently of it.
+ *     independently of it;
+ * OR every line has a price and Σ quantity × price adds up to the taxable
+ * value (Vyapar's GST-inclusive Amount column — reconcileDriveLines).
  * A Vyapar register import outranks this: it replaces 'drive' lines with its
  * own, and lines it already wrote are never overwritten here.
  */
@@ -23,9 +25,9 @@ import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import type { InvoiceLine } from "@/lib/sales/salesInvoiceLines";
 import { hasInvoiceLedgerTables } from "@/lib/sales/ledgerTables";
-import { checkDriveLines, toLedgerRows } from "@/lib/sales/driveLedgerLinesRules";
+import { reconcileDriveLines, toLedgerRows } from "@/lib/sales/driveLedgerLinesRules";
 
-export { checkDriveLines, toLedgerRows } from "@/lib/sales/driveLedgerLinesRules";
+export { checkDriveLines, reconcileDriveLines, toLedgerRows } from "@/lib/sales/driveLedgerLinesRules";
 
 export type SaveLedgerResult =
     | { saved: true; lines: number; batteries: number }
@@ -34,7 +36,7 @@ export type SaveLedgerResult =
 /**
  * Store a Drive invoice's read lines as its invoice_line_items (source
  * 'drive'), replacing earlier 'drive' lines. Refuses lines that fail
- * checkDriveLines, and never touches an invoice that has Vyapar register lines.
+ * reconcileDriveLines, and never touches an invoice that has Vyapar register lines.
  */
 export async function saveDriveLedgerLines(
     invoiceId: string,
@@ -42,9 +44,9 @@ export async function saveDriveLedgerLines(
     subTotal: number | null | undefined,
 ): Promise<SaveLedgerResult> {
     if (!(await hasInvoiceLedgerTables())) return { saved: false, reason: "E-322 not applied" };
-    const check = checkDriveLines(lines, subTotal);
-    if (!check.ok) return { saved: false, reason: check.reason };
-    const rows = toLedgerRows(lines);
+    const fit = reconcileDriveLines(lines, subTotal);
+    if (!fit.ok) return { saved: false, reason: fit.reason };
+    const rows = toLedgerRows(fit.lines);
 
     return db.transaction(async (tx) => {
         const vyapar = (await tx.execute(sql`

@@ -15,6 +15,11 @@
  *   node --import tsx --env-file=.env.local scripts/backfill-drive-line-items.ts --commit
  *   … --id=ITG/202627/067     one invoice
  *   … --max=5                 stop after N invoices
+ *   … --retries=2             re-read an invoice whose lines fail the check
+ *                             (default 2). The model sometimes returns
+ *                             GST-inclusive row amounts; a re-read usually
+ *                             returns the taxable ones. Nothing is stored
+ *                             unless one read passes.
  * For prod: export DATABASE_URL from .env.production first (an exported value
  * wins over --env-file).
  *
@@ -24,8 +29,9 @@
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { downloadFile } from "@/lib/google/drive";
+import { getObject } from "@/lib/storage/s3";
 import { readInvoiceLines } from "@/lib/sales/saveInvoiceLines";
-import { checkDriveLines, saveDriveLedgerLines } from "@/lib/sales/driveLedgerLines";
+import { reconcileDriveLines, saveDriveLedgerLines } from "@/lib/sales/driveLedgerLines";
 import { classifyHsn } from "@/lib/sales/invoiceLines";
 
 const args = process.argv.slice(2);
@@ -33,8 +39,26 @@ const COMMIT = args.includes("--commit");
 const opt = (name: string) => args.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3) ?? null;
 const ONLY = opt("id");
 const MAX = opt("max") ? Number(opt("max")) : Infinity;
+const RETRIES = opt("retries") ? Number(opt("retries")) : 2;
 
-type Inv = { id: string; invoice_number: string; invoice_date: string; total: string; sub_total: string | null; drive_file_id: string; file_name: string };
+type Inv = { id: string; invoice_number: string; invoice_date: string; total: string; sub_total: string | null; drive_file_id: string; file_name: string; storage_key: string | null };
+
+/**
+ * The PDF from Drive, else the copy the scan stored at import (storage_key) —
+ * a file moved or deleted in Drive since (ITD/202627/026: Drive 404) is still
+ * the invoice the revenue figure counts.
+ */
+async function fetchPdf(inv: Inv): Promise<Buffer> {
+    try {
+        return await downloadFile(inv.drive_file_id);
+    } catch (e) {
+        if (!inv.storage_key) throw e;
+        const copy = await getObject("documents", inv.storage_key);
+        if (!copy) throw e;
+        console.log(`    (not in Drive any more — read the stored copy ${inv.storage_key})`);
+        return copy;
+    }
+}
 
 async function main() {
     const host = new URL(process.env.DATABASE_URL ?? "postgres://x").host.split(".")[0];
@@ -42,7 +66,7 @@ async function main() {
 
     const todo = (await db.execute(sql`
         SELECT si.id::text AS id, si.invoice_number, si.invoice_date::text AS invoice_date,
-               si.total::text AS total, si.sub_total::text AS sub_total, si.drive_file_id, si.file_name
+               si.total::text AS total, si.sub_total::text AS sub_total, si.drive_file_id, si.file_name, si.storage_key
           FROM sales_invoices si
          WHERE si.drive_file_id IS NOT NULL
            AND (si.status IS NULL OR si.status <> 'void')
@@ -56,9 +80,13 @@ async function main() {
     for (const inv of todo.slice(0, MAX)) {
         const sub = inv.sub_total == null ? null : Number(inv.sub_total);
         try {
-            const buf = await downloadFile(inv.drive_file_id);
-            const { lines } = await readInvoiceLines(buf, "application/pdf", inv.file_name, sub);
-            const check = checkDriveLines(lines, sub);
+            const buf = await fetchPdf(inv);
+            let { lines } = await readInvoiceLines(buf, "application/pdf", inv.file_name, sub);
+            let check = reconcileDriveLines(lines, sub);
+            for (let attempt = 1; !check.ok && attempt <= RETRIES; attempt++) {
+                ({ lines } = await readInvoiceLines(buf, "application/pdf", inv.file_name, sub));
+                check = reconcileDriveLines(lines, sub);
+            }
             const bat = lines.filter((l) => classifyHsn(l.hsn_code) === "battery").reduce((s, l) => s + l.quantity, 0);
             const desc = lines.map((l) => `${l.quantity}× ${l.description.slice(0, 40)} [${l.hsn_code ?? "-"}]`).join(" | ");
             if (!check.ok) {
@@ -75,6 +103,7 @@ async function main() {
                 }
             }
             stored++;
+            if (check.basis === "qty_x_rate") console.log(`    (amounts were GST-inclusive; taxable rebuilt from quantity × price)`);
             batteries += bat;
             console.log(`✔ ${inv.invoice_number} ${inv.invoice_date} ${lines.length} line(s), ${bat} batteries — ${desc}`);
         } catch (e) {

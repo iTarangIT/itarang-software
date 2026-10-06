@@ -5,7 +5,9 @@
  *
  * Batteries sold are counted from invoice lines only (Kartik, 26 Sep): stock
  * allocation is not used. A line is classified by its HSN code:
- *   8507…   → battery  (electric accumulators)
+ *   8507…   → battery  (electric accumulators) — except 850790…, which is
+ *             PARTS of accumulators ("LCD Display with Box", billed beside
+ *             every battery): other. Counting it made one battery read as two.
  *   850440… → charger  (static converters)
  *   other   → other
  */
@@ -22,6 +24,7 @@ export function normalizeHsn(raw: unknown): string | null {
 export function classifyHsn(raw: unknown): ProductClass {
     const hsn = normalizeHsn(raw);
     if (!hsn) return "other";
+    if (hsn.startsWith("850790")) return "other";
     if (hsn.startsWith("8507")) return "battery";
     if (hsn.startsWith("850440")) return "charger";
     return "other";
