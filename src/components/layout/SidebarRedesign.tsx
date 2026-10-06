@@ -86,9 +86,9 @@ export const NAV_LAYOUTS: Record<string, Layout> = {
                 section: "BUSINESS",
                 defaultOpen: true,
                 items: [
-                    { id: "revenue-costs", label: "Revenue & costs", isNew: true },
+                    { id: "revenue-costs", label: "Revenue & costs" },
                     { id: "sales-invoices", label: "Sales invoices" },
-                    { id: "ceo-accounts", label: "Accounts", isNew: true },
+                    { id: "ceo-accounts", label: "Accounts" },
                     "ceo-targets",
                     "deals",
                 ],
@@ -162,7 +162,7 @@ export const NAV_LAYOUTS: Record<string, Layout> = {
             {
                 section: "DEALERS",
                 items: [
-                    { id: "sh-account-management", label: "Account management", isNew: true },
+                    { id: "sh-account-management", label: "Account management" },
                     "sh-dealer-health",
                     { id: "sh-whatsapp-onboarding", label: "WhatsApp onboarding" },
                     "sh-whatsapp-screenshots",
