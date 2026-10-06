@@ -26,6 +26,7 @@ import {
 } from "@/lib/ai-dialer/call-duration/config-store";
 import { asc, eq } from "drizzle-orm";
 import ExcelJS from "exceljs";
+import { CAMPAIGN_EXPORT_ROLES } from "@/lib/leads/access";
 
 function styleHeader(row: ExcelJS.Row) {
   row.eachCell((cell) => {
@@ -98,18 +99,9 @@ export const GET = withErrorHandler(
     _req: Request,
     { params }: { params: Promise<{ id: string }> },
   ) => {
-    const user = await requireRole([
-      "ceo",
-      "business_head",
-      "sales_head",
-      "sales_manager",
-      "sales_executive",
-      "admin",
-      // Same reason as the advance route: the Export Excel button ships with
-      // the campaign detail view, which these two dashboards now mount.
-      "inside_sales_rep",
-      "asm",
-    ]);
+    // asm / inside_sales_rep may not export campaign leads; the detail view
+    // hides the button for them (canExportCampaign).
+    const user = await requireRole([...CAMPAIGN_EXPORT_ROLES]);
 
     const { id } = await params;
 

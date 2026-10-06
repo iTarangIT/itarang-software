@@ -301,7 +301,7 @@ describe("create_lead", () => {
             kind: "question",
             question: expect.stringMatching(/type of business/i),
         });
-        expect(await run(ISR, "create_lead", { ...base, city: "Nashik", business_type: "finance" })).toMatchObject({
+        expect(await run(ISR, "create_lead", { ...base, city: "Nashik", business_type: "scrap" })).toMatchObject({
             kind: "question",
             question: expect.stringMatching(/how did we find/i),
         });
@@ -327,7 +327,7 @@ describe("create_lead", () => {
 
     it("ID 81: a Trade event / Digital ad lead needs a campaign that exists", async () => {
         findLeadIdByPhone.mockResolvedValue(null);
-        const base = { dealer_name: "Suresh", phone: "9876543210", city: "Nashik", business_type: "finance" };
+        const base = { dealer_name: "Suresh", phone: "9876543210", city: "Nashik", business_type: "scrap" };
 
         // No campaign said, none set up → told where to add one.
         expect(await run(ISR, "create_lead", { ...base, origin: "trade_event" })).toMatchObject({
@@ -354,7 +354,7 @@ describe("create_lead", () => {
         findLeadIdByPhone.mockResolvedValue(null);
         findCampaignByName.mockResolvedValue(null);
         await run(ISR, "create_lead", {
-            dealer_name: "Suresh", phone: "9876543210", city: "Nashik", business_type: "finance", origin: "field_walk_in",
+            dealer_name: "Suresh", phone: "9876543210", city: "Nashik", business_type: "scrap", origin: "field_walk_in",
         });
         expect(stored().plan).toMatchObject({ origin: "field_walk_in", campaign_id: null });
     });

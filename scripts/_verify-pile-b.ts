@@ -71,7 +71,7 @@ async function main() {
   if (e296) (counts ? pass : fail)("fetchBusinessTypeCounts", JSON.stringify(counts));
   else (counts === null ? pass : fail)("fetchBusinessTypeCounts returns null without E-296 (chips hidden)");
   try {
-    const rows = await lq.fetchLeadListRows({ ...baseFilters, businessType: "finance" } as typeof baseFilters, 1, 5);
+    const rows = await lq.fetchLeadListRows({ ...baseFilters, businessType: "battery_sale" } as typeof baseFilters, 1, 5);
     (e296 ? pass : fail)("business_type filter", `${rows.length} rows`);
   } catch (e) {
     (e296 ? fail : warn)("business_type filter", `${e296 ? "" : "expected without E-296: "}${msg(e)}`);
