@@ -16,6 +16,11 @@
  *                 to dealers, KYC submitted (review R-10 — queryOutcome)
  *   E  per_spoc   A–D + T again, once per rep, when no spoc_id was asked for
  *
+ * WHAT A VISIT IS. One person at one dealer on one day: VISIT_KEY. A rep who
+ * logs the same dealer twice in a day (it happens — a second entry minutes
+ * later with a follow-up note) made one visit, not two. Every visit count
+ * here (yesterday, series, totals) counts DISTINCT VISIT_KEY.
+ *
  * "Unique" and "new" are DIFFERENT columns and must stay so: unique = how many
  * distinct dealers were visited in the bucket; new = how many of those had never
  * been visited before (MIN(actual_visit_date) over the whole table, not just the
@@ -129,6 +134,14 @@ export function parseSalesDashboardParams(url: URL): SalesDashboardParams {
 
 // ─────────────────────────────── Fragments ──────────────────────────────────
 
+/**
+ * One visit = one person, one dealer, one IST day (see the header). Counted as
+ * COUNT(DISTINCT VISIT_KEY) over a CTE exposing asm_id / dealer_lead_id /
+ * actual_visit_date. Keyed on the person too, so per-rep visits still add up
+ * to the whole-team figure when two reps see the same dealer the same day.
+ */
+const VISIT_KEY = sql`(asm_id, dealer_lead_id, actual_visit_date)`;
+
 /** A scheduled visit that has not happened yet and was not called off. */
 const OPEN_VISIT = sql`v.visit_status NOT IN ('visited', 'cancelled', 'no_show')`;
 const IST = "Asia/Kolkata";
@@ -199,6 +212,7 @@ async function querySnapshot(
     const rows = await db.execute<SnapshotRow>(sql`
         WITH v AS (
             SELECT ${spocKey(sql`v.asm_id`, bySpoc)} AS spoc,
+                   v.asm_id, v.dealer_lead_id,
                    v.actual_visit_date, v.scheduled_date, v.visit_status
               FROM lead_visits v
               JOIN dealer_leads dl ON dl.id = v.dealer_lead_id
@@ -221,7 +235,7 @@ async function querySnapshot(
         ),
         parts AS (
             SELECT spoc,
-                   COUNT(*) FILTER (WHERE actual_visit_date = ${today}::date - 1) AS visits_yesterday,
+                   COUNT(DISTINCT ${VISIT_KEY}) FILTER (WHERE actual_visit_date = ${today}::date - 1) AS visits_yesterday,
                    0::bigint AS calls_yesterday,
                    COUNT(*) FILTER (WHERE scheduled_date = ${today}::date AND ${OPEN_VISIT}) AS planned_today,
                    COUNT(*) FILTER (WHERE scheduled_date >= ${today}::date
@@ -294,6 +308,7 @@ async function querySeries(
         vis AS (
             SELECT ${spocKey(sql`v.asm_id`, bySpoc)} AS spoc,
                    date_trunc(${granularity}, v.actual_visit_date::timestamp)::date AS bucket,
+                   v.asm_id, v.actual_visit_date,
                    v.dealer_lead_id,
                    (v.actual_visit_date = fv.first_d) AS is_new
               FROM lead_visits v
@@ -318,7 +333,7 @@ async function querySeries(
         ),
         agg AS (
             SELECT spoc, bucket,
-                   COUNT(*)                                            AS visits,
+                   COUNT(DISTINCT ${VISIT_KEY})                        AS visits,
                    COUNT(DISTINCT dealer_lead_id)                      AS unique_visits,
                    COUNT(DISTINCT dealer_lead_id) FILTER (WHERE is_new) AS new_visits,
                    0::bigint                                           AS calls
@@ -475,6 +490,7 @@ async function queryTotals(
         ),
         vis AS (
             SELECT ${spocKey(sql`v.asm_id`, bySpoc)} AS spoc,
+                   v.asm_id, v.actual_visit_date,
                    v.dealer_lead_id,
                    (v.actual_visit_date = fv.first_d) AS is_new
               FROM lead_visits v
@@ -517,7 +533,7 @@ async function queryTotals(
         ),
         parts AS (
             SELECT spoc,
-                   COUNT(*)                                             AS visits,
+                   COUNT(DISTINCT ${VISIT_KEY})                         AS visits,
                    COUNT(DISTINCT dealer_lead_id)                       AS unique_visits,
                    COUNT(DISTINCT dealer_lead_id) FILTER (WHERE is_new) AS new_visits,
                    0::bigint AS calls, 0::bigint AS dealers_called, 0::bigint AS converted,
@@ -575,6 +591,8 @@ type OutcomeRow = {
     quote_revisions: string;
     revenue: string;
     batteries_to_dealers: string;
+    line_invoices: string | null;
+    line_invoices_with_lines: string | null;
     kyc_submitted: string;
 };
 
@@ -667,6 +685,29 @@ async function queryOutcome(
                ${leadScope(f)} ${spocClause(batOwner, f)}
              GROUP BY 1`}
         ),
+        line_cov AS (${lines
+            ? sql`
+            -- How many of the invoices behind revenue have item lines at all.
+            -- Same invoices, same match, same credit as revenue; an invoice with
+            -- no lines adds 0 batteries whatever it sold, so this is what makes
+            -- the battery count readable (unknown vs zero vs a floor).
+            SELECT ${spocKey(revOwner, bySpoc)} AS spoc,
+                   COUNT(*) AS n,
+                   COUNT(*) FILTER (WHERE EXISTS (
+                       SELECT 1 FROM invoice_line_items l
+                        WHERE l.invoice_id = r.id
+                          AND (l.source = r.source OR (r.source = 'drive' AND l.source IN ('vyapar', 'drive')))
+                   )) AS with_lines
+              FROM ${invoices} AS r
+              LEFT JOIN dealer_leads dl ON dl.id = r.dealer_lead_id
+             WHERE ${REVENUE_NOT_VOID}
+               AND (r.account_id IS NOT NULL OR r.dealer_lead_id IS NOT NULL)
+               AND r.invoice_date >= ${f.from}::date
+               AND r.invoice_date <= ${f.to}::date
+               ${leadScope(f)} ${spocClause(revOwner, f)}
+             GROUP BY 1`
+            : sql`SELECT NULL::text AS spoc, NULL::bigint AS n, NULL::bigint AS with_lines WHERE FALSE`}
+        ),
         kyc AS (
             -- One lead, one file, however many queue rows — the funnel report's
             -- rule (funnelCounts.ts kycSharedQuery).
@@ -683,18 +724,22 @@ async function queryOutcome(
         ),
         spocs AS (
             SELECT spoc FROM quotes UNION SELECT spoc FROM revenue
-            UNION SELECT spoc FROM batteries UNION SELECT spoc FROM kyc
+            UNION SELECT spoc FROM batteries UNION SELECT spoc FROM line_cov
+            UNION SELECT spoc FROM kyc
         )
         SELECT s.spoc,
                COALESCE(qu.n, 0)::text AS quotes_issued,
                COALESCE(qu.revisions, 0)::text AS quote_revisions,
                COALESCE(rv.n, 0)::text AS revenue,
                COALESCE(ba.n, 0)::text AS batteries_to_dealers,
+               COALESCE(lc.n, 0)::text AS line_invoices,
+               COALESCE(lc.with_lines, 0)::text AS line_invoices_with_lines,
                COALESCE(ky.n, 0)::text AS kyc_submitted
           FROM spocs s
           LEFT JOIN quotes    qu ON qu.spoc IS NOT DISTINCT FROM s.spoc
           LEFT JOIN revenue   rv ON rv.spoc IS NOT DISTINCT FROM s.spoc
           LEFT JOIN batteries ba ON ba.spoc IS NOT DISTINCT FROM s.spoc
+          LEFT JOIN line_cov  lc ON lc.spoc IS NOT DISTINCT FROM s.spoc
           LEFT JOIN kyc       ky ON ky.spoc IS NOT DISTINCT FROM s.spoc
     `);
     const out = new Map<string | null, SalesOutcome>();
@@ -704,6 +749,9 @@ async function queryOutcome(
             quote_revisions: num(r.quote_revisions),
             revenue: round2(num(r.revenue)),
             batteries_to_dealers: num(r.batteries_to_dealers),
+            battery_lines: lines
+                ? { invoices: num(r.line_invoices), with_lines: num(r.line_invoices_with_lines) }
+                : null,
             kyc_submitted: num(r.kyc_submitted),
         });
     }
@@ -715,6 +763,7 @@ const EMPTY_OUTCOME: SalesOutcome = {
     quote_revisions: 0,
     revenue: 0,
     batteries_to_dealers: 0,
+    battery_lines: null,
     kyc_submitted: 0,
 };
 
@@ -852,6 +901,7 @@ export async function buildSalesDashboard(
     };
 
     let perSpoc: SalesSpocBlock[] | null = null;
+    let unassigned: SalesDashboardSections | null = null;
     if (bySpoc) {
         const [snapshotBy, dailyBy, interestBy, totalsBy, outcomeBy] = await Promise.all([
             querySnapshot(f, today, true),
@@ -887,9 +937,22 @@ export async function buildSalesDashboard(
                     b.totals.visits + b.totals.calls - (a.totals.visits + a.totals.calls) ||
                     (a.name ?? "").localeCompare(b.name ?? ""),
             );
+
+        // The NULL group of the same per-rep pass: what belongs to no one.
+        const hasNull = [snapshotBy, interestBy, totalsBy, outcomeBy].some((m) => m.has(null));
+        if (hasNull) {
+            unassigned = {
+                snapshot: snapshotBy.get(null) ?? EMPTY_SNAPSHOT,
+                series: seriesBy.get(null) ?? [],
+                averages: averagesFromDaily(dailyBy.get(null) ?? [], daysInRange),
+                interest: completeInterest(interestBy.get(null)),
+                totals: totalsBy.get(null) ?? EMPTY_TOTALS,
+                outcome: outcomeBy.get(null) ?? EMPTY_OUTCOME,
+            };
+        }
     }
 
-    return { filters: f, as_of_date: today, ...whole, per_spoc: perSpoc };
+    return { filters: f, as_of_date: today, ...whole, per_spoc: perSpoc, unassigned };
 }
 
 // ─────────────────────────────── CSV ────────────────────────────────────────
@@ -937,6 +1000,28 @@ export function salesDashboardCsv(d: SalesDashboard): SalesCsvSheet {
             revenue: b.outcome.revenue,
             kyc_submitted: b.outcome.kyc_submitted,
         }));
+        // Same remainder row the screen shows, so the sheet's columns add up
+        // to the whole-team figures too.
+        const u = d.unassigned;
+        if (u) {
+            const ul = (l: InterestLevel) => u.interest.rows.find((r) => r.interest_level === l)?.total ?? 0;
+            rows.push({
+                name: "Unassigned (no owner)",
+                role: "",
+                visits: u.totals.visits,
+                unique_visits: u.totals.unique_visits,
+                new_visits: u.totals.new_visits,
+                calls: u.totals.calls,
+                hot: ul("hot"),
+                warm: ul("warm"),
+                cold: ul("cold"),
+                converted: u.totals.converted,
+                quotes_issued: u.outcome.quotes_issued,
+                batteries_to_dealers: u.outcome.batteries_to_dealers,
+                revenue: u.outcome.revenue,
+                kyc_submitted: u.outcome.kyc_submitted,
+            });
+        }
         return {
             filename: `sales-dashboard-by-rep-${range}`,
             columns: [

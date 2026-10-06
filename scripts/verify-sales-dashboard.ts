@@ -48,7 +48,10 @@ async function handSql(spoc: string, day: string) {
             SELECT dealer_lead_id, MIN(actual_visit_date) AS d
               FROM lead_visits WHERE actual_visit_date IS NOT NULL GROUP BY 1
         )
-        SELECT COUNT(*)::text AS visits,
+        -- A visit is one person at one dealer on one day (6 Oct 2026): for a
+        -- single rep and a single day that is the distinct dealers, so a dealer
+        -- logged twice the same day is one visit.
+        SELECT COUNT(DISTINCT v.dealer_lead_id)::text AS visits,
                COUNT(DISTINCT v.dealer_lead_id)::text AS uniq,
                COUNT(DISTINCT v.dealer_lead_id) FILTER (WHERE fv.d = v.actual_visit_date)::text AS nw
           FROM lead_visits v
