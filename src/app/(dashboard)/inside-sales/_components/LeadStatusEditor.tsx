@@ -4,7 +4,7 @@
 // sets no status by hand: the chip only opens the dedicated flows — Mark Won
 // (GSTIN), Mark Lost (reason), Transfer to ASM — via onModalAction. Every other
 // move comes from an event (calls, quotes, visits, approvals).
-// An admin gets "Correct status": a required reason, logged
+// An admin or the Sales Head gets "Correct status": a required reason, logged
 // (POST /api/admin/leads/[id]/correct-status) — the only override. It still
 // asks for what Mark Lost enforces (ID 57): a lost reason for Lost. It does not
 // offer Won or Converted (ID 133): Won is Mark Won, and Converted comes only
@@ -34,7 +34,7 @@ type Props = {
     leadId: string;
     status: string | null | undefined;
     editable: boolean;
-    /** Admin only: "Correct status" with a reason (ID 80). */
+    /** Admin / Sales Head: "Correct status" with a reason (ID 80). */
     canCorrect?: boolean;
     // Dedicated-flow modals the parent view can open (ASM has no transfer_asm).
     modalActions?: StatusModalAction[];
@@ -163,7 +163,7 @@ export function LeadStatusEditor({
             {open && (
                 <div className="absolute left-0 top-7 z-50 w-64 rounded-lg border border-gray-200 bg-white p-3 shadow-lg">
                     <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-gray-500">
-                        {canCorrect ? "Correct status (admin)" : "Close or transfer"}
+                        {canCorrect ? "Correct status" : "Close or transfer"}
                     </p>
                     {canCorrect && (
                     <input
