@@ -460,11 +460,15 @@ function buildWhere(f: LeadListFilters, opts?: { ignoreIntent?: boolean }) {
             conds.push(selection);
         }
     }
+    // created_at is a UTC timestamp without zone; the dates people pick are IST
+    // days. Converting first keeps a lead created 00:00–05:30 IST on the day it
+    // was created — and keeps this list, its download and Reports › Lead
+    // sources counting the same leads for the same dates.
     if (f.from && ISO_DATE_RE.test(f.from)) {
-        conds.push(sql`dl.created_at::date >= ${f.from}`);
+        conds.push(sql`(dl.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date >= ${f.from}`);
     }
     if (f.to && ISO_DATE_RE.test(f.to)) {
-        conds.push(sql`dl.created_at::date <= ${f.to}`);
+        conds.push(sql`(dl.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date <= ${f.to}`);
     }
     // An unassigned lead has assigned_at NULL, so any assigned-date bound
     // excludes it — which is the right answer to "assigned between X and Y".
