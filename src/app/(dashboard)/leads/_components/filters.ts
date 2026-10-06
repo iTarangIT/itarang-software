@@ -22,8 +22,8 @@ export type LeadFilters = {
      * number <input>s — "" is a cleared box, which `0` would not distinguish
      * from a real lower bound of zero.
      *
-     * Mutually exclusive with `intent` in the UI: a bucket IS a score range, so
-     * holding both is either redundant or self-contradicting.
+     * Independent of `intent`, which is the rep-set temperature
+     * (interest_level), so the two combine.
      */
     scoreMin: string;
     scoreMax: string;
