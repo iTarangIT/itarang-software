@@ -11,7 +11,7 @@ import { guardBolnaCall } from '@/lib/security/webhookAuth';
 export const POST = withErrorHandler(async (req: Request) => {
     // ID 118: this legacy URL takes the same bearer as /api/bolna/webhook once
     // BOLNA_WEBHOOK_SECRET is set — it writes call records and lead status.
-    const denied = guardBolnaCall(req.headers, '/api/webhooks/bolna', 'BOLNA_WEBHOOK_SECRET');
+    const denied = guardBolnaCall(req.headers, '/api/webhooks/bolna', 'BOLNA_WEBHOOK_SECRET', req.url);
     if (denied) return denied;
 
     const body = await req.json();

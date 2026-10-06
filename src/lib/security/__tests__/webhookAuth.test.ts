@@ -13,10 +13,13 @@ import { inboundCallbackAllowed, signBody } from "@/lib/nbfc/handoff";
 
 import {
   bearerProof,
+  bolnaCallbackToken,
+  bolnaCallbackUrl,
   checksumProof,
   guardBolnaCall,
   guardDigioWebhook,
   hmacSha256Hex,
+  leegalityMacProof,
   webhookAuthStrict,
   webhookVerdict,
 } from "../webhookAuth";
@@ -184,5 +187,55 @@ describe("guardBolnaCall", () => {
     expect(
       guardBolnaCall(new Headers({ authorization: `Bearer ${SECRET}` }), "/test/bolna-hook", "BOLNA_WEBHOOK_SECRET"),
     ).toBeNull();
+  });
+
+  it("a per-call callback proves itself with the token in its URL, not a header", () => {
+    vi.stubEnv("BOLNA_WEBHOOK_SECRET", SECRET);
+    vi.stubEnv("WEBHOOK_AUTH_STRICT", "");
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const base = "https://crm.test/api/ceo/ai-dialer/webhook/bolna";
+    const url = bolnaCallbackUrl(base);
+    expect(url).toBe(`${base}?cb=${bolnaCallbackToken(SECRET)}`);
+    // The secret itself is never in the URL.
+    expect(url).not.toContain(SECRET);
+    const none = new Headers();
+    expect(guardBolnaCall(none, "/test/bolna-cb", "BOLNA_WEBHOOK_SECRET", url)).toBeNull();
+    expect(guardBolnaCall(none, "/test/bolna-cb", "BOLNA_WEBHOOK_SECRET", `${base}?cb=wrong`)?.status).toBe(401);
+    expect(guardBolnaCall(none, "/test/bolna-cb", "BOLNA_WEBHOOK_SECRET", base)?.status).toBe(401);
+    // A valid bearer still passes, whatever the URL carries.
+    expect(
+      guardBolnaCall(new Headers({ authorization: `Bearer ${SECRET}` }), "/test/bolna-cb", "BOLNA_WEBHOOK_SECRET", `${base}?cb=wrong`),
+    ).toBeNull();
+    // The tool secret's token is a different one.
+    vi.stubEnv("BOLNA_TOOL_SECRET", "tool_secret_0123456789");
+    expect(guardBolnaCall(none, "/test/bolna-tool", "BOLNA_TOOL_SECRET", url)?.status).toBe(401);
+  });
+
+  it("with no secret configured the callback URL is left as it was", () => {
+    vi.stubEnv("BOLNA_WEBHOOK_SECRET", "");
+    expect(bolnaCallbackUrl("https://crm.test/hook")).toBe("https://crm.test/hook");
+  });
+});
+
+describe("leegalityMacProof (ID 130)", () => {
+  const SALT = "salt_abc";
+  const DOC = "01KC8ZWZ7ZWNAFTZRYMYMWV84B";
+  const mac = (salt: string) => createHmac("sha1", salt).update(DOC, "utf8").digest("hex");
+  const body = (m?: string) => JSON.stringify({ documentId: DOC, documentStatus: "Completed", ...(m ? { mac: m } : {}) });
+
+  it("accepts HMAC-SHA1(documentId, privateSalt), any case", () => {
+    expect(leegalityMacProof(SALT, body(mac(SALT)))).toBe("valid");
+    expect(leegalityMacProof(SALT, body(mac(SALT).toUpperCase()))).toBe("valid");
+  });
+
+  it("refuses a wrong mac, a missing salt, or a mac with no documentId", () => {
+    expect(leegalityMacProof(SALT, body(mac("other")))).toBe("invalid");
+    expect(leegalityMacProof(undefined, body(mac(SALT)))).toBe("invalid");
+    expect(leegalityMacProof(SALT, JSON.stringify({ mac: mac(SALT) }))).toBe("invalid");
+  });
+
+  it("no mac or unparsable body is absent", () => {
+    expect(leegalityMacProof(SALT, body())).toBe("absent");
+    expect(leegalityMacProof(SALT, "not json")).toBe("absent");
   });
 });

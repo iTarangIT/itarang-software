@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { checkCronAuth } from '@/lib/cron-auth';
 import { db } from '@/lib/db';
 import { leads } from '@/lib/db/schema';
 import { eq, and, lte, sql } from 'drizzle-orm';
@@ -10,10 +11,9 @@ import { getAICallerEnabled } from '@/lib/ai/settings';
 
 export async function GET(req: NextRequest) {
     // Verify cron secret (Vercel sets this header automatically for cron jobs)
-    const authHeader = req.headers.get('authorization');
-    if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    // ID 130: fails closed — an unset CRON_SECRET is a 500, never an open route.
+    const cronDenied = checkCronAuth(req);
+    if (cronDenied) return cronDenied;
 
     try {
         // Check global AI caller toggle
