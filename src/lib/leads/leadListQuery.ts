@@ -14,7 +14,7 @@ import { parseMobileList } from "@/lib/leads/claimScope";
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { UNASSIGNED_FILTER } from "@/lib/admin/leadsInfoFilters";
-import { INTENT_BUCKETS, type IntentBucket } from "@/lib/leads/intentBucket";
+import type { IntentBucket } from "@/lib/leads/intentBucket";
 import { NEODOVE_LINKED_SYNC_STATUSES } from "@/lib/neodove/syncStatus";
 import type { CampaignFacet } from "@/lib/leads/leadCampaign";
 // Value import, so it must come from the dependency-free module — this file
@@ -93,17 +93,14 @@ export type LeadListFilters = {
      * false shows both. `contactability: "only"` still narrows to flagged.
      */
     hideDead?: boolean | null;
-    /** Display bucket over final_intent_score. See intentBucket.ts. */
+    /**
+     * Rep-set temperature — lower(interest_level) — the same field the ASM /
+     * Inside Sales queues filter on. NOT final_intent_score (see intentPredicate).
+     */
     intent?: IntentBucket | null;
     /**
-     * Explicit inclusive score range — the same axis as `intent`, expressed
-     * exactly rather than in bands.
-     *
-     * The UI keeps these mutually exclusive with `intent` because a bucket IS a
-     * score range: holding both is either redundant ("Hot" + 75–100) or a
-     * contradiction ("Hot" + 0–30) that returns nothing and reads as a broken
-     * filter. They are still ANDed here, so a hand-built URL carrying both gets
-     * the honest intersection rather than one silently winning.
+     * Explicit inclusive AI intent-score range (final_intent_score). A different
+     * column from `intent`, so the two are simply ANDed.
      */
     scoreMin?: number | null;
     scoreMax?: number | null;
@@ -285,24 +282,22 @@ const LATEST_VISIT_JOIN = sql`
     ) lv ON true
 `;
 
-// Intent-bucket predicates. COALESCE matters: final_intent_score is nullable and
-// never-called leads are the majority — without it they'd fall out of every
-// bucket and the three stat cards wouldn't sum to Total.
+// Intent (Hot/Warm/Cold) is the rep-set temperature, interest_level — the SAME
+// expression the ASM / Inside Sales queues (queueFilterSql.ts) and the sales
+// dashboard use. It used to be a cut through final_intent_score, which a rep
+// marking a lead Hot never moves, so "Owner = Jiten, Intent = Hot" showed 0 here
+// while Jiten's own queue showed 14. The AI score stays reachable through the
+// explicit score range below. Lower-cased because the column has several writers.
 function intentPredicate(bucket: IntentBucket) {
-    const score = sql`COALESCE(dl.final_intent_score, 0)`;
-    if (bucket === "hot") return sql`${score} >= ${INTENT_BUCKETS.HOT_MIN}`;
-    if (bucket === "warm")
-        return sql`${score} BETWEEN ${INTENT_BUCKETS.WARM_MIN} AND ${INTENT_BUCKETS.HOT_MIN - 1}`;
-    return sql`${score} <= ${INTENT_BUCKETS.WARM_MIN - 1}`;
+    return sql`lower(dl.interest_level) = ${bucket}`;
 }
 
 /**
- * The whole intent-score selection — bucket AND explicit range — as one
- * predicate, or TRUE when neither is set.
+ * The whole intent selection — temperature bucket AND explicit AI-score range —
+ * as one predicate, or TRUE when neither is set.
  *
- * Both live here rather than beside the other filters because both are cuts
- * through the SAME column, and the stats query has to be able to lift the two of
- * them together (see ignoreIntent).
+ * Both live here rather than beside the other filters because the stats query
+ * has to be able to lift the two of them together (see ignoreIntent).
  */
 function intentSelection(f: LeadListFilters) {
     const score = sql`COALESCE(dl.final_intent_score, 0)`;

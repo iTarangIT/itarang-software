@@ -29,7 +29,8 @@ import { db } from "@/lib/db";
 import { dialerCampaigns, dialerCampaignLeads } from "@/lib/db/schema";
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { successResponse, errorResponse, withErrorHandler } from "@/lib/api-utils";
-import { requireAuth } from "@/lib/auth-utils";
+import { requireRole } from "@/lib/auth-utils";
+import { CAMPAIGN_ACTION_ROLES } from "@/lib/leads/access";
 import { type DialerProvider } from "@/lib/queue/dialerSession";
 import { createCampaign } from "@/lib/queue/campaignTracker";
 import { startDraftCampaign } from "@/lib/queue/startCampaign";
@@ -43,14 +44,9 @@ export const POST = withErrorHandler(
     const { id: campaignId } = await ctx.params;
     if (!campaignId) return errorResponse("Campaign id required", 400);
 
-    // Auth is best-effort (dev/system contexts) — same posture as list start.
-    let triggeredBy: string | null = null;
-    try {
-      const user = await requireAuth();
-      triggeredBy = user?.id ?? null;
-    } catch {
-      /* tolerate no session */
-    }
+    // asm / inside_sales_rep may view a campaign but not re-dial it.
+    const user = await requireRole([...CAMPAIGN_ACTION_ROLES]);
+    const triggeredBy: string | null = user?.id ?? null;
 
     // Load the source campaign — we read from it but never mutate it.
     const rows = await db

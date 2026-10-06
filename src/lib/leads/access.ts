@@ -310,6 +310,48 @@ export const INTENT_REVIEW_ROLES = [
  */
 export const INTENT_CURATOR_ROLES = ["admin", "ceo", "sales_head", "partner"] as const;
 
+/**
+ * Roles that may DRIVE an AI-dialer campaign from its detail screen — Call next,
+ * Force stop, Resume calling, Retry unreached. Enforced by the matching
+ * /api/ai-dialer/campaigns/[id]/{advance,stop,resume,recall-failed} routes; the
+ * detail view only hides the buttons.
+ *
+ * asm and inside_sales_rep are deliberately ABSENT: they can open their own
+ * campaigns read-only, but placing or re-placing calls is an oversight action.
+ * `partner` keeps the stop/resume/retry it always had (those routes had no role
+ * check before).
+ */
+export const CAMPAIGN_ACTION_ROLES = [
+  "admin",
+  "ceo",
+  "business_head",
+  "sales_head",
+  "sales_manager",
+  "partner",
+] as const;
+
+/**
+ * Roles that may download a campaign's Excel export
+ * (/api/ai-dialer/campaigns/[id]/export.xlsx). asm and inside_sales_rep are
+ * excluded for the same reason as CAMPAIGN_ACTION_ROLES.
+ */
+export const CAMPAIGN_EXPORT_ROLES = [
+  "ceo",
+  "business_head",
+  "sales_head",
+  "sales_manager",
+  "sales_executive",
+  "admin",
+] as const;
+
+export function canRunCampaignActions(role: string | null | undefined): boolean {
+  return (CAMPAIGN_ACTION_ROLES as readonly string[]).includes(role ?? "");
+}
+
+export function canExportCampaign(role: string | null | undefined): boolean {
+  return (CAMPAIGN_EXPORT_ROLES as readonly string[]).includes(role ?? "");
+}
+
 export type LeadsCapabilities = {
   canSeeOwnerAsm: boolean;
   canBulkAct: boolean;

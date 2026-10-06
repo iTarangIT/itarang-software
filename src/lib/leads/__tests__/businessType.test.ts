@@ -8,6 +8,7 @@ import {
     BUSINESS_TYPE_LABELS,
     BusinessTypeSchema,
     businessTypeLabel,
+    isBusinessType,
     isBusinessTypeFilter,
     normalizeBusinessType,
 } from "@/lib/leads/businessType";
@@ -49,11 +50,25 @@ describe("BusinessTypeSchema", () => {
     });
 });
 
+describe("retired Finance type (E-327)", () => {
+    it("is no longer a business type", () => {
+        expect(isBusinessType("finance")).toBe(false);
+        expect(BusinessTypeSchema.safeParse("finance").success).toBe(false);
+        expect(isBusinessTypeFilter("finance")).toBe(false);
+    });
+
+    it("folds old finance spellings into Battery Sale", () => {
+        expect(normalizeBusinessType("Finance")).toBe("battery_sale");
+        expect(normalizeBusinessType("financing")).toBe("battery_sale");
+        expect(normalizeBusinessType("loan")).toBe("battery_sale");
+    });
+});
+
 describe("filter + label helpers", () => {
     it("treats 'unset' as a valid filter only", () => {
         expect(isBusinessTypeFilter("unset")).toBe(true);
-        expect(isBusinessTypeFilter("finance")).toBe(true);
-        expect(isBusinessTypeFilter("Finance")).toBe(false);
+        expect(isBusinessTypeFilter("buyback")).toBe(true);
+        expect(isBusinessTypeFilter("Buyback")).toBe(false);
         expect(isBusinessTypeFilter(null)).toBe(false);
     });
 
