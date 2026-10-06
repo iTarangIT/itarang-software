@@ -38,6 +38,13 @@ export function errorResponse(message: string, status = 500) {
 export function withErrorHandler(handler: Function) {
     return async (req: Request, context?: any) => {
         try {
+            // Next 15+ hands a route its `params` as a Promise. A handler that
+            // reads `params.id` without awaiting gets undefined on a production
+            // build (tracker ID 127), so resolve it here: awaiting a plain
+            // object is a no-op, so handlers that do `await params` still work.
+            if (context?.params && typeof context.params.then === 'function') {
+                context = { ...context, params: await context.params };
+            }
             return await handler(req, context);
         } catch (error: any) {
             // Re-throw Next.js redirect errors

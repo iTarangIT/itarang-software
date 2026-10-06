@@ -52,8 +52,6 @@ export type DealerHealthRow = {
     came_through: string | null;
     dealer: string;
     gstin: string | null;
-    /** No GSTIN and no lead: invoices cannot be matched, so the bucket is a guess. */
-    invoices_unmatchable: boolean;
     city: string | null;
     state: string | null;
     business_type: string | null;
@@ -156,8 +154,6 @@ export async function listDealerHealth(): Promise<DealerHealthRow[]> {
             came_through: (r.came_through as string | null) ?? null,
             dealer: String(r.dealer),
             gstin: (r.gstin as string | null) ?? null,
-            invoices_unmatchable:
-                (!r.gstin || String(r.gstin).trim().toUpperCase() === "PENDING") && !r.lead_id,
             city: (r.city as string | null) ?? null,
             state: (r.state as string | null) ?? null,
             business_type: (r.business_type as string | null) ?? null,

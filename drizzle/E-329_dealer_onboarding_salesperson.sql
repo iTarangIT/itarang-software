@@ -1,4 +1,4 @@
--- E-321 — the salesperson on a dealer onboarding, as a CRM user (tracker ID 66,
+-- E-329 — the salesperson on a dealer onboarding, as a CRM user (tracker ID 66,
 -- handover P1-3, decided 29 Sep 2026).
 --
 -- Until now the onboarding stored the sales manager as three typed text fields

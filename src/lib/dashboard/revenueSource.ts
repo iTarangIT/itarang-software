@@ -75,17 +75,8 @@ export interface RevenueInvoiceRow {
    * list / export / summary rows only — see matchedUnion(). NULL = not linked.
    */
   dealer_lead_id?: string | null;
-  /** The matched lead's name, else the matched account's. */
   dealer_name?: string | null;
   dealer_owner_id?: string | null;
-  /**
-   * The activated dealer ACCOUNT with this GSTIN, when there is one — most
-   * dealers are onboarded with no lead behind them. NULL = no such account.
-   */
-  acct_id?: string | null;
-  acct_city?: string | null;
-  /** Linked to a CRM dealer: a lead OR an account matched. */
-  dealer_linked?: boolean;
   /** E-321: the dealer account the invoice matched (accounts.id), if any. */
   account_id?: string | null;
   /** E-321: 'linked' | 'not_dealer' when decided by hand. */
@@ -261,26 +252,7 @@ async function revenueUnion(): Promise<SQL> {
  * pre-E-321 lead-only match. Kept separate from revenueUnion(): company totals
  * and the chart never need the match, and must not move because of it.
  */
-/**
- * The names the account-management side (d949ccc7) reads off a matched row —
- * acct_id, acct_city, dealer_linked — derived from the E-321 match above so
- * both read the same answer.
- */
-function withAccountAliases(q: SQL): SQL {
-  return sql`(
-    SELECT mu.*,
-           mu.account_id                                                  AS acct_id,
-           (SELECT NULLIF(btrim(aa.city), '') FROM accounts aa WHERE aa.id = mu.account_id) AS acct_city,
-           (mu.dealer_lead_id IS NOT NULL OR mu.account_id IS NOT NULL)  AS dealer_linked
-      FROM ${q} AS mu
-  )`;
-}
-
 export async function matchedUnion(): Promise<SQL> {
-  return withAccountAliases(await matchedUnionCore());
-}
-
-async function matchedUnionCore(): Promise<SQL> {
   const src = await revenueUnion();
   // Both matchers are keyed sets built once and hash-joined (see
   // gstinMatch.ts) — not a search per invoice.

@@ -121,6 +121,8 @@ export type LeadRow = LeadListRow & {
     campaign?: LeadCampaign | null;
     /** Who handed this lead to its current owner. Null for non-oversight roles. */
     assigned_by?: LeadAssignedBy | null;
+    /** ID 132: the server's canEditLead() for the signed-in user. */
+    can_edit?: boolean;
     // E-236. Read in a separate, failure-tolerant statement by the API route —
     // absent, not null, on a database without the migration.
     last_disposition?: string | null;
@@ -635,11 +637,13 @@ export function LeadsTable({
                                                         View
                                                     </button>
                                                 </Link>
-                                                <Link href={`/leads/${row.id}/edit`}>
-                                                    <button className="rounded-lg px-2.5 py-1.5 text-xs font-medium text-gray-500 transition-all hover:bg-gray-50">
-                                                        Edit
-                                                    </button>
-                                                </Link>
+                                                {row.can_edit && (
+                                                    <Link href={`/leads/${row.id}/edit`}>
+                                                        <button className="rounded-lg px-2.5 py-1.5 text-xs font-medium text-gray-500 transition-all hover:bg-gray-50">
+                                                            Edit
+                                                        </button>
+                                                    </Link>
+                                                )}
                                             </div>
                                         </td>
                                     </tr>

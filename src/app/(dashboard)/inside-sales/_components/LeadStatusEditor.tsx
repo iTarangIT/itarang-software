@@ -4,10 +4,11 @@
 // sets no status by hand: the chip only opens the dedicated flows — Mark Won
 // (GSTIN), Mark Lost (reason), Transfer to ASM — via onModalAction. Every other
 // move comes from an event (calls, quotes, visits, approvals).
-// An admin gets "Correct status": any status, a required reason, logged
+// An admin or the Sales Head gets "Correct status": a required reason, logged
 // (POST /api/admin/leads/[id]/correct-status) — the only override. It still
-// asks for what Mark Lost / Mark Won enforce (ID 57): a lost reason for Lost,
-// the dealer's GSTIN for Won / Converted.
+// asks for what Mark Lost enforces (ID 57): a lost reason for Lost. It does not
+// offer Won or Converted (ID 133): Won is Mark Won, and Converted comes only
+// from approval of the dealer's onboarding.
 
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -15,6 +16,7 @@ import { Pencil } from "lucide-react";
 import { StatusChip } from "./StatusChip";
 import { LOST_REASON_LABELS } from "./modals/MarkLostModal";
 import { LEAD_STATUS, LOST_REASON, TRANSITION_MAP, type LeadStatus, type LostReason } from "@/lib/lifecycle/transitions";
+import { correctionAllowedTo } from "@/lib/leads/correctStatus";
 
 export type StatusModalAction = "mark_converted" | "mark_lost" | "transfer_asm";
 
@@ -25,14 +27,14 @@ const MODAL_TARGETS: Partial<Record<LeadStatus, StatusModalAction>> = {
 };
 
 // ID 57: corrections that need a detail before they can be saved.
-const NEEDS_DETAILS: readonly LeadStatus[] = ["Lost", "Won", "Converted"];
+const NEEDS_DETAILS: readonly LeadStatus[] = ["Lost"];
 
 
 type Props = {
     leadId: string;
     status: string | null | undefined;
     editable: boolean;
-    /** Admin only: "Correct status" with a reason (ID 80). */
+    /** Admin / Sales Head: "Correct status" with a reason (ID 80). */
     canCorrect?: boolean;
     // Dedicated-flow modals the parent view can open (ASM has no transfer_asm).
     modalActions?: StatusModalAction[];
@@ -52,11 +54,10 @@ export function LeadStatusEditor({
     const [open, setOpen] = useState(false);
     const [reason, setReason] = useState("");
     const [saving, setSaving] = useState(false);
-    // Admin correction to Lost / Won / Converted: picked, waiting for its detail.
+    // Admin correction to Lost: picked, waiting for its reason.
     const [pending, setPending] = useState<LeadStatus | null>(null);
     const [lostReason, setLostReason] = useState<LostReason | "">("");
     const [competitor, setCompetitor] = useState("");
-    const [gstin, setGstin] = useState("");
     const ref = useRef<HTMLSpanElement>(null);
 
     useEffect(() => {
@@ -77,8 +78,9 @@ export function LeadStatusEditor({
 
     const from = (status ?? null) as LeadStatus | null;
     const legalTargets = from ? TRANSITION_MAP[from] ?? [] : [];
-    // ID 80: only an admin correction sets a status directly — to any status.
-    const directOptions = canCorrect ? LEAD_STATUS.filter((t) => t !== from) : [];
+    // ID 80: only an admin correction sets a status directly. ID 133: never
+    // to Won or Converted — the server refuses both.
+    const directOptions = canCorrect ? LEAD_STATUS.filter((t) => t !== from && correctionAllowedTo(t)) : [];
     const modalOptions = legalTargets.filter((t) => {
         const action = MODAL_TARGETS[t];
         return action && modalActions.includes(action);
@@ -94,7 +96,6 @@ export function LeadStatusEditor({
         setPending(null);
         setLostReason("");
         setCompetitor("");
-        setGstin("");
     };
 
     const saveDirect = async (to: LeadStatus) => {
@@ -123,9 +124,6 @@ export function LeadStatusEditor({
                         lost_reason: to === "Lost" ? lostReason : undefined,
                         competitor_name:
                             to === "Lost" && lostReason === "lost_to_competition" ? competitor.trim() : undefined,
-                        // Blank = keep the GSTIN already on the lead; the server
-                        // refuses if there is none.
-                        gstin: (to === "Won" || to === "Converted") && gstin.trim() ? gstin.trim() : undefined,
                     }),
                 },
             );
@@ -165,7 +163,7 @@ export function LeadStatusEditor({
             {open && (
                 <div className="absolute left-0 top-7 z-50 w-64 rounded-lg border border-gray-200 bg-white p-3 shadow-lg">
                     <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-gray-500">
-                        {canCorrect ? "Correct status (admin)" : "Close or transfer"}
+                        {canCorrect ? "Correct status" : "Close or transfer"}
                     </p>
                     {canCorrect && (
                     <input
@@ -188,49 +186,29 @@ export function LeadStatusEditor({
                             >
                                 <StatusChip status={t} size="sm" />
                                 {NEEDS_DETAILS.includes(t) && (
-                                    <span className="text-[10px] text-gray-400">
-                                        {t === "Lost" ? "needs reason" : "needs GSTIN"}
-                                    </span>
+                                    <span className="text-[10px] text-gray-400">needs reason</span>
                                 )}
                             </button>
                         ))}
                         {pending && (
                             <div className="my-1 space-y-2 rounded-md border border-gray-200 bg-gray-50 p-2">
-                                {pending === "Lost" ? (
-                                    <>
-                                        <select
-                                            value={lostReason}
-                                            onChange={(e) => setLostReason(e.target.value as LostReason | "")}
-                                            className="w-full rounded-md border border-gray-200 bg-white px-2 py-1 text-xs focus:border-gray-400 focus:outline-none"
-                                        >
-                                            <option value="">Lost reason (required)</option>
-                                            {LOST_REASON.map((r) => (
-                                                <option key={r} value={r}>{LOST_REASON_LABELS[r]}</option>
-                                            ))}
-                                        </select>
-                                        {lostReason === "lost_to_competition" && (
-                                            <input
-                                                value={competitor}
-                                                onChange={(e) => setCompetitor(e.target.value)}
-                                                placeholder="Competitor (required)"
-                                                className="w-full rounded-md border border-gray-200 bg-white px-2 py-1 text-xs focus:border-gray-400 focus:outline-none"
-                                            />
-                                        )}
-                                    </>
-                                ) : (
-                                    <>
-                                        <input
-                                            value={gstin}
-                                            onChange={(e) => setGstin(e.target.value)}
-                                            placeholder="Dealer GSTIN"
-                                            maxLength={40}
-                                            className="w-full rounded-md border border-gray-200 bg-white px-2 py-1 text-xs uppercase focus:border-gray-400 focus:outline-none"
-                                        />
-                                        <p className="text-[10px] text-gray-500">
-                                            Leave blank if the lead already has a GSTIN. An onboarding
-                                            application is created if there is none.
-                                        </p>
-                                    </>
+                                <select
+                                    value={lostReason}
+                                    onChange={(e) => setLostReason(e.target.value as LostReason | "")}
+                                    className="w-full rounded-md border border-gray-200 bg-white px-2 py-1 text-xs focus:border-gray-400 focus:outline-none"
+                                >
+                                    <option value="">Lost reason (required)</option>
+                                    {LOST_REASON.map((r) => (
+                                        <option key={r} value={r}>{LOST_REASON_LABELS[r]}</option>
+                                    ))}
+                                </select>
+                                {lostReason === "lost_to_competition" && (
+                                    <input
+                                        value={competitor}
+                                        onChange={(e) => setCompetitor(e.target.value)}
+                                        placeholder="Competitor (required)"
+                                        className="w-full rounded-md border border-gray-200 bg-white px-2 py-1 text-xs focus:border-gray-400 focus:outline-none"
+                                    />
                                 )}
                                 <button
                                     type="button"

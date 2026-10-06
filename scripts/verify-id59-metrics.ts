@@ -1,11 +1,9 @@
-// Tracker ID 59 — the four points of the 30 Sep review, checked against the
-// database in DATABASE_URL. READ-ONLY: nothing is written.
+// Tracker ID 59 — the metric definitions, checked against the database in
+// DATABASE_URL. READ-ONLY: nothing is written.
 //   node --import tsx --env-file=.env.local scripts/verify-id59-metrics.ts
-//   node --import tsx --env-file=.env.local scripts/verify-id59-metrics.ts --settings
 //
-// --settings also proves the reports follow the engaged-call SETTING: inside a
-// transaction that is always rolled back it saves three different rules and
-// counts engaged calls under each. Nothing is left behind.
+// Engaged (decided 3 Oct 2026) = a connected human call, any duration. The
+// duration rule and its setting are gone, so there is no --settings mode.
 //
 // Uses the real definitions (reports/metricDefinitions.ts) and the real
 // builders (buildSalesDashboard, listTargets), so it measures what the
@@ -15,16 +13,12 @@
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { buildSalesDashboard } from "@/lib/admin/salesDashboard";
-import type { EngagedCallRule } from "@/lib/lifecycle/touchpointTypes";
-import { getEngagedCallRuleSettings } from "@/lib/reports/engagedCallRule";
 import { salesDailyDigest } from "@/lib/digests/kinds/sales-daily";
 import {
     connectedCall,
     engagedCall,
-    engagedCallCount,
     engagedState,
     humanCall,
-    measuredCall,
 } from "@/lib/reports/metricDefinitions";
 import { listTargets } from "@/lib/targets/service";
 
@@ -40,109 +34,37 @@ const many = async (q: ReturnType<typeof sql>) => (await db.execute(q)) as unkno
 
 async function main() {
     console.log("database:", new URL(process.env.DATABASE_URL!).host.split(".")[0]);
-    const saved = await getEngagedCallRuleSettings();
-    console.log(
-        `engaged-call rule in force: connected and at least ${saved.minSeconds} s; ${
-            saved.durationSource === "reported" ? "rep-entered durations count" : "NeoDove-recorded durations only"
-        }${saved.updated_at ? ` (set by ${saved.updated_by_name ?? "—"})` : " (default — never changed)"}\n`,
-    );
-    const NEODOVE: EngagedCallRule = { minSeconds: saved.minSeconds, durationSource: "neodove" };
-    const REPORTED: EngagedCallRule = { minSeconds: saved.minSeconds, durationSource: "reported" };
 
-    // ── 1. engaged = measured duration ────────────────────────────────────
+    // ── 1. engaged = a connected human call, counted once ─────────────────
     const c = await one(sql`
-        SELECT COUNT(*) FILTER (WHERE ${humanCall()})                        AS human,
-               COUNT(*) FILTER (WHERE ${engagedCall(sql`t`, NEODOVE)})     AS engaged_neodove,
-               COUNT(*) FILTER (WHERE ${engagedCall(sql`t`, REPORTED)})    AS engaged_reported,
-               COUNT(*) FILTER (WHERE ${measuredCall(sql`t`, NEODOVE)})    AS measured_neodove,
-               COUNT(*) FILTER (WHERE ${measuredCall(sql`t`, REPORTED)})   AS measured_reported,
-               COUNT(*) FILTER (WHERE t.is_engaged IS TRUE)                  AS flagged,
-               COUNT(*) FILTER (WHERE t.call_status = 'connected')           AS connected,
-               ${engagedCallCount(sql`t`, NEODOVE)}                        AS count_neodove,
-               ${engagedCallCount(sql`t`, REPORTED)}                       AS count_reported
+        SELECT COUNT(*) FILTER (WHERE ${humanCall()})              AS human,
+               COUNT(*) FILTER (WHERE ${engagedCall()})            AS engaged,
+               COUNT(*) FILTER (WHERE ${connectedCall()})          AS connected_calls,
+               COUNT(*) FILTER (WHERE t.is_engaged IS TRUE)        AS flagged,
+               COUNT(*) FILTER (WHERE t.call_status = 'connected') AS connected_rows,
+               COUNT(*) FILTER (WHERE ${engagedCall()} AND t.call_duration_sec IS NULL) AS engaged_untimed
           FROM lead_touchpoints t
          WHERE t.touchpoint_type = 'inside_sales_call'`);
     console.log(
-        `calls (all time): ${num(c.human)} human · ${num(c.connected)} connected rows · stored flag says engaged on ${num(c.flagged)}`,
+        `calls (all time): ${num(c.human)} human · ${num(c.connected_rows)} connected rows · ${num(c.engaged)} engaged · stored flag says engaged on ${num(c.flagged)}`,
     );
-    console.log(
-        `  NeoDove-recorded duration: ${num(c.measured_neodove)} measured, ${num(c.engaged_neodove)} engaged → report shows ${c.count_neodove == null ? '"Not measured yet"' : num(c.count_neodove)}`,
-    );
-    console.log(
-        `  incl. rep-entered duration: ${num(c.measured_reported)} measured, ${num(c.engaged_reported)} engaged → report would show ${c.count_reported == null ? '"Not measured yet"' : num(c.count_reported)}`,
-    );
-    check(num(c.engaged_reported) <= num(c.human), "engaged never exceeds calls");
-    check(num(c.engaged_neodove) <= num(c.engaged_reported), "a NeoDove-timed engaged call is also engaged when typed durations count");
-    check(
-        (c.count_neodove == null) === (num(c.measured_neodove) === 0),
-        "engagedCallCount is NULL exactly when no call has a measured duration",
-    );
-    // With no explicit rule the fragments read the saved setting themselves.
-    const inline = await one(sql`
-        SELECT COUNT(*) FILTER (WHERE ${engagedCall()}) AS engaged, ${engagedCallCount()} AS shown
-          FROM lead_touchpoints t WHERE t.touchpoint_type = 'inside_sales_call'`);
-    const expected = saved.durationSource === "reported" ? c.engaged_reported : c.engaged_neodove;
-    check(
-        num(inline.engaged) === num(expected),
-        "the fragments read the saved rule from the settings row",
-        `${num(inline.engaged)} engaged under the rule in force`,
-    );
-
-    // ── the setting drives the reports (rolled back) ──────────────────────
-    if (process.argv.includes("--settings")) {
-        class Rollback extends Error {}
-        try {
-            await db.transaction(async (tx) => {
-                const save = (value: unknown) =>
-                    tx.execute(sql`
-                        INSERT INTO app_settings (key, value, updated_at)
-                        VALUES ('engaged_call_rule', ${JSON.stringify(value)}::jsonb, NOW())
-                        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`);
-                const engaged = async (rule?: EngagedCallRule) =>
-                    num(
-                        ((await tx.execute(sql`
-                            SELECT COUNT(*) FILTER (WHERE ${engagedCall(sql`t`, rule)}) AS n
-                              FROM lead_touchpoints t WHERE t.touchpoint_type = 'inside_sales_call'`)) as unknown as Row[])[0]?.n,
-                    );
-
-                await save({ min_seconds: 30, duration_source: "reported" });
-                check(
-                    (await engaged()) === (await engaged({ minSeconds: 30, durationSource: "reported" })),
-                    'saving "rep-entered durations count" changes what the reports count',
-                    `${await engaged()} engaged`,
-                );
-                await save({ min_seconds: 120, duration_source: "reported" });
-                check(
-                    (await engaged()) === (await engaged({ minSeconds: 120, durationSource: "reported" })),
-                    "saving a different threshold changes it too",
-                    `${await engaged()} engaged at 120 s`,
-                );
-                await save({ min_seconds: "abc", duration_source: 7 });
-                check(
-                    (await engaged()) === (await engaged({ minSeconds: 30, durationSource: "neodove" })),
-                    "a malformed settings row falls back to the default instead of breaking the report",
-                );
-                throw new Rollback();
-            });
-        } catch (e) {
-            if (!(e instanceof Rollback)) throw e;
-        }
-        const after = await getEngagedCallRuleSettings();
-        check(
-            after.minSeconds === saved.minSeconds && after.durationSource === saved.durationSource,
-            "the saved rule is as it was before the run",
-        );
-    }
+    check(num(c.engaged) === num(c.connected_calls), "engaged = connected human calls, counted once");
+    check(num(c.engaged) <= num(c.human), "engaged never exceeds calls");
+    check(num(c.engaged) <= num(c.connected_rows), "de-duplicating never adds an engaged call");
+    console.log(`  ${num(c.engaged_untimed)} engaged calls carry no duration — they count all the same`);
 
     // ── 2. the per-row state every reader now uses ────────────────────────
     const s = await one(sql`
         SELECT COUNT(*) FILTER (WHERE ${engagedState()} IS TRUE)  AS yes,
                COUNT(*) FILTER (WHERE ${engagedState()} IS FALSE) AS no,
                COUNT(*) FILTER (WHERE ${engagedState()} IS NULL)  AS unknown,
-               COUNT(*) FILTER (WHERE ${engagedState()} IS TRUE AND t.call_status IS DISTINCT FROM 'connected') AS bad
+               COUNT(*) FILTER (WHERE ${engagedState()} IS TRUE AND t.call_status IS DISTINCT FROM 'connected') AS bad,
+               COUNT(*) FILTER (WHERE ${engagedState()} IS NOT TRUE AND t.call_status = 'connected') AS missed
           FROM lead_touchpoints t
          WHERE t.touchpoint_type = 'inside_sales_call'`);
-    console.log(`\ncall rows by engaged state: ${num(s.yes)} yes · ${num(s.no)} no · ${num(s.unknown)} not measured`);
+    console.log(`\ncall rows by engaged state: ${num(s.yes)} yes · ${num(s.no)} no`);
+    check(num(s.unknown) === 0, "every call row reads Yes or No — never blank");
+    check(num(s.missed) === 0, "every connected call reads as engaged");
     check(num(s.bad) === 0, "no call that did not connect reads as engaged");
 
     const k = await one(sql`
@@ -159,7 +81,6 @@ async function main() {
     console.log(
         `Admin KPI "Engaged → Converted" cohort (leads created last 30 days): ${num(k.old_cohort)} by the old flag → ${num(k.new_cohort)} by the definition`,
     );
-    check(num(k.new_cohort) <= num(k.old_cohort), "the definition never engages a lead the old flag did not");
 
     // ── connected calls, counted once (admin Daily Activity report) ────────
     const cc = await one(sql`
@@ -215,8 +136,25 @@ async function main() {
     console.log(`  A · Engaged calls → ${engagedRow ? engagedRow.slice(1).filter((x) => x !== "").join(" | ") : "(row missing)"}`);
     check(!!engagedRow, "Block A has the Engaged calls row");
     check(
-        !!cBlock && ["Connected MTD", "Connect % MTD", "Engaged MTD", "Hot to field MTD"].every((h) => cBlock.columns.includes(h)),
-        "Block C carries Connected, Connect %, Engaged and Hot to field per rep",
+        !!engagedRow && !engagedRow.slice(1).some((x) => String(x).includes("Not measured")),
+        'Block A "Engaged calls" shows a count in every period, never "Not measured yet"',
+    );
+    // Block A (company) and Block C (per caller) count one predicate: the MTD
+    // figures agree once calls by nobody on Block C's list are added back.
+    const mtd = await one(sql`
+        SELECT COUNT(*) FILTER (WHERE ${engagedCall()}) AS company
+          FROM lead_touchpoints t
+         WHERE (t.performed_at AT TIME ZONE 'Asia/Kolkata')::date BETWEEN date_trunc('month', ${covered}::date)::date AND ${covered}::date`);
+    const aMtd = engagedRow ? Number(String(engagedRow[3]).replace(/,/g, "")) : NaN;
+    check(aMtd === num(mtd.company), "Block A Engaged calls MTD = connected human calls MTD", `${aMtd} vs ${num(mtd.company)}`);
+    // Block C is one group of metric rows per rep: [metric, yesterday, MTD, MTD target, % of target].
+    const cEngaged = (cBlock?.rows ?? []).filter((r) => r[0] === "Engaged calls");
+    const cSum = cEngaged.reduce((n, r) => n + (Number(String(r[2]).replace(/,/g, "")) || 0), 0);
+    check(cSum <= aMtd, "Block C per-caller Engaged MTD sums to no more than Block A", `${cSum} of ${aMtd}`);
+    check(
+        !!cBlock && cEngaged.length > 0 && cEngaged.every((r) => !r.some((x) => String(x).includes("Not measured"))),
+        'Block C has an "Engaged calls" row per rep, as a count',
+        `${cEngaged.length} reps`,
     );
     for (const r of cBlock?.rows ?? []) console.log(`  C · ${r.join(" | ")}`);
     check(

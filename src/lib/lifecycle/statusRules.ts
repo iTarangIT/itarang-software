@@ -191,6 +191,13 @@ export function checkStatusMove(input: {
             if (!input.reason || !input.reason.trim()) {
                 return { ok: false, reason: "Correct status needs a reason." };
             }
+            // ID 133 (business rule, 3 Oct): every onboarding goes the same
+            // path. A correction to Converted skipped documents, verification,
+            // agreement and approval; to Won it skipped Mark Won's checks.
+            if (to === "Converted") {
+                return { ok: false, reason: "Converted is set when the dealer's onboarding is approved." };
+            }
+            if (to === "Won") return { ok: false, reason: "Use Mark Won." };
             return { ok: true };
     }
 }

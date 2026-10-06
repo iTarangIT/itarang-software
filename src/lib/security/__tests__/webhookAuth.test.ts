@@ -15,7 +15,6 @@ import {
   bearerProof,
   bolnaCallbackToken,
   bolnaCallbackUrl,
-  callbackTokenProof,
   checksumProof,
   guardBolnaCall,
   guardDigioWebhook,
@@ -189,44 +188,32 @@ describe("guardBolnaCall", () => {
       guardBolnaCall(new Headers({ authorization: `Bearer ${SECRET}` }), "/test/bolna-hook", "BOLNA_WEBHOOK_SECRET"),
     ).toBeNull();
   });
-});
 
-describe("Bolna per-call callback token (ID 118 item 8)", () => {
-  const HOOK = "https://crm.example/api/ceo/ai-dialer/webhook/bolna";
-
-  it("never puts the raw secret in the URL, and is stable per secret", () => {
-    const url = bolnaCallbackUrl(HOOK, SECRET);
-    expect(url).not.toContain(SECRET);
-    expect(new URL(url).searchParams.get("cb")).toBe(bolnaCallbackToken(SECRET));
-    expect(bolnaCallbackToken(SECRET)).not.toBe(bolnaCallbackToken("other"));
-  });
-
-  it("leaves the URL alone when no secret is configured", () => {
-    expect(bolnaCallbackUrl(HOOK, undefined)).toBe(HOOK);
-    expect(bolnaCallbackUrl(HOOK, "")).toBe(HOOK);
-  });
-
-  it("proof: valid / invalid / absent", () => {
-    expect(callbackTokenProof(SECRET, bolnaCallbackUrl(HOOK, SECRET))).toBe("valid");
-    expect(callbackTokenProof(SECRET, bolnaCallbackUrl(HOOK, "rotated"))).toBe("invalid");
-    expect(callbackTokenProof(SECRET, `${HOOK}?cb=nope`)).toBe("invalid");
-    expect(callbackTokenProof(SECRET, HOOK)).toBe("absent");
-    expect(callbackTokenProof(SECRET, undefined)).toBe("absent");
-    expect(callbackTokenProof(undefined, bolnaCallbackUrl(HOOK, SECRET))).toBe("invalid");
-  });
-
-  it("guardBolnaCall admits the token OR the bearer once the secret is set", () => {
+  it("a per-call callback proves itself with the token in its URL, not a header", () => {
     vi.stubEnv("BOLNA_WEBHOOK_SECRET", SECRET);
     vi.stubEnv("WEBHOOK_AUTH_STRICT", "");
     vi.spyOn(console, "warn").mockImplementation(() => {});
+    const base = "https://crm.test/api/ceo/ai-dialer/webhook/bolna";
+    const url = bolnaCallbackUrl(base);
+    expect(url).toBe(`${base}?cb=${bolnaCallbackToken(SECRET)}`);
+    // The secret itself is never in the URL.
+    expect(url).not.toContain(SECRET);
     const none = new Headers();
-    expect(guardBolnaCall(none, "/t", "BOLNA_WEBHOOK_SECRET", bolnaCallbackUrl(HOOK, SECRET))).toBeNull();
-    expect(guardBolnaCall(none, "/t", "BOLNA_WEBHOOK_SECRET", `${HOOK}?cb=forged`)?.status).toBe(401);
-    expect(guardBolnaCall(none, "/t", "BOLNA_WEBHOOK_SECRET", HOOK)?.status).toBe(401);
-    // A valid bearer is enough even if the query carries junk.
+    expect(guardBolnaCall(none, "/test/bolna-cb", "BOLNA_WEBHOOK_SECRET", url)).toBeNull();
+    expect(guardBolnaCall(none, "/test/bolna-cb", "BOLNA_WEBHOOK_SECRET", `${base}?cb=wrong`)?.status).toBe(401);
+    expect(guardBolnaCall(none, "/test/bolna-cb", "BOLNA_WEBHOOK_SECRET", base)?.status).toBe(401);
+    // A valid bearer still passes, whatever the URL carries.
     expect(
-      guardBolnaCall(new Headers({ authorization: `Bearer ${SECRET}` }), "/t", "BOLNA_WEBHOOK_SECRET", `${HOOK}?cb=junk`),
+      guardBolnaCall(new Headers({ authorization: `Bearer ${SECRET}` }), "/test/bolna-cb", "BOLNA_WEBHOOK_SECRET", `${base}?cb=wrong`),
     ).toBeNull();
+    // The tool secret's token is a different one.
+    vi.stubEnv("BOLNA_TOOL_SECRET", "tool_secret_0123456789");
+    expect(guardBolnaCall(none, "/test/bolna-tool", "BOLNA_TOOL_SECRET", url)?.status).toBe(401);
+  });
+
+  it("with no secret configured the callback URL is left as it was", () => {
+    vi.stubEnv("BOLNA_WEBHOOK_SECRET", "");
+    expect(bolnaCallbackUrl("https://crm.test/hook")).toBe("https://crm.test/hook");
   });
 });
 

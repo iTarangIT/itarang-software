@@ -4,9 +4,9 @@ import { successResponse, errorResponse, withErrorHandler } from '@/lib/api-util
 import { requireRole } from '@/lib/auth-utils';
 import { eq, and } from 'drizzle-orm';
 
-export const DELETE = withErrorHandler(async (_req: Request, { params }: { params: { sessionId: string } }) => {
+export const DELETE = withErrorHandler(async (_req: Request, { params }: { params: Promise<{ sessionId: string }> }) => {
     const user = await requireRole(['dealer']);
-    const { sessionId } = params;
+    const { sessionId } = await params;
 
     let existing;
     try {

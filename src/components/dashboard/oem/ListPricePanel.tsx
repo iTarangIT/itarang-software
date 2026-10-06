@@ -55,7 +55,7 @@ function ListPriceHistory({ row, onRemove, removing }: { row: Row; onRemove: (pr
         queryKey: ["list-prices", "history", row.asset_type, row.product_id],
         queryFn: async () => {
             const r = await fetch(
-                `/api/dashboard/ceo/list-price-catalogue?asset_type=${encodeURIComponent(row.asset_type)}&product_id=${encodeURIComponent(row.product_id)}`,
+                `/api/dashboard/ceo/list-prices?asset_type=${encodeURIComponent(row.asset_type)}&product_id=${encodeURIComponent(row.product_id)}`,
                 { cache: "no-store" },
             );
             const j = await r.json();
@@ -126,7 +126,7 @@ export function ListPricePanel() {
     const { data, isLoading, isError } = useQuery<{ products: Row[]; without_list_price: number }>({
         queryKey: ["list-prices"],
         queryFn: async () => {
-            const r = await fetch("/api/dashboard/ceo/list-price-catalogue", { cache: "no-store" });
+            const r = await fetch("/api/dashboard/ceo/list-prices", { cache: "no-store" });
             const j = await r.json();
             if (!j.success) throw new Error(j?.error?.message ?? "Failed to load");
             return j.data;
@@ -134,7 +134,7 @@ export function ListPricePanel() {
     });
 
     const call = async (method: "POST" | "DELETE", body: unknown) => {
-        const r = await fetch("/api/dashboard/ceo/list-price-catalogue", {
+        const r = await fetch("/api/dashboard/ceo/list-prices", {
             method,
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(body),

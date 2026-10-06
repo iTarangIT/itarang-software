@@ -34,8 +34,8 @@ import { dealerLeads } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 import { withLeadActor } from "@/lib/leads/actorContext";
 import { withErrorHandler } from "@/lib/api-utils";
-import { LEADS_PAGE_ROLES } from "@/lib/leads/access";
-import { normalizePhone } from "@/lib/leads/dedupe";
+import { LEADS_PAGE_ROLES, canEditLead } from "@/lib/leads/access";
+import { loadExistingByPhone, normalizePhone } from "@/lib/leads/dedupe";
 import { BusinessTypeSchema } from "@/lib/leads/businessType";
 import { canonicalRegionUpdates } from "@/lib/leads/regionFields";
 
@@ -84,11 +84,27 @@ export const PATCH = withErrorHandler(
     const body = parsed.data;
 
     const [existing] = await db
-      .select({ id: dealerLeads.id, location: dealerLeads.location })
+      .select({
+        id: dealerLeads.id,
+        location: dealerLeads.location,
+        current_owner_id: dealerLeads.current_owner_id,
+        asm_id: dealerLeads.asm_id,
+      })
       .from(dealerLeads)
       .where(eq(dealerLeads.id, id))
       .limit(1);
-    if (!existing) {
+    // ID 132: a rep may only edit a lead they own (or are the assigned ASM
+    // of); managers any. Same 404 for "not yours" as for "no such lead", so
+    // the route cannot be used to probe which ids exist.
+    if (
+      !existing ||
+      !canEditLead({
+        role: user.role,
+        userId: user.id,
+        currentOwnerId: existing.current_owner_id,
+        asmId: existing.asm_id,
+      })
+    ) {
       return NextResponse.json(
         { success: false, error: { message: "Lead not found" } },
         { status: 404 },
@@ -115,14 +131,18 @@ export const PATCH = withErrorHandler(
           { status: 400 },
         );
       }
-      // dealer_leads.phone is UNIQUE (dealer_leads_phone_unique). Check before
-      // writing so the operator gets a sentence instead of a 500 from a
-      // constraint violation.
-      const [clash] = await db
+      // dealer_leads.phone is UNIQUE (dealer_leads_phone_unique) on the raw
+      // text, so `98765 43210` and `+919876543210` can both exist. Check before
+      // writing — an exact match for the constraint, and the last 10 digits
+      // (the engine every importer uses) so an edit cannot turn this lead into
+      // a second copy of a dealer stored in the other format.
+      const [exact] = await db
         .select({ id: dealerLeads.id })
         .from(dealerLeads)
         .where(and(eq(dealerLeads.phone, normalized), ne(dealerLeads.id, id)))
         .limit(1);
+      const sameDigits = exact ? null : (await loadExistingByPhone([normalized])).get(normalized);
+      const clash = exact ?? (sameDigits && sameDigits.id !== id ? sameDigits : null);
       if (clash) {
         return NextResponse.json(
           {

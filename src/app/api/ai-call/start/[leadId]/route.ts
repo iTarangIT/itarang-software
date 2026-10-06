@@ -6,7 +6,7 @@ import { requireRole } from "@/lib/auth-utils";
 
 export const POST = withErrorHandler(async (
     req: Request,
-    { params }: { params: { leadId: string } }
+    { params }: { params: Promise<{ leadId: string }> }
 ) => {
     // ID 118: signed in, with a role that reaches this screen.
     await requireRole([...LEADS_OVERSIGHT_ROLES]);

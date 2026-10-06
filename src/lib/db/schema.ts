@@ -243,10 +243,6 @@ export const oemReferencePrices = pgTable(
   }),
 );
 
-// E-323 (IDs 4, 47) — the LIST price printed on the quotation. Same dated,
-// append-only shape as oem_reference_prices above, and always >= the OEM price
-// in the same window (checked in listPrices.ts and in setOemPrice). Optional:
-// a product with no list price prints its OEM price as the list price.
 // E-321 — the optional list price printed on quotations (tracker ID 4 /
 // handover P1-14). Same append-only windowed shape as oem_reference_prices;
 // never below the OEM price in any overlapping window (src/lib/leads/listPrices.ts).
@@ -1007,20 +1003,8 @@ export const accounts = pgTable(
     created_by: uuid("created_by"),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
-    // ---- E-322 (ID 65) — the dealer account model. "Onboarded by" is fixed;
-    // the account owner changes with reassignment, every change recorded in
-    // account_ownership_history. Owner changes never edit the onboarding.
-    onboarded_by_user_id: uuid("onboarded_by_user_id"),
-    account_owner_id: uuid("account_owner_id"),
-    account_owner_since: date("account_owner_since"),
-    came_through: varchar("came_through", { length: 16 }), // lead | direct
-    originating_dealer_lead_id: text("originating_dealer_lead_id"),
-    activated_at: timestamp("activated_at", { withTimezone: true }),
-    gstin_corrected_at: timestamp("gstin_corrected_at", { withTimezone: true }),
-    gstin_corrected_by: uuid("gstin_corrected_by"),
   },
   (t) => ({
-    accountOwnerIdx: index("accounts_account_owner_idx").on(t.account_owner_id),
     // E-192 — GIN trigram, leading-wildcard admin buyback search (M23)
     // against business_entity_name/gstin. `accounts` is not a buyback table
     // and exists on every env — see drizzle/E-192_buyback_scale_indexes.sql.
@@ -1029,25 +1013,6 @@ export const accounts = pgTable(
       t.business_entity_name.op("gin_trgm_ops"),
     ),
     gstinTrgmIdx: index("accounts_gstin_trgm_idx").using("gin", t.gstin.op("gin_trgm_ops")),
-  }),
-);
-
-// E-322 (ID 65) — one row per change of a dealer account's owner. Reports read
-// the owner on a given date from here, so past revenue never moves.
-export const accountOwnershipHistory = pgTable(
-  "account_ownership_history",
-  {
-    id: uuid().defaultRandom().primaryKey().notNull(),
-    account_id: varchar("account_id", { length: 255 }).notNull(),
-    from_owner_id: uuid("from_owner_id"),
-    to_owner_id: uuid("to_owner_id"),
-    reason: text().notNull(),
-    effective_date: date("effective_date").notNull(),
-    changed_by: uuid("changed_by"),
-    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-  },
-  (t) => ({
-    accountIdx: index("account_ownership_history_account_idx").on(t.account_id, t.effective_date, t.created_at),
   }),
 );
 
@@ -3409,7 +3374,8 @@ export const dealerOnboardingApplications = pgTable(
     sales_manager_name: text("sales_manager_name"),
     sales_manager_email: text("sales_manager_email"),
     sales_manager_mobile: text("sales_manager_mobile"),
-    // E-321 (ID 66) — the salesperson as a CRM user (active ISR / ASM / Sales
+    // E-329 (ID 66; written as E-321_dealer_onboarding_salesperson before the
+    // 5 Oct renumbering) — the salesperson as a CRM user (active ISR / ASM / Sales
     // Head). The three typed columns above stay, filled from this user's row.
     salesperson_user_id: uuid("salesperson_user_id"),
     itarang_signatory_1_name: text("itarang_signatory_1_name"),
@@ -10093,9 +10059,6 @@ export const dealerLeadCommercials = pgTable(
     // quote stays auditable after the price book moves on.
     approval_mode: varchar("approval_mode", { length: 16 }),
     oem_evaluation: jsonb("oem_evaluation"),
-    // E-323 — the list price each line was quoted against, frozen on the quote
-    // (see ListPriceSnapshot in lib/leads/listPricing.ts). NULL on older quotes.
-    list_price_snapshot: jsonb("list_price_snapshot"),
     // E-242 — the generated quotation draft. Distinct from quote_document_url,
     // which is whatever file the rep attached by hand; these are written only
     // by generateQuotationDraft() and only after approval. quote_snapshot is
