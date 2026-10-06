@@ -69,8 +69,11 @@ export type DownloadLogRow = {
     filters: Record<string, unknown>;
 };
 
-/** The most recent downloads, newest first — the list Admin and CEO see. */
-export async function listDataDownloads(limit = 200): Promise<DownloadLogRow[]> {
+/**
+ * The most recent downloads, newest first. Admin and CEO see everyone's; pass
+ * `userId` for the list anyone else sees — their own downloads only.
+ */
+export async function listDataDownloads(limit = 200, userId?: string): Promise<DownloadLogRow[]> {
     try {
         const rows = (await db.execute(sql`
             SELECT l.id::text AS id, l.created_at::text AS created_at, u.name AS user_name, l.user_role,
@@ -82,6 +85,7 @@ export async function listDataDownloads(limit = 200): Promise<DownloadLogRow[]> 
                    COALESCE(to_jsonb(l) ->> 'format', l.filters ->> 'format')           AS format
               FROM data_download_log l
               LEFT JOIN users u ON u.id::text = l.user_id::text
+             ${userId ? sql`WHERE l.user_id::text = ${userId}` : sql``}
              ORDER BY l.created_at DESC
              LIMIT ${limit}
         `)) as unknown as Array<Record<string, unknown>>;
