@@ -633,43 +633,47 @@ export default function CEODashboard() {
           </>
         }
       >
-        <SegmentedControl
-          label="Period"
-          options={PERIODS}
-          value={period}
-          onChange={(p) => {
-            setPeriod(p);
-            setCustom({ from: "", to: "" });
-          }}
-        />
-        <div
-          role="group"
-          aria-label="Custom date range"
-          className={`inline-flex min-h-10 items-center gap-1.5 rounded-xl border px-3 text-[13px] font-semibold ${
-            period === "custom"
-              ? "border-brand-navy/30 bg-surface text-brand-navy shadow-sm"
-              : "border-transparent bg-[#e7edf3] text-ink-muted"
-          }`}
-        >
-          <CalendarRange className="h-4 w-4 shrink-0 opacity-70" aria-hidden />
-          <input
-            type="date"
-            value={custom.from}
-            max={custom.to || todayStr}
-            onChange={(e) => pickCustom({ from: e.target.value })}
-            aria-label="From date"
-            className="w-[118px] bg-transparent outline-none"
+        {/* One row beside the title on wide screens; stacked and right-aligned
+            when the two controls no longer fit next to it. */}
+        <div className="flex flex-wrap items-center gap-3 lg:flex-col lg:flex-nowrap lg:items-end 2xl:flex-row 2xl:items-center">
+          <SegmentedControl
+            label="Period"
+            options={PERIODS}
+            value={period}
+            onChange={(p) => {
+              setPeriod(p);
+              setCustom({ from: "", to: "" });
+            }}
           />
-          <span className="opacity-50">to</span>
-          <input
-            type="date"
-            value={custom.to}
-            min={custom.from || undefined}
-            max={todayStr}
-            onChange={(e) => pickCustom({ to: e.target.value })}
-            aria-label="To date"
-            className="w-[118px] bg-transparent outline-none"
-          />
+          <div
+            role="group"
+            aria-label="Custom date range"
+            className={`inline-flex min-h-[46px] items-center gap-1.5 rounded-xl border px-3 text-[13px] font-semibold ${
+              period === "custom"
+                ? "border-brand-navy/30 bg-surface text-brand-navy shadow-sm"
+                : "border-transparent bg-[#e7edf3] text-ink-muted"
+            }`}
+          >
+            <CalendarRange className="h-4 w-4 shrink-0 opacity-70" aria-hidden />
+            <input
+              type="date"
+              value={custom.from}
+              max={custom.to || todayStr}
+              onChange={(e) => pickCustom({ from: e.target.value })}
+              aria-label="From date"
+              className="w-[118px] bg-transparent outline-none"
+            />
+            <span className="opacity-50">to</span>
+            <input
+              type="date"
+              value={custom.to}
+              min={custom.from || undefined}
+              max={todayStr}
+              onChange={(e) => pickCustom({ to: e.target.value })}
+              aria-label="To date"
+              className="w-[118px] bg-transparent outline-none"
+            />
+          </div>
         </div>
       </DashPageHeader>
 
