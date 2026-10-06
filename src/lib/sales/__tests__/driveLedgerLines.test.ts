@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { checkDriveLines, toLedgerRows } from "@/lib/sales/driveLedgerLinesRules";
+import { checkDriveLines, reconcileDriveLines, toLedgerRows } from "@/lib/sales/driveLedgerLinesRules";
 import type { InvoiceLine } from "@/lib/sales/salesInvoiceLines";
 
 const line = (p: Partial<InvoiceLine>): InvoiceLine => ({
@@ -60,5 +60,43 @@ describe("toLedgerRows", () => {
         ]);
         expect(rows[0].hsn).toBe("85076000");
         expect(rows[0].item_name).toBe("Trontek Li Battery 51V 105Ah");
+    });
+});
+
+describe("reconcileDriveLines", () => {
+    // ITG/202627/059, read by eye 6 Oct 2026: the Vyapar "Amount" column is
+    // GST-INCLUSIVE (₹2,89,100 for 5 batteries) while Price/Unit is pre-tax
+    // (₹49,000). The model copies the printed Amount, so the lines sum to the
+    // grand total ₹3,25,610, not the taxable ₹2,78,750 — yet qty × price does.
+    const inv059 = [
+        line({ line_no: 1, quantity: 5, rate: 49000, amount: 289100 }),
+        line({ line_no: 2, description: "EV Battery Charger 1200W", hsn_code: "85044030", quantity: 5, rate: 5100, amount: 26775 }),
+        line({ line_no: 3, description: "LCD Display with Box", hsn_code: "85079090", quantity: 5, rate: 600, amount: 3540 }),
+        line({ line_no: 4, description: "Wiring Harness SB-75", hsn_code: "85366990", quantity: 5, rate: 1050, amount: 6195 }),
+    ];
+
+    it("accepts GST-inclusive amounts when qty × price adds up to the taxable value", () => {
+        const r = reconcileDriveLines(inv059, 278750);
+        expect(r.ok).toBe(true);
+        if (r.ok) {
+            expect(r.basis).toBe("qty_x_rate");
+            expect(r.lines.map((l) => l.amount)).toEqual([245000, 25500, 3000, 5250]);
+            expect(r.lines.map((l) => l.quantity)).toEqual([5, 5, 5, 5]);
+        }
+    });
+
+    it("keeps read amounts when they already check out", () => {
+        const r = reconcileDriveLines([line({})], 3562500);
+        expect(r.ok && r.basis).toBe("amounts");
+    });
+
+    it("refuses when neither amounts nor qty × price add up", () => {
+        const r = reconcileDriveLines([line({ quantity: 57, rate: 47500, amount: 4203750 })], 3562500);
+        expect(r.ok).toBe(false);
+    });
+
+    it("refuses the qty × price route when any line has no price", () => {
+        const lines = inv059.map((l, i) => (i === 3 ? { ...l, rate: null } : l));
+        expect(reconcileDriveLines(lines, 278750).ok).toBe(false);
     });
 });
