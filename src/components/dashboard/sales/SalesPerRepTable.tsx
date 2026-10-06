@@ -6,7 +6,8 @@
 import { useMemo } from "react";
 
 import { SortableTh, sortRows, useTableSort, type SortSpec } from "@/components/shared/TableSort";
-import type { InterestLevel, SalesSpocBlock } from "@/lib/admin/salesDashboardTypes";
+import type { InterestLevel, SalesDashboardSections, SalesSpocBlock } from "@/lib/admin/salesDashboardTypes";
+import { batteryReading, type BatteryReading } from "@/lib/admin/batteryReading";
 
 const fmt = (n: number) => n.toLocaleString("en-IN");
 const inr = (n: number) => `₹${n.toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
@@ -25,6 +26,7 @@ type Row = {
     converted: number;
     quotes_issued: number;
     batteries_to_dealers: number;
+    battery: BatteryReading;
     revenue: number;
     kyc_submitted: number;
 };
@@ -45,7 +47,7 @@ const SPECS: SortSpec<Row>[] = [
     { key: "kyc_submitted", type: "number" },
 ];
 
-function toRow(b: SalesSpocBlock): Row {
+function toRow(b: SalesDashboardSections & { spoc_id: string; name: string | null; role: string | null }): Row {
     const level = (l: InterestLevel) => b.interest.rows.find((r) => r.interest_level === l)?.total ?? 0;
     return {
         spoc_id: b.spoc_id,
@@ -61,20 +63,36 @@ function toRow(b: SalesSpocBlock): Row {
         converted: b.totals.converted,
         quotes_issued: b.outcome.quotes_issued,
         batteries_to_dealers: b.outcome.batteries_to_dealers,
+        battery: batteryReading(b.outcome),
         revenue: b.outcome.revenue,
         kyc_submitted: b.outcome.kyc_submitted,
     };
 }
 
+/** "—" when unknown, "125+" when only some invoices have item lines. */
+function batteryCell(b: BatteryReading): { text: string; title?: string } {
+    if (b.state === "unknown") return { text: "—", title: `No item lines on ${b.invoices} invoice(s) — count unknown` };
+    if (b.state === "partial")
+        return { text: `${fmt(b.value ?? 0)}+`, title: `Item lines on ${b.with_lines} of ${b.invoices} invoices` };
+    return { text: fmt(b.value ?? 0) };
+}
+
 export function SalesPerRepTable({
     reps,
+    unassigned,
     onPick,
 }: {
     reps: SalesSpocBlock[];
+    /** Whole-team remainder that belongs to no one — a fixed footer row. */
+    unassigned?: SalesDashboardSections | null;
     onPick: (spocId: string) => void;
 }) {
     const { sort, toggle, comparator } = useTableSort<Row>(SPECS);
     const rows = useMemo(() => sortRows(reps.map(toRow), comparator), [reps, comparator]);
+    const rest = useMemo(
+        () => (unassigned ? toRow({ ...unassigned, spoc_id: "", name: "Unassigned", role: "no owner" }) : null),
+        [unassigned],
+    );
 
     const num = (key: string, label: string) => (
         <SortableTh label={label} sortKey={key} sort={sort} onToggle={toggle} align="right" className="px-4" />
@@ -86,8 +104,10 @@ export function SalesPerRepTable({
                 <h3 className="text-sm font-semibold text-ink">Per SPOC</h3>
                 <p className="text-[11px] text-ink-muted">
                     Everyone with a visit, call, open lead, conversion or outcome in this range. Click a
-                    row to see that person alone. Calls with no performer (the AI dialer) are in
-                    the totals above but under no rep here.
+                    row to see that person alone. Unassigned is everything that belongs to no one —
+                    leads with no owner, calls with no linked caller, invoices of dealer accounts
+                    with no owner — so the rows add up to the figures above. AI dialer calls are
+                    not counted as calls.
                 </p>
             </div>
             <div className="overflow-x-auto border-t border-border">
@@ -144,11 +164,35 @@ export function SalesPerRepTable({
                                 <td className="px-4 py-2 text-right tabular-nums">{fmt(r.cold)}</td>
                                 <td className="px-4 py-2 text-right tabular-nums">{fmt(r.converted)}</td>
                                 <td className="px-4 py-2 text-right tabular-nums">{fmt(r.quotes_issued)}</td>
-                                <td className="px-4 py-2 text-right tabular-nums">{fmt(r.batteries_to_dealers)}</td>
+                                <td className="px-4 py-2 text-right tabular-nums" title={batteryCell(r.battery).title}>
+                                    {batteryCell(r.battery).text}
+                                </td>
                                 <td className="px-4 py-2 text-right tabular-nums">{inr(r.revenue)}</td>
                                 <td className="px-4 py-2 text-right tabular-nums">{fmt(r.kyc_submitted)}</td>
                             </tr>
                         ))}
+                        {rest && (
+                            <tr className="bg-bg/40 text-ink-muted" title="Belongs to no one — not clickable">
+                                <td className="px-4 py-2">
+                                    <div className="font-medium italic">{rest.name}</div>
+                                    <div className="text-[11px]">{rest.role}</div>
+                                </td>
+                                <td className="px-4 py-2 text-right tabular-nums">{fmt(rest.visits)}</td>
+                                <td className="px-4 py-2 text-right tabular-nums">{fmt(rest.unique_visits)}</td>
+                                <td className="px-4 py-2 text-right tabular-nums">{fmt(rest.new_visits)}</td>
+                                <td className="px-4 py-2 text-right tabular-nums">{fmt(rest.calls)}</td>
+                                <td className="px-4 py-2 text-right tabular-nums">{fmt(rest.hot)}</td>
+                                <td className="px-4 py-2 text-right tabular-nums">{fmt(rest.warm)}</td>
+                                <td className="px-4 py-2 text-right tabular-nums">{fmt(rest.cold)}</td>
+                                <td className="px-4 py-2 text-right tabular-nums">{fmt(rest.converted)}</td>
+                                <td className="px-4 py-2 text-right tabular-nums">{fmt(rest.quotes_issued)}</td>
+                                <td className="px-4 py-2 text-right tabular-nums" title={batteryCell(rest.battery).title}>
+                                    {batteryCell(rest.battery).text}
+                                </td>
+                                <td className="px-4 py-2 text-right tabular-nums">{inr(rest.revenue)}</td>
+                                <td className="px-4 py-2 text-right tabular-nums">{fmt(rest.kyc_submitted)}</td>
+                            </tr>
+                        )}
                     </tbody>
                 </table>
             </div>

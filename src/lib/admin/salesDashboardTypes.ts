@@ -138,6 +138,15 @@ export interface SalesOutcome {
      * to a dealer account where E-322 is not applied.
      */
     batteries_to_dealers: number;
+    /**
+     * How much of `batteries_to_dealers` is actually known: of the linked,
+     * non-void invoices in the range (`invoices`), how many have item lines
+     * (`with_lines`). An invoice without lines contributes 0 batteries whatever
+     * it sold, so `with_lines < invoices` means the count is a floor and
+     * `with_lines = 0` means it is unknown, not zero. `null` on the pre-E-322
+     * stock-allocation fallback, which has no such notion.
+     */
+    battery_lines: { invoices: number; with_lines: number } | null;
     /** Customer KYC files first queued in the range, from dealers linked on GSTIN. */
     kyc_submitted: number;
 }
@@ -164,4 +173,13 @@ export interface SalesDashboard extends SalesDashboardSections {
     as_of_date: string;
     /** Section E. `null` when spoc_id was given (there is nothing to split). */
     per_spoc: SalesSpocBlock[] | null;
+    /**
+     * Section E's remainder: everything in the whole-team figures that belongs
+     * to NO person — unowned leads, calls with no performer, invoices of
+     * accounts with no owner. Kept OUT of per_spoc on purpose: per_spoc feeds
+     * targets, digests and the CEO page, which expect a real user per row.
+     * per_spoc + unassigned add up to the whole-team sections. `null` when
+     * spoc_id was given or nothing is unassigned.
+     */
+    unassigned: SalesDashboardSections | null;
 }
