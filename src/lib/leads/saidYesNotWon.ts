@@ -26,6 +26,8 @@ export type SaidYesRow = {
     lead_status: string | null;
     owner_name: string | null;
     owner_role: string | null;
+    /** dealer_leads.current_owner_id — for the Sales Head person filter. */
+    owner_id: string | null;
     commercial_id: string;
     quote_number: string | null;
     version_no: number | null;
@@ -61,6 +63,7 @@ export async function listSaidYesNotWon(): Promise<SaidYesRow[]> {
                dl.city, dl.state, dl.phone, dl.lead_status,
                u.name                                             AS owner_name,
                u.role                                             AS owner_role,
+               dl.current_owner_id                                AS owner_id,
                v.*,
                ${WORKING_DAYS_SINCE(sql`v.dealer_yes_at`)}        AS working_days_waiting
           FROM dealer_leads dl
@@ -97,6 +100,7 @@ export async function listSaidYesNotWon(): Promise<SaidYesRow[]> {
         lead_status: (r.lead_status as string | null) ?? null,
         owner_name: (r.owner_name as string | null) ?? null,
         owner_role: (r.owner_role as string | null) ?? null,
+        owner_id: (r.owner_id as string | null) ?? null,
         commercial_id: String(r.commercial_id),
         quote_number: (r.quote_number as string | null) ?? null,
         version_no: r.version_no == null ? null : Number(r.version_no),
