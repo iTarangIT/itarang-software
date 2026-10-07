@@ -2,6 +2,7 @@ import { createServerClient } from "@supabase/ssr";
 import { type NextRequest, NextResponse } from "next/server";
 
 import { BUYBACK_ADMIN_ROLES } from "@/lib/buyback/roles";
+import { staffPageRolesFor } from "@/lib/auth/staffPageRoles";
 import { detectThreat, detectBodyThreat, type ThreatSignal } from "@/lib/security/detect";
 import { trackRequest, type RateSignal } from "@/lib/security/rate-watch";
 import { postSecurityEvent, SECURITY_INGEST_PATH } from "@/lib/security/report-event";
@@ -635,6 +636,16 @@ export async function middleware(request: NextRequest) {
     return finalize(NextResponse.redirect(new URL(myDashboard, request.url)));
   }
 
+  // /orders, /provisions and /deals have the same shape as /oem-pricing above:
+  // protected, but under no roleDashboards prefix, so they fell through to the
+  // permissive default and rendered for every signed-in role — dealers and
+  // NBFC partners included — and those pages read every row. The lists live in
+  // staffPageRoles.ts because the pages re-check them with requireRole.
+  const staffPageRoles = staffPageRolesFor(path);
+  if (staffPageRoles && !staffPageRoles.includes(role)) {
+    return finalize(NextResponse.redirect(new URL(myDashboard, request.url)));
+  }
+
   // Shared access routes
   const sharedRouteAccess: Record<string, string[]> = {
     // NBFC Risk Head dashboard — the second-approver surface of the
@@ -701,14 +712,20 @@ export async function middleware(request: NextRequest) {
       "partner",
       "business_head",
       "finance_controller",
+      // ID 13 — these three reach the page for Data downloads only (their own
+      // rows, or inventory); ReportsView shows them no other tab.
+      "asm",
+      "inside_sales_rep",
+      "inventory_manager",
     ],
     "/admin/targets": ["admin", "sales_head", "ceo", "business_head"],
     // ID 82 — the page's own requireRole list. Without this row the bare
     // "/admin" entry bounces business_head, sales_manager and partner.
     "/admin/ready-to-assign": ["admin", "sales_head", "ceo", "business_head", "sales_manager", "partner"],
-    // P1-1 / P1-2 — Accounts tab (owner / GSTIN). Admin and CEO only; without
-    // this row the bare "/admin" entry below would also admit sales_head.
-    "/admin/accounts": ["admin", "ceo"],
+    // P1-1 / P1-2 — Accounts tab (owner / GSTIN): admin, CEO and, since the
+    // two account screens were merged on 5 Oct, sales head (see
+    // ACCOUNT_ADMIN_ROLES in api/admin/accounts/_lib.ts).
+    "/admin/accounts": ["admin", "ceo", "sales_head"],
     "/admin/escalations": ["admin", "sales_head", "ceo", "partner"],
     "/admin/merge-requests": ["admin", "sales_head", "ceo", "partner"],
     "/admin/onboarding-dropouts": ["admin", "sales_head", "ceo", "partner"],

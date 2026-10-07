@@ -27,6 +27,8 @@ export type AttentionCode =
   | "date_folder_mismatch"
   | "missing_customer"
   | "missing_seller_gstin"
+  | "customer_gstin_invalid"
+  | "customer_gstin_own"
   | "entity_conflict"
   | "entity_unknown"
   | "other";
@@ -72,6 +74,9 @@ export const ATTENTION_META: Record<AttentionCode, AttentionMeta> = {
   date_folder_mismatch: { severity: "filing", label: "Filed under another month" },
   missing_customer: { severity: "filing", label: "No customer" },
   missing_seller_gstin: { severity: "filing", label: "Entity inferred" },
+  // ID 62 — the amount counts; the row just cannot be credited to a dealer.
+  customer_gstin_invalid: { severity: "filing", label: "Customer GSTIN fails check" },
+  customer_gstin_own: { severity: "filing", label: "Customer GSTIN is ours" },
   entity_conflict: { severity: "filing", label: "Entity signals disagree" },
   entity_unknown: { severity: "filing", label: "Entity unknown" },
   other: { severity: "filing", label: "Needs a look" },
@@ -94,6 +99,8 @@ const ANCHORS: ReadonlyArray<{ code: AttentionCode; prefix: string }> = [
   { code: "missing_number", prefix: "No invoice number could be read" },
   { code: "missing_customer", prefix: "No customer name could be read" },
   { code: "missing_seller_gstin", prefix: "No seller GSTIN could be read" },
+  { code: "customer_gstin_invalid", prefix: "Customer GSTIN is not valid (" },
+  { code: "customer_gstin_own", prefix: "Customer GSTIN is iTarang's own (" },
   { code: "entity_conflict", prefix: "Entity signals disagree (" },
   { code: "entity_unknown", prefix: "Could not tell which iTarang entity" },
   { code: "possible_duplicate", prefix: "Possible duplicate of " },

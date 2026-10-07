@@ -2,7 +2,8 @@ import { z } from 'zod';
 import { db } from '@/lib/db';
 import { orders, slas } from '@/lib/db/schema';
 import { eq, and } from 'drizzle-orm';
-import { requireAuth } from '@/lib/auth-utils';
+import { requireRole } from '@/lib/auth-utils';
+import { ORDERS_PAGE_ROLES } from '@/lib/auth/staffPageRoles';
 import { successResponse, withErrorHandler } from '@/lib/api-utils';
 
 const uploadPiSchema = z.object({
@@ -12,7 +13,8 @@ const uploadPiSchema = z.object({
 
 export const POST = withErrorHandler(async (req: Request, { params }: { params: Promise<{ id: string }> }) => {
     const { id: orderId } = await params;
-    await requireAuth();
+    // ID 143: the roles that can open the order page this is posted from.
+    await requireRole([...ORDERS_PAGE_ROLES]);
     const body = await req.json();
     const validated = uploadPiSchema.parse(body);
 

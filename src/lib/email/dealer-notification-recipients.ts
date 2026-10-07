@@ -1,6 +1,7 @@
 import { db } from "@/lib/db";
 import { dealerAgreementSigners } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
+import { accountOwnerEmail } from "@/lib/accounts/ownerEmail";
 
 function cleanEmail(value: unknown) {
   return typeof value === "string" ? value.trim().toLowerCase() : "";
@@ -35,6 +36,10 @@ export async function getDealerNotificationRecipients(
   emails.push(cleanEmail(application?.sales_manager_email ?? application?.salesManagerEmail));
   emails.push(cleanEmail(application?.itarang_signatory_1_email ?? application?.itarangSignatory1Email));
   emails.push(cleanEmail(application?.itarang_signatory_2_email ?? application?.itarangSignatory2Email));
+
+  // ID 65: once the dealer is an account, its owner is copied — the typed
+  // sales manager above may have moved on. null before activation.
+  emails.push(cleanEmail(await accountOwnerEmail(application?.dealer_code)));
 
   // Fallback: read itarang signer emails from dealer_agreement_signers.
   // This covers admin-initiated agreements where the app-level columns are NULL

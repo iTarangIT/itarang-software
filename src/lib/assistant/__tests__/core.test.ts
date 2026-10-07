@@ -54,9 +54,9 @@ describe("registry", () => {
         expect(toolNamesFor("inside_sales_rep", true)).toEqual([...ROLE_TOOLS.inside_sales_rep]);
     });
 
-    it("all twenty-two tools have a Zod schema that rejects junk (unknown keys are stripped, never acted on)", () => {
+    it("all twenty-three tools have a Zod schema that rejects junk (unknown keys are stripped, never acted on)", () => {
         const all = [...toolsFor("asm", true), ...toolsFor("inside_sales_rep", true)];
-        expect(new Set(all.map((t) => t.name)).size).toBe(22);
+        expect(new Set(all.map((t) => t.name)).size).toBe(23);
         // my_numbers and product_catalogue take no lead: checked on their own below.
         for (const t of all.filter((x) => x.name !== "my_numbers" && x.name !== "product_catalogue")) {
             expect(t.schema.safeParse({ lead_id: "", evil: 1 }).success, t.name).toBe(false);

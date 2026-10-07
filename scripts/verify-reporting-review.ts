@@ -198,6 +198,9 @@ async function main() {
             const p = table(key);
             assert(!p.columns.some((c) => /^(hot|warm|cold)$/i.test(c)), `snapshot H/W/C in ${key} period columns`);
             assert(!p.columns.some((c) => /tomorrow/i.test(c)), `'tomorrow' column in ${key}`);
+            // ID 9 (29 Sep): one row per rep, Yesterday + MTD only — no per-metric group rows, no Last 7 days.
+            assert(!p.groupHeaders && /^(ASM|ISR)$/.test(p.columns[0]), `${key} is not one row per rep`);
+            assert(!p.columns.some((c) => /last 7/i.test(c)), `Last 7 days column in ${key}`);
         }
         table("block_d"); // the H/W/C position, once, as of the send
         table("block_e"); // today and tomorrow, once

@@ -46,11 +46,23 @@ describe("checkStatusMove", () => {
         expect(checkStatusMove({ from: "Won", to: "Under_Discussion", event: "reactivation" }).ok).toBe(false);
     });
 
-    it("correction needs a reason and allows any move", () => {
+    it("correction needs a reason and allows any move except to Won or Converted", () => {
         expect(checkStatusMove({ from: "Commercials_Finalised", to: "Under_Discussion", event: "correction" }).ok).toBe(false);
         expect(
             checkStatusMove({ from: "Commercials_Finalised", to: "Under_Discussion", event: "correction", reason: "wrong tap" }).ok,
         ).toBe(true);
+        expect(checkStatusMove({ from: "Won", to: "Lost", event: "correction", reason: "wrong tap" }).ok).toBe(true);
+        expect(checkStatusMove({ from: "Converted", to: "Won", event: "correction", reason: "wrong tap" }).ok).toBe(false);
+    });
+
+    it("no correction reaches Converted or Won, from any status (ID 133)", () => {
+        for (const from of ["New_Unassigned", "Under_Discussion", "Commercials_Finalised", "Won", "Lost", null] as const) {
+            for (const to of ["Converted", "Won"] as const) {
+                if (from === to) continue;
+                const verdict = checkStatusMove({ from, to, event: "correction", reason: "admin says so" });
+                expect(verdict.ok, `${from} → ${to}`).toBe(false);
+            }
+        }
     });
 
     it("only a visit ends Awaiting field visit, restoring a later stage (ID 77)", () => {
@@ -97,6 +109,16 @@ describe("checkStatusMove", () => {
         expect(TRANSITION_MAP.Under_Discussion).toContain("Lost");
         expect(TRANSITION_MAP.Won).not.toContain("Lost");
         expect(TRANSITION_MAP.Won).not.toContain("Won");
+    });
+
+    it("a dealer approval ends Awaiting field visit at once (ID 77 option A)", () => {
+        expect(checkStatusMove({ from: "Transferred_to_ASM", to: "Commercials_Finalised", event: "quote_approved" }).ok).toBe(true);
+        expect(checkStatusMove({ from: "Awaiting_Customer_Decision", to: "Commercials_Finalised", event: "quote_approved" }).ok).toBe(true);
+        expect(checkStatusMove({ from: "Transferred_to_ASM", to: "Under_Discussion", event: "quote_approved" }).ok).toBe(false);
+        expect(checkStatusMove({ from: "Won", to: "Commercials_Finalised", event: "quote_approved" }).ok).toBe(false);
+        expect(checkStatusMove({ from: "Lost", to: "Commercials_Finalised", event: "quote_approved" }).ok).toBe(false);
+        // A plain progress move still cannot leave Awaiting field visit.
+        expect(checkStatusMove({ from: "Transferred_to_ASM", to: "Commercials_Finalised", event: "progress" }).ok).toBe(false);
     });
 
     it("isForward treats legacy statuses as the start", () => {

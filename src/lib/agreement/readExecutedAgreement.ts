@@ -9,6 +9,7 @@
 
 import { readDocumentWithPrompt } from "@/lib/whatsapp/extraction";
 import { fetchDigioDocumentStatus } from "@/lib/digio";
+import { isOwnGstin } from "@/lib/leads/gstin";
 import {
     checkExecutedAgreement,
     type AgreementCheckResult,
@@ -41,8 +42,7 @@ function str(v: unknown): string | null {
 const DOC_TYPES = new Set(["dealer_agreement", "audit_trail", "other"]);
 
 // iTarang's own GSTIN is printed on every agreement (dealer-agreement-template.ts).
-// The prompt says not to return it as the dealer's; this makes sure.
-const ITARANG_GSTIN = "06AALFI7813E1ZE";
+// The prompt says not to return it as the dealer's; isOwnGstin makes sure.
 
 export async function readAgreementFile(
     buffer: Buffer,
@@ -82,7 +82,7 @@ export async function readAgreementFile(
         documentType,
         documentId: str(parsed.document_id),
         dealerName: str(parsed.dealer_name),
-        gstin: gstin && gstin !== ITARANG_GSTIN ? gstin : null,
+        gstin: gstin && !isOwnGstin(gstin) ? gstin : null,
         agreementDate: str(parsed.agreement_date),
         referenceNumber: str(parsed.reference_number),
         signers,

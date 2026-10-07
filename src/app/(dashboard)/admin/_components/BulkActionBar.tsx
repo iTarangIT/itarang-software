@@ -166,7 +166,11 @@ export function BulkActionBar({
             toast.success(
                 `Done — ${json.data.affected} updated${
                     json.data.skipped ? `, ${json.data.skipped} skipped` : ""
-                }.`,
+                }.${
+                    json.data.skipped_won
+                        ? ` ${json.data.skipped_won} Won — close those from the onboarding drop-out review.`
+                        : ""
+                }`,
             );
             setMode(null);
             setReason("");

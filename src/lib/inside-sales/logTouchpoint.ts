@@ -25,9 +25,7 @@ import {
     CALL_STATUS,
     NEXT_ACTION,
     shouldAutoEngage,
-    type EngagedCallRule,
 } from "@/lib/lifecycle/touchpointTypes";
-import { getEngagedCallRule } from "@/lib/reports/engagedCallRule";
 import { LEAD_STATUS, type LeadStatus } from "@/lib/lifecycle/transitions";
 import { reviewLeadContactability } from "@/lib/leads/contactability";
 import type { DispositionBucket } from "@/lib/leads/dispositions";
@@ -124,8 +122,6 @@ export class LeadNotFoundError extends Error {
 export function planTouchpoint(
     body: TouchpointBody,
     lead: { leadId: string; fromStatus: LeadStatus | null; actorId: string },
-    /** The saved engaged-call rule; the default (30 s, NeoDove durations) when omitted. */
-    opts: { engagedRule?: EngagedCallRule } = {},
 ): WriteTouchpointInput {
     const { leadId, actorId } = lead;
     // Classify the disposition BEFORE isEngaged, which depends on the derived
@@ -159,16 +155,12 @@ export function planTouchpoint(
     const derivedCallStatus = callStatusForDisposition(classified) ?? body.call_status ?? null;
 
     // Auto-engage when applicable (BRD §0.1 Glossary). A CALL is never engaged
-    // by a tick: it follows the ID 59 rule (connected, at least the threshold
-    // of measured duration — a hand-logged call has no measured duration
-    // unless the saved rule counts rep-entered ones). Other types keep the
+    // by a tick: it follows the ID 59 rule (decided 3 Oct 2026) — engaged
+    // exactly when it connected, whatever its duration. Other types keep the
     // rep's tick.
     const autoEngaged = shouldAutoEngage(body.touchpoint_type, {
         callStatus: derivedCallStatus,
         visitOutcome: null,
-        callDurationSec: body.call_duration_sec ?? null,
-        externalSystem: null,
-        engagedRule: opts.engagedRule,
     });
     // Nor is a WhatsApp entry logged here (ID 79): a chat counts as contact only
     // with its screenshot, through recordWhatsappContact — this path saves a note.
@@ -241,11 +233,11 @@ export async function logLeadTouchpoint(
         `);
         const state = rows[0];
         if (!state) throw new LeadNotFoundError();
-        const input = planTouchpoint(
-            body,
-            { leadId, fromStatus: (state.lead_status as LeadStatus | null) ?? null, actorId },
-            { engagedRule: await getEngagedCallRule() },
-        );
+        const input = planTouchpoint(body, {
+            leadId,
+            fromStatus: (state.lead_status as LeadStatus | null) ?? null,
+            actorId,
+        });
         const result = await writeTouchpoint(input, { tx });
 
         // ID 36: every logged call re-checks contactability (dead number from

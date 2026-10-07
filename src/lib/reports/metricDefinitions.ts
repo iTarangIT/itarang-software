@@ -10,35 +10,24 @@
 //                            touchpoints had a twin within 3 minutes). A NeoDove
 //                            call touchpoint with an earlier one on the same lead
 //                            within NEODOVE_CALL_MERGE_WINDOW is the same call.
-//   Engaged call             connected AND >= N s (30) of MEASURED duration.
-//                            By default only NeoDove's recorded duration is a
-//                            measurement — one a rep typed is not. NeoDove
-//                            sends none today (0 of 2,639 calls on database-2,
-//                            01 Oct 2026), so nothing qualifies and every
-//                            report shows "Not measured yet" (engagedCallCount
-//                            → NULL), never a false 0. The threshold, and
-//                            whether typed durations count meanwhile (tracker
-//                            question 6, still open), are a SETTING:
-//                            app_settings['engaged_call_rule'], edited on the
-//                            Sales Daily settings page. These fragments look
-//                            it up inline, so a change applies to every report
-//                            at once with no deploy; writers store the same
-//                            rule in is_engaged (touchpointTypes.isEngagedCall).
+//   Engaged call             a connected human call where the rep spoke with
+//                            the dealer — through NeoDove or logged by the
+//                            rep, any outcome (decided 3 Oct 2026). Duration
+//                            never counts and neither does temperature; there
+//                            is no setting. Writers store the same rule in
+//                            is_engaged (touchpointTypes.isEngagedCall).
 //   Hot handed to field      an ASM transfer whose lead was Hot AT THE MOMENT of
 //                            transfer (dealer_lead_interest_history, E-304),
 //                            not Hot now.
 //   Quotes created           the FIRST quote per lead; revisions counted apart.
+//   Leads in                 a lead that arrived on its own — NOT a bulk import
+//                            (bulkImportedLead below). Bulk imports are counted
+//                            apart, so a list upload can't read as 2,000 new
+//                            enquiries (decided 7 Oct 2026, after the 28 / 29 Sep
+//                            scrape run + INTERAKT list put 2,431 rows into one
+//                            week's "Leads in").
 
 import { sql, type SQL } from "drizzle-orm";
-import {
-    ENGAGED_CALL_MIN_SECONDS,
-    ENGAGED_CALL_MIN_SECONDS_CEILING,
-    ENGAGED_CALL_MIN_SECONDS_FLOOR,
-    ENGAGED_CALL_RULE_KEY,
-    type EngagedCallRule,
-} from "@/lib/lifecycle/touchpointTypes";
-
-export { ENGAGED_CALL_MIN_SECONDS };
 export const NEODOVE_CALL_MERGE_WINDOW = "3 minutes";
 
 /**
@@ -64,7 +53,7 @@ export function humanCall(t: SQL = sql`t`): SQL {
 }
 
 /**
- * A connected human call, counted once. As with engagedCall(), humanCall()
+ * A connected human call, counted once. humanCall()
  * keeps the EARLIEST row of a NeoDove call and the connect can sit on a later
  * re-disposition of it — so the kept row is connected when it, or a later twin
  * within the merge window, is. Counting `call_status = 'connected'` rows
@@ -91,108 +80,27 @@ export function connectedCall(t: SQL = sql`t`): SQL {
         )`;
 }
 
-// ── the engaged-call rule, as SQL ───────────────────────────────────────────
-// With no `rule` argument a fragment reads app_settings['engaged_call_rule']
-// itself (an uncorrelated scalar subquery — evaluated once per statement), with
-// the same defaults and bounds normalizeEngagedCallRule() applies. An explicit
-// `rule` is for the verifier and tests, to ask "what would the other setting
-// show".
-const RULE_KEY = sql.raw(`'${ENGAGED_CALL_RULE_KEY}'`);
-
-/** The threshold in seconds. */
-export function engagedMinSeconds(rule?: EngagedCallRule): SQL {
-    if (rule) return sql`${rule.minSeconds}`;
-    return sql`COALESCE((
-        -- Nested CASE, not AND: only a CASE guarantees the cast is never
-        -- attempted on a value that is not a number.
-        SELECT CASE WHEN ecr.value ->> 'min_seconds' ~ '^[0-9]{1,4}$'
-                    THEN CASE WHEN (ecr.value ->> 'min_seconds')::int BETWEEN ${sql.raw(String(ENGAGED_CALL_MIN_SECONDS_FLOOR))} AND ${sql.raw(String(ENGAGED_CALL_MIN_SECONDS_CEILING))}
-                              THEN (ecr.value ->> 'min_seconds')::int END END
-          FROM app_settings ecr WHERE ecr.key = ${RULE_KEY}), ${sql.raw(String(ENGAGED_CALL_MIN_SECONDS))})`;
-}
-
-/** TRUE when a duration a rep typed counts as a measurement (question 6 = "reported"). */
-function typedDurationsCount(rule?: EngagedCallRule): SQL {
-    if (rule) return rule.durationSource === "reported" ? sql`TRUE` : sql`FALSE`;
-    return sql`COALESCE((
-        SELECT ecr.value ->> 'duration_source' = 'reported'
-          FROM app_settings ecr WHERE ecr.key = ${RULE_KEY}), FALSE)`;
+/**
+ * An engaged human call (ID 59, decided 3 Oct 2026): a connected human call,
+ * counted once — the rep spoke with the dealer. No duration and no temperature
+ * condition, so it is connectedCall() under the name every report uses.
+ */
+export function engagedCall(t: SQL = sql`t`): SQL {
+    return connectedCall(t);
 }
 
 /**
- * The row carries a duration the rule accepts as a measurement: any
- * NeoDove-recorded one, or — only when the setting says "reported" — one a rep
- * typed. SQL twin of isTimedCall() in touchpointTypes.ts.
+ * Was THIS touchpoint an engaged one — TRUE / FALSE. For the per-row "Engaged"
+ * column and for "the lead had an engaged touchpoint". A call follows the
+ * rule, whatever its stored is_engaged says (rows written 1–5 Oct 2026 carry
+ * the retired duration rule): engaged exactly when it connected. Every other
+ * type keeps its stored flag (a productive visit, a WhatsApp reply, a rep's
+ * own tick).
  */
-export function timedCall(t: SQL = sql`t`, rule?: EngagedCallRule): SQL {
-    return sql`${t}.call_duration_sec IS NOT NULL AND (${t}.external_system = 'neodove' OR ${typedDurationsCount(rule)})`;
-}
-
-/** An inside-sales call whose duration was measured — the denominator of "can engaged be reported at all". */
-export function measuredCall(t: SQL = sql`t`, rule?: EngagedCallRule): SQL {
-    return sql`${t}.touchpoint_type = 'inside_sales_call' AND ${timedCall(t, rule)}`;
-}
-
-/**
- * An engaged human call: connected and at least the threshold of MEASURED
- * duration (timedCall).
- *
- * humanCall() keeps the EARLIEST row of a NeoDove call, but the connect and
- * the duration can arrive on a later re-disposition of that same call — so the
- * kept row also counts as engaged when a later twin (same lead, same
- * performer, within the merge window) qualifies. Still at most one per call,
- * so engaged <= calls always holds.
- */
-export function engagedCall(t: SQL = sql`t`, rule?: EngagedCallRule): SQL {
-    return sql`${humanCall(t)}
-        AND (
-            (${t}.call_status = 'connected'
-             AND ${timedCall(t, rule)}
-             AND COALESCE(${t}.call_duration_sec, 0) >= ${engagedMinSeconds(rule)})
-            OR (
-                ${t}.external_system = 'neodove'
-                AND EXISTS (
-                    SELECT 1 FROM lead_touchpoints twin
-                     WHERE twin.dealer_lead_id = ${t}.dealer_lead_id
-                       AND twin.touchpoint_type = 'inside_sales_call'
-                       AND twin.external_system = 'neodove'
-                       AND twin.touchpoint_id <> ${t}.touchpoint_id
-                       AND twin.performed_by IS NOT DISTINCT FROM ${t}.performed_by
-                       AND twin.performed_at >= ${t}.performed_at
-                       AND twin.performed_at <= ${t}.performed_at + ${sql.raw(`INTERVAL '${NEODOVE_CALL_MERGE_WINDOW}'`)}
-                       AND twin.call_status = 'connected'
-                       AND COALESCE(twin.call_duration_sec, 0) >= ${engagedMinSeconds(rule)}
-                )
-            )
-        )`;
-}
-
-/**
- * Engaged calls as an AGGREGATE over rows aliased `t`: NULL — "Not measured
- * yet" — when no call in the set has a measured duration, else the count. A
- * bare COUNT would print 0 for a team whose every call came through NeoDove
- * with no duration, which reads as "nobody had a real conversation".
- */
-export function engagedCallCount(t: SQL = sql`t`, rule?: EngagedCallRule): SQL {
-    return sql`CASE WHEN COUNT(*) FILTER (WHERE ${measuredCall(t, rule)}) = 0 THEN NULL
-                    ELSE COUNT(*) FILTER (WHERE ${engagedCall(t, rule)}) END`;
-}
-
-/**
- * Was THIS touchpoint an engaged one — TRUE / FALSE / NULL (not measurable).
- * For the per-row "Engaged" column and for "the lead had an engaged
- * touchpoint". A call follows the rule, whatever its stored is_engaged says
- * (rows written before 01 Oct 2026 carry "any connected call"): not connected
- * → FALSE; connected with a measured duration → at least the threshold;
- * connected with none → NULL. Every other type keeps its stored flag (a
- * productive visit, a WhatsApp reply, a rep's own tick).
- */
-export function engagedState(t: SQL = sql`t`, rule?: EngagedCallRule): SQL {
+export function engagedState(t: SQL = sql`t`): SQL {
     return sql`(CASE
         WHEN ${t}.touchpoint_type <> 'inside_sales_call' THEN ${t}.is_engaged
-        WHEN ${t}.call_status IS DISTINCT FROM 'connected' THEN FALSE
-        WHEN ${timedCall(t, rule)} THEN ${t}.call_duration_sec >= ${engagedMinSeconds(rule)}
-        ELSE NULL
+        ELSE ${t}.call_status IS NOT DISTINCT FROM 'connected'
     END)`;
 }
 
@@ -224,5 +132,50 @@ export function isFirstQuote(c: SQL = sql`c`): SQL {
          WHERE earlier.dealer_lead_id = ${c}.dealer_lead_id
            AND earlier.event_type IN ('quote_issue', 'quote_revision')
            AND earlier.version_no < ${c}.version_no
+    )`;
+}
+
+/** NeoDove leads arriving faster than this per campaign per hour are a list upload. */
+export const NEODOVE_BULK_PER_HOUR = 50;
+
+/**
+ * The lead came in as part of a bulk import rather than on its own. `dl` is the
+ * dealer_leads alias.
+ *
+ *   - its door is a bulk path: the scraper, the bulk-upload wizard / Import
+ *     button, or an AI-dialer list (leadSourceVocab.LEAD_DOORS); or
+ *   - it is a NeoDove lead whose "lead created" event arrived with more than
+ *     NEODOVE_BULK_PER_HOUR others from the same NeoDove campaign in the same
+ *     hour. NeoDove has no import flag, and a list pushed into it (an INTERAKT
+ *     broadcast: 1,501 in four minutes on 29 Sep 2026) reaches us as ordinary
+ *     LEAD_CREATE webhooks. Genuine arrivals — incoming calls, a rep adding a
+ *     dealer — never came close (38 in an hour at most, checked on db-2).
+ *
+ * The burst groups are found once (uncorrelated), so the predicate stays cheap
+ * inside a COUNT over many leads.
+ */
+export function bulkImportedLead(dl: SQL = sql`dl`): SQL {
+    return sql`(
+        ${dl}.source_door IN ('scraper', 'bulk_upload', 'ai_dialer')
+        OR (
+            ${dl}.source_door = 'neodove'
+            AND ${dl}.id IN (
+                SELECT e.dealer_lead_id
+                  FROM neodove_sync_events e
+                  JOIN (
+                        SELECT g.request_payload ->> 'campaign_id' AS campaign,
+                               date_trunc('hour', g.created_at) AS hr
+                          FROM neodove_sync_events g
+                         WHERE g.direction = 'inbound' AND g.event_type = 'lead_created'
+                         GROUP BY 1, 2
+                        HAVING COUNT(*) > ${sql.raw(String(NEODOVE_BULK_PER_HOUR))}
+                       ) burst
+                    ON burst.campaign IS NOT DISTINCT FROM e.request_payload ->> 'campaign_id'
+                   AND burst.hr = date_trunc('hour', e.created_at)
+                 WHERE e.direction = 'inbound'
+                   AND e.event_type = 'lead_created'
+                   AND e.dealer_lead_id IS NOT NULL
+            )
+        )
     )`;
 }

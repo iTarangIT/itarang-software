@@ -10,7 +10,7 @@
 // Follows the pattern of src/lib/asm/queryBuilder.ts and
 // src/lib/admin/listQueries.ts (raw sql`` fragments, db.execute).
 
-import { parseMobileList } from "@/lib/leads/claimScope";
+import { numberSearchMode } from "@/lib/leads/claimScope";
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { UNASSIGNED_FILTER } from "@/lib/admin/leadsInfoFilters";
@@ -460,11 +460,15 @@ function buildWhere(f: LeadListFilters, opts?: { ignoreIntent?: boolean }) {
             conds.push(selection);
         }
     }
+    // created_at is a UTC timestamp without zone; the dates people pick are IST
+    // days. Converting first keeps a lead created 00:00–05:30 IST on the day it
+    // was created — and keeps this list, its download and Reports › Lead
+    // sources counting the same leads for the same dates.
     if (f.from && ISO_DATE_RE.test(f.from)) {
-        conds.push(sql`dl.created_at::date >= ${f.from}`);
+        conds.push(sql`(dl.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date >= ${f.from}`);
     }
     if (f.to && ISO_DATE_RE.test(f.to)) {
-        conds.push(sql`dl.created_at::date <= ${f.to}`);
+        conds.push(sql`(dl.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date <= ${f.to}`);
     }
     // An unassigned lead has assigned_at NULL, so any assigned-date bound
     // excludes it — which is the right answer to "assigned between X and Y".
@@ -490,8 +494,8 @@ function buildWhere(f: LeadListFilters, opts?: { ignoreIntent?: boolean }) {
 
     // ID 46: "9876543210, 9123456789" selects exactly those leads by mobile
     // (last 10 digits — dealer_leads.phone is stored in mixed formats).
-    const mobileList = f.search && /[,;]/.test(f.search) ? parseMobileList(f.search).mobiles : [];
-    if (mobileList.length > 1) {
+    const mobileList = numberSearchMode(f.search)?.mobiles ?? [];
+    if (mobileList.length > 0) {
         conds.push(
             sql`right(regexp_replace(dl.phone, '[^0-9]', '', 'g'), 10) IN (SELECT jsonb_array_elements_text(${JSON.stringify(mobileList)}::jsonb))`,
         );
@@ -567,6 +571,59 @@ export async function fetchLeadListRows(
         LIMIT ${limit} OFFSET ${offset}
     `);
     return rows as unknown as LeadListRow[];
+}
+
+/**
+ * ID 46: for a number search, which typed numbers could not be read and which
+ * matched no lead under the current filters — so the screen can say so instead
+ * of showing a shorter list with no explanation. null when the search is text.
+ *
+ * A number that misses is then looked up again with every user-picked filter
+ * lifted: `filtered_out` = the lead exists but the filters (most often the
+ * default "Hide dead & disqualified") hide it; `not_found` = no such lead.
+ * The access scope (ownerScopeId, ID 45) is KEPT on that second lookup, so a
+ * rep never learns that a number exists in the pool.
+ */
+export type NumberSearchMisses = {
+    invalid: string[];
+    not_found: string[];
+    filtered_out: string[];
+    /** Valid numbers past LIST_SEARCH_MAX_NUMBERS — not searched. */
+    over_limit: number;
+};
+
+async function matchedMobiles(f: LeadListFilters): Promise<Set<string>> {
+    const rows = await db.execute<{ mobile: string }>(sql`
+        SELECT DISTINCT right(regexp_replace(dl.phone, '[^0-9]', '', 'g'), 10) AS mobile
+        FROM dealer_leads dl
+        ${aiSignalsJoin(f)}
+        WHERE ${buildWhere(f)}
+    `);
+    return new Set((rows as unknown as { mobile: string }[]).map((r) => r.mobile));
+}
+
+export async function fetchNumberSearchMisses(
+    f: LeadListFilters,
+): Promise<NumberSearchMisses | null> {
+    const mode = numberSearchMode(f.search);
+    if (!mode) return null;
+    const found = await matchedMobiles(f);
+    const missed = mode.mobiles.filter((m) => !found.has(m));
+    let exists = new Set<string>();
+    if (missed.length > 0) {
+        exists = await matchedMobiles({
+            ownerScopeId: f.ownerScopeId,
+            search: missed.join(","),
+            hideDead: false,
+            contactability: "include",
+        });
+    }
+    return {
+        invalid: mode.invalid,
+        not_found: missed.filter((m) => !exists.has(m)),
+        filtered_out: missed.filter((m) => exists.has(m)),
+        over_limit: mode.overLimit,
+    };
 }
 
 /**

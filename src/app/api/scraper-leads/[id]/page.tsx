@@ -2,7 +2,8 @@
 import { db } from "@/lib/db";
 import { requireAuth } from "@/lib/auth-utils";
 import Link from "next/link";
-import { redirect } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
+import { readsOwnLeadsOnly } from "@/lib/leads/access";
 import {
   ArrowLeft,
   Phone,
@@ -19,6 +20,9 @@ export const dynamic = "force-dynamic";
 export default async function ScraperLeadDetailPage({ params }: any) {
   const user = await requireAuth();
   if (!user) redirect("/login");
+  // ID 45: reps (asm, inside_sales_rep) read only leads they own; a scraped
+  // prospect has no owner, so this page is not theirs to open.
+  if (readsOwnLeadsOnly(user.role)) notFound();
 
   const { id } = await params;
 

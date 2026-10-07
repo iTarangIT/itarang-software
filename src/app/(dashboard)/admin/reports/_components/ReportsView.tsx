@@ -4,6 +4,7 @@
 // CSV export.
 
 import { useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, Download, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -16,6 +17,8 @@ import {
 import { ReportChart } from "./ReportChart";
 import { ReportTable } from "./ReportTable";
 import { FunnelView } from "./FunnelView";
+import { DataDownloadsView } from "./DataDownloadsView";
+import { ScheduledEmailsView } from "./ScheduledEmailsView";
 
 // B10 — the Funnel tab reads /api/admin/reports/funnel-counts, whose role gate
 // is narrower than this page's, so the tab only renders for roles that would
@@ -23,11 +26,34 @@ import { FunnelView } from "./FunnelView";
 const FUNNEL_ROLES = new Set(["admin", "ceo", "business_head", "finance_controller", "sales_head"]);
 const CATALOGUE_ROLES = new Set(["admin", "sales_head", "ceo", "partner"]);
 
+// ID 13 (29 Sep 2026) — Reports is three tabs. Data downloads and Scheduled
+// email reports are for the roles their APIs admit; everyone else keeps the
+// analyses exactly as before, with no tab strip.
+const DOWNLOAD_ROLES = new Set([
+    "admin", "ceo", "sales_head", "business_head", "partner", "asm", "inside_sales_rep", "inventory_manager",
+]);
+const EMAIL_ROLES = new Set(["admin", "ceo", "sales_head"]);
+const SECTIONS = [
+    { id: "analyses", label: "Analyses" },
+    { id: "downloads", label: "Data downloads" },
+    { id: "emails", label: "Scheduled email reports" },
+] as const;
+type Section = (typeof SECTIONS)[number]["id"];
+
 type Tab = ReportType | "funnel";
 
 export function ReportsView({ viewerRole }: { viewerRole: string }) {
     const canFunnel = FUNNEL_ROLES.has(viewerRole);
     const canCatalogue = CATALOGUE_ROLES.has(viewerRole);
+    const canDownloads = DOWNLOAD_ROLES.has(viewerRole);
+    const sections = SECTIONS.filter((s) =>
+        s.id === "analyses" ? canCatalogue || canFunnel : s.id === "downloads" ? canDownloads : EMAIL_ROLES.has(viewerRole),
+    );
+    // `?section=downloads` lets a page button open this tab directly.
+    const asked = useSearchParams().get("section");
+    const [section, setSection] = useState<Section>(
+        sections.find((s) => s.id === asked)?.id ?? sections[0]?.id ?? "analyses",
+    );
     const [tab, setTab] = useState<Tab>(canCatalogue ? "daily_activity" : "funnel");
     const type: ReportType = tab === "funnel" ? "daily_activity" : tab;
     const [from, setFrom] = useState("");
@@ -39,7 +65,7 @@ export function ReportsView({ viewerRole }: { viewerRole: string }) {
     const qs = params.toString();
 
     const query = useQuery<{ success: true; data: ReportResult }>({
-        enabled: tab !== "funnel",
+        enabled: tab !== "funnel" && section === "analyses",
         queryKey: ["admin-report", type, from, to],
         queryFn: async () => {
             const res = await fetch(
@@ -56,6 +82,30 @@ export function ReportsView({ viewerRole }: { viewerRole: string }) {
 
     return (
         <div className="space-y-4">
+            {sections.length > 1 && (
+                <div className="flex flex-wrap gap-1 border-b border-border">
+                    {sections.map((s) => (
+                        <button
+                            key={s.id}
+                            type="button"
+                            onClick={() => setSection(s.id)}
+                            className={`-mb-px border-b-2 px-4 py-2 text-sm font-semibold transition ${
+                                section === s.id
+                                    ? "border-brand-600 text-brand-600"
+                                    : "border-transparent text-ink-muted hover:text-ink"
+                            }`}
+                        >
+                            {s.label}
+                        </button>
+                    ))}
+                </div>
+            )}
+
+            {section === "downloads" && <DataDownloadsView />}
+            {section === "emails" && <ScheduledEmailsView />}
+
+            {section === "analyses" && (
+            <>
             <div className="flex flex-wrap gap-2">
                 {canCatalogue && REPORT_TYPES.map((t) => (
                     <button
@@ -149,6 +199,8 @@ export function ReportsView({ viewerRole }: { viewerRole: string }) {
                     )}
                 </div>
             </div>
+            )}
+            </>
             )}
         </div>
     );

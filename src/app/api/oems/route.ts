@@ -5,10 +5,15 @@ import { requireRole } from '@/lib/auth-utils';
 import { successResponse, withErrorHandler, generateId } from '@/lib/api-utils';
 import { recordLeadCapture } from '@/lib/leads/lead-registry';
 import { triggerN8nWebhook } from '@/lib/n8n';
+import { isValidGstin } from '@/lib/leads/gstin';
 
 const oemSchema = z.object({
     business_entity_name: z.string().min(1),
-    gstin: z.string().regex(/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/),
+    // Shape + check digit, shared with every other entry point (ID 62).
+    gstin: z
+        .string()
+        .regex(/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/)
+        .refine(isValidGstin, 'That is not a valid GSTIN - check it for a typing mistake.'),
     cin: z.string().min(1),
     bank_account_number: z.string().min(1),
     ifsc_code: z.string().regex(/^[A-Z]{4}0[A-Z0-9]{6}$/),

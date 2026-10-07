@@ -12,8 +12,8 @@ const supabase = createClient(
     process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
-export const GET = withErrorHandler(async (req: Request, { params }: { params: { leadId: string; requestId: string; token: string } }) => {
-    const { leadId, requestId, token } = params;
+export const GET = withErrorHandler(async (req: Request, { params }: { params: Promise<{ leadId: string; requestId: string; token: string }> }) => {
+    const { leadId, requestId, token } = await params;
 
     const [docRequest] = await db.select({
         id: otherDocumentRequests.id,
@@ -43,8 +43,8 @@ export const GET = withErrorHandler(async (req: Request, { params }: { params: {
     });
 });
 
-export const POST = withErrorHandler(async (req: Request, { params }: { params: { leadId: string; requestId: string; token: string } }) => {
-    const { leadId, requestId, token } = params;
+export const POST = withErrorHandler(async (req: Request, { params }: { params: Promise<{ leadId: string; requestId: string; token: string }> }) => {
+    const { leadId, requestId, token } = await params;
 
     const [docRequest] = await db.select({
         id: otherDocumentRequests.id,

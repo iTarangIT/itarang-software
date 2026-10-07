@@ -23,6 +23,7 @@
 import React from "react";
 import { OemInventoryPricing } from "@/components/dashboard/oem/OemInventoryPricing";
 import { OemPriceHistory } from "@/components/dashboard/oem/OemPriceHistory";
+import { ListPricePanel } from "@/components/dashboard/oem/ListPricePanel";
 
 export default function OemPricingPage() {
     return (
@@ -43,6 +44,9 @@ export default function OemPricingPage() {
             </div>
 
             <OemInventoryPricing />
+
+            {/* E-323 (IDs 4, 47) — the list price printed on quotations. */}
+            <ListPricePanel />
 
             {/*
               * E-242 — the full ledger, under the register that writes it.

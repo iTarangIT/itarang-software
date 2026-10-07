@@ -3,7 +3,7 @@ import { scraperLeads } from "@/lib/db/schema";
 import { desc, ilike, or, sql, eq } from "drizzle-orm";
 import { NextRequest, NextResponse } from "next/server";
 import { requireRole } from "@/lib/auth-utils";
-import { LEADS_PAGE_ROLES } from "@/lib/leads/access";
+import { LEADS_PAGE_ROLES, readsOwnLeadsOnly } from "@/lib/leads/access";
 
 export async function GET(req: NextRequest) {
   // Was completely unauthenticated — middleware does not gate /api/*
@@ -15,7 +15,17 @@ export async function GET(req: NextRequest) {
   // redirect("/login") signals by THROWING a NEXT_REDIRECT error; the catch
   // below turns any throw into a 500, so an unauthenticated request would
   // surface as "Internal error" instead of a redirect.
-  await requireRole([...LEADS_PAGE_ROLES]);
+  const user = await requireRole([...LEADS_PAGE_ROLES]);
+  // ID 45: reps (asm, inside_sales_rep) read only leads they own, and the
+  // scraped pool is unowned prospects — nothing in the UI calls this list.
+  // Answered here rather than by narrowing requireRole, whose throw would
+  // surface as a bare 500 in this plain (non-withErrorHandler) route.
+  if (readsOwnLeadsOnly(user.role)) {
+    return NextResponse.json(
+      { success: false, error: "Forbidden: Insufficient permissions" },
+      { status: 403 },
+    );
+  }
 
   try {
     const { searchParams } = new URL(req.url);

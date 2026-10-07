@@ -2,7 +2,7 @@ import { db } from '@/lib/db';
 import { approvals, deals, auditLogs, accounts, leads } from '@/lib/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { withErrorHandler, successResponse, errorResponse, generateId } from '@/lib/api-utils';
-import { requireRole } from '@/lib/auth-utils';
+import { requireAuth, requireRole } from '@/lib/auth-utils';
 import { checkCreditBlock } from '@/lib/sales-utils';
 import { z } from 'zod';
 
@@ -10,13 +10,16 @@ const decisionSchema = z.object({
     comments: z.string().optional(),
 });
 
-export const POST = withErrorHandler(async (req: Request, { params }: { params: { id: string } }) => {
+export const POST = withErrorHandler(async (req: Request, { params }: { params: Promise<{ id: string }> }) => {
+    // Signed in before anything is read; the role is checked below, once the
+    // approval row says which role may decide it.
+    await requireAuth();
     const body = await req.json();
     const result = decisionSchema.safeParse(body);
     if (!result.success) return errorResponse('Validation Error', 400);
     const { comments } = result.data;
 
-    const approvalId = params.id;
+    const approvalId = (await params).id;
 
     // 1. Fetch Approval record
     const [approval] = await db.select().from(approvals).where(eq(approvals.id, approvalId)).limit(1);

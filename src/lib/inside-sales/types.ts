@@ -303,6 +303,10 @@ export type LeadOnboardingMilestones = {
     onboarding_status: string;
     docs_submitted_at: string | null;
     agreement_status: string | null;
+    /** ID 84.1: dealer_leads.agreement_outcome, raw (E-314; null without it). */
+    agreement_outcome?: string | null;
+    /** "Signed" / "Manual agreement on file" / "Not needed" / "Failed" / …; null when unset. */
+    agreement_outcome_label?: string | null;
     approved_at: string | null;
     last_activity_at: string | null;
     /**

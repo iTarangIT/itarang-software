@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { randomUUID } from "crypto";
 import { isS3Backend, putObject, filesProxyPath } from "@/lib/storage/s3";
+import { publicUploadFolder, safeUploadFileName } from "@/lib/storage/fileAccess";
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -15,11 +16,20 @@ export async function POST(req: NextRequest) {
     const formData = await req.formData();
 
     const file = formData.get("file") as File | null;
-    const folder = (formData.get("folder") as string | null) || "general";
+    // ID 128: this route needs no login, so it must not write wherever it is
+    // told. One lowercase slug (what the wizard sends), never a private folder
+    // such as agreements/ — and no "../" to climb with.
+    const folder = publicUploadFolder(formData.get("folder") as string | null);
 
     if (!file) {
       return NextResponse.json(
         { success: false, message: "File is required" },
+        { status: 400 }
+      );
+    }
+    if (!folder) {
+      return NextResponse.json(
+        { success: false, message: "Invalid upload folder" },
         { status: 400 }
       );
     }
@@ -57,7 +67,7 @@ export async function POST(req: NextRequest) {
     const bytes = await file.arrayBuffer();
     const buffer = Buffer.from(bytes);
 
-    const safeFileName = file.name.replace(/\s+/g, "-");
+    const safeFileName = safeUploadFileName(file.name);
     const filePath = `${folder}/${Date.now()}-${randomUUID()}-${safeFileName}`;
 
     let publicUrl: string;

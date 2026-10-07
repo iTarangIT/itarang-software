@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import {
   CheckCircle2,
   AlertTriangle,
@@ -367,6 +367,17 @@ export default function StepReview() {
   const [previewDoc, setPreviewDoc] = useState<PreviewDoc | null>(null);
   const router = useRouter();
 
+  // ID 129: an application with these details already exists and this browser
+  // has not proved it owns it (no login). The server mails a code to the email
+  // ON that application; entering it here yields a token the submit accepts.
+  const resumeTokenRef = useRef<string | null>(null);
+  const [resume, setResume] = useState<{
+    sentTo: string | null;
+    code: string;
+    busy: boolean;
+    error: string | null;
+  } | null>(null);
+
   const state = useOnboardingStore();
   const prevStep = useOnboardingStore((s) => s.prevStep);
   const setField = useOnboardingStore((s) => s.setField);
@@ -402,6 +413,58 @@ export default function StepReview() {
     ],
     [state.agreement]
   );
+
+  const resumeIdentity = () => ({
+    applicationId: state.draftApplicationId || state.internalApplicationId || "",
+    ownerEmail: primaryContact.ownerEmail || "",
+    dealerCode: state.dealerId || "",
+  });
+
+  const requestResumeCode = async () => {
+    setResume((r) => ({ sentTo: r?.sentTo ?? null, code: "", busy: true, error: null }));
+    try {
+      const res = await fetch("/api/dealer/onboarding/resume/send-otp", {
+        method: "POST",
+        cache: "no-store",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(resumeIdentity()),
+      });
+      const json = await res.json();
+      setResume({
+        sentTo: json.sentTo ?? null,
+        code: "",
+        busy: false,
+        error: res.ok && json.success ? null : json.message || "Could not send the code.",
+      });
+    } catch {
+      setResume({ sentTo: null, code: "", busy: false, error: "Could not send the code. Please try again." });
+    }
+  };
+
+  const verifyResumeCode = async () => {
+    if (!resume) return;
+    setResume({ ...resume, busy: true, error: null });
+    try {
+      const res = await fetch("/api/dealer/onboarding/resume/verify-otp", {
+        method: "POST",
+        cache: "no-store",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...resumeIdentity(), code: resume.code.trim() }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.success || !json.resumeToken) {
+        setResume({ ...resume, busy: false, error: json.message || "That code is not right." });
+        return;
+      }
+      resumeTokenRef.current = json.resumeToken;
+      setResume(null);
+      setErrors({});
+      // Submit again, now carrying the proof.
+      await handleSubmitApplication();
+    } catch {
+      setResume({ ...resume, busy: false, error: "Could not check the code. Please try again." });
+    }
+  };
 
   const handleSubmitApplication = async () => {
     const submitErrors: Record<string, string> = {};
@@ -464,6 +527,8 @@ export default function StepReview() {
         applicationId:
           state.draftApplicationId || state.internalApplicationId || "",
         internalSubmission: !!state.internalApplicationId,
+        // Present only after the email code was verified (ID 129).
+        resumeToken: resumeTokenRef.current || undefined,
         dealerId: state.dealerId || "",
         company: state.company,
         compliance: state.compliance,
@@ -566,6 +631,14 @@ export default function StepReview() {
 
       const result = await response.json();
 
+      // ID 129: an application already exists for these details. Ask the
+      // server to mail the code and show the box to enter it.
+      if (response.status === 409 && result.code === "verify_required") {
+        resumeTokenRef.current = null;
+        await requestResumeCode();
+        return;
+      }
+
       if (!response.ok || !result.success) {
         setErrors({
           api:
@@ -574,6 +647,7 @@ export default function StepReview() {
         });
         return;
       }
+      setResume(null);
 
       // Mark onboarding complete in Zustand store (also saves dealerId to localStorage)
       completeOnboarding();
@@ -940,16 +1014,8 @@ export default function StepReview() {
       >
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
           <InfoRow
-            label="Name"
+            label="Salesperson"
             value={state.agreement?.salesManager?.name || "—"}
-          />
-          <InfoRow
-            label="Email"
-            value={state.agreement?.salesManager?.email || "—"}
-          />
-          <InfoRow
-            label="Mobile"
-            value={state.agreement?.salesManager?.mobile || "—"}
           />
           <InfoRow
             label="Age"
@@ -1163,6 +1229,50 @@ export default function StepReview() {
         )}
         {errors.api && (
           <p className="text-sm text-red-600">{errors.api}</p>
+        )}
+
+        {/* ID 129 — prove this application is yours before it is changed. */}
+        {resume && (
+          <div className="rounded-2xl border border-[#E3E8EF] bg-white p-4 shadow-sm">
+            <p className="text-sm font-semibold text-[#173F63]">
+              An application already exists for these details
+            </p>
+            <p className="mt-1 text-sm text-slate-600">
+              {resume.sentTo
+                ? `To continue it, enter the 6-digit code we emailed to ${resume.sentTo}.`
+                : "To continue it, enter the 6-digit code emailed to the owner's registered address."}
+            </p>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <input
+                value={resume.code}
+                onChange={(e) =>
+                  setResume({ ...resume, code: e.target.value.replace(/\D/g, "").slice(0, 6) })
+                }
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                placeholder="6-digit code"
+                aria-label="Email verification code"
+                className="w-40 rounded-xl border border-slate-300 px-3 py-2 text-sm tracking-widest focus:border-[#1F5C8F] focus:outline-none"
+              />
+              <button
+                type="button"
+                disabled={resume.busy || resume.code.length !== 6}
+                onClick={verifyResumeCode}
+                className="rounded-xl bg-[#1F5C8F] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+              >
+                {resume.busy ? "Checking…" : "Verify and submit"}
+              </button>
+              <button
+                type="button"
+                disabled={resume.busy}
+                onClick={requestResumeCode}
+                className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 disabled:opacity-50"
+              >
+                Send a new code
+              </button>
+            </div>
+            {resume.error && <p className="mt-2 text-sm text-red-600">{resume.error}</p>}
+          </div>
         )}
 
         {/* Render any other unexpected errors */}
