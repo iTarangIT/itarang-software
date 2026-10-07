@@ -649,7 +649,7 @@ export function QuotationApprovalsPanel() {
                   </div>
                   <p className="text-[11px] text-gray-500 mt-0.5">
                     {q.city ? `${q.city} · ` : ""}
-                    {q.raised_by} · v{q.version_no}
+                    {q.raised_by}
                     {q.line_count > 0 && ` · ${q.line_count} line${q.line_count === 1 ? "" : "s"}`}
                     {q.event_type === "quote_revision" && " · revision"}
                   </p>

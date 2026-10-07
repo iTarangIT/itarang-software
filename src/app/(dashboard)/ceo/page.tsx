@@ -18,9 +18,9 @@ import {
   AlertCircle,
   CalendarRange,
   Check,
+  CircleCheck,
   FileSignature,
   FileText,
-  Hourglass,
   RefreshCw,
   Target,
   TrendingDown,
@@ -423,14 +423,21 @@ export default function CEODashboard() {
           cta: "Open list",
         },
         {
-          key: "idle",
-          n: x.idle_over_7d,
-          icon: Hourglass,
+          // ID 75.4 — replaces "Leads idle over 7 working days" here; idle
+          // leads are still on Needs Attention and the Sales Head dashboard.
+          key: "said_yes",
+          n: x.said_yes_not_won,
+          icon: CircleCheck,
           tone: "warn",
-          label: "Leads idle over 7 working days",
-          count: num(x.idle_over_7d),
-          sub: "No work logged by their owner",
-          href: "/admin/reports/needs-attention",
+          label: "Dealer said yes, not marked Won",
+          count: num(x.said_yes_not_won),
+          sub:
+            `${inr(x.said_yes_value)} in approved quotes` +
+            (x.said_yes_oldest_days == null
+              ? ""
+              : ` · oldest ${x.said_yes_oldest_days} working day${x.said_yes_oldest_days === 1 ? "" : "s"}` +
+                ` (limit ${x.said_yes_limit_days})`),
+          href: "/ceo/said-yes",
           cta: "Open list",
         },
         {
@@ -527,10 +534,12 @@ export default function CEODashboard() {
   // ── Revenue split ────────────────────────────────────────────────────────
   const mixRows = money
     ? [
+        // Business type already covers every invoice ("Not classified yet" is
+        // its grey row); only the city split leaves unlinked revenue over.
         ...(mix === "type"
-          ? money.by_type.map((t) => ({ label: t.type, value: t.revenue, muted: false }))
+          ? money.by_type.map((t) => ({ label: t.type, value: t.revenue, muted: !!t.unclassified }))
           : money.by_city.map((c) => ({ label: c.city, value: c.revenue, muted: false }))),
-        ...(money.unlinked_revenue > 0
+        ...(mix === "city" && money.unlinked_revenue > 0
           ? [
               {
                 label: "Not linked to a dealer",
@@ -720,8 +729,7 @@ export default function CEODashboard() {
           </p>
         )}
         <p className="text-xs text-ink-muted">
-          Not tracked yet: dealer said yes but not marked Won · orders claimed
-          without an invoice.
+          Not tracked yet: orders claimed without an invoice.
         </p>
       </div>
 
@@ -730,8 +738,7 @@ export default function CEODashboard() {
         <KpiTile
           label="Revenue"
           value={money ? inr(money.revenue.now) : "—"}
-          pill={{ text: "No target", tone: "neutral" }}
-          delta={changeOf(money?.revenue)}
+          href={`/ceo/revenue?from=${win.from}&to=${win.to}&label=${encodeURIComponent(periodLabel)}`}
           spark={chart.map((c) => c.revenue)}
           sub={
             money && money.unlinked_revenue > 0
@@ -763,6 +770,7 @@ export default function CEODashboard() {
         />
         <KpiTile
           label="Batteries to dealers"
+          href={`/ceo/batteries?from=${win.from}&to=${win.to}&label=${encodeURIComponent(periodLabel)}`}
           value={sales.data ? num(sales.data.outcome.batteries_to_dealers) : "—"}
           pill={{ text: "No target", tone: "neutral" }}
           sub={
@@ -775,6 +783,7 @@ export default function CEODashboard() {
         />
         <KpiTile
           label="New dealers live"
+          href={`/ceo/new-dealers?from=${win.from}&to=${win.to}&label=${encodeURIComponent(periodLabel)}`}
           value={funnel.data ? num(funnel.data.totals.dealers_onboarded) : "—"}
           pill={{ text: "No target", tone: "neutral" }}
           sub={
@@ -785,6 +794,7 @@ export default function CEODashboard() {
         />
         <KpiTile
           label="Dealers ordering"
+          href="/admin/reports/dealer-health?bucket=ordering"
           value={haveDealers ? num(ordering) : "—"}
           pill={
             haveDealers && liveDealers > 0
@@ -799,8 +809,8 @@ export default function CEODashboard() {
         <KpiTile
           label="Money owed to us"
           value={owed == null ? "—" : inr(owed)}
-          pill={owed ? { text: "Watch", tone: "bad" } : undefined}
-          sub="Unpaid on all invoices, as of now · not limited to the period · ageing not tracked yet"
+          href="/ceo/receivables"
+          sub="Unpaid on all invoices, as of now · not limited to the period · open for ageing"
         />
       </div>
 
@@ -888,14 +898,14 @@ export default function CEODashboard() {
                       )}
                     </span>
                   </div>
-                  <ProgressBar pct={(r.value / mixMax) * 100} muted={r.muted} />
+                  <ProgressBar pct={Math.max(0, (r.value / mixMax) * 100)} muted={r.muted} />
                 </div>
               ))}
             </div>
           )}
           <span className="mt-auto text-xs leading-relaxed text-ink-muted">
             {mix === "type"
-              ? "Business type is that of the CRM lead the invoice matches on GSTIN; a dealer with an account but no lead reads “Not set”. Invoices that match no lead or dealer account are shown in grey."
+              ? "Business type comes from each invoice line (HSN code). “Not classified yet”: invoices read before line items were captured."
               : "City is that of the lead or dealer account the invoice matches on GSTIN. Invoices that match neither are shown in grey."}
           </span>
         </DashCard>

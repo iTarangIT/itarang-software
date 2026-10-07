@@ -31,9 +31,14 @@ import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { matchedUnion, REVENUE_NOT_VOID } from "@/lib/dashboard/revenueSource";
 import { summarizeNeedsAttention } from "@/lib/leads/needsAttention";
+import {
+    SAID_YES_LIMIT_WORKING_DAYS,
+    listSaidYesNotWon,
+    summarizeSaidYes,
+} from "@/lib/leads/saidYesNotWon";
 import { listDealerHealth } from "@/lib/dealers/accountHealth";
 import type { AccountBucket } from "@/lib/dealers/accountHealthRules";
-import { businessTypeLabel } from "@/lib/leads/businessType";
+import { hasInvoiceLedgerTables } from "@/lib/sales/ledgerTables";
 import {
     AWAITING_ASSIGNMENT_OVERDUE_DAYS,
     awaitingAssignment,
@@ -52,6 +57,14 @@ export type ControlTower = {
         /** Every sales-ready lead with no owner, whatever its wait (ID 82). */
         awaiting_assignment_total: number;
         idle_over_7d: number;
+        /** ID 75.4 — the dealer approved a quote, the lead is not marked Won. */
+        said_yes_not_won: number;
+        /** Value of the dealer-approved quote on each of those leads. */
+        said_yes_value: number;
+        /** Working days (Mon–Sat) since the oldest of those approvals; null when none. */
+        said_yes_oldest_days: number | null;
+        /** The limit for marking Won after the dealer's yes, in working days. */
+        said_yes_limit_days: number;
         red_dormant_dealers: number;
         at_risk_90d: number;
         spocs_below_80: number | null;
@@ -59,7 +72,8 @@ export type ControlTower = {
     };
     money: null | {
         revenue: Compare;
-        by_type: Array<{ type: string; revenue: number }>;
+        /** By what was sold (invoice-line HSN); `unclassified` = invoices with no lines. Sums to revenue.now. */
+        by_type: Array<{ type: string; revenue: number; unclassified?: boolean }>;
         by_spoc: Array<{ name: string; revenue: number }>;
         by_city: Array<{ city: string; revenue: number }>;
         unlinked_revenue: number;
@@ -164,6 +178,9 @@ async function exceptionsTile(): Promise<NonNullable<ControlTower["exceptions"]>
               AND ${daysAwaitingAssignment()} >= ${AWAITING_ASSIGNMENT_OVERDUE_DAYS}) AS unassigned,
           (SELECT COUNT(*) FROM dealer_leads dl WHERE ${awaitingAssignment()}) AS awaiting_total
     `);
+    // ID 75.4 — "Dealer said yes, not marked Won": the sum of the rows the
+    // /ceo/said-yes list shows (saidYesNotWon.ts), so card and list agree.
+    const yes = summarizeSaidYes(await listSaidYesNotWon());
     const [idle, dealers, below] = await Promise.all([
         summarizeNeedsAttention({ minDays: 7 }),
         listDealerHealth(),
@@ -186,6 +203,10 @@ async function exceptionsTile(): Promise<NonNullable<ControlTower["exceptions"]>
         unassigned_over_7d: n(q.unassigned),
         awaiting_assignment_total: n(q.awaiting_total),
         idle_over_7d: idle.reduce((a, h) => a + h.idle, 0),
+        said_yes_not_won: yes.count,
+        said_yes_value: yes.value,
+        said_yes_oldest_days: yes.oldestDays,
+        said_yes_limit_days: SAID_YES_LIMIT_WORKING_DAYS,
         red_dormant_dealers: risky.length,
         at_risk_90d: risky.reduce((a, d) => a + d.revenue_90d, 0),
         spocs_below_80: below,
@@ -194,17 +215,62 @@ async function exceptionsTile(): Promise<NonNullable<ControlTower["exceptions"]>
 }
 
 // ── 2 Money ──────────────────────────────────────────────────────────────────
+// Revenue business type from an invoice line's HSN (digits as stored by
+// normalizeHsn). Scrap = waste batteries / e-waste (8548, 8549) or a line
+// named scrap. Other = services (SAC 99xx — finance subscription, adverts,
+// professional fees; "0099…" is the same code with a stray leading zero) and
+// lines with no HSN. Every other goods line — batteries (8507) and what ships
+// with them: chargers, harnesses, displays, BMS, tools — is a battery sale.
+const LINE_TYPE_SQL = sql`CASE
+    WHEN l.hsn LIKE '8548%' OR l.hsn LIKE '8549%' OR l.item_name ILIKE '%scrap%' THEN 'scrap'
+    WHEN l.hsn IS NULL OR l.hsn = '' OR l.hsn LIKE '99%' OR l.hsn LIKE '0099%' THEN 'other'
+    ELSE 'battery' END`;
+const LINE_TYPE_LABEL: Record<string, string> = {
+    battery: "Battery sales to dealers",
+    scrap: "Scrap sales to recyclers",
+    other: "Other",
+    __unclassified: "Not classified yet",
+};
+
 async function moneyTile(from: string, toExcl: string, prevFrom: string | null, prevTo: string | null) {
     const inv = await matchedUnion();
     const win = (a: string, b: string) => sql`r.invoice_date >= ${a}::date AND r.invoice_date < ${b}::date`;
-    const [typeRows, spocRows, cityRows, prev] = await Promise.all([
+    const lines = await hasInvoiceLedgerTables();
+    const [typeRows, unlinkedRows, spocRows, cityRows, prev] = await Promise.all([
+        // Business type = WHAT WAS SOLD, read from each invoice line's HSN
+        // (invoice_line_items, E-322) — not the matched lead's business_type,
+        // which is blank on nearly every lead. Each invoice's total (with GST)
+        // is spread over its lines by their share of amount_excl_gst, so the
+        // rows add up to the Revenue card exactly. An invoice with no lines
+        // (or lines summing to 0), and every credit note, is "not classified".
         rows(sql`
-            SELECT CASE WHEN r.dealer_lead_id IS NULL AND r.account_id IS NULL THEN '__unlinked'
-                        ELSE COALESCE(to_jsonb(dl) ->> 'business_type', '__unset') END AS t,
-                   COALESCE(SUM(r.total), 0) AS v
-              FROM ${inv} r LEFT JOIN dealer_leads dl ON dl.id = r.dealer_lead_id
-             WHERE ${REVENUE_NOT_VOID} AND ${win(from, toExcl)}
+            WITH inv AS (
+                SELECT r.source, r.id, COALESCE(r.total, 0) AS total
+                  FROM ${inv} r
+                 WHERE ${REVENUE_NOT_VOID} AND ${win(from, toExcl)}
+            ),
+            cls AS (${lines
+                ? sql`
+                SELECT i.source, i.id, ${LINE_TYPE_SQL} AS t, SUM(COALESCE(l.amount_excl_gst, 0)) AS amt
+                  FROM inv i
+                  JOIN invoice_line_items l
+                    ON l.invoice_id = i.id
+                   AND (l.source = i.source OR (i.source = 'drive' AND l.source IN ('vyapar', 'drive')))
+                 GROUP BY 1, 2, 3`
+                : sql`SELECT NULL::text AS source, NULL::text AS id, NULL::text AS t, 0::numeric AS amt WHERE FALSE`}
+            ),
+            tot AS (SELECT source, id, SUM(amt) AS amt FROM cls GROUP BY 1, 2 HAVING SUM(amt) > 0)
+            SELECT COALESCE(c.t, '__unclassified') AS t,
+                   COALESCE(SUM(CASE WHEN c.t IS NULL THEN i.total ELSE i.total * c.amt / tt.amt END), 0) AS v
+              FROM inv i
+              LEFT JOIN tot tt ON tt.source = i.source AND tt.id = i.id
+              LEFT JOIN cls c ON tt.id IS NOT NULL AND c.source = i.source AND c.id = i.id
              GROUP BY 1`),
+        rows(sql`
+            SELECT COALESCE(SUM(r.total), 0) AS v
+              FROM ${inv} r
+             WHERE ${REVENUE_NOT_VOID} AND ${win(from, toExcl)}
+               AND r.dealer_lead_id IS NULL AND r.account_id IS NULL`),
         rows(sql`
             -- E-321 (ID 68): the owner on the invoice date, not today's owner.
             SELECT COALESCE(u.name, '(no owner)') AS name, COALESCE(SUM(r.total), 0) AS v
@@ -223,13 +289,18 @@ async function moneyTile(from: string, toExcl: string, prevFrom: string | null, 
             : Promise.resolve(null),
     ]);
     const total = typeRows.reduce((a, r) => a + n(r.v), 0);
-    const unlinked = n(typeRows.find((r) => r.t === "__unlinked")?.v);
+    const unlinked = n(unlinkedRows[0]?.v);
     return {
         revenue: { now: total, prev: prev ? n(prev[0]?.v) : null },
         by_type: typeRows
-            .filter((r) => r.t !== "__unlinked")
-            .map((r) => ({ type: r.t === "__unset" ? "Not set" : businessTypeLabel(String(r.t)), revenue: n(r.v) }))
-            .sort((a, b) => b.revenue - a.revenue),
+            .map((r) => ({
+                type: LINE_TYPE_LABEL[String(r.t)] ?? "Other",
+                revenue: n(r.v),
+                unclassified: r.t === "__unclassified" ? true : undefined,
+            }))
+            .filter((r) => Math.abs(r.revenue) >= 0.5)
+            // Largest first; "Not classified yet" always last.
+            .sort((a, b) => Number(!!a.unclassified) - Number(!!b.unclassified) || b.revenue - a.revenue),
         by_spoc: spocRows.map((r) => ({ name: String(r.name), revenue: n(r.v) })),
         by_city: cityRows.map((r) => ({ city: String(r.city), revenue: n(r.v) })),
         unlinked_revenue: unlinked,
