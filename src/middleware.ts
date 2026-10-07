@@ -703,6 +703,8 @@ export async function middleware(request: NextRequest) {
     "/admin/reports/sales-dashboard": ["admin", "sales_head", "ceo", "partner", "business_head"],
     "/admin/reports/dealer-health": ["admin", "sales_head", "ceo", "partner", "business_head"],
     "/admin/reports/needs-attention": ["admin", "sales_head", "ceo", "partner"],
+    // Sales Head "Needs action now" tile lists — the Sales Head screen's readers.
+    "/admin/reports/needs-action": ["admin", "sales_head", "ceo", "partner", "business_head"],
     // E-322 (IDs 39, 71) — the invoice ledger: finance, CEO, Admin only.
     "/admin/reports/invoice-ledger": ["admin", "ceo", "finance_controller"],
     "/admin/reports": [
