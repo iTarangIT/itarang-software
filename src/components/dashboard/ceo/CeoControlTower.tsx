@@ -141,7 +141,7 @@ export function CeoControlTower({ windowQs }: { windowQs: string }) {
                         <div className="rounded-xl border border-gray-100 p-3">
                             <p className="text-[11px] font-medium text-gray-600">By business type</p>
                             {m.by_type.length === 0 ? (
-                                <p className="mt-1 text-xs text-gray-400">No invoice is linked to a dealer yet.</p>
+                                <p className="mt-1 text-xs text-gray-400">No revenue in this period.</p>
                             ) : (
                                 m.by_type.map((t) => (
                                     <p key={t.type} className="flex justify-between text-xs tabular-nums"><span>{t.type}</span><span>{inr(t.revenue)}</span></p>
