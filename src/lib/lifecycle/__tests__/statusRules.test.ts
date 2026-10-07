@@ -111,6 +111,16 @@ describe("checkStatusMove", () => {
         expect(TRANSITION_MAP.Won).not.toContain("Won");
     });
 
+    it("a dealer approval ends Awaiting field visit at once (ID 77 option A)", () => {
+        expect(checkStatusMove({ from: "Transferred_to_ASM", to: "Commercials_Finalised", event: "quote_approved" }).ok).toBe(true);
+        expect(checkStatusMove({ from: "Awaiting_Customer_Decision", to: "Commercials_Finalised", event: "quote_approved" }).ok).toBe(true);
+        expect(checkStatusMove({ from: "Transferred_to_ASM", to: "Under_Discussion", event: "quote_approved" }).ok).toBe(false);
+        expect(checkStatusMove({ from: "Won", to: "Commercials_Finalised", event: "quote_approved" }).ok).toBe(false);
+        expect(checkStatusMove({ from: "Lost", to: "Commercials_Finalised", event: "quote_approved" }).ok).toBe(false);
+        // A plain progress move still cannot leave Awaiting field visit.
+        expect(checkStatusMove({ from: "Transferred_to_ASM", to: "Commercials_Finalised", event: "progress" }).ok).toBe(false);
+    });
+
     it("isForward treats legacy statuses as the start", () => {
         expect(isForward("some_legacy", "Assigned_Not_Contacted")).toBe(true);
         expect(isForward("Converted", "Under_Discussion")).toBe(false);

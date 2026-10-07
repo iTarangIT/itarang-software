@@ -26,6 +26,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { requireAuth } from "@/lib/auth-utils";
 import { isNextRedirectError } from "@/lib/api-utils";
+import { readsOwnLeadsOnly } from "@/lib/leads/access";
+import { leadOwnedBy } from "@/lib/ai-dialer/campaignAccess";
 import { listDispatches, QUOTE_DISPATCH_CHANNELS } from "@/lib/leads/quoteDispatch";
 import { MAX_EXTRA_CC, resolveQuotationCc } from "@/lib/leads/quotationCc";
 import {
@@ -61,6 +63,13 @@ const BodySchema = z.object({
     .optional(),
 });
 
+function notFound() {
+  return NextResponse.json(
+    { success: false, error: { message: "Lead not found" } },
+    { status: 404 },
+  );
+}
+
 function forbidden() {
   return NextResponse.json(
     { success: false, error: { message: "FORBIDDEN" } },
@@ -77,6 +86,8 @@ export async function GET(
     if (!ALLOWED_ROLES.has((user.role || "").toLowerCase())) return forbidden();
 
     const { id, commercialId } = await ctx.params;
+    // ID 45: a rep reads only the quotes of leads they own.
+    if (readsOwnLeadsOnly(user.role) && !(await leadOwnedBy(id, user.id))) return notFound();
     const row = await loadQuote(id, commercialId);
     if (!row) {
       return NextResponse.json(
@@ -139,6 +150,7 @@ export async function POST(
   try {
     const user = await requireAuth();
     if (!ALLOWED_ROLES.has((user.role || "").toLowerCase())) return forbidden();
+    if (readsOwnLeadsOnly(user.role) && !(await leadOwnedBy(id, user.id))) return notFound();
 
     const body = BodySchema.parse(await req.json());
     // The gate, the send, the email write-back and the touchpoint all live in

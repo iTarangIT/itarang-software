@@ -134,8 +134,19 @@ describe("checkCallProposal", () => {
         ).toBe(false);
     });
 
-    it("labels outside the map (e.g. REJECTED BY US, Deal Closed) → asks", () => {
-        expect(checkCallProposal({ label: "REJECTED BY US", connect: "connected", bucket: "Lost", status: "Lost" }).ok).toBe(false);
+    it("ID 76.1: REJECTED BY US → Lost, credit by default, geography when said", () => {
+        expect(
+            checkCallProposal({ label: "REJECTED BY US", connect: "connected", bucket: "Lost", status: "Lost" }),
+        ).toMatchObject({ ok: true, lostReason: "rejected_by_us_credit" });
+        expect(
+            checkCallProposal({ label: "REJECTED BY US", connect: "connected", bucket: "Lost", status: "Lost", lostReason: "rejected_by_us_geography" }),
+        ).toMatchObject({ ok: true, lostReason: "rejected_by_us_geography" });
+        expect(
+            checkCallProposal({ label: "REJECTED BY US", connect: "connected", bucket: "Lost", status: "Lost", lostReason: "price_high" }).ok,
+        ).toBe(false);
+    });
+
+    it("labels outside the map (e.g. Deal Closed) → asks", () => {
         expect(checkCallProposal({ label: "Deal Closed", connect: "connected", bucket: "Converted" }).ok).toBe(false);
         expect(checkCallProposal({ label: "made up", connect: "connected" }).ok).toBe(false);
     });

@@ -5,7 +5,7 @@ import { INTENT_REVIEW_ROLES } from "@/lib/leads/access";
 export const dynamic = "force-dynamic";
 
 // AI-dialer campaign history for the partner — the twin of
-// /sales-head/campaigns, /asm/campaigns and /inside-sales/campaigns. Same
+// /sales-head/campaigns (the ASM / inside-sales twins were removed Oct 2026). Same
 // table, same drawer; only the basePath differs, because middleware gates
 // each of those prefixes to its own role.
 export default async function PartnerCampaignsPage() {

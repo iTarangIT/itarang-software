@@ -157,6 +157,20 @@ export function exportsOwnLeadsOnly(role: string | null | undefined): boolean {
 }
 
 /**
+ * Roles that may READ only the leads they own (dealer_leads.current_owner_id)
+ * — lead detail / edit pages, call logs, recordings, AI summaries (tracker ID
+ * 45). Anything else is a 404 "Lead not found", same as no such lead.
+ *
+ * partner is deliberately NOT here (unlike OWN_LEADS_EXPORT_ROLES): its read
+ * scope is open business question Q3, so it keeps today's access until decided.
+ */
+export const OWN_LEADS_READ_ROLES = ["asm", "inside_sales_rep"] as const;
+
+export function readsOwnLeadsOnly(role: string | null | undefined): boolean {
+  return (OWN_LEADS_READ_ROLES as readonly string[]).includes((role ?? "").toLowerCase());
+}
+
+/**
  * May this user download THIS lead's history workbook? The role must be in
  * LEAD_HISTORY_EXPORT_ROLES, and a rep / ASM / partner must also be the lead's
  * current owner (ID 58). One rule for the export route and for both screens
@@ -363,7 +377,12 @@ export type LeadsCapabilities = {
   canTrackLeads: boolean;
   /** May open the lead working page (LEAD_WORKSPACE_ROLES). */
   canOpenLeadPage: boolean;
+  /** May "Correct status" with a reason — /api/admin/leads/[id]/correct-status. */
+  canCorrectStatus: boolean;
 };
+
+/** The roles /api/admin/leads/[id]/correct-status accepts (ID 80). */
+export const STATUS_CORRECTION_ROLES = ["admin", "sales_head"] as const;
 
 // Mirrors NEODOVE_ADMIN_ROLES (src/lib/neodove/roles.ts) and the server gate on
 // /api/campaigns/cost-analytics. Both were already duplicated as literals inside
@@ -397,6 +416,7 @@ export function capabilitiesFor(role: string | null | undefined): LeadsCapabilit
     canCurateIntent: (INTENT_CURATOR_ROLES as readonly string[]).includes(r),
     canTrackLeads: (LEAD_TRACKING_ROLES as readonly string[]).includes(r),
     canOpenLeadPage: (LEAD_WORKSPACE_ROLES as readonly string[]).includes(r),
+    canCorrectStatus: (STATUS_CORRECTION_ROLES as readonly string[]).includes(r),
   };
 }
 
@@ -410,4 +430,5 @@ export const NO_CAPABILITIES: LeadsCapabilities = {
   canCurateIntent: false,
   canTrackLeads: false,
   canOpenLeadPage: false,
+  canCorrectStatus: false,
 };

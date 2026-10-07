@@ -5,11 +5,17 @@
  *   dealer_leads.onboarding_docs_submitted_at   the FIRST submission of the
  *                                                dealer's documents (COALESCE —
  *                                                a resubmission never moves it)
- *   dealer_leads.agreement_outcome               the latest agreement result:
- *                                                completed / failed / cancelled
- *                                                / expired (last write wins —
- *                                                a failed agreement re-sent and
- *                                                signed ends "completed")
+ *   dealer_leads.agreement_outcome               the latest agreement result
+ *                                                (ID 84.1): signed (Digio) /
+ *                                                manual_on_file (a signed copy
+ *                                                uploaded or overridden) /
+ *                                                not_needed (approved without
+ *                                                an agreement) / failed /
+ *                                                cancelled / expired. Last write
+ *                                                wins — a failed agreement
+ *                                                re-sent and signed ends
+ *                                                "signed". Old rows may still
+ *                                                read "completed" (= signed).
  *
  * The lead is the one the application came from: dealer_leads.
  * dealer_onboarding_application_id, or the application's
@@ -25,7 +31,32 @@ import { sql } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 
-export type AgreementOutcome = "completed" | "failed" | "cancelled" | "expired";
+export type AgreementOutcome =
+    | "signed"
+    | "manual_on_file"
+    | "not_needed"
+    | "failed"
+    | "cancelled"
+    | "expired";
+
+/** Pre-84.1 rows wrote "completed" for any finished agreement; read it as signed. */
+export type StoredAgreementOutcome = AgreementOutcome | "completed";
+
+export const AGREEMENT_OUTCOME_LABEL: Record<StoredAgreementOutcome, string> = {
+    signed: "Signed",
+    manual_on_file: "Manual agreement on file",
+    not_needed: "Not needed",
+    failed: "Failed",
+    cancelled: "Cancelled",
+    expired: "Expired",
+    completed: "Signed",
+};
+
+/** Display label for a raw agreement_outcome value; null when unset / unknown. */
+export function agreementOutcomeLabel(raw: string | null | undefined): string | null {
+    if (!raw) return null;
+    return AGREEMENT_OUTCOME_LABEL[raw as StoredAgreementOutcome] ?? null;
+}
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 

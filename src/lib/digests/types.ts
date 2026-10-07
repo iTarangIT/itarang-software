@@ -115,7 +115,26 @@ export type DigestTable = {
    * A shaded box right AFTER the grid (Sales Daily "Right now"). Governed by
    * its own section key, so it can be switched off without hiding the table.
    */
-  footer?: { key: string; label: string; items: Array<{ label: string; value: string; hint?: string }> };
+  footer?: {
+    key: string;
+    label: string;
+    items: Array<{ label: string; value: string; hint?: string; /** Hint in red — e.g. an overdue wait. */ alert?: boolean }>;
+  };
+  /**
+   * One small line under each row's first cell, aligned with `rows` (null =
+   * none) — what the metric counts. Rendered only by the masthead layout.
+   */
+  rowNotes?: Array<string | null>;
+  /** Short key lines after the block ("% of target: green 100% or more …"). */
+  legend?: string[];
+  /** Masthead layout: the column indexes kept on a phone (all, when absent). */
+  phoneColumns?: number[];
+  /** Masthead layout: "+18%" / "−9%" columns, coloured green / red. */
+  deltaColumns?: number[];
+  /** Masthead layout: the column printed bold (MTD). */
+  strongColumn?: number;
+  /** Masthead layout: on a phone, show column [0]'s value small under column [1]. */
+  phoneDeltaUnder?: [number, number];
   /**
    * Column indexes whose "NN%" cells are coloured red / amber / green by
    * ragToneOfCell (src/lib/digests/rag.ts) — the "% of target" columns.
@@ -136,6 +155,35 @@ export type DigestFigures = {
   headline?: string[];
   /** Render the mail wide (880 px) for many-column tables. */
   wide?: boolean;
+  /**
+   * The business-designed layout (Sales Daily, "Daily Sales email · Block A"):
+   * a header card, then the tables as bordered grids with row notes, % pills
+   * and coloured Δ. Present = that layout; absent = the plain digest layout.
+   */
+  masthead?: DigestMasthead;
+};
+
+export type DigestMasthead = {
+  /** "Daily Sales · Sun 4 Oct 2026" */
+  title: string;
+  /** "iTarang CRM to Sales leadership" */
+  audience: string;
+  /**
+   * When the figures were computed, IST — "5 Oct 2026, 9:02 AM". Shown at the
+   * top as "Data updated till …": the snapshot blocks (Right now, D, E, F) are
+   * as of this moment, and nothing recorded after it is in the email.
+   */
+  dataAsOf: string;
+  /** "ITARANG · DAILY SALES" */
+  eyebrow: string;
+  /** "Sunday 4 October" */
+  dayHeading: string;
+  /** "Covers yesterday. Month to date is 1–4 Oct: 3 of 27 working days, …" */
+  intro: string;
+  /** Right of the first block's title ("Full lead lists in the Sales Dashboard"). */
+  firstBlockHint?: string;
+  /** Last line of the card ("Sent by the iTarang CRM every morning at 09:00 IST. …"). */
+  footer: string;
 };
 
 /** A section the admin can tick off on the settings screen. */

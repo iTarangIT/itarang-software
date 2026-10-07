@@ -29,6 +29,24 @@ const PROVIDER_LABEL: Record<string, string> = {
     elevenlabs: "ElevenLabs",
 };
 
+/**
+ * What the AI made of one call — the lead page's AI Call History shows it under
+ * each attempt, so a rep reads the call without opening a campaign (the ISR /
+ * ASM Campaigns pages were removed, Oct 2026). All from ai_call_logs.
+ */
+export type LeadCallDetail = {
+    transcript: string | null;
+    /** Structured turns (ai_call_logs.transcript_turns), when the provider gave them. */
+    conversation: unknown[] | null;
+    summary: string | null;
+    band: string | null;
+    intentReason: string | null;
+    nextAction: string | null;
+    durationSec: number | null;
+    /** complete | dropped_partial | dropped_empty (E-168). */
+    callStatus: string | null;
+};
+
 export type LeadCallAttempt = {
     attempt: number;
     /** null for a one-off call, which belongs to no campaign. */
@@ -44,7 +62,44 @@ export type LeadCallAttempt = {
     isCurrent: boolean;
     callId: string | null;
     recordingUrl: string | null;
+    /** Only with includeDetail; null when the call never reached ai_call_logs. */
+    detail?: LeadCallDetail | null;
 };
+
+const detailColumns = {
+    transcript: aiCallLogs.transcript,
+    transcriptTurns: aiCallLogs.transcript_turns,
+    summary: aiCallLogs.summary,
+    band: aiCallLogs.band,
+    intentReason: aiCallLogs.intent_reason,
+    logNextAction: aiCallLogs.next_action,
+    callDuration: aiCallLogs.call_duration,
+    bandCallStatus: aiCallLogs.call_status,
+};
+
+type DetailRow = {
+    transcript: string | null;
+    transcriptTurns: unknown;
+    summary: string | null;
+    band: string | null;
+    intentReason: string | null;
+    logNextAction: string | null;
+    callDuration: number | null;
+    bandCallStatus: string | null;
+};
+
+function toDetail(r: DetailRow): LeadCallDetail {
+    return {
+        transcript: r.transcript,
+        conversation: Array.isArray(r.transcriptTurns) ? (r.transcriptTurns as unknown[]) : null,
+        summary: r.summary,
+        band: r.band,
+        intentReason: r.intentReason,
+        nextAction: r.logNextAction,
+        durationSec: r.callDuration,
+        callStatus: r.bandCallStatus,
+    };
+}
 
 function toIso(v: Date | string | null | undefined): string | null {
     if (v == null) return null;
@@ -65,8 +120,10 @@ export async function loadLeadCallAttempts(opts: {
     currentCampaignId?: string | null;
     /** Add calls placed outside any campaign (the lead page). */
     includeOneOff?: boolean;
+    /** Add each call's transcript / summary / band (the lead page). */
+    includeDetail?: boolean;
 }): Promise<{ attempts: LeadCallAttempt[]; convertedOnAttempt: number | null }> {
-    const { leadId, currentCampaignId = null, includeOneOff = false } = opts;
+    const { leadId, currentCampaignId = null, includeOneOff = false, includeDetail = false } = opts;
 
     const attemptRows = await db
         .select({
@@ -92,12 +149,21 @@ export async function loadLeadCallAttempts(opts: {
     // one extra query rather than a join, which could duplicate attempt rows.
     const callIds = attemptRows.map((a) => a.bolnaCallId).filter((c): c is string => !!c);
     const recordingByCall = new Map<string, string | null>();
+    const detailByCall = new Map<string, LeadCallDetail>();
     if (callIds.length > 0) {
-        const recRows = await db
-            .select({ callId: aiCallLogs.call_id, recordingUrl: aiCallLogs.recording_url })
-            .from(aiCallLogs)
-            .where(inArray(aiCallLogs.call_id, callIds));
-        for (const r of recRows) recordingByCall.set(r.callId, r.recordingUrl);
+        const recRows = includeDetail
+            ? await db
+                  .select({ callId: aiCallLogs.call_id, recordingUrl: aiCallLogs.recording_url, ...detailColumns })
+                  .from(aiCallLogs)
+                  .where(inArray(aiCallLogs.call_id, callIds))
+            : await db
+                  .select({ callId: aiCallLogs.call_id, recordingUrl: aiCallLogs.recording_url })
+                  .from(aiCallLogs)
+                  .where(inArray(aiCallLogs.call_id, callIds));
+        for (const r of recRows) {
+            recordingByCall.set(r.callId, r.recordingUrl);
+            if (includeDetail) detailByCall.set(r.callId, toDetail(r as typeof r & DetailRow));
+        }
     }
 
     const rows: Omit<LeadCallAttempt, "attempt" | "converted">[] = attemptRows.map((a) => {
@@ -118,6 +184,7 @@ export async function loadLeadCallAttempts(opts: {
             isCurrent: currentCampaignId != null && a.campaignId === currentCampaignId,
             callId,
             recordingUrl: recordingFor(callId, callId ? recordingByCall.get(callId) ?? null : null),
+            ...(includeDetail ? { detail: callId ? detailByCall.get(callId) ?? null : null } : {}),
         };
     });
 
@@ -139,6 +206,7 @@ export async function loadLeadCallAttempts(opts: {
                 endedAt: aiCallLogs.ended_at,
                 createdAt: aiCallLogs.created_at,
                 recordingUrl: aiCallLogs.recording_url,
+                ...detailColumns,
             })
             .from(aiCallLogs)
             .where(
@@ -166,6 +234,7 @@ export async function loadLeadCallAttempts(opts: {
                 isCurrent: false,
                 callId: c.callId,
                 recordingUrl: recordingFor(c.callId, c.recordingUrl),
+                ...(includeDetail ? { detail: toDetail(c) } : {}),
             });
         }
         // Interleave by when each call happened; a row with no time goes last.

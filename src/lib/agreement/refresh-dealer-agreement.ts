@@ -494,7 +494,7 @@ async function runRefresh(
   // Best-effort — never throws.
   const terminalOutcome: AgreementOutcome | null =
     normalizedStatus === "completed"
-      ? "completed"
+      ? "signed"
       : normalizedStatus === "expired"
         ? "expired"
         : normalizedStatus === "failed" || aadhaarMismatchReason
