@@ -1,0 +1,404 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>CEO Overview Explained</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one reading column (72ch) with full-width flow strips; a sticky section index on wide screens. */
+:root{
+  --bg:#f5f7fa; --surface:#ffffff; --fg:#13213a; --muted:#5b6778; --line:#d9e0ea;
+  --navy:#0b2a4a; --teal:#0f8a8a; --teal-soft:#e3f4f3;
+  --table:#5b3fb5; --table-soft:#efe9fb; --rule:#1f7a4d; --rule-soft:#e4f3ea; --calc:#b35c00; --calc-soft:#fdf0e1; --out:#0b5fa5; --out-soft:#e3eef9;
+  --good:#1f7a4d; --warn:#b35c00; --bad:#b3261e;
+  --font:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,Consolas,"Courier New",monospace;
+}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+  --bg:#0e141c; --surface:#151d28; --fg:#e6ecf4; --muted:#9aa8ba; --line:#2a3542;
+  --navy:#dbe7f5; --teal:#4fc3c3; --teal-soft:#113a3a;
+  --table:#c3b1f2; --table-soft:#2a2144; --rule:#7fd3a4; --rule-soft:#143324; --calc:#f0b36b; --calc-soft:#3b2810; --out:#8ec3f2; --out-soft:#10263d;
+  --good:#7fd3a4; --warn:#f0b36b; --bad:#f28b82; color-scheme:dark }}
+:root[data-theme="dark"]{
+  --bg:#0e141c; --surface:#151d28; --fg:#e6ecf4; --muted:#9aa8ba; --line:#2a3542;
+  --navy:#dbe7f5; --teal:#4fc3c3; --teal-soft:#113a3a;
+  --table:#c3b1f2; --table-soft:#2a2144; --rule:#7fd3a4; --rule-soft:#143324; --calc:#f0b36b; --calc-soft:#3b2810; --out:#8ec3f2; --out-soft:#10263d;
+  --good:#7fd3a4; --warn:#f0b36b; --bad:#f28b82; color-scheme:dark }
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--fg);font-family:var(--font);font-size:16px;line-height:1.55;padding-inline:16px;padding-block:0 64px}
+a{color:var(--teal)}
+code{font-family:var(--mono);font-size:.88em;background:var(--table-soft);color:var(--table);padding:.08em .35em;border-radius:4px}
+.wrap{max-width:1180px;margin:0 auto;display:grid;grid-template-columns:230px minmax(0,1fr);gap:40px}
+@media (max-width:900px){.wrap{grid-template-columns:minmax(0,1fr)}}
+nav.toc{position:sticky;top:16px;align-self:start;font-size:13.5px;padding-top:40px}
+@media (max-width:900px){nav.toc{position:static;padding-top:24px}}
+nav.toc .eyebrow{margin-bottom:10px}
+nav.toc ol{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+nav.toc a{color:var(--muted);text-decoration:none}
+nav.toc a:hover,nav.toc a:focus-visible{color:var(--teal)}
+main{min-width:0;padding-top:40px}
+.eyebrow{font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--teal);font-weight:600}
+h1{font-size:clamp(28px,4vw,40px);line-height:1.1;margin:.2em 0 .4em;color:var(--navy);text-wrap:balance;font-weight:700}
+h2{font-size:24px;margin:0 0 .3em;color:var(--navy);text-wrap:balance;font-weight:700}
+h3{font-size:18px;margin:1.6em 0 .4em;color:var(--navy);font-weight:600}
+p,li{max-width:72ch}
+.lede{font-size:18px;color:var(--muted);max-width:68ch}
+section.card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:28px 28px 24px;margin:28px 0;scroll-margin-top:16px}
+@media (max-width:600px){section.card{padding:20px 16px}}
+.screen{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:6px}
+.screen .where{font-size:13px;color:var(--muted)}
+dl.facts{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:8px 18px;margin:14px 0 6px;font-size:15px}
+@media (max-width:600px){dl.facts{grid-template-columns:minmax(0,1fr)}dl.facts dt{margin-top:6px}}
+dl.facts dt{color:var(--muted);font-weight:500}
+dl.facts dd{margin:0;min-width:0}
+.steps{counter-reset:s;margin:10px 0 0;padding:0;list-style:none;display:flex;flex-direction:column;gap:8px}
+.steps li{position:relative;padding-left:34px;max-width:72ch}
+.steps li::before{counter-increment:s;content:counter(s);position:absolute;left:0;top:1px;width:24px;height:24px;border-radius:50%;background:var(--calc-soft);color:var(--calc);font-size:12.5px;font-weight:700;display:grid;place-items:center}
+.ex{border-left:3px solid var(--out);background:var(--out-soft);padding:10px 14px;border-radius:0 8px 8px 0;margin:14px 0;font-size:15px;max-width:72ch}
+.ex b{color:var(--out)}
+.watch{border-left:3px solid var(--warn);background:var(--calc-soft);padding:10px 14px;border-radius:0 8px 8px 0;margin:14px 0;font-size:15px;max-width:72ch}
+.watch b{color:var(--warn)}
+.flow{margin:16px 0 4px;overflow-x:auto}
+.flow svg{display:block;max-width:100%;height:auto}
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:13px;color:var(--muted);margin:8px 0 0}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.legend i{width:14px;height:14px;border-radius:3px;display:inline-block;border:1.5px solid}
+.pill{display:inline-block;font-size:12px;font-weight:600;padding:2px 9px;border-radius:999px;border:1px solid var(--line);color:var(--muted);vertical-align:middle}
+.pill.good{color:var(--good);border-color:currentColor}.pill.warn{color:var(--warn);border-color:currentColor}.pill.bad{color:var(--bad);border-color:currentColor}
+table.t{border-collapse:collapse;width:100%;font-size:14.5px;margin:12px 0}
+table.t th,table.t td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+table.t th{color:var(--muted);font-weight:600;font-size:12.5px;letter-spacing:.06em;text-transform:uppercase}
+.tablewrap{overflow-x:auto}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;margin-top:12px}
+.mini{border:1px solid var(--line);border-radius:10px;padding:14px 16px;background:var(--bg)}
+.mini h4{margin:0 0 6px;font-size:15px;color:var(--navy)}
+.mini p{margin:0;font-size:14px;color:var(--muted)}
+.num{font-variant-numeric:tabular-nums}
+footer{color:var(--muted);font-size:13px;margin-top:40px;max-width:72ch}
+.big{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin:14px 0}
+.big .mini h4{font-size:14px}
+:focus-visible{outline:2px solid var(--teal);outline-offset:2px}
+@media (prefers-reduced-motion:no-preference){html{scroll-behavior:smooth}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav class="toc" aria-label="Sections">
+  <div class="eyebrow">On this page</div>
+  <ol>
+    <li><a href="#how">How to read this</a></li>
+    <li><a href="#period">Period control</a></li>
+    <li><a href="#needs">Needs you today</a></li>
+    <li><a href="#kpi">KPI tiles</a></li>
+    <li><a href="#pace">Revenue pace</a></li>
+    <li><a href="#mix">Where revenue came from</a></li>
+    <li><a href="#money">Money in, money out</a></li>
+    <li><a href="#engine">Sales engine</a></li>
+    <li><a href="#trust">Can you trust these numbers</a></li>
+    <li><a href="#team">Team against target</a></li>
+    <li><a href="#dealers">Dealer base</a></li>
+    <li><a href="#finance">Customer finance</a></li>
+    <li><a href="#buyback">Battery buyback</a></li>
+    <li><a href="#news">Green Energy Today</a></li>
+    <li><a href="#issues">Known gaps</a></li>
+    <li><a href="#glossary">Glossary</a></li>
+  </ol>
+</nav>
+
+<main>
+<div class="eyebrow">iTarang CRM · CEO overview</div>
+<h1>CEO Overview Explained</h1>
+<p class="lede">Every card on the <strong>How the business is doing</strong> page, in plain words: what it shows, which table it reads, how the number is worked out, an example, and what to watch out for.</p>
+
+<section class="card" id="how">
+  <h2>How to read this</h2>
+  <p>Each card below has a small strip that shows the journey of its number from left to right. The colours always mean the same thing.</p>
+  <div class="flow" data-steps='[{"k":"table","l":"Database table","s":"where the rows live"},{"k":"rule","l":"Rule","s":"which rows are kept"},{"k":"calc","l":"Calculation","s":"count, sum or percentage"},{"k":"out","l":"What you see","s":"the number on the card"}]'></div>
+  <div class="legend">
+    <span><i style="border-color:var(--table);background:var(--table-soft)"></i> table in the database</span>
+    <span><i style="border-color:var(--rule);background:var(--rule-soft)"></i> rule that filters rows</span>
+    <span><i style="border-color:var(--calc);background:var(--calc-soft)"></i> calculation</span>
+    <span><i style="border-color:var(--out);background:var(--out-soft)"></i> what the card shows</span>
+  </div>
+  <p style="margin-top:14px">For the full end-to-end map of tables, server modules and screen sections, open the companion diagram: <a href="ceo-overview-dataflow.html">ceo-overview-dataflow.html</a> (same folder; it supports zoom, search and export).</p>
+  <h3>Three facts that apply to the whole page</h3>
+  <ul>
+    <li><strong>Invoices come from two systems.</strong> Zoho invoices and the Drive (Vyapar) invoices are joined into one list. Cancelled (void) invoices are dropped everywhere. Draft invoices <em>count as revenue</em> but <em>never as money owed</em>. Credit notes count as negative revenue on the day they are issued.</li>
+    <li><strong>Days are Indian days.</strong> Most date checks convert timestamps to Asia/Kolkata before deciding which day a thing happened on.</li>
+    <li><strong>Some cards follow the period, some do not.</strong> "As of now" cards (Needs you today, Money owed, Dealer base, Trust checks) ignore the period chips. Each card below says which kind it is.</li>
+  </ul>
+</section>
+
+<section class="card" id="period">
+  <div class="screen"><h2>Period control</h2><span class="where">top right of the page</span></div>
+  <p>The chips <strong>This month · Last month · Quarter · Financial year</strong> and the <strong>from–to</strong> date boxes choose one window. That window is sent to every API that follows the period.</p>
+  <div class="flow" data-steps='[{"k":"out","l":"Chip or dates","s":"chosen in the browser"},{"k":"rule","l":"Window","s":"from date → to date"},{"k":"calc","l":"Previous window","s":"same length, just before"},{"k":"out","l":"Compare","s":"▲ ▼ % vs previous"}]'></div>
+  <dl class="facts">
+    <dt>This month</dt><dd>From the 1st of this month to today.</dd>
+    <dt>Last month</dt><dd>The whole of last month, 1st to last day.</dd>
+    <dt>Quarter</dt><dd>From the first day of the current quarter to today.</dd>
+    <dt>Financial year</dt><dd>From 1 April to today.</dd>
+    <dt>Custom dates</dt><dd>Exactly the days you pick. If typed backwards they are swapped. The "to" date cannot be in the future.</dd>
+    <dt>Previous period</dt><dd>Count the days in the window, then take the same number of days immediately before it. "1–6 Oct" is compared with "25–30 Sep".</dd>
+    <dt>As of HH:MM</dt><dd>The server time when the page last fetched. The figures refresh every 60 seconds while the page is open.</dd>
+  </dl>
+  <div class="watch"><b>Watch out.</b> The subtitle says "each figure compares with the previous period", but only two figures actually show a comparison: Revenue and the buyback kg sourced. All other tiles show "No target" or a share instead.</div>
+</section>
+
+<section class="card" id="needs">
+  <div class="screen"><h2>Needs you today</h2><span class="where">row of action cards · as of now · ignores the period</span></div>
+  <p>Only cards with a number above zero are drawn. Cards at zero are listed in the green "All clear" line underneath. When everything is zero the row says "Nothing needs you right now."</p>
+
+  <h3>Quotes waiting for your approval <span class="pill bad">bad</span></h3>
+  <div class="flow" data-steps='[{"k":"table","l":"dealer_lead_commercials","s":"every quote version"},{"k":"rule","l":"approval pending","s":"and not withdrawn"},{"k":"calc","l":"Count rows"},{"k":"out","l":"Quotes waiting","s":"Open list → /ceo/quotations"}]'></div>
+  <p>A rep cannot send a quote above the automatic limit until the CEO approves it. This counts those quotes sitting in the queue right now.</p>
+
+  <h3>Sales-ready leads with no owner <span class="pill warn">warn</span></h3>
+  <div class="flow" data-steps='[{"k":"table","l":"dealer_leads"},{"k":"rule","l":"no owner · open · sales-ready","s":"not Won, Converted or Lost; phone not dead"},{"k":"calc","l":"Count","s":"and count those waiting 7+ days"},{"k":"out","l":"N leads","s":"\"M waiting more than 7 days\""}]'></div>
+  <p>A lead is <em>sales-ready</em> when a dated event says so: a rep created it, a rep claimed it, the AI call qualified it, or a NeoDove agent picked it up. If such a lead has nobody assigned, it waits here. The waiting clock starts at that event, not at the day the lead was created.</p>
+  <div class="ex"><b>Example.</b> 20 leads are sales-ready with no owner. 15 of them became sales-ready more than 7 days ago. The card shows <span class="num">20</span> and the line "15 waiting more than 7 days". "Open list" opens the Ready to assign page.</div>
+
+  <h3>Leads idle over 7 working days <span class="pill warn">warn</span></h3>
+  <div class="flow" data-steps='[{"k":"table","l":"dealer_leads"},{"k":"rule","l":"has owner · open · workable","s":"Won excluded; dead numbers excluded"},{"k":"calc","l":"Working days since last work","s":"Mon–Sat, from last touch or assignment"},{"k":"out","l":"Leads idle ≥ 7 days","s":"→ Needs attention report"}]'></div>
+  <p>"Last work" is the latest of: the last logged touchpoint, the assignment date, or the creation date. Sundays are skipped. Public holidays are not skipped here.</p>
+
+  <h3>Dealers in Red or Dormant <span class="pill bad">bad</span></h3>
+  <div class="flow" data-steps='[{"k":"table","l":"accounts + invoices","s":"dealer accounts and their invoices"},{"k":"rule","l":"days since last invoice","s":"Red = 46–60 · Dormant = 60+"},{"k":"calc","l":"Count dealers","s":"and sum their last-90-day billing"},{"k":"out","l":"N dealers","s":"\"₹X billed to them in the last 90 days\""}]'></div>
+  <p>These are dealers who used to order and have gone quiet. See the Dealer base card for all the buckets.</p>
+
+  <h3>People below 80% of target <span class="pill bad">bad</span></h3>
+  <div class="flow" data-steps='[{"k":"table","l":"sales_targets","s":"monthly targets per person"},{"k":"rule","l":"accepted or pushed targets","s":"current month"},{"k":"calc","l":"Average % of target to date","s":"per person, across their metrics"},{"k":"out","l":"People under 80%","s":"See team → Team card"}]'></div>
+  <p>For each person, every metric's "% of target to date" is averaged. Anyone whose average is under 80% is counted. If no targets are set up at all, the card cannot be counted and a note with a link to Targets appears instead.</p>
+
+  <h3>NBFCs waiting for your approval <span class="pill warn">warn</span></h3>
+  <div class="flow" data-steps='[{"k":"table","l":"nbfc"},{"k":"rule","l":"status = pending admin review"},{"k":"calc","l":"Count"},{"k":"out","l":"N NBFCs","s":"→ NBFC approvals queue"}]'></div>
+
+  <div class="watch"><b>Watch out.</b> "Not tracked yet: dealer said yes but not marked Won · orders claimed without an invoice" is fixed text. Neither of those two things is counted anywhere yet.</div>
+</section>
+
+<section class="card" id="kpi">
+  <div class="screen"><h2>KPI tiles</h2><span class="where">six tiles · most follow the period</span></div>
+
+  <h3>Revenue</h3>
+  <div class="flow" data-steps='[{"k":"table","l":"zoho_invoices + sales_invoices","s":"+ credit notes as negatives"},{"k":"rule","l":"not void","s":"invoice date inside the window"},{"k":"calc","l":"Sum of invoice totals","s":"drafts included"},{"k":"out","l":"₹ Revenue","s":"▲▼ % vs previous period"}]'></div>
+  <dl class="facts">
+    <dt>Counted</dt><dd>Every invoice whose invoice date falls in the window, from both Zoho and Drive, unless it is void. Draft invoices are counted. A credit note subtracts its amount on its issue date.</dd>
+    <dt>Comparison</dt><dd>The same sum over the previous window of the same length. Shown as ▲ or ▼ with the percentage change. Hidden when the previous value is zero.</dd>
+    <dt>Small text</dt><dd>"₹X not linked to a dealer" appears when some invoices could not be matched to any dealer account or lead (usually a missing GSTIN).</dd>
+  </dl>
+  <div class="ex"><b>Example.</b> Window 1–6 Oct has invoices of ₹4,20,000 and ₹1,80,000 plus a credit note of ₹20,000. Revenue = <span class="num">₹5,80,000</span>. The previous window 25–30 Sep had ₹2,90,000, so the tile shows ▲ 100% vs previous period.</div>
+
+  <h3>Gross margin</h3>
+  <div class="flow" data-steps='[{"k":"table","l":"sales_invoice_lines","s":"Drive invoices only"},{"k":"rule","l":"trusted lines","s":"lines that add up to the invoice subtotal"},{"k":"calc","l":"Line amount − qty × unit cost","s":"cost from stock bought from the OEM"},{"k":"out","l":"₹ Margin","s":"pill: x% of costed sales"}]'></div>
+  <dl class="facts">
+    <dt>Unit cost</dt><dd>First choice: the average OEM purchase price of that product bought in the 180 days before the sale. Second: the average over all costed stock of that product. Third: the OEM reference price in force on the sale date.</dd>
+    <dt>Not costed</dt><dd>A line whose product cannot be matched, or has no known cost, is left out of the margin and reported as "not costed". The tool never guesses a cost.</dd>
+    <dt>The pill</dt><dd>Margin divided by the revenue of the <em>costed</em> lines only, not by total revenue.</dd>
+    <dt>Not included</dt><dd>Zoho invoices and credit notes. The dash "—" means no costed lines in the period.</dd>
+  </dl>
+
+  <h3>Batteries to dealers</h3>
+  <div class="flow" data-steps='[{"k":"table","l":"invoice_line_items"},{"k":"rule","l":"product class = battery","s":"non-void invoice matched to a dealer"},{"k":"calc","l":"Sum of quantity"},{"k":"out","l":"N batteries"}]'></div>
+  <p>Battery lines on invoices dated in the window, matched to a dealer account or lead. On a database without the invoice-line tables it falls back to counting stock units allocated to dealers.</p>
+  <div class="watch"><b>Watch out.</b> The period for this tile is capped at 366 days. A longer custom range shows "—".</div>
+
+  <h3>New dealers live</h3>
+  <div class="flow" data-steps='[{"k":"table","l":"dealer_onboarding_applications"},{"k":"rule","l":"approved date in the window"},{"k":"calc","l":"Count"},{"k":"out","l":"N dealers","s":"\"M leads marked Converted\""}]'></div>
+  <p>A dealer goes live when admin approves the onboarding. The small text counts leads that reached Converted in the same window; the two usually match.</p>
+
+  <h3>Dealers ordering <span class="pill">as of today</span></h3>
+  <div class="flow" data-steps='[{"k":"table","l":"accounts + invoices"},{"k":"rule","l":"last invoice 0–30 days ago","s":"Active + Cooling buckets"},{"k":"calc","l":"Count ÷ all live dealers"},{"k":"out","l":"N dealers","s":"pill: x% of live"}]'></div>
+  <p>Ignores the period. "Live" is every dealer in every bucket, including those who never ordered.</p>
+
+  <h3>Money owed to us <span class="pill">as of now</span></h3>
+  <div class="flow" data-steps='[{"k":"table","l":"zoho_invoices + sales_invoices"},{"k":"rule","l":"not paid · not void · not draft","s":"balance above zero"},{"k":"calc","l":"Sum of balances","s":"Drive: total − amount paid"},{"k":"out","l":"₹ owed","s":"pill: Watch"}]'></div>
+  <dl class="facts">
+    <dt>Zoho side</dt><dd>Zoho tracks payments, so the balance it sends is reliable.</dd>
+    <dt>Drive side</dt><dd>The import only reads the invoice PDF. It cannot know whether the dealer paid. Balance = total minus whatever a finance user has typed in as paid. Until someone records a payment, <strong>every Drive invoice counts as fully unpaid</strong>.</dd>
+    <dt>Credit notes</dt><dd>Carry no balance, so they do not reduce this figure.</dd>
+  </dl>
+  <div class="ex"><b>Example from sandbox.</b> Zoho shows 3 overdue invoices worth ₹43,954. Drive holds 67 invoices worth ₹1.97 Cr with no payment recorded. The tile shows <span class="num">₹1.97 Cr</span>. Recording payments on the CEO invoices page brings it down.</div>
+</section>
+
+<section class="card" id="pace">
+  <div class="screen"><h2>Revenue pace</h2><span class="where">line chart · follows the period</span></div>
+  <div class="flow" data-steps='[{"k":"table","l":"invoice union","s":"Zoho + Drive, not void"},{"k":"rule","l":"group by day or month","s":"day for windows under 62 days"},{"k":"calc","l":"Running total","s":"projection = so far ÷ days passed × days in window"},{"k":"out","l":"Actual line + pace line","s":"\"At this pace the month ends at ₹X\""}]'></div>
+  <ol class="steps">
+    <li>Add up revenue per day (or per month for long windows), then draw the running total.</li>
+    <li>If the window is still running, divide the revenue so far by the days already passed to get a daily rate.</li>
+    <li>Multiply that rate by the total days in the window. That is the dotted "at current pace" end point.</li>
+  </ol>
+  <div class="ex"><b>Example.</b> Six days into October the running total is ₹5,80,000. Daily rate ≈ ₹96,667. October has 31 days, so the pace line ends near <span class="num">₹30 L</span>.</div>
+  <div class="watch"><b>Watch out.</b> There is no company revenue target, so no target line is drawn. A custom range that does not start on the 1st, or that spans two months, plots the points in the wrong place on the x-axis.</div>
+</section>
+
+<section class="card" id="mix">
+  <div class="screen"><h2>Where revenue came from</h2><span class="where">bars by business type or by city · follows the period</span></div>
+  <div class="flow" data-steps='[{"k":"table","l":"invoice union + dealer_leads"},{"k":"rule","l":"invoice matched to a lead","s":"by GSTIN or a manual link"},{"k":"calc","l":"Sum per business type / city","s":"share = row ÷ total revenue"},{"k":"out","l":"Bars with ₹ and %","s":"grey row: not linked to a dealer"}]'></div>
+  <p>Each invoice is matched to a dealer through its GSTIN (or a hand link made on the invoices page). The dealer's lead gives the business type and city.</p>
+  <div class="watch"><b>Watch out.</b> The city view only knows cities from leads. An invoice matched to a dealer account that has no lead disappears from the city bars, and the list is capped at the top 10 cities. So city bars can add up to less than the Revenue tile.</div>
+</section>
+
+<section class="card" id="money">
+  <div class="screen"><h2>Money in, money out</h2><span class="where">two cards · whole months only</span></div>
+  <h3>Revenue against total costs, last 6 months</h3>
+  <div class="flow" data-steps='[{"k":"table","l":"invoices · inventory · expense_submissions"},{"k":"rule","l":"one calendar month at a time","s":"current + five before"},{"k":"calc","l":"Sales · OEM stock bought · approved expenses","s":"net = sales − both costs"},{"k":"out","l":"Two bars per month"}]'></div>
+  <p>This chart always shows the last six months and does not follow the period chips. "Stock bought" is the amount on OEM purchase invoices dated in that month. "Running expenses" are approved expense claims by expense date.</p>
+  <h3>Where the money went, <em>period</em></h3>
+  <p>The same three figures summed for the months in the chosen window, plus a per-department split of expenses when "This month" is selected. The bottom line "Net of purchases" is sales minus stock bought minus expenses.</p>
+  <div class="watch"><b>Watch out.</b> Costs exist per whole month only. A custom range that is not "1st to month-end" shows a hint instead of figures. This card counts stock <em>bought</em>, not stock sold, so a month of heavy stocking looks negative.</div>
+</section>
+
+<section class="card" id="engine">
+  <div class="screen"><h2>Sales engine</h2><span class="where">funnel rows · follows the period</span></div>
+  <div class="flow" data-steps='[{"k":"table","l":"dealer_leads + status history"},{"k":"rule","l":"leads created in the window"},{"k":"calc","l":"Ever reached each stage ÷ leads created"},{"k":"out","l":"One bar per stage","s":"New → Assigned → Discussion → Commercials → Won → Converted"}]'></div>
+  <ol class="steps">
+    <li>Take every lead created inside the window. That is the cohort, shown as "All leads created".</li>
+    <li>For each stage, count how many of those leads are at that stage now <em>or ever passed through it</em>, using the status history.</li>
+    <li>The bar is that count as a share of the cohort.</li>
+  </ol>
+  <dl class="facts">
+    <dt>Headline conversion</dt><dd>Once the CRM has more than 120 days of leads it shows "30-day lead conversion": of leads created 31–60 days ago, the share that converted within 30 days. This ignores the chosen period on purpose, so it is comparable month to month.</dd>
+    <dt>AI dialler line</dt><dd>"N dealers called": leads with an AI call in the window. "p% connected": those that connected. "q qualified": those whose current AI band is Qualified.</dd>
+    <dt>First orders</dt><dd>Leads whose very first invoice is dated in the window.</dd>
+  </dl>
+</section>
+
+<section class="card" id="trust">
+  <div class="screen"><h2>Can you trust these numbers?</h2><span class="where">six checks · as of now</span></div>
+  <p>Each check measures the share of records that are <em>missing</em> something. 0% is the good end. Every other number on the page is under-counted until these reach zero.</p>
+  <div class="flow" data-steps='[{"k":"table","l":"one table per check"},{"k":"rule","l":"rows with something missing"},{"k":"calc","l":"missing ÷ total × 100"},{"k":"out","l":"Good ≤ 5% · Fix soon ≤ 20% · Fix now > 20%","s":"each opens its fix list"}]'></div>
+  <div class="tablewrap"><table class="t">
+    <thead><tr><th>Check</th><th>What is counted as missing</th><th>Why it matters</th></tr></thead>
+    <tbody>
+      <tr><td>Calls credited to no one (30 d)</td><td>Inside-sales calls in the last 30 days with no person on them, usually from an unlinked NeoDove agent</td><td>Effort and ownership go to nobody</td></tr>
+      <tr><td>Leads with no city</td><td>Active leads with a blank city</td><td>City bars and territory rules miss them</td></tr>
+      <tr><td>Leads with no business type</td><td>Active leads with no business type</td><td>Business-type bars show "Not set"</td></tr>
+      <tr><td>Converted dealers with no GSTIN</td><td>Converted leads with a blank GSTIN</td><td>Their invoices cannot be linked, so revenue goes to "not linked"</td></tr>
+      <tr><td>Buyback lines with no weight</td><td>Submitted buyback lines with zero weight</td><td>Scrap kg is under-counted</td></tr>
+      <tr><td>Invoices not linked to a dealer</td><td>All-time invoices with no dealer account and no lead</td><td>Revenue cannot be credited to a dealer or a rep</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section class="card" id="team">
+  <div class="screen"><h2>Team against target</h2><span class="where">one row per person · follows the period</span></div>
+  <div class="flow" data-steps='[{"k":"table","l":"sales_targets · invoices · dealer_leads · touchpoints"},{"k":"rule","l":"people with activity in the window"},{"k":"calc","l":"% of target to date · revenue · converted · idle · engaged"},{"k":"out","l":"Row per person","s":"furthest behind first"}]'></div>
+  <dl class="facts">
+    <dt>% of target to date</dt><dd>Actual ÷ (monthly target × working days passed ÷ working days in the month) × 100, averaged across the person's metrics. The black tick is 100%. Green ≥ 100, amber ≥ 80, red below.</dd>
+    <dt>Revenue</dt><dd>Invoices in the window credited to the person who owned the dealer on the invoice date.</dd>
+    <dt>Converted</dt><dd>Leads that reached Converted in the window, credited to the <strong>closing owner</strong> (who held the lead when it was won), never to whoever holds it now.</dd>
+    <dt>Idle leads</dt><dd>Their leads with no work for 7+ working days, as of now. Bold red at 15 or more.</dd>
+    <dt>Engaged</dt><dd>Of the person's human calls in the window, the share that connected. Duplicate NeoDove entries within 3 minutes count once. Duration does not matter.</dd>
+  </dl>
+  <div class="watch"><b>Watch out.</b> "% of target" always uses the targets of the month in which the window ends. For Quarter and Financial year the revenue and converted columns cover the whole window, but the target column is one month only.</div>
+</section>
+
+<section class="card" id="dealers">
+  <div class="screen"><h2>Dealer base</h2><span class="where">stacked band + bucket rows · as of today</span></div>
+  <div class="flow" data-steps='[{"k":"table","l":"accounts + invoices"},{"k":"rule","l":"active dealer accounts"},{"k":"calc","l":"Days since last invoice","s":"today − latest invoice date"},{"k":"out","l":"Bucket counts","s":"+ ₹ billed in last 90 days"}]'></div>
+  <div class="tablewrap"><table class="t">
+    <thead><tr><th>Bucket</th><th>Days since last invoice</th></tr></thead>
+    <tbody>
+      <tr><td>Active</td><td>0–20</td></tr>
+      <tr><td>Cooling</td><td>21–30</td></tr>
+      <tr><td>Orange, pitch now</td><td>31–45</td></tr>
+      <tr><td>Red, billing must happen</td><td>46–60</td></tr>
+      <tr><td>Dormant</td><td>more than 60</td></tr>
+      <tr><td>Not ordered yet</td><td>never ordered, converted 30 days ago or less</td></tr>
+      <tr><td>Never ordered</td><td>never ordered, converted more than 30 days ago</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section class="card" id="finance">
+  <div class="screen"><h2>Customer finance (NBFC)</h2><span class="where">three counts · follows the period</span></div>
+  <div class="flow" data-steps='[{"k":"table","l":"admin_verification_queue · loan_sanctions"},{"k":"rule","l":"dated inside the window"},{"k":"calc","l":"Count"},{"k":"out","l":"KYC shared · Disbursed · Rejected"}]'></div>
+  <p><strong>KYC files shared</strong> counts customers whose KYC first entered the verification queue in the window. <strong>Disbursed</strong> counts loans with a disbursement date in the window. <strong>Rejected</strong> counts sanctions in rejected status, dated by their last update because there is no separate rejection date.</p>
+</section>
+
+<section class="card" id="buyback">
+  <div class="screen"><h2>Battery buyback</h2><span class="where">three figures · follows the period</span></div>
+  <div class="flow" data-steps='[{"k":"table","l":"buyback_lines · buyback_deals · settlement_transactions"},{"k":"rule","l":"pickup completed in the window"},{"k":"calc","l":"Σ quantity × weight · paid ÷ kg"},{"k":"out","l":"kg sourced · deals closed · ₹ per kg","s":"kg has ▲▼ vs previous"}]'></div>
+  <dl class="facts">
+    <dt>Sourced</dt><dd>Total weight of every line on requests whose pickup was completed in the window. Shown in tonnes above 1,000 kg. Compared with the previous window.</dd>
+    <dt>Deals closed</dt><dd>Requests submitted in the window that have a settled or closed deal. Note it is dated by submission, not by the close.</dd>
+    <dt>Paid per kg</dt><dd>Money paid to dealers in the window divided by the kg above.</dd>
+  </dl>
+</section>
+
+<section class="card" id="news">
+  <div class="screen"><h2>Green Energy Today</h2><span class="where">news brief · as of now</span></div>
+  <p>Today's AI-written brief of green-energy news with its sources, plus the latest six items from the last 24 hours. It refreshes every two hours and the brief is written on the first refresh after 06:00 IST. Visible to the CEO role only.</p>
+</section>
+
+<section class="card" id="issues">
+  <h2>Known gaps, as of 6 Oct 2026</h2>
+  <p>Things the code does today that the labels do not say, or that may surprise a reader.</p>
+  <ol class="steps">
+    <li>The pace chart mis-plots a custom range that does not start on the 1st or that crosses a month boundary.</li>
+    <li>"Where the money went" shows ₹0 for a whole-month range older than six months instead of saying it is not available.</li>
+    <li>"Batteries to dealers" small text says "allocated"; the figure is actually invoiced battery quantity.</li>
+    <li>"Gross margin" small text says "whole months"; the figure uses exact days.</li>
+    <li>City bars ignore invoices matched to an account without a lead, and show only the top 10 cities.</li>
+    <li>"People below 80%" picks the month by UTC, so for a few hours after midnight on the 1st it can look at the wrong month. When targets are missing it wrongly appears in the "All clear" line.</li>
+    <li>Team "% of target" is one month while revenue and converted span the whole period for Quarter and Financial year.</li>
+    <li>The sales-engine headline conversion ignores the chosen period once the CRM is older than 120 days. This is by design but is not stated on screen.</li>
+    <li>The subtitle promises a comparison for every figure; only Revenue and buyback kg have one.</li>
+    <li>Buyback "deals closed" is dated by submission, not by the close.</li>
+    <li>Money owed treats every Drive invoice as unpaid until a payment is recorded by hand.</li>
+  </ol>
+</section>
+
+<section class="card" id="glossary">
+  <h2>Glossary</h2>
+  <div class="grid2">
+    <div class="mini"><h4>Void</h4><p>A cancelled invoice. Dropped from every figure.</p></div>
+    <div class="mini"><h4>Draft</h4><p>An invoice not yet sent. Counted as revenue, never as money owed.</p></div>
+    <div class="mini"><h4>Credit note</h4><p>A refund document. Subtracts from revenue on its issue date.</p></div>
+    <div class="mini"><h4>Matched invoice</h4><p>An invoice linked to a dealer by GSTIN or by a manual link.</p></div>
+    <div class="mini"><h4>Sales-ready</h4><p>A lead that a rep, the AI call or a NeoDove agent has shown is worth working.</p></div>
+    <div class="mini"><h4>Closing owner</h4><p>Whoever held a lead when it was marked Won. Keeps the credit forever.</p></div>
+    <div class="mini"><h4>Engaged call</h4><p>A human call that connected and the rep spoke with the dealer. Length does not matter.</p></div>
+    <div class="mini"><h4>Working day</h4><p>Monday to Saturday. Sundays are skipped; holidays only where the targets rules say so.</p></div>
+    <div class="mini"><h4>Window</h4><p>The from–to range chosen with the chips or dates.</p></div>
+    <div class="mini"><h4>Previous period</h4><p>The same number of days immediately before the window.</p></div>
+  </div>
+</section>
+
+<footer>Written from the code on main as of 6 Oct 2026 (<code>src/app/(dashboard)/ceo/page.tsx</code> and the modules under <code>src/lib/dashboard</code>, <code>src/lib/admin</code>, <code>src/lib/leads</code>). When the code changes, this page needs updating too.</footer>
+</main>
+</div>
+
+<script>
+(function(){
+  var colors={table:["--table","--table-soft"],rule:["--rule","--rule-soft"],calc:["--calc","--calc-soft"],out:["--out","--out-soft"]};
+  var NS="http://www.w3.org/2000/svg";
+  function el(n,a,t){var e=document.createElementNS(NS,n);for(var k in a)e.setAttribute(k,a[k]);if(t!=null)e.textContent=t;return e;}
+  function wrap(s,max){var w=String(s).split(" "),lines=[],cur="";for(var i=0;i<w.length;i++){var nxt=cur?cur+" "+w[i]:w[i];if(nxt.length>max&&cur){lines.push(cur);cur=w[i];}else cur=nxt;}if(cur)lines.push(cur);return lines.slice(0,3);}
+  document.querySelectorAll(".flow[data-steps]").forEach(function(div){
+    var steps;try{steps=JSON.parse(div.getAttribute("data-steps"));}catch(e){return;}
+    var W=200,H=64,G=44,PAD=4,n=steps.length;
+    var width=n*W+(n-1)*G+PAD*2,height=H+PAD*2;
+    var svg=el("svg",{viewBox:"0 0 "+width+" "+height,width:width,height:height,role:"img","aria-label":steps.map(function(s){return s.l;}).join(" → ")});
+    var defs=el("defs",{});var m=el("marker",{id:"ah",viewBox:"0 0 10 10",refX:"9",refY:"5",markerWidth:"7",markerHeight:"7",orient:"auto-start-reverse"});
+    m.appendChild(el("path",{d:"M0 0 L10 5 L0 10 z",fill:"currentColor"}));defs.appendChild(m);svg.appendChild(defs);
+    steps.forEach(function(s,i){
+      var x=PAD+i*(W+G),y=PAD,c=colors[s.k]||colors.out;
+      var g=el("g",{style:"color:var("+c[0]+")"});
+      g.appendChild(el("rect",{x:x,y:y,width:W,height:H,rx:10,fill:"var("+c[1]+")",stroke:"var("+c[0]+")","stroke-width":1.5}));
+      var main=wrap(s.l,24),sub=s.s?wrap(s.s,32):[];
+      var totalLines=main.length+sub.length,lineH=15,startY=y+H/2-((totalLines-1)*lineH)/2+5;
+      main.forEach(function(ln,j){g.appendChild(el("text",{x:x+W/2,y:startY+j*lineH,"text-anchor":"middle","font-size":"12.5","font-weight":"600",fill:"var(--fg)","font-family":"var(--font)"},ln));});
+      sub.forEach(function(ln,j){g.appendChild(el("text",{x:x+W/2,y:startY+(main.length+j)*lineH,"text-anchor":"middle","font-size":"10.5",fill:"var(--muted)","font-family":"var(--font)"},ln));});
+      svg.appendChild(g);
+      if(i<n-1){svg.appendChild(el("line",{x1:x+W+3,y1:y+H/2,x2:x+W+G-3,y2:y+H/2,stroke:"var(--muted)","stroke-width":1.5,"marker-end":"url(#ah)",style:"color:var(--muted)"}));}
+    });
+    div.appendChild(svg);
+  });
+})();
+</script>
+</body>
+</html>

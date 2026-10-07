@@ -9,48 +9,53 @@
  *
  * Nothing read here is trusted on its own: saveInvoiceLines / the margin query
  * use the lines only when they add up to the invoice's taxable value.
+ *
+ * Read with GEMINI (not OpenAI like the header reader): Gemini takes the PDF
+ * inline, so no page rendering is needed. Key: GEMINI_INVOICE_API_KEY, else
+ * GEMINI_API_KEY. Model: INVOICE_GEMINI_MODEL (default gemini-2.5-flash).
+ * 429 / 5xx / network blips are retried; a bad key or request fails at once.
  */
 
 import type { InvoiceLineCandidate } from "@/lib/sales/salesInvoiceLines";
-import { getOpenAI, INVOICE_MODEL } from "./client";
-import { salesInvoiceMediaParts } from "./extractSalesInvoice";
 
-const JSON_SCHEMA = {
-  name: "sales_invoice_lines",
-  strict: true,
-  schema: {
-    type: "object",
-    additionalProperties: false,
-    properties: {
-      lines: {
-        type: "array",
-        description: "One entry per row of the items table, in the order printed",
-        items: {
-          type: "object",
-          additionalProperties: false,
-          properties: {
-            description: {
-              type: ["string", "null"],
-              description: "The item name exactly as printed, including voltage / Ah / model",
-            },
-            hsn_code: { type: ["string", "null"], description: "HSN / SAC code of the row, digits only" },
-            quantity: { type: ["number", "null"], description: "Quantity of the row" },
-            rate: {
-              type: ["number", "null"],
-              description: "Price per unit BEFORE GST",
-            },
-            amount: {
-              type: ["number", "null"],
-              description:
-                "Taxable value of the row BEFORE GST, after any discount — the 'Taxable amount' column. Never the row total including GST.",
-            },
+const GENAI_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
+const MODEL = process.env.INVOICE_GEMINI_MODEL || "gemini-2.5-flash";
+const MAX_ATTEMPTS = 3;
+
+function apiKey(): string {
+  return process.env.GEMINI_INVOICE_API_KEY || process.env.GEMINI_API_KEY || "";
+}
+
+// Gemini's response schema (OpenAPI subset): nullable instead of type unions.
+const RESPONSE_SCHEMA = {
+  type: "OBJECT",
+  properties: {
+    lines: {
+      type: "ARRAY",
+      description: "One entry per row of the items table, in the order printed",
+      items: {
+        type: "OBJECT",
+        properties: {
+          description: {
+            type: "STRING",
+            nullable: true,
+            description: "The item name exactly as printed, including voltage / Ah / model",
           },
-          required: ["description", "hsn_code", "quantity", "rate", "amount"],
+          hsn_code: { type: "STRING", nullable: true, description: "HSN / SAC code of the row, digits only" },
+          quantity: { type: "NUMBER", nullable: true, description: "Quantity of the row" },
+          rate: { type: "NUMBER", nullable: true, description: "Price per unit BEFORE GST" },
+          amount: {
+            type: "NUMBER",
+            nullable: true,
+            description:
+              "Taxable value of the row BEFORE GST, after any discount — the 'Taxable amount' column. Never the row total including GST.",
+          },
         },
+        required: ["description", "hsn_code", "quantity", "rate", "amount"],
       },
     },
-    required: ["lines"],
   },
+  required: ["lines"],
 } as const;
 
 const SYSTEM_PROMPT = [
@@ -77,28 +82,78 @@ function str(v: unknown): string | null {
   return typeof v === "string" && v.trim() ? v.trim() : null;
 }
 
+function supportedMime(mimeType: string): boolean {
+  return mimeType === "application/pdf" || mimeType.startsWith("image/");
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+async function callGemini(buffer: Buffer, mimeType: string): Promise<string> {
+  const key = apiKey();
+  if (!key) throw new Error("GEMINI_API_KEY is not configured");
+  const body = JSON.stringify({
+    systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+    contents: [
+      {
+        role: "user",
+        parts: [
+          { inline_data: { mime_type: mimeType, data: buffer.toString("base64") } },
+          { text: "Extract the rows of the items table from this invoice." },
+        ],
+      },
+    ],
+    generationConfig: {
+      temperature: 0,
+      responseMimeType: "application/json",
+      responseSchema: RESPONSE_SCHEMA,
+    },
+  });
+
+  let lastError = "network_error";
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      const res = await fetch(`${GENAI_BASE}/${MODEL}:generateContent`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-goog-api-key": key },
+        body,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        lastError = `Gemini ${res.status}: ${data?.error?.message ?? "request failed"}`;
+        if ((res.status === 429 || res.status >= 500) && attempt < MAX_ATTEMPTS) {
+          await sleep(1000 * attempt);
+          continue;
+        }
+        throw new Error(lastError);
+      }
+      const parts: Array<{ text?: string }> = data?.candidates?.[0]?.content?.parts ?? [];
+      const raw = parts.map((p) => p.text ?? "").join("").trim();
+      if (!raw) throw new Error(`Empty line-item response from Gemini (${data?.candidates?.[0]?.finishReason ?? "no candidate"})`);
+      return raw;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // Our own non-retryable throws above carry "Gemini "/"Empty"; a bare
+      // network failure ("fetch failed") is retried.
+      if (msg.startsWith("Gemini ") || msg.startsWith("Empty ")) throw err;
+      lastError = msg;
+      if (attempt < MAX_ATTEMPTS) {
+        await sleep(1000 * attempt);
+        continue;
+      }
+    }
+  }
+  throw new Error(lastError);
+}
+
 export async function extractSalesInvoiceLines(
   buffer: Buffer,
   mimeType: string,
   fileName: string,
 ): Promise<InvoiceLineCandidate[]> {
-  const mediaParts = await salesInvoiceMediaParts(buffer, mimeType, fileName);
-
-  const completion = await getOpenAI().chat.completions.create({
-    model: INVOICE_MODEL,
-    temperature: 0,
-    response_format: { type: "json_schema", json_schema: JSON_SCHEMA },
-    messages: [
-      { role: "system", content: SYSTEM_PROMPT },
-      {
-        role: "user",
-        content: [{ type: "text", text: "Extract the rows of the items table from this invoice." }, ...mediaParts],
-      },
-    ],
-  });
-
-  const raw = completion.choices[0]?.message?.content;
-  if (!raw) throw new Error("Empty line-item response from model");
+  if (!supportedMime(mimeType)) {
+    throw new Error(`Cannot read line items of ${fileName || "this file"}: unsupported type ${mimeType}`);
+  }
+  const raw = await callGemini(buffer, mimeType);
   let parsed: { lines?: unknown };
   try {
     parsed = JSON.parse(raw);

@@ -311,17 +311,20 @@ export function KpiTile({
     delta,
     spark,
     sub,
+    href,
 }: {
     label: string;
     value: string;
+    /** Makes the whole tile a link to the detail behind the number. */
+    href?: string;
     pill?: { text: string; tone: Tone };
     /** `good` colours the change green, otherwise red; omit when there is no previous period. */
     delta?: { text: string; good: boolean } | null;
     spark?: number[];
     sub?: string;
 }) {
-    return (
-        <div className="flex flex-col gap-2 rounded-2xl border border-border bg-surface p-[18px] shadow-card">
+    const body = (
+        <>
             <span className="text-[13px] font-semibold text-ink-muted">{label}</span>
             <span className="text-[27px] font-bold leading-tight tracking-tight text-brand-navy tabular-nums">{value}</span>
             <div className="flex min-h-[22px] flex-wrap items-center gap-2">
@@ -332,7 +335,15 @@ export function KpiTile({
             </div>
             {spark && spark.length > 1 ? <Sparkline values={spark} /> : null}
             {sub && <span className="text-xs leading-snug text-ink-muted">{sub}</span>}
-        </div>
+        </>
+    );
+    const box = "flex flex-col gap-2 rounded-2xl border border-border bg-surface p-[18px] shadow-card";
+    return href ? (
+        <Link href={href} className={cn(box, "transition hover:border-brand-sky hover:shadow-md")}>
+            {body}
+        </Link>
+    ) : (
+        <div className={box}>{body}</div>
     );
 }
 
