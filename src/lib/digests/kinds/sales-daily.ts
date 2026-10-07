@@ -67,10 +67,13 @@ import { sql } from "drizzle-orm";
 import {
   BLOCK_A_COLUMNS,
   BLOCK_A_PCT_COLUMN,
-  blockAHeadline,
+  blockAHeadlineParts,
+  blockARowNotes,
   blockATableRows,
   buildBlockA,
+  lastMonthColumnLabel,
 } from "../salesDailyBlockA";
+import { median, workingDaysElapsed } from "../workingTime";
 import {
   BLOCK_B_COLUMNS,
   BLOCK_B_PCT_COLUMN,
@@ -227,6 +230,67 @@ async function rightNow(): Promise<{ waiting: number; oldestDays: number | null 
   }
 }
 
+/**
+ * "Median wait, sales-ready → assigned (MTD)" (business template, Right now).
+ * Leads whose FIRST owner arrived this month after they had become
+ * sales-ready; the wait is in working days (workingTime.ts). A lead that was
+ * sales-ready BECAUSE it got an owner (picked up in NeoDove, rep-created,
+ * claimed — on db-2 every October assignment so far) never waited and is not
+ * in the median. null = nothing measurable.
+ */
+async function medianWaitToAssign(mtd: { from: string; to: string }): Promise<{ median: number | null; n: number } | null> {
+  try {
+    const { db } = await import("@/lib/db");
+    const rows = (await db.execute(sql`
+      WITH first_hop AS (
+        SELECT DISTINCT ON (t.dealer_lead_id) t.dealer_lead_id, t.performed_at
+          FROM lead_touchpoints t
+         WHERE t.to_owner_id IS NOT NULL
+         ORDER BY t.dealer_lead_id, t.performed_at
+      )
+      SELECT (to_jsonb(dl) ->> 'sales_ready_at') AS ready_at, f.performed_at::text AS assigned_at
+        FROM dealer_leads dl
+        JOIN first_hop f ON f.dealer_lead_id = dl.id
+       WHERE (to_jsonb(dl) ->> 'sales_ready_at') IS NOT NULL
+         AND (f.performed_at AT TIME ZONE 'Asia/Kolkata')::date BETWEEN ${mtd.from}::date AND ${mtd.to}::date
+         AND f.performed_at > (to_jsonb(dl) ->> 'sales_ready_at')::timestamptz
+    `)) as unknown as Array<{ ready_at: string; assigned_at: string }>;
+    const hol = (await db.execute(sql`
+      SELECT holiday_date::text AS d FROM holiday_calendar
+       WHERE is_active IS NOT FALSE AND holiday_date >= (${mtd.from}::date - 60)
+    `).catch(() => [])) as unknown as Array<{ d: string }>;
+    const set = new Set(hol.map((h) => h.d));
+    const waits = rows.map((r) => workingDaysElapsed(new Date(r.ready_at), new Date(r.assigned_at), set));
+    return { median: median(waits), n: waits.length };
+  } catch (e) {
+    console.warn("[sales-daily] median wait not measured:", e instanceof Error ? e.message : e);
+    return null;
+  }
+}
+
+/** "5 Oct 2026, 9:02 AM" — an instant in IST, as the masthead shows it. */
+export function istStamp(d: Date): string {
+  return d.toLocaleString("en-IN", {
+    timeZone: "Asia/Kolkata",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  }).replace(/\b(am|pm)\b/, (s) => s.toUpperCase());
+}
+
+/** "Sunday 4 October" / "Sun 4 Oct 2026" for the covered day. */
+function dayNames(istDay: string): { long: string; short: string } {
+  const d = new Date(`${istDay}T12:00:00Z`);
+  const f = (o: Intl.DateTimeFormatOptions) => d.toLocaleDateString("en-GB", { timeZone: "UTC", ...o }).replace(/,/g, "");
+  return {
+    long: f({ weekday: "long", day: "numeric", month: "long" }),
+    short: f({ weekday: "short", day: "numeric", month: "short", year: "numeric" }),
+  };
+}
+
 /** Block E: follow-ups due today / tomorrow per owner. */
 async function followUpsPerOwner(today: string, tomorrow: string): Promise<Map<string, Scheduled>> {
   const { db } = await import("@/lib/db");
@@ -283,12 +347,15 @@ async function collect(
   try {
     const { buildSalesDashboard } = await import("@/lib/admin/salesDashboard");
     const { db } = await import("@/lib/db");
+    // The cut-off: every query below starts after this instant, so nothing the
+    // email shows was recorded later. Shown as "Data updated till …".
+    const computedAt = new Date();
     const sendDay = addDays(istDay, 1);
     const dayAfter = addDays(istDay, 2);
     const periods = salesDailyPeriods(istDay);
 
     const { getDigestSettings } = await import("../settings");
-    const [yesterday, last7, mtd, lastMonth, scheduled, followUps, now, overdue, settings, extrasY, extrasMtd, awaiting, unmatched] = await Promise.all([
+    const [yesterday, last7, mtd, lastMonth, scheduled, followUps, now, overdue, settings, extrasY, extrasMtd, awaiting, unmatched, wait] = await Promise.all([
       buildSalesDashboard({ ...periods.yesterday, granularity: "day" }),
       buildSalesDashboard({ ...periods.last7, granularity: "day" }),
       buildSalesDashboard({ ...periods.mtd, granularity: "day" }),
@@ -302,10 +369,33 @@ async function collect(
       loadRepExtras(db as never, periods.mtd),
       loadAwaitingFieldVisit(db as never),
       unmatchedRevenuePerPeriod(periods),
+      medianWaitToAssign(periods.mtd),
     ]);
     const blockA = await buildBlockA(db as never, periods, { yesterday, last7, mtd, lastMonth }, unmatched);
-    // The "as of" time is the configured morning send time (default 09:00).
-    const asOf = formatSlotTime(settings.morningHour, settings.morningMinute);
+    // "Right now" / "Position at" name the moment the figures were taken — a
+    // test sent at 14:03 used to say "Right now · 09:00".
+    const asOf = computedAt.toLocaleTimeString("en-GB", {
+      timeZone: "Asia/Kolkata",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    });
+    const sendTime = formatSlotTime(settings.morningHour, settings.morningMinute);
+    const days = dayNames(istDay);
+    const mtdRange = lastMonthColumnLabel(periods.mtd);
+    const lmLabel = lastMonthColumnLabel(periods.lastMonth);
+    const blockAColumns = BLOCK_A_COLUMNS.map((c) => (c === "Same period last month" ? lmLabel : c));
+    const col = (name: string) => BLOCK_A_COLUMNS.indexOf(name);
+    const waitValue =
+      wait == null
+        ? "Not measured yet"
+        : wait.median == null
+          ? "—"
+          : `${wait.median.toFixed(1)} working day${wait.median.toFixed(1) === "1.0" ? "" : "s"}`;
+    const waitHint =
+      wait && wait.median == null
+        ? "No lead waited for an owner this month: each got one as it became sales-ready. Limit: Hot 24 hours, others 2 working days"
+        : `Limit: Hot 24 hours, others 2 working days${wait ? ` · ${wait.n} lead${wait.n === 1 ? "" : "s"}` : ""}`;
     const extras = { y: extrasY, mtd: extrasMtd };
 
     // Names for Block E: the builder's per-rep blocks, then users for the rest.
@@ -335,19 +425,42 @@ async function collect(
       ok: true,
       figures: {
         activity: [],
-        headline: [blockAHeadline(blockA.rows)],
+        headline: blockAHeadlineParts(blockA.rows),
         wide: true,
         backlog: [],
+        // Business template "Daily Sales email · Block A" (docs/crm-reports-admin).
+        masthead: {
+          title: `Daily Sales · ${days.short}`,
+          audience: "iTarang CRM to Sales leadership",
+          dataAsOf: istStamp(computedAt),
+          eyebrow: "ITARANG · DAILY SALES",
+          dayHeading: days.long,
+          intro:
+            `Covers ${days.long}, midnight to midnight IST. ` +
+            (blockA.workingDays.total > 0
+              ? `Month to date is ${mtdRange}: ${blockA.workingDays.elapsed} of ${blockA.workingDays.total} working days, ` +
+                `so targets below are ${blockA.workingDays.elapsed}/${blockA.workingDays.total} of the monthly target.`
+              : `Month to date is ${mtdRange}.`),
+          firstBlockHint: "Lead lists for every number in the Sales Dashboard",
+          footer: `Sent by the iTarang CRM every morning at ${sendTime} IST. Recipients are set by Admin.`,
+        },
         tables: [
           {
             key: "block_a",
             title: "A · Company",
-            columns: BLOCK_A_COLUMNS,
+            columns: blockAColumns,
             rows: blockATableRows(blockA.rows),
+            rowNotes: blockARowNotes(blockA.rows),
             textColumns: 1,
             groupHeaders: true,
             toneColumns: [BLOCK_A_PCT_COLUMN],
-            note: blockA.targetsNote,
+            deltaColumns: [col("Δ MTD")],
+            strongColumn: col("MTD"),
+            // Phone frame: METRIC · YDAY · MTD (Δ under it) · TARGET.
+            phoneColumns: [0, col("Yesterday"), col("MTD"), BLOCK_A_PCT_COLUMN],
+            phoneDeltaUnder: [col("Δ MTD"), col("MTD")],
+            // The working-days sentence is already the intro; keep the rest.
+            note: blockA.targetsNote.replace(/^Month to date is [^.]*\.\s*/, "") || undefined,
             // "Right now" sits right after the table, as in the mockup.
             footer: {
               key: "right_now",
@@ -356,10 +469,19 @@ async function collect(
                 {
                   label: "Sales-ready, no owner",
                   value: `${now.waiting} lead${now.waiting === 1 ? "" : "s"}`,
+                  // Calendar days, as the Ready to assign page and the CEO card count it.
                   hint: now.oldestDays != null ? `Oldest waiting ${now.oldestDays} days` : undefined,
+                  alert: now.oldestDays != null && now.oldestDays >= 2,
                 },
+                { label: "Median wait, sales-ready → assigned (MTD)", value: waitValue, hint: waitHint },
               ],
             },
+            legend: [
+              "% of target: green 100% or more · amber 80–99% · red below 80%.",
+              "—: no target is set for this metric, or no figure to compare.",
+              "n/t: not tracked in that period.",
+              "Not measured yet: the CRM does not record this yet.",
+            ],
           },
           {
             key: "block_b",
@@ -381,8 +503,8 @@ async function collect(
             textColumns: 1,
             toneColumns: [BLOCK_C_PCT_COLUMN],
             note:
-              "One row per ISR / CC. Connected = calls that connected, each counted once. Engaged = connected and long enough by measured call length; " +
-              "“—” = not measured yet (NeoDove sends no call length). Hot to field = leads handed to an ASM that were Hot at that moment. " +
+              "One row per ISR / CC, and anyone else who made calls (named with their role). Connected = calls that connected, each counted once. " +
+              "Engaged = connected, of any length (since 3 Oct). Hot to field = leads handed to an ASM that were Hot at that moment. " +
               "% of target = calls MTD against the rep's MTD calls target (“—” = no target set).",
             empty: "No inside-sales reps on the Sales dashboard this month.",
           },

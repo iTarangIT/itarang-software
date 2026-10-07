@@ -146,6 +146,15 @@ export function withUnmatchedRevenue(rows: BlockARow[], values: RowValues | null
 
 /** The one-line headline. */
 export function blockAHeadline(rows: BlockARow[]): string {
+    return blockAHeadlineParts(rows).join(" ");
+}
+
+/**
+ * The headline as the business template lays it out: a "Yesterday: …"
+ * sentence, then a "Month to date: …" one when any metric has a target. The
+ * email bolds each part's text up to the first colon.
+ */
+export function blockAHeadlineParts(rows: BlockARow[]): string[] {
     const get = (label: string) => rows.find((r) => r.label === label);
     const y = (label: string) => get(label)?.values.y;
     const dealers = (n: number) => `${n} dealer${n === 1 ? "" : "s"}`;
@@ -159,12 +168,70 @@ export function blockAHeadline(rows: BlockARow[]): string {
         .map((r) => ({ r, p: rowPctOfTarget(r) }))
         .filter((x) => x.p != null) as Array<{ r: BlockARow; p: number }>;
     const behind = withTarget.filter((x) => x.p < RAG_AMBER_MIN).map((x) => `${x.r.label.toLowerCase()} at ${x.p}%`);
-    const tail = withTarget.length
-        ? behind.length
-            ? ` Month to date behind target: ${behind.join(", ")}.`
-            : ` Month to date: every targeted metric at ${RAG_AMBER_MIN}% or more.`
-        : "";
-    return `Yesterday: ${parts.join(" · ")}.${tail}`;
+    const out = [`Yesterday: ${parts.join(" · ")}.`];
+    if (withTarget.length) {
+        out.push(
+            behind.length
+                ? `Month to date: behind target on ${behind.join(", ")}.`
+                : `Month to date: every targeted metric at ${RAG_AMBER_MIN}% or more.`,
+        );
+    }
+    return out;
+}
+
+/**
+ * The one line under each metric name in the email (business template,
+ * "Daily Sales email · Block A"). Worded for what each query actually counts,
+ * so a reader can tell what a number is without asking.
+ */
+export const BLOCK_A_ROW_NOTES: Record<string, string> = {
+    "Leads in": "Leads that arrived on their own",
+    "Imported in bulk": "Scrape runs, bulk uploads, AI-dialer lists, NeoDove list pushes",
+    "Became sales-ready": "AI-qualified, picked up in NeoDove, rep-created, claimed or assigned",
+    Assigned: "Got a first owner",
+    "Calls made": "Inside sales and NeoDove, AI calls excluded",
+    "Dealers called": "Unique dealers",
+    "Engaged calls": "Connected calls, each counted once",
+    "Hot handed to field": "Hot when transferred to an ASM",
+    "Dealers visited": "Unique dealers",
+    "New dealers visited": "First-ever visit",
+    "Quotes created": "First quote per lead",
+    "Quotes delivered": "Reached the dealer on WhatsApp or email",
+    "Dealer approved": "Dealer said yes to the quote",
+    "Marked Won": "Rep marked won; onboarding started",
+    Converted: "Admin approved; dealer live",
+    "Batteries sold": "Invoices matched to a dealer",
+    Revenue: "Invoices matched to a dealer",
+    "Revenue not matched to a dealer": "Invoiced, but no dealer matched yet",
+    "First attempt within limit": "New owners who called or visited in time",
+    "Time limits missed": "Any limit, all owners",
+};
+
+/** One note per row of blockATableRows(rows) — null on group header rows. */
+export function blockARowNotes(rows: BlockARow[]): Array<string | null> {
+    const out: Array<string | null> = [];
+    let group: string | null = null;
+    for (const r of rows) {
+        if (r.group !== group) {
+            group = r.group;
+            out.push(null);
+        }
+        out.push(BLOCK_A_ROW_NOTES[r.label] ?? null);
+    }
+    return out;
+}
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/**
+ * Header of the "same period last month" column, as the template names it:
+ * "1–4 Sep" (or "1 Sep" for a one-day span).
+ */
+export function lastMonthColumnLabel(p: Period): string {
+    const [, m, d1] = p.from.split("-").map(Number);
+    const d2 = Number(p.to.slice(8, 10));
+    const mon = MONTHS[m - 1] ?? "";
+    return d1 === d2 ? `${d1} ${mon}` : `${d1}–${d2} ${mon}`;
 }
 
 // ─────────────────────────────── queries ────────────────────────────────────
@@ -272,6 +339,8 @@ async function companyTargets(db: Exec, monthFirst: string, upTo: string) {
 export type BlockA = {
     rows: BlockARow[];
     targetsNote: string;
+    /** Working days of the month elapsed / in total (Mon–Sat minus holidays). */
+    workingDays: { elapsed: number; total: number };
     /** Per-person MTD targets (user id → metric → target), for Blocks B / C. */
     userTargets: Map<string, Map<string, number>>;
 };
@@ -425,5 +494,10 @@ export async function buildBlockA(
         t.total > 0
             ? `Month to date is ${t.elapsed} of ${t.total} working days, so targets are ${t.elapsed}/${t.total} of the monthly target. Targets set for ${t.withTarget} of ${t.reps} people.${visitsNote}`
             : "No targets are set for this month.";
-    return { rows: withUnmatchedRevenue(rows, unmatchedRevenue), targetsNote, userTargets: t.perUser };
+    return {
+        rows: withUnmatchedRevenue(rows, unmatchedRevenue),
+        targetsNote,
+        workingDays: { elapsed: t.elapsed, total: t.total },
+        userTargets: t.perUser,
+    };
 }
