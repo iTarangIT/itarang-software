@@ -47,7 +47,7 @@ import { hasInvoiceLedgerTables } from "@/lib/sales/ledgerTables";
 import { sql } from "drizzle-orm";
 
 import { db } from "@/lib/db";
-import { buildExportWhere, type LeadListFilters } from "@/lib/leads/leadListQuery";
+import { aiSignalsJoin, buildExportWhere, type LeadListFilters } from "@/lib/leads/leadListQuery";
 
 /** A12 — what "business" means. Change this one fragment to switch the source. */
 const billingSource = (ledger: boolean) => sql`
@@ -103,7 +103,7 @@ export const LEADS_EXPORT_ROW_CAP = 50_000;
 export async function countLeadsForExport(f: LeadListFilters): Promise<number> {
     const where = buildExportWhere(f);
     const rows = (await db.execute<{ n: number }>(sql`
-        SELECT COUNT(*)::int AS n FROM dealer_leads dl WHERE ${where}
+        SELECT COUNT(*)::int AS n FROM dealer_leads dl ${aiSignalsJoin(f)} WHERE ${where}
     `)) as unknown as { n: number }[];
     return Number(rows[0]?.n ?? 0);
 }
@@ -150,6 +150,7 @@ export async function fetchLeadsForExport(
                    MIN(i.invoice_date)  AS first_billing_date
               FROM dealer_leads dl
               JOIN inv i ON i.customer_key IN (lower(trim(dl.dealer_name)), lower(trim(dl.shop_name)))
+              ${aiSignalsJoin(f)}
              WHERE ${where}
              GROUP BY dl.id
         ),
@@ -199,6 +200,9 @@ export async function fetchLeadsForExport(
           LEFT JOIN remarks r ON r.dealer_lead_id = dl.id
           LEFT JOIN billing b ON b.dealer_lead_id = dl.id
           LEFT JOIN pre_bill pb ON pb.dealer_lead_id = dl.id
+          -- The AI filters (AI band, AI called, signals, callback) name ai.*;
+          -- the join is emitted only when one is set, as on the lead list.
+          ${aiSignalsJoin(f)}
          WHERE ${where}
          ORDER BY dl.last_touchpoint_at DESC NULLS LAST, dl.created_at DESC
          LIMIT ${limit}

@@ -11,12 +11,18 @@ import { successResponse, withErrorHandler } from "@/lib/api-utils";
 import { db } from "@/lib/db";
 import { savedColumnSets } from "@/lib/exports/datasets/columnSets";
 import { DATASETS, datasetAccess, datasetInfo } from "@/lib/exports/datasets/registry";
+import { LEAD_ASSIGNEE_ROLES } from "@/lib/leads/access";
 import { BACKGROUND_LINK_HOURS, BACKGROUND_ROW_CAP, DOWNLOAD_LOG_ROLES, DOWNLOAD_ROW_CAP, FULL_PHONE_ROLES } from "@/lib/exports/datasets/types";
 
 export const dynamic = "force-dynamic";
 
-/** The roles whose people own leads, calls, visits, quotes, targets and accounts. */
-const PERSON_ROLES = ["asm", "inside_sales_rep", "sales_head", "partner", "admin", "ceo", "business_head"];
+/**
+ * The roles whose people own leads, calls, visits, quotes, targets and
+ * accounts: every role a lead can be assigned to (LEAD_ASSIGNEE_ROLES — it
+ * includes sales_manager and sales_executive), plus the managers who also
+ * create quotes and own accounts.
+ */
+const PERSON_ROLES = [...new Set<string>([...LEAD_ASSIGNEE_ROLES, "admin", "ceo", "business_head"])];
 
 export const GET = withErrorHandler(async () => {
     const user = await requireAuth();
@@ -30,10 +36,12 @@ export const GET = withErrorHandler(async () => {
     const [people, saved_columns] = await Promise.all([
         seesEveryone
             ? (db.execute(sql`
-                  SELECT id::text AS id, name, role FROM users
-                   WHERE is_active = TRUE AND role IN (${sql.join(PERSON_ROLES.map((r) => sql`${r}`), sql`, `)})
-                   ORDER BY name
-              `) as unknown as Promise<Array<{ id: string; name: string | null; role: string }>>)
+                  -- Deactivated people too (listed last, marked inactive): their
+                  -- leads, calls and visits are still in the data.
+                  SELECT id::text AS id, name, role, (is_active IS FALSE) AS inactive FROM users
+                   WHERE role IN (${sql.join(PERSON_ROLES.map((r) => sql`${r}`), sql`, `)})
+                   ORDER BY (is_active IS FALSE), name
+              `) as unknown as Promise<Array<{ id: string; name: string | null; role: string; inactive: boolean }>>)
             : Promise.resolve([]),
         savedColumnSets(user.id),
     ]);
