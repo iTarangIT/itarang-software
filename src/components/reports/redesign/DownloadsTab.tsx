@@ -22,7 +22,7 @@ import { BTN_OUTLINE, BTN_SOLID, C, CARD, EYEBROW, ErrorLine, Loading, PANEL, Ru
 
 type Catalogue = {
     datasets: (DatasetInfo & { own_only: boolean })[];
-    people: { id: string; name: string | null; role: string }[];
+    people: { id: string; name: string | null; role: string; inactive?: boolean }[];
     saved_columns: Record<string, string[]>;
     row_cap: number;
     background_row_cap: number;
@@ -295,7 +295,7 @@ export function DownloadsTab() {
                                         <option value="">Person: All</option>
                                         {(catalogue.data?.people ?? []).map((p) => (
                                             <option key={p.id} value={p.id}>
-                                                {p.name ?? p.id} ({p.role.replace(/_/g, " ")})
+                                                {p.name ?? p.id} ({p.role.replace(/_/g, " ")}){p.inactive ? " · inactive" : ""}
                                             </option>
                                         ))}
                                     </select>

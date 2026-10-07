@@ -31,6 +31,7 @@
 import { sql, type SQL } from "drizzle-orm";
 
 import { db } from "@/lib/db";
+import { humanCall } from "@/lib/reports/metricDefinitions";
 
 export const EVENT_LOG_ROW_CAP = 50_000;
 
@@ -157,7 +158,9 @@ function eventsUnion(f: EventLogFilters, s: Sources): SQL {
                    t.call_status),
                t.call_duration_sec, t.remarks
           FROM lead_touchpoints t
-         WHERE t.touchpoint_type IN ('inside_sales_call', 'ai_call')
+         -- A human call counted once (humanCall): a NeoDove call the agent
+         -- re-dispositioned within minutes is one call, not two events.
+         WHERE (t.touchpoint_type = 'ai_call' OR ${humanCall(sql`t`)})
            AND ${inRange(sql`t.performed_at`, f)}
         UNION ALL
         SELECT COALESCE(v.actual_visit_date::timestamp AT TIME ZONE 'Asia/Kolkata', v.created_at),
@@ -185,7 +188,10 @@ function eventsUnion(f: EventLogFilters, s: Sources): SQL {
            AND c.approved_at IS NOT NULL
            AND ${inRange(sql`c.approved_at`, f)}
         UNION ALL
-        SELECT d.created_at, d.dealer_lead_id, 'Quote sent', NULL, d.recipient,
+        SELECT d.created_at, d.dealer_lead_id,
+               -- Only a dispatch that went through is "sent"; a failed one is its own event.
+               CASE WHEN d.status = 'sent' THEN 'Quote sent' ELSE 'Quote send failed' END,
+               NULL, d.recipient,
                d.sent_by, d.channel, d.status, NULL, d.error
           FROM quotation_dispatches d
          WHERE ${inRange(sql`d.created_at`, f)}

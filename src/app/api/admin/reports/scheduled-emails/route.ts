@@ -11,7 +11,7 @@ import { z } from "zod";
 
 import { requireRole } from "@/lib/auth-utils";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
-import { recentDigestRuns, runDigest } from "@/lib/digests/engine";
+import { lastDigestSend, runDigest } from "@/lib/digests/engine";
 import { DIGEST_KINDS, digestKind } from "@/lib/digests/registry";
 import { getDigestSettings } from "@/lib/digests/settings";
 
@@ -22,27 +22,36 @@ const VIEW_ROLES = ["admin", "sales_head", "ceo"];
 const SETTINGS_ROLES = ["admin", "sales_head"];
 
 const hhmm = (h: number, m: number) => `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")} IST`;
+const DAY_NAMES = ["Sundays", "Mondays", "Tuesdays", "Wednesdays", "Thursdays", "Fridays", "Saturdays"];
+
+/** "Every day", or the IST weekdays the kind sends on ("Mondays"). */
+function whichDays(weekdays: number[] | undefined): string {
+    if (!weekdays || weekdays.length === 0 || weekdays.length === 7) return "Every day";
+    return weekdays
+        .slice()
+        .sort((a, b) => a - b)
+        .map((d) => DAY_NAMES[d] ?? `day ${d}`)
+        .join(", ");
+}
 
 export const GET = withErrorHandler(async () => {
     const user = await requireRole(VIEW_ROLES);
     const reports = await Promise.all(
         DIGEST_KINDS.map(async (kind) => {
-            const [settings, runs] = await Promise.all([getDigestSettings(kind), recentDigestRuns(kind.id, 8)]);
+            const [settings, last] = await Promise.all([getDigestSettings(kind), lastDigestSend(kind.id)]);
             const slots = kind.slots ?? ["morning", "evening"];
             const times = slots.map((s) =>
                 s === "morning" ? hhmm(settings.morningHour, settings.morningMinute) : hhmm(settings.eveningHour, settings.eveningMinute),
             );
-            // A test send is not "the report went out".
-            const last = runs.find((r) => r.slot !== "test" && r.status === "sent") ?? null;
             return {
                 id: kind.id,
                 label: kind.label,
                 description: kind.description,
                 enabled: settings.enabled,
-                when: `${kind.weekdays ? "Weekly" : "Daily"} at ${times.join(" and ")}`,
+                when: `${whichDays(kind.weekdays)} at ${times.join(" and ")}`,
                 recipients: settings.recipients,
                 attach_excel: settings.attachExcel,
-                last_sent_at: last?.created_at ?? null,
+                last_sent_at: last?.sent_at ?? null,
                 last_sent_for: last?.digest_date ?? null,
                 settings_href: kind.settingsHref ?? null,
             };
