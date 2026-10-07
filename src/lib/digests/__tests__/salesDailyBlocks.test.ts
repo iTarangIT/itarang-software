@@ -233,3 +233,38 @@ describe("% of target red / amber / green (ID 9)", async () => {
         expect(BLOCK_C_COLUMNS[BLOCK_C_PCT_COLUMN]).toBe("% of target");
     });
 });
+
+describe("rep blocks — who gets a row (reconciled on db-2, 7 Oct 2026)", () => {
+    const inactive = (s: Spoc) => ({ ...s, is_active: false }) as Spoc;
+    const extras = { y: noExtras, mtd: noExtras };
+
+    it("Block C lists a non-ISR who made calls, named with their role", () => {
+        const mtd = { per_spoc: [spoc("i1", "Nidhi", "inside_sales_rep", { calls: 130 }), spoc("p1", "Chirag", "partner", { calls: 10 })] };
+        const names = buildRepBlocks("inside_sales_rep", { per_spoc: [] }, mtd, extras, new Map()).map((b) => b.name);
+        expect(names).toEqual(["Chirag · Partner", "Nidhi"]);
+    });
+
+    it("Block C leaves out a non-ISR with no calls, and Block B never takes callers", () => {
+        const mtd = { per_spoc: [spoc("p1", "Chirag", "partner", { quotes: 1 }), spoc("a1", "Jiten", "asm", { calls: 4 })] };
+        expect(buildRepBlocks("inside_sales_rep", { per_spoc: [] }, mtd, extras, new Map())).toEqual([]);
+        expect(buildRepBlocks("asm", { per_spoc: [] }, mtd, extras, new Map()).map((b) => b.name)).toEqual(["Jiten"]);
+    });
+
+    it("drops a deactivated rep with nothing in either window, keeps (and marks) one who did something", () => {
+        const mtd = {
+            per_spoc: [
+                inactive(spoc("a1", "Abhishek", "asm", { warm: 53 })),
+                inactive(spoc("a2", "Ganesh", "asm", { unique_visits: 2 })),
+                spoc("a3", "Jiten", "asm"),
+            ],
+        };
+        const names = buildRepBlocks("asm", { per_spoc: [] }, mtd, extras, new Map()).map((b) => b.name);
+        expect(names).toEqual(["Ganesh (inactive)", "Jiten"]);
+    });
+
+    it("Block D marks a deactivated owner still holding leads", () => {
+        const d = { per_spoc: [inactive(spoc("a1", "Abhishek", "asm", { warm: 53 }))] };
+        const rows = blockDRows(d, new Map([["a1", 53]]), new Map(), 0);
+        expect(rows[0][0]).toBe("Abhishek (inactive)");
+    });
+});

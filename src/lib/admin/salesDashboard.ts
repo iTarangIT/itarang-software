@@ -793,18 +793,18 @@ const EMPTY_SNAPSHOT: SalesSnapshot = {
     planned_visits_next_7_days: 0,
 };
 
-async function userNames(
-    ids: string[],
-): Promise<Map<string, { name: string | null; role: string | null }>> {
-    const out = new Map<string, { name: string | null; role: string | null }>();
+type UserInfo = { name: string | null; role: string | null; is_active: boolean | null };
+
+async function userNames(ids: string[]): Promise<Map<string, UserInfo>> {
+    const out = new Map<string, UserInfo>();
     if (!ids.length) return out;
-    const rows = await db.execute<{ id: string; name: string | null; role: string | null }>(sql`
-        SELECT id::text AS id, name, role
+    const rows = await db.execute<{ id: string } & UserInfo>(sql`
+        SELECT id::text AS id, name, role, is_active
           FROM users
          WHERE id::text IN (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})
     `);
-    for (const r of rows as unknown as { id: string; name: string | null; role: string | null }[]) {
-        out.set(r.id, { name: r.name, role: r.role });
+    for (const r of rows as unknown as Array<{ id: string } & UserInfo>) {
+        out.set(r.id, { name: r.name, role: r.role, is_active: r.is_active });
     }
     return out;
 }
@@ -924,6 +924,7 @@ export async function buildSalesDashboard(
                 spoc_id: id,
                 name: names.get(id)?.name ?? null,
                 role: names.get(id)?.role ?? null,
+                is_active: names.get(id)?.is_active ?? null,
                 snapshot: snapshotBy.get(id) ?? EMPTY_SNAPSHOT,
                 series: seriesBy.get(id) ?? [],
                 averages: averagesFromDaily(dailyBy.get(id) ?? [], daysInRange),

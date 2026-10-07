@@ -24,6 +24,7 @@ import type {
   DigestDetail,
   DigestFigures,
   DigestKindDescriptor,
+  DigestTable,
 } from "@/lib/digests/types";
 
 export const FIGURES_SHEET_NAME = "Figures";
@@ -77,6 +78,21 @@ export async function buildDigestWorkbook(args: {
   const sheetNames = namedSheets(args.figures);
   if (sheetNames.length > 0) {
     for (const name of sheetNames) writeFlowSheet(workbook, name, args, on);
+    return workbook;
+  }
+
+  // A digest made only of grid blocks (Sales Daily v1.1: every figure lives in
+  // figures.tables) has nothing for the Figures/Detail pair to show — this used
+  // to attach an empty Figures sheet and a "No activity" Detail sheet. Write
+  // each block as mailed instead, one sheet per block.
+  const tables = (args.figures.tables ?? []).filter((t) => on(t.key));
+  if (
+    tables.length > 0 &&
+    args.figures.activity.length === 0 &&
+    args.figures.backlog.length === 0
+  ) {
+    const used = new Set<string>();
+    for (const t of tables) writeTableSheet(workbook, t, args.istDay, used, on);
     return workbook;
   }
 
@@ -184,6 +200,50 @@ export function namedSheets(figures: DigestFigures): string[] {
     if (l.sheet && !out.includes(l.sheet)) out.push(l.sheet);
   }
   return out;
+}
+
+/**
+ * One grid block on its own sheet, exactly as the mail shows it: title, the
+ * note under it, the header row, the rows (group headers bold), then the
+ * block's footer box ("Right now") when that section is on.
+ */
+function writeTableSheet(
+  workbook: ExcelJS.Workbook,
+  t: DigestTable,
+  istDay: string,
+  used: Set<string>,
+  on: (key: string) => boolean,
+): void {
+  let name = safeSheetName(t.title);
+  for (let n = 2; used.has(name); n++) name = safeSheetName(`${t.title.slice(0, 27)} ${n}`);
+  used.add(name);
+
+  const ws = workbook.addWorksheet(name);
+  ws.columns = t.columns.map((_, i) => ({ width: i === 0 ? 34 : i < (t.textColumns ?? 2) ? 22 : 16 }));
+
+  ws.addRow([t.title, istDay]).font = { bold: true, size: 12 };
+  if (t.note) ws.addRow([t.note]).font = { italic: true, color: { argb: "FF64748B" } };
+  ws.addRow([]);
+  const header = ws.addRow([...t.columns]);
+  styleHeader(header);
+  ws.views = [{ state: "frozen", ySplit: header.number }];
+
+  if (t.rows.length === 0) {
+    ws.addRow([t.empty ?? "Nothing to show."]);
+  }
+  let i = 0;
+  for (const r of t.rows) {
+    const isGroup = !!t.groupHeaders && r.slice(1).every((c) => c === "" || c == null);
+    const row = ws.addRow(r);
+    if (isGroup) row.font = { bold: true };
+    else zebra(row, ++i);
+  }
+
+  if (t.footer && on(t.footer.key)) {
+    ws.addRow([]);
+    ws.addRow([t.footer.label]).font = { bold: true };
+    for (const it of t.footer.items) ws.addRow([it.label, it.value, it.hint ?? ""]);
+  }
 }
 
 /** Excel caps sheet names at 31 chars and forbids : \ / ? * [ ] */

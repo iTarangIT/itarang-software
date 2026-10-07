@@ -164,6 +164,8 @@ export interface SalesSpocBlock extends SalesDashboardSections {
     spoc_id: string;
     name: string | null;
     role: string | null;
+    /** users.is_active — false for a deactivated rep who still owns leads. */
+    is_active?: boolean | null;
 }
 
 export interface SalesDashboard extends SalesDashboardSections {

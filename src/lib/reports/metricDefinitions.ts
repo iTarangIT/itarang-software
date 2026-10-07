@@ -20,6 +20,12 @@
 //                            transfer (dealer_lead_interest_history, E-304),
 //                            not Hot now.
 //   Quotes created           the FIRST quote per lead; revisions counted apart.
+//   Leads in                 a lead that arrived on its own — NOT a bulk import
+//                            (bulkImportedLead below). Bulk imports are counted
+//                            apart, so a list upload can't read as 2,000 new
+//                            enquiries (decided 7 Oct 2026, after the 28 / 29 Sep
+//                            scrape run + INTERAKT list put 2,431 rows into one
+//                            week's "Leads in").
 
 import { sql, type SQL } from "drizzle-orm";
 export const NEODOVE_CALL_MERGE_WINDOW = "3 minutes";
@@ -126,5 +132,50 @@ export function isFirstQuote(c: SQL = sql`c`): SQL {
          WHERE earlier.dealer_lead_id = ${c}.dealer_lead_id
            AND earlier.event_type IN ('quote_issue', 'quote_revision')
            AND earlier.version_no < ${c}.version_no
+    )`;
+}
+
+/** NeoDove leads arriving faster than this per campaign per hour are a list upload. */
+export const NEODOVE_BULK_PER_HOUR = 50;
+
+/**
+ * The lead came in as part of a bulk import rather than on its own. `dl` is the
+ * dealer_leads alias.
+ *
+ *   - its door is a bulk path: the scraper, the bulk-upload wizard / Import
+ *     button, or an AI-dialer list (leadSourceVocab.LEAD_DOORS); or
+ *   - it is a NeoDove lead whose "lead created" event arrived with more than
+ *     NEODOVE_BULK_PER_HOUR others from the same NeoDove campaign in the same
+ *     hour. NeoDove has no import flag, and a list pushed into it (an INTERAKT
+ *     broadcast: 1,501 in four minutes on 29 Sep 2026) reaches us as ordinary
+ *     LEAD_CREATE webhooks. Genuine arrivals — incoming calls, a rep adding a
+ *     dealer — never came close (38 in an hour at most, checked on db-2).
+ *
+ * The burst groups are found once (uncorrelated), so the predicate stays cheap
+ * inside a COUNT over many leads.
+ */
+export function bulkImportedLead(dl: SQL = sql`dl`): SQL {
+    return sql`(
+        ${dl}.source_door IN ('scraper', 'bulk_upload', 'ai_dialer')
+        OR (
+            ${dl}.source_door = 'neodove'
+            AND ${dl}.id IN (
+                SELECT e.dealer_lead_id
+                  FROM neodove_sync_events e
+                  JOIN (
+                        SELECT g.request_payload ->> 'campaign_id' AS campaign,
+                               date_trunc('hour', g.created_at) AS hr
+                          FROM neodove_sync_events g
+                         WHERE g.direction = 'inbound' AND g.event_type = 'lead_created'
+                         GROUP BY 1, 2
+                        HAVING COUNT(*) > ${sql.raw(String(NEODOVE_BULK_PER_HOUR))}
+                       ) burst
+                    ON burst.campaign IS NOT DISTINCT FROM e.request_payload ->> 'campaign_id'
+                   AND burst.hr = date_trunc('hour', e.created_at)
+                 WHERE e.direction = 'inbound'
+                   AND e.event_type = 'lead_created'
+                   AND e.dealer_lead_id IS NOT NULL
+            )
+        )
     )`;
 }

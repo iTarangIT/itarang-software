@@ -267,6 +267,7 @@ export const GET = withErrorHandler(
     const { attempts, convertedOnAttempt } = await loadLeadCallAttempts({
       leadId,
       currentCampaignId: campaignId,
+      includeDetail: true,
     });
 
     // Latest human correction for this lead (E-159) — drives the "Corrected"

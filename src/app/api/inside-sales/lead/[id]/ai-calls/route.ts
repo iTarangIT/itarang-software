@@ -32,6 +32,6 @@ export const GET = withErrorHandler(
         if (readsOwnLeadsOnly(user.role) && !(await leadOwnedBy(id, user.id))) {
             return errorResponse("Lead not found", 404);
         }
-        return successResponse(await loadLeadCallAttempts({ leadId: id, includeOneOff: true }));
+        return successResponse(await loadLeadCallAttempts({ leadId: id, includeOneOff: true, includeDetail: true }));
     },
 );
