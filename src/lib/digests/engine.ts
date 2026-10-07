@@ -520,3 +520,27 @@ export async function recentDigestRuns(kindId: string, limit = 8): Promise<Diges
     return [];
   }
 }
+
+/**
+ * The last time this report really went out: the newest run that was SENT and
+ * was not a "Send me a copy" test. Queried directly — reading it out of the
+ * last few runs misses it once tests or failed retries pile up. The time is
+ * when the send was claimed (a retry re-claims an existing row; created_at is
+ * the first attempt), returned as ISO-8601 so every browser parses it.
+ */
+export async function lastDigestSend(kindId: string): Promise<{ sent_at: string; digest_date: string } | null> {
+  try {
+    const rows = (await db.execute(sql`
+      SELECT to_char(COALESCE(claimed_at, created_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS sent_at,
+             digest_date::text AS digest_date
+        FROM digest_runs
+       WHERE kind = ${kindId} AND status = 'sent' AND slot <> 'test'
+       ORDER BY COALESCE(claimed_at, created_at) DESC
+       LIMIT 1
+    `)) as unknown as { sent_at: string; digest_date: string }[];
+    return rows[0] ?? null;
+  } catch (err) {
+    console.error("[digest] failed to read the last send:", err);
+    return null;
+  }
+}
