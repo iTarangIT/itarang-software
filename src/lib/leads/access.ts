@@ -377,7 +377,12 @@ export type LeadsCapabilities = {
   canTrackLeads: boolean;
   /** May open the lead working page (LEAD_WORKSPACE_ROLES). */
   canOpenLeadPage: boolean;
+  /** May "Correct status" with a reason — /api/admin/leads/[id]/correct-status. */
+  canCorrectStatus: boolean;
 };
+
+/** The roles /api/admin/leads/[id]/correct-status accepts (ID 80). */
+export const STATUS_CORRECTION_ROLES = ["admin", "sales_head"] as const;
 
 // Mirrors NEODOVE_ADMIN_ROLES (src/lib/neodove/roles.ts) and the server gate on
 // /api/campaigns/cost-analytics. Both were already duplicated as literals inside
@@ -411,6 +416,7 @@ export function capabilitiesFor(role: string | null | undefined): LeadsCapabilit
     canCurateIntent: (INTENT_CURATOR_ROLES as readonly string[]).includes(r),
     canTrackLeads: (LEAD_TRACKING_ROLES as readonly string[]).includes(r),
     canOpenLeadPage: (LEAD_WORKSPACE_ROLES as readonly string[]).includes(r),
+    canCorrectStatus: (STATUS_CORRECTION_ROLES as readonly string[]).includes(r),
   };
 }
 
@@ -424,4 +430,5 @@ export const NO_CAPABILITIES: LeadsCapabilities = {
   canCurateIntent: false,
   canTrackLeads: false,
   canOpenLeadPage: false,
+  canCorrectStatus: false,
 };

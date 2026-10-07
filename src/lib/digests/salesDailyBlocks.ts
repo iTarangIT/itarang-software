@@ -35,7 +35,8 @@
 // Who is credited (direct counts):
 //   Hot received         the ASM a Hot lead was transferred TO (to_owner_id,
 //                        else the lead's asm_id)
-//   Hot handed to field  the ISR who performed the asm_transfer
+//   Hot handed to field  the ISR who performed the asm_transfer (distinct leads:
+//                        a lead handed over twice in a window counts once)
 //   Connected / Engaged  the caller (performed_by); connectedCall() and
 //                        engagedCall() — since ID 59 an engaged call is a
 //                        connected one, so the two match
@@ -195,9 +196,27 @@ export const BLOCK_C_PCT_COLUMN = BLOCK_C_COLUMNS.indexOf("% of target");
 
 const TOTAL = "Total";
 
+/** "Partner", "Sales Head" — shown after the name of a caller who is not an ISR. */
+function roleLabel(role: string): string {
+    return role.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+/** Every per-rep value is zero or unmeasured. */
+function allZero(values: Partial<Record<RepMetricKey, RepValue>>): boolean {
+    return Object.values(values).every((v) => !v || ((v.y ?? 0) === 0 && (v.mtd ?? 0) === 0));
+}
+
 /**
  * One block per rep of `role`, in name order. Reps come from the builder's
  * per_spoc lists (yesterday ∪ MTD) — the same people Block A sums.
+ *
+ * Two corrections (7 Oct 2026, reconciled on db-2 by verify-sales-daily.ts):
+ *   - Block C also lists anyone else who CALLED (a partner, a sales head…),
+ *     named with their role. Block A's "Calls made" counts every human call,
+ *     so 10 calls by a partner were in the company total and on no rep's row.
+ *   - A deactivated rep with nothing in either window is left out — a row of
+ *     zeros for someone who has left reads as a rep doing nothing. One who
+ *     still did something stays, marked "(inactive)".
  */
 export function buildRepBlocks(
     role: "asm" | "inside_sales_rep",
@@ -213,7 +232,12 @@ export function buildRepBlocks(
     const yBy = new Map((y.per_spoc ?? []).map((b) => [b.spoc_id, b]));
     const mBy = new Map((mtd.per_spoc ?? []).map((b) => [b.spoc_id, b]));
     const ids = new Set<string>();
-    for (const b of [...(mtd.per_spoc ?? []), ...(y.per_spoc ?? [])]) if (b.role === role) ids.add(b.spoc_id);
+    const info = new Map<string, SalesSpocBlock>();
+    for (const b of [...(mtd.per_spoc ?? []), ...(y.per_spoc ?? [])]) {
+        if (!info.has(b.spoc_id)) info.set(b.spoc_id, b);
+        if (b.role === role) ids.add(b.spoc_id);
+        else if (role === "inside_sales_rep" && b.role !== "asm" && b.totals.calls > 0) ids.add(b.spoc_id);
+    }
 
     const pick = (def: MetricDef, b: SalesSpocBlock | undefined, ex: RepExtras, id: string): number | null => {
         if (def.dash) return b ? def.dash(b) : 0;
@@ -223,7 +247,7 @@ export function buildRepBlocks(
     };
 
     return [...ids]
-        .map((id) => {
+        .flatMap((id): RepBlock[] => {
             const yb = yBy.get(id);
             const mb = mBy.get(id);
             const t = targets.get(id);
@@ -231,12 +255,21 @@ export function buildRepBlocks(
             for (const k of keys) {
                 values[k] = { y: pick(METRICS[k], yb, extras.y, id), mtd: pick(METRICS[k], mb, extras.mtd, id) };
             }
-            return {
-                id,
-                name: mb?.name ?? yb?.name ?? "(unknown user)",
-                values,
-                target: t?.has(primary.target) ? Math.round(t.get(primary.target)!) : null,
-            };
+            const who = info.get(id);
+            if (who?.is_active === false && allZero(values)) return [];
+            const base = mb?.name ?? yb?.name ?? "(unknown user)";
+            const name =
+                base +
+                (who?.role && who.role !== role ? ` · ${roleLabel(who.role)}` : "") +
+                (who?.is_active === false ? " (inactive)" : "");
+            return [
+                {
+                    id,
+                    name,
+                    values,
+                    target: t?.has(primary.target) ? Math.round(t.get(primary.target)!) : null,
+                },
+            ];
         })
         .sort((a, b) => a.name.localeCompare(b.name));
 }
@@ -335,8 +368,10 @@ export function blockDRows(
     const rows: Rows = [...ids]
         .map((id) => {
             const b = spocs.get(id);
+            // A deactivated owner still holding leads is exactly what this
+            // block should surface: those leads have nobody working them.
             return [
-                b?.name ?? names.get(id) ?? id,
+                (b?.name ?? names.get(id) ?? id) + (b?.is_active === false ? " (inactive)" : ""),
                 b ? level(b, "hot") : 0,
                 b ? level(b, "warm") : 0,
                 b ? level(b, "cold") : 0,
@@ -375,7 +410,7 @@ export async function loadRepExtras(db: Exec, p: Period): Promise<RepExtras> {
     const [hot_received, hot_handed, connected, engaged, quotes_delivered, dealer_approved, won] = await Promise.all([
         perRep(
             db,
-            sql`SELECT COALESCE(t.to_owner_id, dl.asm_id) AS u, COUNT(*) AS n
+            sql`SELECT COALESCE(t.to_owner_id, dl.asm_id) AS u, COUNT(DISTINCT t.dealer_lead_id) AS n
                   FROM lead_touchpoints t JOIN dealer_leads dl ON dl.id = t.dealer_lead_id
                  WHERE t.touchpoint_type = 'asm_transfer' AND ${win(sql`t.performed_at`)}
                    AND ${wasHotAt(sql`t.dealer_lead_id`, sql`t.performed_at`, sql`dl.interest_level`)}
@@ -383,7 +418,7 @@ export async function loadRepExtras(db: Exec, p: Period): Promise<RepExtras> {
         ),
         perRep(
             db,
-            sql`SELECT t.performed_by AS u, COUNT(*) AS n
+            sql`SELECT t.performed_by AS u, COUNT(DISTINCT t.dealer_lead_id) AS n
                   FROM lead_touchpoints t JOIN dealer_leads dl ON dl.id = t.dealer_lead_id
                  WHERE t.touchpoint_type = 'asm_transfer' AND ${win(sql`t.performed_at`)}
                    AND ${wasHotAt(sql`t.dealer_lead_id`, sql`t.performed_at`, sql`dl.interest_level`)}

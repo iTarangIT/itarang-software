@@ -124,23 +124,37 @@ const SECTIONS: DigestSection[] = [
 
 // ─────────────────────────────── dates ──────────────────────────────────────
 
-function addDays(iso: string, n: number): string {
+export function addDays(iso: string, n: number): string {
   const d = new Date(`${iso}T00:00:00Z`);
   d.setUTCDate(d.getUTCDate() + n);
   return d.toISOString().slice(0, 10);
 }
 
-function firstOfMonth(iso: string): string {
+export function firstOfMonth(iso: string): string {
   return `${iso.slice(0, 7)}-01`;
 }
 
 /** 1st of last month → the same day of last month (capped at its last day). */
-function sameSpanLastMonth(iso: string): { from: string; to: string } {
+export function sameSpanLastMonth(iso: string): { from: string; to: string } {
   const d = new Date(`${iso}T00:00:00Z`);
   const first = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() - 1, 1));
   const lastDay = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 0)).getUTCDate();
   const to = new Date(Date.UTC(first.getUTCFullYear(), first.getUTCMonth(), Math.min(d.getUTCDate(), lastDay)));
   return { from: first.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10) };
+}
+
+/**
+ * The four windows every Block A row is counted over, for the covered IST day.
+ * Inclusive IST days. On the 1st–7th of a month MTD sits inside Last 7 days,
+ * so a count can never show MTD above Last 7 there.
+ */
+export function salesDailyPeriods(istDay: string) {
+  return {
+    yesterday: { from: istDay, to: istDay },
+    last7: { from: addDays(istDay, -6), to: istDay },
+    mtd: { from: firstOfMonth(istDay), to: istDay },
+    lastMonth: sameSpanLastMonth(istDay),
+  };
 }
 
 // ─────────────────────────────── helpers ────────────────────────────────────
@@ -271,12 +285,7 @@ async function collect(
     const { db } = await import("@/lib/db");
     const sendDay = addDays(istDay, 1);
     const dayAfter = addDays(istDay, 2);
-    const periods = {
-      yesterday: { from: istDay, to: istDay },
-      last7: { from: addDays(istDay, -6), to: istDay },
-      mtd: { from: firstOfMonth(istDay), to: istDay },
-      lastMonth: sameSpanLastMonth(istDay),
-    };
+    const periods = salesDailyPeriods(istDay);
 
     const { getDigestSettings } = await import("../settings");
     const [yesterday, last7, mtd, lastMonth, scheduled, followUps, now, overdue, settings, extrasY, extrasMtd, awaiting, unmatched] = await Promise.all([
@@ -306,10 +315,11 @@ async function collect(
     const missing = [...new Set([...scheduled.keys(), ...followUps.keys(), ...awaitingIds])].filter((id) => !names.has(id));
     if (missing.length) {
       const rows = (await db.execute(sql`
-        SELECT id::text AS id, name FROM users
+        SELECT id::text AS id, name, is_active FROM users
          WHERE id::text IN (${sql.join(missing.map((m) => sql`${m}`), sql`, `)})
-      `)) as unknown as Array<{ id: string; name: string | null }>;
-      for (const r of rows) names.set(r.id, r.name ?? r.id);
+      `)) as unknown as Array<{ id: string; name: string | null; is_active: boolean | null }>;
+      // A deactivated owner still holding leads is flagged, as in blockDRows.
+      for (const r of rows) names.set(r.id, (r.name ?? r.id) + (r.is_active === false ? " (inactive)" : ""));
     }
     const eIds = [...new Set([...scheduled.keys(), ...followUps.keys()])];
     const todayRows: DigestTable["rows"] = eIds

@@ -2021,16 +2021,6 @@ const roleNavigation: Record<string, any[]> = {
         // E-307 — Ecofy leads the Sales Head assigned to this ISR + the calculator.
         ecofyWorkerSubnav("is", "/inside-sales"),
         {
-          id: "is-campaigns",
-          label: "Campaigns",
-          icon: Megaphone,
-          href: "/inside-sales/campaigns",
-          // NOT `exact`. getActiveItemId is longest-match-wins, so the campaign
-          // DETAIL route keeps this item lit on its own; marking it exact is the
-          // U5 bug documented on NEODOVE_SECTION — the sidebar goes dark as soon
-          // as you open a campaign.
-        },
-        {
           id: "is-performance",
           label: "My Performance",
           icon: TrendingUp,
@@ -2065,13 +2055,6 @@ const roleNavigation: Record<string, any[]> = {
         },
         // E-307 — Ecofy leads the Sales Head assigned to this ASM + the calculator.
         ecofyWorkerSubnav("asm", "/asm"),
-        {
-          id: "asm-campaigns",
-          label: "Campaigns",
-          icon: Megaphone,
-          href: "/asm/campaigns",
-          // Not `exact`, for the same reason as the inside-sales twin above.
-        },
         {
           id: "asm-performance",
           label: "My Performance",

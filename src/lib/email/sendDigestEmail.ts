@@ -308,8 +308,11 @@ export function buildDigestEmail(
     ${
       p.attachment
         ? `<p style="color:#94a3b8;font-size:12px;font-family:Arial,sans-serif;margin:0 0 6px">
-             Attached: <strong>${esc(p.attachment.filename)}</strong> — every item in the
-             figures above, one row each.
+             Attached: <strong>${esc(p.attachment.filename)}</strong> — ${
+               (p.figures.tables?.length ?? 0) > 0 && p.figures.activity.length === 0
+                 ? "the tables above, one sheet per block, for filtering and checking."
+                 : "every item in the figures above, one row each."
+             }
            </p>`
         : ""
     }
