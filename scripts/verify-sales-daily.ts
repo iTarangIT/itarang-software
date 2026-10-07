@@ -24,6 +24,13 @@
  *   Marked Won                   = distinct leads moved to Won
  *   Quotes delivered             = quote_dispatched touchpoints
  *   Per rep (MTD)                = calls per performed_by, visits per asm_id
+ *   Sales Dashboard rows         = the Sales Dashboard page's own figures for the
+ *                                  same from / to (calls, dealers, visits, quotes,
+ *                                  converted, batteries, revenue, KYC)
+ *   D · open leads per owner     = open (not Converted / Lost) active leads by
+ *                                  current owner and Hot / Warm / Cold — the
+ *                                  /leads Intent filter's rule
+ *   Right now                    = the Ready to assign page's own list
  */
 export {};
 
@@ -163,6 +170,66 @@ async function main() {
 
     const extras = await loadRepExtras(db, periods.mtd);
     console.log(`\n  Block C extras loaded for ${Object.keys(extras).length} metrics.`);
+
+    // Sales Dashboard page: the email's dashboard-sourced rows vs the page's own
+    // numbers for the same window (the page calls buildSalesDashboard too —
+    // this proves the email reads them and drops nothing on the way).
+    console.log("\nBlock A vs the Sales Dashboard page, per window");
+    const fromDash: Array<[string, (d: typeof dm) => number]> = [
+        ["Calls made", (d) => d.totals.calls],
+        ["Dealers called", (d) => d.totals.dealers_called],
+        ["Dealers visited", (d) => d.totals.unique_visits],
+        ["New dealers visited", (d) => d.totals.new_visits],
+        ["Quotes created", (d) => d.outcome.quotes_issued],
+        ["Converted", (d) => d.totals.converted],
+        ["Batteries sold", (d) => d.outcome.batteries_to_dealers],
+        ["Revenue", (d) => d.outcome.revenue],
+        ["KYC submitted", (d) => d.outcome.kyc_submitted],
+    ];
+    const dashBy = { y: dy, d7: d7, mtd: dm, lm: dl } as const;
+    for (const [label, get] of fromDash) {
+        const cells = (["y", "d7", "mtd", "lm"] as const).map((k) => {
+            const e = row(label)?.[k] ?? null;
+            const d = get(dashBy[k]);
+            const ok = e === d;
+            if (!ok) bad++;
+            return `${k}=${e ?? "—"}${ok ? "" : ` MISMATCH dashboard ${d}`}`;
+        });
+        console.log(`  ${label.padEnd(22)} ${cells.join("  ")}`);
+    }
+
+    // D · open Hot / Warm / Cold per owner, as of now.
+    console.log("\nD · open leads per owner — email vs independent recount");
+    const openBy = (await db.execute(sql`
+        SELECT dl.current_owner_id AS u, dl.interest_level AS lvl, COUNT(*) AS n
+          FROM dealer_leads dl
+         WHERE dl.is_active IS NOT FALSE AND dl.current_owner_id IS NOT NULL
+           AND dl.interest_level IN ('hot', 'warm', 'cold')
+           AND COALESCE(dl.lead_status, '') NOT IN ('Converted', 'Lost')
+         GROUP BY 1, 2`)) as unknown as Array<{ u: string; lvl: string; n: string }>;
+    const open = new Map<string, number>();
+    for (const r of openBy) open.set(`${r.u}|${r.lvl}`, Number(r.n));
+    for (const b of dy.per_spoc ?? []) {
+        const lv = (l: string) => b.interest.rows.find((x) => x.interest_level === l)?.total ?? 0;
+        const parts = ["hot", "warm", "cold"].map((l) => {
+            const e = lv(l);
+            const d = open.get(`${b.spoc_id}|${l}`) ?? 0;
+            if (e !== d) bad++;
+            return `${l} ${e}${e === d ? "" : ` MISMATCH db ${d}`}`;
+        });
+        console.log(`  ${String(b.name ?? b.spoc_id).padEnd(22)} ${parts.join("  ")}`);
+    }
+
+    // Right now · sales-ready, no owner vs the Ready to assign page's list.
+    const { countAwaitingAssignment, listReadyToAssign } = await import("@/lib/leads/salesReady");
+    const [count, page] = await Promise.all([countAwaitingAssignment(), listReadyToAssign({ limit: 5000 })]);
+    const pageOldest = page.reduce((m, r) => Math.max(m, Number(r.days_waiting)), 0);
+    const rnOk = count.total === page.length && (page.length === 0 || count.oldestDays === pageOldest);
+    if (!rnOk) bad++;
+    console.log(
+        `\nRight now · sales-ready, no owner: email ${count.total} (oldest ${count.oldestDays} days) · ` +
+            `Ready to assign page ${page.length} (oldest ${pageOldest} days) ${rnOk ? "ok" : "MISMATCH"}`,
+    );
 
     console.log(bad === 0 ? "\nAll figures reconcile." : `\n${bad} figure(s) do not reconcile.`);
     process.exit(bad === 0 ? 0 : 1);
