@@ -18,16 +18,46 @@ import type {
     ReportType,
 } from "./types";
 
-// Date-range fragment on a chosen column. Defaults to the last 30 days when no
-// range is supplied. date_to is treated as an inclusive calendar day.
-function dateRange(col: string, f: DashboardFilters): SQL {
+/*
+ * TIME ZONE. date_from / date_to are IST calendar days (the business runs on
+ * IST), so every bound compares the column's IST day — and the conversion
+ * depends on how the column is stored:
+ *   "utc"   timestamp WITHOUT time zone holding UTC (dealer_leads.created_at)
+ *   "tz"    timestamp WITH time zone (closed_at, lead_touchpoints.performed_at)
+ *   "date"  a plain date already entered as an IST day (lead_visits dates)
+ * Comparing the raw column to a date (the old code) used UTC days: a lead
+ * created or closed 00:00–05:30 IST fell on the day before, so the CEO funnel
+ * and these reports disagreed with every IST surface for the same dates.
+ */
+type ColKind = "utc" | "tz" | "date";
+const IST = "Asia/Kolkata";
+
+/** The column's IST calendar day. */
+function istDayOf(col: string, kind: ColKind): SQL {
     const c = sql.raw(col);
+    if (kind === "date") return sql`(${c})::date`;
+    if (kind === "utc") return sql`((${c}) AT TIME ZONE 'UTC' AT TIME ZONE ${IST})::date`;
+    return sql`((${c}) AT TIME ZONE ${IST})::date`;
+}
+
+// Date-range fragment on a chosen column, in IST days. Defaults to the last 30
+// IST days (today included) when no range is supplied; both ends inclusive.
+// A coarse bound on the raw column comes first so an index can still serve
+// it; the IST day test is exact.
+function dateRange(col: string, f: DashboardFilters, kind: ColKind): SQL {
+    const c = sql.raw(col);
+    const day = istDayOf(col, kind);
+    const coarse = (from: SQL | null, to: SQL | null): SQL =>
+        kind === "date"
+            ? sql``
+            : sql`${from ? sql` AND ${c} >= (${from} - 1)::timestamp` : sql``}${to ? sql` AND ${c} < (${to} + 2)::timestamp` : sql``}`;
     if (f.date_from && f.date_to) {
-        return sql` AND ${c} >= ${f.date_from}::date AND ${c} < (${f.date_to}::date + INTERVAL '1 day')`;
+        return sql`${coarse(sql`${f.date_from}::date`, sql`${f.date_to}::date`)} AND ${day} BETWEEN ${f.date_from}::date AND ${f.date_to}::date`;
     }
-    if (f.date_from) return sql` AND ${c} >= ${f.date_from}::date`;
-    if (f.date_to) return sql` AND ${c} < (${f.date_to}::date + INTERVAL '1 day')`;
-    return sql` AND ${c} >= NOW() - INTERVAL '30 days'`;
+    if (f.date_from) return sql`${coarse(sql`${f.date_from}::date`, null)} AND ${day} >= ${f.date_from}::date`;
+    if (f.date_to) return sql`${coarse(null, sql`${f.date_to}::date`)} AND ${day} <= ${f.date_to}::date`;
+    const start = sql`((now() AT TIME ZONE ${IST})::date - 29)`;
+    return sql`${coarse(start, null)} AND ${day} >= ${start}`;
 }
 
 // The inside-sales "My Open Leads" status list (queryBuilder.ts), inlined the
@@ -49,7 +79,9 @@ async function dailyActivity(f: DashboardFilters): Promise<ReportResult> {
         leads_worked: string;
     }>(sql`
         SELECT
-            t.performed_at::date AS day,
+            -- The IST day, written as a literal: SELECT and GROUP BY must be the
+            -- same expression, and two bound parameters are not.
+            (t.performed_at AT TIME ZONE 'Asia/Kolkata')::date AS day,
             u.name AS rep_name,
             COUNT(*)::text AS total_touchpoints,
             -- ID 59: a human call counted once — a NeoDove call the agent
@@ -59,8 +91,8 @@ async function dailyActivity(f: DashboardFilters): Promise<ReportResult> {
             COUNT(DISTINCT t.dealer_lead_id)::text AS leads_worked
         FROM lead_touchpoints t
         LEFT JOIN users u ON u.id::text = t.performed_by
-        WHERE t.performed_by IS NOT NULL ${dateRange("t.performed_at", f)}
-        GROUP BY t.performed_at::date, u.name
+        WHERE t.performed_by IS NOT NULL ${dateRange("t.performed_at", f, "tz")}
+        GROUP BY (t.performed_at AT TIME ZONE 'Asia/Kolkata')::date, u.name
         ORDER BY day DESC, rep_name ASC
     `);
     return {
@@ -110,14 +142,14 @@ async function leadFunnel(f: DashboardFilters): Promise<ReportResult> {
     const rows = await db.execute<{ lead_status: string | null; c: string }>(sql`
         SELECT dl.lead_status, COUNT(*)::text AS c
         FROM dealer_leads dl
-        WHERE dl.is_active IS NOT FALSE ${dateRange("dl.created_at", f)}
+        WHERE dl.is_active IS NOT FALSE ${dateRange("dl.created_at", f, "utc")}
         GROUP BY dl.lead_status
     `);
     const reachedRows = await db.execute<{ stage: string; c: string }>(sql`
         WITH cohort AS (
             SELECT dl.id, dl.lead_status
             FROM dealer_leads dl
-            WHERE dl.is_active IS NOT FALSE ${dateRange("dl.created_at", f)}
+            WHERE dl.is_active IS NOT FALSE ${dateRange("dl.created_at", f, "utc")}
         ),
         reached AS (
             SELECT c.id, c.lead_status AS stage FROM cohort c
@@ -135,7 +167,7 @@ async function leadFunnel(f: DashboardFilters): Promise<ReportResult> {
     const neverAssigned = await db.execute<{ c: string }>(sql`
         SELECT COUNT(*)::text AS c FROM dealer_leads dl
         WHERE dl.is_active IS NOT FALSE AND dl.lead_status = 'New_Unassigned'
-          AND dl.assigned_at IS NULL ${dateRange("dl.created_at", f)}
+          AND dl.assigned_at IS NULL ${dateRange("dl.created_at", f, "utc")}
     `);
     const byStatus = new Map(rows.map((r) => [r.lead_status ?? "(null)", num(r.c)]));
     const reached = new Map(reachedRows.map((r) => [r.stage, num(r.c)]));
@@ -190,7 +222,7 @@ async function lostAnalysis(f: DashboardFilters): Promise<ReportResult> {
     const lostRows = await db.execute<{ lost_reason: string | null; c: string }>(sql`
         SELECT dl.lost_reason, COUNT(*)::text AS c
         FROM dealer_leads dl
-        WHERE dl.lead_status = 'Lost' ${dateRange("dl.closed_at", f)}
+        WHERE dl.lead_status = 'Lost' ${dateRange("dl.closed_at", f, "tz")}
         GROUP BY dl.lost_reason
     `);
     const dropoutRows = await db.execute<{
@@ -199,7 +231,7 @@ async function lostAnalysis(f: DashboardFilters): Promise<ReportResult> {
     }>(sql`
         SELECT dl.onboarding_dropout_reason, COUNT(*)::text AS c
         FROM dealer_leads dl
-        WHERE dl.onboarding_dropout_reason IS NOT NULL ${dateRange("dl.closed_at", f)}
+        WHERE dl.onboarding_dropout_reason IS NOT NULL ${dateRange("dl.closed_at", f, "tz")}
         GROUP BY dl.onboarding_dropout_reason
     `);
     const lostMap = new Map(
@@ -254,7 +286,7 @@ async function aiScoreAccuracy(f: DashboardFilters): Promise<ReportResult> {
                     ELSE '81-100'
                 END AS bucket
             FROM dealer_leads dl
-            WHERE dl.lead_status IN ('Converted', 'Lost') ${dateRange("dl.closed_at", f)}
+            WHERE dl.lead_status IN ('Converted', 'Lost') ${dateRange("dl.closed_at", f, "tz")}
         ) s
         GROUP BY bucket
         ORDER BY bucket ASC
@@ -295,7 +327,7 @@ async function sourcePerformance(f: DashboardFilters): Promise<ReportResult> {
                COUNT(*) FILTER (WHERE dl.lead_status = 'Converted')::text AS converted,
                COUNT(*) FILTER (WHERE dl.lead_status IN ('Converted','Lost'))::text AS closed
         FROM dealer_leads dl
-        WHERE dl.lead_status IN ('Converted', 'Lost') ${dateRange("dl.closed_at", f)}
+        WHERE dl.lead_status IN ('Converted', 'Lost') ${dateRange("dl.closed_at", f, "tz")}
         GROUP BY COALESCE(dl.source, '(unknown)')
         ORDER BY closed DESC
     `);
@@ -356,7 +388,7 @@ async function asmHandoff(f: DashboardFilters): Promise<ReportResult> {
                    dl.lead_status, dl.closed_at, dl.closing_owner_id
             FROM lead_touchpoints t
             JOIN dealer_leads dl ON dl.id = t.dealer_lead_id
-            WHERE t.touchpoint_type = 'asm_transfer' ${dateRange("t.performed_at", f)}
+            WHERE t.touchpoint_type = 'asm_transfer' ${dateRange("t.performed_at", f, "tz")}
         ),
         per_lead AS (
             -- One row per (ASM, lead): the first handoff in the period carries
@@ -420,9 +452,11 @@ async function asmHandoff(f: DashboardFilters): Promise<ReportResult> {
  * include part of the previous month and never agree with a month-end figure.
  * An explicit ?date_from/?date_to still wins.
  */
-function monthToDate(col: string, f: DashboardFilters): SQL {
-    if (f.date_from || f.date_to) return dateRange(col, f);
-    return sql` AND ${sql.raw(col)} >= date_trunc('month', NOW())`;
+function monthToDate(col: string, f: DashboardFilters, kind: ColKind): SQL {
+    if (f.date_from || f.date_to) return dateRange(col, f, kind);
+    // The IST calendar month — date_trunc on NOW() would start it at 05:30 IST
+    // on the 1st (UTC midnight).
+    return sql` AND ${istDayOf(col, kind)} >= date_trunc('month', (now() AT TIME ZONE ${IST})::date)::date`;
 }
 
 
@@ -491,6 +525,7 @@ async function meetingsMtd(f: DashboardFilters): Promise<ReportResult> {
         WHERE TRUE ${monthToDate(
             "COALESCE(r.actual_visit_date, r.scheduled_date)",
             f,
+            "date",
         )}
         GROUP BY 1, 2
         -- COUNT(*), not the "meetings" alias: that is cast to text for the
@@ -617,7 +652,7 @@ function ownerCtes(f: DashboardFilters): SQL {
             SELECT DISTINCT t.performed_by, t.dealer_lead_id
             FROM lead_touchpoints t
             WHERE t.performed_by IS NOT NULL
-              ${dateRange("t.performed_at", f)}
+              ${dateRange("t.performed_at", f, "tz")}
         ),
         connected AS (
             -- "Connected" is a property of the outreach, not of the lead, so it
@@ -634,7 +669,7 @@ function ownerCtes(f: DashboardFilters): SQL {
             FROM lead_touchpoints t
             WHERE (t.call_status = 'connected' OR t.is_engaged IS TRUE)
               AND t.performed_by IS NOT NULL
-              ${dateRange("t.performed_at", f)}
+              ${dateRange("t.performed_at", f, "tz")}
         ),
         owned AS (
             -- Same predicate as the "My Open Leads" tab, so the numbers match
@@ -653,7 +688,7 @@ function ownerCtes(f: DashboardFilters): SQL {
             WHERE dl.lead_status = 'Converted'
               AND dl.closing_owner_id IS NOT NULL
               AND dl.closed_at IS NOT NULL
-              ${dateRange("dl.closed_at", f)}
+              ${dateRange("dl.closed_at", f, "tz")}
         )`;
 }
 
