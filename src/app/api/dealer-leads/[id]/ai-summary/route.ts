@@ -21,8 +21,9 @@ import { NextRequest } from "next/server";
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { requireRole } from "@/lib/auth-utils";
-import { successResponse, withErrorHandler } from "@/lib/api-utils";
-import { LEADS_PAGE_ROLES } from "@/lib/leads/access";
+import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
+import { LEADS_PAGE_ROLES, readsOwnLeadsOnly } from "@/lib/leads/access";
+import { leadOwnedBy } from "@/lib/ai-dialer/campaignAccess";
 import { readIntentProvenance } from "@/lib/leads/intentOverride";
 
 type LatestCallRow = {
@@ -60,9 +61,13 @@ function iso(v: string | Date | null): string | null {
 
 export const GET = withErrorHandler(
   async (req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
-    await requireRole([...LEADS_PAGE_ROLES]);
+    const user = await requireRole([...LEADS_PAGE_ROLES]);
 
     const { id } = await ctx.params;
+    // ID 45: a rep reads only leads they own; anything else is "no such lead".
+    if (readsOwnLeadsOnly(user.role) && !(await leadOwnedBy(id, user.id))) {
+      return errorResponse("Lead not found", 404);
+    }
     const url = new URL(req.url);
     // The transcript is a large text column and neither the notice nor the
     // panel renders it inline — they link to the drawer. Opt in explicitly so

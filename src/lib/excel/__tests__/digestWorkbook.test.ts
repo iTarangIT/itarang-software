@@ -229,3 +229,51 @@ describe("digest workbook", () => {
     );
   });
 });
+
+describe("buildDigestWorkbook — a digest made only of tables (Sales Daily)", () => {
+  const SALES_KIND = { id: "sales_daily", label: "Sales Daily" } as unknown as DigestKindDescriptor;
+  const TABLE_FIGURES: DigestFigures = {
+    activity: [],
+    backlog: [],
+    tables: [
+      {
+        key: "block_a",
+        title: "A · Company",
+        note: "Month to date is 3 of 27 working days.",
+        columns: ["Metric", "Yesterday", "Last 7 days", "MTD"],
+        rows: [
+          ["INTAKE", "", "", ""],
+          ["Leads in", 0, 198, 108],
+          ["Imported in bulk", 0, 2431, 0],
+        ],
+        groupHeaders: true,
+        footer: { key: "right_now", label: "Right now · 09:00", items: [{ label: "Sales-ready, no owner", value: "7 leads" }] },
+      },
+      { key: "block_f", title: "F · Oldest overdue", columns: ["Dealer", "City"], rows: [], empty: "Nothing overdue." },
+    ],
+  };
+
+  it("writes one sheet per block with the rows as mailed — not an empty Figures sheet", async () => {
+    const wb = await buildDigestWorkbook({ kind: SALES_KIND, istDay: "2026-10-04", figures: TABLE_FIGURES, detail: {} });
+    expect(wb.worksheets.map((w) => w.name)).toEqual(["A · Company", "F · Oldest overdue"]);
+
+    const values = (name: string) =>
+      wb.getWorksheet(name)!.getSheetValues().filter(Boolean).map((r) => (r as unknown[]).slice(1));
+    const a = values("A · Company");
+    expect(a).toContainEqual(["Leads in", 0, 198, 108]);
+    expect(a).toContainEqual(["Imported in bulk", 0, 2431, 0]);
+    expect(a).toContainEqual(["Sales-ready, no owner", "7 leads", ""]);
+    expect(values("F · Oldest overdue")).toContainEqual(["Nothing overdue."]);
+  });
+
+  it("leaves out a block whose section is switched off", async () => {
+    const wb = await buildDigestWorkbook({
+      kind: SALES_KIND,
+      istDay: "2026-10-04",
+      figures: TABLE_FIGURES,
+      detail: {},
+      sections: { block_f: false },
+    });
+    expect(wb.worksheets.map((w) => w.name)).toEqual(["A · Company"]);
+  });
+});

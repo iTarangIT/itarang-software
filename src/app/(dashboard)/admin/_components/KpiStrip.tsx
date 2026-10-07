@@ -88,7 +88,7 @@ export function KpiStrip({ kpis }: { kpis: AdminKpis }) {
             value: fmtPct(kpis.engaged_to_conversion_rate),
             icon: TrendingUp,
             tone: "neutral",
-            hint: "leads created last 30 days with an engaged call (connected, long enough by measured duration) or a productive visit",
+            hint: "leads created last 30 days with an engaged call (connected: the rep spoke with the dealer) or a productive visit",
         },
         {
             label: "Closed-Win · 7d",

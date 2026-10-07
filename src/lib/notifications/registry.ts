@@ -170,6 +170,7 @@ export const TYPE_LABELS: Record<string, string> = {
   "onboarding.chat_started": "Dealer started the WhatsApp onboarding chat",
   "onboarding.docs_uploaded": "Dealer uploaded onboarding documents",
   "onboarding.submitted": "Dealer submitted their onboarding application",
+  "onboarding.bank_changed": "Bank details changed on a dealer application",
   "onboarding.agreement_initiated": "Dealer agreement sent for signature",
   "onboarding.agreement_signed": "Dealer agreement signed",
   "onboarding.agreement_approval_requested": "Uploaded dealer agreement needs a second approval",

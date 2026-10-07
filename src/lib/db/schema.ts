@@ -3374,6 +3374,10 @@ export const dealerOnboardingApplications = pgTable(
     sales_manager_name: text("sales_manager_name"),
     sales_manager_email: text("sales_manager_email"),
     sales_manager_mobile: text("sales_manager_mobile"),
+    // E-329 (ID 66; written as E-321_dealer_onboarding_salesperson before the
+    // 5 Oct renumbering) — the salesperson as a CRM user (active ISR / ASM / Sales
+    // Head). The three typed columns above stay, filled from this user's row.
+    salesperson_user_id: uuid("salesperson_user_id"),
     itarang_signatory_1_name: text("itarang_signatory_1_name"),
     itarang_signatory_1_email: text("itarang_signatory_1_email"),
     itarang_signatory_1_mobile: text("itarang_signatory_1_mobile"),
@@ -9544,6 +9548,45 @@ export const salesInvoices = pgTable(
     ),
   }),
 );
+
+// E-326 — line items of a sales invoice (tracker ID 72). `amount` is the
+// taxable value before GST. `item_key` joins to sales_invoice_item_products.
+export const salesInvoiceLines = pgTable(
+  "sales_invoice_lines",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    // 'drive' (read off the PDF); 'vyapar' / 'zoho' reserved for IDs 39 / 70.
+    source: varchar("source", { length: 16 }).default("drive").notNull(),
+    sales_invoice_id: uuid("sales_invoice_id").notNull(),
+    line_no: integer("line_no").notNull(),
+    description: text("description"),
+    item_key: text("item_key"),
+    hsn_code: varchar("hsn_code", { length: 16 }),
+    quantity: numeric("quantity", { precision: 12, scale: 3 }),
+    rate: numeric("rate", { precision: 14, scale: 2 }),
+    amount: numeric("amount", { precision: 14, scale: 2 }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    salesInvoiceLinesInvoiceLineUnique: uniqueIndex("sales_invoice_lines_invoice_line_unique").on(
+      table.sales_invoice_id,
+      table.line_no,
+    ),
+    salesInvoiceLinesItemKeyIdx: index("sales_invoice_lines_item_key_idx").on(table.item_key),
+  }),
+);
+
+// E-326 — invoice item name → CRM product, mapped once per item (ID 72).
+// product_id NULL = seen, not mapped; auto_matched = proposed, not confirmed.
+export const salesInvoiceItemProducts = pgTable("sales_invoice_item_products", {
+  item_key: text("item_key").primaryKey().notNull(),
+  item_name: text("item_name").notNull(),
+  product_id: uuid("product_id"),
+  auto_matched: boolean("auto_matched").default(false).notNull(),
+  mapped_by: uuid("mapped_by"),
+  created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
 
 export const salesInvoiceFolders = pgTable(
   "sales_invoice_folders",

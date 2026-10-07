@@ -5,9 +5,9 @@ import { withErrorHandler, successResponse, errorResponse, generateId } from '@/
 import { requireRole } from '@/lib/auth-utils';
 import { z } from 'zod';
 
-export const GET = withErrorHandler(async (req: Request, { params }: { params: { id: string } }) => {
+export const GET = withErrorHandler(async (req: Request, { params }: { params: Promise<{ id: string }> }) => {
     const user = await requireRole(['sales_manager', 'sales_head', 'business_head', 'ceo', 'finance_controller']);
-    const dealId = params.id;
+    const dealId = (await params).id;
 
     // Fetch Deal
     const [deal] = await db.select().from(deals).where(eq(deals.id, dealId)).limit(1);
@@ -35,9 +35,9 @@ const updateDealSchema = z.object({
     credit_period_months: z.number().positive().optional(),
 });
 
-export const PATCH = withErrorHandler(async (req: Request, { params }: { params: { id: string } }) => {
+export const PATCH = withErrorHandler(async (req: Request, { params }: { params: Promise<{ id: string }> }) => {
     const user = await requireRole(['sales_manager', 'sales_head', 'business_head', 'ceo']);
-    const dealId = params.id;
+    const dealId = (await params).id;
     const body = await req.json();
 
     const result = updateDealSchema.safeParse(body);

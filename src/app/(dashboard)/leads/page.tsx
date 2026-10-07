@@ -1230,6 +1230,13 @@ export default function LeadsUnifiedPage() {
     string,
     number
   > | null>(null);
+  // ID 46: numbers in the search box that were unreadable or matched no lead.
+  const [numberSearch, setNumberSearch] = useState<{
+    invalid: string[];
+    not_found: string[];
+    filtered_out?: string[];
+    over_limit?: number;
+  } | null>(null);
   // Lead opened in the side drawer (row click).
   const [drawerLead, setDrawerLead] = useState<LeadRow | null>(null);
   const [showMoreFilters, setShowMoreFilters] = useState(false);
@@ -1434,6 +1441,7 @@ export default function LeadsUnifiedPage() {
           if (data.stats) setLeadsStats(data.stats);
           if (data.facets) setFacets(data.facets);
           setBusinessTypeCounts(data.business_type_counts ?? null);
+          setNumberSearch(data.number_search ?? null);
           // The server decides what this role may see and do; the client just
           // renders it. Keeps the gate in one place instead of duplicating role
           // lists here and hoping they stay in sync with the APIs.
@@ -1974,6 +1982,7 @@ export default function LeadsUnifiedPage() {
         onClose={() => setDialerModalOpen(false)}
         onConfirm={confirmDialerStart}
         onStartListCampaign={startListCampaign}
+        canManageGroups={caps.canBulkAct}
       />
 
       {/* HEADER */}
@@ -2153,6 +2162,7 @@ export default function LeadsUnifiedPage() {
             onDateRange={setDateRange}
             onAssignedRange={setAssignedRange}
             busy={leadsLoading}
+            numberSearch={numberSearch}
           />
         </div>
       )}

@@ -22,6 +22,7 @@ import {
 import { isKnownDisposition } from "@/lib/leads/dispositions";
 import { DispositionPicker } from "@/components/leads/DispositionPicker";
 import type { LeadsCapabilities } from "@/lib/leads/access";
+import { LIST_SEARCH_MAX_NUMBERS } from "@/lib/leads/claimScope";
 // ⚠ TYPE-ONLY from leadListQuery — it imports `db`, and a VALUE import here
 // drags the postgres driver into the browser bundle ("Can't resolve 'fs'").
 // Runtime campaign constants come from the dependency-free module instead.
@@ -114,6 +115,15 @@ type Props = {
     /** Set both ends of the assigned range at once (presets / clear). */
     onAssignedRange: (from: string, to: string) => void;
     busy?: boolean;
+    /** ID 46: numbers in the search that were unreadable or matched no lead. */
+    numberSearch?: {
+        invalid: string[];
+        not_found: string[];
+        /** The lead exists but the other filters hide it. */
+        filtered_out?: string[];
+        /** Valid numbers past the per-search cap — not searched. */
+        over_limit?: number;
+    } | null;
 };
 
 export function LeadsFilterBar({
@@ -128,6 +138,7 @@ export function LeadsFilterBar({
     onDateRange,
     onAssignedRange,
     busy,
+    numberSearch,
 }: Props) {
     const moreCount = countSecondary(draft);
     const aiFacets = facets?.aiSignals;
@@ -186,10 +197,53 @@ export function LeadsFilterBar({
                 <Input
                     value={draft.search}
                     onChange={(e) => onChange("search", e.target.value)}
-                    placeholder="Search by dealer, shop, phone or city…"
+                    // ID 46: a column copied from Excel is one number per line,
+                    // and a single-line input would run them together. Turn
+                    // the line breaks into commas before they are lost.
+                    onPaste={(e) => {
+                        const text = e.clipboardData.getData("text");
+                        if (!/[\r\n\t]/.test(text)) return;
+                        e.preventDefault();
+                        const el = e.currentTarget;
+                        const start = el.selectionStart ?? el.value.length;
+                        const end = el.selectionEnd ?? el.value.length;
+                        const joined = text
+                            .split(/[\r\n\t]+/)
+                            .map((s) => s.trim())
+                            .filter(Boolean)
+                            .join(", ");
+                        onChange("search", el.value.slice(0, start) + joined + el.value.slice(end));
+                    }}
+                    placeholder="Search by dealer, shop or city — or mobile numbers separated by commas…"
                     className="pl-9"
                 />
             </div>
+            {numberSearch &&
+                (numberSearch.invalid.length > 0 ||
+                    numberSearch.not_found.length > 0 ||
+                    (numberSearch.filtered_out?.length ?? 0) > 0 ||
+                    (numberSearch.over_limit ?? 0) > 0) && (
+                <p className="text-xs text-amber-700">
+                    {numberSearch.not_found.length > 0 && (
+                        <span>No lead for: {numberSearch.not_found.join(", ")}. </span>
+                    )}
+                    {(numberSearch.filtered_out?.length ?? 0) > 0 && (
+                        <span>
+                            Hidden by the current filters: {numberSearch.filtered_out!.join(", ")} — clear the
+                            filters or untick &ldquo;Hide dead &amp; disqualified&rdquo; to see them.{" "}
+                        </span>
+                    )}
+                    {numberSearch.invalid.length > 0 && (
+                        <span>Not a valid mobile number: {numberSearch.invalid.join(", ")}. </span>
+                    )}
+                    {(numberSearch.over_limit ?? 0) > 0 && (
+                        <span>
+                            Only the first {LIST_SEARCH_MAX_NUMBERS} numbers were searched; {numberSearch.over_limit}{" "}
+                            more were ignored.
+                        </span>
+                    )}
+                </p>
+            )}
 
             {/* ── Qualification · Intent · Owner · More filters, one row ── */}
             <div className="flex flex-wrap items-center gap-2">

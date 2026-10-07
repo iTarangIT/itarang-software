@@ -141,6 +141,7 @@ export const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   "onboarding.chat_started": "Onboarding",
   "onboarding.docs_uploaded": "Onboarding",
   "onboarding.submitted": "Onboarding",
+  "onboarding.bank_changed": "Onboarding",
   "onboarding.agreement_initiated": "Onboarding",
   "onboarding.agreement_signed": "Onboarding",
   // E-318 — a manually uploaded agreement did not verify and waits for a

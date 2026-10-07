@@ -304,10 +304,10 @@ export async function POST(req: NextRequest, context: RouteContext) {
       );
     });
 
-    // ID 84.2: the lead's agreement milestone, as on a verified upload.
-    // Best-effort — never throws.
+    // ID 84.2: the lead's agreement milestone, as on a verified upload
+    // ("Manual agreement on file", ID 84.1). Best-effort — never throws.
     if (!alreadyCompleted) {
-      await markAgreementOutcome({ applicationId: dealerId }, "completed");
+      await markAgreementOutcome({ applicationId: dealerId }, "manual_on_file");
     }
 
     await notifyAgreementApprovalDecided({

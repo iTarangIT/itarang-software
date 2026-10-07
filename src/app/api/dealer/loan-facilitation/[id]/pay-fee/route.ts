@@ -6,9 +6,9 @@ import { requireRole } from '@/lib/auth-utils';
 
 // NOTE: This is a stubbed "payment" endpoint.
 // In production, replace with payment gateway integration + webhook.
-export const POST = withErrorHandler(async (_req: Request, ctx: { params: { id: string } }) => {
+export const POST = withErrorHandler(async (_req: Request, ctx: { params: Promise<{ id: string }> }) => {
     const user = await requireRole(['dealer']);
-    const id = ctx.params.id;
+    const id = (await ctx.params).id;
 
     // Validate ownership
     const rows = await db

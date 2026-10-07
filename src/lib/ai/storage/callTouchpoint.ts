@@ -228,7 +228,10 @@ export async function writeAiCallTouchpoint(
 
         // ID 36: contactability after every AI call, like the CRM call form and
         // NeoDove. A connect clears the flag; "Incorrect / Invalid number" sets
-        // dead_number; otherwise the non-responsive rule is re-checked. Its own
+        // dead_number only on the SECOND such AI call since the last connect
+        // (ID 36.1, source "ai" — this call's touchpoint is already written
+        // above, so it is counted); otherwise the non-responsive rule is
+        // re-checked. Its own
         // try/catch (reviewLeadContactability already swallows DB errors) so the
         // call write above can never be undone by it. actorId null = system.
         try {
@@ -237,6 +240,7 @@ export async function writeAiCallTouchpoint(
                 connected,
                 reasonLabel: d.disposition ?? null,
                 actorId: null,
+                source: "ai",
             });
         } catch (err) {
             console.warn("[callTouchpoint] contactability not reviewed:", err);

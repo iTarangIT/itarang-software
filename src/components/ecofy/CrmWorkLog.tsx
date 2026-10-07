@@ -1,7 +1,8 @@
 "use client";
 
 // E-308 — work an Ecofy lead while Ecofy is unavailable. Calls, remarks,
-// follow-ups and meeting bookings go through the normal action route; when
+// follow-ups, meeting bookings and meeting outcomes (complete / no-show /
+// cancel / reschedule from the Appointments tab) go through the normal action route; when
 // Ecofy cannot take them the route keeps them in the CRM and the ticker replays
 // them. Stage moves (assessment, offer, OTP …) still need Ecofy.
 
@@ -194,6 +195,10 @@ export function LocalActivityList({ rows, loading, onlyUnsynced }: { leadId: str
                         meetingType?: string;
                         scheduledAt?: string;
                         bookingRemarks?: string;
+                        action?: string;
+                        op?: string;
+                        meetingRemarks?: string;
+                        outcomeReason?: string;
                     };
                     return (
                         <li key={r.id} className="grid gap-1 py-2 text-sm sm:grid-cols-[150px_1fr] sm:gap-3">
@@ -201,7 +206,9 @@ export function LocalActivityList({ rows, loading, onlyUnsynced }: { leadId: str
                             <div>
                                 <div className="flex flex-wrap items-center gap-2">
                                     <span className="font-medium">
-                                        {r.kind === "appointment"
+                                        {p.action === "update_appointment"
+                                            ? `Meeting ${(p.op ?? "updated").replace("_", "-").toLowerCase()}${p.op === "RESCHEDULE" && p.scheduledAt ? ` to ${formatIst(p.scheduledAt)}` : ""}`
+                                            : r.kind === "appointment"
                                             ? `Meeting booked (${(p.meetingType ?? "").replace("_", " ").toLowerCase()}) for ${formatIst(p.scheduledAt)}`
                                             : `${p.type ?? "Activity"}${p.callOutcome ? ` · ${p.callOutcome.replace(/_/g, " ").toLowerCase()}` : ""}`}
                                     </span>
@@ -213,7 +220,9 @@ export function LocalActivityList({ rows, loading, onlyUnsynced }: { leadId: str
                                         <Chip tone="amber">waiting for Ecofy</Chip>
                                     )}
                                 </div>
-                                {(p.note || p.bookingRemarks) && <div className="text-gray-700">{p.note ?? p.bookingRemarks}</div>}
+                                {(p.note || p.bookingRemarks || p.meetingRemarks || p.outcomeReason) && (
+                                    <div className="text-gray-700">{p.note ?? p.bookingRemarks ?? p.meetingRemarks ?? p.outcomeReason}</div>
+                                )}
                                 {p.nextFollowUpAt && <div className="text-xs text-gray-500">next follow-up {formatIst(p.nextFollowUpAt)}</div>}
                                 {r.sync_status === "failed" && r.sync_error && <div className="text-xs text-red-700">{r.sync_error}</div>}
                                 <div className="text-[11px] text-gray-400">{r.created_by_name}</div>

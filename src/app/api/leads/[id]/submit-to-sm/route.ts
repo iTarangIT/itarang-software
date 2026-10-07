@@ -15,9 +15,9 @@ const STEP_3_AWAITING_STATES = new Set([
     'awaiting_both',
 ]);
 
-export const POST = withErrorHandler(async (req: Request, { params }: { params: { id: string } }) => {
+export const POST = withErrorHandler(async (req: Request, { params }: { params: Promise<{ id: string }> }) => {
     const user = await requireRole(['dealer']);
-    const leadId = params.id;
+    const leadId = (await params).id;
 
     const [lead] = await db.select({
         id: leads.id,

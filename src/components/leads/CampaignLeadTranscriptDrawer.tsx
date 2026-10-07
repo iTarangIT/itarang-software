@@ -27,12 +27,15 @@ import {
   History,
   RotateCcw,
   CheckCircle2,
+  ChevronDown,
 } from "lucide-react";
 // Import the thresholds module directly (not the scoring barrel) so the client
 // bundle doesn't pull in zod / the scoring engine.
 import { INTENT_THRESHOLDS } from "@/lib/ai/scoring/thresholds";
 import { CorrectIntentForm } from "@/components/leads/intent-review/CorrectIntentForm";
 // Pure (no db, no zod) — safe for the client bundle.
+// Type-only — erased at build, so no db code reaches the client bundle.
+import type { LeadCallDetail } from "@/lib/ai-dialer/leadCallAttempts";
 import {
   campaignLeadStatusLabel,
   isCampaignLeadStatus,
@@ -131,6 +134,9 @@ export type Attempt = {
   // attempt has no call id (no-answer/failed) and thus no recording.
   callId: string | null;
   recordingUrl: string | null;
+  // What the AI made of this call (transcript, summary, band…) — sent by the
+  // lead page and campaign drawer routes (includeDetail). Absent on old callers.
+  detail?: LeadCallDetail | null;
 };
 
 type TranscriptPayload = {
@@ -911,11 +917,94 @@ export function AttemptsTab({
                 {a.recordingUrl && (
                   <RecordingPlayer key={a.recordingUrl} url={a.recordingUrl} compact />
                 )}
+                {a.detail && <AttemptDetails detail={a.detail} />}
               </div>
             </li>
           );
         })}
       </ol>
+    </div>
+  );
+}
+
+const BAND_CHIP: Record<string, string> = {
+  Qualified: "bg-emerald-100 text-emerald-700",
+  Warm: "bg-amber-100 text-amber-700",
+  Cold: "bg-sky-100 text-sky-700",
+  Disqualified: "bg-gray-200 text-gray-700",
+};
+
+const CALL_STATUS_LABEL: Record<string, string> = {
+  complete: "Complete call",
+  dropped_partial: "Dropped mid-call",
+  dropped_empty: "Dropped before talking",
+};
+
+// One attempt's call, read in place: band + intent reason, summary, next
+// action, length, and the transcript behind a toggle (it can run to dozens of
+// turns, and a lead with several attempts would otherwise be a wall of text).
+function AttemptDetails({ detail }: { detail: LeadCallDetail }) {
+  const [open, setOpen] = useState(false);
+  const turns = useMemo(
+    () => buildTurns((detail.conversation as RawTurn[] | null) ?? null, detail.transcript),
+    [detail.conversation, detail.transcript],
+  );
+  const hasAnything =
+    detail.band || detail.intentReason || detail.summary || detail.nextAction ||
+    detail.durationSec || turns.length > 0;
+  if (!hasAnything) return null;
+
+  return (
+    <div className="mt-2 space-y-2">
+      <div className="flex items-center gap-2 flex-wrap text-[11px]">
+        {detail.band && (
+          <span
+            className={`font-semibold px-2 py-0.5 rounded-full ${BAND_CHIP[detail.band] ?? "bg-gray-100 text-gray-700"}`}
+          >
+            Intent: {detail.band}
+          </span>
+        )}
+        {detail.callStatus && (
+          <span className="text-gray-500">
+            {CALL_STATUS_LABEL[detail.callStatus] ?? formatOutcome(detail.callStatus)}
+          </span>
+        )}
+        {detail.durationSec != null && detail.durationSec > 0 && (
+          <span className="text-gray-500">· {fmtDuration(detail.durationSec)}</span>
+        )}
+        {detail.nextAction && (
+          <span className="text-gray-500">· Next: {formatOutcome(detail.nextAction)}</span>
+        )}
+      </div>
+      {detail.intentReason && (
+        <p className="text-xs text-gray-600 leading-relaxed">
+          <span className="font-medium text-gray-700">Why this intent: </span>
+          {detail.intentReason}
+        </p>
+      )}
+      {detail.summary && (
+        <p className="text-xs text-gray-700 leading-relaxed rounded-lg bg-gray-50 border border-gray-100 px-3 py-2">
+          <Sparkles className="inline w-3 h-3 mr-1 text-emerald-600 -mt-0.5" />
+          {detail.summary}
+        </p>
+      )}
+      {turns.length > 0 && (
+        <div>
+          <button
+            type="button"
+            onClick={() => setOpen((v) => !v)}
+            className="inline-flex items-center gap-1 text-xs font-medium text-emerald-700 hover:text-emerald-800"
+          >
+            <ChevronDown className={`w-3.5 h-3.5 transition-transform ${open ? "rotate-180" : ""}`} />
+            {open ? "Hide transcript" : `Show transcript · ${turns.length} turns`}
+          </button>
+          {open && (
+            <div className="mt-2 space-y-3 max-h-[420px] overflow-y-auto rounded-lg border border-gray-100 bg-gray-50/50 px-3 py-3">
+              <TranscriptBubbles turns={turns} />
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -945,32 +1034,11 @@ function TabBtn({
   );
 }
 
-function TranscriptTab({
-  turns,
-  data,
-}: {
-  turns: ChatTurn[];
-  data: TranscriptPayload;
-}) {
-  if (turns.length === 0) {
-    return (
-      <EmptyState
-        icon={<AlertCircle className="w-8 h-8 text-rose-300" />}
-        title={
-          data.callOutcome
-            ? `Call ended: ${formatOutcome(data.callOutcome)}`
-            : "Transcript unavailable"
-        }
-        body={
-          data.summary ??
-          "The call ended before a conversation could be recorded. This can happen on no-answer, busy, or when the dealer hung up immediately."
-        }
-      />
-    );
-  }
-
+// The chat bubbles, shared by the drawer's Transcription tab and each
+// attempt's expanded details in the AI Call History timeline.
+function TranscriptBubbles({ turns }: { turns: ChatTurn[] }) {
   return (
-    <div className="px-5 py-5 space-y-3">
+    <>
       {turns.map((msg, i) => {
         const isUser = msg.role === "user";
         const clock = fmtClock(msg.tSec);
@@ -1008,6 +1076,37 @@ function TranscriptTab({
           </div>
         );
       })}
+    </>
+  );
+}
+
+function TranscriptTab({
+  turns,
+  data,
+}: {
+  turns: ChatTurn[];
+  data: TranscriptPayload;
+}) {
+  if (turns.length === 0) {
+    return (
+      <EmptyState
+        icon={<AlertCircle className="w-8 h-8 text-rose-300" />}
+        title={
+          data.callOutcome
+            ? `Call ended: ${formatOutcome(data.callOutcome)}`
+            : "Transcript unavailable"
+        }
+        body={
+          data.summary ??
+          "The call ended before a conversation could be recorded. This can happen on no-answer, busy, or when the dealer hung up immediately."
+        }
+      />
+    );
+  }
+
+  return (
+    <div className="px-5 py-5 space-y-3">
+      <TranscriptBubbles turns={turns} />
       {data.bolnaCallId && (
         <p className="pt-4 text-center text-[10px] text-gray-400 font-mono">
           Call ID: {data.bolnaCallId}

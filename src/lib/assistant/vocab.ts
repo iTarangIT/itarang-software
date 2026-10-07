@@ -162,9 +162,9 @@ export const CALL_VOCAB: readonly CallVocabRow[] = deepFreeze<CallVocabRow[]>([
     },
     {
         id: "lost",
-        said: "not interested; went elsewhere; moved to another business; shop closed",
+        said: "not interested; went elsewhere; moved to another business; shop closed; we rejected them (credit or geography)",
         connect: "connected",
-        labels: ["Not Interested", "Lost to Competition", "Some other Business", "Business Closed"],
+        labels: ["Not Interested", "Lost to Competition", "Some other Business", "Business Closed", "REJECTED BY US"],
         buckets: ["Lost"],
         askBucket: false,
         status: {
@@ -172,9 +172,14 @@ export const CALL_VOCAB: readonly CallVocabRow[] = deepFreeze<CallVocabRow[]>([
             whenUnstated: "ask",
             question: "Should I mark this lead Lost?",
         },
-        lostReasonByLabel: lostReasonsFor(["Not Interested", "Lost to Competition", "Some other Business", "Business Closed"]),
+        lostReasonByLabel: {
+            ...lostReasonsFor(["Not Interested", "Lost to Competition", "Some other Business", "Business Closed"]),
+            // ID 76.1: as on the web, REJECTED BY US pre-fills credit and the
+            // rep may say geography instead.
+            "REJECTED BY US": ["rejected_by_us_credit", "rejected_by_us_geography"],
+        },
         interest: null,
-        extra: "Mark Lost preview; high-impact confirm for closed",
+        extra: "Mark Lost preview; high-impact confirm for closed and rejected-by-us",
     },
 ]);
 
@@ -322,7 +327,11 @@ export function checkCallProposal(input: {
         if (input.lostReason && !allowed.includes(input.lostReason)) {
             return ask("That lost reason doesn't match what was said. Why is the lead lost?");
         }
-        lostReason = input.lostReason ?? (allowed.length === 1 ? allowed[0] : null);
+        // Several allowed (REJECTED BY US): the label's default, as the web form pre-fills.
+        const fallback = LOST_REASON_BY_LABEL[input.label];
+        lostReason =
+            input.lostReason ??
+            (allowed.length === 1 ? allowed[0] : fallback && allowed.includes(fallback) ? fallback : null);
         if (!lostReason) return ask("Why is the lead lost?");
     }
     return { ok: true, status: settled.status, lostReason, interest: row.interest };

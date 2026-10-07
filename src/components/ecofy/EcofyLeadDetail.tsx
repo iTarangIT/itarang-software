@@ -10,7 +10,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { ArrowLeft, ExternalLink, RefreshCw } from "lucide-react";
 import { formatIst, inr, StageBadge, TemperatureBadge } from "./badges";
 import { useLeadData, useRefreshLead, type EcofyCase } from "./client";
@@ -18,14 +18,19 @@ import { CurrentStepCard } from "./CurrentStepCard";
 import { ErrorNote, KV, Loading, Panel } from "./ui";
 import { ActivitiesTab, AppointmentsTab, TimelineTab } from "./tabs/FollowUpTabs";
 import { AssessmentTab, OfferTab } from "./tabs/AssessmentOfferTabs";
-import { DocumentsTab, FinancingTab, InstallationTab } from "./tabs/LaterStageTabs";
+import { DocumentsTab, FinancingTab, InstallationTab, WithdrawalTab } from "./tabs/LaterStageTabs";
 import type { TabProps } from "./tabs/shared";
 import { CrmWorkLog, LocalActivityList, useLocalActivities } from "./CrmWorkLog";
+import { ECOFY_LEAD_TABS, initialEcofyTab, type EcofyLeadTab } from "@/lib/ecofy/leadTabs";
 
 // History and full views. The current step is not a tab — it is the card above.
-// Withdrawal is deliberately not offered from the CRM: Ecofy owns it (its own case page).
-const TABS = ["Timeline", "Activities", "Appointments", "Assessment", "Offer", "Financing", "Installation", "Documents"] as const;
-type Tab = (typeof TABS)[number];
+// Withdrawal (M14): OpenAPI POST /cases/{caseId}/withdrawals is ITARANG_CALLER +
+// ITARANG_ADMIN, so the assigned ASM / ISR and the Sales Head may request one;
+// confirm / reject / epc-informed are ITARANG_ADMIN only (Sales Head — see
+// MANAGER_ONLY in access.ts). sanction-cancelled is ECOFY_ADMIN and is not offered.
+// `?tab=Financing` (the Financing queue's link) opens that tab first.
+const TABS = ECOFY_LEAD_TABS;
+type Tab = EcofyLeadTab;
 
 export interface EcofyLeadDetailProps {
     leadId: string;
@@ -54,7 +59,8 @@ export function EcofyLeadDetail(props: EcofyLeadDetailProps) {
     const router = useRouter();
     const caseQ = useLeadData<EcofyCase>(leadId, "case");
     const refreshLead = useRefreshLead(leadId);
-    const [tab, setTab] = useState<Tab>("Timeline");
+    const searchParams = useSearchParams();
+    const [tab, setTab] = useState<Tab>(() => initialEcofyTab(searchParams?.get("tab")));
     const tabs = TABS;
     const c = caseQ.data;
 
@@ -173,6 +179,7 @@ export function EcofyLeadDetail(props: EcofyLeadDetailProps) {
                         {tab === "Financing" && <FinancingTab {...tabProps} />}
                         {tab === "Installation" && <InstallationTab {...tabProps} />}
                         {tab === "Documents" && <DocumentsTab {...tabProps} />}
+                        {tab === "Withdrawal" && <WithdrawalTab {...tabProps} />}
                     </div>
                     <div className="space-y-4">
                         <Panel title="Customer">

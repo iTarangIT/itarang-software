@@ -1,6 +1,6 @@
 "use client";
 
-import type { LostReason } from "@/lib/lifecycle/transitions";
+import { isOpen, type LeadStatus, type LostReason } from "@/lib/lifecycle/transitions";
 import { useCallback, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, AlertTriangle, ArrowLeft } from "lucide-react";
@@ -78,11 +78,16 @@ export function AsmLeadDetailView({ leadId, viewerId, viewerRole }: Props) {
         ({ next_action }: { next_action: VisitNextAction }) => {
             setActiveModal(null);
             invalidate();
-            if (next_action === "convert") setActiveModal("mark_converted");
+            // A Lost / Converted lead can't be marked Won (the route refuses it),
+            // so the visit's "convert" doesn't open a modal that can only fail.
+            const st = query.data?.data.lead.lead_status as LeadStatus | null | undefined;
+            if (next_action === "convert") {
+                if (!st || isOpen(st)) setActiveModal("mark_converted");
+            }
             else if (next_action === "lost") setActiveModal("mark_lost");
             else if (next_action === "escalate") setActiveModal("escalate");
         },
-        [invalidate],
+        [invalidate, query.data],
     );
 
     const onStaleConflict = useCallback(

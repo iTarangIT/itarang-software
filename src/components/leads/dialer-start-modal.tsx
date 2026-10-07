@@ -90,6 +90,9 @@ interface DialerStartModalProps {
     // an unscheduled campaign, which is the pre-E-228 behaviour.
     schedule?: unknown,
   ) => Promise<void> | void;
+  // ID 118: may create / edit / delete saved region groups (LEADS_BULK_ROLES —
+  // the same list /api/region-groups enforces on writes).
+  canManageGroups?: boolean;
 }
 
 const CATEGORIES: { key: DialerCategory; label: string; hint: string }[] = [
@@ -177,6 +180,7 @@ export function DialerStartModal({
   onClose,
   onConfirm,
   onStartListCampaign,
+  canManageGroups = false,
 }: DialerStartModalProps) {
   const [provider, setProvider] = useState<DialerProvider>("bolna");
   const [providerOpen, setProviderOpen] = useState(false);
@@ -577,7 +581,7 @@ export function DialerStartModal({
             <RegionSelector
               value={region}
               onChange={setRegion}
-              onManageGroups={() => setShowGroupManager(true)}
+              onManageGroups={canManageGroups ? () => setShowGroupManager(true) : undefined}
               onModeChange={setMode}
               provider={provider}
               onStartList={handleStartList}

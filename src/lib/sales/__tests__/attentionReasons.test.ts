@@ -28,7 +28,7 @@ const candidate = (over: Partial<SalesInvoiceCandidate> = {}): SalesInvoiceCandi
   due_date: null,
   customer_name: "EFY Charging Solutions Private Limited",
   customer_gstin: null,
-  seller_gstin: "07AAKFI0000A1Z5",
+  seller_gstin: "07AAKFI0000A1ZC",
   place_of_supply: null,
   sub_total: 323759,
   tax_total: 58276.62,
@@ -129,6 +129,15 @@ describe("parseAttentionReasons", () => {
       "missing_customer",
       "missing_seller_gstin",
     ]);
+  });
+
+  it("labels a customer GSTIN that was dropped (ID 62)", () => {
+    const [bad] = parseAttentionReasons(storedReason({ customer_gstin: "06AAOCP8906F1Z5" }));
+    expect(bad.code).toBe("customer_gstin_invalid");
+    expect(bad.severity).toBe("filing");
+
+    const [own] = parseAttentionReasons(storedReason({ customer_gstin: "07AALFI7813E1ZC" }));
+    expect(own.code).toBe("customer_gstin_own");
   });
 
   it("labels a non-rupee amount", () => {

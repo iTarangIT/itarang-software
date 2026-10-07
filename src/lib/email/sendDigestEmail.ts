@@ -31,6 +31,7 @@ import type {
 } from "@/lib/digests/types";
 import type { DigestDetailLevel, DigestSections } from "@/lib/digests/schedule";
 import { RAG_CELL_STYLE, ragToneOfCell } from "@/lib/digests/rag";
+import { renderMastheadHtml } from "./digestMastheadHtml";
 import { getMailer } from "./mailer";
 
 function esc(v: unknown): string {
@@ -270,7 +271,29 @@ export function buildDigestEmail(
          ${headline.map((h) => `<p style="margin:0 0 4px">${esc(h)}</p>`).join("")}</div>`
     : "";
 
-  const html = `
+  const attachmentNote = p.attachment
+    ? `Attached: <strong>${esc(p.attachment.filename)}</strong> — ${
+        (p.figures.tables?.length ?? 0) > 0 && p.figures.activity.length === 0
+          ? "the tables above, one sheet per block, for filtering and checking."
+          : "every item in the figures above, one row each."
+      }`
+    : null;
+
+  // The business-designed layout (Sales Daily) replaces the plain one whole;
+  // the subject and the plain-text body below are shared.
+  const masthead = p.figures.masthead;
+  const html = masthead
+    ? renderMastheadHtml({
+        figures: { ...p.figures, masthead },
+        tables,
+        headline,
+        on,
+        isTest: p.slot === "test",
+        ctaHref: href,
+        ctaLabel: p.kind.ctaLabel,
+        attachmentLine: attachmentNote,
+      })
+    : `
   <div style="font-family:Georgia,'Iowan Old Style',Palatino,serif;font-size:14px;
     color:#0f172a;max-width:${p.figures.wide ? 880 : 560}px">
     <p style="margin:0 0 4px;color:${copy.accent};font-size:11px;letter-spacing:.14em;
@@ -308,8 +331,7 @@ export function buildDigestEmail(
     ${
       p.attachment
         ? `<p style="color:#94a3b8;font-size:12px;font-family:Arial,sans-serif;margin:0 0 6px">
-             Attached: <strong>${esc(p.attachment.filename)}</strong> — every item in the
-             figures above, one row each.
+             ${attachmentNote}
            </p>`
         : ""
     }
@@ -321,10 +343,9 @@ export function buildDigestEmail(
 
   // The plain-text sibling is built from the SAME filtered arrays, so a section
   // switched off, or a detail list, cannot appear in one body and not the other.
-  const textParts: string[] = [
-    copy.eyebrow.toUpperCase(),
-    `${p.kind.label} — ${copy.period(dayLabel)}`,
-  ];
+  const textParts: string[] = masthead
+    ? [masthead.title, `Data updated till ${masthead.dataAsOf}`, "", masthead.intro]
+    : [copy.eyebrow.toUpperCase(), `${p.kind.label} — ${copy.period(dayLabel)}`];
   // The headline and the table footers ("Right now") do not depend on there
   // being activity lines — Sales Daily has none, all tables — so they sit
   // outside that guard, mirroring the HTML body.

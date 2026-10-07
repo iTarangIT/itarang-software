@@ -5,8 +5,8 @@
 //   due times for reminders → notifications.
 //
 // Ecofy is the system of record: if its call fails nothing local changes —
-// EXCEPT (E-308) a call / remark / follow-up or a meeting booking while Ecofy
-// is unavailable: the rep's work is kept in the CRM (ecofy_lead_activities)
+// EXCEPT (E-308) a call / remark / follow-up, a meeting booking or a meeting
+// outcome (update_appointment) while Ecofy is unavailable: the rep's work is kept in the CRM (ecofy_lead_activities)
 // and replayed to Ecofy by the ticker, so the lead can still be worked.
 import { requireRole } from "@/lib/auth-utils";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";

@@ -15,6 +15,7 @@ import { callerNotLinkedFor } from "@/lib/neodove/ownerFromCall";
 import { engagedState } from "@/lib/reports/metricDefinitions";
 import { fetchAssignedByForLeads } from "@/lib/leads/leadAssignedBy";
 import { onboardingStall, STALL_LABEL } from "@/lib/onboarding/stall";
+import { agreementOutcomeLabel } from "@/lib/onboarding/leadMilestones";
 import type {
     LeadDetailBundle,
     LeadDetailCommercials,
@@ -22,7 +23,11 @@ import type {
     LeadDetailLead,
     LeadDetailStatusHistory,
     LeadDetailTouchpoint,
-} from "@/lib/inside-sales/types";
+} from "@/lib/inside-sales/types";
+import { onboardingClockSql } from "@/lib/onboarding/clock";
+
+// ID 122: the one onboarding clock (src/lib/onboarding/clock.ts).
+const ONBOARDING_CLOCK = sql.raw(onboardingClockSql("oa"));
 
 /** null when the lead does not exist. */
 export async function fetchLeadDetailBundle(leadId: string): Promise<LeadDetailBundle | null> {
@@ -209,8 +214,10 @@ export async function fetchLeadDetailBundle(leadId: string): Promise<LeadDetailB
                COALESCE(to_jsonb(dl) ->> 'onboarding_docs_submitted_at',
                         oa.submitted_at::text) AS docs_submitted_at,
                oa.agreement_status,
+               -- ID 84.1 (E-314, not in schema.ts): to_jsonb guard as above.
+               to_jsonb(dl) ->> 'agreement_outcome' AS agreement_outcome,
                oa.approved_at::text AS approved_at,
-               COALESCE(oa.last_action_at, oa.updated_at)::text AS last_activity_at,
+               ${ONBOARDING_CLOCK}::text AS last_activity_at,
                (oa.id = dl.dealer_onboarding_application_id
                 OR dl.lead_status IN ('Won', 'Converted')) AS linked
           FROM dealer_onboarding_applications oa
@@ -220,7 +227,9 @@ export async function fetchLeadDetailBundle(leadId: string): Promise<LeadDetailB
          ORDER BY oa.created_at DESC
          LIMIT 1
     `)) as unknown as Array<
-        Omit<LeadOnboardingMilestones, "stalled" | "stalled_waiting_on" | "stalled_label"> & { linked: boolean | null }
+        Omit<LeadOnboardingMilestones, "stalled" | "stalled_waiting_on" | "stalled_label" | "agreement_outcome_label"> & {
+            linked: boolean | null;
+        }
     >;
 
     // ID 84.1: stalled = waiting on the dealer 7+ days, or on us 2+ working
@@ -258,6 +267,7 @@ export async function fetchLeadDetailBundle(leadId: string): Promise<LeadDetailB
             stalled: waitingOn !== null,
             stalled_waiting_on: waitingOn,
             stalled_label: waitingOn ? STALL_LABEL[waitingOn] : null,
+            agreement_outcome_label: agreementOutcomeLabel(o.agreement_outcome),
         };
     }
 

@@ -6,6 +6,7 @@ import { nbfc, nbfcDirectors, users } from "@/lib/db/schema";
 import { recordLeadCapture } from "@/lib/leads/lead-registry";
 import { eq } from "drizzle-orm";
 import crypto from "node:crypto";
+import { isValidGstin } from "@/lib/leads/gstin";
 
 const ADMIN_ROLES = [
   "admin",
@@ -90,7 +91,9 @@ const createSchema = z.object({
   cin: z.string().min(1).max(25),
   gstNumber: z
     .string()
-    .regex(/^\d{2}[A-Z]{5}\d{4}[A-Z]{1}[A-Z\d]{1}Z[A-Z\d]{1}$/),
+    .regex(/^\d{2}[A-Z]{5}\d{4}[A-Z]{1}[A-Z\d]{1}Z[A-Z\d]{1}$/)
+    // Check digit, shared with every other entry point (ID 62).
+    .refine(isValidGstin, "That is not a valid GSTIN - check it for a typing mistake."),
   panNumber: z.string().regex(/^[A-Z]{5}\d{4}[A-Z]$/),
   nbfcType: z.enum([
     "nbfc_icc",

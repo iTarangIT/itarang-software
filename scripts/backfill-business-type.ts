@@ -36,6 +36,7 @@ type Row = {
     id: string;
     scraped_type: string | null;
     products_sold: string | null;
+    buyback_account: boolean;
     buyback_gstin: boolean;
     buyback_phone: boolean;
     finance: boolean;
@@ -52,6 +53,12 @@ async function main() {
         SELECT dl.id,
                s.business_type AS scraped_type,
                s.products_sold,
+               -- Exact link first: approval creates the account with
+               -- id = dealer_code (approve route), and buyback_requests points at it.
+               EXISTS (SELECT 1 FROM buyback_requests br
+                        WHERE oa.dealer_code IS NOT NULL
+                          AND br.dealer_entity_id = oa.dealer_code
+                      ) AS buyback_account,
                EXISTS (SELECT 1 FROM buyback_requests br
                          JOIN accounts a ON a.id = br.dealer_entity_id
                         WHERE ${GSTIN_KEY(sql`a.gstin`)} IS NOT NULL
@@ -77,6 +84,7 @@ async function main() {
     for (const r of rows) {
         const fromScrape = normalizeBusinessType(r.scraped_type) ?? normalizeBusinessType(r.products_sold);
         if (fromScrape) plan.push({ id: r.id, type: fromScrape, why: "scraped listing" });
+        else if (r.buyback_account) plan.push({ id: r.id, type: "buyback", why: "buyback request by its dealer account (dealer code)" });
         else if (r.buyback_gstin) plan.push({ id: r.id, type: "buyback", why: "buyback request by its dealer account (GSTIN)" });
         else if (r.buyback_phone) plan.push({ id: r.id, type: "buyback", why: "buyback request by its dealer account (phone)" });
         else if (r.finance) plan.push({ id: r.id, type: "battery_sale", why: "finance-enabled onboarding" });

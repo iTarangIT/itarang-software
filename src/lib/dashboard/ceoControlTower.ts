@@ -39,8 +39,7 @@ import {
     awaitingAssignment,
     daysAwaitingAssignment,
 } from "@/lib/leads/salesReady";
-import { getEngagedCallRule } from "@/lib/reports/engagedCallRule";
-import { engagedCall, humanCall, measuredCall } from "@/lib/reports/metricDefinitions";
+import { engagedCall, humanCall } from "@/lib/reports/metricDefinitions";
 import { scrapKgSourced } from "@/lib/buyback/scrapKgSourced";
 
 export type Compare = { now: number; prev: number | null };
@@ -78,8 +77,6 @@ export type ControlTower = {
     };
     people: null | {
         basis: "target" | "converted";
-        /** The engaged-call threshold in force (a setting — ID 59), for the column header. */
-        engaged_min_seconds: number;
         rows: Array<{
             spoc_id: string;
             name: string;
@@ -343,19 +340,16 @@ async function baseTile(from: string, toExcl: string, prevFrom: string | null, p
 // ── 5 People ─────────────────────────────────────────────────────────────────
 async function peopleTile(from: string, toIncl: string) {
     const { buildSalesDashboard } = await import("@/lib/admin/salesDashboard");
-    const [dash, idle, rule, engaged, pct] = await Promise.all([
+    const [dash, idle, engaged, pct] = await Promise.all([
         buildSalesDashboard({ from, to: toIncl, granularity: "month" }),
         summarizeNeedsAttention({ minDays: 7 }),
-        getEngagedCallRule(),
         rows(sql`
-            -- ID 59: human calls counted once, engaged = connected and at least
-            -- the threshold of measured duration (the engaged-call setting)
-            -- (metricDefinitions.ts) — the same call the dashboard and the
-            -- daily email count, not the is_engaged flag (any connected call).
+            -- ID 59 (3 Oct 2026): human calls counted once; engaged = the call
+            -- connected, whatever its duration (metricDefinitions.ts) — the
+            -- same call the dashboard and the daily email count.
             SELECT t.performed_by AS u,
                    COUNT(*) FILTER (WHERE ${humanCall()}) AS calls,
-                   COUNT(*) FILTER (WHERE ${engagedCall()}) AS engaged,
-                   COUNT(*) FILTER (WHERE ${measuredCall()}) AS timed
+                   COUNT(*) FILTER (WHERE ${engagedCall()}) AS engaged
               FROM lead_touchpoints t
              WHERE t.touchpoint_type = 'inside_sales_call' AND t.performed_by IS NOT NULL
                AND (t.performed_at AT TIME ZONE 'Asia/Kolkata')::date BETWEEN ${from}::date AND ${toIncl}::date
@@ -374,14 +368,11 @@ async function peopleTile(from: string, toIncl: string) {
         }),
     ]);
     const idleBy = new Map(idle.map((h) => [h.holder_id, h.idle]));
-    // No call in the window carries a MEASURED duration (NeoDove sends none
-    // today, and a duration a rep typed does not count — measuredCall) → the
-    // 30-second rule cannot be measured: show "—", never a column of 0%.
-    const anyTimed = engaged.some((e) => n(e.timed) > 0);
+    // A person with no call in the window has no share to show: "—", not 0%.
     const engBy = new Map(
         engaged.map((e) => [
             String(e.u),
-            anyTimed && n(e.calls) > 0 ? Math.round((n(e.engaged) / n(e.calls)) * 100) : null,
+            n(e.calls) > 0 ? Math.round((n(e.engaged) / n(e.calls)) * 100) : null,
         ]),
     );
     const list = (dash.per_spoc ?? [])
@@ -403,7 +394,6 @@ async function peopleTile(from: string, toIncl: string) {
     );
     return {
         basis: hasTargets ? ("target" as const) : ("converted" as const),
-        engaged_min_seconds: rule.minSeconds,
         rows: list,
     };
 }

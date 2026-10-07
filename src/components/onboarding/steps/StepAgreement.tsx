@@ -4,6 +4,7 @@ import { useMemo, useState, type ReactNode } from "react";
 import { Clock3, CheckCircle2, Info, AlertCircle, Plus, X } from "lucide-react";
 import { useOnboardingStore } from "@/store/onboardingStore";
 import { usesManualAgreement } from "@/lib/dealer/dealer-capabilities";
+import { SalespersonSelect } from "@/components/onboarding/SalespersonSelect";
 
 type SigningMethod =
   | ""
@@ -357,47 +358,32 @@ export default function StepAgreement() {
       </SectionCard>
 
       <SectionCard
-        title="Sales Manager Information"
-        subtitle="Details of the sales manager handling this dealer relationship"
+        title="Salesperson"
+        subtitle="The iTarang salesperson handling this dealer relationship"
       >
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          <InputField
-            label="Sales Manager Name"
-            value={agreement.salesManager?.name || ""}
-            onChange={(value) =>
-              setField("agreement", "salesManager", {
-                ...(agreement.salesManager || {}),
-                name: value.replace(/[0-9]/g, ""),
-              })
-            }
-            placeholder="Sales Manager Name"
-            error={errors.salesManager_name}
-          />
-          <InputField
-            label="Sales Manager Email"
-            value={agreement.salesManager?.email || ""}
-            onChange={(value) =>
-              setField("agreement", "salesManager", {
-                ...(agreement.salesManager || {}),
-                email: value,
-              })
-            }
-            placeholder="Sales Manager Email"
-            type="email"
-            error={errors.salesManager_email}
-          />
-          <InputField
-            label="Sales Manager Contact Number"
-            value={agreement.salesManager?.mobile || ""}
-            onChange={(value) =>
-              setField("agreement", "salesManager", {
-                ...(agreement.salesManager || {}),
-                mobile: value.replace(/[^0-9]/g, "").slice(0, 10),
-              })
-            }
-            placeholder="Sales Manager Contact Number"
-            error={errors.salesManager_mobile}
-          />
+          <div>
+            <FieldLabel>Salesperson</FieldLabel>
+            <SalespersonSelect
+              value={(agreement.salesManager as any)?.userId || ""}
+              typedName={agreement.salesManager?.name}
+              onPick={(o) =>
+                setField("agreement", "salesManager", {
+                  ...(agreement.salesManager || {}),
+                  userId: o?.id ?? "",
+                  name: o?.name ?? "",
+                  email: "",
+                  mobile: "",
+                })
+              }
+              className={`w-full rounded-2xl border px-4 py-3.5 focus:outline-none focus:ring-2 focus:ring-blue-100 ${
+                errors.salesManager_name
+                  ? "border-red-400 bg-red-50 focus:border-red-400"
+                  : "border-[#E3E8EF] bg-white focus:border-[#1F5C8F]"
+              }`}
+            />
+            <FieldError message={errors.salesManager_name} />
+          </div>
           <InputField
             label="Sales Manager Age"
             value={(agreement.salesManager as any)?.age || ""}

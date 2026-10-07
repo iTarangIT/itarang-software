@@ -22,9 +22,9 @@
 
 import { db } from "@/lib/db";
 import { aiCallLogs } from "@/lib/db/schema";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { rehostElevenLabsRecording } from "@/lib/ai/storage/recordingStore";
-import { LEADS_PAGE_ROLES } from "@/lib/leads/access";
+import { LEADS_PAGE_ROLES, readsOwnLeadsOnly } from "@/lib/leads/access";
 import { guardApi } from "@/lib/auth/apiGuard";
 
 function redirectTo(url: string): Response {
@@ -47,6 +47,8 @@ export async function GET(
     .select({
       recordingUrl: aiCallLogs.recording_url,
       provider: aiCallLogs.provider,
+      leadId: aiCallLogs.lead_id,
+      phoneNumber: aiCallLogs.phone_number,
     })
     .from(aiCallLogs)
     .where(eq(aiCallLogs.call_id, callId))
@@ -55,6 +57,28 @@ export async function GET(
   const row = rows[0];
   if (!row) {
     return new Response("Call not found", { status: 404 });
+  }
+
+  // ID 45: a rep (asm, inside_sales_rep) plays only calls on leads they own.
+  // Owned either by the call's lead_id, or — because webhook finalizers
+  // attribute by phone, so lead_id can point elsewhere (see the lead detail
+  // page) — by an owned dealer_leads row whose last 10 digits match the call's
+  // number. Anything else is "not found", same as no such call.
+  if (readsOwnLeadsOnly(authGate.user.role)) {
+    const userId = authGate.user.id;
+    const last10 = (row.phoneNumber ?? "").replace(/\D/g, "").slice(-10);
+    const owned = (await db.execute<{ ok: boolean }>(sql`
+      SELECT TRUE AS ok FROM dealer_leads
+       WHERE current_owner_id = ${userId}
+         AND (
+           id = ${row.leadId ?? ""}
+           OR (${last10} <> '' AND RIGHT(regexp_replace(COALESCE(phone, ''), '[^0-9]', '', 'g'), 10) = ${last10})
+         )
+       LIMIT 1
+    `)) as unknown as Array<{ ok: boolean }>;
+    if (owned.length === 0) {
+      return new Response("Call not found", { status: 404 });
+    }
   }
 
   // Already have a playable URL — hand it straight back.

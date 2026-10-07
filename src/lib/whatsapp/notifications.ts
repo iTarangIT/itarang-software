@@ -17,6 +17,9 @@ import { whatsappMessages } from "@/lib/db/schema";
 
 import { getAdapter } from "./index";
 import type { SendResult } from "./types";
+// ID 128: agreements are private files; Meta fetches the link with no login, so
+// it gets an absolute, signed, expiring one.
+import { shareableFileUrl } from "@/lib/storage/fileAccess";
 
 /** Append an outbound send to whatsapp_messages (best-effort; never throws). */
 export async function logOutbound(
@@ -107,7 +110,7 @@ export async function sendDealerWelcomeWhatsApp(
       if (p.signedAgreementUrl) {
         const res = await adapter.sendDocument(
           p.waPhone,
-          p.signedAgreementUrl,
+          shareableFileUrl(p.signedAgreementUrl) ?? p.signedAgreementUrl,
           `signed-agreement-${p.dealerCode}.pdf`,
           "Signed Dealer Agreement",
         );
@@ -120,7 +123,7 @@ export async function sendDealerWelcomeWhatsApp(
       if (p.auditTrailUrl) {
         const res = await adapter.sendDocument(
           p.waPhone,
-          p.auditTrailUrl,
+          shareableFileUrl(p.auditTrailUrl) ?? p.auditTrailUrl,
           `audit-trail-${p.dealerCode}.pdf`,
           "Agreement Audit Trail",
         );
@@ -275,7 +278,7 @@ export async function sendFinanceActivatedWhatsApp(
     if (p.signedAgreementUrl) {
       const res = await adapter.sendDocument(
         p.waPhone,
-        p.signedAgreementUrl,
+        shareableFileUrl(p.signedAgreementUrl) ?? p.signedAgreementUrl,
         `signed-agreement-${p.dealerCode}.pdf`,
         "Signed Dealer Agreement",
       );
@@ -288,7 +291,7 @@ export async function sendFinanceActivatedWhatsApp(
     if (p.auditTrailUrl) {
       const res = await adapter.sendDocument(
         p.waPhone,
-        p.auditTrailUrl,
+        shareableFileUrl(p.auditTrailUrl) ?? p.auditTrailUrl,
         `audit-trail-${p.dealerCode}.pdf`,
         "Agreement Audit Trail",
       );
