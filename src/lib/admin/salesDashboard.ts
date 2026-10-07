@@ -140,10 +140,10 @@ export function parseSalesDashboardParams(url: URL): SalesDashboardParams {
  * actual_visit_date. Keyed on the person too, so per-rep visits still add up
  * to the whole-team figure when two reps see the same dealer the same day.
  */
-const VISIT_KEY = sql`(asm_id, dealer_lead_id, actual_visit_date)`;
+export const VISIT_KEY = sql`(asm_id, dealer_lead_id, actual_visit_date)`;
 
 /** A scheduled visit that has not happened yet and was not called off. */
-const OPEN_VISIT = sql`v.visit_status NOT IN ('visited', 'cancelled', 'no_show')`;
+export const OPEN_VISIT = sql`v.visit_status NOT IN ('visited', 'cancelled', 'no_show')`;
 const IST = "Asia/Kolkata";
 const AGEING_BASIS = "dealer_leads.interest_changed_at";
 

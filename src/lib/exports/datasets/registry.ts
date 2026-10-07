@@ -280,7 +280,7 @@ const leads: Dataset = {
                 { key: "performed_at", header: "Called at", meaning: "When the call was made (IST).", kind: "datetime" },
                 { key: "caller", header: "Caller", meaning: "The person who made the call. Human calls only — AI calls are not listed.", width: 22 },
                 { key: "call_status", header: "Result", meaning: "Connected, not connected, and so on." },
-                { key: "call_duration_sec", header: "Seconds", meaning: "Recorded duration. A connected call of 30 seconds or more is an engaged call.", kind: "number" },
+                { key: "call_duration_sec", header: "Seconds", meaning: "Recorded duration. Duration no longer decides engagement: since 3 Oct 2026 any connected call is an engaged call.", kind: "number" },
                 { key: "disposition", header: "Outcome", meaning: "The call outcome the caller picked.", width: 26 },
                 { key: "remarks", header: "Remarks", meaning: "What the caller wrote.", width: 50 },
             ],
@@ -540,7 +540,11 @@ const loanFrom = sql`
 
 function loanWhere(ctx: RunContext): SQL {
     const expr = LOAN_DATES[ctx.params.get("date_field") ?? "submitted"] ?? LOAN_DATES.submitted;
-    const conds: SQL[] = [dateRange(ctx.params, sql`(${expr} AT TIME ZONE 'UTC')`)];
+    // These columns are timestamptz (admin_verification_queue, loan_sanctions):
+    // dateRange's own AT TIME ZONE 'Asia/Kolkata' already gives the IST day.
+    // An extra AT TIME ZONE 'UTC' first (right only for the zone-less onboarding
+    // columns) shifted every bound by 5h30.
+    const conds: SQL[] = [dateRange(ctx.params, expr)];
     const status = ctx.params.get("status");
     if (status) conds.push(sql`lower(ls.status) = ${status.toLowerCase()}`);
     const nbfc = ctx.params.get("nbfc");
@@ -591,16 +595,15 @@ const customerLoanFiles: Dataset = {
     async build(ctx) {
         const data = await rows(sql`
             SELECT l.id::text AS file_id,
-                   (q.submitted_on AT TIME ZONE 'UTC') AS submitted_on,
+                   q.submitted_on AS submitted_on,
                    a.business_entity_name AS dealer, ow.name AS account_owner,
                    COALESCE(l.full_name, l.owner_name) AS customer_name,
                    l.city, l.kyc_status,
                    COALESCE(nt.display_name, ls.external_lender) AS nbfc,
                    ls.loan_file_number, ls.status AS loan_status, ls.rejection_reason,
-                   (COALESCE(ls.sanctioned_at, CASE WHEN lower(ls.status) = 'rejected' THEN ls.updated_at END)
-                        AT TIME ZONE 'UTC') AS decided_on,
+                   COALESCE(ls.sanctioned_at, CASE WHEN lower(ls.status) = 'rejected' THEN ls.updated_at END) AS decided_on,
                    ls.loan_amount,
-                   (ls.disbursed_at AT TIME ZONE 'UTC') AS disbursed_at,
+                   ls.disbursed_at AS disbursed_at,
                    ls.disbursement_amount
               ${loanFrom}
              WHERE ${loanWhere(ctx)}
@@ -739,7 +742,7 @@ const leadEvents: Dataset = {
                 { key: "city", header: "City", meaning: "Lead's city." },
                 { key: "state", header: "State", meaning: "Lead's state." },
                 { key: "business_type", header: "Type of business", meaning: "Battery sale, buyback, scrap or other." },
-                { key: "event_type", header: "Event type", meaning: "Status change, Owner change, Interest change, Call, Visit, Quote requested / approved / rejected / sent, Escalation, Log detail change.", width: 22 },
+                { key: "event_type", header: "Event type", meaning: "Status change, Owner change, Interest change, Call, Visit, Quote requested / approved / rejected / sent / send failed, Escalation, Log detail change.", width: 22 },
                 { key: "from_value", header: "From", meaning: "The value before the change, when the event is a change.", width: 22 },
                 { key: "to_value", header: "To", meaning: "The value after the change.", width: 26 },
                 { key: "performed_by", header: "Done by", meaning: "Who did it. Blank = not recorded.", width: 20 },
@@ -831,7 +834,7 @@ const calls: Dataset = {
                 { key: "disposition_bucket", header: "Outcome bucket", meaning: "The outcome's group (positive, negative, follow-up …)." },
                 { key: "disposition", header: "Outcome", meaning: "The call outcome the caller picked.", width: 26 },
                 { key: "call_duration_sec", header: "Seconds", meaning: "Recorded duration.", kind: "number" },
-                { key: "engaged", header: "Engaged", meaning: "Yes = a connected call where the rep spoke with the dealer , any duration; on an AI call, the flag stored with the call." },
+                { key: "engaged", header: "Engaged", meaning: "Yes = a connected call where the rep spoke with the dealer, any duration; on an AI call, the flag stored with the call." },
                 { key: "ai_band", header: "AI band", meaning: "On an AI call: Qualified, Warm, Cold or Disqualified." },
                 { key: "recording_url", header: "Recording", meaning: "Link to the recording, when there is one.", width: 40 },
                 { key: "remarks", header: "Remarks", meaning: "What the caller wrote; on an AI call, the AI's summary.", width: 50 },

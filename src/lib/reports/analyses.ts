@@ -2,10 +2,11 @@
 // page (redesign of 6 Oct 2026). SERVER ONLY. Types, catalogue and pure helpers
 // are in analysesShared.ts.
 //
-// TIME ZONE. The business runs on IST. dealer_leads.created_at / closed_at are
-// timestamps WITHOUT time zone holding UTC, so every period bound converts
-// them to an IST calendar day first. lead_visits dates are plain `date`
-// columns already entered as IST days and are compared as they are.
+// TIME ZONE. The business runs on IST, and the columns are not all alike:
+//   dealer_leads.created_at        timestamp WITHOUT time zone, holding UTC  → istDay()
+//   closed_at / won_at / assigned_at timestamp WITH time zone              → istDayTz()
+//   lead_visits dates              plain `date`, already IST days       → compared as-is
+// Using the wrong one moves every lead closed 00:00–10:59 IST to the day before.
 //
 // E-314 COLUMNS (source_door, source_origin, acquisition_campaign_id, won_at)
 // are not in schema.ts. They are read through to_jsonb(dl) so a database
@@ -14,12 +15,13 @@
 import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { countLeadsForExport } from "@/lib/admin/leadsExport";
+import { buildSalesDashboard, OPEN_VISIT, SALES_DASHBOARD_MAX_DAYS, VISIT_KEY } from "@/lib/admin/salesDashboard";
 import { isUndefinedColumn } from "@/lib/admin/reportHelpers";
 import { capabilitiesFor } from "@/lib/leads/access";
 import { parseLeadListFilters } from "@/lib/leads/leadListParams";
 import { doorLabel, originLabel } from "@/lib/leads/leadSourceVocab";
-import { QUOTE_RELEASED_TYPES } from "@/lib/lifecycle/touchpointTypes";
 import { TEAM_ROLES } from "@/lib/exports/datasets/types";
+import { humanCall } from "@/lib/reports/metricDefinitions";
 import {
     AI_BANDS,
     AI_NOT_SCORED,
@@ -41,8 +43,22 @@ const IST = "Asia/Kolkata";
 const rowsOf = async <T>(q: SQL) => (await db.execute(q)) as unknown as T[];
 const n = (v: unknown): number => Number(v ?? 0);
 
-/** A UTC-without-zone timestamp column as its IST calendar day. */
+/** A UTC-without-zone timestamp column (dealer_leads.created_at) as its IST calendar day. */
 const istDay = (col: SQL): SQL => sql`((${col}) AT TIME ZONE 'UTC' AT TIME ZONE ${IST})::date`;
+
+/** A timestamptz column (closed_at, won_at …) as its IST calendar day. */
+const istDayTz = (col: SQL): SQL => sql`((${col}) AT TIME ZONE ${IST})::date`;
+
+/**
+ * With sales: in the sales lifecycle AND someone holds it now, or held it when
+ * it closed. A lead reactivated back into the pool keeps its old assigned_at
+ * but has no owner — it sits in Ready to Assign, so it is NOT with sales.
+ */
+const WITH_SALES = sql`(dl.lead_status IS NOT NULL AND (dl.current_owner_id IS NOT NULL OR dl.closing_owner_id IS NOT NULL))`;
+
+/** A lead's city as the Meetings rows show it; a blank city is its own row. */
+// Case-insensitive like the Ops dashboard's city filter, so "nashik" and "Nashik" are one row.
+const CITY = sql`COALESCE(INITCAP(LOWER(NULLIF(TRIM(dl.city), ''))), 'Unknown city')`;
 
 export interface AnalysisFilters {
     from?: string | null;
@@ -76,11 +92,17 @@ async function resolvePeriod(f: AnalysisFilters, fallback: "last90" | "mtd"): Pr
 
 const inPeriod = (day: SQL, p: AnalysisPeriod): SQL => sql`${day} BETWEEN ${p.from}::date AND ${p.to}::date`;
 
-/** The current owner's team. A lead with no owner belongs to no team. */
+/**
+ * The team of the lead's person: who holds it now, else who held it when it
+ * closed (conversions are credited to the closing owner everywhere else). A
+ * lead nobody has held belongs to no team, so a team filter leaves it out.
+ */
 function teamCond(team: string | null | undefined): SQL {
     const role = TEAM_ROLES[team ?? ""];
     if (!role) return sql``;
-    return sql` AND EXISTS (SELECT 1 FROM users ou WHERE ou.id::text = dl.current_owner_id::text AND ou.role = ${role})`;
+    return sql` AND EXISTS (SELECT 1 FROM users ou
+                        WHERE ou.id::text = COALESCE(dl.current_owner_id, dl.closing_owner_id)::text
+                          AND ou.role = ${role})`;
 }
 
 /** Same match as the Leads list and its download (leadListQuery.ts), so the two agree. */
@@ -100,24 +122,25 @@ function lostReasonLabel(v: string | null): string | null {
  * as the CEO funnel's "All leads created"), bucketed ONCE so the splits add up
  * by construction:
  *
- *   With sales   = in the sales lifecycle (lead_status set) AND has or had an
- *                  owner. Shown as "Assigned".
+ *   With sales   = WITH_SALES: in the sales lifecycle AND held by someone now
+ *                  or when it closed. Shown as "Assigned".
  *   Not with sales yet = everything else: the AI-dialer pool (status NULL),
- *                  sales-ready with nobody on it, and leads closed before any
- *                  salesperson had them.
+ *                  sales-ready or reactivated with nobody on it (Ready to
+ *                  Assign), and leads closed before any salesperson had them.
  *
  *   Assigned splits into Converted | Lost | In onboarding (Won, waiting for the
  *   admin to approve the dealer) | Open (every other status).
  *
  * The step columns are flags on the same row:
- *   Called      with sales AND at least one human call (inside_sales_call
- *               touchpoint). Any such row means the lead was called: the
- *               NeoDove de-duplication in humanCall() only drops twins, it
- *               never removes the last call on a lead.
- *   Quote sent  with sales AND a quote released to the dealer (touchpoint
- *               quote_released / quote_sent) or a successful quote dispatch.
- *   Marked won  won_at set, or the lead is Won or Converted (a lead converted
- *               before won_at existed has no won_at).
+ *   Called      with sales AND at least one human call — humanCall(), the
+ *               metric-dictionary definition (AI dialer calls are not a
+ *               rep's call).
+ *   Quote sent  with sales AND a quote that REACHED the dealer: a successful
+ *               dispatch (quotation_dispatches 'sent' or the quote_dispatched
+ *               touchpoint) — Sales Daily's "Quotes delivered". A quote that
+ *               was only approved is not sent.
+ *   Marked won  with sales AND (won_at set, or Won / Converted — a lead
+ *               converted before won_at existed has no won_at).
  *   Converted   lead_status = 'Converted' — metric M15, the one definition
  *               every report and email uses.
  */
@@ -152,12 +175,9 @@ export async function leadSources(f: AnalysisFilters, viewer: SessionUser): Prom
                    to_jsonb(dl) ->> 'source_door'             AS door,
                    to_jsonb(dl) ->> 'source_origin'           AS origin,
                    to_jsonb(dl) ->> 'acquisition_campaign_id' AS campaign_id,
-                   (dl.lead_status IS NOT NULL
-                    AND (dl.current_owner_id IS NOT NULL
-                         OR dl.assigned_at IS NOT NULL
-                         OR dl.closing_owner_id IS NOT NULL)) AS with_sales,
-                   ((to_jsonb(dl) ->> 'won_at') IS NOT NULL
-                    OR dl.lead_status IN ('Won', 'Converted')) AS won
+                   ${WITH_SALES} AS with_sales,
+                   (${WITH_SALES} AND ((to_jsonb(dl) ->> 'won_at') IS NOT NULL
+                                       OR dl.lead_status IN ('Won', 'Converted'))) AS won
               FROM dealer_leads dl
              WHERE dl.is_active IS NOT FALSE
                AND ${inPeriod(istDay(sql`dl.created_at`), period)}
@@ -168,14 +188,13 @@ export async function leadSources(f: AnalysisFilters, viewer: SessionUser): Prom
             SELECT cohort.*,
                    cohort.with_sales AND EXISTS (
                        SELECT 1 FROM lead_touchpoints t
-                        WHERE t.dealer_lead_id = cohort.id
-                          AND t.touchpoint_type = 'inside_sales_call'
+                        WHERE t.dealer_lead_id = cohort.id AND ${humanCall(sql`t`)}
                    ) AS called,
                    cohort.with_sales AND (
                        EXISTS (
                            SELECT 1 FROM lead_touchpoints t
                             WHERE t.dealer_lead_id = cohort.id
-                              AND t.touchpoint_type IN (${sql.join(QUOTE_RELEASED_TYPES.map((q) => sql`${q}`), sql`, `)})
+                              AND t.touchpoint_type = 'quote_dispatched'
                        )
                        OR EXISTS (
                            SELECT 1 FROM quotation_dispatches qd
@@ -270,7 +289,7 @@ export async function leadSources(f: AnalysisFilters, viewer: SessionUser): Prom
           FROM dealer_leads dl
          WHERE dl.is_active IS NOT FALSE
            AND dl.lead_status = 'Lost' AND dl.lost_reason IS NOT NULL
-           AND (dl.current_owner_id IS NOT NULL OR dl.assigned_at IS NOT NULL OR dl.closing_owner_id IS NOT NULL)
+           AND ${WITH_SALES}
            AND ${inPeriod(istDay(sql`dl.created_at`), period)}
            ${teamCond(f.team)}
            ${stateCond(f.state)}
@@ -351,7 +370,7 @@ export async function aiScoreAccuracyByBand(f: AnalysisFilters): Promise<AiScore
                WHERE dl.is_active IS NOT FALSE
                  AND dl.lead_status IN ('Converted', 'Lost')
                  AND dl.closed_at IS NOT NULL
-                 AND ${inPeriod(istDay(sql`dl.closed_at`), period)}
+                 AND ${inPeriod(istDayTz(sql`dl.closed_at`), period)}
                  ${teamCond(f.team)}
                  ${sourceCond}
           ) s
@@ -395,110 +414,240 @@ export async function aiScoreAccuracyByBand(f: AnalysisFilters): Promise<AiScore
     return { period, rows, total, checks };
 }
 
+
 // ───────────────────────────────── Meetings ────────────────────────────────
 
 /*
- * One row per sales manager × city — the logic of the old "Meetings (MTD)"
- * report (src/lib/admin/reports.ts meetingsMtd), with the period in IST days
- * and an "All" row.
+ * Field visits by person × city, counted EXACTLY as the Sales Head Ops
+ * dashboard, the Sales Daily email and targets count them
+ * (src/lib/admin/salesDashboard.ts — VISIT_KEY and OPEN_VISIT are imported
+ * from there, not restated):
  *
- * Source is lead_visits, never call touchpoints. Meeting date = the visit
- * date, else the planned date. FRESH vs REPEAT ranks over ALL of the lead's
- * meetings, not only those in the period, so a dealer met many times before
- * never reads as fresh. City comes from the lead.
+ *   A visit   lead_visits row with actual_visit_date in the period, on a lead
+ *             that exists; one person + one dealer + one day is ONE visit
+ *             however many rows were logged.
+ *   Fresh     a visit on the dealer's first-ever actual visit day (over the
+ *             whole table, not only this period). Repeat = the other visits.
+ *   Planned   rows still open (not visited / cancelled / no-show) whose
+ *             planned date falls in the period.
+ *
+ * Planning rows are NOT meetings. Handing a lead to an ASM inserts a
+ * `scheduled` row and logging the visit inserts a NEW `visited` row — nothing
+ * ever closes the plan — so counting rows by "visit date, else planned date"
+ * (the old report) counted most handovers twice.
+ *
+ * Every active ASM / sales manager is listed, with zeros when they had no
+ * visits; anyone else with a visit or plan in the period is listed too,
+ * marked inactive when deactivated.
  */
 export async function meetingsByManagerCity(f: AnalysisFilters): Promise<MeetingsResult> {
     const period = await resolvePeriod(f, "mtd");
-    const cityExpr = sql`COALESCE(NULLIF(TRIM(dl.city), ''), 'Unknown city')`;
 
-    type Raw = {
-        manager_id: string | null;
-        manager: string;
+    type VisitRaw = {
+        asm_id: string | null;
         city: string;
-        meetings: string;
-        done: string;
+        visits: string;
+        dealers: string;
         fresh: string;
-        repeat_count: string;
         ground: string;
         calling: string;
         whatsapp: string;
+        other_mode: string;
     };
-    const build = (modeCol: SQL) => sql`
-        WITH ranked AS (
-            SELECT v.asm_id,
-                   v.dealer_lead_id,
-                   v.visit_status,
-                   COALESCE(v.actual_visit_date, v.scheduled_date) AS meeting_date,
-                   ${modeCol} AS mode,
-                   ROW_NUMBER() OVER (
-                       PARTITION BY v.dealer_lead_id
-                       ORDER BY COALESCE(v.actual_visit_date, v.scheduled_date, v.created_at::date) NULLS LAST, v.created_at
-                   ) AS meeting_seq
+    const visitsQuery = (modeCol: SQL) => sql`
+        WITH fv AS (
+            SELECT dealer_lead_id, MIN(actual_visit_date) AS first_d
+              FROM lead_visits
+             WHERE actual_visit_date IS NOT NULL
+             GROUP BY dealer_lead_id
+        ),
+        vis AS (
+            SELECT v.asm_id, v.dealer_lead_id, v.actual_visit_date,
+                   ${CITY} AS city,
+                   (v.actual_visit_date = fv.first_d) AS is_new,
+                   ${modeCol} AS mode
               FROM lead_visits v
+              JOIN dealer_leads dl ON dl.id = v.dealer_lead_id
+              LEFT JOIN fv ON fv.dealer_lead_id = v.dealer_lead_id
+             WHERE v.actual_visit_date BETWEEN ${period.from}::date AND ${period.to}::date
+        ),
+        -- One row per visit (person, dealer, day). Several rows logged for the
+        -- same visit keep the first mode alphabetically, so the split is stable.
+        visit AS (
+            SELECT asm_id, dealer_lead_id, actual_visit_date,
+                   MIN(city) AS city, BOOL_OR(is_new) AS is_new, MIN(mode) AS mode
+              FROM vis
+             GROUP BY ${VISIT_KEY}
         )
-        SELECT r.asm_id                                                  AS manager_id,
-               COALESCE(u.name, '(unknown)')                             AS manager,
-               ${cityExpr}                                               AS city,
-               COUNT(*)::text                                            AS meetings,
-               COUNT(*) FILTER (WHERE r.visit_status = 'visited')::text  AS done,
-               COUNT(*) FILTER (WHERE r.meeting_seq = 1)::text           AS fresh,
-               COUNT(*) FILTER (WHERE r.meeting_seq > 1)::text           AS repeat_count,
-               COUNT(*) FILTER (WHERE r.mode = 'ground')::text           AS ground,
-               COUNT(*) FILTER (WHERE r.mode = 'calling')::text          AS calling,
-               COUNT(*) FILTER (WHERE r.mode = 'whatsapp')::text         AS whatsapp
-          FROM ranked r
-          LEFT JOIN dealer_leads dl ON dl.id = r.dealer_lead_id
-          LEFT JOIN users u ON u.id::text = r.asm_id
-         WHERE ${inPeriod(sql`r.meeting_date`, period)}
-         GROUP BY r.asm_id, u.name, ${cityExpr}
-         ORDER BY COUNT(*) DESC, manager, city
+        SELECT asm_id, city,
+               COUNT(*)::text                                  AS visits,
+               COUNT(DISTINCT dealer_lead_id)::text            AS dealers,
+               COUNT(*) FILTER (WHERE is_new)::text            AS fresh,
+               COUNT(*) FILTER (WHERE mode = 'ground')::text   AS ground,
+               COUNT(*) FILTER (WHERE mode = 'calling')::text  AS calling,
+               COUNT(*) FILTER (WHERE mode = 'whatsapp')::text AS whatsapp,
+               COUNT(*) FILTER (WHERE mode NOT IN ('ground', 'calling', 'whatsapp'))::text AS other_mode
+          FROM visit
+         GROUP BY asm_id, city
     `;
-    let raw: Raw[];
+    let visitRows: VisitRaw[];
     try {
-        raw = await rowsOf<Raw>(build(sql`COALESCE(v.meeting_mode, 'ground')`));
+        visitRows = await rowsOf<VisitRaw>(visitsQuery(sql`COALESCE(v.meeting_mode, 'ground')`));
     } catch (e) {
         if (!isUndefinedColumn(e)) throw e;
-        // E-220 not applied: every meeting predates any other mode being recordable.
+        // E-220 not applied: every visit predates any other mode being recordable.
         console.warn("[analyses/meetings] lead_visits.meeting_mode absent — E-220 not applied");
-        raw = await rowsOf<Raw>(build(sql`'ground'`));
+        visitRows = await rowsOf<VisitRaw>(visitsQuery(sql`'ground'`));
     }
 
-    const all: MeetingRow[] = raw.map((r) => ({
-        manager_id: r.manager_id,
-        manager: r.manager,
-        city: r.city,
-        meetings: n(r.meetings),
-        done: n(r.done),
-        fresh: n(r.fresh),
-        repeat: n(r.repeat_count),
-        ground: n(r.ground),
-        calling: n(r.calling),
-        whatsapp: n(r.whatsapp),
-    }));
+    const plannedRows = await rowsOf<{ asm_id: string | null; city: string; planned: string }>(sql`
+        SELECT v.asm_id, ${CITY} AS city, COUNT(*)::text AS planned
+          FROM lead_visits v
+          JOIN dealer_leads dl ON dl.id = v.dealer_lead_id
+         WHERE ${OPEN_VISIT}
+           AND v.scheduled_date BETWEEN ${period.from}::date AND ${period.to}::date
+         GROUP BY v.asm_id, ${CITY}
+    `);
 
-    // The filter lists come from the whole period, so picking one value never
-    // empties the other list.
-    const managers = [...new Map(all.filter((r) => r.manager_id).map((r) => [r.manager_id!, r.manager])).entries()]
-        .map(([id, name]) => ({ id, name }))
-        .sort((a, b) => a.name.localeCompare(b.name));
-    const cities = [...new Set(all.map((r) => r.city))].sort((a, b) => a.localeCompare(b));
+    // The people: every active field person, plus anyone with a visit or plan here.
+    const seen = [...new Set([...visitRows, ...plannedRows].map((r) => r.asm_id).filter((x): x is string => !!x))];
+    const people = await rowsOf<{ id: string; name: string | null; is_active: boolean | null }>(sql`
+        SELECT id::text AS id, name, is_active
+          FROM users
+         WHERE (role IN ('asm', 'sales_manager') AND is_active IS TRUE)
+            OR id::text IN (SELECT jsonb_array_elements_text(${JSON.stringify(seen)}::jsonb))
+    `);
+    const personOf = new Map(people.map((p) => [p.id, { name: p.name ?? "(no name)", inactive: p.is_active === false }]));
 
-    const rows = all.filter(
-        (r) => (!f.manager || r.manager_id === f.manager) && (!f.city || r.city === f.city),
-    );
-
-    const keys = ["meetings", "done", "fresh", "repeat", "ground", "calling", "whatsapp"] as const;
-    const total: MeetingRow = {
-        manager_id: null,
-        manager: "All",
-        city: "All cities",
-        ...(Object.fromEntries(keys.map((k) => [k, rows.reduce((s, r) => s + r[k], 0)])) as Record<(typeof keys)[number], number>),
+    const empty = (managerId: string | null, city: string): MeetingRow => {
+        const p = managerId ? personOf.get(managerId) : undefined;
+        return {
+            manager_id: managerId,
+            manager: p ? p.name : managerId ? "(unknown user)" : "(no person recorded)",
+            inactive: p?.inactive ?? false,
+            city,
+            visits: 0,
+            dealers: 0,
+            fresh: 0,
+            repeat: 0,
+            planned: 0,
+            ground: 0,
+            calling: 0,
+            whatsapp: 0,
+        };
     };
-    const name = (r: MeetingRow) => `${r.manager} · ${r.city}`;
+    const byKey = new Map<string, MeetingRow>();
+    const rowFor = (asm: string | null, city: string): MeetingRow => {
+        const k = `${asm ?? ""}|${city}`;
+        let r = byKey.get(k);
+        if (!r) {
+            r = empty(asm, city);
+            byKey.set(k, r);
+        }
+        return r;
+    };
+    let otherMode = 0;
+    for (const v of visitRows) {
+        const r = rowFor(v.asm_id, v.city);
+        r.visits = n(v.visits);
+        r.dealers = n(v.dealers);
+        r.fresh = n(v.fresh);
+        r.repeat = r.visits - r.fresh;
+        r.ground = n(v.ground);
+        r.calling = n(v.calling);
+        r.whatsapp = n(v.whatsapp);
+        otherMode += n(v.other_mode);
+    }
+    for (const p of plannedRows) rowFor(p.asm_id, p.city).planned = n(p.planned);
+    // A field person with nothing in the period still gets a row of zeros.
+    const withRows = new Set([...byKey.values()].map((r) => r.manager_id));
+    for (const p of people) if (!withRows.has(p.id)) rowFor(p.id, "—");
+
+    const all = [...byKey.values()];
+    const managers = [...new Map(all.filter((r) => r.manager_id).map((r) => [r.manager_id as string, r])).values()]
+        .map((r) => ({ id: r.manager_id as string, name: r.manager, inactive: r.inactive }))
+        .sort((a, b) => Number(a.inactive) - Number(b.inactive) || a.name.localeCompare(b.name));
+    const cities = [...new Set(all.map((r) => r.city).filter((c) => c !== "—"))].sort((a, b) => a.localeCompare(b));
+
+    const rows = all
+        .filter((r) => (!f.manager || r.manager_id === f.manager) && (!f.city || r.city === f.city))
+        .sort(
+            (a, b) =>
+                b.visits - a.visits ||
+                b.planned - a.planned ||
+                Number(a.inactive) - Number(b.inactive) ||
+                a.manager.localeCompare(b.manager) ||
+                a.city.localeCompare(b.city),
+        );
+
+    const sumOf = (k: "visits" | "fresh" | "repeat" | "planned" | "ground" | "calling" | "whatsapp") =>
+        rows.reduce((s, r) => s + r[k], 0);
+    const total: MeetingRow = {
+        ...empty(null, f.city || "All cities"),
+        manager: "All",
+        visits: sumOf("visits"),
+        fresh: sumOf("fresh"),
+        repeat: sumOf("repeat"),
+        planned: sumOf("planned"),
+        ground: sumOf("ground"),
+        calling: sumOf("calling"),
+        whatsapp: sumOf("whatsapp"),
+        // Different dealers across everyone shown: a dealer two people visited counts once.
+        dealers: await countDealers(period, f),
+    };
+
+    const label = (r: MeetingRow) => `${r.manager} · ${r.city}`;
     const checks = [
-        checkRows("Fresh + Repeat = Meetings, on every row", [total, ...rows], (r) => r.fresh + r.repeat === r.meetings, name),
-        checkRows("Ground + Calling + WhatsApp = Meetings, on every row", [total, ...rows],
-            (r) => r.ground + r.calling + r.whatsapp === r.meetings, name),
+        checkRows("Fresh + Repeat = Visits, on every row", [total, ...rows], (r) => r.fresh + r.repeat === r.visits, label),
+        checkRows(
+            "Ground + Calling + WhatsApp = Visits, on every row",
+            [total, ...rows],
+            (r) => r.ground + r.calling + r.whatsapp === r.visits,
+            label,
+        ),
     ];
-    return { period, rows, total, checks, managers, cities };
+
+    // The tie to the Ops dashboard, from its own builder. Its city filter cannot
+    // express "Unknown city" and it takes at most a year, so those are not compared.
+    const days = (Date.parse(period.to) - Date.parse(period.from)) / 86_400_000 + 1;
+    if (f.city !== "Unknown city" && days <= SALES_DASHBOARD_MAX_DAYS) {
+        const dash = await buildSalesDashboard({
+            from: period.from,
+            to: period.to,
+            spoc_id: f.manager || null,
+            city: f.city || null,
+            granularity: "day",
+        });
+        const ok = dash.totals.visits === total.visits && dash.totals.unique_visits === total.dealers;
+        checks.push({
+            label: "Visits and dealers = the Ops dashboard for the same dates",
+            holds: ok,
+            detail: ok
+                ? ""
+                : `Breaks: the Ops dashboard has ${dash.totals.visits} visits / ${dash.totals.unique_visits} dealers, this shows ${total.visits} / ${total.dealers}.`,
+        });
+    }
+
+    return {
+        period,
+        rows,
+        total,
+        checks,
+        managers,
+        cities,
+        mode_not_captured: total.calling + total.whatsapp + otherMode === 0,
+    };
+}
+
+/** Distinct dealers visited in the period under the same filters — the "All" row's Dealers. */
+async function countDealers(period: AnalysisPeriod, f: AnalysisFilters): Promise<number> {
+    const [r] = await rowsOf<{ n: string }>(sql`
+        SELECT COUNT(DISTINCT v.dealer_lead_id)::text AS n
+          FROM lead_visits v
+          JOIN dealer_leads dl ON dl.id = v.dealer_lead_id
+         WHERE v.actual_visit_date BETWEEN ${period.from}::date AND ${period.to}::date
+           ${f.manager ? sql` AND v.asm_id = ${f.manager}` : sql``}
+           ${f.city ? sql` AND ${CITY} = ${f.city}` : sql``}
+    `);
+    return n(r?.n);
 }

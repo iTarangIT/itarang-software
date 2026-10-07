@@ -6,7 +6,7 @@
 
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Download } from "lucide-react";
+import { Download, X } from "lucide-react";
 import { LEAD_DOORS, LEAD_DOOR_LABEL } from "@/lib/leads/leadSourceVocab";
 import {
     ANALYSES,
@@ -63,12 +63,26 @@ export function AnalysesTab({ onDownload }: { onDownload: (params: Record<string
 
     const meta = ANALYSES.find((a) => a.id === an)!;
 
+    /** Back to the analysis's own defaults: its default period and no filters. */
+    const clearFilters = () => {
+        setFrom("");
+        setTo("");
+        setTeam("");
+        setState("");
+        setSource("");
+        setManager("");
+        setCity("");
+    };
     const pick = (id: AnalysisId) => {
         setAn(id);
         // Each analysis has its own default period (90 days back, or month to date).
-        setFrom("");
-        setTo("");
+        clearFilters();
     };
+    const filtered =
+        !!(from || to) ||
+        (an === "lead_sources" && !!(team || state.trim())) ||
+        (an === "ai_score" && !!(team || source)) ||
+        (an === "meetings" && !!(manager || city));
 
     const qs = useMemo(() => {
         const p = new URLSearchParams();
@@ -91,6 +105,9 @@ export function AnalysesTab({ onDownload }: { onDownload: (params: Record<string
     const q = useQuery({
         queryKey: ["reports-analysis", an, qs],
         queryFn: () => getJson<LeadSourcesResult | AiScoreResult | MeetingsResult>(`/api/reports/analyses/${an}?${qs}`),
+        // Keep the last answer for the SAME analysis on screen while a filter
+        // change loads, so the filter controls never vanish mid-click.
+        placeholderData: (prev, prevQuery) => (prevQuery?.queryKey[1] === an ? prev : undefined),
     });
     const data = q.data;
     const period = data?.period;
@@ -102,7 +119,8 @@ export function AnalysesTab({ onDownload }: { onDownload: (params: Record<string
             Object.assign(p, { from: period.from, to: period.to, contactability: "include" });
             if (state.trim()) p.state = state.trim();
         } else if (an === "meetings" && period) {
-            Object.assign(p, { from: period.from, to: period.to, date_field: "visit" });
+            // Visits that happened — the rows this analysis counts.
+            Object.assign(p, { from: period.from, to: period.to, date_field: "visit", status: "visited" });
             if (manager) p.person = manager;
         }
         return p;
@@ -235,28 +253,48 @@ export function AnalysesTab({ onDownload }: { onDownload: (params: Record<string
                             ))}
                         </select>
                     )}
-                    {an === "meetings" && data && "managers" in data && (
+                    {an === "meetings" && (
                         <>
                             <select aria-label="Sales manager" value={manager} onChange={(e) => setManager(e.target.value)} className={SELECT}>
                                 <option value="">Sales manager: All</option>
-                                {data.managers.map((m) => (
+                                {(data && "managers" in data ? data.managers : []).map((m) => (
                                     <option key={m.id} value={m.id}>
-                                        {m.name}
+                                        Sales manager: {m.name}
+                                        {m.inactive ? " (inactive)" : ""}
                                     </option>
                                 ))}
                             </select>
                             <select aria-label="City" value={city} onChange={(e) => setCity(e.target.value)} className={SELECT}>
                                 <option value="">City: All</option>
-                                {data.cities.map((c) => (
+                                {(data && "cities" in data ? data.cities : []).map((c) => (
                                     <option key={c} value={c}>
-                                        {c}
+                                        City: {c}
                                     </option>
                                 ))}
                             </select>
                         </>
                     )}
-                    {period && <span className={`text-[12.5px] ${C.muted}`}>{periodLabel(period)} · IST</span>}
+                    {filtered && (
+                        <button
+                            type="button"
+                            onClick={clearFilters}
+                            className="flex min-h-[40px] items-center gap-1.5 rounded-[10px] px-3 text-[13px] font-semibold text-[#138fc6] hover:bg-[#e7f3fa]"
+                        >
+                            <X className="h-3.5 w-3.5" aria-hidden /> Clear filters
+                        </button>
+                    )}
+                    {period && (
+                        <span className={`text-[12.5px] ${C.muted}`}>
+                            {periodLabel(period)} · IST{from || to ? "" : " · default period"}
+                            {q.isFetching && !q.isLoading ? " · updating…" : ""}
+                        </span>
+                    )}
                 </div>
+                {team && an !== "meetings" && (
+                    <span className={`-mt-2 text-[12px] ${C.muted}`}>
+                        With a team picked, only leads someone on that team holds (or held when it closed) are counted; leads nobody has held are left out.
+                    </span>
+                )}
 
                 {q.isLoading && <Loading label="Counting…" />}
                 {q.error && <ErrorLine message={(q.error as Error).message} />}
@@ -425,42 +463,63 @@ function AiTable({ data }: { data: AiScoreResult }) {
     );
 }
 
-const MEET_GRID = "grid grid-cols-[minmax(140px,1.4fr)_minmax(110px,1.1fr)_repeat(7,minmax(64px,0.7fr))] gap-3";
-const MEET_COLS = ["meetings", "done", "fresh", "repeat", "ground", "calling", "whatsapp"] as const;
+const MEET_GRID = "grid grid-cols-[minmax(150px,1.4fr)_minmax(110px,1.1fr)_repeat(8,minmax(60px,0.7fr))] gap-3";
+const MEET_COLS = [
+    { key: "visits", head: "Visits", hint: "One person at one dealer on one day, visit happened" },
+    { key: "dealers", head: "Dealers", hint: "Different dealers visited" },
+    { key: "fresh", head: "Fresh", hint: "Visit on the dealer's first-ever visit day" },
+    { key: "repeat", head: "Repeat", hint: "Every other visit" },
+    { key: "planned", head: "Planned", hint: "Booked for a day in this period, not logged as visited yet" },
+    { key: "ground", head: "Ground", hint: "In person" },
+    { key: "calling", head: "Calling", hint: "Meeting held over a call" },
+    { key: "whatsapp", head: "WhatsApp", hint: "Meeting held over WhatsApp" },
+] as const;
 
 function MeetingsTable({ data }: { data: MeetingsResult }) {
     const rows = [data.total, ...data.rows];
     return (
-        <div className="overflow-x-auto">
-            <div role="table" aria-label="Meetings by sales manager and city" className="flex min-w-[900px] flex-col">
-                <div role="row" className={`${MEET_GRID} items-end border-b border-[#e3e8ef] px-3 pb-2 ${TH}`}>
-                    <span>Sales manager</span>
-                    <span>City</span>
-                    {["Meetings", "Done", "Fresh", "Repeat", "Ground", "Calling", "WhatsApp"].map((h) => (
-                        <span key={h} className="text-right">
-                            {h}
-                        </span>
-                    ))}
-                </div>
-                {rows.map((r, i) => (
-                    <div
-                        key={`${r.manager_id ?? r.manager}-${r.city}-${i}`}
-                        role="row"
-                        className={`${MEET_GRID} min-h-[46px] items-center border-b border-[#f1f4f7] px-3 text-[14px] tabular-nums ${
-                            i === 0 ? "bg-[#f8fafc] font-bold" : "font-medium"
-                        }`}
-                    >
-                        <span className={C.ink}>{r.manager}</span>
-                        <span>{r.city}</span>
-                        {MEET_COLS.map((k) => (
-                            <span key={k} className="text-right">
-                                {fmtNum(r[k])}
+        <div className="flex flex-col gap-2">
+            <div className="overflow-x-auto">
+                <div role="table" aria-label="Meetings by sales manager and city" className="flex min-w-[980px] flex-col">
+                    <div role="row" className={`${MEET_GRID} items-end border-b border-[#e3e8ef] px-3 pb-2 ${TH}`}>
+                        <span>Sales manager</span>
+                        <span>City</span>
+                        {MEET_COLS.map((c) => (
+                            <span key={c.key} className="text-right" title={c.hint}>
+                                {c.head}
                             </span>
                         ))}
                     </div>
-                ))}
-                {data.rows.length === 0 && <div className={`px-3 py-6 text-[13px] ${C.muted}`}>No meetings in this period.</div>}
+                    {rows.map((r, i) => {
+                        const idle = i > 0 && r.visits === 0 && r.planned === 0;
+                        return (
+                            <div
+                                key={`${r.manager_id ?? r.manager}-${r.city}-${i}`}
+                                role="row"
+                                className={`${MEET_GRID} min-h-[46px] items-center border-b border-[#f1f4f7] px-3 text-[14px] tabular-nums ${
+                                    i === 0 ? "bg-[#f8fafc] font-bold" : "font-medium"
+                                } ${idle ? "text-[#8a96a3]" : ""}`}
+                            >
+                                <span className={idle ? "" : C.ink}>
+                                    {r.manager}
+                                    {r.inactive && <span className={`ml-1 text-[11.5px] font-normal ${C.muted}`}>(inactive)</span>}
+                                </span>
+                                <span>{r.city}</span>
+                                {MEET_COLS.map((c) => (
+                                    <span key={c.key} className="text-right">
+                                        {fmtNum(r[c.key])}
+                                    </span>
+                                ))}
+                            </div>
+                        );
+                    })}
+                </div>
             </div>
+            {data.mode_not_captured && (
+                <span className={`text-[12px] ${C.muted}`}>
+                    Meeting type is not captured yet: every visit is recorded as Ground, so Calling and WhatsApp read 0 until the visit form asks for it.
+                </span>
+            )}
         </div>
     );
 }
