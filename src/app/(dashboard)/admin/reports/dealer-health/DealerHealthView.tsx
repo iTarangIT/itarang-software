@@ -30,9 +30,13 @@ const BUCKET_TONE: Record<AccountBucket, string> = {
 const inr = (n: number) => `₹${n.toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
 const pct = (r: number | null) => (r == null ? "—" : `${Math.round(r * 100)}%`);
 
-export function DealerHealthView() {
+/** "ordering" = Active + Cooling: ordered in the last 30 days — the CEO overview's "Dealers ordering" card. */
+export type DealerHealthFilter = AccountBucket | "" | "ordering";
+const ORDERING: readonly AccountBucket[] = ["active", "cooling"];
+
+export function DealerHealthView({ initialBucket = "" }: { initialBucket?: DealerHealthFilter }) {
     const [group, setGroup] = useState<Group>("owner");
-    const [bucket, setBucket] = useState<AccountBucket | "">("");
+    const [bucket, setBucket] = useState<DealerHealthFilter>(initialBucket);
 
     const { data, isLoading, error } = useQuery<{
         rows: DealerHealthRow[];
@@ -61,7 +65,13 @@ export function DealerHealthView() {
     const counts = Object.fromEntries(
         ACCOUNT_BUCKETS.map((b) => [b, rows.filter((r) => r.bucket === b).length]),
     ) as Record<AccountBucket, number>;
-    const visible = bucket ? rows.filter((r) => r.bucket === bucket) : rows;
+    const visible =
+        bucket === "ordering"
+            ? rows.filter((r) => ORDERING.includes(r.bucket))
+            : bucket
+              ? rows.filter((r) => r.bucket === bucket)
+              : rows;
+    const orderingCount = ORDERING.reduce((a, b) => a + counts[b], 0);
     const noGstin = rows.filter((r) => !r.gstin).length;
 
     return (
@@ -73,6 +83,13 @@ export function DealerHealthView() {
                     className={`rounded-full border px-3 py-1 text-xs font-medium ${bucket === "" ? "bg-ink text-white border-ink" : "border-border text-ink"}`}
                 >
                     All · {rows.length}
+                </button>
+                <button
+                    type="button"
+                    onClick={() => setBucket("ordering")}
+                    className={`rounded-full border px-3 py-1 text-xs font-medium ${bucket === "ordering" ? "bg-ink text-white border-ink" : "border-border text-ink"}`}
+                >
+                    Ordered in last 30 d · {orderingCount}
                 </button>
                 {ACCOUNT_BUCKETS.map((b) => (
                     <button

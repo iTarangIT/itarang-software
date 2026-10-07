@@ -1,0 +1,192 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "CEO Overview — where every number comes from",
+    "quality_profile": "showcase",
+    "viewBox": [
+      900,
+      520
+    ]
+  },
+  "stages": [
+    {
+      "label": "Database tables"
+    },
+    {
+      "label": "Query modules (server)"
+    },
+    {
+      "label": "Screen sections"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "leads",
+      "type": "database",
+      "label": "Dealer leads",
+      "sublabel": "leads + touchpoints",
+      "stage": 0,
+      "row": 0,
+      "tag": "CRM"
+    },
+    {
+      "id": "invoices",
+      "type": "database",
+      "label": "Invoices",
+      "sublabel": "Zoho + Drive",
+      "stage": 0,
+      "row": 1,
+      "tag": "money"
+    },
+    {
+      "id": "accounts",
+      "type": "database",
+      "label": "Dealer accounts",
+      "sublabel": "accounts, onboarding",
+      "stage": 0,
+      "row": 2,
+      "tag": "dealers"
+    },
+    {
+      "id": "tower",
+      "type": "backend",
+      "label": "Control tower",
+      "sublabel": "ceoControlTower",
+      "stage": 1,
+      "row": 0,
+      "tag": "exceptions, engine"
+    },
+    {
+      "id": "revenue",
+      "type": "backend",
+      "label": "Revenue union",
+      "sublabel": "revenueSource",
+      "stage": 1,
+      "row": 1,
+      "tag": "Zoho + Drive"
+    },
+    {
+      "id": "health",
+      "type": "backend",
+      "label": "Account health",
+      "sublabel": "accountHealth",
+      "stage": 1,
+      "row": 2,
+      "tag": "buckets"
+    },
+    {
+      "id": "needs",
+      "type": "frontend",
+      "label": "Needs you today",
+      "sublabel": "exception tiles",
+      "stage": 2,
+      "row": 0,
+      "tag": "counts"
+    },
+    {
+      "id": "kpi",
+      "type": "frontend",
+      "label": "KPI tiles",
+      "sublabel": "revenue, margin, owed",
+      "stage": 2,
+      "row": 1,
+      "tag": "vs previous"
+    },
+    {
+      "id": "engine",
+      "type": "frontend",
+      "label": "Engine + trust",
+      "sublabel": "funnel, data health",
+      "stage": 2,
+      "row": 2,
+      "tag": "quality"
+    }
+  ],
+  "flows": [
+    {
+      "id": "f1",
+      "from": "leads",
+      "to": "tower",
+      "label": "open leads",
+      "classification": "CRM rows",
+      "variant": "emphasis",
+      "route": "straight",
+      "labelDy": 22
+    },
+    {
+      "id": "f2",
+      "from": "invoices",
+      "to": "revenue",
+      "label": "non-void invoices",
+      "classification": "money rows",
+      "variant": "emphasis",
+      "route": "straight",
+      "labelDy": 22
+    },
+    {
+      "id": "f3",
+      "from": "accounts",
+      "to": "health",
+      "label": "last order, GSTIN",
+      "classification": "dealer rows",
+      "route": "straight",
+      "labelDy": 22
+    },
+    {
+      "id": "f5",
+      "from": "tower",
+      "to": "needs",
+      "label": "counts + lists",
+      "classification": "JSON",
+      "variant": "emphasis",
+      "route": "straight",
+      "labelDy": 22
+    },
+    {
+      "id": "f6",
+      "from": "revenue",
+      "to": "kpi",
+      "label": "now vs previous",
+      "classification": "JSON",
+      "variant": "emphasis",
+      "route": "straight",
+      "labelDy": 22
+    },
+    {
+      "id": "f7",
+      "from": "health",
+      "to": "engine",
+      "label": "dealer buckets",
+      "classification": "JSON",
+      "route": "straight",
+      "labelDy": 22
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "One period control",
+      "items": [
+        "The chips and the from–to dates send one window to every API",
+        "Each figure compares with the previous window of the same length"
+      ]
+    },
+    {
+      "dot": "orange",
+      "title": "Two money sources",
+      "items": [
+        "Zoho invoices carry a paid balance from Zoho",
+        "Drive invoices count as unpaid until a payment is typed in"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Read the caveats",
+      "items": [
+        "Costs exist per whole month only",
+        "Converted counts the closing owner, not the current owner"
+      ]
+    }
+  ]
+}

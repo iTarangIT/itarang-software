@@ -1,11 +1,22 @@
 import { requireRole } from "@/lib/auth-utils";
-import { DealerHealthView } from "./DealerHealthView";
+import { ACCOUNT_BUCKETS } from "@/lib/dealers/accountHealthRules";
+import { DealerHealthView, type DealerHealthFilter } from "./DealerHealthView";
 
 export const dynamic = "force-dynamic";
 
 // R-18 — converted dealers' re-order health (Requirements #5, #41).
-export default async function DealerHealthPage() {
+// `?bucket=<bucket>` or `?bucket=ordering` opens the list pre-filtered (CEO overview cards link here).
+export default async function DealerHealthPage({
+    searchParams,
+}: {
+    searchParams: Promise<{ bucket?: string }>;
+}) {
     await requireRole(["admin", "ceo", "sales_head", "business_head", "partner"]);
+    const { bucket } = await searchParams;
+    const initialBucket: DealerHealthFilter =
+        bucket === "ordering" || (ACCOUNT_BUCKETS as readonly string[]).includes(bucket ?? "")
+            ? (bucket as DealerHealthFilter)
+            : "";
 
     return (
         <div className="px-4 sm:px-6 md:px-8 py-6 space-y-5 max-w-[1500px]">
@@ -17,7 +28,7 @@ export default async function DealerHealthPage() {
                     owner is the account owner. Orange is the time to pitch; Red means billing must happen.
                 </p>
             </header>
-            <DealerHealthView />
+            <DealerHealthView initialBucket={initialBucket} />
         </div>
     );
 }
