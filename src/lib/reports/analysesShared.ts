@@ -85,14 +85,24 @@ export interface AiScoreResult {
 
 // ── Meetings ────────────────────────────────────────────────────────────────
 
+/**
+ * One row per field person × city. The counting rules are the Sales Head Ops
+ * dashboard's (src/lib/admin/salesDashboard.ts), so the two always agree:
+ *   visits   one person, one dealer, one day with a visit that happened
+ *   dealers  different dealers visited
+ *   fresh    visits on the dealer's first-ever visit day; repeat = the rest
+ *   planned  visits planned for a day in the period and still open
+ */
 export interface MeetingRow {
     manager_id: string | null;
     manager: string;
+    inactive: boolean;
     city: string;
-    meetings: number;
-    done: number;
+    visits: number;
+    dealers: number;
     fresh: number;
     repeat: number;
+    planned: number;
     ground: number;
     calling: number;
     whatsapp: number;
@@ -103,9 +113,11 @@ export interface MeetingsResult {
     rows: MeetingRow[];
     total: MeetingRow;
     checks: AnalysisCheck[];
-    /** For the Sales manager and City filters: every value in the period, before filtering. */
-    managers: { id: string; name: string }[];
+    /** Every field person (active ASMs and sales managers, plus anyone with visits), for the filter. */
+    managers: { id: string; name: string; inactive: boolean }[];
     cities: string[];
+    /** True while no visit has a meeting type other than ground — the type is not captured yet. */
+    mode_not_captured: boolean;
 }
 
 export type AnalysisResult = LeadSourcesResult | AiScoreResult | MeetingsResult;
@@ -182,8 +194,9 @@ export const ANALYSES: AnalysisMeta[] = [
         dataset: "visits",
         periodLabel: "Meeting date",
         note:
-            "A lead's first-ever meeting is fresh; every later one is a repeat, counted over all of the lead's meetings, not just this period. " +
-            "Meeting date is the visit date, or the planned date when it has not happened yet.",
+            "Counted the same way as the Ops dashboard and the Sales Daily email: a visit is one person at one dealer on one day, and only visits that " +
+            "happened count. Fresh is a visit on the dealer's first-ever visit day; every later visit is a repeat. Planned are visits booked for a day " +
+            "in this period that have not happened yet. Every active ASM is listed, even with no visits.",
         links: [
             { from: "Sales Head dashboard · Field tab", to: "Meetings by city" },
             { from: "Old \"Meetings (MTD)\" report", to: "Replaced by this" },
