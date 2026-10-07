@@ -28,6 +28,8 @@ import type { TargetMetric } from "@/lib/targets/rules";
 import type { NeedsAttentionHolderSummary } from "@/lib/leads/needsAttention";
 import type { DealerHealthGroup, DealerHealthRow } from "@/lib/dealers/accountHealth";
 import type { RegionsResponse } from "@/app/api/locations/regions/route";
+import type { ActionKey, ActionSummary } from "@/lib/dashboard/salesHeadActions";
+import type { IsrScore } from "@/lib/admin/isrScorecard";
 import { OutsideTerritoryClaims } from "@/components/leads/OutsideTerritoryClaims";
 import {
     ActionTile,
@@ -87,7 +89,17 @@ async function getData<T>(url: string): Promise<T> {
 const SELECT =
     "min-h-10 rounded-[10px] border border-border bg-surface px-2.5 text-[13px] text-ink outline-none focus:border-brand-teal";
 
-type ScoreCell = { actual: string; target: string | null; pct: number | null };
+type ScoreCell = {
+    actual: string;
+    target: string | null;
+    pct: number | null;
+    /** Shown after "/" when there is no target ("no target", "of calls", "delivered"). */
+    note?: string;
+    /** A share, not progress to a target: plain colour, bar = pct. */
+    neutral?: boolean;
+    /** A bar with no % - e.g. relative to the team's best. */
+    bar?: number;
+};
 
 export function SalesHeadOpsView() {
     const router = useRouter();
@@ -132,7 +144,6 @@ export function SalesHeadOpsView() {
     const targets = useQuery<{ rows: TargetRow[]; context: { working_days_total: number; working_days_elapsed: number } }>({
         queryKey: ["sales-head-ops", "targets", to.slice(0, 7)],
         queryFn: () => getData(`/api/admin/targets?month=${to.slice(0, 7)}`),
-        enabled: monthToDate,
         staleTime: 5 * 60 * 1000,
         retry: false,
     });
@@ -166,6 +177,29 @@ export function SalesHeadOpsView() {
         placeholderData: (prev) => prev,
         retry: false,
     });
+    // The seven tiles beyond idle / dealer health; same filters as the screen.
+    const actionQs = new URLSearchParams();
+    if (filters.state) actionQs.set("state", filters.state);
+    if (filters.spoc_id) actionQs.set("spoc_id", filters.spoc_id);
+    if (team !== "all") actionQs.set("team", team);
+    const actions = useQuery<ActionSummary>({
+        queryKey: ["sales-head-ops", "needs-action", actionQs.toString()],
+        queryFn: () => getData(`/api/admin/reports/needs-action?${actionQs}`),
+        placeholderData: (prev) => prev,
+        staleTime: 60 * 1000,
+        retry: false,
+    });
+    // Inside-sales scorecard figures the sales dashboard does not carry
+    // (engaged calls, hot leads visited, quotes delivered, Won).
+    const isrQs = new URLSearchParams({ from, to });
+    if (filters.state) isrQs.set("state", filters.state);
+    const isr = useQuery<Record<string, IsrScore>>({
+        queryKey: ["sales-head-ops", "isr-scorecard", isrQs.toString()],
+        queryFn: () => getData(`/api/admin/reports/isr-scorecard?${isrQs}`),
+        enabled: score === "inside",
+        placeholderData: (prev) => prev,
+        retry: false,
+    });
     const regions = useQuery<RegionsResponse>({
         queryKey: ["sales-head-ops", "regions"],
         queryFn: () => getData("/api/locations/regions"),
@@ -194,20 +228,39 @@ export function SalesHeadOpsView() {
     const fieldPeople = people.filter((p) => inSeg(p.role, "field"));
     const insidePeople = people.filter((p) => inSeg(p.role, "inside"));
 
-    // ── Targets (month to date only — a target is a monthly figure) ──────────
+    // ── Targets ──────────────────────────────────────────────────────────────
+    // A target is a monthly figure. This month: the targets service's own
+    // to-date progress. Any other period: the monthly target pro-rata to the
+    // period's working days (Mon–Sat) out of the month's, against the period's
+    // actual — so Today / This week read "actual / target" too.
     const targetOf = (userId: string, metric: TargetMetric) =>
-        monthToDate ? (targets.data?.rows.find((t) => t.user_id === userId && t.metric === metric) ?? null) : null;
-    const daysLeft = targets.data
-        ? Math.max(targets.data.context.working_days_total - targets.data.context.working_days_elapsed, 0)
-        : null;
+        targets.data?.rows.find((t) => t.user_id === userId && t.metric === metric) ?? null;
+    const monthDays = targets.data?.context.working_days_total ?? 0;
+    const daysLeft = targets.data ? Math.max(monthDays - targets.data.context.working_days_elapsed, 0) : null;
+    const periodDays = React.useMemo(() => {
+        let n = 0;
+        const end = new Date(`${to}T00:00:00`);
+        for (let d = new Date(`${from}T00:00:00`); d <= end; d.setDate(d.getDate() + 1)) if (d.getDay() !== 0) n++;
+        return n;
+    }, [from, to]);
+    const targetDays = monthToDate ? (targets.data?.context.working_days_elapsed ?? 0) : periodDays;
     const cell = (userId: string, metric: TargetMetric | null, fallback: number, money = false): ScoreCell => {
         const fmt = (v: number) => (money ? inr(v) : num(v));
         const t = metric ? targetOf(userId, metric) : null;
-        if (!t) return { actual: fmt(fallback), target: null, pct: null };
+        if (!t) return { actual: fmt(fallback), target: null, pct: null, note: "no target", bar: 0 };
+        if (monthToDate) {
+            return {
+                actual: t.progress.actual == null ? fmt(fallback) : fmt(t.progress.actual),
+                target: fmt(t.progress.mtd_target),
+                pct: t.progress.pct_of_mtd == null ? null : Math.round(t.progress.pct_of_mtd),
+            };
+        }
+        const perDay = metric === "calls_per_day";
+        const goal = perDay ? t.progress.monthly_target : monthDays > 0 ? (t.progress.monthly_target * periodDays) / monthDays : 0;
         return {
-            actual: t.progress.actual == null ? fmt(fallback) : fmt(t.progress.actual),
-            target: fmt(t.progress.mtd_target),
-            pct: t.progress.pct_of_mtd == null ? null : Math.round(t.progress.pct_of_mtd),
+            actual: fmt(fallback),
+            target: fmt(Math.round(goal * 10) / 10),
+            pct: goal > 0 ? Math.round((fallback / goal) * 100) : null,
         };
     };
 
@@ -222,9 +275,31 @@ export function SalesHeadOpsView() {
     const unowned = (health.data?.rows ?? []).filter((r) => !r.owner_id).length;
     const hot = d?.interest.rows.find((r) => r.interest_level === "hot");
     const hotAged = hot ? hot.age_8_14 + hot.age_15_30 + hot.age_30_plus : 0;
+    const hotQs = new URLSearchParams();
+    if (filters.state) hotQs.set("state", filters.state);
+    if (filters.spoc_id) hotQs.set("spoc_id", filters.spoc_id);
 
     type Tile = React.ComponentProps<typeof ActionTile> & { key: string; n: number; ready: boolean };
+    const a = actions.data;
+    const actionTile = (
+        key: ActionKey,
+        label: string,
+        severity: Tile["severity"],
+        href = `/admin/reports/needs-action/${key}${actionQs.toString() ? `?${actionQs}` : ""}`,
+    ): Tile => ({
+        key,
+        ready: Boolean(a?.[key]),
+        n: a?.[key]?.count ?? 0,
+        severity,
+        count: num(a?.[key]?.count ?? 0),
+        label,
+        sub: a?.[key]?.sub,
+        href,
+    });
     const tiles: Tile[] = [
+        actionTile("sales_ready", "Sales-ready leads with no owner", "now", "/admin/ready-to-assign"),
+        actionTile("hot_not_called", "Hot leads not called in time", "now"),
+        actionTile("visit_overdue", "Waiting for a field visit", "now"),
         {
             key: "hot",
             ready: Boolean(d),
@@ -233,7 +308,8 @@ export function SalesHeadOpsView() {
             count: num(hotAged),
             label: "Hot leads open more than 7 days",
             sub: hot ? `${num(hot.total)} Hot leads open in all · ${num(hot.age_30_plus)} older than 30 days` : undefined,
-            href: "/leads",
+            // The count comes from the sales dashboard, which takes state and person but not team.
+            href: `/admin/reports/needs-action/hot_aged${hotQs.toString() ? `?${hotQs}` : ""}`,
         },
         {
             key: "red",
@@ -245,6 +321,8 @@ export function SalesHeadOpsView() {
             sub: `${inr(atRisk)} billed to them in the last 90 days`,
             href: "/admin/reports/dealer-health",
         },
+        actionTile("quotes_no_answer", "Quotes with no answer", "soon"),
+        actionTile("said_yes", "Dealer said yes, not marked Won", "soon"),
         {
             key: "idle",
             ready: Boolean(idle.data),
@@ -255,6 +333,7 @@ export function SalesHeadOpsView() {
             sub: `No work logged: ISR over 5, ASM over 7 working days · ${num(idleOver14)} over 14`,
             href: "/admin/reports/needs-attention",
         },
+        actionTile("onboarding_stalled", "Onboarding stalled", "soon"),
         {
             key: "dead",
             ready: Boolean(idle.data),
@@ -275,6 +354,7 @@ export function SalesHeadOpsView() {
             sub: "Live dealers nobody manages",
             href: "/admin/accounts",
         },
+        actionTile("won_without_quote", "Won without an approved quote", "info"),
     ];
     const openTiles = tiles.filter((t) => t.ready && t.n > 0);
     const clearTiles = tiles.filter((t) => t.ready && t.n === 0);
@@ -405,7 +485,7 @@ export function SalesHeadOpsView() {
                     <div className="grid grid-cols-1 gap-3.5 md:grid-cols-2 xl:grid-cols-3">
                         {tiles.map(({ key, n, ready, ...t }) => (ready && n > 0 ? <ActionTile key={key} {...t} /> : null))}
                     </div>
-                ) : dash.isLoading || idle.isLoading || health.isLoading ? (
+                ) : dash.isLoading || idle.isLoading || health.isLoading || actions.isLoading ? (
                     <LoadingBlock />
                 ) : (
                     <div className="flex items-center gap-2 rounded-2xl border border-border bg-surface px-5 py-4 text-sm font-semibold text-success shadow-card">
@@ -421,12 +501,11 @@ export function SalesHeadOpsView() {
                     </div>
                 )}
                 <p className="text-xs text-ink-muted">
-                    Sales-ready leads with no owner are on{" "}
+                    Working hours for the hot-lead limit: Mon–Sat, 10:00–19:00 IST. Sales-ready leads with no owner are assigned on{" "}
                     <Link href="/admin/ready-to-assign" className="font-semibold text-brand-sky hover:underline">
                         Ready to Assign
                     </Link>
-                    . Not tracked yet: hot leads not called in time · waiting for a field visit · quotes with no answer · onboarding stalled · won
-                    without an approved quote.
+                    .
                 </p>
                 <OutsideTerritoryClaims />
             </div>
@@ -437,7 +516,7 @@ export function SalesHeadOpsView() {
                 caption={
                     monthToDate
                         ? `Actual / target to date${daysLeft == null ? "" : `, and what each person needs per working day for the rest of the month. ${daysLeft} working days left.`}`
-                        : "Actuals for the selected days. Targets are monthly, so they show on This month."
+                        : `Actual / target for the selected days — the monthly target pro-rata to ${periodDays} working ${periodDays === 1 ? "day" : "days"}${daysLeft == null ? "" : `. Revenue needed per day is for the rest of the month: ${daysLeft} working days left`}.`
                 }
                 action={
                     <SegmentedControl
@@ -459,9 +538,13 @@ export function SalesHeadOpsView() {
                         const list = score === "field" ? fieldPeople : insidePeople;
                         const heads =
                             score === "field"
-                                ? ["Dealer visits", "New dealer visits", "Batteries to dealers", "KYC submitted", "Revenue"]
-                                : ["Calls per day", "Dealers called", "Hot leads to field", "New hot leads", "Quotes issued"];
+                                ? ["Dealer visits", "New dealer visits", "Batteries sold", "KYC submitted", "Revenue"]
+                                : ["Calls per day", "Engaged calls", "Hot leads to field", "Of which visited", "Quotes delivered"];
                         if (list.length === 0) return <NotAvailable empty reason="No one in this team has activity for these filters." />;
+                        const isrOf = (id: string): IsrScore =>
+                            isr.data?.[id] ?? { calls: 0, engaged: 0, hot_to_field: 0, hot_visited: 0, quotes_delivered: 0, won: 0 };
+                        const maxQuotes = Math.max(1, ...list.map((p) => isrOf(p.spoc_id).quotes_delivered));
+                        const isrCell = cell;
                         return (
                             <div className="overflow-x-auto">
                                 <div className="min-w-[900px]">
@@ -470,28 +553,41 @@ export function SalesHeadOpsView() {
                                         {heads.map((h) => (
                                             <span key={h}>{h}</span>
                                         ))}
-                                        <span className="text-right">{score === "field" ? "Revenue needed per day" : "Converted"}</span>
+                                        <span className="text-right">{score === "field" ? "Revenue needed per day" : monthToDate ? "Won this month" : "Won"}</span>
                                     </div>
                                     {list.map((p) => {
-                                        const hotToGround = targetOf(p.spoc_id, "hot_to_ground");
                                         const cells: ScoreCell[] =
                                             score === "field"
                                                 ? [
-                                                      cell(p.spoc_id, "dealer_visits", p.totals.visits),
+                                                      cell(p.spoc_id, "dealer_visits", p.totals.unique_visits),
                                                       cell(p.spoc_id, "new_dealer_visits", p.totals.new_visits),
                                                       cell(p.spoc_id, "batteries_sold", p.outcome.batteries_to_dealers),
                                                       cell(p.spoc_id, "kyc_submitted", p.outcome.kyc_submitted),
                                                       cell(p.spoc_id, "revenue", p.outcome.revenue, true),
                                                   ]
-                                                : [
-                                                      cell(p.spoc_id, "calls_per_day", p.averages.avg_calls_per_day),
-                                                      cell(p.spoc_id, null, p.totals.dealers_called),
-                                                      hotToGround && hotToGround.progress.actual != null
-                                                          ? cell(p.spoc_id, "hot_to_ground", hotToGround.progress.actual)
-                                                          : { actual: "—", target: null, pct: null },
-                                                      cell(p.spoc_id, null, p.totals.new_hot),
-                                                      cell(p.spoc_id, null, p.outcome.quotes_issued),
-                                                  ];
+                                                : (() => {
+                                                      const x = isrOf(p.spoc_id);
+                                                      const engagedPct = x.calls > 0 ? Math.round((x.engaged / x.calls) * 100) : null;
+                                                      const visitedPct = x.hot_to_field > 0 ? Math.round((x.hot_visited / x.hot_to_field) * 100) : null;
+                                                      const cells: ScoreCell[] = [
+                                                          isrCell(p.spoc_id, "calls_per_day", p.averages.avg_calls_per_day),
+                                                          engagedPct == null
+                                                              ? { actual: "—", target: null, pct: null, note: "no calls" }
+                                                              : { actual: `${engagedPct}%`, target: null, pct: null, note: "of calls", bar: engagedPct },
+                                                          isrCell(p.spoc_id, "hot_to_ground", x.hot_to_field),
+                                                          visitedPct == null
+                                                              ? { actual: num(x.hot_visited), target: null, pct: null, note: "none sent" }
+                                                              : { actual: num(x.hot_visited), target: num(x.hot_to_field), pct: visitedPct, neutral: true },
+                                                          {
+                                                              actual: num(x.quotes_delivered),
+                                                              target: null,
+                                                              pct: null,
+                                                              note: "delivered",
+                                                              bar: (x.quotes_delivered / maxQuotes) * 100,
+                                                          },
+                                                      ];
+                                                      return cells;
+                                                  })();
                                         const need = targetOf(p.spoc_id, "revenue")?.progress ?? null;
                                         return (
                                             <div
@@ -512,18 +608,32 @@ export function SalesHeadOpsView() {
                                                         <div key={i} className="flex flex-col gap-1">
                                                             <span className="text-[13px] text-ink tabular-nums">
                                                                 <span className="font-bold">{c.actual}</span>{" "}
-                                                                {c.target != null && <span className="text-ink-muted">/ {c.target}</span>}{" "}
-                                                                {c.pct != null && <span className={`font-bold ${toneText(tone)}`}>{c.pct}%</span>}
+                                                                {c.target != null ? (
+                                                                    <span className="text-ink-muted">/ {c.target}</span>
+                                                                ) : c.note ? (
+                                                                    <span className="text-ink-muted">/ {c.note}</span>
+                                                                ) : null}{" "}
+                                                                {c.pct != null && (
+                                                                    <span className={`font-bold ${c.neutral ? "text-ink" : toneText(tone)}`}>{c.pct}%</span>
+                                                                )}
                                                             </span>
-                                                            {c.pct != null && (
+                                                            {c.pct != null && !c.neutral ? (
                                                                 <ProgressBar pct={Math.min((c.pct / 120) * 100, 100)} tone={tone} height={6} />
-                                                            )}
+                                                            ) : c.neutral && c.pct != null ? (
+                                                                <ProgressBar pct={c.pct} height={6} />
+                                                            ) : c.bar != null ? (
+                                                                <ProgressBar pct={c.bar} height={6} />
+                                                            ) : null}
                                                         </div>
                                                     );
                                                 })}
-                                                <span className="text-right text-[13px] font-semibold text-ink tabular-nums">
+                                                <span
+                                                    className={`text-right text-[13px] font-semibold tabular-nums ${
+                                                        score === "field" && need?.rag === "red" && (need.remaining ?? 0) > 0 ? "text-danger" : "text-ink"
+                                                    }`}
+                                                >
                                                     {score === "inside"
-                                                        ? num(p.totals.converted)
+                                                        ? num(isrOf(p.spoc_id).won)
                                                         : !need
                                                           ? "No target"
                                                           : need.remaining != null && need.remaining <= 0
@@ -540,14 +650,30 @@ export function SalesHeadOpsView() {
                         );
                     })()
                 )}
+                {score === "inside" && (
+                    <span className="text-xs text-ink-muted">
+                        Hot leads to field counts leads that were Hot at the moment of transfer. &ldquo;Of which visited&rdquo; shows whether the ASM
+                        agreed they were worth a visit. Engaged = calls where the rep spoke with the dealer. Every figure is credited to the person who
+                        did it.
+                        {insidePeople.length > 0
+                            ? (() => {
+                                  const none = insidePeople.filter((p) => !targetOf(p.spoc_id, "calls_per_day") && !targetOf(p.spoc_id, "hot_to_ground"));
+                                  return none.length
+                                      ? ` ${none.map((p) => p.name ?? "Unnamed").join(", ")} ${none.length === 1 ? "has" : "have"} no target yet.`
+                                      : "";
+                              })()
+                            : ""}
+                        {isr.error ? " These figures could not be loaded." : ""}
+                    </span>
+                )}
                 <span className="text-xs text-ink-muted">
-                    Targets come from{" "}
+                    Targets from{" "}
                     <Link href="/admin/targets" className="font-semibold text-brand-sky hover:underline">
-                        Targets
+                        Admin › Targets
                     </Link>
-                    , pro-rata to working days. Batteries, KYC and revenue reach a person through their dealer accounts&apos; GSTIN. A figure with
-                    no target shows the actual alone.
-                    {monthToDate && targets.error ? " Targets could not be loaded for your role." : ""}
+                    {monthDays > 0 ? `, pro-rata to ${targetDays} of ${monthDays} working days` : ", pro-rata to working days"}. Batteries and revenue
+                    come from invoices matched to each person&apos;s dealer accounts.
+                    {targets.error ? " Targets could not be loaded for your role." : ""}
                 </span>
             </DashCard>
 
