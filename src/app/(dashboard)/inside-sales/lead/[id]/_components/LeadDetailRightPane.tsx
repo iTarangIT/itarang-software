@@ -137,7 +137,13 @@ export function LeadDetailRightPane({ bundle }: Props) {
                                 Docs submitted:{" "}
                                 {bundle.onboarding.docs_submitted_at ? fmtDate(bundle.onboarding.docs_submitted_at) : "not yet"}
                             </span>
-                            <span>Agreement: {(bundle.onboarding.agreement_status ?? "not started").replace(/_/g, " ")}</span>
+                            {/* ID 84.1: the lead's own outcome (Signed / Manual agreement on file /
+                                Not needed / …) when recorded, else the application's status. */}
+                            <span>
+                                Agreement:{" "}
+                                {bundle.onboarding.agreement_outcome_label ??
+                                    (bundle.onboarding.agreement_status ?? "not started").replace(/_/g, " ")}
+                            </span>
                             <span>
                                 Approved: {bundle.onboarding.approved_at ? fmtDate(bundle.onboarding.approved_at) : "not yet"}
                             </span>

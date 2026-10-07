@@ -34,6 +34,7 @@
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { markSalesReady } from "@/lib/leads/salesReady";
+import { aiInterestLevelSql } from "@/lib/ai/storage/aiInterest";
 import {
   bandOutcome,
   bandToStatus,
@@ -102,7 +103,10 @@ export async function applyIntentOverride(
        SET intent_band          = ${band},
            final_intent_score   = ${score},
            current_status       = ${status},
-           interest_level       = ${outcome.interest_level},
+           -- ID 64 (decided 1 Oct): a correction changes only the AI score.
+           -- Temperature follows the AI band for unowned, open leads only —
+           -- the same rule the AI call finalizers use.
+           interest_level       = ${aiInterestLevelSql(outcome.interest_level)},
            intent_band_source   = 'human',
            intent_overridden_by = ${reviewerId}::uuid,
            -- now() in SQL, never a JS Date: a JS Date interpolated into a raw
@@ -110,16 +114,22 @@ export async function applyIntentOverride(
            -- pm2 VPS clock drifts besides.
            intent_overridden_at = now()
      WHERE id = ${leadId}
-    RETURNING id
+    RETURNING id,
+              (current_owner_id IS NULL
+               AND COALESCE(lead_status, '') NOT IN ('Converted', 'Lost')) AS unowned_open
   `);
 
-  const rows = (result as { rows?: unknown[] }).rows ?? (result as unknown[]);
+  const rows = ((result as { rows?: unknown[] }).rows ??
+    (result as unknown[])) as Array<{ unowned_open?: boolean }>;
   const applied = Array.isArray(rows) && rows.length > 0;
+  const unownedOpen = applied && rows[0]?.unowned_open === true;
 
   // ID 82: a reviewer correcting the band to qualified makes the lead
   // sales-ready exactly as the AI call's own "qualified" does — without this
   // it never reached Ready to assign. First event wins; never throws.
-  if (applied && status === "qualified") {
+  // ID 64.2: only for an unowned, open lead — on an owned lead the correction
+  // changes the AI score and nothing else (no Sales-ready labelled admin_marked).
+  if (unownedOpen && status === "qualified") {
     await markSalesReady(db, { leadId, reason: "admin_marked", actorId: reviewerId });
   }
 

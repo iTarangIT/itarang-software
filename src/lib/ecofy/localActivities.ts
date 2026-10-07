@@ -1,9 +1,19 @@
-// E-308 — the CRM keeps an ASM / ISR's calls, remarks, follow-ups and meeting
-// bookings when Ecofy cannot take them, and replays them later.
+// E-308 — the CRM keeps an ASM / ISR's calls, remarks, follow-ups, meeting
+// bookings and meeting outcomes when Ecofy cannot take them, and replays them
+// later.
 //
-// Only these two action kinds are kept locally: they are records of work the
-// rep already did. Stage moves (advance, assessment, offer, OTP, close …) are
+// Only these action kinds are kept locally: they are records of work the rep
+// already did. Stage moves (advance, assessment, offer, OTP, close …) are
 // decisions Ecofy owns and gates, so they still need Ecofy to be reachable.
+//
+// A meeting outcome (update_appointment: complete / no-show / cancel /
+// reschedule → PATCH /appointments/{id}) is stored under kind 'appointment'
+// (the E-308 CHECK allows only 'activity' | 'appointment'); payload.action
+// tells a booking from an update. It needs Ecofy's appointment id, so it can
+// only be queued for a meeting Ecofy already knows — not for one that is itself
+// still waiting in this queue. If Ecofy has moved on meanwhile (the meeting
+// was already completed or cancelled), the replay gets a 409 / 422 and the
+// entry is marked failed, shown as "Ecofy rejected it".
 
 import { and, asc, desc, eq, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
@@ -17,7 +27,7 @@ export type LocalKind = "activity" | "appointment";
 /** Actions that may be saved in the CRM when Ecofy is unavailable. */
 export function localKindFor(input: EcofyActionInput): LocalKind | null {
     if (input.action === "log_activity") return "activity";
-    if (input.action === "book_appointment") return "appointment";
+    if (input.action === "book_appointment" || input.action === "update_appointment") return "appointment";
     return null;
 }
 

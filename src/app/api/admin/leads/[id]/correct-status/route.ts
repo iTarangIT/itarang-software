@@ -22,6 +22,7 @@
 import { z } from "zod";
 import { sql } from "drizzle-orm";
 import { requireRole } from "@/lib/auth-utils";
+import { STATUS_CORRECTION_ROLES } from "@/lib/leads/access";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
 import { db } from "@/lib/db";
 import { LEAD_STATUS, LOST_REASON, type LeadStatus } from "@/lib/lifecycle/transitions";
@@ -40,7 +41,7 @@ export const POST = withErrorHandler(
     async (req: Request, ctx: { params: Promise<{ id: string }> }) => {
         // Admin and Sales Head (ID 80 locked it to admin on 26 Sep; the Sales
         // Head was added on 6 Oct 2026 at the business's request) — not the CEO.
-        const user = await requireRole(["admin", "sales_head"]);
+        const user = await requireRole([...STATUS_CORRECTION_ROLES]);
         const { id } = await ctx.params;
         const body = BodySchema.parse(await req.json());
         const { to, reason } = body;

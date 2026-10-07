@@ -25,6 +25,7 @@ import { requireSalesHead } from "@/lib/auth/requireSalesHead";
 import { classifyGstinConflict } from "@/lib/dealer/duplicate-check";
 import { checkCustomerGstin, GSTIN_CHECK_MESSAGE } from "@/lib/leads/gstin";
 import { usesManualAgreement } from "@/lib/dealer/dealer-capabilities";
+import { markAgreementOutcome } from "@/lib/onboarding/leadMilestones";
 import {
   maskPhone,
   sendDealerWelcomeWhatsApp,
@@ -856,6 +857,18 @@ export async function POST(req: NextRequest, context: RouteContext) {
     // ID 74: the lead this onboarding came from becomes Converted now — the
     // rep's Mark Won only set Won. Post-commit and best-effort.
     await convertLeadOnOnboardingApproval(dealerId, auth.user.id);
+
+    // ID 84.1: a dealer approved with no agreement at all (finance off, not a
+    // manual-agreement dealer type) reads "Not needed" on the lead — not
+    // blank, which would look like a missing step. A dev bypass is not a
+    // business decision and writes nothing. Best-effort — never throws.
+    if (
+      !application.finance_enabled &&
+      !usesManualAgreement(application.dealer_type) &&
+      !devBypassAgreement
+    ) {
+      await markAgreementOutcome({ applicationId: dealerId }, "not_needed");
+    }
 
     let emailSent = false;
     let emailError: string | null = null;

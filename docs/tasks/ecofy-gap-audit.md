@@ -91,13 +91,17 @@ Audit of `main` @ `5d6010a5` (1 Oct 2026), updated the same day after gaps 1–3
 
 1. **Ecofy-financed sanction, down payment and disbursement (stages 7 and 8).** `financing/decisions`, `down-payment` and `disbursement` are `x-roles: ECOFY_ADMIN, ITARANG_ADMIN`, so the CRM *could* record them. Whether it should for Ecofy's own lending is a business decision (START_HERE: "financing decisions remain with Ecofy").
 2. **Bulk-imported leads reach `ecofy_leads` only through Ecofy's push.** The import API returns counts, not case ids. Single creates are upserted at once.
-3. **Smaller gaps** (unchanged):
-   - The financing queue page has no actions.
-   - Quote request is a log entry only; no email or WhatsApp is actually sent to the EPC.
-   - `update_appointment` is not covered by the offline fallback.
-   - `WithdrawalTab` is fully written but not rendered (dead UI).
-   - Only `lead.assigned` of the §4 events is used.
-   - Ecofy audit cannot attribute actions to a person: the actor name is always "iTarang CRM" and no per-user `X-Itarang-Act-As` is sent.
+3. **Smaller gaps.** Closed in the ID 51 follow-up:
+   - ~~The financing queue page has no actions.~~ Each CRM-linked row now has "Open Financing tab" (`?tab=Financing` deep link, `src/lib/ecofy/leadTabs.ts`) and "Record decision", which reuses the lead screen's `FinancingDecisionForm` (`src/components/ecofy/FinancingQueueAction.tsx`). It goes through the same action route and access gate (Sales Head / CEO, S6), with If-Match set to the row's case version. FR-11.5: other financiers only, and Ecofy enforces the financier's role. A case that was never pushed to the CRM shows "decide in Ecofy". No Ecofy-financed sanction writes were added (item 1).
+   - ~~`update_appointment` is not covered by the offline fallback.~~ A meeting outcome (complete / no-show / cancel / reschedule) is now queued in `ecofy_lead_activities` when Ecofy is unavailable and replayed by the ticker. It is stored as kind `appointment`, so no migration was needed; `payload.action` tells it apart from a booking. It only works for a meeting Ecofy already knows, because it needs Ecofy's appointment id.
+   - ~~`WithdrawalTab` is fully written but not rendered.~~ The tab is now on the lead page. OpenAPI: `POST /cases/{caseId}/withdrawals` is ITARANG_CALLER + ITARANG_ADMIN, so the assigned ASM / ISR and the Sales Head can request. `confirm` / `reject` / `epc-informed` are ITARANG_ADMIN only (Sales Head). `sanction-cancelled` is ECOFY_ADMIN and is not offered. Caveat: the tab lists withdrawals with `GET /cases/{caseId}/withdrawals`, which the OpenAPI does not define (only POST). It has not been run against the sandbox. If Ecofy does not serve it, the list shows an error, but requesting still works.
+
+   Not possible under the contract (left as is):
+   - Quote request is a log entry only. OpenAPI has only `POST /cases/{caseId}/quote-requests` ("Log a quote request", body `epcPartnerId` + `channel`) and `PATCH /quote-requests/{id}`. BRD M09: "IC logs the quote request (EPC partner, channel)". No endpoint notifies the EPC.
+   - Only `lead.assigned` of the §4 events is used. `lead.accepted` (`data: {}`) only "links `crmLeadId` to the case" (§3: "you can also send `lead.accepted` later"). The CRM already links on every `lead.pushed` reply (`{ crmLeadId }`, `inbound.ts`). The doc defines no "worker opened / acknowledged" trigger, so nothing was invented.
+   - Ecofy audit cannot attribute actions to a person. The OpenAPI defines no act-as or actor header; its only security is the session cookie. `X-Itarang-Act-As` / `X-Itarang-Actor-Name` are defined only in `docs/ECOFY_INTEGRATION.md` §5, and Act-As must name an ACTIVE iTarang Admin/Caller *in Ecofy* (anyone else gets 403). The CRM also deliberately hides CRM identities from Ecofy (`ECOFY_OUTBOUND_ACTOR`, commit e7603546). This is unchanged and is a product decision, not a code gap.
+
+   Still open:
    - Ecofy leads live outside `dealer_leads`, so they are absent from the main funnels, reports and AI tooling.
    - Assignment is saved in the CRM first; telling Ecofy is best-effort, with a resend path.
 
@@ -114,5 +118,5 @@ Audit of `main` @ `5d6010a5` (1 Oct 2026), updated the same day after gaps 1–3
 2. The env names on the two sides are not mapped to each other: Ecofy uses `ITARANG_CRM_*`, the CRM uses `ECOFY_SYNC_SECRET` / `ECOFY_EVENTS_URL` / `ECOFY_API_BASE`.
 3. When the secret is missing, the CRM's inbound route answers 503; the doc says 404.
 4. The CRM chose a separate `ecofy_leads` table over `leads` with `source='ECOFY'`, which is why Ecofy leads are outside the CRM funnels.
-5. The CRM uses the §4 events and the §5 API together; the doc says either one. `lead.accepted` is never sent.
+5. The CRM uses the §4 events and the §5 API together; the doc says either one. `lead.accepted` is never sent; it is not needed, because the `lead.pushed` reply already links `crmLeadId` (see Remaining gaps §3).
 6. Ecofy-side operations (its migrations and creating the integration user) have no CRM runbook.

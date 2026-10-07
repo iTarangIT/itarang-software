@@ -73,10 +73,10 @@ export function LeadActionBar({ bundle, isOwner, viewerRole, onAction, onChanged
         );
     }
 
-    // Owner action bar. Converted / Lost / Transfer are not gated on the current
-    // status — a rep can reopen a lead closed by mistake or re-transfer one, the
-    // same freedom the status dropdown gives. Escalate stays open-only because
-    // its route refuses a closed lead.
+    // Owner action bar. Lost / Transfer are not gated on the current status — a
+    // rep can re-transfer a lead, the same freedom the status dropdown gives.
+    // Mark Won and Escalate stay open-only: their routes refuse a Lost /
+    // Converted lead, so the button would only ever produce an error.
 
     return (
         <div className="sticky bottom-0 z-10 bg-white border-t border-gray-200 px-4 sm:px-6 py-2.5 flex flex-wrap items-center gap-2">
@@ -104,6 +104,10 @@ export function LeadActionBar({ bundle, isOwner, viewerRole, onAction, onChanged
                 icon={CheckCircle2}
                 tone="emerald"
                 onClick={() => onAction("mark_converted")}
+                disabled={!open}
+                disabledReason={
+                    !open ? `Lead is ${status === "Lost" ? "Lost" : "closed"} — correct its status first` : undefined
+                }
             >
                 Mark Won
             </ActionButton>

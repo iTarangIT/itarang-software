@@ -26,7 +26,8 @@ export function useRunner(leadId: string, onDone: () => void) {
         setBusy(true);
         try {
             const r = await runLeadAction<T>(leadId, body);
-            toast.success(label);
+            // E-308: Ecofy was unavailable and the route kept the entry in the CRM.
+            toast.success(r.savedLocally ? `${label} — saved in the CRM, sent to Ecofy when Ecofy is back` : label);
             onDone();
             return r.result;
         } catch (e) {

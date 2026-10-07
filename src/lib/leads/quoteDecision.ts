@@ -321,9 +321,11 @@ export async function recordDealerDecision(
   // ID 75.5: the move is the system's (actor null), not the owner's work —
   // advanceLeadOnQuoteEvent never stamps last_worked_at.
   let awaitingVisit = false;
+  let visitStillScheduled = false;
   if (input.decision === "approved") {
     const advanced = await advanceLeadOnQuoteEvent(row.dealer_lead_id, "dealer_approved", null);
     awaitingVisit = advanced.awaitingVisit === true;
+    visitStillScheduled = advanced.visitStillScheduled === true;
 
     // ID 74.1: an approved quote clears the "Won without an approved quote"
     // flag on a lead that was marked Won (or already Converted) before it.
@@ -351,6 +353,7 @@ export async function recordDealerDecision(
     via: input.via,
     note: input.note ?? null,
     awaitingVisit,
+    visitStillScheduled,
   });
 
   return {

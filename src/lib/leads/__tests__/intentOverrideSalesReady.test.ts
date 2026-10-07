@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // to qualified is a Sales-ready event, as the AI call's own "qualified" is.
 // Without it a human-qualified lead never reached Ready to assign.
 
-const execute = vi.fn(async () => [{ id: "DL-1" }]);
+const execute = vi.fn(async (): Promise<unknown[]> => [{ id: "DL-1", unowned_open: true }]);
 vi.mock("@/lib/db", () => ({ db: { execute } }));
 const markSalesReady = vi.fn(async () => true);
 vi.mock("@/lib/leads/salesReady", () => ({ markSalesReady }));
@@ -31,6 +31,13 @@ describe("applyIntentOverride → Sales-ready", () => {
             const out = await applyIntentOverride({ leadId: "DL-1", band, reviewerId: REVIEWER });
             expect(out.status, band).not.toBe("qualified");
         }
+        expect(markSalesReady).not.toHaveBeenCalled();
+    });
+
+    it("an owned (or closed) lead does not — the correction changes only the AI score (ID 64.2)", async () => {
+        execute.mockResolvedValueOnce([{ id: "DL-1", unowned_open: false }]);
+        const out = await applyIntentOverride({ leadId: "DL-1", band: "Qualified", reviewerId: REVIEWER });
+        expect(out.applied).toBe(true);
         expect(markSalesReady).not.toHaveBeenCalled();
     });
 

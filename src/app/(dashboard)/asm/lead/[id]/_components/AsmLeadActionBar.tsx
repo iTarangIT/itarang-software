@@ -79,8 +79,8 @@ export function AsmLeadActionBar({ bundle, isOwner, viewerRole, onAction, onChan
         );
     }
 
-    // Won / Lost are refused server-side for a closed lead (S3, statusRules.ts).
-    // Escalate stays open-only because its route refuses a closed lead.
+    // Won / Lost are refused server-side for a closed lead (S3, statusRules.ts),
+    // so Mark Won and Escalate are disabled on a Lost / Converted lead.
 
     return (
         <div className="sticky bottom-0 z-10 bg-white border-t border-gray-200 px-4 sm:px-6 py-2.5 flex flex-wrap items-center gap-2">
@@ -110,6 +110,10 @@ export function AsmLeadActionBar({ bundle, isOwner, viewerRole, onAction, onChan
                 tone="emerald"
                 icon={CheckCircle2}
                 onClick={() => onAction("mark_converted")}
+                disabled={!open}
+                disabledReason={
+                    !open ? `Lead is ${status === "Lost" ? "Lost" : "closed"} — correct its status first` : undefined
+                }
             >
                 Mark Won
             </Btn>
