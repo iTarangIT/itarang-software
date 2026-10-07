@@ -53,7 +53,7 @@ const WORKABLE_LIST = sql.raw(WORKABLE_STATUSES.map((s) => `'${s}'`).join(", "))
 // flag (E-314, read through to_jsonb so a DB without it counts 0) only means
 // something while the lead is Won / Converted; a re-opened lead keeps the old
 // value until its next Mark Won.
-const WON_WITHOUT_QUOTE = sql`dl.lead_status IN ('Won', 'Converted')
+export const WON_WITHOUT_QUOTE = sql`dl.lead_status IN ('Won', 'Converted')
     AND dl.is_active IS NOT FALSE
     AND (to_jsonb(dl) ->> 'won_without_approved_quote')::boolean IS TRUE`;
 
@@ -74,8 +74,8 @@ function workingDaysSince(expr: string): SQL {
 // holiday matters. Only leads still open (Won included); a lead already in the
 // 21-day drop-out review is listed there instead.
 const sqlList = (xs: readonly string[]) => xs.map((x) => `'${x}'`).join(", ");
-const ONB_LAST = onboardingClockSql("oa");
-const ONB_WAITING_ON = sql.raw(`(CASE
+export const ONB_LAST = onboardingClockSql("oa");
+export const ONB_WAITING_ON = sql.raw(`(CASE
     WHEN oa.onboarding_status IN (${sqlList(DEALER_ONBOARDING_STATUSES)}) THEN 'dealer'
     WHEN oa.onboarding_status = 'submitted'
          AND COALESCE(oa.agreement_status, '') IN (${sqlList(AGREEMENT_AWAITING_DEALER)}) THEN 'dealer'
@@ -97,7 +97,7 @@ const IN_DROPOUT_REVIEW = sql`(dl.lead_status IN ('Won', 'Converted')
              AND ${sql.raw(ONB_LAST)} < NOW() - INTERVAL '21 days'))
     AND COALESCE((to_jsonb(dl) ->> 'onboarding_stalled_at')::timestamptz, 'epoch'::timestamptz)
         < NOW() - INTERVAL '21 days')`;
-const ONBOARDING_STALLED = sql`dl.lead_status IN (${OPEN_LIST}) AND dl.is_active IS NOT FALSE
+export const ONBOARDING_STALLED = sql`dl.lead_status IN (${OPEN_LIST}) AND dl.is_active IS NOT FALSE
     AND oa.onboarding_status IN ('draft','submitted','correction_requested')
     AND (
         (${ONB_WAITING_ON} = 'dealer'
