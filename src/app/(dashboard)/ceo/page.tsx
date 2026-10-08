@@ -17,7 +17,6 @@ import { useQuery } from "@tanstack/react-query";
 import {
   AlertCircle,
   CalendarRange,
-  Check,
   CircleCheck,
   FileSignature,
   FileText,
@@ -475,8 +474,6 @@ export default function CEODashboard() {
         },
       ]
     : [];
-  const open = needs.filter((n) => n.n > 0);
-  const clear = needs.filter((n) => n.n === 0);
 
   // ── Headline tiles ───────────────────────────────────────────────────────
   const months = margin.data?.report.available
@@ -694,29 +691,20 @@ export default function CEODashboard() {
       <div className="flex flex-col gap-3">
         <SectionHeading
           title="Needs you today"
-          note="Only what needs a decision or has money at stake. Zero items stay out of the way."
+          note="Only what needs a decision or has money at stake. A green card is all clear."
         />
         {!x ? (
           <NotAvailable reason="The exceptions could not be computed on this environment." />
-        ) : open.length === 0 ? (
-          <div className="flex items-center gap-2 rounded-2xl border border-border bg-surface px-5 py-4 text-sm font-semibold text-success shadow-card">
-            <Check className="h-4 w-4" aria-hidden /> Nothing needs you right
-            now.
-          </div>
         ) : (
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
-            {needs.map(({ key, n, ...card }) =>
-              n > 0 ? <ActionCard key={key} {...card} /> : null,
-            )}
-          </div>
-        )}
-        {x && clear.length > 0 && open.length > 0 && (
-          <div className="flex items-start gap-2 text-[13px] text-ink-muted">
-            <Check className="mt-0.5 h-4 w-4 shrink-0 text-success" aria-hidden />
-            <span>
-              <span className="font-semibold text-success">All clear:</span>{" "}
-              {clear.map((c) => c.label.toLowerCase()).join(" · ")}
-            </span>
+            {needs.map(({ key, n, tone, primary, ...card }) => (
+              <ActionCard
+                key={key}
+                {...card}
+                tone={n > 0 ? tone : "ok"}
+                primary={n > 0 && primary}
+              />
+            ))}
           </div>
         )}
         {x && x.spocs_below_80 == null && (
