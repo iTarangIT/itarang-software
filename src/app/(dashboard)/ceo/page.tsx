@@ -18,7 +18,6 @@ import {
   AlertCircle,
   CalendarRange,
   CircleCheck,
-  FileSignature,
   FileText,
   RefreshCw,
   Target,
@@ -393,8 +392,6 @@ export default function CEODashboard() {
   });
 
   // ── Needs you today ──────────────────────────────────────────────────────
-  // The count the /admin/nbfc/approvals queue lists — the card opens that page.
-  const nbfcPending = Number(m.nbfcPendingApprovals ?? 0);
   type Need = React.ComponentProps<typeof ActionCard> & { key: string; n: number };
   const needs: Need[] = x
     ? [
@@ -460,17 +457,6 @@ export default function CEODashboard() {
           sub: "Against their target to date",
           href: "#team",
           cta: "See team",
-        },
-        {
-          key: "nbfc",
-          n: nbfcPending,
-          icon: FileSignature,
-          tone: "warn",
-          label: "NBFCs waiting for your approval",
-          count: num(nbfcPending),
-          sub: "Onboarding submitted for your sign-off",
-          href: "/admin/nbfc/approvals",
-          cta: "Open list",
         },
       ]
     : [];
