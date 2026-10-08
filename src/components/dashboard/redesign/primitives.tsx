@@ -213,7 +213,7 @@ export function ActionCard({
     primary = false,
 }: {
     icon: LucideIcon;
-    tone: "bad" | "warn";
+    tone: "bad" | "warn" | "ok";
     label: string;
     count: string;
     sub?: string;
@@ -227,7 +227,11 @@ export function ActionCard({
                 <span
                     className={cn(
                         "flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px]",
-                        tone === "bad" ? "bg-danger-bg text-danger" : "bg-warning-bg text-warning",
+                        tone === "bad"
+                            ? "bg-danger-bg text-danger"
+                            : tone === "warn"
+                              ? "bg-warning-bg text-warning"
+                              : "bg-success-bg text-success",
                     )}
                 >
                     <Icon className="h-4 w-4" aria-hidden />
