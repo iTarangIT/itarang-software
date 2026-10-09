@@ -43,6 +43,9 @@ type DealerApiData = {
   dealerAccountStatus: string;
   approvedAt: string | null;
   submittedAt: string | null;
+  /** Raw enum, e.g. 'sole_proprietorship'. */
+  companyType: string | null;
+  gstNumber: string | null;
   financeEnabled: boolean;
   /** E-202 — 'new' | 'scrap' | 'both'. Decides which modules this dealer has. */
   dealerType: string | null;
@@ -86,6 +89,21 @@ type ExtendedAuthUser = {
   finance_enabled?: boolean | null;
   submitted_at?: string | null;
 };
+
+const COMPANY_TYPE_LABELS: Record<string, string> = {
+  sole_proprietorship: 'Sole Proprietorship',
+  partnership_firm: 'Partnership Firm',
+  private_limited_firm: 'Private Limited',
+  llp: 'LLP',
+};
+
+function formatCompanyType(value: string | null | undefined): string | null {
+  if (!value) return null;
+  return (
+    COMPANY_TYPE_LABELS[value] ??
+    value.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+  );
+}
 
 function DealerApprovalModal({
   open,
@@ -343,11 +361,13 @@ export default function DealerDashboard() {
     'Pending Approval';
 
   const currentCompanyType =
+    formatCompanyType(dealer?.companyType) ||
     currentUser?.company_type ||
     dealerData?.companyType ||
     'Not available';
 
   const currentGst =
+    dealer?.gstNumber ||
     currentUser?.gst_number ||
     dealerData?.gstNumber ||
     'Not available';
