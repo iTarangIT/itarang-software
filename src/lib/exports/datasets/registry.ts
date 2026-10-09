@@ -24,6 +24,7 @@ import { listTargets } from "@/lib/targets/service";
 
 import { DOWNLOAD_ROW_CAP, initialsOf, TEAM_ROLES, type DatasetInfo, type DatasetSheet } from "./types";
 import { onboardingClockSql } from "@/lib/onboarding/clock";
+import { BUSINESS_TYPE_OPTIONS, BUSINESS_TYPE_UNSET, BUSINESS_TYPE_UNSET_LABEL } from "@/lib/leads/businessType";
 
 // ID 122: the one onboarding clock (src/lib/onboarding/clock.ts).
 const ONBOARDING_CLOCK = sql.raw(onboardingClockSql("app"));
@@ -222,6 +223,13 @@ const leads: Dataset = {
         { key: "search", label: "Search (name, or mobile numbers separated by commas)", type: "text" },
         { key: "state", label: "State", type: "text" },
         { key: "city", label: "City", type: "text" },
+        // ID 11 — read by parseLeadListFilters, same values as the Leads list.
+        {
+            key: "business_type",
+            label: "Type of business",
+            type: "select",
+            options: [...BUSINESS_TYPE_OPTIONS, { value: BUSINESS_TYPE_UNSET, label: BUSINESS_TYPE_UNSET_LABEL }],
+        },
     ],
     sheets: [
         {
