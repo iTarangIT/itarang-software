@@ -17,6 +17,8 @@ import { requireRole } from "@/lib/auth-utils";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
 import { suggestedOwners } from "@/lib/accounts/ownership";
 import { ACCOUNT_ADMIN_ROLES, gstinMissingSql, requireAccountTables } from "./_lib";
+import { dealerAccountSql } from "@/lib/accounts/accountList";
+import { closedColumns } from "@/lib/accounts/accountClosures";
 
 export const dynamic = "force-dynamic";
 
@@ -46,6 +48,9 @@ type Row = {
     came_through: string | null;
     source_dealer_lead_id: string | null;
     source_application_id: string | null;
+    /** ID 5 — closed by hand (E-332), with the reason. */
+    closed: boolean;
+    closed_reason: string | null;
     filtered_total: number;
 };
 
@@ -60,12 +65,14 @@ export const GET = withErrorHandler(async (req: Request) => {
 
     // Dealer accounts only: a scrap-vendor entity (users.vendor_entity_id)
     // with no dealer onboarding behind it is not a dealer account.
+    const closed = await closedColumns(sql`a.id`);
     const base = sql`
         SELECT a.id,
                a.business_entity_name                     AS name,
                a.gstin,
                ${gstinMissingSql(sql`a.gstin`)}           AS gstin_missing,
                a.city, a.state, a.status, a.created_at,
+               ${closed},
                o.owner_user_id::text                      AS owner_user_id,
                ou.name                                    AS owner_name,
                o.onboarded_by_user_id::text               AS onboarded_by_user_id,
@@ -80,10 +87,7 @@ export const GET = withErrorHandler(async (req: Request) => {
           LEFT JOIN account_ownership o ON o.account_id = a.id
           LEFT JOIN users ou ON ou.id = o.owner_user_id
           LEFT JOIN users ob ON ob.id = o.onboarded_by_user_id
-         WHERE NOT (
-                   EXISTS (SELECT 1 FROM users v WHERE v.vendor_entity_id = a.id)
-               AND NOT EXISTS (SELECT 1 FROM dealer_onboarding_applications d WHERE d.dealer_code = a.id)
-               )`;
+         WHERE ${dealerAccountSql()}`;
 
     const where: SQL[] = [];
     if (f.q) {
@@ -96,7 +100,9 @@ export const GET = withErrorHandler(async (req: Request) => {
     if (f.gstin_missing) where.push(sql`b.gstin_missing`);
     if (f.came_through === "unknown") where.push(sql`b.came_through IS NULL`);
     else if (f.came_through) where.push(sql`b.came_through = ${f.came_through}`);
-    if (f.status) where.push(sql`b.status = ${f.status}`);
+    // ID 5 — "closed" is a closure (E-332), not an accounts.status value.
+    if (f.status === "closed") where.push(sql`b.closed`);
+    else if (f.status) where.push(sql`b.status = ${f.status} AND NOT b.closed`);
     const whereSql = where.length ? sql`WHERE ${sql.join(where, sql` AND `)}` : sql``;
 
     const [rowsRes, countsRes] = await Promise.all([

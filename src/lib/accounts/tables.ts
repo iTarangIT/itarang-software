@@ -35,3 +35,22 @@ export function resetAccountTablesProbe(): void {
     present = null;
     probedAt = 0;
 }
+
+let closuresPresent: boolean | null = null;
+let closuresProbedAt = 0;
+
+/** E-332 (ID 5) presence probe for account_closures, same TTL idiom as above. */
+export async function hasAccountClosuresTable(): Promise<boolean> {
+    const now = Date.now();
+    if (closuresPresent !== null && now - closuresProbedAt < PROBE_TTL_MS) return closuresPresent;
+    try {
+        const res = (await db.execute(sql`
+            SELECT to_regclass('public.account_closures') IS NOT NULL AS ok
+        `)) as unknown as Array<{ ok: boolean }>;
+        closuresPresent = Boolean(res[0]?.ok);
+    } catch {
+        closuresPresent = false;
+    }
+    closuresProbedAt = now;
+    return closuresPresent;
+}

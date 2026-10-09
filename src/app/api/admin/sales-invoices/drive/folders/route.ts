@@ -56,6 +56,8 @@ const PatchSchema = z
     label: z.string().trim().max(160).nullable().optional(),
     include_names: z.string().trim().max(512).optional(),
     exclude_names: z.string().trim().max(512).optional(),
+    // ID 71 — a folder of credit notes, settable from the screen.
+    doc_kind: z.enum(["sale", "credit_note"]).optional(),
   })
   .refine((o) => Object.keys(o).length > 1, { message: "No fields to update" });
 
@@ -208,6 +210,7 @@ export async function PATCH(req: NextRequest) {
     if (fields.label !== undefined) update.label = fields.label || null;
     if (fields.include_names !== undefined) update.include_names = fields.include_names;
     if (fields.exclude_names !== undefined) update.exclude_names = fields.exclude_names;
+    if (fields.doc_kind !== undefined) update.doc_kind = fields.doc_kind;
 
     const [row] = await db
       .update(salesInvoiceFolders)

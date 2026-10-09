@@ -4,15 +4,18 @@
 // only for invoice lines that could be costed; what could not be is stated
 // beside it, so a month never reads as more profitable than the data supports.
 
-import { useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import Link from "next/link";
+import { useQuery } from "@tanstack/react-query";
 import { TrendingUp } from "lucide-react";
 
-import type { GrossMarginReport, ItemMapping, MarginCell, ProductOption } from "@/lib/dashboard/grossMargin";
+import type { GrossMarginReport, MarginCell } from "@/lib/dashboard/grossMargin";
 import { LINE_TYPES, LINE_TYPE_LABELS } from "@/lib/sales/salesInvoiceLines";
 import { formatINRCompact } from "@/lib/format";
 
-type Payload = { report: GrossMarginReport; mappings?: ItemMapping[]; products?: ProductOption[] };
+type Payload = { report: GrossMarginReport };
+
+/** ID 147 — the ONE item → product mapping, shared with By SKU. */
+const ITEM_MAPPING_HREF = "/admin/reports/invoice-ledger?tab=items";
 
 const QUERY_KEY = ["ceo-gross-margin"];
 
@@ -47,39 +50,16 @@ function MarginCellView({ cell }: { cell: MarginCell }) {
 }
 
 export function GrossMarginPanel({ showMapping = false }: { showMapping?: boolean }) {
-    const queryClient = useQueryClient();
-    const [saving, setSaving] = useState<string | null>(null);
-    const [saveError, setSaveError] = useState<string | null>(null);
-
     const { data, isLoading, error } = useQuery<Payload>({
-        queryKey: [...QUERY_KEY, showMapping],
+        queryKey: QUERY_KEY,
         queryFn: async () => {
-            const res = await fetch(`/api/dashboard/ceo/gross-margin${showMapping ? "?mappings=1" : ""}`, { cache: "no-store" });
+            const res = await fetch("/api/dashboard/ceo/gross-margin", { cache: "no-store" });
             const json = await res.json();
             if (!json.success) throw new Error(json.error?.message ?? "Could not load gross margin");
             return json.data;
         },
         staleTime: 5 * 60 * 1000,
     });
-
-    const mapItem = async (itemKey: string, productId: string) => {
-        setSaving(itemKey);
-        setSaveError(null);
-        try {
-            const res = await fetch("/api/dashboard/ceo/gross-margin", {
-                method: "POST",
-                headers: { "content-type": "application/json" },
-                body: JSON.stringify({ item_key: itemKey, product_id: productId || null }),
-            });
-            const json = await res.json();
-            if (!json.success) throw new Error(json.error?.message ?? "Could not save");
-            await queryClient.invalidateQueries({ queryKey: QUERY_KEY });
-        } catch (e) {
-            setSaveError(e instanceof Error ? e.message : "Could not save");
-        } finally {
-            setSaving(null);
-        }
-    };
 
     const report = data?.report;
     const months = [...(report?.months ?? [])].reverse();
@@ -92,7 +72,7 @@ export function GrossMarginPanel({ showMapping = false }: { showMapping?: boolea
         { invoiceRevenue: 0, costed: 0, margin: 0 },
     );
     const coverage = totals.invoiceRevenue > 0 ? totals.costed / totals.invoiceRevenue : null;
-    const unmapped = (data?.mappings ?? []).filter((m) => !m.product_id).length;
+    const unmapped = report?.unmapped_items ?? 0;
 
     return (
         <div data-testid="ceo-gross-margin" className="p-5 rounded-2xl bg-white border border-gray-100 shadow-sm">
@@ -112,7 +92,7 @@ export function GrossMarginPanel({ showMapping = false }: { showMapping?: boolea
 
             {report && !report.available && (
                 <p className="mt-4 text-xs text-amber-700">
-                    Invoice line items are not set up on this database yet (migration E-326), so gross margin cannot be
+                    The invoice ledger is not set up on this database yet (migration E-322), so gross margin cannot be
                     calculated.
                 </p>
             )}
@@ -176,6 +156,11 @@ export function GrossMarginPanel({ showMapping = false }: { showMapping?: boolea
                                                     {m.invoices_without_lines} of {m.invoices} invoices have no usable lines
                                                 </div>
                                             )}
+                                            {m.credit_notes > 0 && (
+                                                <div className="text-[10px] text-gray-500">
+                                                    after {formatINRCompact(m.credit_notes)} credit notes
+                                                </div>
+                                            )}
                                         </td>
                                         <td className="py-2 pr-3"><MarginCellView cell={m.total} /></td>
                                         {LINE_TYPES.map((t) => (
@@ -188,69 +173,27 @@ export function GrossMarginPanel({ showMapping = false }: { showMapping?: boolea
                     </div>
                     <p className="mt-2 text-[11px] text-gray-500">
                         Margin is on what was sold, not on stock bought. Cost is the product&apos;s average OEM invoice
-                        value over the last 180 days, else all its stock, else the OEM price book.
+                        value over the last 180 days, else all its stock, else the OEM price book. Voided invoices are
+                        left out and credit notes come off the month, as in revenue. Lines and products are the same as
+                        Invoice Ledger › By SKU.
                     </p>
                 </>
             )}
 
-            {showMapping && report?.available && (data?.mappings?.length ?? 0) > 0 && (
-                <div className="mt-5 border-t border-gray-100 pt-4">
-                    <h4 className="text-xs font-semibold text-gray-900">
-                        Invoice items and their products
-                        {unmapped > 0 && <span className="ml-2 rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">{unmapped} not linked</span>}
-                    </h4>
-                    <p className="text-[11px] text-gray-500">
-                        An item is linked once and covers every invoice that carries it. &quot;Suggested&quot; links were matched
-                        on voltage and Ah — confirm or change them.
-                    </p>
-                    {saveError && <p className="mt-2 text-[11px] text-rose-700">{saveError}</p>}
-                    <div className="mt-2 max-h-80 overflow-y-auto">
-                        <table className="w-full text-xs">
-                            <tbody>
-                                {data!.mappings!.map((m) => (
-                                    <tr key={m.item_key} className="border-b border-gray-50">
-                                        <td className="py-1.5 pr-3 text-gray-900">
-                                            {m.item_name}
-                                            <div className="text-[10px] text-gray-500 tabular-nums">
-                                                {m.lines} line{m.lines === 1 ? "" : "s"} · {formatINRCompact(m.amount)}
-                                            </div>
-                                        </td>
-                                        <td className="py-1.5 pr-3">
-                                            <select
-                                                className="w-full max-w-[280px] rounded-lg border border-gray-200 bg-white px-2 py-1 text-xs"
-                                                value={m.product_id ?? ""}
-                                                disabled={saving === m.item_key}
-                                                onChange={(e) => mapItem(m.item_key, e.target.value)}
-                                            >
-                                                <option value="">Not linked</option>
-                                                {(data!.products ?? []).map((p) => (
-                                                    <option key={p.id} value={p.id}>
-                                                        {p.name}{p.has_cost ? "" : " (no cost on file)"}
-                                                    </option>
-                                                ))}
-                                            </select>
-                                        </td>
-                                        <td className="py-1.5 text-[10px]">
-                                            {!m.product_id ? (
-                                                <span className="font-semibold text-amber-700">Not linked</span>
-                                            ) : m.auto_matched ? (
-                                                <button
-                                                    type="button"
-                                                    className="font-semibold text-brand-700 hover:underline"
-                                                    disabled={saving === m.item_key}
-                                                    onClick={() => mapItem(m.item_key, m.product_id!)}
-                                                >
-                                                    Suggested · confirm
-                                                </button>
-                                            ) : (
-                                                <span className="text-emerald-700">Linked</span>
-                                            )}
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
+            {showMapping && report?.available && (
+                <div className="mt-5 flex flex-wrap items-center gap-2 border-t border-gray-100 pt-4 text-xs">
+                    <span className="font-semibold text-gray-900">Invoice items and their products</span>
+                    {unmapped > 0 && (
+                        <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">
+                            {unmapped} not linked in this period
+                        </span>
+                    )}
+                    <Link href={ITEM_MAPPING_HREF} className="font-semibold text-brand-700 hover:underline">
+                        Link them in Invoice Ledger › Item mapping
+                    </Link>
+                    <span className="w-full text-[11px] text-gray-500">
+                        One mapping for the whole CRM: what is linked there is used here and in By SKU.
+                    </span>
                 </div>
             )}
         </div>

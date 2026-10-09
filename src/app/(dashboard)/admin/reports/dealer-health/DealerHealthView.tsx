@@ -5,7 +5,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 
 import {
@@ -25,6 +25,7 @@ const BUCKET_TONE: Record<AccountBucket, string> = {
     dormant: "bg-slate-100 text-slate-700 border-slate-300",
     not_ordered_yet: "bg-white text-slate-600 border-slate-200",
     never_ordered: "bg-amber-50 text-amber-800 border-amber-200",
+    closed: "bg-gray-800 text-white border-gray-800",
 };
 
 const inr = (n: number) => `₹${n.toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
@@ -38,9 +39,31 @@ export function DealerHealthView({ initialBucket = "" }: { initialBucket?: Deale
     const [group, setGroup] = useState<Group>("owner");
     const [bucket, setBucket] = useState<DealerHealthFilter>(initialBucket);
 
+    const queryClient = useQueryClient();
+    // ID 5 — close a dealer as "Lost / closed" with a reason, or reopen it.
+    const [closing, setClosing] = useState<string | null>(null);
+    const [closeReason, setCloseReason] = useState("");
+    const closure = useMutation({
+        mutationFn: async (args: { accountId: string; action: "close" | "reopen" }) => {
+            const res = await fetch(`/api/admin/accounts/${encodeURIComponent(args.accountId)}/closure`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(args.action === "close" ? { action: "close", reason: closeReason } : { action: "reopen" }),
+            });
+            const json = await res.json().catch(() => null);
+            if (!res.ok || !json?.success) throw new Error(json?.error?.message ?? "Could not update the dealer");
+        },
+        onSuccess: () => {
+            setClosing(null);
+            setCloseReason("");
+            queryClient.invalidateQueries({ queryKey: ["dealer-health"] });
+        },
+    });
+
     const { data, isLoading, error } = useQuery<{
         rows: DealerHealthRow[];
         summary: DealerHealthGroup[];
+        can_close?: boolean;
     }>({
         queryKey: ["dealer-health", group],
         queryFn: async () => {
@@ -125,6 +148,7 @@ export function DealerHealthView({ initialBucket = "" }: { initialBucket?: Deale
                             <th className="px-3 py-2 text-right font-semibold">Revenue 90d</th>
                             <th className="px-3 py-2 text-right font-semibold">Lifetime</th>
                             <th className="px-3 py-2 text-right font-semibold">Avg reorder (d)</th>
+                            {data?.can_close && <th className="px-3 py-2" />}
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-border">
@@ -164,6 +188,9 @@ export function DealerHealthView({ initialBucket = "" }: { initialBucket?: Deale
                                     <span className={`rounded-full border px-2 py-0.5 text-[11px] ${BUCKET_TONE[r.bucket]}`}>
                                         {ACCOUNT_BUCKET_LABELS[r.bucket].split(" (")[0]}
                                     </span>
+                                    {r.closed_reason && (
+                                        <div className="mt-1 text-[11px] text-ink-muted">{r.closed_reason}</div>
+                                    )}
                                 </td>
                                 <td className="px-3 py-2 text-ink-muted">{r.converted_on ?? "—"}</td>
                                 <td className="px-3 py-2 text-ink-muted">{r.last_order ?? "—"}</td>
@@ -174,6 +201,60 @@ export function DealerHealthView({ initialBucket = "" }: { initialBucket?: Deale
                                 <td className="px-3 py-2 text-right tabular-nums">{inr(r.revenue_90d)}</td>
                                 <td className="px-3 py-2 text-right tabular-nums">{inr(r.revenue_lifetime)}</td>
                                 <td className="px-3 py-2 text-right tabular-nums">{r.avg_reorder_days ?? "—"}</td>
+                                {data?.can_close && (
+                                    <td className="px-3 py-2 text-right">
+                                        {r.account_id && r.bucket === "closed" && (
+                                            <button
+                                                type="button"
+                                                disabled={closure.isPending}
+                                                onClick={() => closure.mutate({ accountId: r.account_id!, action: "reopen" })}
+                                                className="text-xs font-semibold text-brand-sky hover:underline"
+                                            >
+                                                Reopen
+                                            </button>
+                                        )}
+                                        {r.account_id && r.bucket !== "closed" && closing !== r.account_id && (
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    setClosing(r.account_id);
+                                                    setCloseReason("");
+                                                    closure.reset();
+                                                }}
+                                                className="text-xs font-semibold text-rose-700 hover:underline"
+                                            >
+                                                Close dealer
+                                            </button>
+                                        )}
+                                        {closing === r.account_id && (
+                                            <div className="flex flex-col items-end gap-1">
+                                                <input
+                                                    autoFocus
+                                                    value={closeReason}
+                                                    onChange={(e) => setCloseReason(e.target.value)}
+                                                    placeholder="Why? e.g. shop closed, moved to a competitor"
+                                                    className="w-56 rounded-lg border border-border px-2 py-1 text-xs"
+                                                />
+                                                <div className="flex gap-2">
+                                                    <button type="button" onClick={() => setClosing(null)} className="text-xs text-ink-muted">
+                                                        Cancel
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        disabled={closure.isPending || closeReason.trim().length < 3}
+                                                        onClick={() => closure.mutate({ accountId: r.account_id!, action: "close" })}
+                                                        className="text-xs font-semibold text-rose-700 disabled:opacity-40"
+                                                    >
+                                                        Close as lost
+                                                    </button>
+                                                </div>
+                                                {closure.isError && (
+                                                    <span className="text-[11px] text-rose-600">{(closure.error as Error).message}</span>
+                                                )}
+                                            </div>
+                                        )}
+                                    </td>
+                                )}
                             </tr>
                         ))}
                     </tbody>

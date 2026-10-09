@@ -14,7 +14,7 @@
  * Nothing here assigns an owner by itself. suggestedOwners() is a hint shown
  * next to the "No owner" queue; a person always confirms it.
  */
-import { and, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
     accountOwnerHistory,
@@ -23,6 +23,8 @@ import {
     auditLogs,
 } from "@/lib/db/schema";
 import { generateId } from "@/lib/api-utils";
+import { GSTIN_KEY } from "@/lib/leads/gstinMatch";
+import { SALESPERSON_ROLES } from "@/lib/onboarding/salesperson";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type Runner = typeof db | Tx;
@@ -219,9 +221,15 @@ export async function ownerHistory(accountId: string) {
 
 /**
  * Suggested owner per account — a HINT for the "No owner" queue, never
- * applied automatically. Order: the onboarding application's owner_id (set by
- * Mark Converted), then the linked lead's closing owner, then its current
- * owner. Only active users are suggested.
+ * applied automatically. ID 148: ONE ranking, used by the Accounts screen and
+ * the Dealer accounts download alike:
+ *   1. the salesperson recorded on the onboarding;
+ *   2. the onboarding application's owner (set by Mark Converted);
+ *   3. the linked lead's closing owner, then 4. its current owner;
+ *   5. whoever filled the onboarding form;
+ *   6. the sales manager typed on the onboarding, matched to a CRM user;
+ *   7. the closing owner of another lead with the same GSTIN or phone.
+ * Only active users in a sales role are suggested.
  */
 export async function suggestedOwners(
     accountIds: string[],
@@ -229,34 +237,64 @@ export async function suggestedOwners(
 ): Promise<Map<string, { user_id: string; name: string | null; basis: string }>> {
     const out = new Map<string, { user_id: string; name: string | null; basis: string }>();
     if (accountIds.length === 0) return out;
+    const last10 = (expr: SQL): SQL => sql`right(regexp_replace(COALESCE(${expr}, ''), '[^0-9]', '', 'g'), 10)`;
+    const roles = sql.join(SALESPERSON_ROLES.map((r) => sql`${r}`), sql`, `);
     const rows = (await runner.execute(sql`
         WITH acc AS (
-            SELECT a.id AS account_id,
-                   (SELECT app.id FROM dealer_onboarding_applications app
-                     WHERE app.dealer_code = a.id
-                     ORDER BY app.created_at ASC LIMIT 1) AS app_id
+            SELECT a.id AS account_id, a.gstin, a.contact_phone,
+                   COALESCE(
+                       (SELECT app.id FROM dealer_onboarding_applications app
+                          JOIN dealers d ON d.application_id = app.id::text
+                         WHERE d.dealer_id = a.id LIMIT 1),
+                       (SELECT app.id FROM dealer_onboarding_applications app
+                         WHERE app.dealer_code = a.id
+                         ORDER BY app.created_at ASC LIMIT 1)) AS app_id
               FROM accounts a
              WHERE a.id IN (${sql.join(accountIds.map((i) => sql`${i}`), sql`, `)})
         ),
+        lead AS (
+            SELECT acc.account_id, dl.closing_owner_id, dl.current_owner_id
+              FROM acc
+              JOIN dealer_onboarding_applications app ON app.id = acc.app_id
+              JOIN dealer_leads dl ON dl.id = COALESCE(app.originating_dealer_lead_id,
+                   (SELECT x.id FROM dealer_leads x WHERE x.dealer_onboarding_application_id = app.id LIMIT 1))
+        ),
         cand AS (
-            SELECT acc.account_id, app.owner_id AS user_id, 'onboarding owner' AS basis, 1 AS rank
+            SELECT acc.account_id, app.salesperson_user_id::text AS user_id, 'Salesperson on the onboarding' AS basis, 1 AS rank
               FROM acc JOIN dealer_onboarding_applications app ON app.id = acc.app_id
             UNION ALL
-            SELECT acc.account_id, dl.closing_owner_id, 'lead closing owner', 2
-              FROM acc
-              JOIN dealer_onboarding_applications app ON app.id = acc.app_id
-              JOIN dealer_leads dl ON dl.id = COALESCE(app.originating_dealer_lead_id,
-                   (SELECT x.id FROM dealer_leads x WHERE x.dealer_onboarding_application_id = app.id LIMIT 1))
+            SELECT acc.account_id, app.owner_id::text, 'Owner of the onboarding', 2
+              FROM acc JOIN dealer_onboarding_applications app ON app.id = acc.app_id
             UNION ALL
-            SELECT acc.account_id, dl.current_owner_id, 'lead owner', 3
+            SELECT account_id, closing_owner_id, 'Closed the lead', 3 FROM lead
+            UNION ALL
+            SELECT account_id, current_owner_id, 'Owns the lead', 4 FROM lead
+            UNION ALL
+            SELECT acc.account_id, app.onboarding_operator_id::text, 'Filled the onboarding form', 5
+              FROM acc JOIN dealer_onboarding_applications app ON app.id = acc.app_id
+            UNION ALL
+            SELECT acc.account_id, su.id::text, 'Typed as sales manager on the onboarding', 6
               FROM acc
               JOIN dealer_onboarding_applications app ON app.id = acc.app_id
-              JOIN dealer_leads dl ON dl.id = COALESCE(app.originating_dealer_lead_id,
-                   (SELECT x.id FROM dealer_leads x WHERE x.dealer_onboarding_application_id = app.id LIMIT 1))
+              JOIN users su
+                ON (app.sales_manager_email IS NOT NULL AND lower(su.email) = lower(btrim(app.sales_manager_email)))
+                OR (length(${last10(sql`app.sales_manager_mobile`)}) = 10
+                    AND ${last10(sql`su.phone`)} = ${last10(sql`app.sales_manager_mobile`)})
+            UNION ALL
+            SELECT acc.account_id, sl.closing_owner_id, 'Closed a lead with the same GSTIN or phone', 7
+              FROM acc
+              JOIN dealer_leads sl
+                ON (${GSTIN_KEY(sql`sl.gstin`)} IS NOT NULL
+                    AND upper(btrim(acc.gstin)) <> 'PENDING'
+                    AND ${GSTIN_KEY(sql`sl.gstin`)} = ${GSTIN_KEY(sql`acc.gstin`)})
+                OR (length(${last10(sql`acc.contact_phone`)}) = 10
+                    AND ${last10(sql`sl.phone`)} = ${last10(sql`acc.contact_phone`)})
         )
         SELECT DISTINCT ON (c.account_id) c.account_id, u.id::text AS user_id, u.name, c.basis
           FROM cand c
-          JOIN users u ON u.id::text = c.user_id AND u.is_active IS NOT FALSE
+          JOIN users u ON u.id::text = c.user_id
+         WHERE u.is_active IS NOT FALSE
+           AND lower(u.role) IN (${roles})
          ORDER BY c.account_id, c.rank
     `)) as unknown as Array<{ account_id: string; user_id: string; name: string | null; basis: string }>;
     for (const r of rows) out.set(r.account_id, { user_id: r.user_id, name: r.name, basis: r.basis });

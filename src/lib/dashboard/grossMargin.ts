@@ -18,15 +18,25 @@
  *   * A line whose item is not mapped to a product, or whose product has no
  *     cost anywhere, has no margin. Its revenue is reported as "not costed",
  *     never as 100% margin.
- *   * Void invoices are out, as everywhere else revenue is counted.
+ *   * Void invoices are out — the voids register (invoice_voids) — and credit
+ *     notes come off the month's revenue, as everywhere else revenue is counted
+ *     (revenueSource REVENUE_NOT_VOID).
  *
- * Source today is Drive sales invoices (sales_invoices + sales_invoice_lines,
- * E-326). Zoho-era invoices carry no line items until the ID 70 backfill.
+ * ONE line store and ONE mapping (ID 147): the lines are invoice_line_items —
+ * the Vyapar register, Drive invoices and the Zoho backfill — read through
+ * revenueSource.matchedLinesUnion(), exactly as Invoice Ledger › By SKU reads
+ * them, and an item's product is the one set in Invoice Ledger › Item mapping
+ * (vyapar_item_map → the line's asset_type + product_id, product_master_*).
+ * Stock cost is joined to that product by its model id (inventory.model_type).
+ * The older E-326 store (sales_invoice_lines + sales_invoice_item_products) is
+ * no longer read.
  */
 
 import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { LINES_TOLERANCE_MIN, LINES_TOLERANCE_PCT, LINE_TYPES, type LineType } from "@/lib/sales/salesInvoiceLines";
+import { matchedLinesUnion, matchedUnion, REVENUE_NOT_VOID } from "@/lib/dashboard/revenueSource";
+import { hasInvoiceLedgerTables } from "@/lib/sales/ledgerTables";
+import { LINE_TYPES, type LineType } from "@/lib/sales/salesInvoiceLines";
 
 export const RECENT_COST_DAYS = 180;
 
@@ -46,20 +56,29 @@ export type MarginCell = {
 
 export type MarginMonth = {
   month: string; // YYYY-MM
-  /** Taxable value of every non-void invoice in the month — the base margin is compared with. */
+  /**
+   * Revenue before GST of every non-void invoice in the month, less credit
+   * notes — the base margin is compared with. An invoice with lines counts its
+   * lines; one without counts its taxable value (Drive / Vyapar), or its total
+   * where nothing smaller is known (Zoho stores no tax split).
+   */
   invoice_revenue: number;
   invoices: number;
-  /** Invoices with no stored lines, or lines that do not add up. */
+  /** Invoices with no lines in the ledger. */
   invoices_without_lines: number;
   revenue_without_lines: number;
+  /** ID 71 — credit notes issued in the month, before GST; already off invoice_revenue. */
+  credit_notes: number;
   total: MarginCell;
   by_type: Record<LineType, MarginCell>;
 };
 
 export type GrossMarginReport = {
-  available: boolean; // false when E-326 is not applied on this database
+  available: boolean; // false when the invoice ledger (E-322) is not on this database
   months: MarginMonth[];
   cost_sources: Record<CostSource, number>; // costed line value by where the cost came from
+  /** Item names on lines in the range with no product — map them in Invoice Ledger › Item mapping. */
+  unmapped_items: number;
 };
 
 const emptyCell = (): MarginCell => ({ revenue: 0, cost: 0, margin: 0, margin_pct: null, quantity: 0, not_costed: 0 });
@@ -70,6 +89,7 @@ function finish(cell: MarginCell): MarginCell {
   return cell;
 }
 
+/** The OLD E-326 store (scripts/backfill-sales-invoice-lines.ts still fills it). */
 export async function grossMarginTablesPresent(): Promise<boolean> {
   try {
     const res = (await db.execute<{ present: boolean }>(sql`
@@ -83,29 +103,23 @@ export async function grossMarginTablesPresent(): Promise<boolean> {
   }
 }
 
-/** Invoices that count: not void, with a taxable value. Alias `si`. */
-const COUNTED_INVOICE = sql`si.status IS DISTINCT FROM 'void' AND si.invoice_date IS NOT NULL`;
-
-/** Invoice ids whose stored lines add up to the taxable value. */
-const TRUSTED_LINES = sql`(
-  SELECT l.sales_invoice_id
-    FROM sales_invoice_lines l
-    JOIN sales_invoices s ON s.id = l.sales_invoice_id
-   WHERE s.sub_total > 0
-   GROUP BY l.sales_invoice_id, s.sub_total
-  HAVING ABS(SUM(l.amount) - s.sub_total)
-         <= GREATEST(${LINES_TOLERANCE_MIN}::numeric, s.sub_total * ${LINES_TOLERANCE_PCT}::numeric / 100)
-)`;
-
-/** The line's type: its HSN, else the mapped product's asset type. */
+/** The line's type: its HSN (as invoiceLines.classifyHsn, plus scrap), else the mapped asset type. */
 const LINE_TYPE: SQL = sql`CASE
-    WHEN l.hsn_code LIKE '8507%' THEN 'battery'
-    WHEN l.hsn_code LIKE '850440%' THEN 'charger'
-    WHEN l.hsn_code LIKE '8548%' OR l.hsn_code LIKE '8549%' THEN 'scrap'
-    WHEN l.hsn_code IS NOT NULL THEN 'other'
-    WHEN lower(p.asset_type) LIKE '%batter%' THEN 'battery'
-    WHEN lower(p.asset_type) LIKE '%charger%' THEN 'charger'
+    WHEN r.hsn LIKE '850790%' THEN 'other'
+    WHEN r.hsn LIKE '8507%' THEN 'battery'
+    WHEN r.hsn LIKE '850440%' THEN 'charger'
+    WHEN r.hsn LIKE '8548%' OR r.hsn LIKE '8549%' THEN 'scrap'
+    WHEN r.hsn IS NOT NULL THEN 'other'
+    WHEN r.asset_type = 'battery' THEN 'battery'
+    WHEN r.asset_type = 'charger' THEN 'charger'
     ELSE 'other' END`;
+
+/** The mapped product's model id, which is what stock rows carry (inventory.model_type). */
+const MODEL_ID: SQL = sql`CASE r.asset_type
+    WHEN 'battery' THEN (SELECT b.model_id FROM product_master_batteries b WHERE b.id::text = r.product_id)
+    WHEN 'charger' THEN (SELECT c.model_id FROM product_master_chargers c WHERE c.id::text = r.product_id)
+    WHEN 'paraphernalia' THEN (SELECT pp.item_type_code FROM product_master_paraphernalia pp WHERE pp.id::text = r.product_id)
+  END`;
 
 type LineRow = {
   month: string;
@@ -119,9 +133,10 @@ type LineRow = {
 type MonthRow = {
   month: string;
   invoices: number;
-  invoice_revenue: string;
+  line_revenue: string;
   invoices_without_lines: number;
   revenue_without_lines: string;
+  credit_notes: string;
 };
 
 /**
@@ -131,71 +146,86 @@ type MonthRow = {
 export async function grossMarginByMonth(
   opts: { from?: string | null; to?: string | null; runner?: Pick<typeof db, "execute"> } = {},
 ): Promise<GrossMarginReport> {
-  // `runner` lets scripts/verify-id72-gross-margin.ts read inside its own transaction.
   const run = opts.runner ?? db;
   const report: GrossMarginReport = {
-    available: await grossMarginTablesPresent(),
+    available: await hasInvoiceLedgerTables(),
     months: [],
     cost_sources: { recent_invoices: 0, all_invoices: 0, price_book: 0 },
+    unmapped_items: 0,
   };
-  if (!report.available) return report;
+  const lines = report.available ? await matchedLinesUnion() : null;
+  if (!lines) return { ...report, available: false };
+  const invoices = await matchedUnion();
 
   const range = sql.join(
     [
-      COUNTED_INVOICE,
-      ...(opts.from ? [sql`si.invoice_date >= ${opts.from}::date`] : []),
-      ...(opts.to ? [sql`si.invoice_date <= ${opts.to}::date`] : []),
+      REVENUE_NOT_VOID,
+      sql`r.invoice_date IS NOT NULL`,
+      ...(opts.from ? [sql`r.invoice_date >= ${opts.from}::date`] : []),
+      ...(opts.to ? [sql`r.invoice_date <= ${opts.to}::date`] : []),
     ],
     sql` AND `,
   );
 
+  // One row per month: invoices (with / without ledger lines) and credit notes.
   const monthRows = (await run.execute<MonthRow>(sql`
-    SELECT to_char(si.invoice_date, 'YYYY-MM')                                  AS month,
-           COUNT(*)::int                                                        AS invoices,
-           COALESCE(SUM(si.sub_total), 0)                                       AS invoice_revenue,
-           COUNT(*) FILTER (WHERE tl.sales_invoice_id IS NULL)::int             AS invoices_without_lines,
-           COALESCE(SUM(si.sub_total) FILTER (WHERE tl.sales_invoice_id IS NULL), 0) AS revenue_without_lines
-      FROM sales_invoices si
-      LEFT JOIN ${TRUSTED_LINES} tl ON tl.sales_invoice_id = si.id
-     WHERE ${range}
+    WITH inv AS (
+      SELECT r.source, to_char(r.invoice_date, 'YYYY-MM') AS month,
+             (SELECT SUM(l.amount_excl_gst) FROM invoice_line_items l
+               WHERE l.invoice_id = r.id
+                 AND (l.source = r.source OR (r.source = 'drive' AND l.source IN ('vyapar', 'drive')))) AS line_total,
+             CASE r.source
+               WHEN 'drive'  THEN (SELECT si.sub_total FROM sales_invoices si WHERE si.id::text = r.id)
+               WHEN 'credit' THEN (SELECT cn.sub_total FROM credit_notes cn WHERE cn.id::text = r.id)
+             END AS taxable,
+             r.total
+        FROM ${invoices} AS r
+       WHERE ${range}
+    )
+    SELECT month,
+           COUNT(*) FILTER (WHERE source <> 'credit')::int                                    AS invoices,
+           COALESCE(SUM(line_total) FILTER (WHERE source <> 'credit'), 0)                     AS line_revenue,
+           COUNT(*) FILTER (WHERE source <> 'credit' AND line_total IS NULL)::int             AS invoices_without_lines,
+           COALESCE(SUM(COALESCE(taxable, total)) FILTER (WHERE source <> 'credit' AND line_total IS NULL), 0) AS revenue_without_lines,
+           COALESCE(SUM(COALESCE(taxable, ABS(total))) FILTER (WHERE source = 'credit'), 0)   AS credit_notes
+      FROM inv
      GROUP BY 1
      ORDER BY 1
   `)) as unknown as MonthRow[];
 
+  // Cost per line: recent stock cost, all stock cost, then the OEM price book —
+  // all keyed on the product the Item mapping gave the line.
   const lineRows = (await run.execute<LineRow>(sql`
-    SELECT to_char(si.invoice_date, 'YYYY-MM') AS month,
-           ${LINE_TYPE}                        AS line_type,
+    SELECT to_char(r.invoice_date, 'YYYY-MM') AS month,
+           ${LINE_TYPE}                       AS line_type,
            c.cost_source,
-           SUM(l.amount)                       AS amount,
-           SUM(l.quantity)                     AS quantity,
-           SUM(l.quantity * c.unit_cost)       AS cost
-      FROM sales_invoice_lines l
-      JOIN sales_invoices si ON si.id = l.sales_invoice_id
-      JOIN ${TRUSTED_LINES} tl ON tl.sales_invoice_id = si.id
-      LEFT JOIN sales_invoice_item_products m ON m.item_key = l.item_key
-      LEFT JOIN products p ON p.id = m.product_id
+           SUM(r.amount_excl_gst)             AS amount,
+           SUM(r.quantity)                    AS quantity,
+           SUM(r.quantity * c.unit_cost)      AS cost
+      FROM ${lines} AS r
+      LEFT JOIN LATERAL (SELECT ${MODEL_ID} AS model_id) pm ON TRUE
       LEFT JOIN LATERAL (
         SELECT x.unit_cost, x.cost_source
           FROM (
             SELECT AVG(i.inventory_amount) AS unit_cost, 'recent_invoices'::text AS cost_source, 1 AS rank
               FROM inventory i
-             WHERE i.product_id = m.product_id AND i.inventory_amount > 0
-               AND i.oem_invoice_date::date <= si.invoice_date
-               AND i.oem_invoice_date::date > si.invoice_date - ${RECENT_COST_DAYS}::int
+             WHERE i.asset_type = r.asset_type AND i.model_type = pm.model_id AND i.inventory_amount > 0
+               AND i.oem_invoice_date::date <= r.invoice_date
+               AND i.oem_invoice_date::date > r.invoice_date - ${RECENT_COST_DAYS}::int
             UNION ALL
             SELECT AVG(i.inventory_amount), 'all_invoices', 2
               FROM inventory i
-             WHERE i.product_id = m.product_id AND i.inventory_amount > 0
+             WHERE i.asset_type = r.asset_type AND i.model_type = pm.model_id AND i.inventory_amount > 0
             UNION ALL
-            SELECT (SELECT r.oem_price
-                      FROM oem_reference_prices r
-                     WHERE r.product_id = m.product_id::text
-                     ORDER BY (r.effective_from::date <= si.invoice_date
-                               AND (r.effective_to IS NULL OR r.effective_to::date > si.invoice_date)) DESC,
-                              r.effective_from DESC
+            SELECT (SELECT o.oem_price
+                      FROM oem_reference_prices o
+                     WHERE o.asset_type = r.asset_type AND o.product_id = r.product_id
+                     ORDER BY (o.effective_from::date <= r.invoice_date
+                               AND (o.effective_to IS NULL OR o.effective_to::date > r.invoice_date)) DESC,
+                              o.effective_from DESC
                      LIMIT 1), 'price_book', 3
           ) x
-         WHERE x.unit_cost IS NOT NULL AND m.product_id IS NOT NULL
+         WHERE x.unit_cost IS NOT NULL AND r.product_id IS NOT NULL
          ORDER BY x.rank
          LIMIT 1
       ) c ON TRUE
@@ -203,14 +233,23 @@ export async function grossMarginByMonth(
      GROUP BY 1, 2, 3
   `)) as unknown as LineRow[];
 
+  const [unmapped] = (await run.execute<{ n: number }>(sql`
+    SELECT COUNT(DISTINCT lower(btrim(r.item_name)))::int AS n
+      FROM ${lines} AS r
+     WHERE ${range} AND r.product_id IS NULL AND r.item_name IS NOT NULL
+  `)) as unknown as Array<{ n: number }>;
+  report.unmapped_items = unmapped?.n ?? 0;
+
   const months = new Map<string, MarginMonth>();
   for (const r of monthRows) {
+    const credit = Number(r.credit_notes);
     months.set(r.month, {
       month: r.month,
-      invoice_revenue: Number(r.invoice_revenue),
+      invoice_revenue: Number(r.line_revenue) + Number(r.revenue_without_lines) - credit,
       invoices: r.invoices,
       invoices_without_lines: r.invoices_without_lines,
       revenue_without_lines: Number(r.revenue_without_lines),
+      credit_notes: credit,
       total: emptyCell(),
       by_type: Object.fromEntries(LINE_TYPES.map((t) => [t, emptyCell()])) as Record<LineType, MarginCell>,
     });
@@ -240,58 +279,4 @@ export async function grossMarginByMonth(
   }
   report.months = [...months.values()];
   return report;
-}
-
-// ── Item → product mapping ────────────────────────────────────────────────
-
-export type ItemMapping = {
-  item_key: string;
-  item_name: string;
-  product_id: string | null;
-  product_name: string | null;
-  auto_matched: boolean;
-  lines: number;
-  amount: number;
-};
-
-export type ProductOption = { id: string; name: string; asset_type: string | null; has_cost: boolean };
-
-/** Every invoice item, unmapped first, then by the line value riding on it. */
-export async function listItemMappings(): Promise<ItemMapping[]> {
-  const rows = (await db.execute<Omit<ItemMapping, "amount"> & { amount: string }>(sql`
-    SELECT m.item_key, m.item_name, m.product_id, p.name AS product_name, m.auto_matched,
-           COUNT(l.id)::int AS lines, COALESCE(SUM(l.amount), 0) AS amount
-      FROM sales_invoice_item_products m
-      LEFT JOIN products p ON p.id = m.product_id
-      LEFT JOIN sales_invoice_lines l ON l.item_key = m.item_key
-     GROUP BY m.item_key, m.item_name, m.product_id, p.name, m.auto_matched
-     ORDER BY (m.product_id IS NULL) DESC, m.auto_matched DESC, COALESCE(SUM(l.amount), 0) DESC
-  `)) as unknown as Array<Omit<ItemMapping, "amount"> & { amount: string }>;
-  return rows.map((r) => ({ ...r, amount: Number(r.amount) }));
-}
-
-/** Products an item can be mapped to; has_cost = stock or a price-book line exists. */
-export async function listMarginProducts(): Promise<ProductOption[]> {
-  return (await db.execute<ProductOption>(sql`
-    SELECT p.id, p.name, p.asset_type,
-           (EXISTS (SELECT 1 FROM inventory i WHERE i.product_id = p.id AND i.inventory_amount > 0)
-            OR EXISTS (SELECT 1 FROM oem_reference_prices r WHERE r.product_id = p.id::text)) AS has_cost
-      FROM products p
-     ORDER BY p.name
-  `)) as unknown as ProductOption[];
-}
-
-/** Map an item to a product (or clear it with null). A person's choice is never auto_matched. */
-export async function setItemProduct(itemKey: string, productId: string | null, userId: string): Promise<boolean> {
-  if (productId) {
-    const found = (await db.execute<{ id: string }>(sql`SELECT id FROM products WHERE id = ${productId}::uuid LIMIT 1`)) as unknown as { id: string }[];
-    if (found.length === 0) return false;
-  }
-  const updated = (await db.execute<{ item_key: string }>(sql`
-    UPDATE sales_invoice_item_products
-       SET product_id = ${productId}::uuid, auto_matched = FALSE, mapped_by = ${userId}::uuid, updated_at = now()
-     WHERE item_key = ${itemKey}
-     RETURNING item_key
-  `)) as unknown as { item_key: string }[];
-  return updated.length > 0;
 }

@@ -21,4 +21,11 @@ describe("accountBucket", () => {
         expect(accountBucket(null, 30)).toBe("not_ordered_yet");
         expect(accountBucket(null, 31)).toBe("never_ordered");
     });
+
+    it("ID 5: a closed dealer is Closed whatever its order history, never Dormant", () => {
+        expect(accountBucket(400, 500, true)).toBe("closed");
+        expect(accountBucket(null, 500, true)).toBe("closed");
+        expect(accountBucket(5, 100, true)).toBe("closed");
+        expect(accountBucket(400, 500, false)).toBe("dormant");
+    });
 });

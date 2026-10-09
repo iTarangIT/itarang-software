@@ -228,6 +228,7 @@ const BUCKET_COLOR: Record<AccountBucket, string> = {
   dormant: "#5a6877",
   not_ordered_yet: "#86b6ef",
   never_ordered: "#b8c2cc",
+  closed: "#2b2f36",
 };
 
 /** "Orange — pitch now (31–45 d)" → ["Orange — pitch now", "31–45 d"]. */

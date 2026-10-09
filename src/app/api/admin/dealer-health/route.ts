@@ -5,15 +5,18 @@
 import { requireRole } from "@/lib/auth-utils";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
 import { listDealerHealth, summarizeDealerHealth } from "@/lib/dealers/accountHealth";
+import { ACCOUNT_CLOSE_ROLES } from "@/lib/accounts/accountClosures";
 
 export const dynamic = "force-dynamic";
 
 const VIEW_ROLES = ["admin", "ceo", "sales_head", "business_head", "partner"];
 
 export const GET = withErrorHandler(async (req: Request) => {
-    await requireRole(VIEW_ROLES);
+    const user = await requireRole(VIEW_ROLES);
     const g = new URL(req.url).searchParams.get("group");
     const group = g === "city" || g === "business_type" ? g : "owner";
     const [rows, summary] = await Promise.all([listDealerHealth(), summarizeDealerHealth(group)]);
-    return successResponse({ rows, summary, group });
+    // ID 5 — may this viewer close / reopen a dealer?
+    const canClose = (ACCOUNT_CLOSE_ROLES as readonly string[]).includes(user.role);
+    return successResponse({ rows, summary, group, can_close: canClose });
 });
