@@ -19,7 +19,7 @@ import { db } from "@/lib/db";
 import { isEngagedCall } from "@/lib/lifecycle/touchpointTypes";
 import { dealerLeads } from "@/lib/db/schema";
 import { errorMessage } from "@/lib/api-utils";
-import { StatusGuardError, writeTouchpoint } from "@/lib/touchpoints/write";
+import { writeTouchpoint } from "@/lib/touchpoints/write";
 import { reactivateLead } from "@/lib/leads/reactivation";
 import { classifyAgainstExisting, loadExistingByPhone } from "@/lib/leads/dedupe";
 import {
@@ -241,18 +241,14 @@ async function handleDisposition(
         syncMethod: "api",
         outcome,
         interestReason: "Auto: from NeoDove call outcome",
+        // An inbound call is never refused. A derived move is computed from the
+        // locked row, so the S3 guard should rarely reject it — when it does
+        // (ID 123), only the move is skipped: the call and its temperature are
+        // still saved, and the refusal goes on Sync Activity.
+        skipRefusedStatusMove: true,
     };
-    // An inbound call is never refused. A derived move is computed from the
-    // locked row, so the S3 guard should never reject it — but if it ever does,
-    // the call is still recorded, without the move.
-    let touchpointId: string;
-    try {
-        ({ touchpointId } = await writeTouchpoint(callTouchpoint));
-    } catch (err) {
-        if (!(err instanceof StatusGuardError)) throw err;
-        console.warn(`[neodove/inbound] status move skipped for ${dealerLeadId}: ${err.message}`);
-        ({ touchpointId } = await writeTouchpoint({ ...callTouchpoint, outcome: undefined }));
-    }
+    const { touchpointId, statusRefused } = await writeTouchpoint(callTouchpoint);
+    if (statusRefused) await recordStatusRefused(event, statusRefused);
 
     await attachCallEvidence(touchpointId, event);
     await recordLeadDisposition(dealerLeadId, event);
@@ -696,6 +692,26 @@ async function attachEventContext(
             "[NeoDove/inbound] failed to attach event context:",
             errorMessage(err),
         );
+    }
+}
+
+// ID 123 — a refused status move is not an error (the call was recorded), so
+// it goes on the event's response_payload, which Sync Activity shows as a note,
+// rather than on `error`, which counts as a failure. Best-effort like the rest.
+async function recordStatusRefused(
+    event: NeodoveInboundEvent,
+    refused: { from: string | null; to: string; reason: string },
+): Promise<void> {
+    try {
+        await db.execute(sql`
+            UPDATE neodove_sync_events
+               SET response_payload = COALESCE(response_payload, '{}'::jsonb)
+                                      || jsonb_build_object('status_refused', ${JSON.stringify(refused)}::jsonb)
+             WHERE direction = 'inbound'
+               AND external_event_id = ${event.externalEventId}
+        `);
+    } catch (err) {
+        console.error("[NeoDove/inbound] failed to record refused status move:", errorMessage(err));
     }
 }
 

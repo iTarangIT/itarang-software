@@ -44,6 +44,7 @@ import {
 import { CampaignBannerExpansion } from "@/components/leads/campaign-banner-expansion";
 import { CampaignsTable } from "@/components/leads/campaigns-table";
 import { CostAnalyticsView } from "@/components/leads/cost-analytics-view";
+import { CallTimingView } from "@/components/leads/call-timing/CallTimingView";
 import {
   capabilitiesFor,
   LEAD_ASSIGNEE_ROLES,
@@ -74,7 +75,7 @@ import {
 const ENDED_VISIBLE_MS = 8000;
 const MANUAL_CALL_MAX_MS = 3 * 60 * 1000;
 
-type Tab = "leads" | "scraper" | "converted" | "campaigns" | "cost-analytics";
+type Tab = "leads" | "scraper" | "converted" | "campaigns" | "cost-analytics" | "call-timing";
 
 // The Cost-Analytics and NeoDove role lists used to be duplicated here as two
 // literal Sets. They now live in src/lib/leads/access.ts alongside the
@@ -1173,7 +1174,8 @@ export default function LeadsUnifiedPage() {
     return t === "scraper" ||
       t === "converted" ||
       t === "campaigns" ||
-      t === "cost-analytics"
+      t === "cost-analytics" ||
+      t === "call-timing"
       ? t
       : "leads";
   })();
@@ -2118,6 +2120,9 @@ export default function LeadsUnifiedPage() {
               ...(canSeeCostAnalytics
                 ? [{ key: "cost-analytics" as Tab, label: "Cost Analytics" }]
                 : []),
+              ...(caps.canSeeCallTiming
+                ? [{ key: "call-timing" as Tab, label: "Call timing" }]
+                : []),
             ] as { key: Tab; label: string }[]
           ).map(({ key, label }) => (
             <button
@@ -2416,6 +2421,9 @@ export default function LeadsUnifiedPage() {
       {tab === "cost-analytics" && canSeeCostAnalytics && (
         <CostAnalyticsView />
       )}
+
+      {/* ── TAB: CALL TIMING (ID 144 — when dealers answer the AI dialer) ── */}
+      {tab === "call-timing" && caps.canSeeCallTiming && <CallTimingView />}
     </div>
   );
 }

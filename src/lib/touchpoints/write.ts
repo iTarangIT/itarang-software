@@ -157,11 +157,20 @@ export type WriteTouchpointInput = {
    *               are not the owner's work and must not reset the idle clock.
    */
   countsAsWork?: boolean;
+  /**
+   * ID 123 — when the S3 guard refuses the status move, skip just the move
+   * instead of throwing StatusGuardError: the touchpoint and the temperature
+   * are still written, and the refusal comes back as `statusRefused`. For
+   * observers of a call (NeoDove) whose temperature must survive a refused move.
+   */
+  skipRefusedStatusMove?: boolean;
 };
 
 export type WriteTouchpointResult = {
   touchpointId: string;
   historyId: string | null;
+  /** ID 123 — the refused move, when skipRefusedStatusMove skipped one. */
+  statusRefused?: { from: string | null; to: string; reason: string };
 };
 
 // A live transaction handle, pulled from db.transaction's callback signature so
@@ -234,6 +243,7 @@ export async function writeTouchpoint(
     // written. A same-status move is a no-op (ID 115.6): the touchpoint is still
     // recorded, the move and its history row are skipped.
     const fromStatus = current?.lead_status ?? null;
+    let statusRefused: WriteTouchpointResult["statusRefused"];
     if (statusChange) {
       const verdict = checkStatusMove({
         from: fromStatus,
@@ -242,8 +252,13 @@ export async function writeTouchpoint(
         reason: statusChange.reasonNotes,
         adminOverride: statusChange.adminOverride,
       });
-      if (!verdict.ok) throw new StatusGuardError(verdict.reason);
-      if (verdict.noop) statusChange = undefined;
+      if (!verdict.ok) {
+        if (!input.skipRefusedStatusMove) throw new StatusGuardError(verdict.reason);
+        statusRefused = { from: fromStatus, to: statusChange.to, reason: verdict.reason };
+        statusChange = undefined;
+      } else if (verdict.noop) {
+        statusChange = undefined;
+      }
     }
 
     // E-300 — the idle clock moves only for work (isWorkedTouchpoint), and only
@@ -449,6 +464,7 @@ export async function writeTouchpoint(
     return {
       touchpointId: touchpoint!.touchpoint_id,
       historyId,
+      ...(statusRefused ? { statusRefused } : {}),
     };
   };
 
