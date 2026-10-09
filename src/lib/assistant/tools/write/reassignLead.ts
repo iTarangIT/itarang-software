@@ -18,6 +18,7 @@ import { defineTool, LeadId, ownedLeadOr, type ToolFactory } from "../spec";
 import { leadUrl } from "../leads";
 import { ActionRejected, defineApplier } from "../../applierSpec";
 import { matchPeople, nameList } from "./people";
+import { handBackRefusal, isHandBack } from "@/lib/leads/asmHandBack";
 
 export const ReassignLeadPlan = z.object({
     lead_id: z.string().min(1),
@@ -70,6 +71,15 @@ export const reassignLead: ToolFactory = () =>
             const target = matches[0]!;
             const targetName = target.name?.trim() || target.id;
 
+            // ID 121: say so now rather than after Confirm.
+            const status = await db.execute<{ lead_status: string | null }>(sql`
+                SELECT lead_status FROM dealer_leads WHERE id = ${lead.id} LIMIT 1
+            `);
+            if (isHandBack(status[0]?.lead_status, target.role)) {
+                const refusal = await handBackRefusal(db, lead.id);
+                if (refusal) return { kind: "declined", reason: refusal };
+            }
+
             const reason = input.reason.trim();
             if (reason.length < REASSIGN_REASON_MIN) {
                 return ask(`Why are you reassigning it to ${targetName}? I need a reason of at least ${REASSIGN_REASON_MIN} characters.`);
@@ -116,8 +126,11 @@ export const reassignLeadApplier = defineApplier<ReassignLeadPlan>({
                 { tx },
             );
         } catch (err) {
-            // The person was deactivated (or removed) after the preview.
-            if (err instanceof ReassignError) throw new ActionRejected("target_unavailable");
+            // The person was deactivated (or removed) after the preview — or,
+            // ID 121, the ASM booked a visit after it.
+            if (err instanceof ReassignError) {
+                throw new ActionRejected(err.code === "visit_booked" ? "visit_booked" : "target_unavailable");
+            }
             throw err;
         }
         return { new_owner_id: p.target_user_id };

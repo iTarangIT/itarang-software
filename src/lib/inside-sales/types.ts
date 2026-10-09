@@ -121,6 +121,8 @@ export type LeadDetailLead = QueueRow & {
     dealer_onboarding_application_id: string | null;
     onboarding_status: string | null;
     onboarding_created_at: string | null;
+    /** The GSTIN Mark Won recorded (ID 124: Correct GSTIN shows it). */
+    gstin?: string | null;
     /** E-296 "Type of Business" — see src/lib/leads/businessType.ts. NULL = not set. */
     business_type?: string | null;
     /** ID 81 (E-314): Entered via / Found via / Campaign — see leadSourceVocab.ts. */

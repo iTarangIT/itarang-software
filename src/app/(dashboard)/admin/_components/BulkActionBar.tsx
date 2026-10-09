@@ -170,6 +170,10 @@ export function BulkActionBar({
                     json.data.skipped_won
                         ? ` ${json.data.skipped_won} Won — close those from the onboarding drop-out review.`
                         : ""
+                }${
+                    json.data.skipped_visit_booked
+                        ? ` ${json.data.skipped_visit_booked} kept with the ASM — a visit is booked; cancel or complete it first.`
+                        : ""
                 }`,
             );
             setMode(null);

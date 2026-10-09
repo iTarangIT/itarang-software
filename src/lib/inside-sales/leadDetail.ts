@@ -95,7 +95,9 @@ export async function fetchLeadDetailBundle(leadId: string): Promise<LeadDetailB
             to_jsonb(dl) ->> 'acquisition_campaign_id' AS acquisition_campaign_id,
             -- ID 74 (E-314) Mark Won stamp and its flag, same to_jsonb guard.
             to_jsonb(dl) ->> 'won_at' AS won_at,
-            (to_jsonb(dl) ->> 'won_without_approved_quote')::boolean AS won_without_approved_quote
+            (to_jsonb(dl) ->> 'won_without_approved_quote')::boolean AS won_without_approved_quote,
+            -- ID 124: shown by Correct GSTIN on a Won lead.
+            dl.gstin
         FROM dealer_leads dl
         LEFT JOIN users owner ON owner.id::text = dl.current_owner_id
         LEFT JOIN users originator ON originator.id::text = dl.originator_id

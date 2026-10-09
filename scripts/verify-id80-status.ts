@@ -4,7 +4,9 @@
  *
  *   node --import tsx --env-file=.env.local scripts/verify-id80-status.ts
  *
- * Uses the REAL writers (logLeadTouchpoint, writeTouchpoint, planCorrection).
+ * Uses the REAL writers (logLeadTouchpoint, writeTouchpoint). Since 9 Oct (ID 136)
+ * "Correct status" is gone — scripts/verify-id80-undo-lost-reason.ts checks what
+ * replaced it (Undo Mark Won, Change Lost reason).
  * Leaves nothing behind: every write happens inside a transaction that is
  * always rolled back. Exit code 1 if anything FAILs.
  */
@@ -13,7 +15,7 @@ import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { applyVisitStatus } from "@/lib/asm/visitStatus";
 import { logLeadTouchpoint } from "@/lib/inside-sales/logTouchpoint";
-import { CorrectionInputError, planCorrection } from "@/lib/leads/correctStatus";
+import { existsSync } from "node:fs";
 import { writeTouchpoint } from "@/lib/touchpoints/write";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -178,49 +180,13 @@ async function main() {
                 `last worked ${before.last_worked_at ?? "never"} → ${after.last_worked_at ?? "never"}`,
             );
         });
-
-        // To Lost: the reason reaches dealer_leads.lost_reason.
-        await rolledBack(async (tx) => {
-            const before = await state(tx, anyOpen.id);
-            const plan = planCorrection({ to: "Lost", lostReason: "price_high" });
-            await writeTouchpoint(
-                {
-                    dealerLeadId: anyOpen.id,
-                    touchpointType: "status_change_note",
-                    performedBy: null,
-                    statusChange: {
-                        from: before.lead_status as never,
-                        to: "Lost",
-                        toLostReason: plan.toLostReason,
-                        reasonNotes: "Correct status: verify script",
-                        closingRole: "admin",
-                        event: "correction",
-                    },
-                },
-                { tx },
-            );
-            const after = await state(tx, anyOpen.id);
-            say(
-                after.lead_status === "Lost" && after.lost_reason === "price_high" ? "PASS" : "FAIL",
-                "point 3 — corrected to Lost, the lead carries its lost reason",
-                `lost_reason ${after.lost_reason ?? "NULL"}`,
-            );
-        });
     }
 
-    // What the route refuses before it writes anything.
-    const refuses = (label: string, fn: () => unknown) => {
-        try {
-            fn();
-            say("FAIL", `point 3 — ${label}`, "was accepted");
-        } catch (e) {
-            say(e instanceof CorrectionInputError ? "PASS" : "FAIL", `point 3 — ${label}`, e instanceof Error ? e.message : "");
-        }
-    };
-    refuses("to Lost with no lost reason is refused", () => planCorrection({ to: "Lost" }));
-    // ID 133: Correct status no longer reaches Won or Converted at all.
-    refuses("to Won is refused", () => planCorrection({ to: "Won" }));
-    refuses("to Converted is refused", () => planCorrection({ to: "Converted" }));
+    // ID 136: nobody picks a status by hand any more — the route is gone.
+    say(
+        existsSync("src/app/api/admin/leads/[id]/correct-status/route.ts") ? "FAIL" : "PASS",
+        "ID 136 — the Correct status route no longer exists",
+    );
 
     console.log(failed ? `\n${failed} FAILED` : "\nall checks passed");
 }
