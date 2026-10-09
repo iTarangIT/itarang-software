@@ -14,6 +14,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { runAuctionTick } from "@/lib/nbfc/auction/scheduler";
 import { fromVercelCron } from "@/lib/security/cronAuth";
+import { runAsJob } from "@/lib/runtime/liveSite";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -60,9 +61,9 @@ async function handle(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  return handle(req);
+  return runAsJob("cron:auction", () => handle(req));
 }
 
 export async function GET(req: NextRequest) {
-  return handle(req);
+  return runAsJob("cron:auction", () => handle(req));
 }

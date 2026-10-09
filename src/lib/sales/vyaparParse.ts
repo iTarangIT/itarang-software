@@ -14,7 +14,7 @@
  */
 import * as XLSX from "xlsx";
 import { classifyHsn, normalizeHsn, parseAmount, type ProductClass } from "./invoiceLines";
-import { normalizeGstin, isValidGstin } from "@/lib/leads/gstin";
+import { screenCustomerGstin } from "@/lib/leads/gstin";
 
 export type ImportKind = "vyapar_register" | "gstr1";
 
@@ -138,6 +138,8 @@ export interface ParsedDocument {
     date: string | null;
     party: string | null;
     gstin: string | null;
+    /** ID 62 — why the party GSTIN was dropped (fails the check, or is ours); null when fine. */
+    gstin_attention: string | null;
     cancelled: boolean;
     doc_type: "invoice" | "credit_note";
     taxable: number | null;
@@ -227,12 +229,13 @@ export function parseInvoiceWorkbook(buffer: ArrayBuffer | Buffer, kind: ImportK
         if (rawNumber) {
             doc = docs.get(rawNumber) ?? null;
             if (!doc) {
-                const gst = normalizeGstin(String(cell(row, "gstin") ?? ""));
+                const gst = screenCustomerGstin(String(cell(row, "gstin") ?? ""));
                 doc = {
                     number: rawNumber,
                     date: parseDateCell(cell(row, "date")),
                     party: String(cell(row, "party") ?? "").trim() || null,
-                    gstin: isValidGstin(gst) ? gst : null,
+                    gstin: gst.gstin,
+                    gstin_attention: gst.attention,
                     cancelled: false,
                     doc_type: isCreditNote(best.sheet, cell(row, "doc_type")) ? "credit_note" : "invoice",
                     taxable: null,

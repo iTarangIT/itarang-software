@@ -22,7 +22,7 @@
  * 2023-08-13 — right day, wrong year. The month check below catches it.
  */
 
-import { checkCustomerGstin, normalizeGstin } from "@/lib/leads/gstin";
+import { screenCustomerGstin } from "@/lib/leads/gstin";
 
 export interface SalesInvoiceCandidate {
   invoice_number: string | null;
@@ -189,17 +189,9 @@ export function validateSalesInvoice(
   // ID 62: a customer GSTIN that fails the check digit, or is one of ours (the
   // model picked the seller's), is dropped from the row so it can never match
   // a dealer. The raw value stays readable in the flag.
-  let customerGstin = normalizeGstin(candidate.customer_gstin) || null;
-  if (customerGstin) {
-    const check = checkCustomerGstin(customerGstin);
-    if (check === "own_gstin") {
-      attention.push(`Customer GSTIN is iTarang's own (${customerGstin}) — not matched to a dealer.`);
-      customerGstin = null;
-    } else if (check !== "ok") {
-      attention.push(`Customer GSTIN is not valid (${customerGstin}) — not matched to a dealer.`);
-      customerGstin = null;
-    }
-  }
+  const screened = screenCustomerGstin(candidate.customer_gstin);
+  const customerGstin = screened.gstin;
+  if (screened.attention) attention.push(screened.attention);
 
   return {
     ok: true,
