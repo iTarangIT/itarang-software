@@ -175,24 +175,46 @@ export async function findExistingLeadByPhone(phone: string | null | undefined):
  * copy). The lead's owner and the Sales Head are told (ID 81) — the owner is
  * skipped when they are the one who brought the dealer in again.
  */
-export async function recordReinquiry(input: {
+export async function recordReinquiry(input: ReinquiryInput): Promise<void> {
+    try {
+        await writeReinquiry(input);
+    } catch (e) {
+        console.error("[leadSource] re-inquiry not recorded:", e instanceof Error ? e.message : e);
+        return;
+    }
+    await notifyReinquiry(input);
+}
+
+type ReinquiryInput = {
     leadId: string;
     door: LeadDoor;
     actorId: string | null;
     note?: string | null;
-}): Promise<void> {
-    try {
-        await writeTouchpoint({
+};
+
+/**
+ * The Re-inquiry line alone, optionally inside the caller's transaction — the
+ * WhatsApp Assistant writes it only after the rep answers Yes (ID 137), from
+ * its executor's transaction. Throws on failure; pair with notifyReinquiry.
+ */
+export async function writeReinquiry(
+    input: ReinquiryInput,
+    opts?: Parameters<typeof writeTouchpoint>[1],
+): Promise<void> {
+    await writeTouchpoint(
+        {
             dealerLeadId: input.leadId,
             touchpointType: "lead_reinquiry",
             performedBy: input.actorId,
             remarks: `Re-inquiry via ${doorWords(input.door)}${input.note ? ` — ${input.note}` : ""}.`,
             syncMethod: input.actorId ? "manual" : "system",
-        });
-    } catch (e) {
-        console.error("[leadSource] re-inquiry not recorded:", e instanceof Error ? e.message : e);
-        return;
-    }
+        },
+        opts,
+    );
+}
+
+/** Tell the owner and the Sales Head (ID 81). Best-effort — never throws. */
+export async function notifyReinquiry(input: ReinquiryInput): Promise<void> {
     try {
         // Loaded here, not at the top: the notification hub pulls in the whole
         // emit stack, which the other callers of this module do not need.

@@ -54,6 +54,8 @@ export const WRITE_TOOL_NAMES = [
     "withdraw_quote",
     "attach_document",
     "update_lead",
+    // ID 137 — proposed by create_lead only; never in ROLE_TOOLS.
+    "record_reinquiry",
 ] as const;
 export type ReadToolName = (typeof READ_TOOL_NAMES)[number];
 export type WriteToolName = (typeof WRITE_TOOL_NAMES)[number];
@@ -102,6 +104,12 @@ export type Preview = {
     /** true = Confirm on THIS preview leads to a second, final confirmation. */
     needs_second_confirm: boolean;
     crm_url: string;
+    /**
+     * ID 137 — a question card: the two buttons read these instead of
+     * Confirm / Cancel, and there is no Edit. Confirm still writes; cancel
+     * (or letting it expire) writes nothing.
+     */
+    answers?: { confirm: string; cancel: string };
 };
 
 /**

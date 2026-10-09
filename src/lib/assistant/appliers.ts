@@ -19,6 +19,7 @@ import { sendQuoteApplier } from "./tools/write/sendQuote";
 import { withdrawQuoteApplier } from "./tools/write/withdrawQuote";
 import { attachDocumentApplier } from "./tools/write/attachDocument";
 import { updateLeadApplier } from "./tools/write/updateLead";
+import { recordReinquiryApplier } from "./tools/write/recordReinquiry";
 
 export const APPLIERS: Readonly<Record<WriteToolName, Applier<unknown>>> = Object.freeze({
     log_call: logCallApplier,
@@ -37,4 +38,5 @@ export const APPLIERS: Readonly<Record<WriteToolName, Applier<unknown>>> = Objec
     withdraw_quote: withdrawQuoteApplier,
     attach_document: attachDocumentApplier,
     update_lead: updateLeadApplier,
+    record_reinquiry: recordReinquiryApplier,
 });

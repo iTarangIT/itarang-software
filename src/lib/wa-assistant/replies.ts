@@ -32,7 +32,7 @@ export const REPLY = {
     /** ASSISTANT_DISABLED=true — the global kill switch. */
     disabled: "The iTarang Sales Assistant is paused right now. Please use the CRM for now.",
     /** A typed "yes" / "haan" while a preview is waiting: typing never saves. */
-    tapConfirm: "Please tap *Confirm* on the preview to save it. Typing yes doesn't save anything.",
+    tapConfirm: "Please tap *Confirm* (or *Yes*) on the preview to save it. Typing yes doesn't save anything.",
     /** The previous message from this user is still being worked on. */
     busy: "I'm still working on your last message. Please wait a moment and send this again.",
 } as const;

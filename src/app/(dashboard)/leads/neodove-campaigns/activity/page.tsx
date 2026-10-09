@@ -47,7 +47,11 @@ type ActivityRow = {
     created_at: string;
     request_payload: unknown;
     response_payload: unknown;
+    /** ID 123 — the status move the guard refused; the call was still saved. */
+    status_refused: { from: string | null; to: string; reason: string } | null;
 };
+
+const statusText = (s: string | null) => (s ? s.replace(/_/g, " ") : "no status");
 
 type Payload = {
     rows: ActivityRow[];
@@ -56,6 +60,7 @@ type Payload = {
         outbound: number;
         inbound: number;
         errors: number;
+        refused: number;
         backfilled: number;
     };
 };
@@ -86,6 +91,7 @@ function PayloadBlock({ title, value }: { title: string; value: unknown }) {
 export default function NeodoveActivityPage() {
     const [filter, setFilter] = useState<Filter>("all");
     const [errorsOnly, setErrorsOnly] = useState(false);
+    const [refusedOnly, setRefusedOnly] = useState(false);
     const [page, setPage] = useState(1);
     // Two states, not one: `search` is what the box shows and must update on
     // every keystroke, `query` is what the server is asked for and must not.
@@ -120,11 +126,12 @@ export default function NeodoveActivityPage() {
     }, [search]);
 
     const { data, isLoading, isError, error } = useQuery<Payload>({
-        queryKey: ["neodove-activity", filter, errorsOnly, page, query],
+        queryKey: ["neodove-activity", filter, errorsOnly, refusedOnly, page, query],
         queryFn: async () => {
             const qs = new URLSearchParams({ page: String(page) });
             if (filter !== "all") qs.set("direction", filter);
             if (errorsOnly) qs.set("errorsOnly", "true");
+            if (refusedOnly) qs.set("refusedOnly", "true");
             if (query) qs.set("q", query);
             const res = await fetch(`/api/neodove/activity?${qs}`);
             const json = await res.json();
@@ -156,13 +163,20 @@ export default function NeodoveActivityPage() {
             </p>
 
             {s && (
-                <div className="mt-5 grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div className="mt-5 grid grid-cols-2 sm:grid-cols-5 gap-3">
                     <Stat label="Pushed (24h)" value={s.outbound} />
                     <Stat label="Received (24h)" value={s.inbound} />
                     <Stat
                         label="Errors (24h)"
                         value={s.errors}
                         tone={s.errors > 0 ? "text-rose-600" : "text-gray-900"}
+                    />
+                    {/* ID 123 — calls recorded without the status move NeoDove's
+                        outcome implied, because the move would go backwards. */}
+                    <Stat
+                        label="Status moves refused (24h)"
+                        value={s.refused}
+                        tone={s.refused > 0 ? "text-amber-600" : "text-gray-900"}
                     />
                     {/* Backfilled is the drift signal: anything here arrived by
                         CSV because a webhook never did. */}
@@ -245,6 +259,18 @@ export default function NeodoveActivityPage() {
                         className="rounded border-gray-300"
                     />
                     Errors only
+                </label>
+                <label className="ml-2 inline-flex items-center gap-1.5 text-sm text-gray-700">
+                    <input
+                        type="checkbox"
+                        checked={refusedOnly}
+                        onChange={(e) => {
+                            setRefusedOnly(e.target.checked);
+                            setPage(1);
+                        }}
+                        className="rounded border-gray-300"
+                    />
+                    Status move refused
                 </label>
             </div>
 
@@ -399,6 +425,20 @@ export default function NeodoveActivityPage() {
                                                         : "OK"}
                                                     {r.attempts > 1 &&
                                                         ` · ${r.attempts} attempts`}
+                                                </span>
+                                            )}
+                                            {r.status_refused && (
+                                                <span
+                                                    className="mt-1 flex items-start gap-1 text-amber-700"
+                                                    title={r.status_refused.reason}
+                                                >
+                                                    <Info className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                                                    <span className="line-clamp-2">
+                                                        Status move refused:{" "}
+                                                        {statusText(r.status_refused.from)} →{" "}
+                                                        {statusText(r.status_refused.to)}. Call and
+                                                        temperature saved.
+                                                    </span>
                                                 </span>
                                             )}
                                         </td>
