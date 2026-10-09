@@ -18,6 +18,7 @@ export function parseDashboardFilters(url: URL): DashboardFilters {
         segment: str("segment"),
         city: str("city"),
         state: str("state"),
+        business_type: str("business_type"),
         follow_up_due_today: p.get("follow_up_due_today") === "true",
         reactivated_only: p.get("reactivated_only") === "true",
     };

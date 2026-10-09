@@ -5,6 +5,7 @@ import { z } from "zod";
 import { ownsThread, requireAnalystUser } from "@/lib/analyst/access";
 import { agentFetch, agentJson } from "@/lib/analyst/client";
 import { errorResponse, normalizeAgentError } from "@/lib/analyst/errors";
+import { stripMetricRules, withMetricRules } from "@/lib/analyst/metricRules";
 import type { RunPage } from "@/lib/analyst/types";
 
 export const dynamic = "force-dynamic";
@@ -60,7 +61,8 @@ export async function POST(request: Request) {
   try {
     upstream = await agentFetch("/runs", {
       method: "POST",
-      body: parsed.data,
+      // ID 32 — the agreed metric rules travel with the question.
+      body: { ...parsed.data, question: withMetricRules(parsed.data.question) },
       accept: "text/event-stream",
       // Covers the wait before headers arrive; the stream's own cancel covers the rest.
       signal: request.signal,
@@ -117,7 +119,10 @@ export async function GET(request: Request) {
     const page = await agentJson<RunPage>(
       `/runs?limit=50&thread_id=${encodeURIComponent(threadId!)}`,
     );
-    return Response.json(page);
+    return Response.json({
+      ...page,
+      items: page.items.map((r) => ({ ...r, question: stripMetricRules(r.question) })),
+    });
   } catch (error) {
     return errorResponse(error, "could not load that conversation");
   }

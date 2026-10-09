@@ -129,6 +129,8 @@ export type DashboardFilters = {
     segment?: string | null;
     city?: string | null;
     state?: string | null;
+    /** ID 11 — a BUSINESS_TYPES value, or "unset" for leads with no type yet. */
+    business_type?: string | null;
     follow_up_due_today?: boolean;
     reactivated_only?: boolean;
 };
@@ -320,6 +322,17 @@ export const REPORT_TYPES = [
     "funnel_by_owner",
 ] as const;
 export type ReportType = (typeof REPORT_TYPES)[number];
+
+/**
+ * ID 91 — reports that now live in Reports › Analyses (one version of each).
+ * Their API stays for anything that still calls it; the older page lists them
+ * only as links to the analysis that replaced them.
+ */
+export const REPORTS_MOVED_TO_ANALYSES: Partial<Record<ReportType, "lead_sources" | "ai_score" | "meetings">> = {
+    source_performance: "lead_sources",
+    ai_score_accuracy: "ai_score",
+    meetings_mtd: "meetings",
+};
 
 export const REPORT_LABELS: Record<ReportType, string> = {
     daily_activity: "Daily Activity",

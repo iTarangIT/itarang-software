@@ -164,6 +164,10 @@ export function CampaignsView() {
             <div className="rounded-xl border border-border bg-surface shadow-card">
                 <div className="flex items-center gap-3 border-b border-border px-4 py-3">
                     <h2 className="text-sm font-semibold text-ink">Campaigns</h2>
+                    {/* ID 91 — how each campaign's leads went. */}
+                    <a href="/reports?analysis=lead_sources&group=campaign" className="text-xs font-semibold text-brand-sky hover:underline">
+                        Results by campaign
+                    </a>
                     <select
                         value={kind}
                         onChange={(e) => setKind(e.target.value as CampaignKind | "")}

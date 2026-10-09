@@ -186,6 +186,8 @@ const spocKey = (r: { spoc: string | null }) => r.spoc ?? "";
 export function blockBRows(
     periods: { yesterday: BuybackSpocRow[]; last7: BuybackSpocRow[]; mtd: BuybackSpocRow[] },
     acceptedTargets: ReadonlyMap<string, number>,
+    /** ID 10 — "Today" when the mail goes out at 19:00 for the day itself. */
+    dayLabel = "Yesterday",
 ): Array<Array<string | number>> {
     const names = new Map<string, string | null>();
     for (const list of [periods.mtd, periods.last7, periods.yesterday]) {
@@ -222,7 +224,7 @@ export function blockBRows(
     for (const [key, rawName] of spocs) {
         const name = key === "" ? UNASSIGNED : (rawName ?? key);
         const mtd = find(periods.mtd, key);
-        out.push(line("Yesterday", name, find(periods.yesterday, key)));
+        out.push(line(dayLabel, name, find(periods.yesterday, key)));
         out.push(line("Last 7 days", name, find(periods.last7, key)));
         out.push(line("MTD", name, mtd));
         const target = key === "" ? undefined : acceptedTargets.get(key);
@@ -241,8 +243,8 @@ export function blockBRows(
 
 // ───────────────────────────────── headline ─────────────────────────────────
 
-/** The one line at the top: what was sourced and paid yesterday. */
-export function buybackHeadline(y: BuybackFigures): string {
+/** The one line at the top: what was sourced and paid yesterday (or today, at 19:00). */
+export function buybackHeadline(y: BuybackFigures, dayLabel = "Yesterday"): string {
     const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
     const kg =
         fmtKg(y.kg) +
@@ -250,7 +252,7 @@ export function buybackHeadline(y: BuybackFigures): string {
         // R-13 — never let an under-count read as the real number.
         (y.missing_weight > 0 ? ` (+ ${plural(y.missing_weight, "line", "lines")} with no weight, not counted)` : "");
     return (
-        `Yesterday: ${kg} · ${plural(y.requests, "request", "requests")} received · ` +
+        `${dayLabel}: ${kg} · ${plural(y.requests, "request", "requests")} received · ` +
         `${plural(y.quotes, "quote", "quotes")} shared, ${y.accepted} accepted · ` +
         `${plural(y.pickups, "pickup", "pickups")} completed · ${fmtMoney(y.paid)} paid to suppliers.`
     );

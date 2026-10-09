@@ -5,7 +5,8 @@
 import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { LOST_REASON, OPEN_STATUSES } from "@/lib/lifecycle/transitions";
-import { connectedCall } from "@/lib/reports/metricDefinitions";
+import { bulkImportedLead, connectedCall } from "@/lib/reports/metricDefinitions";
+import { hasLeadScope, leadScopeSql } from "@/lib/leads/leadScopeSql";
 import { ONBOARDING_DROPOUT_REASONS, OWNER_DRILL_METRICS } from "./types";
 import { isUndefinedColumn, ownerConversionRate, roleLabel } from "./reportHelpers";
 import { asmTransferRecipientFromVisitSql } from "@/lib/leads/closingOwner";
@@ -139,17 +140,21 @@ async function dailyActivity(f: DashboardFilters): Promise<ReportResult> {
 const AI_POOL_STAGE = "Not in sales lifecycle (AI pool)";
 
 async function leadFunnel(f: DashboardFilters): Promise<ReportResult> {
+    // The cohort: leads that came in on their own in the window (ID 153 — the
+    // one "Leads in" rule, metricDefinitions.ts), in the screen's place / type
+    // of business (ID 11).
+    const cohort = sql`${dateRange("dl.created_at", f, "utc")} AND NOT ${bulkImportedLead(sql`dl`)} ${leadScopeSql(f)}`;
     const rows = await db.execute<{ lead_status: string | null; c: string }>(sql`
         SELECT dl.lead_status, COUNT(*)::text AS c
         FROM dealer_leads dl
-        WHERE dl.is_active IS NOT FALSE ${dateRange("dl.created_at", f, "utc")}
+        WHERE dl.is_active IS NOT FALSE ${cohort}
         GROUP BY dl.lead_status
     `);
     const reachedRows = await db.execute<{ stage: string; c: string }>(sql`
         WITH cohort AS (
             SELECT dl.id, dl.lead_status
             FROM dealer_leads dl
-            WHERE dl.is_active IS NOT FALSE ${dateRange("dl.created_at", f, "utc")}
+            WHERE dl.is_active IS NOT FALSE ${cohort}
         ),
         reached AS (
             SELECT c.id, c.lead_status AS stage FROM cohort c
@@ -167,7 +172,13 @@ async function leadFunnel(f: DashboardFilters): Promise<ReportResult> {
     const neverAssigned = await db.execute<{ c: string }>(sql`
         SELECT COUNT(*)::text AS c FROM dealer_leads dl
         WHERE dl.is_active IS NOT FALSE AND dl.lead_status = 'New_Unassigned'
-          AND dl.assigned_at IS NULL ${dateRange("dl.created_at", f, "utc")}
+          AND dl.assigned_at IS NULL ${cohort}
+    `);
+    // ID 153 — bulk imports are counted apart, never in the funnel.
+    const bulk = await db.execute<{ c: string }>(sql`
+        SELECT COUNT(*)::text AS c FROM dealer_leads dl
+        WHERE dl.is_active IS NOT FALSE AND ${bulkImportedLead(sql`dl`)}
+          ${dateRange("dl.created_at", f, "utc")} ${leadScopeSql(f)}
     `);
     const byStatus = new Map(rows.map((r) => [r.lead_status ?? "(null)", num(r.c)]));
     const reached = new Map(reachedRows.map((r) => [r.stage, num(r.c)]));
@@ -192,6 +203,8 @@ async function leadFunnel(f: DashboardFilters): Promise<ReportResult> {
     ];
     const out: ReportRow[] = [
         { stage: "All leads created", count: total, ever_reached: total, pct_reached: pctOf(total) },
+        // ID 153 — shown, but outside the funnel and its percentages.
+        { stage: "Imported in bulk (not in the funnel)", count: num(bulk[0]?.c), ever_reached: null, pct_reached: null },
         // R-06 — never in the sales lifecycle. "Ever reached" does not apply:
         // it is the absence of a stage, not a stage.
         { stage: AI_POOL_STAGE, count: byStatus.get("(null)") ?? 0, ever_reached: null, pct_reached: null },
@@ -222,7 +235,7 @@ async function lostAnalysis(f: DashboardFilters): Promise<ReportResult> {
     const lostRows = await db.execute<{ lost_reason: string | null; c: string }>(sql`
         SELECT dl.lost_reason, COUNT(*)::text AS c
         FROM dealer_leads dl
-        WHERE dl.lead_status = 'Lost' ${dateRange("dl.closed_at", f, "tz")}
+        WHERE dl.lead_status = 'Lost' ${dateRange("dl.closed_at", f, "tz")} ${leadScopeSql(f)}
         GROUP BY dl.lost_reason
     `);
     const dropoutRows = await db.execute<{
@@ -231,7 +244,7 @@ async function lostAnalysis(f: DashboardFilters): Promise<ReportResult> {
     }>(sql`
         SELECT dl.onboarding_dropout_reason, COUNT(*)::text AS c
         FROM dealer_leads dl
-        WHERE dl.onboarding_dropout_reason IS NOT NULL ${dateRange("dl.closed_at", f, "tz")}
+        WHERE dl.onboarding_dropout_reason IS NOT NULL ${dateRange("dl.closed_at", f, "tz")} ${leadScopeSql(f)}
         GROUP BY dl.onboarding_dropout_reason
     `);
     const lostMap = new Map(
@@ -388,7 +401,7 @@ async function asmHandoff(f: DashboardFilters): Promise<ReportResult> {
                    dl.lead_status, dl.closed_at, dl.closing_owner_id
             FROM lead_touchpoints t
             JOIN dealer_leads dl ON dl.id = t.dealer_lead_id
-            WHERE t.touchpoint_type = 'asm_transfer' ${dateRange("t.performed_at", f, "tz")}
+            WHERE t.touchpoint_type = 'asm_transfer' ${dateRange("t.performed_at", f, "tz")} ${leadScopeSql(f)}
         ),
         per_lead AS (
             -- One row per (ASM, lead): the first handoff in the period carries
@@ -645,6 +658,10 @@ const OWNER_RATING_FILTERS = {
 // worked / connected / owned / closed_by — the four lead sets every
 // Funnel-by-Owner number is counted from.
 function ownerCtes(f: DashboardFilters): SQL {
+    // ID 11 — touchpoints reach the lead's place / type through the lead.
+    const touchedLeadScope = hasLeadScope(f)
+        ? sql`AND EXISTS (SELECT 1 FROM dealer_leads dl WHERE dl.id = t.dealer_lead_id ${leadScopeSql(f)})`
+        : sql``;
     return sql`
         WITH worked AS (
             -- One row per (person, lead): the lead's status is a property of
@@ -652,7 +669,7 @@ function ownerCtes(f: DashboardFilters): SQL {
             SELECT DISTINCT t.performed_by, t.dealer_lead_id
             FROM lead_touchpoints t
             WHERE t.performed_by IS NOT NULL
-              ${dateRange("t.performed_at", f, "tz")}
+              ${dateRange("t.performed_at", f, "tz")} ${touchedLeadScope}
         ),
         connected AS (
             -- "Connected" is a property of the outreach, not of the lead, so it
@@ -669,7 +686,7 @@ function ownerCtes(f: DashboardFilters): SQL {
             FROM lead_touchpoints t
             WHERE (t.call_status = 'connected' OR t.is_engaged IS TRUE)
               AND t.performed_by IS NOT NULL
-              ${dateRange("t.performed_at", f, "tz")}
+              ${dateRange("t.performed_at", f, "tz")} ${touchedLeadScope}
         ),
         owned AS (
             -- Same predicate as the "My Open Leads" tab, so the numbers match
@@ -678,7 +695,7 @@ function ownerCtes(f: DashboardFilters): SQL {
             FROM dealer_leads dl
             WHERE dl.current_owner_id IS NOT NULL
               AND dl.lead_status IN (${OPEN_LIST})
-              AND dl.is_active IS NOT FALSE
+              AND dl.is_active IS NOT FALSE ${leadScopeSql(f)}
         ),
         closed_by AS (
             -- ID 117: a conversion belongs to its closing owner, in the period
@@ -688,7 +705,7 @@ function ownerCtes(f: DashboardFilters): SQL {
             WHERE dl.lead_status = 'Converted'
               AND dl.closing_owner_id IS NOT NULL
               AND dl.closed_at IS NOT NULL
-              ${dateRange("dl.closed_at", f, "tz")}
+              ${dateRange("dl.closed_at", f, "tz")} ${leadScopeSql(f)}
         )`;
 }
 
