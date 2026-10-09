@@ -21,6 +21,9 @@ import { EscalateModal } from "../../../_components/modals/EscalateModal";
 import { ClaimLeadConfirm } from "../../../_components/modals/ClaimLeadConfirm";
 import { canExportLeadHistory } from "@/lib/leads/access";
 
+export const LEAD_NOT_ACCESSIBLE =
+    "This lead is not assigned to you any more — it may have been transferred to another owner. Ask your manager if you still need it.";
+
 export type ActiveModal =
     | null
     | "touchpoint"
@@ -54,9 +57,13 @@ export function LeadDetailView({ leadId, viewerId, viewerRole, backHref = "/insi
         queryKey: ["inside-sales-lead", leadId],
         queryFn: async () => {
             const res = await fetch(`/api/inside-sales/lead/${encodeURIComponent(leadId)}`, { cache: "no-store" });
+            // ID 45: a rep reads only leads they currently own, so a 404 here is
+            // usually an old bell link to a lead since transferred (e.g. to an ASM).
+            if (res.status === 404) throw new Error(LEAD_NOT_ACCESSIBLE);
             if (!res.ok) throw new Error("Failed to load lead");
             return res.json();
         },
+        retry: (count, err) => (err as Error).message !== LEAD_NOT_ACCESSIBLE && count < 3,
         refetchOnWindowFocus: true,
     });
 
