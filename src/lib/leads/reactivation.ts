@@ -78,12 +78,21 @@ export async function reactivateLead(opts: {
             ? "Assigned_Not_Contacted"
             : "New_Unassigned";
 
+        // Mark Lost "business closed" excludes the lead from the AI dialer
+        // (markLost.ts). A person reactivating it is saying the business is
+        // back, so the exclusion is lifted — only then. An upload or AI-dialer
+        // phone match is not that decision, and keeps it.
+        const liftRecallExclusion =
+            trigger === "admin"
+                ? sql`, ai_recall_status = CASE WHEN ai_recall_status = 'excluded' THEN NULL ELSE ai_recall_status END`
+                : sql``;
         await tx.execute(sql`
             UPDATE dealer_leads SET
                 previous_lost_reason = ${lead.lost_reason},
                 current_owner_id = ${newOwnerId},
                 assigned_at = ${newOwnerId ? sql`NOW()` : sql`assigned_at`},
                 updated_at = NOW()
+                ${liftRecallExclusion}
             WHERE id = ${leadId}
         `);
 

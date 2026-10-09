@@ -63,7 +63,7 @@ export const ACTION_TITLES: Record<ActionKey, string> = {
     hot_not_called: "Hot leads not called in time",
     visit_overdue: "Waiting for a field visit",
     quotes_no_answer: "Quotes with no answer",
-    said_yes: "Dealer said yes, not marked Won",
+    said_yes: "Dealer approved, but not marked Won",
     onboarding_stalled: "Onboarding stalled",
     won_without_quote: "Won without an approved quote",
     hot_aged: "Hot leads open more than 7 days",

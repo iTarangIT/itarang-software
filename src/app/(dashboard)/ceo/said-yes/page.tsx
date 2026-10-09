@@ -154,7 +154,7 @@ export default async function SaidYesNotWonPage() {
                 <Link href="/ceo" className="inline-flex items-center gap-1 text-xs font-semibold text-brand-sky hover:underline">
                     <ArrowLeft className="h-3.5 w-3.5" /> CEO overview
                 </Link>
-                <h1 className="mt-2 text-2xl font-bold tracking-tight text-brand-navy">Dealer said yes, not marked Won</h1>
+                <h1 className="mt-2 text-2xl font-bold tracking-tight text-brand-navy">Dealer approved, but not marked Won</h1>
                 <p className="mt-1 text-sm text-ink-muted">
                     The dealer approved the quote, but its owner has not pressed Mark Won. The limit is{" "}
                     {days(SAID_YES_LIMIT_WORKING_DAYS)} from the dealer&rsquo;s yes (Mon–Sat).
