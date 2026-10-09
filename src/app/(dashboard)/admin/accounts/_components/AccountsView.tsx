@@ -24,6 +24,9 @@ export type AccountRow = {
     city: string | null;
     state: string | null;
     status: string;
+    /** ID 5 — closed by hand as "Lost / closed dealer" (E-332). */
+    closed?: boolean;
+    closed_reason?: string | null;
     created_at: string | null;
     owner_user_id: string | null;
     owner_name: string | null;
@@ -43,7 +46,7 @@ type ListResponse = {
     offset: number;
 };
 
-type Tab = "all" | "no_owner" | "gstin_missing";
+type Tab = "all" | "no_owner" | "gstin_missing" | "closed";
 const PAGE = 100;
 
 export function CameThroughBadge({ value }: { value: string | null }) {
@@ -87,6 +90,7 @@ export function AccountsView() {
         if (tab === "no_owner") p.set("owner", "none");
         else if (ownerFilter) p.set("owner", ownerFilter);
         if (tab === "gstin_missing") p.set("gstin_missing", "1");
+        if (tab === "closed") p.set("status", "closed");
         if (cameThrough) p.set("came_through", cameThrough);
         p.set("limit", String(PAGE));
         p.set("offset", String(page * PAGE));
@@ -175,6 +179,7 @@ export function AccountsView() {
                 {tabBtn("all", "All", counts?.total)}
                 {tabBtn("no_owner", "No owner", counts?.no_owner, "bg-amber-50 border-amber-200 text-amber-800")}
                 {tabBtn("gstin_missing", "GSTIN missing", counts?.gstin_missing, "bg-rose-50 border-rose-200 text-rose-700")}
+                {tabBtn("closed", "Closed")}
                 <div className="ml-auto flex gap-2">
                     <Button variant="outline" size="sm" onClick={() => setDialog("leaver")}>
                         <UserMinus className="mr-1 h-3.5 w-3.5" /> Move leaver&apos;s accounts
@@ -289,6 +294,7 @@ export function AccountsView() {
                                         <div className="text-[11px] text-ink-muted">
                                             {r.id}
                                             {r.status !== "active" ? ` · ${r.status}` : ""}
+                                            {r.closed ? ` · closed${r.closed_reason ? ` — ${r.closed_reason}` : ""}` : ""}
                                         </div>
                                     </td>
                                     <td className="px-3 py-2">

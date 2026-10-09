@@ -7,7 +7,7 @@ import { z } from "zod";
 
 import { db } from "@/lib/db";
 import { hasAccountOwnershipTables } from "@/lib/accounts/tables";
-import { GSTIN_KEY, gstinKeyIsMatchable } from "@/lib/leads/gstinMatch";
+import { gstinMissingSql as sharedGstinMissingSql } from "@/lib/accounts/accountList";
 
 /**
  * Who can open the Accounts tab and change owners / GSTINs.
@@ -85,6 +85,6 @@ export async function assertAssignableOwner(userId: string): Promise<string> {
  * expression (e.g. sql`a.gstin`).
  */
 export function gstinMissingSql(col: ReturnType<typeof sql>) {
-    const key = GSTIN_KEY(col);
-    return sql`(${key} IS NULL OR NOT ${gstinKeyIsMatchable(key)})`;
+    // ID 148 — the one rule, shared with Dealer Health and the download.
+    return sharedGstinMissingSql(col);
 }

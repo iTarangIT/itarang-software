@@ -1,14 +1,21 @@
 /**
  * Dealer accounts, one row each (tracker IDs 65 and 41, E-322).
  *
- * WHO. Every account that belongs to an activated dealer (a `dealers` row) —
- * including dealers onboarded directly, with no lead behind them. This is the
- * set "Converted" is counted from; Account management, dealer health and the
- * Dealer accounts download all read it here, so they cannot disagree.
+ * ID 148 — ONE set of rules, read by Account management, Dealer Health and the
+ * Dealer accounts download (they used to count three different lists):
  *
- * ORDERS are the account's invoices: matched on the ACCOUNT's GSTIN, non-void,
- * drafts counted (the revenue rule). While the account's GSTIN is still
- * "PENDING" the originating lead's GSTIN match is used instead.
+ * WHO (dealerAccountSql). Every account except a scrap-vendor entity with no
+ * dealer onboarding behind it — dealers onboarded directly included.
+ *
+ * GSTIN MISSING (gstinMissingSql). NULL, blank, "PENDING", or a GSTIN that can
+ * never match an invoice (bad shape, bad check character, iTarang's own).
+ *
+ * SUGGESTED OWNER (ownership.suggestedOwners). One ranking, everywhere.
+ *
+ * ORDERS (invoiceAccountSql). The account the revenue matcher gives an invoice
+ * — its GSTIN, an alias GSTIN, or a hand link — else the account sourced from
+ * the invoice's matched lead. Non-void, drafts counted (the revenue rule);
+ * "not a dealer sale" invoices count for nobody.
  *
  * Calendar days in IST; "today" comes from Postgres.
  */
@@ -21,11 +28,41 @@ import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { matchedUnion, REVENUE_NOT_VOID } from "@/lib/dashboard/revenueSource";
 import { accountBucket, type AccountBucket } from "@/lib/dealers/accountHealthRules";
-import { GSTIN_KEY } from "@/lib/leads/gstinMatch";
-import { SALESPERSON_ROLES } from "@/lib/onboarding/salesperson";
+import { GSTIN_KEY, gstinKeyIsMatchable } from "@/lib/leads/gstinMatch";
+import { closedColumns } from "./accountClosures";
+import { suggestedOwners } from "./ownership";
 
 /** What the approve route writes when the onboarding carried no GSTIN. */
 export const GSTIN_PENDING = "PENDING";
+
+/** ID 148 — a dealer account (see the header). `a` is the accounts alias. */
+export function dealerAccountSql(a: SQL = sql`a`): SQL {
+    return sql`NOT (
+        EXISTS (SELECT 1 FROM users v WHERE v.vendor_entity_id = ${a}.id)
+        AND NOT EXISTS (SELECT 1 FROM dealer_onboarding_applications d WHERE d.dealer_code = ${a}.id)
+    )`;
+}
+
+/**
+ * ID 148 / ID 62 — the account's GSTIN is missing: NULL, blank, the 'PENDING'
+ * placeholder, or one that can never match an invoice. `col` is the column.
+ */
+export function gstinMissingSql(col: SQL): SQL {
+    const key = GSTIN_KEY(col);
+    return sql`(${key} IS NULL OR NOT ${gstinKeyIsMatchable(key)})`;
+}
+
+/**
+ * ID 148 — the account an invoice counts for. `r` is a matchedUnion() row:
+ * its account (GSTIN, alias or hand link), else the account whose source lead
+ * the invoice matched (an account still on a PENDING GSTIN).
+ */
+export function invoiceAccountSql(r: SQL = sql`r`): SQL {
+    return sql`COALESCE(${r}.account_id,
+        (SELECT ao_k.account_id FROM account_ownership ao_k
+          WHERE ao_k.source_dealer_lead_id = ${r}.dealer_lead_id
+          ORDER BY ao_k.account_id LIMIT 1))`;
+}
 
 export type AccountRow = {
     account_id: string;
@@ -83,21 +120,19 @@ export type AccountFilters = {
     search?: string | null;
 };
 
-const last10 = (expr: SQL): SQL => sql`right(regexp_replace(COALESCE(${expr}, ''), '[^0-9]', '', 'g'), 10)`;
-const ROLES = sql.join(SALESPERSON_ROLES.map((r) => sql`${r}`), sql`, `);
-
 const day = (v: unknown): string | null => (v ? String(v).slice(0, 10) : null);
 const num = (v: unknown): number | null => (v == null ? null : Number(v));
 
 export async function listAccounts(f: AccountFilters = {}): Promise<AccountRow[]> {
     const invoices = await matchedUnion();
+    const closed = await closedColumns(sql`a.id`);
     const conds: SQL[] = [sql`TRUE`];
     if (f.ownerId) conds.push(sql`ao.owner_user_id::text = ${f.ownerId}`);
     if (f.onboardedById) conds.push(sql`ao.onboarded_by_user_id::text = ${f.onboardedById}`);
     if (f.cameThrough) conds.push(sql`ao.came_through = ${f.cameThrough}`);
     if (f.dealerType) conds.push(sql`d.dealer_type = ${f.dealerType}`);
     if (f.noOwnerOnly) conds.push(sql`ao.owner_user_id IS NULL`);
-    if (f.gstinMissingOnly) conds.push(sql`upper(btrim(a.gstin)) = ${GSTIN_PENDING}`);
+    if (f.gstinMissingOnly) conds.push(gstinMissingSql(sql`a.gstin`));
     if (f.search?.trim()) {
         const like = `%${f.search.trim()}%`;
         conds.push(sql`(a.business_entity_name ILIKE ${like} OR a.gstin ILIKE ${like} OR a.city ILIKE ${like} OR a.id ILIKE ${like})`);
@@ -110,17 +145,8 @@ export async function listAccounts(f: AccountFilters = {}): Promise<AccountRow[]
                 EXTRACT(YEAR FROM (SELECT d FROM today))::int
                   - CASE WHEN EXTRACT(MONTH FROM (SELECT d FROM today)) < 4 THEN 1 ELSE 0 END, 4, 1) AS start
         ),
-        acct AS (
-            SELECT a.id,
-                   CASE WHEN upper(btrim(a.gstin)) = ${GSTIN_PENDING} THEN NULL
-                        ELSE ${GSTIN_KEY(sql`a.gstin`)} END AS gkey,
-                   ao.source_dealer_lead_id AS lead_id
-              FROM accounts a
-                LEFT JOIN account_ownership ao ON ao.account_id = a.id
-             WHERE EXISTS (SELECT 1 FROM dealers d WHERE d.dealer_id = a.id)
-        ),
         orders AS (
-            SELECT ac.id                             AS account_id,
+            SELECT ${invoiceAccountSql()}            AS account_id,
                    COUNT(*)                          AS n,
                    MIN(r.invoice_date)               AS first_order,
                    MAX(r.invoice_date)               AS last_order,
@@ -132,17 +158,15 @@ export async function listAccounts(f: AccountFilters = {}): Promise<AccountRow[]
                    COUNT(DISTINCT r.invoice_date)    AS order_days,
                    bool_or(r.invoice_date >= (SELECT d FROM today) - 30) AS within_30d,
                    bool_or(r.invoice_date <  (SELECT d FROM today) - 30) AS before_30d
-              FROM acct ac
-              JOIN ${invoices} AS r
-                ON (ac.gkey IS NOT NULL AND r.gstin_key = ac.gkey)
-                OR (ac.gkey IS NULL AND ac.lead_id IS NOT NULL AND r.dealer_lead_id = ac.lead_id)
+              FROM ${invoices} AS r
              WHERE ${REVENUE_NOT_VOID}
-             GROUP BY ac.id
+             GROUP BY 1
         )
         SELECT a.id                                              AS account_id,
                COALESCE(a.business_entity_name, '(unnamed)')     AS dealer,
                a.gstin,
-               (upper(btrim(a.gstin)) = ${GSTIN_PENDING})        AS gstin_missing,
+               ${gstinMissingSql(sql`a.gstin`)}                  AS gstin_missing,
+               ${closed},
                a.city, a.state,
                d.dealer_type,
                COALESCE(d.finance_enabled, false)                AS finance_enabled,
@@ -161,9 +185,6 @@ export async function listAccounts(f: AccountFilters = {}): Promise<AccountRow[]
                ao.owner_user_id::text                          AS owner_id,
                ow.name                                           AS owner_name,
                (SELECT (h.effective_from AT TIME ZONE 'Asia/Kolkata')::date FROM account_owner_history h WHERE h.account_id = a.id AND h.effective_to IS NULL LIMIT 1)                             AS owner_since,
-               sug.user_id::text                                 AS suggested_owner_id,
-               sug.name                                          AS suggested_owner_name,
-               sug.why                                           AS suggested_owner_why,
                o.first_order, o.last_order,
                ((SELECT d FROM today) - o.last_order)            AS days_since_last_order,
                ((SELECT d FROM today)
@@ -179,47 +200,16 @@ export async function listAccounts(f: AccountFilters = {}): Promise<AccountRow[]
                COALESCE(o.before_30d, false)                     AS ordered_before_30d
           FROM accounts a
             LEFT JOIN account_ownership ao ON ao.account_id = a.id
-          JOIN dealers d ON d.dealer_id = a.id
-          LEFT JOIN dealer_onboarding_applications app ON app.id::text = d.application_id
+          LEFT JOIN dealers d ON d.dealer_id = a.id
+          LEFT JOIN dealer_onboarding_applications app
+                 ON app.id::text = COALESCE(d.application_id,
+                        (SELECT x.id::text FROM dealer_onboarding_applications x
+                          WHERE x.dealer_code = a.id ORDER BY x.created_at ASC LIMIT 1))
           LEFT JOIN dealer_leads dl ON dl.id = ao.source_dealer_lead_id
           LEFT JOIN users ob ON ob.id = ao.onboarded_by_user_id
           LEFT JOIN users ow ON ow.id = ao.owner_user_id
           LEFT JOIN orders o ON o.account_id = a.id
-          -- The suggestion is only worked out for accounts with no owner. Order
-          -- of trust: the onboarding's own salesperson, the staff member who
-          -- filled the form, the typed sales manager matched to a CRM user,
-          -- then the closing owner of a lead with the same GSTIN or phone.
-          LEFT JOIN LATERAL (
-              SELECT s.user_id, u.name, s.why
-                FROM (
-                    SELECT app.salesperson_user_id AS user_id, 'Salesperson on the onboarding' AS why, 1 AS rank
-                    UNION ALL
-                    SELECT app.onboarding_operator_id, 'Filled the onboarding form', 2
-                    UNION ALL
-                    SELECT su.id, 'Typed as sales manager on the onboarding', 3
-                      FROM users su
-                     WHERE (app.sales_manager_email IS NOT NULL
-                            AND lower(su.email) = lower(btrim(app.sales_manager_email)))
-                        OR (length(${last10(sql`app.sales_manager_mobile`)}) = 10
-                            AND ${last10(sql`su.phone`)} = ${last10(sql`app.sales_manager_mobile`)})
-                    UNION ALL
-                    SELECT sl.closing_owner_id::uuid, 'Closed a lead with the same GSTIN or phone', 4
-                      FROM dealer_leads sl
-                     WHERE sl.closing_owner_id ~* '^[0-9a-f-]{36}$'
-                       AND ((${GSTIN_KEY(sql`sl.gstin`)} IS NOT NULL
-                             AND upper(btrim(a.gstin)) <> ${GSTIN_PENDING}
-                             AND ${GSTIN_KEY(sql`sl.gstin`)} = ${GSTIN_KEY(sql`a.gstin`)})
-                            OR (length(${last10(sql`a.contact_phone`)}) = 10
-                                AND ${last10(sql`sl.phone`)} = ${last10(sql`a.contact_phone`)}))
-                ) s
-                JOIN users u ON u.id = s.user_id
-               WHERE ao.owner_user_id IS NULL
-                 AND u.is_active
-                 AND lower(u.role) IN (${ROLES})
-               ORDER BY s.rank
-               LIMIT 1
-          ) sug ON TRUE
-         WHERE ${sql.join(conds, sql` AND `)}
+         WHERE ${dealerAccountSql()} AND ${sql.join(conds, sql` AND `)}
          ORDER BY days_since_last_order DESC NULLS FIRST, dealer
     `)) as unknown as Array<Record<string, unknown>>;
 
@@ -248,9 +238,9 @@ export async function listAccounts(f: AccountFilters = {}): Promise<AccountRow[]
             owner_id: (r.owner_id as string | null) ?? null,
             owner_name: (r.owner_name as string | null) ?? null,
             owner_since: day(r.owner_since),
-            suggested_owner_id: (r.suggested_owner_id as string | null) ?? null,
-            suggested_owner_name: (r.suggested_owner_name as string | null) ?? null,
-            suggested_owner_why: (r.suggested_owner_why as string | null) ?? null,
+            suggested_owner_id: null,
+            suggested_owner_name: null,
+            suggested_owner_why: null,
             first_order: day(r.first_order),
             last_order: day(r.last_order),
             days_since_last_order: sinceOrder,
@@ -262,9 +252,18 @@ export async function listAccounts(f: AccountFilters = {}): Promise<AccountRow[]
             avg_reorder_days: num(r.avg_reorder_days),
             ordered_last_30d: r.ordered_last_30d === true,
             ordered_before_30d: r.ordered_before_30d === true,
-            bucket: accountBucket(sinceOrder, sinceActivation),
+            bucket: accountBucket(sinceOrder, sinceActivation, r.closed === true),
         };
     });
+    // ID 148 — the same suggestion the Accounts screen shows, for the unowned.
+    const hints = await suggestedOwners(mapped.filter((r) => !r.owner_id).map((r) => r.account_id));
+    for (const r of mapped) {
+        const h = hints.get(r.account_id);
+        if (!h) continue;
+        r.suggested_owner_id = h.user_id;
+        r.suggested_owner_name = h.name;
+        r.suggested_owner_why = h.basis;
+    }
     // The bucket is the pure rule applied to the row, so it is filtered here.
     return f.bucket ? mapped.filter((r) => r.bucket === f.bucket) : mapped;
 }
@@ -274,10 +273,10 @@ export async function countAccounts(): Promise<{ total: number; no_owner: number
     const [r] = (await db.execute(sql`
         SELECT COUNT(*)                                                         AS total,
                COUNT(*) FILTER (WHERE ao.owner_user_id IS NULL)               AS no_owner,
-               COUNT(*) FILTER (WHERE upper(btrim(a.gstin)) = ${GSTIN_PENDING}) AS gstin_missing
+               COUNT(*) FILTER (WHERE ${gstinMissingSql(sql`a.gstin`)})       AS gstin_missing
           FROM accounts a
             LEFT JOIN account_ownership ao ON ao.account_id = a.id
-         WHERE EXISTS (SELECT 1 FROM dealers d WHERE d.dealer_id = a.id)
+         WHERE ${dealerAccountSql()}
     `)) as unknown as Array<Record<string, unknown>>;
     return { total: Number(r?.total ?? 0), no_owner: Number(r?.no_owner ?? 0), gstin_missing: Number(r?.gstin_missing ?? 0) };
 }
