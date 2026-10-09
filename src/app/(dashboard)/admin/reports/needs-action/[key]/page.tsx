@@ -36,6 +36,10 @@ const RULE: Record<ActionKey, string> = {
     won_without_quote: "Leads marked Won this month with no quote the dealer approved. Check the price before onboarding.",
     hot_aged:
         "Open leads (not Converted or Lost) rated Hot for more than 7 days, counted from the day the lead became Hot. A Hot lead this old needs a decision: push it to a quote, transfer it for a visit, or re-rate it.",
+    won_undo_requests:
+        "A rep marked a lead Won by mistake and asked to undo it. Open the lead to approve (it goes back to its earlier stage, same owner) or refuse. Possible only until the dealer submits onboarding.",
+    won_undone_week:
+        "Every Mark Won undone in the last 7 days: the lead went back to the stage it was at before Won, its empty onboarding application was withdrawn, and the Won is not counted anywhere.",
 };
 
 export default async function NeedsActionListPage({

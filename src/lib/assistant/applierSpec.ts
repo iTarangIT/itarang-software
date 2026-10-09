@@ -27,6 +27,10 @@ export type RejectReason =
     | "not_claimable"
     | "duplicate_phone"
     | "target_unavailable"
+    /** A hand-back to an ISR while the ASM has a visit booked (ID 121). */
+    | "visit_booked"
+    /** A second Transfer to ASM on a lead already awaiting the visit (ID 120). */
+    | "already_transferred"
     /** A photo / file on the plan was consumed by another confirmed action meanwhile (E-311). */
     | "attachment_used";
 

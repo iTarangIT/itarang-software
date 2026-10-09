@@ -15,6 +15,8 @@ import { Ban } from "lucide-react";
 import type { LeadDetailBundle } from "@/lib/inside-sales/types";
 import { isOpen, type LeadStatus } from "@/lib/lifecycle/transitions";
 import { CallNowButton } from "@/components/leads/call-now-button";
+import { CorrectLeadGstinButton } from "@/components/leads/CorrectLeadGstinButton";
+import { GSTIN_CORRECTION_MANAGER_ROLES } from "@/lib/leads/correctLeadGstinRules";
 
 type ActiveModal =
     | null
@@ -67,14 +69,22 @@ export function AsmLeadActionBar({ bundle, isOwner, viewerRole, onAction, onChan
     const status = lead.lead_status as LeadStatus | null;
     const open = status ? isOpen(status) : false;
     const isAdmin = viewerRole === "admin" || viewerRole === "ceo";
+    // ID 124: a Won lead has no Mark Won — a GSTIN typo is fixed with Correct
+    // GSTIN, which updates the lead and its onboarding application together.
+    const isWon = status === "Won";
+    const correctGstin = (
+        <CorrectLeadGstinButton leadId={lead.id} currentGstin={lead.gstin ?? null} onDone={onChanged} />
+    );
 
     if (!isOwner) {
         const helper = isAdmin
             ? "Admin/CEO — reassign first to modify."
             : "Read-only — you are not the current owner.";
+        const managerCanFixGstin = isWon && (GSTIN_CORRECTION_MANAGER_ROLES as readonly string[]).includes(viewerRole);
         return (
-            <div className="sticky bottom-0 z-10 bg-white border-t border-gray-200 px-6 py-3 text-xs text-gray-500">
-                {helper}
+            <div className="sticky bottom-0 z-10 bg-white border-t border-gray-200 px-6 py-3 text-xs text-gray-500 flex flex-wrap items-center gap-3">
+                <span>{helper}</span>
+                {managerCanFixGstin && correctGstin}
             </div>
         );
     }
@@ -106,17 +116,21 @@ export function AsmLeadActionBar({ bundle, isOwner, viewerRole, onAction, onChan
                 disabled={!open}
                 onQueued={onChanged}
             />
-            <Btn
-                tone="emerald"
-                icon={CheckCircle2}
-                onClick={() => onAction("mark_converted")}
-                disabled={!open}
-                disabledReason={
-                    !open ? `Lead is ${status === "Lost" ? "Lost" : "closed"} — correct its status first` : undefined
-                }
-            >
-                Mark Won
-            </Btn>
+            {isWon ? (
+                correctGstin
+            ) : (
+                <Btn
+                    tone="emerald"
+                    icon={CheckCircle2}
+                    onClick={() => onAction("mark_converted")}
+                    disabled={!open}
+                    disabledReason={
+                        !open ? `Lead is ${status === "Lost" ? "Lost — reactivate it first" : "closed"}` : undefined
+                    }
+                >
+                    Mark Won
+                </Btn>
+            )}
             {/* ID 115.4: a Won lead goes to Lost only through the admin
                 onboarding drop-out review — the server refuses it here. */}
             {status !== "Won" && (
