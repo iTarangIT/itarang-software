@@ -18,6 +18,7 @@ import { toast } from "sonner";
 import { ExternalLink, Loader2, Phone, RotateCcw, Tag, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { LeadTrackingPanel } from "@/components/leads/lead-tracking-panel";
+import { ReactivateLeadButton } from "@/components/leads/ReactivateLeadButton";
 import { StatusChip } from "@/app/(dashboard)/inside-sales/_components/StatusChip";
 import { InterestChip } from "@/app/(dashboard)/inside-sales/_components/InterestChip";
 import { LEAD_STATUS, LOST_REASON, type LeadStatus, type LostReason } from "@/lib/lifecycle/transitions";
@@ -453,6 +454,20 @@ export function LeadDrawer({ lead, caps, onClose, onDone }: Props) {
                             leadId={lead.id}
                             canDownload={caps.canTrackLeads}
                             compact
+                        />
+                    </div>
+                )}
+
+                {/* A Lost lead's way back (BRD §0.9). Same role gate as the
+                    reassign form below — both post to /api/admin/leads/bulk. */}
+                {caps.canBulkAct && lead.lead_status === "Lost" && (
+                    <div className="px-5 pt-4">
+                        <ReactivateLeadButton
+                            leadId={lead.id}
+                            onDone={() => {
+                                onDone();
+                                onClose();
+                            }}
                         />
                     </div>
                 )}

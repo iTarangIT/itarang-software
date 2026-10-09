@@ -322,7 +322,7 @@ export function SalesHeadOpsView() {
             href: "/admin/reports/dealer-health",
         },
         actionTile("quotes_no_answer", "Quotes with no answer", "soon"),
-        actionTile("said_yes", "Dealer said yes, not marked Won", "soon"),
+        actionTile("said_yes", "Dealer approved, but not marked Won", "soon"),
         {
             key: "idle",
             ready: Boolean(idle.data),
@@ -333,7 +333,6 @@ export function SalesHeadOpsView() {
             sub: `No work logged: ISR over 5, ASM over 7 working days · ${num(idleOver14)} over 14`,
             href: "/admin/reports/needs-attention",
         },
-        actionTile("onboarding_stalled", "Onboarding stalled", "soon"),
         {
             key: "dead",
             ready: Boolean(idle.data),
@@ -377,10 +376,75 @@ export function SalesHeadOpsView() {
 
     const csvHref = `/api/admin/reports/sales-dashboard?${dashQs}&format=csv`;
 
+    // Pinned with the page header while scrolling, so it is sized to sit on one
+    // row on a laptop screen: long state names and the search box are capped.
+    const filterBar = (
+        <div className="flex flex-wrap items-center gap-2.5 rounded-[14px] border border-border bg-surface px-3 py-2">
+            <SegmentedControl
+                label="Team"
+                size="sm"
+                options={[
+                    { value: "all", label: "Everyone" },
+                    { value: "field", label: "Field (ASM)" },
+                    { value: "inside", label: "Inside sales (ISR)" },
+                ]}
+                value={team}
+                onChange={setTeam}
+            />
+            <label className="flex items-center gap-2 text-[13px] text-ink-muted">
+                State
+                <select value={filters.state} onChange={(e) => update({ state: e.target.value })} className={`${SELECT} max-w-[170px]`}>
+                    <option value="">All states</option>
+                    {(regions.data?.states ?? []).map((s) => (
+                        <option key={s.code} value={s.name}>
+                            {s.name}
+                        </option>
+                    ))}
+                </select>
+            </label>
+            <label className="flex items-center gap-2 text-[13px] text-ink-muted">
+                Person
+                <select value={filters.spoc_id} onChange={(e) => update({ spoc_id: e.target.value })} className={`${SELECT} max-w-[170px]`}>
+                    <option value="">Everyone</option>
+                    {repOptions.map((r) => (
+                        <option key={r.user_id} value={r.user_id}>
+                            {r.name ?? r.email}
+                        </option>
+                    ))}
+                </select>
+            </label>
+            <form
+                className="ml-auto flex min-h-10 w-full items-center gap-2 rounded-[10px] border border-border bg-[#fbfcfd] px-3 sm:w-[230px]"
+                onSubmit={(e) => {
+                    e.preventDefault();
+                    if (phone.trim()) router.push(`/leads?search=${encodeURIComponent(phone.trim())}`);
+                }}
+            >
+                <Search className="h-4 w-4 shrink-0 text-ink-muted" aria-hidden />
+                <input
+                    type="search"
+                    inputMode="tel"
+                    aria-label="Find a dealer by phone number"
+                    placeholder="Find dealer by phone"
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value)}
+                    className="min-w-0 grow border-0 bg-transparent text-[13px] text-ink outline-none"
+                />
+            </form>
+            <a
+                href={csvHref}
+                download
+                className="inline-flex min-h-10 items-center gap-1.5 rounded-[10px] border border-border px-3 text-[13px] font-semibold text-brand-navy hover:bg-bg"
+            >
+                <Download className="h-3.5 w-3.5" aria-hidden /> CSV
+            </a>
+        </div>
+    );
+
     return (
         <div className="flex flex-col gap-7 pb-12" data-testid="sales-head-ops">
-            <div className="flex flex-col gap-4">
-                <DashPageHeader
+            <DashPageHeader
+                    sticky
                     eyebrow="Sales Head · operations"
                     title="Is the team doing the work, and what is stuck?"
                     subtitle={
@@ -394,6 +458,7 @@ export function SalesHeadOpsView() {
                                   : ""}
                         </>
                     }
+                    footer={filterBar}
                 >
                     <SegmentedControl
                         label="Period"
@@ -409,68 +474,6 @@ export function SalesHeadOpsView() {
                         }}
                     />
                 </DashPageHeader>
-
-                <div className="flex flex-wrap items-center gap-3 rounded-[14px] border border-border bg-surface px-3.5 py-3">
-                    <SegmentedControl
-                        label="Team"
-                        size="sm"
-                        options={[
-                            { value: "all", label: "Everyone" },
-                            { value: "field", label: "Field (ASM)" },
-                            { value: "inside", label: "Inside sales (ISR)" },
-                        ]}
-                        value={team}
-                        onChange={setTeam}
-                    />
-                    <label className="flex items-center gap-2 text-[13px] text-ink-muted">
-                        State
-                        <select value={filters.state} onChange={(e) => update({ state: e.target.value })} className={SELECT}>
-                            <option value="">All states</option>
-                            {(regions.data?.states ?? []).map((s) => (
-                                <option key={s.code} value={s.name}>
-                                    {s.name}
-                                </option>
-                            ))}
-                        </select>
-                    </label>
-                    <label className="flex items-center gap-2 text-[13px] text-ink-muted">
-                        Person
-                        <select value={filters.spoc_id} onChange={(e) => update({ spoc_id: e.target.value })} className={`${SELECT} max-w-[200px]`}>
-                            <option value="">Everyone</option>
-                            {repOptions.map((r) => (
-                                <option key={r.user_id} value={r.user_id}>
-                                    {r.name ?? r.email}
-                                </option>
-                            ))}
-                        </select>
-                    </label>
-                    <form
-                        className="ml-auto flex min-h-10 w-full items-center gap-2 rounded-[10px] border border-border bg-[#fbfcfd] px-3 sm:w-[300px]"
-                        onSubmit={(e) => {
-                            e.preventDefault();
-                            if (phone.trim()) router.push(`/leads?search=${encodeURIComponent(phone.trim())}`);
-                        }}
-                    >
-                        <Search className="h-4 w-4 shrink-0 text-ink-muted" aria-hidden />
-                        <input
-                            type="search"
-                            inputMode="tel"
-                            aria-label="Find a dealer by phone number"
-                            placeholder="Find a dealer by phone number"
-                            value={phone}
-                            onChange={(e) => setPhone(e.target.value)}
-                            className="min-w-0 grow border-0 bg-transparent text-[13px] text-ink outline-none"
-                        />
-                    </form>
-                    <a
-                        href={csvHref}
-                        download
-                        className="inline-flex min-h-10 items-center gap-1.5 rounded-[10px] border border-border px-3 text-[13px] font-semibold text-brand-navy hover:bg-bg"
-                    >
-                        <Download className="h-3.5 w-3.5" aria-hidden /> CSV
-                    </a>
-                </div>
-            </div>
 
             {dash.error && (
                 <div className="rounded-xl border border-danger/30 bg-danger-bg px-4 py-3 text-sm text-danger">

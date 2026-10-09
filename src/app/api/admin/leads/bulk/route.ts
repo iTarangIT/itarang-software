@@ -224,6 +224,7 @@ export const POST = withErrorHandler(async (req: Request) => {
     let skipped = 0;
     // Of `skipped`: Won leads a bulk Mark Lost left alone (ID 115).
     let skippedWon = 0;
+    const reactivated: Array<{ id: string } & Awaited<ReturnType<typeof reactivateLead>>> = [];
 
     if (body.action === "reassign") {
         if (!body.target_user_id) {
@@ -347,15 +348,23 @@ export const POST = withErrorHandler(async (req: Request) => {
                 skipped++;
                 continue;
             }
-            await reactivateLead({
+            const r = await reactivateLead({
                 leadId: lead.id,
                 trigger: "admin",
                 performedBy: user.id,
                 notes: body.reason ?? "Manual reactivation (admin).",
             });
+            reactivated.push({ id: lead.id, ...r });
             affected++;
         }
     }
 
-    return successResponse({ ok: true, affected, skipped, skipped_won: skippedWon });
+    return successResponse({
+        ok: true,
+        affected,
+        skipped,
+        skipped_won: skippedWon,
+        // reactivate only: where each lead went (owner back, or the unassigned pool).
+        ...(body.action === "reactivate" ? { reactivated } : {}),
+    });
 });
