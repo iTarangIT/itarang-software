@@ -160,12 +160,16 @@ async function leadFunnel(f: DashboardFilters): Promise<ReportResult> {
             SELECT c.id, c.lead_status AS stage FROM cohort c
              WHERE c.lead_status IS NOT NULL
             UNION
+            -- ID 134: a Mark Won undone as a mistake never reached Won —
+            -- skip that row and the undo row leaving Won (E-333).
             SELECT h.dealer_lead_id, h.to_status
               FROM dealer_lead_status_history h JOIN cohort c ON c.id = h.dealer_lead_id
+             WHERE (to_jsonb(h) ->> 'won_undone_at') IS NULL
             UNION
             SELECT h.dealer_lead_id, h.from_status
               FROM dealer_lead_status_history h JOIN cohort c ON c.id = h.dealer_lead_id
              WHERE h.from_status IS NOT NULL
+               AND NOT (h.from_status = 'Won' AND COALESCE(h.reason_notes, '') LIKE 'Won undone:%')
         )
         SELECT stage, COUNT(DISTINCT id)::text AS c FROM reached GROUP BY stage
     `);
