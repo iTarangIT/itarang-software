@@ -32,6 +32,8 @@ import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { matchedUnion, REVENUE_NOT_VOID } from "@/lib/dashboard/revenueSource";
 import { hasAccountOwnershipTables } from "@/lib/accounts/tables";
+import { dealerAccountSql, invoiceAccountSql } from "@/lib/accounts/accountList";
+import { closedColumns } from "@/lib/accounts/accountClosures";
 
 import {
     ACCOUNT_BUCKETS,
@@ -67,12 +69,16 @@ export type DealerHealthRow = {
     revenue_lifetime: number;
     avg_reorder_days: number | null;
     bucket: AccountBucket;
+    /** ID 5 — why it was closed, when bucket is "closed". */
+    closed_reason: string | null;
 };
 
 export async function listDealerHealth(): Promise<DealerHealthRow[]> {
     const invoices = await matchedUnion();
     const accountsOn = await hasAccountOwnershipTables();
-    const keyCol = accountsOn ? sql`r.account_id` : sql`r.dealer_lead_id`;
+    // ID 148 — the shared order key (accountList.invoiceAccountSql).
+    const keyCol = accountsOn ? invoiceAccountSql() : sql`r.dealer_lead_id`;
+    const closed = accountsOn ? await closedColumns(sql`a.id`) : sql`FALSE AS closed, NULL::text AS closed_reason`;
     const orders = sql`
         orders AS (
             SELECT ${keyCol}                         AS k,
@@ -113,13 +119,15 @@ export async function listDealerHealth(): Promise<DealerHealthRow[]> {
                u.name                                               AS owner_name,
                (a.created_at AT TIME ZONE 'Asia/Kolkata')::date     AS converted_on,
                ((SELECT d FROM today) - (a.created_at AT TIME ZONE 'Asia/Kolkata')::date) AS days_since_conversion,
+               ${closed},
                ${orderCols}
           FROM accounts a
           LEFT JOIN account_ownership ao ON ao.account_id = a.id
           LEFT JOIN dealer_leads dl ON dl.id = ao.source_dealer_lead_id
           LEFT JOIN orders o ON o.k = a.id
           LEFT JOIN users u  ON u.id = ao.owner_user_id
-         WHERE a.status = 'active'
+         -- ID 148: the same dealer list as Accounts and the download.
+         WHERE ${dealerAccountSql()}
          ORDER BY days_since_last_order DESC NULLS FIRST, dealer
     `)
         : await db.execute(sql`
@@ -136,6 +144,7 @@ export async function listDealerHealth(): Promise<DealerHealthRow[]> {
                u.name                                               AS owner_name,
                (dl.closed_at AT TIME ZONE 'Asia/Kolkata')::date     AS converted_on,
                ((SELECT d FROM today) - (dl.closed_at AT TIME ZONE 'Asia/Kolkata')::date) AS days_since_conversion,
+               ${closed},
                ${orderCols}
           FROM dealer_leads dl
           LEFT JOIN orders o ON o.k = dl.id
@@ -168,7 +177,8 @@ export async function listDealerHealth(): Promise<DealerHealthRow[]> {
             revenue_90d: Number(r.revenue_90d ?? 0),
             revenue_lifetime: Number(r.revenue_lifetime ?? 0),
             avg_reorder_days: r.avg_reorder_days == null ? null : Number(r.avg_reorder_days),
-            bucket: accountBucket(sinceOrder, sinceConv),
+            bucket: accountBucket(sinceOrder, sinceConv, r.closed === true),
+            closed_reason: (r.closed_reason as string | null) ?? null,
         };
     });
 }
@@ -193,7 +203,7 @@ export async function summarizeDealerHealth(
 ): Promise<DealerHealthGroup[]> {
     const invoices = await matchedUnion();
     const rows = await listDealerHealth();
-    const keyCol = (await hasAccountOwnershipTables()) ? sql`r.account_id` : sql`r.dealer_lead_id`;
+    const keyCol = (await hasAccountOwnershipTables()) ? invoiceAccountSql() : sql`r.dealer_lead_id`;
     const reorder = (await db.execute(sql`
         WITH w AS (SELECT (now() AT TIME ZONE 'Asia/Kolkata')::date - ${windowDays}::int AS start)
         SELECT ${keyCol} AS k,
