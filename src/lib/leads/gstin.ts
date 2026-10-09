@@ -60,6 +60,29 @@ export function checkCustomerGstin(value: string | null | undefined): GstinCheck
     return isOwnGstin(value) ? "own_gstin" : "ok";
 }
 
+/**
+ * ID 62 — a customer GSTIN read off a document (invoice PDF, Vyapar register,
+ * Zoho). One that fails is dropped so it can never match a dealer, and comes
+ * back as a Needs-attention sentence (attentionReasons.ts parses these exact
+ * openings into customer_gstin_invalid / customer_gstin_own) — never silently.
+ */
+export function screenCustomerGstin(raw: string | null | undefined): {
+    gstin: string | null;
+    attention: string | null;
+} {
+    const g = normalizeGstin(raw);
+    if (!g) return { gstin: null, attention: null };
+    const check = checkCustomerGstin(g);
+    if (check === "ok") return { gstin: g, attention: null };
+    return {
+        gstin: null,
+        attention:
+            check === "own_gstin"
+                ? `Customer GSTIN is iTarang's own (${g}) — not matched to a dealer.`
+                : `Customer GSTIN is not valid (${g}) — not matched to a dealer.`,
+    };
+}
+
 export const GSTIN_CHECK_MESSAGE: Record<Exclude<ReturnType<typeof checkCustomerGstin>, "ok">, string> = {
     bad_shape: "Enter a valid 15-character GSTIN.",
     bad_check_digit: "This GSTIN's last character does not match — check it for a typing mistake.",

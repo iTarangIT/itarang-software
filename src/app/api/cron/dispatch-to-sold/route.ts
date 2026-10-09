@@ -12,6 +12,7 @@ import { checkCronAuth } from "@/lib/cron-auth";
 import { markDispatchedAsSold } from "@/lib/sales/sale-finalization";
 import { notifyDelivered } from "@/lib/notifications";
 import { sendKycSms } from "@/lib/sms";
+import { runAsJob } from "@/lib/runtime/liveSite";
 
 // BRD V2 §3.5 — daily cron that auto-finalises any lead stuck in 'dispatched'
 // once the configurable delay (default 1 day) has elapsed since its inventory
@@ -22,7 +23,11 @@ import { sendKycSms } from "@/lib/sms";
 //
 // Schedule: registered in vercel.json. Run at 04:00 UTC daily.
 
-export const GET = withErrorHandler(async (req: Request) => {
+export const GET = withErrorHandler((req: Request) =>
+  runAsJob("cron:dispatch-to-sold", () => dispatchToSold(req)),
+);
+
+async function dispatchToSold(req: Request) {
   // Dev still allows unauthenticated localhost calls for testing — only the
   // env-var-missing case is hardened relative to before. In production an
   // unset CRON_SECRET now returns 500, not 200.
@@ -152,4 +157,4 @@ export const GET = withErrorHandler(async (req: Request) => {
     cutoff: cutoff.toISOString(),
     dispatchToSoldDays: days,
   });
-});
+}

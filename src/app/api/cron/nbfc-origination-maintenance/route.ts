@@ -19,6 +19,7 @@ import { sendManualHandoffNudge } from "@/lib/email/sendManualHandoffEmail";
 import { ENACH_STALE_RISK_DAYS } from "@/lib/nbfc/enach";
 import { getWalletFundsProvider } from "@/lib/nbfc/wallet/provider";
 import { fromVercelCron } from "@/lib/security/cronAuth";
+import { runAsJob } from "@/lib/runtime/liveSite";
 
 /** §16.3 lockout: once an auto-recharge fires, no re-fire for this many hours. */
 const WALLET_AUTORECHARGE_LOCKOUT_HOURS = Number(process.env.WALLET_AUTORECHARGE_LOCKOUT_HOURS ?? 6);
@@ -197,12 +198,12 @@ async function run() {
 
 export async function GET(req: NextRequest) {
   if (!isAuthorised(req)) return NextResponse.json({ ok: false, error: "UNAUTHORIZED" }, { status: 401 });
-  const summary = await run();
+  const summary = await runAsJob("cron:nbfc-origination-maintenance", run);
   return NextResponse.json({ ok: true, ...summary });
 }
 
 export async function POST(req: NextRequest) {
   if (!isAuthorised(req)) return NextResponse.json({ ok: false, error: "UNAUTHORIZED" }, { status: 401 });
-  const summary = await run();
+  const summary = await runAsJob("cron:nbfc-origination-maintenance", run);
   return NextResponse.json({ ok: true, ...summary });
 }

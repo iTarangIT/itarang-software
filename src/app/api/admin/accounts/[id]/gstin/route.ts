@@ -25,7 +25,7 @@ import { db } from "@/lib/db";
 import { accountGstins, accounts, auditLogs, dealerOnboardingDocuments } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 import { generateId, storedFileUrl, successResponse, withErrorHandler } from "@/lib/api-utils";
-import { isValidGstin, normalizeGstin } from "@/lib/leads/gstin";
+import { checkCustomerGstin, GSTIN_CHECK_MESSAGE, isValidGstin, normalizeGstin } from "@/lib/leads/gstin";
 import { saveMedia } from "@/lib/whatsapp/storage";
 import {
     ACCOUNT_ADMIN_ROLES,
@@ -72,9 +72,9 @@ export const PATCH = withErrorHandler(async (req: Request, context: RouteContext
     const fields = FieldsSchema.parse(raw);
 
     const gstin = normalizeGstin(fields.gstin);
-    if (!isValidGstin(gstin)) {
-        throw new HttpError(`"${gstin}" is not a valid GSTIN (15 characters: state code, PAN, entity, Z, check)`, 400);
-    }
+    // ID 62 — the check character, and never iTarang's own registration.
+    const check = checkCustomerGstin(gstin);
+    if (check !== "ok") throw new HttpError(`"${gstin}": ${GSTIN_CHECK_MESSAGE[check]}`, 400);
 
     // ── Account + current GSTIN ────────────────────────────────────────────
     const [acc] = await db
