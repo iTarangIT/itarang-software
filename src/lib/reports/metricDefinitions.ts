@@ -179,3 +179,21 @@ export function bulkImportedLead(dl: SQL = sql`dl`): SQL {
         )
     )`;
 }
+
+/**
+ * ID 32 — the agreed rules above, in words, for the AI Analyst (a separate
+ * service that writes its own SQL), so the CEO gets one answer to one question.
+ * Kept here, beside the SQL it describes: change a rule, change this line.
+ * Sent with every question, so it stays short (src/lib/analyst/metricRules.ts).
+ */
+export const ANALYST_METRIC_RULES = [
+    "Days are IST calendar days (yesterday, last month = in IST).",
+    "Leads in = active dealer_leads created in the period, EXCLUDING bulk imports (source_door scraper / bulk_upload / ai_dialer, or a NeoDove lead_created burst of more than " +
+        `${NEODOVE_BULK_PER_HOUR} per campaign per hour); report bulk imports apart.`,
+    "Dealers converted = dealer_leads.lead_status 'Converted' with closed_at in the period.",
+    "Calls / dealers called = human calls only: lead_touchpoints.touchpoint_type 'inside_sales_call' (AI dialer 'ai_call' excluded); " +
+        `a NeoDove call within ${NEODOVE_CALL_MERGE_WINDOW} of an earlier one by the same agent on the same lead is the same call.`,
+    "Engaged call = such a call that connected (call_status 'connected' or is_engaged), any outcome; duration never counts.",
+    "Quotes created = the first quote per lead (dealer_lead_commercials quote_issue); revisions counted apart.",
+    "Hot handed to field = asm_transfer touchpoints where the lead was Hot at the moment of transfer.",
+].join(" ");

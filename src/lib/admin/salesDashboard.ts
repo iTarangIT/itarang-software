@@ -65,6 +65,7 @@ import {
     isBusinessTypeFilter,
 } from "@/lib/leads/businessType";
 import { accountOwnerOn, dealerLeadByGstin, GSTIN_KEY } from "@/lib/leads/gstinMatch";
+import { leadScopeSql } from "@/lib/leads/leadScopeSql";
 import { hasAccountOwnershipTables } from "@/lib/accounts/tables";
 import { matchedLinesUnion, matchedUnion, REVENUE_NOT_VOID } from "@/lib/dashboard/revenueSource";
 import { humanCall, isFirstQuote } from "@/lib/reports/metricDefinitions";
@@ -150,26 +151,9 @@ const AGEING_BASIS = "dealer_leads.interest_changed_at";
 const num = (v: unknown): number => Number(v ?? 0);
 const round2 = (v: number): number => Math.round(v * 100) / 100;
 
-/**
- * City / state / business type, all on the joined `dl` alias. City and state
- * compare trimmed and case-folded so "nashik" and "Nashik" are one place; an
- * unknown value simply matches nothing, which the spec wants read as zeros.
- * business_type is emitted ONLY when asked for — the column is outside
- * schema.ts (E-296) and naming it unconditionally would fail on a host that
- * lacks it.
- */
+/** City / state / business type on the joined `dl` alias (shared with the reports, ID 11). */
 function leadScope(f: SalesDashboardFilters): SQL {
-    const parts: SQL[] = [];
-    if (f.city) parts.push(sql` AND lower(trim(dl.city)) = lower(trim(${f.city}))`);
-    if (f.state) parts.push(sql` AND lower(trim(dl.state)) = lower(trim(${f.state}))`);
-    if (f.business_type && isBusinessTypeFilter(f.business_type)) {
-        parts.push(
-            f.business_type === BUSINESS_TYPE_UNSET
-                ? sql` AND dl.business_type IS NULL`
-                : sql` AND dl.business_type = ${f.business_type}`,
-        );
-    }
-    return parts.length ? sql.join(parts, sql``) : sql``;
+    return leadScopeSql(f);
 }
 
 /** `AND <col> = spoc` when a rep is pinned; nothing otherwise. */

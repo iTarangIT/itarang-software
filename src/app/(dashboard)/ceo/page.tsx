@@ -625,7 +625,12 @@ export default function CEODashboard() {
   // The Lead Funnel report's stages when it loads (share of the period's leads
   // that ever reached each stage); the control tower's three steps otherwise.
   type FunnelRow = { label: string; count: number; pct: number | null; note: string };
-  const stageRows: FunnelRow[] = (stages.data?.rows ?? []).map((r, i) => {
+  // ID 153 — the report lists bulk imports on their own row; they are not a
+  // funnel stage, so they leave the bars and are stated under the card.
+  const BULK_STAGE = "Imported in bulk (not in the funnel)";
+  const bulkStage = (stages.data?.rows ?? []).find((r) => r.stage === BULK_STAGE);
+  const importedBulk = bulkStage ? Number(bulkStage.count ?? 0) : (engine?.imported_bulk.now ?? null);
+  const stageRows: FunnelRow[] = (stages.data?.rows ?? []).filter((r) => r.stage !== BULK_STAGE).map((r, i) => {
     const ever = r.ever_reached == null ? null : Number(r.ever_reached);
     const pct = r.pct_reached == null ? null : Number(r.pct_reached);
     return {
@@ -1077,9 +1082,12 @@ export default function CEODashboard() {
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
         <DashCard
           title="Sales funnel"
+          // ID 91 — the same leads, split by where they came from.
+          action={<CardLink href="/reports?analysis=lead_sources">Lead sources</CardLink>}
           caption={
             engine
-              ? `How far the period's ${num(engine.leads_in.now)} new leads have got. The bar is the share of them that reached each stage.`
+              ? `How far the period's ${num(engine.leads_in.now)} new leads have got. The bar is the share of them that reached each stage.` +
+                (importedBulk ? ` ${num(importedBulk)} more came in as bulk imports and are not counted here.` : "")
               : undefined
           }
         >

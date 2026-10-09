@@ -130,7 +130,15 @@ export const NAV_LAYOUTS: Record<string, Layout> = {
             { section: "ECOFY", items: [{ spread: "sh-ecofy" }] },
             {
                 section: "REPORTS",
-                items: ["ceo-reports", { id: "ceo-admin-dashboard", label: "Ops dashboard" }, "ceo-news"],
+                // ID 91 — the redesign board's REPORTS group.
+                items: [
+                    { id: "ceo-reports", isNew: true },
+                    { id: "ceo-data-downloads", isNew: true },
+                    { id: "ceo-scheduled-emails", isNew: true },
+                    "ceo-report-catalogue",
+                    { id: "ceo-admin-dashboard", label: "Ops dashboard" },
+                    "ceo-news",
+                ],
             },
         ],
     },
@@ -212,7 +220,16 @@ export const NAV_LAYOUTS: Record<string, Layout> = {
             },
             { section: "MONEY", items: [{ id: "sh-ai-expense-tracker", label: "Expense tracker" }, "submit-expense"] },
             { section: "ECOFY", items: [{ spread: "sh-ecofy" }] },
-            { section: "REPORTS", items: ["sh-reports", { id: "sh-admin-dashboard", label: "Ops dashboard" }] },
+            {
+                section: "REPORTS",
+                items: [
+                    { id: "sh-reports", isNew: true },
+                    { id: "sh-data-downloads", isNew: true },
+                    { id: "sh-scheduled-emails", isNew: true },
+                    "sh-report-catalogue",
+                    { id: "sh-admin-dashboard", label: "Ops dashboard" },
+                ],
+            },
             { section: "SETTINGS", items: [{ section: "Settings" }] },
         ],
     },

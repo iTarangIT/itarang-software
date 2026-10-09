@@ -3,6 +3,7 @@ import "server-only";
 import { ownsThread, requireAnalystUser } from "@/lib/analyst/access";
 import { agentJson } from "@/lib/analyst/client";
 import { errorResponse } from "@/lib/analyst/errors";
+import { stripMetricRules } from "@/lib/analyst/metricRules";
 import type { RunDetail } from "@/lib/analyst/types";
 
 export const dynamic = "force-dynamic";
@@ -18,7 +19,7 @@ export async function GET(_request: Request, context: { params: Promise<{ runId:
     if (!ownsThread(user, detail.thread_id)) {
       return Response.json({ error: "run not found", code: "not_found" }, { status: 404 });
     }
-    return Response.json(detail);
+    return Response.json({ ...detail, question: stripMetricRules(detail.question) });
   } catch (error) {
     return errorResponse(error, "could not load that answer");
   }

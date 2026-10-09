@@ -60,6 +60,12 @@ export interface LeadSourcesResult {
     group: LeadSourceGroup;
     total: LeadSourceRow;
     rows: LeadSourceRow[];
+    /**
+     * ID 153 — leads that came in as a bulk import (scraper, list upload,
+     * AI-dialer list, NeoDove list push), counted apart from "Leads in" and
+     * from every source row; null when there were none.
+     */
+    bulk: LeadSourceRow | null;
     checks: AnalysisCheck[];
 }
 

@@ -11,6 +11,8 @@ import {
   Users,
   UserCheck,
   FileText,
+  Download,
+  Mail,
   Calculator,
   Phone,
   PieChart,
@@ -516,6 +518,30 @@ const ROLE_TRAILING_SECTIONS: Record<string, any[]> = {
   ],
 };
 
+// ID 91 — Reports for the CEO, Admin and Sales Head, as the redesign board's
+// REPORTS group: Analyses (Lead sources, AI score accuracy, Meetings), Data
+// downloads and Scheduled email reports, all on the shared /reports page. The
+// older catalogue (daily activity, funnel, lost, handoff) stays one row below.
+function reportsNav(idPrefix: "ceo" | "admin" | "sh") {
+  return [
+    {
+      id: `${idPrefix}-reports`,
+      label: "Analyses",
+      icon: BarChart3,
+      // A node, not a route (see nbfcSettingsSubnav).
+      href: "/reports",
+      children: [
+        { id: `${idPrefix}-analysis-lead-sources`, label: "Lead sources", icon: BarChart3, href: "/reports?analysis=lead_sources" },
+        { id: `${idPrefix}-analysis-ai-score`, label: "AI score accuracy", icon: BarChart3, href: "/reports?analysis=ai_score" },
+        { id: `${idPrefix}-analysis-meetings`, label: "Meetings", icon: BarChart3, href: "/reports?analysis=meetings" },
+      ],
+    },
+    { id: `${idPrefix}-data-downloads`, label: "Data downloads", icon: Download, href: "/reports?section=downloads" },
+    { id: `${idPrefix}-scheduled-emails`, label: "Scheduled email reports", icon: Mail, href: "/reports?section=emails" },
+    { id: `${idPrefix}-report-catalogue`, label: "Report catalogue", icon: FileText, href: "/admin/reports" },
+  ];
+}
+
 // The AI Analyst (the Data Analyst agent, a separate Python service proxied via
 // /api/analyst/*). A `direct` group: one destination, rendered as a link in the
 // section-header row rather than a collapsible heading, so it is one click from
@@ -579,12 +605,7 @@ const roleNavigation: Record<string, any[]> = {
           icon: FileCheck,
           href: "/ceo/quotations",
         },
-        {
-          id: "ceo-reports",
-          label: "Reports",
-          icon: BarChart3,
-          href: "/admin/reports",
-        },
+        ...reportsNav("ceo"),
         {
           id: "ceo-sales-dashboard",
           label: "Sales Dashboard",
@@ -880,14 +901,7 @@ const roleNavigation: Record<string, any[]> = {
           icon: Radar,
           href: "/admin/acquisition-campaigns",
         },
-        {
-          id: "sh-reports",
-          label: "Reports",
-          icon: BarChart3,
-          // The Sales Head's own Reports page (redesign, 6 Oct 2026); the
-          // shared /admin/reports stays for the other roles.
-          href: "/sales-head/reports",
-        },
+        ...reportsNav("sh"),
         {
           id: "sh-sales-dashboard",
           label: "Sales Dashboard",
@@ -1488,12 +1502,7 @@ const roleNavigation: Record<string, any[]> = {
           icon: Radar,
           href: "/admin/acquisition-campaigns",
         },
-        {
-          id: "admin-reports",
-          label: "Reports",
-          icon: BarChart3,
-          href: "/admin/reports",
-        },
+        ...reportsNav("admin"),
         {
           id: "admin-sales-dashboard",
           label: "Sales Dashboard",

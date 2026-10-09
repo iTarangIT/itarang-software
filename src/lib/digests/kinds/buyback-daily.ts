@@ -73,6 +73,7 @@ import { humanCall } from "@/lib/reports/metricDefinitions";
 import { monthEnd, workingDaysBetween } from "@/lib/targets/rules";
 
 import { istRangeTz } from "../window";
+import { digestDateForSlot } from "../schedule";
 import type {
   DigestDetail,
   DigestFigures,
@@ -444,6 +445,12 @@ async function collect(
   istDay: string,
 ): Promise<{ ok: boolean; figures: DigestFigures; error?: string }> {
   try {
+    // ID 10 — sent at 19:00 for the day itself (the layout: "Every day, 19:00"),
+    // so the first period is Today and the pickups are tomorrow's. A run for an
+    // earlier day (a re-send) keeps the morning wording.
+    const forToday = istDay === digestDateForSlot("evening");
+    const dayLabel = forToday ? "Today" : "Yesterday";
+    const [next1, next2] = forToday ? ["tomorrow", "the day after"] : ["today", "tomorrow"];
     const sendDay = addDays(istDay, 1);
     const dayAfter = addDays(istDay, 2);
     const monthFirst = firstOfMonth(istDay);
@@ -470,14 +477,14 @@ async function collect(
       ok: true,
       figures: {
         activity: [],
-        headline: [buybackHeadline(company.y)],
+        headline: [buybackHeadline(company.y, dayLabel)],
         wide: true,
         backlog: [],
         tables: [
           {
             key: "company",
             title: "A · Company headline",
-            columns: BLOCK_A_COLUMNS,
+            columns: BLOCK_A_COLUMNS.map((c) => (c === "Yesterday" ? dayLabel : c)),
             rows: blockARows(company, targets.company),
             textColumns: 1,
             note: targets.note,
@@ -489,6 +496,7 @@ async function collect(
             rows: blockBRows(
               { yesterday: buybackOnly(yesterday), last7: buybackOnly(last7), mtd: buybackOnly(mtd) },
               targets.byUser,
+              dayLabel,
             ),
             note:
               "The SPOC is the request's owner. Dealers called counts the person's human calls on buyback " +
@@ -497,7 +505,7 @@ async function collect(
           },
           {
             key: "pipeline",
-            title: "C · Buyback pipeline — as of this morning",
+            title: `C · Buyback pipeline — as of ${forToday ? "this evening" : "this morning"}`,
             columns: [
               "SPOC",
               "Awaiting images",
@@ -515,11 +523,11 @@ async function collect(
           },
           {
             key: "today",
-            title: "D · Pickups today and tomorrow",
-            columns: ["SPOC", "Pickups today", "Pickups tomorrow", "Expected kg today"],
+            title: `D · Pickups ${next1} and ${next2}`,
+            columns: ["SPOC", `Pickups ${next1}`, `Pickups ${next2}`, `Expected kg ${next1}`],
             rows: pickups,
             textColumns: 1,
-            empty: "No pickups scheduled for today or tomorrow.",
+            empty: `No pickups scheduled for ${next1} or ${next2}.`,
           },
         ],
       },
@@ -539,17 +547,19 @@ export const buybackDailyDigest: DigestKindDescriptor = {
   id: "buyback_daily",
   label: "Buyback Daily",
   description:
-    "One mail every morning: A · the company headline (requests, quotes, pickups, kg, ₹ paid, " +
+    "One mail every day at 19:00, for the day itself (requests, pickups, payments and kg sourced), " +
+    "to the buyback team and the CEO: A · the company headline (requests, quotes, pickups, kg, ₹ paid, " +
     "₹/kg and gross margin — yesterday, last 7 days, month to date, target and the same period " +
     "last month), B · the same activity per SPOC (the request's owner), C · the open buyback " +
-    "pipeline by where each request is waiting, and D · pickups for today and tomorrow with the " +
-    "kg expected today. Nothing is sent until recipients are added here.",
+    "pipeline by where each request is waiting, and D · pickups for tomorrow and the day after with " +
+    "the kg expected tomorrow. Nothing is sent until recipients are added here.",
   settingsKey: "buyback_daily_digest",
   settingsHref: "/admin/settings/buyback-daily",
   ctaHref: "/admin/buyback/dashboard",
   ctaLabel: "Open Buyback Dashboard",
   sections: SECTIONS,
-  slots: ["morning"],
+  // ID 10 — the layout's "Every day, 19:00" (evening slot, default 19:00).
+  slots: ["evening"],
   defaults: { enabled: false, recipients: [] },
   subject: ({ dayLabel }) => `iTarang Buyback Daily — ${dayLabel}`,
   collect,
