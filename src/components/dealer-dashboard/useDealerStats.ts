@@ -30,6 +30,9 @@ export type DealerApiData = {
   dealerAccountStatus: string;
   approvedAt: string | null;
   submittedAt: string | null;
+  /** Raw enum, e.g. 'sole_proprietorship'. */
+  companyType: string | null;
+  gstNumber: string | null;
   financeEnabled: boolean;
   /** E-202 — 'new' | 'scrap' | 'both'. Decides which modules this dealer has. */
   dealerType: string | null;
