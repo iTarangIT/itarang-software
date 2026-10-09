@@ -69,6 +69,8 @@ export async function GET() {
     let canonicalDealer: {
       id: number;
       companyName: string;
+      companyType: string | null;
+      gstNumber: string | null;
       onboardingStatus: string;
       createdAt: Date;
     } | null = null;
@@ -78,6 +80,8 @@ export async function GET() {
           .select({
             id: dealers.id,
             companyName: dealers.company_name,
+            companyType: dealers.company_type,
+            gstNumber: dealers.gst_number,
             onboardingStatus: dealers.onboarding_status,
             createdAt: dealers.created_at,
             financeEnabled: dealers.finance_enabled,
@@ -178,6 +182,10 @@ export async function GET() {
               dealerAccountStatus: dealerApp.dealer_account_status,
               approvedAt: dealerApp.approved_at,
               submittedAt: dealerApp.submitted_at,
+              // Canonical dealers row first (admin edits land there after
+              // approval), application as the pre-approval fallback.
+              companyType: canonicalDealer?.companyType || dealerApp.company_type || null,
+              gstNumber: canonicalDealer?.gstNumber || dealerApp.gst_number || null,
               // Canonical dealers.finance_enabled, NOT the application flag.
               // The two diverge during post-approval finance enablement: the
               // application flag flips when the admin enables finance, but
@@ -209,6 +217,8 @@ export async function GET() {
                 dealerAccountStatus: null,
                 approvedAt: canonicalDealer.createdAt,
                 submittedAt: null,
+                companyType: canonicalDealer.companyType,
+                gstNumber: canonicalDealer.gstNumber,
                 financeEnabled: financeLive,
                 dealerType,
                 // A `dealers` row is only written at approval (approve route
