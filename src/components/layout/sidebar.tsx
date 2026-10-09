@@ -1337,6 +1337,8 @@ const roleNavigation: Record<string, any[]> = {
       section: "SALES",
       items: [
         { id: "leads", label: "My Leads", icon: Users, href: "/leads" },
+        // ID 5 — the dealers this user owns, with "Order placed".
+        { id: "sm-my-dealers", label: "My Dealers", icon: Store, href: "/my-dealers" },
         {
           // ID 82 — sales-ready leads nobody owns, longest wait first.
           id: "sm-ready-to-assign",
@@ -1999,6 +2001,8 @@ const roleNavigation: Record<string, any[]> = {
       items: [
         { id: "leads", label: "My Leads", icon: Users, href: "/leads" },
         { id: "deals", label: "My Deals", icon: FileCheck, href: "/deals" },
+        // ID 5 — the dealers this user owns, with "Order placed".
+        { id: "se-my-dealers", label: "My Dealers", icon: Store, href: "/my-dealers" },
       ],
     },
   ],
@@ -2029,6 +2033,8 @@ const roleNavigation: Record<string, any[]> = {
         },
         // E-307 — Ecofy leads the Sales Head assigned to this ISR + the calculator.
         ecofyWorkerSubnav("is", "/inside-sales"),
+        // ID 5 — the dealers this user owns, with "Order placed".
+        { id: "is-my-dealers", label: "My Dealers", icon: Store, href: "/my-dealers" },
         {
           id: "is-performance",
           label: "My Performance",
@@ -2064,6 +2070,8 @@ const roleNavigation: Record<string, any[]> = {
         },
         // E-307 — Ecofy leads the Sales Head assigned to this ASM + the calculator.
         ecofyWorkerSubnav("asm", "/asm"),
+        // ID 5 — the dealers this user owns, with "Order placed".
+        { id: "asm-my-dealers", label: "My Dealers", icon: Store, href: "/my-dealers" },
         {
           id: "asm-performance",
           label: "My Performance",

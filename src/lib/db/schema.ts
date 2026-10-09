@@ -1087,6 +1087,37 @@ export const accountClosures = pgTable("account_closures", {
   closed_at: timestamp("closed_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
+// E-334 (ID 5) — "Order placed" claims: pause a dealer's ageing for 15 days
+// from order_date; an invoice in that window confirms it. Status is computed
+// (src/lib/accounts/orderClaims.ts), never stored. Readers use raw SQL behind
+// the hasOrderClaimTables() probe.
+export const accountOrderClaims = pgTable("account_order_claims", {
+  id: bigserial("id", { mode: "number" }).primaryKey(),
+  account_id: varchar("account_id", { length: 255 }).notNull(),
+  order_date: date("order_date").notNull(),
+  po_number: text("po_number"),
+  note: text(),
+  claimed_by: uuid("claimed_by"),
+  claimed_at: timestamp("claimed_at", { withTimezone: true }).defaultNow().notNull(),
+  withdrawn_at: timestamp("withdrawn_at", { withTimezone: true }),
+  withdrawn_by: uuid("withdrawn_by"),
+  withdrawn_reason: text("withdrawn_reason"),
+});
+
+// E-334 (ID 5) — dealer reorder reminders already sent, one row per
+// (kind, period, recipient); claimed before the send, deleted if it fails.
+export const accountReminderLog = pgTable(
+  "account_reminder_log",
+  {
+    kind: text().notNull(),
+    period_key: text("period_key").notNull(),
+    recipient: text().notNull(),
+    dealers: integer().default(0).notNull(),
+    sent_at: timestamp("sent_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.kind, t.period_key, t.recipient] })],
+);
+
 // E-321 — a person's decision about one invoice: linked to an account, or
 // "not a dealer sale". invoice_id = zoho_invoices.id / sales_invoices.id.
 export const invoiceAccountLinks = pgTable(

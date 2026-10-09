@@ -41,6 +41,7 @@ export async function register() {
       startWaAssistantSweepTicker,
       startDealerAgreementRefreshTicker,
       startAgreementExpiryReminderTicker,
+      startDealerReorderReminderTicker,
     } = await import("./instrumentation-node");
     // ID 125 — every ticker runs as a named job. Its timers inherit the job
     // context, so the email / WhatsApp / Telegram senders drop what a job tries
@@ -64,6 +65,9 @@ export async function register() {
     // ID 53 — agreement expiry reminders, hourly (kickoff 215s out); the
     // Vercel cron for it never fired on the pm2 boxes.
     await runAsJob("agreement-expiry-reminder", startAgreementExpiryReminderTicker);
+    // ID 5 — dealer reorder reminders, hourly (kickoff 220s out): Orange nudge,
+    // monthly Dormant win-back, the CEO's "turned Dormant" alert.
+    await runAsJob("dealer-reorder-reminders", startDealerReorderReminderTicker);
     await runAsJob("recording-transcription", startRecordingTranscriptionTicker);
     await runAsJob("drive-mirror", startDriveMirrorTicker);
     // E-280 — Drive sales-invoice scan. Kickoff staggered 195s out, the last

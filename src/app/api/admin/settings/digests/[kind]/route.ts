@@ -65,16 +65,28 @@ export const GET = withErrorHandler(
         await requireRole(EDITOR_ROLES);
         const kind = resolve((await ctx.params).kind);
 
-        const [settings, runs] = await Promise.all([
+        const [settings, runs, audience] = await Promise.all([
             getDigestSettings(kind),
             // Empty on a database without E-288 applied — the screen still lets an
             // admin configure the digest, it just cannot show a history yet.
             recentDigestRuns(kind.id, 8),
+            // ID 10 — who the kind adds at send time (role / activity based).
+            kind.audience
+                ? kind.audience
+                      .resolve()
+                      .then((emails) => ({ label: kind.audience!.label, emails, error: null as string | null }))
+                      .catch((e: unknown) => ({
+                          label: kind.audience!.label,
+                          emails: [] as string[],
+                          error: e instanceof Error ? e.message : String(e),
+                      }))
+                : Promise.resolve(null),
         ]);
 
         return successResponse({
             settings,
             runs,
+            audience,
             // The screen renders its tick-boxes and headings from this, so a
             // descriptor gaining a section needs no front-end change.
             kind: {
