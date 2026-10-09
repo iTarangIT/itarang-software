@@ -12,9 +12,6 @@ export const INTENT_THRESHOLDS = {
   COLD: 20,
 } as const;
 
-// Finer VISUAL-ONLY tier for "hot" badges. Never used for routing or status.
-export const HOT_BADGE = 85;
-
 export type LeadStatus = "qualified" | "warm" | "cold" | "disqualified";
 
 /**
