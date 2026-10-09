@@ -17,7 +17,7 @@ import { eq } from "drizzle-orm";
 import { nbfcNotificationChannels } from "@/lib/db/schema";
 import { sendKycSms } from "@/lib/sms";
 import type { SendSmsResult } from "@/lib/sms-types";
-import { getMailer, type Mailer } from "@/lib/email/mailer";
+import { getMailer, skipJobSendsOffLive, type Mailer } from "@/lib/email/mailer";
 
 export interface ResolvedEmail {
   transporter: Mailer;
@@ -27,7 +27,7 @@ export interface ResolvedEmail {
 
 /** Wrap a raw nodemailer transporter in the shared Mailer shape. */
 function wrapNodemailer(transporter: nodemailer.Transporter): Mailer {
-  return {
+  return skipJobSendsOffLive({
     async sendMail(opts) {
       const info = await transporter.sendMail(opts as nodemailer.SendMailOptions);
       return { messageId: info.messageId };
@@ -36,7 +36,7 @@ function wrapNodemailer(transporter: nodemailer.Transporter): Mailer {
       await transporter.verify();
       return true as const;
     },
-  };
+  });
 }
 
 type ChannelRow = typeof nbfcNotificationChannels.$inferSelect;

@@ -10,8 +10,8 @@
 
 import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { checkCustomerGstin } from "@/lib/leads/gstin";
-import { GSTIN_KEY, gstinKeyIsMatchable } from "@/lib/leads/gstinMatch";
+import { checkCustomerGstin, screenCustomerGstin } from "@/lib/leads/gstin";
+import { accountsByGstinKey, GSTIN_KEY, gstinKeyIsMatchable, leadsByGstinKey } from "@/lib/leads/gstinMatch";
 
 let failed = 0;
 function check(label: string, ok: boolean, detail?: unknown) {
@@ -96,6 +96,32 @@ async function main() {
             console.log(`SKIP  ${inv.src} — ${(e as Error).message.split("\n")[0]}`);
         }
     }
+
+    // The main revenue matcher's keyed sets (revenueSource.matchedUnion) must
+    // re-check too: no failing GSTIN may sit in either.
+    for (const [label, keyed] of [
+        ["leadsByGstinKey", leadsByGstinKey()],
+        ["accountsByGstinKey", accountsByGstinKey()],
+    ] as const) {
+        try {
+            const [r] = (await db.execute<{ total: number; failing: number }>(sql`
+                SELECT COUNT(*)::int AS total,
+                       COUNT(*) FILTER (WHERE NOT ${gstinKeyIsMatchable(sql`s.k`)})::int AS failing
+                  FROM (${keyed}) s
+            `)) as unknown as Array<{ total: number; failing: number }>;
+            check(`${label}: none of ${r.total} key(s) fails the rule`, r.failing === 0, r);
+        } catch (e) {
+            console.log(`SKIP  ${label} — ${(e as Error).message.split("\n")[0]}`);
+        }
+    }
+
+    // Documents (Drive, Vyapar, Zoho) flag a refused GSTIN, never drop it silently.
+    const screenWrong = FIXED.filter((g) => {
+        const s = screenCustomerGstin(g);
+        const ok = checkCustomerGstin(g) === "ok";
+        return ok ? s.gstin === null || s.attention !== null : s.gstin !== null || s.attention === null;
+    });
+    check("screenCustomerGstin keeps the good ones and flags every refused one", screenWrong.length === 0, screenWrong);
 
     console.log(failed === 0 ? "\nAll checks passed." : `\n${failed} check(s) FAILED.`);
     process.exit(failed === 0 ? 0 : 1);

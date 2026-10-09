@@ -112,6 +112,10 @@ export function leadsByGstinKey(): SQL {
                 ON gm_app.id = gm_dl.dealer_onboarding_application_id
           ) lk
          WHERE lk.k IS NOT NULL
+           -- ID 62: the main revenue matcher re-checks the GSTIN too, so a lead
+           -- saved with a mistyped GSTIN never claims an invoice carrying the
+           -- same mistake (dealerLeadByGstin already did this).
+           AND ${gstinKeyIsMatchable(sql`lk.k`)}
          ORDER BY lk.k,
                   (lk.lead_status IN ('Converted', 'Won')) DESC,
                   lk.closed_at DESC NULLS LAST,
@@ -137,6 +141,7 @@ export function accountsByGstinKey(): SQL {
               JOIN accounts ga_a ON ga_a.id = ga_g.account_id
           ) ak
          WHERE ak.k IS NOT NULL
+           AND ${gstinKeyIsMatchable(sql`ak.k`)} -- ID 62, as leadsByGstinKey
          ORDER BY ak.k, ak.created_at ASC`;
 }
 

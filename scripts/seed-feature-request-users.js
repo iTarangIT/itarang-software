@@ -8,8 +8,11 @@
  *   rushikesh@itarangjosh.com  developer     → developer
  *   every active role=ceo user   ceo (untouched) → requester
  *
- * Password for the four new logins: "password". The CEO account's password
- * and role are NOT touched — it only gets its seat.
+ * Password (ID 140): a NEW login gets FR_SEED_PASSWORD, or a random one that is
+ * printed once, and must change it at first sign-in. An EXISTING login is never
+ * touched — not its password, not its role — it only gets its seat. Re-running
+ * this script can therefore never reset anyone's password. The CEO accounts
+ * likewise only get their seat.
  *
  * Writes to BOTH Supabase Auth (login) and public.users on the AWS RDS
  * Postgres in DATABASE_URL (auth-utils reads that; a missing row reads as
@@ -23,6 +26,7 @@
  */
 
 /* eslint-disable @typescript-eslint/no-require-imports */
+const crypto = require('crypto');
 const { createClient } = require('@supabase/supabase-js');
 const postgres = require('postgres');
 require('dotenv').config({ path: '.env.local' });
@@ -38,7 +42,9 @@ const sql = postgres(process.env.DATABASE_URL, {
     max: 1,
 });
 
-const PASSWORD = 'password';
+// Never a fixed, guessable default (ID 140) — every run without FR_SEED_PASSWORD
+// draws a fresh random one for the logins it creates.
+const NEW_LOGIN_PASSWORD = process.env.FR_SEED_PASSWORD || crypto.randomBytes(12).toString('base64url');
 const USERS = [
     { email: 'kartik@itarangjosh.com', name: 'Kartik', role: 'product_head', seat: 'product_reviewer' },
     { email: 'apoorv@itarangjosh.com', name: 'Apoorv', role: 'tech_head', seat: 'tech_reviewer' },
@@ -62,42 +68,35 @@ async function seedUser(u) {
     const existing = await findAuthUser(u.email);
     let authId;
     if (existing) {
+        // ID 140: an existing login keeps its password and role — a re-run must
+        // never put a known password back on a live account.
         authId = existing.id;
-        const { error } = await supabase.auth.admin.updateUserById(authId, {
-            password: PASSWORD,
-            app_metadata: { ...(existing.app_metadata || {}), role: u.role },
-        });
-        if (error) throw new Error(`update ${u.email}: ${error.message}`);
-        console.log(`  ${u.email}: auth user existed — password + role refreshed`);
+        console.log(`  ${u.email}: auth user exists — password and role left as they are`);
     } else {
         const { data, error } = await supabase.auth.admin.createUser({
             email: u.email,
-            password: PASSWORD,
+            password: NEW_LOGIN_PASSWORD,
             email_confirm: true,
             app_metadata: { role: u.role },
         });
         if (error) throw new Error(`create ${u.email}: ${error.message}`);
         authId = data.user.id;
+        created.push(u.email);
         console.log(`  ${u.email}: auth user created`);
     }
 
+    // Missing row only: an existing users row (role, active flag, password
+    // state) is the owner's, not this script's.
     await sql`
         INSERT INTO users (id, email, name, role, is_active, must_change_password, created_at, updated_at)
-        VALUES (${authId}::uuid, ${u.email}, ${u.name}, ${u.role}, true, false, NOW(), NOW())
-        ON CONFLICT (id) DO UPDATE SET
-            email = EXCLUDED.email, name = EXCLUDED.name, role = EXCLUDED.role,
-            is_active = true, must_change_password = false, updated_at = NOW()
-    `;
-    await sql`
-        UPDATE users SET role = ${u.role}, is_active = true, must_change_password = false, updated_at = NOW()
-        WHERE email = ${u.email} AND id <> ${authId}::uuid
+        VALUES (${authId}::uuid, ${u.email}, ${u.name}, ${u.role}, true, true, NOW(), NOW())
+        ON CONFLICT (id) DO NOTHING
     `;
     await upsertSeat(authId, u.seat);
-
-    const { error: loginErr } = await supabase.auth.signInWithPassword({ email: u.email, password: PASSWORD });
-    if (loginErr) throw new Error(`login test ${u.email}: ${loginErr.message}`);
-    console.log(`  ${u.email}: RDS row + seat ${u.seat} ready, login verified`);
+    console.log(`  ${u.email}: RDS row + seat ${u.seat} ready`);
 }
+
+const created = [];
 
 async function upsertSeat(userId, seat) {
     await sql`
@@ -115,6 +114,13 @@ async function run() {
     if (!reg.t) throw new Error('E-316 is not applied to this database — run scripts/_apply-e316.mjs first');
 
     for (const u of USERS) await seedUser(u);
+    if (created.length > 0) {
+        console.log(
+            `\nNew login(s) ${created.join(', ')} — first-time password ` +
+                `${process.env.FR_SEED_PASSWORD ? '(FR_SEED_PASSWORD)' : NEW_LOGIN_PASSWORD}; ` +
+                'each must change it at first sign-in. Shown once, not stored.\n',
+        );
+    }
 
     // Every active CEO login (Sanchit + the CEO test account) can raise
     // requests: seat only — their password and role stay as they are.

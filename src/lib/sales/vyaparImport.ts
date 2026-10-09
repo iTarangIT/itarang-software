@@ -184,9 +184,11 @@ export async function commitImport(
                 const [row] = rowsOf<{ id: string }>(
                     await tx.execute(sql`
                         INSERT INTO sales_invoices (source, invoice_number, invoice_number_key, invoice_date, customer_name,
-                                                    customer_gstin, organization_id, sub_total, tax_total, total, status)
+                                                    customer_gstin, organization_id, sub_total, tax_total, total, status,
+                                                    needs_attention, attention_reason)
                         VALUES ('vyapar', ${d.number}, ${key}, ${d.date}::date, ${d.party}, ${d.gstin},
-                                ${org.organizationId}, ${d.taxable}, ${d.tax}, ${d.total}, 'sent')
+                                ${org.organizationId}, ${d.taxable}, ${d.tax}, ${d.total}, 'sent',
+                                ${d.gstin_attention !== null}, ${d.gstin_attention})
                         ON CONFLICT DO NOTHING
                         RETURNING id::text AS id`),
                 );
@@ -203,6 +205,16 @@ export async function commitImport(
                 await tx.execute(sql`
                     UPDATE sales_invoices SET customer_gstin = ${d.gstin}, updated_at = now()
                      WHERE id = ${id}::uuid AND customer_gstin IS DISTINCT FROM ${d.gstin}`);
+            } else if (d.gstin_attention) {
+                // ID 62 — the register's GSTIN was refused: say so on the
+                // invoice (once) instead of dropping it silently.
+                await tx.execute(sql`
+                    UPDATE sales_invoices
+                       SET needs_attention = true,
+                           attention_reason = concat_ws(' ', NULLIF(attention_reason, ''), ${d.gstin_attention}::text),
+                           updated_at = now()
+                     WHERE id = ${id}::uuid
+                       AND position(${d.gstin_attention}::text IN COALESCE(attention_reason, '')) = 0`);
             }
 
             if (d.lines.length) {

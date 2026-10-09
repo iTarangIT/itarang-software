@@ -33,6 +33,7 @@ import { runAllDigests, runDigest } from "@/lib/digests/engine";
 import type { DigestRunSlot } from "@/lib/digests/engine";
 import { DIGEST_KIND_IDS, digestKind } from "@/lib/digests/registry";
 import { fromVercelCron } from "@/lib/security/cronAuth";
+import { runAsJob } from "@/lib/runtime/liveSite";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -93,8 +94,8 @@ async function run(req: NextRequest) {
 }
 
 export async function GET(req: NextRequest) {
-  return run(req);
+  return runAsJob("cron:digest", () => run(req));
 }
 export async function POST(req: NextRequest) {
-  return run(req);
+  return runAsJob("cron:digest", () => run(req));
 }

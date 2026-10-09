@@ -18,6 +18,7 @@
  * sites did not have to change.
  */
 import nodemailer from "nodemailer";
+import { suppressJobSend } from "@/lib/runtime/liveSite";
 
 export interface MailAttachment {
   filename: string;
@@ -227,6 +228,26 @@ function smtpMailer(): Mailer {
  * somebody needs to read.
  */
 export function getMailer(): Mailer {
+  return skipJobSendsOffLive(providerMailer());
+}
+
+/**
+ * ID 125 — a scheduled job on a site that is not the live CRM does not email
+ * anyone. Reported as delivered so a job's retry logic does not loop on it.
+ */
+export function skipJobSendsOffLive(mailer: Mailer): Mailer {
+  return {
+    sendMail: async (opts) => {
+      if (suppressJobSend("email")) {
+        return { messageId: "skipped:not-live-site", accepted: toAddressList(opts.to), rejected: [] };
+      }
+      return mailer.sendMail(opts);
+    },
+    verify: () => mailer.verify(),
+  };
+}
+
+function providerMailer(): Mailer {
   const am = agentMailConfig();
   if (am) {
     return {

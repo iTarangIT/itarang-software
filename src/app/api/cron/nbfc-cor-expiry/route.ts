@@ -13,6 +13,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { checkNbfcCorExpiryJob } from "@/lib/queue/jobs/checkNbfcCorExpiryJob";
 import { fromVercelCron } from "@/lib/security/cronAuth";
+import { runAsJob } from "@/lib/runtime/liveSite";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -63,9 +64,9 @@ async function runJob(req: NextRequest) {
 }
 
 export async function GET(req: NextRequest) {
-  return runJob(req);
+  return runAsJob("cron:nbfc-cor-expiry", () => runJob(req));
 }
 
 export async function POST(req: NextRequest) {
-  return runJob(req);
+  return runAsJob("cron:nbfc-cor-expiry", () => runJob(req));
 }

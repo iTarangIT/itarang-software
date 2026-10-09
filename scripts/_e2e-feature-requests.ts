@@ -4,7 +4,7 @@
  * an existing request through the whole workflow and checks every refusal.
  *
  *   node scripts/_fr-test-requester.js            # throwaway requester login
- *   (raise a request as fr-test-ceo@itarangjosh.com / password, note its id)
+ *   (raise a request as fr-test-ceo@itarangjosh.com / $FR_E2E_PASSWORD, note its id)
  *   node --import tsx --env-file=.env.local scripts/_e2e-feature-requests.ts <featureRequestId> [baseUrl]
  *   node scripts/_fr-test-requester.js --remove   # afterwards
  *
@@ -15,6 +15,10 @@ import { createServerClient } from "@supabase/ssr";
 const [frId, base = "http://localhost:3100"] = process.argv.slice(2);
 if (!frId) throw new Error("usage: _e2e-feature-requests.ts <featureRequestId> [baseUrl]");
 
+// ID 140: no fixed default password — the test logins use whatever FR_E2E_PASSWORD says.
+const E2E_PASSWORD: string = process.env.FR_E2E_PASSWORD ?? "";
+if (!E2E_PASSWORD) throw new Error("set FR_E2E_PASSWORD to the test logins' password");
+
 async function login(email: string): Promise<string> {
   const jar = new Map<string, string>();
   const sb = createServerClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!, {
@@ -23,7 +27,7 @@ async function login(email: string): Promise<string> {
       setAll: (list) => list.forEach(({ name, value }) => jar.set(name, value)),
     },
   });
-  const { error } = await sb.auth.signInWithPassword({ email, password: "password" });
+  const { error } = await sb.auth.signInWithPassword({ email, password: E2E_PASSWORD });
   if (error) throw new Error(`${email}: ${error.message}`);
   return [...jar].map(([n, v]) => `${n}=${v}`).join("; ");
 }

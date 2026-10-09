@@ -11,6 +11,8 @@
  * set only on the box disappears at the next deploy.
  */
 
+import { suppressJobSend } from "@/lib/runtime/liveSite";
+
 const API = "https://api.telegram.org";
 
 /** Telegram errors carry a useful `description`; surface it, never the token. */
@@ -44,6 +46,8 @@ async function call(
     method: string,
     body: FormData | URLSearchParams,
 ): Promise<{ messageId: number }> {
+    // ID 125 — a scheduled job off the live site posts nothing.
+    if (suppressJobSend("telegram")) return { messageId: 0 };
     const res = await fetch(`${API}/bot${cfg.token}/${method}`, { method: "POST", body });
 
     // Parse before checking res.ok: Telegram returns its `description` on 4xx,
