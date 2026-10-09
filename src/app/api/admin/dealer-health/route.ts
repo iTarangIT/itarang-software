@@ -6,6 +6,7 @@ import { requireRole } from "@/lib/auth-utils";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
 import { listDealerHealth, summarizeDealerHealth } from "@/lib/dealers/accountHealth";
 import { ACCOUNT_CLOSE_ROLES } from "@/lib/accounts/accountClosures";
+import { hasOrderClaimTables } from "@/lib/accounts/tables";
 
 export const dynamic = "force-dynamic";
 
@@ -18,5 +19,7 @@ export const GET = withErrorHandler(async (req: Request) => {
     const [rows, summary] = await Promise.all([listDealerHealth(), summarizeDealerHealth(group)]);
     // ID 5 — may this viewer close / reopen a dealer?
     const canClose = (ACCOUNT_CLOSE_ROLES as readonly string[]).includes(user.role);
-    return successResponse({ rows, summary, group, can_close: canClose });
+    // ID 5 (E-334) — may this viewer record "Order placed" here?
+    const canRecordOrders = canClose && (await hasOrderClaimTables());
+    return successResponse({ rows, summary, group, can_close: canClose, can_record_orders: canRecordOrders });
 });

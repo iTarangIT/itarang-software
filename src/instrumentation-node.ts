@@ -1888,3 +1888,46 @@ export async function startAgreementExpiryReminderTicker() {
 
   console.log("[instrumentation] dealer agreement expiry reminder (hourly) started in-process");
 }
+
+// ---------------------------------------------------------------------------
+// Tracker ID 5 — dealer reorder reminders (E-334): the daily Orange nudge to
+// each owner, the monthly Dormant win-back list, the CEO's "turned Dormant"
+// alert. Hourly; each mail is claimed in account_reminder_log, so it goes out
+// once per period whatever the restarts. Nothing before 10:00 IST.
+// ---------------------------------------------------------------------------
+export async function startDealerReorderReminderTicker() {
+  if (process.env.VERCEL === "1") return;
+
+  const TICK_INTERVAL_MS = 60 * 60_000;
+  let inFlight = false;
+
+  const tick = async () => {
+    if (inFlight) return;
+    inFlight = true;
+    try {
+      const { runReorderReminders } = await import("@/lib/accounts/reorderReminders");
+      const r = await runReorderReminders();
+      if (r.orange || r.winback || r.ceoAlerted || r.errors.length) {
+        console.log(
+          `[instrumentation:dealer-reorder] orange=${r.orange} winback=${r.winback} ` +
+            `ceo=${r.ceoAlerted} errors=${r.errors.length}`,
+          r.errors.length ? r.errors : "",
+        );
+      }
+    } catch (err) {
+      console.error(
+        "[instrumentation:dealer-reorder] tick failed:",
+        err instanceof Error ? err.message : err,
+      );
+    } finally {
+      inFlight = false;
+    }
+  };
+
+  const kickoff = setTimeout(tick, 220_000);
+  if (typeof kickoff.unref === "function") kickoff.unref();
+  const interval = setInterval(tick, TICK_INTERVAL_MS);
+  if (typeof interval.unref === "function") interval.unref();
+
+  console.log("[instrumentation] dealer reorder reminders (hourly) started in-process");
+}

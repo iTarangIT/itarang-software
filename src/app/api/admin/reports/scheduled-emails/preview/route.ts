@@ -9,6 +9,7 @@ import { z } from "zod";
 
 import { requireRole } from "@/lib/auth-utils";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
+import { digestRecipients } from "@/lib/digests/engine";
 import { digestKind } from "@/lib/digests/registry";
 import { digestDateForSlot } from "@/lib/digests/schedule";
 import { getDigestSettings } from "@/lib/digests/settings";
@@ -43,5 +44,5 @@ export const POST = withErrorHandler(async (req: Request) => {
         sections: settings.sections,
         attachment: null,
     });
-    return successResponse({ subject, html, for_day: istDay, recipients: settings.recipients });
+    return successResponse({ subject, html, for_day: istDay, recipients: await digestRecipients(kind, settings) });
 });

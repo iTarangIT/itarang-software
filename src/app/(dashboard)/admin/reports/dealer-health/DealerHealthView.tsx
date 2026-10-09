@@ -14,6 +14,7 @@ import {
     type AccountBucket,
 } from "@/lib/dealers/accountHealthRules";
 import type { DealerHealthGroup, DealerHealthRow } from "@/lib/dealers/accountHealth";
+import { OrderClaimBadge, OrderClaimsList, OrderPlacedButton } from "@/components/accounts/OrderClaims";
 
 type Group = "owner" | "city" | "business_type";
 
@@ -64,6 +65,7 @@ export function DealerHealthView({ initialBucket = "" }: { initialBucket?: Deale
         rows: DealerHealthRow[];
         summary: DealerHealthGroup[];
         can_close?: boolean;
+        can_record_orders?: boolean;
     }>({
         queryKey: ["dealer-health", group],
         queryFn: async () => {
@@ -191,6 +193,7 @@ export function DealerHealthView({ initialBucket = "" }: { initialBucket?: Deale
                                     {r.closed_reason && (
                                         <div className="mt-1 text-[11px] text-ink-muted">{r.closed_reason}</div>
                                     )}
+                                    {r.order_claim && <OrderClaimBadge claim={r.order_claim} />}
                                 </td>
                                 <td className="px-3 py-2 text-ink-muted">{r.converted_on ?? "—"}</td>
                                 <td className="px-3 py-2 text-ink-muted">{r.last_order ?? "—"}</td>
@@ -203,6 +206,12 @@ export function DealerHealthView({ initialBucket = "" }: { initialBucket?: Deale
                                 <td className="px-3 py-2 text-right tabular-nums">{r.avg_reorder_days ?? "—"}</td>
                                 {data?.can_close && (
                                     <td className="px-3 py-2 text-right">
+                                        {/* ID 5 (E-334) — record an order before its invoice exists. */}
+                                        {data?.can_record_orders && r.account_id && r.bucket !== "closed" && !r.order_claim && closing !== r.account_id && (
+                                            <div className="mb-1">
+                                                <OrderPlacedButton accountId={r.account_id} />
+                                            </div>
+                                        )}
                                         {r.account_id && r.bucket === "closed" && (
                                             <button
                                                 type="button"
@@ -260,6 +269,8 @@ export function DealerHealthView({ initialBucket = "" }: { initialBucket?: Deale
                     </tbody>
                 </table>
             </div>
+
+            <OrderClaimsList canWithdraw={Boolean(data?.can_close)} />
 
             <div className="rounded-xl border border-border bg-surface shadow-card">
                 <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">

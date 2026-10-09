@@ -26,6 +26,10 @@
  * orders are invoices matched to the account, and the "never ordered" clock
  * runs from the account's creation (approval). Without E-321 the lead-keyed
  * behaviour above is kept unchanged.
+ *
+ * E-334 (ID 5): an open "Order placed" claim still awaiting its invoice pauses
+ * the clock — the bucket counts from the order date (orderClaims.ts). The
+ * invoice figures (last order, days since it) stay the invoices' own.
  */
 import { sql } from "drizzle-orm";
 
@@ -34,11 +38,15 @@ import { matchedUnion, REVENUE_NOT_VOID } from "@/lib/dashboard/revenueSource";
 import { hasAccountOwnershipTables } from "@/lib/accounts/tables";
 import { dealerAccountSql, invoiceAccountSql } from "@/lib/accounts/accountList";
 import { closedColumns } from "@/lib/accounts/accountClosures";
+import { hasOrderClaimTables } from "@/lib/accounts/tables";
+import { claimStateCte, claimStatusSql, invoicesByAccountCte } from "@/lib/accounts/orderClaims";
 
 import {
     ACCOUNT_BUCKETS,
     accountBucket,
+    effectiveDaysSinceOrder,
     type AccountBucket,
+    type OrderClaimStatus,
 } from "@/lib/dealers/accountHealthRules";
 
 export { ACCOUNT_BUCKETS, ACCOUNT_BUCKET_LABELS, accountBucket, type AccountBucket } from "@/lib/dealers/accountHealthRules";
@@ -71,6 +79,17 @@ export type DealerHealthRow = {
     bucket: AccountBucket;
     /** ID 5 — why it was closed, when bucket is "closed". */
     closed_reason: string | null;
+    /**
+     * ID 5 (E-334) — the account's open "Order placed" claim: `pending` pauses
+     * the ageing (the bucket counts from the order date), `unconfirmed` = the
+     * window passed with no invoice. NULL when there is none.
+     */
+    order_claim: {
+        id: number;
+        order_date: string;
+        po_number: string | null;
+        status: Extract<OrderClaimStatus, "pending" | "unconfirmed">;
+    } | null;
 };
 
 export async function listDealerHealth(): Promise<DealerHealthRow[]> {
@@ -79,6 +98,8 @@ export async function listDealerHealth(): Promise<DealerHealthRow[]> {
     // ID 148 — the shared order key (accountList.invoiceAccountSql).
     const keyCol = accountsOn ? invoiceAccountSql() : sql`r.dealer_lead_id`;
     const closed = accountsOn ? await closedColumns(sql`a.id`) : sql`FALSE AS closed, NULL::text AS closed_reason`;
+    // ID 5 (E-334) — open "Order placed" claims; a pending one pauses ageing.
+    const claimsOn = accountsOn && (await hasOrderClaimTables());
     const orders = sql`
         orders AS (
             SELECT ${keyCol}                         AS k,
@@ -105,7 +126,28 @@ export async function listDealerHealth(): Promise<DealerHealthRow[]> {
     const rows = accountsOn
         ? await db.execute(sql`
         WITH today AS (SELECT (now() AT TIME ZONE 'Asia/Kolkata')::date AS d),
-        ${orders}
+        ${await invoicesByAccountCte()},
+        orders AS (
+            SELECT inv.k,
+                   COUNT(*)                          AS n,
+                   MIN(inv.invoice_date)             AS first_order,
+                   MAX(inv.invoice_date)             AS last_order,
+                   COALESCE(SUM(inv.total), 0)       AS lifetime,
+                   COALESCE(SUM(inv.total) FILTER (
+                       WHERE inv.invoice_date > (SELECT d FROM today) - 90), 0) AS last_90d,
+                   COUNT(DISTINCT inv.invoice_date)  AS order_days
+              FROM inv
+             GROUP BY inv.k
+        )${claimsOn ? sql`,
+        ${claimStateCte},
+        open_claim AS (
+            SELECT DISTINCT ON (s.account_id)
+                   s.account_id, s.id, s.order_date, s.po_number, s.days_since_order,
+                   ${claimStatusSql} AS status
+              FROM claim_state s
+             WHERE ${claimStatusSql} IN ('pending', 'unconfirmed')
+             ORDER BY s.account_id, s.order_date DESC, s.id DESC
+        )` : sql``}
         SELECT a.id                                                 AS key,
                a.id                                                 AS account_id,
                ao.source_dealer_lead_id                             AS lead_id,
@@ -120,12 +162,18 @@ export async function listDealerHealth(): Promise<DealerHealthRow[]> {
                (a.created_at AT TIME ZONE 'Asia/Kolkata')::date     AS converted_on,
                ((SELECT d FROM today) - (a.created_at AT TIME ZONE 'Asia/Kolkata')::date) AS days_since_conversion,
                ${closed},
+               ${claimsOn
+                   ? sql`oc.id AS claim_id, oc.order_date::text AS claim_order_date,
+                         oc.po_number AS claim_po, oc.status AS claim_status,
+                         oc.days_since_order AS claim_days,`
+                   : sql``}
                ${orderCols}
           FROM accounts a
           LEFT JOIN account_ownership ao ON ao.account_id = a.id
           LEFT JOIN dealer_leads dl ON dl.id = ao.source_dealer_lead_id
           LEFT JOIN orders o ON o.k = a.id
           LEFT JOIN users u  ON u.id = ao.owner_user_id
+          ${claimsOn ? sql`LEFT JOIN open_claim oc ON oc.account_id = a.id` : sql``}
          -- ID 148: the same dealer list as Accounts and the download.
          WHERE ${dealerAccountSql()}
          ORDER BY days_since_last_order DESC NULLS FIRST, dealer
@@ -156,6 +204,8 @@ export async function listDealerHealth(): Promise<DealerHealthRow[]> {
     return (rows as unknown as Array<Record<string, unknown>>).map((r) => {
         const sinceOrder = r.days_since_last_order == null ? null : Number(r.days_since_last_order);
         const sinceConv = r.days_since_conversion == null ? null : Number(r.days_since_conversion);
+        const claimStatus = r.claim_status === "pending" || r.claim_status === "unconfirmed" ? r.claim_status : null;
+        const pendingDays = claimStatus === "pending" ? Number(r.claim_days) : null;
         return {
             key: String(r.key),
             account_id: (r.account_id as string | null) ?? null,
@@ -177,8 +227,16 @@ export async function listDealerHealth(): Promise<DealerHealthRow[]> {
             revenue_90d: Number(r.revenue_90d ?? 0),
             revenue_lifetime: Number(r.revenue_lifetime ?? 0),
             avg_reorder_days: r.avg_reorder_days == null ? null : Number(r.avg_reorder_days),
-            bucket: accountBucket(sinceOrder, sinceConv, r.closed === true),
+            bucket: accountBucket(effectiveDaysSinceOrder(sinceOrder, pendingDays), sinceConv, r.closed === true),
             closed_reason: (r.closed_reason as string | null) ?? null,
+            order_claim: claimStatus
+                ? {
+                      id: Number(r.claim_id),
+                      order_date: String(r.claim_order_date).slice(0, 10),
+                      po_number: (r.claim_po as string | null) ?? null,
+                      status: claimStatus,
+                  }
+                : null,
         };
     });
 }
