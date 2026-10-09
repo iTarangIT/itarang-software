@@ -31,6 +31,7 @@ import { withdrawQuote } from "./tools/write/withdrawQuote";
 import { readDocument } from "./tools/read/readDocument";
 import { attachDocument } from "./tools/write/attachDocument";
 import { updateLead } from "./tools/write/updateLead";
+import { recordReinquiryTool } from "./tools/write/recordReinquiry";
 
 const FACTORIES: Readonly<Record<ToolName, ToolFactory>> = Object.freeze({
     my_queue: myQueue,
@@ -56,6 +57,7 @@ const FACTORIES: Readonly<Record<ToolName, ToolFactory>> = Object.freeze({
     read_document: readDocument,
     attach_document: attachDocument,
     update_lead: updateLead,
+    record_reinquiry: recordReinquiryTool,
 });
 
 /**

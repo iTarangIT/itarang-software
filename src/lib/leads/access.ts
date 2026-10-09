@@ -371,6 +371,8 @@ export type LeadsCapabilities = {
   canBulkAct: boolean;
   canSendToNeodove: boolean;
   canSeeCostAnalytics: boolean;
+  /** ID 144 — the AI dialer weekday × hour answer grid (CALL_TIMING_ROLES). */
+  canSeeCallTiming: boolean;
   canReviewIntent: boolean;
   canCurateIntent: boolean;
   /** May open the "Lead tracking" section and download a single lead's CSV. */
@@ -405,6 +407,13 @@ const COST_ANALYTICS_ROLES = [
   "partner",
 ];
 
+/**
+ * ID 144 — who sees when dealers answer the AI dialer (by weekday and hour),
+ * and may set the default calling hours from it. Server gate on
+ * /api/campaigns/call-timing reads the same list.
+ */
+export const CALL_TIMING_ROLES = ["admin", "ceo", "sales_head"] as const;
+
 export function capabilitiesFor(role: string | null | undefined): LeadsCapabilities {
   const r = role ?? "";
   return {
@@ -412,6 +421,7 @@ export function capabilitiesFor(role: string | null | undefined): LeadsCapabilit
     canBulkAct: (LEADS_BULK_ROLES as readonly string[]).includes(r),
     canSendToNeodove: NEODOVE_ROLES.includes(r),
     canSeeCostAnalytics: COST_ANALYTICS_ROLES.includes(r),
+    canSeeCallTiming: (CALL_TIMING_ROLES as readonly string[]).includes(r),
     canReviewIntent: (INTENT_REVIEW_ROLES as readonly string[]).includes(r),
     canCurateIntent: (INTENT_CURATOR_ROLES as readonly string[]).includes(r),
     canTrackLeads: (LEAD_TRACKING_ROLES as readonly string[]).includes(r),
@@ -426,6 +436,7 @@ export const NO_CAPABILITIES: LeadsCapabilities = {
   canBulkAct: false,
   canSendToNeodove: false,
   canSeeCostAnalytics: false,
+  canSeeCallTiming: false,
   canReviewIntent: false,
   canCurateIntent: false,
   canTrackLeads: false,

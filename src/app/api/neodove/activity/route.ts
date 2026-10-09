@@ -40,6 +40,8 @@ export type ActivityRow = {
     created_at: string;
     request_payload: unknown;
     response_payload: unknown;
+    /** ID 123 — a status move the S3 guard refused; the call itself was saved. */
+    status_refused: { from: string | null; to: string; reason: string } | null;
 };
 
 export const GET = withErrorHandler(async (req: Request) => {
@@ -54,6 +56,7 @@ export const GET = withErrorHandler(async (req: Request) => {
     const wantOutbound = direction !== "inbound";
     const wantInbound = direction !== "outbound";
     const errorsOnly = searchParams.get("errorsOnly") === "true";
+    const refusedOnly = searchParams.get("refusedOnly") === "true";
     const campaignId = searchParams.get("campaignId");
 
     // SEARCH, MATCHED AGAINST BOTH SIDES OF THE ROW.
@@ -153,7 +156,8 @@ export const GET = withErrorHandler(async (req: Request) => {
                     THEN e.request_payload - 'endpoint'
                     ELSE e.request_payload
                END AS request_payload,
-               e.response_payload
+               e.response_payload,
+               e.response_payload -> 'status_refused' AS status_refused
           FROM neodove_sync_events e
           LEFT JOIN neodove_campaigns c ON c.id = e.neodove_campaign_id
           -- Soft join: dealer_lead_id is not an FK (lead rows outlive campaign
@@ -164,6 +168,7 @@ export const GET = withErrorHandler(async (req: Request) => {
               OR (e.direction = 'inbound'  AND ${wantInbound})
                )
            AND (${!errorsOnly} OR e.error IS NOT NULL)
+           AND (${!refusedOnly} OR e.response_payload ? 'status_refused')
            AND (${campaignId === null} OR e.neodove_campaign_id = ${campaignId})
            AND (${!searching} OR (
                    (${phoneNeedle !== null} AND (
@@ -193,12 +198,14 @@ export const GET = withErrorHandler(async (req: Request) => {
         outbound: string;
         inbound: string;
         errors: string;
+        refused: string;
         backfilled: string;
     }>(sql`
         SELECT
           COUNT(*) FILTER (WHERE direction = 'outbound')::text AS outbound,
           COUNT(*) FILTER (WHERE direction = 'inbound')::text  AS inbound,
           COUNT(*) FILTER (WHERE error IS NOT NULL)::text      AS errors,
+          COUNT(*) FILTER (WHERE response_payload ? 'status_refused')::text AS refused,
           COUNT(*) FILTER (WHERE event_type = 'reconciliation')::text AS backfilled
         FROM neodove_sync_events
         WHERE created_at > NOW() - INTERVAL '24 hours'
@@ -211,6 +218,7 @@ export const GET = withErrorHandler(async (req: Request) => {
             outbound: Number(summary[0]?.outbound ?? 0),
             inbound: Number(summary[0]?.inbound ?? 0),
             errors: Number(summary[0]?.errors ?? 0),
+            refused: Number(summary[0]?.refused ?? 0),
             backfilled: Number(summary[0]?.backfilled ?? 0),
         },
     });

@@ -1,6 +1,7 @@
 import { requireRole } from "@/lib/auth-utils";
 import { CampaignsTable } from "@/components/leads/campaigns-table";
-import { INTENT_REVIEW_ROLES } from "@/lib/leads/access";
+import { CallTimingView } from "@/components/leads/call-timing/CallTimingView";
+import { CALL_TIMING_ROLES, INTENT_REVIEW_ROLES } from "@/lib/leads/access";
 
 export const dynamic = "force-dynamic";
 
@@ -27,6 +28,12 @@ export default async function SalesHeadCampaignsPage() {
                 </p>
             </header>
             <CampaignsTable basePath="/sales-head/campaigns" />
+            {(CALL_TIMING_ROLES as readonly string[]).includes(user.role) && (
+                <section className="space-y-3">
+                    <h2 className="text-lg font-semibold text-gray-900">When dealers answer</h2>
+                    <CallTimingView />
+                </section>
+            )}
         </div>
     );
 }

@@ -108,10 +108,11 @@ export function renderPreview(preview: Preview, actionId: string, opts: { edit?:
         body: `${head}\n${lines}${warning}\n${footer}`,
         // Edit sits between Confirm and Cancel. Not on a high-impact second
         // confirmation or a dealer invite: there is nothing left to edit.
+        // A question card (ID 137) answers Yes / No and has nothing to edit.
         buttons: [
-            { id: `ast:c:${actionId}`, title: "Confirm" },
-            ...(opts.edit === false ? [] : [{ id: `ast:e:${actionId}`, title: "Edit" }]),
-            { id: `ast:x:${actionId}`, title: "Cancel" },
+            { id: `ast:c:${actionId}`, title: preview.answers?.confirm ?? "Confirm" },
+            ...(opts.edit === false || preview.answers ? [] : [{ id: `ast:e:${actionId}`, title: "Edit" }]),
+            { id: `ast:x:${actionId}`, title: preview.answers?.cancel ?? "Cancel" },
         ],
         actionId,
     };
@@ -135,6 +136,13 @@ const REJECTED: Record<Extract<ExecOutcome, { kind: "rejected" }>["reason"], str
  */
 function renderConfirmed(o: Extract<ExecOutcome, { kind: "confirmed" }>): WaPayload {
     const saved = fit(`✅ Saved: ${o.title.replace(/^\*|\*$/g, "")}\n${o.crmUrl}`, RENDER_LIMITS.text);
+    // ID 137 — the card's title is the question; the answer reads as what happened.
+    if (o.tool === "record_reinquiry") {
+        return {
+            kind: "text",
+            body: fit(`✅ Re-inquiry recorded. The lead's owner and the Sales Head have been told.\n${o.crmUrl}`, RENDER_LIMITS.text),
+        };
+    }
     if (o.tool === "invite_dealer_onboarding") {
         if (o.extra?.delivered === true) return { kind: "text", body: `✅ Onboarding invite sent to the dealer.\n${o.crmUrl}` };
         const why = String(o.extra?.error ?? "WhatsApp send failed");

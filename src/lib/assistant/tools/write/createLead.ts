@@ -26,7 +26,7 @@ import { AttachmentId, DOC_TYPE_LABEL, DOC_TYPES, PlannedFile, plannedFile, reso
 import { fileDocuments } from "./attachDocument";
 import { gstinQuestion } from "./updateLead";
 import { LEAD_ORIGIN_LABEL, LEAD_ORIGINS, campaignRequired } from "@/lib/leads/leadSourceVocab";
-import { recordReinquiry } from "@/lib/leads/leadSource";
+import { proposeReinquiry } from "./recordReinquiry";
 import { findCampaignByName, listCampaigns } from "@/lib/leads/acquisitionCampaigns";
 
 const INTEREST = ["hot", "warm", "cold"] as const;
@@ -120,25 +120,19 @@ export const createLead: ToolFactory = () =>
                 source = plannedFile(found.rows[0]);
             }
 
-            // ID 81: a known dealer the rep tries to add again is a Re-inquiry
-            // on the lead we hold (findLeadIdByPhone is the shared check).
+            // ID 81 / ID 137: a known dealer the rep tries to add again may be a
+            // Re-inquiry on the lead we hold (findLeadIdByPhone is the shared
+            // check) — but only once the rep says the dealer contacted us
+            // again: a Yes / No card, nothing recorded until Yes.
             const existingId = await findLeadIdByPhone(phone);
             if (existingId) {
-                await recordReinquiry({
-                    leadId: existingId,
-                    door: "whatsapp_assistant",
-                    actorId: ctx.user.id,
-                    note: input.dealer_name.trim(),
-                });
                 const visible = await findLeadInScope(ctx.user, existingId);
-                return {
-                    kind: "declined",
-                    reason: visible
-                        ? `A lead with this number already exists: ${visible.shop_name || visible.dealer_name || visible.id}.` +
-                          (source ? " I can save this photo / file on that lead instead (attach_document)." : "")
-                        : "A lead with this number already exists.",
-                    crm_url: visible ? leadUrl(ctx.user, visible.id) : null,
-                };
+                return proposeReinquiry(
+                    ctx,
+                    existingId,
+                    input.dealer_name.trim() || null,
+                    visible && source ? "To save this photo / file on that lead, use attach_document." : null,
+                );
             }
 
             // ID 81: required at creation — source cannot be added properly later.
