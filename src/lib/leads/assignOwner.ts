@@ -35,6 +35,7 @@ import { writeTouchpoint } from "@/lib/touchpoints/write";
 import { markSalesReady } from "@/lib/leads/salesReady";
 import type { TouchpointType } from "@/lib/lifecycle/touchpointTypes";
 import { checkStatusMove } from "@/lib/lifecycle/statusRules";
+import { handBackRefusal, isHandBack, releaseAsm, releaseNote } from "@/lib/leads/asmHandBack";
 import {
     canTransition,
     isOpen,
@@ -114,16 +115,19 @@ export async function resolveAssignTarget(
     };
 }
 
-// Which branch ran — for the caller's aggregate counts and for logging. There
-// is deliberately no "refused" member: a blocked transition falls through to the
-// plain swap rather than aborting, so the lead still changes hands and still
-// gets an audit row. Assignment never silently does nothing.
+// Which branch ran — for the caller's aggregate counts and for logging. A
+// blocked status transition falls through to the plain swap rather than
+// aborting, so the lead still changes hands and still gets an audit row. The
+// one refusal is "handback_blocked" (ID 121): a lead Awaiting field visit is
+// not handed to an ISR / partner while the ASM has a visit booked — nothing is
+// written and `blockedReason` says why.
 export type AssignPath =
     | "asm_swap"
     | "asm_lift"
     | "rep_lift"
     | "transfer_undo"
-    | "owner_swap";
+    | "owner_swap"
+    | "handback_blocked";
 
 /**
  * ID 77.5 — the status a Transferred_to_ASM lead goes back to when it is handed
@@ -148,6 +152,8 @@ export type AssignOutcome = {
     path: AssignPath;
     /** Non-null only when this call changed lead_status. */
     statusLiftedTo: LeadStatus | null;
+    /** path "handback_blocked" only: the sentence to show (ID 121). */
+    blockedReason?: string;
 };
 
 export type AssignLeadOwnerInput = {
@@ -343,11 +349,19 @@ async function assignOwner(input: AssignLeadOwnerInput): Promise<AssignOutcome> 
     // owner swap and status move in ONE transaction, the move as a
     // `correction` (the only event that may leave Transferred_to_ASM without a
     // visit). Reassignment is not work: the idle clock is left alone.
-    if (
-        (target.role === "inside_sales_rep" || target.role === "partner") &&
-        fromStatus === "Transferred_to_ASM"
-    ) {
-        const restored = await db.transaction(async (tx) => {
+    //
+    // ID 121: refused while the ASM has a visit booked for today or later
+    // (asmHandBack.ts); otherwise the ASM is unlinked and the open visits are
+    // closed, in the same transaction.
+    if (isHandBack(fromStatus, target.role)) {
+        const result = await db.transaction(async (tx) => {
+            const locked = (await tx.execute<{ lead_status: string | null }>(sql`
+                SELECT lead_status FROM dealer_leads WHERE id = ${leadId} FOR UPDATE
+            `)) as unknown as Array<{ lead_status: string | null }>;
+            if (locked[0]?.lead_status === "Transferred_to_ASM") {
+                const refusal = await handBackRefusal(tx, leadId);
+                if (refusal) return { blocked: refusal } as const;
+            }
             const rows = (await tx.execute<{
                 from_owner_id: string | null;
                 pre_transfer_status: string | null;
@@ -380,6 +394,9 @@ async function assignOwner(input: AssignLeadOwnerInput): Promise<AssignOutcome> 
             // visit landed): just record the hop, no status move.
             const stillTransferred = prev?.lead_status === "Transferred_to_ASM";
             const to = statusBeforeTransfer(prev?.pre_transfer_status ?? null);
+            const closedVisits = stillTransferred
+                ? await releaseAsm(tx, leadId, `Closed: lead handed back to ${target.name ?? "an inside-sales rep"}`)
+                : 0;
             await writeTouchpoint(
                 {
                     dealerLeadId: leadId,
@@ -396,19 +413,22 @@ async function assignOwner(input: AssignLeadOwnerInput): Promise<AssignOutcome> 
                                   from: "Transferred_to_ASM" as LeadStatus,
                                   to,
                                   event: "correction" as const,
-                                  reasonNotes: `Reassigned to ${target.name ?? "an inside-sales rep"} before the field visit; back to the pre-transfer stage`,
+                                  reasonNotes: `Reassigned to ${target.name ?? "an inside-sales rep"} before the field visit; back to the pre-transfer stage. ${releaseNote(closedVisits)}`,
                               },
                           }
                         : {}),
                 },
                 { tx },
             );
-            return stillTransferred ? to : null;
+            return { restored: stillTransferred ? to : null } as const;
         });
+        if ("blocked" in result) {
+            return { assigned: false, path: "handback_blocked", statusLiftedTo: null, blockedReason: result.blocked };
+        }
         return {
             assigned: true,
-            path: restored ? "transfer_undo" : "owner_swap",
-            statusLiftedTo: restored,
+            path: result.restored ? "transfer_undo" : "owner_swap",
+            statusLiftedTo: result.restored,
         };
     }
 

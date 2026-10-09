@@ -17,8 +17,8 @@ type Props = {
     defaultReason?: LostReason | null;
 };
 
-// Exported for admin "Correct status" (LeadStatusEditor), which asks for the
-// same reason when it corrects a lead to Lost.
+// Exported for "Change Lost reason" (ChangeLostReasonButton, ID 136), which
+// offers the same list.
 export const LOST_REASON_LABELS: Record<LostReason, string> = {
     not_interested: "Not interested",
     price_high: "Price too high",
