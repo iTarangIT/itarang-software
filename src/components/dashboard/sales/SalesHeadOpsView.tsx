@@ -50,6 +50,7 @@ import {
     toneText,
 } from "@/components/dashboard/redesign/primitives";
 import { useSalesDashboardFilters } from "./useSalesDashboardFilters";
+import { BUSINESS_TYPE_OPTIONS, BUSINESS_TYPE_UNSET, BUSINESS_TYPE_UNSET_LABEL } from "@/lib/leads/businessType";
 
 type Period = "today" | "week" | "month";
 type TeamSeg = "all" | "field" | "inside";
@@ -123,7 +124,15 @@ export function SalesHeadOpsView() {
 
     /** Rewrite the URL filters; an empty value removes the key. */
     const update = (patch: Record<string, string>) => {
-        const next: Record<string, string> = { from: filters.from, to: filters.to, state: filters.state, spoc_id: filters.spoc_id, ...patch };
+        const next: Record<string, string> = {
+            from: filters.from,
+            to: filters.to,
+            state: filters.state,
+            city: filters.city,
+            spoc_id: filters.spoc_id,
+            business_type: filters.business_type,
+            ...patch,
+        };
         const p = new URLSearchParams();
         for (const [k, v] of Object.entries(next)) if (v) p.set(k, v);
         const s = p.toString();
@@ -133,8 +142,16 @@ export function SalesHeadOpsView() {
     const dashQs = new URLSearchParams({ from, to });
     if (filters.state) dashQs.set("state", filters.state);
     if (filters.spoc_id) dashQs.set("spoc_id", filters.spoc_id);
+    // ID 11 — city and type of business, honoured by the dashboard figures and
+    // by the funnel / lost / handoff reports (one shared lead scope).
     const reportQs = new URLSearchParams({ date_from: from, date_to: to });
     if (filters.state) reportQs.set("state", filters.state);
+    for (const k of ["city", "business_type"] as const) {
+        if (filters[k]) {
+            dashQs.set(k, filters[k]);
+            reportQs.set(k, filters[k]);
+        }
+    }
 
     const dash = useQuery<SalesDashboard>({
         queryKey: ["sales-head-ops", "dashboard", dashQs.toString()],
@@ -205,6 +222,14 @@ export function SalesHeadOpsView() {
         queryFn: () => getData("/api/locations/regions"),
         staleTime: 60 * 60 * 1000,
     });
+    // Cities of the chosen state; every city when no state is chosen.
+    const cityOptions = React.useMemo(() => {
+        const r = regions.data;
+        if (!r) return [];
+        const code = r.states.find((st) => st.name === filters.state)?.code;
+        const list = code ? (r.citiesByState[code] ?? []) : Object.values(r.citiesByState).flat();
+        return [...new Set(list)].sort((a, b) => a.localeCompare(b));
+    }, [regions.data, filters.state]);
     const reps = useQuery<{ users: UserOption[] }>({
         queryKey: ["sales-head-ops", "reps"],
         queryFn: () => getData("/api/admin/users?roles=asm,inside_sales_rep,sales_manager,sales_head,partner"),
@@ -393,13 +418,40 @@ export function SalesHeadOpsView() {
             />
             <label className="flex items-center gap-2 text-[13px] text-ink-muted">
                 State
-                <select value={filters.state} onChange={(e) => update({ state: e.target.value })} className={`${SELECT} max-w-[170px]`}>
+                <select value={filters.state} onChange={(e) => update({ state: e.target.value, city: "" })} className={`${SELECT} max-w-[170px]`}>
                     <option value="">All states</option>
                     {(regions.data?.states ?? []).map((s) => (
                         <option key={s.code} value={s.name}>
                             {s.name}
                         </option>
                     ))}
+                </select>
+            </label>
+            <label className="flex items-center gap-2 text-[13px] text-ink-muted">
+                City
+                <select value={filters.city} onChange={(e) => update({ city: e.target.value })} className={`${SELECT} max-w-[170px]`}>
+                    <option value="">All cities</option>
+                    {cityOptions.map((c) => (
+                        <option key={c} value={c}>
+                            {c}
+                        </option>
+                    ))}
+                </select>
+            </label>
+            <label className="flex items-center gap-2 text-[13px] text-ink-muted">
+                Type of business
+                <select
+                    value={filters.business_type}
+                    onChange={(e) => update({ business_type: e.target.value })}
+                    className={`${SELECT} max-w-[170px]`}
+                >
+                    <option value="">All types</option>
+                    {BUSINESS_TYPE_OPTIONS.map((o) => (
+                        <option key={o.value} value={o.value}>
+                            {o.label}
+                        </option>
+                    ))}
+                    <option value={BUSINESS_TYPE_UNSET}>{BUSINESS_TYPE_UNSET_LABEL}</option>
                 </select>
             </label>
             <label className="flex items-center gap-2 text-[13px] text-ink-muted">
@@ -737,6 +789,11 @@ export function SalesHeadOpsView() {
                         <span>More · shaded within each column ·</span>
                         <Link href="/admin/reports" className="font-semibold text-brand-sky hover:underline">
                             open Funnel by Owner for the lead lists
+                        </Link>
+                        <span>·</span>
+                        {/* ID 91 */}
+                        <Link href="/reports?analysis=lead_sources" className="font-semibold text-brand-sky hover:underline">
+                            which lead sources convert
                         </Link>
                     </div>
                 </DashCard>

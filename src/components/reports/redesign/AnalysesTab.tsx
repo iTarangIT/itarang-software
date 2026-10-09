@@ -4,13 +4,16 @@
 // decision. Numbers come from /api/reports/analyses/[id]; every analysis
 // carries its own self-checks, shown as Holds / Breaks.
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { Download, X } from "lucide-react";
 import { LEAD_DOORS, LEAD_DOOR_LABEL } from "@/lib/leads/leadSourceVocab";
 import {
     ANALYSES,
+    ANALYSIS_IDS,
     FUNNEL_STEPS,
+    LEAD_SOURCE_GROUPS,
     barWidth,
     fmtNum,
     pct,
@@ -49,11 +52,19 @@ const STEP_HEAD: Record<(typeof FUNNEL_STEPS)[number], string> = {
     converted: "Converted",
 };
 
+const isAnalysisId = (v: string | null): v is AnalysisId => (ANALYSIS_IDS as readonly string[]).includes(v ?? "");
+const isGroup = (v: string | null): v is LeadSourceGroup => (LEAD_SOURCE_GROUPS as readonly string[]).includes(v ?? "");
+
 export function AnalysesTab({ onDownload }: { onDownload: (params: Record<string, string>) => void }) {
-    const [an, setAn] = useState<AnalysisId>("lead_sources");
+    // ID 91 — ?analysis= / ?group= open a given analysis from a menu row or a
+    // link on another screen (CEO funnel, Sales Head dashboard, a campaign).
+    const params = useSearchParams();
+    const askedAnalysis = params.get("analysis");
+    const askedGroup = params.get("group");
+    const [an, setAn] = useState<AnalysisId>(() => (isAnalysisId(askedAnalysis) ? askedAnalysis : "lead_sources"));
     const [from, setFrom] = useState("");
     const [to, setTo] = useState("");
-    const [group, setGroup] = useState<LeadSourceGroup>("door");
+    const [group, setGroup] = useState<LeadSourceGroup>(() => (isGroup(askedGroup) ? askedGroup : "door"));
     const [show, setShow] = useState<Show>("share");
     const [team, setTeam] = useState("");
     const [state, setState] = useState("");
@@ -78,6 +89,12 @@ export function AnalysesTab({ onDownload }: { onDownload: (params: Record<string
         // Each analysis has its own default period (90 days back, or month to date).
         clearFilters();
     };
+    // A menu row clicked while this page is already open changes only the URL.
+    useEffect(() => {
+        if (isAnalysisId(askedAnalysis)) pick(askedAnalysis);
+        if (isGroup(askedGroup)) setGroup(askedGroup);
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- follow the URL only
+    }, [askedAnalysis, askedGroup]);
     const filtered =
         !!(from || to) ||
         (an === "lead_sources" && !!(team || state.trim())) ||
@@ -410,6 +427,12 @@ function SourcesTable({ data, show }: { data: LeadSourcesResult; show: Show }) {
                 </div>
                 {all.map((r, i) => row(r, i === 0))}
                 {data.rows.length === 0 && <div className={`px-3 py-6 text-[13px] ${C.muted}`}>No leads were created in this period.</div>}
+                {/* ID 153 — counted apart from Leads in and from All sources. */}
+                {data.bulk && (
+                    <div className="opacity-70" title="Bulk imports are not counted in Leads in">
+                        {row(data.bulk, false)}
+                    </div>
+                )}
             </div>
         </div>
     );

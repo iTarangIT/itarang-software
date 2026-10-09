@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import {
     REPORT_LABELS,
     REPORT_TYPES,
+    REPORTS_MOVED_TO_ANALYSES,
     type ReportResult,
     type ReportType,
 } from "@/lib/admin/types";
@@ -107,7 +108,7 @@ export function ReportsView({ viewerRole }: { viewerRole: string }) {
             {section === "analyses" && (
             <>
             <div className="flex flex-wrap gap-2">
-                {canCatalogue && REPORT_TYPES.map((t) => (
+                {canCatalogue && REPORT_TYPES.filter((t) => !REPORTS_MOVED_TO_ANALYSES[t]).map((t) => (
                     <button
                         key={t}
                         type="button"
@@ -121,6 +122,18 @@ export function ReportsView({ viewerRole }: { viewerRole: string }) {
                         {REPORT_LABELS[t]}
                     </button>
                 ))}
+                {/* ID 91 — one version of each: these moved to Reports › Analyses. */}
+                {canCatalogue &&
+                    REPORT_TYPES.filter((t) => REPORTS_MOVED_TO_ANALYSES[t]).map((t) => (
+                        <a
+                            key={t}
+                            href={`/reports?analysis=${REPORTS_MOVED_TO_ANALYSES[t]}`}
+                            className="px-3 py-1.5 rounded-md text-sm font-medium border border-dashed border-border text-ink-muted hover:bg-bg"
+                            title="Moved to Reports › Analyses"
+                        >
+                            {REPORT_LABELS[t]} → Analyses
+                        </a>
+                    ))}
                 {canFunnel && (
                     <button
                         type="button"

@@ -46,8 +46,16 @@ export const DEALS_PAGE_ROLES = [
   "finance_controller",
 ] as const;
 
+/**
+ * ID 91 — the shared Reports page (Analyses, Data downloads, Scheduled email
+ * reports) for everyone the redesign board's REPORTS menu is for. The APIs
+ * behind each tab re-check their own roles.
+ */
+export const REPORTS_PAGE_ROLES = ["admin", "ceo", "sales_head"] as const;
+
 /** Prefix → roles, for middleware. Matched on a whole path segment. */
 export const STAFF_PAGE_ROLES: Record<string, readonly string[]> = {
+  "/reports": REPORTS_PAGE_ROLES,
   "/orders": ORDERS_PAGE_ROLES,
   "/provisions": PROVISIONS_PAGE_ROLES,
   "/deals": DEALS_PAGE_ROLES,
