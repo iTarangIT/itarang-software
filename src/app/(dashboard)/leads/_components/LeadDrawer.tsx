@@ -15,7 +15,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ExternalLink, Loader2, Phone, RotateCcw, X } from "lucide-react";
+import { ExternalLink, Loader2, Phone, RotateCcw, Tag, Users, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { LeadTrackingPanel } from "@/components/leads/lead-tracking-panel";
 import { ReactivateLeadButton } from "@/components/leads/ReactivateLeadButton";
@@ -44,6 +44,22 @@ function pretty(value: string | null | undefined): string {
     if (!value) return "—";
     return value.replaceAll("_", " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
+
+// The drawer's actions on a Lost lead, one tab each instead of three stacked
+// sections. A non-Lost lead has only "reassign", so no tab bar shows.
+type ActionTab = "reactivate" | "lost_reason" | "reassign";
+
+const ACTION_TAB_LABEL: Record<ActionTab, string> = {
+    reactivate: "Reactivate",
+    lost_reason: "Change Lost reason",
+    reassign: "Reassign owner",
+};
+
+const ACTION_TAB_ICON: Record<ActionTab, typeof RotateCcw> = {
+    reactivate: RotateCcw,
+    lost_reason: Tag,
+    reassign: Users,
+};
 
 function fmtDateTime(iso: string | null): string {
     if (!iso) return "—";
@@ -78,6 +94,18 @@ export function LeadDrawer({ lead, caps, onClose, onDone }: Props) {
     const [reason, setReason] = useState("");
     const [submitting, setSubmitting] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [tab, setTab] = useState<ActionTab | null>(null);
+
+    const isLost = lead?.lead_status === "Lost";
+    const tabs = useMemo<ActionTab[]>(() => {
+        const t: ActionTab[] = [];
+        if (caps.canBulkAct && isLost) t.push("reactivate");
+        if (caps.canChangeLostReason && isLost) t.push("lost_reason");
+        if (caps.canBulkAct) t.push("reassign");
+        return t;
+    }, [caps.canBulkAct, caps.canChangeLostReason, isLost]);
+    // Falls back to the first tab when none is picked or the picked one is gone.
+    const activeTab: ActionTab | null = tab && tabs.includes(tab) ? tab : tabs[0] ?? null;
 
     // Reset the form whenever a different lead opens or the drawer closes.
     useEffect(() => {
@@ -85,6 +113,7 @@ export function LeadDrawer({ lead, caps, onClose, onDone }: Props) {
         setReason("");
         setError(null);
         setSubmitting(false);
+        setTab(null);
     }, [lead?.id]);
 
     // ESC closes the drawer (but not while a save is in flight).
@@ -390,11 +419,51 @@ export function LeadDrawer({ lead, caps, onClose, onDone }: Props) {
                     </div>
                 )}
 
-                {/* A Lost lead's way back (BRD §0.9). Same role gate as the
-                    reassign form below — both post to /api/admin/leads/bulk. */}
-                {caps.canBulkAct && lead.lead_status === "Lost" && (
+                {/* ID 134: a Won marked by mistake, before onboarding is submitted. */}
+                {lead.lead_status === "Won" && (
+                    <div className="flex flex-wrap px-5 pt-4">
+                        <WonUndoControl leadId={lead.id} onDone={onDone} />
+                    </div>
+                )}
+
+                {/* Actions as tabs. Reactivate and Reassign share the
+                    /api/admin/leads/bulk role gate (caps.canBulkAct); Change
+                    Lost reason is ID 136's own gate. Hiding a tab is
+                    cosmetic — each endpoint enforces its roles server-side. */}
+                {tabs.length > 1 && (
                     <div className="px-5 pt-4">
+                        <div role="tablist" className="flex gap-1 rounded-lg bg-gray-100 p-1">
+                            {tabs.map((t) => {
+                                const Icon = ACTION_TAB_ICON[t];
+                                const on = t === activeTab;
+                                return (
+                                    <button
+                                        key={t}
+                                        type="button"
+                                        role="tab"
+                                        aria-selected={on}
+                                        onClick={() => setTab(t)}
+                                        disabled={submitting}
+                                        className={`flex flex-1 items-center justify-center gap-1 rounded-md px-2 py-1.5 text-[11px] font-semibold transition ${
+                                            on
+                                                ? "bg-white text-gray-900 shadow-sm"
+                                                : "text-gray-500 hover:text-gray-800"
+                                        }`}
+                                    >
+                                        <Icon className="h-3 w-3" />
+                                        {ACTION_TAB_LABEL[t]}
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    </div>
+                )}
+
+                {/* A Lost lead's way back (BRD §0.9). */}
+                {activeTab === "reactivate" && (
+                    <div className="px-5 py-4">
                         <ReactivateLeadButton
+                            key={lead.id}
                             leadId={lead.id}
                             onDone={() => {
                                 onDone();
@@ -405,28 +474,19 @@ export function LeadDrawer({ lead, caps, onClose, onDone }: Props) {
                 )}
 
                 {/* ID 136: a wrong Lost reason — the lead stays Lost. */}
-                {caps.canChangeLostReason && lead.lead_status === "Lost" && (
-                    <div className="px-5 pt-4">
+                {activeTab === "lost_reason" && (
+                    <div className="px-5 py-4">
                         <ChangeLostReasonButton
+                            key={lead.id}
                             leadId={lead.id}
                             currentReason={lead.lost_reason ?? null}
                             onDone={onDone}
-                            compact
                         />
                     </div>
                 )}
 
-                {/* ID 134: a Won marked by mistake, before onboarding is submitted. */}
-                {lead.lead_status === "Won" && (
-                    <div className="flex flex-wrap px-5 pt-4">
-                        <WonUndoControl leadId={lead.id} onDone={onDone} />
-                    </div>
-                )}
-
-                {/* Reassign form — bulk-capable roles only. Hiding it is cosmetic;
-                    /api/admin/leads/bulk enforces the same list server-side. */}
-                {caps.canBulkAct ? (
-
+                {/* Reassign form — bulk-capable roles only. */}
+                {activeTab === "reassign" && (
                         <div className="px-5 py-4">
                             <h3 className="flex items-center gap-1.5 text-sm font-semibold text-gray-900">
                                 <RotateCcw className="h-3.5 w-3.5 text-gray-500" />
@@ -490,7 +550,9 @@ export function LeadDrawer({ lead, caps, onClose, onDone }: Props) {
                                 )}
                             </div>
                         </div>
-                ) : (
+                )}
+
+                {!caps.canBulkAct && (
                         <div className="px-5 py-4">
                             <p className="text-[11px] text-gray-400">
                                 Reassignment is limited to admins and the sales head.
@@ -499,7 +561,7 @@ export function LeadDrawer({ lead, caps, onClose, onDone }: Props) {
                 )}
                 </div>
 
-                {caps.canBulkAct && (
+                {activeTab === "reassign" && (
                         <div className="flex items-center justify-end gap-2 border-t border-gray-100 px-5 py-3">
                             <Button
                                 type="button"
