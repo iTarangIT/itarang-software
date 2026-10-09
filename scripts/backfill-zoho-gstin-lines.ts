@@ -30,7 +30,7 @@ import { db } from "@/lib/db";
 import { fetchInvoiceDetail } from "@/lib/zoho/invoices";
 import { fetchContactGstin } from "@/lib/zoho/contacts";
 import { classifyHsn, normalizeHsn } from "@/lib/sales/invoiceLines";
-import { isValidGstin, normalizeGstin } from "@/lib/leads/gstin";
+import { screenCustomerGstin } from "@/lib/leads/gstin";
 
 const args = process.argv.slice(2);
 const COMMIT = args.includes("--commit");
@@ -106,6 +106,9 @@ async function main() {
     let fetched = 0;
     let failed = 0;
     const gstinFromInvoice = new Map<string, string>();
+    // ID 62 — GSTINs refused by the check (bad check character, or iTarang's
+    // own), listed at the end for finance instead of being dropped silently.
+    const refused: Array<{ where: string; reason: string }> = [];
     for (const inv of todo) {
         try {
             const d = await throttled(() => fetchInvoiceDetail(inv.zoho_invoice_id, inv.organization_id ?? undefined));
@@ -124,8 +127,9 @@ async function main() {
                 }
                 lineRows += n;
             });
-            const g = normalizeGstin(d.gst_no);
-            if (inv.customer_id && isValidGstin(g)) gstinFromInvoice.set(`${inv.organization_id}:${inv.customer_id}`, g);
+            const g = screenCustomerGstin(d.gst_no);
+            if (g.attention) refused.push({ where: `invoice ${inv.zoho_invoice_id}`, reason: g.attention });
+            if (inv.customer_id && g.gstin) gstinFromInvoice.set(`${inv.organization_id}:${inv.customer_id}`, g.gstin);
             fetched += 1;
             if (fetched % 25 === 0) console.log(`  ${fetched}/${todo.length} invoices, ${lineRows} lines`);
         } catch (e) {
@@ -163,8 +167,9 @@ async function main() {
                     }
                     throw e;
                 }
-                const n = normalizeGstin(raw);
-                g = isValidGstin(n) ? n : null;
+                const screened = screenCustomerGstin(raw);
+                if (screened.attention) refused.push({ where: `customer ${c.customer}`, reason: screened.attention });
+                g = screened.gstin;
             }
             await db.execute(sql`
                 INSERT INTO zoho_customer_gstins (organization_id, customer_id, gstin)
@@ -185,6 +190,8 @@ async function main() {
     console.log(`customers without one : ${none}`);
     console.log(`customers deferred    : ${deferred}${deferred ? " — no GSTIN on their fetched invoices and /contacts unavailable; re-run later" : ""}`);
     console.log(`failures              : ${failed}${failed ? " — re-run to retry; done rows are skipped" : ""}`);
+    console.log(`GSTINs refused        : ${refused.length}${refused.length ? " — not matched to a dealer; fix them in Zoho or link by hand:" : ""}`);
+    for (const r of refused) console.log(`  needs attention  ${r.where}: ${r.reason}`);
 }
 
 main()

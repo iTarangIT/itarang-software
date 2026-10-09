@@ -9,7 +9,7 @@
 // only PROPOSES invite_dealer_onboarding — its own Confirm sends.
 
 import { z } from "zod";
-import { isValidGstin, normalizeGstin } from "@/lib/leads/gstin";
+import { checkCustomerGstin, normalizeGstin } from "@/lib/leads/gstin";
 import { markLeadConverted } from "@/lib/leads/markConverted";
 import { isWorkedTouchpoint } from "@/lib/lifecycle/touchpointTypes";
 import { createPending } from "../../actions";
@@ -23,7 +23,8 @@ import { gstinQuestion } from "./updateLead";
 
 export const MarkConvertedPlan = z.object({
     lead_id: z.string().min(1),
-    gstin: z.string().refine(isValidGstin),
+    // ID 62 — a stored plan must pass the same rule the question used (own GSTIN refused).
+    gstin: z.string().refine((g) => checkCustomerGstin(g) === "ok"),
     notes: z.string().nullable(),
 });
 export type MarkConvertedPlan = z.infer<typeof MarkConvertedPlan>;

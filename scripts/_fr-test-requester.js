@@ -17,7 +17,7 @@ const EMAIL = 'fr-test-ceo@itarangjosh.com';
     }
     console.log('removed');
   } else {
-    if (!u) u = (await supabase.auth.admin.createUser({ email: EMAIL, password: 'password', email_confirm: true, app_metadata: { role: 'product_head' } })).data.user;
+    if (!u) u = (await supabase.auth.admin.createUser({ email: EMAIL, password: process.env.FR_TEST_PASSWORD || require('crypto').randomBytes(12).toString('base64url'), email_confirm: true, app_metadata: { role: 'product_head' } })).data.user;
     await sql`INSERT INTO users (id,email,name,role,is_active,must_change_password,created_at,updated_at) VALUES (${u.id}::uuid, ${EMAIL}, 'Test CEO', 'product_head', true, false, NOW(), NOW()) ON CONFLICT (id) DO UPDATE SET is_active = true`;
     await sql`INSERT INTO feature_request_members (user_id, seat) VALUES (${u.id}::uuid, 'requester') ON CONFLICT (user_id) DO UPDATE SET seat='requester', is_active = true`;
     console.log('ready', u.id);

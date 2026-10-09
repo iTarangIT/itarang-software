@@ -12,6 +12,7 @@
 
 import crypto from "crypto";
 import { bufferToArrayBuffer } from "@/lib/bytes";
+import { suppressJobSend } from "@/lib/runtime/liveSite";
 
 import type {
   DownloadedMedia,
@@ -258,6 +259,10 @@ export class MetaWhatsAppAdapter implements WhatsAppAdapter {
   }
 
   private async send(body: Record<string, unknown>): Promise<SendResult> {
+    // ID 125 — a scheduled job off the live site messages nobody.
+    if (suppressJobSend("whatsapp")) {
+      return { ok: true, providerMessageId: null, raw: { skipped: "not-live-site" } };
+    }
     if (!token() || !phoneNumberId()) {
       return {
         ok: false,
@@ -398,6 +403,7 @@ export class MetaWhatsAppAdapter implements WhatsAppAdapter {
     mimeType: string,
     filename: string,
   ): Promise<{ id: string | null; error?: string }> {
+    if (suppressJobSend("whatsapp")) return { id: "skipped:not-live-site" };
     if (!token() || !phoneNumberId()) {
       return { id: null, error: "meta_credentials_missing" };
     }

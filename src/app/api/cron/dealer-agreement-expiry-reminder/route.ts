@@ -16,6 +16,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { runAgreementExpiryReminders } from "@/lib/agreement/expiryReminder";
 import { fromVercelCron } from "@/lib/security/cronAuth";
+import { runAsJob } from "@/lib/runtime/liveSite";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -39,8 +40,8 @@ async function run(req: NextRequest) {
 }
 
 export async function GET(req: NextRequest) {
-  return run(req);
+  return runAsJob("cron:agreement-expiry-reminder", () => run(req));
 }
 export async function POST(req: NextRequest) {
-  return run(req);
+  return runAsJob("cron:agreement-expiry-reminder", () => run(req));
 }

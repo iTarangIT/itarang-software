@@ -7,7 +7,7 @@ import { z } from "zod";
 
 import { db } from "@/lib/db";
 import { hasAccountOwnershipTables } from "@/lib/accounts/tables";
-import { GSTIN_RE } from "@/lib/leads/gstin";
+import { GSTIN_KEY, gstinKeyIsMatchable } from "@/lib/leads/gstinMatch";
 
 /**
  * Who can open the Accounts tab and change owners / GSTINs.
@@ -80,12 +80,11 @@ export async function assertAssignableOwner(userId: string): Promise<string> {
 
 /**
  * SQL predicate: the account's GSTIN is missing — NULL, blank, the
- * 'PENDING' placeholder, or not a well-formed GSTIN. `col` is the column
+ * 'PENDING' placeholder, or one that can never match an invoice (ID 62: bad
+ * shape, bad check character, or iTarang's own). `col` is the column
  * expression (e.g. sql`a.gstin`).
  */
 export function gstinMissingSql(col: ReturnType<typeof sql>) {
-    return sql`(${col} IS NULL
-        OR btrim(${col}) = ''
-        OR upper(btrim(${col})) = 'PENDING'
-        OR upper(regexp_replace(${col}, '\\s', '', 'g')) !~ ${GSTIN_RE.source})`;
+    const key = GSTIN_KEY(col);
+    return sql`(${key} IS NULL OR NOT ${gstinKeyIsMatchable(key)})`;
 }

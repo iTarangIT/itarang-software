@@ -34,6 +34,11 @@ module.exports = {
         // --update-env` (or delete+start) to take effect — a plain reload does
         // not re-read this block.
         OPS_APP_NAME: "itarang-crm-web",
+        // ID 125 — the one "this is the live CRM" switch. Scheduled jobs send
+        // email / WhatsApp / Telegram only where this is 1 (or ALLOW_JOB_SENDS=1);
+        // sandbox shares NODE_ENV=production, so NODE_ENV cannot say it. Read by
+        // src/lib/runtime/liveSite.ts.
+        LIVE_SITE: "1",
       },
       max_memory_restart: "900M",
       // Give Next 8s to close its listener gracefully before SIGKILL. The
