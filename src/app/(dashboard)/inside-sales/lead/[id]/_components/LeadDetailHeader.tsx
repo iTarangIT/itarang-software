@@ -11,7 +11,9 @@ import { OwnerIndicator } from "../../../_components/OwnerIndicator";
 import { NeodoveTag } from "@/components/leads/neodove-tag";
 import { SentByStamp } from "@/components/leads/sent-by-stamp";
 import { ReactivateLeadButton } from "@/components/leads/ReactivateLeadButton";
-import { LEADS_BULK_ROLES } from "@/lib/leads/access";
+import { ChangeLostReasonButton } from "@/components/leads/ChangeLostReasonButton";
+import { WonUndoControl } from "@/components/leads/WonUndoControl";
+import { LEADS_BULK_ROLES, capabilitiesFor } from "@/lib/leads/access";
 
 // Roles permitted to override a lead's temperature (mirrors the PATCH route).
 const INTEREST_EDIT_ROLES = ["inside_sales_rep", "asm", "admin", "partner"];
@@ -91,14 +93,13 @@ export function LeadDetailHeader({
                         <h1 className="text-xl font-semibold text-gray-900 truncate">
                             {lead.dealer_name || lead.shop_name || "(unnamed dealer)"}
                         </h1>
+                        {/* ID 136: nobody picks a status by hand — the chip opens
+                            Mark Won / Mark Lost / Transfer for the owner only. */}
                         <LeadStatusEditor
-                            leadId={lead.id}
                             status={lead.lead_status}
                             editable={isOwner}
-                            canCorrect={viewerRole === "admin" || viewerRole === "sales_head"}
                             modalActions={statusModalActions}
                             onModalAction={onStatusModal}
-                            onUpdated={onUpdated}
                         />
                         <InterestLevelEditor
                             leadId={lead.id}
@@ -115,6 +116,17 @@ export function LeadDetailHeader({
                             (LEADS_BULK_ROLES as readonly string[]).includes(viewerRole ?? "") && (
                                 <ReactivateLeadButton leadId={lead.id} onDone={onUpdated} compact />
                             )}
+                        {/* ID 136: a wrong Lost reason is fixed here, not by a status change. */}
+                        {lead.lead_status === "Lost" && capabilitiesFor(viewerRole).canChangeLostReason && (
+                            <ChangeLostReasonButton
+                                leadId={lead.id}
+                                currentReason={lead.lost_reason}
+                                onDone={onUpdated}
+                                compact
+                            />
+                        )}
+                        {/* ID 134: a Won marked by mistake, before onboarding is submitted. */}
+                        {lead.lead_status === "Won" && <WonUndoControl leadId={lead.id} onDone={onUpdated} />}
                     </div>
                     {lead.shop_name && lead.dealer_name && (
                         <div className="text-xs text-gray-500 mt-0.5">{lead.shop_name}</div>

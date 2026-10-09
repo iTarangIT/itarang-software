@@ -125,6 +125,8 @@ const REJECTED: Record<Extract<ExecOutcome, { kind: "rejected" }>["reason"], str
     not_claimable: "That lead can no longer be claimed. Nothing was saved.",
     duplicate_phone: "A lead with this phone number already exists. Nothing was saved.",
     target_unavailable: "That person is no longer active, so nothing was saved. Pick someone else.",
+    visit_booked: "The ASM has a visit booked on this lead, so nothing was saved. Cancel or complete the visit first.",
+    already_transferred: "This lead was already transferred to an ASM, so nothing was saved.",
     attachment_used: "That photo or file was already used for another change, so nothing was saved. Send it again.",
 };
 

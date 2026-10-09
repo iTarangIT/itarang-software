@@ -31,6 +31,7 @@ import { type LeadStatus } from "@/lib/lifecycle/transitions";
 import { createOnboardingApplicationForConvertedLead } from "@/lib/onboarding/fromConvertedLead";
 import { notifyRoles, notifyUser } from "@/lib/notifications/notify";
 import { withLeadActor } from "@/lib/leads/actorContext";
+import { normalizeGstin } from "@/lib/leads/gstin";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -49,6 +50,20 @@ export function deriveConvertClosingRole(
 export class ConvertLeadNotFoundError extends Error {
     constructor() {
         super("Lead not found");
+    }
+}
+
+/**
+ * ID 124: Mark Won on a lead that is already Won with a DIFFERENT GSTIN. It
+ * used to overwrite the lead's GSTIN and leave the onboarding application's —
+ * Correct GSTIN changes both. The same GSTIN again (a double tap) stays a
+ * no-op (ID 115.6).
+ */
+export class AlreadyWonGstinChangeError extends Error {
+    readonly status = 409;
+    constructor() {
+        super("This lead is already Won. To change its GSTIN use Correct GSTIN — it updates the onboarding application too.");
+        this.name = "AlreadyWonGstinChangeError";
     }
 }
 
@@ -116,13 +131,17 @@ export async function markLeadConverted(
     // must not log a second "onboarding initiated" or notify twice.
     let repeat = false;
     const run = async (tx: Tx): Promise<string> => {
-        const rows = await tx.execute<{ lead_status: string | null; asm_id: string | null }>(sql`
-            SELECT dl.lead_status, dl.asm_id FROM dealer_leads dl WHERE dl.id = ${leadId} LIMIT 1
+        // Locked so two Mark Wons serialise and the second sees Won (ID 124).
+        const rows = await tx.execute<{ lead_status: string | null; asm_id: string | null; gstin: string | null }>(sql`
+            SELECT dl.lead_status, dl.asm_id, dl.gstin FROM dealer_leads dl WHERE dl.id = ${leadId} FOR UPDATE
         `);
         const state = rows[0];
         if (!state) throw new ConvertLeadNotFoundError();
         const fromStatus = state.lead_status as LeadStatus | null;
         repeat = fromStatus === "Won";
+        if (repeat && state.gstin && normalizeGstin(state.gstin) !== normalizeGstin(input.gstin)) {
+            throw new AlreadyWonGstinChangeError();
+        }
 
         const closingRole = deriveConvertClosingRole(actor.role, state.asm_id);
         const remarks = input.notes?.trim() || "Lead marked Won. Dealer onboarding initiated.";

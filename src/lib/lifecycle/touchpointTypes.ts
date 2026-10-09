@@ -119,7 +119,9 @@ export function isWorkedTouchpoint(
   statusEvent?: string | null,
 ): boolean {
   if (type === "inside_sales_call" || type === "visit") return true;
-  return type === "status_change_note" && hasStatusChange && statusEvent !== "correction";
+  // A system correction and Undo Mark Won (ID 134) fix the record; neither
+  // is the owner working the lead.
+  return type === "status_change_note" && hasStatusChange && statusEvent !== "correction" && statusEvent !== "won_undone";
 }
 
 /**

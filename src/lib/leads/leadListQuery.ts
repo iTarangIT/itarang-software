@@ -35,6 +35,8 @@ export type LeadListRow = {
     city: string | null;
     state: string | null;
     lead_status: string | null;
+    /** For "Change Lost reason" in the drawer (ID 136). */
+    lost_reason: string | null;
     source: string | null;
     final_intent_score: number | null;
     interest_level: string | null;
@@ -542,6 +544,7 @@ export async function fetchLeadListRows(
             dl.city,
             dl.state,
             dl.lead_status,
+            dl.lost_reason,
             dl.source,
             dl.final_intent_score,
             dl.interest_level,

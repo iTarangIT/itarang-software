@@ -7,8 +7,14 @@ import type { SQL } from "drizzle-orm";
 const dialect = new PgDialect();
 const statements: string[] = [];
 let row: Record<string, unknown> = {};
+// ID 121: the booked-visit lookup and the visit close answer by query text.
+let bookedVisits: Record<string, unknown>[] = [];
+let openVisits: Record<string, unknown>[] = [];
 const execute = vi.fn(async (q: SQL) => {
-    statements.push(dialect.sqlToQuery(q).sql);
+    const text = dialect.sqlToQuery(q).sql;
+    statements.push(text);
+    if (/^\s*SELECT[\s\S]*FROM lead_visits/.test(text)) return bookedVisits;
+    if (/UPDATE lead_visits/.test(text)) return openVisits;
     return [row];
 });
 const tx = { execute };
@@ -37,6 +43,8 @@ const call = () => writeTouchpoint.mock.calls.at(-1) as unknown as [Record<strin
 
 beforeEach(() => {
     statements.length = 0;
+    bookedVisits = [];
+    openVisits = [];
     execute.mockClear();
     transaction.mockClear();
     writeTouchpoint.mockClear();
@@ -60,8 +68,12 @@ describe("assignLeadOwner → ISR on a Transferred_to_ASM lead", () => {
         const out = await assign();
         expect(out).toEqual({ assigned: true, path: "transfer_undo", statusLiftedTo: "Commercials_Explained" });
         expect(transaction).toHaveBeenCalledTimes(1);
-        expect(statements).toHaveLength(1);
-        expect(statements[0]).toMatch(/pre_transfer_status = CASE/);
+        // lock, booked-visit check, owner swap, unlink ASM, close visits — one tx.
+        expect(statements).toHaveLength(5);
+        expect(statements[0]).toMatch(/FOR UPDATE/);
+        expect(statements[2]).toMatch(/pre_transfer_status = CASE/);
+        expect(statements[3]).toMatch(/asm_id = NULL/);
+        expect(statements[4]).toMatch(/UPDATE lead_visits[\s\S]*'cancelled'/);
         const [input, opts] = call();
         expect(opts).toEqual({ tx });
         expect(input).toMatchObject({
@@ -84,6 +96,23 @@ describe("assignLeadOwner → ISR on a Transferred_to_ASM lead", () => {
         const out = await assign();
         expect(out).toEqual({ assigned: true, path: "owner_swap", statusLiftedTo: null });
         expect(call()[0].statusChange).toBeUndefined();
+    });
+
+    it("ID 121: refused while the ASM has a visit booked — nothing written", async () => {
+        row = { from_owner_id: "asm-1", pre_transfer_status: "Under_Discussion", lead_status: "Transferred_to_ASM" };
+        bookedVisits = [{ scheduled_date: "2026-10-12", asm_name: "Suresh" }];
+        const out = await assign();
+        expect(out).toMatchObject({ assigned: false, path: "handback_blocked", statusLiftedTo: null });
+        expect(out.blockedReason).toMatch(/Suresh has a visit booked for 12 Oct/);
+        expect(statements.some((q) => /^\s*UPDATE/.test(q))).toBe(false);
+        expect(writeTouchpoint).not.toHaveBeenCalled();
+    });
+
+    it("ID 121: with nothing booked, the ASM is unlinked and open visits are closed", async () => {
+        row = { from_owner_id: "asm-1", pre_transfer_status: "Under_Discussion", lead_status: "Transferred_to_ASM" };
+        openVisits = [{ visit_id: "v-1" }];
+        await assign();
+        expect((call()[0].statusChange as { reasonNotes: string }).reasonNotes).toMatch(/ASM unlinked; 1 open visit closed/);
     });
 
     it("an ASM target still only swaps which ASM holds it", async () => {

@@ -12,6 +12,7 @@ import {
     TRANSFER_REASONS,
     VISIT_TYPES,
     transferLeadToAsm,
+    LeadAlreadyTransferredError,
     type TransferReason,
     type VisitType,
 } from "@/lib/leads/transferToAsm";
@@ -21,7 +22,7 @@ import { fmtDate, reasonLabel, statusLabel } from "../../format";
 import type { Preview, ToolResult } from "../../types";
 import { defineTool, LeadId, ownedLeadOr, type ToolFactory } from "../spec";
 import { leadUrl } from "../leads";
-import { defineApplier } from "../../applierSpec";
+import { ActionRejected, defineApplier } from "../../applierSpec";
 import { IsoDate, Remarks } from "./vocabSchemas";
 import { futureDay } from "./when";
 import { matchPeople, nameList } from "./people";
@@ -66,6 +67,14 @@ export const transferToAsm: ToolFactory = () =>
             if (owned.result) return owned.result;
             const lead = owned.lead;
             const crmUrl = leadUrl(ctx.user, lead.id);
+            // ID 120: a second transfer is refused by the writer — say so now.
+            if (lead.lead_status === "Transferred_to_ASM") {
+                return {
+                    kind: "declined",
+                    reason: "This lead is already with an ASM, awaiting the field visit. Reassign it instead of transferring again.",
+                    crm_url: crmUrl,
+                };
+            }
 
             const { asms } = await listAsmOptions({ state: lead.state, city: lead.city, includeOutOfTerritory: true });
             const people = asms.map((a) => ({ ...a, id: a.user_id }));
@@ -146,21 +155,27 @@ export const transferToAsm: ToolFactory = () =>
 export const transferToAsmApplier = defineApplier<TransferToAsmPlan>({
     schema: TransferToAsmPlan,
     apply: async ({ tx, user }, p) => {
-        await transferLeadToAsm(
-            {
-                leadId: p.lead_id,
-                actorId: user.id,
-                asmId: p.asm_id,
-                reason: p.reason,
-                visitType: p.visit_type,
-                suggestedVisitDate: p.suggested_visit_date,
-                dealerPreferredTime: p.dealer_preferred_time,
-                handoffNotes: p.handoff_notes,
-                pendingItems: p.pending_items,
-                outOfTerritoryReason: p.out_of_territory_reason,
-            },
-            { tx },
-        );
+        try {
+            await transferLeadToAsm(
+                {
+                    leadId: p.lead_id,
+                    actorId: user.id,
+                    asmId: p.asm_id,
+                    reason: p.reason,
+                    visitType: p.visit_type,
+                    suggestedVisitDate: p.suggested_visit_date,
+                    dealerPreferredTime: p.dealer_preferred_time,
+                    handoffNotes: p.handoff_notes,
+                    pendingItems: p.pending_items,
+                    outOfTerritoryReason: p.out_of_territory_reason,
+                },
+                { tx },
+            );
+        } catch (err) {
+            // ID 120: transferred meanwhile (another tab, the web screen).
+            if (err instanceof LeadAlreadyTransferredError) throw new ActionRejected("already_transferred");
+            throw err;
+        }
         return { new_owner_id: p.asm_id };
     },
 });

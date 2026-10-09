@@ -224,6 +224,8 @@ export const POST = withErrorHandler(async (req: Request) => {
     let skipped = 0;
     // Of `skipped`: Won leads a bulk Mark Lost left alone (ID 115).
     let skippedWon = 0;
+    // Of `skipped`: Awaiting-field-visit leads a reassign left with the ASM (ID 121).
+    let skippedVisitBooked = 0;
     const reactivated: Array<{ id: string } & Awaited<ReturnType<typeof reactivateLead>>> = [];
 
     if (body.action === "reassign") {
@@ -245,7 +247,7 @@ export const POST = withErrorHandler(async (req: Request) => {
         // calling campaign lands on the same queue an admin reassign would put
         // it on. See src/lib/leads/assignOwner.ts for the full rationale.
         for (const lead of leads) {
-            await assignLeadOwner({
+            const outcome = await assignLeadOwner({
                 leadId: lead.id,
                 fromStatus: lead.lead_status as LeadStatus | null,
                 target,
@@ -253,6 +255,15 @@ export const POST = withErrorHandler(async (req: Request) => {
                 actorRole: user.role,
                 remarks,
             });
+            // ID 121: an Awaiting-field-visit lead stays with the ASM while a
+            // visit is booked. One lead (drawer, Converted card) → the reason
+            // as an error, so the screen does not say "reassigned".
+            if (outcome.path === "handback_blocked") {
+                if (leads.length === 1) return errorResponse(outcome.blockedReason ?? "The ASM has a visit booked.", 409);
+                skipped++;
+                skippedVisitBooked++;
+                continue;
+            }
             affected++;
         }
     } else if (body.action === "mark_lost") {
@@ -364,6 +375,7 @@ export const POST = withErrorHandler(async (req: Request) => {
         affected,
         skipped,
         skipped_won: skippedWon,
+        skipped_visit_booked: skippedVisitBooked,
         // reactivate only: where each lead went (owner back, or the unassigned pool).
         ...(body.action === "reactivate" ? { reactivated } : {}),
     });

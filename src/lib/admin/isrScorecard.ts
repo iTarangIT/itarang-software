@@ -79,6 +79,8 @@ export async function buildIsrScorecard(f: { from: string; to: string; state?: s
               FROM dealer_lead_status_history h
               JOIN dealer_leads dl ON dl.id = h.dealer_lead_id
              WHERE h.to_status = 'Won'
+               -- ID 134: a Mark Won undone as a mistake is not a Won (E-333).
+               AND (to_jsonb(h) ->> 'won_undone_at') IS NULL
                AND ${inRange(sql`h.changed_at`, f.from, f.to)} ${st}
              GROUP BY 1
         ),

@@ -222,7 +222,7 @@ export const LEAD_TRACKING_ROLES = [
  */
 /**
  * Roles that may open the lead working page (/inside-sales/lead/[id]) — status,
- * Correct status, Withdraw quote, the full history. Must match the
+ * Change Lost reason, Undo Mark Won, Withdraw quote, the full history. Must match the
  * "/inside-sales/lead" row of sharedRouteAccess in src/middleware.ts; a role
  * missing there would get a button to a page that bounces it.
  */
@@ -377,12 +377,15 @@ export type LeadsCapabilities = {
   canTrackLeads: boolean;
   /** May open the lead working page (LEAD_WORKSPACE_ROLES). */
   canOpenLeadPage: boolean;
-  /** May "Correct status" with a reason — /api/admin/leads/[id]/correct-status. */
-  canCorrectStatus: boolean;
+  /**
+   * May "Change Lost reason" on a Lost lead — /api/admin/leads/[id]/lost-reason
+   * (ID 136). "Correct status" is gone: nobody picks a status by hand.
+   */
+  canChangeLostReason: boolean;
 };
 
-/** The roles /api/admin/leads/[id]/correct-status accepts (ID 80). */
-export const STATUS_CORRECTION_ROLES = ["admin", "sales_head"] as const;
+/** The roles /api/admin/leads/[id]/lost-reason accepts (ID 136) — LOST_REASON_CHANGE_ROLES. */
+const LOST_REASON_ROLES = ["admin", "sales_head"];
 
 // Mirrors NEODOVE_ADMIN_ROLES (src/lib/neodove/roles.ts) and the server gate on
 // /api/campaigns/cost-analytics. Both were already duplicated as literals inside
@@ -416,7 +419,7 @@ export function capabilitiesFor(role: string | null | undefined): LeadsCapabilit
     canCurateIntent: (INTENT_CURATOR_ROLES as readonly string[]).includes(r),
     canTrackLeads: (LEAD_TRACKING_ROLES as readonly string[]).includes(r),
     canOpenLeadPage: (LEAD_WORKSPACE_ROLES as readonly string[]).includes(r),
-    canCorrectStatus: (STATUS_CORRECTION_ROLES as readonly string[]).includes(r),
+    canChangeLostReason: LOST_REASON_ROLES.includes(r),
   };
 }
 
@@ -430,5 +433,5 @@ export const NO_CAPABILITIES: LeadsCapabilities = {
   canCurateIntent: false,
   canTrackLeads: false,
   canOpenLeadPage: false,
-  canCorrectStatus: false,
+  canChangeLostReason: false,
 };
