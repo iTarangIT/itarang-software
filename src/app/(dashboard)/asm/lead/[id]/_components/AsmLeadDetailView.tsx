@@ -20,6 +20,7 @@ import { LogVisitModal } from "@/app/(dashboard)/asm/_components/modals/LogVisit
 import { AsmLeadActionBar } from "./AsmLeadActionBar";
 import type { VisitNextAction } from "@/lib/asm/types";
 import { canExportLeadHistory } from "@/lib/leads/access";
+import { LEAD_NOT_ACCESSIBLE } from "@/app/(dashboard)/inside-sales/lead/[id]/_components/LeadDetailView";
 
 type ActiveModal =
     | null
@@ -51,9 +52,12 @@ export function AsmLeadDetailView({ leadId, viewerId, viewerRole }: Props) {
         queryKey: ["asm-lead", leadId],
         queryFn: async () => {
             const res = await fetch(`/api/inside-sales/lead/${encodeURIComponent(leadId)}`, { cache: "no-store" });
+            // Same API as the IS view — a 404 is a lead the viewer no longer owns.
+            if (res.status === 404) throw new Error(LEAD_NOT_ACCESSIBLE);
             if (!res.ok) throw new Error("Failed to load lead");
             return res.json();
         },
+        retry: (count, err) => (err as Error).message !== LEAD_NOT_ACCESSIBLE && count < 3,
         refetchOnWindowFocus: true,
     });
 
