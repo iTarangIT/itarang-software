@@ -28,6 +28,13 @@ import {
 import type { ControlTower, Compare } from "@/lib/dashboard/ceoControlTower";
 import type { DataHealthCheck } from "@/lib/dashboard/dataHealth";
 import type { GrossMarginReport } from "@/lib/dashboard/grossMargin";
+import {
+  summariseCompanyTargets,
+  targetVerdict,
+  type CompanyTarget,
+  type CompanyTargetMetric,
+  type TargetRowLite,
+} from "@/lib/dashboard/companyTarget";
 import type { DealerHealthRow } from "@/lib/dealers/accountHealth";
 import {
   ACCOUNT_BUCKETS,
@@ -326,6 +333,35 @@ export default function CEODashboard() {
       ),
     staleTime: 5 * 60 * 1000,
   });
+  // Company targets = the sum of everyone's monthly targets (the register on
+  // /admin/targets). A past month counts in full; the current month counts to
+  // date (pro-rata over working days). A custom range that does not cover whole
+  // months has no target.
+  const targetMonths = React.useMemo(() => {
+    if (period === "fy") {
+      const first = new Date(now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1, 3, 1);
+      const out: string[] = [];
+      for (let d = new Date(first); d <= now; d.setMonth(d.getMonth() + 1)) out.push(ym(d));
+      return out;
+    }
+    return win.months;
+  }, [period, now, win.months]);
+  const targets = useQuery<Record<CompanyTargetMetric, CompanyTarget>>({
+    queryKey: ["ceo-company-targets", targetMonths?.join(",") ?? ""],
+    enabled: Boolean(targetMonths?.length),
+    queryFn: async () => {
+      const lists = await Promise.all(
+        targetMonths!.map((month) =>
+          getData<{ rows: TargetRowLite[] }>(`/api/admin/targets?month=${month}`).then(
+            (d) => ({ month, rows: d.rows }),
+          ),
+        ),
+      );
+      return summariseCompanyTargets(lists, targetMonths!, ym(now));
+    },
+    staleTime: 5 * 60 * 1000,
+    retry: false,
+  });
   const fySnapshot = useQuery<Snapshot>({
     queryKey: ["ceo-snapshot-fy"],
     queryFn: () => getData("/api/dashboard/ceo/snapshot-summary?period=fy"),
@@ -425,7 +461,7 @@ export default function CEODashboard() {
           n: x.said_yes_not_won,
           icon: CircleCheck,
           tone: "warn",
-          label: "Dealer said yes, not marked Won",
+          label: "Dealer approved, but not marked Won",
           count: num(x.said_yes_not_won),
           sub:
             `${inr(x.said_yes_value)} in approved quotes` +
@@ -498,6 +534,35 @@ export default function CEODashboard() {
   const haveDealers = Boolean(dealerRows || baseBlock);
   const liveDealers = ACCOUNT_BUCKETS.reduce((a, k) => a + bucketCount(k), 0);
   const ordering = bucketCount("active") + bucketCount("cooling");
+
+  // "89% of target" pill + "Target to date ₹3.05 Cr" line for a tile.
+  const includesToday = win.to >= todayStr;
+  const vsTarget = (
+    actual: number | null,
+    metric: "revenue" | "batteries_sold",
+    fmt: (v: number) => string,
+  ): { pill: { text: string; tone: Tone }; line: string | null } => {
+    const v = targetVerdict(targets.data?.[metric], actual, targetMonths ?? [], ym(now));
+    if (v.kind === "none") return { pill: { text: "No target", tone: "neutral" }, line: null };
+    if (v.kind === "partial") {
+      const names = v.covered.map((mo) =>
+        new Date(`${mo}-01T00:00:00`).toLocaleDateString("en-IN", { month: "short", year: "numeric" }),
+      );
+      return {
+        pill: { text: "Target not set for every month", tone: "neutral" },
+        line: `Target set only for ${names.join(", ")} (${fmt(Math.round(v.goal))}${v.includesThisMonth ? " to date" : ""})`,
+      };
+    }
+    const line = `${includesToday ? "Target to date" : "Target"} ${fmt(Math.round(v.goal))}`;
+    if (v.pct == null) return { pill: { text: "Target set", tone: "neutral" }, line };
+    return { pill: { text: `${v.pct}% of target`, tone: toneForPct(v.pct) }, line };
+  };
+  const revenueTarget = vsTarget(money ? money.revenue.now : null, "revenue", inr);
+  const batteriesTarget = vsTarget(
+    sales.data ? sales.data.outcome.batteries_to_dealers : null,
+    "batteries_sold",
+    num,
+  );
 
   // ── Revenue pace ─────────────────────────────────────────────────────────
   const chart = ov?.chart ?? [];
@@ -614,6 +679,7 @@ export default function CEODashboard() {
   return (
     <div className="flex flex-col gap-7 pb-12" data-testid="ceo-overview">
       <DashPageHeader
+        sticky
         eyebrow="CEO overview"
         title="How the business is doing"
         subtitle={
@@ -714,11 +780,15 @@ export default function CEODashboard() {
           value={money ? inr(money.revenue.now) : "—"}
           href={`/ceo/revenue?from=${win.from}&to=${win.to}&label=${encodeURIComponent(periodLabel)}`}
           spark={chart.map((c) => c.revenue)}
-          sub={
+          pill={revenueTarget.pill}
+          sub={[
+            revenueTarget.line,
             money && money.unlinked_revenue > 0
               ? `${inr(money.unlinked_revenue)} not linked to a dealer`
-              : "Non-void invoices dated in the period"
-          }
+              : "Non-void invoices dated in the period",
+          ]
+            .filter(Boolean)
+            .join(" · ")}
         />
         <KpiTile
           label="Gross margin"
@@ -746,13 +816,16 @@ export default function CEODashboard() {
           label="Batteries to dealers"
           href={`/ceo/batteries?from=${win.from}&to=${win.to}&label=${encodeURIComponent(periodLabel)}`}
           value={sales.data ? num(sales.data.outcome.batteries_to_dealers) : "—"}
-          pill={{ text: "No target", tone: "neutral" }}
+          pill={batteriesTarget.pill}
           sub={
             sales.isLoading
               ? "Loading…"
-              : sales.data
-                ? "Allocated to dealer accounts in the period"
-                : "Not available yet"
+              : [
+                  batteriesTarget.line,
+                  sales.data ? "Allocated to dealer accounts in the period" : "Not available yet",
+                ]
+                  .filter(Boolean)
+                  .join(" · ")
           }
         />
         <KpiTile
@@ -837,8 +910,9 @@ export default function CEODashboard() {
             />
           )}
           <span className="text-xs text-ink-muted">
-            No company revenue target is set, so there is no target-pace line.
-            Pace is a straight line over calendar days.
+            {revenueTarget.line
+              ? `${revenueTarget.line} (sum of everyone's targets). Pace is a straight line over calendar days.`
+              : "No company revenue target is set, so there is no target-pace line. Pace is a straight line over calendar days."}
           </span>
         </DashCard>
 
@@ -1002,7 +1076,7 @@ export default function CEODashboard() {
       {/* Engine + base */}
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
         <DashCard
-          title="Sales engine"
+          title="Sales funnel"
           caption={
             engine
               ? `How far the period's ${num(engine.leads_in.now)} new leads have got. The bar is the share of them that reached each stage.`

@@ -82,8 +82,27 @@ export function Header() {
         };
     }, []);
 
+    // Publish this bar's height as --app-header-h so a page can pin its own
+    // controls (e.g. the CEO period filter) directly beneath it while scrolling.
+    // Measured, not hard-coded: the height changes with breakpoint and content.
+    const headerRef = useRef<HTMLElement>(null);
+    useEffect(() => {
+        const el = headerRef.current;
+        if (!el) return;
+        const root = document.documentElement;
+        const publish = () => root.style.setProperty("--app-header-h", `${el.offsetHeight}px`);
+        publish();
+        const ro = new ResizeObserver(publish);
+        ro.observe(el);
+        return () => {
+            ro.disconnect();
+            root.style.removeProperty("--app-header-h");
+        };
+    }, []);
+
     return (
         <header
+            ref={headerRef}
             className="sticky top-0 z-20 px-6 py-3 flex items-center justify-between"
             style={{
                 background: "var(--color-surface)",

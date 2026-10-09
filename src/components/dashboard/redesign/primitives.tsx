@@ -55,22 +55,84 @@ export function DashPageHeader({
     title,
     subtitle,
     children,
+    footer,
+    sticky = false,
 }: {
     eyebrow: string;
     title: string;
     subtitle?: React.ReactNode;
     children?: React.ReactNode;
+    /** Full-width row under the title (e.g. a filter bar) — pinned with it when sticky. */
+    footer?: React.ReactNode;
+    /**
+     * Pin the header (and its filters) under the app bar while the page scrolls.
+     * Once pinned it goes compact — eyebrow and subtitle hide, the title drops to
+     * one line — so the controls stay reachable without eating the screen.
+     */
+    sticky?: boolean;
 }) {
+    const ref = React.useRef<HTMLDivElement>(null);
+    const [stuck, setStuck] = React.useState(false);
+    React.useEffect(() => {
+        if (!sticky) return;
+        const onScroll = () => {
+            const el = ref.current;
+            if (!el) return;
+            const top = parseFloat(getComputedStyle(el).top) || 0;
+            setStuck(window.scrollY > 0 && el.getBoundingClientRect().top <= top + 0.5);
+        };
+        onScroll();
+        window.addEventListener("scroll", onScroll, { passive: true });
+        window.addEventListener("resize", onScroll);
+        return () => {
+            window.removeEventListener("scroll", onScroll);
+            window.removeEventListener("resize", onScroll);
+        };
+    }, [sticky]);
+
+    // Collapsing only changes this element's own height, never its natural
+    // position, so going compact cannot flip `stuck` back and forth.
+    const compact = sticky && stuck;
+
     return (
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between lg:gap-6">
-            {/* The controls keep their natural width at the right; the title takes
-                what is left, so a long subtitle wraps instead of squeezing them. */}
-            <div className="flex min-w-0 flex-col gap-1.5 lg:flex-1">
-                <span className="text-xs font-bold uppercase tracking-[0.12em] text-brand-teal">{eyebrow}</span>
-                <h1 className="text-[30px] font-bold leading-tight tracking-tight text-brand-navy">{title}</h1>
-                {subtitle && <p className="text-sm text-ink-muted">{subtitle}</p>}
+        <div
+            ref={ref}
+            className={cn(
+                "flex flex-col",
+                compact ? "gap-2" : "gap-4",
+                // Bleeds over <main>'s padding so cards scrolling underneath are
+                // fully covered; the page background keeps it visually seamless.
+                sticky &&
+                    "sticky top-[var(--app-header-h,0px)] z-10 -mx-6 bg-[color:var(--color-bg)] px-6 md:-mx-8 md:px-8",
+                sticky && (compact ? "py-2" : "py-3"),
+                compact && "border-b border-[color:var(--color-border)] shadow-[0_6px_12px_-8px_rgba(15,40,70,0.18)]",
+            )}
+        >
+            <div
+                className={cn(
+                    "flex flex-col lg:flex-row lg:justify-between",
+                    compact ? "gap-2 lg:items-center lg:gap-4" : "gap-4 lg:items-end lg:gap-6",
+                )}
+            >
+                {/* The controls keep their natural width at the right; the title takes
+                    what is left, so a long subtitle wraps instead of squeezing them. */}
+                <div className="flex min-w-0 flex-col gap-1.5 lg:flex-1">
+                    {!compact && (
+                        <span className="text-xs font-bold uppercase tracking-[0.12em] text-brand-teal">{eyebrow}</span>
+                    )}
+                    <h1
+                        className={cn(
+                            "font-bold tracking-tight text-brand-navy",
+                            compact ? "truncate text-lg leading-snug" : "text-[30px] leading-tight",
+                        )}
+                    >
+                        {title}
+                    </h1>
+                    {subtitle && !compact && <p className="text-sm text-ink-muted">{subtitle}</p>}
+                </div>
+                {children && <div className="flex flex-wrap items-center gap-3 lg:shrink-0 lg:justify-end">{children}</div>}
             </div>
-            {children && <div className="flex flex-wrap items-center gap-3 lg:shrink-0 lg:justify-end">{children}</div>}
+            {footer}
         </div>
     );
 }

@@ -10,6 +10,8 @@ import { LeadStatusEditor, type StatusModalAction } from "../../../_components/L
 import { OwnerIndicator } from "../../../_components/OwnerIndicator";
 import { NeodoveTag } from "@/components/leads/neodove-tag";
 import { SentByStamp } from "@/components/leads/sent-by-stamp";
+import { ReactivateLeadButton } from "@/components/leads/ReactivateLeadButton";
+import { LEADS_BULK_ROLES } from "@/lib/leads/access";
 
 // Roles permitted to override a lead's temperature (mirrors the PATCH route).
 const INTEREST_EDIT_ROLES = ["inside_sales_rep", "asm", "admin", "partner"];
@@ -109,6 +111,10 @@ export function LeadDetailHeader({
                             lose its NeoDove provenance by being opened. */}
                         <NeodoveTag syncStatus={lead.neodove_sync_status} />
                         {wonWithoutQuote(lead) && <WonWithoutQuoteChip />}
+                        {lead.lead_status === "Lost" &&
+                            (LEADS_BULK_ROLES as readonly string[]).includes(viewerRole ?? "") && (
+                                <ReactivateLeadButton leadId={lead.id} onDone={onUpdated} compact />
+                            )}
                     </div>
                     {lead.shop_name && lead.dealer_name && (
                         <div className="text-xs text-gray-500 mt-0.5">{lead.shop_name}</div>

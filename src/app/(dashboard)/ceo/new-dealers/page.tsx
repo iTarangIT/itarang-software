@@ -24,6 +24,8 @@ type Row = {
     approved_on: string;
     account_id: string | null;
     account_name: string | null;
+    credit_name: string | null;
+    closer_name: string | null;
 };
 
 const isDate = (s: string | undefined): s is string => !!s && /^\d{4}-\d{2}-\d{2}$/.test(s);
@@ -49,15 +51,33 @@ export default async function CeoNewDealersPage({
     if (from > to) [from, to] = [to, from];
     const label = sp.label?.trim() || null;
 
+    // Credit to = who brought the dealer in: the account's "onboarded by"
+    // (E-321), else the salesperson on the application, else whoever closed
+    // the originating lead. "Lead closed by" is the conversion-credit owner
+    // (dealer_leads.closing_owner_id, tracker ID 117), shown when it differs.
+    // account_ownership is absent on a DB without E-321, so it is joined only
+    // when it exists.
+    const hasOwnership = (
+        (await db.execute(sql`SELECT to_regclass('public.account_ownership') IS NOT NULL AS ok`)) as unknown as Array<{ ok: boolean }>
+    )[0]?.ok;
+    const onboardedBy = hasOwnership
+        ? sql`(SELECT ao.onboarded_by_user_id::text FROM account_ownership ao WHERE ao.account_id = a.id)`
+        : sql`NULL::text`;
+
     const rows = (await db.execute(sql`
         SELECT app.id::text AS id, app.company_name, app.owner_name, app.owner_phone,
                app.city, app.state, app.gst_number,
                (app.approved_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date::text AS approved_on,
-               a.id AS account_id, a.business_entity_name AS account_name
+               a.id AS account_id, a.business_entity_name AS account_name,
+               COALESCE(cr.name, cr.email, cl.name, cl.email) AS credit_name,
+               COALESCE(cl.name, cl.email) AS closer_name
           FROM dealer_onboarding_applications app
           LEFT JOIN users u ON u.id = app.dealer_user_id
           LEFT JOIN dealers d ON d.application_id = app.id::text
           LEFT JOIN accounts a ON a.id = COALESCE(u.dealer_id, d.dealer_id)
+          LEFT JOIN users cr ON cr.id::text = COALESCE(${onboardedBy}, app.salesperson_user_id::text)
+          LEFT JOIN dealer_leads dl ON dl.id::text = app.originating_dealer_lead_id::text
+          LEFT JOIN users cl ON cl.id::text = dl.closing_owner_id::text
          WHERE app.approved_at IS NOT NULL
            AND ${istRangeNaive(sql`app.approved_at`, from, to)}
          ORDER BY app.approved_at DESC
@@ -111,6 +131,7 @@ export default async function CeoNewDealersPage({
                                 <th className="px-4 py-3">Approved on</th>
                                 <th className="px-4 py-3">Dealer</th>
                                 <th className="px-4 py-3">Owner</th>
+                                <th className="px-4 py-3">Credit to</th>
                                 <th className="px-4 py-3">City</th>
                                 <th className="px-4 py-3">GSTIN</th>
                                 <th className="px-4 py-3">Account</th>
@@ -131,6 +152,12 @@ export default async function CeoNewDealersPage({
                                     <td className="px-4 py-3 text-gray-800">
                                         {r.owner_name ?? "—"}
                                         {r.owner_phone && <span className="block text-xs text-gray-500">{r.owner_phone}</span>}
+                                    </td>
+                                    <td className="px-4 py-3 text-gray-800">
+                                        {r.credit_name ?? <span className="text-gray-400">Not recorded</span>}
+                                        {r.closer_name && r.closer_name !== r.credit_name && (
+                                            <span className="block text-xs text-gray-500">Lead closed by {r.closer_name}</span>
+                                        )}
                                     </td>
                                     <td className="px-4 py-3 text-gray-700">
                                         {[r.city, r.state].filter(Boolean).join(", ") || "—"}
