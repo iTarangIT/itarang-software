@@ -22,6 +22,10 @@
  *                       (salesDashboard.ts queryInterest: interest_level
  *                       'hot', active, not Converted / Lost, IST days since
  *                       interest_changed_at)
+ *   won_undo_requests   A rep asked to undo a Mark Won (ID 134) and the Sales
+ *                       Head has not decided yet
+ *   won_undone_week     Every Mark Won undone in the last 7 days (ID 134 — the
+ *                       Sales Head's weekly view of undos)
  *
  * One function returns a tile's ROWS; the tile's count and sub-line are made
  * from those rows, so the card and the list it opens cannot disagree. Each
@@ -55,6 +59,8 @@ export const ACTION_KEYS = [
     "onboarding_stalled",
     "won_without_quote",
     "hot_aged",
+    "won_undo_requests",
+    "won_undone_week",
 ] as const;
 export type ActionKey = (typeof ACTION_KEYS)[number];
 
@@ -67,6 +73,8 @@ export const ACTION_TITLES: Record<ActionKey, string> = {
     onboarding_stalled: "Onboarding stalled",
     won_without_quote: "Won without an approved quote",
     hot_aged: "Hot leads open more than 7 days",
+    won_undo_requests: "Undo Mark Won requests waiting",
+    won_undone_week: "Won undone in the last 7 days",
 };
 
 export type Team = "all" | "field" | "inside";
@@ -337,6 +345,44 @@ async function hotAged(s: ActionScope): Promise<Built> {
     return { rows, sub: `${over30} older than 30 days` };
 }
 
+// ID 134 — Undo Mark Won. Both read lead_won_undo_requests (E-333); on a DB
+// without it the tile is null, like any tile whose source is missing.
+async function wonUndoRequests(s: ActionScope): Promise<Built> {
+    const raw = await run(sql`
+        SELECT dl.id AS lead_id, ${NAME} AS dealer, dl.city, dl.state, u.name AS owner_name, u.id::text AS owner_id,
+               rq.name AS requested_by_name, r.request_reason, ${IST_DAY(sql`r.requested_at`)} AS asked_on
+          FROM lead_won_undo_requests r
+          JOIN dealer_leads dl ON dl.id = r.dealer_lead_id
+          LEFT JOIN users u ON u.id::text = dl.current_owner_id
+          LEFT JOIN users rq ON rq.id::text = r.requested_by
+         WHERE r.status = 'pending' ${scope(s, "owner")}
+         ORDER BY r.requested_at ASC`);
+    const rows = raw.map((r) =>
+        base(r, `Asked ${String(r.asked_on)} by ${str(r.requested_by_name) ?? "the owner"} · ${String(r.request_reason)}`),
+    );
+    return { rows, sub: "Approve or refuse on the lead page" };
+}
+
+async function wonUndoneWeek(s: ActionScope): Promise<Built> {
+    const raw = await run(sql`
+        SELECT dl.id AS lead_id, ${NAME} AS dealer, dl.city, dl.state, u.name AS owner_name, u.id::text AS owner_id,
+               d.name AS decided_by_name, r.restore_status, r.request_reason, ${IST_DAY(sql`r.decided_at`)} AS undone_on
+          FROM lead_won_undo_requests r
+          JOIN dealer_leads dl ON dl.id = r.dealer_lead_id
+          LEFT JOIN users u ON u.id::text = dl.current_owner_id
+          LEFT JOIN users d ON d.id::text = r.decided_by
+         WHERE r.status = 'approved' AND r.decided_at >= NOW() - INTERVAL '7 days' ${scope(s, "owner")}
+         ORDER BY r.decided_at DESC`);
+    const rows = raw.map((r) =>
+        base(
+            r,
+            `Undone ${String(r.undone_on)} by ${str(r.decided_by_name) ?? "—"} · back to ${String(r.restore_status ?? "").replace(/_/g, " ")} · ${String(r.request_reason)}`,
+        ),
+    );
+    const people = new Set(rows.map((r) => r.owner_id ?? "")).size;
+    return { rows, sub: `${plural(people, "owner")} · not counted as Won, drop-out or Lost` };
+}
+
 const BUILDERS: Record<ActionKey, (s: ActionScope) => Promise<Built>> = {
     sales_ready: salesReady,
     hot_not_called: hotNotCalled,
@@ -346,6 +392,8 @@ const BUILDERS: Record<ActionKey, (s: ActionScope) => Promise<Built>> = {
     onboarding_stalled: onboardingStalled,
     won_without_quote: wonWithoutQuote,
     hot_aged: hotAged,
+    won_undo_requests: wonUndoRequests,
+    won_undone_week: wonUndoneWeek,
 };
 
 /** Every row behind one tile, most urgent first. */

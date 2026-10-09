@@ -300,6 +300,7 @@ export function SalesHeadOpsView() {
         actionTile("sales_ready", "Sales-ready leads with no owner", "now", "/admin/ready-to-assign"),
         actionTile("hot_not_called", "Hot leads not called in time", "now"),
         actionTile("visit_overdue", "Waiting for a field visit", "now"),
+        actionTile("won_undo_requests", "Undo Mark Won requests waiting", "now"),
         {
             key: "hot",
             ready: Boolean(d),
@@ -354,6 +355,7 @@ export function SalesHeadOpsView() {
             href: "/admin/accounts",
         },
         actionTile("won_without_quote", "Won without an approved quote", "info"),
+        actionTile("won_undone_week", "Won undone in the last 7 days", "info"),
     ];
     const openTiles = tiles.filter((t) => t.ready && t.n > 0);
     const clearTiles = tiles.filter((t) => t.ready && t.n === 0);

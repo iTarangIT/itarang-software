@@ -65,6 +65,16 @@ describe("checkStatusMove", () => {
         }
     });
 
+    it("Undo Mark Won takes Won back to an open stage only, with a reason (ID 134)", () => {
+        expect(checkStatusMove({ from: "Won", to: "Commercials_Finalised", event: "won_undone", reason: "mis-click" }).ok).toBe(true);
+        expect(checkStatusMove({ from: "Won", to: "Transferred_to_ASM", event: "won_undone", reason: "mis-click" }).ok).toBe(true);
+        expect(checkStatusMove({ from: "Won", to: "Under_Discussion", event: "won_undone" }).ok).toBe(false);
+        expect(checkStatusMove({ from: "Won", to: "Lost", event: "won_undone", reason: "mis-click" }).ok).toBe(false);
+        expect(checkStatusMove({ from: "Won", to: "Converted", event: "won_undone", reason: "mis-click" }).ok).toBe(false);
+        expect(checkStatusMove({ from: "Converted", to: "Under_Discussion", event: "won_undone", reason: "mis-click" }).ok).toBe(false);
+        expect(checkStatusMove({ from: "Lost", to: "Under_Discussion", event: "won_undone", reason: "mis-click" }).ok).toBe(false);
+    });
+
     it("only a visit ends Awaiting field visit, restoring a later stage (ID 77)", () => {
         expect(checkStatusMove({ from: "Transferred_to_ASM", to: "Under_Discussion", event: "progress" }).ok).toBe(false);
         expect(checkStatusMove({ from: "Transferred_to_ASM", to: "Under_Discussion", event: "visit" }).ok).toBe(true);
