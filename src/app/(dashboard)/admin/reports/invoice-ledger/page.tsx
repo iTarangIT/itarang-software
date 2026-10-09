@@ -1,4 +1,5 @@
 import { requireRole } from "@/lib/auth-utils";
+import { Suspense } from "react";
 import { InvoiceLedgerView } from "./InvoiceLedgerView";
 
 export const dynamic = "force-dynamic";
@@ -15,10 +16,12 @@ export default async function InvoiceLedgerPage() {
                 <p className="mt-1 text-sm text-ink-muted">
                     Import the weekly Vyapar sales register (lines, HSN, quantity, cancellations) and the
                     filed GSTR-1. Batteries sold are counted from invoice lines (HSN 8507). Void an invoice
-                    or record a payment from Sales Invoices.
+                    or record a payment from Sales Invoices; void or restore one on the Invoices tab.
                 </p>
             </header>
-            <InvoiceLedgerView />
+            <Suspense fallback={null}>
+                <InvoiceLedgerView />
+            </Suspense>
         </div>
     );
 }

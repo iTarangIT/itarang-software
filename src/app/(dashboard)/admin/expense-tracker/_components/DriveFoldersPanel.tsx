@@ -50,6 +50,8 @@ interface DriveFolder {
   include_names: string;
   exclude_names: string;
   last_scanned_at: string | null;
+  /** Sales folders only (E-322): 'sale' or 'credit_note'. */
+  doc_kind?: string;
 }
 
 /**
@@ -133,6 +135,8 @@ export interface DriveFoldersPanelConfig {
   removeTitle: string;
   includeHint: (tokens: string) => string;
   noFilterWarning: string;
+  /** ID 71 — offer "Sale invoices / Credit notes" per folder (sales panel only). */
+  docKinds?: boolean;
 }
 
 export const EXPENSE_PANEL: DriveFoldersPanelConfig = {
@@ -190,6 +194,7 @@ export const SALES_PANEL: DriveFoldersPanelConfig = {
     `Importing only what is inside folders named ${tokens}. The purchase side is read separately into expenses, so it stays out of revenue.`,
   noFilterWarning:
     "No sale filter set — every folder in this tree is imported, including supplier bills, which would book spend as revenue.",
+  docKinds: true,
 };
 
 export function DriveFoldersPanel({
@@ -199,6 +204,7 @@ export function DriveFoldersPanel({
 } = {}) {
   const qc = useQueryClient();
   const [folderInput, setFolderInput] = useState("");
+  const [newKind, setNewKind] = useState<"sale" | "credit_note">("sale");
   const [error, setError] = useState<string | null>(null);
   const [summary, setSummary] = useState<ScanSummary | null>(null);
 
@@ -237,7 +243,7 @@ export function DriveFoldersPanel({
       const r = await fetch(config.foldersEndpoint, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ folder }),
+        body: JSON.stringify(config.docKinds ? { folder, doc_kind: newKind } : { folder }),
       });
       await readJsonBody(r, "Could not add folder");
     },
@@ -250,7 +256,7 @@ export function DriveFoldersPanel({
   });
 
   const toggleFolder = useMutation({
-    mutationFn: async (vars: { id: string; is_active: boolean }) => {
+    mutationFn: async (vars: { id: string; is_active?: boolean; doc_kind?: "sale" | "credit_note" }) => {
       const r = await fetch(config.foldersEndpoint, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
@@ -360,6 +366,21 @@ export function DriveFoldersPanel({
             }}
           />
         </div>
+        {config.docKinds && (
+          <div>
+            <label className="block text-xs font-semibold text-gray-700 mb-1.5 uppercase tracking-wider">
+              It holds
+            </label>
+            <select
+              className={inputCls}
+              value={newKind}
+              onChange={(e) => setNewKind(e.target.value as "sale" | "credit_note")}
+            >
+              <option value="sale">Sale invoices</option>
+              <option value="credit_note">Credit notes</option>
+            </select>
+          </div>
+        )}
         <Button
           type="button"
           variant="outline"
@@ -416,6 +437,20 @@ export function DriveFoldersPanel({
                 )}
                 <CoverageLine coverage={coverageByFolder.get(f.id)} />
               </div>
+              {config.docKinds && (
+                <select
+                  aria-label="What this folder holds"
+                  className="rounded-lg border border-gray-200 bg-white px-2 py-1 text-xs"
+                  value={f.doc_kind === "credit_note" ? "credit_note" : "sale"}
+                  disabled={toggleFolder.isPending}
+                  onChange={(e) =>
+                    toggleFolder.mutate({ id: f.id, doc_kind: e.target.value as "sale" | "credit_note" })
+                  }
+                >
+                  <option value="sale">Sale invoices</option>
+                  <option value="credit_note">Credit notes — subtracted from revenue</option>
+                </select>
+              )}
               <button
                 type="button"
                 onClick={() => toggleFolder.mutate({ id: f.id, is_active: !f.is_active })}

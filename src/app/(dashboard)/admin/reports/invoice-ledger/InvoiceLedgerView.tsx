@@ -1,9 +1,11 @@
 "use client";
 
 // E-322 (tracker IDs 39, 71) — Invoice Ledger: Import · Item mapping ·
-// By SKU · Reconciliation. Every write goes through a preview first.
+// By SKU · Invoices · Reconciliation. Every write goes through a preview first.
+// ?tab= opens a tab directly (Revenue & costs links to Item mapping).
 
 import { useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Loader2, Upload } from "lucide-react";
@@ -11,7 +13,8 @@ import { Loader2, Upload } from "lucide-react";
 import { Tabs } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 
-type Tab = "import" | "items" | "sku" | "recon";
+const TABS = ["import", "items", "sku", "invoices", "recon"] as const;
+type Tab = (typeof TABS)[number];
 
 const inr = (n: number | null | undefined) =>
     n == null ? "—" : `₹${Number(n).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
@@ -23,7 +26,8 @@ async function readData<T>(res: Response, fallback: string): Promise<T> {
 }
 
 export function InvoiceLedgerView() {
-    const [tab, setTab] = useState<Tab>("import");
+    const asked = useSearchParams().get("tab");
+    const [tab, setTab] = useState<Tab>(() => ((TABS as readonly string[]).includes(asked ?? "") ? (asked as Tab) : "import"));
     return (
         <div className="space-y-4">
             <Tabs
@@ -33,6 +37,7 @@ export function InvoiceLedgerView() {
                     { value: "import", label: "Import" },
                     { value: "items", label: "Item mapping" },
                     { value: "sku", label: "By SKU" },
+                    { value: "invoices", label: "Invoices" },
                     { value: "recon", label: "GSTR-1 reconciliation" },
                 ]}
             />
@@ -40,6 +45,7 @@ export function InvoiceLedgerView() {
                 {tab === "import" && <ImportTab />}
                 {tab === "items" && <ItemsTab />}
                 {tab === "sku" && <SkuTab />}
+                {tab === "invoices" && <InvoicesTab />}
                 {tab === "recon" && <ReconTab />}
             </div>
         </div>
@@ -492,6 +498,158 @@ function DiffList({ title, rows }: { title: string; rows: string[][] }) {
                         </li>
                     ))}
                 </ul>
+            )}
+        </div>
+    );
+}
+
+// ── Invoices (ID 71) ────────────────────────────────────────────────────────
+// Void a cancelled invoice with a reason, or restore it — the same action and
+// audit trail as the CEO's Sales invoices page, reachable by finance and Admin.
+
+type LedgerInvoice = {
+    source: "zoho" | "drive";
+    id: string;
+    invoice_number: string | null;
+    invoice_date: string | null;
+    customer_name: string | null;
+    total: number | null;
+    status: string | null;
+    void_reason: string | null;
+    voided_at: string | null;
+};
+
+function InvoicesTab() {
+    const queryClient = useQueryClient();
+    const [month, setMonth] = useState(() => new Date(Date.now() + 5.5 * 3600_000).toISOString().slice(0, 7));
+    const [q, setQ] = useState("");
+    const [editing, setEditing] = useState<string | null>(null);
+    const [reason, setReason] = useState("");
+
+    const list = useQuery({
+        queryKey: ["ledger-invoices", month, q],
+        queryFn: async () => {
+            const p = new URLSearchParams({ month });
+            if (q.trim()) p.set("q", q.trim());
+            return readData<{ rows: LedgerInvoice[]; limit: number }>(
+                await fetch(`/api/admin/sales-invoices/ledger/invoices?${p}`),
+                "Could not load invoices",
+            );
+        },
+    });
+
+    const save = useMutation({
+        mutationFn: async (args: { row: LedgerInvoice; action: "void" | "restore" }) =>
+            readData(
+                await fetch(`/api/dashboard/ceo/invoices/${encodeURIComponent(args.row.id)}/void`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ source: args.row.source, action: args.action, reason }),
+                }),
+                "Could not update the invoice",
+            ),
+        onSuccess: (_d, args) => {
+            toast.success(args.action === "void" ? "Invoice voided — it no longer counts in revenue." : "Invoice restored.");
+            setEditing(null);
+            setReason("");
+            queryClient.invalidateQueries({ queryKey: ["ledger-invoices"] });
+        },
+        onError: (e) => toast.error((e as Error).message),
+    });
+
+    const rows = list.data?.rows ?? [];
+    return (
+        <div className="space-y-3">
+            <div className="flex flex-wrap items-end gap-3">
+                <label className="text-xs text-ink-muted">
+                    Month
+                    <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} className="mt-1 block rounded-lg border border-border px-2 py-1.5 text-sm" />
+                </label>
+                <label className="text-xs text-ink-muted">
+                    Invoice number or customer
+                    <input value={q} onChange={(e) => setQ(e.target.value)} className="mt-1 block w-64 rounded-lg border border-border px-2 py-1.5 text-sm" />
+                </label>
+                <p className="text-xs text-ink-muted">
+                    A void invoice stops counting in revenue, gross margin and By SKU everywhere. Every void and restore is logged.
+                </p>
+            </div>
+            {list.isLoading && <p className="text-sm text-ink-muted">Loading…</p>}
+            {list.isError && <p className="text-sm text-danger">{(list.error as Error).message}</p>}
+            {list.data && rows.length === 0 && <p className="text-sm text-ink-muted">No invoices in this month.</p>}
+            {rows.length > 0 && (
+                <div className="overflow-x-auto">
+                    <table className="w-full min-w-[720px] text-sm">
+                        <thead>
+                            <tr className="border-b border-border text-left text-xs text-ink-muted">
+                                <th className="py-2 pr-3">Invoice</th>
+                                <th className="py-2 pr-3">Date</th>
+                                <th className="py-2 pr-3">Customer</th>
+                                <th className="py-2 pr-3 text-right">Total</th>
+                                <th className="py-2 pr-3">Status</th>
+                                <th className="py-2" />
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {rows.map((r) => {
+                                const key = `${r.source}:${r.id}`;
+                                const isVoid = r.status === "void";
+                                return (
+                                    <tr key={key} className="border-b border-border/60 align-top">
+                                        <td className="py-2 pr-3 font-medium">
+                                            {r.invoice_number ?? "—"}
+                                            <span className="ml-1 text-[10px] uppercase text-ink-muted">{r.source === "zoho" ? "Zoho" : "Drive / Vyapar"}</span>
+                                        </td>
+                                        <td className="py-2 pr-3 tabular-nums">{r.invoice_date?.slice(0, 10) ?? "—"}</td>
+                                        <td className="py-2 pr-3">{r.customer_name ?? "—"}</td>
+                                        <td className="py-2 pr-3 text-right tabular-nums">{inr(r.total)}</td>
+                                        <td className="py-2 pr-3">
+                                            {isVoid ? (
+                                                <span className="text-rose-700" title={r.void_reason ?? ""}>
+                                                    Void{r.void_reason ? ` — ${r.void_reason}` : ""}
+                                                </span>
+                                            ) : (
+                                                <span className="text-ink-muted">{r.status ?? "—"}</span>
+                                            )}
+                                            {editing === key && (
+                                                <div className="mt-2 flex flex-wrap items-center gap-2">
+                                                    <input
+                                                        value={reason}
+                                                        onChange={(e) => setReason(e.target.value)}
+                                                        placeholder={isVoid ? "Why restore it?" : "Why is it void? e.g. cancelled in Vyapar"}
+                                                        className="w-72 max-w-full rounded-lg border border-border px-2 py-1 text-sm"
+                                                    />
+                                                    <Button
+                                                        size="sm"
+                                                        variant={isVoid ? "primary" : "danger"}
+                                                        disabled={save.isPending || reason.trim().length < 3}
+                                                        onClick={() => save.mutate({ row: r, action: isVoid ? "restore" : "void" })}
+                                                    >
+                                                        {save.isPending ? "Saving…" : isVoid ? "Restore" : "Void invoice"}
+                                                    </Button>
+                                                </div>
+                                            )}
+                                        </td>
+                                        <td className="py-2 text-right">
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    setEditing(editing === key ? null : key);
+                                                    setReason("");
+                                                }}
+                                                className="text-xs font-semibold text-rose-700 hover:underline"
+                                            >
+                                                {editing === key ? "Cancel" : isVoid ? "Restore" : "Void"}
+                                            </button>
+                                        </td>
+                                    </tr>
+                                );
+                            })}
+                        </tbody>
+                    </table>
+                    {rows.length >= (list.data?.limit ?? Infinity) && (
+                        <p className="mt-2 text-xs text-ink-muted">Showing the latest {list.data?.limit}. Search by number to find an older one.</p>
+                    )}
+                </div>
             )}
         </div>
     );

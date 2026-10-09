@@ -12,6 +12,8 @@ export const ACCOUNT_BUCKETS = [
     "dormant",
     "not_ordered_yet",
     "never_ordered",
+    // ID 5 — closed by hand ("Lost / closed dealer", E-332); never Dormant.
+    "closed",
 ] as const;
 export type AccountBucket = (typeof ACCOUNT_BUCKETS)[number];
 
@@ -23,13 +25,16 @@ export const ACCOUNT_BUCKET_LABELS: Record<AccountBucket, string> = {
     dormant: "Dormant (60+ d)",
     not_ordered_yet: "Not ordered yet (≤30 d since conversion)",
     never_ordered: "Never ordered (31+ d since conversion)",
+    closed: "Closed (lost / closed dealer)",
 };
 
 /** Pure bucket rule — the SQL below mirrors it; tested in __tests__. */
 export function accountBucket(
     daysSinceLastOrder: number | null,
     daysSinceConversion: number | null,
+    closed = false,
 ): AccountBucket {
+    if (closed) return "closed";
     if (daysSinceLastOrder == null) {
         return (daysSinceConversion ?? 0) <= 30 ? "not_ordered_yet" : "never_ordered";
     }

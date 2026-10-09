@@ -1077,6 +1077,16 @@ export const accountGstins = pgTable(
   }),
 );
 
+// E-332 (ID 5) — a dealer account closed by hand ("Lost / closed dealer"),
+// with the reason. A row = closed; delete it to reopen. accounts.status is not
+// touched. Readers go through the to_regclass probe in accountClosures.ts.
+export const accountClosures = pgTable("account_closures", {
+  account_id: varchar("account_id", { length: 255 }).primaryKey().notNull(),
+  reason: text().notNull(),
+  closed_by: uuid("closed_by"),
+  closed_at: timestamp("closed_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
 // E-321 — a person's decision about one invoice: linked to an account, or
 // "not a dealer sale". invoice_id = zoho_invoices.id / sales_invoices.id.
 export const invoiceAccountLinks = pgTable(
