@@ -11,7 +11,7 @@ import { z } from "zod";
 
 import { requireRole } from "@/lib/auth-utils";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
-import { lastDigestSend, runDigest } from "@/lib/digests/engine";
+import { digestRecipients, lastDigestSend, runDigest } from "@/lib/digests/engine";
 import { DIGEST_KINDS, digestKind } from "@/lib/digests/registry";
 import { getDigestSettings } from "@/lib/digests/settings";
 
@@ -39,6 +39,8 @@ export const GET = withErrorHandler(async () => {
     const reports = await Promise.all(
         DIGEST_KINDS.map(async (kind) => {
             const [settings, last] = await Promise.all([getDigestSettings(kind), lastDigestSend(kind.id)]);
+            // ID 10 — who it really goes to: the stored list plus the kind's audience.
+            const recipients = await digestRecipients(kind, settings);
             const slots = kind.slots ?? ["morning", "evening"];
             const times = slots.map((s) =>
                 s === "morning" ? hhmm(settings.morningHour, settings.morningMinute) : hhmm(settings.eveningHour, settings.eveningMinute),
@@ -49,7 +51,7 @@ export const GET = withErrorHandler(async () => {
                 description: kind.description,
                 enabled: settings.enabled,
                 when: `${whichDays(kind.weekdays)} at ${times.join(" and ")}`,
-                recipients: settings.recipients,
+                recipients,
                 attach_excel: settings.attachExcel,
                 last_sent_at: last?.sent_at ?? null,
                 last_sent_for: last?.digest_date ?? null,

@@ -255,6 +255,35 @@ async function countAndSend(
 }
 
 /**
+ * Who a send goes to: the stored recipients plus the kind's `audience`,
+ * de-duplicated without regard to case. An audience that fails to resolve is
+ * logged and skipped — the stored list still gets its mail.
+ */
+export async function digestRecipients(
+  kind: DigestKindDescriptor,
+  settings: DigestSettings,
+): Promise<string[]> {
+  let extra: string[] = [];
+  if (kind.audience) {
+    try {
+      extra = await kind.audience.resolve();
+    } catch (err) {
+      console.error(`[digest:${kind.id}] audience "${kind.audience.label}" failed:`, err);
+    }
+  }
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of [...settings.recipients, ...extra]) {
+    const email = raw.trim();
+    const key = email.toLowerCase();
+    if (!email || seen.has(key)) continue;
+    seen.add(key);
+    out.push(email);
+  }
+  return out;
+}
+
+/**
  * Send every slot this kind currently owes, or one named slot.
  *
  * - no `slot`      → whatever `slotsDueAt()` says is due (the ticker's call)
@@ -299,7 +328,9 @@ export async function runDigest(opts: {
 
   if (opts.slot === "test") {
     const recipients =
-      opts.toOverride && opts.toOverride.length > 0 ? opts.toOverride : settings.recipients;
+      opts.toOverride && opts.toOverride.length > 0
+        ? opts.toOverride
+        : await digestRecipients(kind, settings);
     if (recipients.length === 0) {
       return {
         ok: false,
@@ -365,7 +396,8 @@ export async function runDigest(opts: {
 
   // No recipients = inert, and the ledger must say so rather than record a
   // "sent" that went to nobody (see normalizeRecipients / defaultSettings).
-  if (settings.recipients.length === 0) {
+  const recipients = await digestRecipients(kind, settings);
+  if (recipients.length === 0) {
     return {
       ok: true,
       outcomes: [
@@ -420,7 +452,7 @@ export async function runDigest(opts: {
       target.slot,
       target.digestDate,
       opts.triggeredBy,
-      settings.recipients,
+      recipients,
     );
 
     if (id == null) {
@@ -438,7 +470,7 @@ export async function runDigest(opts: {
       kind,
       target.slot,
       target.digestDate,
-      settings.recipients,
+      recipients,
       settings,
     );
     await finishRun(id, r.ok ? "sent" : "failed", r.figures, r.messageId, r.error ?? null);
@@ -449,7 +481,7 @@ export async function runDigest(opts: {
       digestDate: target.digestDate,
       sent: r.ok,
       figures: r.figures ?? undefined,
-      recipients: settings.recipients,
+      recipients,
       error: r.error,
     });
   }

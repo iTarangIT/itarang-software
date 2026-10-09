@@ -11,9 +11,10 @@ import { toast } from "sonner";
 import { Loader2, Upload } from "lucide-react";
 
 import { Tabs } from "@/components/ui/tabs";
+import { OrderClaimsList } from "@/components/accounts/OrderClaims";
 import { Button } from "@/components/ui/button";
 
-const TABS = ["import", "items", "sku", "invoices", "recon"] as const;
+const TABS = ["import", "items", "sku", "invoices", "orders", "recon"] as const;
 type Tab = (typeof TABS)[number];
 
 const inr = (n: number | null | undefined) =>
@@ -38,6 +39,8 @@ export function InvoiceLedgerView() {
                     { value: "items", label: "Item mapping" },
                     { value: "sku", label: "By SKU" },
                     { value: "invoices", label: "Invoices" },
+                    // ID 5 (E-334) — "Order placed" with no invoice raised.
+                    { value: "orders", label: "Orders without invoice" },
                     { value: "recon", label: "GSTR-1 reconciliation" },
                 ]}
             />
@@ -46,6 +49,7 @@ export function InvoiceLedgerView() {
                 {tab === "items" && <ItemsTab />}
                 {tab === "sku" && <SkuTab />}
                 {tab === "invoices" && <InvoicesTab />}
+                {tab === "orders" && <OrderClaimsList canWithdraw={false} />}
                 {tab === "recon" && <ReconTab />}
             </div>
         </div>
