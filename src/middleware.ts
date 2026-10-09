@@ -520,6 +520,9 @@ export async function middleware(request: NextRequest) {
     // ID 91 — the shared Reports page (staffPageRoles.ts decides who).
     path === "/reports" ||
     path.startsWith("/reports/") ||
+    // ID 5 — My dealers (staffPageRoles.ts decides who).
+    path === "/my-dealers" ||
+    path.startsWith("/my-dealers/") ||
     path.startsWith("/provisions") ||
     path.startsWith("/disputes") ||
     path.startsWith("/expenses") ||

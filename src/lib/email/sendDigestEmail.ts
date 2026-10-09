@@ -74,7 +74,7 @@ const COPY: Record<
   test: { accent: MUTED, eyebrow: "Test send", period: (d) => `Sample · ${d}` },
 };
 
-function appUrl(): string {
+export function appUrl(): string {
   return (
     process.env.NEXT_PUBLIC_APP_URL ||
     process.env.APP_URL ||

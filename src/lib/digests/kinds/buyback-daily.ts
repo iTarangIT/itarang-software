@@ -69,6 +69,7 @@
 import { sql } from "drizzle-orm";
 
 import { dealerLeadByGstin, GSTIN_KEY } from "@/lib/leads/gstinMatch";
+import { isTestLogin } from "@/lib/users/testLogin";
 import { humanCall } from "@/lib/reports/metricDefinitions";
 import { monthEnd, workingDaysBetween } from "@/lib/targets/rules";
 
@@ -543,6 +544,30 @@ async function collectDetail(): Promise<{ ok: boolean; detail: DigestDetail; err
   return { ok: true, detail: {} };
 }
 
+/**
+ * ID 10 — the layout's "Buyback team, CEO", worked out at send time: every
+ * active CEO login, and everyone who owns a buyback request submitted in the
+ * last 90 days (the SPOCs — there is no separate buyback role). Added to the
+ * addresses on the settings screen, never instead of them.
+ */
+async function buybackTeamAndCeo(): Promise<string[]> {
+  const { db } = await import("@/lib/db");
+  const rows = (await db.execute(sql`
+    SELECT DISTINCT u.email
+      FROM users u
+     WHERE u.is_active = TRUE
+       AND u.email IS NOT NULL
+       AND (u.role = 'ceo'
+            OR u.id::text IN (
+                SELECT br.owner_id
+                  FROM buyback_requests br
+                 WHERE br.owner_id IS NOT NULL
+                   AND COALESCE(br.submitted_at, br.created_at) >= now() - interval '90 days'))
+     ORDER BY u.email
+  `)) as unknown as Array<{ email: string }>;
+  return rows.map((r) => r.email).filter((e) => e.includes("@") && !isTestLogin(e));
+}
+
 export const buybackDailyDigest: DigestKindDescriptor = {
   id: "buyback_daily",
   label: "Buyback Daily",
@@ -552,7 +577,8 @@ export const buybackDailyDigest: DigestKindDescriptor = {
     "₹/kg and gross margin — yesterday, last 7 days, month to date, target and the same period " +
     "last month), B · the same activity per SPOC (the request's owner), C · the open buyback " +
     "pipeline by where each request is waiting, and D · pickups for tomorrow and the day after with " +
-    "the kg expected tomorrow. Nothing is sent until recipients are added here.",
+    "the kg expected tomorrow. The buyback team (everyone who owns a buyback request from the last " +
+    "90 days) and the CEO are always included; add anyone else here.",
   settingsKey: "buyback_daily_digest",
   settingsHref: "/admin/settings/buyback-daily",
   ctaHref: "/admin/buyback/dashboard",
@@ -561,6 +587,7 @@ export const buybackDailyDigest: DigestKindDescriptor = {
   // ID 10 — the layout's "Every day, 19:00" (evening slot, default 19:00).
   slots: ["evening"],
   defaults: { enabled: false, recipients: [] },
+  audience: { label: "Buyback team and CEO", resolve: buybackTeamAndCeo },
   subject: ({ dayLabel }) => `iTarang Buyback Daily — ${dayLabel}`,
   collect,
   collectDetail,

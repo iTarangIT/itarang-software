@@ -53,9 +53,27 @@ export const DEALS_PAGE_ROLES = [
  */
 export const REPORTS_PAGE_ROLES = ["admin", "ceo", "sales_head"] as const;
 
+/**
+ * Tracker ID 5 — "My dealers": the dealer accounts the signed-in user owns,
+ * with "Order placed". Everyone an account can be owned by
+ * (ASSIGNABLE_OWNER_ROLES in api/admin/accounts/_lib.ts) plus the managers
+ * who may record an order on any account.
+ */
+export const MY_DEALERS_PAGE_ROLES = [
+  "inside_sales_rep",
+  "asm",
+  "sales_executive",
+  "sales_manager",
+  "sales_head",
+  "business_head",
+  "admin",
+  "ceo",
+] as const;
+
 /** Prefix → roles, for middleware. Matched on a whole path segment. */
 export const STAFF_PAGE_ROLES: Record<string, readonly string[]> = {
   "/reports": REPORTS_PAGE_ROLES,
+  "/my-dealers": MY_DEALERS_PAGE_ROLES,
   "/orders": ORDERS_PAGE_ROLES,
   "/provisions": PROVISIONS_PAGE_ROLES,
   "/deals": DEALS_PAGE_ROLES,

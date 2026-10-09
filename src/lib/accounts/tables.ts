@@ -54,3 +54,26 @@ export async function hasAccountClosuresTable(): Promise<boolean> {
     closuresProbedAt = now;
     return closuresPresent;
 }
+
+let claimsPresent: boolean | null = null;
+let claimsProbedAt = 0;
+
+/**
+ * E-334 (ID 5) presence probe for account_order_claims + account_reminder_log,
+ * same TTL idiom as above. Both need the E-321 accounts too.
+ */
+export async function hasOrderClaimTables(): Promise<boolean> {
+    const now = Date.now();
+    if (claimsPresent !== null && now - claimsProbedAt < PROBE_TTL_MS) return claimsPresent;
+    try {
+        const res = (await db.execute(sql`
+            SELECT to_regclass('public.account_order_claims') IS NOT NULL
+               AND to_regclass('public.account_reminder_log') IS NOT NULL AS ok
+        `)) as unknown as Array<{ ok: boolean }>;
+        claimsPresent = Boolean(res[0]?.ok) && (await hasAccountOwnershipTables());
+    } catch {
+        claimsPresent = false;
+    }
+    claimsProbedAt = now;
+    return claimsPresent;
+}

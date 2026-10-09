@@ -232,6 +232,13 @@ export type DigestKindDescriptor = {
    * not mail anyone until an admin says so sets `{ enabled: false, recipients: [] }`.
    */
   defaults?: { enabled?: boolean; recipients?: string[] };
+  /**
+   * Recipients worked out at send time and added to the stored list — people
+   * picked by role or activity ("the buyback team and the CEO"), so a new joiner
+   * is included without anyone editing the settings. Shown on the settings
+   * screen; a failure to resolve it sends to the stored list alone.
+   */
+  audience?: { label: string; resolve(): Promise<string[]> };
   /** Custom subject line. Absent = the shared "[iTarang] <label> — yesterday (…)" form. */
   subject?: (args: { istDay: string; dayLabel: string; slot: "morning" | "evening" | "test" }) => string;
   /** The figures. Must never throw — return ok:false and the send is cancelled. */

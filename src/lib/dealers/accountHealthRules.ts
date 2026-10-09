@@ -44,3 +44,48 @@ export function accountBucket(
     if (daysSinceLastOrder <= 60) return "red";
     return "dormant";
 }
+
+/**
+ * ID 5 — "Order placed" (E-334). A salesperson's claim pauses the ageing clock
+ * for this many days from the order date; an invoice dated inside the window
+ * confirms it.
+ */
+export const ORDER_CLAIM_WINDOW_DAYS = 15;
+
+export type OrderClaimStatus = "pending" | "confirmed" | "unconfirmed" | "withdrawn";
+
+export const ORDER_CLAIM_STATUS_LABELS: Record<OrderClaimStatus, string> = {
+    pending: "Order placed — awaiting invoice",
+    confirmed: "Confirmed by an invoice",
+    unconfirmed: "Order claimed, no invoice raised",
+    withdrawn: "Withdrawn",
+};
+
+/**
+ * Pure claim rule — orderClaims.ts's SQL mirrors it; tested in __tests__.
+ * `invoiced` = an invoice for the account dated within
+ * [order_date, order_date + ORDER_CLAIM_WINDOW_DAYS].
+ */
+export function orderClaimStatus(args: {
+    withdrawn: boolean;
+    invoiced: boolean;
+    daysSinceOrder: number;
+}): OrderClaimStatus {
+    if (args.withdrawn) return "withdrawn";
+    if (args.invoiced) return "confirmed";
+    return args.daysSinceOrder <= ORDER_CLAIM_WINDOW_DAYS ? "pending" : "unconfirmed";
+}
+
+/**
+ * The days the bucket is worked out from. A pending claim counts as the latest
+ * order (the paused clock); a confirmed claim's invoice is already in
+ * `daysSinceLastInvoice`; an unconfirmed or withdrawn one counts for nothing.
+ */
+export function effectiveDaysSinceOrder(
+    daysSinceLastInvoice: number | null,
+    daysSincePendingClaim: number | null,
+): number | null {
+    if (daysSincePendingClaim == null) return daysSinceLastInvoice;
+    if (daysSinceLastInvoice == null) return daysSincePendingClaim;
+    return Math.min(daysSinceLastInvoice, daysSincePendingClaim);
+}

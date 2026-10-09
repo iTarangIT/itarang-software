@@ -44,6 +44,9 @@ type Settings = {
     attachExcel: boolean;
 };
 
+/** ID 10 — recipients the digest adds at send time (role / activity based). */
+type Audience = { label: string; emails: string[]; error: string | null } | null;
+
 type RunRow = {
     id: number;
     kind: string;
@@ -108,13 +111,14 @@ export function DigestSettingsForm({ kind }: { kind: string }) {
             if (!res.ok || !json.success) {
                 throw new Error(json?.error?.message ?? "Failed to load digest settings");
             }
-            return json.data as { settings: Settings; runs: RunRow[]; kind: KindMeta };
+            return json.data as { settings: Settings; runs: RunRow[]; kind: KindMeta; audience?: Audience };
         },
     });
 
     const settings = draft ?? data?.settings ?? null;
     const runs = data?.runs ?? [];
     const meta = data?.kind ?? null;
+    const audience = data?.audience ?? null;
     const sections = meta?.sections ?? [];
 
     function patch(next: Partial<Settings>) {
@@ -273,8 +277,19 @@ export function DigestSettingsForm({ kind }: { kind: string }) {
             <div className="space-y-2">
                 <label className="block text-sm font-medium text-ink">Recipients</label>
                 <p className="text-xs text-ink-muted">
-                    Everyone here gets both emails. At most {MAX_RECIPIENTS} addresses.
+                    Everyone here gets every email this digest sends. At most {MAX_RECIPIENTS} addresses.
                 </p>
+                {audience && (
+                    <p className="rounded-lg border border-border bg-surface-subtle px-3 py-2 text-xs text-ink-muted">
+                        <span className="font-medium text-ink">Always included — {audience.label}:</span>{" "}
+                        {audience.error
+                            ? `could not be worked out just now (${audience.error}); the addresses below still get the email.`
+                            : audience.emails.length > 0
+                              ? audience.emails.join(", ")
+                              : "nobody right now."}{" "}
+                        Worked out when the email is sent, so new team members are added automatically.
+                    </p>
+                )}
                 <div className="flex flex-wrap gap-2">
                     {settings.recipients.map((email) => (
                         <span
