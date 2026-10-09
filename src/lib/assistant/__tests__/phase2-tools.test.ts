@@ -36,9 +36,13 @@ vi.mock("@/lib/inside-sales/createLead", async (orig) => ({
 }));
 // ID 81 — the Re-inquiry writer and the campaign register (both hit the DB).
 const recordReinquiry = vi.fn<(...a: unknown[]) => Promise<void>>(async () => {});
+const writeReinquiry = vi.fn<(...a: unknown[]) => Promise<void>>(async () => {});
+const notifyReinquiry = vi.fn<(...a: unknown[]) => Promise<void>>(async () => {});
 vi.mock("@/lib/leads/leadSource", async (orig) => ({
     ...(await orig<typeof import("@/lib/leads/leadSource")>()),
     recordReinquiry,
+    writeReinquiry,
+    notifyReinquiry,
 }));
 const findCampaignByName = vi.fn<(...a: unknown[]) => Promise<{ id: string; name: string } | null>>(async () => null);
 const listCampaigns = vi.fn<(...a: unknown[]) => Promise<{ name: string }[]>>(async () => []);
@@ -55,7 +59,7 @@ const { ReassignError } = await import("@/lib/leads/reassign");
 const { DuplicatePhoneError } = await import("@/lib/inside-sales/createLead");
 const { matchPeople } = await import("../tools/write/people");
 const { tenDigitPhone } = await import("../tools/write/createLead");
-const { renderTapOutcome } = await import("@/lib/wa-assistant/render");
+const { renderPreview, renderTapOutcome } = await import("@/lib/wa-assistant/render");
 import type { AssistantUser, Preview, ToolContext } from "../types";
 
 const ISR: AssistantUser = { id: "isr-1", name: "Priya", role: "inside_sales_rep" };
@@ -307,22 +311,44 @@ describe("create_lead", () => {
         });
     });
 
-    it("an existing phone → declined; the lead is named only if the user can see it", async () => {
+    it("ID 137: an existing phone → asks Yes / No first; nothing is recorded or alerted yet", async () => {
         findLeadIdByPhone.mockResolvedValue("DL-99");
         findLeadInScope.mockResolvedValue(null);
+        execute.mockResolvedValueOnce([{ dealer: "ABC Traders", owner_name: "Priya" }] as never);
         const hidden = await run(ISR, "create_lead", { dealer_name: "Suresh", phone: "9876543210" });
-        expect(hidden).toEqual({ kind: "declined", reason: "A lead with this number already exists.", crm_url: null });
+        expect(hidden).toMatchObject({ kind: "preview", action_id: "act-1" });
+        expect(stored().tool).toBe("record_reinquiry");
+        expect(stored().leadId).toBe("DL-99");
+        expect(stored().plan).toEqual({ lead_id: "DL-99", note: "Suresh" });
+        expect(stored().preview.title).toBe("Already in CRM, with Priya. Did the dealer contact us again?");
+        expect(stored().preview.answers).toEqual({ confirm: "Yes", cancel: "No" });
+        // The dealer is named only when the rep can see the lead (Invariant 1).
+        expect(JSON.stringify(stored().preview.lines)).not.toMatch(/ABC Traders/);
+        expect(recordReinquiry).not.toHaveBeenCalled();
+        expect(writeReinquiry).not.toHaveBeenCalled();
+        expect(notifyReinquiry).not.toHaveBeenCalled();
+
         findLeadInScope.mockResolvedValue(lead({ id: "DL-99" }));
-        const seen = await run(ISR, "create_lead", { dealer_name: "Suresh", phone: "9876543210" });
-        expect((seen as { reason: string }).reason).toMatch(/ABC Traders/);
-        expect(createPending).not.toHaveBeenCalled();
-        // ID 81: adding a dealer we already hold is a Re-inquiry on that lead.
-        expect(recordReinquiry).toHaveBeenCalledWith({
-            leadId: "DL-99",
-            door: "whatsapp_assistant",
-            actorId: ISR.id,
-            note: "Suresh",
-        });
+        execute.mockResolvedValueOnce([{ dealer: "ABC Traders", owner_name: null }] as never);
+        await run(ISR, "create_lead", { dealer_name: "Suresh", phone: "9876543210" });
+        expect(stored().preview.title).toBe("Already in CRM, with no owner. Did the dealer contact us again?");
+        expect(JSON.stringify(stored().preview.lines)).toMatch(/ABC Traders/);
+    });
+
+    it("ID 137 applier: Yes writes the Re-inquiry on the tx and alerts only after commit", async () => {
+        const plan = APPLIERS.record_reinquiry.schema.parse({ lead_id: "DL-99", note: "Suresh" });
+        const out = await APPLIERS.record_reinquiry.apply({ tx: TX, user: ISR, step: 1 }, plan);
+        const input = { leadId: "DL-99", door: "whatsapp_assistant", actorId: ISR.id, note: "Suresh" };
+        expect(writeReinquiry).toHaveBeenCalledWith(input, { tx: TX });
+        expect(notifyReinquiry).not.toHaveBeenCalled();
+        await out.afterCommit!();
+        expect(notifyReinquiry).toHaveBeenCalledWith(input);
+        // A returning dealer is usually on someone else's lead.
+        expect(APPLIERS.record_reinquiry.ownership).toBe("none");
+    });
+
+    it("ID 137: record_reinquiry is never offered to the model", () => {
+        for (const u of [ISR, ASM]) expect(toolsFor(u.role, true).some((t) => t.name === "record_reinquiry")).toBe(false);
     });
 
     it("ID 81: a Trade event / Digital ad lead needs a campaign that exists", async () => {
@@ -386,6 +412,26 @@ describe("confirmed replies", () => {
         const p = confirmed("mark_converted");
         expect(p).toMatchObject({ kind: "buttons", buttons: [{ id: "ast:inv:DL-7", title: "Send invite" }] });
         expect(p.kind === "buttons" && p.actionId).toBeFalsy();
+    });
+
+    it("ID 137: a Re-inquiry card answers Yes / No, without Edit, and Yes reads as recorded", () => {
+        const preview: Preview = {
+            title: "Already in CRM, with Priya. Did the dealer contact us again?",
+            lines: [],
+            resets_idle_clock: false,
+            warning: null,
+            needs_second_confirm: false,
+            crm_url: "https://crm/q",
+            answers: { confirm: "Yes", cancel: "No" },
+        };
+        expect(renderPreview(preview, "a-1")).toMatchObject({
+            kind: "buttons",
+            buttons: [
+                { id: "ast:c:a-1", title: "Yes" },
+                { id: "ast:x:a-1", title: "No" },
+            ],
+        });
+        expect(confirmed("record_reinquiry").body).toMatch(/Re-inquiry recorded/);
     });
 
     it("the invite reports whether it went out", () => {
