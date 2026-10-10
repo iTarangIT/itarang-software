@@ -1,7 +1,7 @@
 "use client";
 
 // The left menu of the CRM Reporting & Dashboards redesign, for the CEO and
-// the Sales Head: text-only rows under a fixed HOME group and collapsible
+// for Admin and the Sales Head (one shared menu, ID 90): text-only rows under a fixed HOME group and collapsible
 // groups whose folded header says what is inside (page count, summed queue
 // count, NEW).
 //
@@ -35,14 +35,15 @@ type Ref =
     | string
     /** An existing item, relabelled or flagged. */
     | ({ id: string } & Flags)
-    /** A new folder made of existing items. */
-    | ({ node: string; children: Array<string | ({ id: string } & Flags)> } & Flags)
+    /** A new folder made of existing items (or pages with no menu entry). */
+    | ({ node: string; children: Array<string | ({ id: string } & Flags) | AddRef> } & Flags)
     /** The children of an existing folder, laid out as rows of the group. */
     | { spread: string }
     /** Everything still unplaced from one of the role's original sections. */
     | { section: string }
     /** A page that exists but had no menu entry. */
-    | { add: string; label: string; href: string; isNew?: boolean };
+    | AddRef;
+type AddRef = { add: string; label: string; href: string; isNew?: boolean };
 
 type LayoutGroup = { section: string; fixed?: boolean; defaultOpen?: boolean; items: Ref[] };
 type Layout = { roleLabel: string; hide?: string[]; groups: LayoutGroup[] };
@@ -67,9 +68,204 @@ const NEODOVE: Ref = {
     children: ["neodove-campaigns", "neodove-activity", "neodove-reconcile"],
 };
 
+/**
+ * Tracker ID 90 — ONE menu for Admin and Sales Head ("Admin and Sales Head see
+ * the same", 29 Sep). The two roles' source menus in sidebar.tsx still use
+ * their own id prefixes (`sh-…` / `admin-…`) because badges, test ids and a
+ * few hrefs key on them, so every row below names both spellings: leaf() skips
+ * an id the role does not have. That is also how admin-only pages (Invoice
+ * Ledger, OEM prices) appear for Admin only, and Sales-Head-only ones
+ * (Approvals, NBFC, Ecofy, E-commerce) for the Sales Head only — access is
+ * still decided by sidebar.tsx's role menus and the route gates, never here.
+ *
+ * Trimmed by folding, not removing: every page either role could reach before
+ * is still a row, a row inside a folder, or (if this layout forgot it) in the
+ * trailing MORE group. Menu search covers the folded rows too.
+ */
+const both = (suffix: string) => [`sh-${suffix}`, `admin-${suffix}`];
+const bothAs = (suffix: string, flags: Flags) => both(suffix).map((id) => ({ id, ...flags }));
+
+const ADMIN_SALES_HEAD_GROUPS: LayoutGroup[] = [
+    { section: "HOME", fixed: true, items: [{ id: "dashboard", label: "Sales dashboard" }, "sh-ai-analyst"] },
+    {
+        section: "WORK QUEUES",
+        defaultOpen: true,
+        items: [
+            { id: "approvals", label: "Approvals", urgent: true },
+            { node: "Reviews", urgent: true, children: ["kyc-review", "dealer-validation", "product-review"] },
+            ...both("escalations"),
+            ...both("ready-to-assign"),
+            ...both("needs-attention"),
+            {
+                node: "Lead clean-up",
+                children: [
+                    ...both("merge-requests"),
+                    ...both("number-repair"),
+                    ...bothAs("onboarding-dropouts", { label: "Onboarding drop-outs" }),
+                ],
+            },
+        ],
+    },
+    {
+        section: "SALES",
+        defaultOpen: true,
+        items: [
+            ...bothAs("leads", { label: "Leads" }),
+            "deals",
+            ...both("targets"),
+            {
+                node: "Lead sourcing",
+                children: [
+                    ...both("lead-upload"),
+                    "sh-ai-campaigns",
+                    ...both("ai-intent"),
+                    ...both("acquisition-campaigns"),
+                    { id: "neodove-campaigns", label: "NeoDove campaigns" },
+                    { id: "neodove-activity", label: "NeoDove sync activity" },
+                    { id: "neodove-reconcile", label: "NeoDove reconcile" },
+                ],
+            },
+        ],
+    },
+    {
+        section: "DEALERS",
+        items: [
+            {
+                node: "Account management",
+                children: [
+                    { id: "sh-account-management", label: "Accounts" },
+                    { id: "admin-accounts", label: "Accounts" },
+                    ...both("dealer-health"),
+                ],
+            },
+            {
+                node: "WhatsApp",
+                children: [
+                    ...bothAs("whatsapp-onboarding", { label: "Onboarding" }),
+                    ...bothAs("whatsapp-screenshots", { label: "Screenshots" }),
+                ],
+            },
+        ],
+    },
+    {
+        section: "BATTERY FINANCE",
+        items: [
+            {
+                node: "NBFC",
+                children: [
+                    { id: "nbfc-directory", label: "Directory" },
+                    "nbfc-onboard",
+                    "nbfc-my-drafts",
+                    { id: "nbfc-risk-cards", label: "Risk cards" },
+                ],
+            },
+            { id: "loan-products", label: "Loan products" },
+            {
+                node: "Loan calculator",
+                children: [
+                    ...bothAs("calculator", { label: "Calculator" }),
+                    ...bothAs("calculator-history", { label: "Search history" }),
+                ],
+            },
+        ],
+    },
+    {
+        section: "BATTERY LIFECYCLE",
+        items: [
+            BUYBACK,
+            {
+                node: "Auction",
+                children: [
+                    { id: "nbfc-auction-control", label: "Control" },
+                    { id: "nbfc-auction-analytics", label: "Performance" },
+                ],
+            },
+            {
+                node: "Refurbishment",
+                children: [
+                    { id: "nbfc-refurb-desk", label: "Jobs" },
+                    { id: "nbfc-refurbishers", label: "Refurbishers" },
+                ],
+            },
+            { id: "nbfc-scrap-desk", label: "NBFC scrap purchase" },
+        ],
+    },
+    {
+        section: "PRODUCTS & STOCK",
+        items: [
+            { id: "admin-product-master", label: "Product master" },
+            { id: "admin-oem-pricing", label: "OEM prices" },
+            {
+                node: "Inventory",
+                children: [
+                    { id: "admin-inventory", label: "Stock" },
+                    "admin-inventory-ageing",
+                    "admin-inventory-transfer",
+                    "admin-inventory-add",
+                    "admin-inventory-upload",
+                ],
+            },
+            { id: "sh-ecommerce-products", label: "E-commerce products" },
+        ],
+    },
+    {
+        section: "MONEY",
+        items: [
+            ...bothAs("ai-expense-tracker", { label: "Expense tracker" }),
+            "admin-invoice-ledger",
+            "submit-expense",
+        ],
+    },
+    // One line, "Ecofy", that opens its pages (spec: "Ecofy collapsed").
+    { section: "ECOFY", items: ["sh-ecofy"] },
+    {
+        section: "REPORTS",
+        items: [
+            ...bothAs("reports", { isNew: true }),
+            {
+                node: "Downloads & email reports",
+                isNew: true,
+                children: [...both("data-downloads"), ...both("scheduled-emails"), ...both("report-catalogue")],
+            },
+        ],
+    },
+    {
+        section: "SETTINGS",
+        items: [
+            { id: "sh-settings", label: "Notifications" },
+            { id: "admin-settings", label: "Notifications" },
+            // ID 155 — a tab on the settings page, given its own row.
+            { add: "reporting-lines", label: "Reporting lines", href: "/admin/settings?tab=reporting-lines", isNew: true },
+            ...both("kyc-automation"),
+            {
+                node: "Email reports",
+                children: [
+                    ...both("sales-daily-digest"),
+                    ...both("buyback-daily-digest"),
+                    ...both("dealer-validation-digest"),
+                    ...both("kyc-review-digest"),
+                    ...both("scrap-buyback-digest"),
+                    ...both("idle-weekly-digest"),
+                    ...both("targets-pending-digest"),
+                ],
+            },
+            ...both("loan-product-defaults"),
+            ...both("nbfc-settings"),
+            ...both("whatsapp-settings"),
+            ...both("gdrive-mirror"),
+            // Anything else the Sales Head's Settings section gains later.
+            { section: "Settings" },
+        ],
+    },
+];
+
 export const NAV_LAYOUTS: Record<string, Layout> = {
     ceo: {
         roleLabel: "CEO",
+        // ID 88 — /admin is the Sales dashboard now, the same screen as the
+        // "Sales dashboard" row; the old Operations Dashboard is off the menu
+        // (still at /admin/ops-dashboard, linked from Reports).
+        hide: ["ceo-admin-dashboard"],
         groups: [
             { section: "HOME", fixed: true, items: [{ id: "dashboard", label: "Overview" }, "ceo-ai-analyst"] },
             {
@@ -87,8 +283,11 @@ export const NAV_LAYOUTS: Record<string, Layout> = {
                 defaultOpen: true,
                 items: [
                     { id: "revenue-costs", label: "Revenue & costs" },
-                    { id: "sales-invoices", label: "Sales invoices" },
-                    { id: "ceo-accounts", label: "Accounts" },
+                    { node: "Invoices", children: [{ id: "sales-invoices", label: "Sales invoices" }, "ceo-invoice-ledger"] },
+                    {
+                        node: "Account management",
+                        children: [{ id: "ceo-accounts", label: "Accounts" }, "ceo-dealer-health"],
+                    },
                     "ceo-targets",
                     "deals",
                 ],
@@ -96,18 +295,24 @@ export const NAV_LAYOUTS: Record<string, Layout> = {
             {
                 section: "TEAM",
                 items: [
-                    { id: "ceo-sales-dashboard", label: "Sales Head dashboard" },
+                    { id: "ceo-sales-dashboard", label: "Sales dashboard" },
                     "leads",
                     "ceo-escalations",
                     { node: "Review queues", children: ["kyc-review", "product-review", "dealer-validation"] },
-                    NEODOVE,
-                    { add: "ceo-ai-dialer", label: "AI dialler", href: "/ceo/ai-dialer" },
-                    "ceo-ready-to-assign",
-                    "ceo-needs-attention",
-                    "ceo-number-repair",
-                    "ceo-dealer-health",
-                    "ceo-whatsapp-screenshots",
-                    "ceo-acquisition-campaigns",
+                    {
+                        node: "Lead queues",
+                        children: ["ceo-ready-to-assign", "ceo-needs-attention", "ceo-number-repair", "ceo-whatsapp-screenshots"],
+                    },
+                    {
+                        node: "Lead sourcing",
+                        children: [
+                            "ceo-acquisition-campaigns",
+                            { add: "ceo-ai-dialer", label: "AI dialler", href: "/ceo/ai-dialer" },
+                            { id: "neodove-campaigns", label: "NeoDove campaigns" },
+                            { id: "neodove-activity", label: "NeoDove sync activity" },
+                            { id: "neodove-reconcile", label: "NeoDove reconcile" },
+                        ],
+                    },
                 ],
             },
             {
@@ -127,111 +332,34 @@ export const NAV_LAYOUTS: Record<string, Layout> = {
                     { id: "inventory-reports", label: "Inventory" },
                 ],
             },
-            { section: "ECOFY", items: [{ spread: "sh-ecofy" }] },
+            { section: "ECOFY", items: ["sh-ecofy"] },
             {
                 section: "REPORTS",
                 // ID 91 — the redesign board's REPORTS group.
                 items: [
                     { id: "ceo-reports", isNew: true },
-                    { id: "ceo-data-downloads", isNew: true },
-                    { id: "ceo-scheduled-emails", isNew: true },
-                    "ceo-report-catalogue",
-                    { id: "ceo-admin-dashboard", label: "Ops dashboard" },
-                    "ceo-news",
+                    {
+                        node: "Downloads & email reports",
+                        isNew: true,
+                        children: ["ceo-data-downloads", "ceo-scheduled-emails", "ceo-report-catalogue"],
+                    },
                 ],
             },
+            { section: "MORE", items: ["ceo-news", "feature-requests", "submit-expense"] },
         ],
     },
+    // ID 88 — every "Sales dashboard" entry is the one screen (SalesHeadOpsView)
+    // at /sales-head, /admin and /admin/reports/sales-dashboard: the HOME row
+    // stays, the duplicates (and the retired Ops Dashboard row) are hidden.
     sales_head: {
         roleLabel: "Sales Head",
-        // The same screen as the Dashboard row since the redesign.
-        hide: ["sh-sales-dashboard"],
-        groups: [
-            { section: "HOME", fixed: true, items: ["dashboard", "sh-ai-analyst"] },
-            {
-                section: "WORK QUEUES",
-                defaultOpen: true,
-                items: [
-                    { id: "approvals", label: "Approvals", urgent: true },
-                    { node: "Reviews", urgent: true, children: ["kyc-review", "dealer-validation", "product-review"] },
-                    "sh-escalations",
-                    "sh-merge-requests",
-                    { id: "sh-onboarding-dropouts", label: "Onboarding drop-outs" },
-                    "sh-ready-to-assign",
-                    "sh-needs-attention",
-                    "sh-number-repair",
-                ],
-            },
-            { section: "SALES", defaultOpen: true, items: [{ id: "sh-leads", label: "Leads" }, "deals", "sh-targets"] },
-            {
-                section: "LEAD SOURCING",
-                items: ["sh-lead-upload", "sh-ai-campaigns", "sh-ai-intent", "sh-acquisition-campaigns", NEODOVE],
-            },
-            {
-                section: "DEALERS",
-                items: [
-                    { id: "sh-account-management", label: "Account management" },
-                    "sh-dealer-health",
-                    { id: "sh-whatsapp-onboarding", label: "WhatsApp onboarding" },
-                    "sh-whatsapp-screenshots",
-                ],
-            },
-            {
-                section: "BATTERY FINANCE",
-                items: [
-                    { id: "nbfc-directory", label: "NBFC directory" },
-                    "nbfc-onboard",
-                    "nbfc-my-drafts",
-                    { id: "loan-products", label: "Loan products" },
-                    { id: "nbfc-risk-cards", label: "Risk cards" },
-                    { id: "sh-calculator", label: "Loan calculator" },
-                    "sh-calculator-history",
-                ],
-            },
-            {
-                section: "BATTERY LIFECYCLE",
-                items: [
-                    BUYBACK,
-                    {
-                        node: "Auction",
-                        children: [
-                            { id: "nbfc-auction-control", label: "Control" },
-                            { id: "nbfc-auction-analytics", label: "Performance" },
-                        ],
-                    },
-                    {
-                        node: "Refurbishment",
-                        children: [
-                            { id: "nbfc-refurb-desk", label: "Jobs" },
-                            { id: "nbfc-refurbishers", label: "Refurbishers" },
-                        ],
-                    },
-                    { id: "nbfc-scrap-desk", label: "NBFC scrap purchase" },
-                ],
-            },
-            {
-                section: "PRODUCTS & STOCK",
-                items: [
-                    { id: "admin-product-master", label: "Product master" },
-                    { id: "admin-inventory", label: "Inventory" },
-                    { section: "INVENTORY" },
-                    { id: "sh-ecommerce-products", label: "E-commerce products" },
-                ],
-            },
-            { section: "MONEY", items: [{ id: "sh-ai-expense-tracker", label: "Expense tracker" }, "submit-expense"] },
-            { section: "ECOFY", items: [{ spread: "sh-ecofy" }] },
-            {
-                section: "REPORTS",
-                items: [
-                    { id: "sh-reports", isNew: true },
-                    { id: "sh-data-downloads", isNew: true },
-                    { id: "sh-scheduled-emails", isNew: true },
-                    "sh-report-catalogue",
-                    { id: "sh-admin-dashboard", label: "Ops dashboard" },
-                ],
-            },
-            { section: "SETTINGS", items: [{ section: "Settings" }] },
-        ],
+        hide: ["sh-sales-dashboard", "sh-admin-dashboard"],
+        groups: ADMIN_SALES_HEAD_GROUPS,
+    },
+    admin: {
+        roleLabel: "Admin",
+        hide: ["admin-sales-dashboard"],
+        groups: ADMIN_SALES_HEAD_GROUPS,
     },
 };
 
@@ -279,7 +407,11 @@ export function applyNavLayout(layout: Layout, source: SourceGroup[]): RedesignG
                 const item = leaf(ref);
                 if (item) items.push(item);
             } else if ("node" in ref) {
-                const children = ref.children.map(leaf).filter((c): c is RedesignItem => c !== null);
+                const children = ref.children
+                    .map((c): RedesignItem | null =>
+                        typeof c !== "string" && "add" in c ? { id: c.add, label: c.label, href: c.href, isNew: c.isNew } : leaf(c),
+                    )
+                    .filter((c): c is RedesignItem => c !== null);
                 if (children.length) {
                     items.push({
                         id: `node-${ref.node.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
@@ -312,7 +444,12 @@ export function applyNavLayout(layout: Layout, source: SourceGroup[]): RedesignG
             if (placed) rest.push(placed);
         }
     }
-    if (rest.length) groups.push({ section: "MORE", items: rest });
+    if (rest.length) {
+        // A layout may name its own MORE group; the leftovers join it.
+        const more = groups.find((g) => g.section === "MORE");
+        if (more) more.items.push(...rest);
+        else groups.push({ section: "MORE", items: rest });
+    }
     return groups;
 }
 

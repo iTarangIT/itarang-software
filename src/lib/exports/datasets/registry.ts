@@ -7,6 +7,7 @@ import { sql, type SQL } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import { listAccounts } from "@/lib/accounts/accountList";
+import { hasAccountOwnershipTables } from "@/lib/accounts/tables";
 import { countLeadsForExport, fetchLeadsForExport } from "@/lib/admin/leadsExport";
 import { BUYBACK_ADMIN_ROLES } from "@/lib/buyback/roles";
 import { matchedUnion, REVENUE_NOT_VOID, REVENUE_OUTSTANDING } from "@/lib/dashboard/revenueSource";
@@ -15,6 +16,7 @@ import { INVENTORY_STATUSES } from "@/lib/inventory/status";
 import { capabilitiesFor } from "@/lib/leads/access";
 import { businessTypeLabel } from "@/lib/leads/businessType";
 import { countEvents, fetchEvents, type EventLogFilters } from "@/lib/leads/eventLog";
+import { LEAD_EVENT_TYPES, parseEventTypes } from "@/lib/leads/eventTypes";
 import { parseLeadListFilters } from "@/lib/leads/leadListParams";
 import { doorLabel, originLabel } from "@/lib/leads/leadSourceVocab";
 import { onboardingStall, STALL_LABEL } from "@/lib/onboarding/stall";
@@ -543,7 +545,10 @@ const loanFrom = sql`
       ) ls ON TRUE
       LEFT JOIN nbfc_tenants nt ON nt.id = ls.nbfc_id
       LEFT JOIN accounts a ON a.id = l.dealer_id
-      LEFT JOIN users ow ON ow.id = a.account_owner_id
+      -- ID 146: the one owner model (E-321 account_ownership). accounts.account_owner_id
+      -- was the retired second build (E-322_account_owner_model, db-1 only).
+      LEFT JOIN account_ownership aown ON aown.account_id = a.id
+      LEFT JOIN users ow ON ow.id = aown.owner_user_id
 `;
 
 function loanWhere(ctx: RunContext): SQL {
@@ -557,7 +562,7 @@ function loanWhere(ctx: RunContext): SQL {
     if (status) conds.push(sql`lower(ls.status) = ${status.toLowerCase()}`);
     const nbfc = ctx.params.get("nbfc");
     if (nbfc) conds.push(sql`ls.nbfc_id::text = ${nbfc}`);
-    conds.push(...commonConds(ctx, { person: sql`a.account_owner_id` }));
+    conds.push(...commonConds(ctx, { person: sql`aown.owner_user_id` }));
     return sql.join(conds, sql` AND `);
 }
 
@@ -721,6 +726,8 @@ const dealerAccounts: Dataset = {
 async function eventFilters(ctx: RunContext): Promise<EventLogFilters> {
     const { params } = ctx;
     const performerId = personParam(ctx) ?? undefined;
+    // ID 34 — "call,visit"; nothing ticked (or all) = every event type.
+    const eventTypes = parseEventTypes(params.get("event_type"));
     const from = params.get("from");
     const to = params.get("to");
     const okFrom = from && ISO_DATE.test(from) ? from : null;
@@ -728,18 +735,21 @@ async function eventFilters(ctx: RunContext): Promise<EventLogFilters> {
     const [d] = await rows<{ first: string; today: string }>(sql`
         SELECT date_trunc('month', now() AT TIME ZONE 'Asia/Kolkata')::date::text AS first, ${IST_TODAY}::text AS today
     `);
-    if (!okFrom && !okTo) return { from: d.first, to: d.today, performerId };
-    return { from: okFrom ?? "2000-01-01", to: okTo ?? d.today, performerId };
+    if (!okFrom && !okTo) return { from: d.first, to: d.today, performerId, eventTypes };
+    return { from: okFrom ?? "2000-01-01", to: okTo ?? d.today, performerId, eventTypes };
 }
 
 const leadEvents: Dataset = {
     id: "lead_events",
     label: "Lead events",
-    description: "The event log: one row per thing that happened to a lead — status, owner and interest changes, calls, visits, quotes, escalations, field edits.",
+    description: "The event log: one row per thing that happened to a lead — created, re-inquiry, sales-ready, status, owner, interest and contactability changes, calls, visits, quotes, escalations, field edits. The date range is the date of the event, not of the lead.",
     roles: MANAGERS,
     dateFields: [{ value: "event", label: "Event time" }],
     commonFilters: ["person"],
-    filters: [],
+    // ID 34 — pick the event types here instead of filtering in Excel.
+    filters: [
+        { key: "event_type", label: "Event type", type: "multiselect", options: LEAD_EVENT_TYPES.map((t) => ({ value: t.value, label: t.label })) },
+    ],
     sheets: [
         {
             name: "Lead events",
@@ -750,10 +760,10 @@ const leadEvents: Dataset = {
                 { key: "city", header: "City", meaning: "Lead's city." },
                 { key: "state", header: "State", meaning: "Lead's state." },
                 { key: "business_type", header: "Type of business", meaning: "Battery sale, buyback, scrap or other." },
-                { key: "event_type", header: "Event type", meaning: "Status change, Owner change, Interest change, Call, Visit, Quote requested / approved / rejected / sent / send failed, Escalation, Log detail change.", width: 22 },
+                { key: "event_type", header: "Event type", meaning: `One of: ${LEAD_EVENT_TYPES.map((t) => t.label).join(", ")}.`, width: 22 },
                 { key: "from_value", header: "From", meaning: "The value before the change, when the event is a change.", width: 22 },
-                { key: "to_value", header: "To", meaning: "The value after the change.", width: 26 },
-                { key: "performed_by", header: "Done by", meaning: "Who did it. Blank = not recorded.", width: 20 },
+                { key: "to_value", header: "To", meaning: "The value after the change. Lead created: how it came in. Sales-ready: the reason. Contactability change: dead number, non-responsive or cleared.", width: 26 },
+                { key: "performed_by", header: "Done by", meaning: "Who did it. Blank = the system, or not recorded.", width: 20 },
                 { key: "role", header: "Role", meaning: "That person's role today." },
                 { key: "channel", header: "Channel", meaning: "For calls and messages: where it came from." },
                 { key: "outcome", header: "Outcome", meaning: "Call or visit outcome, or the lost reason on a status change.", width: 24 },
@@ -973,6 +983,17 @@ const visits: Dataset = {
 
 // ────────────────────────────────── Quotes ──────────────────────────────────
 
+/**
+ * ID 146 — one quote line's frozen list price (`pl` = a product_lines element
+ * of `c`): the line's own list_price, else the retired list_price_snapshot
+ * (read through to_jsonb, so a database without that column reads null).
+ */
+const QUOTE_LINE_LIST_PRICE = sql`COALESCE(
+    ${jnum(sql`pl ->> 'list_price'`)},
+    (SELECT ${jnum(sql`lp ->> 'list_price'`)}
+       FROM jsonb_array_elements(${jarr(sql`(to_jsonb(c) -> 'list_price_snapshot') -> 'lines'`)}) lp
+      WHERE lp ->> 'product_id' = pl ->> 'product_id' LIMIT 1))`;
+
 const quoteFrom = sql`
       FROM dealer_lead_commercials c
       LEFT JOIN dealer_leads dl ON dl.id = c.dealer_lead_id
@@ -983,12 +1004,16 @@ const quoteFrom = sql`
             FROM quotation_dispatches x WHERE x.commercial_id = c.commercial_id AND x.status = 'sent'
       ) qd ON TRUE
       LEFT JOIN LATERAL (
-          SELECT SUM(${jnum(sql`lpx.lp ->> 'list_price'`)} * ${jnum(sql`pl ->> 'quantity'`)}) AS list_total,
-                 SUM(${jnum(sql`pl ->> 'unit_price'`)} * ${jnum(sql`pl ->> 'quantity'`)}) AS quoted_total
+          -- ID 146: the list price is frozen on each quote line
+          -- (product_lines[].list_price, listPrices.ts snapshotListPrices, E-321).
+          -- The retired second build's list_price_snapshot column is only a
+          -- fallback for the few db-1 rows it wrote on 3-5 Oct; nothing fills
+          -- it now, which is why List price / Discount came out blank.
+          -- Discount compares only the lines that carry a list price.
+          SELECT SUM(${QUOTE_LINE_LIST_PRICE} * ${jnum(sql`pl ->> 'quantity'`)}) AS list_total,
+                 SUM(${jnum(sql`pl ->> 'unit_price'`)} * ${jnum(sql`pl ->> 'quantity'`)})
+                     FILTER (WHERE ${QUOTE_LINE_LIST_PRICE} IS NOT NULL) AS quoted_listed_total
             FROM jsonb_array_elements(${jarr(sql`c.product_lines`)}) pl
-            LEFT JOIN LATERAL (
-                SELECT lp FROM jsonb_array_elements(${jarr(sql`(to_jsonb(c) -> 'list_price_snapshot') -> 'lines'`)}) lp
-                 WHERE lp ->> 'product_id' = pl ->> 'product_id' LIMIT 1) lpx ON TRUE
       ) lt ON TRUE
       LEFT JOIN LATERAL (
           SELECT MIN(${jnum(sql`ol ->> 'delta'`)}) AS min_delta
@@ -1051,7 +1076,7 @@ const quotes: Dataset = {
                 { key: "gst", header: "GST (₹)", meaning: "Total with GST minus the amount before GST, from the generated quotation.", kind: "money" },
                 { key: "total_with_gst", header: "Total with GST (₹)", meaning: "From the generated quotation.", kind: "money" },
                 { key: "list_total", header: "List price total (₹)", meaning: "Quantity × list price over the lines, at the list prices frozen on the quote. Blank on quotes raised before list prices existed.", kind: "money" },
-                { key: "discount", header: "Discount on list (₹)", meaning: "List price total minus the quoted total over the lines.", kind: "money" },
+                { key: "discount", header: "Discount on list (₹)", meaning: "List price total minus the quoted total, over the lines that carry a list price.", kind: "money" },
                 { key: "lowest_vs_oem", header: "Lowest line vs OEM price (₹)", meaning: "The smallest gap between a line's quoted unit price and its OEM price; negative = quoted below OEM price.", kind: "money" },
                 { key: "credit_terms", header: "Credit terms", meaning: "Credit terms written on the quote.", width: 24 },
                 { key: "payment_method", header: "Payment method", meaning: "Payment method on the quote." },
@@ -1099,8 +1124,8 @@ const quotes: Dataset = {
                        ${jnum(sql`c.quote_snapshot ->> 'subTotal'`)} AS sub_total,
                        ${jnum(sql`c.quote_snapshot ->> 'total'`)} - ${jnum(sql`c.quote_snapshot ->> 'subTotal'`)} AS gst,
                        ${jnum(sql`c.quote_snapshot ->> 'total'`)} AS total_with_gst,
-                       CASE WHEN (to_jsonb(c) -> 'list_price_snapshot') IS NOT NULL THEN lt.list_total END AS list_total,
-                       CASE WHEN (to_jsonb(c) -> 'list_price_snapshot') IS NOT NULL THEN lt.list_total - lt.quoted_total END AS discount,
+                       lt.list_total AS list_total,
+                       lt.list_total - lt.quoted_listed_total AS discount,
                        oe.min_delta AS lowest_vs_oem,
                        c.credit_terms, c.payment_method,
                        c.approval_status, c.approval_mode, au.name AS approved_by, c.approved_at,
@@ -1117,8 +1142,7 @@ const quotes: Dataset = {
                 SELECT c.quote_number, c.dealer_lead_id AS lead_id, c.version_no,
                        pl ->> 'product_name' AS product_name, pl ->> 'asset_type' AS asset_type,
                        pl ->> 'quantity' AS quantity, pl ->> 'unit_price' AS unit_price,
-                       (SELECT lp ->> 'list_price' FROM jsonb_array_elements(${jarr(sql`(to_jsonb(c) -> 'list_price_snapshot') -> 'lines'`)}) lp
-                         WHERE lp ->> 'product_id' = pl ->> 'product_id' LIMIT 1) AS list_price,
+                       ${QUOTE_LINE_LIST_PRICE} AS list_price,
                        (SELECT ol ->> 'oem_price' FROM jsonb_array_elements(${jarr(sql`c.oem_evaluation -> 'lines'`)}) ol
                          WHERE ol ->> 'product_id' = pl ->> 'product_id' LIMIT 1) AS oem_price
                   ${quoteFrom}
@@ -1214,23 +1238,41 @@ const targets: Dataset = {
 
 const INVOICE_STATUSES = ["draft", "sent", "overdue", "paid", "partially_paid", "void"];
 
-/** The unioned invoices with their own table's extra columns, the dealer account and its owner on the invoice date. */
-const invoicesFrom = (src: SQL): SQL => sql`
+/**
+ * The unioned invoices with their own table's extra columns, the dealer account
+ * and its owner — today and on the invoice date.
+ *
+ * ID 146: everything comes from matchedUnion() (revenueSource.ts), the same
+ * match the Sales invoices page and the dashboards use. It already resolves
+ * the account (hand link, account GSTIN or alias) as r.account_id and, for an
+ * account match, the owner whose account_owner_history window holds the
+ * invoice date as r.dealer_owner_id. The download used to redo the match
+ * against the retired second build (accounts.originating_dealer_lead_id,
+ * account_ownership_history.to_owner_id, r.dealer_linked), which failed on
+ * every database.
+ *
+ * `ownership` = the E-321 tables exist (hasAccountOwnershipTables). Without
+ * them matchedUnion gives no account, and r.dealer_owner_id is the lead's
+ * current owner.
+ */
+const invoicesFrom = (src: SQL, ownership: boolean): SQL => sql`
       FROM ${src} AS r
       LEFT JOIN sales_invoices si ON r.source = 'drive' AND si.id::text = r.id
       LEFT JOIN zoho_invoices zi ON r.source = 'zoho' AND zi.id::text = r.id
       LEFT JOIN dealer_leads idl ON idl.id = r.dealer_lead_id
-      LEFT JOIN users ow ON ow.id::text = r.dealer_owner_id::text
-      LEFT JOIN LATERAL (
-          SELECT ac.id, ac.business_entity_name FROM accounts ac
-           WHERE (r.dealer_lead_id IS NOT NULL AND ac.originating_dealer_lead_id = r.dealer_lead_id)
-              OR (r.gstin_key IS NOT NULL AND upper(replace(ac.gstin, ' ', '')) = r.gstin_key)
-           LIMIT 1) acct ON TRUE
-      LEFT JOIN LATERAL (
-          SELECT hu.name FROM account_ownership_history h LEFT JOIN users hu ON hu.id = h.to_owner_id
-           WHERE h.account_id = acct.id AND h.effective_date <= r.invoice_date
-           ORDER BY h.effective_date DESC, h.created_at DESC LIMIT 1) oh ON TRUE
+      LEFT JOIN accounts acct ON acct.id = r.account_id
+      ${ownership ? sql`LEFT JOIN account_ownership iao ON iao.account_id = r.account_id` : sql``}
+      -- Owner today: the account's current owner, else the matched lead's owner.
+      LEFT JOIN users ow ON ow.id::text = ${
+          ownership
+              ? sql`CASE WHEN r.account_id IS NOT NULL THEN iao.owner_user_id::text ELSE idl.current_owner_id::text END`
+              : sql`idl.current_owner_id::text`
+      }
+      -- Owner on the invoice date: only an account carries owner history.
+      LEFT JOIN users oh ON r.account_id IS NOT NULL AND oh.id::text = r.dealer_owner_id::text
 `;
+/** "Linked" = an account or a lead matched — revenueSource.ts MATCHED_TO_DEALER. */
+const INVOICE_LINKED = sql`(r.account_id IS NOT NULL OR r.dealer_lead_id IS NOT NULL)`;
 const INVOICE_PAID_ON = sql`COALESCE(si.last_payment_date, zi.last_payment_date)`;
 
 function invoicesWhere(ctx: RunContext): SQL {
@@ -1242,8 +1284,8 @@ function invoicesWhere(ctx: RunContext): SQL {
     const link = ctx.params.get("link");
     // "Linked" = a lead OR a dealer account matched the GSTIN (gstinMatch.ts),
     // the same rule the Sales invoices page and the data-health check count by.
-    if (link === "linked") conds.push(sql`r.dealer_linked`);
-    if (link === "unlinked") conds.push(sql`NOT r.dealer_linked`);
+    if (link === "linked") conds.push(INVOICE_LINKED);
+    if (link === "unlinked") conds.push(sql`NOT ${INVOICE_LINKED}`);
     conds.push(...commonConds(ctx, { person: sql`r.dealer_owner_id` }));
     return sql.join(conds, sql` AND `);
 }
@@ -1296,18 +1338,18 @@ const invoicesDataset: Dataset = {
         },
     ],
     async count(ctx) {
-        const src = await matchedUnion();
-        const [r] = await rows<{ n: number }>(sql`SELECT COUNT(*)::int AS n ${invoicesFrom(src)} WHERE ${invoicesWhere(ctx)}`);
+        const [src, ownership] = await Promise.all([matchedUnion(), hasAccountOwnershipTables()]);
+        const [r] = await rows<{ n: number }>(sql`SELECT COUNT(*)::int AS n ${invoicesFrom(src, ownership)} WHERE ${invoicesWhere(ctx)}`);
         return Number(r?.n ?? 0);
     },
     async build(ctx) {
-        const src = await matchedUnion();
+        const [src, ownership] = await Promise.all([matchedUnion(), hasAccountOwnershipTables()]);
         const data = await rows(sql`
             SELECT r.invoice_number, r.invoice_date, r.due_date, r.source,
                    CASE r.organization_id WHEN '60064046518' THEN 'Delhi' WHEN '60060919257' THEN 'Haryana'
                         ELSE r.organization_id END AS entity,
                    r.customer_name, r.gstin_key AS gstin, r.dealer_name, r.dealer_lead_id,
-                   CASE WHEN r.dealer_linked THEN 'Linked' ELSE 'Not linked' END AS link_status,
+                   CASE WHEN ${INVOICE_LINKED} THEN 'Linked' ELSE 'Not linked' END AS link_status,
                    to_jsonb(idl) ->> 'business_type' AS business_type,
                    acct.business_entity_name AS account,
                    ow.name AS dealer_owner, oh.name AS owner_on_invoice_date,
@@ -1315,7 +1357,7 @@ const invoicesDataset: Dataset = {
                    r.total, (COALESCE(r.total, 0) - COALESCE(r.balance, 0)) AS paid, r.balance, r.status,
                    CASE WHEN ${REVENUE_OUTSTANDING} AND r.due_date < ${IST_TODAY} THEN ${IST_TODAY} - r.due_date END AS days_overdue,
                    ${INVOICE_PAID_ON} AS paid_on, r.payment_reference, r.attention_reason
-              ${invoicesFrom(src)}
+              ${invoicesFrom(src, ownership)}
              WHERE ${invoicesWhere(ctx)}
              ORDER BY r.invoice_date DESC NULLS LAST
              LIMIT ${rowLimit(ctx)}

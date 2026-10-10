@@ -14,6 +14,8 @@ import { CLAIM_ROLES, type LeadDetailBundle } from "@/lib/inside-sales/types";
 import { isOpen, isTerminal, type LeadStatus } from "@/lib/lifecycle/transitions";
 import type { ActiveModal } from "./LeadDetailView";
 import { CallNowButton } from "@/components/leads/call-now-button";
+import { CorrectLeadGstinButton } from "@/components/leads/CorrectLeadGstinButton";
+import { GSTIN_CORRECTION_MANAGER_ROLES } from "@/lib/leads/correctLeadGstinRules";
 
 type Props = {
     bundle: LeadDetailBundle;
@@ -30,6 +32,12 @@ export function LeadActionBar({ bundle, isOwner, viewerRole, onAction, onChanged
     const isUnassigned = !lead.current_owner_id && !(status && isTerminal(status));
     const open = status ? isOpen(status) : false;
     const isAdmin = viewerRole === "admin" || viewerRole === "ceo";
+    // ID 124: a Won lead has no Mark Won — a GSTIN typo is fixed with Correct
+    // GSTIN, which updates the lead and its onboarding application together.
+    const isWon = status === "Won";
+    const correctGstin = (
+        <CorrectLeadGstinButton leadId={lead.id} currentGstin={lead.gstin ?? null} onDone={onChanged} />
+    );
 
     // Claim banner shows when lead is unassigned — only to the roles the claim
     // route accepts (CLAIM_ROLES). A manager reaching this page (Open lead page)
@@ -66,9 +74,12 @@ export function LeadActionBar({ bundle, isOwner, viewerRole, onAction, onChanged
         const helper = isAdmin
             ? "Admin/CEO — reassign first to modify."
             : "Read-only — you are not the current owner.";
+        // The Sales Head / admin may still correct a Won lead's GSTIN (ID 124).
+        const managerCanFixGstin = isWon && (GSTIN_CORRECTION_MANAGER_ROLES as readonly string[]).includes(viewerRole);
         return (
-            <div className="sticky bottom-0 z-10 bg-white border-t border-gray-200 px-6 py-3 text-xs text-gray-500">
-                {helper}
+            <div className="sticky bottom-0 z-10 bg-white border-t border-gray-200 px-6 py-3 text-xs text-gray-500 flex flex-wrap items-center gap-3">
+                <span>{helper}</span>
+                {managerCanFixGstin && correctGstin}
             </div>
         );
     }
@@ -100,17 +111,21 @@ export function LeadActionBar({ bundle, isOwner, viewerRole, onAction, onChanged
             >
                 Transfer to ASM
             </ActionButton>
-            <ActionButton
-                icon={CheckCircle2}
-                tone="emerald"
-                onClick={() => onAction("mark_converted")}
-                disabled={!open}
-                disabledReason={
-                    !open ? `Lead is ${status === "Lost" ? "Lost" : "closed"} — correct its status first` : undefined
-                }
-            >
-                Mark Won
-            </ActionButton>
+            {isWon ? (
+                correctGstin
+            ) : (
+                <ActionButton
+                    icon={CheckCircle2}
+                    tone="emerald"
+                    onClick={() => onAction("mark_converted")}
+                    disabled={!open}
+                    disabledReason={
+                        !open ? `Lead is ${status === "Lost" ? "Lost — reactivate it first" : "closed"}` : undefined
+                    }
+                >
+                    Mark Won
+                </ActionButton>
+            )}
             {/* ID 115.4: a Won lead goes to Lost only through the admin
                 onboarding drop-out review — the server refuses it here. */}
             {status !== "Won" && (

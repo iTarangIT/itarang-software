@@ -17,6 +17,7 @@ import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, Download, Loader2, Mail } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { DatasetInfo } from "@/lib/exports/datasets/types";
+import { MultiSelectFilter } from "@/components/reports/MultiSelectFilter";
 import type { DownloadLogRow } from "@/lib/exports/downloadLog";
 
 type Catalogue = {
@@ -273,7 +274,9 @@ export function DataDownloadsView() {
                         {dataset.filters.map((f) => (
                             <div key={f.key} className={f.type === "text" ? "min-w-[200px] flex-1" : ""}>
                                 <label className={labelCls}>{f.label}</label>
-                                {f.type === "select" ? (
+                                {f.type === "multiselect" ? (
+                                    <MultiSelectFilter filter={f} value={values[f.key]} onChange={(v) => set(f.key, v)} className={inputCls} />
+                                ) : f.type === "select" ? (
                                     <select value={values[f.key] ?? ""} onChange={(e) => set(f.key, e.target.value)} className={inputCls}>
                                         <option value="">Any</option>
                                         {(f.options ?? []).map((o) => (

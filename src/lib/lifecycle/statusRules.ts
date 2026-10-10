@@ -33,10 +33,22 @@
 //                 one backward move an event may make. NOT from Commercials
 //                 finalised: the dealer said yes, and only Mark Won / Mark Lost
 //                 leave that stage.
+//   quote_rejected
+//                 the CEO rejected a quote and no other version is approved or
+//                 waiting for him (ID 135): the same backward move, and from
+//                 the same two stages only, as quote_withdrawn.
 //   reactivation  a closed lead re-enters the pipeline at New_Unassigned or
 //                 Assigned_Not_Contacted (BRD §0.9 reactivation, drop-out re-engage).
 //   dropout_lost  admin drop-out resolution: Converted → Lost.
-//   correction    admin "Correct status" with a reason — the only override.
+//   won_undone    Undo Mark Won (ID 134): the Sales Head reverses a Won marked
+//                 by mistake, before the dealer submitted onboarding. Won goes
+//                 back to the open stage it came from — never to Won,
+//                 Converted or Lost — with a reason. wonUndo.ts checks the
+//                 onboarding and picks the stage from the status history.
+//   correction    a SYSTEM move with a reason — assignOwner restoring a
+//                 pre-transfer stage, logged one-time scripts. Since 9 Oct
+//                 (ID 136) no screen, API or WhatsApp tool lets a person pick a
+//                 status: "Correct status" is gone.
 //
 // A status equal to the current one is a no-op for every event (ID 115.6): the
 // verdict is ok with `noop: true`, and the writer records the touchpoint but
@@ -56,6 +68,8 @@ export const STATUS_EVENTS = [
     "visit",
     "quote_approved",
     "quote_withdrawn",
+    "quote_rejected",
+    "won_undone",
     "correction",
 ] as const;
 export type StatusEvent = (typeof STATUS_EVENTS)[number];
@@ -104,7 +118,7 @@ export function checkStatusMove(input: {
     from: string | null;
     to: LeadStatus;
     event: StatusEvent;
-    /** Required for `correction`. */
+    /** Required for `correction` and `won_undone`. */
     reason?: string | null;
     /**
      * An admin-driven move (the onboarding drop-out resolution). Only `mark_lost`
@@ -165,13 +179,15 @@ export function checkStatusMove(input: {
                 return { ok: false, reason: `A lead cannot move back from ${label(from)} to ${label(to)}.` };
             }
             return { ok: true };
-        case "quote_withdrawn": {
+        case "quote_withdrawn":
+        case "quote_rejected": {
             if (from === "Commercials_Finalised") {
                 return { ok: false, reason: "The dealer approved the quote; from Commercials finalised use Mark Won or Mark Lost." };
             }
             const commercials = ["Commercials_Explained", "Awaiting_Customer_Decision"];
             if (to !== "Under_Discussion" || !commercials.includes(from ?? "")) {
-                return { ok: false, reason: "Withdrawing a quote moves a commercials-stage lead back to Under discussion only." };
+                const what = event === "quote_rejected" ? "Rejecting" : "Withdrawing";
+                return { ok: false, reason: `${what} a quote moves a commercials-stage lead back to Under discussion only.` };
             }
             return { ok: true };
         }
@@ -187,9 +203,16 @@ export function checkStatusMove(input: {
                 return { ok: false, reason: "Drop-out resolution moves Converted to Lost only." };
             }
             return { ok: true };
+        case "won_undone":
+            if (from !== "Won") return { ok: false, reason: "Only a Won lead can have its Mark Won undone." };
+            if (!input.reason || !input.reason.trim()) return { ok: false, reason: "Undo Mark Won needs a reason." };
+            if (to === "Converted" || to === "Lost") {
+                return { ok: false, reason: `Undo Mark Won returns the lead to an open stage, not ${label(to)}.` };
+            }
+            return { ok: true };
         case "correction":
             if (!input.reason || !input.reason.trim()) {
-                return { ok: false, reason: "Correct status needs a reason." };
+                return { ok: false, reason: "A status correction needs a reason." };
             }
             // ID 133 (business rule, 3 Oct): every onboarding goes the same
             // path. A correction to Converted skipped documents, verification,

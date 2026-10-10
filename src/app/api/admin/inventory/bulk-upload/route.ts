@@ -28,6 +28,13 @@ import {
   type ParaphernaliaMaster,
 } from "@/lib/inventory/product-master";
 import { registerIotDevice } from "@/lib/iot/registerDevice";
+import {
+  baseValueMismatch,
+  baseValueMismatchMessage,
+  buildBaseValueRefs,
+  distinctInvoiceNumbers,
+  rowInvoiceNumber,
+} from "@/lib/inventory/invoice-rules";
 
 type StructuredError = {
   row: number;
@@ -198,29 +205,29 @@ export const POST = withErrorHandler(async (req: Request) => {
   const productBySku = new Map(productRows.map((p) => [p.sku.toLowerCase(), p]));
 
   // ── Invoice consistency + per-asset-type uniqueness ──────────────────────
-  // Every row must carry the same invoice_number (battery/charger: also the
-  // same base_value); that invoice_number must not already exist for the
-  // SAME asset type. One supplier invoice can span a battery upload AND a
-  // charger upload. Defence-in-depth — the Step 4 preview enforces the same.
-  const refInvoiceNumber = String(rows[0]?.invoice_number || "").trim();
-  const refInvoiceValue =
-    assetType === "paraphernalia" ? null : Number(rows[0]?.base_value);
+  // A file may carry several invoice_numbers. Battery/charger: rows sharing an
+  // invoice_number AND model_id must share a base_value. Each invoice_number
+  // must not already exist for the SAME asset type. One supplier invoice can
+  // span a battery upload AND a charger upload. Defence-in-depth — the Step 4
+  // preview enforces the same.
+  const baseValueRefs = buildBaseValueRefs(rows, assetType);
   const inventoryTypeForAsset =
     assetType === "paraphernalia" ? "paraphernalia_lot" : assetType;
-  const invoiceNumberAlreadyUsed =
-    refInvoiceNumber.length > 0 &&
+  const usedInvoiceNumbers = new Set(
     (
-      await db
-        .select({ id: inventory.id })
-        .from(inventory)
-        .where(
-          and(
-            eq(inventory.oem_invoice_number, refInvoiceNumber),
-            eq(inventory.inventory_type, inventoryTypeForAsset),
+      await safeInArrayQuery(distinctInvoiceNumbers(rows), (arr) =>
+        db
+          .selectDistinct({ n: inventory.oem_invoice_number })
+          .from(inventory)
+          .where(
+            and(
+              inArray(inventory.oem_invoice_number, arr),
+              eq(inventory.inventory_type, inventoryTypeForAsset),
+            ),
           ),
-        )
-        .limit(1)
-    ).length > 0;
+      )
+    ).map((r) => r.n),
+  );
 
   const errors: StructuredError[] = [];
   const seenSerials = new Set<string>();
@@ -260,39 +267,26 @@ export const POST = withErrorHandler(async (req: Request) => {
 
     const r = parsed.data as Record<string, unknown>;
 
-    // Invoice — one file = one invoice, and that invoice must be brand-new.
-    if (refInvoiceNumber) {
-      const rowInvoiceNumber = String(r.invoice_number || "").trim();
-      if (rowInvoiceNumber !== refInvoiceNumber) {
-        errors.push({
-          row: rowNumber,
-          field: "invoice_number",
-          code: "INVOICE_NUMBER_MISMATCH",
-          message: `invoice_number must be identical on every row of one upload (expected '${refInvoiceNumber}').`,
-        });
-        continue;
-      }
-      if (invoiceNumberAlreadyUsed) {
-        errors.push({
-          row: rowNumber,
-          field: "invoice_number",
-          code: "DUPLICATE_INVOICE",
-          message: `invoice_number '${refInvoiceNumber}' was already used by a previous ${assetType} upload — use a new invoice number for this asset type.`,
-        });
-        continue;
-      }
+    // Invoice — each invoice_number must be brand-new for this asset type.
+    const invoiceNumber = rowInvoiceNumber(r);
+    if (invoiceNumber && usedInvoiceNumbers.has(invoiceNumber)) {
+      errors.push({
+        row: rowNumber,
+        field: "invoice_number",
+        code: "DUPLICATE_INVOICE",
+        message: `invoice_number '${invoiceNumber}' was already used by a previous ${assetType} upload — use a new invoice number for this asset type.`,
+      });
+      continue;
     }
-    if (refInvoiceValue != null && !Number.isNaN(refInvoiceValue)) {
-      const rowInvoiceValue = Number(r.base_value);
-      if (rowInvoiceValue !== refInvoiceValue) {
-        errors.push({
-          row: rowNumber,
-          field: "base_value",
-          code: "INVOICE_VALUE_MISMATCH",
-          message: `base_value must be identical on every row of one upload (expected ${refInvoiceValue}).`,
-        });
-        continue;
-      }
+    const baseValueRef = baseValueMismatch(rows[i], assetType, baseValueRefs);
+    if (baseValueRef) {
+      errors.push({
+        row: rowNumber,
+        field: "base_value",
+        code: "INVOICE_VALUE_MISMATCH",
+        message: `base_value ${baseValueMismatchMessage(baseValueRef)}.`,
+      });
+      continue;
     }
 
     const serial =

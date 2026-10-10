@@ -41,9 +41,11 @@ import { z } from "zod";
 
 import { db } from "@/lib/db";
 import { istRangeNaive, istRangeTz } from "@/lib/digests/window";
+import { ECOFY_STAGE_LABELS } from "@/lib/ecofy/access";
 import {
     FUNNEL_GROUP_BYS,
     type FunnelCounts,
+    type FunnelEcofySection,
     type FunnelCountsResult,
     type FunnelFilters,
     type FunnelGroupBy,
@@ -317,6 +319,47 @@ async function options(): Promise<{ dealers: FunnelOption[]; nbfcs: FunnelOption
     return { dealers: map(dealers), nbfcs: map(nbfcs) };
 }
 
+/**
+ * ID 51 #2 — Ecofy leads in range, by current stage. A separate pipeline (no
+ * dealer, no NBFC of ours), so only the date and city/state filters apply.
+ * Tolerant: a DB without ecofy_leads yields available=false, never an error.
+ */
+async function ecofySection(f: FunnelFilters): Promise<FunnelEcofySection> {
+    const note =
+        f.dealer_id || f.nbfc_id
+            ? "Ecofy leads have no dealer or financier, so the dealer and financier filters do not apply here; date, city and state do."
+            : "Counted by the day the CRM first received the lead from Ecofy, shown at its current stage. Not included in the dealer funnel counts above.";
+    try {
+        const rows = (await db.execute<{ stage: string | null; n: string }>(sql`
+            SELECT COALESCE(NULLIF(trim(e.stage), ''), 'UNKNOWN') AS stage, COUNT(*)::text AS n
+              FROM ecofy_leads e
+             WHERE ${istRangeTz(sql`e.created_at`, f.from, f.to)}
+               ${geo(sql`e.city`, f.city)} ${geo(sql`e.state`, f.state)}
+             GROUP BY 1
+        `)) as unknown as { stage: string | null; n: string }[];
+        const order = Object.keys(ECOFY_STAGE_LABELS);
+        const by_stage = rows
+            .map((r) => {
+                const stage = String(r.stage ?? "UNKNOWN");
+                const label = ECOFY_STAGE_LABELS[stage] ? `${stage} · ${ECOFY_STAGE_LABELS[stage]}` : stage;
+                return { stage, label, count: num(r.n) };
+            })
+            .sort((a, b) => {
+                const ia = order.indexOf(a.stage), ib = order.indexOf(b.stage);
+                return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.stage.localeCompare(b.stage);
+            });
+        return {
+            available: true,
+            leads_received: by_stage.reduce((t, r) => t + r.count, 0),
+            by_stage,
+            note,
+        };
+    } catch (err) {
+        console.warn("[funnelCounts] ecofy_leads unreadable — Ecofy section skipped:", err);
+        return { available: false, leads_received: 0, by_stage: [], note: "Ecofy leads are not available on this database." };
+    }
+}
+
 // ─────────────────────────────── builder ────────────────────────────────────
 
 const ZERO: FunnelCounts = {
@@ -356,12 +399,13 @@ export async function buildFunnelCounts(p: FunnelParams): Promise<FunnelCountsRe
     const today = await istToday();
     const f = resolveFunnelFilters(p, today);
 
-    const [totalsMap, groupedMap, reasons, onbReasons, opts] = await Promise.all([
+    const [totalsMap, groupedMap, reasons, onbReasons, opts, ecofy] = await Promise.all([
         counts(f, "none"),
         f.group_by === "none" ? Promise.resolve(new Map<string, FunnelRow>()) : counts(f, f.group_by),
         loanRejectionReasons(f),
         onboardingRejectionReasons(f),
         options(),
+        ecofySection(f),
     ]);
 
     const totalsRow = totalsMap.get("") ?? { key: "", label: "", ...ZERO };
@@ -402,6 +446,7 @@ export async function buildFunnelCounts(p: FunnelParams): Promise<FunnelCountsRe
         rows,
         notes,
         options: opts,
+        ecofy,
     };
 }
 

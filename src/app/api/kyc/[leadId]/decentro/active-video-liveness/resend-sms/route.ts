@@ -5,6 +5,7 @@ import { db } from '@/lib/db';
 import { kycVerifications, leads } from '@/lib/db/schema';
 import { sendKycSms } from '@/lib/sms';
 import { createClient } from '@/lib/supabase/server';
+import { requireLeadAccess } from '@/lib/auth/requireLeadAccess';
 
 function buildSmsMessage(url: string): string {
     return `Complete Video KYC for your Itarang loan: ${url} (valid 24h)`;
@@ -22,6 +23,9 @@ export async function POST(
         }
 
         const { leadId } = await params;
+        // ID 119: signed in AND this lead is the caller's (a dealer's own lead, or back office).
+        const leadGate = await requireLeadAccess(leadId);
+        if (!leadGate.ok) return leadGate.response;
 
         const [row] = await db
             .select()

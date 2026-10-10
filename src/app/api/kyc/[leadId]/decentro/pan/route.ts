@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { executePanVerification } from '@/lib/kyc/pan-verification';
+import { requireLeadAccess } from '@/lib/auth/requireLeadAccess';
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
     try {
@@ -9,6 +10,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
 
         const { leadId } = await params;
+        // ID 119: signed in AND this lead is the caller's (a dealer's own lead, or back office).
+        const leadGate = await requireLeadAccess(leadId);
+        if (!leadGate.ok) return leadGate.response;
         const { pan_number, dob, document_type } = await req.json();
 
         const result = await executePanVerification(leadId, {

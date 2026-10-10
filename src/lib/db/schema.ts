@@ -63,6 +63,10 @@ export const users = pgTable("users", {
   updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   password_hash: text("password_hash"),
   must_change_password: boolean("must_change_password").default(false).notNull(),
+  // E-335 (ID 155) adds `reports_to uuid` (→ users.id). Deliberately NOT
+  // declared here: users is selected and inserted through Drizzle all over the
+  // app, and a declared column would break every one of those on a database
+  // without E-335. Read / write it via src/lib/users/reportingLines.ts.
 });
 
 // --- PHASE 0: MVP ---

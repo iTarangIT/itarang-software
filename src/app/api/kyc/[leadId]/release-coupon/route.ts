@@ -4,6 +4,8 @@ import { couponCodes, leads } from '@/lib/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { requireRole } from '@/lib/auth-utils';
 import { logCouponAction } from '@/lib/coupon-audit';
+import { requireLeadAccess } from '@/lib/auth/requireLeadAccess';
+import { isNextRedirectError } from '@/lib/api-utils';
 
 type RouteContext = {
     params: Promise<{ leadId: string }>;
@@ -13,6 +15,9 @@ export async function POST(_req: NextRequest, context: RouteContext) {
     try {
         const user = await requireRole(['dealer']);
         const { leadId } = await context.params;
+        // ID 119: signed in AND this lead is the caller's (a dealer's own lead, or back office).
+        const leadGate = await requireLeadAccess(leadId);
+        if (!leadGate.ok) return leadGate.response;
 
         // Verify lead exists and belongs to dealer
         const leadRows = await db.select({
@@ -79,6 +84,11 @@ export async function POST(_req: NextRequest, context: RouteContext) {
             message: 'Coupon released. You can now enter a new code.',
         });
     } catch (error) {
+        // requireRole() refuses a logged-out caller with a redirect; answer 401
+        // like the other KYC routes instead of a 500 "NEXT_REDIRECT".
+        if (isNextRedirectError(error)) {
+          return NextResponse.json({ success: false, error: { message: 'Unauthorized' } }, { status: 401 });
+        }
         console.error('[Release Coupon] Error:', error);
         return NextResponse.json({ success: false, error: { message: 'Server error' } }, { status: 500 });
     }

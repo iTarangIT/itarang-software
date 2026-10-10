@@ -5,6 +5,8 @@ import { db } from "@/lib/db";
 import { kycDocuments, leads } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { requireRole } from "@/lib/auth-utils";
+import { requireLeadAccess } from "@/lib/auth/requireLeadAccess";
+import { isNextRedirectError } from "@/lib/api-utils";
 
 type RouteContext = {
   params: Promise<{ leadId: string }>;
@@ -27,6 +29,9 @@ export async function GET(_req: Request, context: RouteContext) {
   try {
     await requireRole(["dealer"]);
     const { leadId } = await context.params;
+    // ID 119: signed in AND this lead is the caller's (a dealer's own lead, or back office).
+    const leadGate = await requireLeadAccess(leadId);
+    if (!leadGate.ok) return leadGate.response;
 
     if (!leadId) {
       return NextResponse.json(
@@ -95,6 +100,11 @@ export async function GET(_req: Request, context: RouteContext) {
       },
     });
   } catch (error) {
+    // requireRole() refuses a logged-out caller with a redirect; answer 401
+    // like the other KYC routes instead of a 500 "NEXT_REDIRECT".
+    if (isNextRedirectError(error)) {
+      return NextResponse.json({ success: false, error: { message: "Unauthorized" } }, { status: 401 });
+    }
     console.error("KYC document-status error:", error);
     return NextResponse.json(
       { success: false, message: "Failed to fetch document status" },

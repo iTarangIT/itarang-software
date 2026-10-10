@@ -23,6 +23,7 @@ import {
   getKycAutoApprovalSettings,
   slaStampFor,
 } from "@/lib/kyc/auto-approval-settings";
+import { requireLeadAccess } from "@/lib/auth/requireLeadAccess";
 
 const DEFAULT_ESTIMATED_REVIEW_TIME = "10-12 hours";
 
@@ -40,6 +41,9 @@ export async function POST(
     }
 
     const { leadId } = await params;
+    // ID 119: signed in AND this lead is the caller's (a dealer's own lead, or back office).
+    const leadGate = await requireLeadAccess(leadId);
+    if (!leadGate.ok) return leadGate.response;
 
     const leadRows = await db
       .select({

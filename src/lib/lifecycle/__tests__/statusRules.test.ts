@@ -65,6 +65,16 @@ describe("checkStatusMove", () => {
         }
     });
 
+    it("Undo Mark Won takes Won back to an open stage only, with a reason (ID 134)", () => {
+        expect(checkStatusMove({ from: "Won", to: "Commercials_Finalised", event: "won_undone", reason: "mis-click" }).ok).toBe(true);
+        expect(checkStatusMove({ from: "Won", to: "Transferred_to_ASM", event: "won_undone", reason: "mis-click" }).ok).toBe(true);
+        expect(checkStatusMove({ from: "Won", to: "Under_Discussion", event: "won_undone" }).ok).toBe(false);
+        expect(checkStatusMove({ from: "Won", to: "Lost", event: "won_undone", reason: "mis-click" }).ok).toBe(false);
+        expect(checkStatusMove({ from: "Won", to: "Converted", event: "won_undone", reason: "mis-click" }).ok).toBe(false);
+        expect(checkStatusMove({ from: "Converted", to: "Under_Discussion", event: "won_undone", reason: "mis-click" }).ok).toBe(false);
+        expect(checkStatusMove({ from: "Lost", to: "Under_Discussion", event: "won_undone", reason: "mis-click" }).ok).toBe(false);
+    });
+
     it("only a visit ends Awaiting field visit, restoring a later stage (ID 77)", () => {
         expect(checkStatusMove({ from: "Transferred_to_ASM", to: "Under_Discussion", event: "progress" }).ok).toBe(false);
         expect(checkStatusMove({ from: "Transferred_to_ASM", to: "Under_Discussion", event: "visit" }).ok).toBe(true);
@@ -84,6 +94,17 @@ describe("checkStatusMove", () => {
         expect(verdict.ok).toBe(false);
         expect(checkStatusMove({ from: "Commercials_Finalised", to: "Won", event: "mark_won" }).ok).toBe(true);
         expect(checkStatusMove({ from: "Commercials_Finalised", to: "Lost", event: "mark_lost" }).ok).toBe(true);
+    });
+
+    it("a CEO-rejected quote with nothing left sends the lead back the same way (ID 135)", () => {
+        for (const from of ["Commercials_Explained", "Awaiting_Customer_Decision"] as const) {
+            expect(checkStatusMove({ from, to: "Under_Discussion", event: "quote_rejected" }).ok, from).toBe(true);
+        }
+        // Never out of Commercials finalised, never to another stage, never a closed lead.
+        expect(checkStatusMove({ from: "Commercials_Finalised", to: "Under_Discussion", event: "quote_rejected" }).ok).toBe(false);
+        expect(checkStatusMove({ from: "Awaiting_Customer_Decision", to: "Assigned_Not_Contacted", event: "quote_rejected" }).ok).toBe(false);
+        expect(checkStatusMove({ from: "Lost", to: "Under_Discussion", event: "quote_rejected" }).ok).toBe(false);
+        expect(checkStatusMove({ from: "Transferred_to_ASM", to: "Under_Discussion", event: "quote_rejected" }).ok).toBe(false);
     });
 
     it("a same-status move is a no-op, not a refusal (ID 115.6)", () => {

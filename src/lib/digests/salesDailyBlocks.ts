@@ -452,7 +452,7 @@ export async function loadRepExtras(db: Exec, p: Period): Promise<RepExtras> {
         perRep(
             db,
             sql`SELECT h.changed_by AS u, COUNT(DISTINCT h.dealer_lead_id) AS n FROM dealer_lead_status_history h
-                 WHERE h.to_status = 'Won' AND ${win(sql`h.changed_at`)}
+                 WHERE h.to_status = 'Won' AND (to_jsonb(h) ->> 'won_undone_at') IS NULL AND ${win(sql`h.changed_at`)}
                  GROUP BY 1`,
         ),
     ]);

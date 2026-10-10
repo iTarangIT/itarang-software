@@ -33,6 +33,11 @@ import {
   products,
   users,
 } from "@/lib/db/schema";
+import {
+  DRAFT_KYC_STATUSES,
+  PUSHED_DRAFT_KYC_STATUSES,
+  isOpenDraftStatus,
+} from "./pushedLeads";
 
 type Application = typeof dealerOnboardingApplications.$inferSelect;
 
@@ -397,12 +402,12 @@ export interface DealerDraft {
 }
 
 /**
- * Lead states that still count as "a draft the dealer can pick up in chat".
- * Anything past these has left the dealer's hands (submitted, sanctioned,
- * dispatched, sold) and belongs to the portal — the old filter keyed only on
- * the admin KYC queue, which let a SOLD cash lead sit in Save Drafts forever.
+ * ID 33 — the WhatsApp console lists its own leads plus web leads the iTarang
+ * team pushed to this dealer (leads.dealer_assigned_at is set only by that
+ * push). Draft rules live in ./pushedLeads.
  */
-const DRAFT_KYC_STATUSES = ["pending", "draft"];
+const inConsoleScope = () =>
+  or(eq(leads.source_channel, "whatsapp"), isNotNull(leads.dealer_assigned_at));
 
 /**
  * List this dealer's open WhatsApp drafts — leads created over WhatsApp that
@@ -428,11 +433,19 @@ export async function listDealerDrafts(
 
   const conds = [
     eq(leads.dealer_id, dealerCode),
-    eq(leads.source_channel, "whatsapp"),
+    // ID 33 — plus web leads iTarang pushed to this dealer.
+    inConsoleScope(),
     // E-285 — the dealer deleted it from their dashboard; "My Leads" is the
     // same list over WhatsApp, so it must not offer the lead back to them.
     isNull(leads.deleted_by_dealer_at),
-    or(isNull(leads.kyc_status), inArray(leads.kyc_status, DRAFT_KYC_STATUSES)),
+    or(
+      isNull(leads.kyc_status),
+      inArray(leads.kyc_status, DRAFT_KYC_STATUSES),
+      and(
+        isNotNull(leads.dealer_assigned_at),
+        inArray(leads.kyc_status, PUSHED_DRAFT_KYC_STATUSES),
+      ),
+    ),
   ];
   if (salespersonId) {
     conds.push(eq(leads.salesperson_id, salespersonId));
@@ -505,7 +518,7 @@ export async function getDealerDraft(
 ): Promise<DealerDraft | null> {
   const row = await loadDealerLeadRow(dealerCode, leadId, salespersonId);
   if (!row) return null;
-  if (row.kycStatus && !DRAFT_KYC_STATUSES.includes(row.kycStatus)) return null;
+  if (!isOpenDraftStatus(row.kycStatus, row.pushed)) return null;
   return toDealerDraft(row);
 }
 
@@ -531,7 +544,7 @@ async function loadDealerLeadRow(
   // E-277 — salesperson scope: only leads they created. Undefined = dealer,
   // whole dealership.
   salespersonId?: string,
-): Promise<(DraftRow & { kycStatus: string | null }) | null> {
+): Promise<(DraftRow & { kycStatus: string | null; pushed: boolean }) | null> {
   const [row] = await db
     .select({
       id: leads.id,
@@ -545,6 +558,8 @@ async function loadDealerLeadRow(
       vehicleRc: leads.vehicle_rc,
       productTypeId: leads.product_type_id,
       kycStatus: leads.kyc_status,
+      // ID 33 — pushed to this dealer from the web (see PUSHED_DRAFT_KYC_STATUSES).
+      pushed: sql<boolean>`${leads.dealer_assigned_at} IS NOT NULL`,
     })
     .from(leads)
     .where(
@@ -583,7 +598,8 @@ export async function listTeamLeads(
 ): Promise<TeamLeadListItem[]> {
   const conds = [
     eq(leads.dealer_id, dealerCode),
-    eq(leads.source_channel, "whatsapp"),
+    // ID 33 — History (includeOwn) also shows web leads iTarang pushed here.
+    inConsoleScope(),
   ];
   if (!opts.includeOwn) conds.push(isNotNull(leads.salesperson_id));
 
