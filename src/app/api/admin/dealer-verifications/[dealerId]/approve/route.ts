@@ -463,14 +463,24 @@ export async function POST(req: NextRequest, context: RouteContext) {
           applicationId: application.id,
           missing,
         });
+        // ID 56: the admin does not have to wait on Digio — an audit trail
+        // downloaded from the Digio dashboard can be uploaded on the review
+        // page (Section 3 → "Add agreement documents"; the same box reads
+        // "Agreement completed outside iTarang?" before completion). That
+        // upload fills audit_trail_url, which ensureDealerAuditTrailUrl reads
+        // first on the next Approve.
+        const uploadHint = !auditBuf
+          ? ` To approve now, download the audit trail from the Digio dashboard and upload it on this page under Section 3 → "Add agreement documents" (shown as "Agreement completed outside iTarang?" before the agreement is completed), then click Approve again.`
+          : "";
         return NextResponse.json(
           {
             success: false,
             message:
-              `Could not get the ${missing.join(" and ")} from Digio, so the dealer was NOT approved (the welcome email must carry both). Please try Approve again in a minute. If it keeps failing, Digio is refusing this server — check the Digio credentials / whitelisted IP.`,
+              `Could not get the ${missing.join(" and ")} from Digio, so the dealer was NOT approved (the welcome email must carry both).${uploadHint} Otherwise try Approve again in a minute; if it keeps failing, Digio is refusing this server — check the Digio credentials / whitelisted IP.`,
             details: {
               signedAgreementAvailable: Boolean(signedBuf),
               auditTrailAvailable: Boolean(auditBuf),
+              canUploadAuditTrail: !auditBuf,
             },
           },
           { status: 409 }

@@ -16,6 +16,7 @@ import { DatePicker } from '@/components/ui/date-picker';
 import { FINANCE_DOCUMENTS } from '@/components/dealer-portal/lead-wizard/constants';
 import OtherDocumentsSection, { type RequestedDoc as OtherRequestedDoc } from '@/components/dealer-portal/lead-wizard/OtherDocumentsSection';
 import ConsentOtpCard from '@/components/dealer-portal/lead-wizard/ConsentOtpCard';
+import { isMaskedAadhaar } from '@/lib/kyc/aadhaarMask';
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -654,9 +655,11 @@ export default function BorrowerConsentPage() {
         if (!f.pan_no.trim()) errs.pan_no = 'PAN is required';
         else if (!/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(f.pan_no.trim())) errs.pan_no = 'PAN format must be AAAAA9999A';
 
-        // Aadhaar — required, 12 digits
+        // Aadhaar — required, 12 digits. ID 119: a saved number comes back
+        // masked (XXXX XXXX 1234); that counts as "on file" — the server keeps
+        // the stored digits when the mask is saved back.
         if (!f.aadhaar_no) errs.aadhaar_no = 'Aadhaar is required';
-        else if (!/^\d{12}$/.test(f.aadhaar_no)) errs.aadhaar_no = 'Aadhaar must be exactly 12 digits';
+        else if (!/^\d{12}$/.test(f.aadhaar_no) && !isMaskedAadhaar(f.aadhaar_no)) errs.aadhaar_no = 'Aadhaar must be exactly 12 digits';
 
         // Relationship — required, one of allowed enums
         if (!f.relationship) errs.relationship = 'Relationship is required';

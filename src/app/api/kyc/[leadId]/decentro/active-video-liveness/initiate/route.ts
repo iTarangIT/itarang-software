@@ -9,6 +9,7 @@ import { createClient } from '@/lib/supabase/server';
 import { activeVideoLivenessInitiate } from '@/lib/decentro';
 import { publicOrigin, PublicOriginError } from '@/lib/public-origin';
 import { sendKycSms } from '@/lib/sms';
+import { requireLeadAccess } from '@/lib/auth/requireLeadAccess';
 
 function buildSmsMessage(url: string): string {
     return `Complete Video KYC for your Itarang loan: ${url} (valid 24h)`;
@@ -26,6 +27,9 @@ export async function POST(
         }
 
         const { leadId } = await params;
+        // ID 119: signed in AND this lead is the caller's (a dealer's own lead, or back office).
+        const leadGate = await requireLeadAccess(leadId);
+        if (!leadGate.ok) return leadGate.response;
 
         // Resolve public origin for redirect/callback URLs that Decentro can reach.
         let origin: string;

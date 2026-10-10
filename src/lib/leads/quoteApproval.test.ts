@@ -93,6 +93,21 @@ describe("rollbackTarget", () => {
         expect(target?.version_no).toBe(1);
     });
 
+    // ID 135: rep sends v1, raises v2 (pending), withdraws v1; the CEO rejects
+    // v2. v1 must NOT come back as current — the dealer's link says withdrawn.
+    it("never restores a withdrawn version", () => {
+        const versions = [
+            { ...v(1, "approved"), withdrawn_at: "2026-10-01T10:00:00Z" },
+            v(2, "pending"),
+        ];
+        expect(rollbackTarget(versions, 2)).toBeNull();
+        // An older approved, not-withdrawn version is still a valid target.
+        expect(
+            rollbackTarget([v(1, "approved"), { ...v(2, "approved"), withdrawn_at: "x" }, v(3, "pending")], 3)
+                ?.version_no,
+        ).toBe(1);
+    });
+
     it("does not depend on input ordering", () => {
         const shuffled = [v(3, "pending"), v(1, "approved"), v(2, "approved")];
         expect(rollbackTarget(shuffled, 3)?.version_no).toBe(2);

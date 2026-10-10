@@ -5,6 +5,7 @@ import { db } from '@/lib/db';
 import { kycVerifications } from '@/lib/db/schema';
 import { activeVideoLivenessResult } from '@/lib/decentro';
 import { createClient } from '@/lib/supabase/server';
+import { requireLeadAccess } from '@/lib/auth/requireLeadAccess';
 
 function pickBestMatchScore(results: unknown): number | null {
     const arr = (results as { videoFaceMatchResults?: Array<{ results?: { matchScore?: number } }> } | null)
@@ -46,6 +47,9 @@ export async function GET(
         }
 
         const { leadId } = await params;
+        // ID 119: signed in AND this lead is the caller's (a dealer's own lead, or back office).
+        const leadGate = await requireLeadAccess(leadId);
+        if (!leadGate.ok) return leadGate.response;
 
         const [row] = await db
             .select()

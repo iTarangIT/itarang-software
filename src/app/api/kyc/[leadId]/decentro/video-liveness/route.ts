@@ -6,6 +6,7 @@ import { db } from '@/lib/db';
 import { kycVerifications } from '@/lib/db/schema';
 import { and, desc, eq } from 'drizzle-orm';
 import { createWorkflowId } from '@/lib/kyc/admin-workflow';
+import { requireLeadAccess } from '@/lib/auth/requireLeadAccess';
 
 const MAX_VIDEO_BYTES = 25 * 1024 * 1024; // 25 MB — accommodates ~10s @ 720p MediaRecorder webm
 // MediaRecorder hands back MIME types like "video/webm;codecs=vp9,opus" — match
@@ -25,6 +26,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         }
 
         const { leadId } = await params;
+        // ID 119: signed in AND this lead is the caller's (a dealer's own lead, or back office).
+        const leadGate = await requireLeadAccess(leadId);
+        if (!leadGate.ok) return leadGate.response;
 
         const formData = await req.formData();
         const video = formData.get('video') as File | null;

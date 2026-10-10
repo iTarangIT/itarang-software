@@ -366,6 +366,19 @@ export function canExportCampaign(role: string | null | undefined): boolean {
   return (CAMPAIGN_EXPORT_ROLES as readonly string[]).includes(role ?? "");
 }
 
+/**
+ * ID 118 (decision 10 Oct): roles that may upload an AI-dialer calling list,
+ * start a dialer run (list or region) and stop the running one. These place
+ * real, billable calls and add leads, so the set is narrower than
+ * LEADS_OVERSIGHT_ROLES. Enforced on /api/ai-dialer/{start,stop,lists/create,
+ * lists/[id]/start}; a logged-out call is 401, any other role 403.
+ */
+export const DIALER_CONTROL_ROLES = ["admin", "ceo", "sales_head"] as const;
+
+export function canControlDialer(role: string | null | undefined): boolean {
+  return (DIALER_CONTROL_ROLES as readonly string[]).includes(role ?? "");
+}
+
 export type LeadsCapabilities = {
   canSeeOwnerAsm: boolean;
   canBulkAct: boolean;

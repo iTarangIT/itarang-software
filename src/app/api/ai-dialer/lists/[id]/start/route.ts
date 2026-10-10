@@ -12,7 +12,8 @@ import { db } from "@/lib/db";
 import { dialerCampaigns } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { successResponse, errorResponse, withErrorHandler } from "@/lib/api-utils";
-import { requireAuth } from "@/lib/auth-utils";
+import { guardApi } from "@/lib/auth/apiGuard";
+import { DIALER_CONTROL_ROLES } from "@/lib/leads/access";
 import { type DialerProvider } from "@/lib/queue/dialerSession";
 import { startDraftCampaign } from "@/lib/queue/startCampaign";
 import {
@@ -27,12 +28,10 @@ export const POST = withErrorHandler(
     const { id: campaignId } = await ctx.params;
     if (!campaignId) return errorResponse("Campaign id required", 400);
 
-    // Auth is best-effort (dev/system contexts) — same posture as /start.
-    try {
-      await requireAuth();
-    } catch {
-      /* tolerate no session */
-    }
+    // ID 118: starting places real AI calls — login + dialer control role.
+    // (The old try/catch around requireAuth() let anonymous callers through.)
+    const gate = await guardApi([...DIALER_CONTROL_ROLES]);
+    if (!gate.ok) return gate.response;
 
     const body = await req.json().catch(() => ({}));
     const provider: DialerProvider = ALLOWED_PROVIDERS.includes(body?.provider)
