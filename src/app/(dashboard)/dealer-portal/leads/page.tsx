@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { PlusCircle, Search, Filter, Loader2, Trash2, X, AlertTriangle, Pencil, Save } from 'lucide-react';
+import { PlusCircle, Search, Filter, Loader2, Trash2, X, AlertTriangle, Pencil, Save, Send } from 'lucide-react';
 import { useEffect, useState, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { toast } from 'sonner';
@@ -40,6 +40,99 @@ function DealerLeadsContent() {
                 Payment confirmation pending
             </Link>
         ) : null;
+
+    // ─── ID 33: push several house-dealer leads to one dealer at once ───────
+    // Only the house-dealer login / internal roles get a 200 from the lookup
+    // probe; everyone else never sees the checkboxes.
+    const [pushEligible, setPushEligible] = useState(false);
+    const [selected, setSelected] = useState<Set<string>>(new Set());
+    const [pushOpen, setPushOpen] = useState(false);
+    const [pushMobile, setPushMobile] = useState('');
+    const [pushMatch, setPushMatch] = useState<{ dealerId: string; name: string } | null>(null);
+    const [pushLookupMsg, setPushLookupMsg] = useState<string | null>(null);
+    const [pushLookupLoading, setPushLookupLoading] = useState(false);
+    const [pushing, setPushing] = useState(false);
+
+    useEffect(() => {
+        let alive = true;
+        fetch('/api/leads/dealer-lookup', { cache: 'no-store' })
+            .then((r) => { if (alive && r.ok) setPushEligible(true); })
+            .catch(() => { /* not eligible */ });
+        return () => { alive = false; };
+    }, []);
+
+    useEffect(() => {
+        setPushMatch(null);
+        setPushLookupMsg(null);
+        const digits = pushMobile.replace(/\D/g, '');
+        if (!pushOpen || !digits) return;
+        if (digits.length < 10) { setPushLookupMsg('Enter the 10-digit dealer mobile number'); return; }
+        let alive = true;
+        setPushLookupLoading(true);
+        const t = setTimeout(async () => {
+            try {
+                const r = await fetch(`/api/leads/dealer-lookup?mobile=${encodeURIComponent(digits)}`, { cache: 'no-store' });
+                const j = await r.json().catch(() => null);
+                if (!alive) return;
+                if (j?.success && j.data?.found) setPushMatch(j.data.dealer);
+                else setPushLookupMsg(j?.data?.message || j?.error?.message || 'No active dealer with this number');
+            } catch {
+                if (alive) setPushLookupMsg('Could not look up the dealer. Try again.');
+            } finally {
+                if (alive) setPushLookupLoading(false);
+            }
+        }, 400);
+        return () => { alive = false; clearTimeout(t); setPushLookupLoading(false); };
+    }, [pushMobile, pushOpen]);
+
+    const toggleSelected = (id: string) =>
+        setSelected((prev) => {
+            const next = new Set(prev);
+            if (next.has(id)) next.delete(id); else next.add(id);
+            return next;
+        });
+    const allSelected = leads.length > 0 && leads.every((l: any) => selected.has(l.id));
+    const toggleAll = () =>
+        setSelected(allSelected ? new Set() : new Set(leads.map((l: any) => l.id)));
+
+    const closePush = () => { setPushOpen(false); setPushMobile(''); };
+
+    const handlePush = async () => {
+        if (!pushMatch || selected.size === 0) return;
+        setPushing(true);
+        try {
+            const res = await fetch('/api/leads/push-to-dealer', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ leadIds: Array.from(selected), dealer_mobile: pushMobile }),
+            });
+            const j = await res.json().catch(() => null);
+            if (!j?.success) {
+                toast.error(j?.error?.message || j?.message || 'Could not push the leads');
+                return;
+            }
+            const { pushed = [], skipped = [], dealer } = j.data ?? {};
+            if (pushed.length) {
+                toast.success(`${pushed.length} lead${pushed.length === 1 ? '' : 's'} pushed to ${dealer?.name ?? 'the dealer'}`);
+            }
+            if (skipped.length) {
+                const names = new Map<string, string>(leads.map((l: any) => [l.id, l.owner_name || l.id]));
+                toast.error(
+                    `${skipped.length} not pushed: ` +
+                    skipped.slice(0, 3).map((s: any) => `${names.get(s.leadId) ?? s.leadId} (${s.reason})`).join('; ') +
+                    (skipped.length > 3 ? '…' : ''),
+                    { duration: 10000 },
+                );
+            }
+            setSelected(new Set());
+            closePush();
+            fetchLeads();
+        } catch {
+            toast.error('Could not push the leads');
+        } finally {
+            setPushing(false);
+        }
+    };
 
     const fetchLeads = async () => {
         setLoading(true);
@@ -220,6 +313,25 @@ function DealerLeadsContent() {
                 </div>
             </div>
 
+            {pushEligible && selected.size > 0 && (
+                <div className="flex flex-wrap items-center justify-between gap-3 mx-4 sm:mx-0 px-4 py-3 bg-brand-50 border border-brand-100 rounded-xl">
+                    <span className="text-sm font-medium text-brand-800">
+                        {selected.size} lead{selected.size === 1 ? '' : 's'} selected
+                    </span>
+                    <div className="flex items-center gap-2">
+                        <button onClick={() => setSelected(new Set())}
+                            className="px-3 py-2 text-sm font-medium text-gray-600 hover:text-gray-900">
+                            Clear
+                        </button>
+                        <button onClick={() => setPushOpen(true)}
+                            className="inline-flex items-center gap-2 px-4 py-2 bg-brand-600 text-white text-sm font-medium rounded-lg hover:bg-brand-700">
+                            <Send className="w-4 h-4" />
+                            Push to dealer
+                        </button>
+                    </div>
+                </div>
+            )}
+
             {/* Table */}
             <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden min-h-[300px]">
                 {loading ? (
@@ -238,6 +350,12 @@ function DealerLeadsContent() {
                         <table className="w-full text-left border-collapse">
                             <thead>
                                 <tr className="bg-gray-50 border-b border-gray-200 text-xs uppercase text-gray-500 font-semibold tracking-wider">
+                                    {pushEligible && (
+                                        <th className="pl-6 py-4 w-8">
+                                            <input type="checkbox" checked={allSelected} onChange={toggleAll}
+                                                aria-label="Select all leads" className="w-4 h-4 accent-brand-600" />
+                                        </th>
+                                    )}
                                     <th className="px-6 py-4">Customer</th>
                                     <th className="px-6 py-4">Status</th>
                                     <th className="px-6 py-4">Interest</th>
@@ -249,6 +367,12 @@ function DealerLeadsContent() {
                             <tbody className="divide-y divide-gray-100 text-sm">
                                 {leads.map((lead: any) => (
                                     <tr key={lead.id} className={`hover:bg-gray-50 transition-colors group ${newLeadId === lead.id ? 'bg-brand-50' : ''}`}>
+                                        {pushEligible && (
+                                            <td className="pl-6 py-4 w-8">
+                                                <input type="checkbox" checked={selected.has(lead.id)} onChange={() => toggleSelected(lead.id)}
+                                                    aria-label={`Select ${lead.owner_name}`} className="w-4 h-4 accent-brand-600" />
+                                            </td>
+                                        )}
                                         <td className="px-6 py-4">
                                             <div className="font-medium text-gray-900">{lead.owner_name}</div>
                                             <div className="text-gray-500 text-xs">{lead.owner_contact}</div>
@@ -347,7 +471,11 @@ function DealerLeadsContent() {
                         {leads.map((lead: any) => (
                             <div key={lead.id} className={`p-4 ${newLeadId === lead.id ? 'bg-brand-50' : ''}`}>
                                 <div className="flex items-start justify-between gap-3">
-                                    <div className="min-w-0">
+                                    {pushEligible && (
+                                        <input type="checkbox" checked={selected.has(lead.id)} onChange={() => toggleSelected(lead.id)}
+                                            aria-label={`Select ${lead.owner_name}`} className="mt-1 w-4 h-4 shrink-0 accent-brand-600" />
+                                    )}
+                                    <div className="min-w-0 flex-1">
                                         <div className="font-medium text-gray-900 truncate">{lead.owner_name}</div>
                                         <div className="text-gray-500 text-xs">{lead.owner_contact}</div>
                                         <div className="mt-1">{paymentPendingBadge(lead.id)}</div>
@@ -409,6 +537,56 @@ function DealerLeadsContent() {
                   </>
                 )}
             </div>
+
+            {/* Push to dealer modal (ID 33, bulk) */}
+            {pushOpen && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+                    <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full mx-4 overflow-hidden">
+                        <div className="px-6 py-5 border-b border-gray-100 flex items-center justify-between">
+                            <div>
+                                <h3 className="text-lg font-bold text-gray-900">Push {selected.size} lead{selected.size === 1 ? '' : 's'} to a dealer</h3>
+                                <p className="text-xs text-gray-500 mt-0.5">They move from iTarang House to the dealer you pick.</p>
+                            </div>
+                            <button onClick={closePush} className="text-gray-400 hover:text-gray-600" aria-label="Close">
+                                <X className="w-5 h-5" />
+                            </button>
+                        </div>
+                        <div className="px-6 py-5 space-y-3">
+                            <label className="block text-sm font-semibold text-gray-700">Dealer mobile number</label>
+                            <input
+                                type="tel"
+                                inputMode="numeric"
+                                autoFocus
+                                value={pushMobile}
+                                onChange={(e) => setPushMobile(e.target.value)}
+                                placeholder="10-digit mobile"
+                                className="w-full px-4 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent"
+                            />
+                            {pushLookupLoading ? (
+                                <p className="text-xs text-gray-500 flex items-center gap-1.5"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Looking up dealer…</p>
+                            ) : pushMatch ? (
+                                <p className="text-sm text-green-700">Dealer: <span className="font-semibold">{pushMatch.name}</span></p>
+                            ) : pushLookupMsg ? (
+                                <p className="text-xs text-red-600">{pushLookupMsg}</p>
+                            ) : null}
+                            <p className="text-xs text-gray-500">
+                                Finance leads move only to a finance-enabled dealer. A lead can be pushed once; moving it again needs an admin.
+                            </p>
+                        </div>
+                        <div className="px-6 pb-5 flex gap-3">
+                            <button onClick={closePush} disabled={pushing}
+                                className="flex-1 px-4 py-3 border-2 border-gray-200 rounded-xl font-semibold text-sm text-gray-600 hover:bg-gray-50 transition-all">
+                                Cancel
+                            </button>
+                            <button onClick={handlePush} disabled={pushing || !pushMatch}
+                                className="flex-1 px-4 py-3 bg-brand-600 text-white rounded-xl font-semibold text-sm hover:bg-brand-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2">
+                                {pushing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                                {pushing ? 'Pushing...' : 'Push leads'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* Edit Lead Modal */}
             {editTarget && (
