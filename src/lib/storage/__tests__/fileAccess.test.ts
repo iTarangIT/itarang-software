@@ -16,6 +16,7 @@ import {
     safeStorageKey,
     safeUploadFileName,
     shareableFileUrl,
+    signedFilePath,
 } from "../fileAccess";
 
 afterEach(() => vi.unstubAllEnvs());
@@ -139,7 +140,7 @@ describe("signed links", () => {
         expect(fileLinkValid("dealer-documents", KEY, "9999999999", "x")).toBe(false);
     });
 
-    it("WhatsApp gets an absolute, signed link for an agreement and a plain one otherwise", () => {
+    it("WhatsApp gets an absolute, signed link for any stored file", () => {
         vi.stubEnv("FILE_LINK_SECRET", "test-secret-0123456789");
         const origin = "https://crm.test";
         const signed = shareableFileUrl(`/api/files/dealer-documents/${KEY}`, { origin })!;
@@ -149,26 +150,51 @@ describe("signed links", () => {
         const q = new URL(signed).searchParams;
         expect(fileLinkValid("dealer-documents", KEY, q.get("exp"), q.get("sig"))).toBe(true);
 
-        expect(shareableFileUrl("/api/files/dealer-documents/owner-photograph/a.jpg", { origin })).toBe(
-            "https://crm.test/api/files/dealer-documents/owner-photograph/a.jpg",
-        );
+        // ID 119: an onboarding upload is no longer public, so it is signed too.
+        const photo = shareableFileUrl("/api/files/dealer-documents/owner-photograph/a.jpg", { origin })!;
+        const pq = new URL(photo).searchParams;
+        expect(photo.startsWith("https://crm.test/api/files/dealer-documents/owner-photograph/a.jpg?exp=")).toBe(true);
+        expect(fileLinkValid("dealer-documents", "owner-photograph/a.jpg", pq.get("exp"), pq.get("sig"))).toBe(true);
         expect(shareableFileUrl("https://elsewhere.test/x.pdf", { origin })).toBe("https://elsewhere.test/x.pdf");
         expect(shareableFileUrl(null)).toBeNull();
+    });
+});
+
+describe("signedFilePath (ID 119)", () => {
+    it("signs a files-proxy path, stays relative, and validates for that file only", () => {
+        vi.stubEnv("FILE_LINK_SECRET", "test-secret-0123456789");
+        const path = "/api/files/dealer-documents/last-3-years-itr/17849-abc-itr.pdf";
+        const signed = signedFilePath(path, 3600)!;
+        expect(signed).toMatch(/^\/api\/files\/dealer-documents\/last-3-years-itr\/17849-abc-itr\.pdf\?exp=\d+&sig=[0-9a-f]{64}$/);
+        const q = new URL(signed, "https://x.test").searchParams;
+        expect(fileLinkValid("dealer-documents", "last-3-years-itr/17849-abc-itr.pdf", q.get("exp"), q.get("sig"))).toBe(true);
+        expect(fileLinkValid("documents", "last-3-years-itr/17849-abc-itr.pdf", q.get("exp"), q.get("sig"))).toBe(false);
+        // An old signature on the stored path is replaced, not stacked.
+        expect(signedFilePath(`${path}?exp=1&sig=old`, 3600)).not.toContain("sig=old");
+    });
+
+    it("leaves anything that is not a files-proxy path alone", () => {
+        expect(signedFilePath("https://elsewhere.test/x.pdf", 3600)).toBe("https://elsewhere.test/x.pdf");
+        expect(signedFilePath(null, 3600)).toBeNull();
     });
 });
 
 describe("the routes use these rules", () => {
     const read = (...parts: string[]) => readFileSync(join(process.cwd(), "src", ...parts), "utf8");
 
-    it("the file link checks the path, then privacy, before it reads storage", () => {
+    it("the file link checks the path, then login-or-signature, before it reads storage", () => {
         const route = read("app", "api", "files", "[bucket]", "[...path]", "route.ts");
         const keyAt = route.indexOf("safeStorageKey(segments)");
-        const privateAt = route.indexOf("isPrivateDealerDocument(key)");
+        const signAt = route.indexOf("fileLinkValid(");
+        const authAt = route.indexOf("auth.getUser()");
         const readAt = route.indexOf("readBucketObject(bucket, key)");
         expect(keyAt).toBeGreaterThan(-1);
-        expect(privateAt).toBeGreaterThan(keyAt);
-        expect(readAt).toBeGreaterThan(privateAt);
+        expect(signAt).toBeGreaterThan(keyAt);
+        expect(authAt).toBeGreaterThan(signAt);
+        expect(readAt).toBeGreaterThan(authAt);
         expect(route).not.toMatch(/segments\.join\(/);
+        // ID 119: no bucket is exempt from the login check any more.
+        expect(route).not.toMatch(/AUTH_REQUIRED_BUCKETS/);
     });
 
     it("the public upload only writes to an allowed folder", () => {
