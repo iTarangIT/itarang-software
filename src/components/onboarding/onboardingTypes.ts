@@ -26,6 +26,8 @@ export type UploadFileItem = {
   file: File | null;
   previewUrl: string | null;
   uploadedUrl?: string | null;
+  /** Signed link to preview the upload without a login (ID 119). Never stored. */
+  viewUrl?: string | null;
   storagePath?: string | null;
   bucketName?: string | null;
   verificationState: VerificationState;
