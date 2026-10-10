@@ -90,9 +90,33 @@ export function DashPageHeader({
         };
     }, [sticky]);
 
-    // Collapsing only changes this element's own height, never its natural
-    // position, so going compact cannot flip `stuck` back and forth.
     const compact = sticky && stuck;
+
+    // Going compact shrinks this element, which pulls everything below it up;
+    // the browser's scroll anchoring then pulls scrollY back by the same amount,
+    // which drops it under the "stuck" line, the header expands again, and the
+    // page blinks between the two states. A bottom margin worth exactly the
+    // height it lost keeps the flow below in place, so nothing moves to anchor.
+    const expandedH = React.useRef(0);
+    const syncSpacer = React.useCallback(() => {
+        const el = ref.current;
+        if (!el) return;
+        if (!compact) {
+            expandedH.current = el.offsetHeight;
+            el.style.marginBottom = "";
+        } else {
+            el.style.marginBottom = `${Math.max(0, expandedH.current - el.offsetHeight)}px`;
+        }
+    }, [compact]);
+    React.useLayoutEffect(syncSpacer, [syncSpacer]);
+    React.useEffect(() => {
+        const el = ref.current;
+        if (!sticky || !el || typeof ResizeObserver === "undefined") return;
+        // Margin is outside the border box, so this never re-triggers itself.
+        const ro = new ResizeObserver(syncSpacer);
+        ro.observe(el);
+        return () => ro.disconnect();
+    }, [sticky, syncSpacer]);
 
     return (
         <div
