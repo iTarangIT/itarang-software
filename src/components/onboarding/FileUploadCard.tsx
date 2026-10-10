@@ -25,6 +25,8 @@ export type UploadCardValue = {
   file: File | null;
   previewUrl: string | null;
   uploadedUrl?: string | null;
+  /** Signed link to preview the upload without a login (ID 119). Never stored. */
+  viewUrl?: string | null;
   storagePath?: string | null;
   bucketName?: string | null;
   verificationState: VerificationState;
@@ -207,6 +209,7 @@ export default function FileUploadCard({
       onChange({
         ...baseItem,
         uploadedUrl: result.file?.url ?? null,
+        viewUrl: result.file?.viewUrl ?? null,
         storagePath: result.file?.path ?? null,
         bucketName: result.file?.bucketName ?? "dealer-documents",
         verificationState: "verified",
@@ -368,7 +371,7 @@ export default function FileUploadCard({
 
                   {currentValue.uploadedUrl ? (
                     <a
-                      href={currentValue.uploadedUrl}
+                      href={currentValue.viewUrl || currentValue.uploadedUrl}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="inline-flex items-center gap-1 text-xs font-medium text-[#1F5C8F] hover:underline"

@@ -77,7 +77,7 @@ export const PUBLIC_API_RULES: readonly PublicApiRule[] = [
   { pattern: /^\/api\/dealer\/onboarding\/resume\/(send-otp|verify-otp)$/, why: "one-time code to continue an existing application without a login — mailed to the owner e-mail on the application (ID 129)" },
   { pattern: /^\/api\/dealer-onboarding\/salespeople$/, why: "salesperson dropdown on the pre-login onboarding form — names and roles only, no email or phone (ID 66)" },
   { pattern: /^\/api\/uploads\/dealer-documents$/, why: "uploads from the pre-login onboarding form and the correction link" },
-  { pattern: /^\/api\/files\/dealer-documents\//, why: "reads of what the pre-login onboarding form uploaded (random keys)" },
+  { pattern: /^\/api\/files\/dealer-documents\//, why: "the route itself requires a session OR a signed, expiring link (?exp=&sig=) — the pre-login onboarding form previews its uploads that way (ID 119)" },
 
   // ── monitoring
   { pattern: /^\/api\/health$/, why: "uptime probe" },
