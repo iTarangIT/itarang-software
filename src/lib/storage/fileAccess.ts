@@ -10,7 +10,11 @@
 //      evidence), which were therefore open to anyone holding the link;
 //   3. the public upload took any folder name it was given.
 //
-// This module is the rule for all three. No storage or env imports besides
+// ID 119 (follow-up): every file, dealer documents included, now needs a login
+// or a signed, expiring link. The pre-login onboarding form gets a signed link
+// back from its upload (signedFilePath) instead of an open bucket.
+//
+// This module is the rule for all of it. No storage or env imports besides
 // node:crypto, so it can be unit-tested directly.
 
 import { createHmac, timingSafeEqual } from "node:crypto";
@@ -146,21 +150,11 @@ export function fileLinkValid(
     return want.length === got.length && timingSafeEqual(want, got);
 }
 
-/**
- * A link an outside service can fetch: for a private dealer document held as a
- * files-proxy path, an absolute URL with an expiring signature; anything else
- * is returned made absolute, otherwise unchanged.
- */
-export function shareableFileUrl(
-    url: string | null | undefined,
-    opts: { ttlSeconds?: number; origin?: string } = {},
-): string | null {
-    if (!url) return null;
-    const origin = (opts.origin ?? process.env.NEXT_PUBLIC_APP_URL ?? "").replace(/\/+$/, "");
+/** bucket + key of a files-proxy URL (relative or absolute), or null. */
+function proxyTarget(url: string): { at: number; path: string; bucket: string; key: string } | null {
     const at = url.indexOf("/api/files/");
-    if (at === -1) return url;
+    if (at === -1) return null;
     const path = url.slice(at).split("?")[0];
-    const absolute = /^https?:\/\//i.test(url) ? url.split("?")[0] : `${origin}${path}`;
     const [bucket, ...rest] = path.slice("/api/files/".length).split("/");
     const key = safeStorageKey(rest.map((s) => {
         try {
@@ -169,7 +163,38 @@ export function shareableFileUrl(
             return s;
         }
     }));
-    if (bucket !== "dealer-documents" || !key || !isPrivateDealerDocument(key)) return absolute;
-    const signed = fileLinkSignature(bucket, key, opts.ttlSeconds ?? 60 * 60);
+    return bucket && key ? { at, path, bucket, key } : null;
+}
+
+/**
+ * The files-proxy path with an expiring signature, for someone with no login
+ * who may see this one file: the pre-login dealer onboarding form previewing
+ * what it just uploaded, the dealer correction link. Stays relative. Any other
+ * URL comes back unchanged. Never store the result — store the plain path.
+ */
+export function signedFilePath(url: string | null | undefined, ttlSeconds: number): string | null {
+    if (!url) return null;
+    const t = proxyTarget(url);
+    if (!t) return url;
+    const signed = fileLinkSignature(t.bucket, t.key, ttlSeconds);
+    return signed ? `${t.path}?exp=${signed.exp}&sig=${signed.sig}` : t.path;
+}
+
+/**
+ * A link an outside service can fetch (WhatsApp/Meta has no login): a
+ * files-proxy path becomes an absolute URL with an expiring signature —
+ * every stored file needs a login or a signature (ID 119). Anything else is
+ * returned made absolute, otherwise unchanged.
+ */
+export function shareableFileUrl(
+    url: string | null | undefined,
+    opts: { ttlSeconds?: number; origin?: string } = {},
+): string | null {
+    if (!url) return null;
+    const origin = (opts.origin ?? process.env.NEXT_PUBLIC_APP_URL ?? "").replace(/\/+$/, "");
+    const t = proxyTarget(url);
+    if (!t) return url;
+    const absolute = /^https?:\/\//i.test(url) ? url.split("?")[0] : `${origin}${t.path}`;
+    const signed = fileLinkSignature(t.bucket, t.key, opts.ttlSeconds ?? 60 * 60);
     return signed ? `${absolute}?exp=${signed.exp}&sig=${signed.sig}` : absolute;
 }

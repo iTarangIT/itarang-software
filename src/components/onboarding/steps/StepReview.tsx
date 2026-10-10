@@ -58,7 +58,8 @@ type PreviewDoc = {
 
 function resolveDocUrl(item: UploadItemLike) {
   if (!item) return null;
-  return item.uploadedUrl || (item as any).previewUrl || null;
+  // viewUrl is signed — it opens without a login (ID 119).
+  return (item as any).viewUrl || item.uploadedUrl || (item as any).previewUrl || null;
 }
 
 function inferKindFromUrl(url: string, fileName?: string) {
