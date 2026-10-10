@@ -41,6 +41,12 @@ export type CommercialVersion = {
     commercial_id: string;
     version_no: number;
     approval_status: string | null;
+    /**
+     * ID 135: set when the sales team withdrew the version (E-314). Optional so
+     * callers that never read it keep compiling; a missing value means "not
+     * withdrawn".
+     */
+    withdrawn_at?: string | null;
 }
 
 /**
@@ -49,7 +55,8 @@ export type CommercialVersion = {
  * The highest version below the rejected one that is not itself rejected. A
  * rejected row must never become current again — it was refused — and a still
  * pending row must not either, or rejecting v3 would silently promote an
- * unapproved v2 to live.
+ * unapproved v2 to live. A WITHDRAWN row never comes back either (ID 135): the
+ * sales team closed it and the dealer's link already says "withdrawn".
  *
  * Returns null when nothing qualifies, which is the real case of a lead whose
  * very first quote is rejected: it goes back to having no current commercials
@@ -62,6 +69,7 @@ export function rollbackTarget(
     const eligible = versions
         .filter((v) => v.version_no < rejectedVersionNo)
         .filter((v) => (v.approval_status ?? "approved") === "approved")
+        .filter((v) => !v.withdrawn_at)
         .sort((a, b) => b.version_no - a.version_no);
     return eligible[0] ?? null;
 }

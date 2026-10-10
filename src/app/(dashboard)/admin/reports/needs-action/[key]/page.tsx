@@ -1,7 +1,7 @@
 // The list behind one Sales Head "Needs action now" tile — the same rows the
 // tile counts (src/lib/dashboard/salesHeadActions.ts), with the dashboard's
-// filters carried over in the URL. Each row opens the lead, where the actions
-// (call, reassign, mark Won, …) live. The filter bar is a plain GET form, and
+// filters carried over in the URL. Each row opens the lead (call, mark Won, …)
+// and carries Assign / Reassign itself (NeedsActionTable, ID 88 #3). The filter bar is a plain GET form, and
 // "Download CSV" sends the same query string to the API, so the file holds
 // exactly the rows on screen.
 
@@ -17,6 +17,8 @@ import {
     listSalesHeadActionFiltered,
     type ActionKey,
 } from "@/lib/dashboard/salesHeadActions";
+import { LEADS_BULK_ROLES } from "@/lib/leads/access";
+import { NeedsActionTable } from "./NeedsActionTable";
 
 export const dynamic = "force-dynamic";
 
@@ -70,14 +72,14 @@ export default async function NeedsActionListPage({
     const anyFilter = Boolean(sp.q || sp.state || sp.spoc_id || (sp.team && sp.team !== "all"));
     const hasValue = rows.some((r) => r.value != null);
     const total = rows.reduce((a, r) => a + (r.value ?? 0), 0);
-    const back = user.role === "sales_head" ? "/sales-head" : "/admin/reports/sales-dashboard";
+    const back = user.role === "sales_head" ? "/sales-head" : user.role === "admin" ? "/admin" : "/admin/reports/sales-dashboard";
     const field = "min-h-10 rounded-[10px] border border-border bg-surface px-2.5 text-[13px] text-ink outline-none focus:border-brand-teal";
 
     return (
         <div className="space-y-6 px-4 py-6 pb-12 sm:px-6 md:px-8">
             <div>
                 <Link href={back} className="inline-flex items-center gap-1 text-xs font-semibold text-brand-sky hover:underline">
-                    <ArrowLeft className="h-3.5 w-3.5" /> Sales Head dashboard
+                    <ArrowLeft className="h-3.5 w-3.5" /> Sales dashboard
                 </Link>
                 <h1 className="mt-2 text-2xl font-bold tracking-tight text-brand-navy">{ACTION_TITLES[k]}</h1>
                 <p className="mt-1 max-w-3xl text-sm text-ink-muted">{RULE[k]}</p>
@@ -145,41 +147,18 @@ export default async function NeedsActionListPage({
                     {anyFilter ? "No leads match these filters." : "Nothing here right now."}
                 </p>
             ) : (
-                <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white">
-                    <table className="min-w-full text-sm">
-                        <thead className="bg-gray-50 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
-                            <tr>
-                                <th className="px-4 py-3">Dealer</th>
-                                <th className="px-4 py-3">Location</th>
-                                <th className="px-4 py-3">{k === "visit_overdue" ? "ASM / owner" : "Owner"}</th>
-                                <th className="px-4 py-3">Why it is here</th>
-                                {hasValue && <th className="px-4 py-3 text-right">Value</th>}
-                            </tr>
-                        </thead>
-                        <tbody className="divide-y divide-gray-100">
-                            {rows.map((r) => (
-                                <tr key={r.lead_id} className="align-top">
-                                    <td className="px-4 py-3">
-                                        <Link
-                                            href={`/inside-sales/lead/${encodeURIComponent(r.lead_id)}`}
-                                            className="font-medium text-gray-900 hover:text-brand-sky hover:underline"
-                                        >
-                                            {r.dealer}
-                                        </Link>
-                                    </td>
-                                    <td className="px-4 py-3 text-gray-700">{[r.city, r.state].filter(Boolean).join(", ") || "—"}</td>
-                                    <td className="px-4 py-3 text-gray-700">{r.owner_name ?? "—"}</td>
-                                    <td className="px-4 py-3 text-gray-700">{r.detail}</td>
-                                    {hasValue && (
-                                        <td className="whitespace-nowrap px-4 py-3 text-right font-semibold tabular-nums text-gray-900">
-                                            {r.value == null ? "—" : inr(r.value)}
-                                        </td>
-                                    )}
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                </div>
+                // ID 88 #3 — assign / reassign on the row (the undo-Won tiles
+                // are decided on the lead, so they keep the plain list).
+                <NeedsActionTable
+                    rows={rows}
+                    ownerHeading={k === "visit_overdue" ? "ASM / owner" : "Owner"}
+                    hasValue={hasValue}
+                    canAssign={
+                        (LEADS_BULK_ROLES as readonly string[]).includes(user.role) &&
+                        k !== "won_undo_requests" &&
+                        k !== "won_undone_week"
+                    }
+                />
             )}
         </div>
     );

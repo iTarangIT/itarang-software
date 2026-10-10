@@ -1,5 +1,5 @@
 // GET /api/admin/exports/lead-events.xlsx?from=YYYY-MM-DD&to=YYYY-MM-DD
-//        [&lead_ids=a,b,c][&performer=<user id>]
+//        [&lead_ids=a,b,c][&performer=<user id>][&event_type=call,visit]
 //
 // Review R-21 (sheet 9, Requirements #34 and #44) — every event on the chosen
 // leads, filtered by WHEN IT HAPPENED, one row per event, plus a Summary sheet
@@ -27,6 +27,7 @@ import {
     summarizeEvents,
     type EventLogFilters,
 } from "@/lib/leads/eventLog";
+import { parseEventTypes } from "@/lib/leads/eventTypes";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -51,7 +52,9 @@ export const GET = withErrorHandler(async (req: Request) => {
     if (from > to) return errorResponse("`from` must not be after `to`.", 400);
     const leadIds = (sp.get("lead_ids") ?? "").split(",").map((s) => s.trim()).filter(Boolean).slice(0, 5000);
     const performer = sp.get("performer")?.trim() || undefined;
-    const f: EventLogFilters = { from, to, leadIds: leadIds.length ? leadIds : undefined, performerId: performer };
+    // ID 34 — optional ?event_type=call,visit (eventTypes.ts values); absent = all.
+    const eventTypes = parseEventTypes(sp.get("event_type"));
+    const f: EventLogFilters = { from, to, leadIds: leadIds.length ? leadIds : undefined, performerId: performer, eventTypes };
 
     const n = await countEvents(f);
     if (n > EVENT_LOG_ROW_CAP) {
@@ -67,7 +70,7 @@ export const GET = withErrorHandler(async (req: Request) => {
         entity_id: leadIds.length === 1 ? leadIds[0]! : "bulk",
         action: "exported",
         performed_by: user.id,
-        changes: { filters: { from, to, performer: performer ?? null }, selected_ids: leadIds.length, row_count: n },
+        changes: { filters: { from, to, performer: performer ?? null, event_types: eventTypes ?? null }, selected_ids: leadIds.length, row_count: n },
     });
 
     const [rows, summary, src] = await Promise.all([fetchEvents(f), summarizeEvents(f), eventSources()]);

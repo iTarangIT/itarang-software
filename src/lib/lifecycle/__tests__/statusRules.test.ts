@@ -96,6 +96,17 @@ describe("checkStatusMove", () => {
         expect(checkStatusMove({ from: "Commercials_Finalised", to: "Lost", event: "mark_lost" }).ok).toBe(true);
     });
 
+    it("a CEO-rejected quote with nothing left sends the lead back the same way (ID 135)", () => {
+        for (const from of ["Commercials_Explained", "Awaiting_Customer_Decision"] as const) {
+            expect(checkStatusMove({ from, to: "Under_Discussion", event: "quote_rejected" }).ok, from).toBe(true);
+        }
+        // Never out of Commercials finalised, never to another stage, never a closed lead.
+        expect(checkStatusMove({ from: "Commercials_Finalised", to: "Under_Discussion", event: "quote_rejected" }).ok).toBe(false);
+        expect(checkStatusMove({ from: "Awaiting_Customer_Decision", to: "Assigned_Not_Contacted", event: "quote_rejected" }).ok).toBe(false);
+        expect(checkStatusMove({ from: "Lost", to: "Under_Discussion", event: "quote_rejected" }).ok).toBe(false);
+        expect(checkStatusMove({ from: "Transferred_to_ASM", to: "Under_Discussion", event: "quote_rejected" }).ok).toBe(false);
+    });
+
     it("a same-status move is a no-op, not a refusal (ID 115.6)", () => {
         expect(checkStatusMove({ from: "Under_Discussion", to: "Under_Discussion", event: "progress" })).toEqual({ ok: true, noop: true });
         expect(checkStatusMove({ from: "Lost", to: "Lost", event: "mark_lost" })).toEqual({ ok: true, noop: true });

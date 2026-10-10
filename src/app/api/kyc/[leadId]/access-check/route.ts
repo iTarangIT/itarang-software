@@ -3,6 +3,7 @@ import { db } from '@/lib/db';
 import { kycVerificationMetadata, leads, personalDetails } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
 import { requireLeadAccess } from "@/lib/auth/requireLeadAccess";
+import { maskAadhaar, maskAadhaarDeep } from "@/lib/kyc/aadhaarMask";
 
 const FINANCE_METHODS = ['finance', 'other_finance', 'dealer_finance'];
 
@@ -60,7 +61,9 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ lead
             permanent_address: l.permanent_address ?? pd?.permanent_address ?? null,
             current_address: l.current_address ?? pd?.local_address ?? null,
             local_address: l.local_address ?? pd?.local_address ?? null,
-            aadhaar_no: pd?.aadhaar_no ?? null,
+            // ID 119: never send the full Aadhaar to the browser — the screens
+            // only display it masked, and nothing on them needs the digits.
+            aadhaar_no: maskAadhaar(pd?.aadhaar_no),
             pan_no: pd?.pan_no ?? null,
             asset_model: l.asset_model,
             asset_category: null, // column not present on current leads schema
@@ -73,7 +76,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ lead
             coupon_status: l.coupon_status,
             lead_status: l.lead_status,
             has_co_borrower: l.has_co_borrower,
-            kyc_draft_data: l.kyc_draft_data,
+            kyc_draft_data: maskAadhaarDeep(l.kyc_draft_data),
             draft_updated_at: l.updated_at,
             final_decision: finalDecision,
         };
