@@ -743,6 +743,13 @@ export const POST = withErrorHandler(async (req: Request) => {
                 dealerName: await dealerDisplayName(pushTarget?.dealerId ?? dealer_id),
             });
 
+            // ID 33 — tell the dealer on WhatsApp the lead is now theirs; it is
+            // listed under Save Drafts in their console. Best-effort, never throws.
+            if (pushTarget) {
+                const { notifyDealerOfPushedLead } = await import('@/lib/whatsapp/pushedLeadNotice');
+                await notifyDealerOfPushedLead(data.leadId!);
+            }
+
             return successResponse({
                 success: true,
                 leadId: data.leadId,
