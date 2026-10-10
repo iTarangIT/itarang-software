@@ -14,6 +14,13 @@ import {
 import { normalizeDateCell } from "@/lib/inventory/date-normalize";
 import { formatZodErrors, getRowSchema, normalizeLegacyKeys, ValidatedRow } from "@/lib/inventory/validation";
 import { loadProductMasterBatch } from "@/lib/inventory/product-master";
+import {
+  baseValueMismatch,
+  baseValueMismatchMessage,
+  buildBaseValueRefs,
+  distinctInvoiceNumbers,
+  rowInvoiceNumber,
+} from "@/lib/inventory/invoice-rules";
 
 const MAX_ROWS = 500;
 const MAX_BYTES = 5 * 1024 * 1024;
@@ -132,29 +139,27 @@ export const POST = withErrorHandler(async (req: Request) => {
       : null;
 
   // ── Invoice consistency + per-asset-type uniqueness ──────────────────────
-  // Every row of the file must carry the same invoice_number (battery/charger:
-  // also the same base_value). That invoice_number must not already exist
-  // for the SAME asset type — one supplier invoice can span a battery upload
-  // AND a charger upload, but the same asset type can't reuse it.
-  const refInvoiceNumber = String(rawRows[0]?.invoice_number || "").trim();
-  const refInvoiceValue =
-    assetType === "paraphernalia" ? null : Number(rawRows[0]?.base_value);
+  // A file may carry several invoice_numbers. Battery/charger: rows sharing an
+  // invoice_number AND model_id must share a base_value. Each invoice_number
+  // must not already exist for the SAME asset type — one supplier invoice can
+  // span a battery upload AND a charger upload, but the same asset type can't
+  // reuse it.
+  const baseValueRefs = buildBaseValueRefs(rawRows, assetType);
   const inventoryTypeForAsset =
     assetType === "paraphernalia" ? "paraphernalia_lot" : assetType;
-  const invoiceNumberAlreadyUsed =
-    refInvoiceNumber.length > 0 &&
-    (
-      await db
-        .select({ id: inventory.id })
+  const fileInvoiceNumbers = distinctInvoiceNumbers(rawRows);
+  const usedInvoiceRows = fileInvoiceNumbers.length
+    ? await db
+        .selectDistinct({ n: inventory.oem_invoice_number })
         .from(inventory)
         .where(
           and(
-            eq(inventory.oem_invoice_number, refInvoiceNumber),
+            inArray(inventory.oem_invoice_number, fileInvoiceNumbers),
             eq(inventory.inventory_type, inventoryTypeForAsset),
           ),
         )
-        .limit(1)
-    ).length > 0;
+    : [];
+  const usedInvoiceNumbers = new Set(usedInvoiceRows.map((r) => r.n));
 
   const seenSerialsInBatch = new Set<string>();
   const seenImeisInBatch = new Set<string>();
@@ -269,27 +274,16 @@ export const POST = withErrorHandler(async (req: Request) => {
       }
     }
 
-    // Invoice — one file = one invoice, and that invoice must be brand-new.
-    if (refInvoiceNumber) {
-      const rowInvoiceNumber = String(rawRows[i].invoice_number || "").trim();
-      if (rowInvoiceNumber && rowInvoiceNumber !== refInvoiceNumber) {
-        errors.push(
-          `invoice_number: must be identical on every row of one upload (expected '${refInvoiceNumber}')`,
-        );
-      }
-      if (invoiceNumberAlreadyUsed) {
-        errors.push(
-          `invoice_number: '${refInvoiceNumber}' was already used by a previous ${assetType} upload — use a new invoice number for this asset type`,
-        );
-      }
+    // Invoice — each invoice_number must be brand-new for this asset type.
+    const invoiceNumber = rowInvoiceNumber(rawRows[i]);
+    if (invoiceNumber && usedInvoiceNumbers.has(invoiceNumber)) {
+      errors.push(
+        `invoice_number: '${invoiceNumber}' was already used by a previous ${assetType} upload — use a new invoice number for this asset type`,
+      );
     }
-    if (refInvoiceValue != null && !Number.isNaN(refInvoiceValue)) {
-      const rowInvoiceValue = Number(rawRows[i].base_value);
-      if (!Number.isNaN(rowInvoiceValue) && rowInvoiceValue !== refInvoiceValue) {
-        errors.push(
-          `base_value: must be identical on every row of one upload (expected ${refInvoiceValue})`,
-        );
-      }
+    const baseValueRef = baseValueMismatch(rawRows[i], assetType, baseValueRefs);
+    if (baseValueRef) {
+      errors.push(`base_value: ${baseValueMismatchMessage(baseValueRef)}`);
     }
 
     const status: "valid" | "error" = errors.length === 0 ? "valid" : "error";
