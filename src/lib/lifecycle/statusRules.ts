@@ -33,6 +33,10 @@
 //                 one backward move an event may make. NOT from Commercials
 //                 finalised: the dealer said yes, and only Mark Won / Mark Lost
 //                 leave that stage.
+//   quote_rejected
+//                 the CEO rejected a quote and no other version is approved or
+//                 waiting for him (ID 135): the same backward move, and from
+//                 the same two stages only, as quote_withdrawn.
 //   reactivation  a closed lead re-enters the pipeline at New_Unassigned or
 //                 Assigned_Not_Contacted (BRD §0.9 reactivation, drop-out re-engage).
 //   dropout_lost  admin drop-out resolution: Converted → Lost.
@@ -64,6 +68,7 @@ export const STATUS_EVENTS = [
     "visit",
     "quote_approved",
     "quote_withdrawn",
+    "quote_rejected",
     "won_undone",
     "correction",
 ] as const;
@@ -174,13 +179,15 @@ export function checkStatusMove(input: {
                 return { ok: false, reason: `A lead cannot move back from ${label(from)} to ${label(to)}.` };
             }
             return { ok: true };
-        case "quote_withdrawn": {
+        case "quote_withdrawn":
+        case "quote_rejected": {
             if (from === "Commercials_Finalised") {
                 return { ok: false, reason: "The dealer approved the quote; from Commercials finalised use Mark Won or Mark Lost." };
             }
             const commercials = ["Commercials_Explained", "Awaiting_Customer_Decision"];
             if (to !== "Under_Discussion" || !commercials.includes(from ?? "")) {
-                return { ok: false, reason: "Withdrawing a quote moves a commercials-stage lead back to Under discussion only." };
+                const what = event === "quote_rejected" ? "Rejecting" : "Withdrawing";
+                return { ok: false, reason: `${what} a quote moves a commercials-stage lead back to Under discussion only.` };
             }
             return { ok: true };
         }

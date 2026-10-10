@@ -20,6 +20,17 @@
  *
  * The whole decision runs in one transaction with the row locked FOR UPDATE:
  * two CEOs clicking at once must not both pass the pending check.
+ *
+ * ID 135 (REJECT, 10 Oct):
+ *   - A withdrawn version is never made current again (rollbackTarget skips it).
+ *   - When no quote is left that is approved or waiting for the CEO (and not
+ *     withdrawn), the lead goes back to Under discussion through the status
+ *     guard (event quote_rejected) and writeTouchpoint's status history — the
+ *     same rule as Withdraw quote. A lead awaiting a field visit keeps that
+ *     status and has its pre_transfer_status lowered instead.
+ *   - The lead row is locked first, then the quote row — the same order as
+ *     withdrawQuote — so a reject and a withdrawal on one lead run in turn.
+ *   - The lead owner is alerted on the bell and WhatsApp with the reason.
  */
 import { NextRequest, NextResponse } from "next/server";
 import { sql } from "drizzle-orm";
@@ -31,6 +42,14 @@ import { writeTouchpoint } from "@/lib/touchpoints/write";
 import { rollbackTarget, type CommercialVersion } from "@/lib/leads/quoteApproval";
 import { tryGenerateQuotationDraft } from "@/lib/leads/quoteDraft";
 import { notifyQuotationApproved } from "@/lib/notifications/events";
+import {
+  leadMoveOnWithdraw,
+  lockLeadForQuote,
+  quotesInPlay,
+  type QuoteLockedLead,
+} from "@/lib/leads/withdrawQuote";
+import { alertOwnerQuoteRejected } from "@/lib/leads/quoteRejectedNotice";
+import type { LeadStatus } from "@/lib/lifecycle/transitions";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -66,17 +85,30 @@ export async function POST(
     const body = BodySchema.parse(await req.json());
 
     const outcome = await db.transaction(async (tx) => {
+      // ID 135: a reject may move the lead's status, so it locks the LEAD
+      // first (lead → quote, the same order as withdrawQuote). Approve moves
+      // nothing on the lead and keeps its quote-row-only lock.
+      let rejectLead: QuoteLockedLead | null = null;
+      if (body.decision === "reject") {
+        const owner = await tx.execute<{ dealer_lead_id: string }>(sql`
+          SELECT dealer_lead_id FROM dealer_lead_commercials
+           WHERE commercial_id = ${commercialId}
+        `);
+        if (owner[0]) rejectLead = await lockLeadForQuote(tx, owner[0].dealer_lead_id);
+      }
+
       const locked = await tx.execute<{
         commercial_id: string;
         dealer_lead_id: string;
         version_no: number;
+        quote_number: string | null;
         approval_status: string | null;
         price_quoted: string | null;
         final_price: string | null;
         quote_document_url: string | null;
         withdrawn_at: string | null;
       }>(sql`
-        SELECT commercial_id, dealer_lead_id, version_no, approval_status,
+        SELECT commercial_id, dealer_lead_id, version_no, quote_number, approval_status,
                price_quoted, final_price, quote_document_url,
                withdrawn_at::text AS withdrawn_at
           FROM dealer_lead_commercials
@@ -88,7 +120,8 @@ export async function POST(
       // NOTE: the lead is read WITHOUT a lock and is NOT part of the decision —
       // it only supplies who to notify and what to call the dealer. Locking it
       // here would put every quotation decision behind the same row as every
-      // ownership change on that lead, for two display fields.
+      // ownership change on that lead, for two display fields. (A REJECT does
+      // lock it, above — ID 135 — because a reject may move the lead.)
       if (!row) return { status: 404 as const, message: "Quotation not found." };
       // ID 78: the sales team withdrew it while it waited here. Approving it
       // now would release — and draft a document for — a quote nobody wants
@@ -160,8 +193,11 @@ export async function POST(
          WHERE commercial_id = ${commercialId}
       `);
 
+      // ID 135: withdrawn_at is read so rollbackTarget never restores a
+      // version the sales team withdrew.
       const siblings = await tx.execute<CommercialVersion>(sql`
-        SELECT commercial_id, version_no, approval_status
+        SELECT commercial_id, version_no, approval_status,
+               withdrawn_at::text AS withdrawn_at
           FROM dealer_lead_commercials
          WHERE dealer_lead_id = ${row.dealer_lead_id}
       `);
@@ -175,12 +211,67 @@ export async function POST(
         `);
       }
 
+      // ID 135: same rule as Withdraw quote — when nothing approved or at the
+      // CEO is left, the lead stops claiming the dealer has a quote to answer.
+      const rest = await quotesInPlay(tx, row.dealer_lead_id);
+      const live = rest.find((r) => r.approval_status === "approved") ?? null;
+      const leadStatus = rejectLead?.lead_status ?? null;
+      const move = leadMoveOnWithdraw({
+        leadStatus,
+        preTransferStatus: rejectLead?.pre_transfer_status ?? null,
+        quoteStillInPlay: rest.length > 0,
+      });
+      const value = Number(row.final_price ?? row.price_quoted ?? 0);
+      const money = value > 0 ? ` — ₹${value.toLocaleString("en-IN")}` : "";
+      const remarks =
+        `Quote${row.quote_number ? ` ${row.quote_number}` : ""} (v${row.version_no}) rejected by CEO${money} — ${body.reason}` +
+        (target
+          ? ` (restored v${target.version_no})`
+          : " (lead left with no current quote)") +
+        (move === "back" ? " · lead back to Under discussion" : "") +
+        (move === "pre_transfer" ? " · stage after the field visit lowered to Under discussion" : "");
+
+      if (move === "pre_transfer") {
+        await tx.execute(sql`
+          UPDATE dealer_leads SET pre_transfer_status = 'Under_Discussion' WHERE id = ${row.dealer_lead_id}
+        `);
+      }
+      // Written INSIDE the transaction now (it was post-commit): when it
+      // carries the status move, the reject and the move must commit together.
+      // A CEO decision is not the owner's work, so the idle clock stays put.
+      await writeTouchpoint(
+        {
+          dealerLeadId: row.dealer_lead_id,
+          touchpointType: "quote_rejected",
+          performedBy: user.id,
+          remarks,
+          countsAsWork: false,
+          ...(move === "back"
+            ? {
+                statusChange: {
+                  from: leadStatus as LeadStatus,
+                  to: "Under_Discussion" as LeadStatus,
+                  reasonNotes: body.reason ?? null,
+                  event: "quote_rejected" as const,
+                },
+              }
+            : {}),
+        },
+        { tx },
+      );
+
       return {
         status: 200 as const,
         decision: "rejected" as const,
         leadId: row.dealer_lead_id,
-        value: Number(row.final_price ?? row.price_quoted ?? 0),
+        value,
         restoredVersion: target?.version_no ?? null,
+        versionNo: row.version_no,
+        quoteNumber: row.quote_number,
+        ownerId: (rejectLead ?? lead).current_owner_id,
+        dealerName: (rejectLead ?? lead).dealer_name,
+        leadMove: move,
+        liveVersionNo: live?.version_no ?? null,
       };
     });
 
@@ -235,15 +326,22 @@ export async function POST(
         draftReady: !!draft,
       });
     } else {
-      await writeTouchpoint({
-        dealerLeadId: outcome.leadId,
-        touchpointType: "quote_rejected",
-        performedBy: user.id,
-        remarks:
-          `Quote rejected by CEO${money} — ${body.reason}` +
-          (outcome.restoredVersion
-            ? ` (restored v${outcome.restoredVersion})`
-            : " (lead left with no current quote)"),
+      // ID 135: the timeline note (and any status move) was written in the
+      // transaction. Now tell the owner — bell + WhatsApp, never throws.
+      await alertOwnerQuoteRejected({
+        leadId: outcome.leadId,
+        commercialId,
+        ownerUserId: outcome.ownerId,
+        notice: {
+          dealerName: outcome.dealerName,
+          quoteNumber: outcome.quoteNumber,
+          versionNo: outcome.versionNo,
+          value: outcome.value,
+          reason: body.reason ?? "",
+          rejectorName: user.name,
+          leadMove: outcome.leadMove,
+          liveVersionNo: outcome.liveVersionNo,
+        },
       });
     }
 

@@ -2173,6 +2173,52 @@ export async function notifyQuotationDealerDecision(p: {
   });
 }
 
+/**
+ * ID 135 — the CEO rejected a quotation. The mirror of `quote.approved`: until
+ * now an approval told the rep and a rejection wrote only a timeline note, so a
+ * refused discount went unanswered and the dealer went quiet. Goes to the lead
+ * owner only (they raised it and must act: revise, or talk to the dealer), with
+ * the CEO's reason, which is the whole point of the alert. The WhatsApp copy is
+ * sent separately by alertOwnerQuoteRejected (quoteRejectedNotice.ts).
+ */
+export async function notifyQuotationRejected(p: {
+  leadId: string;
+  commercialId: string;
+  ownerUserId: string | null;
+  dealerName: string | null;
+  quoteNumber: string | null;
+  versionNo: number;
+  value: number;
+  reason: string;
+  rejectorName?: string | null;
+  /** The text the bell shows — built by quoteRejectedMessage so WhatsApp says the same. */
+  message: string;
+}) {
+  if (!p.ownerUserId) return;
+  await emit({
+    type: "quote.rejected",
+    title: "Quotation rejected by CEO",
+    message: p.message,
+    leadId: p.leadId,
+    stage: "Quotation",
+    from: ADMIN_PARTY,
+    data: {
+      commercialId: p.commercialId,
+      quoteNumber: p.quoteNumber,
+      versionNo: p.versionNo,
+      value: p.value,
+      reason: p.reason,
+    },
+    to: [
+      {
+        audience: { kind: "user" as const, userId: p.ownerUserId },
+        as: ADMIN_PARTY,
+        href: `/inside-sales/lead/${p.leadId}?quote=${p.commercialId}`,
+      },
+    ],
+  });
+}
+
 /** Re-exported so routes need only one import. */
 export { ADMIN_AUDIENCE_ROLES };
 

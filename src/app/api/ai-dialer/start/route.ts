@@ -5,8 +5,8 @@ import { inArray } from "drizzle-orm";
 import { NextRequest, NextResponse } from "next/server";
 import { createCampaign } from "@/lib/queue/campaignTracker";
 import { advanceCampaign } from "@/lib/queue/advanceCampaign";
-import { requireAuth, requireRole } from "@/lib/auth-utils";
-import { LEADS_OVERSIGHT_ROLES } from "@/lib/leads/access";
+import { guardApi } from "@/lib/auth/apiGuard";
+import { DIALER_CONTROL_ROLES } from "@/lib/leads/access";
 import { campaignScheduleSchema } from "@/lib/queue/campaignWindow";
 
 const ALLOWED_PROVIDERS: DialerProvider[] = ["bolna", "elevenlabs"];
@@ -19,11 +19,14 @@ export async function POST(req: NextRequest) {
   // that was found and fixed on the /leads list (see the note in
   // src/app/api/dealer-leads/route.ts).
   //
-  // LEADS_OVERSIGHT_ROLES rather than the wider LEADS_PAGE_ROLES: spending money
-  // on a dialer run is not something an inside_sales_rep or finance_controller
-  // should be able to trigger. The best-effort requireAuth() below is kept for
-  // the genuinely system-fired case, where triggered_by is legitimately absent.
-  await requireRole([...LEADS_OVERSIGHT_ROLES]);
+  // Spending money on a dialer run is not something an inside_sales_rep or
+  // finance_controller should be able to trigger.
+  //
+  // ID 118 (decision 10 Oct): narrowed to DIALER_CONTROL_ROLES (admin, ceo,
+  // sales_head), and guardApi so no session is a JSON 401 and a wrong role a
+  // 403 (requireRole threw out of this plain handler: redirect / 500).
+  const gate = await guardApi([...DIALER_CONTROL_ROLES]);
+  if (!gate.ok) return gate.response;
 
   const body = await req.json();
   const {
@@ -78,16 +81,8 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Resolve triggered_by. requireAuth() returns null/redirects on no-session,
-  // but a system-fired start (e.g. cron-driven sweeps) might not have a user;
-  // keep the campaign insert resilient by tolerating an absent user.
-  let triggeredBy: string | null = null;
-  try {
-    const user = await requireAuth();
-    triggeredBy = (user as any)?.id ?? null;
-  } catch {
-    triggeredBy = null;
-  }
+  // triggered_by is the signed-in caller resolved by the gate above.
+  const triggeredBy: string | null = gate.user.id;
 
   // Snapshot saved-group names into the region blob so the campaign history
   // survives group renames/deletes. Best-effort — if lookup fails, we still

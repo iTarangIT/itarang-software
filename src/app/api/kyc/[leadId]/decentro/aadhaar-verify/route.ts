@@ -4,6 +4,7 @@ import { db } from '@/lib/db';
 import { kycVerifications } from '@/lib/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { aadhaarValidateOtp } from '@/lib/decentro';
+import { requireLeadAccess } from '@/lib/auth/requireLeadAccess';
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
     try {
@@ -12,6 +13,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
 
         const { leadId } = await params;
+        // ID 119: signed in AND this lead is the caller's (a dealer's own lead, or back office).
+        const leadGate = await requireLeadAccess(leadId);
+        if (!leadGate.ok) return leadGate.response;
         const { decentro_txn_id, otp } = await req.json();
 
         if (!decentro_txn_id || !otp) {

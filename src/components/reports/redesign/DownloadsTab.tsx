@@ -18,6 +18,7 @@ import type { DatasetInfo } from "@/lib/exports/datasets/types";
 import type { DownloadLogRow } from "@/lib/exports/downloadLog";
 import { DATASET_LAYOUT, DATASET_SECTIONS, groupColumns } from "@/lib/exports/datasets/layout";
 import { fmtNum } from "@/lib/reports/analysesShared";
+import { MultiSelectFilter } from "@/components/reports/MultiSelectFilter";
 import { BTN_OUTLINE, BTN_SOLID, C, CARD, EYEBROW, ErrorLine, Loading, PANEL, RuleLine, SELECT, TH, getJson } from "./ui";
 
 type Catalogue = {
@@ -304,7 +305,9 @@ export function DownloadsTab() {
                                     <input aria-label="State" placeholder="State: All" value={values.state ?? ""} onChange={(e) => set("state", e.target.value)} className={`${SELECT} w-36`} />
                                 )}
                                 {dataset.filters.map((f) =>
-                                    f.type === "select" ? (
+                                    f.type === "multiselect" ? (
+                                        <MultiSelectFilter key={f.key} filter={f} value={values[f.key]} onChange={(v) => set(f.key, v)} className={`${SELECT} max-w-[280px]`} />
+                                    ) : f.type === "select" ? (
                                         <select key={f.key} aria-label={f.label} value={values[f.key] ?? ""} onChange={(e) => set(f.key, e.target.value)} className={`${SELECT} max-w-[280px]`}>
                                             <option value="">{f.label}: All</option>
                                             {(f.options ?? []).map((o) => (

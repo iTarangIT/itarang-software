@@ -63,6 +63,22 @@ export interface FunnelOption {
     name: string;
 }
 
+/**
+ * Tracker ID 51 #2 — Ecofy (solar) leads live in their own table
+ * (ecofy_leads, synced from Ecofy) and are NOT part of the dealer funnel
+ * counts above; this section reports them alongside, clearly separate.
+ */
+export interface FunnelEcofySection {
+    /** false when ecofy_leads could not be read (e.g. table missing on this DB). */
+    available: boolean;
+    /** ecofy_leads first received by the CRM (created_at) in range. */
+    leads_received: number;
+    /** Those leads by their CURRENT Ecofy stage; sums to leads_received. */
+    by_stage: { stage: string; label: string; count: number }[];
+    /** Which filters apply to this section. */
+    note: string;
+}
+
 export interface FunnelCountsResult {
     filters: FunnelFilters;
     totals: FunnelCounts;
@@ -76,4 +92,6 @@ export interface FunnelCountsResult {
     notes: string[];
     /** Pick-lists for the filter bar. */
     options: { dealers: FunnelOption[]; nbfcs: FunnelOption[] };
+    /** ID 51 — Ecofy leads, separate from every count above. Optional for older clients. */
+    ecofy?: FunnelEcofySection;
 }

@@ -3,6 +3,8 @@ import { db } from '@/lib/db';
 import { consentRecords } from '@/lib/db/schema';
 import { eq, and, desc } from 'drizzle-orm';
 import { requireRole } from '@/lib/auth-utils';
+import { requireLeadAccess } from '@/lib/auth/requireLeadAccess';
+import { isNextRedirectError } from '@/lib/api-utils';
 
 type RouteContext = {
     params: Promise<{ leadId: string }>;
@@ -12,6 +14,9 @@ export async function GET(req: NextRequest, { params }: RouteContext) {
     try {
         await requireRole(['dealer', 'admin', 'ceo', 'business_head', 'sales_head']);
         const { leadId } = await params;
+        // ID 119: signed in AND this lead is the caller's (a dealer's own lead, or back office).
+        const leadGate = await requireLeadAccess(leadId);
+        if (!leadGate.ok) return leadGate.response;
 
         // consent_for: "customer" (Step 2 KYC) or "borrower" (Step 3 Borrower Consent)
         const consentFor = req.nextUrl.searchParams.get('consent_for') || 'primary';
@@ -56,6 +61,11 @@ export async function GET(req: NextRequest, { params }: RouteContext) {
             },
         });
     } catch (error) {
+        // requireRole() refuses a logged-out caller with a redirect; answer 401
+        // like the other KYC routes instead of a 500 "NEXT_REDIRECT".
+        if (isNextRedirectError(error)) {
+          return NextResponse.json({ success: false, error: { message: 'Unauthorized' } }, { status: 401 });
+        }
         console.error('[Consent Status] Error:', error);
         const message = error instanceof Error ? error.message : 'Failed to fetch consent status';
         return NextResponse.json({ success: false, error: { message } }, { status: 500 });
