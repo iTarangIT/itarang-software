@@ -3,7 +3,14 @@
  * one row per thing that HAPPENED to a lead, filtered by the EVENT's date —
  * "what changed on these leads last week" — not by when the lead was created.
  *
- * Event types (sheet 9 §B) and their sources:
+ * Event types (sheet 9 §B) and their sources — the list and its filter
+ * values live in eventTypes.ts (tracker ID 34: "Event type" filter):
+ *   Lead created         dealer_leads.created_at, every lead (ID 35); who /
+ *                        how from the "lead_created" line when there is one
+ *   Re-inquiry           lead_touchpoints lead_reinquiry (ID 81)
+ *   Sales-ready          lead_touchpoints sales_ready (ID 82, E-314 reason)
+ *   Contactability change  lead_touchpoints contactability_flag (ID 36):
+ *                        dead number / non-responsive / cleared / repaired
  *   Status change        dealer_lead_status_history (from → to, lost reason)
  *   Owner change         lead_touchpoints with from/to_owner_id (E-295)
  *   Interest change      dealer_lead_interest_history (E-304 trigger — every
@@ -32,6 +39,7 @@ import { sql, type SQL } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import { humanCall } from "@/lib/reports/metricDefinitions";
+import { eventTypeMatchers, type LeadEventTypeValue } from "@/lib/leads/eventTypes";
 
 export const EVENT_LOG_ROW_CAP = 50_000;
 
@@ -50,6 +58,8 @@ export type EventLogFilters = {
     leadIds?: string[];
     /** Only events performed by this user. */
     performerId?: string;
+    /** Only these event types (eventTypes.ts values, ID 34). Absent = every type. */
+    eventTypes?: string[];
 };
 
 export type EventLogRow = {
@@ -120,32 +130,103 @@ function eventsUnion(f: EventLogFilters, s: Sources): SQL {
 
     const fieldChanges = s.fieldChanges
         ? sql`
-        UNION ALL
         SELECT fc.changed_at, fc.dealer_lead_id, 'Log detail change',
                fc.old_value, fc.new_value, fc.changed_by, NULL, fc.field, NULL, NULL
           FROM dealer_lead_field_changes fc
          WHERE ${inRange(sql`fc.changed_at`, f)}`
-        : sql``;
+        : null;
 
-    return sql`
-        SELECT h.changed_at AS event_at, h.dealer_lead_id AS lead_id, 'Status change' AS event_type,
-               h.from_status AS from_value,
-               h.to_status || COALESCE(' (' || h.to_lost_reason || ')', '') AS to_value,
-               h.changed_by AS actor, NULL::text AS channel, NULL::text AS outcome,
-               NULL::int AS duration_sec, h.reason_notes AS remarks
+    // Each source, tagged with the event types (eventTypes.ts values) it can
+    // produce: a source none of whose types were asked for is not run at all.
+    // Columns: event_at, lead_id, event_type, from_value, to_value, actor,
+    // channel, outcome, duration_sec, remarks — names and types come from SEED.
+    const branches: Array<{ types: LeadEventTypeValue[]; sql: SQL | null }> = [
+        {
+            // ID 35 — every lead, dated at creation (created_at has no time
+            // zone and is stored as UTC). Who / how from the "Lead created"
+            // line when one was written (ID 81 onwards), else the originator.
+            types: ["lead_created"],
+            sql: sql`
+        SELECT dl.created_at AT TIME ZONE 'UTC', dl.id, 'Lead created',
+               NULL, replace(COALESCE(to_jsonb(dl) ->> 'source_door', dl.source), '_', ' '),
+               COALESCE(lc.performed_by, dl.originator_id),
+               dl.source, replace(to_jsonb(dl) ->> 'source_origin', '_', ' '), NULL, lc.remarks
+          FROM dealer_leads dl
+          LEFT JOIN LATERAL (
+              SELECT t.performed_by, t.remarks FROM lead_touchpoints t
+               WHERE t.dealer_lead_id = dl.id AND t.touchpoint_type = 'lead_created'
+               ORDER BY t.performed_at LIMIT 1) lc ON TRUE
+         WHERE dl.created_at IS NOT NULL
+           AND ${inRange(sql`(dl.created_at AT TIME ZONE 'UTC')`, f)}`,
+        },
+        {
+            // ID 81 — a known dealer arriving again (leadSource.ts writeReinquiry
+            // / recordReinquiries). The remark says through which door.
+            types: ["re_inquiry"],
+            sql: sql`
+        SELECT t.performed_at, t.dealer_lead_id, 'Re-inquiry', NULL, NULL,
+               t.performed_by, t.sync_method, NULL, NULL, t.remarks
+          FROM lead_touchpoints t
+         WHERE t.touchpoint_type = 'lead_reinquiry'
+           AND ${inRange(sql`t.performed_at`, f)}`,
+        },
+        {
+            // ID 82 — the dated Sales-ready event (salesReady.ts markSalesReady,
+            // and the backfill, both write this line). The reason is the
+            // lead's sales_ready_reason (E-314, read tolerantly).
+            types: ["sales_ready"],
+            sql: sql`
+        SELECT t.performed_at, t.dealer_lead_id, 'Sales-ready', NULL,
+               replace(to_jsonb(dl) ->> 'sales_ready_reason', '_', ' '),
+               t.performed_by, t.sync_method, NULL, NULL, t.remarks
+          FROM lead_touchpoints t
+          LEFT JOIN dealer_leads dl ON dl.id = t.dealer_lead_id
+         WHERE t.touchpoint_type = 'sales_ready'
+           AND ${inRange(sql`t.performed_at`, f)}`,
+        },
+        {
+            // ID 36 — contactability set / cleared / repaired (contactability.ts).
+            // Only the remark records which change it was, so To is read from
+            // the remark's fixed opening words.
+            types: ["contactability"],
+            sql: sql`
+        SELECT t.performed_at, t.dealer_lead_id, 'Contactability change', NULL,
+               CASE WHEN t.remarks LIKE 'Dead number%'                THEN 'Dead number'
+                    WHEN t.remarks LIKE 'Non-responsive%'             THEN 'Non-responsive'
+                    WHEN t.remarks LIKE 'Contactability cleared%'     THEN 'Cleared (call connected)'
+                    WHEN t.remarks LIKE 'Number repaired%'            THEN 'Cleared (number repaired)'
+                    WHEN t.remarks LIKE 'Number confirmed as is%'     THEN 'Dead number (confirmed as is)'
+                    ELSE NULL END,
+               t.performed_by, t.sync_method, NULL, NULL, t.remarks
+          FROM lead_touchpoints t
+         WHERE t.touchpoint_type = 'contactability_flag'
+           AND ${inRange(sql`t.performed_at`, f)}`,
+        },
+        {
+            types: ["status_change"],
+            sql: sql`
+        SELECT h.changed_at, h.dealer_lead_id, 'Status change',
+               h.from_status,
+               h.to_status || COALESCE(' (' || h.to_lost_reason || ')', ''),
+               h.changed_by, NULL, NULL, NULL, h.reason_notes
           FROM dealer_lead_status_history h
-         WHERE ${inRange(sql`h.changed_at`, f)}
-        UNION ALL
+         WHERE ${inRange(sql`h.changed_at`, f)}`,
+        },
+        {
+            types: ["owner_change"],
+            sql: sql`
         SELECT t.performed_at, t.dealer_lead_id, 'Owner change',
                fu.name, tu.name, t.performed_by, t.touchpoint_type, NULL, NULL, t.remarks
           FROM lead_touchpoints t
           LEFT JOIN users fu ON fu.id::text = to_jsonb(t) ->> 'from_owner_id'
           LEFT JOIN users tu ON tu.id::text = to_jsonb(t) ->> 'to_owner_id'
          WHERE (to_jsonb(t) ->> 'from_owner_id' IS NOT NULL OR to_jsonb(t) ->> 'to_owner_id' IS NOT NULL)
-           AND ${inRange(sql`t.performed_at`, f)}
-        UNION ALL
-        ${interest}
-        UNION ALL
+           AND ${inRange(sql`t.performed_at`, f)}`,
+        },
+        { types: ["interest_change"], sql: interest },
+        {
+            types: ["call", "call_ai"],
+            sql: sql`
         SELECT t.performed_at, t.dealer_lead_id,
                CASE WHEN t.touchpoint_type = 'ai_call' THEN 'Call (AI)' ELSE 'Call' END,
                NULL, NULL, t.performed_by,
@@ -161,23 +242,32 @@ function eventsUnion(f: EventLogFilters, s: Sources): SQL {
          -- A human call counted once (humanCall): a NeoDove call the agent
          -- re-dispositioned within minutes is one call, not two events.
          WHERE (t.touchpoint_type = 'ai_call' OR ${humanCall(sql`t`)})
-           AND ${inRange(sql`t.performed_at`, f)}
-        UNION ALL
+           AND ${inRange(sql`t.performed_at`, f)}`,
+        },
+        {
+            types: ["visit"],
+            sql: sql`
         SELECT COALESCE(v.actual_visit_date::timestamp AT TIME ZONE 'Asia/Kolkata', v.created_at),
                v.dealer_lead_id, 'Visit', NULL, v.visit_status, v.asm_id, v.meeting_mode,
                v.visit_outcome || CASE WHEN v.gps_check_in_lat IS NOT NULL THEN ' · GPS Y' ELSE ' · GPS N' END,
                NULL, v.visit_remarks
           FROM lead_visits v
-         WHERE ${inRange(sql`COALESCE(v.actual_visit_date::timestamp AT TIME ZONE 'Asia/Kolkata', v.created_at)`, f)}
-        UNION ALL
+         WHERE ${inRange(sql`COALESCE(v.actual_visit_date::timestamp AT TIME ZONE 'Asia/Kolkata', v.created_at)`, f)}`,
+        },
+        {
+            types: ["quote_requested", "commercials"],
+            sql: sql`
         SELECT c.created_at, c.dealer_lead_id,
                CASE WHEN c.event_type IN ${QUOTE_EVENTS} THEN 'Quote requested'
                     ELSE 'Commercials: ' || replace(c.event_type, '_', ' ') END,
                NULL, 'v' || c.version_no || COALESCE(' · ₹' || c.price_quoted::text, ''),
                c.created_by, NULL, NULL, NULL, c.deal_notes
           FROM dealer_lead_commercials c
-         WHERE ${inRange(sql`c.created_at`, f)}
-        UNION ALL
+         WHERE ${inRange(sql`c.created_at`, f)}`,
+        },
+        {
+            types: ["quote_approved", "quote_rejected"],
+            sql: sql`
         SELECT c.approved_at, c.dealer_lead_id,
                CASE WHEN c.approval_status = 'rejected' THEN 'Quote rejected' ELSE 'Quote approved' END,
                NULL, 'v' || c.version_no || COALESCE(' · ₹' || c.price_quoted::text, ''),
@@ -186,40 +276,71 @@ function eventsUnion(f: EventLogFilters, s: Sources): SQL {
          WHERE c.event_type IN ${QUOTE_EVENTS}
            AND c.approval_status IN ('approved', 'rejected')
            AND c.approved_at IS NOT NULL
-           AND ${inRange(sql`c.approved_at`, f)}
-        UNION ALL
+           AND ${inRange(sql`c.approved_at`, f)}`,
+        },
+        {
+            types: ["quote_sent", "quote_send_failed"],
+            sql: sql`
         SELECT d.created_at, d.dealer_lead_id,
                -- Only a dispatch that went through is "sent"; a failed one is its own event.
                CASE WHEN d.status = 'sent' THEN 'Quote sent' ELSE 'Quote send failed' END,
                NULL, d.recipient,
                d.sent_by, d.channel, d.status, NULL, d.error
           FROM quotation_dispatches d
-         WHERE ${inRange(sql`d.created_at`, f)}
-        UNION ALL
+         WHERE ${inRange(sql`d.created_at`, f)}`,
+        },
+        {
+            types: ["quote_dealer_decision"],
+            sql: sql`
         SELECT t.performed_at, t.dealer_lead_id, 'Quote dealer decision', NULL,
                CASE WHEN t.touchpoint_type = 'quote_dealer_approved' THEN 'accepted' ELSE 'declined' END,
                t.performed_by, NULL, NULL, NULL, t.remarks
           FROM lead_touchpoints t
          WHERE t.touchpoint_type IN ('quote_dealer_approved', 'quote_dealer_declined')
-           AND ${inRange(sql`t.performed_at`, f)}
-        UNION ALL
+           AND ${inRange(sql`t.performed_at`, f)}`,
+        },
+        {
+            types: ["escalation_raised"],
+            sql: sql`
         SELECT e.raised_at, e.dealer_lead_id, 'Escalation raised', NULL, e.urgency,
                e.raised_by, NULL, e.escalation_reason, NULL, e.escalation_notes
           FROM lead_escalations e
-         WHERE ${inRange(sql`e.raised_at`, f)}
-        UNION ALL
+         WHERE ${inRange(sql`e.raised_at`, f)}`,
+        },
+        {
+            types: ["escalation_ceo_comment"],
+            sql: sql`
         SELECT e.ceo_recommended_at, e.dealer_lead_id, 'Escalation CEO comment', NULL,
                e.ceo_recommendation, NULL, NULL, NULL, NULL, e.ceo_comment
           FROM lead_escalations e
-         WHERE e.ceo_recommended_at IS NOT NULL AND ${inRange(sql`e.ceo_recommended_at`, f)}
-        UNION ALL
+         WHERE e.ceo_recommended_at IS NOT NULL AND ${inRange(sql`e.ceo_recommended_at`, f)}`,
+        },
+        {
+            types: ["escalation_resolved"],
+            sql: sql`
         SELECT e.resolved_at, e.dealer_lead_id, 'Escalation resolved', NULL, e.resolution_action,
                e.resolved_by, NULL, NULL, NULL, e.resolution_notes
           FROM lead_escalations e
-         WHERE e.resolved_at IS NOT NULL AND ${inRange(sql`e.resolved_at`, f)}
-        ${fieldChanges}
-    `;
+         WHERE e.resolved_at IS NOT NULL AND ${inRange(sql`e.resolved_at`, f)}`,
+        },
+        { types: ["log_detail_change"], sql: fieldChanges },
+    ];
+
+    const wanted = f.eventTypes?.length ? new Set<string>(f.eventTypes) : null;
+    const chosen = branches.filter((b) => b.sql && (!wanted || b.types.some((t) => wanted.has(t))));
+    // SEED fixes the column names and types and returns nothing, so the union
+    // is valid whichever sources were skipped.
+    return sql.join([SEED, ...chosen.map((b) => b.sql as SQL)], sql`
+        UNION ALL
+`);
 }
+
+const SEED = sql`
+        SELECT NULL::timestamptz AS event_at, NULL::text AS lead_id, NULL::text AS event_type,
+               NULL::text AS from_value, NULL::text AS to_value, NULL::text AS actor,
+               NULL::text AS channel, NULL::text AS outcome, NULL::int AS duration_sec,
+               NULL::text AS remarks
+         WHERE FALSE`;
 
 function scope(f: EventLogFilters): SQL {
     const parts: SQL[] = [];
@@ -227,6 +348,15 @@ function scope(f: EventLogFilters): SQL {
         parts.push(sql`ev.lead_id IN (${sql.join(f.leadIds.map((i) => sql`${i}`), sql`, `)})`);
     }
     if (f.performerId) parts.push(sql`ev.actor = ${f.performerId}`);
+    // ID 34 — a source can yield several types (Call / Call (AI)), so the
+    // chosen types are also matched on the row itself.
+    if (f.eventTypes?.length) {
+        const { exact, prefixes } = eventTypeMatchers(f.eventTypes);
+        const ors: SQL[] = [];
+        if (exact.length) ors.push(sql`ev.event_type IN (${sql.join(exact.map((l) => sql`${l}`), sql`, `)})`);
+        for (const p of prefixes) ors.push(sql`ev.event_type LIKE ${`${p}%`}`);
+        if (ors.length) parts.push(sql`(${sql.join(ors, sql` OR `)})`);
+    }
     return parts.length ? sql`WHERE ${sql.join(parts, sql` AND `)}` : sql``;
 }
 

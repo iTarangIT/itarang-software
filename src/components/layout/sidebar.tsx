@@ -3332,8 +3332,8 @@ export function Sidebar() {
     }));
   }
 
-  // CRM Reporting & Dashboards redesign — the CEO and Sales Head get the
-  // regrouped, text-only menu. Applied AFTER every badge pass above, so the
+  // CRM Reporting & Dashboards redesign — the CEO, and Admin + Sales Head (one
+  // shared layout, tracker ID 90), get the regrouped, text-only menu. Applied AFTER every badge pass above, so the
   // layout only moves finished items around (see SidebarRedesign.tsx).
   const navLayout = NAV_LAYOUTS[inferredRole];
   const redesignedGroups = navLayout ? applyNavLayout(navLayout, menuItems) : null;

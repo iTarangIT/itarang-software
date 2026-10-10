@@ -15,15 +15,15 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ExternalLink, Loader2, Phone, RotateCcw, Tag, X } from "lucide-react";
+import { ExternalLink, Loader2, Phone, RotateCcw, Tag, Users, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { LeadTrackingPanel } from "@/components/leads/lead-tracking-panel";
 import { ReactivateLeadButton } from "@/components/leads/ReactivateLeadButton";
+import { ChangeLostReasonButton } from "@/components/leads/ChangeLostReasonButton";
+import { WonUndoControl } from "@/components/leads/WonUndoControl";
 import { StatusChip } from "@/app/(dashboard)/inside-sales/_components/StatusChip";
 import { InterestChip } from "@/app/(dashboard)/inside-sales/_components/InterestChip";
-import { LEAD_STATUS, LOST_REASON, type LeadStatus, type LostReason } from "@/lib/lifecycle/transitions";
-import { correctionAllowedTo } from "@/lib/leads/correctStatus";
-import { LOST_REASON_LABELS } from "@/app/(dashboard)/inside-sales/_components/modals/MarkLostModal";
+import type { LeadStatus } from "@/lib/lifecycle/transitions";
 import { VISIT_OUTCOME_LABELS, type VisitOutcome } from "@/lib/asm/types";
 import type { UserOption } from "@/lib/admin/types";
 import { LEAD_ASSIGNEE_ROLES, type LeadsCapabilities } from "@/lib/leads/access";
@@ -44,6 +44,22 @@ function pretty(value: string | null | undefined): string {
     if (!value) return "—";
     return value.replaceAll("_", " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
+
+// The drawer's actions on a Lost lead, one tab each instead of three stacked
+// sections. A non-Lost lead has only "reassign", so no tab bar shows.
+type ActionTab = "reactivate" | "lost_reason" | "reassign";
+
+const ACTION_TAB_LABEL: Record<ActionTab, string> = {
+    reactivate: "Reactivate",
+    lost_reason: "Change Lost reason",
+    reassign: "Reassign owner",
+};
+
+const ACTION_TAB_ICON: Record<ActionTab, typeof RotateCcw> = {
+    reactivate: RotateCcw,
+    lost_reason: Tag,
+    reassign: Users,
+};
 
 function fmtDateTime(iso: string | null): string {
     if (!iso) return "—";
@@ -72,28 +88,32 @@ type Props = {
 export function LeadDrawer({ lead, caps, onClose, onDone }: Props) {
     const open = lead !== null;
 
-    // The manage section does one of two things: hand the lead to someone else,
-    // or (admin / Sales Head) correct its status — the same logged override as
-    // "Correct status" on the lead page, without having to open it.
-    const [mode, setMode] = useState<"reassign" | "status">("reassign");
+    // The manage section reassigns the lead. "Change status" is gone (ID 136):
+    // a Lost lead gets Change Lost reason, a Won lead Undo Mark Won, below.
     const [targetUserId, setTargetUserId] = useState("");
     const [reason, setReason] = useState("");
-    const [toStatus, setToStatus] = useState<LeadStatus | "">("");
-    const [lostReason, setLostReason] = useState<LostReason | "">("");
-    const [competitor, setCompetitor] = useState("");
     const [submitting, setSubmitting] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [tab, setTab] = useState<ActionTab | null>(null);
+
+    const isLost = lead?.lead_status === "Lost";
+    const tabs = useMemo<ActionTab[]>(() => {
+        const t: ActionTab[] = [];
+        if (caps.canBulkAct && isLost) t.push("reactivate");
+        if (caps.canChangeLostReason && isLost) t.push("lost_reason");
+        if (caps.canBulkAct) t.push("reassign");
+        return t;
+    }, [caps.canBulkAct, caps.canChangeLostReason, isLost]);
+    // Falls back to the first tab when none is picked or the picked one is gone.
+    const activeTab: ActionTab | null = tab && tabs.includes(tab) ? tab : tabs[0] ?? null;
 
     // Reset the form whenever a different lead opens or the drawer closes.
     useEffect(() => {
-        setMode("reassign");
         setTargetUserId("");
         setReason("");
-        setToStatus("");
-        setLostReason("");
-        setCompetitor("");
         setError(null);
         setSubmitting(false);
+        setTab(null);
     }, [lead?.id]);
 
     // ESC closes the drawer (but not while a save is in flight).
@@ -175,65 +195,6 @@ export function LeadDrawer({ lead, caps, onClose, onDone }: Props) {
                 throw new Error(json?.error?.message ?? "Reassign failed");
             }
             toast.success("Lead reassigned.");
-            onDone();
-            onClose();
-        } catch (e) {
-            setError((e as Error).message);
-        } finally {
-            setSubmitting(false);
-        }
-    }
-
-    // Same option list as the lead page's "Correct status" popover: every
-    // status except the current one, never Won or Converted (ID 133).
-    const statusOptions = LEAD_STATUS.filter(
-        (t) => t !== lead?.lead_status && correctionAllowedTo(t),
-    );
-    const canChangeStatus = caps.canCorrectStatus;
-    const statusReady =
-        !!toStatus &&
-        reason.trim().length >= 5 &&
-        (toStatus !== "Lost" ||
-            (!!lostReason && (lostReason !== "lost_to_competition" || !!competitor.trim())));
-
-    async function submitStatus() {
-        if (!lead || !toStatus) return;
-        if (reason.trim().length < 5) {
-            setError("Reason must be at least 5 characters.");
-            return;
-        }
-        if (toStatus === "Lost" && !lostReason) {
-            setError("Pick a Lost reason.");
-            return;
-        }
-        if (toStatus === "Lost" && lostReason === "lost_to_competition" && !competitor.trim()) {
-            setError("Name the competitor.");
-            return;
-        }
-        setSubmitting(true);
-        setError(null);
-        try {
-            const res = await fetch(
-                `/api/admin/leads/${encodeURIComponent(lead.id)}/correct-status`,
-                {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                        to: toStatus,
-                        reason: reason.trim(),
-                        lost_reason: toStatus === "Lost" ? lostReason : undefined,
-                        competitor_name:
-                            toStatus === "Lost" && lostReason === "lost_to_competition"
-                                ? competitor.trim()
-                                : undefined,
-                    }),
-                },
-            );
-            const json = await res.json();
-            if (!res.ok || json?.success === false) {
-                throw new Error(json?.error?.message ?? "Failed to update status");
-            }
-            toast.success("Status updated.");
             onDone();
             onClose();
         } catch (e) {
@@ -430,7 +391,7 @@ export function LeadDrawer({ lead, caps, onClose, onDone }: Props) {
                         <ExternalLink className="h-3 w-3" />
                         Open full lead &amp; timeline
                     </Link>
-                    {/* The working page: status, Correct status, Withdraw quote.
+                    {/* The working page: status, Undo Mark Won, Withdraw quote.
                         Managers had no link to it from the leads list. */}
                     {caps.canOpenLeadPage && (
                         <Link
@@ -458,11 +419,51 @@ export function LeadDrawer({ lead, caps, onClose, onDone }: Props) {
                     </div>
                 )}
 
-                {/* A Lost lead's way back (BRD §0.9). Same role gate as the
-                    reassign form below — both post to /api/admin/leads/bulk. */}
-                {caps.canBulkAct && lead.lead_status === "Lost" && (
+                {/* ID 134: a Won marked by mistake, before onboarding is submitted. */}
+                {lead.lead_status === "Won" && (
+                    <div className="flex flex-wrap px-5 pt-4">
+                        <WonUndoControl leadId={lead.id} onDone={onDone} />
+                    </div>
+                )}
+
+                {/* Actions as tabs. Reactivate and Reassign share the
+                    /api/admin/leads/bulk role gate (caps.canBulkAct); Change
+                    Lost reason is ID 136's own gate. Hiding a tab is
+                    cosmetic — each endpoint enforces its roles server-side. */}
+                {tabs.length > 1 && (
                     <div className="px-5 pt-4">
+                        <div role="tablist" className="flex gap-1 rounded-lg bg-gray-100 p-1">
+                            {tabs.map((t) => {
+                                const Icon = ACTION_TAB_ICON[t];
+                                const on = t === activeTab;
+                                return (
+                                    <button
+                                        key={t}
+                                        type="button"
+                                        role="tab"
+                                        aria-selected={on}
+                                        onClick={() => setTab(t)}
+                                        disabled={submitting}
+                                        className={`flex flex-1 items-center justify-center gap-1 rounded-md px-2 py-1.5 text-[11px] font-semibold transition ${
+                                            on
+                                                ? "bg-white text-gray-900 shadow-sm"
+                                                : "text-gray-500 hover:text-gray-800"
+                                        }`}
+                                    >
+                                        <Icon className="h-3 w-3" />
+                                        {ACTION_TAB_LABEL[t]}
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    </div>
+                )}
+
+                {/* A Lost lead's way back (BRD §0.9). */}
+                {activeTab === "reactivate" && (
+                    <div className="px-5 py-4">
                         <ReactivateLeadButton
+                            key={lead.id}
                             leadId={lead.id}
                             onDone={() => {
                                 onDone();
@@ -472,129 +473,20 @@ export function LeadDrawer({ lead, caps, onClose, onDone }: Props) {
                     </div>
                 )}
 
-                {/* Reassign form — bulk-capable roles only. Hiding it is cosmetic;
-                    /api/admin/leads/bulk enforces the same list server-side. */}
-                {caps.canBulkAct && canChangeStatus && (
-                    <div className="px-5 pt-4">
-                        <div
-                            role="tablist"
-                            aria-label="Manage lead"
-                            className="grid grid-cols-2 gap-1 rounded-lg bg-gray-100 p-1"
-                        >
-                            {(
-                                [
-                                    ["reassign", "Reassign", RotateCcw],
-                                    ["status", "Change status", Tag],
-                                ] as const
-                            ).map(([key, label, Icon]) => (
-                                <button
-                                    key={key}
-                                    type="button"
-                                    role="tab"
-                                    aria-selected={mode === key}
-                                    disabled={submitting}
-                                    onClick={() => {
-                                        setMode(key);
-                                        setReason("");
-                                        setError(null);
-                                    }}
-                                    className={`inline-flex items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors ${
-                                        mode === key
-                                            ? "bg-white text-gray-900 shadow-sm"
-                                            : "text-gray-500 hover:text-gray-700"
-                                    }`}
-                                >
-                                    <Icon className="h-3.5 w-3.5" />
-                                    {label}
-                                </button>
-                            ))}
-                        </div>
+                {/* ID 136: a wrong Lost reason — the lead stays Lost. */}
+                {activeTab === "lost_reason" && (
+                    <div className="px-5 py-4">
+                        <ChangeLostReasonButton
+                            key={lead.id}
+                            leadId={lead.id}
+                            currentReason={lead.lost_reason ?? null}
+                            onDone={onDone}
+                        />
                     </div>
                 )}
 
-                {caps.canBulkAct && canChangeStatus && mode === "status" ? (
-                        <div className="px-5 py-4">
-                            <h3 className="flex items-center gap-1.5 text-sm font-semibold text-gray-900">
-                                <Tag className="h-3.5 w-3.5 text-gray-500" />
-                                Change status
-                            </h3>
-                            <p className="mt-1 text-[11px] text-gray-500">
-                                Recorded on the lead as a status correction with your reason. Won
-                                comes only from Mark Won, and Converted from onboarding approval.
-                            </p>
-
-                            <div className="mt-4 space-y-3">
-                                <div>
-                                    <label className="mb-1 block text-[11px] font-medium text-gray-600">
-                                        New status
-                                    </label>
-                                    <select
-                                        value={toStatus}
-                                        onChange={(e) => setToStatus(e.target.value as LeadStatus | "")}
-                                        disabled={submitting}
-                                        className="w-full rounded-md border border-gray-200 bg-white px-2.5 py-2 text-sm disabled:bg-gray-50"
-                                    >
-                                        <option value="">Select a status…</option>
-                                        {statusOptions.map((t) => (
-                                            <option key={t} value={t}>
-                                                {pretty(t)}
-                                            </option>
-                                        ))}
-                                    </select>
-                                </div>
-
-                                {toStatus === "Lost" && (
-                                    <div className="space-y-2 rounded-md border border-gray-200 bg-gray-50 p-3">
-                                        <select
-                                            value={lostReason}
-                                            onChange={(e) => setLostReason(e.target.value as LostReason | "")}
-                                            disabled={submitting}
-                                            className="w-full rounded-md border border-gray-200 bg-white px-2.5 py-2 text-sm"
-                                        >
-                                            <option value="">Lost reason (required)</option>
-                                            {LOST_REASON.map((r) => (
-                                                <option key={r} value={r}>
-                                                    {LOST_REASON_LABELS[r]}
-                                                </option>
-                                            ))}
-                                        </select>
-                                        {lostReason === "lost_to_competition" && (
-                                            <input
-                                                value={competitor}
-                                                onChange={(e) => setCompetitor(e.target.value)}
-                                                placeholder="Competitor (required)"
-                                                disabled={submitting}
-                                                className="w-full rounded-md border border-gray-200 bg-white px-2.5 py-2 text-sm"
-                                            />
-                                        )}
-                                    </div>
-                                )}
-
-                                <div>
-                                    <label className="mb-1 block text-[11px] font-medium text-gray-600">
-                                        Reason <span className="text-rose-600">*</span>
-                                    </label>
-                                    <textarea
-                                        value={reason}
-                                        onChange={(e) => setReason(e.target.value)}
-                                        rows={4}
-                                        placeholder="Why is the status being changed?"
-                                        disabled={submitting}
-                                        className="w-full rounded-md border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-100 disabled:bg-gray-50"
-                                    />
-                                    <p className="mt-1 text-[11px] text-gray-400">
-                                        Minimum 5 characters.
-                                    </p>
-                                </div>
-
-                                {error && (
-                                    <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-[12px] text-rose-700">
-                                        {error}
-                                    </div>
-                                )}
-                            </div>
-                        </div>
-                ) : caps.canBulkAct ? (
+                {/* Reassign form — bulk-capable roles only. */}
+                {activeTab === "reassign" && (
                         <div className="px-5 py-4">
                             <h3 className="flex items-center gap-1.5 text-sm font-semibold text-gray-900">
                                 <RotateCcw className="h-3.5 w-3.5 text-gray-500" />
@@ -658,7 +550,9 @@ export function LeadDrawer({ lead, caps, onClose, onDone }: Props) {
                                 )}
                             </div>
                         </div>
-                ) : (
+                )}
+
+                {!caps.canBulkAct && (
                         <div className="px-5 py-4">
                             <p className="text-[11px] text-gray-400">
                                 Reassignment is limited to admins and the sales head.
@@ -667,7 +561,7 @@ export function LeadDrawer({ lead, caps, onClose, onDone }: Props) {
                 )}
                 </div>
 
-                {caps.canBulkAct && (
+                {activeTab === "reassign" && (
                         <div className="flex items-center justify-end gap-2 border-t border-gray-100 px-5 py-3">
                             <Button
                                 type="button"
@@ -678,19 +572,6 @@ export function LeadDrawer({ lead, caps, onClose, onDone }: Props) {
                             >
                                 Cancel
                             </Button>
-                            {mode === "status" && canChangeStatus ? (
-                                <Button
-                                    type="button"
-                                    size="sm"
-                                    onClick={submitStatus}
-                                    disabled={submitting || !statusReady}
-                                >
-                                    {submitting && (
-                                        <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
-                                    )}
-                                    Update status
-                                </Button>
-                            ) : (
                                 <Button
                                     type="button"
                                     size="sm"
@@ -704,7 +585,6 @@ export function LeadDrawer({ lead, caps, onClose, onDone }: Props) {
                                     )}
                                     Reassign
                                 </Button>
-                            )}
                         </div>
                 )}
             </aside>

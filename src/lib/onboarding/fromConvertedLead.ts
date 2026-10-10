@@ -160,6 +160,23 @@ export async function createOnboardingApplicationForConvertedLead(
             LIMIT 1
         `)) as unknown as { id: string }[];
         applicationId = existing[0]?.id ?? null;
+
+        // ID 134: an Undo Mark Won withdrew this application while it was an
+        // untouched draft. Marked Won again, it is the live draft again —
+        // otherwise a Won lead would sit on a withdrawn application and fall
+        // straight into the drop-out review. Never reopens one the dealer
+        // submitted or anything an admin withdrew for another reason. The
+        // withdrawn_* columns are E-333; to_jsonb keeps a DB without it working.
+        if (applicationId) {
+            await executor.execute(sql`
+                UPDATE dealer_onboarding_applications
+                   SET onboarding_status = 'draft', updated_at = NOW()
+                 WHERE id = ${applicationId}::uuid
+                   AND onboarding_status = 'withdrawn'
+                   AND submitted_at IS NULL
+                   AND to_jsonb(dealer_onboarding_applications) ->> 'withdrawn_reason' = 'Marked Won by mistake'
+            `);
+        }
     }
 
     if (applicationId) {

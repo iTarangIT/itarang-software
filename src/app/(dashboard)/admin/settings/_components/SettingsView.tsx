@@ -12,6 +12,7 @@ import { QuotationCcForm } from "./QuotationCcForm";
 import { QuotationTermsForm } from "./QuotationTermsForm";
 import { TerritoryManager } from "./TerritoryManager";
 import { AsmVisitLimitForm } from "./AsmVisitLimitForm";
+import { ReportingLinesManager } from "./ReportingLinesManager";
 import type { SettingsBundle } from "@/lib/admin/types";
 
 // Two sections, two channels: Notification Access (E-231) governs the in-app
@@ -44,6 +45,8 @@ const TAB_VALUES = [
     "quotation-terms",
     "territories",
     "asm-visit-limit",
+    // ID 155 — who reports to whom (E-335).
+    "reporting-lines",
 ] as const;
 type TabValue = (typeof TAB_VALUES)[number];
 
@@ -90,6 +93,7 @@ export function SettingsView() {
                     { value: "quotation-terms", label: "Quotation terms" },
                     { value: "territories", label: "ASM Territories" },
                     { value: "asm-visit-limit", label: "ASM Visit Limit" },
+                    { value: "reporting-lines", label: "Reporting lines" },
                 ]}
             />
 
@@ -100,6 +104,7 @@ export function SettingsView() {
                     {active === "quotation-cc" && <QuotationCcForm />}
                     {active === "quotation-terms" && <QuotationTermsForm />}
                     {active === "asm-visit-limit" && <AsmVisitLimitForm />}
+                    {active === "reporting-lines" && <ReportingLinesManager />}
                     {active === "territories" &&
                         (bundleQuery.isLoading ? (
                             <div className="flex items-center gap-2 py-8 text-sm text-ink-muted">

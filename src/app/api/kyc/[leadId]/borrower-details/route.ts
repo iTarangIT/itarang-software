@@ -6,6 +6,8 @@ import { leads } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { requireRole } from "@/lib/auth-utils";
 import { requireLeadAccess } from "@/lib/auth/requireLeadAccess";
+import { maskAadhaar } from "@/lib/kyc/aadhaarMask";
+import { isNextRedirectError } from "@/lib/api-utils";
 
 type RouteContext = {
     params: Promise<{ leadId: string }>;
@@ -60,7 +62,10 @@ export async function GET(_req: NextRequest, { params }: RouteContext) {
                 dob: borrowerForm.dob || null,
                 email: borrowerForm.email || null,
                 pan_no: borrowerForm.pan_no || null,
-                aadhaar_no: borrowerForm.aadhaar_no || null,
+                // ID 119: masked (XXXX XXXX 1234). The form saves it back as
+                // is; save-draft and POST /api/coborrower/[leadId] keep the
+                // stored number when they receive the mask.
+                aadhaar_no: maskAadhaar(borrowerForm.aadhaar_no),
                 income: borrowerForm.income || null,
                 marital_status: borrowerForm.marital_status || null,
                 local_address: borrowerForm.current_address || null,
@@ -70,6 +75,11 @@ export async function GET(_req: NextRequest, { params }: RouteContext) {
             },
         });
     } catch (error) {
+        // requireRole() refuses a logged-out caller with a redirect; answer 401
+        // like the other KYC routes instead of a 500 "NEXT_REDIRECT".
+        if (isNextRedirectError(error)) {
+          return NextResponse.json({ success: false, error: { message: "Unauthorized" } }, { status: 401 });
+        }
         console.error("[Borrower Details] Error:", error);
         const message =
             error instanceof Error ? error.message : "Failed to fetch borrower details";

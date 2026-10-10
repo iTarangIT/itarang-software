@@ -12,6 +12,8 @@ import {
   type ConsentFor,
   type ConsentOtpChannel,
 } from "@/lib/kyc/consent-service";
+import { requireLeadAccess } from "@/lib/auth/requireLeadAccess";
+import { isNextRedirectError } from "@/lib/api-utils";
 
 type RouteContext = {
   params: Promise<{ leadId: string }>;
@@ -34,6 +36,9 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
   try {
     const user = await requireRole(["dealer", "admin", "ceo", "sales_head"]);
     const { leadId } = await params;
+    // ID 119: signed in AND this lead is the caller's (a dealer's own lead, or back office).
+    const leadGate = await requireLeadAccess(leadId);
+    if (!leadGate.ok) return leadGate.response;
     const body = await req.json().catch(() => ({}));
     const channel = String(body?.channel || "call").toLowerCase();
 
@@ -124,6 +129,11 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
       },
     });
   } catch (error: any) {
+    // requireRole() refuses a logged-out caller with a redirect; answer 401
+    // like the other KYC routes instead of a 500 "NEXT_REDIRECT".
+    if (isNextRedirectError(error)) {
+      return NextResponse.json({ success: false, error: { message: "Unauthorized" } }, { status: 401 });
+    }
     console.error("[Send Consent] Error:", error);
     const message = error instanceof Error ? error.message : "Server error";
     return NextResponse.json({ success: false, error: { message } }, { status: 500 });

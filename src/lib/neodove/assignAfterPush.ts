@@ -131,7 +131,7 @@ export async function assignAfterPush(input: {
         `);
         if (!rows[0]) return false;
 
-        await assignLeadOwner({
+        const outcome = await assignLeadOwner({
             leadId: input.leadId,
             fromStatus: rows[0].lead_status as LeadStatus | null,
             target: input.target,
@@ -144,6 +144,12 @@ export async function assignAfterPush(input: {
                 `"${input.campaignLabel}". NeoDove has no assignee API — this mirrors the assignment ` +
                 `made in that campaign's own settings.`,
         });
+        // ID 121: an Awaiting-field-visit lead stays with the ASM while a visit
+        // is booked — the push stands, the CRM assignment does not.
+        if (outcome.path === "handback_blocked") {
+            console.warn(`[NeoDove/assign] ${input.leadId} kept with the ASM: ${outcome.blockedReason}`);
+            return false;
+        }
 
         // Best-effort, and nested on purpose: without E-237 this UPDATE fails at
         // PARSE time, and that must cost the audit stamp rather than undoing an

@@ -401,6 +401,8 @@ export const TYPE_LABELS: Record<string, string> = {
   // E-243. The dealer's own answer, captured from the approval link or a
   // tapped WhatsApp button.
   "quote.dealer_decision": "Dealer responded to a quotation",
+  // ID 135. The CEO rejected a quotation — to the lead owner, with his reason.
+  "quote.rejected": "Quotation rejected by CEO",
 
   // --- Buyback: negotiation ---
   "buyback.negotiate": "Buyback price negotiation opened",

@@ -136,6 +136,8 @@ export const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   // E-256 — a quote landed in the CEO pending queue. Same Leads filing as its
   // siblings: the recipient acts on a deal, not on the catalogue.
   "quote.pending_approval": "Leads",
+  // ID 135 — the CEO rejected a quote; the owner must revise or talk to the dealer.
+  "quote.rejected": "Leads",
 
   // --- Dealer onboarding (portal + WhatsApp) ---
   "onboarding.chat_started": "Onboarding",
@@ -481,6 +483,9 @@ const WARNING = new Set([
   // E-256 — a pending quote is a dealer waiting on a number the rep has already
   // committed to; the queue is pull-only, so the amber chip IS the prompt.
   "quote.pending_approval",
+  // ID 135 — a refused quote leaves the dealer with nothing to answer; the
+  // owner has to act today.
+  "quote.rejected",
   // You are no longer winning, and the window is finite — both are "act now or
   // lose it", which is the definition of amber. `auction.lost` is NOT here: by
   // the time it arrives there is nothing left to act on.

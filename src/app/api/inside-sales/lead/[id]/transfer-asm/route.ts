@@ -8,6 +8,7 @@ import { requireRole } from "@/lib/auth-utils";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
 import { assertOwner } from "@/lib/leads/ownership";
 import {
+    LeadAlreadyTransferredError,
     TRANSFER_REASONS,
     TransferLeadNotFoundError,
     VISIT_TYPES,
@@ -51,6 +52,7 @@ export const POST = withErrorHandler(
             });
         } catch (err) {
             if (err instanceof TransferLeadNotFoundError) return errorResponse("Lead not found", 404);
+            if (err instanceof LeadAlreadyTransferredError) return errorResponse(err.message, 409);
             throw err;
         }
 

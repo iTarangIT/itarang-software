@@ -31,6 +31,7 @@ import type { RegionsResponse } from "@/app/api/locations/regions/route";
 import type { ActionKey, ActionSummary } from "@/lib/dashboard/salesHeadActions";
 import type { IsrScore } from "@/lib/admin/isrScorecard";
 import { OutsideTerritoryClaims } from "@/components/leads/OutsideTerritoryClaims";
+import { batteryReading } from "@/lib/admin/batteryReading";
 import {
     ActionTile,
     CardLink,
@@ -288,6 +289,17 @@ export function SalesHeadOpsView() {
             pct: goal > 0 ? Math.round((fallback / goal) * 100) : null,
         };
     };
+    // ID 88 #4 — batteries come from invoice item lines. Invoices in range with
+    // no lines captured make the count unknown ("—", never 0); some without
+    // lines make it a floor ("n+"). Same rule as the sales dashboard tables.
+    const batteryCell = (p: SalesSpocBlock): ScoreCell => {
+        const r = batteryReading(p.outcome);
+        if (r.state === "unknown") {
+            return { actual: "—", target: null, pct: null, note: `not tracked: ${num(r.invoices ?? 0)} invoices have no item lines` };
+        }
+        const c = cell(p.spoc_id, "batteries_sold", p.outcome.batteries_to_dealers);
+        return r.state === "partial" ? { ...c, actual: `${c.actual}+` } : c;
+    };
 
     // ── Needs action now ─────────────────────────────────────────────────────
     const holders = (idle.data?.holders ?? []).filter((h) => inSeg(h.holder_role, team) && (!filters.spoc_id || h.holder_id === filters.spoc_id));
@@ -325,6 +337,7 @@ export function SalesHeadOpsView() {
         actionTile("sales_ready", "Sales-ready leads with no owner", "now", "/admin/ready-to-assign"),
         actionTile("hot_not_called", "Hot leads not called in time", "now"),
         actionTile("visit_overdue", "Waiting for a field visit", "now"),
+        actionTile("won_undo_requests", "Undo Mark Won requests waiting", "now"),
         {
             key: "hot",
             ready: Boolean(d),
@@ -379,6 +392,7 @@ export function SalesHeadOpsView() {
             href: "/admin/accounts",
         },
         actionTile("won_without_quote", "Won without an approved quote", "info"),
+        actionTile("won_undone_week", "Won undone in the last 7 days", "info"),
     ];
     const openTiles = tiles.filter((t) => t.ready && t.n > 0);
     const clearTiles = tiles.filter((t) => t.ready && t.n === 0);
@@ -497,7 +511,7 @@ export function SalesHeadOpsView() {
         <div className="flex flex-col gap-7 pb-12" data-testid="sales-head-ops">
             <DashPageHeader
                     sticky
-                    eyebrow="Sales Head · operations"
+                    eyebrow="Sales dashboard"
                     title="Is the team doing the work, and what is stuck?"
                     subtitle={
                         <>
@@ -616,7 +630,7 @@ export function SalesHeadOpsView() {
                                                 ? [
                                                       cell(p.spoc_id, "dealer_visits", p.totals.unique_visits),
                                                       cell(p.spoc_id, "new_dealer_visits", p.totals.new_visits),
-                                                      cell(p.spoc_id, "batteries_sold", p.outcome.batteries_to_dealers),
+                                                      batteryCell(p),
                                                       cell(p.spoc_id, "kyc_submitted", p.outcome.kyc_submitted),
                                                       cell(p.spoc_id, "revenue", p.outcome.revenue, true),
                                                   ]

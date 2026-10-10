@@ -426,7 +426,7 @@ export async function buildBlockA(
                 db,
                 periods,
                 (p) => sql`SELECT COUNT(DISTINCT h.dealer_lead_id) AS n FROM dealer_lead_status_history h
-                            WHERE h.to_status = 'Won' AND ${inRange(sql`h.changed_at`, p)}`,
+                            WHERE h.to_status = 'Won' AND (to_jsonb(h) ->> 'won_undone_at') IS NULL AND ${inRange(sql`h.changed_at`, p)}`,
             ),
             perPeriod(
                 db,

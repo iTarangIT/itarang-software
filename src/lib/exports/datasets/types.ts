@@ -25,8 +25,17 @@ export interface DatasetSheet extends DatasetSheetSpec {
 export interface DatasetFilter {
     key: string;
     label: string;
-    type: "select" | "text";
+    /**
+     * "multiselect": tick any number of `options`; sent as one param of
+     * comma-joined values ("call,visit"). Nothing ticked = all (ID 34).
+     */
+    type: "select" | "text" | "multiselect";
     options?: { value: string; label: string }[];
+}
+
+/** A multiselect param value → the ticked option values. */
+export function splitMulti(value: string | null | undefined): string[] {
+    return (value ?? "").split(",").map((s) => s.trim()).filter(Boolean);
 }
 
 /** What the catalogue shows before anything is downloaded. */

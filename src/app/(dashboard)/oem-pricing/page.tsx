@@ -23,7 +23,6 @@
 import React from "react";
 import { OemInventoryPricing } from "@/components/dashboard/oem/OemInventoryPricing";
 import { OemPriceHistory } from "@/components/dashboard/oem/OemPriceHistory";
-import { ListPricePanel } from "@/components/dashboard/oem/ListPricePanel";
 
 export default function OemPricingPage() {
     return (
@@ -43,10 +42,17 @@ export default function OemPricingPage() {
                 </p>
             </div>
 
+            {/*
+              * List prices (E-321/E-323, IDs 4 and 47) live in this table's
+              * List Price column and its drawer: set, schedule, history,
+              * remove. ID 149: a second "List prices" box (ListPricePanel,
+              * from the 4-5 Oct double build) sat below it, wrote the same
+              * price list, and read a response shape the API no longer
+              * returns — so it always showed "No product matches" and
+              * "(undefined)". Removed rather than re-pointed: it could only
+              * ever duplicate the column.
+              */}
             <OemInventoryPricing />
-
-            {/* E-323 (IDs 4, 47) — the list price printed on quotations. */}
-            <ListPricePanel />
 
             {/*
               * E-242 — the full ledger, under the register that writes it.

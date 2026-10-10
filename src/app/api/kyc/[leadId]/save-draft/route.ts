@@ -7,6 +7,7 @@ import {
     isDealerKycEditsLocked,
 } from '@/lib/kyc/admin-workflow';
 import { requireRole } from '@/lib/auth-utils';
+import { restoreMaskedAadhaarDeep } from '@/lib/kyc/aadhaarMask';
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
     try {
@@ -34,7 +35,10 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ le
             );
         }
 
-        const { step, data } = await req.json();
+        const { step, data: rawData } = await req.json();
+        // ID 119: borrower-details hands the form a masked Aadhaar and the form
+        // autosaves it straight back — keep the stored number, not the mask.
+        const data = restoreMaskedAadhaarDeep(rawData, lead.kyc_draft_data);
 
         const savedAt = new Date();
         await db.update(leads)
