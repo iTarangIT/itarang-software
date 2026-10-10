@@ -837,6 +837,7 @@ function ActionCard({
   onboardingStatus,
   branchAck, setBranchAck,
   hasSalesperson,
+  onSetSalesperson,
 }: {
   remarks: string;
   setRemarks: (value: string) => void;
@@ -854,6 +855,8 @@ function ActionCard({
   onboardingStatus?: string;
   /** ID 66 — false blocks approval. */
   hasSalesperson: boolean;
+  /** ID 56 — set the salesperson right from the blocker, no Edit round-trip. */
+  onSetSalesperson?: (salespersonUserId: string) => Promise<boolean>;
   branchAck: boolean;
   setBranchAck: (value: boolean) => void;
 }) {
@@ -879,6 +882,8 @@ function ActionCard({
   const salespersonBlock = !hasSalesperson;
   const approvalBlocked =
     financeGateBlock || duplicateBlock || submissionGateBlock || branchAckBlock || salespersonBlock;
+  const [quickSalesperson, setQuickSalesperson] = useState("");
+  const [quickSalespersonSaving, setQuickSalespersonSaving] = useState(false);
 
   return (
     <motion.aside
@@ -942,10 +947,38 @@ function ActionCard({
         <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-4">
           <div className="flex items-start gap-3">
             <Clock3 className="mt-0.5 h-4 w-4 text-amber-600" />
-            <p className="text-sm text-amber-800">
-              Approval is blocked until a salesperson is set. Edit the application and pick
-              one under <span className="font-semibold">Salesperson</span>.
-            </p>
+            <div className="flex-1">
+              <p className="text-sm text-amber-800">
+                <span className="font-semibold">Approve &amp; Activate is blocked until a salesperson is set</span>{" "}
+                (the ISR, ASM or Sales Head who owns this dealer). Pick one here and save,
+                then approve.
+              </p>
+              {onSetSalesperson && (
+                <div className="mt-3 flex flex-col gap-2">
+                  <SalespersonSelect
+                    value={quickSalesperson}
+                    onPick={(o) => setQuickSalesperson(o?.id ?? "")}
+                    disabled={quickSalespersonSaving}
+                    className="w-full rounded-xl border border-amber-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-amber-400"
+                  />
+                  <button
+                    type="button"
+                    disabled={!quickSalesperson || quickSalespersonSaving}
+                    onClick={async () => {
+                      setQuickSalespersonSaving(true);
+                      try {
+                        if (await onSetSalesperson(quickSalesperson)) setQuickSalesperson("");
+                      } finally {
+                        setQuickSalespersonSaving(false);
+                      }
+                    }}
+                    className="inline-flex items-center justify-center rounded-xl bg-amber-600 px-3 py-2 text-sm font-semibold text-white hover:bg-amber-700 disabled:opacity-50"
+                  >
+                    {quickSalespersonSaving ? "Saving…" : "Save salesperson"}
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}
@@ -2158,6 +2191,30 @@ export default function DealerReviewPage() {
     }
   };
 
+  // ID 56 — set the salesperson straight from the Review Action blocker. The
+  // PATCH fills name / email / mobile from the picked user (ID 66).
+  const handleQuickSetSalesperson = async (salespersonUserId: string): Promise<boolean> => {
+    try {
+      const res = await fetch(`/api/admin/dealer-verifications/${dealerId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ salespersonUserId }),
+      });
+      let json: any = null;
+      try { json = await res.json(); } catch { /* non-JSON body */ }
+      if (!res.ok || !json?.success) {
+        toast.error(json?.message || `Could not save the salesperson (HTTP ${res.status})`);
+        return false;
+      }
+      toast.success("Salesperson saved — you can approve now.");
+      await reloadDealer();
+      return true;
+    } catch (err: any) {
+      toast.error(err?.message || "Something went wrong while saving the salesperson");
+      return false;
+    }
+  };
+
   const handleApprove = async () => {
     setSubmitting(true);
     try {
@@ -2169,7 +2226,10 @@ export default function DealerReviewPage() {
       let json: any = null;
       try { json = await res.json(); } catch { /* non-JSON body */ }
       if (!res.ok || !json?.success) {
-        toast.error(json?.message || `Approve failed (HTTP ${res.status})`);
+        // ID 56 — the "upload the audit trail yourself" hint is long; keep it
+        // on screen long enough to read and act on.
+        toast.error(json?.message || `Approve failed (HTTP ${res.status})`,
+          json?.details?.canUploadAuditTrail ? { duration: 20_000 } : undefined);
         return;
       }
       router.push("/admin/dealer-verification");
@@ -3417,6 +3477,7 @@ export default function DealerReviewPage() {
           branchAck={branchAck}
           setBranchAck={setBranchAck}
           hasSalesperson={!!data.salespersonUserId}
+          onSetSalesperson={handleQuickSetSalesperson}
         />
 
         {/* Finance enablement for a dealer already approved WITHOUT it. Not

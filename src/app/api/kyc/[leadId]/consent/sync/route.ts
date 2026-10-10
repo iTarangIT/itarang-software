@@ -12,6 +12,7 @@ import {
     checkAadhaarMatch,
     getExpectedConsentAadhaar,
 } from '@/lib/digio/aadhaar-match';
+import { requireLeadAccess } from '@/lib/auth/requireLeadAccess';
 
 type RouteContext = { params: Promise<{ leadId: string }> };
 
@@ -52,6 +53,9 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
     try {
         await requireRole(['dealer', 'admin', 'ceo', 'business_head', 'sales_head']);
         const { leadId } = await params;
+        // ID 119: signed in AND this lead is the caller's (a dealer's own lead, or back office).
+        const leadGate = await requireLeadAccess(leadId);
+        if (!leadGate.ok) return leadGate.response;
 
         // Sync the primary applicant by default; Step 3 page passes
         // ?consent_for=borrower to sync the co-borrower consent instead.

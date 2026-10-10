@@ -29,6 +29,16 @@ export default async function AdminReportsPage() {
                 <p className="mt-1 text-sm text-ink-muted">
                     Analyses, data downloads and the scheduled email reports.
                 </p>
+                {/* ID 88 — the old Operations Dashboard is off every menu; its
+                    route stays reachable from here until it is deleted. */}
+                {["admin", "sales_head", "ceo"].includes(user.role) && (
+                    <p className="mt-1 text-xs text-ink-muted">
+                        The old Operations Dashboard was replaced by the Sales dashboard.{" "}
+                        <a href="/admin/ops-dashboard" className="font-semibold text-brand-sky hover:underline">
+                            Open the old screen
+                        </a>
+                    </p>
+                )}
             </header>
             <ReportsView viewerRole={user.role} />
         </div>

@@ -27,6 +27,13 @@
 //
 // One writer for the web route and the WhatsApp Assistant's withdraw_quote.
 // The caller has already checked who may withdraw (owner or manager).
+//
+// ID 135: the LEAD row is locked first (lockLeadForQuote), before the quote
+// row, so two withdrawals of different versions on one lead — or a withdrawal
+// and a CEO reject — run one after the other. Locking only the quote row let
+// both see the other's version still "in play" and leave the lead at a
+// commercials stage with no quote. The CEO reject route takes the same locks in
+// the same order and reuses quotesInPlay + leadMoveOnWithdraw.
 
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
@@ -110,6 +117,49 @@ type Row = WithdrawableQuote & {
     pre_transfer_status: string | null;
 };
 
+export type QuoteLockedLead = {
+    lead_status: string | null;
+    pre_transfer_status: string | null;
+    current_owner_id: string | null;
+    dealer_name: string | null;
+};
+
+/**
+ * ID 135 — lock the lead row (FOR UPDATE) for a quote close: a withdrawal or a
+ * CEO reject. Take it BEFORE locking any dealer_lead_commercials row, in every
+ * caller, so the lock order is always lead → quote and two closes cannot
+ * deadlock. writeTouchpoint locks the same row again later, which is a no-op
+ * inside the same transaction. Null when the lead does not exist.
+ */
+export async function lockLeadForQuote(tx: Tx, leadId: string): Promise<QuoteLockedLead | null> {
+    const rows = (await tx.execute<QuoteLockedLead>(sql`
+        SELECT lead_status, pre_transfer_status, current_owner_id, dealer_name
+          FROM dealer_leads
+         WHERE id = ${leadId}
+         FOR UPDATE
+    `)) as unknown as QuoteLockedLead[];
+    return rows[0] ?? null;
+}
+
+export type QuoteInPlay = { version_no: number; quote_number: string | null; approval_status: string | null };
+
+/**
+ * The quote versions still in play on a lead: approved or waiting for the CEO,
+ * and not withdrawn — newest first. Read after the close was written, inside
+ * the same transaction. Shared by withdraw and the CEO reject (ID 135).
+ */
+export async function quotesInPlay(tx: Tx, leadId: string): Promise<QuoteInPlay[]> {
+    return (await tx.execute<QuoteInPlay>(sql`
+        SELECT q.version_no, q.quote_number, q.approval_status
+          FROM dealer_lead_commercials q
+         WHERE q.dealer_lead_id = ${leadId}
+           AND q.event_type IN ('quote_issue', 'quote_revision')
+           AND q.approval_status IN ('approved', 'pending')
+           AND q.withdrawn_at IS NULL
+         ORDER BY q.version_no DESC
+    `)) as unknown as QuoteInPlay[];
+}
+
 export type WithdrawQuoteResult = {
     quoteNumber: string | null;
     leadStatus: string | null;
@@ -127,6 +177,9 @@ export async function withdrawQuote(
     opts?: { tx?: Tx },
 ): Promise<WithdrawQuoteResult> {
     const run = async (tx: Tx): Promise<WithdrawQuoteResult> => {
+        // ID 135: the lead first, then the quote row — see lockLeadForQuote.
+        const lead = await lockLeadForQuote(tx, input.leadId);
+        if (!lead) throw new WithdrawQuoteError("Quote not found.", 404);
         const rows = (await tx.execute<Row>(sql`
             SELECT c.event_type, c.quote_number, c.version_no, c.approval_status, c.dealer_decision,
                    c.withdrawn_at::text AS withdrawn_at,
@@ -152,15 +205,7 @@ export async function withdrawQuote(
         // What is left once this one is gone: the other versions that are
         // approved or still at the CEO, and not withdrawn. The newest approved
         // one is the quote the dealer can still answer.
-        const rest = (await tx.execute<{ version_no: number; quote_number: string | null; approval_status: string | null }>(sql`
-            SELECT q.version_no, q.quote_number, q.approval_status
-              FROM dealer_lead_commercials q
-             WHERE q.dealer_lead_id = ${input.leadId}
-               AND q.event_type IN ('quote_issue', 'quote_revision')
-               AND q.approval_status IN ('approved', 'pending')
-               AND q.withdrawn_at IS NULL
-             ORDER BY q.version_no DESC
-        `)) as unknown as Array<{ version_no: number; quote_number: string | null; approval_status: string | null }>;
+        const rest = await quotesInPlay(tx, input.leadId);
         const live = rest.find((r) => r.approval_status === "approved") ?? null;
         const liveQuote = live ? { versionNo: live.version_no, quoteNumber: live.quote_number } : null;
 

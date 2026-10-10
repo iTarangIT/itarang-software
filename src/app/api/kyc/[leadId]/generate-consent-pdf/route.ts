@@ -10,6 +10,7 @@ import {
     generateManualConsentPdf,
     type ConsentFor,
 } from '@/lib/kyc/consent-service';
+import { requireLeadAccess } from '@/lib/auth/requireLeadAccess';
 
 type RouteContext = { params: Promise<{ leadId: string }> };
 
@@ -19,6 +20,9 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
     try {
         const user = await requireRole(['dealer']);
         const { leadId } = await params;
+        // ID 119: signed in AND this lead is the caller's (a dealer's own lead, or back office).
+        const leadGate = await requireLeadAccess(leadId);
+        if (!leadGate.ok) return leadGate.response;
         const body = await req.json().catch(() => ({}));
 
         let dealerName = '';

@@ -8,6 +8,8 @@ import { recordLeadCapture } from '@/lib/leads/lead-registry';
 import { capabilitiesFor } from '@/lib/dealer/dealer-capabilities';
 import { notifyLeadCreated } from '@/lib/notifications/events';
 import { dealerDisplayName } from '@/lib/notifications/emit';
+import { findActiveDealerByMobile, houseDealerCode, type PushTargetDealer } from '@/lib/leads/dealerByMobile';
+import { canUsePushToDealer, NO_ACTIVE_DEALER_MESSAGE } from '@/lib/leads/pushToDealer';
 import { z } from 'zod';
 import { eq, and, sql, desc } from 'drizzle-orm';
 import {
@@ -190,6 +192,10 @@ const step1Schema = z.object({
     asset_model_label: z.string().optional().nullable(),
     asset_type: z.string().optional().nullable(),
     is_vehicle_category: z.boolean().optional(),
+    // Tracker ID 33 — iTarang-team submissions only: the mobile of the
+    // onboarded dealer this customer file belongs to. Blank = keep it with
+    // the house dealer (iTarang House).
+    push_to_dealer_mobile: z.string().max(20).optional().nullable(),
 }).passthrough();
 
 // Compute the next reference sequence by taking the NUMERIC max of the trailing
@@ -565,6 +571,44 @@ export const POST = withErrorHandler(async (req: Request) => {
             }
         }
 
+        // Tracker ID 33 — an iTarang-team submission (house-dealer login) can
+        // name the onboarded dealer this file belongs to. The lead is then
+        // created under that dealer; uploader_id stays the team member so they
+        // can still finish KYC. Blank keeps it with the house dealer.
+        let pushTarget: PushTargetDealer | null = null;
+        const pushMobile = data.push_to_dealer_mobile?.trim();
+        if (pushMobile) {
+            const house = await houseDealerCode();
+            if (!canUsePushToDealer({ role: user.role, dealerId: dealer_id, houseDealerCode: house })) {
+                return errorResponse('Only the iTarang team can submit a lead for another dealer.', 403);
+            }
+            const [current] = await db
+                .select({ dealerId: leads.dealer_id })
+                .from(leads)
+                .where(eq(leads.id, data.leadId!))
+                .limit(1);
+            if (!current) return errorResponse('Lead not found', 404);
+            if (current.dealerId !== dealer_id) {
+                return errorResponse('This lead already belongs to another dealer. Moving it again needs an admin.', 409);
+            }
+            const found = await findActiveDealerByMobile(pushMobile);
+            if (found.status !== 'found') {
+                const why = found.status === 'invalid_mobile'
+                    ? 'Enter a 10-digit dealer mobile number'
+                    : found.status === 'ambiguous'
+                        ? 'More than one active dealer uses this number'
+                        : NO_ACTIVE_DEALER_MESSAGE;
+                return errorResponse(`${why}. Clear the dealer mobile to keep this lead with iTarang House.`, 422);
+            }
+            if (_isFinanceLead && !found.dealer.financeEnabled) {
+                return errorResponse(
+                    `${found.dealer.name} is not enabled for finance leads. Choose cash, or clear the dealer mobile to keep this lead with iTarang House.`,
+                    422,
+                );
+            }
+            pushTarget = found.dealer;
+        }
+
         const normPhone = normalizePhone(data.phone)!;
         const normOwnerPhone = normalizePhone(data.vehicle_owner_phone);
         const score = data.interest_level === 'hot' ? 90 : data.interest_level === 'warm' ? 60 : 30;
@@ -613,6 +657,15 @@ export const POST = withErrorHandler(async (req: Request) => {
                     workflow_step: isCashLike && isHot ? 4 : 1,
                     status: 'ACTIVE',
                     lead_status: 'new',
+                    // ID 33 — E-264 columns record who pushed it and when.
+                    ...(pushTarget
+                        ? {
+                            dealer_id: pushTarget.dealerId,
+                            assignment_status: 'assigned',
+                            dealer_assigned_at: new Date(),
+                            dealer_assigned_by: user.id,
+                        }
+                        : {}),
                     updated_at: new Date()
                 }).where(eq(leads.id, data.leadId!));
 
@@ -649,6 +702,23 @@ export const POST = withErrorHandler(async (req: Request) => {
                     performed_by: user.id,
                     timestamp: new Date()
                 });
+
+                if (pushTarget) {
+                    await tx.insert(auditLogs).values({
+                        id: `AUDIT-${Date.now()}-push`,
+                        entity_type: 'lead',
+                        entity_id: data.leadId!,
+                        action: 'LEAD_PUSHED_TO_DEALER',
+                        changes: {
+                            from_dealer_id: dealer_id,
+                            to_dealer_id: pushTarget.dealerId,
+                            to_dealer_name: pushTarget.name,
+                            via: 'step1_dealer_mobile',
+                        },
+                        performed_by: user.id,
+                        timestamp: new Date()
+                    });
+                }
             });
 
             // E-179 — first moment this lead has a real name + phone (Step 1 commit).
@@ -670,10 +740,14 @@ export const POST = withErrorHandler(async (req: Request) => {
                 customerName: data.full_name?.trim() || null,
                 paymentMethod: data.payment_method || 'finance',
                 source: 'portal',
-                dealerName: await dealerDisplayName(dealer_id),
+                dealerName: await dealerDisplayName(pushTarget?.dealerId ?? dealer_id),
             });
 
-            return successResponse({ success: true, leadId: data.leadId });
+            return successResponse({
+                success: true,
+                leadId: data.leadId,
+                ...(pushTarget ? { pushedTo: { dealerId: pushTarget.dealerId, name: pushTarget.name } } : {}),
+            });
         } catch (err) {
             console.error("Lead commit failed:", err);
             return errorResponse("Something went wrong while saving the lead. Please try again.", 500);

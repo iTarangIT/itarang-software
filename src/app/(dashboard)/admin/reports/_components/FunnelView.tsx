@@ -252,6 +252,23 @@ export function FunnelView() {
                         <ReasonBars title="Loan rejection reasons" reasons={d.rejection_reasons} empty="No loan files were rejected in this range." />
                         <ReasonBars title="Onboarding rejection reasons" reasons={d.onboarding_rejection_reasons} empty="No onboarding applications were rejected in this range." />
                     </div>
+
+                    {/* ID 51 #2 — Ecofy (solar) leads: a separate pipeline, never mixed into the counts above. */}
+                    {d.ecofy?.available && (
+                        <div className="space-y-2">
+                            <div className="flex flex-wrap items-baseline justify-between gap-2">
+                                <h3 className="text-sm font-semibold text-ink">
+                                    Ecofy leads (separate pipeline) — {fmt(d.ecofy.leads_received)} received
+                                </h3>
+                                <p className="text-[11px] text-ink-muted">{d.ecofy.note}</p>
+                            </div>
+                            <ReasonBars
+                                title="Ecofy leads by current stage"
+                                reasons={d.ecofy.by_stage.map((s) => ({ reason: s.label, count: s.count }))}
+                                empty="No Ecofy leads were received in this range."
+                            />
+                        </div>
+                    )}
                 </>
             )}
         </div>

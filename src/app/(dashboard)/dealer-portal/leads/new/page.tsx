@@ -127,6 +127,47 @@ function NewLeadWizardContent() {
     const [showDraftPrompt, setShowDraftPrompt] = useState(false);
     const [hasDraft, setHasDraft] = useState(false);
 
+    // ─── ID 33: iTarang-team submission → onboarded dealer ─────────────────
+    // Shown only to the house-dealer login / internal roles (the lookup API
+    // answers 403 to anyone else). Blank keeps the lead with iTarang House.
+    const [pushEligible, setPushEligible] = useState(false);
+    const [dealerMobile, setDealerMobile] = useState('');
+    const [dealerMatch, setDealerMatch] = useState<{ dealerId: string; name: string } | null>(null);
+    const [dealerLookupMsg, setDealerLookupMsg] = useState<string | null>(null);
+    const [dealerLookupLoading, setDealerLookupLoading] = useState(false);
+
+    useEffect(() => {
+        let alive = true;
+        fetch('/api/leads/dealer-lookup', { cache: 'no-store' })
+            .then((r) => { if (alive && r.ok) setPushEligible(true); })
+            .catch(() => { /* not eligible */ });
+        return () => { alive = false; };
+    }, []);
+
+    useEffect(() => {
+        setDealerMatch(null);
+        setDealerLookupMsg(null);
+        const digits = dealerMobile.replace(/\D/g, '');
+        if (!pushEligible || !digits) return;
+        if (digits.length < 10) { setDealerLookupMsg('Enter the 10-digit dealer mobile number'); return; }
+        let alive = true;
+        setDealerLookupLoading(true);
+        const t = setTimeout(async () => {
+            try {
+                const r = await fetch(`/api/leads/dealer-lookup?mobile=${encodeURIComponent(digits)}`, { cache: 'no-store' });
+                const j = await r.json().catch(() => null);
+                if (!alive) return;
+                if (j?.success && j.data?.found) setDealerMatch(j.data.dealer);
+                else setDealerLookupMsg(j?.data?.message || j?.error?.message || 'No active dealer with this number');
+            } catch {
+                if (alive) setDealerLookupMsg('Could not look up the dealer. Try again.');
+            } finally {
+                if (alive) setDealerLookupLoading(false);
+            }
+        }, 400);
+        return () => { alive = false; clearTimeout(t); setDealerLookupLoading(false); };
+    }, [dealerMobile, pushEligible]);
+
     // ─── Draft Init ─────────────────────────────────────────────────────────
 
     // The lead-create API uses two error shapes:
@@ -374,6 +415,11 @@ function NewLeadWizardContent() {
             }, 60);
             return;
         }
+        // ID 33 — a typed dealer mobile must resolve to an active dealer.
+        if (pushEligible && dealerMobile.trim() && !dealerMatch) {
+            setApiError(`${dealerLookupMsg || 'No active dealer with this number'}. Clear the dealer mobile to keep this lead with iTarang House.`);
+            return;
+        }
         setShowConfirm(true);
     };
 
@@ -392,6 +438,8 @@ function NewLeadWizardContent() {
                     commitStep: true,
                     lead_score: leadScoreMap[formData.interest_level] || 30,
                     additional_products: additionalProducts.filter(p => p.product_id),
+                    // ID 33 — only sent once the number resolved to a dealer.
+                    push_to_dealer_mobile: pushEligible && dealerMatch ? dealerMobile.trim() : undefined,
                 })
             });
             const result = await res.json();
@@ -556,6 +604,12 @@ function NewLeadWizardContent() {
                                     <div className="flex justify-between items-center">
                                         <span className="text-xs text-gray-500 font-medium">Product</span>
                                         <span className="text-sm font-semibold text-gray-900">{formData.product_name || formData.asset_model}</span>
+                                    </div>
+                                )}
+                                {pushEligible && (
+                                    <div className="flex justify-between items-center">
+                                        <span className="text-xs text-gray-500 font-medium">Dealer</span>
+                                        <span className="text-sm font-semibold text-gray-900">{dealerMatch ? dealerMatch.name : 'iTarang House'}</span>
                                     </div>
                                 )}
                                 {formData.payment_method && (
@@ -904,6 +958,37 @@ function NewLeadWizardContent() {
                             </div>
                         </div>
                     </SectionCard>
+
+                    {/* ─── ID 33: submit for an onboarded dealer (iTarang team) ── */}
+                    {pushEligible && (
+                        <SectionCard title="Submitting for a dealer? (iTarang team)">
+                            <div className="space-y-2">
+                                <InputField
+                                    label="Dealer mobile number (optional)"
+                                    value={dealerMobile}
+                                    onChange={(v) => setDealerMobile(v.replace(/[^0-9+ ]/g, ''))}
+                                    placeholder="Leave blank to keep this lead with iTarang House"
+                                    inputMode="tel"
+                                    maxLength={14}
+                                />
+                                {dealerLookupLoading ? (
+                                    <p className="px-1 text-xs text-gray-500">Looking up the dealer…</p>
+                                ) : dealerMatch ? (
+                                    <p className="px-1 text-xs font-semibold text-emerald-700">
+                                        This lead will be created under {dealerMatch.name}. It will show in their portal; you can still finish the KYC.
+                                    </p>
+                                ) : dealerLookupMsg ? (
+                                    <p className="px-1 text-xs font-semibold text-amber-700">
+                                        {dealerLookupMsg}. Clear the number to keep this lead with iTarang House.
+                                    </p>
+                                ) : (
+                                    <p className="px-1 text-xs text-gray-500">
+                                        If the customer came through an onboarded dealer, enter that dealer&apos;s mobile and the lead is created under them.
+                                    </p>
+                                )}
+                            </div>
+                        </SectionCard>
+                    )}
 
                     {/* ─── Select Payment Method ─────────────────────────── */}
                     <SectionCard title="Select Payment Method">
