@@ -11,6 +11,7 @@ import { listAsmOptions } from "@/lib/inside-sales/asmOptions";
 import {
     TRANSFER_REASONS,
     VISIT_TYPES,
+    notifyAsmOfTransfer,
     transferLeadToAsm,
     LeadAlreadyTransferredError,
     type TransferReason,
@@ -176,6 +177,18 @@ export const transferToAsmApplier = defineApplier<TransferToAsmPlan>({
             if (err instanceof LeadAlreadyTransferredError) throw new ActionRejected("already_transferred");
             throw err;
         }
-        return { new_owner_id: p.asm_id };
+        return {
+            new_owner_id: p.asm_id,
+            // The ASM's bell, once the transfer has committed.
+            afterCommit: async () => {
+                await notifyAsmOfTransfer({
+                    leadId: p.lead_id,
+                    asmId: p.asm_id,
+                    actorId: user.id,
+                    visitType: p.visit_type,
+                    suggestedVisitDate: p.suggested_visit_date,
+                });
+            },
+        };
     },
 });

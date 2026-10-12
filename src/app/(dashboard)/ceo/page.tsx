@@ -451,7 +451,7 @@ export default function CEODashboard() {
           tone: "warn",
           label: "Sales-ready leads with no owner",
           count: num(x.awaiting_assignment_total),
-          sub: `${num(x.unassigned_over_7d)} waiting more than 7 days`,
+          sub: `${num(x.unassigned_over_7d)} waiting ${x.unassigned_overdue_days}+ days`,
           href: "/admin/ready-to-assign",
           cta: "Open list",
         },
@@ -537,14 +537,21 @@ export default function CEODashboard() {
   const ordering = bucketCount("active") + bucketCount("cooling");
 
   // "89% of target" pill + "Target to date ₹3.05 Cr" line for a tile.
+  // ID 157 (10 Oct): the target keeps counting every status; under it,
+  // "Accepted ₹A · Not yet accepted ₹B" (Draft + Pending approval + Pushed).
   const includesToday = win.to >= todayStr;
   const vsTarget = (
     actual: number | null,
     metric: "revenue" | "batteries_sold",
     fmt: (v: number) => string,
-  ): { pill: { text: string; tone: Tone }; line: string | null } => {
-    const v = targetVerdict(targets.data?.[metric], actual, targetMonths ?? [], ym(now));
-    if (v.kind === "none") return { pill: { text: "No target", tone: "neutral" }, line: null };
+  ): { pill: { text: string; tone: Tone }; line: string | null; split: string | null } => {
+    const t = targets.data?.[metric];
+    const split =
+      t && t.sum > 0
+        ? `Accepted ${fmt(Math.round(t.accepted))} · Not yet accepted ${fmt(Math.round(t.notAccepted))}`
+        : null;
+    const v = targetVerdict(t, actual, targetMonths ?? [], ym(now));
+    if (v.kind === "none") return { pill: { text: "No target", tone: "neutral" }, line: null, split: null };
     if (v.kind === "partial") {
       const names = v.covered.map((mo) =>
         new Date(`${mo}-01T00:00:00`).toLocaleDateString("en-IN", { month: "short", year: "numeric" }),
@@ -552,11 +559,12 @@ export default function CEODashboard() {
       return {
         pill: { text: "Target not set for every month", tone: "neutral" },
         line: `Target set only for ${names.join(", ")} (${fmt(Math.round(v.goal))}${v.includesThisMonth ? " to date" : ""})`,
+        split,
       };
     }
     const line = `${includesToday ? "Target to date" : "Target"} ${fmt(Math.round(v.goal))}`;
-    if (v.pct == null) return { pill: { text: "Target set", tone: "neutral" }, line };
-    return { pill: { text: `${v.pct}% of target`, tone: toneForPct(v.pct) }, line };
+    if (v.pct == null) return { pill: { text: "Target set", tone: "neutral" }, line, split };
+    return { pill: { text: `${v.pct}% of target`, tone: toneForPct(v.pct) }, line, split };
   };
   const revenueTarget = vsTarget(money ? money.revenue.now : null, "revenue", inr);
   const batteriesTarget = vsTarget(
@@ -626,12 +634,7 @@ export default function CEODashboard() {
   // The Lead Funnel report's stages when it loads (share of the period's leads
   // that ever reached each stage); the control tower's three steps otherwise.
   type FunnelRow = { label: string; count: number; pct: number | null; note: string };
-  // ID 153 — the report lists bulk imports on their own row; they are not a
-  // funnel stage, so they leave the bars and are stated under the card.
-  const BULK_STAGE = "Imported in bulk (not in the funnel)";
-  const bulkStage = (stages.data?.rows ?? []).find((r) => r.stage === BULK_STAGE);
-  const importedBulk = bulkStage ? Number(bulkStage.count ?? 0) : (engine?.imported_bulk.now ?? null);
-  const stageRows: FunnelRow[] = (stages.data?.rows ?? []).filter((r) => r.stage !== BULK_STAGE).map((r, i) => {
+  const stageRows: FunnelRow[] = (stages.data?.rows ?? []).map((r, i) => {
     const ever = r.ever_reached == null ? null : Number(r.ever_reached);
     const pct = r.pct_reached == null ? null : Number(r.pct_reached);
     return {
@@ -789,6 +792,7 @@ export default function CEODashboard() {
           pill={revenueTarget.pill}
           sub={[
             revenueTarget.line,
+            revenueTarget.split,
             money && money.unlinked_revenue > 0
               ? `${inr(money.unlinked_revenue)} not linked to a dealer`
               : "Non-void invoices dated in the period",
@@ -828,6 +832,7 @@ export default function CEODashboard() {
               ? "Loading…"
               : [
                   batteriesTarget.line,
+                  batteriesTarget.split,
                   sales.data ? "Allocated to dealer accounts in the period" : "Not available yet",
                 ]
                   .filter(Boolean)
@@ -917,7 +922,7 @@ export default function CEODashboard() {
           )}
           <span className="text-xs text-ink-muted">
             {revenueTarget.line
-              ? `${revenueTarget.line} (sum of everyone's targets). Pace is a straight line over calendar days.`
+              ? `${revenueTarget.line} (sum of everyone's targets${revenueTarget.split ? `: ${revenueTarget.split}` : ""}). Pace is a straight line over calendar days.`
               : "No company revenue target is set, so there is no target-pace line. Pace is a straight line over calendar days."}
           </span>
         </DashCard>
@@ -1087,8 +1092,7 @@ export default function CEODashboard() {
           action={<CardLink href="/reports?analysis=lead_sources">Lead sources</CardLink>}
           caption={
             engine
-              ? `How far the period's ${num(engine.leads_in.now)} new leads have got. The bar is the share of them that reached each stage.` +
-                (importedBulk ? ` ${num(importedBulk)} more came in as bulk imports and are not counted here.` : "")
+              ? `How far the period's ${num(engine.leads_in.now)} new leads have got. The bar is the share of them that reached each stage.`
               : undefined
           }
         >

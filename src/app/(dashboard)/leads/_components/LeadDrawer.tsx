@@ -97,13 +97,16 @@ export function LeadDrawer({ lead, caps, onClose, onDone }: Props) {
     const [tab, setTab] = useState<ActionTab | null>(null);
 
     const isLost = lead?.lead_status === "Lost";
+    const lostByDropout = isLost && lead?.lost_reason === "onboarding_dropout";
     const tabs = useMemo<ActionTab[]>(() => {
         const t: ActionTab[] = [];
-        if (caps.canBulkAct && isLost) t.push("reactivate");
-        if (caps.canChangeLostReason && isLost) t.push("lost_reason");
+        // ID 158: Reactivate is Admin / Sales Head / CEO (caps.canReactivate).
+        if (caps.canReactivate && isLost) t.push("reactivate");
+        // ID 168: a drop-out Lost reason is the drop-out review's to change.
+        if (caps.canChangeLostReason && isLost && !lostByDropout) t.push("lost_reason");
         if (caps.canBulkAct) t.push("reassign");
         return t;
-    }, [caps.canBulkAct, caps.canChangeLostReason, isLost]);
+    }, [caps.canBulkAct, caps.canReactivate, caps.canChangeLostReason, isLost, lostByDropout]);
     // Falls back to the first tab when none is picked or the picked one is gone.
     const activeTab: ActionTab | null = tab && tabs.includes(tab) ? tab : tabs[0] ?? null;
 
@@ -426,9 +429,10 @@ export function LeadDrawer({ lead, caps, onClose, onDone }: Props) {
                     </div>
                 )}
 
-                {/* Actions as tabs. Reactivate and Reassign share the
-                    /api/admin/leads/bulk role gate (caps.canBulkAct); Change
-                    Lost reason is ID 136's own gate. Hiding a tab is
+                {/* Actions as tabs. Reassign uses the /api/admin/leads/bulk
+                    role gate (caps.canBulkAct); Reactivate posts there too but
+                    has its own narrower list (ID 158, caps.canReactivate);
+                    Change Lost reason is ID 136's own gate. Hiding a tab is
                     cosmetic — each endpoint enforces its roles server-side. */}
                 {tabs.length > 1 && (
                     <div className="px-5 pt-4">

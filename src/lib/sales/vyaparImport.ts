@@ -25,6 +25,7 @@ import { db } from "@/lib/db";
 import { normalizeInvoiceNumber } from "@/lib/sales/normalizeInvoiceNumber";
 import { resolveSalesOrg } from "@/lib/sales/resolveSalesOrg";
 import { itemKey } from "@/lib/sales/invoiceLines";
+import { classFor, itemKeySql, mappedItems } from "@/lib/sales/itemMap";
 import { voidInvoice } from "@/lib/sales/invoiceVoids";
 import type { ImportKind, ParseResult, ParsedDocument } from "@/lib/sales/vyaparParse";
 
@@ -76,13 +77,6 @@ async function existingByKey(runner: Runner, keys: string[]): Promise<Map<string
              WHERE invoice_number_key IN (${sql.join(keys.map((k) => sql`${k}`), sql`, `)})`),
     );
     return new Map(rows.map((r) => [r.k, r.id]));
-}
-
-async function mappedItems(runner: Runner): Promise<Map<string, { asset_type: string | null; product_id: string | null }>> {
-    const rows = rowsOf<{ item_key: string; asset_type: string | null; product_id: string | null }>(
-        await runner.execute(sql`SELECT item_key, asset_type, product_id FROM vyapar_item_map WHERE product_id IS NOT NULL`),
-    );
-    return new Map(rows.map((r) => [r.item_key, r]));
 }
 
 const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
@@ -223,10 +217,11 @@ export async function commitImport(
                 for (const l of d.lines) {
                     n++;
                     const m = l.item_name ? mapped.get(itemKey(l.item_name)) : undefined;
+                    const productClass = m ? classFor(m, l.product_class) : l.product_class;
                     await tx.execute(sql`
                         INSERT INTO invoice_line_items (source, invoice_id, line_no, item_name, hsn, product_class,
                                                         asset_type, product_id, quantity, rate, amount_excl_gst, import_id)
-                        VALUES ('vyapar', ${id}, ${n}, ${l.item_name}, ${l.hsn}, ${l.product_class},
+                        VALUES ('vyapar', ${id}, ${n}, ${l.item_name}, ${l.hsn}, ${productClass},
                                 ${m?.asset_type ?? null}, ${m?.product_id ?? null}, ${l.quantity}, ${l.rate},
                                 ${l.amount_excl_gst}, ${imp.id}::uuid)`);
                 }
@@ -266,8 +261,10 @@ export async function mapVyaparItem(input: {
         const res = rowsOf<{ n: number }>(
             await tx.execute(sql`
                 WITH u AS (
-                    UPDATE invoice_line_items SET asset_type = ${input.assetType}, product_id = ${input.productId}
-                     WHERE lower(regexp_replace(btrim(item_name), '\\s+', ' ', 'g')) = ${key}
+                    UPDATE invoice_line_items SET asset_type = ${input.assetType}, product_id = ${input.productId},
+                           -- ID 172: an onboarding-fee line is revenue, never a battery.
+                           product_class = CASE WHEN ${input.assetType} = 'onboarding_fee' THEN 'other' ELSE product_class END
+                     WHERE ${itemKeySql(sql`item_name`)} = ${key}
                     RETURNING 1)
                 SELECT count(*)::int AS n FROM u`),
         );

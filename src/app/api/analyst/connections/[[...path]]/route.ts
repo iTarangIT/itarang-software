@@ -15,6 +15,7 @@ import { agentFetch } from "@/lib/analyst/client";
 import { AnalystError, errorResponse, normalizeAgentError } from "@/lib/analyst/errors";
 import {
   CreateConnectionBody,
+  CRM_SOURCE_NAME,
   forwardQuery,
   matchSourceRoute,
   MAX_UPLOAD_REQUEST_BYTES,
@@ -31,20 +32,17 @@ type Ctx = { params: Promise<{ path?: string[] }> };
 /** The JSON the agent receives. Only the create call is reshaped; the rest pass as validated. */
 function agentBody(route: SourceRoute, data: unknown): unknown {
   if (route.schema !== CreateConnectionBody) return data;
-  const body = data as { preset: "crm"; name?: string } | { name: string; dsn: string };
-  if ("preset" in body) {
-    // The CRM's own database, through a read-only role. The DSN stays on this server.
-    const dsn = process.env.ANALYST_CRM_READONLY_DSN?.trim();
-    if (!dsn) {
-      throw new AnalystError(
-        "the iTarang database is not set up for the analyst on this server (ANALYST_CRM_READONLY_DSN is missing)",
-        503,
-        "not_configured",
-      );
-    }
-    return { name: body.name ?? "iTarang CRM", kind: "postgres", secret: { dsn } };
+  // The CRM's own database, through a read-only role. The DSN stays on this server. The only
+  // database source there is (ID 167), always under the same name.
+  const dsn = process.env.ANALYST_CRM_READONLY_DSN?.trim();
+  if (!dsn) {
+    throw new AnalystError(
+      "the iTarang database is not set up for the analyst on this server (ANALYST_CRM_READONLY_DSN is missing)",
+      503,
+      "not_configured",
+    );
   }
-  return { name: body.name, kind: "postgres", secret: { dsn: body.dsn } };
+  return { name: CRM_SOURCE_NAME, kind: "postgres", secret: { dsn } };
 }
 
 async function handle(request: Request, ctx: Ctx): Promise<Response> {

@@ -18,7 +18,7 @@
  */
 
 import { LEAD_STATUS, type LeadStatus } from "@/lib/lifecycle/transitions";
-import { isBusinessTypeFilter } from "@/lib/leads/businessType";
+import { businessTypeFilterParam } from "@/lib/leads/businessType";
 
 export type QueueFilters = {
   /** `dealer_leads.lead_status`, exact. "" = any. */
@@ -127,9 +127,7 @@ export function readQueueFilters(sp: URLSearchParams): QueueFilters {
     city: sp.get("city")?.trim() ?? "",
     from: ISO_DATE.test(from) ? from : "",
     to: ISO_DATE.test(to) ? to : "",
-    business_type: isBusinessTypeFilter(sp.get("business_type"))
-      ? (sp.get("business_type") as string)
-      : "",
+    business_type: businessTypeFilterParam(sp.get("business_type")) ?? "",
   };
 }
 

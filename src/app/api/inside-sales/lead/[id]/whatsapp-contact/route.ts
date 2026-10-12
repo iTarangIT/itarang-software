@@ -3,6 +3,7 @@
 //   remarks         text, required
 //   dealer_replied  "true" | "false"
 //   follow_up_at    ISO datetime, optional — the next follow-up agreed in the chat
+//   clear_follow_up "true" to clear the lead's follow-up (ignored when follow_up_at is set)
 //
 // Tracker ID 79 (handover P2-7): a WhatsApp chat counts as contact only with a
 // screenshot. The file is stored, hashed (a reused image is flagged) and the
@@ -38,6 +39,7 @@ export const POST = withErrorHandler(
         if (followUpAt && Number.isNaN(followUpAt.getTime())) {
             return errorResponse("The follow-up date is not a valid date.", 400);
         }
+        const clearFollowUp = !followUpAt && String(form.get("clear_follow_up") ?? "") === "true";
         const file = form.get("screenshot");
 
         let screenshot: { url: string; sha256: string } | null = null;
@@ -69,6 +71,11 @@ export const POST = withErrorHandler(
             if (followUpAt) {
                 await tx.execute(sql`
                     UPDATE dealer_leads SET next_follow_up_at = ${followUpAt.toISOString()}, updated_at = NOW()
+                     WHERE id = ${id}
+                `);
+            } else if (clearFollowUp) {
+                await tx.execute(sql`
+                    UPDATE dealer_leads SET next_follow_up_at = NULL, updated_at = NOW()
                      WHERE id = ${id}
                 `);
             }

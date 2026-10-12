@@ -13,15 +13,18 @@
  *                     the same "visited" test as transferVisitLimit.ts)
  *   quotes_delivered  leads whose quote the person delivered to the dealer
  *                     (quote_dispatched touchpoints; a resend is not a second)
- *   won               leads the person moved to Won (status history)
+ *   won               leads Won in the period, credited to the lead's closer
+ *                     (closing_owner_id; ID 159, 10 Oct), else who clicked
  *
- * Every count is credited to the person who did it (performed_by /
- * changed_by), not the lead's current owner. `state` narrows by the lead.
+ * Every other count is credited to the person who did it (performed_by),
+ * not the lead's current owner. `state` narrows by the lead.
+ * ID 169 (10 Oct): a dealer handed to the field twice counts once.
  */
 import { sql, type SQL } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import { engagedCall, humanCall, wasHotAt } from "@/lib/reports/metricDefinitions";
+import { dealCardActualsSql, VOLUME_CHECK_DAYS } from "@/lib/leads/dealCardActuals";
 
 export type IsrScore = {
     calls: number;
@@ -30,6 +33,13 @@ export type IsrScore = {
     hot_visited: number;
     quotes_delivered: number;
     won: number;
+    /**
+     * ID 172 volume check: dealers this person closed whose 60 days after Won
+     * ended in the period and whose quote carries a deal card — batteries the
+     * dealer said they would buy in those 60 days (2 × per month) against the
+     * battery units actually invoiced. Undefined when not computable.
+     */
+    volume?: { dealers: number; expected: number; actual: number };
 };
 
 const IST = "Asia/Kolkata";
@@ -58,8 +68,10 @@ export async function buildIsrScorecard(f: { from: string; to: string; state?: s
                AND ${inRange(sql`t.performed_at`, f.from, f.to)} ${st}
         ),
         hotv AS (
-            SELECT h.u, COUNT(*) AS n,
-                   COUNT(*) FILTER (WHERE EXISTS (
+            -- ID 169: COUNT(DISTINCT): a lead handed back and transferred
+            -- again is one dealer, as in the daily email.
+            SELECT h.u, COUNT(DISTINCT h.dealer_lead_id) AS n,
+                   COUNT(DISTINCT h.dealer_lead_id) FILTER (WHERE EXISTS (
                        SELECT 1 FROM lead_visits v
                         WHERE v.dealer_lead_id = h.dealer_lead_id AND v.visit_status = 'visited'
                           AND (v.created_at >= h.at OR v.actual_visit_date >= (h.at AT TIME ZONE ${IST})::date)
@@ -75,7 +87,7 @@ export async function buildIsrScorecard(f: { from: string; to: string; state?: s
              GROUP BY 1
         ),
         won AS (
-            SELECT h.changed_by AS u, COUNT(DISTINCT h.dealer_lead_id) AS n
+            SELECT COALESCE(dl.closing_owner_id::text, h.changed_by) AS u, COUNT(DISTINCT h.dealer_lead_id) AS n
               FROM dealer_lead_status_history h
               JOIN dealer_leads dl ON dl.id = h.dealer_lead_id
              WHERE h.to_status = 'Won'
@@ -108,6 +120,42 @@ export async function buildIsrScorecard(f: { from: string; to: string; state?: s
             quotes_delivered: Number(r.quotes_delivered),
             won: Number(r.won),
         };
+    }
+
+    // ID 172 item 6 — the volume check, credited to the closer.
+    const actuals = await dealCardActualsSql();
+    if (actuals) {
+        const vol = (await db.execute(sql`
+            SELECT dl.closing_owner_id AS u,
+                   COUNT(*)::int AS dealers,
+                   SUM(card.per_month * ${sql.raw(String(VOLUME_CHECK_DAYS / 30))})::float8 AS expected,
+                   COALESCE(SUM(da.batteries_60d), 0)::float8 AS actual
+              FROM dealer_leads dl
+              CROSS JOIN LATERAL (
+                  SELECT (to_jsonb(c) ->> 'expected_batteries_per_month')::int AS per_month
+                    FROM dealer_lead_commercials c
+                   WHERE c.dealer_lead_id = dl.id
+                     AND c.event_type IN ('quote_issue', 'quote_revision')
+                     AND c.withdrawn_at IS NULL
+                     AND c.approval_status IS DISTINCT FROM 'rejected'
+                     AND (to_jsonb(c) ->> 'expected_batteries_per_month') IS NOT NULL
+                   ORDER BY c.version_no DESC
+                   LIMIT 1
+              ) card
+              LEFT JOIN (${actuals}) da ON da.lead_id = dl.id
+             WHERE dl.closing_owner_id IS NOT NULL
+               AND dl.lead_status IN ('Won', 'Converted')
+               AND (to_jsonb(dl) ->> 'won_at') IS NOT NULL
+               AND ((to_jsonb(dl) ->> 'won_at')::timestamptz AT TIME ZONE ${IST})::date + ${sql.raw(String(VOLUME_CHECK_DAYS))}
+                   BETWEEN ${f.from}::date AND ${f.to}::date
+               ${st}
+             GROUP BY 1
+        `)) as unknown as Array<{ u: string; dealers: number; expected: number; actual: number }>;
+        for (const v of vol) {
+            const key = String(v.u);
+            out[key] ??= { calls: 0, engaged: 0, hot_to_field: 0, hot_visited: 0, quotes_delivered: 0, won: 0 };
+            out[key].volume = { dealers: Number(v.dealers), expected: Number(v.expected), actual: Number(v.actual) };
+        }
     }
     return out;
 }

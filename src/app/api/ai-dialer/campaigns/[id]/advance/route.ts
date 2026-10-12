@@ -17,14 +17,15 @@ import {
   successResponse,
   withErrorHandler,
 } from "@/lib/api-utils";
-import { requireRole } from "@/lib/auth-utils";
+import { guardApi } from "@/lib/auth/apiGuard";
 import { CAMPAIGN_ACTION_ROLES } from "@/lib/leads/access";
 
 export const POST = withErrorHandler(
   async (_req: Request, ctx: { params: Promise<{ id: string }> }) => {
-    // asm / inside_sales_rep see the campaign read-only; the detail view hides
-    // Call next for them (canRunCampaignActions).
-    await requireRole([...CAMPAIGN_ACTION_ROLES]);
+    // ID 145: Admin and CEO only; the detail view hides Call next for the rest
+    // (canRunCampaignActions). JSON 401/403, never a redirect.
+    const gate = await guardApi([...CAMPAIGN_ACTION_ROLES]);
+    if (!gate.ok) return gate.response;
 
     const { id: campaignId } = await ctx.params;
     if (!campaignId) return errorResponse("Campaign id required", 400);

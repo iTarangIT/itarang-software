@@ -1931,3 +1931,40 @@ export async function startDealerReorderReminderTicker() {
 
   console.log("[instrumentation] dealer reorder reminders (hourly) started in-process");
 }
+
+// ---------------------------------------------------------------------------
+// Tracker ID 86 — lead clocks. Rebuilds lead_clocks (E-337) for every lead
+// from calls, visits, assignments and status moves: first attempt / contact,
+// the time limit in force, and "Limit passed". Hourly; one full rebuild takes
+// seconds (14k leads on prod). The daily email, dashboards, downloads and the
+// event log read the table. A database without E-337 is a no-op.
+// ---------------------------------------------------------------------------
+export async function startLeadClocksTicker() {
+  if (process.env.VERCEL === "1") return;
+
+  const TICK_INTERVAL_MS = 60 * 60_000;
+  let inFlight = false;
+
+  const tick = async () => {
+    if (inFlight) return;
+    inFlight = true;
+    try {
+      const { refreshLeadClocks } = await import("@/lib/leads/clocks");
+      await refreshLeadClocks();
+    } catch (err) {
+      console.error(
+        "[instrumentation:lead-clocks] tick failed:",
+        err instanceof Error ? err.message : err,
+      );
+    } finally {
+      inFlight = false;
+    }
+  };
+
+  const kickoff = setTimeout(tick, 225_000);
+  if (typeof kickoff.unref === "function") kickoff.unref();
+  const interval = setInterval(tick, TICK_INTERVAL_MS);
+  if (typeof interval.unref === "function") interval.unref();
+
+  console.log("[instrumentation] lead clocks (hourly) started in-process");
+}

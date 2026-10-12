@@ -19,8 +19,11 @@ const PAGE_SIZE = 25;
 
 export function OnboardingDropoutsView({
     viewerRole,
+    keepWaitingDays,
 }: {
     viewerRole: string;
+    /** ID 85 — onboarding_keep_waiting in force today, for the modal's text. */
+    keepWaitingDays: number;
 }) {
     const qc = useQueryClient();
     const [page, setPage] = useState(1);
@@ -78,7 +81,8 @@ export function OnboardingDropoutsView({
                 loading={query.isLoading}
                 error={query.error ? (query.error as Error).message : null}
                 onPageChange={setPage}
-                canResolve={(viewerRole === "admin" || viewerRole === "sales_head")}
+                // ID 158: CEO may resolve too, but only by Re-engage.
+                canResolve={viewerRole === "admin" || viewerRole === "sales_head" || viewerRole === "ceo"}
                 onResolve={setActive}
             />
 
@@ -86,6 +90,8 @@ export function OnboardingDropoutsView({
                 <ResolveDropoutModal
                     open={!!active}
                     dropout={active}
+                    viewerRole={viewerRole}
+                    keepWaitingDays={keepWaitingDays}
                     onClose={() => setActive(null)}
                     onSuccess={() => {
                         setActive(null);

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { randomUUID } from "crypto";
 import { isS3Backend, putObject, filesProxyPath } from "@/lib/storage/s3";
-import { publicUploadFolder, safeUploadFileName } from "@/lib/storage/fileAccess";
+import { publicUploadFolder, safeUploadFileName, signedFilePath } from "@/lib/storage/fileAccess";
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -10,6 +10,8 @@ const supabase = createClient(
 );
 
 const BUCKET_NAME = "dealer-documents";
+// A draft can be resumed days later in the same browser.
+const VIEW_LINK_TTL_SECONDS = 7 * 24 * 60 * 60;
 
 export async function POST(req: NextRequest) {
   try {
@@ -107,6 +109,10 @@ export async function POST(req: NextRequest) {
         name: file.name,
         path: filePath,
         url: publicUrl,
+        // ID 119: /api/files needs a login or a signature, and this form has no
+        // login. `viewUrl` is a signed link for the uploader to preview the
+        // file; store `url`, never `viewUrl`.
+        viewUrl: signedFilePath(publicUrl, VIEW_LINK_TTL_SECONDS),
         type: file.type,
         size: file.size,
         bucketName: BUCKET_NAME,

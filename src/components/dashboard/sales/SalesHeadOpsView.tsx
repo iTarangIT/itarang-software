@@ -51,6 +51,7 @@ import {
     toneText,
 } from "@/components/dashboard/redesign/primitives";
 import { useSalesDashboardFilters } from "./useSalesDashboardFilters";
+import { ResponseTimeCard } from "./ResponseTimeCard";
 import { BUSINESS_TYPE_OPTIONS, BUSINESS_TYPE_UNSET, BUSINESS_TYPE_UNSET_LABEL } from "@/lib/leads/businessType";
 
 type Period = "today" | "week" | "month";
@@ -259,8 +260,12 @@ export function SalesHeadOpsView() {
     // to-date progress. Any other period: the monthly target pro-rata to the
     // period's working days (Mon–Sat) out of the month's, against the period's
     // actual — so Today / This week read "actual / target" too.
+    // ID 157 (Kartik, 10 Oct): people reports count every target that was sent
+    // (pushed), accepted or not; a draft or one waiting for approval stays out.
     const targetOf = (userId: string, metric: TargetMetric) =>
-        targets.data?.rows.find((t) => t.user_id === userId && t.metric === metric) ?? null;
+        targets.data?.rows.find(
+            (t) => t.user_id === userId && t.metric === metric && (t.status === "pushed" || t.status === "accepted"),
+        ) ?? null;
     const monthDays = targets.data?.context.working_days_total ?? 0;
     const daysLeft = targets.data ? Math.max(monthDays - targets.data.context.working_days_elapsed, 0) : null;
     const periodDays = React.useMemo(() => {
@@ -702,7 +707,23 @@ export function SalesHeadOpsView() {
                                                     }`}
                                                 >
                                                     {score === "inside"
-                                                        ? num(isrOf(p.spoc_id).won)
+                                                        ? (() => {
+                                                              const x = isrOf(p.spoc_id);
+                                                              return (
+                                                                  <>
+                                                                      {num(x.won)}
+                                                                      {/* ID 172: 60 days after Won, promised vs ordered. */}
+                                                                      {x.volume && (
+                                                                          <span
+                                                                              className="block text-[11px] font-normal text-ink-muted"
+                                                                              title={`${x.volume.dealers} dealer(s) whose 60 days after Won ended in this period: batteries promised (2 × per month on the deal card) vs battery units invoiced.`}
+                                                                          >
+                                                                              60 d: {num(x.volume.actual)} of {num(x.volume.expected)} promised
+                                                                          </span>
+                                                                      )}
+                                                                  </>
+                                                              );
+                                                          })()
                                                         : !need
                                                           ? "No target"
                                                           : need.remaining != null && need.remaining <= 0
@@ -891,6 +912,9 @@ export function SalesHeadOpsView() {
                     </span>
                 </DashCard>
             </div>
+
+            {/* ID 86 — lead / owner / transfer clocks */}
+            <ResponseTimeCard from={from} to={to} spocId={filters.spoc_id || undefined} />
 
             {/* Quotes */}
             <DashCard

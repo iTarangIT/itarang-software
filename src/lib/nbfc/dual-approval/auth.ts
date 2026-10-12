@@ -15,6 +15,7 @@
  * (env != production, server secret, matching request header) so it cannot
  * be abused by a leaked header alone.
  */
+import { safeEqual } from "@/lib/cron-auth";
 import { db } from "@/lib/db";
 import { eq, and } from "drizzle-orm";
 import { nbfcUsers, nbfcTenants, nbfcRolePermissions } from "@/lib/db/schema";
@@ -56,7 +57,7 @@ export function isTestBypassRequest(headers: Headers): boolean {
   const secret = process.env.NBFC_TEST_BYPASS_SECRET;
   if (!secret) return false;
   const provided = headers.get("x-nbfc-test-bypass");
-  return !!provided && provided === secret;
+  return !!provided && safeEqual(provided, secret);
 }
 
 export async function resolveActor(headers: Headers): Promise<DualApprovalActor> {

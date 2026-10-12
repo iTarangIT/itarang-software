@@ -244,7 +244,7 @@ describe("buildDigestWorkbook — a digest made only of tables (Sales Daily)", (
         rows: [
           ["INTAKE", "", "", ""],
           ["Leads in", 0, 198, 108],
-          ["Imported in bulk", 0, 2431, 0],
+          ["Assigned", 0, 2431, 0],
         ],
         groupHeaders: true,
         footer: { key: "right_now", label: "Right now · 09:00", items: [{ label: "Sales-ready, no owner", value: "7 leads" }] },
@@ -261,7 +261,7 @@ describe("buildDigestWorkbook — a digest made only of tables (Sales Daily)", (
       wb.getWorksheet(name)!.getSheetValues().filter(Boolean).map((r) => (r as unknown[]).slice(1));
     const a = values("A · Company");
     expect(a).toContainEqual(["Leads in", 0, 198, 108]);
-    expect(a).toContainEqual(["Imported in bulk", 0, 2431, 0]);
+    expect(a).toContainEqual(["Assigned", 0, 2431, 0]);
     expect(a).toContainEqual(["Sales-ready, no owner", "7 leads", ""]);
     expect(values("F · Oldest overdue")).toContainEqual(["Nothing overdue."]);
   });

@@ -1,6 +1,8 @@
 // Module 3 — parse the shared dashboard/report filter set (BRD §0.11 Zone 4)
 // out of a request URL. Reused by the dashboard, alert-panel, and report routes.
 
+import { businessTypeFilterParam } from "@/lib/leads/businessType";
+
 import type { DashboardFilters } from "./types";
 
 export function parseDashboardFilters(url: URL): DashboardFilters {
@@ -18,7 +20,8 @@ export function parseDashboardFilters(url: URL): DashboardFilters {
         segment: str("segment"),
         city: str("city"),
         state: str("state"),
-        business_type: str("business_type"),
+        // ID 11 — an old link's "finance" reads as Battery Sale.
+        business_type: businessTypeFilterParam(str("business_type")),
         follow_up_due_today: p.get("follow_up_due_today") === "true",
         reactivated_only: p.get("reactivated_only") === "true",
     };

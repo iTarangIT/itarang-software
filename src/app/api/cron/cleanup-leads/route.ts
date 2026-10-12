@@ -7,10 +7,8 @@ import { supabaseAdmin } from '@/lib/supabase/admin';
 import { isS3Backend, removeObjects } from '@/lib/storage/s3';
 
 export const GET = withErrorHandler(async (req: Request) => {
-    if (process.env.NODE_ENV === 'production') {
-        const unauth = checkCronAuth(req);
-        if (unauth) return unauth;
-    }
+    const unauth = checkCronAuth(req);
+    if (unauth) return unauth;
 
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
     const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);

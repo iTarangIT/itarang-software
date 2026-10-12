@@ -5,7 +5,7 @@
 import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { LOST_REASON, OPEN_STATUSES } from "@/lib/lifecycle/transitions";
-import { bulkImportedLead, connectedCall } from "@/lib/reports/metricDefinitions";
+import { connectedCall } from "@/lib/reports/metricDefinitions";
 import { hasLeadScope, leadScopeSql } from "@/lib/leads/leadScopeSql";
 import { ONBOARDING_DROPOUT_REASONS, OWNER_DRILL_METRICS } from "./types";
 import { isUndefinedColumn, ownerConversionRate, roleLabel } from "./reportHelpers";
@@ -70,6 +70,12 @@ const ratio = (a: number, b: number): number | null =>
     b > 0 ? Math.round((a / b) * 1000) / 1000 : null;
 
 // Report 1 — Daily Activity. lead_touchpoints.performed_at, grouped by rep/day.
+//
+// ID 170 (10 Oct): "Status Changes" is counted from dealer_lead_status_history
+// (a row whose status really moved), not from the timeline note type — a note
+// of type status_change_note may carry no status change at all. Record fixes
+// (touchpoint_type 'record_correction': Correct GSTIN, Change Lost reason,
+// Undo Mark Won) are not touchpoints or leads worked either.
 async function dailyActivity(f: DashboardFilters): Promise<ReportResult> {
     const rows = await db.execute<{
         day: string;
@@ -79,22 +85,45 @@ async function dailyActivity(f: DashboardFilters): Promise<ReportResult> {
         status_changes: string;
         leads_worked: string;
     }>(sql`
+        WITH tp AS (
+            SELECT
+                -- The IST day, written as a literal: SELECT and GROUP BY must be
+                -- the same expression, and two bound parameters are not.
+                (t.performed_at AT TIME ZONE 'Asia/Kolkata')::date AS day,
+                t.performed_by AS person_id,
+                COUNT(*) AS total_touchpoints,
+                -- ID 59: a human call counted once — a NeoDove call the agent
+                -- re-dispositioned is one connected call, not two.
+                COUNT(*) FILTER (WHERE ${connectedCall()}) AS connected_calls,
+                COUNT(DISTINCT t.dealer_lead_id) AS leads_worked
+            FROM lead_touchpoints t
+            WHERE t.performed_by IS NOT NULL
+              AND t.touchpoint_type <> 'record_correction'
+              ${dateRange("t.performed_at", f, "tz")}
+            GROUP BY 1, 2
+        ),
+        sc AS (
+            SELECT
+                (h.changed_at AT TIME ZONE 'Asia/Kolkata')::date AS day,
+                h.changed_by AS person_id,
+                COUNT(*) AS status_changes
+            FROM dealer_lead_status_history h
+            WHERE h.changed_by IS NOT NULL
+              AND h.from_status IS DISTINCT FROM h.to_status
+              ${dateRange("h.changed_at", f, "tz")}
+            GROUP BY 1, 2
+        )
         SELECT
-            -- The IST day, written as a literal: SELECT and GROUP BY must be the
-            -- same expression, and two bound parameters are not.
-            (t.performed_at AT TIME ZONE 'Asia/Kolkata')::date AS day,
+            COALESCE(tp.day, sc.day) AS day,
             u.name AS rep_name,
-            COUNT(*)::text AS total_touchpoints,
-            -- ID 59: a human call counted once — a NeoDove call the agent
-            -- re-dispositioned is one connected call, not two.
-            COUNT(*) FILTER (WHERE ${connectedCall()})::text AS connected_calls,
-            COUNT(*) FILTER (WHERE t.touchpoint_type = 'status_change_note')::text AS status_changes,
-            COUNT(DISTINCT t.dealer_lead_id)::text AS leads_worked
-        FROM lead_touchpoints t
-        LEFT JOIN users u ON u.id::text = t.performed_by
-        WHERE t.performed_by IS NOT NULL ${dateRange("t.performed_at", f, "tz")}
-        GROUP BY (t.performed_at AT TIME ZONE 'Asia/Kolkata')::date, u.name
-        ORDER BY day DESC, rep_name ASC
+            COALESCE(tp.total_touchpoints, 0)::text AS total_touchpoints,
+            COALESCE(tp.connected_calls, 0)::text AS connected_calls,
+            COALESCE(sc.status_changes, 0)::text AS status_changes,
+            COALESCE(tp.leads_worked, 0)::text AS leads_worked
+        FROM tp
+        FULL OUTER JOIN sc ON sc.day = tp.day AND sc.person_id = tp.person_id
+        LEFT JOIN users u ON u.id::text = COALESCE(tp.person_id, sc.person_id)
+        ORDER BY COALESCE(tp.day, sc.day) DESC, u.name ASC NULLS LAST
     `);
     return {
         type: "daily_activity",
@@ -140,10 +169,10 @@ async function dailyActivity(f: DashboardFilters): Promise<ReportResult> {
 const AI_POOL_STAGE = "Not in sales lifecycle (AI pool)";
 
 async function leadFunnel(f: DashboardFilters): Promise<ReportResult> {
-    // The cohort: leads that came in on their own in the window (ID 153 — the
-    // one "Leads in" rule, metricDefinitions.ts), in the screen's place / type
-    // of business (ID 11).
-    const cohort = sql`${dateRange("dl.created_at", f, "utc")} AND NOT ${bulkImportedLead(sql`dl`)} ${leadScopeSql(f)}`;
+    // The cohort: every lead created in the window, whatever its source (ID 153
+    // — the one "Leads in" rule, metricDefinitions.ts), in the screen's place /
+    // type of business (ID 11).
+    const cohort = sql`${dateRange("dl.created_at", f, "utc")} ${leadScopeSql(f)}`;
     const rows = await db.execute<{ lead_status: string | null; c: string }>(sql`
         SELECT dl.lead_status, COUNT(*)::text AS c
         FROM dealer_leads dl
@@ -178,12 +207,6 @@ async function leadFunnel(f: DashboardFilters): Promise<ReportResult> {
         WHERE dl.is_active IS NOT FALSE AND dl.lead_status = 'New_Unassigned'
           AND dl.assigned_at IS NULL ${cohort}
     `);
-    // ID 153 — bulk imports are counted apart, never in the funnel.
-    const bulk = await db.execute<{ c: string }>(sql`
-        SELECT COUNT(*)::text AS c FROM dealer_leads dl
-        WHERE dl.is_active IS NOT FALSE AND ${bulkImportedLead(sql`dl`)}
-          ${dateRange("dl.created_at", f, "utc")} ${leadScopeSql(f)}
-    `);
     const byStatus = new Map(rows.map((r) => [r.lead_status ?? "(null)", num(r.c)]));
     const reached = new Map(reachedRows.map((r) => [r.stage, num(r.c)]));
     const total = rows.reduce((s, r) => s + num(r.c), 0);
@@ -207,8 +230,6 @@ async function leadFunnel(f: DashboardFilters): Promise<ReportResult> {
     ];
     const out: ReportRow[] = [
         { stage: "All leads created", count: total, ever_reached: total, pct_reached: pctOf(total) },
-        // ID 153 — shown, but outside the funnel and its percentages.
-        { stage: "Imported in bulk (not in the funnel)", count: num(bulk[0]?.c), ever_reached: null, pct_reached: null },
         // R-06 — never in the sales lifecycle. "Ever reached" does not apply:
         // it is the absence of a stage, not a stage.
         { stage: AI_POOL_STAGE, count: byStatus.get("(null)") ?? 0, ever_reached: null, pct_reached: null },
@@ -262,6 +283,9 @@ async function lostAnalysis(f: DashboardFilters): Promise<ReportResult> {
     );
     const out: ReportRow[] = [];
     for (const reason of LOST_REASON) {
+        // ID 170: a lead Lost with reason onboarding_dropout is already counted
+        // under "Onboarding dropout" below (it carries onboarding_dropout_reason).
+        if (reason === "onboarding_dropout") continue;
         out.push({ category: "Sales lost", reason, count: lostMap.get(reason) ?? 0 });
     }
     for (const reason of ONBOARDING_DROPOUT_REASONS) {
@@ -525,6 +549,9 @@ async function meetingsMtd(f: DashboardFilters): Promise<ReportResult> {
                                 NULLS LAST, v.created_at
                    ) AS meeting_seq
             FROM lead_visits v
+            -- ID 170: a cancelled visit (e.g. closed by a hand-back) is not a
+            -- meeting, and must not turn the real first visit into a "Repeat".
+            WHERE v.visit_status IS DISTINCT FROM 'cancelled'
         )
         SELECT COALESCE(u.name, '(unknown)')                       AS manager,
                -- R-20: a missing city is its own row, named the same in every report.
@@ -670,9 +697,12 @@ function ownerCtes(f: DashboardFilters): SQL {
         WITH worked AS (
             -- One row per (person, lead): the lead's status is a property of
             -- the lead, so it must not be counted once per touchpoint.
+            -- ID 170: a record fix (GSTIN, Lost reason, Undo Mark Won) is not
+            -- the person touching the lead.
             SELECT DISTINCT t.performed_by, t.dealer_lead_id
             FROM lead_touchpoints t
             WHERE t.performed_by IS NOT NULL
+              AND t.touchpoint_type <> 'record_correction'
               ${dateRange("t.performed_at", f, "tz")} ${touchedLeadScope}
         ),
         connected AS (

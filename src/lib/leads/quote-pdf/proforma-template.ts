@@ -134,6 +134,8 @@ export function renderProformaHtml(view: QuotationView): string {
   // the document renders exactly as it did.
   const dealTermRows = [
     ["Payment", view.commercialTerms.paymentMethod],
+    // ID 172: the fee prints; the two monthly estimates never do.
+    ["Onboarding fee", view.commercialTerms.onboardingFee ?? null],
     ["Credit period", view.commercialTerms.creditTerms],
     ["Delivery", view.commercialTerms.deliveryTerms],
     ["Warranty", view.commercialTerms.warranty],

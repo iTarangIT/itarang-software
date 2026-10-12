@@ -132,7 +132,7 @@ export function AccountDetailView({ accountId }: { accountId: string }) {
                         </Button>
                     </div>
                 </Field>
-                <Field label="Onboarded by">{a.onboarded_by_name ?? "—"}</Field>
+                <Field label="Onboarded by (on the form, not credit)">{a.onboarded_by_name ?? "—"}</Field>
                 <Field label="Came through">
                     {a.came_through === "lead" ? "Lead" : a.came_through === "direct" ? "Direct onboarding" : "Not recorded"}
                     {data.lead && (

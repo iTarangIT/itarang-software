@@ -25,6 +25,7 @@ import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import type { InvoiceLine } from "@/lib/sales/salesInvoiceLines";
 import { hasInvoiceLedgerTables } from "@/lib/sales/ledgerTables";
+import { classFor, mappedItems, productFor } from "@/lib/sales/itemMap";
 import { reconcileDriveLines, toLedgerRows } from "@/lib/sales/driveLedgerLinesRules";
 
 export { checkDriveLines, reconcileDriveLines, toLedgerRows } from "@/lib/sales/driveLedgerLinesRules";
@@ -55,12 +56,15 @@ export async function saveDriveLedgerLines(
         if (vyapar.length > 0) return { saved: false as const, reason: "has Vyapar register lines" };
 
         await tx.execute(sql`DELETE FROM invoice_line_items WHERE invoice_id = ${invoiceId} AND source = 'drive'`);
+        // ID 147 — an item already mapped in Invoice Ledger › Item mapping lands linked.
+        const mapped = await mappedItems(tx);
         for (const r of rows) {
+            const m = productFor(mapped, r.item_name);
             await tx.execute(sql`
                 INSERT INTO invoice_line_items (source, invoice_id, line_no, item_name, hsn, product_class,
-                                                quantity, rate, amount_excl_gst)
-                VALUES ('drive', ${invoiceId}, ${r.line_no}, ${r.item_name}, ${r.hsn}, ${r.product_class},
-                        ${r.quantity}, ${r.rate}, ${r.amount_excl_gst})`);
+                                                asset_type, product_id, quantity, rate, amount_excl_gst)
+                VALUES ('drive', ${invoiceId}, ${r.line_no}, ${r.item_name}, ${r.hsn}, ${classFor(m, r.product_class)},
+                        ${m.asset_type}, ${m.product_id}, ${r.quantity}, ${r.rate}, ${r.amount_excl_gst})`);
         }
         const batteries = rows.filter((r) => r.product_class === "battery").reduce((s, r) => s + r.quantity, 0);
         return { saved: true as const, lines: rows.length, batteries };

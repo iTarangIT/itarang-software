@@ -44,6 +44,11 @@ export const TOUCHPOINT_TYPE = [
   "quote_dealer_declined",
   // Status transitions
   "status_change_note",
+  // ID 170 (10 Oct): a fix to the RECORD — Correct GSTIN, Change Lost reason,
+  // Undo Mark Won. Never work, never a "status change" in a report (status
+  // changes are counted from dealer_lead_status_history), never a touchpoint
+  // in the activity counts. Before ID 170 these were status_change_note rows.
+  "record_correction",
   // Ownership lifecycle
   "lead_assigned",
   "lead_claimed",

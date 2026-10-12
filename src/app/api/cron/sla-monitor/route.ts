@@ -7,10 +7,8 @@ import { triggerN8nWebhook } from '@/lib/n8n';
 
 // Triggered by an external cron (system crontab + curl, GitHub Actions, etc.).
 export const GET = withErrorHandler(async (req: Request) => {
-    if (process.env.NODE_ENV === 'production') {
-        const unauth = checkCronAuth(req);
-        if (unauth) return unauth;
-    }
+    const unauth = checkCronAuth(req);
+    if (unauth) return unauth;
 
     const now = new Date();
 

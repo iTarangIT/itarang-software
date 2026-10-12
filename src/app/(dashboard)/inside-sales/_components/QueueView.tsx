@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { QueueTabs } from "./QueueTabs";
 import { LeadQueueTable } from "./LeadQueueTable";
+import type { StaleThresholds } from "@/lib/inside-sales/staleness";
 import { BulkClaimBar } from "./BulkClaimBar";
 import { ClaimByNumberPanel } from "@/components/leads/ClaimByNumberPanel";
 import { claimsByNumberOnly, ISR_POOL_TABS } from "@/lib/leads/claimScope";
@@ -301,7 +302,10 @@ export function QueueView({
     }, [filterKey, tab]);
 
     // ── Holiday cache for stale-row visual cues (BRD §0.5) ───────────────
-    const holidaysQuery = useQuery<{ success: true; data: { dates: string[] } }>({
+    const holidaysQuery = useQuery<{
+        success: true;
+        data: { dates: string[]; stale_thresholds?: StaleThresholds };
+    }>({
         queryKey: ["inside-sales-holidays"],
         queryFn: async () => {
             const res = await fetch("/api/inside-sales/holidays", { cache: "no-store" });
@@ -314,6 +318,8 @@ export function QueueView({
         () => new Set(holidaysQuery.data?.data?.dates ?? []),
         [holidaysQuery.data],
     );
+    // ID 85 — the no-touch cue limits in force today (defaults until loaded).
+    const staleThresholds = holidaysQuery.data?.data?.stale_thresholds;
 
     return (
         <div className="space-y-4">
@@ -486,6 +492,7 @@ export function QueueView({
                     onPageChange={setPage}
                     viewerId={viewerId}
                     holidaySet={holidaySet}
+                    staleThresholds={staleThresholds}
                     selection={
                         selectable
                             ? {

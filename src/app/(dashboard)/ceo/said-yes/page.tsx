@@ -6,10 +6,11 @@ import Link from "next/link";
 import { ArrowLeft, FileText } from "lucide-react";
 
 import { requireRole } from "@/lib/auth-utils";
+import { dealCardChips } from "@/lib/leads/dealCardRules";
 import { LEAD_STATUS_LABEL } from "@/lib/leads/queueFilters";
 import type { LeadStatus } from "@/lib/lifecycle/transitions";
 import {
-    SAID_YES_LIMIT_WORKING_DAYS,
+    getSaidYesLimit,
     listSaidYesNotWon,
     summarizeSaidYes,
     type SaidYesRow,
@@ -48,8 +49,8 @@ function Chip({ label, value }: { label: string; value: string }) {
     );
 }
 
-function LeadCard({ r }: { r: SaidYesRow }) {
-    const over = r.working_days_waiting > SAID_YES_LIMIT_WORKING_DAYS;
+function LeadCard({ r, limit }: { r: SaidYesRow; limit: number }) {
+    const over = r.working_days_waiting > limit;
     const owner = r.owner_name ? `${r.owner_name}${r.owner_role ? ` (${r.owner_role.replace(/_/g, " ")})` : ""}` : "No owner";
     return (
         <div className="space-y-3 rounded-xl border border-gray-200 bg-white p-4 sm:p-5">
@@ -71,7 +72,7 @@ function LeadCard({ r }: { r: SaidYesRow }) {
                     <p className="text-lg font-bold text-gray-900">{rupees(r.value)}</p>
                     <p className={`text-xs font-semibold ${over ? "text-red-600" : "text-amber-600"}`}>
                         waiting {days(r.working_days_waiting)}
-                        {over && ` · ${days(r.working_days_waiting - SAID_YES_LIMIT_WORKING_DAYS)} over limit`}
+                        {over && ` · ${days(r.working_days_waiting - limit)} over limit`}
                     </p>
                 </div>
             </div>
@@ -79,7 +80,12 @@ function LeadCard({ r }: { r: SaidYesRow }) {
             <div className="flex flex-wrap gap-1.5">
                 <Chip label="Quote" value={`${r.quote_number ?? "no number"}${r.version_no ? ` · v${r.version_no}` : ""}`} />
                 <Chip label="Credit" value={r.credit_terms ?? "—"} />
-                <Chip label="Customer finance" value={r.customer_finance == null ? "—" : r.customer_finance ? "Yes" : "No"} />
+                {/* ID 172: the deal card next to Credit; older quotes keep Customer finance. */}
+                {r.deal_card ? (
+                    dealCardChips(r.deal_card).map(([k, v]) => <Chip key={k} label={k} value={v} />)
+                ) : (
+                    <Chip label="Customer finance" value={r.customer_finance == null ? "—" : r.customer_finance ? "Yes" : "No"} />
+                )}
                 {r.delivery_terms && <Chip label="Delivery" value={r.delivery_terms} />}
                 {r.warranty_terms && <Chip label="Warranty" value={r.warranty_terms} />}
             </div>
@@ -144,9 +150,9 @@ function LeadCard({ r }: { r: SaidYesRow }) {
 
 export default async function SaidYesNotWonPage() {
     await requireRole(["ceo", "admin"]);
-    const rows = await listSaidYesNotWon();
+    const [rows, limit] = await Promise.all([listSaidYesNotWon(), getSaidYesLimit()]);
     const s = summarizeSaidYes(rows);
-    const overLimit = rows.filter((r) => r.working_days_waiting > SAID_YES_LIMIT_WORKING_DAYS).length;
+    const overLimit = rows.filter((r) => r.working_days_waiting > limit).length;
 
     return (
         <div className="space-y-6 pb-12">
@@ -157,7 +163,7 @@ export default async function SaidYesNotWonPage() {
                 <h1 className="mt-2 text-2xl font-bold tracking-tight text-brand-navy">Dealer approved, but not marked Won</h1>
                 <p className="mt-1 text-sm text-ink-muted">
                     The dealer approved the quote, but its owner has not pressed Mark Won. The limit is{" "}
-                    {days(SAID_YES_LIMIT_WORKING_DAYS)} from the dealer&rsquo;s yes (Mon–Sat).
+                    {days(limit)} from the dealer&rsquo;s yes (Mon–Sat, holidays off).
                 </p>
             </div>
 
@@ -177,7 +183,7 @@ export default async function SaidYesNotWonPage() {
                         Nothing waiting — every quote a dealer approved has been marked Won.
                     </p>
                 ) : (
-                    rows.map((r) => <LeadCard key={r.lead_id} r={r} />)
+                    rows.map((r) => <LeadCard key={r.lead_id} r={r} limit={limit} />)
                 )}
             </div>
         </div>

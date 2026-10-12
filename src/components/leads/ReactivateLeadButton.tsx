@@ -7,8 +7,9 @@
 // old reason as previous_lost_reason, marks it sales-ready so it shows in Ready
 // to Assign, and lifts a "business closed" AI-recall exclusion.
 //
-// Render it only for LEADS_BULK_ROLES (the endpoint's own gate) and only on a
-// Lost lead; the endpoint skips anything else.
+// Render it only for REACTIVATE_ROLES (admin, sales_head, ceo — ID 158; the
+// endpoint checks the same list) and only on a Lost lead; the endpoint skips
+// anything else.
 
 import { useState } from "react";
 import { toast } from "sonner";

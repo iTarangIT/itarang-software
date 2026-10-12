@@ -119,6 +119,32 @@ export function canEditLead(input: {
 export const LEADS_BULK_ROLES = ["admin", "sales_head", "ceo", "partner"] as const;
 
 /**
+ * ID 158 (10 Oct): who may Reactivate a Lost lead by hand — the lead page,
+ * the Leads drawer, the bulk endpoint's "reactivate" action and the drop-out
+ * review's "Re-engage". Its own list on purpose: LEADS_BULK_ROLES also gates
+ * Reassign, Mark Lost and Export, and partner keeps those. Automatic
+ * reactivation (uploaded sheet, AI recall, NeoDove) is not a person and stays.
+ */
+export const REACTIVATE_ROLES = ["admin", "sales_head", "ceo"] as const;
+
+export function canReactivateLead(role: string | null | undefined): boolean {
+  return (REACTIVATE_ROLES as readonly string[]).includes(role ?? "");
+}
+
+/**
+ * Transfer to ASM (12 Oct): the inside-sales rep who owns the lead, or a
+ * manager — Sales Head, Partner, CEO, Admin — on any lead. The ASM gets a bell
+ * that opens the lead (transferToAsm.ts notifyAsmOfTransfer).
+ */
+export const TRANSFER_TO_ASM_ROLES = ["inside_sales_rep", "sales_head", "partner", "ceo", "admin"] as const;
+/** Managers who may transfer a lead they do not own. */
+export const TRANSFER_ANY_LEAD_ROLES = ["sales_head", "partner", "ceo", "admin"] as const;
+
+export function canTransferAnyLead(role: string | null | undefined): boolean {
+  return (TRANSFER_ANY_LEAD_ROLES as readonly string[]).includes(role ?? "");
+}
+
+/**
  * Roles that may download a single lead's touchpoint history as .xlsx — the
  * "Export to Excel" button on the inside-sales pane and on the CRM lead-detail
  * Activity timeline.
@@ -325,24 +351,34 @@ export const INTENT_REVIEW_ROLES = [
 export const INTENT_CURATOR_ROLES = ["admin", "ceo", "sales_head", "partner"] as const;
 
 /**
- * Roles that may DRIVE an AI-dialer campaign from its detail screen — Call next,
- * Force stop, Resume calling, Retry unreached. Enforced by the matching
- * /api/ai-dialer/campaigns/[id]/{advance,stop,resume,recall-failed} routes; the
- * detail view only hides the buttons.
- *
- * asm and inside_sales_rep are deliberately ABSENT: they can open their own
- * campaigns read-only, but placing or re-placing calls is an oversight action.
- * `partner` keeps the stop/resume/retry it always had (those routes had no role
- * check before).
+ * ID 145 (decision 10 Oct): roles that may upload an AI-dialer calling list,
+ * start a dialer run (list or region) and stop the running one. These place
+ * real, billable calls and add leads, so the set is narrower than
+ * LEADS_OVERSIGHT_ROLES. Enforced on /api/ai-dialer/{start,stop,lists/create,
+ * lists/[id]/start}; a logged-out call is 401, any other role 403. The Leads
+ * page hides the AI Dialer switch and its Lists tab for everyone else
+ * (LeadsCapabilities.canControlDialer).
  */
-export const CAMPAIGN_ACTION_ROLES = [
-  "admin",
-  "ceo",
-  "business_head",
-  "sales_head",
-  "sales_manager",
-  "partner",
-] as const;
+export const CALLING_LIST_ROLES = ["admin", "ceo", "business_head", "sales_head"] as const;
+
+export function canControlDialer(role: string | null | undefined): boolean {
+  return (CALLING_LIST_ROLES as readonly string[]).includes(role ?? "");
+}
+
+/**
+ * Roles that may place MORE calls from a campaign's detail screen — Call next,
+ * Resume calling, Retry unreached (ID 145, Kartik 10 Oct: Admin and CEO only).
+ * Enforced by /api/ai-dialer/campaigns/[id]/{advance,resume,recall-failed};
+ * the detail view only hides the buttons.
+ */
+export const CAMPAIGN_ACTION_ROLES = ["admin", "ceo"] as const;
+
+/**
+ * Force stop on a running campaign: the same four roles that can start calls
+ * (CALLING_LIST_ROLES), so no one can start calls they can't stop. Enforced by
+ * /api/ai-dialer/campaigns/[id]/stop.
+ */
+export const CAMPAIGN_STOP_ROLES = CALLING_LIST_ROLES;
 
 /**
  * Roles that may download a campaign's Excel export
@@ -362,26 +398,19 @@ export function canRunCampaignActions(role: string | null | undefined): boolean 
   return (CAMPAIGN_ACTION_ROLES as readonly string[]).includes(role ?? "");
 }
 
-export function canExportCampaign(role: string | null | undefined): boolean {
-  return (CAMPAIGN_EXPORT_ROLES as readonly string[]).includes(role ?? "");
+export function canStopCampaign(role: string | null | undefined): boolean {
+  return (CAMPAIGN_STOP_ROLES as readonly string[]).includes(role ?? "");
 }
 
-/**
- * ID 118 (decision 10 Oct): roles that may upload an AI-dialer calling list,
- * start a dialer run (list or region) and stop the running one. These place
- * real, billable calls and add leads, so the set is narrower than
- * LEADS_OVERSIGHT_ROLES. Enforced on /api/ai-dialer/{start,stop,lists/create,
- * lists/[id]/start}; a logged-out call is 401, any other role 403.
- */
-export const DIALER_CONTROL_ROLES = ["admin", "ceo", "sales_head"] as const;
-
-export function canControlDialer(role: string | null | undefined): boolean {
-  return (DIALER_CONTROL_ROLES as readonly string[]).includes(role ?? "");
+export function canExportCampaign(role: string | null | undefined): boolean {
+  return (CAMPAIGN_EXPORT_ROLES as readonly string[]).includes(role ?? "");
 }
 
 export type LeadsCapabilities = {
   canSeeOwnerAsm: boolean;
   canBulkAct: boolean;
+  /** ID 158 — Reactivate a Lost lead (REACTIVATE_ROLES); partner may bulk-act but not this. */
+  canReactivate: boolean;
   canSendToNeodove: boolean;
   canSeeCostAnalytics: boolean;
   /** ID 144 — the AI dialer weekday × hour answer grid (CALL_TIMING_ROLES). */
@@ -397,6 +426,8 @@ export type LeadsCapabilities = {
    * (ID 136). "Correct status" is gone: nobody picks a status by hand.
    */
   canChangeLostReason: boolean;
+  /** ID 145 — AI Dialer switch, its Lists tab and the banner Stop (CALLING_LIST_ROLES). */
+  canControlDialer: boolean;
 };
 
 /** The roles /api/admin/leads/[id]/lost-reason accepts (ID 136) — LOST_REASON_CHANGE_ROLES. */
@@ -435,6 +466,7 @@ export function capabilitiesFor(role: string | null | undefined): LeadsCapabilit
   return {
     canSeeOwnerAsm: (LEADS_OVERSIGHT_ROLES as readonly string[]).includes(r),
     canBulkAct: (LEADS_BULK_ROLES as readonly string[]).includes(r),
+    canReactivate: canReactivateLead(r),
     canSendToNeodove: NEODOVE_ROLES.includes(r),
     canSeeCostAnalytics: COST_ANALYTICS_ROLES.includes(r),
     canSeeCallTiming: (CALL_TIMING_ROLES as readonly string[]).includes(r),
@@ -443,6 +475,7 @@ export function capabilitiesFor(role: string | null | undefined): LeadsCapabilit
     canTrackLeads: (LEAD_TRACKING_ROLES as readonly string[]).includes(r),
     canOpenLeadPage: (LEAD_WORKSPACE_ROLES as readonly string[]).includes(r),
     canChangeLostReason: LOST_REASON_ROLES.includes(r),
+    canControlDialer: canControlDialer(r),
   };
 }
 
@@ -450,6 +483,7 @@ export function capabilitiesFor(role: string | null | undefined): LeadsCapabilit
 export const NO_CAPABILITIES: LeadsCapabilities = {
   canSeeOwnerAsm: false,
   canBulkAct: false,
+  canReactivate: false,
   canSendToNeodove: false,
   canSeeCostAnalytics: false,
   canSeeCallTiming: false,
@@ -458,4 +492,5 @@ export const NO_CAPABILITIES: LeadsCapabilities = {
   canTrackLeads: false,
   canOpenLeadPage: false,
   canChangeLostReason: false,
+  canControlDialer: false,
 };

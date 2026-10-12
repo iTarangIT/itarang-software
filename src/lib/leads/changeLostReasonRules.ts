@@ -40,6 +40,14 @@ export function planLostReasonChange(input: {
     if (input.leadStatus !== "Lost") {
         throw new LostReasonChangeError("Only a Lost lead has a Lost reason to change.", 409);
     }
+    // ID 168: a drop-out loss belongs to the drop-out review. Changing it here
+    // would count the lead twice — once as a sales loss, once as a drop-out.
+    if (input.currentReason === "onboarding_dropout") {
+        throw new LostReasonChangeError(
+            "This lead was lost through the onboarding drop-out review. Only a new drop-out review decision changes it.",
+            409,
+        );
+    }
     if (!CHANGEABLE_LOST_REASONS.includes(input.to)) {
         throw new LostReasonChangeError("Onboarding drop-out is set only by the drop-out review.");
     }

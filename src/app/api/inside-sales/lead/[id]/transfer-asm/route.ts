@@ -2,6 +2,10 @@
 // BRD §0.8 — hand off to an ASM. ASM picker may be territory-filtered; out-of-
 // territory requires a reason. The write itself lives in
 // lib/leads/transferToAsm.ts, shared with the WhatsApp Assistant.
+//
+// Who: the inside-sales rep who owns the lead, or a manager (Sales Head,
+// Partner, CEO, Admin) on any lead. The ASM is notified with a link that opens
+// the lead on their page.
 
 import { z } from "zod";
 import { requireRole } from "@/lib/auth-utils";
@@ -11,11 +15,12 @@ import {
     LeadAlreadyTransferredError,
     TRANSFER_REASONS,
     TransferLeadNotFoundError,
+    TRANSFER_TO_ASM_ROLES,
     VISIT_TYPES,
+    canTransferAnyLead,
+    notifyAsmOfTransfer,
     transferLeadToAsm,
 } from "@/lib/leads/transferToAsm";
-
-const MUTATE_ROLES = ["inside_sales_rep", "admin", "partner"];
 
 const BodySchema = z.object({
     asm_id: z.string().min(1),
@@ -30,12 +35,13 @@ const BodySchema = z.object({
 
 export const POST = withErrorHandler(
     async (req: Request, ctx: { params: Promise<{ id: string }> }) => {
-        const user = await requireRole(MUTATE_ROLES);
+        const user = await requireRole([...TRANSFER_TO_ASM_ROLES]);
         const { id } = await ctx.params;
         if (!id) return errorResponse("Lead id required", 400);
         const body = BodySchema.parse(await req.json());
 
-        await assertOwner(id, user.id);
+        // A rep transfers only their own lead; a manager may transfer any lead.
+        if (!canTransferAnyLead(user.role)) await assertOwner(id, user.id);
 
         try {
             await transferLeadToAsm({
@@ -55,6 +61,14 @@ export const POST = withErrorHandler(
             if (err instanceof LeadAlreadyTransferredError) return errorResponse(err.message, 409);
             throw err;
         }
+
+        await notifyAsmOfTransfer({
+            leadId: id,
+            asmId: body.asm_id,
+            actorId: user.id,
+            visitType: body.visit_type,
+            suggestedVisitDate: body.suggested_visit_date,
+        });
 
         return successResponse({ ok: true });
     },

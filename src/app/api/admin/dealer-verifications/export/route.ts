@@ -121,9 +121,14 @@ export async function GET(req: NextRequest) {
       .select()
       .from(dealerOnboardingApplications)
       .where(
-        or(
-          ne(dealerOnboardingApplications.onboarding_status, "draft"),
-          isNotNull(dealerOnboardingApplications.submitted_at),
+        and(
+          or(
+            ne(dealerOnboardingApplications.onboarding_status, "draft"),
+            isNotNull(dealerOnboardingApplications.submitted_at),
+          ),
+          // ID 169: a form withdrawn by Undo Mark Won was never submitted —
+          // it leaves the queue, the cards and the export.
+          sql`NOT (${dealerOnboardingApplications.onboarding_status} = 'withdrawn' AND ${dealerOnboardingApplications.submitted_at} IS NULL)`,
         ),
       )
       .orderBy(

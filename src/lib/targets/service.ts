@@ -91,7 +91,9 @@ async function actualsFor(monthFirst: string, upTo: string, elapsedWorkingDays: 
         ),
         hot AS (
             -- ID 59: Hot AT THE MOMENT of transfer, not Hot now.
-            SELECT t.performed_by AS u, COUNT(*) AS n
+            -- ID 169 (Kartik, 10 Oct): a dealer handed back and transferred
+            -- again counts once, as in the daily email.
+            SELECT t.performed_by AS u, COUNT(DISTINCT t.dealer_lead_id) AS n
               FROM lead_touchpoints t
               JOIN dealer_leads dl ON dl.id = t.dealer_lead_id
              WHERE t.touchpoint_type = 'asm_transfer'

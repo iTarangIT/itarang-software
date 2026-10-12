@@ -63,6 +63,10 @@ type StatusRow = {
     changed_by_name: string | null;
     changed_at: string | null;
     to_lost_reason: string | null;
+    /** ID 170 (E-333): the reason before a Lost-reason change. */
+    from_lost_reason: string | null;
+    /** ID 170 (E-333): this Won was undone. */
+    won_undone: boolean | null;
     reason_notes: string | null;
 };
 
@@ -109,7 +113,9 @@ export const GET = withErrorHandler(
                     u.name AS changed_by_name,
                     h.changed_at::text AS changed_at,
                     h.to_lost_reason,
-                    h.reason_notes
+                    h.reason_notes,
+                    to_jsonb(h) ->> 'from_lost_reason' AS from_lost_reason,
+                    (to_jsonb(h) ->> 'won_undone_at') IS NOT NULL AS won_undone
                 FROM dealer_lead_status_history h
                 LEFT JOIN users u ON u.id::text = h.changed_by
                 WHERE h.dealer_lead_id = ${id}
@@ -193,11 +199,12 @@ export const GET = withErrorHandler(
         shRows.forEach((r, i) => {
             const row = shSheet.addRow({
                 from: humanise(r.from_status, LEAD_STATUS_LABEL),
-                to: humanise(r.to_status, LEAD_STATUS_LABEL),
+                to: humanise(r.to_status, LEAD_STATUS_LABEL) + (r.won_undone ? " (undone)" : ""),
                 by: r.changed_by_name ?? "System",
                 at: fmt(r.changed_at),
+                // ID 170: a Lost-reason change shows old → new.
                 lost_reason: r.to_lost_reason
-                    ? r.to_lost_reason.replace(/_/g, " ")
+                    ? `${r.from_lost_reason ? `${r.from_lost_reason.replace(/_/g, " ")} → ` : ""}${r.to_lost_reason.replace(/_/g, " ")}`
                     : "—",
                 notes: r.reason_notes ?? "—",
             });

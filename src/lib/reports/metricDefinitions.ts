@@ -20,12 +20,11 @@
 //                            transfer (dealer_lead_interest_history, E-304),
 //                            not Hot now.
 //   Quotes created           the FIRST quote per lead; revisions counted apart.
-//   Leads in                 a lead that arrived on its own — NOT a bulk import
-//                            (bulkImportedLead below). Bulk imports are counted
-//                            apart, so a list upload can't read as 2,000 new
-//                            enquiries (decided 7 Oct 2026, after the 28 / 29 Sep
-//                            scrape run + INTERAKT list put 2,431 rows into one
-//                            week's "Leads in").
+//   Leads in                 EVERY new active dealer lead, whatever brought it in:
+//                            a rep, inbound, referral, bulk upload, the scraper,
+//                            an AI-dialer list, NeoDove (ID 153, Kartik 10 Oct —
+//                            reverses the 7 Oct rule that left bulk imports out).
+//                            Door and Origin still split it by source.
 
 import { sql, type SQL } from "drizzle-orm";
 export const NEODOVE_CALL_MERGE_WINDOW = "3 minutes";
@@ -135,51 +134,6 @@ export function isFirstQuote(c: SQL = sql`c`): SQL {
     )`;
 }
 
-/** NeoDove leads arriving faster than this per campaign per hour are a list upload. */
-export const NEODOVE_BULK_PER_HOUR = 50;
-
-/**
- * The lead came in as part of a bulk import rather than on its own. `dl` is the
- * dealer_leads alias.
- *
- *   - its door is a bulk path: the scraper, the bulk-upload wizard / Import
- *     button, or an AI-dialer list (leadSourceVocab.LEAD_DOORS); or
- *   - it is a NeoDove lead whose "lead created" event arrived with more than
- *     NEODOVE_BULK_PER_HOUR others from the same NeoDove campaign in the same
- *     hour. NeoDove has no import flag, and a list pushed into it (an INTERAKT
- *     broadcast: 1,501 in four minutes on 29 Sep 2026) reaches us as ordinary
- *     LEAD_CREATE webhooks. Genuine arrivals — incoming calls, a rep adding a
- *     dealer — never came close (38 in an hour at most, checked on db-2).
- *
- * The burst groups are found once (uncorrelated), so the predicate stays cheap
- * inside a COUNT over many leads.
- */
-export function bulkImportedLead(dl: SQL = sql`dl`): SQL {
-    return sql`(
-        ${dl}.source_door IN ('scraper', 'bulk_upload', 'ai_dialer')
-        OR (
-            ${dl}.source_door = 'neodove'
-            AND ${dl}.id IN (
-                SELECT e.dealer_lead_id
-                  FROM neodove_sync_events e
-                  JOIN (
-                        SELECT g.request_payload ->> 'campaign_id' AS campaign,
-                               date_trunc('hour', g.created_at) AS hr
-                          FROM neodove_sync_events g
-                         WHERE g.direction = 'inbound' AND g.event_type = 'lead_created'
-                         GROUP BY 1, 2
-                        HAVING COUNT(*) > ${sql.raw(String(NEODOVE_BULK_PER_HOUR))}
-                       ) burst
-                    ON burst.campaign IS NOT DISTINCT FROM e.request_payload ->> 'campaign_id'
-                   AND burst.hr = date_trunc('hour', e.created_at)
-                 WHERE e.direction = 'inbound'
-                   AND e.event_type = 'lead_created'
-                   AND e.dealer_lead_id IS NOT NULL
-            )
-        )
-    )`;
-}
-
 /**
  * ID 32 — the agreed rules above, in words, for the AI Analyst (a separate
  * service that writes its own SQL), so the CEO gets one answer to one question.
@@ -187,13 +141,18 @@ export function bulkImportedLead(dl: SQL = sql`dl`): SQL {
  * Sent with every question, so it stays short (src/lib/analyst/metricRules.ts).
  */
 export const ANALYST_METRIC_RULES = [
-    "Days are IST calendar days (yesterday, last month = in IST).",
-    "Leads in = active dealer_leads created in the period, EXCLUDING bulk imports (source_door scraper / bulk_upload / ai_dialer, or a NeoDove lead_created burst of more than " +
-        `${NEODOVE_BULK_PER_HOUR} per campaign per hour); report bulk imports apart.`,
-    "Dealers converted = dealer_leads.lead_status 'Converted' with closed_at in the period.",
+    "Days, yesterday and months are IST calendar days.",
+    "Leads in = every active dealer_leads row created in the period, whatever its source (bulk imports included).",
+    "Dealers converted = dealer_leads.lead_status 'Converted' with closed_at in the period, credited to closing_owner_id.",
     "Calls / dealers called = human calls only: lead_touchpoints.touchpoint_type 'inside_sales_call' (AI dialer 'ai_call' excluded); " +
         `a NeoDove call within ${NEODOVE_CALL_MERGE_WINDOW} of an earlier one by the same agent on the same lead is the same call.`,
     "Engaged call = such a call that connected (call_status 'connected' or is_engaged), any outcome; duration never counts.",
     "Quotes created = the first quote per lead (dealer_lead_commercials quote_issue); revisions counted apart.",
-    "Hot handed to field = asm_transfer touchpoints where the lead was Hot at the moment of transfer.",
+    "Hot handed to field = asm_transfer touchpoints where the lead was Hot when transferred, each dealer once.",
+    // ID 169 (10 Oct): Undo Mark Won leaves the history row; won_undone_at marks it.
+    "Marked Won = status history to_status 'Won' with won_undone_at NULL, credited to closing_owner_id.",
+    "A Lost to Lost history row is a reason change, not a loss.",
+    "Visits = lead_visits visit_status 'visited'.",
+    // ID 11 — Finance was folded into Battery sale (E-331).
+    "business_type 'finance' means battery_sale.",
 ].join(" ");

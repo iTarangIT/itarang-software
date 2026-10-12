@@ -47,6 +47,7 @@ import {
 import Link from "next/link";
 import { formatINRCompact, formatINRExact } from "@/lib/format";
 import { Pagination, usePagination } from "@/components/shared/Pagination";
+import { dealCardChips, type DealCard } from "@/lib/leads/dealCardRules";
 
 // E-242 — "history" is the decision log: approvals AND rejections together.
 // Kept as a third tab rather than a page of its own because every row primitive
@@ -99,6 +100,8 @@ interface Quotation {
     payment_method: string | null;
     /** E-322: NBFC finance for the end customer. NULL on pre-E-322 quotes. */
     customer_finance?: boolean | null;
+    /** ID 172: onboarding fee + monthly estimates. NULL on older quotes. */
+    deal_card?: DealCard | null;
     credit_terms: string | null;
     delivery_terms: string | null;
     warranty_terms: string | null;
@@ -246,9 +249,13 @@ function TermsStrip({ terms }: { terms: Quotation["terms"] }) {
       : terms.customer_finance
         ? "Yes"
         : "No";
+  // ID 172: the deal card sits next to Credit, without a click; it replaces
+  // the Customer finance Yes / No on quotes that carry one.
+  const card = terms.deal_card ?? null;
   const chips = [
-    finance ? ["Customer finance", finance] : ["Payment", terms.payment_method],
+    ...(card ? [] : [finance ? ["Customer finance", finance] : ["Payment", terms.payment_method]]),
     ["Credit", terms.credit_terms],
+    ...dealCardChips(card),
     ["Delivery", terms.delivery_terms],
     ["Warranty", terms.warranty_terms],
   ].filter(([, v]) => !!v) as [string, string][];

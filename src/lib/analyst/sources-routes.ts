@@ -30,18 +30,18 @@ const ID = /^[A-Za-z0-9_-]{1,100}$/;
 
 // ── Bodies ───────────────────────────────────────────────────────────────────
 
-/** Either the one-click iTarang CRM database (DSN filled in server-side) or any Postgres DSN. */
-export const CreateConnectionBody = z.union([
-  z.object({ preset: z.literal("crm"), name: z.string().trim().min(1).max(200).optional() }),
-  z.object({
-    name: z.string().trim().min(1).max(200),
-    dsn: z
-      .string()
-      .trim()
-      .max(2000)
-      .regex(/^postgres(ql)?(\+psycopg)?:\/\//, "the address must start with postgresql://"),
-  }),
-]);
+/**
+ * Only the one-click iTarang CRM database (DSN filled in server-side). ID 167: an outside
+ * Postgres address is refused — it would bypass the read-only role's withheld columns and
+ * masked views, and send whatever it holds to the LLM.
+ */
+export const CreateConnectionBody = z.object({ preset: z.literal("crm") }).strict();
+
+/**
+ * The fixed name every iTarang-database source gets. A Postgres source with any other name was
+ * made through the retired "Other database" tab (scripts/_delete-analyst-outside-connections.ts).
+ */
+export const CRM_SOURCE_NAME = "iTarang CRM";
 
 const DatasetBody = z.object({ name: z.string().trim().min(1).max(200) });
 

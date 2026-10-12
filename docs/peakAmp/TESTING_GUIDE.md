@@ -54,22 +54,13 @@ Dealer creates request  →  iTarang reviews it  →  they haggle over the price
 | A **dealer** login | Plays the battery dealer |
 | 6 or more photos of anything on your machine | The system demands photos of each battery |
 
-#### Creating the two logins (developer does this once)
+#### The two logins
 
-```bash
-node scripts/seed-buyback-test-users.js
-```
-
-That creates both logins and prints them:
-
-| Login | Password | Role | Lands on |
-|---|---|---|---|
-| `buyback.dealer@itarang.com` | `password` | dealer | `/dealer-portal/buyback` |
-| `buyback.admin@itarang.com` | `password` | admin | `/admin/buyback` |
-
-> **⚠ Developer note — these are throwaway passwords.** Do not run this against
-> production. If you already have an admin/CEO login, delete the admin entry from
-> the `USERS` array in the script and use your own.
+Use your own admin login, and a real dealer login whose dealer has
+`dealer_type` = `buyback` or `both`. The shared test logins
+(`buyback.dealer@` / `buyback.admin@itarang.com`, fixed password) and the
+script that made them were retired by tracker ID 140 (10 Oct): a login with a
+known password on a shared database is an open door.
 
 **A dealer login is three things, not one**, and this is where people lose an
 afternoon:

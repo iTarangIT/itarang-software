@@ -102,7 +102,8 @@ async function collect(
             ELSE a.onboarding_status
           END AS status
         FROM dealer_onboarding_applications a
-        WHERE a.onboarding_status <> 'draft' OR a.submitted_at IS NOT NULL
+        -- ID 169: a form withdrawn by Undo Mark Won was never submitted.
+        WHERE (a.onboarding_status <> 'draft' OR a.submitted_at IS NOT NULL) AND NOT (a.onboarding_status = 'withdrawn' AND a.submitted_at IS NULL)
       )
       SELECT
         (SELECT COUNT(*) FROM derived d
@@ -190,7 +191,8 @@ async function collectDetail(
         SELECT a.id, a.company_name, a.owner_name, a.city, a.state, a.source,
                a.approved_at, a.rejected_at, a.submitted_at, a.onboarding_status
           FROM dealer_onboarding_applications a
-         WHERE a.onboarding_status <> 'draft' OR a.submitted_at IS NOT NULL
+         -- ID 169: a form withdrawn by Undo Mark Won was never submitted.
+         WHERE (a.onboarding_status <> 'draft' OR a.submitted_at IS NOT NULL) AND NOT (a.onboarding_status = 'withdrawn' AND a.submitted_at IS NULL)
       )
       SELECT
         (SELECT COALESCE(json_agg(x ORDER BY x.at DESC), '[]'::json) FROM (

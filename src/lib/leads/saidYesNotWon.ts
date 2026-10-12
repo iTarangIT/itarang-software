@@ -6,16 +6,24 @@
 // the admin alert panel and the reps' queue chip. Per lead, the MOST RECENT
 // quote the dealer approved supplies the value and the clock.
 //
-// Wait: working days (Mon–Sat, IST) since the dealer's yes — the same count as
-// needsAttention's idle days. Limit: Dealer Lead Reporting spec ID 85,
-// "Dealer approved, not marked Won — 1 working day".
+// Wait: working days (Mon–Sat, IST, active holidays off) since the dealer's
+// yes — the same count as needsAttention's idle days. Limit: the ID 85 time
+// limit said_yes_not_won (default 1 working day; getSaidYesLimit()). The admin
+// alert panel lists the same "over limit" leads (finalisedNotWonSql's floor).
 
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { finalisedNotWonSql } from "@/lib/leads/finalisedNotWon";
 import type { CommercialsProductLine } from "@/lib/inside-sales/types";
+import { dealCardJson } from "@/lib/leads/dealCard";
+import { parseDealCard, type DealCard } from "@/lib/leads/dealCardRules";
+import { workingDaysSinceSql } from "@/lib/calendar/holidays";
+import { getTimeLimits } from "@/lib/timeLimits/store";
 
-export const SAID_YES_LIMIT_WORKING_DAYS = 1;
+/** The limit in force today, in working days. Never throws. */
+export async function getSaidYesLimit(): Promise<number> {
+    return (await getTimeLimits()).said_yes_not_won;
+}
 
 export type SaidYesRow = {
     lead_id: string;
@@ -36,6 +44,8 @@ export type SaidYesRow = {
     lines: Array<{ product_name: string; quantity: number }>;
     credit_terms: string | null;
     customer_finance: boolean | null;
+    /** ID 172: the quote's deal card (null on an older quote). */
+    deal_card: DealCard | null;
     delivery_terms: string | null;
     warranty_terms: string | null;
     released_at: string | null;
@@ -48,13 +58,6 @@ export type SaidYesRow = {
 
 export type SaidYesSummary = { count: number; value: number; oldestDays: number | null };
 
-const WORKING_DAYS_SINCE = (at: ReturnType<typeof sql>) => sql`(
-    SELECT COUNT(*) FROM generate_series(
-        ((${at} AT TIME ZONE 'Asia/Kolkata')::date + 1),
-        (now() AT TIME ZONE 'Asia/Kolkata')::date, INTERVAL '1 day'
-    ) gs WHERE EXTRACT(DOW FROM gs) <> 0
-)::int`;
-
 /** Every lead on the card, longest wait first. */
 export async function listSaidYesNotWon(): Promise<SaidYesRow[]> {
     const rows = (await db.execute(sql`
@@ -65,13 +68,14 @@ export async function listSaidYesNotWon(): Promise<SaidYesRow[]> {
                u.role                                             AS owner_role,
                dl.current_owner_id                                AS owner_id,
                v.*,
-               ${WORKING_DAYS_SINCE(sql`v.dealer_yes_at`)}        AS working_days_waiting
+               ${workingDaysSinceSql(sql`v.dealer_yes_at`)}       AS working_days_waiting
           FROM dealer_leads dl
           LEFT JOIN users u ON u.id::text = dl.current_owner_id
           CROSS JOIN LATERAL (
               SELECT c.commercial_id, c.quote_number, c.version_no, c.quote_pdf_url,
                      COALESCE(c.final_price, c.price_quoted, 0) AS value,
                      c.product_lines, c.credit_terms, c.customer_finance,
+                     ${dealCardJson("c")}                        AS deal_card,
                      c.delivery_terms, c.warranty_terms,
                      COALESCE(c.approved_at, c.created_at)     AS released_at,
                      c.approval_mode,
@@ -114,6 +118,7 @@ export async function listSaidYesNotWon(): Promise<SaidYesRow[]> {
             : [],
         credit_terms: (r.credit_terms as string | null) ?? null,
         customer_finance: (r.customer_finance as boolean | null) ?? null,
+        deal_card: parseDealCard(r.deal_card),
         delivery_terms: (r.delivery_terms as string | null) ?? null,
         warranty_terms: (r.warranty_terms as string | null) ?? null,
         released_at: iso(r.released_at),
