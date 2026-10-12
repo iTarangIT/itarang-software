@@ -345,7 +345,7 @@ export const NAV_LAYOUTS: Record<string, Layout> = {
                     },
                 ],
             },
-            { section: "MORE", items: ["ceo-news", "feature-requests", "submit-expense"] },
+            { section: "MORE", items: ["ceo-news", "submit-expense"] },
         ],
     },
     // ID 88 — every "Sales dashboard" entry is the one screen (SalesHeadOpsView)

@@ -802,13 +802,8 @@ const roleNavigation: Record<string, any[]> = {
           icon: ClipboardCheck,
           href: "/ceo/expenses",
         },
-        // E-316 — raise a feature request and follow it through review.
-        {
-          id: "feature-requests",
-          label: "Feature Requests",
-          icon: Lightbulb,
-          href: "/feature-requests",
-        },
+        // E-316's "Feature Requests" entry is gone: the module is parked
+        // (tracker ID 140, 10 Oct) — code kept, CEO menu and logins off.
         // E-230 — E-226's "OEM Price List" entry pointed at /ceo/oem-prices,
         // which now redirects to /oem-pricing under BUSINESS above. Two sidebar
         // entries onto one table is exactly the "multiple gates to reach one

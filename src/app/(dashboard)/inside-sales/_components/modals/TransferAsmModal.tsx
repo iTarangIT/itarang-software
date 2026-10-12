@@ -127,7 +127,7 @@ export function TransferAsmModal({ open, onClose, leadId, state, city, onSuccess
                     </select>
                     {totalAsms === 0 && (
                         <p className="text-[11px] text-gray-500 mt-1">
-                            No ASM users found. Run scripts/seed-asm-users.js to add them.
+                            No ASM users found. Ask an Admin to add ASM users.
                         </p>
                     )}
                 </div>
