@@ -25,7 +25,7 @@ import { db } from "@/lib/db";
 import { normalizeInvoiceNumber } from "@/lib/sales/normalizeInvoiceNumber";
 import { resolveSalesOrg } from "@/lib/sales/resolveSalesOrg";
 import { itemKey } from "@/lib/sales/invoiceLines";
-import { itemKeySql, mappedItems } from "@/lib/sales/itemMap";
+import { classFor, itemKeySql, mappedItems } from "@/lib/sales/itemMap";
 import { voidInvoice } from "@/lib/sales/invoiceVoids";
 import type { ImportKind, ParseResult, ParsedDocument } from "@/lib/sales/vyaparParse";
 
@@ -217,10 +217,11 @@ export async function commitImport(
                 for (const l of d.lines) {
                     n++;
                     const m = l.item_name ? mapped.get(itemKey(l.item_name)) : undefined;
+                    const productClass = m ? classFor(m, l.product_class) : l.product_class;
                     await tx.execute(sql`
                         INSERT INTO invoice_line_items (source, invoice_id, line_no, item_name, hsn, product_class,
                                                         asset_type, product_id, quantity, rate, amount_excl_gst, import_id)
-                        VALUES ('vyapar', ${id}, ${n}, ${l.item_name}, ${l.hsn}, ${l.product_class},
+                        VALUES ('vyapar', ${id}, ${n}, ${l.item_name}, ${l.hsn}, ${productClass},
                                 ${m?.asset_type ?? null}, ${m?.product_id ?? null}, ${l.quantity}, ${l.rate},
                                 ${l.amount_excl_gst}, ${imp.id}::uuid)`);
                 }

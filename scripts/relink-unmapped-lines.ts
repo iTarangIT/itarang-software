@@ -46,7 +46,9 @@ async function main() {
     const [done] = (await db.execute(sql`
         WITH u AS (
             UPDATE invoice_line_items l
-               SET asset_type = m.asset_type, product_id = m.product_id
+               SET asset_type = m.asset_type, product_id = m.product_id,
+                   -- ID 172: an onboarding-fee line is revenue, never a battery.
+                   product_class = CASE WHEN m.asset_type = 'onboarding_fee' THEN 'other' ELSE l.product_class END
               FROM vyapar_item_map m
              WHERE m.item_key = ${key}
                AND l.product_id IS NULL AND m.product_id IS NOT NULL

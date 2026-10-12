@@ -30,7 +30,7 @@ import { db } from "@/lib/db";
 import { fetchInvoiceDetail } from "@/lib/zoho/invoices";
 import { fetchContactGstin } from "@/lib/zoho/contacts";
 import { classifyHsn, normalizeHsn } from "@/lib/sales/invoiceLines";
-import { mappedItems, productFor } from "@/lib/sales/itemMap";
+import { classFor, mappedItems, productFor } from "@/lib/sales/itemMap";
 import { screenCustomerGstin } from "@/lib/leads/gstin";
 
 const args = process.argv.slice(2);
@@ -127,7 +127,7 @@ async function main() {
                         INSERT INTO invoice_line_items
                                (source, invoice_id, line_no, item_name, hsn, product_class, asset_type, product_id,
                                 quantity, rate, amount_excl_gst)
-                        VALUES ('zoho', ${inv.id}, ${n}, ${name}, ${hsn}, ${classifyHsn(hsn)}, ${m.asset_type},
+                        VALUES ('zoho', ${inv.id}, ${n}, ${name}, ${hsn}, ${classFor(m, classifyHsn(hsn))}, ${m.asset_type},
                                 ${m.product_id}, ${l.quantity ?? null}, ${l.rate ?? null}, ${l.item_total ?? null})
                     `);
                 }
