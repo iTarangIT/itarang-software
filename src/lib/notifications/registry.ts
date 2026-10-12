@@ -159,6 +159,11 @@ export const TYPE_LABELS: Record<string, string> = {
   // --- Leads ---
   "lead.created": "Lead created",
   "lead.assigned": "Lead assigned to someone",
+  "lead.transferred_to_asm": "Lead transferred to you (ASM)",
+  "lead.reassigned_to_you": "Lead reassigned to you",
+  "lead.reactivated": "Lead reactivated and back with you",
+  "lead.visit_update": "Field visit booked / done / not needed (to whoever transferred the lead)",
+  "lead.deal_card_changed": "Deal card on your lead changed by the Sales Head",
   "lead.discarded": "Lead discarded",
   "lead.closed": "Lead closed",
   "lead.qualified": "Lead qualified",
@@ -380,6 +385,7 @@ export const TYPE_LABELS: Record<string, string> = {
   escalation_resolved: "Escalation resolved (legacy)",
   "escalation.raised": "Escalation raised",
   "escalation.resolved": "Escalation resolved",
+  "escalation.ceo_input": "CEO commented on / recommended for an escalation",
 
   // --- System ---
   "nbfc.dual_approval": "Dual approval requested",

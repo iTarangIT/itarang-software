@@ -29,6 +29,7 @@ import { trackingCsvResponse } from "@/lib/leads/trackingCsv";
 import { reactivateLead } from "@/lib/leads/reactivation";
 import { canReactivateLead } from "@/lib/leads/access";
 import { assignLeadOwner, resolveAssignTarget } from "@/lib/leads/assignOwner";
+import { notifyLeadsReassigned, notifyLeadsReturned } from "@/lib/leads/newOwnerNotice";
 import {
     LOST_REASON,
     isOpen,
@@ -244,6 +245,8 @@ export const POST = withErrorHandler(async (req: Request) => {
         }
         const target = resolved.target;
         const remarks = body.reason ?? "Bulk reassign (admin).";
+        // 12 Oct: the new owner is told (bell → opens the lead on their page).
+        const reassignedIds: string[] = [];
 
         // Reassign isn't just "swap the owner": for the lead to actually land
         // on the new owner's workspace, both asm_id (for ASMs) and lead_status
@@ -270,8 +273,15 @@ export const POST = withErrorHandler(async (req: Request) => {
                 skippedVisitBooked++;
                 continue;
             }
+            if (outcome.assigned) reassignedIds.push(lead.id);
             affected++;
         }
+        await notifyLeadsReassigned({
+            leadIds: reassignedIds,
+            targetUserId: body.target_user_id,
+            actorId: user.id,
+            reason: body.reason ?? null,
+        });
     } else if (body.action === "mark_lost") {
         if (!body.lost_reason) {
             return errorResponse("lost_reason is required to mark lost.", 400);
@@ -373,6 +383,15 @@ export const POST = withErrorHandler(async (req: Request) => {
             });
             reactivated.push({ id: lead.id, ...r });
             affected++;
+        }
+        // 12 Oct: each person who gets leads back is told (one bell per lead,
+        // or one summary for a big batch).
+        const byOwner = new Map<string, string[]>();
+        for (const r of reactivated) {
+            if (r.new_owner_id) byOwner.set(r.new_owner_id, [...(byOwner.get(r.new_owner_id) ?? []), r.id]);
+        }
+        for (const [ownerId, leadIds] of byOwner) {
+            await notifyLeadsReturned({ leadIds, targetUserId: ownerId, actorId: user.id, reason: body.reason ?? null });
         }
     }
 

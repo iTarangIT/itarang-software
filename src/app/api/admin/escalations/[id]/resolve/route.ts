@@ -12,6 +12,7 @@ import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { requireRole } from "@/lib/auth-utils";
+import { notifyLeadPerson, notifyLeadsReassigned } from "@/lib/leads/newOwnerNotice";
 import {
     errorResponse,
     successResponse,
@@ -53,8 +54,9 @@ export const POST = withErrorHandler(
         const escRows = await db.execute<{
             dealer_lead_id: string;
             status: string;
+            raised_by: string | null;
         }>(sql`
-            SELECT dealer_lead_id, status FROM lead_escalations
+            SELECT dealer_lead_id, status, raised_by FROM lead_escalations
             WHERE escalation_id = ${id} LIMIT 1
         `);
         const esc = escRows[0];
@@ -127,6 +129,31 @@ export const POST = withErrorHandler(
                 );
             }
         });
+
+        // 12 Oct: the rep who raised it hears the outcome; on a reassign the
+        // new owner gets the lead with its own bell. Both open the lead.
+        const outcomeText =
+            body.action === "reassign"
+                ? "{by} resolved your escalation on {lead}: the lead was reassigned."
+                : body.action === "returned"
+                  ? "{by} resolved your escalation on {lead}: the lead stays with you."
+                  : "{by} closed your escalation on {lead} with no action.";
+        await notifyLeadPerson({
+            userId: esc.raised_by,
+            actorId: user.id,
+            leadId: esc.dealer_lead_id,
+            type: "escalation.resolved",
+            title: "Escalation resolved",
+            message: `${outcomeText} Note: ${body.resolution_notes}`,
+        });
+        if (body.action === "reassign" && body.target_user_id) {
+            await notifyLeadsReassigned({
+                leadIds: [esc.dealer_lead_id],
+                targetUserId: body.target_user_id,
+                actorId: user.id,
+                reason: `Escalation resolved — ${body.resolution_notes}`,
+            });
+        }
 
         return successResponse({ ok: true, action: body.action });
     },

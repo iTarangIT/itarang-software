@@ -132,6 +132,19 @@ export function canReactivateLead(role: string | null | undefined): boolean {
 }
 
 /**
+ * Transfer to ASM (12 Oct): the inside-sales rep who owns the lead, or a
+ * manager — Sales Head, Partner, CEO, Admin — on any lead. The ASM gets a bell
+ * that opens the lead (transferToAsm.ts notifyAsmOfTransfer).
+ */
+export const TRANSFER_TO_ASM_ROLES = ["inside_sales_rep", "sales_head", "partner", "ceo", "admin"] as const;
+/** Managers who may transfer a lead they do not own. */
+export const TRANSFER_ANY_LEAD_ROLES = ["sales_head", "partner", "ceo", "admin"] as const;
+
+export function canTransferAnyLead(role: string | null | undefined): boolean {
+  return (TRANSFER_ANY_LEAD_ROLES as readonly string[]).includes(role ?? "");
+}
+
+/**
  * Roles that may download a single lead's touchpoint history as .xlsx — the
  * "Export to Excel" button on the inside-sales pane and on the CRM lead-detail
  * Activity timeline.
