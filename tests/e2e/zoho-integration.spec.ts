@@ -6,6 +6,7 @@ import {
   sumTotalsFromCsv,
   parseCsv,
 } from './helpers/zoho';
+import { cronAuth } from './helpers/cron-auth';
 
 /**
  * E2E for the Zoho Invoice integration:
@@ -38,7 +39,7 @@ test.describe('Zoho integration', () => {
     if (isProd) return;
     const ctx = await playwrightRequest.newContext({ baseURL });
     try {
-      const r = await ctx.post('/api/cron/zoho-sync', { timeout: 60_000 });
+      const r = await ctx.post('/api/cron/zoho-sync', { timeout: 60_000, headers: cronAuth() });
       // Sync may fail if Zoho creds aren't on this env — that's fine, the
       // rest of the suite reads from the DB regardless. Log and continue.
       if (!r.ok()) {
@@ -337,7 +338,7 @@ test.describe('Zoho cron sync [manual]', () => {
     test.skip(isProd, 'Skipping live Zoho sync against production');
     const ctx = await playwrightRequest.newContext({ baseURL });
     try {
-      const r = await ctx.post('/api/cron/zoho-sync', { timeout: 60_000 });
+      const r = await ctx.post('/api/cron/zoho-sync', { timeout: 60_000, headers: cronAuth() });
       expect(r.status()).toBe(200);
       const body = await r.json();
       expect(body.ok).toBe(true);

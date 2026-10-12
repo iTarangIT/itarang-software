@@ -166,7 +166,7 @@ export type LeadListFilters = {
     callback?: boolean;
     // ── Type of Business (E-296) ─────────────────────────────────────────
     /**
-     * battery_sale | buyback | finance | scrap | other, or BUSINESS_TYPE_UNSET
+     * battery_sale | buyback | scrap | other, or BUSINESS_TYPE_UNSET
      * ("unset") for leads with no type recorded. Validated by the route.
      */
     businessType?: string | null;

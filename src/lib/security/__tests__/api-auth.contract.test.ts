@@ -187,7 +187,7 @@ describe("every API route says who may call it", () => {
   it("every cron route checks the cron secret — being on the public list is not a check", () => {
     const open = routes
       .filter((r) => /^\/api\/cron\//.test(r.url) || /\/cron(\/|$)/.test(r.url))
-      .filter((r) => !/CRON_SECRET|checkCronAuth\s*\(/.test(r.src))
+      .filter((r) => !/CRON_SECRET|(?:checkCronAuth|isCronAuthorised)\s*\(/.test(r.src))
       .map((r) => r.url);
     expect(open, "a cron route with no CRON_SECRET check runs for anyone who calls it").toEqual([]);
   });
@@ -232,6 +232,7 @@ const CALLER_PROOF = new RegExp(
     String.raw`\bnew Receiver\s*\(`, // QStash
     // crons and machines
     String.raw`\bcheckCronAuth\s*\(`,
+    String.raw`\bisCronAuthorised\s*\(`,
     String.raw`CRON_SECRET`,
     String.raw`\bwithBotAuth\s*\(`,
     String.raw`\b[A-Z][A-Z_]*_SECRET\b`,

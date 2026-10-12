@@ -7,26 +7,17 @@
  * Auth model mirrors `/api/cron/nbfc-cor-expiry`:
  *   - x-vercel-cron header → trust
  *   - Bearer CRON_SECRET   → trust
- *   - In non-prod, allow unauthenticated triggers (test fixtures use this)
+ *   - Nothing else, in any environment (ID 130)
  */
 import { NextRequest, NextResponse } from "next/server";
 import { scanOfflineBatteries } from "@/lib/iot/alerts/scanOfflineBatteriesCron";
-import { fromVercelCron } from "@/lib/security/cronAuth";
+import { isCronAuthorised } from "@/lib/cron-auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-function isAuthorised(req: NextRequest): boolean {
-  if (fromVercelCron(req)) return true;
-  const auth = req.headers.get("authorization") ?? "";
-  const expected = process.env.CRON_SECRET;
-  if (expected && auth === `Bearer ${expected}`) return true;
-  if (process.env.NODE_ENV !== "production") return true;
-  return false;
-}
-
 async function runJob(req: NextRequest) {
-  if (!isAuthorised(req)) {
+  if (!isCronAuthorised(req)) {
     return NextResponse.json(
       { ok: false, error: "UNAUTHORIZED" },
       { status: 401 },

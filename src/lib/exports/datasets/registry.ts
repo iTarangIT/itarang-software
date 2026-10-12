@@ -18,6 +18,10 @@ import { businessTypeLabel } from "@/lib/leads/businessType";
 import { countEvents, fetchEvents, type EventLogFilters } from "@/lib/leads/eventLog";
 import { LEAD_EVENT_TYPES, parseEventTypes } from "@/lib/leads/eventTypes";
 import { parseLeadListFilters } from "@/lib/leads/leadListParams";
+import { hasLeadClocks } from "@/lib/leads/clocks";
+import { workingDaysSince as officeWorkingDaysSince } from "@/lib/calendar/officeCalendar";
+import { loadHolidays } from "@/lib/calendar/holidays";
+import { getTimeLimits } from "@/lib/timeLimits/store";
 import { doorLabel, originLabel } from "@/lib/leads/leadSourceVocab";
 import { onboardingStall, STALL_LABEL } from "@/lib/onboarding/stall";
 import { connectedCall, engagedCall, engagedState, humanCall } from "@/lib/reports/metricDefinitions";
@@ -112,15 +116,12 @@ function dateRange(params: URLSearchParams, expr: SQL): SQL {
 
 // ───────────────────────────────── Leads ────────────────────────────────────
 
-/** Working days (Mon–Sat) from the day after `since` to today. */
-function workingDaysSince(since: unknown): number | null {
+/** Working days on the office calendar (Mon–Sat, holidays off) from the day after `since` to today. */
+function workingDaysSince(since: unknown, holidays: ReadonlySet<string>): number | null {
     if (!since) return null;
     const d = new Date(String(since));
     if (Number.isNaN(d.getTime())) return null;
-    const end = Date.now();
-    let n = 0;
-    for (let t = d.getTime() + 86_400_000; t <= end; t += 86_400_000) if (new Date(t).getUTCDay() !== 0) n += 1;
-    return n;
+    return officeWorkingDaysSince(d, new Date(), holidays);
 }
 
 /**
@@ -132,6 +133,34 @@ async function leadExtras(ids: string[]): Promise<Map<string, Record<string, unk
     const out = new Map<string, Record<string, unknown>>();
     if (ids.length === 0) return out;
     try {
+        // ID 86 — first attempt / contact and the time-limit flags come from the
+        // lead clocks (calls AND visits, E-337); without them, the old
+        // calls-only rule.
+        const [clocks, holidays] = await Promise.all([hasLeadClocks(), loadHolidays()]);
+        const firstTouch = clocks
+            ? sql`
+              LEFT JOIN LATERAL (
+                  SELECT c.first_attempt_at AS at, c.first_contact_at AS contact_at, c.started_at,
+                         c.attempt_working_minutes, c.contact_working_minutes, c.limit_passed_at, c.start_inferred
+                    FROM lead_clocks c WHERE c.dealer_lead_id = dl.id AND c.clock = 'lead' LIMIT 1) fa ON TRUE
+              LEFT JOIN LATERAL (SELECT fa.contact_at AS at) fc ON TRUE
+              LEFT JOIN LATERAL (
+                  SELECT c.started_at, c.first_attempt_at, c.attempt_working_minutes, c.limit_passed_at, c.owner_inferred
+                    FROM lead_clocks c WHERE c.dealer_lead_id = dl.id AND c.clock = 'owner'
+                   ORDER BY c.started_at DESC LIMIT 1) oc ON TRUE`
+            : sql`
+              LEFT JOIN LATERAL (
+                  SELECT MIN(t.performed_at) AS at, NULL::timestamptz AS started_at, NULL::int AS attempt_working_minutes,
+                         NULL::int AS contact_working_minutes, NULL::timestamptz AS limit_passed_at, NULL::boolean AS start_inferred
+                    FROM lead_touchpoints t
+                   WHERE t.dealer_lead_id = dl.id AND t.touchpoint_type IN ('inside_sales_call', 'ai_call')) fa ON TRUE
+              LEFT JOIN LATERAL (
+                  SELECT MIN(t.performed_at) AS at FROM lead_touchpoints t
+                   WHERE t.dealer_lead_id = dl.id AND t.touchpoint_type IN ('inside_sales_call', 'ai_call')
+                     AND (t.call_status = 'connected' OR t.connect_status = 'connected')) fc ON TRUE
+              LEFT JOIN LATERAL (
+                  SELECT NULL::timestamptz AS started_at, NULL::timestamptz AS first_attempt_at, NULL::int AS attempt_working_minutes,
+                         NULL::timestamptz AS limit_passed_at, NULL::boolean AS owner_inferred) oc ON TRUE`;
         const data = await rows(sql`
             SELECT dl.id AS lead_id,
                    x.j ->> 'gstin' AS gstin,
@@ -145,6 +174,14 @@ async function leadExtras(ids: string[]): Promise<Map<string, Record<string, unk
                    x.j ->> 'sales_ready_reason' AS sales_ready_reason,
                    x.j ->> 'assigned_at' AS assigned_on,
                    fa.at AS first_attempt_on, fc.at AS first_contact_on,
+                   round(fa.attempt_working_minutes / 60.0, 1) AS hours_to_first_attempt,
+                   round(fa.contact_working_minutes / 60.0, 1) AS hours_to_first_contact,
+                   CASE WHEN fa.started_at IS NULL THEN NULL WHEN fa.limit_passed_at IS NULL THEN 'No' ELSE 'Yes' END AS lead_limit_passed,
+                   oc.started_at AS owner_clock_from,
+                   oc.first_attempt_at AS owner_first_attempt_on,
+                   round(oc.attempt_working_minutes / 60.0, 1) AS owner_hours_to_first_attempt,
+                   CASE WHEN oc.started_at IS NULL THEN NULL WHEN oc.limit_passed_at IS NULL THEN 'No' ELSE 'Yes' END AS owner_limit_passed,
+                   CASE WHEN oc.owner_inferred THEN 'Yes' WHEN oc.started_at IS NOT NULL THEN 'No' END AS owner_inferred,
                    x.j ->> 'last_worked_at' AS last_worked_on,
                    x.j ->> 'next_follow_up_at' AS next_follow_up,
                    x.j ->> 'intent_band' AS ai_band,
@@ -163,13 +200,7 @@ async function leadExtras(ids: string[]): Promise<Map<string, Record<string, unk
                   SELECT u.name FROM lead_touchpoints t LEFT JOIN users u ON u.id::text = t.performed_by
                    WHERE t.dealer_lead_id = dl.id AND t.touchpoint_type = 'lead_created'
                    ORDER BY t.performed_at LIMIT 1) cb ON TRUE
-              LEFT JOIN LATERAL (
-                  SELECT MIN(t.performed_at) AS at FROM lead_touchpoints t
-                   WHERE t.dealer_lead_id = dl.id AND t.touchpoint_type IN ('inside_sales_call', 'ai_call')) fa ON TRUE
-              LEFT JOIN LATERAL (
-                  SELECT MIN(t.performed_at) AS at FROM lead_touchpoints t
-                   WHERE t.dealer_lead_id = dl.id AND t.touchpoint_type IN ('inside_sales_call', 'ai_call')
-                     AND (t.call_status = 'connected' OR t.connect_status = 'connected')) fc ON TRUE
+              ${firstTouch}
               LEFT JOIN LATERAL (
                   SELECT COALESCE(${jnum(sql`c.quote_snapshot ->> 'total'`)}, c.final_price, c.price_quoted) AS value,
                          CASE WHEN c.withdrawn_at IS NOT NULL THEN 'withdrawn'
@@ -196,7 +227,7 @@ async function leadExtras(ids: string[]): Promise<Map<string, Record<string, unk
                 owner_role: ((r.owner_role as string | null) ?? "").replace(/_/g, " ") || null,
                 // The score column defaults to 0; a lead the AI never scored shows blank, not 0.
                 ai_score: r.ai_band || Number(r.ai_score) > 0 ? r.ai_score : null,
-                idle_working_days: closed ? null : workingDaysSince(r.last_worked_on ?? r.assigned_on ?? created),
+                idle_working_days: closed ? null : workingDaysSince(r.last_worked_on ?? r.assigned_on ?? created, holidays),
             });
         }
     } catch (e) {
@@ -267,10 +298,18 @@ const leads: Dataset = {
                 { key: "sales_ready_on", header: "Sales-ready on", meaning: "When the lead became ready for a salesperson.", kind: "datetime" },
                 { key: "sales_ready_reason", header: "Sales-ready reason", meaning: "Why it was marked sales-ready." },
                 { key: "assigned_on", header: "Assigned on", meaning: "When the lead was assigned to its owner.", kind: "datetime" },
-                { key: "first_attempt_on", header: "First attempt on", meaning: "The first call on the lead, human or AI, connected or not.", kind: "datetime" },
-                { key: "first_contact_on", header: "First contact on", meaning: "The first call that connected.", kind: "datetime" },
+                { key: "first_attempt_on", header: "First attempt on", meaning: "Lead clock (ID 86): the first call or visit by anyone after the lead became sales-ready, connected or not.", kind: "datetime" },
+                { key: "first_contact_on", header: "First contact on", meaning: "Lead clock: the first call that connected or visit marked visited.", kind: "datetime" },
+                { key: "hours_to_first_attempt", header: "Working hours to first attempt", meaning: "Lead clock: working hours (Mon–Sat 10:00–19:00, holidays off) from sales-ready to the first attempt.", kind: "number" },
+                { key: "hours_to_first_contact", header: "Working hours to first contact", meaning: "Lead clock: working hours from sales-ready to the first contact.", kind: "number" },
+                { key: "lead_limit_passed", header: "Lead first-attempt limit passed", meaning: "Yes when no call or visit came within the lead first-attempt limit in force that day (Admin › Time limits)." },
+                { key: "owner_clock_from", header: "Current owner since", meaning: "Owner clock: when the current owner got the lead.", kind: "datetime" },
+                { key: "owner_first_attempt_on", header: "Owner's first attempt on", meaning: "Owner clock: the current owner's first call or visit after getting the lead.", kind: "datetime" },
+                { key: "owner_hours_to_first_attempt", header: "Owner's working hours to first attempt", meaning: "Owner clock: working hours from assignment to that first attempt.", kind: "number" },
+                { key: "owner_limit_passed", header: "Owner first-attempt limit passed", meaning: "Yes when the current owner did not call or visit within the owner first-attempt limit." },
+                { key: "owner_inferred", header: "Owner start inferred", meaning: "Yes when no assignment record exists and the owner clock starts from the lead's assigned date instead." },
                 { key: "last_worked_on", header: "Last worked on", meaning: "The last time someone worked the lead.", kind: "datetime" },
-                { key: "idle_working_days", header: "Idle working days", meaning: "Working days (Mon–Sat, holidays not removed) since it was last worked, else since it was assigned or created.", kind: "number" },
+                { key: "idle_working_days", header: "Idle working days", meaning: "Working days (Mon–Sat, holidays off) since it was last worked, else since it was assigned or created.", kind: "number" },
                 { key: "next_follow_up", header: "Next follow-up", meaning: "The follow-up date set on the lead.", kind: "datetime" },
                 { key: "ai_band", header: "AI band", meaning: "Qualified, Warm, Cold or Disqualified, from the AI call." },
                 { key: "ai_score", header: "AI score", meaning: "The AI intent score.", kind: "number" },
@@ -476,7 +515,7 @@ const dealerOnboarding: Dataset = {
                 { key: "approved_by", header: "Approved by", meaning: "Who activated the dealer.", width: 22 },
                 { key: "rejection_reason", header: "Rejection reason", meaning: "Why it was rejected, when it was.", width: 40 },
                 { key: "times_sent_back", header: "Times sent back", meaning: "How many times the application was sent back to the dealer for corrections.", kind: "number" },
-                { key: "stalled", header: "Stalled", meaning: "Set when an open onboarding has waited on the dealer 7+ days, or on iTarang 2+ working days.", width: 26 },
+                { key: "stalled", header: "Stalled", meaning: "Set when an open onboarding has waited on the dealer, or on iTarang, longer than its limit in Admin › Time limits (defaults 7 days / 2 working days).", width: 26 },
                 { key: "dropout_reason", header: "Drop-out reason", meaning: "Why the dealer dropped out, when the linked lead records one.", width: 24 },
             ],
         },
@@ -520,11 +559,9 @@ const dealerOnboarding: Dataset = {
              ORDER BY app.created_at DESC
              LIMIT ${rowLimit(ctx)}
         `);
-        const holidays = new Set(
-            (await rows<{ d: string }>(sql`SELECT holiday_date::text AS d FROM holiday_calendar WHERE is_active IS NOT FALSE AND holiday_date IS NOT NULL`)).map(
-                (h) => h.d,
-            ),
-        );
+        // ID 85 — the office calendar and the stall limits in force today.
+        const [holidays, limits] = await Promise.all([loadHolidays(), getTimeLimits()]);
+        const stallLimits = { dealerDays: limits.onboarding_stall_dealer, usWorkingDays: limits.onboarding_stall_us };
         return [
             {
                 ...this.sheets[0],
@@ -535,7 +572,9 @@ const dealerOnboarding: Dataset = {
                             agreement_status: r.finance_enabled ? ((r.agreement_status as string | null) ?? null) : null,
                             last_activity_at: (r.last_activity_at as string | Date | null) ?? null,
                         },
-                        holidays,
+                        new Set(holidays),
+                        new Date(),
+                        stallLimits,
                     );
                     return { ...r, stalled: on ? STALL_LABEL[on] : null };
                 }),

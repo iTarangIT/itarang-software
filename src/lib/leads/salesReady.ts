@@ -32,6 +32,8 @@
 import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { writeTouchpoint } from "@/lib/touchpoints/write";
+import { TIME_LIMIT_DEFAULTS } from "@/lib/timeLimits/registry";
+import { getTimeLimits } from "@/lib/timeLimits/store";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -103,8 +105,12 @@ export function createdByHandReason(origin: string | null | undefined): SalesRea
     return origin === "inbound_call" ? "inbound_inquiry" : "rep_created";
 }
 
-/** A sales-ready lead waiting this many days or more is overdue — the CEO card's number. */
-export const AWAITING_ASSIGNMENT_OVERDUE_DAYS = 7;
+/**
+ * A sales-ready lead waiting this many days or more is overdue — the CEO
+ * card's number. DEFAULT only: the live value is the ID 85 time limit
+ * sales_ready_unassigned (getTimeLimits()).
+ */
+export const AWAITING_ASSIGNMENT_OVERDUE_DAYS = TIME_LIMIT_DEFAULTS.sales_ready_unassigned;
 
 /** For the page and the timeline: "ai_qualified" → "qualified by the AI call". */
 export function salesReadyReasonLabel(reason: string | null | undefined): string {
@@ -144,26 +150,34 @@ export function daysAwaitingAssignment(dl: SQL = sql`dl`): SQL {
 export type AwaitingAssignmentCounts = {
     /** Every lead awaiting assignment. */
     total: number;
-    /** Of those, waiting AWAITING_ASSIGNMENT_OVERDUE_DAYS or more. */
+    /** Of those, waiting `overdueDays` or more. */
     overdue: number;
+    /** The sales_ready_unassigned limit the count used (ID 85), in days. */
+    overdueDays: number;
     /** The longest wait, in days; null when nothing is waiting. */
     oldestDays: number | null;
 };
 
 /** The numbers every surface shows. Never throws — a failure reads as zero. */
 export async function countAwaitingAssignment(): Promise<AwaitingAssignmentCounts> {
+    const overdueDays = (await getTimeLimits()).sales_ready_unassigned;
     try {
         const [r] = (await db.execute(sql`
             SELECT COUNT(*)::int AS total,
-                   COUNT(*) FILTER (WHERE ${daysAwaitingAssignment()} >= ${AWAITING_ASSIGNMENT_OVERDUE_DAYS})::int AS overdue,
+                   COUNT(*) FILTER (WHERE ${daysAwaitingAssignment()} >= ${overdueDays})::int AS overdue,
                    MAX(${daysAwaitingAssignment()}) AS oldest
               FROM dealer_leads dl
              WHERE ${awaitingAssignment()}
         `)) as unknown as Array<{ total: number; overdue: number; oldest: number | null }>;
-        return { total: Number(r?.total ?? 0), overdue: Number(r?.overdue ?? 0), oldestDays: r?.oldest == null ? null : Number(r.oldest) };
+        return {
+            total: Number(r?.total ?? 0),
+            overdue: Number(r?.overdue ?? 0),
+            overdueDays,
+            oldestDays: r?.oldest == null ? null : Number(r.oldest),
+        };
     } catch (e) {
         console.warn("[salesReady] count failed:", e instanceof Error ? e.message : e);
-        return { total: 0, overdue: 0, oldestDays: null };
+        return { total: 0, overdue: 0, overdueDays, oldestDays: null };
     }
 }
 
@@ -182,7 +196,8 @@ export type ReadyToAssignRow = {
 /**
  * Ready to assign: the leads awaitingAssignment(), oldest wait first.
  * `minDays` narrows it to leads waiting at least that long — the CEO card
- * links here with ?min_days=7, so the list it opens is the number it showed.
+ * links here with ?min_days=<sales_ready_unassigned>, so the list it opens is
+ * the number it showed.
  */
 export async function listReadyToAssign(opts: { minDays?: number; limit?: number } = {}): Promise<ReadyToAssignRow[]> {
     const limit = opts.limit ?? 500;

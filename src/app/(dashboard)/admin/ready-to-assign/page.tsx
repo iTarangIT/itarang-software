@@ -1,7 +1,6 @@
 import Link from "next/link";
 import { requireRole } from "@/lib/auth-utils";
 import {
-    AWAITING_ASSIGNMENT_OVERDUE_DAYS,
     countAwaitingAssignment,
     listReadyToAssign,
     salesReadyReasonLabel,
@@ -23,8 +22,8 @@ const ASSIGN_ROLES: readonly string[] = LEADS_BULK_ROLES;
 // Tracker ID 82 (handover P2-10): sales-ready leads nobody owns, oldest wait
 // first. The wait is counted from the Sales-ready event, not from creation.
 //
-// The CEO card "Sales-ready leads awaiting assignment (7+ days)" opens this
-// page with ?min_days=7. Card, page and the daily email's "Right now" box all
+// The CEO card "Sales-ready leads awaiting assignment (N+ days)" opens this
+// page with ?min_days=N, N = the ID 85 time limit sales_ready_unassigned. Card, page and the daily email's "Right now" box all
 // count by ONE rule (awaitingAssignment in lib/leads/salesReady.ts), and the
 // page says the number it is showing, so what the card said is what is listed.
 export default async function ReadyToAssignPage({
@@ -41,7 +40,8 @@ export default async function ReadyToAssignPage({
         countAwaitingAssignment(),
         listReadyToAssign({ minDays, limit: LIST_CAP }),
     ]);
-    const overdueOnly = minDays === AWAITING_ASSIGNMENT_OVERDUE_DAYS;
+    const overdueDays = counts.overdueDays;
+    const overdueOnly = minDays === overdueDays;
     const showing = minDays === 0 ? counts.total : overdueOnly ? counts.overdue : rows.length;
 
     const tab = (href: string, label: string, n: number, active: boolean) => (
@@ -70,8 +70,8 @@ export default async function ReadyToAssignPage({
             <div className="flex flex-wrap items-center gap-2">
                 {tab("/admin/ready-to-assign", "All awaiting", counts.total, minDays === 0)}
                 {tab(
-                    `/admin/ready-to-assign?min_days=${AWAITING_ASSIGNMENT_OVERDUE_DAYS}`,
-                    `Waiting ${AWAITING_ASSIGNMENT_OVERDUE_DAYS}+ days`,
+                    `/admin/ready-to-assign?min_days=${overdueDays}`,
+                    `Waiting ${overdueDays}+ days`,
                     counts.overdue,
                     overdueOnly,
                 )}
@@ -95,7 +95,7 @@ export default async function ReadyToAssignPage({
                     )}
                     <ReadyToAssignTable
                         canAssign={canAssign}
-                        overdueDays={AWAITING_ASSIGNMENT_OVERDUE_DAYS}
+                        overdueDays={overdueDays}
                         rows={rows.map((r) => ({
                             id: r.id,
                             dealer_name: r.dealer_name,

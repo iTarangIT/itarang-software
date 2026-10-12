@@ -451,7 +451,7 @@ export default function CEODashboard() {
           tone: "warn",
           label: "Sales-ready leads with no owner",
           count: num(x.awaiting_assignment_total),
-          sub: `${num(x.unassigned_over_7d)} waiting more than 7 days`,
+          sub: `${num(x.unassigned_over_7d)} waiting ${x.unassigned_overdue_days}+ days`,
           href: "/admin/ready-to-assign",
           cta: "Open list",
         },
@@ -634,12 +634,7 @@ export default function CEODashboard() {
   // The Lead Funnel report's stages when it loads (share of the period's leads
   // that ever reached each stage); the control tower's three steps otherwise.
   type FunnelRow = { label: string; count: number; pct: number | null; note: string };
-  // ID 153 — the report lists bulk imports on their own row; they are not a
-  // funnel stage, so they leave the bars and are stated under the card.
-  const BULK_STAGE = "Imported in bulk (not in the funnel)";
-  const bulkStage = (stages.data?.rows ?? []).find((r) => r.stage === BULK_STAGE);
-  const importedBulk = bulkStage ? Number(bulkStage.count ?? 0) : (engine?.imported_bulk.now ?? null);
-  const stageRows: FunnelRow[] = (stages.data?.rows ?? []).filter((r) => r.stage !== BULK_STAGE).map((r, i) => {
+  const stageRows: FunnelRow[] = (stages.data?.rows ?? []).map((r, i) => {
     const ever = r.ever_reached == null ? null : Number(r.ever_reached);
     const pct = r.pct_reached == null ? null : Number(r.pct_reached);
     return {
@@ -1097,8 +1092,7 @@ export default function CEODashboard() {
           action={<CardLink href="/reports?analysis=lead_sources">Lead sources</CardLink>}
           caption={
             engine
-              ? `How far the period's ${num(engine.leads_in.now)} new leads have got. The bar is the share of them that reached each stage.` +
-                (importedBulk ? ` ${num(importedBulk)} more came in as bulk imports and are not counted here.` : "")
+              ? `How far the period's ${num(engine.leads_in.now)} new leads have got. The bar is the share of them that reached each stage.`
               : undefined
           }
         >

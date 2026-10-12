@@ -61,12 +61,12 @@ describe("forwardQuery", () => {
 });
 
 describe("CreateConnectionBody", () => {
-  it("accepts the CRM preset or a postgres address", () => {
+  it("accepts only the CRM preset", () => {
     expect(CreateConnectionBody.safeParse({ preset: "crm" }).success).toBe(true);
-    expect(CreateConnectionBody.safeParse({ name: "W", dsn: "postgresql://u:p@h:5432/d" }).success).toBe(true);
-    expect(CreateConnectionBody.safeParse({ name: "W", dsn: "postgres://u@h/d" }).success).toBe(true);
   });
-  it("refuses anything else", () => {
+  it("refuses an outside database (ID 167) and anything else", () => {
+    expect(CreateConnectionBody.safeParse({ name: "W", dsn: "postgresql://u:p@h:5432/d" }).success).toBe(false);
+    expect(CreateConnectionBody.safeParse({ preset: "crm", dsn: "postgresql://u@h/d" }).success).toBe(false);
     expect(CreateConnectionBody.safeParse({ name: "W", dsn: "mysql://u@h/d" }).success).toBe(false);
     expect(CreateConnectionBody.safeParse({ preset: "other" }).success).toBe(false);
     expect(CreateConnectionBody.safeParse({ dsn: "postgresql://u@h/d" }).success).toBe(false);

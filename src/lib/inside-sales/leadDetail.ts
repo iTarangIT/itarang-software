@@ -15,6 +15,7 @@ import { callerNotLinkedFor } from "@/lib/neodove/ownerFromCall";
 import { engagedState } from "@/lib/reports/metricDefinitions";
 import { fetchAssignedByForLeads } from "@/lib/leads/leadAssignedBy";
 import { onboardingStall, STALL_LABEL } from "@/lib/onboarding/stall";
+import { getTimeLimits } from "@/lib/timeLimits/store";
 import { agreementOutcomeLabel } from "@/lib/onboarding/leadMilestones";
 import type {
     LeadDetailBundle,
@@ -278,8 +279,9 @@ export async function fetchLeadDetailBundle(leadId: string): Promise<LeadDetailB
         }
     >;
 
-    // ID 84.1: stalled = waiting on the dealer 7+ days, or on us 2+ working
-    // days (holiday_calendar excluded). Holidays only matter for the "us" side,
+    // ID 84.1: stalled = waiting on the dealer onboarding_stall_dealer+ days,
+    // or on us onboarding_stall_us+ working days (ID 85 time limits;
+    // holiday_calendar excluded). Holidays only matter for the "us" side,
     // so they are read only when there is an open onboarding.
     let onboarding: LeadOnboardingMilestones | null = null;
     if (onboardingRaw[0]) {
@@ -298,7 +300,8 @@ export async function fetchLeadDetailBundle(leadId: string): Promise<LeadDetailB
                 // No calendar: Sundays alone are skipped.
             }
         }
-        const waitingOn = live
+        const limits = live ? await getTimeLimits() : null;
+        const waitingOn = live && limits
             ? onboardingStall(
                   {
                       onboarding_status: o.onboarding_status,
@@ -306,6 +309,8 @@ export async function fetchLeadDetailBundle(leadId: string): Promise<LeadDetailB
                       last_activity_at: o.last_activity_at,
                   },
                   holidays,
+                  new Date(),
+                  { dealerDays: limits.onboarding_stall_dealer, usWorkingDays: limits.onboarding_stall_us },
               )
             : null;
         onboarding = {

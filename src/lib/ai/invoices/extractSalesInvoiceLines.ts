@@ -7,8 +7,8 @@
  * a failure here must never cost an invoice — the caller stores the header
  * first and treats this as best-effort.
  *
- * Nothing read here is trusted on its own: saveInvoiceLines / the margin query
- * use the lines only when they add up to the invoice's taxable value.
+ * Nothing read here is trusted on its own: the ledger stores the lines only
+ * when they check out against the invoice (driveLedgerLines.reconcileDriveLines).
  *
  * Read with GEMINI (not OpenAI like the header reader): Gemini takes the PDF
  * inline, so no page rendering is needed. Key: GEMINI_INVOICE_API_KEY, else

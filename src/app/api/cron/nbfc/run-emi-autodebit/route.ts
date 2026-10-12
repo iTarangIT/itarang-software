@@ -19,7 +19,7 @@
  *   - LIVE never marks the EMI paid here — the emi-webhook is source of truth.
  *
  * Schedule: vercel.json "0 6 * * *" (after run-emi-aging at 05:30). Auth:
- * Vercel cron header OR Bearer CRON_SECRET; unauthenticated allowed non-prod.
+ * Vercel cron header OR Bearer CRON_SECRET; closed when the secret is unset.
  */
 import { NextRequest, NextResponse } from "next/server";
 import { and, asc, eq, inArray, isNull, lte, sql } from "drizzle-orm";
@@ -35,7 +35,7 @@ import {
 } from "@/lib/db/schema";
 import { createPaymentQr, createRecurringDebit, razorpayErrorMessage } from "@/lib/razorpay";
 import { applyEmiPayment } from "@/lib/nbfc/servicing/applyEmiPayment";
-import { fromVercelCron } from "@/lib/security/cronAuth";
+import { isCronAuthorised } from "@/lib/cron-auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -43,15 +43,6 @@ export const dynamic = "force-dynamic";
 const MAX_PAISE_CEILING = process.env.EMI_AUTODEBIT_MAX_PAISE
   ? Number(process.env.EMI_AUTODEBIT_MAX_PAISE)
   : null;
-
-function isAuthorised(req: NextRequest): boolean {
-  if (fromVercelCron(req)) return true;
-  const auth = req.headers.get("authorization") ?? "";
-  const expected = process.env.CRON_SECRET;
-  if (expected && auth === `Bearer ${expected}`) return true;
-  if (process.env.NODE_ENV !== "production") return true;
-  return false;
-}
 
 interface Summary {
   mode: string;
@@ -296,7 +287,7 @@ async function run(): Promise<Summary> {
 }
 
 async function handle(req: NextRequest) {
-  if (!isAuthorised(req)) {
+  if (!isCronAuthorised(req)) {
     return NextResponse.json({ ok: false, error: "UNAUTHORIZED" }, { status: 401 });
   }
   try {

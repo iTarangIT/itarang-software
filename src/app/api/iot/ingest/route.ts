@@ -25,6 +25,7 @@
  *   skipped — trusting the X-Device-IMEI header. This mirrors the loop-test
  *   pattern used by other NBFC routes.
  */
+import { safeEqual } from "@/lib/cron-auth";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { and, eq, sql as dsql } from "drizzle-orm";
@@ -129,7 +130,7 @@ function isTestBypass(req: NextRequest): boolean {
   if (process.env.NODE_ENV === "production") return false;
   const secret = process.env.NBFC_TEST_BYPASS_SECRET;
   if (!secret) return false;
-  return req.headers.get("x-nbfc-test-bypass") === secret;
+  return safeEqual(req.headers.get("x-nbfc-test-bypass") ?? "", secret);
 }
 
 export async function POST(req: NextRequest) {

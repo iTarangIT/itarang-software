@@ -14,9 +14,10 @@
  * mismatch exits 1.
  *
  * Checked:
- *   Leads in + Imported in bulk  = every lead created in the window, counted the
- *                                  way the /leads list's Created filter counts
- *                                  (leadListQuery.ts: UTC → IST date)
+ *   Leads in                     = every lead created in the window, any source
+ *                                  (ID 153), counted the way the /leads list's
+ *                                  Created filter counts (leadListQuery.ts:
+ *                                  UTC → IST date)
  *   Calls made / Dealers called  = inside_sales_call touchpoints on IST days
  *                                  (NeoDove re-dispositions printed apart: they
  *                                  are dropped by design, metricDefinitions.ts)
@@ -49,7 +50,7 @@ async function main() {
     const { sql } = await import("drizzle-orm");
     const { db } = await import("@/lib/db");
     const { buildSalesDashboard } = await import("@/lib/admin/salesDashboard");
-    const { buildBlockA, IMPORTED_LABEL } = await import("@/lib/digests/salesDailyBlockA");
+    const { buildBlockA } = await import("@/lib/digests/salesDailyBlockA");
     const { loadRepExtras } = await import("@/lib/digests/salesDailyBlocks");
     const { salesDailyPeriods } = await import("@/lib/digests/kinds/sales-daily");
 
@@ -78,7 +79,7 @@ async function main() {
 
     // Independent recounts — written here, not imported.
     const independent: Record<string, (p: Win) => Promise<number>> = {
-        "Leads in + Imported in bulk": (p) =>
+        "Leads in": (p) =>
             one(sql`SELECT COUNT(*) AS n FROM dealer_leads dl
                      WHERE dl.is_active IS NOT FALSE
                        AND (dl.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date BETWEEN ${p.from}::date AND ${p.to}::date`),
@@ -98,11 +99,7 @@ async function main() {
                        AND ${istDate(sql`t.performed_at`)} BETWEEN ${p.from}::date AND ${p.to}::date`),
     };
     const emailValue: Record<string, (k: "y" | "d7" | "mtd" | "lm") => number | null> = {
-        "Leads in + Imported in bulk": (k) => {
-            const a = row("Leads in")?.[k];
-            const b = row(IMPORTED_LABEL)?.[k];
-            return a == null || b == null ? null : a + b;
-        },
+        "Leads in": (k) => row("Leads in")?.[k] ?? null,
         "Calls made": (k) => row("Calls made")?.[k] ?? null,
         "Dealers visited": (k) => row("Dealers visited")?.[k] ?? null,
         "Marked Won": (k) => row("Marked Won")?.[k] ?? null,
@@ -132,9 +129,7 @@ async function main() {
         }
     }
     const li = row("Leads in");
-    const im = row(IMPORTED_LABEL);
-    console.log(`\n  Leads in (own arrival) y/7d/MTD/LM: ${li?.y}/${li?.d7}/${li?.mtd}/${li?.lm}`);
-    console.log(`  Imported in bulk      y/7d/MTD/LM: ${im?.y}/${im?.d7}/${im?.mtd}/${im?.lm}`);
+    console.log(`\n  Leads in (every source) y/7d/MTD/LM: ${li?.y}/${li?.d7}/${li?.mtd}/${li?.lm}`);
 
     // Per rep, MTD: the dashboard's per_spoc (Blocks B / C) vs plain counts.
     console.log("\nPer rep (MTD) — email vs independent recount");

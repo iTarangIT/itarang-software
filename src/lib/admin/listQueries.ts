@@ -3,7 +3,7 @@
 // (BRD §0.13 Point B). Raw SQL via db.execute() — same approach as the
 // Module 1/2 query builders.
 
-import { sql } from "drizzle-orm";
+import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { engagedState } from "@/lib/reports/metricDefinitions";
 import type {
@@ -17,6 +17,8 @@ import type {
     LeadDetailTouchpoint,
 } from "@/lib/inside-sales/types";
 import { onboardingClockSql } from "@/lib/onboarding/clock";
+import type { TimeLimits } from "@/lib/timeLimits/registry";
+import { getTimeLimits } from "@/lib/timeLimits/store";
 
 // ID 122: the one onboarding clock (src/lib/onboarding/clock.ts).
 const ONBOARDING_CLOCK = sql.raw(onboardingClockSql("oa"));
@@ -250,10 +252,17 @@ export async function fetchMergeRequests(
 
 // BRD §0.13 Point B — a Converted lead is a "dropout pending review" when its
 // onboarding application is rejected/withdrawn OR stalled (still in an early
-// status with no action for 21+ calendar days — see src/lib/onboarding/clock.ts
-// for what counts as an action), and admin has not yet acted
-// (onboarding_dropout_reason still NULL).
-export const DROPOUT_WHERE = sql`
+// status with no action for onboarding_dropout calendar days, default 21 — see
+// src/lib/onboarding/clock.ts for what counts as an action), and admin has not
+// yet acted (onboarding_dropout_reason still NULL). Both day counts are ID 85
+// time limits (src/lib/timeLimits), bound as parameters.
+export type DropoutLimits = Pick<TimeLimits, "onboarding_dropout" | "onboarding_keep_waiting">;
+
+/** NOW() minus `days` calendar days — `days` bound as a parameter. */
+export const daysAgoSql = (days: number): SQL => sql`(NOW() - make_interval(days => ${Math.floor(days)}::int))`;
+
+export function dropoutWhere(l: DropoutLimits): SQL {
+    return sql`
     dl.lead_status IN ('Won', 'Converted')  -- ID 74: Won = onboarding under way
     AND dl.is_active IS NOT FALSE
     AND dl.onboarding_dropout_reason IS NULL
@@ -263,25 +272,27 @@ export const DROPOUT_WHERE = sql`
         OR (
             oa.onboarding_status IN ('draft', 'submitted', 'correction_requested')
             AND ${ONBOARDING_CLOCK}
-                < NOW() - INTERVAL '21 days'
+                < ${daysAgoSql(l.onboarding_dropout)}
         )
     )
-    -- ID 84: "keep waiting" parks the decision for another 21 days (E-314,
-    -- read via to_jsonb so a DB without it behaves as before).
+    -- ID 84: "keep waiting" parks the decision for onboarding_keep_waiting days
+    -- (E-314, read via to_jsonb so a DB without it behaves as before).
     AND COALESCE((to_jsonb(dl) ->> 'onboarding_stalled_at')::timestamptz, 'epoch'::timestamptz)
-        < NOW() - INTERVAL '21 days'
+        < ${daysAgoSql(l.onboarding_keep_waiting)}
 `;
+}
 
 // ID 74 — when the lead closed, else when it was marked Won (E-314).
 const DROPOUT_WON_OR_CLOSED_AT = sql`COALESCE(dl.closed_at, (to_jsonb(dl) ->> 'won_at')::timestamptz)`;
 
 export async function countOnboardingDropouts(): Promise<number> {
+    const where = dropoutWhere(await getTimeLimits());
     const rows = await db.execute<{ c: string }>(sql`
         SELECT COUNT(*)::text AS c
         FROM dealer_leads dl
         JOIN dealer_onboarding_applications oa
             ON oa.id = dl.dealer_onboarding_application_id
-        WHERE ${DROPOUT_WHERE}
+        WHERE ${where}
     `);
     return Number(rows[0]?.c ?? 0);
 }
@@ -295,6 +306,7 @@ export async function fetchOnboardingDropouts({
         ? sql` AND (dl.dealer_name ILIKE ${"%" + q + "%"} OR dl.phone ILIKE ${"%" + q + "%"})`
         : sql``;
     const offset = (page - 1) * limit;
+    const where = dropoutWhere(await getTimeLimits());
 
     const rows = await db.execute<OnboardingDropoutRow>(sql`
         SELECT
@@ -321,7 +333,7 @@ export async function fetchOnboardingDropouts({
         JOIN dealer_onboarding_applications oa
             ON oa.id = dl.dealer_onboarding_application_id
         LEFT JOIN users ow ON ow.id::text = dl.current_owner_id
-        WHERE ${DROPOUT_WHERE}${search}
+        WHERE ${where}${search}
         ORDER BY ${DROPOUT_WON_OR_CLOSED_AT} ASC NULLS LAST
         LIMIT ${limit} OFFSET ${offset}
     `);
@@ -331,7 +343,7 @@ export async function fetchOnboardingDropouts({
         FROM dealer_leads dl
         JOIN dealer_onboarding_applications oa
             ON oa.id = dl.dealer_onboarding_application_id
-        WHERE ${DROPOUT_WHERE}${search}
+        WHERE ${where}${search}
     `);
 
     return {

@@ -6,6 +6,7 @@
  * Persona-grouped + assertion-bearing per Phase 0.2.
  */
 import { test, expect } from '@playwright/test';
+import { cronAuth } from '../helpers/cron-auth';
 
 const HEADED_DIR = `docs/nbfc/headed_tests/E-030`;
 
@@ -16,7 +17,7 @@ test.describe('E-030 headed — PCI nightly computation job', () => {
     let body: any = null;
     let status = 0;
     try {
-      const res = await request.post('/api/cron/nbfc/compute-pci', { data: {}, timeout: 10000 });
+      const res = await request.post('/api/cron/nbfc/compute-pci', { data: {}, timeout: 10000, headers: cronAuth() });
       status = res.status();
       try { body = await res.json(); } catch { body = await res.text(); }
     } catch (e) { body = String(e); }
@@ -29,7 +30,7 @@ test.describe('E-030 headed — PCI nightly computation job', () => {
     let body: any = null;
     let status = 0;
     try {
-      const res = await request.post('/api/cron/nbfc/compute-pci', { data: {}, timeout: 10000 });
+      const res = await request.post('/api/cron/nbfc/compute-pci', { data: {}, timeout: 10000, headers: cronAuth() });
       status = res.status();
       try { body = await res.json(); } catch { body = await res.text(); }
     } catch (e) { body = String(e); }
@@ -42,7 +43,7 @@ test.describe('E-030 headed — PCI nightly computation job', () => {
     let body: any = null;
     let status = 0;
     try {
-      const res = await request.post('/api/cron/nbfc/compute-pci', { data: {}, timeout: 10000 });
+      const res = await request.post('/api/cron/nbfc/compute-pci', { data: {}, timeout: 10000, headers: cronAuth() });
       status = res.status();
       try { body = await res.json(); } catch { body = await res.text(); }
     } catch (e) { body = String(e); }
@@ -55,7 +56,7 @@ test.describe('E-030 headed — PCI nightly computation job', () => {
     let body: any = null;
     let status = 0;
     try {
-      const res = await request.post('/api/cron/nbfc/compute-pci', { data: {}, timeout: 10000 });
+      const res = await request.post('/api/cron/nbfc/compute-pci', { data: {}, timeout: 10000, headers: cronAuth() });
       status = res.status();
       try { body = await res.json(); } catch { body = await res.text(); }
     } catch (e) { body = String(e); }

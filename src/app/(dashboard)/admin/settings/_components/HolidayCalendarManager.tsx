@@ -13,8 +13,14 @@ import type { HolidayRow } from "@/lib/admin/types";
 
 export function HolidayCalendarManager({
     holidays,
+    queryKey = ["admin-settings"],
+    readOnly = false,
 }: {
     holidays: HolidayRow[];
+    /** The query to refresh after a change (the page that loaded `holidays`). */
+    queryKey?: string[];
+    /** ID 85 — the CEO sees the office calendar on Time limits but does not edit it. */
+    readOnly?: boolean;
 }) {
     const qc = useQueryClient();
     const [date, setDate] = useState("");
@@ -22,7 +28,7 @@ export function HolidayCalendarManager({
     const [busy, setBusy] = useState(false);
 
     function refresh() {
-        qc.invalidateQueries({ queryKey: ["admin-settings"] });
+        qc.invalidateQueries({ queryKey });
     }
 
     async function add() {
@@ -74,6 +80,7 @@ export function HolidayCalendarManager({
 
     return (
         <div className="space-y-4">
+            {!readOnly && (
             <div className="flex flex-wrap items-end gap-3 rounded-lg border border-border bg-bg/50 p-3">
                 <div>
                     <label className="block text-xs font-medium text-ink-muted mb-1">
@@ -106,6 +113,7 @@ export function HolidayCalendarManager({
                     Add Holiday
                 </Button>
             </div>
+            )}
 
             <div className="rounded-lg border border-border overflow-hidden">
                 <table className="w-full text-sm">
@@ -149,13 +157,15 @@ export function HolidayCalendarManager({
                                     )}
                                 </td>
                                 <td className="px-4 py-2.5 text-right">
-                                    <button
-                                        type="button"
-                                        onClick={() => toggle(h)}
-                                        className="text-xs font-medium text-brand-600 hover:underline"
-                                    >
-                                        {h.is_active ? "Disable" : "Enable"}
-                                    </button>
+                                    {!readOnly && (
+                                        <button
+                                            type="button"
+                                            onClick={() => toggle(h)}
+                                            className="text-xs font-medium text-brand-600 hover:underline"
+                                        >
+                                            {h.is_active ? "Disable" : "Enable"}
+                                        </button>
+                                    )}
                                 </td>
                             </tr>
                         ))}

@@ -2,7 +2,8 @@
 // The day-21 decision (ID 84, 29 Sep 2026) on a Won lead — or a legacy
 // Converted one — whose onboarding fell through or went quiet:
 //   keep_waiting — Stalled: the lead stays Won and the decision comes back in
-//                  21 days (onboarding_stalled_at, E-314). No "keep converted":
+//                  onboarding_keep_waiting days (ID 85 time limit, default
+//                  21; onboarding_stalled_at, E-314). No "keep converted":
 //                  Converted means the onboarding was approved.
 //   flip_to_lost — lead_status → Lost, lost_reason = 'onboarding_dropout'.
 //   re_engage    — runs the reactivation cycle (→ Assigned/New).
@@ -21,6 +22,7 @@ import { markSalesReady } from "@/lib/leads/salesReady";
 import { ONBOARDING_DROPOUT_REASONS } from "@/lib/admin/types";
 import { canReactivateLead } from "@/lib/leads/access";
 import { notifyLeadsReturned } from "@/lib/leads/newOwnerNotice";
+import { getTimeLimits } from "@/lib/timeLimits/store";
 
 // Keep waiting / Flip to Lost. Re-engage is a reactivation and follows
 // REACTIVATE_ROLES instead (ID 158, 10 Oct: admin, sales_head, ceo).
@@ -70,7 +72,9 @@ export const POST = withErrorHandler(
         const fromWon = lead.lead_status === "Won";
 
         if (body.action === "keep_waiting") {
-            // Stalled: stays Won; the decision returns in 21 days.
+            // Stalled: stays Won; the decision returns in onboarding_keep_waiting
+            // days (read at review time against onboarding_stalled_at).
+            const keepDays = (await getTimeLimits()).onboarding_keep_waiting;
             await db.execute(sql`
                 UPDATE dealer_leads SET
                     onboarding_stalled_at = NOW(),
@@ -82,7 +86,7 @@ export const POST = withErrorHandler(
                 dealerLeadId: id,
                 touchpointType: "onboarding_dropout_action",
                 performedBy: user.id,
-                remarks: `Onboarding stalled — keep waiting (decision again in 21 days). ${body.onboarding_dropout_notes}`,
+                remarks: `Onboarding stalled — keep waiting (decision again in ${keepDays} days). ${body.onboarding_dropout_notes}`,
             });
         } else if (body.action === "flip_to_lost") {
             // Converted → Lost (admin loopback, BRD §0.7).
