@@ -65,9 +65,14 @@ export async function GET() {
       // an admin opens the row and clicks Approve. Submitted, approved,
       // rejected, and correction_requested rows are still returned.
       .where(
-        or(
-          ne(dealerOnboardingApplications.onboarding_status, "draft"),
-          isNotNull(dealerOnboardingApplications.submitted_at),
+        and(
+          or(
+            ne(dealerOnboardingApplications.onboarding_status, "draft"),
+            isNotNull(dealerOnboardingApplications.submitted_at),
+          ),
+          // ID 169: a form withdrawn by Undo Mark Won was never submitted —
+          // it leaves the queue, the cards and the export.
+          sql`NOT (${dealerOnboardingApplications.onboarding_status} = 'withdrawn' AND ${dealerOnboardingApplications.submitted_at} IS NULL)`,
         ),
       )
       .orderBy(

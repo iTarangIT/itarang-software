@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
     LEAD_HISTORY_EXPORT_ROLES,
     canEditLead,
+    canReactivateLead,
+    capabilitiesFor,
     canEditRegionGroup,
     canExportLeadHistory,
     exportsOwnLeadsOnly,
@@ -108,5 +110,14 @@ describe("Edit Lead — the owner, the assigned ASM, or a manager (ID 132)", () 
     it("no signed-in id never matches an unowned lead", () => {
         expect(canEditLead({ role: "asm", userId: null, currentOwnerId: null, asmId: null })).toBe(false);
         expect(canEditLead({ role: "asm", userId: undefined, currentOwnerId: undefined, asmId: undefined })).toBe(false);
+    });
+});
+
+describe("Reactivate roles (ID 158)", () => {
+    it("is Admin, Sales Head and CEO only — partner can bulk-act but not reactivate", () => {
+        for (const r of ["admin", "sales_head", "ceo"]) expect(canReactivateLead(r)).toBe(true);
+        for (const r of ["partner", "asm", "inside_sales", "business_head", null]) expect(canReactivateLead(r)).toBe(false);
+        expect(capabilitiesFor("partner").canBulkAct).toBe(true);
+        expect(capabilitiesFor("partner").canReactivate).toBe(false);
     });
 });

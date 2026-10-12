@@ -15,12 +15,14 @@ import { successResponse, withErrorHandler } from "@/lib/api-utils";
 import { listOemCatalogue } from "@/lib/leads/oemPrices";
 import { mapVyaparItem } from "@/lib/sales/vyaparImport";
 import { requireLedger } from "../_auth";
+import { ONBOARDING_FEE_ITEM } from "@/lib/leads/dealCardRules";
 
 export const dynamic = "force-dynamic";
 
 const BodySchema = z.object({
     item_name: z.string().trim().min(1).max(300),
-    asset_type: z.enum(["battery", "charger", "paraphernalia"]).nullable(),
+    // ID 172: "onboarding_fee" maps a fee line (product_id = "onboarding_fee").
+    asset_type: z.enum(["battery", "charger", "paraphernalia", ONBOARDING_FEE_ITEM]).nullable(),
     product_id: z.string().trim().min(1).max(100).nullable(),
 });
 

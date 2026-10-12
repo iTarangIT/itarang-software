@@ -93,15 +93,18 @@ async function resolvePeriod(f: AnalysisFilters, fallback: "last90" | "mtd"): Pr
 const inPeriod = (day: SQL, p: AnalysisPeriod): SQL => sql`${day} BETWEEN ${p.from}::date AND ${p.to}::date`;
 
 /**
- * The team of the lead's person: who holds it now, else who held it when it
- * closed (conversions are credited to the closing owner everywhere else). A
- * lead nobody has held belongs to no team, so a team filter leaves it out.
+ * The team of the lead's person. A closed lead (Won, Converted, Lost) belongs
+ * to its closer's team — ID 159 (10 Oct): credit is the closer's everywhere —
+ * falling back to whoever holds it now; an open lead to whoever holds it now.
+ * A lead nobody has held belongs to no team, so a team filter leaves it out.
  */
 function teamCond(team: string | null | undefined): SQL {
     const role = TEAM_ROLES[team ?? ""];
     if (!role) return sql``;
     return sql` AND EXISTS (SELECT 1 FROM users ou
-                        WHERE ou.id::text = COALESCE(dl.current_owner_id, dl.closing_owner_id)::text
+                        WHERE ou.id::text = (CASE WHEN dl.lead_status IN ('Won', 'Converted', 'Lost')
+                                                  THEN COALESCE(dl.closing_owner_id, dl.current_owner_id)
+                                                  ELSE COALESCE(dl.current_owner_id, dl.closing_owner_id) END)::text
                           AND ou.role = ${role})`;
 }
 

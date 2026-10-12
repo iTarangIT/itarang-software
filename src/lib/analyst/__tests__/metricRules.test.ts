@@ -14,7 +14,9 @@ describe("withMetricRules", () => {
     });
 
     it("leaves room for a real question (the rules are short)", () => {
-        expect(withMetricRules("x".repeat(1000))).toContain(ANALYST_METRIC_RULES);
+        // ID 169 (10 Oct) added the Marked Won / Lost-reason / visit rules; the
+        // tracker accepted ~690 characters left for the question.
+        expect(withMetricRules("x".repeat(700))).toContain(ANALYST_METRIC_RULES);
     });
 
     it("sends a long question as asked rather than cut", () => {

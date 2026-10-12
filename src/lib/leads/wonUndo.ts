@@ -12,7 +12,12 @@
 //          mistake — <reason>". The lead returns to the EXACT stage it was at
 //          before Won (from_status of its Mark Won history row) with the same
 //          owner. The draft application is withdrawn ("Marked Won by
-//          mistake") and leaves every queue. Won date, closing owner and the
+//          mistake") and leaves every queue. ID 169: it also lets go of the
+//          lead (originating_dealer_lead_id = NULL; the undo request keeps
+//          onboarding_application_id), so a later real onboarding links to
+//          the lead and converts it; a second Mark Won reopens that form by
+//          the request's id (fromConvertedLead.ts). Admin and partner — who
+//          were told the form was created — are told it was withdrawn. Won date, closing owner and the
 //          won-without-quote flag are cleared; the Mark Won history row gets
 //          won_undone_at so Won counters skip it. Not a drop-out, not a Lost.
 //   Where  every undo is listed in the Sales Head's "Won undone this week"
@@ -233,7 +238,9 @@ async function performUndo(
     await writeTouchpoint(
         {
             dealerLeadId: leadId,
-            touchpointType: "status_change_note",
+            // ID 170: the status move is still a history row (and counts as a
+            // status change there); the touchpoint is a record fix, not work.
+            touchpointType: "record_correction",
             performedBy: actorId,
             remarks: `${WON_UNDONE_HISTORY_PREFIX} — ${reason}. Back to ${verdict.restoreStatus.replace(/_/g, " ")}.`,
             countsAsWork: false,
@@ -260,11 +267,15 @@ async function performUndo(
         `);
     }
     if (appId) {
+        // ID 169: originating_dealer_lead_id is released too — a withdrawn
+        // form that still claimed the lead hid it from linkOnboardingToLead,
+        // so the dealer's real onboarding never converted it.
         await tx.execute(sql`
             UPDATE dealer_onboarding_applications
                SET onboarding_status = 'withdrawn',
                    withdrawn_at = NOW(),
                    withdrawn_reason = ${WITHDRAWN_BY_UNDO_REASON},
+                   originating_dealer_lead_id = NULL,
                    last_action_by = ${actorId}::uuid,
                    last_action_at = NOW(),
                    updated_at = NOW()
@@ -286,6 +297,26 @@ async function performUndo(
 /** performUndo for scripts that run inside their own (rolled-back) transaction. */
 export const undoWonInTx = performUndo;
 
+/**
+ * ID 169: admin, Sales Head and partner were told "New dealer onboarding
+ * application created" at Mark Won; tell them it was withdrawn, so nobody
+ * works a dead form. Post-commit, never throws.
+ */
+async function notifyOnboardingWithdrawn(leadId: string, appId: string | null, actorId: string): Promise<void> {
+    if (!appId) return;
+    try {
+        await notifyRoles(["admin", "sales_head", "partner"], {
+            type: "onboarding_withdrawn",
+            title: "Dealer onboarding withdrawn",
+            message: "Mark Won was undone (marked by mistake), so its onboarding application was withdrawn. Nothing to do on it.",
+            leadId,
+            data: { onboarding_application_id: appId, withdrawn_by: actorId },
+        });
+    } catch (err) {
+        console.error("[won-undo] withdrawn notification failed:", err);
+    }
+}
+
 /** The Sales Head approves or rejects the waiting request on a lead. */
 export async function decideWonUndo(input: {
     leadId: string;
@@ -295,6 +326,7 @@ export async function decideWonUndo(input: {
 }): Promise<{ restoreStatus: LeadStatus | null }> {
     const note = input.note?.trim() || null;
     let requester: string | null = null;
+    let withdrawnApp: string | null = null;
     const restoreStatus = await withLeadActor(input.actor.id, async (tx) => {
         let req: { id: string; requested_by: string; request_reason: string } | undefined;
         try {
@@ -315,6 +347,7 @@ export async function decideWonUndo(input: {
         if (input.approve) {
             const done = await performUndo(tx, input.leadId, input.actor.id, req.request_reason);
             restored = done.restoreStatus;
+            withdrawnApp = done.appId;
         } else if (!note || note.length < 5) {
             throw new WonUndoError("Say why the undo is refused (at least 5 characters).", 400);
         }
@@ -328,6 +361,7 @@ export async function decideWonUndo(input: {
         return restored;
     });
 
+    if (input.approve) await notifyOnboardingWithdrawn(input.leadId, withdrawnApp, input.actor.id);
     if (requester && requester !== input.actor.id) {
         try {
             await notifyUser(requester, {
@@ -353,7 +387,8 @@ export async function undoWonDirect(input: {
     reason: string;
 }): Promise<{ restoreStatus: LeadStatus }> {
     const reason = cleanReason(input.reason);
-    return withLeadActor(input.actor.id, async (tx) => {
+    let withdrawnApp: string | null = null;
+    const out = await withLeadActor(input.actor.id, async (tx) => {
         // A waiting request is superseded by the direct undo.
         let hasPending = false;
         try {
@@ -367,6 +402,7 @@ export async function undoWonDirect(input: {
         }
         const { wonHistoryId, appId } = await readFacts(tx, input.leadId, true);
         const { restoreStatus } = await performUndo(tx, input.leadId, input.actor.id, reason);
+        withdrawnApp = appId;
         if (hasPending) {
             await tx.execute(sql`
                 UPDATE lead_won_undo_requests
@@ -385,4 +421,6 @@ export async function undoWonDirect(input: {
         }
         return { restoreStatus };
     });
+    await notifyOnboardingWithdrawn(input.leadId, withdrawnApp, input.actor.id);
+    return out;
 }

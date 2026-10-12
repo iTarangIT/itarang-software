@@ -99,6 +99,10 @@ export function LogTouchpointModal({
     const [changeStatus, setChangeStatus] = useState(false);
     const [toStatus, setToStatus] = useState<LeadStatus | "">("");
     const [followUpAt, setFollowUpAt] = useState("");
+    // Clear the lead's current follow-up (only offered when it has one and no
+    // new date is picked). ID 121: an ASM's follow-up blocks handing the lead
+    // back to an ISR, and this is how the ASM lifts it.
+    const [clearFollowUp, setClearFollowUp] = useState(false);
     const [submitting, setSubmitting] = useState(false);
     // Temperature change to save with this touchpoint ("" = leave as is).
     const [toInterest, setToInterest] = useState<Interest | "">("");
@@ -151,6 +155,7 @@ export function LogTouchpointModal({
         setChangeStatus(false);
         setToStatus("");
         setFollowUpAt("");
+        setClearFollowUp(false);
         setToInterest("");
         setAuto({ status: false, interest: false });
         setTouched({ status: false, interest: false });
@@ -181,6 +186,7 @@ export function LogTouchpointModal({
                 fd.append("dealer_replied", waReplied ? "true" : "false");
                 if (waScreenshot) fd.append("screenshot", waScreenshot);
                 if (followUpAt) fd.append("follow_up_at", new Date(followUpAt).toISOString());
+                else if (clearFollowUp) fd.append("clear_follow_up", "true");
                 const wr = await fetch(`/api/inside-sales/lead/${encodeURIComponent(leadId)}/whatsapp-contact`, {
                     method: "POST",
                     body: fd,
@@ -214,6 +220,7 @@ export function LogTouchpointModal({
             // ID 80 / 114: no manual status — the server applies the outcome
             // rule (autoProgress) in the status writer itself.
             if (followUpAt) body.follow_up_at = new Date(followUpAt).toISOString();
+            else if (clearFollowUp) body.follow_up_at = null;
             // Temperature rides with the touchpoint and commits with it: the
             // value on the form (auto-filled or changed by the rep), or null
             // for "leave as is" so the server does not derive one the rep
@@ -458,9 +465,29 @@ export function LogTouchpointModal({
                             <Input
                                 type="datetime-local"
                                 value={followUpAt}
-                                onChange={(e) => setFollowUpAt(e.target.value)}
+                                onChange={(e) => {
+                                    setFollowUpAt(e.target.value);
+                                    if (e.target.value) setClearFollowUp(false);
+                                }}
                                 className="mt-1"
                             />
+                            {lead.next_follow_up_at && !followUpAt && (
+                                <label className="mt-2 flex items-center gap-2 text-sm text-gray-700">
+                                    <input
+                                        type="checkbox"
+                                        checked={clearFollowUp}
+                                        onChange={(e) => setClearFollowUp(e.target.checked)}
+                                    />
+                                    Clear the follow-up (now{" "}
+                                    {new Date(lead.next_follow_up_at).toLocaleString("en-IN", {
+                                        day: "numeric",
+                                        month: "short",
+                                        hour: "numeric",
+                                        minute: "2-digit",
+                                    })}
+                                    )
+                                </label>
+                            )}
                         </div>
                     </>
                 )}

@@ -231,6 +231,17 @@ export type LeadDetailCommercials = {
     credit_days: number | null;
     /** E-322: NBFC finance for the end customer. */
     customer_finance: boolean | null;
+    /** ID 172 (E-336): the quote's deal card; null on older quotes / without E-336. */
+    deal_card?: {
+        onboarding_fee: number;
+        fee_waived_reason?: string | null;
+        batteries_per_month: number;
+        finance_files_per_month: number;
+    } | null;
+    /** ID 172: set when the lead's card is locked (CEO approved / dealer said yes). */
+    deal_card_locked?: "ceo" | "dealer" | null;
+    /** ID 172 item 5: onboarding fee invoiced to this dealer (₹, before GST); null = not computable. */
+    fee_invoiced?: number | null;
     deal_notes: string | null;
     product_lines: CommercialsProductLine[];
     notes: string | null;

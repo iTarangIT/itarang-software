@@ -78,7 +78,8 @@ export function OnboardingDropoutsView({
                 loading={query.isLoading}
                 error={query.error ? (query.error as Error).message : null}
                 onPageChange={setPage}
-                canResolve={(viewerRole === "admin" || viewerRole === "sales_head")}
+                // ID 158: CEO may resolve too, but only by Re-engage.
+                canResolve={viewerRole === "admin" || viewerRole === "sales_head" || viewerRole === "ceo"}
                 onResolve={setActive}
             />
 
@@ -86,6 +87,7 @@ export function OnboardingDropoutsView({
                 <ResolveDropoutModal
                     open={!!active}
                     dropout={active}
+                    viewerRole={viewerRole}
                     onClose={() => setActive(null)}
                     onSuccess={() => {
                         setActive(null);

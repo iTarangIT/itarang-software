@@ -27,6 +27,7 @@ import { buildTouchpointWorkbook } from "@/lib/leads/touchpointWorkbook";
 import { buildLeadTracking } from "@/lib/leads/tracking";
 import { trackingCsvResponse } from "@/lib/leads/trackingCsv";
 import { reactivateLead } from "@/lib/leads/reactivation";
+import { canReactivateLead } from "@/lib/leads/access";
 import { assignLeadOwner, resolveAssignTarget } from "@/lib/leads/assignOwner";
 import {
     LOST_REASON,
@@ -77,6 +78,11 @@ export const POST = withErrorHandler(async (req: Request) => {
     const user = await requireRole(MUTATE_ROLES);
     const body = BodySchema.parse(await req.json());
     const ids = body.lead_ids;
+    // ID 158: Reactivate has its own, narrower list (admin, sales_head, ceo).
+    // MUTATE_ROLES stays as it is — it also gates Reassign, Mark Lost, Export.
+    if (body.action === "reactivate" && !canReactivateLead(user.role)) {
+        return errorResponse("Only Admin, Sales Head or CEO can reactivate a Lost lead.", 403);
+    }
 
     // ID 58 — the three exports below hand lead data out as a file, so they
     // follow the export rule, not the bulk-action rule: a role whose exports
