@@ -430,6 +430,17 @@ function idleWeeklyDigestItem(idPrefix: string) {
   };
 }
 
+// ID 85 — every lead time limit, dated, its change log and the office calendar.
+// Admin edits; the CEO reads the same page.
+function timeLimitsItem(idPrefix: string) {
+  return {
+    id: `${idPrefix}-time-limits`,
+    label: "Time limits",
+    icon: Timer,
+    href: "/admin/settings/time-limits",
+  };
+}
+
 // B9 — the buyback team's per-SPOC morning mail.
 function buybackDailyDigestItem(idPrefix: string) {
   return {
@@ -735,6 +746,7 @@ const roleNavigation: Record<string, any[]> = {
           icon: Newspaper,
           href: "/ceo/news",
         },
+        timeLimitsItem("ceo"),
       ],
     },
     {
@@ -1592,6 +1604,7 @@ const roleNavigation: Record<string, any[]> = {
         idleWeeklyDigestItem("admin"),
         targetsPendingDigestItem("admin"),
         buybackDailyDigestItem("admin"),
+        timeLimitsItem("admin"),
         loanProductSettingsItem("admin"),
         nbfcSettingsSubnav("admin"),
         whatsappSettingsSubnav("admin"),

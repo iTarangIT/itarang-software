@@ -4,22 +4,30 @@
  * the same classification in SQL from the arrays below (admin/dashboard.ts).
  *
  *   waiting on the DEALER   draft, correction requested, or an agreement sent
- *                           and not yet signed — stalled after 7 calendar days
+ *                           and not yet signed — stalled after
+ *                           onboarding_stall_dealer calendar days (default 7)
  *                           without an update.
  *   waiting on US           submitted for review, signed agreement awaiting
  *                           approval, agreement not yet initiated or needing a
- *                           re-send (expired / failed) — stalled after 2 working
- *                           days (Mon–Sat, holiday_calendar excluded).
+ *                           re-send (expired / failed) — stalled after
+ *                           onboarding_stall_us working days (default 2;
+ *                           Mon–Sat, holiday_calendar excluded).
  *   neither                 approved, rejected, withdrawn — not open.
  *
- * Both fire well before the 21-day drop-out review.
+ * Both limits are ID 85 time limits (src/lib/timeLimits): server callers pass
+ * the values in force (getTimeLimits()); the defaults below are the registry's.
+ * Both fire well before the drop-out review.
  */
 import { workingDaysSince } from "@/lib/inside-sales/staleness";
+import { TIME_LIMIT_DEFAULTS } from "@/lib/timeLimits/registry";
 
 export type OnboardingWaitingOn = "dealer" | "us";
 
-export const STALL_DEALER_DAYS = 7;
-export const STALL_US_WORKING_DAYS = 2;
+/** Defaults only — the live values come from getTimeLimits(). */
+export const STALL_DEALER_DAYS = TIME_LIMIT_DEFAULTS.onboarding_stall_dealer;
+export const STALL_US_WORKING_DAYS = TIME_LIMIT_DEFAULTS.onboarding_stall_us;
+
+export type StallLimits = { dealerDays: number; usWorkingDays: number };
 
 /** onboarding_status values that are still in flight. */
 export const OPEN_ONBOARDING_STATUSES = ["draft", "submitted", "correction_requested"] as const;
@@ -66,6 +74,7 @@ export function onboardingStall(
     },
     holidayDates: Set<string> = new Set(),
     now: Date = new Date(),
+    limits: StallLimits = { dealerDays: STALL_DEALER_DAYS, usWorkingDays: STALL_US_WORKING_DAYS },
 ): OnboardingWaitingOn | null {
     const on = onboardingWaitingOn(input);
     if (!on || !input.last_activity_at) return null;
@@ -73,8 +82,8 @@ export function onboardingStall(
     if (Number.isNaN(last.getTime())) return null;
     if (on === "dealer") {
         const days = (now.getTime() - last.getTime()) / 86_400_000;
-        return days >= STALL_DEALER_DAYS ? "dealer" : null;
+        return days >= limits.dealerDays ? "dealer" : null;
     }
     const wd = workingDaysSince(last, holidayDates, now) ?? 0;
-    return wd >= STALL_US_WORKING_DAYS ? "us" : null;
+    return wd >= limits.usWorkingDays ? "us" : null;
 }

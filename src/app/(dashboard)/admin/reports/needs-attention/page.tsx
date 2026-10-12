@@ -1,4 +1,5 @@
 import { requireRole } from "@/lib/auth-utils";
+import { getTimeLimits } from "@/lib/timeLimits/store";
 import { NeedsAttentionView } from "./NeedsAttentionView";
 
 export const dynamic = "force-dynamic";
@@ -7,6 +8,8 @@ export const dynamic = "force-dynamic";
 // set as the API it reads and the bulk-lead route it reassigns through.
 export default async function NeedsAttentionPage() {
     await requireRole(["admin", "sales_head", "ceo", "partner"]);
+    // ID 85 — the idle limits in force today (needsAttention.ts reads the same).
+    const limits = await getTimeLimits();
 
     return (
         <div className="px-4 sm:px-6 md:px-8 py-6 space-y-5 max-w-[1400px]">
@@ -15,8 +18,8 @@ export default async function NeedsAttentionPage() {
                 <p className="mt-1 text-sm text-ink-muted">
                     Every open lead someone is holding but not working, oldest first. Only a
                     call, visit or status change counts as work — assigning, claiming or
-                    commenting does not. Listed from 5 idle working days for inside sales, 7 for
-                    ASMs. Reassign straight from the row.
+                    commenting does not. Listed from {limits.idle_cc} idle working days for inside
+                    sales, {limits.idle_asm} for ASMs. Reassign straight from the row.
                 </p>
             </header>
             <NeedsAttentionView />

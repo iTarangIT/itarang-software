@@ -6,12 +6,13 @@
 //
 // Raw SQL via db.execute() — same approach as the Module 1/2 query builders.
 //
-// Working-day note: stale thresholds count Mon–Sat (Sundays excluded) but NOT
-// holidays — the precise holiday-aware count lives in
-// src/lib/inside-sales/staleness.ts for the rep queue. Holidays are rare; for
-// an alert dashboard the Sunday-only approximation is acceptable. Avg-time-to-
-// first-touch is plain elapsed hours (BRD's "excluding non-working hours" is a
-// V1.1 refinement).
+// Working-day note: stale thresholds count working days on the office
+// calendar — Mon–Sat, IST, active holiday_calendar rows off
+// (workingDaysSinceSql) — the same calendar as the rep queue's cues
+// (src/lib/inside-sales/staleness.ts). Every threshold is an ID 85 time limit
+// (src/lib/timeLimits), read once per request with getTimeLimits().
+// Avg-time-to-first-touch is plain elapsed hours (BRD's "excluding
+// non-working hours" is a V1.1 refinement).
 
 import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
@@ -25,21 +26,22 @@ import type {
     TeamPerfRow,
 } from "./types";
 import { ALERT_PANELS } from "./types";
-import { countOnboardingDropouts } from "./listQueries";
+import { countOnboardingDropouts, daysAgoSql, dropoutWhere } from "./listQueries";
 import { nonResponsiveSql } from "@/lib/leads/nonResponsive";
-import { finalisedNotWonSql } from "@/lib/leads/finalisedNotWon";
+import { DEALER_YES_AT_SQL, finalisedNotWonSql } from "@/lib/leads/finalisedNotWon";
 import {
     TRANSFER_AT_EXPR,
-    TRANSFER_VISIT_OVERDUE_SQL,
     TRANSFER_WORKING_DAYS_SQL,
+    transferVisitOverdueSql,
 } from "@/lib/asm/transferVisitLimit";
 import {
     AGREEMENT_AWAITING_DEALER,
     DEALER_ONBOARDING_STATUSES,
-    STALL_DEALER_DAYS,
-    STALL_US_WORKING_DAYS,
 } from "@/lib/onboarding/stall";
 import { onboardingClockSql } from "@/lib/onboarding/clock";
+import { workingDaysSinceSql } from "@/lib/calendar/holidays";
+import type { TimeLimits } from "@/lib/timeLimits/registry";
+import { getTimeLimits } from "@/lib/timeLimits/store";
 
 // ID 122: the one onboarding clock (src/lib/onboarding/clock.ts).
 const ONBOARDING_CLOCK = sql.raw(onboardingClockSql("oa"));
@@ -57,22 +59,23 @@ export const WON_WITHOUT_QUOTE = sql`dl.lead_status IN ('Won', 'Converted')
     AND dl.is_active IS NOT FALSE
     AND (to_jsonb(dl) ->> 'won_without_approved_quote')::boolean IS TRUE`;
 
-// Working days (Mon–Sat) elapsed since a timestamp expression, as a SQL scalar.
+// Working days (Mon–Sat, holidays off, IST) elapsed since a timestamp
+// expression, as a SQL int scalar.
 function workingDaysSince(expr: string): SQL {
-    return sql.raw(`(
-        SELECT COUNT(*) FROM generate_series(
-            ((${expr})::date + 1), CURRENT_DATE, INTERVAL '1 day'
-        ) gs WHERE EXTRACT(DOW FROM gs) <> 0
-    )`);
+    return workingDaysSinceSql(sql.raw(expr));
 }
+
+/** A validated whole number for a SQL comparison (time limits are integers). */
+const n = (v: number): SQL => sql.raw(String(Math.floor(v)));
 
 // ID 84.3 — onboarding stalled, the same rule as the lead page (src/lib/
 // onboarding/stall.ts): waiting on the DEALER (draft / correction requested /
-// agreement sent, unsigned) 7+ calendar days, or on US (submitted for review,
-// agreement to initiate, re-send or approve) 2+ working days. The "us" clock
-// skips holiday_calendar too, like the lead page — a short threshold is where a
-// holiday matters. Only leads still open (Won included); a lead already in the
-// 21-day drop-out review is listed there instead.
+// agreement sent, unsigned) onboarding_stall_dealer+ calendar days, or on US
+// (submitted for review, agreement to initiate, re-send or approve)
+// onboarding_stall_us+ working days. The "us" clock skips holiday_calendar
+// too, like the lead page — a short threshold is where a holiday matters. Only
+// leads still open (Won included); a lead already in the drop-out review is
+// listed there instead.
 const sqlList = (xs: readonly string[]) => xs.map((x) => `'${x}'`).join(", ");
 export const ONB_LAST = onboardingClockSql("oa");
 export const ONB_WAITING_ON = sql.raw(`(CASE
@@ -81,37 +84,27 @@ export const ONB_WAITING_ON = sql.raw(`(CASE
          AND COALESCE(oa.agreement_status, '') IN (${sqlList(AGREEMENT_AWAITING_DEALER)}) THEN 'dealer'
     WHEN oa.onboarding_status = 'submitted' THEN 'us'
 END)`);
-const ONB_US_WORKING_DAYS = sql.raw(`(
-    SELECT COUNT(*) FROM generate_series(
-        ((${ONB_LAST})::date + 1), CURRENT_DATE, INTERVAL '1 day'
-    ) gs
-    WHERE EXTRACT(DOW FROM gs) <> 0
-      AND gs::date NOT IN (SELECT hc.holiday_date FROM holiday_calendar hc
-                            WHERE hc.is_active IS NOT FALSE AND hc.holiday_date IS NOT NULL)
-)`);
-// Same predicate as the onboarding_dropouts panel, so a lead is in one or the other.
-const IN_DROPOUT_REVIEW = sql`(dl.lead_status IN ('Won', 'Converted')
-    AND dl.onboarding_dropout_reason IS NULL
-    AND (oa.onboarding_status IN ('rejected','withdrawn')
-         OR (oa.onboarding_status IN ('draft','submitted','correction_requested')
-             AND ${sql.raw(ONB_LAST)} < NOW() - INTERVAL '21 days'))
-    AND COALESCE((to_jsonb(dl) ->> 'onboarding_stalled_at')::timestamptz, 'epoch'::timestamptz)
-        < NOW() - INTERVAL '21 days')`;
-export const ONBOARDING_STALLED = sql`dl.lead_status IN (${OPEN_LIST}) AND dl.is_active IS NOT FALSE
+const ONB_US_WORKING_DAYS = workingDaysSinceSql(sql.raw(ONB_LAST));
+// The onboarding_dropouts panel's own predicate (listQueries.dropoutWhere), so
+// a lead is in one or the other.
+export function onboardingStalledSql(l: TimeLimits): SQL {
+    return sql`dl.lead_status IN (${OPEN_LIST}) AND dl.is_active IS NOT FALSE
     AND oa.onboarding_status IN ('draft','submitted','correction_requested')
     AND (
         (${ONB_WAITING_ON} = 'dealer'
-            AND ${sql.raw(ONB_LAST)} < NOW() - INTERVAL '${sql.raw(String(STALL_DEALER_DAYS))} days')
-        OR (${ONB_WAITING_ON} = 'us' AND ${ONB_US_WORKING_DAYS} >= ${sql.raw(String(STALL_US_WORKING_DAYS))})
+            AND ${sql.raw(ONB_LAST)} < ${daysAgoSql(l.onboarding_stall_dealer)})
+        OR (${ONB_WAITING_ON} = 'us' AND ${ONB_US_WORKING_DAYS} >= ${n(l.onboarding_stall_us)})
     )
-    AND NOT ${IN_DROPOUT_REVIEW}`;
+    AND NOT (${dropoutWhere(l)})`;
+}
 
-// ID 75.4 — the dealer approved the quote 2+ days ago and the lead still sits
-// at Commercials finalised: nobody pressed Mark Won. The predicate is shared
-// with the reps' own "Finalised, not Won" queue chip (no age floor there).
-const FINALISED_NOT_WON = finalisedNotWonSql({ minAgeDays: 2 });
-const FINALISED_APPROVED_AT = sql`(SELECT MAX(c.dealer_decision_at) FROM dealer_lead_commercials c
-    WHERE c.dealer_lead_id = dl.id AND c.dealer_decision = 'approved' AND c.withdrawn_at IS NULL)`;
+// ID 75.4 — the dealer approved the quote more than said_yes_not_won working
+// days ago and the lead still sits at Commercials finalised: nobody pressed
+// Mark Won. The CEO card's rule (saidYesNotWon.ts), so the two agree; the
+// predicate is shared with the reps' own "Finalised, not Won" queue chip (no
+// age floor there).
+const finalisedNotWon = (l: TimeLimits) => finalisedNotWonSql({ overWorkingDays: l.said_yes_not_won });
+const FINALISED_APPROVED_AT = DEALER_YES_AT_SQL;
 
 // The idle clock (E-300, review R-04): last call / visit / status change only.
 // last_touchpoint_at also moves on assignment, claims, dial requests and
@@ -151,6 +144,7 @@ function leadFilter(f: DashboardFilters): SQL {
 
 export async function fetchKpis(f: DashboardFilters): Promise<AdminKpis> {
     const lf = leadFilter(f);
+    const limits = await getTimeLimits();
 
     const [counts, firstTouch, conv7, conv30, staleConv, compliance, dropouts, cohort] =
         await Promise.all([
@@ -198,7 +192,7 @@ export async function fetchKpis(f: DashboardFilters): Promise<AdminKpis> {
                 -- Won + Converted, the same rows the stale_converted panel lists.
                 WHERE dl.lead_status IN ('Won', 'Converted')
                   AND ${ONBOARDING_CLOCK}
-                      < NOW() - INTERVAL '3 days' ${lf}
+                      < ${daysAgoSql(limits.won_not_converted)} ${lf}
             `),
             db.execute<{ c: string }>(sql`
                 SELECT COUNT(*)::text AS c
@@ -333,6 +327,7 @@ export async function fetchTeamPerformance(
         source: f.source,
         segment: f.segment,
     });
+    const limits = await getTimeLimits();
 
     const rows = await db.execute<TeamPerfRow>(sql`
         SELECT
@@ -382,13 +377,13 @@ export async function fetchTeamPerformance(
                WHERE dl.current_owner_id = u.id::text
                  AND dl.lead_status IN (${WORKABLE_LIST})
                  AND dl.is_active IS NOT FALSE
-                 AND ${workingDaysSince(LAST_TOUCH)} > 5
+                 AND ${workingDaysSince(LAST_TOUCH)} > ${n(limits.stale_yellow)}
                  AND ${NOT_NON_RESPONSIVE}) AS stale_leads,
             (SELECT COUNT(*) FROM dealer_leads dl
                WHERE dl.current_owner_id = u.id::text
                  AND dl.lead_status IN (${WORKABLE_LIST})
                  AND dl.is_active IS NOT FALSE
-                 AND ${workingDaysSince(LAST_TOUCH)} > 10
+                 AND ${workingDaysSince(LAST_TOUCH)} > ${n(limits.stale_red)}
                  AND ${NOT_NON_RESPONSIVE}) AS critical_stale,
             (SELECT up.pref_value->>'status' FROM user_preferences up
                WHERE up.user_id = u.id::text
@@ -423,16 +418,16 @@ export async function fetchTeamPerformance(
 
 // Each panel's COUNT(*) query. The drill-down query (fetchAlertPanel) reuses
 // the same FROM/WHERE and just selects display columns.
-function panelCountSql(key: AlertPanelKey, lf: SQL): SQL {
+function panelCountSql(key: AlertPanelKey, lf: SQL, limits: TimeLimits): SQL {
     switch (key) {
         case "no_touch_5d":
             return sql`SELECT COUNT(*)::text AS c FROM dealer_leads dl
                 WHERE dl.lead_status IN (${WORKABLE_LIST}) AND dl.is_active IS NOT FALSE
-                  AND ${workingDaysSince(LAST_TOUCH)} > 5 AND ${NOT_NON_RESPONSIVE} ${lf}`;
+                  AND ${workingDaysSince(LAST_TOUCH)} > ${n(limits.stale_yellow)} AND ${NOT_NON_RESPONSIVE} ${lf}`;
         case "no_touch_10d":
             return sql`SELECT COUNT(*)::text AS c FROM dealer_leads dl
                 WHERE dl.lead_status IN (${WORKABLE_LIST}) AND dl.is_active IS NOT FALSE
-                  AND ${workingDaysSince(LAST_TOUCH)} > 10 AND ${NOT_NON_RESPONSIVE} ${lf}`;
+                  AND ${workingDaysSince(LAST_TOUCH)} > ${n(limits.stale_red)} AND ${NOT_NON_RESPONSIVE} ${lf}`;
         case "non_responsive":
             return sql`SELECT COUNT(*)::text AS c FROM dealer_leads dl
                 WHERE dl.lead_status IN (${OPEN_LIST}) AND dl.is_active IS NOT FALSE
@@ -441,21 +436,16 @@ function panelCountSql(key: AlertPanelKey, lf: SQL): SQL {
             return sql`SELECT COUNT(*)::text AS c FROM dealer_leads dl
                 WHERE dl.lead_status = 'Awaiting_Customer_Decision'
                   AND dl.is_active IS NOT FALSE
-                  AND ${workingDaysSince(LAST_TOUCH)} > 14 ${lf}`;
+                  AND ${workingDaysSince(LAST_TOUCH)} > ${n(limits.stale_critical)} ${lf}`;
         case "pending_escalations":
             return sql`SELECT COUNT(*)::text AS c FROM lead_escalations
                 WHERE status = 'pending_review'`;
         case "onboarding_dropouts":
+            // listQueries.dropoutWhere — the drop-out review page's own rule.
             return sql`SELECT COUNT(*)::text AS c FROM dealer_leads dl
                 JOIN dealer_onboarding_applications oa
                     ON oa.id = dl.dealer_onboarding_application_id
-                WHERE dl.lead_status IN ('Won', 'Converted') AND dl.is_active IS NOT FALSE
-                  AND dl.onboarding_dropout_reason IS NULL
-                  AND (oa.onboarding_status IN ('rejected','withdrawn')
-                       OR (oa.onboarding_status IN ('draft','submitted','correction_requested')
-                           AND ${ONBOARDING_CLOCK} < NOW() - INTERVAL '21 days'))
-                  AND COALESCE((to_jsonb(dl) ->> 'onboarding_stalled_at')::timestamptz, 'epoch'::timestamptz)
-                      < NOW() - INTERVAL '21 days'`;
+                WHERE ${dropoutWhere(limits)}`;
         case "won_without_quote":
             return sql`SELECT COUNT(*)::text AS c FROM dealer_leads dl
                 WHERE ${WON_WITHOUT_QUOTE} ${lf}`;
@@ -464,18 +454,18 @@ function panelCountSql(key: AlertPanelKey, lf: SQL): SQL {
                 JOIN dealer_onboarding_applications oa
                     ON oa.id = dl.dealer_onboarding_application_id
                 WHERE dl.lead_status IN ('Won', 'Converted')
-                  AND ${ONBOARDING_CLOCK} < NOW() - INTERVAL '3 days' ${lf}`;
+                  AND ${ONBOARDING_CLOCK} < ${daysAgoSql(limits.won_not_converted)} ${lf}`;
         case "onboarding_stalled":
             return sql`SELECT COUNT(*)::text AS c FROM dealer_leads dl
                 JOIN dealer_onboarding_applications oa
                     ON oa.id = dl.dealer_onboarding_application_id
-                WHERE ${ONBOARDING_STALLED} ${lf}`;
+                WHERE ${onboardingStalledSql(limits)} ${lf}`;
         case "transfer_visit_overdue":
             return sql`SELECT COUNT(*)::text AS c FROM dealer_leads dl
-                WHERE ${TRANSFER_VISIT_OVERDUE_SQL} ${lf}`;
+                WHERE ${transferVisitOverdueSql(limits.asm_transfer_first_visit)} ${lf}`;
         case "finalised_not_won":
             return sql`SELECT COUNT(*)::text AS c FROM dealer_leads dl
-                WHERE ${FINALISED_NOT_WON} ${lf}`;
+                WHERE ${finalisedNotWon(limits)} ${lf}`;
         case "asm_no_activity":
             return sql`SELECT COUNT(*)::text AS c FROM dealer_leads dl
                 WHERE dl.lead_status = 'Transferred_to_ASM' AND dl.asm_id IS NOT NULL
@@ -506,8 +496,9 @@ export async function fetchAlertCounts(
     f: DashboardFilters,
 ): Promise<Record<AlertPanelKey, number>> {
     const lf = leadFilter(f);
+    const limits = await getTimeLimits();
     const results = await Promise.all(
-        ALERT_PANELS.map((key) => db.execute<{ c: string }>(panelCountSql(key, lf))),
+        ALERT_PANELS.map((key) => db.execute<{ c: string }>(panelCountSql(key, lf, limits))),
     );
     const out = {} as Record<AlertPanelKey, number>;
     ALERT_PANELS.forEach((key, i) => {
@@ -522,6 +513,7 @@ export async function fetchAlertPanel(
     limit = 50,
 ): Promise<AlertPanelRow[]> {
     const lf = leadFilter(f);
+    const limits = await getTimeLimits();
 
     // Lead-based panels share one SELECT shape.
     const leadPanel = (where: SQL, meta: SQL, order: SQL) =>
@@ -542,14 +534,18 @@ export async function fetchAlertPanel(
         case "no_touch_10d":
         case "awaiting_decision_14d": {
             const threshold =
-                key === "no_touch_5d" ? 5 : key === "no_touch_10d" ? 10 : 14;
+                key === "no_touch_5d"
+                    ? limits.stale_yellow
+                    : key === "no_touch_10d"
+                      ? limits.stale_red
+                      : limits.stale_critical;
             const statusFilter =
                 key === "awaiting_decision_14d"
                     ? sql`dl.lead_status = 'Awaiting_Customer_Decision'`
                     : sql`dl.lead_status IN (${WORKABLE_LIST})`;
             const rows = await leadPanel(
                 sql`${statusFilter} AND dl.is_active IS NOT FALSE
-                    AND ${workingDaysSince(LAST_TOUCH)} > ${sql.raw(String(threshold))}
+                    AND ${workingDaysSince(LAST_TOUCH)} > ${n(threshold)}
                     ${key === "awaiting_decision_14d" ? sql`` : sql`AND ${NOT_NON_RESPONSIVE}`} ${lf}`,
                 sql`CONCAT(${workingDaysSince(LAST_TOUCH)}, ' working days idle')`,
                 sql`${workingDaysSince(LAST_TOUCH)} DESC`,
@@ -612,7 +608,7 @@ export async function fetchAlertPanel(
                 JOIN dealer_onboarding_applications oa
                     ON oa.id = dl.dealer_onboarding_application_id
                 WHERE dl.lead_status IN ('Won', 'Converted')
-                  AND ${ONBOARDING_CLOCK} < NOW() - INTERVAL '3 days' ${lf}
+                  AND ${ONBOARDING_CLOCK} < ${daysAgoSql(limits.won_not_converted)} ${lf}
                 ORDER BY ${ONBOARDING_CLOCK} ASC
                 LIMIT ${limit}
             `);
@@ -628,13 +624,7 @@ export async function fetchAlertPanel(
                 FROM dealer_leads dl
                 JOIN dealer_onboarding_applications oa
                     ON oa.id = dl.dealer_onboarding_application_id
-                WHERE dl.lead_status IN ('Won', 'Converted') AND dl.is_active IS NOT FALSE
-                  AND dl.onboarding_dropout_reason IS NULL
-                  AND (oa.onboarding_status IN ('rejected','withdrawn')
-                       OR (oa.onboarding_status IN ('draft','submitted','correction_requested')
-                           AND ${ONBOARDING_CLOCK} < NOW() - INTERVAL '21 days'))
-                  AND COALESCE((to_jsonb(dl) ->> 'onboarding_stalled_at')::timestamptz, 'epoch'::timestamptz)
-                      < NOW() - INTERVAL '21 days'
+                WHERE ${dropoutWhere(limits)}
                 ORDER BY dl.closed_at ASC NULLS LAST
                 LIMIT ${limit}
             `);
@@ -654,7 +644,7 @@ export async function fetchAlertPanel(
                 FROM dealer_leads dl
                 JOIN dealer_onboarding_applications oa
                     ON oa.id = dl.dealer_onboarding_application_id
-                WHERE ${ONBOARDING_STALLED} ${lf}
+                WHERE ${onboardingStalledSql(limits)} ${lf}
                 ORDER BY ${sql.raw(ONB_LAST)} ASC
                 LIMIT ${limit}
             `);
@@ -662,7 +652,7 @@ export async function fetchAlertPanel(
         }
         case "transfer_visit_overdue": {
             const rows = await leadPanel(
-                sql`${TRANSFER_VISIT_OVERDUE_SQL} ${lf}`,
+                sql`${transferVisitOverdueSql(limits.asm_transfer_first_visit)} ${lf}`,
                 sql`CONCAT('transferred ',
                         TO_CHAR((${sql.raw(TRANSFER_AT_EXPR)}) AT TIME ZONE 'Asia/Kolkata', 'DD Mon'),
                         ' · ', ${TRANSFER_WORKING_DAYS_SQL}, ' working days, no visit')`,
@@ -672,7 +662,7 @@ export async function fetchAlertPanel(
         }
         case "finalised_not_won": {
             const rows = await leadPanel(
-                sql`${FINALISED_NOT_WON} ${lf}`,
+                sql`${finalisedNotWon(limits)} ${lf}`,
                 sql`CONCAT('dealer approved ',
                         TO_CHAR(${FINALISED_APPROVED_AT} AT TIME ZONE 'Asia/Kolkata', 'DD Mon'),
                         ' · not marked Won')`,

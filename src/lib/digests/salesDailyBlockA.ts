@@ -22,6 +22,7 @@ import type { SalesDashboard } from "@/lib/admin/salesDashboardTypes";
 import { engagedCall, wasHotAt } from "@/lib/reports/metricDefinitions";
 import { monthEnd, workingDaysBetween } from "@/lib/targets/rules";
 import { scrapKgSourced } from "@/lib/buyback/scrapKgSourced";
+import { clockStats, limitsPassed } from "@/lib/leads/clocks";
 import { istRangeNaive, istRangeTz } from "./window";
 import { RAG_AMBER_MIN } from "./rag";
 
@@ -36,7 +37,7 @@ export type RowValues = { y: number | null; d7: number | null; mtd: number | nul
 export type BlockARow = {
     group: "INTAKE" | "EFFORT" | "COMMERCIALS" | "OUTCOME" | "DISCIPLINE";
     label: string;
-    kind: "count" | "money" | "percent";
+    kind: "count" | "money" | "percent" | "hours";
     values: RowValues;
     /** Company MTD target, or null when none is set. */
     target: number | null;
@@ -65,6 +66,7 @@ export function fmtValue(v: number | null, kind: BlockARow["kind"]): string {
         return `₹${Math.round(v).toLocaleString("en-IN")}`;
     }
     if (kind === "percent") return `${Math.round(v)}%`;
+    if (kind === "hours") return `${v.toFixed(1)} h`;
     return Math.round(v).toLocaleString("en-IN");
 }
 
@@ -202,6 +204,8 @@ export const BLOCK_A_ROW_NOTES: Record<string, string> = {
     "Revenue not matched to a dealer": "Invoiced, but no dealer matched yet",
     "First attempt within limit": "New owners who called or visited in time",
     "Time limits missed": "Any limit, all owners",
+    "Hours to first attempt": "Median, working hours, new owners",
+    "Hours to first attempt (slowest 1 in 10)": "Working hours, new owners",
 };
 
 /** One note per row of blockATableRows(rows) — null on group header rows. */
@@ -274,6 +278,30 @@ async function scrapKgPerPeriod(db: Exec, periods: Periods): Promise<RowValues> 
         one(periods.lastMonth),
     ]);
     return { y, d7, mtd, lm };
+}
+
+/**
+ * ID 86 — the owner clock and limit-passed figures per period (lead_clocks,
+ * E-337, rebuilt hourly). All null when the clocks are not on this database,
+ * so the rows keep reading "Not measured yet".
+ */
+async function clockRows(periods: Periods): Promise<{ inLimit: RowValues; missed: RowValues; median: RowValues; p90: RowValues }> {
+    const ps = [periods.yesterday, periods.last7, periods.mtd, periods.lastMonth];
+    // Never throws: a clock read failing must not cost the rest of the email.
+    const [stats, missed] = await Promise.all([
+        Promise.all(ps.map((p) => clockStats("owner", p.from, p.to))),
+        Promise.all(ps.map((p) => limitsPassed(p.from, p.to))),
+    ]).catch((e) => {
+        console.warn("[sales-daily] lead clocks unavailable:", e instanceof Error ? e.message : e);
+        return [ps.map(() => null), ps.map(() => null)] as const;
+    });
+    const row = (pick: (i: number) => number | null): RowValues => ({ y: pick(0), d7: pick(1), mtd: pick(2), lm: pick(3) });
+    return {
+        inLimit: row((i) => stats[i]?.pct_in_limit ?? null),
+        missed: row((i) => missed[i]),
+        median: row((i) => stats[i]?.attempt_median_h ?? null),
+        p90: row((i) => stats[i]?.attempt_p90_h ?? null),
+    };
 }
 
 async function perPeriod(db: Exec, periods: Periods, make: (p: Period) => ReturnType<typeof sql>): Promise<RowValues> {
@@ -363,6 +391,7 @@ export async function buildBlockA(
         lm: pick(dash.lastMonth),
     });
     const NONE: RowValues = { y: null, d7: null, mtd: null, lm: null };
+    const clocksPending = clockRows(periods);
 
     const [leadsIn, salesReady, assigned, engaged, hotToField, delivered, dealerApproved, won, kycDisbursed, scrapDeals, scrapKg] =
         await Promise.all([
@@ -438,6 +467,7 @@ export async function buildBlockA(
     const visitedPerPerson = (dash.mtd.per_spoc ?? []).reduce((sum, b) => sum + b.totals.unique_visits, 0);
     const visitedDiffers = (dash.mtd.per_spoc ?? []).length > 0 && visitedPerPerson !== visitedCompany;
 
+    const clocks = await clocksPending;
     const rows: BlockARow[] = [
         { group: "INTAKE", label: "Leads in", kind: "count", values: leadsIn, target: null },
         { group: "INTAKE", label: "Became sales-ready", kind: "count", values: hasSalesReady ? salesReady : NONE, target: null },
@@ -466,11 +496,14 @@ export async function buildBlockA(
         { group: "OUTCOME", label: "KYC disbursed", kind: "count", values: kycDisbursed, target: tgt("kyc_disbursed") },
         { group: "OUTCOME", label: "Scrap deals", kind: "count", values: scrapDeals, target: tgt("scrap_deals") },
         // Kg over requests that completed pickup — scrapKgSourced(), the CEO
-        // control tower's buyback tile. The two discipline rows wait for the
-        // clocks (handover P3).
+        // control tower's buyback tile.
         { group: "OUTCOME", label: "Scrap sourced (kg)", kind: "count", values: scrapKg, target: null },
-        { group: "DISCIPLINE", label: "First attempt within limit", kind: "percent", values: NONE, target: null },
-        { group: "DISCIPLINE", label: "Time limits missed", kind: "count", values: NONE, target: null },
+        // ID 86 — the owner clock (lead_clocks): share of new owners whose
+        // first call / visit came within the limit, and every limit passed.
+        { group: "DISCIPLINE", label: "First attempt within limit", kind: "percent", values: clocks.inLimit, target: null },
+        { group: "DISCIPLINE", label: "Time limits missed", kind: "count", values: clocks.missed, target: null },
+        { group: "DISCIPLINE", label: "Hours to first attempt", kind: "hours", values: clocks.median, target: null },
+        { group: "DISCIPLINE", label: "Hours to first attempt (slowest 1 in 10)", kind: "hours", values: clocks.p90, target: null },
     ];
 
     const visitsNote =

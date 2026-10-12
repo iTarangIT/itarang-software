@@ -6,6 +6,7 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { requireRole } from "@/lib/auth-utils";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
+import { forgetHolidays } from "@/lib/calendar/holidays";
 
 const BodySchema = z.object({
     holiday_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD"),
@@ -24,6 +25,7 @@ export const POST = withErrorHandler(async (req: Request) => {
             is_active = TRUE,
             updated_at = NOW()
     `);
+    forgetHolidays();
 
     return successResponse({ ok: true });
 });

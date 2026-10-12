@@ -451,7 +451,7 @@ export default function CEODashboard() {
           tone: "warn",
           label: "Sales-ready leads with no owner",
           count: num(x.awaiting_assignment_total),
-          sub: `${num(x.unassigned_over_7d)} waiting more than 7 days`,
+          sub: `${num(x.unassigned_over_7d)} waiting ${x.unassigned_overdue_days}+ days`,
           href: "/admin/ready-to-assign",
           cta: "Open list",
         },
