@@ -40,6 +40,7 @@ import {
     type AlertPanelKey,
     type AlertPanelRow,
 } from "@/lib/admin/types";
+import type { TimeLimits } from "@/lib/timeLimits/registry";
 import { BulkActionBar } from "./BulkActionBar";
 
 // Panels whose rows are open dealer_leads — eligible for bulk actions.
@@ -99,12 +100,12 @@ const SEVERITY_CLASSES: Record<
 export function AlertPanels({
     counts,
     filterQs,
-    transferVisitLimitDays,
+    limits,
 }: {
     counts: Record<AlertPanelKey, number>;
     filterQs: string;
-    /** ID 77.1 — the admin-set ASM visit limit, shown in its panel's label. */
-    transferVisitLimitDays?: number;
+    /** ID 85 — the time limits in force today, shown in the panel labels. */
+    limits?: TimeLimits;
 }) {
     const qc = useQueryClient();
     const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -159,7 +160,7 @@ export function AlertPanels({
                     <AlertPanel
                         key={key}
                         panelKey={key}
-                        label={alertPanelLabel(key, { transferVisitLimitDays })}
+                        label={alertPanelLabel(key, limits)}
                         count={counts[key] ?? 0}
                         filterQs={filterQs}
                         selectable={SELECTABLE.has(key)}

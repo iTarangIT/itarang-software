@@ -19,6 +19,8 @@ type Props = {
     dropout: OnboardingDropoutRow;
     /** ID 158: Re-engage is Admin / Sales Head / CEO; the other two are not CEO's. */
     viewerRole: string;
+    /** ID 85 — how long Keep waiting parks the decision (onboarding_keep_waiting). */
+    keepWaitingDays: number;
     onClose: () => void;
     onSuccess: () => void;
 };
@@ -32,7 +34,7 @@ const ACTIONS: {
     {
         value: "keep_waiting",
         label: "Stalled — keep waiting",
-        desc: "The lead stays Won; this decision comes back in 21 days.",
+        desc: "The lead stays Won; this decision comes back in {days} days.",
         icon: CheckCircle2,
     },
     {
@@ -53,6 +55,7 @@ export function ResolveDropoutModal({
     open,
     dropout,
     viewerRole,
+    keepWaitingDays,
     onClose,
     onSuccess,
 }: Props) {
@@ -149,7 +152,7 @@ export function ResolveDropoutModal({
                                         {a.label}
                                     </div>
                                     <div className="text-xs text-ink-muted">
-                                        {a.desc}
+                                        {a.desc.replace("{days}", String(keepWaitingDays))}
                                     </div>
                                 </div>
                             </button>

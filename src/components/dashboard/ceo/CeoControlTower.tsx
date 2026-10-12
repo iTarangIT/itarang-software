@@ -105,9 +105,9 @@ export function CeoControlTower({ windowQs }: { windowQs: string }) {
                     <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6">
                         <Exception label="Quotes waiting for your approval" count={x.quotes_pending} />
                         <Exception
-                            label="Sales-ready leads awaiting assignment (7+ days)"
+                            label={`Sales-ready leads awaiting assignment (${x.unassigned_overdue_days}+ days)`}
                             count={x.unassigned_over_7d}
-                            href="/admin/ready-to-assign?min_days=7"
+                            href={`/admin/ready-to-assign?min_days=${x.unassigned_overdue_days}`}
                             extra={
                                 x.awaiting_assignment_total != null
                                     ? `${num(x.awaiting_assignment_total)} awaiting in all`
