@@ -21,6 +21,7 @@ import { writeTouchpoint } from "@/lib/touchpoints/write";
 import { markSalesReady } from "@/lib/leads/salesReady";
 import { ONBOARDING_DROPOUT_REASONS } from "@/lib/admin/types";
 import { canReactivateLead } from "@/lib/leads/access";
+import { notifyLeadsReturned } from "@/lib/leads/newOwnerNotice";
 import { getTimeLimits } from "@/lib/timeLimits/store";
 
 // Keep waiting / Flip to Lost. Re-engage is a reactivation and follows
@@ -182,6 +183,13 @@ export const POST = withErrorHandler(
                     reason: newOwnerId ? "admin_assigned" : "reactivated",
                     actorId: user.id,
                 });
+            });
+            // 12 Oct: the originator gets the lead back with a bell.
+            await notifyLeadsReturned({
+                leadIds: [id],
+                targetUserId: newOwnerId,
+                actorId: user.id,
+                reason: `Re-engaged after onboarding drop-out — ${body.onboarding_dropout_notes}`,
             });
         }
 

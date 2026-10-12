@@ -8,6 +8,7 @@ import { requireRole } from "@/lib/auth-utils";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
 import { assertOwner } from "@/lib/leads/ownership";
 import { REASSIGN_REASON_MIN, ReassignError, reassignLead } from "@/lib/leads/reassign";
+import { notifyLeadsReassigned } from "@/lib/leads/newOwnerNotice";
 
 const MUTATE_ROLES = ["inside_sales_rep", "asm", "admin", "partner"];
 
@@ -37,6 +38,8 @@ export const POST = withErrorHandler(
             if (err instanceof ReassignError) return errorResponse(err.message, err.status);
             throw err;
         }
+        // The new owner's bell opens the lead on their page.
+        await notifyLeadsReassigned({ leadIds: [id], targetUserId: body.target_user_id, actorId: user.id, reason: body.reason });
 
         return successResponse({ ok: true, notify_admin: !!body.notify_admin });
     },

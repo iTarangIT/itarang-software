@@ -17,6 +17,7 @@ import { ROLE_LABEL, type AssistantRole, type Preview, type ToolResult } from ".
 import { defineTool, LeadId, ownedLeadOr, type ToolFactory } from "../spec";
 import { leadUrl } from "../leads";
 import { ActionRejected, defineApplier } from "../../applierSpec";
+import { notifyLeadsReassigned } from "@/lib/leads/newOwnerNotice";
 import { matchPeople, nameList } from "./people";
 import { handBackRefusal, isHandBack } from "@/lib/leads/asmHandBack";
 
@@ -133,6 +134,17 @@ export const reassignLeadApplier = defineApplier<ReassignLeadPlan>({
             }
             throw err;
         }
-        return { new_owner_id: p.target_user_id };
+        return {
+            new_owner_id: p.target_user_id,
+            // The new owner's bell, once the reassignment has committed.
+            afterCommit: async () => {
+                await notifyLeadsReassigned({
+                    leadIds: [p.lead_id],
+                    targetUserId: p.target_user_id,
+                    actorId: user.id,
+                    reason: p.reason,
+                });
+            },
+        };
     },
 });
