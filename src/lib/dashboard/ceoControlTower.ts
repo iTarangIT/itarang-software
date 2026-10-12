@@ -31,20 +31,13 @@ import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { matchedUnion, REVENUE_NOT_VOID } from "@/lib/dashboard/revenueSource";
 import { summarizeNeedsAttention } from "@/lib/leads/needsAttention";
-import {
-    SAID_YES_LIMIT_WORKING_DAYS,
-    listSaidYesNotWon,
-    summarizeSaidYes,
-} from "@/lib/leads/saidYesNotWon";
+import { listSaidYesNotWon, summarizeSaidYes } from "@/lib/leads/saidYesNotWon";
+import { getTimeLimits } from "@/lib/timeLimits/store";
 import { listDealerHealth } from "@/lib/dealers/accountHealth";
 import type { AccountBucket } from "@/lib/dealers/accountHealthRules";
 import { hasInvoiceLedgerTables } from "@/lib/sales/ledgerTables";
-import {
-    AWAITING_ASSIGNMENT_OVERDUE_DAYS,
-    awaitingAssignment,
-    daysAwaitingAssignment,
-} from "@/lib/leads/salesReady";
-import { bulkImportedLead, engagedCall, humanCall } from "@/lib/reports/metricDefinitions";
+import { awaitingAssignment, daysAwaitingAssignment } from "@/lib/leads/salesReady";
+import { engagedCall, humanCall } from "@/lib/reports/metricDefinitions";
 import { scrapKgSourced } from "@/lib/buyback/scrapKgSourced";
 
 export type Compare = { now: number; prev: number | null };
@@ -53,7 +46,10 @@ export type ControlTower = {
     window: { from: string; to: string; prev_from: string | null; prev_to: string | null };
     exceptions: null | {
         quotes_pending: number;
+        /** Waiting sales_ready_unassigned days or more (the name predates ID 85). */
         unassigned_over_7d: number;
+        /** ID 85 — the sales_ready_unassigned limit in force, in days. */
+        unassigned_overdue_days: number;
         /** Every sales-ready lead with no owner, whatever its wait (ID 82). */
         awaiting_assignment_total: number;
         idle_over_7d: number;
@@ -79,9 +75,8 @@ export type ControlTower = {
         unlinked_revenue: number;
     };
     engine: null | {
-        /** ID 153 — leads that arrived on their own; bulk imports are in imported_bulk. */
+        /** ID 153 — every new active lead, whatever its source (bulk imports included). */
         leads_in: Compare;
-        imported_bulk: Compare;
         converted: Compare;
         first_orders: Compare;
         headline: { measure: "cohort_conversion_to_date" | "conversion_30d_rate"; label: string; value: number | null };
@@ -167,6 +162,8 @@ export async function buildControlTower(w: { startStr: string | null; endStr: st
 
 // ── 1 Exceptions ─────────────────────────────────────────────────────────────
 async function exceptionsTile(): Promise<NonNullable<ControlTower["exceptions"]>> {
+    const limits = await getTimeLimits();
+    const overdueDays = limits.sales_ready_unassigned;
     const [q] = await rows(sql`
         SELECT
           (SELECT COUNT(*) FROM dealer_lead_commercials WHERE approval_status = 'pending' AND withdrawn_at IS NULL) AS quotes_pending,
@@ -174,10 +171,11 @@ async function exceptionsTile(): Promise<NonNullable<ControlTower["exceptions"]>
           -- from the Sales-ready event, not from creation, and WHO is awaiting
           -- is the one rule the Ready to assign page lists by
           -- (awaitingAssignment: dead numbers are not awaiting anyone). The
-          -- card opens that page filtered to the same 7+ days.
+          -- card opens that page filtered to the same limit (ID 85
+          -- sales_ready_unassigned, default 7 days).
           (SELECT COUNT(*) FROM dealer_leads dl
             WHERE ${awaitingAssignment()}
-              AND ${daysAwaitingAssignment()} >= ${AWAITING_ASSIGNMENT_OVERDUE_DAYS}) AS unassigned,
+              AND ${daysAwaitingAssignment()} >= ${overdueDays}) AS unassigned,
           (SELECT COUNT(*) FROM dealer_leads dl WHERE ${awaitingAssignment()}) AS awaiting_total
     `);
     // ID 75.4 — "Dealer said yes, not marked Won": the sum of the rows the
@@ -203,12 +201,13 @@ async function exceptionsTile(): Promise<NonNullable<ControlTower["exceptions"]>
     return {
         quotes_pending: n(q.quotes_pending),
         unassigned_over_7d: n(q.unassigned),
+        unassigned_overdue_days: overdueDays,
         awaiting_assignment_total: n(q.awaiting_total),
         idle_over_7d: idle.reduce((a, h) => a + h.idle, 0),
         said_yes_not_won: yes.count,
         said_yes_value: yes.value,
         said_yes_oldest_days: yes.oldestDays,
-        said_yes_limit_days: SAID_YES_LIMIT_WORKING_DAYS,
+        said_yes_limit_days: limits.said_yes_not_won,
         red_dormant_dealers: risky.length,
         at_risk_90d: risky.reduce((a, d) => a + d.revenue_90d, 0),
         spocs_below_80: below,
@@ -315,11 +314,9 @@ async function engineTile(from: string, toExcl: string, prevFrom: string | null,
     const counts = async (a: string, b: string) => {
         const [r] = await rows(sql`
             SELECT
-              -- ID 153: the one "Leads in" rule (metricDefinitions) — bulk imports apart.
-              (SELECT COUNT(*) FILTER (WHERE NOT ${bulkImportedLead(sql`dl`)})
+              -- ID 153: the one "Leads in" rule (metricDefinitions) — every new lead.
+              (SELECT COUNT(*)
                  FROM dealer_leads dl WHERE dl.is_active IS NOT FALSE AND ${inWinNaive(sql`dl.created_at`, a, b)}) AS leads_in,
-              (SELECT COUNT(*) FILTER (WHERE ${bulkImportedLead(sql`dl`)})
-                 FROM dealer_leads dl WHERE dl.is_active IS NOT FALSE AND ${inWinNaive(sql`dl.created_at`, a, b)}) AS imported_bulk,
               (SELECT COUNT(*) FROM dealer_leads dl WHERE dl.lead_status = 'Converted' AND ${inWin(sql`dl.closed_at`, a, b)}) AS converted,
               (SELECT COUNT(*) FROM (
                   SELECT r.dealer_lead_id, MIN(r.invoice_date) AS first_d
@@ -371,7 +368,6 @@ async function engineTile(from: string, toExcl: string, prevFrom: string | null,
     const a = ai[0];
     return {
         leads_in: { now: n(now.leads_in), prev: prev ? n(prev.leads_in) : null },
-        imported_bulk: { now: n(now.imported_bulk), prev: prev ? n(prev.imported_bulk) : null },
         converted: { now: n(now.converted), prev: prev ? n(prev.converted) : null },
         first_orders: { now: n(now.first_orders), prev: prev ? n(prev.first_orders) : null },
         headline,

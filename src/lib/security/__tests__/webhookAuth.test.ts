@@ -132,11 +132,18 @@ describe("guardDigioWebhook", () => {
     expect(guardDigioWebhook(headers(sign(SECRET, BODY)), BODY, "/test/digio-genuine")).toBeNull();
   });
 
-  it("strict mode refuses an unconfigured webhook", () => {
+  it("strict mode refuses an unconfigured webhook — 503, the caller did nothing wrong (ID 130)", () => {
     vi.stubEnv("DIGIO_WEBHOOK_SECRET", "");
     vi.stubEnv("WEBHOOK_AUTH_STRICT", "1");
     vi.spyOn(console, "warn").mockImplementation(() => {});
-    expect(guardDigioWebhook(headers(), BODY, "/test/digio-strict")?.status).toBe(401);
+    expect(guardDigioWebhook(headers(), BODY, "/test/digio-strict")?.status).toBe(503);
+  });
+
+  it("strict mode still answers 401 to a wrong proof when the secret is configured", () => {
+    vi.stubEnv("DIGIO_WEBHOOK_SECRET", SECRET);
+    vi.stubEnv("WEBHOOK_AUTH_STRICT", "1");
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(guardDigioWebhook(headers("deadbeef"), BODY, "/test/digio-strict-wrong")?.status).toBe(401);
   });
 });
 

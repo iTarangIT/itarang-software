@@ -3,16 +3,15 @@
  * session — so `Bearer CRON_SECRET` is the whole of their protection.
  *
  * api-auth.contract.test.ts already fails a cron route that never mentions the
- * secret. It cannot see a route that mentions it and then skips the check,
- * which is what the NODE_ENV branch below does. This suite pins the strict
- * helper, and holds the set of routes that relax it.
+ * secret. It cannot see a route that mentions it and then skips the check.
+ * This suite pins the strict helpers and fails any route that relaxes them.
  */
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { checkCronAuth } from "@/lib/cron-auth";
+import { checkCronAuth, isCronAuthorised, isNbfcTestBypass } from "@/lib/cron-auth";
 
 const API_DIR = join(process.cwd(), "src", "app", "api");
 
@@ -74,11 +73,64 @@ describe("checkCronAuth", () => {
   });
 });
 
+describe("isCronAuthorised (boolean form)", () => {
+  const req = (authorization?: string) =>
+    new Request("http://localhost/api/cron/digest", { headers: authorization ? { authorization } : {} });
+
+  it("fails closed when CRON_SECRET is unset, in every environment", () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.stubEnv("CRON_SECRET", undefined);
+    vi.stubEnv("NODE_ENV", "development");
+    expect(isCronAuthorised(req())).toBe(false);
+    expect(isCronAuthorised(req("Bearer undefined"))).toBe(false);
+    vi.stubEnv("CRON_SECRET", "");
+    expect(isCronAuthorised(req("Bearer "))).toBe(false);
+  });
+
+  it("admits only the exact bearer", () => {
+    vi.stubEnv("CRON_SECRET", "s3cret");
+    expect(isCronAuthorised(req("Bearer s3cret"))).toBe(true);
+    for (const h of [undefined, "Bearer wrong", "Bearer s3cretx", "s3cret"]) {
+      expect(isCronAuthorised(req(h)), String(h)).toBe(false);
+    }
+  });
+
+  it("ignores x-vercel-cron off Vercel", () => {
+    vi.stubEnv("CRON_SECRET", "s3cret");
+    vi.stubEnv("VERCEL", undefined);
+    const r = new Request("http://localhost/api/cron/digest", { headers: { "x-vercel-cron": "1" } });
+    expect(isCronAuthorised(r)).toBe(false);
+  });
+});
+
+describe("isNbfcTestBypass", () => {
+  const req = (v?: string) =>
+    new Request("http://localhost/api/cron/auction/tick", { headers: v ? { "x-nbfc-test-bypass": v } : {} });
+
+  it("needs the flag, a secret, non-production and an exact match", () => {
+    vi.stubEnv("NBFC_TEST_BYPASS", "1");
+    vi.stubEnv("NBFC_TEST_BYPASS_SECRET", "tb");
+    vi.stubEnv("NODE_ENV", "test");
+    expect(isNbfcTestBypass(req("tb"))).toBe(true);
+    expect(isNbfcTestBypass(req("tbx"))).toBe(false);
+    expect(isNbfcTestBypass(req())).toBe(false);
+    vi.stubEnv("NODE_ENV", "production");
+    expect(isNbfcTestBypass(req("tb"))).toBe(false);
+    vi.stubEnv("NODE_ENV", "test");
+    vi.stubEnv("NBFC_TEST_BYPASS", "0");
+    expect(isNbfcTestBypass(req("tb"))).toBe(false);
+  });
+});
+
 describe("no route fails OPEN when CRON_SECRET is missing (ID 130)", () => {
-  it("never uses the optional check or a raw `Bearer ${process.env.CRON_SECRET}` compare", () => {
-    // `if (CRON_SECRET && header !== …)` skips the check when the env var is
-    // unset; `header !== \`Bearer ${process.env.CRON_SECRET}\`` admits
-    // "Bearer undefined". Both are what checkCronAuth() exists to replace.
+  it("finds the cron routes", () => {
+    expect(cronRoutes.length).toBeGreaterThan(30);
+  });
+
+  it("never compares a bearer by hand", () => {
+    // `if (CRON_SECRET && header !== …)` / `if (expected && auth === …)` skip
+    // the check when the env var is unset; a raw `=== \`Bearer ${…}\`` is not
+    // constant-time. checkCronAuth() / isCronAuthorised() replace them all.
     const open = walk(API_DIR)
       .map((file) => ({
         url: "/api/" + relative(API_DIR, file).split(sep).slice(0, -1).join("/"),
@@ -87,71 +139,19 @@ describe("no route fails OPEN when CRON_SECRET is missing (ID 130)", () => {
       .filter(
         (r) =>
           /process\.env\.CRON_SECRET\s*&&/.test(r.src) ||
-          /`Bearer \$\{process\.env\.CRON_SECRET\}`/.test(r.src),
+          /[!=]==?\s*`Bearer \$\{/.test(r.src) ||
+          /`Bearer \$\{[^}]*\}`\s*[!=]==?/.test(r.src),
       )
       .map((r) => r.url);
     expect(open).toEqual([]);
   });
-});
 
-describe("KNOWN GAP: cron routes that skip the secret outside production", () => {
-  it("finds the cron routes", () => {
-    expect(cronRoutes.length).toBeGreaterThan(30);
-  });
-
-  it("the set of routes with a NODE_ENV branch does not grow", () => {
-    // Each of these answers ANY caller when NODE_ENV is not "production" — a
-    // deliberate convenience for poking a job from localhost. PM2 sets
-    // production, so the VPS is closed. The exposure is a dev server pointed
-    // at a shared database (both AWS DBs are reachable from a laptop), worst
-    // behind a cloudflared tunnel: an anonymous GET then sends dealer
-    // reminders, runs EMI auto-debit, expires coupons.
-    //
-    // New cron routes should call checkCronAuth() unconditionally and be poked
-    // locally with the bearer. Remove a route from this list when its bypass
-    // goes; a route that ADDS one fails here.
-    const relaxed = cronRoutes
-      .filter((r) => /NODE_ENV/.test(r.src))
-      .map((r) => r.url)
-      .sort();
-
-    expect(relaxed).toEqual([
-      "/api/cron/auction/tick",
-      "/api/cron/cleanup-leads",
-      "/api/cron/dealer-agreement-expiry-reminder",
-      "/api/cron/dealer-agreement-refresh",
-      "/api/cron/digest",
-      "/api/cron/dispatch-to-sold",
-      "/api/cron/drive-expenses",
-      "/api/cron/drive-sales",
-      "/api/cron/gdrive-mirror",
-      "/api/cron/iot/scan-offline-batteries",
-      "/api/cron/kyc-auto-approval",
-      "/api/cron/monitor-morning",
-      "/api/cron/nbfc-cor-expiry",
-      "/api/cron/nbfc-origination-maintenance",
-      "/api/cron/nbfc-request-sla",
-      "/api/cron/nbfc/compute-cds",
-      "/api/cron/nbfc/compute-pci",
-      "/api/cron/nbfc/evaluate-anomaly-flags",
-      "/api/cron/nbfc/risk-analysis",
-      "/api/cron/nbfc/run-emi-aging",
-      "/api/cron/nbfc/run-emi-autodebit",
-      "/api/cron/scraper-queue/tick",
-      "/api/cron/sla-monitor",
-      "/api/cron/zoho-sync",
-      "/api/nbfc/dpdpa/retention/cron",
-      "/api/nbfc/dual-approval/cron/expire",
-    ]);
-  });
-
-  it("every such branch is keyed on the literal \"production\" — nothing looser", () => {
-    // `=== "development"` would open staging; a typo'd literal would open prod.
-    const odd = cronRoutes.flatMap((r) =>
-      [...r.src.matchAll(/NODE_ENV\s*([!=]==?)\s*(["'])([^"']*)\2/g)]
-        .filter((m) => m[3] !== "production")
-        .map((m) => `${r.url}: ${m[0]}`),
-    );
-    expect(odd).toEqual([]);
+  it("no cron route has a NODE_ENV branch", () => {
+    // These used to answer ANY caller when NODE_ENV was not "production" — a
+    // dev server pointed at a shared database could then send dealer
+    // reminders or run EMI auto-debit for an anonymous GET. Poke a job locally
+    // with the bearer from .env.local instead.
+    const relaxed = cronRoutes.filter((r) => /NODE_ENV/.test(r.src)).map((r) => r.url);
+    expect(relaxed).toEqual([]);
   });
 });

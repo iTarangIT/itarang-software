@@ -40,7 +40,7 @@ describe("Block A pieces", () => {
         const rows = [row("Leads in", "INTAKE"), row("Calls made", "EFFORT"), row("Something new", "EFFORT")];
         const notes = blockARowNotes(rows);
         expect(notes).toHaveLength(blockATableRows(rows).length);
-        expect(notes).toEqual([null, "Leads that arrived on their own", null, "Inside sales and NeoDove, AI calls excluded", null]);
+        expect(notes).toEqual([null, "Every new lead, whatever the source (bulk imports included)", null, "Inside sales and NeoDove, AI calls excluded", null]);
     });
 });
 

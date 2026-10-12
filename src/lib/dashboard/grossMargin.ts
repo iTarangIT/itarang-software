@@ -13,8 +13,9 @@
  * Each inventory row is one unit, so a plain average IS quantity-weighted.
  *
  * What is NOT guessed:
- *   * Lines are used only when they add up to the invoice's taxable value
- *     (the SQL twin of linesAddUp() in src/lib/sales/salesInvoiceLines.ts).
+ *   * Lines come from the ledger as stored: the Vyapar register as imported,
+ *     and Drive lines only when they checked out against the invoice when
+ *     they were read (driveLedgerLines.reconcileDriveLines).
  *   * A line whose item is not mapped to a product, or whose product has no
  *     cost anywhere, has no margin. Its revenue is reported as "not costed",
  *     never as 100% margin.
@@ -28,14 +29,17 @@
  * them, and an item's product is the one set in Invoice Ledger › Item mapping
  * (vyapar_item_map → the line's asset_type + product_id, product_master_*).
  * Stock cost is joined to that product by its model id (inventory.model_type).
- * The older E-326 store (sales_invoice_lines + sales_invoice_item_products) is
- * no longer read.
+ * Every writer stamps the mapped product as it inserts a line (itemMap.ts), and
+ * "not linked" counts item names by the same key the mapping uses. The older
+ * E-326 store (sales_invoice_lines + sales_invoice_item_products) is neither
+ * read nor written any more.
  */
 
 import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { matchedLinesUnion, matchedUnion, REVENUE_NOT_VOID } from "@/lib/dashboard/revenueSource";
 import { hasInvoiceLedgerTables } from "@/lib/sales/ledgerTables";
+import { itemKeySql } from "@/lib/sales/itemMap";
 import { LINE_TYPES, type LineType } from "@/lib/sales/salesInvoiceLines";
 
 export const RECENT_COST_DAYS = 180;
@@ -87,20 +91,6 @@ function finish(cell: MarginCell): MarginCell {
   cell.margin = cell.revenue - cell.cost;
   cell.margin_pct = cell.revenue > 0 ? cell.margin / cell.revenue : null;
   return cell;
-}
-
-/** The OLD E-326 store (scripts/backfill-sales-invoice-lines.ts still fills it). */
-export async function grossMarginTablesPresent(): Promise<boolean> {
-  try {
-    const res = (await db.execute<{ present: boolean }>(sql`
-      SELECT (to_regclass('public.sales_invoice_lines') IS NOT NULL
-          AND to_regclass('public.sales_invoice_item_products') IS NOT NULL
-          AND to_regclass('public.sales_invoices') IS NOT NULL) AS present
-    `)) as unknown as { present: boolean }[];
-    return Boolean(res[0]?.present);
-  } catch {
-    return false;
-  }
 }
 
 /** The line's type: its HSN (as invoiceLines.classifyHsn, plus scrap), else the mapped asset type. */
@@ -234,7 +224,7 @@ export async function grossMarginByMonth(
   `)) as unknown as LineRow[];
 
   const [unmapped] = (await run.execute<{ n: number }>(sql`
-    SELECT COUNT(DISTINCT lower(btrim(r.item_name)))::int AS n
+    SELECT COUNT(DISTINCT ${itemKeySql(sql`r.item_name`)})::int AS n
       FROM ${lines} AS r
      WHERE ${range} AND r.product_id IS NULL AND r.item_name IS NOT NULL
   `)) as unknown as Array<{ n: number }>;

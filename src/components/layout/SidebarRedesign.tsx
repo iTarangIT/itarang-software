@@ -237,6 +237,8 @@ const ADMIN_SALES_HEAD_GROUPS: LayoutGroup[] = [
             // ID 155 — a tab on the settings page, given its own row.
             { add: "reporting-lines", label: "Reporting lines", href: "/admin/settings?tab=reporting-lines", isNew: true },
             ...both("kyc-automation"),
+            // ID 85 — admin only (sales_head has no such item, so it is skipped).
+            { id: "admin-time-limits", isNew: true },
             {
                 node: "Email reports",
                 children: [
@@ -345,7 +347,7 @@ export const NAV_LAYOUTS: Record<string, Layout> = {
                     },
                 ],
             },
-            { section: "MORE", items: ["ceo-news", "feature-requests", "submit-expense"] },
+            { section: "MORE", items: ["ceo-news", { id: "ceo-time-limits", isNew: true }, "submit-expense"] },
         ],
     },
     // ID 88 — every "Sales dashboard" entry is the one screen (SalesHeadOpsView)

@@ -18,7 +18,8 @@ const sql = postgres(process.env.DATABASE_URL, {
     max: 1,
 });
 
-const ASM_EMAIL = 'asm.itarang@gmail.com';
+// The shared ASM test login was retired (ID 140): pass a real ASM's email.
+const ASM_EMAIL = process.env.ASM_EMAIL || 'asm.itarang@gmail.com';
 
 // Promote these 3 — they're owned by Nidhi after Module 1's seed.
 //
@@ -42,7 +43,7 @@ async function run() {
     const asms = await sql`SELECT id::text AS id FROM users WHERE email = ${ASM_EMAIL} LIMIT 1`;
     const asmId = asms[0]?.id;
     if (!asmId) {
-        console.error(`ASM ${ASM_EMAIL} not found. Run scripts/seed-asm-user.js first.`);
+        console.error(`ASM ${ASM_EMAIL} not found. Set ASM_EMAIL to an existing ASM login.`);
         process.exit(1);
     }
     console.log(`  asm: ${ASM_EMAIL} (${asmId})`);

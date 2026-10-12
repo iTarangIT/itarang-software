@@ -42,6 +42,7 @@
  *      contract { fresh | stale | offline } per BRD §6.2.7 by collapsing
  *      idle + stale into "stale".
  */
+import { safeEqual } from "@/lib/cron-auth";
 import { db } from "@/lib/db";
 import { eq, and, sql as drizzleSql } from "drizzle-orm";
 import {
@@ -109,7 +110,7 @@ function isTestBypass(headers: Headers): boolean {
   const secret = process.env.NBFC_TEST_BYPASS_SECRET;
   if (!secret) return false;
   const provided = headers.get(BYPASS_HEADER);
-  return !!provided && provided === secret;
+  return !!provided && safeEqual(provided, secret);
 }
 
 /**

@@ -62,6 +62,7 @@ import { db } from "@/lib/db";
 import {
     BUSINESS_TYPE_UNSET,
     BusinessTypeSchema,
+    businessTypeFilterParam,
     isBusinessTypeFilter,
 } from "@/lib/leads/businessType";
 import { accountOwnerOn, dealerLeadByGstin, GSTIN_KEY } from "@/lib/leads/gstinMatch";
@@ -128,7 +129,8 @@ export function parseSalesDashboardParams(url: URL): SalesDashboardParams {
         city: get("city"),
         state: get("state"),
         spoc_id: get("spoc_id"),
-        business_type: get("business_type"),
+        // ID 11 — a retired spelling ("finance") maps to today's type; junk still 400s.
+        business_type: businessTypeFilterParam(get("business_type")) ?? get("business_type"),
         granularity: get("granularity"),
     });
 }

@@ -1,8 +1,11 @@
 // "Finalised, not Won" (ID 75.4): the admin panel and the reps' queue chip
-// share ONE predicate; the admin panel only adds the 2-day age floor.
-import { describe, expect, it } from "vitest";
+// share ONE predicate; the admin panel only adds the said_yes_not_won
+// working-day floor (ID 85 — the CEO card's limit).
+import { describe, expect, it, vi } from "vitest";
 import { PgDialect } from "drizzle-orm/pg-core";
-import { finalisedNotWonSql } from "@/lib/leads/finalisedNotWon";
+
+vi.mock("@/lib/db", () => ({ db: {} }));
+const { finalisedNotWonSql } = await import("@/lib/leads/finalisedNotWon");
 
 const text = (q: ReturnType<typeof finalisedNotWonSql>) =>
     new PgDialect().sqlToQuery(q).sql.replace(/\s+/g, " ").trim();
@@ -18,11 +21,13 @@ describe("finalisedNotWonSql", () => {
         expect(s).not.toContain("dealer_decision_at");
     });
 
-    it("the admin panel's version only adds the age floor, inside the same EXISTS", () => {
+    it("the admin panel's version only appends a working-day floor on the dealer's latest yes", () => {
         const base = text(finalisedNotWonSql());
-        const aged = text(finalisedNotWonSql({ minAgeDays: 2 }));
-        expect(aged).toBe(
-            base.replace(/\)$/, " AND c.dealer_decision_at < NOW() - INTERVAL '2 days')"),
-        );
+        const aged = text(finalisedNotWonSql({ overWorkingDays: 1 }));
+        expect(aged.startsWith(base)).toBe(true);
+        const extra = aged.slice(base.length);
+        expect(extra).toContain("MAX(c.dealer_decision_at)");
+        expect(extra).toContain("holiday_calendar");
+        expect(extra).toMatch(/::int > 1$/);
     });
 });

@@ -2,7 +2,18 @@
 // Server-side queue route returns last_touchpoint_at + a /api/inside-sales/holidays
 // snapshot; the client computes severity from this so the queue route stays cheap.
 
+import { TIME_LIMIT_DEFAULTS } from "@/lib/timeLimits/registry";
+
 export type StaleSeverity = "normal" | "yellow" | "red" | "critical";
+
+/** The three no-touch cues, in working days — ID 85 time limits (stale_yellow / _red / _critical). */
+export type StaleThresholds = { yellow: number; red: number; critical: number };
+
+export const DEFAULT_STALE_THRESHOLDS: StaleThresholds = {
+    yellow: TIME_LIMIT_DEFAULTS.stale_yellow,
+    red: TIME_LIMIT_DEFAULTS.stale_red,
+    critical: TIME_LIMIT_DEFAULTS.stale_critical,
+};
 
 const SUNDAY = 0;
 
@@ -45,11 +56,16 @@ export function workingDaysSince(
     return workingDaysBetween(lastDate, now, holidayDates);
 }
 
-// BRD §0.5 visual cue thresholds.
-export function staleSeverity(workingDays: number | null): StaleSeverity {
+// BRD §0.5 visual cue thresholds. The live values come from the server
+// (getTimeLimits(), sent with /api/inside-sales/holidays); the default is the
+// registry's, for a caller that has not loaded them.
+export function staleSeverity(
+    workingDays: number | null,
+    t: StaleThresholds = DEFAULT_STALE_THRESHOLDS,
+): StaleSeverity {
     if (workingDays === null) return "normal";
-    if (workingDays >= 14) return "critical";
-    if (workingDays >= 10) return "red";
-    if (workingDays >= 5) return "yellow";
+    if (workingDays >= t.critical) return "critical";
+    if (workingDays >= t.red) return "red";
+    if (workingDays >= t.yellow) return "yellow";
     return "normal";
 }

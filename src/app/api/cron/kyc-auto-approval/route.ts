@@ -24,12 +24,8 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 async function handle(req: Request) {
-    // Relaxed outside production so the sweep can be poked during local
-    // testing, matching cleanup-leads / dispatch-to-sold.
-    if (process.env.NODE_ENV === "production") {
-        const unauth = checkCronAuth(req);
-        if (unauth) return unauth;
-    }
+    const unauth = checkCronAuth(req);
+    if (unauth) return unauth;
 
     try {
         const result = await runKycAutoApprovalTick();
