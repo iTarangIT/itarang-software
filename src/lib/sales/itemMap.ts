@@ -35,3 +35,8 @@ export async function mappedItems(runner: Runner = db): Promise<Map<string, Item
 export function productFor(mapped: Map<string, ItemProduct>, itemName: string | null | undefined): ItemProduct {
     return (itemName ? mapped.get(itemKey(itemName)) : undefined) ?? { asset_type: null, product_id: null };
 }
+
+/** A line's product class once its mapping is known: an onboarding-fee item is revenue, never a battery (ID 172). */
+export function classFor(m: ItemProduct, productClass: string | null): string | null {
+    return m.asset_type === "onboarding_fee" ? "other" : productClass;
+}
