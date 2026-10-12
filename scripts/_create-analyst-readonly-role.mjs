@@ -25,6 +25,16 @@
 // column, without those. On such a table `select *` is refused — the agent has to name
 // columns, and its schema listing only shows the ones it may read. A column added to such a
 // table later is unreadable until this script is run again.
+//
+// Tracker ID 167 (10 Oct): the analyst still reached customer PII through free text and names
+// the patterns missed (leads.owner_name, vehicle RC, remarks / notes / call summaries, Ecofy's
+// `snapshot` jsonb with the whole case). Now also withheld: person names, vehicle numbers,
+// every remark / note / comment / summary / feedback column, provider snapshots, loan / account
+// numbers and pincodes (address = city only). Ecofy's customer table is no longer granted at
+// all: the analyst reads `analyst_ecofy_leads`, a view that shows each customer as
+// "Customer #<code>" (the same code every time, from the row id), city and state only, and no
+// phone, email, address, pincode, case number, link or snapshot. Customer loan files
+// (loan_files, loan_applications, loan_sanctions, nbfc_loans, …) are not on ALLOWED and stay off.
 import postgres from "postgres";
 
 const ROLE = "analyst_ro";
@@ -37,7 +47,7 @@ const ALLOWED = [
   "states", "cities",
   // AI dialer & campaigns
   "campaigns", "campaign_segments", "dialer_campaigns", "dialer_campaign_leads", "ai_call_logs",
-  "bolna_calls", "call_records", "call_sessions", "ecofy_leads", "ecofy_lead_activities",
+  "bolna_calls", "call_records", "call_sessions", "ecofy_lead_activities",
   // scraper
   "scraper_leads", "scraped_dealer_leads", "scraper_runs",
   // revenue, orders, expenses
@@ -74,14 +84,43 @@ const WITHHELD = [
   /recording/,
   /(^|_)raw(_|$)|payload|draft/,
   /photo|selfie|signature|document_url|proof_url/,
+  // ID 167 — person names, vehicle numbers, free text, snapshots, account numbers, pincodes
+  /owner_name|proprietor|contact_person|person_name/,
+  /vehicle_(rc|no|number|reg)|(^|_)rc(_|$)|registration_no|chassis|engine_no/,
+  /remark|(^|_)notes?(_|$)|comment|(^|_)summary$|conversation|feedback|issue_description|message_content|(^|_)description$/,
+  /snapshot|last_change/,
+  /loan_account|account_no(_|$)|account_number/,
+  /pincode|pin_code/,
 ];
 // Matches above that are not personal data: flags, counters, ids, city centroids.
 const KEPT = new Set([
   "phone_quality", "phone_valid", "new_leads_skipped_invalid_phone", "answered_by_voicemail", "transcript_fetched_at",
   "pickup_address_id", "cities.lat", "cities.lng",
+  // configuration text written by staff, not about a customer
+  "campaign_segments.description", "region_groups.description",
 ]);
 const withheld = (table, column) =>
   !KEPT.has(column) && !KEPT.has(`${table}.${column}`) && WITHHELD.some((re) => re.test(column));
+
+// ID 167 — masked views the analyst reads in place of a customer table. The view runs with
+// its owner's rights, so the role needs no grant on the base table. Same code every time:
+// the first 8 hex digits of the row id.
+const MASKED_VIEWS = [
+  {
+    name: "analyst_ecofy_leads",
+    base: "ecofy_leads",
+    sql: `CREATE OR REPLACE VIEW public.analyst_ecofy_leads AS
+      SELECT id,
+             'Customer #' || left(replace(id::text, '-', ''), 8) AS customer,
+             stage, sub_status, segment, temperature, lead_source, owner, qualified_by_name,
+             queue_entered_at, product_interest, avg_monthly_bill_inr, sanctioned_load_kw,
+             existing_backup, preferred_call_time, closure_reason, customer_type, city, state,
+             preferred_language, property_type, last_event_type, last_event_at,
+             assigned_to_user_id, assigned_role, assigned_at, next_follow_up_at,
+             next_appointment_at, created_at, updated_at
+        FROM public.ecofy_leads`,
+  },
+];
 
 const dryRun = /^(1|true|yes)$/i.test(process.env.DRY_RUN ?? "");
 const url = process.env.DATABASE_URL;
@@ -107,8 +146,14 @@ for (const r of await sql`select table_name, column_name from information_schema
   plan.get(r.table_name)[withheld(r.table_name, r.column_name) ? "withhold" : "grant"].push(r.column_name);
 }
 
+const baseTables = new Set(
+  (await sql`select table_name from information_schema.tables where table_schema = 'public'`).map((r) => r.table_name),
+);
+const views = MASKED_VIEWS.filter((v) => baseTables.has(v.base));
+
 if (dryRun) {
   console.log(exists.length ? `role ${ROLE} exists` : `role ${ROLE} does NOT exist in this database`);
+  console.log(`masked views a real run would create and grant: ${views.map((v) => v.name).join(", ") || "none"}`);
   const whole = await sql`select table_name from information_schema.table_privileges
                            where grantee = ${ROLE} and table_schema = 'public' and privilege_type = 'SELECT'`;
   console.log(`readable in full today: ${whole.length} table(s)`);
@@ -155,6 +200,11 @@ for (const [table, p] of plan) {
     console.log(`  ${table}: withheld ${p.withhold.join(", ")}`);
   }
 }
+for (const v of views) {
+  await sql.unsafe(v.sql);
+  await sql.unsafe(`GRANT SELECT ON public.${ident(v.name)} TO ${ident(ROLE)}`);
+  console.log(`  ${v.name}: masked view over ${v.base} (base table not granted)`);
+}
 const missing = ALLOWED.filter((t) => !plan.has(t));
 console.log(`granted SELECT on ${plan.size} tables`);
 if (missing.length) console.log("not in this database (skipped):", missing.join(", "));
@@ -174,12 +224,24 @@ if (!password) {
     withheldReadable = r.ok;
   }
   const [u] = await admin`select has_table_privilege(${ROLE}, 'public.users', 'SELECT') as ok`;
+  const [e] = await admin`select to_regclass('public.ecofy_leads') is null
+                              or not has_table_privilege(${ROLE}, 'public.ecofy_leads', 'SELECT') as ok`;
+  const [o] = await admin`select not has_column_privilege(${ROLE}, 'public.leads', 'owner_name', 'SELECT') as ok`;
+  const masked = [];
+  for (const v of views) {
+    const [r] = await admin.unsafe(`select customer from public.${ident(v.name)} limit 1`);
+    const [g] = await admin`select has_table_privilege(${ROLE}, ${"public." + v.name}, 'SELECT') as ok`;
+    masked.push(`${v.name}: granted=${g.ok} sample=${r?.customer ?? "(no rows)"}`);
+  }
   await admin.end();
   console.log({
     tables_readable_in_full: whole,
     tables_with_any_readable_column: partial,
     users_blocked: !u.ok,
     withheld_column_blocked: withheldReadable === null ? true : !withheldReadable,
+    ecofy_base_table_blocked: e.ok,
+    leads_owner_name_blocked: o.ok,
+    masked_views: masked,
   });
   console.log("\npassword unchanged — ANALYST_CRM_READONLY_DSN stays as it is");
   process.exit(0);
