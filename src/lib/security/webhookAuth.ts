@@ -12,8 +12,12 @@
 //   secret not configured the call is accepted as before and logged as
 //                         UNVERIFIED, so the gap is visible in the log.
 //   WEBHOOK_AUTH_STRICT=1 a call that cannot be verified is refused, secret or
-//                         no secret. Turn this on once every provider below has
-//                         its secret set and the UNVERIFIED lines have stopped.
+//                         no secret (503 when no secret is configured). Turn
+//                         this on once every provider below has its secret set
+//                         and the UNVERIFIED lines have stopped.
+//
+// A missing secret also rings every admin's bell, once an hour per route
+// (configAlert.ts, tracker ID 130).
 //
 // `allowUnsigned` is for the NBFC hand-off rails only. There the secret is
 // minted by US the moment the NBFC switches a rail to "own", so "a secret
@@ -25,6 +29,8 @@
 
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
+
+import { alertMissingSecret } from "@/lib/security/configAlert";
 
 /** What the caller presented: a proof that matches, one that does not, or nothing. */
 export type WebhookProof = "valid" | "invalid" | "absent";
@@ -138,6 +144,17 @@ export function checkWebhook(check: WebhookCheck): WebhookVerdict {
     proof: check.proof,
     allowUnsigned: check.allowUnsigned,
   });
+  // NBFC rails (allowUnsigned) carry a per-NBFC secret that is legitimately
+  // absent until the NBFC switches the rail on — not ours to fix, no alert.
+  if (!check.secret && !check.allowUnsigned) {
+    alertMissingSecret(
+      check.route,
+      (verdict === "refuse"
+        ? "Calls are being REFUSED (WEBHOOK_AUTH_STRICT is on) because no secret is configured. "
+        : "Calls are being accepted WITHOUT proof of who sent them because no secret is configured. ") +
+        check.configure,
+    );
+  }
   if (verdict === "refuse" && shouldLog(`refuse:${check.route}`)) {
     console.warn(
       `[webhook-auth] REFUSED ${check.route} — ` +
@@ -155,9 +172,16 @@ export function checkWebhook(check: WebhookCheck): WebhookVerdict {
   return verdict;
 }
 
-/** Decide, log, and return the 401 to send — or null when the call may proceed. */
+/**
+ * Decide, log, and return the refusal to send — or null when the call may
+ * proceed. 401 for a missing or wrong proof; 503 when strict mode refuses
+ * because WE have no secret configured (the caller did nothing wrong).
+ */
 export function guardWebhook(check: WebhookCheck): NextResponse | null {
   if (checkWebhook(check) !== "refuse") return null;
+  if (!check.secret) {
+    return NextResponse.json({ success: false, error: "Webhook not configured" }, { status: 503 });
+  }
   return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
 }
 

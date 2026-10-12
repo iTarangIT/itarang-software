@@ -384,6 +384,7 @@ export const TYPE_LABELS: Record<string, string> = {
   // --- System ---
   "nbfc.dual_approval": "Dual approval requested",
   "nbfc.wallet_low": "NBFC wallet balance is low",
+  "security.secret_missing": "Webhook or scheduled job missing its secret",
   ops_alert: "Operations alert (no current emitter)",
   // E-230's price-register sweep. `oem.price_missing` predates its emitter —
   // 5 rows were already in the bell from something outside this repo when

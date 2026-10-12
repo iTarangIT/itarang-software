@@ -5,40 +5,18 @@
  *   - x-vercel-cron header (trusted Vercel cron trigger)
  *   - Bearer CRON_SECRET (manual / test runners)
  *   - Optional NBFC_TEST_BYPASS for Playwright runs
- *   - In non-production, unauthenticated triggers are accepted for parity
  *
  * Response: { ok, evaluated_count, flagged_count, cleared_count, run_at }
  */
 import { NextRequest, NextResponse } from "next/server";
 import { evaluateAnomalyFlags } from "@/lib/nbfc/anomalyFlags";
-import { fromVercelCron } from "@/lib/security/cronAuth";
+import { isCronAuthorised, isNbfcTestBypass } from "@/lib/cron-auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-function isAuthorised(req: NextRequest): boolean {
-  if (fromVercelCron(req)) return true;
-
-  const auth = req.headers.get("authorization") ?? "";
-  const expected = process.env.CRON_SECRET;
-  if (expected && auth === `Bearer ${expected}`) return true;
-
-  if (
-    process.env.NBFC_TEST_BYPASS === "1" &&
-    process.env.NBFC_TEST_BYPASS_SECRET &&
-    req.headers.get("x-nbfc-test-bypass") ===
-      process.env.NBFC_TEST_BYPASS_SECRET
-  ) {
-    return true;
-  }
-
-  if (process.env.NODE_ENV !== "production") return true;
-
-  return false;
-}
-
 async function handle(req: NextRequest) {
-  if (!isAuthorised(req)) {
+  if (!(isCronAuthorised(req) || isNbfcTestBypass(req))) {
     return NextResponse.json(
       { ok: false, error: "UNAUTHORIZED" },
       { status: 401 },

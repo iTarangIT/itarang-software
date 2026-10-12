@@ -7,8 +7,7 @@
  *   1. Vercel cron header (`x-vercel-cron`) — automatic.
  *   2. Bearer CRON_SECRET — manual / Playwright.
  *   3. Triple-guarded NBFC test bypass (admin role) — Playwright in CI.
- *   4. In non-production, unauthenticated requests are accepted (mirrors
- *      `/api/cron/nbfc-cor-expiry`) so dev tooling and the loop can fire it.
+ *   Nothing else, in any environment (ID 130).
  *
  * Returns: { ok, computed_count, alert_triggered_count, run_at }.
  */
@@ -20,7 +19,7 @@ import {
   resolveAdminActor,
   ADMIN_ROLES,
 } from "@/lib/nbfc/admin/auth";
-import { fromVercelCron } from "@/lib/security/cronAuth";
+import { isCronAuthorised } from "@/lib/cron-auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -28,22 +27,13 @@ export const maxDuration = 120;
 
 const RequestSchema = z.object({}).passthrough();
 
-function isProd(): boolean {
-  return process.env.NODE_ENV === "production";
-}
-
 async function isAuthorised(req: NextRequest): Promise<{
   ok: boolean;
   status?: number;
   error?: string;
 }> {
-  // Vercel cron — automatic header.
-  if (fromVercelCron(req)) return { ok: true };
-
-  // Manual: Bearer CRON_SECRET.
-  const auth = req.headers.get("authorization") ?? "";
-  const expected = process.env.CRON_SECRET;
-  if (expected && auth === `Bearer ${expected}`) return { ok: true };
+  // Vercel cron, or Bearer CRON_SECRET.
+  if (isCronAuthorised(req)) return { ok: true };
 
   // NBFC test bypass — admin role required (mirrors other admin-gated routes).
   if (isTestBypassRequest(req.headers)) {
@@ -65,9 +55,6 @@ async function isAuthorised(req: NextRequest): Promise<{
       return { ok: false, status, error: msg };
     }
   }
-
-  // Non-production: allow unauthenticated triggers so dev / loop tooling works.
-  if (!isProd()) return { ok: true };
 
   return { ok: false, status: 401, error: "UNAUTHORIZED" };
 }

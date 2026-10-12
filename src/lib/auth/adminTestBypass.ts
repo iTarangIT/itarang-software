@@ -15,6 +15,7 @@
  *
  * Mirrors the dual-approval bypass but for admin-role-gated routes.
  */
+import { safeEqual } from "@/lib/cron-auth";
 import { NextResponse } from "next/server";
 import { requireAdmin, type RequireAdminResult } from "./requireAdmin";
 
@@ -34,7 +35,7 @@ function isTestBypassRequest(headers: Headers): boolean {
   const secret = process.env.NBFC_TEST_BYPASS_SECRET;
   if (!secret) return false;
   const provided = headers.get("x-nbfc-test-bypass");
-  return !!provided && provided === secret;
+  return !!provided && safeEqual(provided, secret);
 }
 
 export async function requireAdminOrTestBypass(

@@ -22,10 +22,8 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 async function handle(req: Request) {
-    if (process.env.NODE_ENV === "production") {
-        const unauth = checkCronAuth(req);
-        if (unauth) return unauth;
-    }
+    const unauth = checkCronAuth(req);
+    if (unauth) return unauth;
 
     const url = new URL(req.url);
     const backfill = url.searchParams.get("backfill") === "1";
