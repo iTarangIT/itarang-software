@@ -44,7 +44,7 @@ import {
     awaitingAssignment,
     daysAwaitingAssignment,
 } from "@/lib/leads/salesReady";
-import { bulkImportedLead, engagedCall, humanCall } from "@/lib/reports/metricDefinitions";
+import { engagedCall, humanCall } from "@/lib/reports/metricDefinitions";
 import { scrapKgSourced } from "@/lib/buyback/scrapKgSourced";
 
 export type Compare = { now: number; prev: number | null };
@@ -79,9 +79,8 @@ export type ControlTower = {
         unlinked_revenue: number;
     };
     engine: null | {
-        /** ID 153 — leads that arrived on their own; bulk imports are in imported_bulk. */
+        /** ID 153 — every new active lead, whatever its source (bulk imports included). */
         leads_in: Compare;
-        imported_bulk: Compare;
         converted: Compare;
         first_orders: Compare;
         headline: { measure: "cohort_conversion_to_date" | "conversion_30d_rate"; label: string; value: number | null };
@@ -315,11 +314,9 @@ async function engineTile(from: string, toExcl: string, prevFrom: string | null,
     const counts = async (a: string, b: string) => {
         const [r] = await rows(sql`
             SELECT
-              -- ID 153: the one "Leads in" rule (metricDefinitions) — bulk imports apart.
-              (SELECT COUNT(*) FILTER (WHERE NOT ${bulkImportedLead(sql`dl`)})
+              -- ID 153: the one "Leads in" rule (metricDefinitions) — every new lead.
+              (SELECT COUNT(*)
                  FROM dealer_leads dl WHERE dl.is_active IS NOT FALSE AND ${inWinNaive(sql`dl.created_at`, a, b)}) AS leads_in,
-              (SELECT COUNT(*) FILTER (WHERE ${bulkImportedLead(sql`dl`)})
-                 FROM dealer_leads dl WHERE dl.is_active IS NOT FALSE AND ${inWinNaive(sql`dl.created_at`, a, b)}) AS imported_bulk,
               (SELECT COUNT(*) FROM dealer_leads dl WHERE dl.lead_status = 'Converted' AND ${inWin(sql`dl.closed_at`, a, b)}) AS converted,
               (SELECT COUNT(*) FROM (
                   SELECT r.dealer_lead_id, MIN(r.invoice_date) AS first_d
@@ -371,7 +368,6 @@ async function engineTile(from: string, toExcl: string, prevFrom: string | null,
     const a = ai[0];
     return {
         leads_in: { now: n(now.leads_in), prev: prev ? n(prev.leads_in) : null },
-        imported_bulk: { now: n(now.imported_bulk), prev: prev ? n(prev.imported_bulk) : null },
         converted: { now: n(now.converted), prev: prev ? n(prev.converted) : null },
         first_orders: { now: n(now.first_orders), prev: prev ? n(prev.first_orders) : null },
         headline,

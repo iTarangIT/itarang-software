@@ -5,7 +5,7 @@
 import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { LOST_REASON, OPEN_STATUSES } from "@/lib/lifecycle/transitions";
-import { bulkImportedLead, connectedCall } from "@/lib/reports/metricDefinitions";
+import { connectedCall } from "@/lib/reports/metricDefinitions";
 import { hasLeadScope, leadScopeSql } from "@/lib/leads/leadScopeSql";
 import { ONBOARDING_DROPOUT_REASONS, OWNER_DRILL_METRICS } from "./types";
 import { isUndefinedColumn, ownerConversionRate, roleLabel } from "./reportHelpers";
@@ -140,10 +140,10 @@ async function dailyActivity(f: DashboardFilters): Promise<ReportResult> {
 const AI_POOL_STAGE = "Not in sales lifecycle (AI pool)";
 
 async function leadFunnel(f: DashboardFilters): Promise<ReportResult> {
-    // The cohort: leads that came in on their own in the window (ID 153 — the
-    // one "Leads in" rule, metricDefinitions.ts), in the screen's place / type
-    // of business (ID 11).
-    const cohort = sql`${dateRange("dl.created_at", f, "utc")} AND NOT ${bulkImportedLead(sql`dl`)} ${leadScopeSql(f)}`;
+    // The cohort: every lead created in the window, whatever its source (ID 153
+    // — the one "Leads in" rule, metricDefinitions.ts), in the screen's place /
+    // type of business (ID 11).
+    const cohort = sql`${dateRange("dl.created_at", f, "utc")} ${leadScopeSql(f)}`;
     const rows = await db.execute<{ lead_status: string | null; c: string }>(sql`
         SELECT dl.lead_status, COUNT(*)::text AS c
         FROM dealer_leads dl
@@ -178,12 +178,6 @@ async function leadFunnel(f: DashboardFilters): Promise<ReportResult> {
         WHERE dl.is_active IS NOT FALSE AND dl.lead_status = 'New_Unassigned'
           AND dl.assigned_at IS NULL ${cohort}
     `);
-    // ID 153 — bulk imports are counted apart, never in the funnel.
-    const bulk = await db.execute<{ c: string }>(sql`
-        SELECT COUNT(*)::text AS c FROM dealer_leads dl
-        WHERE dl.is_active IS NOT FALSE AND ${bulkImportedLead(sql`dl`)}
-          ${dateRange("dl.created_at", f, "utc")} ${leadScopeSql(f)}
-    `);
     const byStatus = new Map(rows.map((r) => [r.lead_status ?? "(null)", num(r.c)]));
     const reached = new Map(reachedRows.map((r) => [r.stage, num(r.c)]));
     const total = rows.reduce((s, r) => s + num(r.c), 0);
@@ -207,8 +201,6 @@ async function leadFunnel(f: DashboardFilters): Promise<ReportResult> {
     ];
     const out: ReportRow[] = [
         { stage: "All leads created", count: total, ever_reached: total, pct_reached: pctOf(total) },
-        // ID 153 — shown, but outside the funnel and its percentages.
-        { stage: "Imported in bulk (not in the funnel)", count: num(bulk[0]?.c), ever_reached: null, pct_reached: null },
         // R-06 — never in the sales lifecycle. "Ever reached" does not apply:
         // it is the absence of a stage, not a stage.
         { stage: AI_POOL_STAGE, count: byStatus.get("(null)") ?? 0, ever_reached: null, pct_reached: null },
