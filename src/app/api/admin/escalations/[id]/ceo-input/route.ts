@@ -7,6 +7,8 @@ import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { requireRole } from "@/lib/auth-utils";
+import { notifyRoles } from "@/lib/notifications/notify";
+import { notifyLeadPerson } from "@/lib/leads/newOwnerNotice";
 import {
     errorResponse,
     successResponse,
@@ -44,8 +46,9 @@ export const POST = withErrorHandler(
         const escRows = await db.execute<{
             dealer_lead_id: string;
             status: string;
+            raised_by: string | null;
         }>(sql`
-            SELECT dealer_lead_id, status FROM lead_escalations
+            SELECT dealer_lead_id, status, raised_by FROM lead_escalations
             WHERE escalation_id = ${id} LIMIT 1
         `);
         const esc = escRows[0];
@@ -85,6 +88,29 @@ export const POST = withErrorHandler(
                 remarks: composed,
             });
         }
+
+        // 12 Oct: the CEO advises, Sales Head / Admin / Partner execute — they
+        // are told (bell opens Escalations); the raiser sees it on the lead.
+        const said = body.action === "comment" ? body.text : `${RECO_LABEL[body.recommendation]} — ${body.text}`;
+        try {
+            await notifyRoles(["admin", "sales_head", "partner"], {
+                type: "escalation.ceo_input",
+                title: body.action === "comment" ? "CEO commented on an escalation" : "CEO recommended an action on an escalation",
+                message: `${user.name ?? "The CEO"}: ${said}`,
+                leadId: esc.dealer_lead_id,
+                data: { href: "/admin/escalations", escalation_id: id },
+            });
+        } catch (err) {
+            console.error("[ceo-input] notification failed:", err);
+        }
+        await notifyLeadPerson({
+            userId: esc.raised_by,
+            actorId: user.id,
+            leadId: esc.dealer_lead_id,
+            type: "escalation.ceo_input",
+            title: "CEO responded to your escalation",
+            message: `{by} on {lead}: ${said}`,
+        });
 
         return successResponse({ ok: true, action: body.action });
     },

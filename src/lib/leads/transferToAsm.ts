@@ -7,13 +7,22 @@
 // write the touchpoint after its transaction, so a failure there left the lead
 // owned by the ASM without the Transferred_to_ASM status.)
 //
-// Ownership is the CALLER's job (assertOwner before calling).
+// Ownership is the CALLER's job: an inside-sales rep must own the lead
+// (assertOwner); a manager in TRANSFER_ANY_LEAD_ROLES may transfer any lead.
+//
+// After the commit the caller runs notifyAsmOfTransfer(): the ASM gets a bell
+// that opens the lead on their own page (/asm/lead/[id]).
 
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { leadVisits } from "@/lib/db/schema";
 import { writeTouchpoint } from "@/lib/touchpoints/write";
 import { type LeadStatus } from "@/lib/lifecycle/transitions";
+import { notifyUser } from "@/lib/notifications/notify";
+
+// Role lists live in the client-safe access.ts (the lead page's action bar
+// reads them); re-exported here for the route and the Assistant.
+export { TRANSFER_TO_ASM_ROLES, TRANSFER_ANY_LEAD_ROLES, canTransferAnyLead } from "@/lib/leads/access";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -73,8 +82,8 @@ export async function transferLeadToAsm(input: TransferToAsmInput, opts?: { tx?:
     const run = async (tx: Tx) => {
         // ID 120: lock the row so a concurrent transfer waits here, then sees
         // the committed Transferred_to_ASM and is refused below.
-        const stateRows = await tx.execute<{ lead_status: string | null }>(sql`
-            SELECT lead_status FROM dealer_leads WHERE id = ${input.leadId} FOR UPDATE
+        const stateRows = await tx.execute<{ lead_status: string | null; current_owner_id: string | null }>(sql`
+            SELECT lead_status, current_owner_id FROM dealer_leads WHERE id = ${input.leadId} FOR UPDATE
         `);
         if (stateRows.length === 0) throw new TransferLeadNotFoundError();
         if (stateRows[0]?.lead_status === "Transferred_to_ASM") throw new LeadAlreadyTransferredError();
@@ -105,8 +114,9 @@ export async function transferLeadToAsm(input: TransferToAsmInput, opts?: { tx?:
                 touchpointType: "asm_transfer",
                 performedBy: input.actorId,
                 remarks: buildTransferRemarks(input),
-                // E-295: the caller's assertOwner proved the actor held the lead.
-                fromOwnerId: input.actorId,
+                // E-295: who held the lead before — the rep, or (a manager's
+                // transfer) the lead's owner at that moment, not the manager.
+                fromOwnerId: stateRows[0]?.current_owner_id ?? input.actorId,
                 toOwnerId: input.asmId,
                 statusChange: { from: fromStatus, to: "Transferred_to_ASM", event: "transfer" },
             },
@@ -114,4 +124,43 @@ export async function transferLeadToAsm(input: TransferToAsmInput, opts?: { tx?:
         );
     };
     return opts?.tx ? run(opts.tx) : db.transaction(run);
+}
+
+/**
+ * The ASM's bell after a transfer — clicking it opens the lead on the ASM's
+ * own page. Run AFTER the transfer commits; never throws (best-effort).
+ */
+export async function notifyAsmOfTransfer(input: {
+    leadId: string;
+    asmId: string;
+    actorId: string;
+    visitType?: string | null;
+    suggestedVisitDate?: string | null;
+}): Promise<void> {
+    if (!input.asmId || input.asmId === input.actorId) return;
+    try {
+        const rows = (await db.execute<{ dealer: string | null; city: string | null; actor: string | null; actor_role: string | null }>(sql`
+            SELECT COALESCE(dl.shop_name, dl.dealer_name) AS dealer, dl.city,
+                   (SELECT COALESCE(u.name, u.email) FROM users u WHERE u.id::text = ${input.actorId}) AS actor,
+                   (SELECT u.role FROM users u WHERE u.id::text = ${input.actorId}) AS actor_role
+              FROM dealer_leads dl WHERE dl.id = ${input.leadId}
+        `)) as unknown as Array<{ dealer: string | null; city: string | null; actor: string | null; actor_role: string | null }>;
+        const r = rows[0];
+        const dealer = r?.dealer ?? "a dealer";
+        const visit = input.visitType ? input.visitType.replace(/_/g, " ").toLowerCase() : "visit";
+        const when = input.suggestedVisitDate ? ` on ${input.suggestedVisitDate}` : "";
+        await notifyUser(input.asmId, {
+            type: "lead.transferred_to_asm",
+            title: "New lead transferred to you",
+            message: `${r?.actor ?? "Someone"} transferred ${dealer}${r?.city ? ` (${r.city})` : ""} to you for a ${visit}${when}. Tap to open the lead.`,
+            leadId: input.leadId,
+            data: {
+                href: `/asm/lead/${input.leadId}`,
+                transferred_by: input.actorId,
+                transferred_by_role: r?.actor_role ?? null,
+            },
+        });
+    } catch (err) {
+        console.error("[transfer-asm] ASM notification failed:", err);
+    }
 }
