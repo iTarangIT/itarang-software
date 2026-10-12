@@ -205,7 +205,14 @@ export function planTouchpoint(
         remarks: body.remarks ?? null,
         attachments: body.attachments ?? null,
         nextAction: body.next_action ?? null,
-        nextActionAt: body.next_action_at ? new Date(body.next_action_at) : null,
+        // A follow-up set on the form rides on the touchpoint too (as the
+        // Assistant's tools already do): it records WHO set the lead's
+        // next_follow_up_at, which the ID 121 hand-back rule reads.
+        nextActionAt: body.next_action_at
+            ? new Date(body.next_action_at)
+            : body.follow_up_at
+              ? new Date(body.follow_up_at)
+              : null,
         outcome,
         // Absent stays absent (derive); null and a level pass through.
         ...(body.interest_level !== undefined

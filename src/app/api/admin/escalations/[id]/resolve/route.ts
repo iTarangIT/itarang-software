@@ -3,6 +3,10 @@
 // Direct Mark-Lost is deliberately NOT available here (BRD §0.6) — to close a
 // lead the admin reassigns first, then the new owner marks it Lost.
 // CEO advises (comment/recommend) but never executes — admin only.
+// Reassign applies the hand-back rule (tracker ID 121) through
+// reassignFromEscalation: a lead Awaiting field visit given to an ISR / partner
+// is refused (409) while the ASM has a visit or follow-up booked. The whole
+// resolution is one transaction, so a refusal leaves the escalation pending.
 
 import { sql } from "drizzle-orm";
 import { z } from "zod";
@@ -14,7 +18,7 @@ import {
     withErrorHandler,
 } from "@/lib/api-utils";
 import { writeTouchpoint } from "@/lib/touchpoints/write";
-import { markSalesReady } from "@/lib/leads/salesReady";
+import { reassignFromEscalation } from "@/lib/leads/escalationReassign";
 import type { TouchpointType } from "@/lib/lifecycle/touchpointTypes";
 
 const MUTATE_ROLES = ["admin", "sales_head", "partner"];
@@ -59,84 +63,69 @@ export const POST = withErrorHandler(
             return errorResponse("This escalation is already resolved.", 409);
         }
 
-        // E-295: the hop this resolution records, for Lead Tracking. Stays
-        // null on the non-reassign actions (no ownership change).
-        let ownership: { fromOwnerId: string | null; toOwnerId: string | null } | null =
-            null;
-
-        // Reassign — validate the target, then flip ownership (BRD §0.3 Path D).
-        if (body.action === "reassign") {
-            const targets = await db.execute<{
-                id: string;
-                is_active: boolean | null;
-            }>(sql`
-                SELECT id::text AS id, is_active FROM users
-                WHERE id::text = ${body.target_user_id} LIMIT 1
+        await db.transaction(async (tx) => {
+            // Re-check under a lock: two admins resolving the same escalation
+            // at once must not both reassign.
+            const locked = await tx.execute<{ status: string }>(sql`
+                SELECT status FROM lead_escalations
+                WHERE escalation_id = ${id} FOR UPDATE
             `);
-            const target = targets[0];
-            if (!target) return errorResponse("Target user not found.", 404);
-            if (target.is_active === false) {
-                return errorResponse("Target user is inactive.", 400);
+            if (locked[0]?.status !== "pending_review") {
+                throw Object.assign(new Error("This escalation is already resolved."), { status: 409 });
             }
-            // Lock + swap + return the previous owner in one statement, so the
-            // touchpoint below records the hop that actually happened.
-            const swapped = await db.execute<{ from_owner_id: string | null }>(sql`
-                WITH prev AS (
-                    SELECT id, current_owner_id FROM dealer_leads
-                     WHERE id = ${esc.dealer_lead_id} FOR UPDATE
-                )
-                UPDATE dealer_leads dl
-                   SET current_owner_id = ${body.target_user_id},
-                       assigned_at = NOW(),
-                       updated_at = NOW()
-                  FROM prev
-                 WHERE dl.id = prev.id
-                RETURNING prev.current_owner_id AS from_owner_id
+
+            // Reassign — validate the target, then flip ownership (BRD §0.3
+            // Path D). Writes its own escalation_resolved_reassign touchpoint.
+            if (body.action === "reassign") {
+                await reassignFromEscalation(tx, {
+                    leadId: esc.dealer_lead_id,
+                    actorId: user.id,
+                    targetUserId: body.target_user_id!,
+                    notes: body.resolution_notes,
+                });
+            }
+
+            // Mark the escalation resolved.
+            await tx.execute(sql`
+                UPDATE lead_escalations SET
+                    status = 'resolved',
+                    resolved_by = ${user.id},
+                    resolved_at = NOW(),
+                    resolution_action = ${body.action},
+                    resolution_notes = ${body.resolution_notes},
+                    updated_at = NOW()
+                WHERE escalation_id = ${id}
             `);
-            ownership = {
-                fromOwnerId: swapped[0]?.from_owner_id ?? null,
-                toOwnerId: body.target_user_id ?? null,
-            };
-            // ID 82: an owner given by an admin is a Sales-ready event (a no-op
-            // when the lead already has one — the first event wins).
-            await markSalesReady(db, { leadId: esc.dealer_lead_id, reason: "admin_assigned", actorId: user.id });
-        }
 
-        // Mark the escalation resolved.
-        await db.execute(sql`
-            UPDATE lead_escalations SET
-                status = 'resolved',
-                resolved_by = ${user.id},
-                resolved_at = NOW(),
-                resolution_action = ${body.action},
-                resolution_notes = ${body.resolution_notes},
-                updated_at = NOW()
-            WHERE escalation_id = ${id}
-        `);
+            // Clear the lead's escalation flag — unless another pending escalation
+            // still exists for the same lead.
+            await tx.execute(sql`
+                UPDATE dealer_leads SET
+                    escalation_status = CASE
+                        WHEN EXISTS (
+                            SELECT 1 FROM lead_escalations
+                            WHERE dealer_lead_id = ${esc.dealer_lead_id}
+                              AND status = 'pending_review'
+                        ) THEN 'pending_review'
+                        ELSE 'resolved'
+                    END,
+                    updated_at = NOW()
+                WHERE id = ${esc.dealer_lead_id}
+            `);
 
-        // Clear the lead's escalation flag — unless another pending escalation
-        // still exists for the same lead.
-        await db.execute(sql`
-            UPDATE dealer_leads SET
-                escalation_status = CASE
-                    WHEN EXISTS (
-                        SELECT 1 FROM lead_escalations
-                        WHERE dealer_lead_id = ${esc.dealer_lead_id}
-                          AND status = 'pending_review'
-                    ) THEN 'pending_review'
-                    ELSE 'resolved'
-                END,
-                updated_at = NOW()
-            WHERE id = ${esc.dealer_lead_id}
-        `);
-
-        // Audit touchpoint — keeps the unified history complete.
-        await writeTouchpoint({
-            dealerLeadId: esc.dealer_lead_id,
-            touchpointType: TOUCHPOINT[body.action],
-            performedBy: user.id,
-            remarks: body.resolution_notes,
-            ...(ownership ?? {}),
+            // Audit touchpoint for the non-reassign actions (no ownership
+            // change) — keeps the unified history complete.
+            if (body.action !== "reassign") {
+                await writeTouchpoint(
+                    {
+                        dealerLeadId: esc.dealer_lead_id,
+                        touchpointType: TOUCHPOINT[body.action],
+                        performedBy: user.id,
+                        remarks: body.resolution_notes,
+                    },
+                    { tx },
+                );
+            }
         });
 
         return successResponse({ ok: true, action: body.action });

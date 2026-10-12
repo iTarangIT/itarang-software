@@ -30,6 +30,25 @@ describe("handBackBlockReason", () => {
     });
 });
 
+describe("handBackBlockReason — ASM follow-up (ID 121)", () => {
+    it("refuses on a follow-up the ASM set and says how to lift it", () => {
+        expect(handBackBlockReason(null, { followUpDate: "2026-10-14", asmName: "Suresh" })).toBe(
+            'Suresh has a follow-up set for 14 Oct. Ask them to clear the follow-up (log a note with "Clear the follow-up") first, then hand the lead back.',
+        );
+    });
+    it("names the booked visit first when there are both", () => {
+        expect(
+            handBackBlockReason(
+                { scheduledDate: "2026-10-13", asmName: "Suresh" },
+                { followUpDate: "2026-10-14", asmName: "Suresh" },
+            ),
+        ).toMatch(/^Suresh has a visit booked for 13 Oct\./);
+    });
+    it("falls back to 'The ASM' with no name", () => {
+        expect(handBackBlockReason(null, { followUpDate: "2026-10-14", asmName: null })).toMatch(/^The ASM has a follow-up set for 14 Oct\./);
+    });
+});
+
 describe("releaseNote", () => {
     it("counts the closed visits", () => {
         expect(releaseNote(0)).toBe("ASM unlinked.");
