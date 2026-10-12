@@ -7,6 +7,7 @@ import {
     BUSINESS_TYPES,
     BUSINESS_TYPE_LABELS,
     BusinessTypeSchema,
+    businessTypeFilterParam,
     businessTypeLabel,
     isBusinessType,
     isBusinessTypeFilter,
@@ -76,5 +77,23 @@ describe("filter + label helpers", () => {
         expect(businessTypeLabel(null)).toBe("Not set");
         expect(businessTypeLabel("garbage")).toBe("Not set");
         expect(businessTypeLabel("buyback")).toBe("Buyback");
+    });
+});
+
+describe("businessTypeFilterParam (ID 11)", () => {
+    it("reads an old link's finance as Battery Sale", () => {
+        expect(businessTypeFilterParam("finance")).toBe("battery_sale");
+        expect(businessTypeFilterParam("Finance")).toBe("battery_sale");
+    });
+
+    it("keeps today's types and the unset sentinel", () => {
+        expect(businessTypeFilterParam("buyback")).toBe("buyback");
+        expect(businessTypeFilterParam("unset")).toBe("unset");
+    });
+
+    it("is no filter for blank or junk", () => {
+        expect(businessTypeFilterParam(null)).toBeNull();
+        expect(businessTypeFilterParam("")).toBeNull();
+        expect(businessTypeFilterParam("garbage")).toBeNull();
     });
 });

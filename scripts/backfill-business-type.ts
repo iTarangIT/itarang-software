@@ -17,7 +17,7 @@
  *      R-11 rule, GSTIN_KEY), else on the account's contact phone (last ten
  *      digits);
  *   3. a finance application from this dealer → battery_sale ("finance" was
- *      retired as a business type in E-327 — a financed sale is a battery sale).
+ *      retired as a business type in E-331 — a financed sale is a battery sale).
  * Never overwrites a value a person set. Re-run = no-op.
  *
  * AUDIT. The E-304 trigger logs every business_type change to
