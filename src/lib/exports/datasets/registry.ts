@@ -26,6 +26,7 @@ import { listTargets } from "@/lib/targets/service";
 
 import { DOWNLOAD_ROW_CAP, initialsOf, TEAM_ROLES, type DatasetInfo, type DatasetSheet } from "./types";
 import { onboardingClockSql } from "@/lib/onboarding/clock";
+import { dealCardActualsSql } from "@/lib/leads/dealCardActuals";
 import { BUSINESS_TYPE_OPTIONS, BUSINESS_TYPE_UNSET, BUSINESS_TYPE_UNSET_LABEL } from "@/lib/leads/businessType";
 
 // ID 122: the one onboarding clock (src/lib/onboarding/clock.ts).
@@ -405,6 +406,17 @@ const ONBOARDING_DATES: Record<string, SQL> = {
     approved: sql`app.approved_at`,
 };
 
+/**
+ * ID 159 (10 Oct): the closer of the lead an onboarding came from — the
+ * person credited with the dealer (dealer_leads.closing_owner_id). The form's
+ * originating lead first, else a lead linked to the form.
+ */
+const ONBOARDING_CLOSER = sql`(SELECT cdl.closing_owner_id FROM dealer_leads cdl
+     WHERE cdl.id = app.originating_dealer_lead_id
+        OR cdl.dealer_onboarding_application_id::text = app.id::text
+     ORDER BY (cdl.id = app.originating_dealer_lead_id) DESC NULLS LAST
+     LIMIT 1)`;
+
 function onboardingWhere(ctx: RunContext): SQL {
     // These three columns are naive UTC timestamps on this table.
     const expr = ONBOARDING_DATES[ctx.params.get("date_field") ?? "started"] ?? ONBOARDING_DATES.started;
@@ -413,7 +425,9 @@ function onboardingWhere(ctx: RunContext): SQL {
     if (status) conds.push(sql`app.onboarding_status = ${status}`);
     const salesperson = ctx.params.get("salesperson");
     if (salesperson) conds.push(sql`app.salesperson_user_id::text = ${salesperson}`);
-    conds.push(...commonConds(ctx, { person: sql`app.salesperson_user_id` }));
+    // ID 159: the Person / Team filters pick the lead's closer — the credit —
+    // and fall back to the form's salesperson when there is no lead.
+    conds.push(...commonConds(ctx, { person: sql`COALESCE(${ONBOARDING_CLOSER}, app.salesperson_user_id::text)` }));
     return sql.join(conds, sql` AND `);
 }
 
@@ -434,7 +448,8 @@ const dealerOnboarding: Dataset = {
             key: "status",
             label: "Status",
             type: "select",
-            options: ["draft", "submitted", "approved", "rejected"].map((s) => ({ value: s, label: s[0].toUpperCase() + s.slice(1) })),
+            // ID 169: "withdrawn" — a form closed by Undo Mark Won.
+            options: ["draft", "submitted", "approved", "rejected", "withdrawn"].map((s) => ({ value: s, label: s[0].toUpperCase() + s.slice(1) })),
         },
     ],
     sheets: [
@@ -448,9 +463,11 @@ const dealerOnboarding: Dataset = {
                 { key: "dealer_type", header: "Dealer type", meaning: "New battery, scrap, or both." },
                 { key: "started_on", header: "Started on", meaning: "When the onboarding was first saved.", kind: "datetime" },
                 { key: "started_through", header: "Started through", meaning: "Web wizard, WhatsApp, or from a won lead." },
-                { key: "salesperson", header: "Salesperson", meaning: "The ISR, ASM or Sales Head picked on the onboarding. Blank on older onboardings — approval is blocked until it is set.", width: 22 },
+                { key: "salesperson", header: "Salesperson (on the form)", meaning: "The ISR, ASM or Sales Head picked on the onboarding — information, not credit. Blank on older onboardings — approval is blocked until it is set.", width: 22 },
+                { key: "lead_closed_by", header: "Lead closed by (credit)", meaning: "Who closed the linked lead — the person credited with this dealer. The Person and Team filters use this; blank for a direct onboarding.", width: 22 },
                 { key: "lead_id", header: "Linked lead ID", meaning: "The dealer lead this onboarding came from; blank for a direct onboarding.", width: 24 },
-                { key: "onboarding_status", header: "Status", meaning: "Draft, submitted, approved or rejected." },
+                { key: "onboarding_status", header: "Status", meaning: "Draft, submitted, approved, rejected or withdrawn (closed by Undo Mark Won)." },
+                { key: "withdrawn_reason", header: "Why withdrawn", meaning: "Why a withdrawn onboarding was closed, e.g. 'Marked Won by mistake'.", width: 28 },
                 { key: "submitted_at", header: "Documents submitted on", meaning: "When the dealer submitted the application.", kind: "datetime" },
                 { key: "finance_enabled", header: "Customer finance", meaning: "Whether the dealer asked for customer finance." },
                 { key: "agreement_status", header: "Agreement status", meaning: "Where the dealer agreement stands; 'completed' means signed by every party. 'N/A' when finance is off." },
@@ -477,6 +494,8 @@ const dealerOnboarding: Dataset = {
                    COALESCE(to_jsonb(app) ->> 'onboarding_channel', to_jsonb(app) ->> 'source',
                             CASE WHEN app.originating_dealer_lead_id IS NOT NULL THEN 'lead' ELSE 'web' END) AS started_through,
                    sp.name AS salesperson,
+                   (SELECT COALESCE(cu.name, cu.email) FROM users cu WHERE cu.id::text = ${ONBOARDING_CLOSER}) AS lead_closed_by,
+                   to_jsonb(app) ->> 'withdrawn_reason' AS withdrawn_reason,
                    COALESCE(app.originating_dealer_lead_id,
                             (SELECT dl.id FROM dealer_leads dl
                               WHERE dl.dealer_onboarding_application_id::text = app.id::text LIMIT 1)) AS lead_id,
@@ -684,7 +703,7 @@ const dealerAccounts: Dataset = {
                 { key: "agreement_status", header: "Agreement", meaning: "Status of the dealer agreement." },
                 { key: "came_through", header: "Came through", meaning: "'lead' = won from a dealer lead; 'direct' = onboarded with no lead." },
                 { key: "lead_id", header: "Lead ID", meaning: "The lead it came through, when it did.", width: 24 },
-                { key: "onboarded_by_name", header: "Onboarded by", meaning: "The salesperson who brought the dealer in. Fixed; never changes.", width: 22 },
+                { key: "onboarded_by_name", header: "Onboarded by", meaning: "The salesperson named on the onboarding form — information, not credit (credit goes to the lead's closer). Fixed; never changes.", width: 22 },
                 { key: "owner_name", header: "Account owner", meaning: "Who looks after the account now. Blank = no owner yet.", width: 22 },
                 { key: "owner_since", header: "Owner since", meaning: "The effective date of the current owner.", kind: "date" },
                 { key: "activated_on", header: "Activated on", meaning: "When the dealer went live (admin approval).", kind: "date" },
@@ -1078,6 +1097,12 @@ const quotes: Dataset = {
                 { key: "list_total", header: "List price total (₹)", meaning: "Quantity × list price over the lines, at the list prices frozen on the quote. Blank on quotes raised before list prices existed.", kind: "money" },
                 { key: "discount", header: "Discount on list (₹)", meaning: "List price total minus the quoted total, over the lines that carry a list price.", kind: "money" },
                 { key: "lowest_vs_oem", header: "Lowest line vs OEM price (₹)", meaning: "The smallest gap between a line's quoted unit price and its OEM price; negative = quoted below OEM price.", kind: "money" },
+                { key: "onboarding_fee", header: "Onboarding fee (₹)", meaning: "Deal card (ID 172): the onboarding fee agreed on this quote; 0 = waived. Prints on the dealer's quotation.", kind: "money" },
+                { key: "fee_waived_reason", header: "Why waived", meaning: "Deal card: why the onboarding fee is 0.", width: 28 },
+                { key: "expected_batteries_per_month", header: "Expected batteries per month", meaning: "Deal card: batteries the dealer said they will buy from us a month after the first order. Internal.", kind: "number" },
+                { key: "expected_finance_files_per_month", header: "Expected finance files per month", meaning: "Deal card: of the dealer's monthly customers, how many buy on a loan. Internal; replaced Customer finance Yes / No.", kind: "number" },
+                { key: "fee_invoiced", header: "Fee invoiced (₹)", meaning: "Onboarding fee actually invoiced to this dealer (before GST): invoice lines mapped 'Onboarding fee' in Invoice Ledger › Item mapping. Same for every version of the lead.", kind: "money" },
+                { key: "batteries_60d_after_won", header: "Batteries ordered in the 60 days after Won", meaning: "Battery units invoiced to this dealer in the 60 days from the day the lead was marked Won (invoice lines, HSN 8507). Blank when the lead was never Won.", kind: "number" },
                 { key: "credit_terms", header: "Credit terms", meaning: "Credit terms written on the quote.", width: 24 },
                 { key: "payment_method", header: "Payment method", meaning: "Payment method on the quote." },
                 { key: "approval_status", header: "Approval", meaning: "iTarang's own approval: pending, approved or rejected." },
@@ -1115,6 +1140,12 @@ const quotes: Dataset = {
         return Number(r?.n ?? 0);
     },
     async build(ctx) {
+        // ID 172: deal card (E-336 via to_jsonb) + what was invoiced against it.
+        const actuals = await dealCardActualsSql();
+        const actualsJoin = actuals ? sql`LEFT JOIN (${actuals}) da ON da.lead_id = c.dealer_lead_id` : sql``;
+        const actualCols = actuals
+            ? sql`da.fee_invoiced, CASE WHEN (to_jsonb(dl) ->> 'won_at') IS NOT NULL THEN COALESCE(da.batteries_60d, 0) END AS batteries_60d_after_won`
+            : sql`NULL::float8 AS fee_invoiced, NULL::float8 AS batteries_60d_after_won`;
         const [quoteRows, lineRows] = await Promise.all([
             rows(sql`
                 SELECT c.quote_number, c.version_no, c.is_current, c.dealer_lead_id AS lead_id,
@@ -1132,8 +1163,14 @@ const quotes: Dataset = {
                        ROUND((EXTRACT(EPOCH FROM (c.approved_at - c.created_at)) / 3600)::numeric, 1) AS approval_wait_hours,
                        c.rejection_reason, qd.delivered_at, qd.channels,
                        c.dealer_decision, c.dealer_decision_at, c.dealer_decision_via, c.withdrawn_at,
-                       to_jsonb(c) ->> 'withdraw_reason' AS withdraw_reason
+                       to_jsonb(c) ->> 'withdraw_reason' AS withdraw_reason,
+                       (to_jsonb(c) ->> 'onboarding_fee')::numeric AS onboarding_fee,
+                       to_jsonb(c) ->> 'fee_waived_reason' AS fee_waived_reason,
+                       (to_jsonb(c) ->> 'expected_batteries_per_month')::int AS expected_batteries_per_month,
+                       (to_jsonb(c) ->> 'expected_finance_files_per_month')::int AS expected_finance_files_per_month,
+                       ${actualCols}
                   ${quoteFrom}
+                  ${actualsJoin}
                  WHERE ${quotesWhere(ctx)}
                  ORDER BY c.created_at DESC
                  LIMIT ${rowLimit(ctx)}

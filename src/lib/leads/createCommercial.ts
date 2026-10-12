@@ -39,6 +39,13 @@ import {
     type ResolvedQuoteTerms,
     type TermsHold,
 } from "@/lib/leads/quoteTerms";
+import {
+    hasDealCardColumns,
+    readLatestDealCard,
+    readLockedDealCard,
+    writeDealCard,
+} from "@/lib/leads/dealCard";
+import { DEAL_CARD_EDIT_ROLES, sameDealCard, type DealCard } from "@/lib/leads/dealCardRules";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -85,12 +92,21 @@ export type CommercialInput = {
     deal_notes?: string | null;
     product_lines?: CommercialsProductLine[];
     notes?: string | null;
+    /**
+     * ID 172 (E-336): onboarding fee, expected batteries and finance files per
+     * month. Required on a quote issue / revision when the caller sets
+     * `requireDealCard` (Update commercials). Terms events carry the quote's.
+     * When present, customer_finance is written as finance files > 0.
+     */
+    deal_card?: DealCard | null;
 };
 
 export type CreateCommercialArgs = {
     leadId: string;
-    actor: { id: string; name: string | null };
+    actor: { id: string; name: string | null; role?: string | null };
     body: CommercialInput;
+    /** ID 172: refuse a quote issue / revision without a deal card (the web form). */
+    requireDealCard?: boolean;
     /** Defaults to now — the instant the quote is stamped and judged. */
     performedAt?: Date;
 };
@@ -140,6 +156,39 @@ export async function createLeadCommercial(
         // event — and can never slip past approval as a "terms update".
         const standard =
             body.event_type === "brochure_share" ? null : await getStandardQuoteTerms(tx);
+
+        // ── ID 172 deal card ──
+        // A quote carries the rep's card unless the lead's card is LOCKED (the
+        // CEO approved a quote, or the dealer said yes): then it carries the
+        // locked one, and a different card is refused — only the Sales Head
+        // changes it (POST …/deal-card). Terms events copy the quote's card.
+        const cardColumns =
+            body.event_type === "brochure_share" ? false : await hasDealCardColumns(tx);
+        let dealCard: DealCard | null = null;
+        if (isGatedQuoteEvent(body.event_type)) {
+            if (args.requireDealCard && !body.deal_card) {
+                throw new CommercialInputError(
+                    "Fill the deal card: onboarding fee, batteries per month and finance files per month.",
+                    400,
+                );
+            }
+            const locked = cardColumns ? await readLockedDealCard(tx, id) : null;
+            const canEdit = (DEAL_CARD_EDIT_ROLES as readonly string[]).includes(actor.role ?? "");
+            if (locked && body.deal_card && !canEdit && !sameDealCard(locked.card, body.deal_card)) {
+                throw new CommercialInputError(
+                    `The deal card is locked: ${
+                        locked.by === "ceo" ? "the CEO approved" : "the dealer said yes to"
+                    } v${locked.versionNo}. Only the Sales Head can change the onboarding fee or the monthly estimates.`,
+                );
+            }
+            dealCard = locked && !canEdit ? locked.card : (body.deal_card ?? locked?.card ?? null);
+        } else if (body.event_type === "terms_update" || body.event_type === "final_terms") {
+            dealCard = cardColumns ? await readLatestDealCard(tx, id) : null;
+        }
+        // Finance files per month replace the Customer finance Yes / No.
+        const cardFinance = dealCard ? dealCard.finance_files_per_month > 0 : null;
+        // ── end ID 172 ──
+
         let terms: ResolvedQuoteTerms | null = null;
         if (isGatedQuoteEvent(body.event_type)) {
             if (!body.terms) {
@@ -148,7 +197,10 @@ export async function createLeadCommercial(
                     400,
                 );
             }
-            terms = resolveQuoteTerms(body.terms, standard!);
+            terms = resolveQuoteTerms(
+                cardFinance == null ? body.terms : { ...body.terms, customer_finance: cardFinance },
+                standard!,
+            );
             hold = termsHold(terms);
         }
         // ── end E-322 ──
@@ -238,7 +290,7 @@ export async function createLeadCommercial(
                     dealer_payment_terms: quoteTerms,
                     credit_days: quoteTerms === "credit" ? (q?.credit_days ?? null) : null,
                     customer_finance:
-                        body.terms?.customer_finance ?? q?.customer_finance ?? null,
+                        cardFinance ?? body.terms?.customer_finance ?? q?.customer_finance ?? null,
                 },
                 standard!,
             );
@@ -291,6 +343,11 @@ export async function createLeadCommercial(
                 approved_at: approvalMode === "auto" ? performedAt : null,
             })
             .returning({ commercial_id: dealerLeadCommercials.commercial_id });
+
+        // ID 172: the deal card rides on the same row (E-336, raw columns).
+        if (dealCard && cardColumns && inserted[0]?.commercial_id) {
+            await writeDealCard(tx, inserted[0].commercial_id, dealCard);
+        }
 
         // BRD §0.10: dealer_leads.brochure_sent_at = first brochure_share ever; never overwritten.
         if (body.event_type === "brochure_share") {

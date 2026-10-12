@@ -46,6 +46,7 @@ import { renderProformaHtml } from "./quote-pdf/proforma-template";
 import { buildQuotationView, composeBillToAddress } from "./quote-pdf/view";
 import { resolvePlaceOfSupply } from "./quote-pdf/gst-states";
 import { loadLineTaxRefs } from "./quote-pdf/view-store";
+import { formatCreditTerms } from "./quoteTermsRules";
 
 export interface QuotationDraft {
   commercial_id: string;
@@ -125,6 +126,11 @@ type CommercialRow = {
   quote_number: string | null;
   quote_pdf_url: string | null;
   payment_method: string | null;
+  /** E-322: 'cash' | 'credit'; NULL on older quotes. */
+  dealer_payment_terms: string | null;
+  credit_days: number | null;
+  /** ID 172 (E-336 via to_jsonb): numeric as text, NULL when unset. */
+  onboarding_fee: string | null;
   credit_terms: string | null;
   delivery_terms: string | null;
   warranty_terms: string | null;
@@ -171,6 +177,9 @@ export async function generateQuotationDraft(
            -- quote_snapshot with it, so a quote re-opened after the row changes
            -- still shows the terms it was sent with.
            c.payment_method,
+           c.dealer_payment_terms,
+           c.credit_days,
+           to_jsonb(c) ->> 'onboarding_fee' AS onboarding_fee,
            c.credit_terms,
            c.delivery_terms,
            c.warranty_terms,
@@ -257,8 +266,20 @@ export async function generateQuotationDraft(
       phone: row.dealer_phone,
     },
     commercialTerms: {
-      paymentMethod: row.payment_method,
-      creditTerms: row.credit_terms,
+      // ID 172 (Kartik, 10 Oct): "Payment" is the dealer's payment terms, not
+      // the customer-finance pick it used to print. With them on record the
+      // separate "Credit period" row would repeat the same words, so it is
+      // left for older quotes only.
+      paymentMethod: row.dealer_payment_terms
+        ? formatCreditTerms(row.dealer_payment_terms === "credit" ? "credit" : "cash", row.credit_days)
+        : row.payment_method,
+      onboardingFee:
+        row.onboarding_fee == null
+          ? null
+          : Number(row.onboarding_fee) > 0
+            ? `₹${Number(row.onboarding_fee).toLocaleString("en-IN")}`
+            : "Waived",
+      creditTerms: row.dealer_payment_terms ? null : row.credit_terms,
       deliveryTerms: row.delivery_terms,
       warranty: row.warranty_terms,
       dealNotes: row.deal_notes,

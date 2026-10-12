@@ -10,10 +10,12 @@ let row: Record<string, unknown> = {};
 // ID 121: the booked-visit lookup and the visit close answer by query text.
 let bookedVisits: Record<string, unknown>[] = [];
 let openVisits: Record<string, unknown>[] = [];
+let asmFollowUps: Record<string, unknown>[] = [];
 const execute = vi.fn(async (q: SQL) => {
     const text = dialect.sqlToQuery(q).sql;
     statements.push(text);
     if (/^\s*SELECT[\s\S]*FROM lead_visits/.test(text)) return bookedVisits;
+    if (/^\s*SELECT[\s\S]*FROM lead_touchpoints/.test(text)) return asmFollowUps;
     if (/UPDATE lead_visits/.test(text)) return openVisits;
     return [row];
 });
@@ -45,6 +47,7 @@ beforeEach(() => {
     statements.length = 0;
     bookedVisits = [];
     openVisits = [];
+    asmFollowUps = [];
     execute.mockClear();
     transaction.mockClear();
     writeTouchpoint.mockClear();
@@ -68,12 +71,14 @@ describe("assignLeadOwner → ISR on a Transferred_to_ASM lead", () => {
         const out = await assign();
         expect(out).toEqual({ assigned: true, path: "transfer_undo", statusLiftedTo: "Commercials_Explained" });
         expect(transaction).toHaveBeenCalledTimes(1);
-        // lock, booked-visit check, owner swap, unlink ASM, close visits — one tx.
-        expect(statements).toHaveLength(5);
+        // lock, booked-visit check, ASM follow-up check, owner swap, unlink
+        // ASM, close visits — one tx.
+        expect(statements).toHaveLength(6);
         expect(statements[0]).toMatch(/FOR UPDATE/);
-        expect(statements[2]).toMatch(/pre_transfer_status = CASE/);
-        expect(statements[3]).toMatch(/asm_id = NULL/);
-        expect(statements[4]).toMatch(/UPDATE lead_visits[\s\S]*'cancelled'/);
+        expect(statements[2]).toMatch(/FROM lead_touchpoints/);
+        expect(statements[3]).toMatch(/pre_transfer_status = CASE/);
+        expect(statements[4]).toMatch(/asm_id = NULL/);
+        expect(statements[5]).toMatch(/UPDATE lead_visits[\s\S]*'cancelled'/);
         const [input, opts] = call();
         expect(opts).toEqual({ tx });
         expect(input).toMatchObject({
@@ -104,6 +109,16 @@ describe("assignLeadOwner → ISR on a Transferred_to_ASM lead", () => {
         const out = await assign();
         expect(out).toMatchObject({ assigned: false, path: "handback_blocked", statusLiftedTo: null });
         expect(out.blockedReason).toMatch(/Suresh has a visit booked for 12 Oct/);
+        expect(statements.some((q) => /^\s*UPDATE/.test(q))).toBe(false);
+        expect(writeTouchpoint).not.toHaveBeenCalled();
+    });
+
+    it("ID 121: refused while the ASM has a follow-up set — nothing written", async () => {
+        row = { from_owner_id: "asm-1", pre_transfer_status: "Under_Discussion", lead_status: "Transferred_to_ASM" };
+        asmFollowUps = [{ follow_up_date: "2026-10-14", asm_name: "Suresh" }];
+        const out = await assign();
+        expect(out).toMatchObject({ assigned: false, path: "handback_blocked", statusLiftedTo: null });
+        expect(out.blockedReason).toMatch(/Suresh has a follow-up set for 14 Oct/);
         expect(statements.some((q) => /^\s*UPDATE/.test(q))).toBe(false);
         expect(writeTouchpoint).not.toHaveBeenCalled();
     });

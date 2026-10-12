@@ -260,7 +260,9 @@ export async function mapVyaparItem(input: {
         const res = rowsOf<{ n: number }>(
             await tx.execute(sql`
                 WITH u AS (
-                    UPDATE invoice_line_items SET asset_type = ${input.assetType}, product_id = ${input.productId}
+                    UPDATE invoice_line_items SET asset_type = ${input.assetType}, product_id = ${input.productId},
+                           -- ID 172: an onboarding-fee line is revenue, never a battery.
+                           product_class = CASE WHEN ${input.assetType} = 'onboarding_fee' THEN 'other' ELSE product_class END
                      WHERE ${itemKeySql(sql`item_name`)} = ${key}
                     RETURNING 1)
                 SELECT count(*)::int AS n FROM u`),

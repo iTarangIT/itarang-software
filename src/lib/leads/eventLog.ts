@@ -206,8 +206,13 @@ function eventsUnion(f: EventLogFilters, s: Sources): SQL {
             types: ["status_change"],
             sql: sql`
         SELECT h.changed_at, h.dealer_lead_id, 'Status change',
-               h.from_status,
-               h.to_status || COALESCE(' (' || h.to_lost_reason || ')', ''),
+               -- ID 170: a Lost-reason change (Lost → Lost) shows the OLD
+               -- reason too, and an undone Mark Won is marked "(undone)" so
+               -- nobody counts it as a Won. to_jsonb: E-333 columns may be
+               -- missing on an environment that has not applied it.
+               h.from_status || COALESCE(' (' || (to_jsonb(h) ->> 'from_lost_reason') || ')', ''),
+               h.to_status || COALESCE(' (' || h.to_lost_reason || ')', '')
+                 || CASE WHEN to_jsonb(h) ->> 'won_undone_at' IS NOT NULL THEN ' (undone)' ELSE '' END,
                h.changed_by, NULL, NULL, NULL, h.reason_notes
           FROM dealer_lead_status_history h
          WHERE ${inRange(sql`h.changed_at`, f)}`,

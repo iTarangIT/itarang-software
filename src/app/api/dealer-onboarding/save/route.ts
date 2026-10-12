@@ -296,6 +296,21 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // ID 169: a form withdrawn by Undo Mark Won is closed. Saving it from an
+    // invite link sent before the undo would bring it back as a live
+    // onboarding for a lead that is no longer Won. (Submit refuses it too.)
+    if (application && application.onboarding_status === "withdrawn") {
+      const res = NextResponse.json(
+        {
+          success: false,
+          message: "This onboarding was withdrawn by iTarang. Please contact your iTarang sales contact for a new link.",
+        },
+        { status: 409 },
+      );
+      mergeCookies(cookieCollector, res);
+      return res;
+    }
+
     if (application && application.onboarding_status === "approved") {
       // Don't modify approved applications via auto-save.
       // Return success silently so the frontend doesn't show an error.

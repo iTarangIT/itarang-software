@@ -50,6 +50,9 @@ export const inr = (n: number) =>
           : `₹${Math.round(n).toLocaleString("en-IN")}`;
 export const num = (n: number) => n.toLocaleString("en-IN", { maximumFractionDigits: 1 });
 
+/** How far (px) a pinned header must fall below its line before it expands again. */
+const UNSTICK_GAP = 24;
+
 export function DashPageHeader({
     eyebrow,
     title,
@@ -79,12 +82,25 @@ export function DashPageHeader({
             const el = ref.current;
             if (!el) return;
             const top = parseFloat(getComputedStyle(el).top) || 0;
-            setStuck(window.scrollY > 0 && el.getBoundingClientRect().top <= top + 0.5);
+            const rectTop = el.getBoundingClientRect().top;
+            // Dead zone: pin on reaching the line, but only un-pin once the header
+            // has dropped clearly below it (or the page is back at the top). A
+            // small scroll correction around the line can then never flip it back.
+            setStuck((prev) =>
+                prev ? !(window.scrollY <= 0 || rectTop > top + UNSTICK_GAP) : window.scrollY > 0 && rectTop <= top + 0.5,
+            );
         };
+        // Scroll anchoring "corrects" scrollY whenever content above the anchor
+        // changes height — the header going compact is exactly that — and the
+        // correction is what drags it back out of the pinned state.
+        const root = document.documentElement;
+        const prevAnchor = root.style.overflowAnchor;
+        root.style.overflowAnchor = "none";
         onScroll();
         window.addEventListener("scroll", onScroll, { passive: true });
         window.addEventListener("resize", onScroll);
         return () => {
+            root.style.overflowAnchor = prevAnchor;
             window.removeEventListener("scroll", onScroll);
             window.removeEventListener("resize", onScroll);
         };
@@ -97,18 +113,27 @@ export function DashPageHeader({
     // which drops it under the "stuck" line, the header expands again, and the
     // page blinks between the two states. A bottom margin worth exactly the
     // height it lost keeps the flow below in place, so nothing moves to anchor.
+    //
+    // The compact flag is read through a ref, never a closure: the observer
+    // fires for the shrink before a re-subscribing effect would run, and a stale
+    // "expanded" callback there would record the compact height as the expanded
+    // one and drop the spacer — which is exactly the blink this guards against.
     const expandedH = React.useRef(0);
+    const compactRef = React.useRef(compact);
     const syncSpacer = React.useCallback(() => {
         const el = ref.current;
         if (!el) return;
-        if (!compact) {
+        if (!compactRef.current) {
             expandedH.current = el.offsetHeight;
             el.style.marginBottom = "";
         } else {
             el.style.marginBottom = `${Math.max(0, expandedH.current - el.offsetHeight)}px`;
         }
-    }, [compact]);
-    React.useLayoutEffect(syncSpacer, [syncSpacer]);
+    }, []);
+    React.useLayoutEffect(() => {
+        compactRef.current = compact;
+        syncSpacer();
+    }, [compact, syncSpacer]);
     React.useEffect(() => {
         const el = ref.current;
         if (!sticky || !el || typeof ResizeObserver === "undefined") return;

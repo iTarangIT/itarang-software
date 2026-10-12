@@ -38,6 +38,8 @@ import { GATED_QUOTE_EVENTS } from "@/lib/leads/quoteApproval";
 import { linesNeedingAttention, quotePriceChanged, type OemEvaluation } from "@/lib/leads/oemPricing";
 import { loadLiveOemPrices } from "@/lib/leads/oemPrices";
 import type { CommercialsProductLine } from "@/lib/inside-sales/types";
+import { dealCardJson } from "@/lib/leads/dealCard";
+import { parseDealCard } from "@/lib/leads/dealCardRules";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -182,6 +184,8 @@ export async function GET(req: NextRequest) {
         // document, so they belong in front of whoever approves it.
         payment_method: dealerLeadCommercials.payment_method,
         customer_finance: dealerLeadCommercials.customer_finance,
+        // ID 172 (E-336, not in schema.ts): the deal card, via to_jsonb.
+        deal_card: sql<unknown>`${dealCardJson("dealer_lead_commercials")}`,
         credit_terms: dealerLeadCommercials.credit_terms,
         delivery_terms: dealerLeadCommercials.delivery_terms,
         warranty_terms: dealerLeadCommercials.warranty_terms,
@@ -306,6 +310,7 @@ export async function GET(req: NextRequest) {
           terms: {
             payment_method: r.payment_method ?? null,
             customer_finance: r.customer_finance ?? null,
+            deal_card: parseDealCard(r.deal_card),
             credit_terms: r.credit_terms ?? null,
             delivery_terms: r.delivery_terms ?? null,
             warranty_terms: r.warranty_terms ?? null,

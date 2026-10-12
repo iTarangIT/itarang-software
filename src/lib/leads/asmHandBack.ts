@@ -1,19 +1,23 @@
 // Handing a lead that is Awaiting field visit (Transferred_to_ASM) back to an
 // ISR / partner (tracker ID 121, business rule 3 Oct 2026, Kartik):
 //
-//   1. If the ASM has a visit booked for today or later, the hand-back is
-//      REFUSED with the reason — cancel or complete the visit first. An ASM's
-//      follow-up is a visit too (recordVisit's next_visit_date books one), so
-//      this one check covers "visit or follow-up". dealer_leads.next_follow_up_at
-//      is not counted: no ASM screen can set or clear it, so a block on it
-//      could never be lifted by the ASM.
+//   1. If the ASM has a visit booked for today or later, OR a follow-up for
+//      today or later that the ASM set, the hand-back is REFUSED with the
+//      reason — cancel or complete the visit / clear the follow-up first.
+//      The ASM sets a follow-up from the lead page's log form ("Set next
+//      follow-up", the same form the ISR uses) and clears it there ("Clear
+//      the follow-up"). Who set dealer_leads.next_follow_up_at is read off the
+//      touchpoint that carries the same date in next_action_at
+//      (logTouchpoint.ts records it there), so an ISR's follow-up from before
+//      the transfer does not block.
 //   2. With nothing booked, the hand-back unlinks the ASM (asm_id = NULL) and
 //      closes the lead's open visits (pending_scheduling, or a scheduled date
 //      already past) as cancelled. Before this the ASM kept the lead on Today
 //      and could not log the visit, and the ISR never knew one was planned.
 //
 // Every path applies it: admin / bulk / NeoDove through assignOwner.ts, the
-// ASM's own Reassign and the WhatsApp Assistant through reassign.ts.
+// ASM's own Reassign and the WhatsApp Assistant through reassign.ts, and an
+// escalation resolved with Reassign through escalationReassign.ts.
 // Dates compare against Postgres CURRENT_DATE, never the Node clock.
 
 import { sql } from "drizzle-orm";
@@ -46,14 +50,32 @@ function shortDate(ymd: string): string {
     });
 }
 
-/** The refusal sentence for a booked visit, or null when the hand-back may go ahead. Pure. */
-export function handBackBlockReason(visit: BookedVisit | null): string | null {
-    if (!visit) return null;
-    const who = visit.asmName?.trim() || "The ASM";
-    return (
-        `${who} has a visit booked for ${shortDate(visit.scheduledDate)}. ` +
-        `Cancel or complete the visit first, then hand the lead back.`
-    );
+export type AsmFollowUp = {
+    /** dealer_leads.next_follow_up_at as a date, YYYY-MM-DD. */
+    followUpDate: string;
+    asmName: string | null;
+};
+
+/**
+ * The refusal sentence for a booked visit or an ASM follow-up, or null when
+ * the hand-back may go ahead. A visit is named first. Pure.
+ */
+export function handBackBlockReason(visit: BookedVisit | null, followUp: AsmFollowUp | null = null): string | null {
+    if (visit) {
+        const who = visit.asmName?.trim() || "The ASM";
+        return (
+            `${who} has a visit booked for ${shortDate(visit.scheduledDate)}. ` +
+            `Cancel or complete the visit first, then hand the lead back.`
+        );
+    }
+    if (followUp) {
+        const who = followUp.asmName?.trim() || "The ASM";
+        return (
+            `${who} has a follow-up set for ${shortDate(followUp.followUpDate)}. ` +
+            `Ask them to clear the follow-up (log a note with "Clear the follow-up") first, then hand the lead back.`
+        );
+    }
+    return null;
 }
 
 /** Refused before anything is written; withErrorHandler / callers answer 409 with the sentence. */
@@ -81,9 +103,38 @@ export async function findBookedVisit(ex: Executor, leadId: string): Promise<Boo
     return row ? { scheduledDate: row.scheduled_date, asmName: row.asm_name } : null;
 }
 
+/**
+ * The lead's follow-up for today or later, when the lead's ASM set it: the
+ * latest touchpoint carrying that exact date was performed by dealer_leads.asm_id.
+ */
+export async function findAsmFollowUp(ex: Executor, leadId: string): Promise<AsmFollowUp | null> {
+    const rows = (await ex.execute<{ follow_up_date: string; asm_name: string | null }>(sql`
+        SELECT dl.next_follow_up_at::date::text AS follow_up_date, u.name AS asm_name
+          FROM dealer_leads dl
+          JOIN LATERAL (
+                SELECT t.performed_by
+                  FROM lead_touchpoints t
+                 WHERE t.dealer_lead_id = dl.id
+                   AND t.next_action_at = dl.next_follow_up_at
+                 ORDER BY t.performed_at DESC
+                 LIMIT 1
+          ) setter ON TRUE
+          LEFT JOIN users u ON u.id::text = dl.asm_id
+         WHERE dl.id = ${leadId}
+           AND dl.asm_id IS NOT NULL
+           AND setter.performed_by = dl.asm_id
+           AND dl.next_follow_up_at::date >= CURRENT_DATE
+         LIMIT 1
+    `)) as unknown as Array<{ follow_up_date: string; asm_name: string | null }>;
+    const row = rows[0];
+    return row ? { followUpDate: row.follow_up_date, asmName: row.asm_name } : null;
+}
+
 /** The refusal for handing this lead back right now, or null. */
 export async function handBackRefusal(ex: Executor, leadId: string): Promise<string | null> {
-    return handBackBlockReason(await findBookedVisit(ex, leadId));
+    const visit = await findBookedVisit(ex, leadId);
+    if (visit) return handBackBlockReason(visit);
+    return handBackBlockReason(null, await findAsmFollowUp(ex, leadId));
 }
 
 /**
