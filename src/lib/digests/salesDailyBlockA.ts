@@ -18,16 +18,13 @@
 
 import { sql } from "drizzle-orm";
 import type { SalesDashboard } from "@/lib/admin/salesDashboardTypes";
-import { bulkImportedLead, engagedCall, wasHotAt } from "@/lib/reports/metricDefinitions";
+import { engagedCall, wasHotAt } from "@/lib/reports/metricDefinitions";
 import { monthEnd, workingDaysBetween } from "@/lib/targets/rules";
 import { scrapKgSourced } from "@/lib/buyback/scrapKgSourced";
 import { istRangeNaive, istRangeTz } from "./window";
 import { RAG_AMBER_MIN } from "./rag";
 
 export const NOT_MEASURED = "Not measured yet";
-
-/** Bulk-imported leads — kept out of "Leads in" (metricDefinitions.bulkImportedLead). */
-export const IMPORTED_LABEL = "Imported in bulk";
 
 export type Period = { from: string; to: string };
 export type Periods = { yesterday: Period; last7: Period; mtd: Period; lastMonth: Period };
@@ -185,8 +182,7 @@ export function blockAHeadlineParts(rows: BlockARow[]): string[] {
  * so a reader can tell what a number is without asking.
  */
 export const BLOCK_A_ROW_NOTES: Record<string, string> = {
-    "Leads in": "Leads that arrived on their own",
-    "Imported in bulk": "Scrape runs, bulk uploads, AI-dialer lists, NeoDove list pushes",
+    "Leads in": "Every new lead, whatever the source (bulk imports included)",
     "Became sales-ready": "AI-qualified, picked up in NeoDove, rep-created, claimed or assigned",
     Assigned: "Got a first owner",
     "Calls made": "Inside sales and NeoDove, AI calls excluded",
@@ -367,25 +363,16 @@ export async function buildBlockA(
     });
     const NONE: RowValues = { y: null, d7: null, mtd: null, lm: null };
 
-    const [leadsIn, imported, salesReady, assigned, engaged, hotToField, delivered, dealerApproved, won, kycDisbursed, scrapDeals, scrapKg] =
+    const [leadsIn, salesReady, assigned, engaged, hotToField, delivered, dealerApproved, won, kycDisbursed, scrapDeals, scrapKg] =
         await Promise.all([
             // dealer_leads.created_at is a NAIVE timestamp holding UTC wall-clock.
-            // Same base scope as the /leads list (is_active IS NOT FALSE), split
-            // into leads that arrived on their own and bulk imports (ID 59 note
-            // in metricDefinitions.ts) — the two rows add up to the list's count.
+            // Same scope as the /leads list (is_active IS NOT FALSE), so Leads in
+            // equals the Leads download for the same dates (ID 153: every source).
             perPeriod(
                 db,
                 periods,
                 (p) => sql`SELECT COUNT(*) AS n FROM dealer_leads dl
-                            WHERE dl.is_active IS NOT FALSE AND ${istRangeNaive(sql`dl.created_at`, p.from, p.to)}
-                              AND NOT ${bulkImportedLead(sql`dl`)}`,
-            ),
-            perPeriod(
-                db,
-                periods,
-                (p) => sql`SELECT COUNT(*) AS n FROM dealer_leads dl
-                            WHERE dl.is_active IS NOT FALSE AND ${istRangeNaive(sql`dl.created_at`, p.from, p.to)}
-                              AND ${bulkImportedLead(sql`dl`)}`,
+                            WHERE dl.is_active IS NOT FALSE AND ${istRangeNaive(sql`dl.created_at`, p.from, p.to)}`,
             ),
             perPeriod(
                 db,
@@ -452,7 +439,6 @@ export async function buildBlockA(
 
     const rows: BlockARow[] = [
         { group: "INTAKE", label: "Leads in", kind: "count", values: leadsIn, target: null },
-        { group: "INTAKE", label: IMPORTED_LABEL, kind: "count", values: imported, target: null },
         { group: "INTAKE", label: "Became sales-ready", kind: "count", values: hasSalesReady ? salesReady : NONE, target: null },
         { group: "INTAKE", label: "Assigned", kind: "count", values: assigned, target: null },
         { group: "EFFORT", label: "Calls made", kind: "count", values: fromDash((d) => d.totals.calls), target: tgt("calls_per_day") },
