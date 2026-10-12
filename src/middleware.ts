@@ -660,8 +660,9 @@ export async function middleware(request: NextRequest) {
     // gate. admin/ceo retain support access.
     "/risk-head": ["nbfc_partner", "admin", "ceo"],
     // E-316 — the API re-checks the caller's seat in feature_request_members;
-    // this row only decides who can open the pages.
-    "/feature-requests": ["ceo", "product_head", "tech_head", "developer"],
+    // this row only decides who can open the pages. CEO removed: the module is
+    // parked (tracker ID 140, 10 Oct) and its seats are switched off.
+    "/feature-requests": ["product_head", "tech_head", "developer"],
     "/admin/dealer-verification": ["sales_head", "ceo"],
     "/admin/kyc-review": ["admin", "sales_head", "business_head", "ceo"],
     // NBFC onboarding (BRD §6.0): sales_head submits, CEO approves. Admin and
