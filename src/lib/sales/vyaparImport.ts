@@ -25,6 +25,7 @@ import { db } from "@/lib/db";
 import { normalizeInvoiceNumber } from "@/lib/sales/normalizeInvoiceNumber";
 import { resolveSalesOrg } from "@/lib/sales/resolveSalesOrg";
 import { itemKey } from "@/lib/sales/invoiceLines";
+import { itemKeySql, mappedItems } from "@/lib/sales/itemMap";
 import { voidInvoice } from "@/lib/sales/invoiceVoids";
 import type { ImportKind, ParseResult, ParsedDocument } from "@/lib/sales/vyaparParse";
 
@@ -76,13 +77,6 @@ async function existingByKey(runner: Runner, keys: string[]): Promise<Map<string
              WHERE invoice_number_key IN (${sql.join(keys.map((k) => sql`${k}`), sql`, `)})`),
     );
     return new Map(rows.map((r) => [r.k, r.id]));
-}
-
-async function mappedItems(runner: Runner): Promise<Map<string, { asset_type: string | null; product_id: string | null }>> {
-    const rows = rowsOf<{ item_key: string; asset_type: string | null; product_id: string | null }>(
-        await runner.execute(sql`SELECT item_key, asset_type, product_id FROM vyapar_item_map WHERE product_id IS NOT NULL`),
-    );
-    return new Map(rows.map((r) => [r.item_key, r]));
 }
 
 const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
@@ -267,7 +261,7 @@ export async function mapVyaparItem(input: {
             await tx.execute(sql`
                 WITH u AS (
                     UPDATE invoice_line_items SET asset_type = ${input.assetType}, product_id = ${input.productId}
-                     WHERE lower(regexp_replace(btrim(item_name), '\\s+', ' ', 'g')) = ${key}
+                     WHERE ${itemKeySql(sql`item_name`)} = ${key}
                     RETURNING 1)
                 SELECT count(*)::int AS n FROM u`),
         );

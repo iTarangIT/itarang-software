@@ -30,6 +30,7 @@ import { db } from "@/lib/db";
 import { fetchInvoiceDetail } from "@/lib/zoho/invoices";
 import { fetchContactGstin } from "@/lib/zoho/contacts";
 import { classifyHsn, normalizeHsn } from "@/lib/sales/invoiceLines";
+import { mappedItems, productFor } from "@/lib/sales/itemMap";
 import { screenCustomerGstin } from "@/lib/leads/gstin";
 
 const args = process.argv.slice(2);
@@ -114,15 +115,20 @@ async function main() {
             const d = await throttled(() => fetchInvoiceDetail(inv.zoho_invoice_id, inv.organization_id ?? undefined));
             await db.transaction(async (tx) => {
                 await tx.execute(sql`DELETE FROM invoice_line_items WHERE source = 'zoho' AND invoice_id = ${inv.id}`);
+                // ID 147 — lines of an item already mapped land linked to its product.
+                const mapped = await mappedItems(tx);
                 let n = 0;
                 for (const l of d.line_items) {
                     n += 1;
                     const hsn = normalizeHsn(l.hsn_or_sac);
+                    const name = l.name ?? l.description ?? null;
+                    const m = productFor(mapped, name);
                     await tx.execute(sql`
                         INSERT INTO invoice_line_items
-                               (source, invoice_id, line_no, item_name, hsn, product_class, quantity, rate, amount_excl_gst)
-                        VALUES ('zoho', ${inv.id}, ${n}, ${l.name ?? l.description ?? null}, ${hsn},
-                                ${classifyHsn(hsn)}, ${l.quantity ?? null}, ${l.rate ?? null}, ${l.item_total ?? null})
+                               (source, invoice_id, line_no, item_name, hsn, product_class, asset_type, product_id,
+                                quantity, rate, amount_excl_gst)
+                        VALUES ('zoho', ${inv.id}, ${n}, ${name}, ${hsn}, ${classifyHsn(hsn)}, ${m.asset_type},
+                                ${m.product_id}, ${l.quantity ?? null}, ${l.rate ?? null}, ${l.item_total ?? null})
                     `);
                 }
                 lineRows += n;
