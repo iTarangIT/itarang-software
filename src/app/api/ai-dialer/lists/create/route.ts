@@ -9,7 +9,7 @@
 
 import { successResponse, errorResponse, withErrorHandler } from "@/lib/api-utils";
 import { guardApi } from "@/lib/auth/apiGuard";
-import { DIALER_CONTROL_ROLES } from "@/lib/leads/access";
+import { CALLING_LIST_ROLES } from "@/lib/leads/access";
 import { createCampaign } from "@/lib/queue/campaignTracker";
 import { importListRows } from "@/lib/ai-dialer/listImport";
 import { LEAD_ORIGINS, type LeadOrigin } from "@/lib/leads/leadSourceVocab";
@@ -22,7 +22,7 @@ export const POST = withErrorHandler(async (req: Request) => {
   // ID 118: uploading a list adds leads, so it needs a login with a dialer
   // control role. The old best-effort requireAuth() sat in a try/catch that
   // swallowed the no-session redirect, so anyone could call this.
-  const gate = await guardApi([...DIALER_CONTROL_ROLES]);
+  const gate = await guardApi([...CALLING_LIST_ROLES]);
   if (!gate.ok) return gate.response;
   const triggeredBy: string | null = gate.user.id;
 

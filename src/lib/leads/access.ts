@@ -325,24 +325,34 @@ export const INTENT_REVIEW_ROLES = [
 export const INTENT_CURATOR_ROLES = ["admin", "ceo", "sales_head", "partner"] as const;
 
 /**
- * Roles that may DRIVE an AI-dialer campaign from its detail screen — Call next,
- * Force stop, Resume calling, Retry unreached. Enforced by the matching
- * /api/ai-dialer/campaigns/[id]/{advance,stop,resume,recall-failed} routes; the
- * detail view only hides the buttons.
- *
- * asm and inside_sales_rep are deliberately ABSENT: they can open their own
- * campaigns read-only, but placing or re-placing calls is an oversight action.
- * `partner` keeps the stop/resume/retry it always had (those routes had no role
- * check before).
+ * ID 145 (decision 10 Oct): roles that may upload an AI-dialer calling list,
+ * start a dialer run (list or region) and stop the running one. These place
+ * real, billable calls and add leads, so the set is narrower than
+ * LEADS_OVERSIGHT_ROLES. Enforced on /api/ai-dialer/{start,stop,lists/create,
+ * lists/[id]/start}; a logged-out call is 401, any other role 403. The Leads
+ * page hides the AI Dialer switch and its Lists tab for everyone else
+ * (LeadsCapabilities.canControlDialer).
  */
-export const CAMPAIGN_ACTION_ROLES = [
-  "admin",
-  "ceo",
-  "business_head",
-  "sales_head",
-  "sales_manager",
-  "partner",
-] as const;
+export const CALLING_LIST_ROLES = ["admin", "ceo", "business_head", "sales_head"] as const;
+
+export function canControlDialer(role: string | null | undefined): boolean {
+  return (CALLING_LIST_ROLES as readonly string[]).includes(role ?? "");
+}
+
+/**
+ * Roles that may place MORE calls from a campaign's detail screen — Call next,
+ * Resume calling, Retry unreached (ID 145, Kartik 10 Oct: Admin and CEO only).
+ * Enforced by /api/ai-dialer/campaigns/[id]/{advance,resume,recall-failed};
+ * the detail view only hides the buttons.
+ */
+export const CAMPAIGN_ACTION_ROLES = ["admin", "ceo"] as const;
+
+/**
+ * Force stop on a running campaign: the same four roles that can start calls
+ * (CALLING_LIST_ROLES), so no one can start calls they can't stop. Enforced by
+ * /api/ai-dialer/campaigns/[id]/stop.
+ */
+export const CAMPAIGN_STOP_ROLES = CALLING_LIST_ROLES;
 
 /**
  * Roles that may download a campaign's Excel export
@@ -362,21 +372,12 @@ export function canRunCampaignActions(role: string | null | undefined): boolean 
   return (CAMPAIGN_ACTION_ROLES as readonly string[]).includes(role ?? "");
 }
 
-export function canExportCampaign(role: string | null | undefined): boolean {
-  return (CAMPAIGN_EXPORT_ROLES as readonly string[]).includes(role ?? "");
+export function canStopCampaign(role: string | null | undefined): boolean {
+  return (CAMPAIGN_STOP_ROLES as readonly string[]).includes(role ?? "");
 }
 
-/**
- * ID 118 (decision 10 Oct): roles that may upload an AI-dialer calling list,
- * start a dialer run (list or region) and stop the running one. These place
- * real, billable calls and add leads, so the set is narrower than
- * LEADS_OVERSIGHT_ROLES. Enforced on /api/ai-dialer/{start,stop,lists/create,
- * lists/[id]/start}; a logged-out call is 401, any other role 403.
- */
-export const DIALER_CONTROL_ROLES = ["admin", "ceo", "sales_head"] as const;
-
-export function canControlDialer(role: string | null | undefined): boolean {
-  return (DIALER_CONTROL_ROLES as readonly string[]).includes(role ?? "");
+export function canExportCampaign(role: string | null | undefined): boolean {
+  return (CAMPAIGN_EXPORT_ROLES as readonly string[]).includes(role ?? "");
 }
 
 export type LeadsCapabilities = {
@@ -397,6 +398,8 @@ export type LeadsCapabilities = {
    * (ID 136). "Correct status" is gone: nobody picks a status by hand.
    */
   canChangeLostReason: boolean;
+  /** ID 145 — AI Dialer switch, its Lists tab and the banner Stop (CALLING_LIST_ROLES). */
+  canControlDialer: boolean;
 };
 
 /** The roles /api/admin/leads/[id]/lost-reason accepts (ID 136) — LOST_REASON_CHANGE_ROLES. */
@@ -443,6 +446,7 @@ export function capabilitiesFor(role: string | null | undefined): LeadsCapabilit
     canTrackLeads: (LEAD_TRACKING_ROLES as readonly string[]).includes(r),
     canOpenLeadPage: (LEAD_WORKSPACE_ROLES as readonly string[]).includes(r),
     canChangeLostReason: LOST_REASON_ROLES.includes(r),
+    canControlDialer: canControlDialer(r),
   };
 }
 
@@ -458,4 +462,5 @@ export const NO_CAPABILITIES: LeadsCapabilities = {
   canTrackLeads: false,
   canOpenLeadPage: false,
   canChangeLostReason: false,
+  canControlDialer: false,
 };

@@ -4,13 +4,13 @@ import {
   finalizeCampaign,
 } from "@/lib/queue/campaignTracker";
 import { guardApi } from "@/lib/auth/apiGuard";
-import { DIALER_CONTROL_ROLES } from "@/lib/leads/access";
+import { CALLING_LIST_ROLES } from "@/lib/leads/access";
 import { NextResponse } from "next/server";
 
 export async function POST() {
   // ID 118: stopping the running campaign needs a login + dialer control role.
   // The old best-effort requireAuth() in a try/catch let anyone stop it.
-  const gate = await guardApi([...DIALER_CONTROL_ROLES]);
+  const gate = await guardApi([...CALLING_LIST_ROLES]);
   if (!gate.ok) return gate.response;
   const stoppedBy: string | null = gate.user.id;
 
