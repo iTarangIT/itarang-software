@@ -18,6 +18,7 @@
 
 import { z } from "zod";
 import { requireRole } from "@/lib/auth-utils";
+import { lastTransferredBy, notifyLeadPerson } from "@/lib/leads/newOwnerNotice";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
 import { recordVisit } from "@/lib/asm/recordVisit";
 import { applyVisitStatus } from "@/lib/asm/visitStatus";
@@ -119,6 +120,22 @@ export const POST = withErrorHandler(
             }
             return recorded;
         });
+
+        // 12 Oct: the person who transferred the lead hears how the visit went
+        // (or when it is booked). The bell opens the lead.
+        if (visited || visit.visit_status === "scheduled") {
+            const outcome = visit.visit_outcome ? visit.visit_outcome.replace(/_/g, " ") : null;
+            await notifyLeadPerson({
+                userId: await lastTransferredBy(id),
+                actorId: user.id,
+                leadId: id,
+                type: "lead.visit_update",
+                title: visited ? "Field visit done" : "Field visit booked",
+                message: visited
+                    ? `{by} visited {lead}${outcome ? ` — outcome: ${outcome}` : ""}. ${visit.visit_remarks}`
+                    : `{by} booked a visit to {lead}${visit.scheduled_date ? ` on ${visit.scheduled_date}` : ""}.`,
+            });
+        }
 
         return successResponse({
             visit_id: visitId,
