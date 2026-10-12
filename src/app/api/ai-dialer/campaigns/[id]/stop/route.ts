@@ -22,8 +22,8 @@ import {
 } from "@/lib/queue/campaignTracker";
 import { dialerSession } from "@/lib/queue/dialerSession";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
-import { requireRole } from "@/lib/auth-utils";
-import { CAMPAIGN_ACTION_ROLES } from "@/lib/leads/access";
+import { guardApi } from "@/lib/auth/apiGuard";
+import { CAMPAIGN_STOP_ROLES } from "@/lib/leads/access";
 import { eq } from "drizzle-orm";
 
 export const POST = withErrorHandler(
@@ -31,9 +31,12 @@ export const POST = withErrorHandler(
     const { id: campaignId } = await ctx.params;
     if (!campaignId) return errorResponse("Campaign id required", 400);
 
-    // asm / inside_sales_rep may view a campaign but not drive it.
-    const user = await requireRole([...CAMPAIGN_ACTION_ROLES]);
-    const stoppedBy: string | null = user?.id ?? null;
+    // ID 145: Force stop is for the four roles that can start calls
+    // (CAMPAIGN_STOP_ROLES = CALLING_LIST_ROLES), so no one can start calls
+    // they can't stop.
+    const gate = await guardApi([...CAMPAIGN_STOP_ROLES]);
+    if (!gate.ok) return gate.response;
+    const stoppedBy: string | null = gate.user.id;
 
     const existing = await db
       .select({
