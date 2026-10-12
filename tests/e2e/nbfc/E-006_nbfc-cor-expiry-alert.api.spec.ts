@@ -18,6 +18,7 @@ import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import { eq, like, inArray } from 'drizzle-orm';
 import * as schema from '../../../src/lib/db/schema';
+import { cronAuth } from '../helpers/cron-auth';
 
 const DB_URL = process.env.DATABASE_URL;
 if (!DB_URL) {
@@ -177,7 +178,7 @@ test.describe('E-006 — NBFC CoR expiry alert', () => {
     });
 
     // First run: must insert exactly one ledger row for this nbfc.
-    const run1 = await request.get('/api/cron/nbfc-cor-expiry');
+    const run1 = await request.get('/api/cron/nbfc-cor-expiry', { headers: cronAuth() });
     expect(run1.status(), await run1.text().catch(() => '')).toBe(200);
     const run1Body = await run1.json();
     expect(run1Body.ok).toBe(true);
@@ -195,7 +196,7 @@ test.describe('E-006 — NBFC CoR expiry alert', () => {
     expect(ledger1.length).toBe(1);
 
     // Second run on the same day: must NOT insert a second row.
-    const run2 = await request.get('/api/cron/nbfc-cor-expiry');
+    const run2 = await request.get('/api/cron/nbfc-cor-expiry', { headers: cronAuth() });
     expect(run2.status()).toBe(200);
     const run2Body = await run2.json();
     expect(run2Body.ok).toBe(true);

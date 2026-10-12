@@ -17,7 +17,7 @@ import { InterestChip } from "./InterestChip";
 import { OwnerIndicator } from "./OwnerIndicator";
 import { NeodoveTag } from "@/components/leads/neodove-tag";
 import { SentByStamp } from "@/components/leads/sent-by-stamp";
-import { staleSeverity, workingDaysSince } from "@/lib/inside-sales/staleness";
+import { staleSeverity, workingDaysSince, type StaleThresholds } from "@/lib/inside-sales/staleness";
 import { wonWithoutQuote, type QueueRow, type QueueTab } from "@/lib/inside-sales/types";
 import { WonWithoutQuoteChip } from "@/components/leads/won-without-quote-chip";
 
@@ -32,6 +32,8 @@ type Props = {
     onPageChange: (p: number) => void;
     viewerId: string;
     holidaySet: Set<string>;
+    /** ID 85 — the no-touch cue limits in force today; registry defaults when absent. */
+    staleThresholds?: StaleThresholds;
     /** Lead-detail route prefix. Twins of the ISR queue (/partner) pass their own. */
     leadHrefBase?: string;
     /**
@@ -84,6 +86,7 @@ export function LeadQueueTable({
     onPageChange,
     viewerId,
     holidaySet,
+    staleThresholds,
     leadHrefBase = "/inside-sales/lead",
     selection,
 }: Props) {
@@ -162,7 +165,7 @@ export function LeadQueueTable({
                             // Stale cue runs on the work clock (E-300, R-04):
                             // a claim, dial request or comment is not work.
                             const days = workingDaysSince(row.last_worked_at ?? row.assigned_at, holidaySet);
-                            const sev = staleSeverity(days);
+                            const sev = staleSeverity(days, staleThresholds);
                             const followUpOverdue =
                                 row.next_follow_up_at && new Date(row.next_follow_up_at).getTime() < nowMs;
                             const href = `${leadHrefBase}/${encodeURIComponent(row.id)}`;

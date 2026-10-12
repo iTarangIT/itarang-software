@@ -11,7 +11,6 @@ import { EmailNotificationManager } from "./EmailNotificationManager";
 import { QuotationCcForm } from "./QuotationCcForm";
 import { QuotationTermsForm } from "./QuotationTermsForm";
 import { TerritoryManager } from "./TerritoryManager";
-import { AsmVisitLimitForm } from "./AsmVisitLimitForm";
 import { ReportingLinesManager } from "./ReportingLinesManager";
 import type { SettingsBundle } from "@/lib/admin/types";
 
@@ -37,14 +36,13 @@ import type { SettingsBundle } from "@/lib/admin/types";
 // restored for this tab alone and only fires while it is the active tab.
 
 // Quotation CC (E-297) sits here too: it is also "who gets which email".
-// ASM visit limit (ID 77.1) sits beside ASM Territories.
+// The ASM visit limit (ID 77.1) moved to Settings › Time limits (ID 85).
 const TAB_VALUES = [
     "access",
     "email",
     "quotation-cc",
     "quotation-terms",
     "territories",
-    "asm-visit-limit",
     // ID 155 — who reports to whom (E-335).
     "reporting-lines",
 ] as const;
@@ -92,7 +90,6 @@ export function SettingsView() {
                     { value: "quotation-cc", label: "Quotation CC" },
                     { value: "quotation-terms", label: "Quotation terms" },
                     { value: "territories", label: "ASM Territories" },
-                    { value: "asm-visit-limit", label: "ASM Visit Limit" },
                     { value: "reporting-lines", label: "Reporting lines" },
                 ]}
             />
@@ -103,7 +100,6 @@ export function SettingsView() {
                     {active === "email" && <EmailNotificationManager />}
                     {active === "quotation-cc" && <QuotationCcForm />}
                     {active === "quotation-terms" && <QuotationTermsForm />}
-                    {active === "asm-visit-limit" && <AsmVisitLimitForm />}
                     {active === "reporting-lines" && <ReportingLinesManager />}
                     {active === "territories" &&
                         (bundleQuery.isLoading ? (

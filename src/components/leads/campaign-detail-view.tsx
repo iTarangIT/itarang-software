@@ -10,7 +10,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/components/auth/AuthProvider";
-import { canExportCampaign, canRunCampaignActions } from "@/lib/leads/access";
+import { canExportCampaign, canRunCampaignActions, canStopCampaign } from "@/lib/leads/access";
 import {
   ArrowLeft,
   Download,
@@ -397,9 +397,12 @@ export function CampaignDetailView({
 }) {
   // asm / inside_sales_rep get this screen read-only: no calling, no export.
   // Hidden until the profile loads so the buttons never flash. The API routes
-  // enforce the same role sets (CAMPAIGN_ACTION_ROLES / CAMPAIGN_EXPORT_ROLES).
+  // enforce the same role sets (CAMPAIGN_ACTION_ROLES / CAMPAIGN_STOP_ROLES /
+  // CAMPAIGN_EXPORT_ROLES). ID 145: Call next / Resume / Retry are Admin + CEO;
+  // Force stop is the four roles that can start calls.
   const { user } = useAuth();
   const canAct = canRunCampaignActions(user?.role);
+  const canStop = canStopCampaign(user?.role);
   const canExport = canExportCampaign(user?.role);
   const [bucket, setBucket] = useState<Bucket>("all");
   const [page, setPage] = useState(1);
@@ -714,7 +717,7 @@ export function CampaignDetailView({
               Call next
             </button>
           )}
-          {canAct && isRunning && (
+          {canStop && isRunning && (
             <button
               type="button"
               onClick={async () => {

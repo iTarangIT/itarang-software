@@ -56,7 +56,6 @@ function filesForm(files: File[]): FormData {
 export const sourcesApi = {
   list: () => call<Connection[]>(""),
   connectCrm: () => call<Connection>("", json("POST", { preset: "crm" })),
-  connectPostgres: (name: string, dsn: string) => call<Connection>("", json("POST", { name, dsn })),
   createDataset: (name: string) => call<Connection>("/dataset", json("POST", { name })),
   remove: (connectionId: string) => call<void>(`/${id(connectionId)}`, { method: "DELETE" }),
 

@@ -48,7 +48,7 @@ import {
   normalizePhone,
 } from "@/lib/leads/dedupe";
 import { CampaignError, resolveLeadCampaign } from "@/lib/leads/acquisitionCampaigns";
-import { normalizeBusinessType } from "@/lib/leads/businessType";
+import { BUSINESS_TYPE_OPTIONS, normalizeBusinessType } from "@/lib/leads/businessType";
 
 export async function POST(req: NextRequest) {
   // ⚠ SECURITY: this create had no auth check (middleware does not gate
@@ -112,8 +112,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(
         {
           success: false,
-          error:
-            "Type of Business must be one of: Battery Sale, Buyback, Finance, Scrap, Other.",
+          // ID 11 — from the live list, so a retired type (Finance) never reappears here.
+          error: `Type of Business must be one of: ${BUSINESS_TYPE_OPTIONS.map((o) => o.label).join(", ")}.`,
         },
         { status: 400 },
       );

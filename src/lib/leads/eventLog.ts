@@ -27,6 +27,9 @@
  *   Escalation raised / CEO comment / resolved   lead_escalations
  *   Log detail change    dealer_lead_field_changes (E-304 trigger — field,
  *                        old → new)
+ *   Limit passed         lead_clocks (E-337, ID 86) — dated when the limit
+ *                        fell due; from = which clock, to = the limit, outcome
+ *                        = attempted late / not attempted
  *
  * E-304 tables are read only when they exist, so the export still works on a
  * host without them (interest changes then come from overrides alone, and
@@ -82,14 +85,15 @@ export type EventLogRow = {
     remarks: string | null;
 };
 
-type Sources = { interestHistory: boolean; fieldChanges: boolean };
+type Sources = { interestHistory: boolean; fieldChanges: boolean; clocks: boolean };
 
 async function sources(): Promise<Sources> {
     const r = (await db.execute(sql`
         SELECT to_regclass('public.dealer_lead_interest_history') IS NOT NULL AS ih,
-               to_regclass('public.dealer_lead_field_changes') IS NOT NULL AS fc
-    `)) as unknown as Array<{ ih: boolean; fc: boolean }>;
-    return { interestHistory: Boolean(r[0]?.ih), fieldChanges: Boolean(r[0]?.fc) };
+               to_regclass('public.dealer_lead_field_changes') IS NOT NULL AS fc,
+               to_regclass('public.lead_clocks') IS NOT NULL AS lc
+    `)) as unknown as Array<{ ih: boolean; fc: boolean; lc: boolean }>;
+    return { interestHistory: Boolean(r[0]?.ih), fieldChanges: Boolean(r[0]?.fc), clocks: Boolean(r[0]?.lc) };
 }
 
 /** `ts` inside [from, to] as IST calendar days. */
@@ -134,6 +138,22 @@ function eventsUnion(f: EventLogFilters, s: Sources): SQL {
                fc.old_value, fc.new_value, fc.changed_by, NULL, fc.field, NULL, NULL
           FROM dealer_lead_field_changes fc
          WHERE ${inRange(sql`fc.changed_at`, f)}`
+        : null;
+
+    // ID 86 — a clock that passed its limit, dated when it fell due.
+    const limitPassed = s.clocks
+        ? sql`
+        SELECT c.limit_passed_at, c.dealer_lead_id, 'Limit passed',
+               CASE c.clock WHEN 'lead' THEN 'Lead clock' WHEN 'owner' THEN 'Owner clock' ELSE 'Transfer clock' END,
+               CASE c.clock WHEN 'transfer' THEN 'First visit' ELSE 'First call or visit' END || ' within '
+                   || round(c.limit_value)::int::text
+                   || CASE WHEN c.clock = 'transfer' THEN ' working days' ELSE ' working hours' END,
+               c.owner_id, NULL,
+               CASE WHEN c.first_attempt_at IS NULL THEN 'not attempted' ELSE 'attempted late' END,
+               NULL,
+               CASE WHEN c.owner_inferred THEN 'Owner inferred from assigned_at (no assignment record)' END
+          FROM lead_clocks c
+         WHERE c.limit_passed_at IS NOT NULL AND ${inRange(sql`c.limit_passed_at`, f)}`
         : null;
 
     // Each source, tagged with the event types (eventTypes.ts values) it can
@@ -329,6 +349,7 @@ function eventsUnion(f: EventLogFilters, s: Sources): SQL {
          WHERE e.resolved_at IS NOT NULL AND ${inRange(sql`e.resolved_at`, f)}`,
         },
         { types: ["log_detail_change"], sql: fieldChanges },
+        { types: ["limit_passed"], sql: limitPassed },
     ];
 
     const wanted = f.eventTypes?.length ? new Set<string>(f.eventTypes) : null;

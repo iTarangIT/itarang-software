@@ -4,20 +4,23 @@
  *   sales_ready         Sales-ready leads with no owner (salesReady.ts — the
  *                       Ready to Assign list's own predicate)
  *   hot_not_called      Hot lead with an owner, no call or visit since it
- *                       reached that owner, more than HOT_FIRST_CALL_LIMIT_HOURS
- *                       working hours ago (workingHours.ts: Mon–Sat 10–19 IST)
- *   visit_overdue       Transferred to an ASM, first visit past the admin-set
- *                       limit (transferVisitLimit.ts — the admin panel's rule)
+ *                       reached that owner, more than owner_first_attempt
+ *                       working hours ago (ID 85 time limit, default 4;
+ *                       workingHours.ts: Mon–Sat 10–19 IST, holidays off)
+ *   visit_overdue       Transferred to an ASM, first visit past the
+ *                       asm_transfer_first_visit limit (transferVisitLimit.ts
+ *                       — the admin panel's rule)
  *   quotes_no_answer    Latest quote delivered to the dealer more than
- *                       QUOTE_NO_ANSWER_WORKING_DAYS working days ago, no
- *                       answer, not withdrawn, lead still open
+ *                       quote_no_answer working days ago (ID 85 time limit,
+ *                       default 3), no answer, not withdrawn, lead still open
  *   said_yes            Dealer approved the quote, lead not marked Won
  *                       (saidYesNotWon.ts — the CEO card's list)
  *   onboarding_stalled  Won lead whose onboarding stalled, on the dealer or on
- *                       us (admin/dashboard.ts ONBOARDING_STALLED)
+ *                       us (admin/dashboard.ts onboardingStalledSql)
  *   won_without_quote   Marked Won this month with no dealer-approved quote
  *                       (admin/dashboard.ts WON_WITHOUT_QUOTE)
- *   hot_aged            Open lead rated Hot for more than 7 days — the rows
+ *   hot_aged            Open lead rated Hot for more than 7 days (fixed — not
+ *                       an ID 85 time limit) — the rows
  *                       behind the tile the sales dashboard counts
  *                       (salesDashboard.ts queryInterest: interest_level
  *                       'hot', active, not Converted / Lost, IST days since
@@ -35,20 +38,18 @@
 import { sql, type SQL } from "drizzle-orm";
 
 import { db } from "@/lib/db";
-import { ONB_LAST, ONB_WAITING_ON, ONBOARDING_STALLED, WON_WITHOUT_QUOTE } from "@/lib/admin/dashboard";
+import { ONB_LAST, ONB_WAITING_ON, onboardingStalledSql, WON_WITHOUT_QUOTE } from "@/lib/admin/dashboard";
 import { awaitingAssignment, daysAwaitingAssignment } from "@/lib/leads/salesReady";
 import { listSaidYesNotWon } from "@/lib/leads/saidYesNotWon";
 import {
     TRANSFER_AT_EXPR,
-    TRANSFER_VISIT_OVERDUE_SQL,
     TRANSFER_WORKING_DAYS_SQL,
-    getAsmTransferVisitLimit,
+    transferVisitOverdueSql,
 } from "@/lib/asm/transferVisitLimit";
 import { WORKABLE_STATUSES } from "@/lib/lifecycle/transitions";
 import { workingHoursBetween } from "@/lib/leads/workingHours";
-
-export const HOT_FIRST_CALL_LIMIT_HOURS = 4;
-export const QUOTE_NO_ANSWER_WORKING_DAYS = 3;
+import { loadHolidays, workingDaysSinceSql } from "@/lib/calendar/holidays";
+import { getTimeLimits } from "@/lib/timeLimits/store";
 
 export const ACTION_KEYS = [
     "sales_ready",
@@ -104,12 +105,8 @@ const rolesOf = (team: Team | undefined) => (team === "field" ? FIELD_ROLES : te
 const WORKABLE = sql.raw(WORKABLE_STATUSES.map((s) => `'${s}'`).join(", "));
 const NAME = sql`COALESCE(dl.shop_name, dl.dealer_name, '(unnamed)')`;
 const IST_DAY = (at: SQL) => sql`TO_CHAR((${at}) AT TIME ZONE 'Asia/Kolkata', 'DD Mon')`;
-const WORKING_DAYS_SINCE = (at: SQL) => sql`(
-    SELECT COUNT(*) FROM generate_series(
-        ((${at}) AT TIME ZONE 'Asia/Kolkata')::date + 1,
-        (now() AT TIME ZONE 'Asia/Kolkata')::date, INTERVAL '1 day'
-    ) gs WHERE EXTRACT(DOW FROM gs) <> 0
-)::int`;
+// Working days (Mon–Sat, active holidays off) since `at` — the office calendar.
+const WORKING_DAYS_SINCE = (at: SQL) => workingDaysSinceSql(at);
 
 /**
  * The page's filters on `dl`. `holder` is who the person / team filters look
@@ -184,20 +181,22 @@ async function hotNotCalled(s: ActionScope): Promise<Built> {
                 WHERE t.dealer_lead_id = dl.id AND t.touchpoint_type IN ('inside_sales_call', 'visit')
                   AND t.performed_at >= COALESCE(dl.assigned_at, dl.created_at))
            ${scope(s, "owner")}`);
+    const [limits, holidays] = await Promise.all([getTimeLimits(), loadHolidays()]);
+    const limitHours = limits.owner_first_attempt;
     const now = new Date();
     const late = raw
-        .map((r) => ({ r, hours: workingHoursBetween(new Date(String(r.since)), now) }))
-        .filter((x) => x.hours > HOT_FIRST_CALL_LIMIT_HOURS)
+        .map((r) => ({ r, hours: workingHoursBetween(new Date(String(r.since)), now, holidays) }))
+        .filter((x) => x.hours > limitHours)
         .sort((a, b) => b.hours - a.hours);
     const rows = late.map(({ r, hours }) =>
         base(r, `With owner since ${new Date(String(r.since)).toLocaleDateString("en-IN", { day: "2-digit", month: "short", timeZone: "Asia/Kolkata" })} · ${Math.floor(hours)} working hours, no call or visit`),
     );
-    return { rows, sub: `Past the ${HOT_FIRST_CALL_LIMIT_HOURS}-working-hour first-attempt limit` };
+    return { rows, sub: `Past the ${limitHours}-working-hour first-attempt limit` };
 }
 
 async function visitOverdue(s: ActionScope): Promise<Built> {
-    const [raw, limit] = await Promise.all([
-        run(sql`
+    const limitDays = (await getTimeLimits()).asm_transfer_first_visit;
+    const raw = await run(sql`
             SELECT dl.id AS lead_id, ${NAME} AS dealer, dl.city, dl.state,
                    COALESCE(a.name, u.name) AS owner_name,
                    COALESCE(a.id::text, u.id::text) AS owner_id,
@@ -206,10 +205,8 @@ async function visitOverdue(s: ActionScope): Promise<Built> {
               FROM dealer_leads dl
               LEFT JOIN users a ON a.id::text = dl.asm_id
               LEFT JOIN users u ON u.id::text = dl.current_owner_id
-             WHERE ${TRANSFER_VISIT_OVERDUE_SQL} ${scope(s, "owner_or_asm")}
-             ORDER BY days DESC`),
-        getAsmTransferVisitLimit(),
-    ]);
+             WHERE ${transferVisitOverdueSql(limitDays)} ${scope(s, "owner_or_asm")}
+             ORDER BY days DESC`);
     const rows = raw.map((r) => base(r, `Transferred ${String(r.transferred_on)} · ${plural(Number(r.days), "working day")}, no visit`));
     const byCity = new Map<string, number>();
     for (const r of rows) {
@@ -217,10 +214,11 @@ async function visitOverdue(s: ActionScope): Promise<Built> {
         byCity.set(c, (byCity.get(c) ?? 0) + 1);
     }
     const top = [...byCity.entries()].sort((a, b) => b[1] - a[1]).slice(0, 2).map(([c, n]) => `${c} ${n}`).join(", ");
-    return { rows, sub: `Over ${plural(limit.days, "working day")} since transfer${top ? ` · ${top}` : ""}` };
+    return { rows, sub: `Over ${plural(limitDays, "working day")} since transfer${top ? ` · ${top}` : ""}` };
 }
 
 async function quotesNoAnswer(s: ActionScope): Promise<Built> {
+    const limitDays = (await getTimeLimits()).quote_no_answer;
     const raw = await run(sql`
         SELECT dl.id AS lead_id, ${NAME} AS dealer, dl.city, dl.state, u.name AS owner_name, u.id::text AS owner_id,
                q.quote_number, q.value, ${IST_DAY(sql`d.sent_at`)} AS sent_on,
@@ -245,7 +243,7 @@ async function quotesNoAnswer(s: ActionScope): Promise<Built> {
            AND dl.lead_status IN (${WORKABLE})
            AND q.dealer_decision IS NULL AND q.withdrawn_at IS NULL
            AND d.sent_at IS NOT NULL
-           AND ${WORKING_DAYS_SINCE(sql`d.sent_at`)} > ${QUOTE_NO_ANSWER_WORKING_DAYS}
+           AND ${WORKING_DAYS_SINCE(sql`d.sent_at`)} > ${sql.raw(String(Math.floor(limitDays)))}
            ${scope(s, "owner")}
          ORDER BY days DESC`);
     const rows = raw.map((r) =>
@@ -256,7 +254,7 @@ async function quotesNoAnswer(s: ActionScope): Promise<Built> {
         ),
     );
     const total = rows.reduce((a, r) => a + (r.value ?? 0), 0);
-    return { rows, sub: `Delivered over ${QUOTE_NO_ANSWER_WORKING_DAYS} working days ago · ${inr(total)} quoted` };
+    return { rows, sub: `Delivered over ${plural(limitDays, "working day")} ago · ${inr(total)} quoted` };
 }
 
 async function saidYes(s: ActionScope): Promise<Built> {
@@ -280,6 +278,7 @@ async function saidYes(s: ActionScope): Promise<Built> {
 }
 
 async function onboardingStalled(s: ActionScope): Promise<Built> {
+    const limits = await getTimeLimits();
     const raw = await run(sql`
         SELECT dl.id AS lead_id, COALESCE(dl.shop_name, dl.dealer_name, oa.company_name, '(unnamed)') AS dealer,
                dl.city, dl.state, u.name AS owner_name, u.id::text AS owner_id,
@@ -288,7 +287,7 @@ async function onboardingStalled(s: ActionScope): Promise<Built> {
           FROM dealer_leads dl
           JOIN dealer_onboarding_applications oa ON oa.id = dl.dealer_onboarding_application_id
           LEFT JOIN users u ON u.id::text = dl.current_owner_id
-         WHERE ${ONBOARDING_STALLED} ${scope(s, "owner")}
+         WHERE ${onboardingStalledSql(limits)} ${scope(s, "owner")}
          ORDER BY ${sql.raw(ONB_LAST)} ASC`);
     const rows = raw.map((r) =>
         base(

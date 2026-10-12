@@ -19,8 +19,11 @@ const PAGE_SIZE = 25;
 
 export function OnboardingDropoutsView({
     viewerRole,
+    keepWaitingDays,
 }: {
     viewerRole: string;
+    /** ID 85 — onboarding_keep_waiting in force today, for the modal's text. */
+    keepWaitingDays: number;
 }) {
     const qc = useQueryClient();
     const [page, setPage] = useState(1);
@@ -88,6 +91,7 @@ export function OnboardingDropoutsView({
                     open={!!active}
                     dropout={active}
                     viewerRole={viewerRole}
+                    keepWaitingDays={keepWaitingDays}
                     onClose={() => setActive(null)}
                     onSuccess={() => {
                         setActive(null);

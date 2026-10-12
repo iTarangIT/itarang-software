@@ -13,7 +13,7 @@ import { dialerCampaigns } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { successResponse, errorResponse, withErrorHandler } from "@/lib/api-utils";
 import { guardApi } from "@/lib/auth/apiGuard";
-import { DIALER_CONTROL_ROLES } from "@/lib/leads/access";
+import { CALLING_LIST_ROLES } from "@/lib/leads/access";
 import { type DialerProvider } from "@/lib/queue/dialerSession";
 import { startDraftCampaign } from "@/lib/queue/startCampaign";
 import {
@@ -30,7 +30,7 @@ export const POST = withErrorHandler(
 
     // ID 118: starting places real AI calls — login + dialer control role.
     // (The old try/catch around requireAuth() let anonymous callers through.)
-    const gate = await guardApi([...DIALER_CONTROL_ROLES]);
+    const gate = await guardApi([...CALLING_LIST_ROLES]);
     if (!gate.ok) return gate.response;
 
     const body = await req.json().catch(() => ({}));

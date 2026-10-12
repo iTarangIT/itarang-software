@@ -16,8 +16,8 @@
  * `sent: false` rather than mailing twice.
  *
  * Auth: trusts the Vercel cron header (`x-vercel-cron`), else a
- * `Bearer CRON_SECRET`, else allows unauthenticated in non-production — matching
- * its sibling crons.
+ * `Bearer CRON_SECRET` — closed when the secret is unset, in every environment
+ * (ID 130).
  *
  * Crontab lines for the VPS (the box runs UTC, so 09:00 / 19:00 IST are
  * 03:30 / 13:30 UTC):
@@ -32,20 +32,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { runAllDigests, runDigest } from "@/lib/digests/engine";
 import type { DigestRunSlot } from "@/lib/digests/engine";
 import { DIGEST_KIND_IDS, digestKind } from "@/lib/digests/registry";
-import { fromVercelCron } from "@/lib/security/cronAuth";
+import { isCronAuthorised } from "@/lib/cron-auth";
 import { runAsJob } from "@/lib/runtime/liveSite";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-function isAuthorised(req: NextRequest): boolean {
-  if (fromVercelCron(req)) return true;
-  const auth = req.headers.get("authorization") ?? "";
-  const expected = process.env.CRON_SECRET;
-  if (expected && auth === `Bearer ${expected}`) return true;
-  if (process.env.NODE_ENV !== "production") return true;
-  return false;
-}
 
 function parseSlot(raw: string | null): DigestRunSlot | undefined {
   if (raw === "morning" || raw === "evening" || raw === "test") return raw;
@@ -53,7 +44,7 @@ function parseSlot(raw: string | null): DigestRunSlot | undefined {
 }
 
 async function run(req: NextRequest) {
-  if (!isAuthorised(req)) {
+  if (!isCronAuthorised(req)) {
     return NextResponse.json({ ok: false, error: "UNAUTHORIZED" }, { status: 401 });
   }
 

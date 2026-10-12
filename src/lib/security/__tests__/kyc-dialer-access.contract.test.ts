@@ -4,8 +4,10 @@
  *
  *   ID 119: the 21 KYC actions that checked only the login / role now also
  *           check the lead is the caller's (requireLeadAccess).
- *   ID 118: uploading, starting and stopping AI-dialer calling lists is for
- *           admin, ceo and sales_head only (DIALER_CONTROL_ROLES via guardApi).
+ *   ID 145: uploading, starting and stopping AI-dialer calling lists is for
+ *           admin, ceo, business_head and sales_head only (CALLING_LIST_ROLES
+ *           via guardApi); a campaign's Call next / Resume / Retry for admin
+ *           and ceo, its Force stop for the four calling-list roles.
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -13,7 +15,15 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { dealerOwnsLead } from "@/lib/auth/leadAccessRules";
-import { DIALER_CONTROL_ROLES, canControlDialer } from "@/lib/leads/access";
+import {
+  CALLING_LIST_ROLES,
+  CAMPAIGN_ACTION_ROLES,
+  CAMPAIGN_STOP_ROLES,
+  canControlDialer,
+  canRunCampaignActions,
+  canStopCampaign,
+  capabilitiesFor,
+} from "@/lib/leads/access";
 
 const API_DIR = join(process.cwd(), "src", "app", "api");
 
@@ -86,20 +96,52 @@ describe("dealerOwnsLead", () => {
   });
 });
 
-describe("ID 118 — AI-dialer lists: admin, ceo, sales_head only", () => {
+const OTHERS = ["dealer", "sales_manager", "sales_executive", "partner", "asm", "inside_sales_rep", "finance_controller", "user", "", null];
+
+describe("ID 145 — AI-dialer lists: admin, ceo, business_head, sales_head only", () => {
   it("the role set is exactly the decision", () => {
-    expect([...DIALER_CONTROL_ROLES].sort()).toEqual(["admin", "ceo", "sales_head"]);
-    for (const r of ["dealer", "sales_manager", "business_head", "partner", "asm", "inside_sales_rep", "user", "", null]) {
-      expect(canControlDialer(r), String(r)).toBe(false);
+    expect([...CALLING_LIST_ROLES].sort()).toEqual(["admin", "business_head", "ceo", "sales_head"]);
+    for (const r of CALLING_LIST_ROLES) expect(canControlDialer(r), r).toBe(true);
+    for (const r of OTHERS) expect(canControlDialer(r), String(r)).toBe(false);
+  });
+
+  it("the Leads page capability follows the same set", () => {
+    expect(capabilitiesFor("business_head").canControlDialer).toBe(true);
+    expect(capabilitiesFor("sales_manager").canControlDialer).toBe(false);
+    expect(capabilitiesFor("asm").canControlDialer).toBe(false);
+  });
+
+  it("campaign Call next / Resume / Retry: admin and ceo only; Force stop: the four", () => {
+    expect([...CAMPAIGN_ACTION_ROLES].sort()).toEqual(["admin", "ceo"]);
+    expect([...CAMPAIGN_STOP_ROLES].sort()).toEqual([...CALLING_LIST_ROLES].sort());
+    expect(canRunCampaignActions("sales_head")).toBe(false);
+    expect(canStopCampaign("sales_head")).toBe(true);
+    for (const r of OTHERS) {
+      expect(canRunCampaignActions(r), String(r)).toBe(false);
+      expect(canStopCampaign(r), String(r)).toBe(false);
     }
   });
 
+  for (const [route, roles] of [
+    ["ai-dialer/campaigns/[id]/advance", "CAMPAIGN_ACTION_ROLES"],
+    ["ai-dialer/campaigns/[id]/resume", "CAMPAIGN_ACTION_ROLES"],
+    ["ai-dialer/campaigns/[id]/recall-failed", "CAMPAIGN_ACTION_ROLES"],
+    ["ai-dialer/campaigns/[id]/stop", "CAMPAIGN_STOP_ROLES"],
+  ] as const) {
+    it(`${route} gates on ${roles} with a JSON refusal`, () => {
+      const src = code(route);
+      expect(src).toMatch(new RegExp(String.raw`guardApi\(\s*\[\s*\.\.\.${roles}\s*\]\s*\)`));
+      expect(src).toMatch(/if\s*\(\s*!gate\.ok\s*\)\s*return\s+gate\.response/);
+      expect(src).not.toMatch(/requireRole\(/);
+    });
+  }
+
   for (const route of ["ai-dialer/lists/create", "ai-dialer/lists/[id]/start", "ai-dialer/stop", "ai-dialer/start"]) {
-    it(`${route} gates on DIALER_CONTROL_ROLES before any work`, () => {
+    it(`${route} gates on CALLING_LIST_ROLES before any work`, () => {
       const src = code(route);
       const handler = src.slice(src.search(/export (async function|const) POST/));
-      const gateAt = handler.search(/guardApi\(\s*\[\s*\.\.\.DIALER_CONTROL_ROLES\s*\]\s*\)/);
-      expect(gateAt, "guardApi([...DIALER_CONTROL_ROLES])").toBeGreaterThan(-1);
+      const gateAt = handler.search(/guardApi\(\s*\[\s*\.\.\.CALLING_LIST_ROLES\s*\]\s*\)/);
+      expect(gateAt, "guardApi([...CALLING_LIST_ROLES])").toBeGreaterThan(-1);
       expect(handler).toMatch(/if\s*\(\s*!gate\.ok\s*\)\s*return\s+gate\.response/);
       // the old fail-open shape: requireAuth() inside a try whose catch swallows it
       expect(handler).not.toMatch(/try\s*\{\s*(const\s+\w+\s*=\s*)?await\s+requireAuth\(\)/);

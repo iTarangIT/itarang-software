@@ -27,6 +27,7 @@ import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import { eq, inArray } from 'drizzle-orm';
 import * as schema from '../../../src/lib/db/schema';
+import { cronAuth } from '../helpers/cron-auth';
 
 const DB_URL = process.env.DATABASE_URL;
 if (!DB_URL) {
@@ -205,7 +206,7 @@ test.describe('E-049 — Telemetry alert rule engine', () => {
     const now = new Date(lastSeen.getTime() + 25 * 60 * 60 * 1000);
     const res = await request.post(
       `/api/cron/iot/scan-offline-batteries?now=${encodeURIComponent(now.toISOString())}`,
-      { headers: { 'content-type': 'application/json' } },
+      { headers: { 'content-type': 'application/json', ...cronAuth() } },
     );
     expect(res.status(), await res.text().catch(() => '')).toBe(200);
     const body = await res.json();
@@ -233,7 +234,7 @@ test.describe('E-049 — Telemetry alert rule engine', () => {
     const now = new Date(lastSeen.getTime() + 50 * 60 * 60 * 1000);
     const res = await request.post(
       `/api/cron/iot/scan-offline-batteries?now=${encodeURIComponent(now.toISOString())}`,
-      { headers: { 'content-type': 'application/json' } },
+      { headers: { 'content-type': 'application/json', ...cronAuth() } },
     );
     expect(res.status(), await res.text().catch(() => '')).toBe(200);
     const body = await res.json();

@@ -8,6 +8,7 @@ import type {
     LeadDetailStatusHistory,
 } from "@/lib/inside-sales/types";
 import type { LeadStatus } from "@/lib/lifecycle/transitions";
+import { TIME_LIMIT_DEFAULTS, type TimeLimits } from "@/lib/timeLimits/registry";
 
 // ─────────────────────────────── Dashboard ────────────────────────────────
 
@@ -48,8 +49,8 @@ export type TeamPerfRow = {
     avg_time_to_first_touch_hours: number | null;
     /** Converted ÷ (Converted + Lost) closed by this person, last 30 days (R-08). */
     closed_win_rate_30d: number | null;
-    stale_leads: number; // open, no touch > 5 days
-    critical_stale: number; // open, no touch > 10 days
+    stale_leads: number; // open, no touch > stale_yellow working days (ID 85 time limit)
+    critical_stale: number; // open, no touch > stale_red working days
     ooo_status: string | null;
 };
 
@@ -73,7 +74,8 @@ export const ALERT_PANELS = [
     "won_without_quote",
     // ID 77.1 — Transferred to ASM, no visit within the admin-set limit.
     "transfer_visit_overdue",
-    // ID 75.4 — dealer approved the quote 2+ days ago, lead not marked Won.
+    // ID 75.4 — dealer approved the quote more than said_yes_not_won working
+    // days ago (the CEO card's limit), lead not marked Won.
     "finalised_not_won",
 ] as const;
 export type AlertPanelKey = (typeof ALERT_PANELS)[number];
@@ -96,19 +98,33 @@ export const ALERT_PANEL_LABELS: Record<AlertPanelKey, string> = {
     finalised_not_won: "Commercials finalised, not marked Won",
 };
 
+const wd = (n: number) => `${n} working day${n === 1 ? "" : "s"}`;
+
 /**
- * A panel's label with its live threshold. Only transfer_visit_overdue has one
- * (the admin-set ASM visit limit, ID 77.1); every other label is fixed.
+ * A panel's label with its live threshold — the time limits in force today
+ * (ID 85, src/lib/timeLimits; the dashboard API sends them). The panel KEYS
+ * keep their original numbers (no_touch_5d …) as identifiers only. Panels
+ * without a limit use ALERT_PANEL_LABELS.
  */
-export function alertPanelLabel(
-    key: AlertPanelKey,
-    opts: { transferVisitLimitDays?: number | null } = {},
-): string {
-    if (key === "transfer_visit_overdue" && opts.transferVisitLimitDays) {
-        const n = opts.transferVisitLimitDays;
-        return `Awaiting field visit past ${n} working day${n === 1 ? "" : "s"}`;
+export function alertPanelLabel(key: AlertPanelKey, limits: TimeLimits = TIME_LIMIT_DEFAULTS): string {
+    switch (key) {
+        case "no_touch_5d":
+            return `No Touch > ${wd(limits.stale_yellow)}`;
+        case "no_touch_10d":
+            return `No Touch > ${wd(limits.stale_red)}`;
+        case "awaiting_decision_14d":
+            return `Awaiting Customer Decision > ${wd(limits.stale_critical)}`;
+        case "stale_converted":
+            return `Stale Won / Converted (no onboarding activity ${limits.won_not_converted}+ days)`;
+        case "onboarding_stalled":
+            return `Onboarding stalled (dealer ${limits.onboarding_stall_dealer}+ days / us ${limits.onboarding_stall_us}+ working days)`;
+        case "transfer_visit_overdue":
+            return `Awaiting field visit past ${wd(limits.asm_transfer_first_visit)}`;
+        case "finalised_not_won":
+            return `Dealer approved, not marked Won after ${wd(limits.said_yes_not_won)}`;
+        default:
+            return ALERT_PANEL_LABELS[key];
     }
-    return ALERT_PANEL_LABELS[key];
 }
 
 // Generic drill-down row used by every alert panel.
@@ -139,8 +155,8 @@ export type DashboardResponse = {
     kpis: AdminKpis;
     team: TeamPerfRow[];
     alert_counts: Record<AlertPanelKey, number>;
-    /** ID 77.1 — the admin-set ASM visit limit, for the panel label. */
-    transfer_visit_limit_days?: number;
+    /** ID 85 — the time limits in force today, for the panel and column labels. */
+    time_limits?: TimeLimits;
 };
 
 // ────────────────────────────── Escalations ───────────────────────────────
