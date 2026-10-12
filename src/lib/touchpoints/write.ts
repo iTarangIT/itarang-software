@@ -35,6 +35,7 @@ import { checkStatusMove, type StatusEvent } from "@/lib/lifecycle/statusRules";
 import type { Interest } from "@/lib/leads/autoProgress";
 import { planOutcome, type TouchpointOutcome } from "@/lib/leads/outcomeRule";
 import { setInterestLevel } from "@/lib/leads/interestLevel";
+import { cancelPendingWonUndo } from "@/lib/leads/wonUndoCancel";
 
 /**
  * A status move the S3 rules refuse (statusRules.ts). Carries an HTTP status so
@@ -359,6 +360,12 @@ export async function writeTouchpoint(
         .returning({ history_id: dealerLeadStatusHistory.history_id });
 
       historyId = history?.history_id ?? null;
+
+      // ID 169: leaving Won (other than by the undo itself, which closes its
+      // own request) makes a waiting Undo Mark Won request moot.
+      if (fromStatus === "Won" && sc.to !== "Won" && sc.event !== "won_undone") {
+        await cancelPendingWonUndo(tx, input.dealerLeadId, `Cancelled: the lead left Won (now ${sc.to}).`);
+      }
 
       // BRD §0.7: terminal transitions set closed_at + closing_owner_id +
       // closing_role; non-terminal transitions just update lead_status (+

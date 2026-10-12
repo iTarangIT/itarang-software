@@ -15,6 +15,7 @@ import { callerNotLinkedFor } from "@/lib/neodove/ownerFromCall";
 import { engagedState } from "@/lib/reports/metricDefinitions";
 import { fetchAssignedByForLeads } from "@/lib/leads/leadAssignedBy";
 import { onboardingStall, STALL_LABEL } from "@/lib/onboarding/stall";
+import { getTimeLimits } from "@/lib/timeLimits/store";
 import { agreementOutcomeLabel } from "@/lib/onboarding/leadMilestones";
 import type {
     LeadDetailBundle,
@@ -25,6 +26,9 @@ import type {
     LeadDetailTouchpoint,
 } from "@/lib/inside-sales/types";
 import { onboardingClockSql } from "@/lib/onboarding/clock";
+import { dealCardJson } from "@/lib/leads/dealCard";
+import { dealCardLockedBy, parseDealCard } from "@/lib/leads/dealCardRules";
+import { dealCardActualsSql } from "@/lib/leads/dealCardActuals";
 
 // ID 122: the one onboarding clock (src/lib/onboarding/clock.ts).
 const ONBOARDING_CLOCK = sql.raw(onboardingClockSql("oa"));
@@ -135,7 +139,10 @@ export async function fetchLeadDetailBundle(leadId: string): Promise<LeadDetailB
                 dealer_decision, dealer_decision_at, dealer_decision_via,
                 dealer_decision_note, oem_evaluation,
                 -- ID 78 (E-314), read through to_jsonb so a DB without it still loads.
-                to_jsonb(dealer_lead_commercials) ->> 'withdraw_reason' AS withdraw_reason
+                to_jsonb(dealer_lead_commercials) ->> 'withdraw_reason' AS withdraw_reason,
+                -- ID 172 (E-336, not in schema.ts): the deal card, via to_jsonb.
+                ${dealCardJson("dealer_lead_commercials")} AS deal_card_raw,
+                approved_by::text AS approved_by_id
             FROM dealer_lead_commercials
             WHERE dealer_lead_id = ${leadId}
             ORDER BY version_no DESC
@@ -193,6 +200,44 @@ export async function fetchLeadDetailBundle(leadId: string): Promise<LeadDetailB
     // ID 78: flag an OPEN quote (released, unanswered, not withdrawn) whose
     // product reference price changed since it was issued.
     const history = commercialsHistory as LeadDetailCommercials[];
+
+    // ID 172: each row's deal card, and whether the lead's card is locked —
+    // the latest live quote with a card that the CEO approved or the dealer
+    // said yes to (same rule as readLockedDealCard).
+    let cardLock: "ceo" | "dealer" | null = null;
+    for (const c of history) {
+        const raw = c as unknown as { deal_card_raw?: unknown; approved_by_id?: string | null };
+        c.deal_card = parseDealCard(raw.deal_card_raw);
+        const live =
+            (c.event_type === "quote_issue" || c.event_type === "quote_revision") &&
+            !c.withdrawn_at &&
+            c.approval_status !== "rejected";
+        if (!cardLock && live && c.deal_card) {
+            cardLock = dealCardLockedBy({
+                approval_status: c.approval_status,
+                approved_by: raw.approved_by_id ?? null,
+                dealer_decision: c.dealer_decision ?? null,
+            });
+        }
+        delete raw.deal_card_raw;
+        delete raw.approved_by_id;
+    }
+    for (const c of history) c.deal_card_locked = cardLock;
+    // ID 172 item 5: "Fee promised · invoiced" — read only when a card exists.
+    if (history.some((c) => c.deal_card)) {
+        try {
+            const actuals = await dealCardActualsSql();
+            if (actuals) {
+                const fee = (await db.execute(sql`
+                    SELECT da.fee_invoiced FROM (${actuals}) da WHERE da.lead_id = ${leadId}
+                `)) as unknown as Array<{ fee_invoiced: number }>;
+                const v = Number(fee[0]?.fee_invoiced ?? 0);
+                for (const c of history) c.fee_invoiced = v;
+            }
+        } catch (err) {
+            console.warn("[leadDetail] fee invoiced skipped", err);
+        }
+    }
     for (const c of history) {
         const open =
             (c.event_type === "quote_issue" || c.event_type === "quote_revision") &&
@@ -234,8 +279,9 @@ export async function fetchLeadDetailBundle(leadId: string): Promise<LeadDetailB
         }
     >;
 
-    // ID 84.1: stalled = waiting on the dealer 7+ days, or on us 2+ working
-    // days (holiday_calendar excluded). Holidays only matter for the "us" side,
+    // ID 84.1: stalled = waiting on the dealer onboarding_stall_dealer+ days,
+    // or on us onboarding_stall_us+ working days (ID 85 time limits;
+    // holiday_calendar excluded). Holidays only matter for the "us" side,
     // so they are read only when there is an open onboarding.
     let onboarding: LeadOnboardingMilestones | null = null;
     if (onboardingRaw[0]) {
@@ -254,7 +300,8 @@ export async function fetchLeadDetailBundle(leadId: string): Promise<LeadDetailB
                 // No calendar: Sundays alone are skipped.
             }
         }
-        const waitingOn = live
+        const limits = live ? await getTimeLimits() : null;
+        const waitingOn = live && limits
             ? onboardingStall(
                   {
                       onboarding_status: o.onboarding_status,
@@ -262,6 +309,8 @@ export async function fetchLeadDetailBundle(leadId: string): Promise<LeadDetailB
                       last_activity_at: o.last_activity_at,
                   },
                   holidays,
+                  new Date(),
+                  { dealerDays: limits.onboarding_stall_dealer, usWorkingDays: limits.onboarding_stall_us },
               )
             : null;
         onboarding = {

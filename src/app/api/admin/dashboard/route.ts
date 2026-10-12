@@ -11,7 +11,7 @@ import {
     fetchTeamPerformance,
 } from "@/lib/admin/dashboard";
 import { parseDashboardFilters } from "@/lib/admin/filters";
-import { getAsmTransferVisitLimit } from "@/lib/asm/transferVisitLimit";
+import { getTimeLimits } from "@/lib/timeLimits/store";
 import type { DashboardResponse } from "@/lib/admin/types";
 
 export const dynamic = "force-dynamic";
@@ -23,18 +23,18 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
     await requireRole(READ_ROLES);
     const filters = parseDashboardFilters(new URL(req.url));
 
-    const [kpis, team, alert_counts, visitLimit] = await Promise.all([
+    const [kpis, team, alert_counts, time_limits] = await Promise.all([
         fetchKpis(filters),
         fetchTeamPerformance(filters),
         fetchAlertCounts(filters),
-        getAsmTransferVisitLimit(),
+        getTimeLimits(),
     ]);
 
     const body: DashboardResponse = {
         kpis,
         team,
         alert_counts,
-        transfer_visit_limit_days: visitLimit.days,
+        time_limits,
     };
     return successResponse(body);
 });

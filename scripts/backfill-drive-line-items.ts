@@ -4,7 +4,7 @@
  *
  * On prod (6 Oct 2026) invoice_line_items was EMPTY, so the sales dashboard
  * read 0 batteries beside ₹82 lakh of battery invoices. New invoices now get
- * lines from the Drive scan (saveInvoiceLines → saveDriveLedgerLines); this
+ * lines from the Drive scan (readAndSaveInvoiceLines → saveDriveLedgerLines); this
  * reads the existing ones. Each PDF's items table is read by the same model
  * call the scan uses, and stored ONLY when it checks out against the invoice:
  * lines add up to the taxable value AND quantity × rate = amount per line

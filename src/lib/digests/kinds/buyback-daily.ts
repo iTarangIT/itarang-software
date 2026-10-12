@@ -147,6 +147,18 @@ const num = (v: unknown) => {
 };
 
 /**
+ * ID 10 — the CRM leads of dealers with a buyback request (GSTIN match, owner.ts). The
+ * `buyback_leads` CTE of Section B and the audience share it, so "a buyback lead" is one rule:
+ * this, or a lead whose Type of business is Buyback.
+ */
+const BUYBACK_LEAD_IDS = sql`
+      SELECT DISTINCT m.dealer_lead_id
+        FROM buyback_requests br
+        JOIN accounts a ON a.id = br.dealer_entity_id
+        JOIN ${dealerLeadByGstin(GSTIN_KEY(sql`a.gstin`))} m ON TRUE
+       WHERE m.dealer_lead_id IS NOT NULL`;
+
+/**
  * One row per SPOC for one period. Every figure is grouped on its own natural
  * key first (request → owner, touchpoint → performer) and the groups are
  * unioned and summed, so a SPOC with only quotes still appears. Rows with no
@@ -206,11 +218,7 @@ async function periodRows(from: string, to: string): Promise<BuybackSpocRow[]> {
     ),
     buyback_leads AS (
       -- CRM leads of dealers with a buyback request (GSTIN match, owner.ts).
-      SELECT DISTINCT m.dealer_lead_id
-        FROM buyback_requests br
-        JOIN accounts a ON a.id = br.dealer_entity_id
-        JOIN ${dealerLeadByGstin(GSTIN_KEY(sql`a.gstin`))} m ON TRUE
-       WHERE m.dealer_lead_id IS NOT NULL
+      ${BUYBACK_LEAD_IDS}
     ),
     margin AS (
       -- Deals whose recycler sale was booked in the period: all that came in
@@ -545,14 +553,20 @@ async function collectDetail(): Promise<{ ok: boolean; detail: DigestDetail; err
 }
 
 /**
- * ID 10 — the layout's "Buyback team, CEO", worked out at send time: every
- * active CEO login, and everyone who owns a buyback request submitted in the
- * last 90 days (the SPOCs — there is no separate buyback role). Added to the
+ * ID 10 — the layout's "Buyback team, CEO", worked out at send time. There is
+ * no buyback role, so a SPOC is anyone doing buyback work: every active CEO
+ * login, plus everyone who
+ *   - owns a buyback request submitted in the last 90 days,
+ *   - made a human call on a buyback lead in the last 90 days (the people
+ *     Section B already lists), or
+ *   - currently owns a buyback lead.
+ * The last two reach a new SPOC before their first request. Added to the
  * addresses on the settings screen, never instead of them.
  */
 async function buybackTeamAndCeo(): Promise<string[]> {
   const { db } = await import("@/lib/db");
   const rows = (await db.execute(sql`
+    WITH buyback_leads AS (${BUYBACK_LEAD_IDS})
     SELECT DISTINCT u.email
       FROM users u
      WHERE u.is_active = TRUE
@@ -562,7 +576,22 @@ async function buybackTeamAndCeo(): Promise<string[]> {
                 SELECT br.owner_id
                   FROM buyback_requests br
                  WHERE br.owner_id IS NOT NULL
-                   AND COALESCE(br.submitted_at, br.created_at) >= now() - interval '90 days'))
+                   AND COALESCE(br.submitted_at, br.created_at) >= now() - interval '90 days')
+            OR u.id::text IN (
+                SELECT t.performed_by
+                  FROM lead_touchpoints t
+                  JOIN dealer_leads dl ON dl.id = t.dealer_lead_id
+                 WHERE ${humanCall()}
+                   AND t.performed_by IS NOT NULL
+                   AND t.performed_at >= now() - interval '90 days'
+                   AND ((to_jsonb(dl) ->> 'business_type') = 'buyback'
+                        OR dl.id IN (SELECT dealer_lead_id FROM buyback_leads)))
+            OR u.id::text IN (
+                SELECT dl.current_owner_id
+                  FROM dealer_leads dl
+                 WHERE dl.current_owner_id IS NOT NULL
+                   AND ((to_jsonb(dl) ->> 'business_type') = 'buyback'
+                        OR dl.id IN (SELECT dealer_lead_id FROM buyback_leads))))
      ORDER BY u.email
   `)) as unknown as Array<{ email: string }>;
   return rows.map((r) => r.email).filter((e) => e.includes("@") && !isTestLogin(e));
@@ -577,8 +606,9 @@ export const buybackDailyDigest: DigestKindDescriptor = {
     "₹/kg and gross margin — yesterday, last 7 days, month to date, target and the same period " +
     "last month), B · the same activity per SPOC (the request's owner), C · the open buyback " +
     "pipeline by where each request is waiting, and D · pickups for tomorrow and the day after with " +
-    "the kg expected tomorrow. The buyback team (everyone who owns a buyback request from the last " +
-    "90 days) and the CEO are always included; add anyone else here.",
+    "the kg expected tomorrow. The buyback team and the CEO are always included: everyone who " +
+    "owns a buyback request or called a buyback lead in the last 90 days, or owns a buyback lead " +
+    "now. Add anyone else here.",
   settingsKey: "buyback_daily_digest",
   settingsHref: "/admin/settings/buyback-daily",
   ctaHref: "/admin/buyback/dashboard",

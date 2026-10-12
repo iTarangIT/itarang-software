@@ -1,45 +1,30 @@
-// Apply E-170 (WhatsApp dealer self-service) to the connected host.
-//
-// The webhook fails at recordInbound with: column "dealer_session_id" of
-// relation "whatsapp_messages" does not exist. schema.ts + E-170 both declare
-// it, but E-170 never got applied here, so every inbound message 500s and the
-// bot goes silent.
-//
-// E-170 is strictly additive + idempotent (CREATE TABLE/INDEX IF NOT EXISTS,
-// ADD COLUMN IF NOT EXISTS), so re-running is a no-op. Run with:
-//   node scripts/_apply-e170.mjs
-import { readFileSync } from "node:fs";
-import postgres from "postgres";
-
-const env = readFileSync(".env.local", "utf8");
-const m = env.match(/^DATABASE_URL=(.*)$/m);
-if (!m) { console.error("DATABASE_URL not found"); process.exit(1); }
-const url = m[1].trim().replace(/^["']|["']$/g, "");
-const host = (url.match(/@([^:/]+)/) || [])[1];
-console.log("Applying E-170 to host:", host);
-
-const e170 = readFileSync("drizzle/E-170_whatsapp_dealer_sessions.sql", "utf8");
-
-const sql = postgres(url, { ssl: "require", prepare: false, max: 1, connect_timeout: 15 });
-try {
-  await sql.unsafe(e170);
-  console.log("E-170 applied OK");
-
-  const col = await sql`
-    SELECT column_name
-    FROM information_schema.columns
-    WHERE table_name = 'whatsapp_messages'
-      AND column_name = 'dealer_session_id'`;
-  const tbl = await sql`
-    SELECT to_regclass('public.whatsapp_dealer_sessions') AS t`;
-  console.log(
-    "whatsapp_messages.dealer_session_id:",
-    col.length ? "present" : "MISSING (unexpected)",
-  );
-  console.log(
-    "whatsapp_dealer_sessions table:",
-    tbl[0].t ? "present" : "MISSING (unexpected)",
-  );
-} finally {
-  await sql.end();
-}
+// Applies drizzle/E-170 (dead Supabase links -> /api/files) to the DB in DATABASE_URL.
+// Refuses unless the host is the one named on the command line. Saves a snapshot first.
+import pg from "pg";
+import { readFileSync, writeFileSync } from "node:fs";
+const want = process.argv[2];
+const snapPath = process.argv[3];
+const host = new URL(process.env.DATABASE_URL).host.split(".")[0];
+if (host !== want) { console.error(`DATABASE_URL is ${host}, expected ${want}`); process.exit(1); }
+const sql = readFileSync("drizzle/E-170_backfill_storage_urls_to_files_proxy.sql", "utf8");
+const cols = [["ai_call_logs","recording_url"],["consent_records","generated_pdf_url"],["consent_records","signed_consent_url"],["dealer_onboarding_applications","signed_agreement_url"],["dealer_onboarding_applications","audit_trail_url"],["dealer_onboarding_documents","file_url"],["kyc_documents","file_url"],["other_document_requests","file_url"],["expense_submissions","bill_url"],["lead_touchpoints","recording_url"],["product_selections","battery_photo_urls"],["product_selections","charger_photo_urls"]];
+const RE = `https?://[^/]+/storage/v1/object/public/(documents|dealer-documents|call-recordings)/`;
+const c = new pg.Client({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
+await c.connect();
+const count = async () => { const out = {}; for (const [t, k] of cols) { try { const r = await c.query(`select count(*)::int n from "${t}" where "${k}"::text ~ $1`, [RE]); out[`${t}.${k}`] = r.rows[0].n; } catch (e) { out[`${t}.${k}`] = "missing"; } } return out; };
+const before = await count();
+console.log("host", host, "BEFORE", before);
+const snap = {};
+for (const [t, k] of cols) { try { snap[`${t}.${k}`] = (await c.query(`select ctid::text, "${k}"::text v, (select row_to_json(x) from (select * from "${t}" limit 0) x) _ , * from "${t}" where "${k}"::text ~ $1`, [RE])).rows.map(r => ({ id: r.id ?? null, value: r.v })); } catch {} }
+writeFileSync(snapPath, JSON.stringify({ host, at: new Date().toISOString(), snap }, null, 1));
+console.log("snapshot ->", snapPath);
+await c.query("BEGIN");
+await c.query(sql);
+const after = await count();
+const left = Object.values(after).filter(v => typeof v === "number").reduce((a, b) => a + b, 0);
+if (left !== 0) { await c.query("ROLLBACK"); console.error("ROLLED BACK, still left:", after); process.exit(1); }
+await c.query("COMMIT");
+console.log("AFTER", after);
+await c.query(sql); // re-run must be a no-op
+console.log("AFTER re-run", await count());
+await c.end();

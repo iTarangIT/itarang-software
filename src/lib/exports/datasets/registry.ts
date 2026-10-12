@@ -18,6 +18,10 @@ import { businessTypeLabel } from "@/lib/leads/businessType";
 import { countEvents, fetchEvents, type EventLogFilters } from "@/lib/leads/eventLog";
 import { LEAD_EVENT_TYPES, parseEventTypes } from "@/lib/leads/eventTypes";
 import { parseLeadListFilters } from "@/lib/leads/leadListParams";
+import { hasLeadClocks } from "@/lib/leads/clocks";
+import { workingDaysSince as officeWorkingDaysSince } from "@/lib/calendar/officeCalendar";
+import { loadHolidays } from "@/lib/calendar/holidays";
+import { getTimeLimits } from "@/lib/timeLimits/store";
 import { doorLabel, originLabel } from "@/lib/leads/leadSourceVocab";
 import { onboardingStall, STALL_LABEL } from "@/lib/onboarding/stall";
 import { connectedCall, engagedCall, engagedState, humanCall } from "@/lib/reports/metricDefinitions";
@@ -26,6 +30,7 @@ import { listTargets } from "@/lib/targets/service";
 
 import { DOWNLOAD_ROW_CAP, initialsOf, TEAM_ROLES, type DatasetInfo, type DatasetSheet } from "./types";
 import { onboardingClockSql } from "@/lib/onboarding/clock";
+import { dealCardActualsSql } from "@/lib/leads/dealCardActuals";
 import { BUSINESS_TYPE_OPTIONS, BUSINESS_TYPE_UNSET, BUSINESS_TYPE_UNSET_LABEL } from "@/lib/leads/businessType";
 
 // ID 122: the one onboarding clock (src/lib/onboarding/clock.ts).
@@ -111,15 +116,12 @@ function dateRange(params: URLSearchParams, expr: SQL): SQL {
 
 // ───────────────────────────────── Leads ────────────────────────────────────
 
-/** Working days (Mon–Sat) from the day after `since` to today. */
-function workingDaysSince(since: unknown): number | null {
+/** Working days on the office calendar (Mon–Sat, holidays off) from the day after `since` to today. */
+function workingDaysSince(since: unknown, holidays: ReadonlySet<string>): number | null {
     if (!since) return null;
     const d = new Date(String(since));
     if (Number.isNaN(d.getTime())) return null;
-    const end = Date.now();
-    let n = 0;
-    for (let t = d.getTime() + 86_400_000; t <= end; t += 86_400_000) if (new Date(t).getUTCDay() !== 0) n += 1;
-    return n;
+    return officeWorkingDaysSince(d, new Date(), holidays);
 }
 
 /**
@@ -131,6 +133,34 @@ async function leadExtras(ids: string[]): Promise<Map<string, Record<string, unk
     const out = new Map<string, Record<string, unknown>>();
     if (ids.length === 0) return out;
     try {
+        // ID 86 — first attempt / contact and the time-limit flags come from the
+        // lead clocks (calls AND visits, E-337); without them, the old
+        // calls-only rule.
+        const [clocks, holidays] = await Promise.all([hasLeadClocks(), loadHolidays()]);
+        const firstTouch = clocks
+            ? sql`
+              LEFT JOIN LATERAL (
+                  SELECT c.first_attempt_at AS at, c.first_contact_at AS contact_at, c.started_at,
+                         c.attempt_working_minutes, c.contact_working_minutes, c.limit_passed_at, c.start_inferred
+                    FROM lead_clocks c WHERE c.dealer_lead_id = dl.id AND c.clock = 'lead' LIMIT 1) fa ON TRUE
+              LEFT JOIN LATERAL (SELECT fa.contact_at AS at) fc ON TRUE
+              LEFT JOIN LATERAL (
+                  SELECT c.started_at, c.first_attempt_at, c.attempt_working_minutes, c.limit_passed_at, c.owner_inferred
+                    FROM lead_clocks c WHERE c.dealer_lead_id = dl.id AND c.clock = 'owner'
+                   ORDER BY c.started_at DESC LIMIT 1) oc ON TRUE`
+            : sql`
+              LEFT JOIN LATERAL (
+                  SELECT MIN(t.performed_at) AS at, NULL::timestamptz AS started_at, NULL::int AS attempt_working_minutes,
+                         NULL::int AS contact_working_minutes, NULL::timestamptz AS limit_passed_at, NULL::boolean AS start_inferred
+                    FROM lead_touchpoints t
+                   WHERE t.dealer_lead_id = dl.id AND t.touchpoint_type IN ('inside_sales_call', 'ai_call')) fa ON TRUE
+              LEFT JOIN LATERAL (
+                  SELECT MIN(t.performed_at) AS at FROM lead_touchpoints t
+                   WHERE t.dealer_lead_id = dl.id AND t.touchpoint_type IN ('inside_sales_call', 'ai_call')
+                     AND (t.call_status = 'connected' OR t.connect_status = 'connected')) fc ON TRUE
+              LEFT JOIN LATERAL (
+                  SELECT NULL::timestamptz AS started_at, NULL::timestamptz AS first_attempt_at, NULL::int AS attempt_working_minutes,
+                         NULL::timestamptz AS limit_passed_at, NULL::boolean AS owner_inferred) oc ON TRUE`;
         const data = await rows(sql`
             SELECT dl.id AS lead_id,
                    x.j ->> 'gstin' AS gstin,
@@ -144,6 +174,14 @@ async function leadExtras(ids: string[]): Promise<Map<string, Record<string, unk
                    x.j ->> 'sales_ready_reason' AS sales_ready_reason,
                    x.j ->> 'assigned_at' AS assigned_on,
                    fa.at AS first_attempt_on, fc.at AS first_contact_on,
+                   round(fa.attempt_working_minutes / 60.0, 1) AS hours_to_first_attempt,
+                   round(fa.contact_working_minutes / 60.0, 1) AS hours_to_first_contact,
+                   CASE WHEN fa.started_at IS NULL THEN NULL WHEN fa.limit_passed_at IS NULL THEN 'No' ELSE 'Yes' END AS lead_limit_passed,
+                   oc.started_at AS owner_clock_from,
+                   oc.first_attempt_at AS owner_first_attempt_on,
+                   round(oc.attempt_working_minutes / 60.0, 1) AS owner_hours_to_first_attempt,
+                   CASE WHEN oc.started_at IS NULL THEN NULL WHEN oc.limit_passed_at IS NULL THEN 'No' ELSE 'Yes' END AS owner_limit_passed,
+                   CASE WHEN oc.owner_inferred THEN 'Yes' WHEN oc.started_at IS NOT NULL THEN 'No' END AS owner_inferred,
                    x.j ->> 'last_worked_at' AS last_worked_on,
                    x.j ->> 'next_follow_up_at' AS next_follow_up,
                    x.j ->> 'intent_band' AS ai_band,
@@ -162,13 +200,7 @@ async function leadExtras(ids: string[]): Promise<Map<string, Record<string, unk
                   SELECT u.name FROM lead_touchpoints t LEFT JOIN users u ON u.id::text = t.performed_by
                    WHERE t.dealer_lead_id = dl.id AND t.touchpoint_type = 'lead_created'
                    ORDER BY t.performed_at LIMIT 1) cb ON TRUE
-              LEFT JOIN LATERAL (
-                  SELECT MIN(t.performed_at) AS at FROM lead_touchpoints t
-                   WHERE t.dealer_lead_id = dl.id AND t.touchpoint_type IN ('inside_sales_call', 'ai_call')) fa ON TRUE
-              LEFT JOIN LATERAL (
-                  SELECT MIN(t.performed_at) AS at FROM lead_touchpoints t
-                   WHERE t.dealer_lead_id = dl.id AND t.touchpoint_type IN ('inside_sales_call', 'ai_call')
-                     AND (t.call_status = 'connected' OR t.connect_status = 'connected')) fc ON TRUE
+              ${firstTouch}
               LEFT JOIN LATERAL (
                   SELECT COALESCE(${jnum(sql`c.quote_snapshot ->> 'total'`)}, c.final_price, c.price_quoted) AS value,
                          CASE WHEN c.withdrawn_at IS NOT NULL THEN 'withdrawn'
@@ -195,7 +227,7 @@ async function leadExtras(ids: string[]): Promise<Map<string, Record<string, unk
                 owner_role: ((r.owner_role as string | null) ?? "").replace(/_/g, " ") || null,
                 // The score column defaults to 0; a lead the AI never scored shows blank, not 0.
                 ai_score: r.ai_band || Number(r.ai_score) > 0 ? r.ai_score : null,
-                idle_working_days: closed ? null : workingDaysSince(r.last_worked_on ?? r.assigned_on ?? created),
+                idle_working_days: closed ? null : workingDaysSince(r.last_worked_on ?? r.assigned_on ?? created, holidays),
             });
         }
     } catch (e) {
@@ -266,10 +298,18 @@ const leads: Dataset = {
                 { key: "sales_ready_on", header: "Sales-ready on", meaning: "When the lead became ready for a salesperson.", kind: "datetime" },
                 { key: "sales_ready_reason", header: "Sales-ready reason", meaning: "Why it was marked sales-ready." },
                 { key: "assigned_on", header: "Assigned on", meaning: "When the lead was assigned to its owner.", kind: "datetime" },
-                { key: "first_attempt_on", header: "First attempt on", meaning: "The first call on the lead, human or AI, connected or not.", kind: "datetime" },
-                { key: "first_contact_on", header: "First contact on", meaning: "The first call that connected.", kind: "datetime" },
+                { key: "first_attempt_on", header: "First attempt on", meaning: "Lead clock (ID 86): the first call or visit by anyone after the lead became sales-ready, connected or not.", kind: "datetime" },
+                { key: "first_contact_on", header: "First contact on", meaning: "Lead clock: the first call that connected or visit marked visited.", kind: "datetime" },
+                { key: "hours_to_first_attempt", header: "Working hours to first attempt", meaning: "Lead clock: working hours (Mon–Sat 10:00–19:00, holidays off) from sales-ready to the first attempt.", kind: "number" },
+                { key: "hours_to_first_contact", header: "Working hours to first contact", meaning: "Lead clock: working hours from sales-ready to the first contact.", kind: "number" },
+                { key: "lead_limit_passed", header: "Lead first-attempt limit passed", meaning: "Yes when no call or visit came within the lead first-attempt limit in force that day (Admin › Time limits)." },
+                { key: "owner_clock_from", header: "Current owner since", meaning: "Owner clock: when the current owner got the lead.", kind: "datetime" },
+                { key: "owner_first_attempt_on", header: "Owner's first attempt on", meaning: "Owner clock: the current owner's first call or visit after getting the lead.", kind: "datetime" },
+                { key: "owner_hours_to_first_attempt", header: "Owner's working hours to first attempt", meaning: "Owner clock: working hours from assignment to that first attempt.", kind: "number" },
+                { key: "owner_limit_passed", header: "Owner first-attempt limit passed", meaning: "Yes when the current owner did not call or visit within the owner first-attempt limit." },
+                { key: "owner_inferred", header: "Owner start inferred", meaning: "Yes when no assignment record exists and the owner clock starts from the lead's assigned date instead." },
                 { key: "last_worked_on", header: "Last worked on", meaning: "The last time someone worked the lead.", kind: "datetime" },
-                { key: "idle_working_days", header: "Idle working days", meaning: "Working days (Mon–Sat, holidays not removed) since it was last worked, else since it was assigned or created.", kind: "number" },
+                { key: "idle_working_days", header: "Idle working days", meaning: "Working days (Mon–Sat, holidays off) since it was last worked, else since it was assigned or created.", kind: "number" },
                 { key: "next_follow_up", header: "Next follow-up", meaning: "The follow-up date set on the lead.", kind: "datetime" },
                 { key: "ai_band", header: "AI band", meaning: "Qualified, Warm, Cold or Disqualified, from the AI call." },
                 { key: "ai_score", header: "AI score", meaning: "The AI intent score.", kind: "number" },
@@ -405,6 +445,17 @@ const ONBOARDING_DATES: Record<string, SQL> = {
     approved: sql`app.approved_at`,
 };
 
+/**
+ * ID 159 (10 Oct): the closer of the lead an onboarding came from — the
+ * person credited with the dealer (dealer_leads.closing_owner_id). The form's
+ * originating lead first, else a lead linked to the form.
+ */
+const ONBOARDING_CLOSER = sql`(SELECT cdl.closing_owner_id FROM dealer_leads cdl
+     WHERE cdl.id = app.originating_dealer_lead_id
+        OR cdl.dealer_onboarding_application_id::text = app.id::text
+     ORDER BY (cdl.id = app.originating_dealer_lead_id) DESC NULLS LAST
+     LIMIT 1)`;
+
 function onboardingWhere(ctx: RunContext): SQL {
     // These three columns are naive UTC timestamps on this table.
     const expr = ONBOARDING_DATES[ctx.params.get("date_field") ?? "started"] ?? ONBOARDING_DATES.started;
@@ -413,7 +464,9 @@ function onboardingWhere(ctx: RunContext): SQL {
     if (status) conds.push(sql`app.onboarding_status = ${status}`);
     const salesperson = ctx.params.get("salesperson");
     if (salesperson) conds.push(sql`app.salesperson_user_id::text = ${salesperson}`);
-    conds.push(...commonConds(ctx, { person: sql`app.salesperson_user_id` }));
+    // ID 159: the Person / Team filters pick the lead's closer — the credit —
+    // and fall back to the form's salesperson when there is no lead.
+    conds.push(...commonConds(ctx, { person: sql`COALESCE(${ONBOARDING_CLOSER}, app.salesperson_user_id::text)` }));
     return sql.join(conds, sql` AND `);
 }
 
@@ -434,7 +487,8 @@ const dealerOnboarding: Dataset = {
             key: "status",
             label: "Status",
             type: "select",
-            options: ["draft", "submitted", "approved", "rejected"].map((s) => ({ value: s, label: s[0].toUpperCase() + s.slice(1) })),
+            // ID 169: "withdrawn" — a form closed by Undo Mark Won.
+            options: ["draft", "submitted", "approved", "rejected", "withdrawn"].map((s) => ({ value: s, label: s[0].toUpperCase() + s.slice(1) })),
         },
     ],
     sheets: [
@@ -448,9 +502,11 @@ const dealerOnboarding: Dataset = {
                 { key: "dealer_type", header: "Dealer type", meaning: "New battery, scrap, or both." },
                 { key: "started_on", header: "Started on", meaning: "When the onboarding was first saved.", kind: "datetime" },
                 { key: "started_through", header: "Started through", meaning: "Web wizard, WhatsApp, or from a won lead." },
-                { key: "salesperson", header: "Salesperson", meaning: "The ISR, ASM or Sales Head picked on the onboarding. Blank on older onboardings — approval is blocked until it is set.", width: 22 },
+                { key: "salesperson", header: "Salesperson (on the form)", meaning: "The ISR, ASM or Sales Head picked on the onboarding — information, not credit. Blank on older onboardings — approval is blocked until it is set.", width: 22 },
+                { key: "lead_closed_by", header: "Lead closed by (credit)", meaning: "Who closed the linked lead — the person credited with this dealer. The Person and Team filters use this; blank for a direct onboarding.", width: 22 },
                 { key: "lead_id", header: "Linked lead ID", meaning: "The dealer lead this onboarding came from; blank for a direct onboarding.", width: 24 },
-                { key: "onboarding_status", header: "Status", meaning: "Draft, submitted, approved or rejected." },
+                { key: "onboarding_status", header: "Status", meaning: "Draft, submitted, approved, rejected or withdrawn (closed by Undo Mark Won)." },
+                { key: "withdrawn_reason", header: "Why withdrawn", meaning: "Why a withdrawn onboarding was closed, e.g. 'Marked Won by mistake'.", width: 28 },
                 { key: "submitted_at", header: "Documents submitted on", meaning: "When the dealer submitted the application.", kind: "datetime" },
                 { key: "finance_enabled", header: "Customer finance", meaning: "Whether the dealer asked for customer finance." },
                 { key: "agreement_status", header: "Agreement status", meaning: "Where the dealer agreement stands; 'completed' means signed by every party. 'N/A' when finance is off." },
@@ -459,7 +515,7 @@ const dealerOnboarding: Dataset = {
                 { key: "approved_by", header: "Approved by", meaning: "Who activated the dealer.", width: 22 },
                 { key: "rejection_reason", header: "Rejection reason", meaning: "Why it was rejected, when it was.", width: 40 },
                 { key: "times_sent_back", header: "Times sent back", meaning: "How many times the application was sent back to the dealer for corrections.", kind: "number" },
-                { key: "stalled", header: "Stalled", meaning: "Set when an open onboarding has waited on the dealer 7+ days, or on iTarang 2+ working days.", width: 26 },
+                { key: "stalled", header: "Stalled", meaning: "Set when an open onboarding has waited on the dealer, or on iTarang, longer than its limit in Admin › Time limits (defaults 7 days / 2 working days).", width: 26 },
                 { key: "dropout_reason", header: "Drop-out reason", meaning: "Why the dealer dropped out, when the linked lead records one.", width: 24 },
             ],
         },
@@ -477,6 +533,8 @@ const dealerOnboarding: Dataset = {
                    COALESCE(to_jsonb(app) ->> 'onboarding_channel', to_jsonb(app) ->> 'source',
                             CASE WHEN app.originating_dealer_lead_id IS NOT NULL THEN 'lead' ELSE 'web' END) AS started_through,
                    sp.name AS salesperson,
+                   (SELECT COALESCE(cu.name, cu.email) FROM users cu WHERE cu.id::text = ${ONBOARDING_CLOSER}) AS lead_closed_by,
+                   to_jsonb(app) ->> 'withdrawn_reason' AS withdrawn_reason,
                    COALESCE(app.originating_dealer_lead_id,
                             (SELECT dl.id FROM dealer_leads dl
                               WHERE dl.dealer_onboarding_application_id::text = app.id::text LIMIT 1)) AS lead_id,
@@ -501,11 +559,9 @@ const dealerOnboarding: Dataset = {
              ORDER BY app.created_at DESC
              LIMIT ${rowLimit(ctx)}
         `);
-        const holidays = new Set(
-            (await rows<{ d: string }>(sql`SELECT holiday_date::text AS d FROM holiday_calendar WHERE is_active IS NOT FALSE AND holiday_date IS NOT NULL`)).map(
-                (h) => h.d,
-            ),
-        );
+        // ID 85 — the office calendar and the stall limits in force today.
+        const [holidays, limits] = await Promise.all([loadHolidays(), getTimeLimits()]);
+        const stallLimits = { dealerDays: limits.onboarding_stall_dealer, usWorkingDays: limits.onboarding_stall_us };
         return [
             {
                 ...this.sheets[0],
@@ -516,7 +572,9 @@ const dealerOnboarding: Dataset = {
                             agreement_status: r.finance_enabled ? ((r.agreement_status as string | null) ?? null) : null,
                             last_activity_at: (r.last_activity_at as string | Date | null) ?? null,
                         },
-                        holidays,
+                        new Set(holidays),
+                        new Date(),
+                        stallLimits,
                     );
                     return { ...r, stalled: on ? STALL_LABEL[on] : null };
                 }),
@@ -684,7 +742,7 @@ const dealerAccounts: Dataset = {
                 { key: "agreement_status", header: "Agreement", meaning: "Status of the dealer agreement." },
                 { key: "came_through", header: "Came through", meaning: "'lead' = won from a dealer lead; 'direct' = onboarded with no lead." },
                 { key: "lead_id", header: "Lead ID", meaning: "The lead it came through, when it did.", width: 24 },
-                { key: "onboarded_by_name", header: "Onboarded by", meaning: "The salesperson who brought the dealer in. Fixed; never changes.", width: 22 },
+                { key: "onboarded_by_name", header: "Onboarded by", meaning: "The salesperson named on the onboarding form — information, not credit (credit goes to the lead's closer). Fixed; never changes.", width: 22 },
                 { key: "owner_name", header: "Account owner", meaning: "Who looks after the account now. Blank = no owner yet.", width: 22 },
                 { key: "owner_since", header: "Owner since", meaning: "The effective date of the current owner.", kind: "date" },
                 { key: "activated_on", header: "Activated on", meaning: "When the dealer went live (admin approval).", kind: "date" },
@@ -1078,6 +1136,12 @@ const quotes: Dataset = {
                 { key: "list_total", header: "List price total (₹)", meaning: "Quantity × list price over the lines, at the list prices frozen on the quote. Blank on quotes raised before list prices existed.", kind: "money" },
                 { key: "discount", header: "Discount on list (₹)", meaning: "List price total minus the quoted total, over the lines that carry a list price.", kind: "money" },
                 { key: "lowest_vs_oem", header: "Lowest line vs OEM price (₹)", meaning: "The smallest gap between a line's quoted unit price and its OEM price; negative = quoted below OEM price.", kind: "money" },
+                { key: "onboarding_fee", header: "Onboarding fee (₹)", meaning: "Deal card (ID 172): the onboarding fee agreed on this quote; 0 = waived. Prints on the dealer's quotation.", kind: "money" },
+                { key: "fee_waived_reason", header: "Why waived", meaning: "Deal card: why the onboarding fee is 0.", width: 28 },
+                { key: "expected_batteries_per_month", header: "Expected batteries per month", meaning: "Deal card: batteries the dealer said they will buy from us a month after the first order. Internal.", kind: "number" },
+                { key: "expected_finance_files_per_month", header: "Expected finance files per month", meaning: "Deal card: of the dealer's monthly customers, how many buy on a loan. Internal; replaced Customer finance Yes / No.", kind: "number" },
+                { key: "fee_invoiced", header: "Fee invoiced (₹)", meaning: "Onboarding fee actually invoiced to this dealer (before GST): invoice lines mapped 'Onboarding fee' in Invoice Ledger › Item mapping. Same for every version of the lead.", kind: "money" },
+                { key: "batteries_60d_after_won", header: "Batteries ordered in the 60 days after Won", meaning: "Battery units invoiced to this dealer in the 60 days from the day the lead was marked Won (invoice lines, HSN 8507). Blank when the lead was never Won.", kind: "number" },
                 { key: "credit_terms", header: "Credit terms", meaning: "Credit terms written on the quote.", width: 24 },
                 { key: "payment_method", header: "Payment method", meaning: "Payment method on the quote." },
                 { key: "approval_status", header: "Approval", meaning: "iTarang's own approval: pending, approved or rejected." },
@@ -1115,6 +1179,12 @@ const quotes: Dataset = {
         return Number(r?.n ?? 0);
     },
     async build(ctx) {
+        // ID 172: deal card (E-336 via to_jsonb) + what was invoiced against it.
+        const actuals = await dealCardActualsSql();
+        const actualsJoin = actuals ? sql`LEFT JOIN (${actuals}) da ON da.lead_id = c.dealer_lead_id` : sql``;
+        const actualCols = actuals
+            ? sql`da.fee_invoiced, CASE WHEN (to_jsonb(dl) ->> 'won_at') IS NOT NULL THEN COALESCE(da.batteries_60d, 0) END AS batteries_60d_after_won`
+            : sql`NULL::float8 AS fee_invoiced, NULL::float8 AS batteries_60d_after_won`;
         const [quoteRows, lineRows] = await Promise.all([
             rows(sql`
                 SELECT c.quote_number, c.version_no, c.is_current, c.dealer_lead_id AS lead_id,
@@ -1132,8 +1202,14 @@ const quotes: Dataset = {
                        ROUND((EXTRACT(EPOCH FROM (c.approved_at - c.created_at)) / 3600)::numeric, 1) AS approval_wait_hours,
                        c.rejection_reason, qd.delivered_at, qd.channels,
                        c.dealer_decision, c.dealer_decision_at, c.dealer_decision_via, c.withdrawn_at,
-                       to_jsonb(c) ->> 'withdraw_reason' AS withdraw_reason
+                       to_jsonb(c) ->> 'withdraw_reason' AS withdraw_reason,
+                       (to_jsonb(c) ->> 'onboarding_fee')::numeric AS onboarding_fee,
+                       to_jsonb(c) ->> 'fee_waived_reason' AS fee_waived_reason,
+                       (to_jsonb(c) ->> 'expected_batteries_per_month')::int AS expected_batteries_per_month,
+                       (to_jsonb(c) ->> 'expected_finance_files_per_month')::int AS expected_finance_files_per_month,
+                       ${actualCols}
                   ${quoteFrom}
+                  ${actualsJoin}
                  WHERE ${quotesWhere(ctx)}
                  ORDER BY c.created_at DESC
                  LIMIT ${rowLimit(ctx)}

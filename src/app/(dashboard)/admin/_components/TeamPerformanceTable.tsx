@@ -8,6 +8,7 @@ import { ArrowDown, ArrowUp, Users } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import type { TeamPerfRow } from "@/lib/admin/types";
+import { TIME_LIMIT_DEFAULTS, type TimeLimits } from "@/lib/timeLimits/registry";
 
 type SortKey =
     | "user_name"
@@ -29,9 +30,16 @@ const COLUMNS: { key: SortKey; label: string; numeric: boolean }[] = [
     { key: "avg_time_to_first_touch_hours", label: "Avg 1st Touch", numeric: true },
     // Converted ÷ (Converted + Lost) they closed — not lead-base conversion (R-08).
     { key: "closed_win_rate_30d", label: "Closed-win % (30d)", numeric: true },
-    { key: "stale_leads", label: "Stale >5d", numeric: true },
-    { key: "critical_stale", label: "Critical >10d", numeric: true },
+    // Labels carry the live no-touch limits (ID 85) — see columnLabel().
+    { key: "stale_leads", label: "Stale", numeric: true },
+    { key: "critical_stale", label: "Critical", numeric: true },
 ];
+
+function columnLabel(key: SortKey, label: string, limits: TimeLimits): string {
+    if (key === "stale_leads") return `${label} >${limits.stale_yellow}d`;
+    if (key === "critical_stale") return `${label} >${limits.stale_red}d`;
+    return label;
+}
 
 function cell(key: SortKey, row: TeamPerfRow): string {
     const v = row[key];
@@ -41,7 +49,14 @@ function cell(key: SortKey, row: TeamPerfRow): string {
     return String(v);
 }
 
-export function TeamPerformanceTable({ rows }: { rows: TeamPerfRow[] }) {
+export function TeamPerformanceTable({
+    rows,
+    limits = TIME_LIMIT_DEFAULTS,
+}: {
+    rows: TeamPerfRow[];
+    /** ID 85 — the time limits in force today, for the stale column labels. */
+    limits?: TimeLimits;
+}) {
     const [sortKey, setSortKey] = useState<SortKey>("critical_stale");
     const [asc, setAsc] = useState(false);
 
@@ -94,7 +109,7 @@ export function TeamPerformanceTable({ rows }: { rows: TeamPerfRow[] }) {
                                     )}
                                 >
                                     <span className="inline-flex items-center gap-1">
-                                        {c.label}
+                                        {columnLabel(c.key, c.label, limits)}
                                         {sortKey === c.key &&
                                             (asc ? (
                                                 <ArrowUp className="h-3 w-3 text-brand-sky" />

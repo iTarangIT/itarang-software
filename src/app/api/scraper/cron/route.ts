@@ -1,4 +1,5 @@
 import { after } from "next/server";
+import { checkCronAuth } from "@/lib/cron-auth";
 import { db } from "@/lib/db";
 import { scraperSchedules, scraperRuns } from "@/lib/db/schema";
 import { generateId, successResponse } from "@/lib/api-utils";
@@ -36,19 +37,8 @@ function isDue(schedule: {
 
 export const GET = async (req: Request) => {
   // Strict cron auth: CRON_SECRET must be set AND the header must match.
-  // The earlier optional pattern (`if (process.env.CRON_SECRET && ...)`)
-  // exposed the route publicly whenever the env var was missing or empty.
-  const secret = process.env.CRON_SECRET;
-  if (!secret) {
-    console.error(
-      "[scraper:cron] CRON_SECRET is not set — rejecting all cron invocations",
-    );
-    return new Response("Cron secret not configured", { status: 500 });
-  }
-  const authHeader = req.headers.get("authorization");
-  if (authHeader !== `Bearer ${secret}`) {
-    return new Response("Unauthorized", { status: 401 });
-  }
+  const unauth = checkCronAuth(req);
+  if (unauth) return unauth;
 
   const [schedule] = await db
     .select()

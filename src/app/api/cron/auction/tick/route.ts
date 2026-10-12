@@ -13,30 +13,14 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { runAuctionTick } from "@/lib/nbfc/auction/scheduler";
-import { fromVercelCron } from "@/lib/security/cronAuth";
+import { isCronAuthorised, isNbfcTestBypass } from "@/lib/cron-auth";
 import { runAsJob } from "@/lib/runtime/liveSite";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-function isAuthorised(req: NextRequest): boolean {
-  if (fromVercelCron(req)) return true;
-  const auth = req.headers.get("authorization") ?? "";
-  const expected = process.env.CRON_SECRET;
-  if (expected && auth === `Bearer ${expected}`) return true;
-  if (
-    process.env.NBFC_TEST_BYPASS === "1" &&
-    process.env.NBFC_TEST_BYPASS_SECRET &&
-    req.headers.get("x-nbfc-test-bypass") === process.env.NBFC_TEST_BYPASS_SECRET
-  ) {
-    return true;
-  }
-  if (process.env.NODE_ENV !== "production") return true;
-  return false;
-}
-
 async function handle(req: NextRequest) {
-  if (!isAuthorised(req)) {
+  if (!(isCronAuthorised(req) || isNbfcTestBypass(req))) {
     return NextResponse.json({ ok: false, error: "UNAUTHORIZED" }, { status: 401 });
   }
   try {

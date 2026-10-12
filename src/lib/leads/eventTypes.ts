@@ -40,6 +40,8 @@ export const LEAD_EVENT_TYPES = [
     { value: "escalation_ceo_comment", label: "Escalation CEO comment" },
     { value: "escalation_resolved", label: "Escalation resolved" },
     { value: "log_detail_change", label: "Log detail change" },
+    // ID 86 — a lead / owner / transfer clock passed its time limit (lead_clocks, E-337).
+    { value: "limit_passed", label: "Limit passed" },
 ] as const satisfies readonly LeadEventType[];
 
 export type LeadEventTypeValue = (typeof LEAD_EVENT_TYPES)[number]["value"];

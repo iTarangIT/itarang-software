@@ -42,6 +42,7 @@ export async function register() {
       startDealerAgreementRefreshTicker,
       startAgreementExpiryReminderTicker,
       startDealerReorderReminderTicker,
+      startLeadClocksTicker,
     } = await import("./instrumentation-node");
     // ID 125 — every ticker runs as a named job. Its timers inherit the job
     // context, so the email / WhatsApp / Telegram senders drop what a job tries
@@ -68,6 +69,8 @@ export async function register() {
     // ID 5 — dealer reorder reminders, hourly (kickoff 220s out): Orange nudge,
     // monthly Dormant win-back, the CEO's "turned Dormant" alert.
     await runAsJob("dealer-reorder-reminders", startDealerReorderReminderTicker);
+    // ID 86 — lead clocks rebuilt hourly (kickoff 225s out).
+    await runAsJob("lead-clocks", startLeadClocksTicker);
     await runAsJob("recording-transcription", startRecordingTranscriptionTicker);
     await runAsJob("drive-mirror", startDriveMirrorTicker);
     // E-280 — Drive sales-invoice scan. Kickoff staggered 195s out, the last

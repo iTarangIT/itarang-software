@@ -17,18 +17,18 @@ describe("summariseCompanyTargets", () => {
             ["2026-09", "2026-10"],
             "2026-10",
         );
-        expect(t.revenue).toEqual({ sum: 240, missing: [] });
-        expect(t.batteries_sold).toEqual({ sum: 9, missing: ["2026-09"] });
+        expect(t.revenue).toEqual({ sum: 240, accepted: 0, notAccepted: 240, missing: [] });
+        expect(t.batteries_sold).toEqual({ sum: 9, accepted: 0, notAccepted: 9, missing: ["2026-09"] });
     });
 
     it("treats a zero monthly target as no target", () => {
         const t = summariseCompanyTargets([{ month: "2026-09", rows: [row("revenue", 0, 0)] }], ["2026-09"], "2026-10");
-        expect(t.revenue).toEqual({ sum: 0, missing: ["2026-09"] });
+        expect(t.revenue).toEqual({ sum: 0, accepted: 0, notAccepted: 0, missing: ["2026-09"] });
     });
 
     it("does not call the current month missing on the 1st (to-date target 0)", () => {
         const t = summariseCompanyTargets([{ month: "2026-10", rows: [row("revenue", 300, 0)] }], ["2026-10"], "2026-10");
-        expect(t.revenue).toEqual({ sum: 0, missing: [] });
+        expect(t.revenue).toEqual({ sum: 0, accepted: 0, notAccepted: 0, missing: [] });
     });
 
     it("ignores other metrics", () => {
@@ -60,5 +60,25 @@ describe("targetVerdict", () => {
 
     it("target set but actual still loading → no %", () => {
         expect(targetVerdict({ sum: 10, missing: [] }, null, ["2026-10"], "2026-10")).toEqual({ kind: "set", goal: 10, pct: null });
+    });
+});
+
+describe("accepted / not yet accepted split (ID 157)", () => {
+    it("splits the target by status; the two add up to the target", () => {
+        const t = summariseCompanyTargets(
+            [
+                {
+                    month: "2026-10",
+                    rows: [
+                        { metric: "revenue", status: "accepted", progress: { monthly_target: 300, mtd_target: 100 } },
+                        { metric: "revenue", status: "pushed", progress: { monthly_target: 150, mtd_target: 50 } },
+                        { metric: "revenue", status: "draft", progress: { monthly_target: 60, mtd_target: 20 } },
+                    ],
+                },
+            ],
+            ["2026-10"],
+            "2026-10",
+        );
+        expect(t.revenue).toEqual({ sum: 170, accepted: 100, notAccepted: 70, missing: [] });
     });
 });

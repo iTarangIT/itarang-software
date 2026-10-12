@@ -16,6 +16,7 @@ import type { ActiveModal } from "./LeadDetailView";
 import { CallNowButton } from "@/components/leads/call-now-button";
 import { CorrectLeadGstinButton } from "@/components/leads/CorrectLeadGstinButton";
 import { GSTIN_CORRECTION_MANAGER_ROLES } from "@/lib/leads/correctLeadGstinRules";
+import { canTransferAnyLead } from "@/lib/leads/access";
 
 type Props = {
     bundle: LeadDetailBundle;
@@ -76,9 +77,16 @@ export function LeadActionBar({ bundle, isOwner, viewerRole, onAction, onChanged
             : "Read-only — you are not the current owner.";
         // The Sales Head / admin may still correct a Won lead's GSTIN (ID 124).
         const managerCanFixGstin = isWon && (GSTIN_CORRECTION_MANAGER_ROLES as readonly string[]).includes(viewerRole);
+        // Sales Head / Partner / CEO / Admin may hand any open lead to an ASM.
+        const managerCanTransfer = open && canTransferAnyLead(viewerRole);
         return (
             <div className="sticky bottom-0 z-10 bg-white border-t border-gray-200 px-6 py-3 text-xs text-gray-500 flex flex-wrap items-center gap-3">
-                <span>{helper}</span>
+                <span>{managerCanTransfer ? "Not your lead — you can still transfer it to an ASM." : helper}</span>
+                {managerCanTransfer && (
+                    <ActionButton icon={Send} onClick={() => onAction("transfer_asm")}>
+                        Transfer to ASM
+                    </ActionButton>
+                )}
                 {managerCanFixGstin && correctGstin}
             </div>
         );

@@ -13,12 +13,20 @@ export type CompanyTargetMetric = "revenue" | "batteries_sold";
 
 export type TargetRowLite = {
     metric: string;
+    /** draft · pending_approval · pushed · accepted (TARGET_STATUSES). */
+    status?: string | null;
     progress: { monthly_target: number; mtd_target: number };
 };
 
 export type CompanyTarget = {
-    /** Target over the months that have one. */
+    /** Target over the months that have one — every status counts (ID 157). */
     sum: number;
+    /**
+     * ID 157 (10 Oct): the part of `sum` its people have accepted, and the rest
+     * (Draft + Pending approval + Pushed). accepted + notAccepted === sum.
+     */
+    accepted: number;
+    notAccepted: number;
     /** Months of the period ("YYYY-MM") with no target for the metric. */
     missing: string[];
 };
@@ -32,6 +40,7 @@ export function summariseCompanyTargets(
         revenue: new Map(),
         batteries_sold: new Map(),
     };
+    const accepted: Record<CompanyTargetMetric, number> = { revenue: 0, batteries_sold: 0 };
     for (const { month, rows } of lists) {
         for (const r of rows) {
             if (r.metric !== "revenue" && r.metric !== "batteries_sold") continue;
@@ -41,13 +50,20 @@ export function summariseCompanyTargets(
             const v = month === thisMonth ? r.progress.mtd_target : r.progress.monthly_target;
             const m = perMonth[r.metric];
             m.set(month, (m.get(month) ?? 0) + Number(v || 0));
+            if (r.status === "accepted") accepted[r.metric] += Number(v || 0);
         }
     }
-    const summarise = (m: Map<string, number>): CompanyTarget => ({
-        sum: [...m.values()].reduce((a, v) => a + v, 0),
-        missing: months.filter((mo) => !m.has(mo)),
-    });
-    return { revenue: summarise(perMonth.revenue), batteries_sold: summarise(perMonth.batteries_sold) };
+    const summarise = (metric: CompanyTargetMetric): CompanyTarget => {
+        const m = perMonth[metric];
+        const sum = [...m.values()].reduce((a, v) => a + v, 0);
+        return {
+            sum,
+            accepted: accepted[metric],
+            notAccepted: sum - accepted[metric],
+            missing: months.filter((mo) => !m.has(mo)),
+        };
+    };
+    return { revenue: summarise("revenue"), batteries_sold: summarise("batteries_sold") };
 }
 
 export type TargetVerdict =
@@ -57,7 +73,7 @@ export type TargetVerdict =
 
 /** What the tile shows: no target, a target for only some months, or a %. */
 export function targetVerdict(
-    t: CompanyTarget | null | undefined,
+    t: Pick<CompanyTarget, "sum" | "missing"> | null | undefined,
     actual: number | null,
     months: readonly string[],
     thisMonth: string,

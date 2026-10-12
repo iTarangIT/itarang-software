@@ -12,30 +12,14 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { checkNbfcCorExpiryJob } from "@/lib/queue/jobs/checkNbfcCorExpiryJob";
-import { fromVercelCron } from "@/lib/security/cronAuth";
+import { isCronAuthorised } from "@/lib/cron-auth";
 import { runAsJob } from "@/lib/runtime/liveSite";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-function isAuthorised(req: NextRequest): boolean {
-  // Vercel cron sets this header automatically.
-  if (fromVercelCron(req)) return true;
-
-  // Manual / Playwright invocation: accept Bearer or no auth in non-prod.
-  const auth = req.headers.get("authorization") ?? "";
-  const expected = process.env.CRON_SECRET;
-  if (expected && auth === `Bearer ${expected}`) return true;
-
-  // In non-production we allow unauthenticated triggers (mirrors other
-  // cron routes in this repo) so dev tooling and tests can run the job.
-  if (process.env.NODE_ENV !== "production") return true;
-
-  return false;
-}
-
 async function runJob(req: NextRequest) {
-  if (!isAuthorised(req)) {
+  if (!isCronAuthorised(req)) {
     return NextResponse.json(
       { ok: false, error: "UNAUTHORIZED" },
       { status: 401 },

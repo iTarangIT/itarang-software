@@ -315,6 +315,8 @@ function ItemsTab() {
                                     onChange={(e) => map.mutate({ item_name: i.item_name, value: e.target.value })}
                                 >
                                     <option value="">— not mapped —</option>
+                                    {/* ID 172: the dealer's onboarding fee — revenue, never a battery. */}
+                                    <option value="onboarding_fee|onboarding_fee">Onboarding fee (not a product)</option>
                                     {q.data.products.map((p) => (
                                         <option key={`${p.asset_type}|${p.product_id}`} value={`${p.asset_type}|${p.product_id}`}>
                                             {p.asset_type}: {p.product_name}

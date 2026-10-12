@@ -18,6 +18,8 @@ import {
     type ActionKey,
 } from "@/lib/dashboard/salesHeadActions";
 import { LEADS_BULK_ROLES } from "@/lib/leads/access";
+import { formatLimit, type TimeLimits } from "@/lib/timeLimits/registry";
+import { getTimeLimits } from "@/lib/timeLimits/store";
 import { NeedsActionTable } from "./NeedsActionTable";
 
 export const dynamic = "force-dynamic";
@@ -25,24 +27,25 @@ export const dynamic = "force-dynamic";
 const inr = (n: number) =>
     n >= 1e7 ? `₹${(n / 1e7).toFixed(2)} Cr` : n >= 1e5 ? `₹${(n / 1e5).toFixed(2)} L` : `₹${Math.round(n).toLocaleString("en-IN")}`;
 
-const RULE: Record<ActionKey, string> = {
+// The rule each list follows, with the time limits in force today (ID 85).
+const rules = (l: TimeLimits): Record<ActionKey, string> => ({
     sales_ready: "Leads marked sales-ready that nobody owns yet. Assign them from Ready to Assign.",
     hot_not_called:
-        "Hot leads with an owner and no call or visit since the owner got the lead, more than 4 working hours ago (Mon–Sat, 10:00–19:00 IST). Leads with an ASM for a visit, and dead / non-responsive numbers, are left out.",
-    visit_overdue: "Leads transferred to an ASM whose first visit is past the admin-set limit, with no visit marked since the transfer.",
+        `Hot leads with an owner and no call or visit since the owner got the lead, more than ${formatLimit(l.owner_first_attempt, "working_hours")} ago (Mon–Sat, 10:00–19:00 IST, holidays off). Leads with an ASM for a visit, and dead / non-responsive numbers, are left out.`,
+    visit_overdue: `Leads transferred to an ASM whose first visit is past the limit (${formatLimit(l.asm_transfer_first_visit, "working_days")}), with no visit marked since the transfer.`,
     quotes_no_answer:
-        "The lead's latest quote was delivered to the dealer more than 3 working days ago and the dealer has neither approved nor declined it. Withdrawn quotes and closed leads are left out.",
+        `The lead's latest quote was delivered to the dealer more than ${formatLimit(l.quote_no_answer, "working_days")} ago and the dealer has neither approved nor declined it. Withdrawn quotes and closed leads are left out.`,
     said_yes: "The dealer approved the quote, but the lead has not been marked Won.",
     onboarding_stalled:
-        "Won leads whose onboarding has stopped: waiting on the dealer 7+ days, or waiting on us 2+ working days. Leads already in the 21-day drop-out review are listed there instead.",
+        `Won leads whose onboarding has stopped: waiting on the dealer ${l.onboarding_stall_dealer}+ days, or waiting on us ${l.onboarding_stall_us}+ working days. Leads already in the ${l.onboarding_dropout}-day drop-out review are listed there instead.`,
     won_without_quote: "Leads marked Won this month with no quote the dealer approved. Check the price before onboarding.",
     hot_aged:
         "Open leads (not Converted or Lost) rated Hot for more than 7 days, counted from the day the lead became Hot. A Hot lead this old needs a decision: push it to a quote, transfer it for a visit, or re-rate it.",
     won_undo_requests:
-        "A rep marked a lead Won by mistake and asked to undo it. Open the lead to approve (it goes back to its earlier stage, same owner) or refuse. Possible only until the dealer submits onboarding.",
+        "A rep marked a lead Won by mistake and asked to undo it. Open the lead to approve (it goes back to its earlier stage, same owner) or refuse. Possible only until the dealer uploads any onboarding document; after that it is a drop-out. A request is cancelled on its own when the lead leaves Won.",
     won_undone_week:
         "Every Mark Won undone in the last 7 days: the lead went back to the stage it was at before Won, its empty onboarding application was withdrawn, and the Won is not counted anywhere.",
-};
+});
 
 export default async function NeedsActionListPage({
     params,
@@ -61,7 +64,11 @@ export default async function NeedsActionListPage({
     qs.delete("format");
     // Filtered rows for the table; the unfiltered list feeds the dropdowns, so
     // picking a state never hides the other states from the menu.
-    const [rows, all] = await Promise.all([listSalesHeadActionFiltered(k, qs), listSalesHeadAction(k, {})]);
+    const [rows, all, limits] = await Promise.all([
+        listSalesHeadActionFiltered(k, qs),
+        listSalesHeadAction(k, {}),
+        getTimeLimits(),
+    ]);
     const states = [...new Set(all.map((r) => r.state?.trim()).filter((v): v is string => !!v))].sort();
     if (sp.state && !states.includes(sp.state)) states.unshift(sp.state);
     const owners = [...new Map(all.filter((r) => r.owner_id).map((r) => [r.owner_id!, r.owner_name ?? r.owner_id!])).entries()].sort((a, b) =>
@@ -82,7 +89,7 @@ export default async function NeedsActionListPage({
                     <ArrowLeft className="h-3.5 w-3.5" /> Sales dashboard
                 </Link>
                 <h1 className="mt-2 text-2xl font-bold tracking-tight text-brand-navy">{ACTION_TITLES[k]}</h1>
-                <p className="mt-1 max-w-3xl text-sm text-ink-muted">{RULE[k]}</p>
+                <p className="mt-1 max-w-3xl text-sm text-ink-muted">{rules(limits)[k]}</p>
             </div>
 
             <form method="get" className="flex flex-wrap items-center gap-2.5 rounded-[14px] border border-border bg-surface px-3.5 py-3">

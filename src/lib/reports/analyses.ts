@@ -21,7 +21,7 @@ import { capabilitiesFor } from "@/lib/leads/access";
 import { parseLeadListFilters } from "@/lib/leads/leadListParams";
 import { doorLabel, originLabel } from "@/lib/leads/leadSourceVocab";
 import { TEAM_ROLES } from "@/lib/exports/datasets/types";
-import { bulkImportedLead, humanCall } from "@/lib/reports/metricDefinitions";
+import { humanCall } from "@/lib/reports/metricDefinitions";
 import {
     AI_BANDS,
     AI_NOT_SCORED,
@@ -42,8 +42,6 @@ const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 const IST = "Asia/Kolkata";
 const rowsOf = async <T>(q: SQL) => (await db.execute(q)) as unknown as T[];
 const n = (v: unknown): number => Number(v ?? 0);
-/** ID 153 — the group key bulk-imported leads collect under in Lead sources. */
-const BULK_KEY = "__bulk__";
 
 /** A UTC-without-zone timestamp column (dealer_leads.created_at) as its IST calendar day. */
 const istDay = (col: SQL): SQL => sql`((${col}) AT TIME ZONE 'UTC' AT TIME ZONE ${IST})::date`;
@@ -95,15 +93,18 @@ async function resolvePeriod(f: AnalysisFilters, fallback: "last90" | "mtd"): Pr
 const inPeriod = (day: SQL, p: AnalysisPeriod): SQL => sql`${day} BETWEEN ${p.from}::date AND ${p.to}::date`;
 
 /**
- * The team of the lead's person: who holds it now, else who held it when it
- * closed (conversions are credited to the closing owner everywhere else). A
- * lead nobody has held belongs to no team, so a team filter leaves it out.
+ * The team of the lead's person. A closed lead (Won, Converted, Lost) belongs
+ * to its closer's team — ID 159 (10 Oct): credit is the closer's everywhere —
+ * falling back to whoever holds it now; an open lead to whoever holds it now.
+ * A lead nobody has held belongs to no team, so a team filter leaves it out.
  */
 function teamCond(team: string | null | undefined): SQL {
     const role = TEAM_ROLES[team ?? ""];
     if (!role) return sql``;
     return sql` AND EXISTS (SELECT 1 FROM users ou
-                        WHERE ou.id::text = COALESCE(dl.current_owner_id, dl.closing_owner_id)::text
+                        WHERE ou.id::text = (CASE WHEN dl.lead_status IN ('Won', 'Converted', 'Lost')
+                                                  THEN COALESCE(dl.closing_owner_id, dl.current_owner_id)
+                                                  ELSE COALESCE(dl.current_owner_id, dl.closing_owner_id) END)::text
                           AND ou.role = ${role})`;
 }
 
@@ -149,12 +150,9 @@ function lostReasonLabel(v: string | null): string | null {
 export async function leadSources(f: AnalysisFilters, viewer: SessionUser): Promise<LeadSourcesResult> {
     const period = await resolvePeriod(f, "last90");
     const group: LeadSourceGroup = f.group ?? "door";
-    // ID 153 — bulk imports are one row of their own, outside every source row
-    // and outside "All sources" (the one "Leads in" rule, metricDefinitions.ts).
-    // A literal, not a bind: SELECT and GROUP BY must be the same expression.
-    const keyExpr = sql`CASE WHEN c.bulk THEN ${sql.raw(`'${BULK_KEY}'`)} ELSE ${
-        group === "origin" ? sql`c.origin` : group === "campaign" ? sql`c.campaign_id` : sql`c.door`
-    } END`;
+    // ID 153 — every lead counts, bulk imports included; they sit under their own
+    // door / origin like any other lead (the one "Leads in" rule, metricDefinitions.ts).
+    const keyExpr = group === "origin" ? sql`c.origin` : group === "campaign" ? sql`c.campaign_id` : sql`c.door`;
 
     type Raw = {
         key: string | null;
@@ -182,7 +180,6 @@ export async function leadSources(f: AnalysisFilters, viewer: SessionUser): Prom
                    to_jsonb(dl) ->> 'source_origin'           AS origin,
                    to_jsonb(dl) ->> 'acquisition_campaign_id' AS campaign_id,
                    ${WITH_SALES} AS with_sales,
-                   ${bulkImportedLead(sql`dl`)} AS bulk,
                    (${WITH_SALES} AND ((to_jsonb(dl) ->> 'won_at') IS NOT NULL
                                        OR dl.lead_status IN ('Won', 'Converted'))) AS won
               FROM dealer_leads dl
@@ -234,7 +231,7 @@ export async function leadSources(f: AnalysisFilters, viewer: SessionUser): Prom
     // Labels for campaigns, in one query.
     const campaignNames = new Map<string, { name: string; kind: string | null }>();
     if (group === "campaign") {
-        const ids = raw.map((r) => r.key).filter((k): k is string => !!k && k !== BULK_KEY);
+        const ids = raw.map((r) => r.key).filter((k): k is string => !!k);
         if (ids.length > 0) {
             try {
                 const names = await rowsOf<{ id: string; name: string; kind: string | null }>(sql`
@@ -253,10 +250,7 @@ export async function leadSources(f: AnalysisFilters, viewer: SessionUser): Prom
         const campaigns = n(r.campaigns);
         let label: string;
         let sub: string;
-        if (r.key === BULK_KEY) {
-            label = "Imported in bulk";
-            sub = "Scraper, list uploads, AI-dialer lists, NeoDove list pushes — not in Leads in";
-        } else if (r.key == null) {
+        if (r.key == null) {
             label = "Not recorded";
             sub = group === "campaign" ? "No campaign on the lead" : "Created before sources were recorded";
         } else if (group === "door") {
@@ -288,8 +282,7 @@ export async function leadSources(f: AnalysisFilters, viewer: SessionUser): Prom
         };
     };
 
-    const bulk = raw.filter((r) => r.key === BULK_KEY).map(toRow)[0] ?? null;
-    const rows = raw.filter((r) => r.key !== BULK_KEY).map(toRow);
+    const rows = raw.map(toRow);
 
     // The total is summed from the rows (every lead sits in exactly one group,
     // NULL included) — except the top lost reason, which is a mode and has to
@@ -301,7 +294,6 @@ export async function leadSources(f: AnalysisFilters, viewer: SessionUser): Prom
          WHERE dl.is_active IS NOT FALSE
            AND dl.lead_status = 'Lost' AND dl.lost_reason IS NOT NULL
            AND ${WITH_SALES}
-           AND NOT ${bulkImportedLead(sql`dl`)}
            AND ${inPeriod(istDay(sql`dl.created_at`), period)}
            ${teamCond(f.team)}
            ${stateCond(f.state)}
@@ -309,7 +301,7 @@ export async function leadSources(f: AnalysisFilters, viewer: SessionUser): Prom
     const total: LeadSourceRow = {
         key: "__all__",
         label: "All sources",
-        sub: "Leads that came in on their own in the period",
+        sub: "Every lead that came in during the period",
         leads_in: sum("leads_in"),
         not_with_sales: sum("not_with_sales"),
         assigned: sum("assigned"),
@@ -342,16 +334,15 @@ export async function leadSources(f: AnalysisFilters, viewer: SessionUser): Prom
         const downloadCount = await countLeadsForExport(
             await parseLeadListFilters(p, capabilitiesFor(viewer.role), viewer),
         );
-        // The download has every lead; here bulk imports sit in their own row.
-        const shown = total.leads_in + (bulk?.leads_in ?? 0);
+        const shown = total.leads_in;
         checks.push({
-            label: "All sources + Imported in bulk = the Leads download for the same period",
+            label: "All sources = the Leads download for the same period",
             holds: downloadCount === shown,
             detail: downloadCount === shown ? "" : `Breaks: the download has ${downloadCount} leads, this shows ${shown}.`,
         });
     }
 
-    return { period, group, total, rows, bulk, checks };
+    return { period, group, total, rows, checks };
 }
 
 // ───────────────────────────── AI score accuracy ───────────────────────────

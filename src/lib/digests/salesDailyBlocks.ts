@@ -451,7 +451,11 @@ export async function loadRepExtras(db: Exec, p: Period): Promise<RepExtras> {
         ),
         perRep(
             db,
-            sql`SELECT h.changed_by AS u, COUNT(DISTINCT h.dealer_lead_id) AS n FROM dealer_lead_status_history h
+            // ID 159 (Kartik, 10 Oct): Marked Won credits the lead's closer
+            // (closing_owner_id), not whoever clicked — the conversion rule.
+            sql`SELECT COALESCE(dl.closing_owner_id::text, h.changed_by) AS u, COUNT(DISTINCT h.dealer_lead_id) AS n
+                  FROM dealer_lead_status_history h
+                  JOIN dealer_leads dl ON dl.id = h.dealer_lead_id
                  WHERE h.to_status = 'Won' AND (to_jsonb(h) ->> 'won_undone_at') IS NULL AND ${win(sql`h.changed_at`)}
                  GROUP BY 1`,
         ),

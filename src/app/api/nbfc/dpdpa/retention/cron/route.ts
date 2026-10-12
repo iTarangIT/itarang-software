@@ -8,24 +8,15 @@
  * /api/nbfc/dpdpa/retention/run; this endpoint is the unattended scheduler.
  */
 import { NextRequest, NextResponse } from "next/server";
+import { isCronAuthorised } from "@/lib/cron-auth";
 import { isTestBypassRequest } from "@/lib/nbfc/dual-approval/auth";
 import { runDpdpaRetention } from "@/lib/nbfc/dpdpa/retentionCron";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-function authorize(req: NextRequest): boolean {
-  if (isTestBypassRequest(req.headers)) return true;
-  const cronSecret = process.env.CRON_SECRET;
-  if (!cronSecret) {
-    return process.env.NODE_ENV !== "production";
-  }
-  const auth = req.headers.get("authorization");
-  return auth === `Bearer ${cronSecret}`;
-}
-
 async function handle(req: NextRequest) {
-  if (!authorize(req)) {
+  if (!(isTestBypassRequest(req.headers) || isCronAuthorised(req))) {
     return NextResponse.json(
       { ok: false, error: "UNAUTHORIZED: cron auth missing" },
       { status: 401 },

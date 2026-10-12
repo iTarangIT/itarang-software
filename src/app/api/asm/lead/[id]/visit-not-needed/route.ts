@@ -10,6 +10,7 @@ import { z } from "zod";
 import { sql } from "drizzle-orm";
 import { requireRole } from "@/lib/auth-utils";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
+import { lastTransferredBy, notifyLeadPerson } from "@/lib/leads/newOwnerNotice";
 import { assertOwner } from "@/lib/leads/ownership";
 import { withLeadActor } from "@/lib/leads/actorContext";
 import { applyVisitStatus } from "@/lib/asm/visitStatus";
@@ -50,6 +51,16 @@ export const POST = withErrorHandler(
         });
 
         if (!result) return errorResponse("Only a lead awaiting a field visit can be marked 'Visit not needed'.", 409);
+        // 12 Oct: the person who transferred it is told the visit was dropped.
+        await notifyLeadPerson({
+            userId: await lastTransferredBy(id),
+            actorId: user.id,
+            leadId: id,
+            type: "lead.visit_update",
+            title: "Field visit not needed",
+            message: "{by} marked the visit to {lead} as not needed.",
+        });
+
         return successResponse({ status: result.status });
     },
 );

@@ -427,12 +427,6 @@ function SourcesTable({ data, show }: { data: LeadSourcesResult; show: Show }) {
                 </div>
                 {all.map((r, i) => row(r, i === 0))}
                 {data.rows.length === 0 && <div className={`px-3 py-6 text-[13px] ${C.muted}`}>No leads were created in this period.</div>}
-                {/* ID 153 — counted apart from Leads in and from All sources. */}
-                {data.bulk && (
-                    <div className="opacity-70" title="Bulk imports are not counted in Leads in">
-                        {row(data.bulk, false)}
-                    </div>
-                )}
             </div>
         </div>
     );

@@ -14,7 +14,9 @@ describe("withMetricRules", () => {
     });
 
     it("leaves room for a real question (the rules are short)", () => {
-        expect(withMetricRules("x".repeat(1000))).toContain(ANALYST_METRIC_RULES);
+        // ID 169 (10 Oct) added the Marked Won / Lost-reason / visit rules; the
+        // tracker accepted ~690 characters left for the question.
+        expect(withMetricRules("x".repeat(700))).toContain(ANALYST_METRIC_RULES);
     });
 
     it("sends a long question as asked rather than cut", () => {
@@ -22,9 +24,14 @@ describe("withMetricRules", () => {
         expect(withMetricRules(long)).toBe(long);
     });
 
-    it("carries the agreed Leads-in rule (bulk imports apart)", () => {
-        expect(ANALYST_METRIC_RULES).toMatch(/EXCLUDING bulk imports/);
+    it("carries the agreed Leads-in rule (every source, ID 153)", () => {
+        expect(ANALYST_METRIC_RULES).toMatch(/bulk imports included/);
+        expect(ANALYST_METRIC_RULES).not.toMatch(/EXCLUDING bulk/);
         expect(ANALYST_METRIC_RULES).toMatch(/inside_sales_call/);
+    });
+
+    it("tells the analyst Finance is retired (ID 11)", () => {
+        expect(ANALYST_METRIC_RULES).toMatch(/'finance' means battery_sale/);
     });
 });
 

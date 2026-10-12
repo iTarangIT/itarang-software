@@ -28,6 +28,7 @@
  * Online definition (BRD logic step 6): device_status='online' AND
  * last_seen >= now() - 15 minutes.
  */
+import { safeEqual } from "@/lib/cron-auth";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
@@ -67,7 +68,7 @@ function isTestBypassRequest(headers: Headers): boolean {
   const secret = process.env.NBFC_TEST_BYPASS_SECRET;
   if (!secret) return false;
   const provided = headers.get("x-nbfc-test-bypass");
-  return !!provided && provided === secret;
+  return !!provided && safeEqual(provided, secret);
 }
 
 interface CallerCtx {

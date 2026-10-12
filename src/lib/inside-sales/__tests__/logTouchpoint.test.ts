@@ -120,4 +120,19 @@ describe("planTouchpoint (extracted from POST /api/inside-sales/lead/[id]/touchp
         expect(p.nextAction).toBe("follow_up");
         expect(p.nextActionAt?.toISOString()).toBe("2026-09-26T05:30:00.000Z");
     });
+
+    it("ID 121: a follow-up set on the form is recorded on the touchpoint (who set it)", () => {
+        const p = planTouchpoint(body({ follow_up_at: "2026-10-14T05:30:00.000Z" }), lead);
+        expect(p.nextActionAt?.toISOString()).toBe("2026-10-14T05:30:00.000Z");
+    });
+
+    it("an explicit next_action_at wins over the follow-up; clearing records nothing", () => {
+        const both = planTouchpoint(
+            body({ next_action_at: "2026-10-15T05:30:00.000Z", follow_up_at: "2026-10-14T05:30:00.000Z" }),
+            lead,
+        );
+        expect(both.nextActionAt?.toISOString()).toBe("2026-10-15T05:30:00.000Z");
+        expect(planTouchpoint(body({ follow_up_at: null }), lead).nextActionAt).toBeNull();
+        expect(planTouchpoint(body({}), lead).nextActionAt).toBeNull();
+    });
 });

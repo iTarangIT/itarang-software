@@ -38,6 +38,7 @@
 import { randomUUID } from 'node:crypto';
 import { test, expect, type Page, type Browser, type APIRequestContext } from '@playwright/test';
 import postgres from 'postgres';
+import { cronAuth } from '../helpers/cron-auth';
 
 // ---------------------------------------------------------------------------
 // Wiring
@@ -120,7 +121,7 @@ async function login(browser: Browser, email: string, password: string): Promise
 
 /** One scheduler tick, driven from outside the process. */
 async function tick(api: APIRequestContext): Promise<Record<string, unknown>> {
-  const res = await api.post('/api/cron/auction/tick');
+  const res = await api.post('/api/cron/auction/tick', { headers: cronAuth() });
   expect(res.status(), 'cron tick').toBe(200);
   return (await res.json()) as Record<string, unknown>;
 }

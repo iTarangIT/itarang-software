@@ -1,0 +1,41 @@
+/**
+ * ID 172 items 5–7 — what actually happened against a quote's deal card, per
+ * dealer lead, from the invoice lines (E-322; never stock allocation):
+ *
+ *   fee_invoiced         Σ amount (before GST) of lines mapped "Onboarding fee"
+ *                        in Invoice Ledger › Item mapping (ONBOARDING_FEE_ITEM)
+ *   batteries_60d        Σ battery units (product_class 'battery') invoiced in
+ *                        the 60 days from the lead's Won day (won_at, IST)
+ *
+ * Same invoice → lead match and void rule as revenue (revenueSource.ts).
+ * Returns null when the invoice-line tables are missing (E-322 not applied).
+ */
+import { sql, type SQL } from "drizzle-orm";
+import { matchedLinesUnion, REVENUE_NOT_VOID } from "@/lib/dashboard/revenueSource";
+import { ONBOARDING_FEE_ITEM } from "@/lib/leads/dealCardRules";
+
+/** Days after Won the volume check looks at (Kartik, 10 Oct). */
+export const VOLUME_CHECK_DAYS = 60;
+
+/**
+ * A CTE body keyed by dealer_lead_id: lead_id, fee_invoiced, batteries_60d.
+ * Join it to dealer_leads / commercials as `LEFT JOIN (<this>) da ON da.lead_id = …`.
+ */
+export async function dealCardActualsSql(): Promise<SQL | null> {
+    const lines = await matchedLinesUnion();
+    if (!lines) return null;
+    return sql`
+        SELECT r.dealer_lead_id AS lead_id,
+               COALESCE(SUM(r.amount_excl_gst) FILTER (WHERE r.asset_type = ${ONBOARDING_FEE_ITEM}), 0)::float8 AS fee_invoiced,
+               COALESCE(SUM(r.quantity) FILTER (
+                   WHERE r.product_class = 'battery'
+                     AND (to_jsonb(dl) ->> 'won_at') IS NOT NULL
+                     AND r.invoice_date >= ((to_jsonb(dl) ->> 'won_at')::timestamptz AT TIME ZONE 'Asia/Kolkata')::date
+                     AND r.invoice_date < ((to_jsonb(dl) ->> 'won_at')::timestamptz AT TIME ZONE 'Asia/Kolkata')::date
+                                          + ${sql.raw(String(VOLUME_CHECK_DAYS))}
+               ), 0)::float8 AS batteries_60d
+          FROM ${lines} AS r
+          JOIN dealer_leads dl ON dl.id = r.dealer_lead_id
+         WHERE ${REVENUE_NOT_VOID}
+         GROUP BY r.dealer_lead_id`;
+}

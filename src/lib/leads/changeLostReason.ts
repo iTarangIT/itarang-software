@@ -104,7 +104,8 @@ export async function changeLostReason(input: {
         // Timeline entry. Not work — last_touchpoint_at moves, last_worked_at does not.
         await tx.insert(leadTouchpoints).values({
             dealer_lead_id: input.leadId,
-            touchpoint_type: "status_change_note",
+            // ID 170: a record fix — not a status change in any report.
+            touchpoint_type: "record_correction",
             performed_by: input.actor.id,
             performed_at: now,
             remarks: `Lost reason changed by ${who}: ${fromLabel} → ${toLabel} — ${plan.note}`,

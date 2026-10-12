@@ -29,7 +29,7 @@ import { db } from "@/lib/db";
 import { dialerCampaigns, dialerCampaignLeads } from "@/lib/db/schema";
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { successResponse, errorResponse, withErrorHandler } from "@/lib/api-utils";
-import { requireRole } from "@/lib/auth-utils";
+import { guardApi } from "@/lib/auth/apiGuard";
 import { CAMPAIGN_ACTION_ROLES } from "@/lib/leads/access";
 import { type DialerProvider } from "@/lib/queue/dialerSession";
 import { createCampaign } from "@/lib/queue/campaignTracker";
@@ -44,9 +44,10 @@ export const POST = withErrorHandler(
     const { id: campaignId } = await ctx.params;
     if (!campaignId) return errorResponse("Campaign id required", 400);
 
-    // asm / inside_sales_rep may view a campaign but not re-dial it.
-    const user = await requireRole([...CAMPAIGN_ACTION_ROLES]);
-    const triggeredBy: string | null = user?.id ?? null;
+    // ID 145: Admin and CEO only — everyone else views the campaign read-only.
+    const gate = await guardApi([...CAMPAIGN_ACTION_ROLES]);
+    if (!gate.ok) return gate.response;
+    const triggeredBy: string | null = gate.user.id;
 
     // Load the source campaign — we read from it but never mutate it.
     const rows = await db

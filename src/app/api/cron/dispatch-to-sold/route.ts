@@ -18,8 +18,7 @@ import { runAsJob } from "@/lib/runtime/liveSite";
 // once the configurable delay (default 1 day) has elapsed since its inventory
 // was dispatched. Mirrors the manual /mark-delivered logic.
 //
-// Auth: Bearer ${CRON_SECRET}. In dev (NODE_ENV !== 'production') we relax
-// the gate so localhost curl tests work. Pattern matches cleanup-leads.
+// Auth: Bearer ${CRON_SECRET}, in every environment (ID 130).
 //
 // Schedule: registered in vercel.json. Run at 04:00 UTC daily.
 
@@ -28,13 +27,8 @@ export const GET = withErrorHandler((req: Request) =>
 );
 
 async function dispatchToSold(req: Request) {
-  // Dev still allows unauthenticated localhost calls for testing — only the
-  // env-var-missing case is hardened relative to before. In production an
-  // unset CRON_SECRET now returns 500, not 200.
-  if (process.env.NODE_ENV === "production") {
-    const unauth = checkCronAuth(req);
-    if (unauth) return unauth;
-  }
+  const unauth = checkCronAuth(req);
+  if (unauth) return unauth;
 
   const days = Number(process.env.DISPATCH_TO_SOLD_DAYS ?? "1");
   const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);

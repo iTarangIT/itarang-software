@@ -70,11 +70,11 @@ export function AdminDashboardView({ readOnly }: { readOnly: boolean }) {
                 <>
                     <KpiStrip kpis={data.kpis} />
                     <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[1.5fr_1fr]">
-                        <TeamPerformanceTable rows={data.team} />
+                        <TeamPerformanceTable rows={data.team} limits={data.time_limits} />
                         <AlertPanels
                             counts={data.alert_counts}
                             filterQs={qs}
-                            transferVisitLimitDays={data.transfer_visit_limit_days}
+                            limits={data.time_limits}
                         />
                     </div>
                 </>

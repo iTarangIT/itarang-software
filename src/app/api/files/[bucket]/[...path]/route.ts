@@ -13,16 +13,17 @@
  * Backend: reads from S3 when STORAGE_BACKEND=s3, else Supabase — with a fallback
  * to the other backend so nothing breaks mid-migration.
  *
- * AUTH: these include KYC PII, so a valid Supabase session is required (same as
- * /api/nbfc-uploads). `dealer-documents` is the exception — see below — except
- * for its private folders (signed agreements, audit trails, buyback evidence),
- * which need a session or a signed, expiring link (tracker ID 128).
+ * AUTH: these include KYC PII and dealer financials, so EVERY read needs a
+ * valid Supabase session (same as /api/nbfc-uploads) or a signed, expiring
+ * link (?exp=&sig=, see fileAccess.ts). No bucket is open (ID 119): the
+ * pre-login dealer onboarding form gets a signed link back from its upload,
+ * and WhatsApp delivery signs what it sends.
  */
 import { NextRequest, NextResponse } from "next/server";
 
 import { createClient } from "@/lib/supabase/server";
 import { readBucketObject, contentTypeForName } from "@/lib/storage/readStoredDocument";
-import { fileLinkValid, isPrivateDealerDocument, safeStorageKey } from "@/lib/storage/fileAccess";
+import { fileLinkValid, safeStorageKey } from "@/lib/storage/fileAccess";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -30,23 +31,6 @@ export const dynamic = "force-dynamic";
 // Only these logical buckets may be proxied here (nbfc-documents has its own
 // route at /api/nbfc-uploads).
 const ALLOWED_BUCKETS = new Set(["documents", "dealer-documents", "call-recordings"]);
-
-// Buckets that require an authenticated Supabase session to read.
-//
-// `dealer-documents` is intentionally EXCLUDED: dealer onboarding is a public,
-// pre-login flow (the login page's "Create one" link lands a prospective dealer
-// on /dealer-onboarding with no session) and its upload endpoint
-// (/api/uploads/dealer-documents) is itself unauthenticated. Requiring a session
-// to read what an anonymous user just uploaded is the bug — the dealer clicks
-// "View uploaded file" and gets {"error":"Unauthorized"}. This bucket was also
-// a public Supabase bucket before the S3 migration, so anonymous reads here just
-// restore the prior behavior. Keys are random UUIDs (not enumerable).
-//
-// ID 128: that reasoning covers what a dealer uploads, not everything in the
-// bucket. Signed agreements, audit trails and buyback evidence live there too
-// and are not part of the public flow — isPrivateDealerDocument() — so they
-// need a session, or the signed link WhatsApp delivery uses.
-const AUTH_REQUIRED_BUCKETS = new Set(["documents", "call-recordings"]);
 
 export async function GET(
   req: NextRequest,
@@ -69,21 +53,22 @@ export async function GET(
     return NextResponse.json({ error: "Invalid path" }, { status: 400 });
   }
 
-  // Require an authenticated session for PII buckets. `dealer-documents` is
-  // served without a session because its write side is anonymous (public
-  // onboarding) — see AUTH_REQUIRED_BUCKETS above — apart from its private
-  // folders, which a signed link may also open.
-  const privateDealerFile = bucket === "dealer-documents" && isPrivateDealerDocument(key);
-  const signedLink =
-    privateDealerFile &&
-    fileLinkValid(bucket, key, req.nextUrl.searchParams.get("exp"), req.nextUrl.searchParams.get("sig"));
-  if ((AUTH_REQUIRED_BUCKETS.has(bucket) || privateDealerFile) && !signedLink) {
+  // A session, or a signed link for exactly this file. `dealer-documents` used
+  // to be readable by anyone holding the link (it backed the pre-login
+  // onboarding form); ID 119 closed it — that form now gets a signed link.
+  const signedLink = fileLinkValid(
+    bucket,
+    key,
+    req.nextUrl.searchParams.get("exp"),
+    req.nextUrl.searchParams.get("sig"),
+  );
+  if (!signedLink) {
     try {
       const supabase = await createClient();
       const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      if (!user) return unauthorized(req);
     } catch {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      return unauthorized(req);
     }
   }
 
@@ -109,6 +94,20 @@ export async function GET(
       "Cache-Control": "private, max-age=3600, immutable",
     },
   });
+}
+
+/** 401, as a readable page when a person opened the link in a browser. */
+function unauthorized(req: NextRequest) {
+  if (!(req.headers.get("accept") || "").includes("text/html")) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+  return new NextResponse(
+    `<!doctype html><meta charset="utf-8"><title>Unauthorized</title>` +
+      `<div style="font:15px/1.6 system-ui,sans-serif;max-width:34rem;margin:15vh auto;padding:0 1.5rem;color:#0f172a">` +
+      `<h1 style="font-size:1.25rem;margin:0 0 .75rem">Unauthorized</h1>` +
+      `<p style="margin:0;color:#475569">Please log in to the iTarang CRM to view this document.</p></div>`,
+    { status: 401, headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } },
+  );
 }
 
 /**

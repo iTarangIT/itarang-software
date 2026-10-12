@@ -19,6 +19,7 @@ import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import { eq, desc, and, inArray } from "drizzle-orm";
 import * as schema from "../../../src/lib/db/schema";
+import { cronAuth } from "../helpers/cron-auth";
 
 const DB_URL = process.env.DATABASE_URL;
 if (!DB_URL) throw new Error("DATABASE_URL must be set for E-030 API tests");
@@ -179,6 +180,7 @@ test.describe("E-030 — PCI nightly computation", () => {
 
     const res = await request.post("/api/cron/nbfc/compute-pci", {
       data: {},
+      headers: cronAuth(),
     });
     expect(res.status(), await res.text().catch(() => "")).toBe(200);
     const body = await res.json();
@@ -201,7 +203,7 @@ test.describe("E-030 — PCI nightly computation", () => {
       pattern: ["on_time", "on_time", "on_time", "on_time", "on_time", "on_time"],
     });
 
-    const res = await request.post("/api/cron/nbfc/compute-pci", { data: {} });
+    const res = await request.post("/api/cron/nbfc/compute-pci", { data: {}, headers: cronAuth() });
     expect(res.status()).toBe(200);
 
     const floorRow = await db
@@ -239,7 +241,7 @@ test.describe("E-030 — PCI nightly computation", () => {
       pattern: ["missed", "missed", "missed", "missed", "missed", "missed"],
     });
 
-    const res = await request.post("/api/cron/nbfc/compute-pci", { data: {} });
+    const res = await request.post("/api/cron/nbfc/compute-pci", { data: {}, headers: cronAuth() });
     expect(res.status()).toBe(200);
 
     const alerts = await db
@@ -266,7 +268,7 @@ test.describe("E-030 — PCI nightly computation", () => {
       pattern: ["on_time", "late", "on_time", "late", "on_time", "late"],
     });
 
-    const res = await request.post("/api/cron/nbfc/compute-pci", { data: {} });
+    const res = await request.post("/api/cron/nbfc/compute-pci", { data: {}, headers: cronAuth() });
     expect(res.status()).toBe(200);
 
     // Re-read the most recent borrower_risk_scores row for the loan.
