@@ -190,10 +190,14 @@ export const ANALYST_METRIC_RULES = [
     "Days are IST calendar days (yesterday, last month = in IST).",
     "Leads in = active dealer_leads created in the period, EXCLUDING bulk imports (source_door scraper / bulk_upload / ai_dialer, or a NeoDove lead_created burst of more than " +
         `${NEODOVE_BULK_PER_HOUR} per campaign per hour); report bulk imports apart.`,
-    "Dealers converted = dealer_leads.lead_status 'Converted' with closed_at in the period.",
+    "Dealers converted = dealer_leads.lead_status 'Converted' with closed_at in the period, credited to closing_owner_id.",
     "Calls / dealers called = human calls only: lead_touchpoints.touchpoint_type 'inside_sales_call' (AI dialer 'ai_call' excluded); " +
         `a NeoDove call within ${NEODOVE_CALL_MERGE_WINDOW} of an earlier one by the same agent on the same lead is the same call.`,
     "Engaged call = such a call that connected (call_status 'connected' or is_engaged), any outcome; duration never counts.",
     "Quotes created = the first quote per lead (dealer_lead_commercials quote_issue); revisions counted apart.",
-    "Hot handed to field = asm_transfer touchpoints where the lead was Hot at the moment of transfer.",
+    "Hot handed to field = asm_transfer touchpoints where the lead was Hot at the moment of transfer, each dealer once.",
+    // ID 169 (10 Oct): Undo Mark Won leaves the history row; won_undone_at marks it.
+    "Marked Won = status history to_status 'Won' with won_undone_at NULL, credited to closing_owner_id.",
+    "A Lost to Lost history row is a reason change, not a loss.",
+    "Visits = lead_visits visit_status 'visited'.",
 ].join(" ");

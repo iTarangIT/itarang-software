@@ -128,6 +128,10 @@ type StatusRow = {
     changed_by_name: string | null;
     changed_at: string | null;
     to_lost_reason: string | null;
+    /** ID 170 (E-333): the reason before a Lost-reason change. */
+    from_lost_reason: string | null;
+    /** ID 170 (E-333): this Won was undone. */
+    won_undone: boolean | null;
     reason_notes: string | null;
 };
 
@@ -199,7 +203,7 @@ function statusEvent(r: StatusRow): HistoryEvent {
         at: r.changed_at,
         cells: {
             event: "Status change",
-            activity: `${statusText(r.from_status)} → ${statusText(r.to_status)}`,
+            activity: `${statusText(r.from_status)} → ${statusText(r.to_status)}${r.won_undone ? " (undone)" : ""}`,
             by: r.changed_by_name ?? "System",
             at: fmtIst(r.changed_at),
             details: r.reason_notes ?? DASH,
@@ -208,8 +212,9 @@ function statusEvent(r: StatusRow): HistoryEvent {
             engaged: DASH,
             next_action: DASH,
             next_action_at: DASH,
+            // ID 170: a Lost-reason change shows old → new.
             lost_reason: r.to_lost_reason
-                ? r.to_lost_reason.replace(/_/g, " ")
+                ? `${r.from_lost_reason ? `${r.from_lost_reason.replace(/_/g, " ")} → ` : ""}${r.to_lost_reason.replace(/_/g, " ")}`
                 : DASH,
             // Raw machine value for the status side, so a pivot on Type (code)
             // separates the two kinds of event without parsing "Activity".
@@ -285,7 +290,9 @@ export async function buildTouchpointWorkbook(
                 u.name AS changed_by_name,
                 h.changed_at::text AS changed_at,
                 h.to_lost_reason,
-                h.reason_notes
+                h.reason_notes,
+                to_jsonb(h) ->> 'from_lost_reason' AS from_lost_reason,
+                (to_jsonb(h) ->> 'won_undone_at') IS NOT NULL AS won_undone
             FROM dealer_lead_status_history h
             LEFT JOIN users u ON u.id::text = h.changed_by
             WHERE h.dealer_lead_id IN ${ids}

@@ -14,7 +14,8 @@
 //
 // Company MTD target = Σ pushed / accepted targets of the month, pro-rated by
 // working days elapsed (Mon–Sat minus holidays, as the targets register does);
-// "Targets set for N of M people" says how complete that sum is.
+// "Targets sent to N of M people" says how complete that sum is (ID 157:
+// pushed or accepted; drafts and pending approval stay out).
 
 import { sql } from "drizzle-orm";
 import type { SalesDashboard } from "@/lib/admin/salesDashboardTypes";
@@ -492,7 +493,7 @@ export async function buildBlockA(
             : "";
     const targetsNote =
         t.total > 0
-            ? `Month to date is ${t.elapsed} of ${t.total} working days, so targets are ${t.elapsed}/${t.total} of the monthly target. Targets set for ${t.withTarget} of ${t.reps} people.${visitsNote}`
+            ? `Month to date is ${t.elapsed} of ${t.total} working days, so targets are ${t.elapsed}/${t.total} of the monthly target. Targets sent (accepted or not) to ${t.withTarget} of ${t.reps} people; drafts not yet sent are left out.${visitsNote}`
             : "No targets are set for this month.";
     return {
         rows: withUnmatchedRevenue(rows, unmatchedRevenue),

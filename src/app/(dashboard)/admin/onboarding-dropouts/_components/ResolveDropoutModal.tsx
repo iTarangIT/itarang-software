@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { CheckCircle2, Loader2, RotateCcw, XCircle } from "lucide-react";
 import { Modal } from "@/app/(dashboard)/inside-sales/_components/Modal";
 import { Button } from "@/components/ui/button";
+import { canReactivateLead } from "@/lib/leads/access";
 import {
     ONBOARDING_DROPOUT_REASONS,
     type DropoutResolutionAction,
@@ -16,6 +17,8 @@ import {
 type Props = {
     open: boolean;
     dropout: OnboardingDropoutRow;
+    /** ID 158: Re-engage is Admin / Sales Head / CEO; the other two are not CEO's. */
+    viewerRole: string;
     onClose: () => void;
     onSuccess: () => void;
 };
@@ -49,11 +52,18 @@ const ACTIONS: {
 export function ResolveDropoutModal({
     open,
     dropout,
+    viewerRole,
     onClose,
     onSuccess,
 }: Props) {
-    const [action, setAction] =
-        useState<DropoutResolutionAction>("keep_waiting");
+    const actions = ACTIONS.filter((a) =>
+        a.value === "re_engage"
+            ? canReactivateLead(viewerRole)
+            : viewerRole === "admin" || viewerRole === "sales_head" || viewerRole === "partner",
+    );
+    const [action, setAction] = useState<DropoutResolutionAction>(
+        actions[0]?.value ?? "keep_waiting",
+    );
     const [reason, setReason] = useState<string>(ONBOARDING_DROPOUT_REASONS[0]);
     const [notes, setNotes] = useState("");
     const [submitting, setSubmitting] = useState(false);
@@ -116,7 +126,7 @@ export function ResolveDropoutModal({
         >
             <div className="space-y-4">
                 <div className="space-y-2">
-                    {ACTIONS.map((a) => {
+                    {actions.map((a) => {
                         const activeOn = action === a.value;
                         return (
                             <button

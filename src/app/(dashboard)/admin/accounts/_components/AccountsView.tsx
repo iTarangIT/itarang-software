@@ -269,7 +269,7 @@ export function AccountsView() {
                                 <th className="px-3 py-2 text-left font-semibold">GSTIN</th>
                                 <th className="px-3 py-2 text-left font-semibold">Owner</th>
                                 <th className="px-3 py-2 text-left font-semibold">Came through</th>
-                                <th className="px-3 py-2 text-left font-semibold">Onboarded by</th>
+                                <th className="px-3 py-2 text-left font-semibold" title="Named on the onboarding form — information, not credit (ID 159)">Onboarded by</th>
                                 <th className="px-3 py-2 text-left font-semibold">Location</th>
                                 <th className="px-3 py-2 text-left font-semibold">Created</th>
                             </tr>

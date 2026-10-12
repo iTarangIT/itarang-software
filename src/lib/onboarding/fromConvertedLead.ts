@@ -107,6 +107,22 @@ export async function createOnboardingApplicationForConvertedLead(
         owner_email: "to_be_verified",
     });
 
+    // ID 169: Mark Won again after an Undo Mark Won. The undo let the form go
+    // (originating_dealer_lead_id NULL) and the undo request kept its id —
+    // reopen THAT form rather than starting a second one. It takes the lead's
+    // GSTIN afresh (gst_number cleared; markConverted fills it) and the new
+    // closer. Only an untouched form withdrawn by the undo is reopened.
+    const reopened = await reopenFormWithdrawnByUndo(executor, leadId, r.closing_owner_id);
+    if (reopened) {
+        await executor.execute(sql`
+            UPDATE dealer_leads
+            SET dealer_onboarding_application_id = ${reopened},
+                updated_at = NOW()
+            WHERE id = ${leadId}
+        `);
+        return { created: false, applicationId: reopened, alreadyExisted: true };
+    }
+
     const inserted = (await executor.execute<{ id: string }>(sql`
         INSERT INTO dealer_onboarding_applications (
             company_name, onboarding_status,
@@ -168,9 +184,12 @@ export async function createOnboardingApplicationForConvertedLead(
         // submitted or anything an admin withdrew for another reason. The
         // withdrawn_* columns are E-333; to_jsonb keeps a DB without it working.
         if (applicationId) {
+            // ID 169: and it takes the new GSTIN — gst_number is cleared so
+            // markConverted fills the lead's number. (withdrawn_* are not
+            // touched here: this path must also run on a DB without E-333.)
             await executor.execute(sql`
                 UPDATE dealer_onboarding_applications
-                   SET onboarding_status = 'draft', updated_at = NOW()
+                   SET onboarding_status = 'draft', gst_number = NULL, updated_at = NOW()
                  WHERE id = ${applicationId}::uuid
                    AND onboarding_status = 'withdrawn'
                    AND submitted_at IS NULL
@@ -190,4 +209,53 @@ export async function createOnboardingApplicationForConvertedLead(
     }
 
     return { created, applicationId, alreadyExisted: !created && !!applicationId };
+}
+
+/**
+ * ID 169: the form an Undo Mark Won withdrew for this lead, reopened as the
+ * live draft and re-attached to the lead. Null when there is none (or E-333 is
+ * not applied). The lead claim is taken back only when no other form holds it
+ * (partial UNIQUE index on originating_dealer_lead_id, E-127).
+ */
+async function reopenFormWithdrawnByUndo(
+    executor: SqlExecutor,
+    leadId: string,
+    closingOwnerId: string | null,
+): Promise<string | null> {
+    const has = (await executor.execute<{ ok: boolean }>(sql`
+        SELECT to_regclass('public.lead_won_undo_requests') IS NOT NULL AS ok
+    `)) as unknown as Array<{ ok: boolean }>;
+    if (!has[0]?.ok) return null;
+    const rows = (await executor.execute<{ id: string }>(sql`
+        UPDATE dealer_onboarding_applications oa
+           SET onboarding_status = 'draft',
+               withdrawn_at = NULL,
+               withdrawn_reason = NULL,
+               gst_number = NULL,
+               originating_dealer_lead_id = CASE
+                   WHEN NOT EXISTS (SELECT 1 FROM dealer_onboarding_applications o
+                                     WHERE o.originating_dealer_lead_id = ${leadId} AND o.id <> oa.id)
+                   THEN ${leadId} ELSE oa.originating_dealer_lead_id END,
+               owner_id = COALESCE(${closingOwnerId}, oa.owner_id),
+               salesperson_user_id = COALESCE(
+                   (SELECT u.id FROM users u
+                     WHERE u.id::text = ${closingOwnerId}
+                       AND u.is_active
+                       AND LOWER(u.role) IN ('inside_sales_rep', 'asm', 'sales_head')),
+                   oa.salesperson_user_id),
+               last_action_at = NOW(),
+               updated_at = NOW()
+         WHERE oa.id = (
+               SELECT w.id FROM dealer_onboarding_applications w
+                WHERE w.onboarding_status = 'withdrawn'
+                  AND w.submitted_at IS NULL
+                  AND w.withdrawn_reason = 'Marked Won by mistake'
+                  AND (w.originating_dealer_lead_id = ${leadId}
+                       OR w.id IN (SELECT r.onboarding_application_id FROM lead_won_undo_requests r
+                                    WHERE r.dealer_lead_id = ${leadId} AND r.status = 'approved'))
+                ORDER BY w.updated_at DESC
+                LIMIT 1)
+        RETURNING oa.id::text AS id
+    `)) as unknown as Array<{ id: string }>;
+    return rows[0]?.id ?? null;
 }
