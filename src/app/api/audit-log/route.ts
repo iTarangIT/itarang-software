@@ -23,6 +23,7 @@
  *
  * Results ordered by timestamp DESC, paginated.
  */
+import { safeEqual } from "@/lib/cron-auth";
 import { NextRequest, NextResponse } from "next/server";
 import { clientError } from "@/lib/nbfc/http-error";
 import { z } from "zod";
@@ -43,7 +44,7 @@ function isAdminTestBypass(headers: Headers): boolean {
   const secret = process.env.NBFC_TEST_BYPASS_SECRET;
   if (!secret) return false;
   const provided = headers.get("x-nbfc-test-bypass");
-  return !!provided && provided === secret;
+  return !!provided && safeEqual(provided, secret);
 }
 
 export const runtime = "nodejs";

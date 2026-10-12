@@ -11,27 +11,18 @@
  * and the ticker together send at most once a day.
  *
  * Auth: trusts the Vercel cron header (`x-vercel-cron`), else a
- * `Bearer CRON_SECRET`, else allows unauthenticated in non-production.
+ * `Bearer CRON_SECRET` (checkCronAuth rules — closed when the secret is unset).
  */
 import { NextRequest, NextResponse } from "next/server";
 import { runAgreementExpiryReminders } from "@/lib/agreement/expiryReminder";
-import { fromVercelCron } from "@/lib/security/cronAuth";
+import { isCronAuthorised } from "@/lib/cron-auth";
 import { runAsJob } from "@/lib/runtime/liveSite";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-function isAuthorised(req: NextRequest): boolean {
-  if (fromVercelCron(req)) return true;
-  const auth = req.headers.get("authorization") ?? "";
-  const expected = process.env.CRON_SECRET;
-  if (expected && auth === `Bearer ${expected}`) return true;
-  if (process.env.NODE_ENV !== "production") return true;
-  return false;
-}
-
 async function run(req: NextRequest) {
-  if (!isAuthorised(req)) {
+  if (!isCronAuthorised(req)) {
     return NextResponse.json({ ok: false, error: "UNAUTHORIZED" }, { status: 401 });
   }
 

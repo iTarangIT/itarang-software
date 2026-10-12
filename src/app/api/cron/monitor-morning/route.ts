@@ -12,8 +12,8 @@
  * STILL subject to the claim, so a second curl on the same IST day returns
  * `sent: false, reason: "already_claimed"` rather than posting twice.
  *
- * Auth: trusts the Vercel cron header, else a `Bearer CRON_SECRET`, else allows
- * unauthenticated outside production — matching its sibling crons.
+ * Auth: trusts the Vercel cron header, else a `Bearer CRON_SECRET` — closed
+ * when the secret is unset, in every environment (ID 130).
  *
  * Crontab line for the VPS (the box runs UTC; 08:00 IST is 02:30 UTC):
  *
@@ -23,23 +23,14 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { runMonitorMorningReport } from "@/lib/monitor/morning-report";
-import { fromVercelCron } from "@/lib/security/cronAuth";
+import { isCronAuthorised } from "@/lib/cron-auth";
 import { runAsJob } from "@/lib/runtime/liveSite";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-function isAuthorised(req: NextRequest): boolean {
-    if (fromVercelCron(req)) return true;
-    const auth = req.headers.get("authorization") ?? "";
-    const expected = process.env.CRON_SECRET;
-    if (expected && auth === `Bearer ${expected}`) return true;
-    if (process.env.NODE_ENV !== "production") return true;
-    return false;
-}
-
 async function handle(req: NextRequest) {
-    if (!isAuthorised(req)) {
+    if (!isCronAuthorised(req)) {
         return NextResponse.json({ success: false, error: { message: "Unauthorized" } }, { status: 401 });
     }
 

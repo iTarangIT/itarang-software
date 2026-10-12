@@ -7,26 +7,17 @@
  * statuses.
  *
  * Schedule: vercel.json "30 5 * * *". Auth: Vercel cron header OR
- * Bearer CRON_SECRET; unauthenticated allowed in non-production (repo pattern).
+ * Bearer CRON_SECRET; closed when the secret is unset (ID 130).
  */
 import { NextRequest, NextResponse } from "next/server";
 import { runEmiAging } from "@/lib/nbfc/servicing/runEmiAging";
-import { fromVercelCron } from "@/lib/security/cronAuth";
+import { isCronAuthorised } from "@/lib/cron-auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-function isAuthorised(req: NextRequest): boolean {
-  if (fromVercelCron(req)) return true;
-  const auth = req.headers.get("authorization") ?? "";
-  const expected = process.env.CRON_SECRET;
-  if (expected && auth === `Bearer ${expected}`) return true;
-  if (process.env.NODE_ENV !== "production") return true;
-  return false;
-}
-
 async function handle(req: NextRequest) {
-  if (!isAuthorised(req)) {
+  if (!isCronAuthorised(req)) {
     return NextResponse.json({ ok: false, error: "UNAUTHORIZED" }, { status: 401 });
   }
   try {
