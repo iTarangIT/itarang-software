@@ -187,7 +187,7 @@ export function bulkImportedLead(dl: SQL = sql`dl`): SQL {
  * Sent with every question, so it stays short (src/lib/analyst/metricRules.ts).
  */
 export const ANALYST_METRIC_RULES = [
-    "Days are IST calendar days (yesterday, last month = in IST).",
+    "Days, yesterday and months are IST calendar days.",
     "Leads in = active dealer_leads created in the period, EXCLUDING bulk imports (source_door scraper / bulk_upload / ai_dialer, or a NeoDove lead_created burst of more than " +
         `${NEODOVE_BULK_PER_HOUR} per campaign per hour); report bulk imports apart.`,
     "Dealers converted = dealer_leads.lead_status 'Converted' with closed_at in the period.",
@@ -195,5 +195,7 @@ export const ANALYST_METRIC_RULES = [
         `a NeoDove call within ${NEODOVE_CALL_MERGE_WINDOW} of an earlier one by the same agent on the same lead is the same call.`,
     "Engaged call = such a call that connected (call_status 'connected' or is_engaged), any outcome; duration never counts.",
     "Quotes created = the first quote per lead (dealer_lead_commercials quote_issue); revisions counted apart.",
-    "Hot handed to field = asm_transfer touchpoints where the lead was Hot at the moment of transfer.",
+    "Hot handed to field = asm_transfer touchpoints where the lead was Hot when transferred.",
+    // ID 11 — Finance was folded into Battery sale (E-331).
+    "business_type 'finance' means battery_sale.",
 ].join(" ");

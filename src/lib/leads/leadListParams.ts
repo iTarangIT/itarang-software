@@ -23,7 +23,7 @@ import { isConnectStatus, isDispositionBucket } from "@/lib/leads/dispositions";
 import type { LeadListFilters } from "@/lib/leads/leadListQuery";
 import { IDLE_RANGES, isIdleRangeKey } from "@/lib/leads/idle";
 import { neodoveTablesPresent } from "@/lib/leads/leadCampaign";
-import { isBusinessTypeFilter } from "@/lib/leads/businessType";
+import { businessTypeFilterParam } from "@/lib/leads/businessType";
 import { exportsOwnLeadsOnly } from "@/lib/exports/downloadLog";
 
 export async function parseLeadListFilters(
@@ -78,9 +78,7 @@ export async function parseLeadListFilters(
         })(),
         callback: searchParams.get("callback") === "1",
         disposition: searchParams.get("disposition")?.trim() || null,
-        businessType: isBusinessTypeFilter(searchParams.get("business_type"))
-            ? searchParams.get("business_type")
-            : null,
+        businessType: businessTypeFilterParam(searchParams.get("business_type")),
         ownerId: caps.canSeeOwnerAsm ? searchParams.get("owner_id") || null : null,
         asmId: caps.canSeeOwnerAsm ? searchParams.get("asm_id") || null : null,
         assignedFrom: caps.canSeeOwnerAsm ? searchParams.get("assigned_from")?.trim() || null : null,
