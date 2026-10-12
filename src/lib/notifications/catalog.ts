@@ -359,6 +359,8 @@ export const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   "vendor.registered": "Onboarding",
   "nbfc.dual_approval": "System",
   "nbfc.wallet_low": "System",
+  // ID 130 — a webhook or cron route is missing its secret (security/configAlert.ts).
+  "security.secret_missing": "System",
   // 141 live rows on sandbox and NO emitter anywhere in src/ — found by
   // `npm run verify:notifications`. Mapped rather than left unmapped so the
   // rows already in people's bells file correctly and the type is governable
@@ -425,6 +427,8 @@ const CRITICAL = new Set([
   "ecofy.sync_failed",
   "escalation_raised",
   "escalation.raised",
+  // ID 130 — a protection is open (or a job refused) until someone sets an env var.
+  "security.secret_missing",
 ]);
 
 /** Waiting on the recipient to act — surfaced amber. */

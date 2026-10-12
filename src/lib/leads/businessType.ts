@@ -101,7 +101,7 @@ export function normalizeBusinessType(input: unknown): BusinessType | null {
         sales: "battery_sale",
         buy_back: "buyback",
         buybacks: "buyback",
-        // "Finance" was retired as a business type (E-327 folded every stored
+        // "Finance" was retired as a business type (E-331 folded every stored
         // 'finance' row into battery_sale), so old sheets and habits that
         // still say it land on Battery Sale instead of being rejected.
         finance: "battery_sale",
@@ -112,4 +112,17 @@ export function normalizeBusinessType(input: unknown): BusinessType | null {
         others: "other",
     };
     return ALIASES[key] ?? null;
+}
+
+/**
+ * A Type-of-business FILTER value read from a URL (ID 11): a stored type, the
+ * "unset" sentinel, or a retired / alias spelling mapped to today's type — so
+ * an old link with `business_type=finance` shows Battery Sale leads instead of
+ * an error or every type. Anything else is null (no filter).
+ */
+export function businessTypeFilterParam(
+    raw: unknown,
+): BusinessType | typeof BUSINESS_TYPE_UNSET | null {
+    if (raw === BUSINESS_TYPE_UNSET) return BUSINESS_TYPE_UNSET;
+    return normalizeBusinessType(raw);
 }

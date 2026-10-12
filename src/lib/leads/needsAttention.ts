@@ -4,11 +4,13 @@
  * holds it, how long it has sat, and what happened last — so the manager can
  * reassign from the row instead of opening each lead.
  *
- *   Idle      working days (Mon–Sat) since dealer_leads.last_worked_at — the
- *             E-300 clock: only a call, visit or status change resets it.
- *             Never-worked leads count from when the holder got them.
- *   Threshold #6: a CC / inside-sales holder is listed from 5 idle days, an
- *             ASM from 7. Other holders use 5.
+ *   Idle      working days (Mon–Sat, active holidays off) since
+ *             dealer_leads.last_worked_at — the E-300 clock: only a call, visit
+ *             or status change resets it. Never-worked leads count from when
+ *             the holder got them.
+ *   Threshold #6: a CC / inside-sales holder is listed from idle_cc idle days
+ *             (default 5), an ASM from idle_asm (default 7) — ID 85 time
+ *             limits, read per call. Other holders use idle_cc.
  *   Non-responsive (R-16) leads are returned with non_responsive = true and
  *             kept OUT of the idle totals — a dead number is not neglect. The
  *             page shows them as their own bucket.
@@ -26,10 +28,14 @@ import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { WORKABLE_STATUSES } from "@/lib/lifecycle/transitions";
 import { nonResponsiveSql } from "@/lib/leads/nonResponsive";
-import { TRANSFER_VISIT_OVERDUE_SQL } from "@/lib/asm/transferVisitLimit";
+import { transferVisitOverdueSql } from "@/lib/asm/transferVisitLimit";
+import { workingDaysSinceSql } from "@/lib/calendar/holidays";
+import { TIME_LIMIT_DEFAULTS, type TimeLimits } from "@/lib/timeLimits/registry";
+import { getTimeLimits } from "@/lib/timeLimits/store";
 
-export const IDLE_THRESHOLD_CC = 5;
-export const IDLE_THRESHOLD_ASM = 7;
+/** Defaults only — the live values are the idle_cc / idle_asm time limits. */
+export const IDLE_THRESHOLD_CC = TIME_LIMIT_DEFAULTS.idle_cc;
+export const IDLE_THRESHOLD_ASM = TIME_LIMIT_DEFAULTS.idle_asm;
 
 export type NeedsAttentionRow = {
     lead_id: string;
@@ -52,13 +58,8 @@ export type NeedsAttentionRow = {
 // ID 74 — Won is open but waits on onboarding, not on the rep: not "idle".
 const OPEN_LIST = sql.raw(WORKABLE_STATUSES.map((s) => `'${s}'`).join(", "));
 const IDLE_BASIS = sql`COALESCE(dl.last_worked_at, dl.assigned_at, dl.created_at)`;
-/** Mon–Sat days elapsed since the basis, Sundays excluded — as the admin dashboard counts. */
-const DAYS_IDLE = sql`(
-    SELECT COUNT(*) FROM generate_series(
-        ((${IDLE_BASIS} AT TIME ZONE 'Asia/Kolkata')::date + 1),
-        (now() AT TIME ZONE 'Asia/Kolkata')::date, INTERVAL '1 day'
-    ) gs WHERE EXTRACT(DOW FROM gs) <> 0
-)`;
+/** Working days elapsed since the basis (Mon–Sat, holidays off) — as the admin dashboard counts. */
+const DAYS_IDLE = workingDaysSinceSql(IDLE_BASIS);
 
 type Opts = {
     holderId?: string | null;
@@ -67,11 +68,11 @@ type Opts = {
 };
 
 /** Every lead over its threshold, as a subquery `x` — no ORDER, no LIMIT. */
-function baseQuery(opts: Opts): SQL {
+function baseQuery(opts: Opts, limits: TimeLimits): SQL {
     const threshold =
         opts.minDays != null
             ? sql`${opts.minDays}::int`
-            : sql`CASE WHEN lower(u.role) = 'asm' THEN ${IDLE_THRESHOLD_ASM}::int ELSE ${IDLE_THRESHOLD_CC}::int END`;
+            : sql`CASE WHEN lower(u.role) = 'asm' THEN ${limits.idle_asm}::int ELSE ${limits.idle_cc}::int END`;
     return sql`(SELECT * FROM (
             SELECT dl.id                                         AS lead_id,
                    COALESCE(dl.shop_name, dl.dealer_name, '(unnamed)') AS dealer,
@@ -89,7 +90,7 @@ function baseQuery(opts: Opts): SQL {
                    -- E-314) counts as not idle — the lead is in Number Repair.
                    (${nonResponsiveSql(sql`dl.id`)}
                     OR (to_jsonb(dl)->>'contactability') IS NOT NULL) AS non_responsive,
-                   ${TRANSFER_VISIT_OVERDUE_SQL}                 AS visit_overdue,
+                   ${transferVisitOverdueSql(limits.asm_transfer_first_visit)} AS visit_overdue,
                    ${threshold}                                  AS threshold
               FROM dealer_leads dl
               LEFT JOIN users u ON u.id::text = dl.current_owner_id
@@ -106,8 +107,9 @@ function baseQuery(opts: Opts): SQL {
 export async function listNeedsAttention(
     opts: Opts & { limit?: number } = {},
 ): Promise<NeedsAttentionRow[]> {
+    const limits = await getTimeLimits();
     const rows = await db.execute(sql`
-        SELECT * FROM ${baseQuery(opts)} x
+        SELECT * FROM ${baseQuery(opts, limits)} x
          ORDER BY x.non_responsive ASC, x.days_idle DESC, x.dealer ASC
          LIMIT ${Math.min(Math.max(opts.limit ?? 500, 1), 2000)}::int
     `);
@@ -145,13 +147,14 @@ export type NeedsAttentionHolderSummary = {
  * leads, and a capped count reads as a real one).
  */
 export async function summarizeNeedsAttention(opts: Opts = {}): Promise<NeedsAttentionHolderSummary[]> {
+    const limits = await getTimeLimits();
     const rows = await db.execute(sql`
         SELECT x.holder_id, MAX(x.holder_name) AS holder_name, MAX(x.holder_role) AS holder_role,
                COUNT(*) FILTER (WHERE NOT x.non_responsive)::int                     AS idle,
                COUNT(*) FILTER (WHERE NOT x.non_responsive AND x.days_idle > 14)::int AS idle_over_14,
                COALESCE(MAX(x.days_idle) FILTER (WHERE NOT x.non_responsive), 0)::int AS oldest_days,
                COUNT(*) FILTER (WHERE x.non_responsive)::int                         AS non_responsive
-          FROM ${baseQuery(opts)} x
+          FROM ${baseQuery(opts, limits)} x
          GROUP BY x.holder_id
          ORDER BY idle DESC
     `);

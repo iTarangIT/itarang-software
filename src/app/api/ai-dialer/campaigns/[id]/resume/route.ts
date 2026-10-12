@@ -17,7 +17,7 @@ import { dialerCampaigns, dialerCampaignLeads } from "@/lib/db/schema";
 import { startDraftCampaign } from "@/lib/queue/startCampaign";
 import type { DialerProvider } from "@/lib/queue/dialerSession";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
-import { requireRole } from "@/lib/auth-utils";
+import { guardApi } from "@/lib/auth/apiGuard";
 import { CAMPAIGN_ACTION_ROLES } from "@/lib/leads/access";
 import { and, eq, isNotNull, or, sql } from "drizzle-orm";
 
@@ -26,8 +26,9 @@ export const POST = withErrorHandler(
     const { id: campaignId } = await ctx.params;
     if (!campaignId) return errorResponse("Campaign id required", 400);
 
-    // asm / inside_sales_rep may view a campaign but not drive it.
-    await requireRole([...CAMPAIGN_ACTION_ROLES]);
+    // ID 145: Admin and CEO only — everyone else views the campaign read-only.
+    const gate = await guardApi([...CAMPAIGN_ACTION_ROLES]);
+    if (!gate.ok) return gate.response;
 
     const existing = await db
       .select({

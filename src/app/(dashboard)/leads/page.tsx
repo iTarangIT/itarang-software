@@ -1979,13 +1979,18 @@ export default function LeadsUnifiedPage() {
         />
       )}
 
-      <DialerStartModal
-        isOpen={dialerModalOpen}
-        onClose={() => setDialerModalOpen(false)}
-        onConfirm={confirmDialerStart}
-        onStartListCampaign={startListCampaign}
-        canManageGroups={caps.canBulkAct}
-      />
+      {/* ID 145 — the dialer (region start, calling lists, stop) is for
+          CALLING_LIST_ROLES only; the API refuses everyone else, so the
+          switch and its modal (with the Lists tab) are not offered either. */}
+      {caps.canControlDialer && (
+        <DialerStartModal
+          isOpen={dialerModalOpen}
+          onClose={() => setDialerModalOpen(false)}
+          onConfirm={confirmDialerStart}
+          onStartListCampaign={startListCampaign}
+          canManageGroups={caps.canBulkAct}
+        />
+      )}
 
       {/* HEADER */}
       <div className="flex justify-between items-start mb-6">
@@ -1998,7 +2003,7 @@ export default function LeadsUnifiedPage() {
           </p>
         </div>
         <div className="flex items-center gap-3">
-          {tab === "leads" && (
+          {tab === "leads" && caps.canControlDialer && (
             <button
               onClick={dialerOn ? handleDialerOff : handleDialerOn}
               className="flex items-center gap-3 px-4 py-2.5 bg-white border border-gray-200 rounded-xl hover:border-gray-300 transition-all shadow-sm cursor-pointer"
@@ -2182,7 +2187,7 @@ export default function LeadsUnifiedPage() {
       {/* ── TAB: LEADS ── */}
       {tab === "leads" && (
         <div>
-          {dialerOn && dialerPhase !== "idle" && (
+          {caps.canControlDialer && dialerOn && dialerPhase !== "idle" && (
             <AiDialerBanner
               phase={dialerPhase}
               currentLead={currentDialerLead}

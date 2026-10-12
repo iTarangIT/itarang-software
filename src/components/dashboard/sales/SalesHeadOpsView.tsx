@@ -51,6 +51,7 @@ import {
     toneText,
 } from "@/components/dashboard/redesign/primitives";
 import { useSalesDashboardFilters } from "./useSalesDashboardFilters";
+import { ResponseTimeCard } from "./ResponseTimeCard";
 import { BUSINESS_TYPE_OPTIONS, BUSINESS_TYPE_UNSET, BUSINESS_TYPE_UNSET_LABEL } from "@/lib/leads/businessType";
 
 type Period = "today" | "week" | "month";
@@ -911,6 +912,9 @@ export function SalesHeadOpsView() {
                     </span>
                 </DashCard>
             </div>
+
+            {/* ID 86 — lead / owner / transfer clocks */}
+            <ResponseTimeCard from={from} to={to} spocId={filters.spoc_id || undefined} />
 
             {/* Quotes */}
             <DashCard

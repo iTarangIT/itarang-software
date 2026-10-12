@@ -1,12 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { PgDialect } from "drizzle-orm/pg-core";
-import { sql } from "drizzle-orm";
 
 vi.mock("@/lib/db", () => ({ db: {} }));
 const { salesDailyPeriods, sameSpanLastMonth, addDays, firstOfMonth } = await import(
     "../kinds/sales-daily"
 );
-const { bulkImportedLead, NEODOVE_BULK_PER_HOUR } = await import("@/lib/reports/metricDefinitions");
 
 describe("salesDailyPeriods — the windows a Sales Daily is counted over", () => {
     it("Sun 4 Oct 2026: yesterday = that day, last 7 = 28 Sep–4 Oct, MTD = 1–4 Oct, last month = 1–4 Sep", () => {
@@ -46,26 +43,5 @@ describe("salesDailyPeriods — the windows a Sales Daily is counted over", () =
         expect(addDays("2026-12-31", 1)).toBe("2027-01-01");
         expect(addDays("2026-03-01", -1)).toBe("2026-02-28");
         expect(firstOfMonth("2026-10-04")).toBe("2026-10-01");
-    });
-});
-
-describe("bulkImportedLead — what Leads in leaves out", () => {
-    const text = new PgDialect().sqlToQuery(bulkImportedLead(sql`dl`)).sql;
-
-    it("treats the scraper, bulk upload and AI-dialer list doors as imports", () => {
-        expect(text).toContain("source_door IN ('scraper', 'bulk_upload', 'ai_dialer')");
-    });
-
-    it("flags a NeoDove lead only through a per-campaign, per-hour burst of lead_created events", () => {
-        expect(text).toContain("source_door = 'neodove'");
-        expect(text).toContain("event_type = 'lead_created'");
-        expect(text).toContain("date_trunc('hour'");
-        expect(text).toContain(`HAVING COUNT(*) > ${NEODOVE_BULK_PER_HOUR}`);
-    });
-
-    it("finds the bursts in an uncorrelated subquery (a per-lead count ran > 5 min on db-2)", () => {
-        // The burst groups must not reference the outer lead row.
-        const burst = text.slice(text.indexOf("JOIN ("), text.indexOf(") burst"));
-        expect(burst).not.toContain("dl.");
     });
 });

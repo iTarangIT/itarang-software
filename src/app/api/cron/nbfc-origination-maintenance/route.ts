@@ -8,7 +8,7 @@
  *   3. FI SLA breach (§6.3): flag field investigations past their 48h SLA.
  *
  * Schedule: daily (configure in vercel.json). Auth: Vercel cron header OR
- * Bearer CRON_SECRET; unauthenticated allowed in non-production (repo pattern).
+ * Bearer CRON_SECRET; closed when the secret is unset (ID 130).
  */
 import { NextRequest, NextResponse } from "next/server";
 import { and, eq, inArray, isNull, lt, or } from "drizzle-orm";
@@ -18,7 +18,7 @@ import { enachMandates, fieldInvestigations, leads, manualHandoffs, nbfcWallets,
 import { sendManualHandoffNudge } from "@/lib/email/sendManualHandoffEmail";
 import { ENACH_STALE_RISK_DAYS } from "@/lib/nbfc/enach";
 import { getWalletFundsProvider } from "@/lib/nbfc/wallet/provider";
-import { fromVercelCron } from "@/lib/security/cronAuth";
+import { isCronAuthorised } from "@/lib/cron-auth";
 import { runAsJob } from "@/lib/runtime/liveSite";
 
 /** §16.3 lockout: once an auto-recharge fires, no re-fire for this many hours. */
@@ -26,15 +26,6 @@ const WALLET_AUTORECHARGE_LOCKOUT_HOURS = Number(process.env.WALLET_AUTORECHARGE
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-function isAuthorised(req: NextRequest): boolean {
-  if (fromVercelCron(req)) return true;
-  const auth = req.headers.get("authorization") ?? "";
-  const expected = process.env.CRON_SECRET;
-  if (expected && auth === `Bearer ${expected}`) return true;
-  if (process.env.NODE_ENV !== "production") return true;
-  return false;
-}
 
 async function run() {
   const now = Date.now();
@@ -197,13 +188,13 @@ async function run() {
 }
 
 export async function GET(req: NextRequest) {
-  if (!isAuthorised(req)) return NextResponse.json({ ok: false, error: "UNAUTHORIZED" }, { status: 401 });
+  if (!isCronAuthorised(req)) return NextResponse.json({ ok: false, error: "UNAUTHORIZED" }, { status: 401 });
   const summary = await runAsJob("cron:nbfc-origination-maintenance", run);
   return NextResponse.json({ ok: true, ...summary });
 }
 
 export async function POST(req: NextRequest) {
-  if (!isAuthorised(req)) return NextResponse.json({ ok: false, error: "UNAUTHORIZED" }, { status: 401 });
+  if (!isCronAuthorised(req)) return NextResponse.json({ ok: false, error: "UNAUTHORIZED" }, { status: 401 });
   const summary = await runAsJob("cron:nbfc-origination-maintenance", run);
   return NextResponse.json({ ok: true, ...summary });
 }

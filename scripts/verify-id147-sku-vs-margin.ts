@@ -15,6 +15,7 @@ import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { grossMarginByMonth } from "@/lib/dashboard/grossMargin";
 import { skuReport } from "@/lib/sales/skuReport";
+import { itemKeySql } from "@/lib/sales/itemMap";
 
 let failed = 0;
 function check(label: string, ok: boolean, detail?: unknown) {
@@ -66,6 +67,17 @@ async function main() {
     `)) as unknown as Array<{ n: number }>;
     console.log(`\nvoided invoices carrying ledger lines: ${voidLines?.n ?? 0} (excluded by both — check 1 holds with them present)`);
     console.log(`unmapped item names in range: ${margin.unmapped_items}`);
+
+    // ID 147 — every writer stamps the mapping at insert, so no line of an item
+    // that IS mapped may still be unlinked (scripts/relink-unmapped-lines.ts
+    // fixes lines stored before that).
+    const [stale] = (await db.execute(sql`
+        SELECT COUNT(*)::int AS n, COUNT(DISTINCT l.source)::int AS sources
+          FROM invoice_line_items l
+          JOIN vyapar_item_map m ON m.item_key = ${itemKeySql(sql`l.item_name`)}
+         WHERE l.product_id IS NULL AND m.product_id IS NOT NULL
+    `)) as unknown as Array<{ n: number; sources: number }>;
+    check("no line of a mapped item is left unlinked", (stale?.n ?? 0) === 0, stale);
 
     console.log(failed === 0 ? "\nAll checks passed." : `\n${failed} check(s) FAILED.`);
     process.exit(failed === 0 ? 0 : 1);

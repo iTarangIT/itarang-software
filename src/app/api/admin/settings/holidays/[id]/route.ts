@@ -10,6 +10,7 @@ import {
     successResponse,
     withErrorHandler,
 } from "@/lib/api-utils";
+import { forgetHolidays } from "@/lib/calendar/holidays";
 
 const BodySchema = z.object({ is_active: z.boolean() });
 
@@ -27,6 +28,7 @@ export const PATCH = withErrorHandler(
             RETURNING holiday_id
         `);
         if (res.length === 0) return errorResponse("Holiday not found.", 404);
+        forgetHolidays();
 
         return successResponse({ ok: true });
     },

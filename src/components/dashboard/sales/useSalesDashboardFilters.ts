@@ -12,6 +12,7 @@ import {
     SALES_DASHBOARD_GRANULARITIES,
     type SalesDashboardGranularity,
 } from "@/lib/admin/salesDashboardTypes";
+import { businessTypeFilterParam } from "@/lib/leads/businessType";
 
 export const SALES_FILTER_KEYS = [
     "from",
@@ -36,7 +37,8 @@ function readFilters(sp: URLSearchParams): SalesFilters {
         state: sp.get("state")?.trim() ?? "",
         city: sp.get("city")?.trim() ?? "",
         spoc_id: sp.get("spoc_id")?.trim() ?? "",
-        business_type: sp.get("business_type")?.trim() ?? "",
+        // ID 11 — an old link's "finance" reads as Battery Sale.
+        business_type: businessTypeFilterParam(sp.get("business_type")?.trim()) ?? "",
         granularity: (SALES_DASHBOARD_GRANULARITIES as readonly string[]).includes(g) ? g : "day",
     };
 }

@@ -10,7 +10,7 @@ import {
 } from "@/lib/leads/dispositions";
 import type { IntentBucket } from "@/lib/leads/intentBucket";
 import { isIdleRangeKey } from "@/lib/leads/idle";
-import { isBusinessTypeFilter } from "@/lib/leads/businessType";
+import { businessTypeFilterParam } from "@/lib/leads/businessType";
 
 export type LeadFilters = {
     search: string;
@@ -255,9 +255,7 @@ export function fromSearchParams(sp: URLSearchParams): LeadFilters {
         callback: sp.get("callback") === "1" ? "1" : "",
         // Closed vocabulary (+ "unset"), validated for the same blank-<select>
         // reason as the fields above.
-        businessType: isBusinessTypeFilter(sp.get("business_type"))
-            ? (sp.get("business_type") as string)
-            : "",
+        businessType: businessTypeFilterParam(sp.get("business_type")) ?? "",
         showDead: sp.get("hide_dead") === "0" ? "1" : "",
     };
 }

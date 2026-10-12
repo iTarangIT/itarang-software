@@ -14,6 +14,7 @@
  * triple-guarded (env != production, server secret, matching request header)
  * so a leaked header alone is not enough.
  */
+import { safeEqual } from "@/lib/cron-auth";
 import { createClient } from "@/lib/supabase/server";
 import { db } from "@/lib/db";
 import { users } from "@/lib/db/schema";
@@ -44,7 +45,7 @@ export function isTestBypassRequest(headers: Headers): boolean {
   const secret = process.env.NBFC_TEST_BYPASS_SECRET;
   if (!secret) return false;
   const provided = headers.get("x-nbfc-test-bypass");
-  return !!provided && provided === secret;
+  return !!provided && safeEqual(provided, secret);
 }
 
 /**

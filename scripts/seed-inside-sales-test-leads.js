@@ -21,7 +21,8 @@ const sql = postgres(process.env.DATABASE_URL, {
 });
 
 const OWNER_EMAIL = 'nidhi.itarang@gmail.com';
-const ASM_EMAIL = 'asm.itarang@gmail.com';
+// The shared ASM test login was retired (ID 140): pass a real ASM's email.
+const ASM_EMAIL = process.env.ASM_EMAIL || 'asm.itarang@gmail.com';
 
 const SEEDS = [
     {
@@ -140,7 +141,7 @@ async function run() {
         }
         console.log(`  asm:   ${ASM_EMAIL} (${asmId}) — covers ${seedStates.length} state(s)`);
     } else {
-        console.log(`  asm:   ${ASM_EMAIL} not found (skipped territory seed; run scripts/seed-asm-user.js)`);
+        console.log(`  asm:   ${ASM_EMAIL} not found (skipped territory seed; set ASM_EMAIL to an existing ASM login)`);
     }
 
     // Clean prior test rows (idempotent re-run).

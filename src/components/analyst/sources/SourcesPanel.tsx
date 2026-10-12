@@ -264,9 +264,10 @@ function SmallButton({
 
 // ── Add ──────────────────────────────────────────────────────────────────────
 
+// ID 167 — no "Other database": an outside Postgres address bypassed every control the
+// iTarang database source has (column withholding, masked views), so it is gone.
 const ADD_TABS = [
   { value: "crm", label: "iTarang database" },
-  { value: "postgres", label: "Other database" },
   { value: "files", label: "Files" },
   { value: "google", label: "Google Sheets / Drive" },
 ];
@@ -287,7 +288,6 @@ function AddSource({ onCreated }: { onCreated: (connectionId: string, next: "tab
     <div className="flex flex-col gap-4">
       <Tabs tabs={ADD_TABS} value={tab} onValueChange={setTab} className="overflow-x-auto" />
       {tab === "crm" ? <CrmDatabase onCreated={onCreated} /> : null}
-      {tab === "postgres" ? <PostgresForm onCreated={onCreated} /> : null}
       {tab === "files" ? <FilesForm onCreated={onCreated} /> : null}
       {tab === "google" ? (
         <GoogleSourceFlow
@@ -309,8 +309,9 @@ function CrmDatabase({ onCreated }: { onCreated: (id: string, next: "tables") =>
     <div className="flex flex-col gap-3 text-[0.8125rem] text-ink">
       <p className="leading-relaxed">
         Connect the CRM&rsquo;s own database — leads, dealers, AI calls, invoices, expenses and more — through a
-        read-only login. The analyst can never change data, and personal documents (KYC, Aadhaar, PAN) are not
-        readable through it.
+        read-only login. The analyst can never change data. Personal data is withheld: names, phone numbers,
+        addresses, vehicle numbers, KYC documents, notes, remarks and call summaries are not readable through it,
+        and Ecofy customers appear only as &ldquo;Customer #&hellip;&rdquo; with their city.
       </p>
       <p className="text-ink-muted">Next you choose which tables (up to 12) the analyst may use.</p>
       {error ? <p className="text-danger">{error}</p> : null}
@@ -338,62 +339,6 @@ function CrmDatabase({ onCreated }: { onCreated: (id: string, next: "tables") =>
         </button>
       </div>
     </div>
-  );
-}
-
-function PostgresForm({ onCreated }: { onCreated: (id: string, next: "tables") => Promise<void> }) {
-  const [name, setName] = useState("");
-  const [dsn, setDsn] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  return (
-    <form
-      className="flex flex-col gap-3"
-      onSubmit={async (e) => {
-        e.preventDefault();
-        if (!name.trim()) return setError("Name this database.");
-        if (!/^postgres(ql)?(\+psycopg)?:\/\//.test(dsn.trim())) return setError("The address must start with postgresql://");
-        setBusy(true);
-        setError(null);
-        try {
-          const c = await sourcesApi.connectPostgres(name.trim(), dsn.trim());
-          toast.success(`Connected ${c.name}`);
-          await onCreated(c.id, "tables");
-        } catch (err) {
-          setError((err as Error).message);
-        } finally {
-          setBusy(false);
-        }
-      }}
-    >
-      <Field label="Name">
-        <input value={name} onChange={(e) => setName(e.target.value)} maxLength={200} className={INPUT} placeholder="e.g. Warehouse DB" />
-      </Field>
-      <Field label="Connection address" error={error}>
-        <input
-          value={dsn}
-          onChange={(e) => setDsn(e.target.value)}
-          type="password"
-          autoComplete="off"
-          className={cn(INPUT, "font-mono")}
-          placeholder="postgresql://readonly_user:password@host:5432/dbname"
-        />
-      </Field>
-      <p className="text-[0.75rem] text-ink-muted">
-        Use a read-only login. Only the <code>public</code> schema is visible, and the database must accept connections
-        from the analyst service. The address is stored encrypted by the analyst and never shown again.
-      </p>
-      <div className="flex justify-end">
-        <button
-          type="submit"
-          disabled={busy}
-          className="inline-flex items-center gap-2 rounded-lg bg-brand-500 px-4 py-2 text-[0.8125rem] font-medium text-white hover:bg-brand-600 disabled:opacity-60"
-        >
-          {busy ? <Loader2 aria-hidden className="size-4 animate-spin" /> : null}
-          Connect
-        </button>
-      </div>
-    </form>
   );
 }
 

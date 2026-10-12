@@ -6,7 +6,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createCampaign } from "@/lib/queue/campaignTracker";
 import { advanceCampaign } from "@/lib/queue/advanceCampaign";
 import { guardApi } from "@/lib/auth/apiGuard";
-import { DIALER_CONTROL_ROLES } from "@/lib/leads/access";
+import { CALLING_LIST_ROLES } from "@/lib/leads/access";
 import { campaignScheduleSchema } from "@/lib/queue/campaignWindow";
 
 const ALLOWED_PROVIDERS: DialerProvider[] = ["bolna", "elevenlabs"];
@@ -22,10 +22,10 @@ export async function POST(req: NextRequest) {
   // Spending money on a dialer run is not something an inside_sales_rep or
   // finance_controller should be able to trigger.
   //
-  // ID 118 (decision 10 Oct): narrowed to DIALER_CONTROL_ROLES (admin, ceo,
+  // ID 145 (decision 10 Oct): CALLING_LIST_ROLES (admin, ceo, business_head,
   // sales_head), and guardApi so no session is a JSON 401 and a wrong role a
   // 403 (requireRole threw out of this plain handler: redirect / 500).
-  const gate = await guardApi([...DIALER_CONTROL_ROLES]);
+  const gate = await guardApi([...CALLING_LIST_ROLES]);
   if (!gate.ok) return gate.response;
 
   const body = await req.json();
