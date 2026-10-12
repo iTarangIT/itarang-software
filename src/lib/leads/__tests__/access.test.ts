@@ -3,6 +3,7 @@ import {
     LEAD_HISTORY_EXPORT_ROLES,
     canEditLead,
     canReactivateLead,
+    canTransferAnyLead,
     capabilitiesFor,
     canEditRegionGroup,
     canExportLeadHistory,
@@ -119,5 +120,12 @@ describe("Reactivate roles (ID 158)", () => {
         for (const r of ["partner", "asm", "inside_sales", "business_head", null]) expect(canReactivateLead(r)).toBe(false);
         expect(capabilitiesFor("partner").canBulkAct).toBe(true);
         expect(capabilitiesFor("partner").canReactivate).toBe(false);
+    });
+});
+
+describe("Transfer to ASM roles (12 Oct)", () => {
+    it("Sales Head, Partner, CEO and Admin may transfer any lead; a rep only their own", () => {
+        for (const r of ["sales_head", "partner", "ceo", "admin"]) expect(canTransferAnyLead(r)).toBe(true);
+        for (const r of ["inside_sales_rep", "asm", "business_head", null]) expect(canTransferAnyLead(r)).toBe(false);
     });
 });

@@ -117,6 +117,13 @@ export const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   // --- Leads ---
   "lead.created": "Leads",
   "lead.assigned": "Leads",
+  // A lead handed to an ASM — the bell opens it on /asm/lead/[id].
+  "lead.transferred_to_asm": "Leads",
+  // A lead reassigned to this person — the bell opens it on their page.
+  "lead.reassigned_to_you": "Leads",
+  "lead.reactivated": "Leads",
+  "lead.visit_update": "Leads",
+  "lead.deal_card_changed": "Leads",
   "lead.discarded": "Leads",
   "lead.closed": "Leads",
   "lead.qualified": "Leads",
@@ -396,6 +403,7 @@ export const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   escalation_resolved: "Escalations",
   "escalation.raised": "Escalations",
   "escalation.resolved": "Escalations",
+  "escalation.ceo_input": "Escalations",
 };
 
 /** Something went wrong or a decision is blocked — surfaced red. */
