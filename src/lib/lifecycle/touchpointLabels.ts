@@ -38,6 +38,7 @@ export const TOUCHPOINT_TYPE_LABEL: Record<TouchpointType, string> = {
     quote_dealer_approved: "Dealer approved quote",
     quote_dealer_declined: "Dealer declined quote",
     status_change_note: "Status update",
+    record_correction: "Record corrected",
     lead_assigned: "Assigned",
     lead_claimed: "Claimed",
     ownership_transfer: "Reassigned",

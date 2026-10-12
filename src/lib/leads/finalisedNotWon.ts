@@ -24,8 +24,15 @@ export function finalisedNotWonSql(opts: { minAgeDays?: number } = {}): SQL {
         ? sql`
           AND c.dealer_decision_at < NOW() - INTERVAL '${sql.raw(String(days))} days'`
         : sql``;
+    // ID 169 (Kartik, 10 Oct): a lead whose Mark Won was undone is not
+    // "dealer said yes, not marked Won" — it was marked and taken back on
+    // purpose. to_jsonb: won_undone_at is E-333.
     return sql`dl.lead_status = 'Commercials_Finalised'
     AND dl.is_active IS NOT FALSE
+    AND NOT EXISTS (SELECT 1 FROM dealer_lead_status_history uh
+        WHERE uh.dealer_lead_id = dl.id
+          AND uh.to_status = 'Won'
+          AND to_jsonb(uh) ->> 'won_undone_at' IS NOT NULL)
     AND EXISTS (SELECT 1 FROM dealer_lead_commercials c
         WHERE c.dealer_lead_id = dl.id
           AND c.dealer_decision = 'approved'

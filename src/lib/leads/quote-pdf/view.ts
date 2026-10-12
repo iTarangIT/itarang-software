@@ -230,6 +230,7 @@ export function buildQuotationView(input: BuildQuotationViewInput): QuotationVie
     isIntraState: totals.isIntraState,
     commercialTerms: {
       paymentMethod: term(input.commercialTerms?.paymentMethod),
+      onboardingFee: term(input.commercialTerms?.onboardingFee),
       creditTerms: term(input.commercialTerms?.creditTerms),
       deliveryTerms: term(input.commercialTerms?.deliveryTerms),
       warranty: term(input.commercialTerms?.warranty),

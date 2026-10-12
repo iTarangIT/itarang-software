@@ -8,6 +8,7 @@ import { FileUploadField } from "../FileUploadField";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
+import { DEAL_CARD_QUESTIONS } from "@/lib/leads/dealCardRules";
 import type {
     AssetType,
     CommercialsProductLine,
@@ -60,13 +61,16 @@ export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercia
     const [creditDays, setCreditDays] = useState(
         currentCommercials?.credit_days != null ? String(currentCommercials.credit_days) : "",
     );
-    const [customerFinance, setCustomerFinance] = useState<"yes" | "no" | "">(
-        currentCommercials?.customer_finance != null
-            ? currentCommercials.customer_finance
-                ? "yes"
-                : "no"
-            : "",
-    );
+    // ID 172: the deal card — onboarding fee, batteries and finance files per
+    // month. Finance files replace the old Customer finance Yes / No. Prefilled
+    // from the current quote; once locked (CEO approved / dealer said yes) the
+    // server keeps the locked values and only the Sales Head changes them.
+    const prevCard = currentCommercials?.deal_card ?? null;
+    const [fee, setFee] = useState(prevCard ? String(prevCard.onboarding_fee) : "");
+    const [feeWaivedReason, setFeeWaivedReason] = useState(prevCard?.fee_waived_reason ?? "");
+    const [batteriesPerMonth, setBatteriesPerMonth] = useState(prevCard ? String(prevCard.batteries_per_month) : "");
+    const [financeFiles, setFinanceFiles] = useState(prevCard ? String(prevCard.finance_files_per_month) : "");
+    const cardLocked = currentCommercials?.deal_card_locked ?? null;
     const [standardTerms, setStandardTerms] = useState<{ warranty: string; delivery: string } | null>(null);
     const [quoteUrl, setQuoteUrl] = useState(currentCommercials?.quote_document_url ?? "");
     const [quoteFileName, setQuoteFileName] = useState("");
@@ -211,6 +215,28 @@ export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercia
             toast.error("Enter the credit period in days (1–180).");
             return;
         }
+        // ID 172: every quote states the deal card.
+        const feeN = Number(fee);
+        const batN = Number(batteriesPerMonth);
+        const finN = Number(financeFiles);
+        if (isQuote) {
+            if (fee.trim() === "" || !Number.isFinite(feeN) || feeN < 0) {
+                toast.error("Enter the onboarding fee (₹, 0 if waived).");
+                return;
+            }
+            if (feeN === 0 && feeWaivedReason.trim().length < 5) {
+                toast.error("The onboarding fee is 0 — say why it is waived.");
+                return;
+            }
+            if (!(Number.isInteger(batN) && batN >= 1)) {
+                toast.error("Enter the batteries per month the dealer will buy after the first order (1 or more).");
+                return;
+            }
+            if (financeFiles.trim() === "" || !(Number.isInteger(finN) && finN >= 0)) {
+                toast.error("Enter the finance files per month (0 if none).");
+                return;
+            }
+        }
         setSubmitting(true);
         try {
             const body: Record<string, unknown> = { event_type: eventType };
@@ -224,7 +250,16 @@ export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercia
                 body.terms = {
                     dealer_payment_terms: payTerms || "cash",
                     credit_days: payTerms === "credit" ? days : null,
-                    customer_finance: customerFinance === "" ? null : customerFinance === "yes",
+                    // ID 172: derived on the server from finance files / month.
+                    customer_finance: prevCard ? prevCard.finance_files_per_month > 0 : null,
+                };
+            }
+            if (isQuote) {
+                body.deal_card = {
+                    onboarding_fee: feeN,
+                    fee_waived_reason: feeN === 0 ? feeWaivedReason.trim() : null,
+                    batteries_per_month: batN,
+                    finance_files_per_month: finN,
                 };
             }
             if (quoteUrl) body.quote_document_url = quoteUrl;
@@ -461,19 +496,7 @@ export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercia
                             className="mt-1"
                         />
                     </div>
-                    <div>
-                        <Label>Customer finance (NBFC)</Label>
-                        <select
-                            className="mt-1 w-full rounded-md border border-gray-200 px-3 py-2 text-sm bg-white"
-                            value={customerFinance}
-                            onChange={(e) => setCustomerFinance(e.target.value as "yes" | "no" | "")}
-                        >
-                            <option value="">—</option>
-                            <option value="yes">Yes — end customers need finance</option>
-                            <option value="no">No</option>
-                        </select>
-                    </div>
-                    <div className="text-xs text-gray-600">
+                    <div className="col-span-2 text-xs text-gray-600">
                         <Label>Warranty &amp; delivery (standard)</Label>
                         <p className="mt-1">{standardTerms?.warranty ?? "Loading…"}</p>
                         <p>{standardTerms?.delivery ?? ""}</p>
@@ -484,6 +507,77 @@ export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercia
                         </p>
                     )}
                 </div>
+                )}
+
+                {/* ── ID 172: Deal card — required on every quote ─────────── */}
+                {(eventType === "quote_issue" || eventType === "quote_revision") && (
+                    <div className="rounded-lg border border-indigo-100 bg-indigo-50/40 p-3 space-y-3">
+                        <div className="flex items-center justify-between">
+                            <Label className="!mb-0">Deal card</Label>
+                            <span className="text-[11px] text-gray-500">Required · the CEO sees it on the approval</span>
+                        </div>
+                        {cardLocked && (
+                            <p className="rounded-md border border-amber-100 bg-amber-50 px-2 py-1.5 text-[11px] text-amber-800">
+                                Locked — {cardLocked === "ceo" ? "the CEO approved" : "the dealer said yes to"} an earlier version.
+                                This quote keeps these numbers; only the Sales Head can change them.
+                            </p>
+                        )}
+                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                            <div>
+                                <Label className="text-[11px]">Onboarding fee (₹)</Label>
+                                <Input
+                                    type="number"
+                                    min={0}
+                                    value={fee}
+                                    disabled={!!cardLocked}
+                                    onChange={(e) => setFee(e.target.value)}
+                                    placeholder="0 if waived"
+                                    className="mt-1"
+                                />
+                                <p className="mt-1 text-[11px] text-gray-500">{DEAL_CARD_QUESTIONS.onboarding_fee}</p>
+                            </div>
+                            <div>
+                                <Label className="text-[11px]">Batteries / month after the first order</Label>
+                                <Input
+                                    type="number"
+                                    min={1}
+                                    value={batteriesPerMonth}
+                                    disabled={!!cardLocked}
+                                    onChange={(e) => setBatteriesPerMonth(e.target.value)}
+                                    className="mt-1"
+                                />
+                                <p className="mt-1 text-[11px] text-gray-500">{DEAL_CARD_QUESTIONS.batteries_per_month}</p>
+                            </div>
+                            <div>
+                                <Label className="text-[11px]">Finance files / month</Label>
+                                <Input
+                                    type="number"
+                                    min={0}
+                                    value={financeFiles}
+                                    disabled={!!cardLocked}
+                                    onChange={(e) => setFinanceFiles(e.target.value)}
+                                    placeholder="0 if none"
+                                    className="mt-1"
+                                />
+                                <p className="mt-1 text-[11px] text-gray-500">{DEAL_CARD_QUESTIONS.finance_files_per_month}</p>
+                            </div>
+                        </div>
+                        {fee.trim() !== "" && Number(fee) === 0 && (
+                            <div>
+                                <Label className="text-[11px]">Why waived?</Label>
+                                <Input
+                                    value={feeWaivedReason}
+                                    disabled={!!cardLocked}
+                                    onChange={(e) => setFeeWaivedReason(e.target.value)}
+                                    placeholder="e.g. strategic dealer, large first order"
+                                    className="mt-1"
+                                />
+                            </div>
+                        )}
+                        <p className="text-[11px] text-gray-500">
+                            The onboarding fee prints on the dealer&apos;s quotation; the two monthly estimates stay internal.
+                        </p>
+                    </div>
                 )}
 
                 <div className="grid grid-cols-2 gap-3">

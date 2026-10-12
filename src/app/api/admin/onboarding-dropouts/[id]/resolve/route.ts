@@ -19,7 +19,10 @@ import {
 import { writeTouchpoint } from "@/lib/touchpoints/write";
 import { markSalesReady } from "@/lib/leads/salesReady";
 import { ONBOARDING_DROPOUT_REASONS } from "@/lib/admin/types";
+import { canReactivateLead } from "@/lib/leads/access";
 
+// Keep waiting / Flip to Lost. Re-engage is a reactivation and follows
+// REACTIVATE_ROLES instead (ID 158, 10 Oct: admin, sales_head, ceo).
 const MUTATE_ROLES = ["admin", "sales_head", "partner"];
 
 const BodySchema = z.object({
@@ -30,10 +33,22 @@ const BodySchema = z.object({
 
 export const POST = withErrorHandler(
     async (req: Request, ctx: { params: Promise<{ id: string }> }) => {
-        const user = await requireRole(MUTATE_ROLES);
+        const user = await requireRole([...MUTATE_ROLES, "ceo"]);
         const { id } = await ctx.params;
         if (!id) return errorResponse("Lead id required.", 400);
         const body = BodySchema.parse(await req.json());
+        const allowed =
+            body.action === "re_engage"
+                ? canReactivateLead(user.role)
+                : MUTATE_ROLES.includes(user.role);
+        if (!allowed) {
+            return errorResponse(
+                body.action === "re_engage"
+                    ? "Only Admin, Sales Head or CEO can re-engage a lead."
+                    : "Only Admin or Sales Head can make this drop-out decision.",
+                403,
+            );
+        }
 
         const leadRows = await db.execute<{
             lead_status: string | null;

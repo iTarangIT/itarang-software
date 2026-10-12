@@ -343,17 +343,22 @@ export async function fetchTeamPerformance(
                WHERE dl.current_owner_id = u.id::text
                  AND dl.lead_status IN (${OPEN_LIST})
                  AND dl.is_active IS NOT FALSE ${tf}) AS open_leads,
+            -- ID 170: record fixes (touchpoint_type 'record_correction') are
+            -- not the person's touchpoints.
             (SELECT COUNT(*) FROM lead_touchpoints t
                WHERE t.performed_by = u.id::text
+                 AND t.touchpoint_type <> 'record_correction'
                  AND t.performed_at::date = CURRENT_DATE) AS touchpoints_today,
             (SELECT COUNT(*) FROM lead_touchpoints t
                WHERE t.performed_by = u.id::text
+                 AND t.touchpoint_type <> 'record_correction'
                  AND t.performed_at >= NOW() - INTERVAL '7 days') AS touchpoints_week,
             (SELECT ROUND(
                 COUNT(*)::numeric
                 / NULLIF(COUNT(DISTINCT t.dealer_lead_id), 0), 2)
                FROM lead_touchpoints t
-               WHERE t.performed_by = u.id::text) AS avg_touchpoints_per_lead,
+               WHERE t.performed_by = u.id::text
+                 AND t.touchpoint_type <> 'record_correction') AS avg_touchpoints_per_lead,
             (SELECT ROUND(AVG(
                 EXTRACT(EPOCH FROM (ft.first_touch - dl.assigned_at)) / 3600)::numeric, 1)
                FROM dealer_leads dl

@@ -13,7 +13,7 @@ import { SentByStamp } from "@/components/leads/sent-by-stamp";
 import { ReactivateLeadButton } from "@/components/leads/ReactivateLeadButton";
 import { ChangeLostReasonButton } from "@/components/leads/ChangeLostReasonButton";
 import { WonUndoControl } from "@/components/leads/WonUndoControl";
-import { LEADS_BULK_ROLES, capabilitiesFor } from "@/lib/leads/access";
+import { capabilitiesFor, canReactivateLead } from "@/lib/leads/access";
 
 // Roles permitted to override a lead's temperature (mirrors the PATCH route).
 const INTEREST_EDIT_ROLES = ["inside_sales_rep", "asm", "admin", "partner"];
@@ -112,12 +112,15 @@ export function LeadDetailHeader({
                             lose its NeoDove provenance by being opened. */}
                         <NeodoveTag syncStatus={lead.neodove_sync_status} />
                         {wonWithoutQuote(lead) && <WonWithoutQuoteChip />}
-                        {lead.lead_status === "Lost" &&
-                            (LEADS_BULK_ROLES as readonly string[]).includes(viewerRole ?? "") && (
+                        {/* ID 158: Admin, Sales Head, CEO — not partner. */}
+                        {lead.lead_status === "Lost" && canReactivateLead(viewerRole) && (
                                 <ReactivateLeadButton leadId={lead.id} onDone={onUpdated} compact />
                             )}
                         {/* ID 136: a wrong Lost reason is fixed here, not by a status change. */}
-                        {lead.lead_status === "Lost" && capabilitiesFor(viewerRole).canChangeLostReason && (
+                        {/* ID 168: a drop-out Lost reason changes only through a new drop-out review decision. */}
+                        {lead.lead_status === "Lost" &&
+                            lead.lost_reason !== "onboarding_dropout" &&
+                            capabilitiesFor(viewerRole).canChangeLostReason && (
                             <ChangeLostReasonButton
                                 leadId={lead.id}
                                 currentReason={lead.lost_reason}

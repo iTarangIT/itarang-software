@@ -38,6 +38,7 @@ import {
   accountsByGstinKey,
   GSTIN_KEY,
   leadsByGstinKey,
+  leadKeyValidOn,
 } from "@/lib/leads/gstinMatch";
 import { hasAccountOwnershipTables } from "@/lib/accounts/tables";
 import { hasInvoiceLedgerTables } from "@/lib/sales/ledgerTables";
@@ -270,7 +271,7 @@ export async function matchedUnion(): Promise<SQL> {
                   WHEN u.gstin_key IS NULL THEN 'not_dealer'
                   ELSE 'unknown' END AS match_status
         FROM ${src} AS u
-        LEFT JOIN lead_keys m ON m.k = u.gstin_key
+        LEFT JOIN lead_keys m ON m.k = u.gstin_key AND ${leadKeyValidOn("m", sql`u.invoice_date`)}
     )`;
   }
   return sql`(
@@ -318,6 +319,7 @@ export async function matchedUnion(): Promise<SQL> {
           LEFT JOIN account_ownership ao ON ao.account_id = c.m_account_id
           -- The lead / onboarding GSTIN only when no account matched.
           LEFT JOIN lead_keys m ON c.m_account_id IS NULL AND c.link_kind IS NULL AND m.k = c.gstin_key
+                               AND ${leadKeyValidOn("m", sql`c.invoice_date`)}
       ) x
   )`;
 }
