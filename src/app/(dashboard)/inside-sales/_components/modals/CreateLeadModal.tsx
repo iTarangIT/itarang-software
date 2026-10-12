@@ -44,14 +44,18 @@ export function CreateLeadModal({ open, onClose, onSuccess }: Props) {
 
     // Canonical state + city reference lists (E-108/E-110/E-111). Loaded once
     // when the modal first opens and cached by React Query.
-    const { data: regions } = useQuery<RegionsResponse>({
+    // The cache holds the raw `{ success, data }` body: SalesFilterBar and
+    // FunnelView share this key and store it that way, so unwrapping inside
+    // queryFn put two shapes under one key (a sales-dashboard visit, then this
+    // page, crashed on `regions.states.find`). `select` unwraps per observer.
+    const { data: regions } = useQuery<{ data: RegionsResponse }, Error, RegionsResponse>({
         queryKey: ["locations-regions"],
         queryFn: async () => {
             const res = await fetch("/api/locations/regions", { cache: "no-store" });
             if (!res.ok) throw new Error("Failed to load states/cities");
-            const json = await res.json();
-            return json.data as RegionsResponse;
+            return res.json();
         },
+        select: (json) => json.data,
         enabled: open,
         staleTime: 60 * 60 * 1000,
     });
@@ -64,7 +68,7 @@ export function CreateLeadModal({ open, onClose, onSuccess }: Props) {
         stateCode ? regions?.citiesByState[stateCode] ?? [] : []
     ).map((c) => ({ value: c, label: c }));
     const stateName =
-        regions?.states.find((s) => s.code === stateCode)?.name ?? "";
+        regions?.states?.find((s) => s.code === stateCode)?.name ?? "";
 
     const reset = () => {
         setDealerName("");
