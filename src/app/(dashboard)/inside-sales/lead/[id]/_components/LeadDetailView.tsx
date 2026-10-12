@@ -149,7 +149,7 @@ export function LeadDetailView({ leadId, viewerId, viewerRole, backHref = "/insi
                         currentOwnerId: lead.current_owner_id,
                     })}
                 />
-                <LeadDetailRightPane bundle={bundle} />
+                <LeadDetailRightPane bundle={bundle} viewerRole={viewerRole} />
             </div>
 
             <LeadActionBar

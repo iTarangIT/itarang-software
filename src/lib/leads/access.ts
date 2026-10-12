@@ -119,6 +119,19 @@ export function canEditLead(input: {
 export const LEADS_BULK_ROLES = ["admin", "sales_head", "ceo", "partner"] as const;
 
 /**
+ * ID 158 (10 Oct): who may Reactivate a Lost lead by hand — the lead page,
+ * the Leads drawer, the bulk endpoint's "reactivate" action and the drop-out
+ * review's "Re-engage". Its own list on purpose: LEADS_BULK_ROLES also gates
+ * Reassign, Mark Lost and Export, and partner keeps those. Automatic
+ * reactivation (uploaded sheet, AI recall, NeoDove) is not a person and stays.
+ */
+export const REACTIVATE_ROLES = ["admin", "sales_head", "ceo"] as const;
+
+export function canReactivateLead(role: string | null | undefined): boolean {
+  return (REACTIVATE_ROLES as readonly string[]).includes(role ?? "");
+}
+
+/**
  * Roles that may download a single lead's touchpoint history as .xlsx — the
  * "Export to Excel" button on the inside-sales pane and on the CRM lead-detail
  * Activity timeline.
@@ -382,6 +395,8 @@ export function canControlDialer(role: string | null | undefined): boolean {
 export type LeadsCapabilities = {
   canSeeOwnerAsm: boolean;
   canBulkAct: boolean;
+  /** ID 158 — Reactivate a Lost lead (REACTIVATE_ROLES); partner may bulk-act but not this. */
+  canReactivate: boolean;
   canSendToNeodove: boolean;
   canSeeCostAnalytics: boolean;
   /** ID 144 — the AI dialer weekday × hour answer grid (CALL_TIMING_ROLES). */
@@ -435,6 +450,7 @@ export function capabilitiesFor(role: string | null | undefined): LeadsCapabilit
   return {
     canSeeOwnerAsm: (LEADS_OVERSIGHT_ROLES as readonly string[]).includes(r),
     canBulkAct: (LEADS_BULK_ROLES as readonly string[]).includes(r),
+    canReactivate: canReactivateLead(r),
     canSendToNeodove: NEODOVE_ROLES.includes(r),
     canSeeCostAnalytics: COST_ANALYTICS_ROLES.includes(r),
     canSeeCallTiming: (CALL_TIMING_ROLES as readonly string[]).includes(r),
@@ -450,6 +466,7 @@ export function capabilitiesFor(role: string | null | undefined): LeadsCapabilit
 export const NO_CAPABILITIES: LeadsCapabilities = {
   canSeeOwnerAsm: false,
   canBulkAct: false,
+  canReactivate: false,
   canSendToNeodove: false,
   canSeeCostAnalytics: false,
   canSeeCallTiming: false,

@@ -62,8 +62,14 @@ export async function correctLeadGstin(input: {
         const apps = (await tx.execute<{ id: string; gst_number: string | null }>(sql`
             UPDATE dealer_onboarding_applications a
                SET gst_number = ${plan.to}, updated_at = NOW()
+              -- ID 169: the form the lead links to (dealer_onboarding_application_id)
+              -- as well as the one it originated. The old number stays an alias
+              -- for earlier invoices through the audit row below (gstinMatch.ts).
               FROM (SELECT id, gst_number FROM dealer_onboarding_applications
-                     WHERE originating_dealer_lead_id = ${input.leadId} FOR UPDATE) prev
+                     WHERE originating_dealer_lead_id = ${input.leadId}
+                        OR id = (SELECT dealer_onboarding_application_id FROM dealer_leads
+                                  WHERE id = ${input.leadId})
+                     FOR UPDATE) prev
              WHERE a.id = prev.id
             RETURNING a.id::text AS id, prev.gst_number AS gst_number
         `)) as unknown as Array<{ id: string; gst_number: string | null }>;
@@ -72,7 +78,8 @@ export async function correctLeadGstin(input: {
         await writeTouchpoint(
             {
                 dealerLeadId: input.leadId,
-                touchpointType: "status_change_note",
+                // ID 170: a record fix, not a status change or work.
+                touchpointType: "record_correction",
                 performedBy: input.actor.id,
                 remarks: `GSTIN corrected: ${plan.from ?? "none"} → ${plan.to}${
                     applicationId ? " (lead and onboarding application)" : ""

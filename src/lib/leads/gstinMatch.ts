@@ -91,25 +91,44 @@ export function dealerLeadByGstin(key: SQL): SQL {
  * order as dealerLeadByGstin, so the two can never disagree; built once and
  * hash-joined instead of searching dealer_leads once per invoice, which got
  * slow as soon as most invoices carried a GSTIN (E-322 Zoho backfill).
- * Columns: k, dealer_lead_id, dealer_name, dealer_owner_id.
+ *
+ * ID 169 (Kartik, 10 Oct): a GSTIN replaced by "Correct GSTIN" stays an ALIAS
+ * of its lead for invoices dated BEFORE the correction (the audit_logs row
+ * lead_gstin_corrected keeps the old number and the time). An alias never
+ * beats a lead's own GSTIN: it ranks last, and `valid_before` tells the caller
+ * to use it only for an invoice dated before that moment.
+ * Columns: k, dealer_lead_id, dealer_name, dealer_owner_id, valid_before.
  */
 export function leadsByGstinKey(): SQL {
     return sql`
-        SELECT DISTINCT ON (lk.k) lk.k, lk.dealer_lead_id, lk.dealer_name, lk.dealer_owner_id
+        SELECT DISTINCT ON (lk.k) lk.k, lk.dealer_lead_id, lk.dealer_name, lk.dealer_owner_id, lk.valid_before
           FROM (
             SELECT ${GSTIN_KEY(sql`gm_dl.gstin`)}                  AS k,
                    gm_dl.id                                       AS dealer_lead_id,
                    COALESCE(gm_dl.shop_name, gm_dl.dealer_name)   AS dealer_name,
                    gm_dl.current_owner_id                         AS dealer_owner_id,
-                   gm_dl.lead_status, gm_dl.closed_at, gm_dl.created_at
+                   gm_dl.lead_status, gm_dl.closed_at, gm_dl.created_at,
+                   0 AS alias_rank, NULL::timestamptz AS valid_before
               FROM dealer_leads gm_dl
             UNION ALL
             SELECT ${GSTIN_KEY(sql`gm_app.gst_number`)},
                    gm_dl.id, COALESCE(gm_dl.shop_name, gm_dl.dealer_name), gm_dl.current_owner_id,
-                   gm_dl.lead_status, gm_dl.closed_at, gm_dl.created_at
+                   gm_dl.lead_status, gm_dl.closed_at, gm_dl.created_at,
+                   0, NULL::timestamptz
               FROM dealer_leads gm_dl
               JOIN dealer_onboarding_applications gm_app
                 ON gm_app.id = gm_dl.dealer_onboarding_application_id
+            UNION ALL
+            -- ID 169: the number a Correct GSTIN replaced (latest correction
+            -- of that number per lead wins through DISTINCT ON below).
+            SELECT ${GSTIN_KEY(sql`gm_al.old_data ->> 'gstin'`)},
+                   gm_dl.id, COALESCE(gm_dl.shop_name, gm_dl.dealer_name), gm_dl.current_owner_id,
+                   gm_dl.lead_status, gm_dl.closed_at, gm_dl.created_at,
+                   1, gm_al.timestamp
+              FROM audit_logs gm_al
+              JOIN dealer_leads gm_dl ON gm_dl.id = gm_al.entity_id
+             WHERE gm_al.entity_type = 'dealer_lead'
+               AND gm_al.action = 'lead_gstin_corrected'
           ) lk
          WHERE lk.k IS NOT NULL
            -- ID 62: the main revenue matcher re-checks the GSTIN too, so a lead
@@ -117,9 +136,21 @@ export function leadsByGstinKey(): SQL {
            -- same mistake (dealerLeadByGstin already did this).
            AND ${gstinKeyIsMatchable(sql`lk.k`)}
          ORDER BY lk.k,
+                  lk.alias_rank ASC,
                   (lk.lead_status IN ('Converted', 'Won')) DESC,
                   lk.closed_at DESC NULLS LAST,
-                  lk.created_at ASC`;
+                  lk.created_at ASC,
+                  lk.valid_before DESC NULLS LAST`;
+}
+
+/**
+ * ID 169: the join condition for `leadsByGstinKey()` rows aliased `m` against
+ * an invoice date — an alias GSTIN counts only for invoices dated (IST day)
+ * before its correction.
+ */
+export function leadKeyValidOn(m: string, invoiceDate: SQL): SQL {
+    const vb = sql.raw(`${m}.valid_before`);
+    return sql`(${vb} IS NULL OR ${invoiceDate} < (${vb} AT TIME ZONE 'Asia/Kolkata')::date)`;
 }
 
 /**

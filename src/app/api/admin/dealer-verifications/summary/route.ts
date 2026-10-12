@@ -49,7 +49,8 @@ export async function GET(req: NextRequest) {
             ELSE a.onboarding_status
           END AS status
         FROM dealer_onboarding_applications a
-        WHERE a.onboarding_status <> 'draft' OR a.submitted_at IS NOT NULL
+        -- ID 169: a form withdrawn by Undo Mark Won was never submitted.
+        WHERE (a.onboarding_status <> 'draft' OR a.submitted_at IS NOT NULL) AND NOT (a.onboarding_status = 'withdrawn' AND a.submitted_at IS NULL)
       )
       SELECT
         (SELECT COUNT(*) FROM derived d

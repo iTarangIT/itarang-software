@@ -170,7 +170,7 @@ export function AsmLeadDetailView({ leadId, viewerId, viewerRole }: Props) {
                         currentOwnerId: lead.current_owner_id,
                     })}
                 />
-                <LeadDetailRightPane bundle={bundle} />
+                <LeadDetailRightPane bundle={bundle} viewerRole={viewerRole} />
             </div>
 
             <AsmLeadActionBar

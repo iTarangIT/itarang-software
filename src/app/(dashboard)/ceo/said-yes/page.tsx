@@ -6,6 +6,7 @@ import Link from "next/link";
 import { ArrowLeft, FileText } from "lucide-react";
 
 import { requireRole } from "@/lib/auth-utils";
+import { dealCardChips } from "@/lib/leads/dealCardRules";
 import { LEAD_STATUS_LABEL } from "@/lib/leads/queueFilters";
 import type { LeadStatus } from "@/lib/lifecycle/transitions";
 import {
@@ -79,7 +80,12 @@ function LeadCard({ r }: { r: SaidYesRow }) {
             <div className="flex flex-wrap gap-1.5">
                 <Chip label="Quote" value={`${r.quote_number ?? "no number"}${r.version_no ? ` · v${r.version_no}` : ""}`} />
                 <Chip label="Credit" value={r.credit_terms ?? "—"} />
-                <Chip label="Customer finance" value={r.customer_finance == null ? "—" : r.customer_finance ? "Yes" : "No"} />
+                {/* ID 172: the deal card next to Credit; older quotes keep Customer finance. */}
+                {r.deal_card ? (
+                    dealCardChips(r.deal_card).map(([k, v]) => <Chip key={k} label={k} value={v} />)
+                ) : (
+                    <Chip label="Customer finance" value={r.customer_finance == null ? "—" : r.customer_finance ? "Yes" : "No"} />
+                )}
                 {r.delivery_terms && <Chip label="Delivery" value={r.delivery_terms} />}
                 {r.warranty_terms && <Chip label="Warranty" value={r.warranty_terms} />}
             </div>

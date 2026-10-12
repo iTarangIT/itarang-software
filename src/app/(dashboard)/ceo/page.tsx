@@ -537,14 +537,21 @@ export default function CEODashboard() {
   const ordering = bucketCount("active") + bucketCount("cooling");
 
   // "89% of target" pill + "Target to date ₹3.05 Cr" line for a tile.
+  // ID 157 (10 Oct): the target keeps counting every status; under it,
+  // "Accepted ₹A · Not yet accepted ₹B" (Draft + Pending approval + Pushed).
   const includesToday = win.to >= todayStr;
   const vsTarget = (
     actual: number | null,
     metric: "revenue" | "batteries_sold",
     fmt: (v: number) => string,
-  ): { pill: { text: string; tone: Tone }; line: string | null } => {
-    const v = targetVerdict(targets.data?.[metric], actual, targetMonths ?? [], ym(now));
-    if (v.kind === "none") return { pill: { text: "No target", tone: "neutral" }, line: null };
+  ): { pill: { text: string; tone: Tone }; line: string | null; split: string | null } => {
+    const t = targets.data?.[metric];
+    const split =
+      t && t.sum > 0
+        ? `Accepted ${fmt(Math.round(t.accepted))} · Not yet accepted ${fmt(Math.round(t.notAccepted))}`
+        : null;
+    const v = targetVerdict(t, actual, targetMonths ?? [], ym(now));
+    if (v.kind === "none") return { pill: { text: "No target", tone: "neutral" }, line: null, split: null };
     if (v.kind === "partial") {
       const names = v.covered.map((mo) =>
         new Date(`${mo}-01T00:00:00`).toLocaleDateString("en-IN", { month: "short", year: "numeric" }),
@@ -552,11 +559,12 @@ export default function CEODashboard() {
       return {
         pill: { text: "Target not set for every month", tone: "neutral" },
         line: `Target set only for ${names.join(", ")} (${fmt(Math.round(v.goal))}${v.includesThisMonth ? " to date" : ""})`,
+        split,
       };
     }
     const line = `${includesToday ? "Target to date" : "Target"} ${fmt(Math.round(v.goal))}`;
-    if (v.pct == null) return { pill: { text: "Target set", tone: "neutral" }, line };
-    return { pill: { text: `${v.pct}% of target`, tone: toneForPct(v.pct) }, line };
+    if (v.pct == null) return { pill: { text: "Target set", tone: "neutral" }, line, split };
+    return { pill: { text: `${v.pct}% of target`, tone: toneForPct(v.pct) }, line, split };
   };
   const revenueTarget = vsTarget(money ? money.revenue.now : null, "revenue", inr);
   const batteriesTarget = vsTarget(
@@ -789,6 +797,7 @@ export default function CEODashboard() {
           pill={revenueTarget.pill}
           sub={[
             revenueTarget.line,
+            revenueTarget.split,
             money && money.unlinked_revenue > 0
               ? `${inr(money.unlinked_revenue)} not linked to a dealer`
               : "Non-void invoices dated in the period",
@@ -828,6 +837,7 @@ export default function CEODashboard() {
               ? "Loading…"
               : [
                   batteriesTarget.line,
+                  batteriesTarget.split,
                   sales.data ? "Allocated to dealer accounts in the period" : "Not available yet",
                 ]
                   .filter(Boolean)
@@ -917,7 +927,7 @@ export default function CEODashboard() {
           )}
           <span className="text-xs text-ink-muted">
             {revenueTarget.line
-              ? `${revenueTarget.line} (sum of everyone's targets). Pace is a straight line over calendar days.`
+              ? `${revenueTarget.line} (sum of everyone's targets${revenueTarget.split ? `: ${revenueTarget.split}` : ""}). Pace is a straight line over calendar days.`
               : "No company revenue target is set, so there is no target-pace line. Pace is a straight line over calendar days."}
           </span>
         </DashCard>

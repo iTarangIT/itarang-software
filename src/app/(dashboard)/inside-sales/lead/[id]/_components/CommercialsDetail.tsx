@@ -274,6 +274,19 @@ export function CommercialsDetail({
             <Field label="Price Quoted" value={cc.price_quoted ? `₹${cc.price_quoted}` : null} />
             <Field label="Final Price" value={cc.final_price ? `₹${cc.final_price}` : null} />
             <Field label="Payment Method" value={cc.payment_method} />
+            {cc.deal_card && (
+                <>
+                    {/* ID 172: the deal card on every version, history included. */}
+                    <Field
+                        label="Onboarding Fee"
+                        value={cc.deal_card.onboarding_fee > 0 ? `₹${cc.deal_card.onboarding_fee.toLocaleString("en-IN")}` : "Waived"}
+                    />
+                    <Field
+                        label="Batteries / Finance files per month"
+                        value={`${cc.deal_card.batteries_per_month} / ${cc.deal_card.finance_files_per_month}`}
+                    />
+                </>
+            )}
             <Field label="Credit Terms" value={cc.credit_terms} />
             <Field label="Delivery Terms" value={cc.delivery_terms} />
             <Field label="Warranty" value={cc.warranty_terms} />

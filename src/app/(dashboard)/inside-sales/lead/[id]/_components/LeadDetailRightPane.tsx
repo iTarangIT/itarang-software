@@ -23,6 +23,7 @@ import {
 } from "./CommercialsDetail";
 import { pickLiveQuote, pickPendingQuote } from "@/lib/leads/liveQuote";
 import { QuotationSendDialog } from "./QuotationSendDialog";
+import { DealCardBlock } from "./DealCardBlock";
 import { businessTypeLabel, businessTypeTone } from "@/lib/leads/businessType";
 import { doorLabel, originLabel, SOURCE_LABELS } from "@/lib/leads/leadSourceVocab";
 import { SetLeadSource } from "@/components/leads/SetLeadSource";
@@ -40,9 +41,11 @@ const GROUPS: { key: GroupKey; label: string; icon: React.ComponentType<{ classN
 
 type Props = {
     bundle: LeadDetailBundle;
+    /** ID 172: the Sales Head may change a locked deal card. */
+    viewerRole?: string | null;
 };
 
-export function LeadDetailRightPane({ bundle }: Props) {
+export function LeadDetailRightPane({ bundle, viewerRole }: Props) {
     const [open, setOpen] = useState<Record<GroupKey, boolean>>({
         snapshot: true,
         business: true,
@@ -246,6 +249,8 @@ export function LeadDetailRightPane({ bundle }: Props) {
                                                         onSend={() => setSendFor(cc.commercial_id)}
                                                         onWithdraw={() => void withdraw(cc.commercial_id)}
                                                     />
+                                                    {/* ID 172: the deal card of the current version. */}
+                                                    <DealCardBlock leadId={lead.id} cc={cc} viewerRole={viewerRole} />
                                                     {liveQuoteBelow && (
                                                         <div className="space-y-1.5">
                                                             <p className="text-xs text-gray-500">

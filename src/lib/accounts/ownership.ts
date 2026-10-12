@@ -223,9 +223,11 @@ export async function ownerHistory(accountId: string) {
  * Suggested owner per account — a HINT for the "No owner" queue, never
  * applied automatically. ID 148: ONE ranking, used by the Accounts screen and
  * the Dealer accounts download alike:
- *   1. the salesperson recorded on the onboarding;
- *   2. the onboarding application's owner (set by Mark Converted);
- *   3. the linked lead's closing owner, then 4. its current owner;
+ *   1. the linked lead's closing owner — ID 159 (Kartik, 10 Oct): credit is
+ *      the closer's, so the closer is suggested first;
+ *   2. the salesperson recorded on the onboarding;
+ *   3. the onboarding application's owner (set by Mark Converted);
+ *   4. the linked lead's current owner;
  *   5. whoever filled the onboarding form;
  *   6. the sales manager typed on the onboarding, matched to a CRM user;
  *   7. the closing owner of another lead with the same GSTIN or phone.
@@ -260,13 +262,13 @@ export async function suggestedOwners(
                    (SELECT x.id FROM dealer_leads x WHERE x.dealer_onboarding_application_id = app.id LIMIT 1))
         ),
         cand AS (
-            SELECT acc.account_id, app.salesperson_user_id::text AS user_id, 'Salesperson on the onboarding' AS basis, 1 AS rank
+            SELECT account_id, closing_owner_id AS user_id, 'Closed the lead' AS basis, 1 AS rank FROM lead
+            UNION ALL
+            SELECT acc.account_id, app.salesperson_user_id::text, 'Salesperson on the onboarding', 2
               FROM acc JOIN dealer_onboarding_applications app ON app.id = acc.app_id
             UNION ALL
-            SELECT acc.account_id, app.owner_id::text, 'Owner of the onboarding', 2
+            SELECT acc.account_id, app.owner_id::text, 'Owner of the onboarding', 3
               FROM acc JOIN dealer_onboarding_applications app ON app.id = acc.app_id
-            UNION ALL
-            SELECT account_id, closing_owner_id, 'Closed the lead', 3 FROM lead
             UNION ALL
             SELECT account_id, current_owner_id, 'Owns the lead', 4 FROM lead
             UNION ALL

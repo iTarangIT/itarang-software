@@ -14,6 +14,8 @@ import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { finalisedNotWonSql } from "@/lib/leads/finalisedNotWon";
 import type { CommercialsProductLine } from "@/lib/inside-sales/types";
+import { dealCardJson } from "@/lib/leads/dealCard";
+import { parseDealCard, type DealCard } from "@/lib/leads/dealCardRules";
 
 export const SAID_YES_LIMIT_WORKING_DAYS = 1;
 
@@ -36,6 +38,8 @@ export type SaidYesRow = {
     lines: Array<{ product_name: string; quantity: number }>;
     credit_terms: string | null;
     customer_finance: boolean | null;
+    /** ID 172: the quote's deal card (null on an older quote). */
+    deal_card: DealCard | null;
     delivery_terms: string | null;
     warranty_terms: string | null;
     released_at: string | null;
@@ -72,6 +76,7 @@ export async function listSaidYesNotWon(): Promise<SaidYesRow[]> {
               SELECT c.commercial_id, c.quote_number, c.version_no, c.quote_pdf_url,
                      COALESCE(c.final_price, c.price_quoted, 0) AS value,
                      c.product_lines, c.credit_terms, c.customer_finance,
+                     ${dealCardJson("c")}                        AS deal_card,
                      c.delivery_terms, c.warranty_terms,
                      COALESCE(c.approved_at, c.created_at)     AS released_at,
                      c.approval_mode,
@@ -114,6 +119,7 @@ export async function listSaidYesNotWon(): Promise<SaidYesRow[]> {
             : [],
         credit_terms: (r.credit_terms as string | null) ?? null,
         customer_finance: (r.customer_finance as boolean | null) ?? null,
+        deal_card: parseDealCard(r.deal_card),
         delivery_terms: (r.delivery_terms as string | null) ?? null,
         warranty_terms: (r.warranty_terms as string | null) ?? null,
         released_at: iso(r.released_at),

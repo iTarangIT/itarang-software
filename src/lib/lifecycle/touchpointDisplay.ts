@@ -42,6 +42,7 @@ export const TOUCHPOINT_ICONS: Record<TouchpointType | "default", TouchpointIcon
     quote_dealer_approved: ThumbsUp,
     quote_dealer_declined: ThumbsDown,
     status_change_note: Activity,
+    record_correction: FileCheck2,
     lead_assigned: UserPlus2,
     lead_claimed: UserPlus2,
     ownership_transfer: Repeat,
