@@ -124,7 +124,13 @@ export interface BankBlock {
  * this existed therefore renders exactly as it did.
  */
 export interface CommercialTerms {
+  /**
+   * ID 172: the DEALER's payment terms ("Cash" / "Credit — 30 days"); before
+   * that it printed the customer-finance pick as "cash" / "finance".
+   */
   paymentMethod: string | null;
+  /** ID 172: the agreed onboarding fee ("₹25,000" or "Waived"). Optional: older callers set none. */
+  onboardingFee?: string | null;
   creditTerms: string | null;
   deliveryTerms: string | null;
   warranty: string | null;

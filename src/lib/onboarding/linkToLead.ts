@@ -87,6 +87,18 @@ export async function linkOnboardingToLead(
         for (const c of candidatePhones(app)) {
             const leadId = await findExistingLeadByPhone(c.phone);
             if (!leadId) continue;
+            // ID 169: a form withdrawn by Undo Mark Won ("Marked Won by
+            // mistake") is not a holder — let it go of the lead so this real
+            // onboarding links to it (older undos kept the claim).
+            await runner.execute(sql`
+                UPDATE dealer_onboarding_applications o
+                   SET originating_dealer_lead_id = NULL, updated_at = now()
+                 WHERE o.originating_dealer_lead_id = ${leadId}
+                   AND o.id <> ${applicationId}
+                   AND o.onboarding_status = 'withdrawn'
+                   AND o.submitted_at IS NULL
+                   AND to_jsonb(o) ->> 'withdrawn_reason' = 'Marked Won by mistake'
+            `);
             const claimed = (await runner.execute(sql`
                 UPDATE dealer_onboarding_applications app
                    SET originating_dealer_lead_id = ${leadId}, updated_at = now()

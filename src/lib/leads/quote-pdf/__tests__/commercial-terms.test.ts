@@ -35,7 +35,8 @@ function view(over: Partial<BuildQuotationViewInput> = {}) {
 }
 
 const ALL_TERMS = {
-  paymentMethod: "cash",
+  paymentMethod: "Credit — 120 days",
+  onboardingFee: "₹25,000",
   creditTerms: "120",
   deliveryTerms: "12",
   warranty: "24",
@@ -50,6 +51,7 @@ describe("buildQuotationView — commercial terms", () => {
   it("defaults to all-null when the caller passes none", () => {
     expect(view().commercialTerms).toEqual({
       paymentMethod: null,
+      onboardingFee: null,
       creditTerms: null,
       deliveryTerms: null,
       warranty: null,
@@ -74,7 +76,10 @@ describe("renderProformaHtml — terms block", () => {
     const html = renderProformaHtml(view({ commercialTerms: ALL_TERMS }));
     expect(html).toContain("Terms Of This Quotation");
     expect(html).toContain("Payment");
-    expect(html).toContain("cash");
+    expect(html).toContain("Credit — 120 days");
+    // ID 172: the onboarding fee prints; the monthly estimates are never passed in.
+    expect(html).toContain("Onboarding fee");
+    expect(html).toContain("₹25,000");
     expect(html).toContain("Credit period");
     expect(html).toContain("120");
     expect(html).toContain("Warranty");

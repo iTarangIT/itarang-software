@@ -40,4 +40,15 @@ describe("Change Lost reason (ID 136)", () => {
     it("leaves onboarding drop-out to the drop-out review", () => {
         expect(() => planLostReasonChange({ ...base, to: "onboarding_dropout" })).toThrow(LostReasonChangeError);
     });
+
+    it("ID 168: a lead lost through the drop-out review keeps its reason (409)", () => {
+        try {
+            planLostReasonChange({ ...base, currentReason: "onboarding_dropout", to: "price_high" });
+            expect.unreachable();
+        } catch (e) {
+            expect(e).toBeInstanceOf(LostReasonChangeError);
+            expect((e as LostReasonChangeError).status).toBe(409);
+            expect((e as Error).message).toMatch(/drop-out review/);
+        }
+    });
 });

@@ -355,7 +355,17 @@ async function wonUndoRequests(s: ActionScope): Promise<Built> {
           JOIN dealer_leads dl ON dl.id = r.dealer_lead_id
           LEFT JOIN users u ON u.id::text = dl.current_owner_id
           LEFT JOIN users rq ON rq.id::text = r.requested_by
-         WHERE r.status = 'pending' ${scope(s, "owner")}
+         WHERE r.status = 'pending'
+           -- ID 169: only a lead that is still Won, and still undoable (no
+           -- onboarding document yet). Older requests that outlived that are
+           -- not "waiting" any more.
+           AND dl.lead_status = 'Won'
+           AND NOT EXISTS (
+               SELECT 1 FROM dealer_onboarding_applications oa
+                WHERE (oa.id = dl.dealer_onboarding_application_id OR oa.originating_dealer_lead_id = dl.id)
+                  AND (oa.submitted_at IS NOT NULL
+                       OR EXISTS (SELECT 1 FROM dealer_onboarding_documents d WHERE d.application_id = oa.id)))
+           ${scope(s, "owner")}
          ORDER BY r.requested_at ASC`);
     const rows = raw.map((r) =>
         base(r, `Asked ${String(r.asked_on)} by ${str(r.requested_by_name) ?? "the owner"} · ${String(r.request_reason)}`),

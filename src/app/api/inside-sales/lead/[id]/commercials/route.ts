@@ -14,6 +14,7 @@ import { requireRole } from "@/lib/auth-utils";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
 import { assertOwner } from "@/lib/leads/ownership";
 import { COMMERCIAL_EVENT_TYPES, createLeadCommercial } from "@/lib/leads/createCommercial";
+import { DealCardSchema } from "@/lib/leads/dealCardRules";
 
 const MUTATE_ROLES = ["inside_sales_rep", "asm", "admin", "partner"];
 
@@ -48,6 +49,8 @@ const BodySchema = z.object({
         .max(100)
         .optional(),
     notes: z.string().max(5000).nullable().optional(),
+    // ID 172: required on a quote issue / revision (createLeadCommercial).
+    deal_card: DealCardSchema.nullable().optional(),
 });
 
 export const POST = withErrorHandler(
@@ -61,8 +64,11 @@ export const POST = withErrorHandler(
 
         const outcome = await createLeadCommercial({
             leadId: id,
-            actor: { id: user.id, name: user.name ?? user.email ?? null },
+            actor: { id: user.id, name: user.name ?? user.email ?? null, role: user.role ?? null },
             body,
+            // ID 172 (Kartik, 10 Oct): every quote from Update commercials
+            // states the deal card. The WhatsApp Assistant does not ask yet.
+            requireDealCard: true,
         });
         // Draft PDF, paired touchpoint and notifications — after the commit.
         await outcome.afterCommit();

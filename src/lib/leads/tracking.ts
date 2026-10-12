@@ -89,6 +89,10 @@ type StatusRow = {
     changed_by: string | null;
     changed_at: string;
     to_lost_reason: string | null;
+    /** ID 170: the reason before a Lost-reason change (E-333). */
+    from_lost_reason: string | null;
+    /** ID 170: this Won was undone (E-333 won_undone_at set). */
+    won_undone: boolean | null;
     reason_notes: string | null;
 };
 
@@ -144,7 +148,9 @@ export async function buildLeadTracking(
             SELECT h.dealer_lead_id AS lead_id,
                    h.from_status, h.to_status, h.changed_by,
                    ${ISO(sql`h.changed_at`)} AS changed_at,
-                   h.to_lost_reason, h.reason_notes
+                   h.to_lost_reason, h.reason_notes,
+                   to_jsonb(h) ->> 'from_lost_reason' AS from_lost_reason,
+                   (to_jsonb(h) ->> 'won_undone_at') IS NOT NULL AS won_undone
               FROM dealer_lead_status_history h
              WHERE h.dealer_lead_id IN ${ids}
              ORDER BY h.changed_at ASC, h.created_at ASC
@@ -268,10 +274,17 @@ export async function buildLeadTracking(
                 at: h.changed_at,
                 actor: resolve(h.changed_by),
                 kind: "status_change",
-                action: `Status: ${statusText(h.from_status)} → ${statusText(h.to_status)}`,
+                action: `Status: ${statusText(h.from_status)} → ${statusText(h.to_status)}${h.won_undone ? " (undone)" : ""}`,
                 type_code: h.to_status ? `status:${h.to_status}` : "status",
                 details:
-                    [h.reason_notes, h.to_lost_reason ? `Lost reason: ${h.to_lost_reason.replace(/_/g, " ")}` : null]
+                    [
+                        h.reason_notes,
+                        h.to_lost_reason
+                            ? `Lost reason: ${
+                                  h.from_lost_reason ? `${h.from_lost_reason.replace(/_/g, " ")} → ` : ""
+                              }${h.to_lost_reason.replace(/_/g, " ")}`
+                            : null,
+                    ]
                         .filter(Boolean)
                         .join(" · ") || null,
                 status_from: h.from_status,
