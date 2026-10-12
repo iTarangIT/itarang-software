@@ -17,6 +17,7 @@ import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-util
 import { dealCardJson, hasDealCardColumns, writeDealCard } from "@/lib/leads/dealCard";
 import { DEAL_CARD_EDIT_ROLES, DealCardSchema, normaliseDealCard, parseDealCard } from "@/lib/leads/dealCardRules";
 import { writeTouchpoint } from "@/lib/touchpoints/write";
+import { notifyLeadPerson } from "@/lib/leads/newOwnerNotice";
 
 const BodySchema = z.object({
     deal_card: DealCardSchema,
@@ -79,6 +80,18 @@ export const POST = withErrorHandler(
         });
 
         if (result.status !== 200) return errorResponse(result.message, result.status);
+        // 12 Oct: the lead's owner is told the agreed numbers changed.
+        const owner = (await db.execute<{ owner: string | null }>(sql`
+            SELECT current_owner_id AS owner FROM dealer_leads WHERE id = ${id}
+        `)) as unknown as Array<{ owner: string | null }>;
+        await notifyLeadPerson({
+            userId: owner[0]?.owner,
+            actorId: user.id,
+            leadId: id,
+            type: "lead.deal_card_changed",
+            title: "Deal card changed",
+            message: `{by} changed the deal card on {lead} (v${result.versionNo}): ${body.note}`,
+        });
         return successResponse({ commercial_id: result.commercialId, version_no: result.versionNo, deal_card: card });
     },
 );
