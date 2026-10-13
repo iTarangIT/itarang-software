@@ -16,6 +16,40 @@ import type { ActionRow } from "@/lib/dashboard/salesHeadActions";
 const inr = (n: number) =>
     n >= 1e7 ? `₹${(n / 1e7).toFixed(2)} Cr` : n >= 1e5 ? `₹${(n / 1e5).toFixed(2)} L` : `₹${Math.round(n).toLocaleString("en-IN")}`;
 
+// A bare tel: link does nothing on a desktop browser with no phone app, so the
+// button looked dead there. On a touch device it still dials; on a desktop it
+// shows the number in place and copies it, so it can be dialled from a phone.
+function CallLink({ phone }: { phone: string }) {
+    const [shown, setShown] = useState<"" | "copied" | "shown">("");
+    const dial = phone.replace(/[^\d+]/g, "");
+    return (
+        <a
+            href={`tel:${dial}`}
+            title={`Call ${phone}`}
+            onClick={(e) => {
+                if (window.matchMedia?.("(pointer: coarse)").matches) return;
+                e.preventDefault();
+                setShown("shown");
+                navigator.clipboard?.writeText(phone).then(
+                    () => setShown("copied"),
+                    () => {},
+                );
+            }}
+            className="inline-flex items-center gap-1 rounded-md border border-border px-2.5 py-1 text-xs font-medium text-ink hover:bg-bg"
+        >
+            <Phone className="h-3 w-3" aria-hidden />
+            {shown ? (
+                <>
+                    <span className="tabular-nums">{phone}</span>
+                    {shown === "copied" && <span className="text-ink-muted">· copied</span>}
+                </>
+            ) : (
+                "Call"
+            )}
+        </a>
+    );
+}
+
 export function NeedsActionTable({
     rows,
     phones,
@@ -118,16 +152,8 @@ export function NeedsActionTable({
                                 )}
                                 <td className="whitespace-nowrap px-4 py-3 text-right">
                                     <div className="inline-flex items-center gap-1.5">
-                                        {/* ID 88 #3 — dials from the phone (tel:); no number, no button. */}
-                                        {phones[r.lead_id] && (
-                                            <a
-                                                href={`tel:${phones[r.lead_id].replace(/[^\d+]/g, "")}`}
-                                                title={`Call ${phones[r.lead_id]}`}
-                                                className="inline-flex items-center gap-1 rounded-md border border-border px-2.5 py-1 text-xs font-medium text-ink hover:bg-bg"
-                                            >
-                                                <Phone className="h-3 w-3" aria-hidden /> Call
-                                            </a>
-                                        )}
+                                        {/* ID 88 #3 — no number, no button. */}
+                                        {phones[r.lead_id] && <CallLink phone={phones[r.lead_id]} />}
                                         {canAssign && (
                                             <button
                                                 type="button"
