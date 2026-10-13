@@ -402,7 +402,7 @@ export async function middleware(request: NextRequest) {
     // default "report" mode. Each route still checks its own caller; this is
     // the net under the route somebody forgets. See apiGateMode() for why it
     // ships reporting and how to switch it to enforce.
-    const verdict = apiGate({ pathname: path, hasSession: !!user });
+    const verdict = apiGate({ pathname: path, hasSession: !!user, search: request.nextUrl.search });
     if (verdict !== "allow") {
       if (shouldLogApiGate(path)) {
         console.warn(

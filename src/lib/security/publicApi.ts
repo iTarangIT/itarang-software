@@ -76,6 +76,7 @@ export const PUBLIC_API_RULES: readonly PublicApiRule[] = [
   { pattern: /^\/api\/dealer\/onboarding\/(submit|status)$/, why: "pre-login dealer onboarding form" },
   { pattern: /^\/api\/dealer\/onboarding\/resume\/(send-otp|verify-otp)$/, why: "one-time code to continue an existing application without a login — mailed to the owner e-mail on the application (ID 129)" },
   { pattern: /^\/api\/dealer-onboarding\/salespeople$/, why: "salesperson dropdown on the pre-login onboarding form — names and roles only, no email or phone (ID 66)" },
+  { pattern: /^\/api\/dealer-onboarding\/save$/, why: "autosave of the pre-login onboarding form — a prospective dealer has no account yet (ID 118 log review, 13 Oct)" },
   { pattern: /^\/api\/uploads\/dealer-documents$/, why: "uploads from the pre-login onboarding form and the correction link" },
   { pattern: /^\/api\/files\/dealer-documents\//, why: "the route itself requires a session OR a signed, expiring link (?exp=&sig=) — the pre-login onboarding form previews its uploads that way (ID 119)" },
 
@@ -114,10 +115,34 @@ export function apiGateMode(raw: string | undefined = process.env.API_AUTH_GATE)
 export type ApiGateVerdict = "allow" | "report" | "refuse";
 
 /** The gate's decision for one request. Pure. */
-export function apiGate(input: { pathname: string; hasSession: boolean; mode?: ApiGateMode }): ApiGateVerdict {
+export function apiGate(input: {
+  pathname: string;
+  hasSession: boolean;
+  mode?: ApiGateMode;
+  /** The request's query string (with or without the leading "?"). */
+  search?: string;
+}): ApiGateVerdict {
   const mode = input.mode ?? apiGateMode();
   if (mode === "off" || input.hasSession) return "allow";
   if (!input.pathname.startsWith("/api/")) return "allow";
   if (isPublicApiPath(input.pathname)) return "allow";
+  if (isSignedFileLink(input.pathname, input.search)) return "allow";
   return mode === "enforce" ? "refuse" : "report";
+}
+
+/**
+ * ID 118 log review (13 Oct): ~550 no-session opens of
+ * /api/files/documents/whatsapp/… in a fortnight — signed links (WhatsApp,
+ * e-mail, the onboarding resume). The files route itself checks the HMAC
+ * signature, its expiry and the ID 166 rule (src/lib/storage/fileAccess.ts
+ * fileLinkValid), so the gate only has to let a link that CARRIES one reach
+ * it; a forged or expired signature is refused there. A /api/files request
+ * with no session and no signature stays refused here.
+ */
+const FILES_PROXY_PATH = /^\/api\/files\/(documents|dealer-documents|call-recordings)\/./;
+
+export function isSignedFileLink(pathname: string, search: string | undefined): boolean {
+  if (!FILES_PROXY_PATH.test(pathname)) return false;
+  const q = new URLSearchParams(search ?? "");
+  return Boolean(q.get("exp") && q.get("sig"));
 }
