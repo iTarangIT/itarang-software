@@ -41,7 +41,7 @@ export type AccountRow = {
 type ListResponse = {
     rows: AccountRow[];
     filtered_total: number;
-    counts: { total: number; no_owner: number; gstin_missing: number };
+    counts: { total: number; no_owner: number; gstin_missing: number; closed?: number };
     limit: number;
     offset: number;
 };
@@ -176,10 +176,10 @@ export function AccountsView() {
     return (
         <div className="space-y-4">
             <div className="flex flex-wrap items-center gap-2">
-                {tabBtn("all", "All", counts?.total)}
+                {tabBtn("all", "Live", counts?.total)}
                 {tabBtn("no_owner", "No owner", counts?.no_owner, "bg-amber-50 border-amber-200 text-amber-800")}
                 {tabBtn("gstin_missing", "GSTIN missing", counts?.gstin_missing, "bg-rose-50 border-rose-200 text-rose-700")}
-                {tabBtn("closed", "Closed")}
+                {tabBtn("closed", "Closed", counts?.closed, "text-ink-muted")}
                 <div className="ml-auto flex gap-2">
                     <Button variant="outline" size="sm" onClick={() => setDialog("leaver")}>
                         <UserMinus className="mr-1 h-3.5 w-3.5" /> Move leaver&apos;s accounts

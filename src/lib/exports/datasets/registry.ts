@@ -754,7 +754,7 @@ const dealerAccounts: Dataset = {
                 { key: "first_order", header: "First invoice", meaning: "Date of the first invoice matched to the account's GSTIN.", kind: "date" },
                 { key: "last_order", header: "Last invoice", meaning: "Date of the latest matched invoice.", kind: "date" },
                 { key: "days_since_last_order", header: "Days since last invoice", meaning: "Calendar days (IST) since the last invoice. Blank = never invoiced.", kind: "number" },
-                { key: "bucket_label", header: "Health", meaning: "Active 0–20 days, Cooling 21–30, Orange 31–45, Red 46–60, Dormant 60+; never invoiced: Not ordered yet (≤30 days since activation) or Never ordered.", width: 30 },
+                { key: "bucket_label", header: "Health", meaning: "Active 0–20 days, Cooling 21–30, Orange 31–45, Red 46–60, Dormant 60+; never invoiced: Not ordered yet (≤30 days since activation) or Never ordered; an open \"Order placed\" pauses the ageing (same as Dealer Health). Closed = closed by hand — not counted as a live dealer anywhere.", width: 30 },
                 { key: "revenue_90d", header: "Billed, last 90 days (₹)", meaning: "Invoice totals in the last 90 days. Void excluded, drafts counted.", kind: "money" },
                 { key: "revenue_fy", header: "Billed, this FY (₹)", meaning: "Invoice totals since 1 April.", kind: "money" },
                 { key: "revenue_lifetime", header: "Billed, lifetime (₹)", meaning: "Invoice totals, all time. Void excluded, drafts counted.", kind: "money" },

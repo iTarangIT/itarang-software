@@ -36,7 +36,7 @@ import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { matchedUnion, REVENUE_IS_ORDER, REVENUE_NOT_VOID } from "@/lib/dashboard/revenueSource";
 import { hasAccountOwnershipTables } from "@/lib/accounts/tables";
-import { dealerAccountSql, invoiceAccountSql } from "@/lib/accounts/accountList";
+import { dealerAccountSql, gstinMissingSql, invoiceAccountSql } from "@/lib/accounts/accountList";
 import { closedColumns } from "@/lib/accounts/accountClosures";
 import { hasOrderClaimTables } from "@/lib/accounts/tables";
 import { claimStateCte, claimStatusSql, invoicesByAccountCte } from "@/lib/accounts/orderClaims";
@@ -45,11 +45,19 @@ import {
     ACCOUNT_BUCKETS,
     accountBucket,
     effectiveDaysSinceOrder,
+    isLiveBucket,
     type AccountBucket,
     type OrderClaimStatus,
 } from "@/lib/dealers/accountHealthRules";
 
-export { ACCOUNT_BUCKETS, ACCOUNT_BUCKET_LABELS, accountBucket, type AccountBucket } from "@/lib/dealers/accountHealthRules";
+export {
+    ACCOUNT_BUCKETS,
+    ACCOUNT_BUCKET_LABELS,
+    accountBucket,
+    isLiveBucket,
+    LIVE_BUCKETS,
+    type AccountBucket,
+} from "@/lib/dealers/accountHealthRules";
 
 export type DealerHealthRow = {
     /** Stable row key: the account id (E-321) or, pre-E-321, the lead id. */
@@ -62,6 +70,8 @@ export type DealerHealthRow = {
     came_through: string | null;
     dealer: string;
     gstin: string | null;
+    /** ID 148: the Accounts screen's GSTIN-missing rule (blank, PENDING, or fails the check). */
+    gstin_missing: boolean;
     city: string | null;
     state: string | null;
     business_type: string | null;
@@ -156,13 +166,16 @@ export async function listDealerHealth(): Promise<DealerHealthRow[]> {
                ao.came_through,
                a.business_entity_name                               AS dealer,
                a.gstin,
+               ${gstinMissingSql(sql`a.gstin`)}                     AS gstin_missing,
                COALESCE(a.city, dl.city)                            AS city,
                COALESCE(a.state, dl.state)                          AS state,
                to_jsonb(dl) ->> 'business_type'                     AS business_type,
                ao.owner_user_id::text                               AS owner_id,
                u.name                                               AS owner_name,
-               (a.created_at AT TIME ZONE 'Asia/Kolkata')::date     AS converted_on,
-               ((SELECT d FROM today) - (a.created_at AT TIME ZONE 'Asia/Kolkata')::date) AS days_since_conversion,
+               -- ID 148: the same "since activation" clock as the Accounts download.
+               (COALESCE((to_jsonb(a) ->> 'activated_at')::timestamptz, a.created_at) AT TIME ZONE 'Asia/Kolkata')::date AS converted_on,
+               ((SELECT d FROM today)
+                  - (COALESCE((to_jsonb(a) ->> 'activated_at')::timestamptz, a.created_at) AT TIME ZONE 'Asia/Kolkata')::date) AS days_since_conversion,
                ${closed},
                ${claimsOn
                    ? sql`oc.id AS claim_id, oc.order_date::text AS claim_order_date,
@@ -188,7 +201,7 @@ export async function listDealerHealth(): Promise<DealerHealthRow[]> {
                dl.id                                                AS lead_id,
                NULL::text                                           AS came_through,
                COALESCE(dl.shop_name, dl.dealer_name, '(unnamed)')  AS dealer,
-               dl.gstin, dl.city, dl.state,
+               dl.gstin, ${gstinMissingSql(sql`dl.gstin`)} AS gstin_missing, dl.city, dl.state,
                to_jsonb(dl) ->> 'business_type'                     AS business_type,
                dl.current_owner_id                                  AS owner_id,
                u.name                                               AS owner_name,
@@ -215,6 +228,7 @@ export async function listDealerHealth(): Promise<DealerHealthRow[]> {
             came_through: (r.came_through as string | null) ?? null,
             dealer: String(r.dealer),
             gstin: (r.gstin as string | null) ?? null,
+            gstin_missing: r.gstin_missing === true,
             city: (r.city as string | null) ?? null,
             state: (r.state as string | null) ?? null,
             business_type: (r.business_type as string | null) ?? null,
@@ -283,7 +297,8 @@ export async function summarizeDealerHealth(
               : (r.business_type ?? "Not set");
 
     const groups = new Map<string, DealerHealthGroup & { _before: number; _both: number }>();
-    for (const r of rows) {
+    // ID 148: groups count live dealers only — a closed dealer is in no total or reorder rate.
+    for (const r of rows.filter((x) => isLiveBucket(x.bucket))) {
         const k = keyOf(r);
         const g =
             groups.get(k) ??
