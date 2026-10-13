@@ -30,6 +30,10 @@ import type { DealerHealthGroup, DealerHealthRow } from "@/lib/dealers/accountHe
 import type { RegionsResponse } from "@/app/api/locations/regions/route";
 import type { ActionKey, ActionSummary } from "@/lib/dashboard/salesHeadActions";
 import type { IsrScore } from "@/lib/admin/isrScorecard";
+import type { SalesHeadMeasures } from "@/lib/dashboard/salesHeadMeasures";
+import { STUCK_DAYS, batteryText, countWithShare, hoursText, share } from "@/lib/dashboard/salesHeadMeasureFormat";
+import { LEAD_STATUS_LABEL } from "@/lib/leads/queueFilters";
+import { OPEN_STATUSES, type LeadStatus } from "@/lib/lifecycle/transitions";
 import { OutsideTerritoryClaims } from "@/components/leads/OutsideTerritoryClaims";
 import { batteryReading } from "@/lib/admin/batteryReading";
 import {
@@ -112,6 +116,8 @@ export function SalesHeadOpsView() {
     const [score, setScore] = React.useState<"field" | "inside">("field");
     const [phone, setPhone] = React.useState("");
     const [pressed, setPressed] = React.useState<Period | null>(null);
+    // ID 88 — "Where open leads are sitting": activity in the period, or time in stage.
+    const [cells, setCells] = React.useState<"count" | "aged">("count");
 
     const now = React.useMemo(() => new Date(), []);
     const preset = React.useMemo(() => presets(now), [now]);
@@ -219,6 +225,16 @@ export function SalesHeadOpsView() {
         placeholderData: (prev) => prev,
         retry: false,
     });
+    // ID 88 — the figures that used to read "not tracked yet": speed, stuck
+    // over 7 days, engaged / WhatsApp shares, verified visits, quote boxes,
+    // stage lost at, and the batteries estimate. Same filters as the dashboard.
+    const measures = useQuery<SalesHeadMeasures>({
+        queryKey: ["sales-head-ops", "measures", dashQs.toString()],
+        queryFn: () => getData(`/api/admin/reports/sales-head-measures?${dashQs}`),
+        placeholderData: (prev) => prev,
+        retry: false,
+    });
+    const m = measures.data;
     const regions = useQuery<RegionsResponse>({
         queryKey: ["sales-head-ops", "regions"],
         queryFn: () => getData("/api/locations/regions"),
@@ -297,13 +313,17 @@ export function SalesHeadOpsView() {
     // ID 88 #4 — batteries come from invoice item lines. Invoices in range with
     // no lines captured make the count unknown ("—", never 0); some without
     // lines make it a floor ("n+"). Same rule as the sales dashboard tables.
+    // When lines are missing, the dealer-approved quote's battery units stand
+    // in as a labelled estimate ("≈"), never mixed into the invoice count.
     const batteryCell = (p: SalesSpocBlock): ScoreCell => {
         const r = batteryReading(p.outcome);
+        const est = m?.batteries?.find((b) => b.spoc === p.spoc_id);
         if (r.state === "unknown") {
-            return { actual: "—", target: null, pct: null, note: `not tracked: ${num(r.invoices ?? 0)} invoices have no item lines` };
+            const t = batteryText(r, "", est, num);
+            return { actual: t.actual, target: null, pct: null, note: t.note };
         }
         const c = cell(p.spoc_id, "batteries_sold", p.outcome.batteries_to_dealers);
-        return r.state === "partial" ? { ...c, actual: `${c.actual}+` } : c;
+        return { ...c, actual: batteryText(r, c.actual, est, num).actual };
     };
 
     // ── Needs action now ─────────────────────────────────────────────────────
@@ -763,7 +783,8 @@ export function SalesHeadOpsView() {
                         Admin › Targets
                     </Link>
                     {monthDays > 0 ? `, pro-rata to ${targetDays} of ${monthDays} working days` : ", pro-rata to working days"}. Batteries and revenue
-                    come from invoices matched to each person&apos;s dealer accounts.
+                    come from invoices matched to each person&apos;s dealer accounts. Where an invoice has no item lines, &ldquo;≈&rdquo; is an
+                    estimate from the battery units on that dealer&apos;s approved quote, not an invoiced count.
                     {targets.error ? " Targets could not be loaded for your role." : ""}
                 </span>
             </DashCard>
@@ -774,9 +795,11 @@ export function SalesHeadOpsView() {
                     className="xl:col-span-2"
                     title="Where open leads are sitting"
                     caption={
-                        worst && Number(worst.not_worked ?? 0) > 0
-                            ? `Open leads and what happened to them in the period, by person. ${String(worst.person)} has ${num(Number(worst.not_worked))} leads not worked.`
-                            : "Open leads and what happened to them in the period, by person."
+                        cells === "aged"
+                            ? `Open leads that have sat in the same stage for more than ${STUCK_DAYS} days, by owner and stage, as of today.`
+                            : worst && Number(worst.not_worked ?? 0) > 0
+                              ? `Open leads and what happened to them in the period, by person. ${String(worst.person)} has ${num(Number(worst.not_worked))} leads not worked.`
+                              : "Open leads and what happened to them in the period, by person."
                     }
                     action={
                         <SegmentedControl
@@ -784,14 +807,19 @@ export function SalesHeadOpsView() {
                             size="sm"
                             options={[
                                 { value: "count", label: "How many" },
-                                { value: "aged", label: "Stuck over 7 days", disabled: true, title: "Not available yet — time in stage is not tracked" },
+                                { value: "aged", label: `Stuck over ${STUCK_DAYS} days` },
                             ]}
-                            value="count"
-                            onChange={() => undefined}
+                            value={cells}
+                            onChange={setCells}
                         />
                     }
                 >
-                    {!byOwner.data ? (
+                    {cells === "aged" ? (
+                        <StuckGrid
+                            rows={m?.stuck?.filter((r) => inSeg(r.role, team)) ?? null}
+                            loading={measures.isLoading}
+                        />
+                    ) : !byOwner.data ? (
                         byOwner.isLoading ? <LoadingBlock /> : <NotAvailable reason={(byOwner.error as Error | null)?.message} />
                     ) : ownerRows.length === 0 ? (
                         <NotAvailable empty reason="No one owns open leads for these filters." />
@@ -866,9 +894,34 @@ export function SalesHeadOpsView() {
                             ))}
                         </div>
                     )}
-                    <span className="mt-auto text-xs leading-relaxed text-ink-muted">
-                        Speed measures (sales-ready to assigned, assigned to first attempt, transfer to first visit) are not tracked yet.
-                    </span>
+                    {/* ID 88 — speed, from the lead clocks (working hours, the Response time card's clocks). */}
+                    <div className="mt-auto flex flex-col gap-1.5 border-t border-border pt-3">
+                        <span className={TABLE_HEAD}>Speed · median, slowest 1 in 10 (working hours)</span>
+                        {!m?.speed ? (
+                            <span className="text-xs text-ink-muted">
+                                {measures.isLoading ? "Loading…" : "Lead clocks are not set up on this server yet (migration E-337)."}
+                            </span>
+                        ) : (
+                            [
+                                {
+                                    label: "Sales-ready → assigned",
+                                    s: m.speed.ready_to_assigned,
+                                    n: `${num(m.speed.ready_to_assigned.assigned)} assigned${m.speed.ready_to_assigned.waiting ? ` · ${num(m.speed.ready_to_assigned.waiting)} still waiting` : ""}`,
+                                },
+                                { label: "Assigned → first attempt", s: m.speed.assigned_to_attempt, n: `${num(m.speed.assigned_to_attempt.started)} assignments` },
+                                { label: "Transfer → first visit", s: m.speed.transfer_to_visit, n: `${num(m.speed.transfer_to_visit.started)} transfers` },
+                            ].map(({ label, s, n }) => (
+                                <div key={label} className="grid grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)] items-baseline gap-2 text-[13px]">
+                                    <span className="font-semibold text-ink">{label}</span>
+                                    <span className="text-right tabular-nums">
+                                        <span className="font-bold">{hoursText(s.median_h)}</span>
+                                        <span className="text-ink-muted"> · {hoursText(s.p90_h)}</span>
+                                        <span className="block text-[11.5px] text-ink-muted">{n}</span>
+                                    </span>
+                                </div>
+                            ))
+                        )}
+                    </div>
                 </DashCard>
             </div>
 
@@ -881,17 +934,29 @@ export function SalesHeadOpsView() {
                     <PeopleTable
                         loading={dash.isLoading}
                         people={shown.filter((p) => inSeg(p.role, "inside"))}
-                        heads={["Calls", "Per day", "Dealers called", "New hot", "Converted"]}
-                        row={(p) => [
-                            num(p.totals.calls),
-                            num(p.averages.avg_calls_per_day),
-                            num(p.totals.dealers_called),
-                            num(p.totals.new_hot),
-                            num(p.totals.converted),
-                        ]}
+                        heads={["Calls", "Per day", "Dealers called", "Engaged", "WhatsApp", "New hot", "Converted"]}
+                        row={(p) => {
+                            // ID 88 — engaged = connected calls (share of calls); WhatsApp =
+                            // chats that count as contact (dealer replied + a fresh screenshot),
+                            // as a share of all contacts made (engaged calls + WhatsApp).
+                            const c = m?.calling?.find((x) => x.user_id === p.spoc_id);
+                            const engaged = c ? countWithShare(c.engaged, share(c.engaged, c.calls), num) : m?.calling ? "0" : "—";
+                            const wa = c ? countWithShare(c.whatsapp, share(c.whatsapp, c.engaged + c.whatsapp), num) : m?.calling ? "0" : "—";
+                            return [
+                                num(p.totals.calls),
+                                num(p.averages.avg_calls_per_day),
+                                num(p.totals.dealers_called),
+                                engaged,
+                                wa,
+                                num(p.totals.new_hot),
+                                num(p.totals.converted),
+                            ];
+                        }}
                     />
                     <span className="text-xs leading-relaxed text-ink-muted">
-                        Engaged (connected) and WhatsApp-contact shares per person are not available on this screen yet.
+                        Engaged = calls where the rep spoke with the dealer, with its share of calls. WhatsApp = chats that count as contact
+                        (dealer replied, with a fresh screenshot), with its share of all contacts.
+                        {measures.error ? " These two columns could not be loaded." : ""}
                     </span>
                 </DashCard>
 
@@ -899,17 +964,26 @@ export function SalesHeadOpsView() {
                     <PeopleTable
                         loading={dash.isLoading}
                         people={shown.filter((p) => inSeg(p.role, "field"))}
-                        heads={["Visits", "Dealers visited", "New dealers", "Planned today", "KYC submitted"]}
-                        row={(p) => [
-                            num(p.totals.visits),
-                            num(p.totals.unique_visits),
-                            num(p.totals.new_visits),
-                            num(p.snapshot.planned_visits_today),
-                            num(p.outcome.kyc_submitted),
-                        ]}
+                        heads={["Visits", "Dealers visited", "New dealers", "Verified", "Productive", "Planned today", "KYC submitted"]}
+                        row={(p) => {
+                            // ID 88 — of the visits marked visited in the period.
+                            const v = m?.field?.find((x) => x.user_id === p.spoc_id);
+                            const fallback = m?.field ? "0" : "—";
+                            return [
+                                num(p.totals.visits),
+                                num(p.totals.unique_visits),
+                                num(p.totals.new_visits),
+                                v ? countWithShare(v.verified, share(v.verified, v.visited), num) : fallback,
+                                v ? countWithShare(v.productive, share(v.productive, v.visited), num) : fallback,
+                                num(p.snapshot.planned_visits_today),
+                                num(p.outcome.kyc_submitted),
+                            ];
+                        }}
                     />
                     <span className="text-xs leading-relaxed text-ink-muted">
-                        Verified visits (shop photo and location pin) and productive-visit shares are not tracked yet.
+                        Of the visits marked visited: verified = with a shop photo and a location pin; productive = outcome Productive or
+                        Commercials progressed. Each with its share.
+                        {measures.error ? " These two columns could not be loaded." : ""}
                     </span>
                 </DashCard>
             </div>
@@ -922,22 +996,33 @@ export function SalesHeadOpsView() {
                 title="Quotes in progress"
                 action={<span className="text-[13px] text-ink-muted">Quotes created in the period</span>}
             >
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                    <div className="flex flex-col gap-1.5 rounded-xl border border-border bg-[#fbfcfd] p-4">
-                        <span className="text-[13px] font-semibold">Quotes issued</span>
-                        <span className="text-[26px] font-bold text-brand-navy tabular-nums">{d ? num(d.outcome.quotes_issued) : "—"}</span>
-                        <span className="text-[12.5px] text-ink-muted">Leads with a first quote</span>
-                    </div>
-                    <div className="flex flex-col gap-1.5 rounded-xl border border-border bg-[#fbfcfd] p-4">
-                        <span className="text-[13px] font-semibold">Revised quotes</span>
-                        <span className="text-[26px] font-bold text-brand-navy tabular-nums">{d ? num(d.outcome.quote_revisions) : "—"}</span>
-                        <span className="text-[12.5px] text-ink-muted">Later versions of a quote</span>
-                    </div>
-                    <NotAvailable
-                        className="flex flex-col justify-center"
-                        reason="Waiting for approval, delivered, declined and dealer-said-yes boxes with time limits are not available to this screen yet."
-                    />
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
+                    {(
+                        [
+                            ["Quotes issued", d ? num(d.outcome.quotes_issued) : "—", "Leads with a first quote"],
+                            ["Revised quotes", d ? num(d.outcome.quote_revisions) : "—", "Later versions of a quote"],
+                            // ID 88 — where each lead's latest quote created in the period stands.
+                            ["Waiting for approval", m?.quotes ? num(m.quotes.waiting_approval) : "—", "With the CEO, not yet released"],
+                            ["Delivered, no answer", m?.quotes ? num(m.quotes.delivered_no_answer) : "—", "Sent to the dealer, no reply logged"],
+                            ["Dealer said yes", m?.quotes ? num(m.quotes.dealer_yes) : "—", "Dealer approved the quote"],
+                            ["Declined", m?.quotes ? num(m.quotes.dealer_declined) : "—", "Dealer declined the quote"],
+                        ] as const
+                    ).map(([label, value, sub]) => (
+                        <div key={label} className="flex flex-col gap-1.5 rounded-xl border border-border bg-[#fbfcfd] p-4">
+                            <span className="text-[13px] font-semibold">{label}</span>
+                            <span className="text-[26px] font-bold text-brand-navy tabular-nums">{value}</span>
+                            <span className="text-[12.5px] text-ink-muted">{sub}</span>
+                        </div>
+                    ))}
                 </div>
+                <span className="text-xs text-ink-muted">
+                    The last four boxes count each lead&apos;s latest quote created in the period
+                    {m?.quotes
+                        ? ` (${num(m.quotes.total)}): also ${num(m.quotes.approved_not_sent)} approved but not sent yet, ${num(m.quotes.refused_by_us)} refused by us, ${num(m.quotes.withdrawn)} withdrawn`
+                        : ""}
+                    . Quotes past their answer limit are on the &ldquo;Quotes with no answer&rdquo; tile.
+                    {measures.error ? " These boxes could not be loaded." : ""}
+                </span>
             </DashCard>
 
             {/* Accounts + lost */}
@@ -1011,7 +1096,25 @@ export function SalesHeadOpsView() {
                             ))}
                         </div>
                     )}
-                    <span className="mt-auto text-xs text-ink-muted">The stage a lead was lost at is not tracked yet.</span>
+                    {/* ID 88 — the status each lead left when it moved to Lost (status history). */}
+                    <div className="mt-auto flex flex-col gap-1.5 border-t border-border pt-3">
+                        <span className={TABLE_HEAD}>Stage it was lost at</span>
+                        {!m?.lost_stage ? (
+                            <span className="text-xs text-ink-muted">{measures.isLoading ? "Loading…" : "Could not be loaded."}</span>
+                        ) : m.lost_stage.length === 0 ? (
+                            <span className="text-xs text-ink-muted">No leads were marked Lost in this period.</span>
+                        ) : (
+                            m.lost_stage.map((s) => (
+                                <div key={s.stage} className="grid grid-cols-[minmax(0,190px)_minmax(0,1fr)_44px] items-center gap-3">
+                                    <span className="truncate text-[13px] font-semibold">
+                                        {LEAD_STATUS_LABEL[s.stage as LeadStatus] ?? (s.stage === "Unknown" ? "Not recorded" : s.stage.replace(/_/g, " "))}
+                                    </span>
+                                    <ProgressBar pct={(s.n / m.lost_stage![0].n) * 100} />
+                                    <span className="text-right text-[13px] font-bold tabular-nums">{num(s.n)}</span>
+                                </div>
+                            ))
+                        )}
+                    </div>
                 </DashCard>
             </div>
         </div>
@@ -1031,10 +1134,12 @@ function PeopleTable({
 }) {
     if (loading && people.length === 0) return <LoadingBlock />;
     if (people.length === 0) return <NotAvailable empty reason="No one in this team has activity for these filters." />;
+    // Column count follows `heads` (inline, since a computed class name is not generated by Tailwind).
+    const columns = { gridTemplateColumns: `minmax(0,1.4fr) repeat(${heads.length}, minmax(0,1fr))` };
     return (
         <div className="overflow-x-auto">
-            <div className="min-w-[520px]">
-                <div className={`grid grid-cols-[minmax(0,1.4fr)_repeat(5,minmax(0,1fr))] gap-2.5 border-b border-border pb-2 ${TABLE_HEAD}`}>
+            <div style={{ minWidth: Math.max(520, 140 + heads.length * 90) }}>
+                <div className={`grid gap-2.5 border-b border-border pb-2 ${TABLE_HEAD}`} style={columns}>
                     <span>Person</span>
                     {heads.map((h) => (
                         <span key={h} className="text-right">
@@ -1045,7 +1150,8 @@ function PeopleTable({
                 {people.map((p) => (
                     <div
                         key={p.spoc_id}
-                        className="grid min-h-[42px] grid-cols-[minmax(0,1.4fr)_repeat(5,minmax(0,1fr))] items-center gap-2.5 border-b border-[#f1f4f7] text-[13.5px] tabular-nums"
+                        className="grid min-h-[42px] items-center gap-2.5 border-b border-[#f1f4f7] text-[13.5px] tabular-nums"
+                        style={columns}
                     >
                         <span className="truncate font-semibold">{p.name ?? "Unnamed"}</span>
                         {row(p).map((v, i) => (
@@ -1053,6 +1159,45 @@ function PeopleTable({
                                 {v}
                             </span>
                         ))}
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
+}
+
+/**
+ * ID 88 — "Stuck over 7 days": open leads per owner and stage that have sat in
+ * that stage longer than STUCK_DAYS (salesHeadMeasures.ts stuck()), as of today.
+ * Shaded within each stage column, like the activity view.
+ */
+function StuckGrid({ rows, loading }: { rows: SalesHeadMeasures["stuck"]; loading: boolean }) {
+    if (!rows) return loading ? <LoadingBlock /> : <NotAvailable reason="Time in stage could not be loaded." />;
+    const stages = OPEN_STATUSES.filter((s) => rows.some((r) => (r.by_stage[s] ?? 0) > 0));
+    if (rows.length === 0 || stages.length === 0) {
+        return <NotAvailable empty reason={`No open lead has sat in one stage for more than ${STUCK_DAYS} days.`} />;
+    }
+    const max = Object.fromEntries(stages.map((s) => [s, Math.max(0, ...rows.map((r) => r.by_stage[s] ?? 0))]));
+    const columns = { gridTemplateColumns: `150px repeat(${stages.length + 1}, minmax(0,1fr))` };
+    return (
+        <div className="overflow-x-auto">
+            <div className="flex flex-col gap-1" style={{ minWidth: Math.max(560, 150 + (stages.length + 1) * 72) }}>
+                <div className={`grid gap-1 ${TABLE_HEAD} !tracking-[0.04em]`} style={columns}>
+                    <span />
+                    {stages.map((s) => (
+                        <span key={s} className="text-center leading-snug">
+                            {LEAD_STATUS_LABEL[s]}
+                        </span>
+                    ))}
+                    <span className="text-center leading-snug">Total</span>
+                </div>
+                {rows.map((r) => (
+                    <div key={r.owner_id} className="grid items-center gap-1" style={columns}>
+                        <span className="truncate text-[13px] font-semibold text-ink">{r.owner}</span>
+                        {stages.map((s) => (
+                            <HeatCell key={s} value={r.by_stage[s] ?? 0} max={max[s]} />
+                        ))}
+                        <span className="text-center text-[13px] font-bold tabular-nums text-ink">{num(r.total)}</span>
                     </div>
                 ))}
             </div>
