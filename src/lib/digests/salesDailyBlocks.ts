@@ -279,12 +279,25 @@ function sumOf(vals: Array<number | null>): number | null {
     return known.length ? known.reduce((a, b) => a + b, 0) : null;
 }
 
+/** ID 156: each rep's manager on the email day (member id → manager id). */
+export type TeamOf = ReadonlyMap<string, string>;
+
+/** Prefix of a team member's name under their manager, and of a team subtotal row. */
+export const TEAM_MEMBER_PREFIX = "↳ ";
+export const TEAM_SUBTOTAL_PREFIX = "Team subtotal · ";
+
 /**
  * Email rows for Block B (`asm`) or C (`inside_sales_rep`): one row per rep in
  * the block's column order, then a Total row (sum of the reps listed; "% of
  * target" on the reps that have a target) when there is more than one rep.
+ *
+ * ID 156: with `teamOf`, a manager listed in the block is followed by their
+ * team members (↳) and a "Team subtotal · <manager>" row — the manager's own
+ * numbers plus the members' — whose "% of target" is against the MANAGER'S
+ * own target (Kartik, 10 Oct: the team lead's target is theirs, not the sum).
+ * Reps in no team follow, then the block Total as before.
  */
-export function repBlockTableRows(role: "asm" | "inside_sales_rep", blocks: RepBlock[]): Rows {
+export function repBlockTableRows(role: "asm" | "inside_sales_rep", blocks: RepBlock[], teamOf?: TeamOf): Rows {
     const cols = COLS[role];
     const primary = PRIMARY_TARGET[role].metric;
     const cell = (r: RepBlock, c: ColSpec): string | number => {
@@ -303,27 +316,66 @@ export function repBlockTableRows(role: "asm" | "inside_sales_rep", blocks: RepB
         return p == null ? REP_NOT_MEASURED : `${p}%`;
     };
 
-    const rows: Rows = blocks.map((b) => cols.map((c) => cell(b, c)));
-    if (blocks.length > 1) {
+    const summed = (label: string, group: RepBlock[], pct: () => number | null) => {
         const values: Partial<Record<RepMetricKey, RepValue>> = {};
-        for (const k of Object.keys(blocks[0].values) as RepMetricKey[]) {
+        for (const k of Object.keys(group[0].values) as RepMetricKey[]) {
             values[k] = {
-                y: sumOf(blocks.map((b) => b.values[k]?.y ?? null)),
-                mtd: sumOf(blocks.map((b) => b.values[k]?.mtd ?? null)),
+                y: sumOf(group.map((b) => b.values[k]?.y ?? null)),
+                mtd: sumOf(group.map((b) => b.values[k]?.mtd ?? null)),
             };
         }
-        // % of target on the reps that HAVE a target: their MTD against their targets.
-        const withTarget = blocks.filter((b) => b.target != null);
-        const total: RepBlock = { id: TOTAL, name: TOTAL, values, target: null };
-        const totalRow = cols.map((c) => {
-            if (!("pctTarget" in c)) return cell(total, c);
-            const p = pctOfTarget(
-                sumOf(withTarget.map((b) => b.values[primary]?.mtd ?? null)),
-                withTarget.length ? withTarget.reduce((a, b) => a + b.target!, 0) : null,
-            );
+        const row: RepBlock = { id: label, name: label, values, target: null };
+        return cols.map((c) => {
+            if (!("pctTarget" in c)) return cell(row, c);
+            const p = pct();
             return p == null ? REP_NOT_MEASURED : `${p}%`;
         });
-        rows.push(totalRow);
+    };
+
+    // ID 156 — managers in this block with their members under them.
+    const byId = new Map(blocks.map((b) => [b.id, b]));
+    const teams = new Map<string, RepBlock[]>();
+    for (const b of blocks) {
+        const m = teamOf?.get(b.id);
+        if (m && m !== b.id && byId.has(m)) teams.set(m, [...(teams.get(m) ?? []), b]);
+    }
+    const rows: Rows = [];
+    const placed = new Set<string>();
+    const inShownTeam = (b: RepBlock) => {
+        const m = teamOf?.get(b.id);
+        return !!m && teams.has(m);
+    };
+    for (const b of blocks) {
+        // A member is listed under their manager, not on its own.
+        if (placed.has(b.id) || inShownTeam(b)) continue;
+        rows.push(cols.map((c) => cell(b, c)));
+        placed.add(b.id);
+        const members = teams.get(b.id);
+        if (!members) continue;
+        for (const m of members) {
+            rows.push(cols.map((c) => cell({ ...m, name: TEAM_MEMBER_PREFIX + m.name }, c)));
+            placed.add(m.id);
+        }
+        const group = [b, ...members];
+        rows.push(
+            summed(TEAM_SUBTOTAL_PREFIX + b.name, group, () =>
+                pctOfTarget(sumOf(group.map((x) => x.values[primary]?.mtd ?? null)), b.target),
+            ),
+        );
+    }
+    // A member of a member (nested teams) is not lost: listed at the end, ungrouped.
+    for (const b of blocks) if (!placed.has(b.id)) rows.push(cols.map((c) => cell(b, c)));
+    if (blocks.length > 1) {
+        // % of target on the reps that HAVE a target: their MTD against their targets.
+        const withTarget = blocks.filter((b) => b.target != null);
+        rows.push(
+            summed(TOTAL, blocks, () =>
+                pctOfTarget(
+                    sumOf(withTarget.map((b) => b.values[primary]?.mtd ?? null)),
+                    withTarget.length ? withTarget.reduce((a, b) => a + b.target!, 0) : null,
+                ),
+            ),
+        );
     }
     return rows;
 }

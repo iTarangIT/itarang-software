@@ -75,8 +75,12 @@ async function holidays(from: string, to: string): Promise<Set<string>> {
     return new Set(r.map((x) => x.d));
 }
 
-/** Month-to-date actual per (user, metric). null = not measurable. */
-async function actualsFor(monthFirst: string, upTo: string, elapsedWorkingDays: number) {
+/**
+ * Month-to-date actual per (user, metric). null = not measurable. Exported for
+ * ID 156: a manager's team actual sums the members' actuals, each over the
+ * days they were in the team (src/lib/admin/teamPerformance.ts).
+ */
+export async function actualsFor(monthFirst: string, upTo: string, elapsedWorkingDays: number) {
     const { buildSalesDashboard } = await import("@/lib/admin/salesDashboard");
     const dash = await buildSalesDashboard({ from: monthFirst, to: upTo, granularity: "month" });
     const extra = (await db.execute(sql`

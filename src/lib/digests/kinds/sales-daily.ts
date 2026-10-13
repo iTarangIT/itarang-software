@@ -432,6 +432,9 @@ async function collect(
       ecofySnapshot(istDay),
     ]);
     const blockA = await buildBlockA(db as never, periods, { yesterday, last7, mtd, lastMonth }, unmatched);
+    // ID 156: each rep's manager today, so Blocks B / C show a team subtotal
+    // under each manager. Imported here, not at module scope (needs the db).
+    const teamOf = await (await import("@/lib/users/team")).currentTeamOf();
     // "Right now" / "Position at" name the moment the figures were taken — a
     // test sent at 14:03 used to say "Right now · 09:00".
     const asOf = computedAt.toLocaleTimeString("en-GB", {
@@ -547,11 +550,12 @@ async function collect(
             key: "block_b",
             title: "B · Field team (ASM)",
             columns: BLOCK_B_COLUMNS,
-            rows: repBlockTableRows("asm", buildRepBlocks("asm", yesterday, mtd, extras, blockA.userTargets)),
+            rows: repBlockTableRows("asm", buildRepBlocks("asm", yesterday, mtd, extras, blockA.userTargets), teamOf),
             textColumns: 1,
             toneColumns: [BLOCK_B_PCT_COLUMN],
             note:
               "One row per ASM. % of target = dealers visited MTD against the ASM's MTD dealer-visit target (“—” = no target set). " +
+              "Under a manager: their team (↳) and a team subtotal — % of target against the manager's own target. " +
               "Total = the ASMs listed; Block A also counts work credited to nobody.",
             empty: "No ASMs on the Sales dashboard this month.",
           },
@@ -559,13 +563,14 @@ async function collect(
             key: "block_c",
             title: "C · Inside sales (ISR / CC)",
             columns: BLOCK_C_COLUMNS,
-            rows: repBlockTableRows("inside_sales_rep", buildRepBlocks("inside_sales_rep", yesterday, mtd, extras, blockA.userTargets)),
+            rows: repBlockTableRows("inside_sales_rep", buildRepBlocks("inside_sales_rep", yesterday, mtd, extras, blockA.userTargets), teamOf),
             textColumns: 1,
             toneColumns: [BLOCK_C_PCT_COLUMN],
             note:
               "One row per ISR / CC, and anyone else who made calls (named with their role). Connected = calls that connected, each counted once. " +
               "Engaged = connected, of any length (since 3 Oct). Hot to field = leads handed to an ASM that were Hot at that moment. " +
-              "% of target = calls MTD against the rep's MTD calls target (“—” = no target set).",
+              "% of target = calls MTD against the rep's MTD calls target (“—” = no target set). " +
+              "Under a manager: their team (↳) and a team subtotal against the manager's own target.",
             empty: "No inside-sales reps on the Sales dashboard this month.",
           },
           {
