@@ -9,7 +9,15 @@ import { capabilitiesFor } from '@/lib/dealer/dealer-capabilities';
 import { notifyLeadCreated } from '@/lib/notifications/events';
 import { dealerDisplayName } from '@/lib/notifications/emit';
 import { findActiveDealerByMobile, houseDealerCode, type PushTargetDealer } from '@/lib/leads/dealerByMobile';
-import { canUsePushToDealer, NO_ACTIVE_DEALER_MESSAGE } from '@/lib/leads/pushToDealer';
+import { canUsePushToDealer, consentSignedMessage, NO_ACTIVE_DEALER_MESSAGE, PUSHED_BEFORE_MESSAGE } from '@/lib/leads/pushToDealer';
+import {
+    detachAuditChanges,
+    detachFromOldDealer,
+    logPushCouponRelease,
+    pushedBeforeLeadIds,
+    signedConsentLeadIds,
+    type DetachResult,
+} from '@/lib/leads/pushGuards';
 import { z } from 'zod';
 import { eq, and, sql, desc } from 'drizzle-orm';
 import {
@@ -591,6 +599,15 @@ export const POST = withErrorHandler(async (req: Request) => {
             if (current.dealerId !== dealer_id) {
                 return errorResponse('This lead already belongs to another dealer. Moving it again needs an admin.', 409);
             }
+            // ID 33: consent gate — a re-submitted Step 1 on a file whose
+            // customer already signed consent must not move it.
+            if ((await signedConsentLeadIds([data.leadId!])).has(data.leadId!)) {
+                return errorResponse(consentSignedMessage(await dealerDisplayName(dealer_id)), 409);
+            }
+            // ID 33: one push per file — a second move needs an admin (CRM).
+            if ((await pushedBeforeLeadIds([data.leadId!])).has(data.leadId!)) {
+                return errorResponse(PUSHED_BEFORE_MESSAGE, 409);
+            }
             const found = await findActiveDealerByMobile(pushMobile);
             if (found.status !== 'found') {
                 const why = found.status === 'invalid_mobile'
@@ -617,6 +634,8 @@ export const POST = withErrorHandler(async (req: Request) => {
         const isCashLike = isUpfront || data.payment_method === 'cash';
         const isHot = data.interest_level === 'hot';
 
+        // ID 33: what a Step-1 push took off the house dealer (coupon, salesperson).
+        let pushDetached = null as DetachResult | null;
         try {
             await db.transaction(async (tx) => {
                 await tx.update(leads).set({
@@ -704,6 +723,8 @@ export const POST = withErrorHandler(async (req: Request) => {
                 });
 
                 if (pushTarget) {
+                    const detached = await detachFromOldDealer(tx, data.leadId!);
+                    pushDetached = detached;
                     await tx.insert(auditLogs).values({
                         id: `AUDIT-${Date.now()}-push`,
                         entity_type: 'lead',
@@ -714,6 +735,7 @@ export const POST = withErrorHandler(async (req: Request) => {
                             to_dealer_id: pushTarget.dealerId,
                             to_dealer_name: pushTarget.name,
                             via: 'step1_dealer_mobile',
+                            ...detachAuditChanges(detached),
                         },
                         performed_by: user.id,
                         timestamp: new Date()
@@ -746,6 +768,7 @@ export const POST = withErrorHandler(async (req: Request) => {
             // ID 33 — tell the dealer on WhatsApp the lead is now theirs; it is
             // listed under Save Drafts in their console. Best-effort, never throws.
             if (pushTarget) {
+                if (pushDetached) await logPushCouponRelease(pushDetached, data.leadId!, user.id, pushTarget.name);
                 const { notifyDealerOfPushedLead } = await import('@/lib/whatsapp/pushedLeadNotice');
                 await notifyDealerOfPushedLead(data.leadId!);
             }
