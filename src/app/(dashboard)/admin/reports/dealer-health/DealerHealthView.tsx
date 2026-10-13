@@ -11,6 +11,7 @@ import { Loader2 } from "lucide-react";
 import {
     ACCOUNT_BUCKETS,
     ACCOUNT_BUCKET_LABELS,
+    isLiveBucket,
     type AccountBucket,
 } from "@/lib/dealers/accountHealthRules";
 import type { DealerHealthGroup, DealerHealthRow } from "@/lib/dealers/accountHealth";
@@ -87,6 +88,9 @@ export function DealerHealthView({ initialBucket = "" }: { initialBucket?: Deale
     if (error) return <p className="text-sm text-rose-600">{(error as Error).message}</p>;
 
     const rows = data?.rows ?? [];
+    // ID 148: "Live" = every dealer that is not closed — the same count as the
+    // CEO Dealer base and the Accounts screen. Closed dealers keep their own chip.
+    const live = rows.filter((r) => isLiveBucket(r.bucket));
     const counts = Object.fromEntries(
         ACCOUNT_BUCKETS.map((b) => [b, rows.filter((r) => r.bucket === b).length]),
     ) as Record<AccountBucket, number>;
@@ -95,9 +99,10 @@ export function DealerHealthView({ initialBucket = "" }: { initialBucket?: Deale
             ? rows.filter((r) => ORDERING.includes(r.bucket))
             : bucket
               ? rows.filter((r) => r.bucket === bucket)
-              : rows;
+              : live;
     const orderingCount = ORDERING.reduce((a, b) => a + counts[b], 0);
-    const noGstin = rows.filter((r) => !r.gstin).length;
+    // The Accounts screen's GSTIN-missing rule: blank, PENDING, or fails the check.
+    const noGstin = live.filter((r) => r.gstin_missing).length;
 
     return (
         <div className="space-y-5">
@@ -107,7 +112,7 @@ export function DealerHealthView({ initialBucket = "" }: { initialBucket?: Deale
                     onClick={() => setBucket("")}
                     className={`rounded-full border px-3 py-1 text-xs font-medium ${bucket === "" ? "bg-ink text-white border-ink" : "border-border text-ink"}`}
                 >
-                    All · {rows.length}
+                    Live · {live.length}
                 </button>
                 <button
                     type="button"
@@ -130,9 +135,12 @@ export function DealerHealthView({ initialBucket = "" }: { initialBucket?: Deale
 
             {noGstin > 0 && (
                 <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                    {noGstin} of {rows.length} converted dealers have no GSTIN on their lead, so none of
-                    their invoices can be seen here. GSTIN is now required at Mark Converted; older leads
-                    can have it added from the lead&apos;s contact details.
+                    {noGstin} of {live.length} live dealers have no usable GSTIN (blank, pending, or failing the
+                    check), so their invoices cannot be matched to them. Fix it with Correct GSTIN on the{" "}
+                    <Link href="/admin/accounts?tab=gstin_missing" className="font-semibold underline">
+                        Accounts screen
+                    </Link>
+                    .
                 </p>
             )}
 
@@ -178,7 +186,7 @@ export function DealerHealthView({ initialBucket = "" }: { initialBucket?: Deale
                                     <div className="text-[11px] text-ink-muted">
                                         {[
                                             r.city,
-                                            r.gstin ?? "no GSTIN",
+                                            r.gstin_missing ? "GSTIN missing" : r.gstin,
                                             r.came_through === "direct" ? "direct onboarding" : null,
                                         ]
                                             .filter(Boolean)

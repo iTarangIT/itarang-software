@@ -335,7 +335,8 @@ export function SalesHeadOpsView() {
     const groups = health.data?.summary ?? [];
     const redDormant = groups.reduce((a, g) => a + (g.by_bucket.red ?? 0) + (g.by_bucket.dormant ?? 0), 0);
     const atRisk = groups.reduce((a, g) => a + g.at_risk_90d, 0);
-    const unowned = (health.data?.rows ?? []).filter((r) => !r.owner_id).length;
+    // ID 148: live dealers only — a closed dealer needs no owner (summary groups are live already).
+    const unowned = (health.data?.rows ?? []).filter((r) => !r.owner_id && r.bucket !== "closed").length;
     const hot = d?.interest.rows.find((r) => r.interest_level === "hot");
     const hotAged = hot ? hot.age_8_14 + hot.age_15_30 + hot.age_30_plus : 0;
     const hotQs = new URLSearchParams();

@@ -18,6 +18,7 @@ function row(p: Partial<DealerHealthRow> & Pick<DealerHealthRow, "key" | "bucket
         came_through: null,
         dealer: p.key,
         gstin: null,
+        gstin_missing: true,
         city: null,
         state: null,
         business_type: null,

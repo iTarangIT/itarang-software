@@ -17,6 +17,15 @@ export const ACCOUNT_BUCKETS = [
 ] as const;
 export type AccountBucket = (typeof ACCOUNT_BUCKETS)[number];
 
+/**
+ * ID 148 — a "live" dealer is every dealer account that is not closed. Every
+ * live-dealer count (CEO Dealer base and ordering %, Accounts tabs, Dealer
+ * Health totals and reorder rate, Sales Head no-owner tile and Accounts by
+ * owner) counts these buckets only; closed dealers keep their own chip.
+ */
+export const LIVE_BUCKETS = ACCOUNT_BUCKETS.filter((b) => b !== "closed") as Exclude<AccountBucket, "closed">[];
+export const isLiveBucket = (b: AccountBucket): boolean => b !== "closed";
+
 export const ACCOUNT_BUCKET_LABELS: Record<AccountBucket, string> = {
     active: "Active (0–20 d)",
     cooling: "Cooling (21–30 d)",
