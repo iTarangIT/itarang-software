@@ -15,6 +15,7 @@ import {
 import { FINANCE_DOCUMENTS } from '@/components/dealer-portal/lead-wizard/constants';
 import OtherDocumentsSection, { type RequestedDoc } from '@/components/dealer-portal/lead-wizard/OtherDocumentsSection';
 import ConsentOtpCard from '@/components/dealer-portal/lead-wizard/ConsentOtpCard';
+import { onFreshFileClick } from '@/lib/storage/freshFileLink';
 
 type UploadedDoc = {
     id?: string;
@@ -784,7 +785,7 @@ export default function KYCPage() {
                                     </div>
                                 </div>
                                 {consentRecord?.signed_consent_url && (
-                                    <a href={consentRecord.signed_consent_url} target="_blank" rel="noopener noreferrer"
+                                    <a href={consentRecord.signed_consent_url} onClick={(e) => onFreshFileClick(e, consentRecord.signed_consent_url)} target="_blank" rel="noopener noreferrer"
                                         className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-emerald-200 rounded-lg text-xs font-bold text-emerald-700 hover:bg-emerald-50 transition-all">
                                         <Download className="w-3.5 h-3.5" /> Download Signed Consent PDF
                                     </a>
@@ -892,7 +893,7 @@ export default function KYCPage() {
                                     </div>
                                 </div>
                                 {consentRecord?.signed_consent_url && (
-                                    <a href={consentRecord.signed_consent_url} target="_blank" rel="noopener noreferrer"
+                                    <a href={consentRecord.signed_consent_url} onClick={(e) => onFreshFileClick(e, consentRecord.signed_consent_url)} target="_blank" rel="noopener noreferrer"
                                         className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-emerald-200 rounded-lg text-xs font-bold text-emerald-700 hover:bg-emerald-50 transition-all">
                                         <Download className="w-3.5 h-3.5" /> Download Signed Consent PDF
                                     </a>
@@ -996,7 +997,7 @@ export default function KYCPage() {
                                                 {(consentStatus === 'consent_generated' || consentStatus === 'consent_uploaded' || consentPdfUrl) && (
                                                     <>
                                                         {consentPdfUrl && (
-                                                            <a href={consentPdfUrl} target="_blank" rel="noopener noreferrer"
+                                                            <a href={consentPdfUrl} onClick={(e) => onFreshFileClick(e, consentPdfUrl)} target="_blank" rel="noopener noreferrer"
                                                                 className="w-full px-3 py-2 bg-white border border-teal-300 text-teal-700 rounded-lg text-xs font-bold hover:bg-teal-50 transition-all flex items-center justify-center gap-1.5">
                                                                 <Eye className="w-3 h-3" /> View / Download Consent PDF
                                                             </a>
