@@ -12,6 +12,7 @@ import {
   sendTwoFactorVoiceOtp,
   twoFactorConfigured,
 } from "@/lib/twofactor";
+import { dealerMayActOnLead } from "@/lib/auth/requireLeadAccess";
 
 // BRD V2 §3.2 — Step 5 OTP send.
 // Generates a 6-digit OTP, stores a SHA-256 hash with 10-minute expiry, and
@@ -49,7 +50,7 @@ export async function POST(
         { status: 404 },
       );
     }
-    if (lead.dealer_id !== user.dealer_id) {
+    if (!(await dealerMayActOnLead(user, lead.dealer_id))) {
       return NextResponse.json(
         { success: false, error: { message: "Access denied" } },
         { status: 403 },

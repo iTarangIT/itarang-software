@@ -3,6 +3,8 @@
 //   POST mapping   {mapping: sourceHeader → template column, saveAs?}  → Import
 //   POST validate  (no body) → ImportPreview: counts + sample row errors
 //   POST commit    {consentAttested: true, attestationText, idempotencyKey} → Import
+//   POST sync      (no body) → ImportSyncResult: the COMMITTED import's leads
+//                  upserted into ecofy_leads now (ID 51 #3, importSync.ts)
 //
 // Shapes follow OpenAPI ImportMapping / ImportPreview / ImportCommit; commit
 // carries the required Idempotency-Key. Every step is a write in
@@ -12,7 +14,13 @@ import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-util
 import { ECOFY_MANAGER_ROLES } from "@/lib/ecofy/access";
 import { importCommitSchema, importMappingSchema } from "@/lib/ecofy/intake";
 import { ecofyActorName } from "@/lib/ecofy/queries";
-import { commitEcofyImport, EcofyCallError, saveEcofyImportMapping, validateEcofyImport } from "@/lib/ecofy/service";
+import {
+    commitEcofyImport,
+    EcofyCallError,
+    saveEcofyImportMapping,
+    syncEcofyImportToCrm,
+    validateEcofyImport,
+} from "@/lib/ecofy/service";
 
 export const dynamic = "force-dynamic";
 
@@ -46,6 +54,10 @@ export const POST = withErrorHandler(async (req: Request, ctx: { params: Promise
                     202,
                 );
             }
+            case "sync":
+                // ID 51 #3: once COMMITTED, put the imported leads in the CRM now
+                // (reads + local upsert only; safe to repeat).
+                return successResponse(await syncEcofyImportToCrm(id));
             default:
                 return errorResponse("Unknown import step", 404);
         }

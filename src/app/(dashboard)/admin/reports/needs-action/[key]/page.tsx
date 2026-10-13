@@ -1,7 +1,7 @@
 // The list behind one Sales Head "Needs action now" tile — the same rows the
 // tile counts (src/lib/dashboard/salesHeadActions.ts), with the dashboard's
-// filters carried over in the URL. Each row opens the lead (call, mark Won, …)
-// and carries Assign / Reassign itself (NeedsActionTable, ID 88 #3). The filter bar is a plain GET form, and
+// filters carried over in the URL. Each row opens the lead (mark Won, …) and
+// carries Call and Assign / Reassign itself (NeedsActionTable, ID 88 #3). The filter bar is a plain GET form, and
 // "Download CSV" sends the same query string to the API, so the file holds
 // exactly the rows on screen.
 
@@ -15,6 +15,7 @@ import {
     ACTION_TITLES,
     listSalesHeadAction,
     listSalesHeadActionFiltered,
+    phonesForActionRows,
     type ActionKey,
 } from "@/lib/dashboard/salesHeadActions";
 import { LEADS_BULK_ROLES } from "@/lib/leads/access";
@@ -69,6 +70,8 @@ export default async function NeedsActionListPage({
         listSalesHeadAction(k, {}),
         getTimeLimits(),
     ]);
+    // ID 88 #3 — the dealer's number for the row's Call button.
+    const phones = await phonesForActionRows(rows);
     const states = [...new Set(all.map((r) => r.state?.trim()).filter((v): v is string => !!v))].sort();
     if (sp.state && !states.includes(sp.state)) states.unshift(sp.state);
     const owners = [...new Map(all.filter((r) => r.owner_id).map((r) => [r.owner_id!, r.owner_name ?? r.owner_id!])).entries()].sort((a, b) =>
@@ -154,10 +157,11 @@ export default async function NeedsActionListPage({
                     {anyFilter ? "No leads match these filters." : "Nothing here right now."}
                 </p>
             ) : (
-                // ID 88 #3 — assign / reassign on the row (the undo-Won tiles
-                // are decided on the lead, so they keep the plain list).
+                // ID 88 #3 — call, assign and reassign on the row (the undo-Won
+                // tiles are decided on the lead, so they get Call only).
                 <NeedsActionTable
                     rows={rows}
+                    phones={phones}
                     ownerHeading={k === "visit_overdue" ? "ASM / owner" : "Owner"}
                     hasValue={hasValue}
                     canAssign={

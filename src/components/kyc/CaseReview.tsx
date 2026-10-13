@@ -10,6 +10,7 @@ import BankCard from "./cards/BankCard";
 import CIBILCard from "./cards/CIBILCard";
 import RCCard from "./cards/RCCard";
 import ConsentPdfViewerModal from "./ConsentPdfViewerModal";
+import { freshFileUrl } from "@/lib/storage/freshFileLink";
 import SupportingDocsPanel, {
   type SupportingDoc,
 } from "./step3/SupportingDocsPanel";
@@ -1869,10 +1870,19 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
         const renderDocCard = (doc: Document) => {
           const label = DOC_TYPE_LABELS[doc.docType] || doc.docType;
           const docIsPdf = isPdfUrl(doc.fileUrl);
-          const openDoc = () => {
+          // ID 166: open through a fresh 15-minute link, so the address in the
+          // viewer (or its open-in-new-tab fallback) stops working if pasted.
+          const openDoc = async () => {
             if (!doc.fileUrl) return;
-            if (docIsPdf) setPdfViewer({ url: doc.fileUrl, title: label });
-            else setLightboxUrl(doc.fileUrl);
+            let url = doc.fileUrl;
+            try {
+              url = await freshFileUrl(doc.fileUrl);
+            } catch (err) {
+              alert(err instanceof Error ? err.message : "You can't open this file.");
+              return;
+            }
+            if (docIsPdf) setPdfViewer({ url, title: label });
+            else setLightboxUrl(url);
           };
           return (
           <button key={doc.id} onClick={openDoc}

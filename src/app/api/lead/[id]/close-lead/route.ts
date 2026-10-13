@@ -4,6 +4,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { leads } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
+import { dealerMayActOnLead } from "@/lib/auth/requireLeadAccess";
 
 // BRD V2 §4.0 Scenario B — Close Lead action.
 // Permanently closes a lead that was rejected by the lender.
@@ -34,7 +35,7 @@ export async function POST(
         { status: 404 },
       );
     }
-    if (lead.dealer_id !== user.dealer_id) {
+    if (!(await dealerMayActOnLead(user, lead.dealer_id))) {
       return NextResponse.json(
         { success: false, error: { message: "Access denied" } },
         { status: 403 },

@@ -11,6 +11,8 @@ import {
   readsOwnLeadsOnly,
 } from "@/lib/leads/access";
 import { StatusChip } from "@/app/(dashboard)/inside-sales/_components/StatusChip";
+import { getTeamMemberIds } from "@/lib/users/team";
+import { ownerInScope } from "@/lib/users/teamRules";
 import type { LeadStatus } from "@/lib/lifecycle/transitions";
 import { LeadTrackingPanel } from "@/components/leads/lead-tracking-panel";
 import Link from "next/link";
@@ -46,8 +48,10 @@ export default async function LeadDetailPage({ params }: any) {
   });
 
   // ID 45: a rep (asm, inside_sales_rep) reads only leads they own — someone
-  // else's lead gets the same answer as no lead at all.
-  if (!lead || (readsOwnLeadsOnly(user.role) && lead.current_owner_id !== user.id)) {
+  // else's lead gets the same answer as no lead at all. ID 155: a manager also
+  // reads the leads of their direct reports.
+  const teamMemberIds = lead && readsOwnLeadsOnly(user.role) ? await getTeamMemberIds(user.id) : [];
+  if (!lead || (readsOwnLeadsOnly(user.role) && !ownerInScope(lead.current_owner_id, user.id, teamMemberIds))) {
     return (
       <div className="p-10 text-center bg-white rounded-xl border m-8 text-gray-500">
         Lead not found

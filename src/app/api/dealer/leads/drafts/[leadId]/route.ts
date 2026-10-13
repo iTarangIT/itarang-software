@@ -3,6 +3,7 @@ import { db } from '@/lib/db';
 import { leads, auditLogs } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
 import { requireRole } from '@/lib/auth-utils';
+import { dealerMayActOnLead } from '@/lib/auth/requireLeadAccess';
 
 export const DELETE = withErrorHandler(async (_req: Request, { params }: { params: Promise<{ leadId: string }> }) => {
     const user = await requireRole(['dealer']);
@@ -12,7 +13,8 @@ export const DELETE = withErrorHandler(async (_req: Request, { params }: { param
     if (!lead) return errorResponse('Draft not found', 404);
 
     const isOwner = lead.uploader_id === user.id;
-    const isSameDealer = user.dealer_id && lead.dealer_id === user.dealer_id;
+    // ID 119: resolves a dealer login with no users.dealer_id via its onboarding code.
+    const isSameDealer = await dealerMayActOnLead(user, lead.dealer_id);
     if (!isOwner && !isSameDealer) {
         return errorResponse('Forbidden: You do not have permission to delete this draft', 403);
     }

@@ -9,6 +9,7 @@ import {
 } from "react";
 
 import NbfcFileRejectionsSection from "./NbfcFileRejectionsSection";
+import { onFreshFileClick } from "@/lib/storage/freshFileLink";
 
 // Change 6 — the admin's "NBFC KYC Verification" card in the KYC case-review.
 // One place where the admin sees, per NBFC: every per-document verdict the NBFC
@@ -763,6 +764,7 @@ export default function NbfcKycVerificationCard({ leadId }: { leadId: string }) 
                         <a
                           key={i}
                           href={a.url}
+                          onClick={(e) => onFreshFileClick(e, a.url)}
                           target="_blank"
                           rel="noreferrer"
                           className="inline-flex items-center gap-1 rounded border border-sky-200 bg-sky-50 px-2 py-0.5 text-[11px] font-medium text-sky-700 hover:bg-sky-100"
@@ -1194,6 +1196,7 @@ function AttachmentChips({
         <a
           key={i}
           href={a.url}
+          onClick={(e) => onFreshFileClick(e, a.url)}
           target="_blank"
           rel="noreferrer"
           className={`inline-flex items-center gap-1 rounded border px-2 py-0.5 text-[11px] font-medium ${cls}`}
@@ -1449,6 +1452,7 @@ function ForwardedVerdictStatus({
               {it.file_url ? (
                 <a
                   href={it.file_url}
+                  onClick={(e) => onFreshFileClick(e, it.file_url)}
                   target="_blank"
                   rel="noreferrer"
                   className="rounded border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-medium text-slate-700 hover:bg-slate-50"

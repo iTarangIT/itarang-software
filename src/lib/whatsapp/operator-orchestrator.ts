@@ -40,9 +40,17 @@ import {
   PLACEHOLDER_COMPANY,
   askCompanyType,
   runConsoleTurn,
+  runCustomerTurn,
   runOnboardingStates,
+  startOperatorCustomerFlow,
 } from "./orchestrator";
-import { loadApplication } from "./customer-lead";
+import { loadApplication, resolveHouseDealer, resolvePushedCustomerDealer } from "./customer-lead";
+import { findActiveDealerByMobile } from "@/lib/leads/dealerByMobile";
+import {
+  NO_ACTIVE_DEALER_MESSAGE,
+  OPERATOR_DEALER_SKIP_ID,
+  parseOperatorDealerAnswer,
+} from "@/lib/leads/pushToDealer";
 import { resolveWhatsAppDealer } from "./dealer-identity";
 import { getAdapter } from "./index";
 import type { WhatsAppOperator } from "./operator-identity";
@@ -78,6 +86,12 @@ const OP_MENU_ROWS: ListRow[] = [
     id: "op_open_files",
     title: "📂 Open Files",
     description: "Resume a dealer you started",
+  },
+  // ID 33: a customer's KYC, for an onboarded dealer or the iTarang house.
+  {
+    id: "op_customer_kyc",
+    title: "👤 Customer KYC",
+    description: "Start a customer's KYC for a dealer",
   },
   {
     id: "op_help",
@@ -148,9 +162,18 @@ export async function runOperatorTurn(
       return await showOperatorMenu(hub, operator);
     }
 
+    // ID 33: a customer KYC the operator started runs the customer lead flow
+    // on the hub itself (DC_LEAD_* and journey states). Escapes above still
+    // win and bring the operator back to the menu.
+    if (ctx.flow === "customer" && !hub.current_state.startsWith("OP_")) {
+      return await runCustomerTurn(hub, event);
+    }
+
     switch (hub.current_state) {
       case "OP_MENU":
         return await onMenuChoice(hub, event, operator);
+      case "OP_CUST_DEALER":
+        return await onCustomerDealer(hub, event, operator);
       case "OP_NEW_PHONE":
         return await onNewDealerPhone(hub, event, operator);
       case "OP_NEW_NAME":
@@ -198,6 +221,12 @@ async function showOperatorMenu(
     ctx.op.draft = undefined;
     ctx.op.pickPage = 0;
     ctx.op.inDealerConsole = false;
+    // ID 33: leaving a customer KYC — the lead (if created) stays as a draft
+    // with its dealer; only the chat pointer is dropped.
+    ctx.op.customerDealer = undefined;
+    ctx.op.dealerAskRetried = undefined;
+    ctx.flow = undefined;
+    ctx.lead = undefined;
   });
   await setSession(hub.id, {
     current_state: "OP_MENU",
@@ -240,6 +269,10 @@ async function onMenuChoice(
     return await showOpenFiles(hub, operator, 0);
   }
 
+  if (choice === "op_customer_kyc" || /^(customer|kyc)$/.test(choice)) {
+    return await askCustomerDealer(hub);
+  }
+
   if (choice === "op_my_console") {
     const dealer = await resolveOwnDealer(hub, hub.wa_phone);
     if (!dealer) {
@@ -278,8 +311,93 @@ function helpText(): string {
     "straight back to this menu to start the next dealer.\n\n" +
     "You can run as many dealer files as you like from this one number — " +
     "*Open Files* resumes any of them.\n\n" +
+    "👤 *Customer KYC* — start a customer's KYC; send the dealer's mobile " +
+    "and the lead goes to that dealer, or Skip to keep it with iTarang.\n\n" +
     "Type *menu* at any point to come back here."
   );
+}
+
+// ── ID 33: customer KYC — which dealer is it for? ───────────────────────────
+
+const CUSTOMER_DEALER_QUESTION =
+  "👤 *Customer KYC*\n\nWhich dealer is this for? Send the dealer's mobile, or Skip.";
+
+const SKIP_BUTTON = [{ id: OPERATOR_DEALER_SKIP_ID, title: "Skip" }];
+
+async function askCustomerDealer(hub: SessionRow): Promise<void> {
+  await mergeContext(hub, (ctx) => {
+    if (ctx.op) {
+      ctx.op.customerDealer = undefined;
+      ctx.op.dealerAskRetried = false;
+    }
+  });
+  await setSession(hub.id, { current_state: "OP_CUST_DEALER" });
+  return await reply(await loadSession(hub.id), CUSTOMER_DEALER_QUESTION, SKIP_BUTTON);
+}
+
+/**
+ * Skip → the house dealer. A mobile of an active onboarded dealer → that
+ * dealer (the lead is created under them, audited as a push, and they get a
+ * WhatsApp). An unknown / invalid number re-asks ONCE with
+ * NO_ACTIVE_DEALER_MESSAGE; a second miss falls back to the house dealer.
+ */
+async function onCustomerDealer(
+  hub: SessionRow,
+  event: InboundEvent,
+  operator: WhatsAppOperator,
+): Promise<void> {
+  const answer = parseOperatorDealerAnswer(event.text);
+  const ctx = (hub.context ?? {}) as Ctx;
+
+  if (answer.kind === "mobile") {
+    const found = await findActiveDealerByMobile(answer.mobile);
+    if (found.status === "found") {
+      const picked = {
+        dealerCode: found.dealer.dealerId,
+        name: found.dealer.name,
+        byUserId: operator.userId,
+        byName: operator.displayName,
+      };
+      const dealer = await resolvePushedCustomerDealer(picked);
+      if (dealer) {
+        await mergeContext(hub, (c) => {
+          c.op = { ...(c.op ?? { operatorId: operator.id }), customerDealer: picked, dealerAskRetried: undefined };
+        });
+        if (!dealer.financeEnabled) {
+          await reply(hub, `ℹ️ ${dealer.dealerName} is not enabled for finance leads — only *cash* is offered for this customer.`);
+        }
+        return await startOperatorCustomerFlow(await loadSession(hub.id), dealer);
+      }
+    }
+  }
+
+  if (answer.kind !== "skip" && !ctx.op?.dealerAskRetried) {
+    await mergeContext(hub, (c) => {
+      if (c.op) c.op.dealerAskRetried = true;
+    });
+    return await reply(
+      hub,
+      `${NO_ACTIVE_DEALER_MESSAGE}. Send the dealer's mobile again, or Skip to keep the customer with iTarang.`,
+      SKIP_BUTTON,
+    );
+  }
+
+  // Skip, or a second miss → the house dealer.
+  const house = await resolveHouseDealer();
+  if (!house) {
+    await reply(hub, "Sorry, we can't take new customer leads right now. Please try again later.");
+    return await showOperatorMenu(hub, operator);
+  }
+  await mergeContext(hub, (c) => {
+    if (c.op) {
+      c.op.customerDealer = undefined;
+      c.op.dealerAskRetried = undefined;
+    }
+  });
+  if (answer.kind !== "skip") {
+    await reply(hub, `${NO_ACTIVE_DEALER_MESSAGE} — keeping this customer with iTarang.`);
+  }
+  return await startOperatorCustomerFlow(await loadSession(hub.id), house);
 }
 
 // ── New dealer file ─────────────────────────────────────────────────────────

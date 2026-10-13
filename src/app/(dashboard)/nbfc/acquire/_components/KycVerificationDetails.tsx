@@ -8,6 +8,7 @@ import type {
   kycVerifications,
 } from "@/lib/db/schema";
 import { extractOcrFields } from "@/lib/nbfc/ocr-display";
+import { onFreshFileClick } from "@/lib/storage/freshFileLink";
 
 // The NBFC's OWN per-document verdict + supporting attachments (E-201/E-207),
 // keyed by (doc_for, doc_key). Loaded once for the table and rendered in the
@@ -1122,6 +1123,7 @@ function FileChip({ url, name }: { url: string; name: string }) {
   return (
     <a
       href={url}
+      onClick={(e) => onFreshFileClick(e, url)}
       target="_blank"
       rel="noreferrer"
       className="inline-flex max-w-full items-center gap-1 truncate rounded border border-sky-200 bg-sky-50 px-1.5 py-0.5 text-[10px] font-medium text-sky-700 hover:bg-sky-100"

@@ -6,8 +6,8 @@ export const dynamic = "force-dynamic";
 
 // Tracker ID 88 — Admin lands on the Sales dashboard, the same screen as
 // /sales-head and /admin/reports/sales-dashboard ("Admin and Sales Head see
-// the same", 29 Sep). The old Operations Dashboard moved to
-// /admin/ops-dashboard and is off every menu. Filters live in the URL
+// the same", 29 Sep). The old Operations Dashboard is retired:
+// /admin/ops-dashboard redirects here. Filters live in the URL
 // (useSearchParams), hence the Suspense boundary.
 export default async function AdminDashboardPage() {
     await requireRole(["admin", "sales_head", "ceo"]);

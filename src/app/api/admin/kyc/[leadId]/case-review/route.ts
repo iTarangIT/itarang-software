@@ -29,6 +29,9 @@ import {
 import { fetchAndStoreSignedConsent } from "@/lib/digio/fetch-signed-consent";
 import { syncConsentStatusFromDigio } from "@/lib/digio/sync-consent-status";
 import { sanitizeDbError } from "@/lib/error-utils";
+import { fullIdsForLead } from "@/lib/auth/requireLeadAccess";
+import { maskAadhaarDeep } from "@/lib/kyc/aadhaarMask";
+import { maskPanDeep } from "@/lib/kyc/panMask";
 
 function formatDob(dob: Date | string | null | undefined): string | null {
   if (!dob) return null;
@@ -204,7 +207,15 @@ export async function GET(
         })
       : "normal";
 
-    return NextResponse.json({
+    // ID 119: the full Aadhaar never goes to the browser (personal details,
+    // co-borrower, DigiLocker / OCR data — the screen only shows the last 4).
+    // ID 119 / 166: the full PAN only for Admin, Sales Head, CEO and the
+    // lead's owner; sales managers / executives get it masked.
+    const fullIds = await fullIdsForLead(appUser, leadId);
+    const protectIds = <T,>(payload: T): T =>
+      fullIds ? maskAadhaarDeep(payload) : maskPanDeep(maskAadhaarDeep(payload));
+
+    return NextResponse.json(protectIds({
       success: true,
       data: {
         lead: {
@@ -493,7 +504,7 @@ export async function GET(
               }
           : null,
       },
-    });
+    }));
   } catch (error) {
     // Log the full error (including raw SQL / stack) to the server, but
     // never surface raw DB internals to the UI — sanitize via the shared

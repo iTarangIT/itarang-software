@@ -1,6 +1,7 @@
 import { requireRole } from "@/lib/auth-utils";
 import { SalesDashboardView } from "@/components/dashboard/sales/SalesDashboardView";
 import { MyTargetsCard } from "@/components/targets/MyTargetsCard";
+import { getTeamPeople } from "@/lib/users/team";
 
 export const dynamic = "force-dynamic";
 
@@ -8,6 +9,8 @@ export const dynamic = "force-dynamic";
 // pins the rep to the session, so there is no rep picker and no per-rep table.
 export default async function AsmPerformancePage() {
     const user = await requireRole(["asm"]);
+    // ID 155/156: a manager (anyone with direct reports) can pick a team member.
+    const team = await getTeamPeople(user.id);
 
     return (
         <div className="px-4 sm:px-6 md:px-8 py-6 space-y-5 max-w-[1400px]">
@@ -22,7 +25,7 @@ export default async function AsmPerformancePage() {
             </header>
             {/* R-17 — accept pushed targets; actual vs target this month. */}
             <MyTargetsCard />
-            <SalesDashboardView mode="asm" />
+            <SalesDashboardView mode="asm" people={team.length ? [{ id: user.id, name: user.name }, ...team] : undefined} />
         </div>
     );
 }

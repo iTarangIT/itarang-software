@@ -11,6 +11,7 @@ import {
   productSelections,
 } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
+import { dealerMayActOnLead } from "@/lib/auth/requireLeadAccess";
 
 // Consolidated Step 5 state for the dealer page: loan details + product
 // summary + active OTP session (if any).
@@ -30,7 +31,7 @@ export async function GET(
         { status: 404 },
       );
     }
-    if (lead.dealer_id !== user.dealer_id) {
+    if (!(await dealerMayActOnLead(user, lead.dealer_id))) {
       return NextResponse.json(
         { success: false, error: { message: "Access denied" } },
         { status: 403 },

@@ -7,6 +7,7 @@ import {
     ShieldCheck
 } from 'lucide-react';
 import { Dropdown } from '@/components/ui/select-dropdown';
+import { onFreshFileClick } from '@/lib/storage/freshFileLink';
 
 // Re-export so existing `import { Dropdown } from './shared'` callers keep working.
 export { Dropdown };
@@ -245,7 +246,7 @@ export function DocumentCard({ label, required, uploaded, status, failedReason, 
                                     href={fileUrl}
                                     target="_blank"
                                     rel="noopener noreferrer"
-                                    onClick={e => e.stopPropagation()}
+                                    onClick={e => { e.stopPropagation(); onFreshFileClick(e, fileUrl); }}
                                     className="px-3 py-1.5 bg-white/95 backdrop-blur rounded-lg text-[11px] font-bold text-gray-900 flex items-center gap-1.5 hover:bg-white shadow-md"
                                 >
                                     <Eye className="w-3.5 h-3.5" /> View

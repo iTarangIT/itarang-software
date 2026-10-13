@@ -33,6 +33,7 @@ import {
 import { fetchBusinessTypeForLeads } from "@/lib/leads/leadListQuery";
 import { businessTypeLabel } from "@/lib/leads/businessType";
 import { exportsOwnLeadsOnly, logDataDownload } from "@/lib/exports/downloadLog";
+import { teamForOwnScopedViewer } from "@/lib/users/team";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -117,6 +118,9 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
         finalisedOnly: parsed.finalised === "1",
         filters: readQueueFilters(url.searchParams),
         ownedBy: ownOnly ? user.id : null,
+        // ID 155: a manager's export covers what their table shows — their
+        // own leads plus their direct reports'.
+        teamMemberIds: ownOnly ? await teamForOwnScopedViewer(user) : [],
     };
 
     const [rows, total] = await Promise.all([

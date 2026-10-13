@@ -3,6 +3,7 @@ import { leads, loanOffers } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
 import { withErrorHandler, successResponse, errorResponse } from '@/lib/api-utils';
 import { requireRole } from '@/lib/auth-utils';
+import { dealerMayActOnLead } from '@/lib/auth/requireLeadAccess';
 
 export const GET = withErrorHandler(async (req: Request, { params }: { params: Promise<{ id: string }> }) => {
     const user = await requireRole(['dealer', 'sales_manager', 'sales_head', 'business_head', 'ceo']);
@@ -15,7 +16,7 @@ export const GET = withErrorHandler(async (req: Request, { params }: { params: P
     }).from(leads).where(eq(leads.id, leadId)).limit(1);
 
     if (!lead) return errorResponse('Lead not found', 404);
-    if (user.role === 'dealer' && lead.dealer_id !== user.dealer_id) return errorResponse('Access denied', 403);
+    if (user.role === 'dealer' && !(await dealerMayActOnLead(user, lead.dealer_id))) return errorResponse('Access denied', 403);
 
     const offers = await db.select().from(loanOffers)
         .where(eq(loanOffers.lead_id, leadId));
