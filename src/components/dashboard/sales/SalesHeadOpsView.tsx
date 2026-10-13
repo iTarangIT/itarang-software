@@ -376,6 +376,7 @@ export function SalesHeadOpsView() {
             sub: `No work logged: ISR over 5, ASM over 7 working days · ${num(idleOver14)} over 14`,
             href: "/admin/reports/needs-attention",
         },
+        actionTile("onboarding_stalled", "Onboarding stalled", "soon"),
         {
             key: "dead",
             ready: Boolean(idle.data),
