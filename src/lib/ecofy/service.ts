@@ -31,6 +31,15 @@ import {
     type EcofyUploadTicket,
 } from "./intake";
 import { notifyEcofySyncFailed } from "./notify";
+import {
+    caseNosToSync,
+    isMirroredStage,
+    parseImportReport,
+    pickCaseByNo,
+    tallyImportSync,
+    type ImportSyncOutcome,
+    type ImportSyncResult,
+} from "./importSync";
 
 export class EcofyCallError extends Error {
     constructor(
@@ -757,6 +766,58 @@ export function readEcofyImport(importId: string): Promise<EcofyImport> {
     return ecofyCall<EcofyImport>("GET", `/imports/${encodeURIComponent(importId)}`);
 }
 
+/** Cases looked up per sync run; the rest still arrive with Ecofy's push. */
+export const IMPORT_SYNC_MAX_CASES = 500;
+const IMPORT_SYNC_CONCURRENCY = 4;
+
+/**
+ * ID 51 #3 — bring a COMMITTED import's leads into the CRM now instead of
+ * waiting for Ecofy's push (src/lib/ecofy/importSync.ts has the rules). Reads
+ * only (report, case search, case detail) plus the local version-guarded
+ * upsert, so running it twice changes nothing the second time. A case Ecofy
+ * cannot find or that fails is left to the push.
+ */
+export async function syncEcofyImportToCrm(importId: string): Promise<ImportSyncResult> {
+    const imp = await readEcofyImport(importId);
+    if (imp.status !== "COMMITTED") {
+        return tallyImportSync({ importId, status: imp.status, reportRows: 0, cases: 0 }, []);
+    }
+    const report = await (await fetchEcofyImportFile({ kind: "report", importId })).text();
+    const rows = parseImportReport(report);
+    const caseNos = caseNosToSync(rows);
+    const todo = caseNos.slice(0, IMPORT_SYNC_MAX_CASES);
+
+    const one = async (caseNo: string): Promise<ImportSyncOutcome> => {
+        try {
+            const hits = await ecofyCall<Array<{ id?: unknown; caseNo?: unknown; stage?: unknown }>>("GET", "/cases", {
+                query: { q: caseNo, limit: 20 },
+            });
+            const hit = pickCaseByNo(hits, caseNo);
+            if (!hit) return "not_found";
+            if (!isMirroredStage(hit.stage)) return "skipped_s0";
+            // Detail, not the list row: lists mask the customer's mobile.
+            const kase = await ecofyCall<Record<string, unknown>>("GET", `/cases/${String(hit.id)}`);
+            if (!isMirroredStage(kase?.stage)) return "skipped_s0";
+            const [had] = await db
+                .select({ id: ecofyLeads.id })
+                .from(ecofyLeads)
+                .where(eq(ecofyLeads.ecofy_case_id, String(kase.id)))
+                .limit(1);
+            await upsertEcofyLeadSnapshot(caseToLeadSnapshot(kase), "crm.import_committed");
+            return had ? "updated" : "added";
+        } catch (err) {
+            console.warn(`[Ecofy] import ${importId}: case ${caseNo} not synced:`, errorMessage(err));
+            return "failed";
+        }
+    };
+
+    const outcomes: ImportSyncOutcome[] = [];
+    for (let i = 0; i < todo.length; i += IMPORT_SYNC_CONCURRENCY) {
+        outcomes.push(...(await Promise.all(todo.slice(i, i + IMPORT_SYNC_CONCURRENCY).map(one))));
+    }
+    return tallyImportSync({ importId, status: imp.status, reportRows: rows.length, cases: caseNos.length }, outcomes);
+}
+
 /**
  * The upload template or an import's row report, as Ecofy sends it (no JSON
  * envelope; OpenAPI declares only `200 OK`). Throws EcofyCallError on a
@@ -797,6 +858,21 @@ interface EcofyCaseView {
     temperature: string | null;
     closureReason: string | null;
     queueEnteredAt: string | null;
+}
+
+/**
+ * ID 51 #1 — the case's current financier name, read live (the local snapshot
+ * does not carry it). undefined when Ecofy cannot be read: the CRM's money
+ * gate then steps aside and Ecofy's own "role per financier" rule decides.
+ */
+export async function readEcofyCaseFinancier(ecofyCaseId: string): Promise<string | null | undefined> {
+    try {
+        const k = await ecofyCall<{ financierName?: string | null }>("GET", `/cases/${ecofyCaseId}`);
+        return k && "financierName" in k ? (k.financierName ?? null) : undefined;
+    } catch (err) {
+        console.warn("[Ecofy] financier read failed:", errorMessage(err));
+        return undefined;
+    }
 }
 
 /**

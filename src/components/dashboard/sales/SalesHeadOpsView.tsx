@@ -35,6 +35,7 @@ import { STUCK_DAYS, batteryText, countWithShare, hoursText, share } from "@/lib
 import { LEAD_STATUS_LABEL } from "@/lib/leads/queueFilters";
 import { OPEN_STATUSES, type LeadStatus } from "@/lib/lifecycle/transitions";
 import { OutsideTerritoryClaims } from "@/components/leads/OutsideTerritoryClaims";
+import { EcofyStageTile } from "@/components/ecofy/EcofyStageTile";
 import { batteryReading } from "@/lib/admin/batteryReading";
 import {
     ActionTile,
@@ -924,6 +925,9 @@ export function SalesHeadOpsView() {
                     </div>
                 </DashCard>
             </div>
+
+            {/* ID 51 #2 — Ecofy leads by stage: its own block, never in the dealer numbers above. */}
+            <EcofyStageTile />
 
             {/* Calling + field */}
             <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">

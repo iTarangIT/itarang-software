@@ -47,6 +47,7 @@ import type { SalesDashboard } from "@/lib/admin/salesDashboardTypes";
 import type { CeoOverviewData } from "@/components/dashboard/ceo/CeoOverviewCards";
 import { DashboardSkeleton } from "@/components/dashboard/ceo/DashboardSkeleton";
 import { GreenNewsCard } from "@/components/dashboard/ceo/GreenNewsCard";
+import { EcofyStageTile } from "@/components/ecofy/EcofyStageTile";
 import {
   ActionCard,
   CardLink,
@@ -1190,6 +1191,9 @@ export default function CEODashboard() {
           )}
         </DashCard>
       </div>
+
+      {/* ID 51 #2 — Ecofy leads by stage: its own block, never in the funnel above. */}
+      <EcofyStageTile />
 
       {/* Team + finance + buyback */}
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-3">

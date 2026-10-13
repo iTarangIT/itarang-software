@@ -14,6 +14,9 @@ import { matchedUnion, REVENUE_NOT_VOID, REVENUE_OUTSTANDING } from "@/lib/dashb
 import { ACCOUNT_BUCKET_LABELS, ACCOUNT_BUCKETS, type AccountBucket } from "@/lib/dealers/accountHealthRules";
 import { INVENTORY_STATUSES } from "@/lib/inventory/status";
 import { capabilitiesFor } from "@/lib/leads/access";
+import { ECOFY_ROLE_LABEL, ECOFY_STAGE_LABELS } from "@/lib/ecofy/access";
+import { ECOFY_SEGMENTS } from "@/lib/ecofy/listTypes";
+import { csvPretty } from "@/lib/leads/queueCsv";
 import { businessTypeLabel } from "@/lib/leads/businessType";
 import { countEvents, fetchEvents, type EventLogFilters } from "@/lib/leads/eventLog";
 import { LEAD_EVENT_TYPES, parseEventTypes } from "@/lib/leads/eventTypes";
@@ -1741,9 +1744,147 @@ const inventoryDataset: Dataset = {
     },
 };
 
+// ─────────────────────────────── Ecofy leads ────────────────────────────────
+
+// ID 51 — Ecofy leads (E-305 / E-307) in Reports › Data downloads, with the
+// columns of the workspace's own CSV (/api/ecofy/leads/export). A CRM-side
+// file: owner names are fine here, they never go to Ecofy. Read behind a
+// to_regclass probe, so a database without E-305 gives an empty file.
+const ECOFY_DATES: Record<string, SQL> = {
+    created: sql`e.created_at`,
+    queue: sql`e.queue_entered_at`,
+    assigned: sql`e.assigned_at`,
+};
+
+async function hasEcofyLeads(): Promise<boolean> {
+    const [r] = await rows<{ ok: boolean }>(sql`SELECT to_regclass('public.ecofy_leads') IS NOT NULL AS ok`);
+    return Boolean(r?.ok);
+}
+
+function ecofyWhere(ctx: RunContext): SQL {
+    const day = ECOFY_DATES[ctx.params.get("date_field") ?? ""] ?? ECOFY_DATES.created;
+    const conds: SQL[] = [dateRange(ctx.params, day)];
+    // ASM / ISR: the leads the Sales Head assigned to them, as on their Ecofy page.
+    if (ctx.ownOnly) conds.push(sql`e.assigned_to_user_id::text = ${ctx.user.id}`);
+    const view = ctx.params.get("view");
+    // Same rules as the workspace tabs (src/lib/ecofy/queries.ts).
+    if (view === "open") conds.push(sql`(e.stage IS NULL OR e.stage NOT IN ('S0', 'CLOSED'))`);
+    else if (view === "queue") conds.push(sql`(e.stage = 'S1' AND e.assigned_to_user_id IS NULL)`);
+    else if (view === "closed") conds.push(sql`e.stage IN ('S0', 'CLOSED')`);
+    const stage = ctx.params.get("stage");
+    if (stage) conds.push(sql`e.stage = ${stage}`);
+    const temp = ctx.params.get("temperature");
+    if (temp) conds.push(sql`upper(e.temperature) = ${temp.toUpperCase()}`);
+    const segment = ctx.params.get("segment");
+    if (segment) conds.push(sql`upper(e.segment) = ${segment.toUpperCase()}`);
+    conds.push(...commonConds(ctx, { person: sql`e.assigned_to_user_id`, state: sql`e.state` }));
+    return sql.join(conds, sql` AND `);
+}
+
+const ecofyLeadsDataset: Dataset = {
+    id: "ecofy_leads",
+    label: "Ecofy leads",
+    description: "One row per Ecofy lead (solar / storage cases pushed from Ecofy): stage, temperature, owner, follow-up and meeting dates, and when it entered the pickup queue.",
+    roles: MANAGERS,
+    ownRowsRoles: ["asm", "inside_sales_rep"],
+    dateFields: [
+        { value: "created", label: "Came in from Ecofy" },
+        { value: "queue", label: "Entered pickup queue" },
+        { value: "assigned", label: "Assigned" },
+    ],
+    commonFilters: ["team", "person", "state"],
+    filters: [
+        {
+            key: "view",
+            label: "Leads",
+            type: "select",
+            options: [
+                { value: "open", label: "Open" },
+                { value: "queue", label: "Pickup queue (unassigned)" },
+                { value: "closed", label: "Returned or closed" },
+            ],
+        },
+        {
+            key: "stage",
+            label: "Stage",
+            type: "select",
+            options: Object.entries(ECOFY_STAGE_LABELS).map(([value, label]) => ({ value, label: `${value} · ${label}` })),
+        },
+        {
+            key: "temperature",
+            label: "Temperature",
+            type: "select",
+            options: ["HOT", "WARM", "COLD"].map((t) => ({ value: t, label: csvPretty(t.toLowerCase()) })),
+        },
+        { key: "segment", label: "Segment", type: "select", options: ECOFY_SEGMENTS.map((s) => ({ value: s, label: s })) },
+    ],
+    sheets: [
+        {
+            name: "Ecofy leads",
+            columns: [
+                { key: "case_no", header: "Case", meaning: "Ecofy's case number.", width: 16 },
+                { key: "segment", header: "Segment", meaning: "RESI, ESS or CI." },
+                { key: "customer_name", header: "Customer", meaning: "Customer name on the case.", width: 24 },
+                { key: "customer_mobile", header: "Mobile Number", meaning: "Customer's mobile. Masked unless full numbers were requested with a reason.", kind: "phone" },
+                { key: "city", header: "City", meaning: "Customer's city." },
+                { key: "state", header: "State", meaning: "Customer's state." },
+                { key: "stage", header: "Stage", meaning: "Ecofy stage code and name (S1 = pickup queue … S8 = asset, Closed).", width: 24 },
+                { key: "sub_status", header: "Sub-status", meaning: "Ecofy's sub-status within the stage.", width: 20 },
+                { key: "temperature", header: "Temperature", meaning: "Hot, warm or cold." },
+                { key: "product_interest", header: "Product Interest", meaning: "What the customer asked about.", width: 18 },
+                { key: "owner", header: "Owner", meaning: "The CRM person the lead is assigned to. Blank = not assigned.", width: 22 },
+                { key: "owner_role", header: "Owner Role", meaning: "That person's role on the assignment." },
+                { key: "next_follow_up_at", header: "Next Follow-up", meaning: "Next follow-up set in the CRM.", kind: "datetime" },
+                { key: "next_appointment_at", header: "Next Meeting", meaning: "Next meeting booked.", kind: "datetime" },
+                { key: "queue_entered_at", header: "In Queue Since", meaning: "When the lead entered the pickup queue.", kind: "datetime" },
+                { key: "assigned_at", header: "Assigned on", meaning: "When it was assigned to the owner.", kind: "datetime" },
+                { key: "created_at", header: "Came in", meaning: "When the CRM first received the lead from Ecofy.", kind: "datetime" },
+                { key: "closure_reason", header: "Closure reason", meaning: "Why it was closed, when it was.", width: 20 },
+            ],
+        },
+    ],
+    async count(ctx) {
+        if (!(await hasEcofyLeads())) return 0;
+        const [r] = await rows<{ n: number }>(sql`SELECT COUNT(*)::int AS n FROM ecofy_leads e WHERE ${ecofyWhere(ctx)}`);
+        return Number(r?.n ?? 0);
+    },
+    async build(ctx) {
+        if (!(await hasEcofyLeads())) return [{ ...this.sheets[0], rows: [] }];
+        const data = await rows<Record<string, unknown>>(sql`
+            SELECT e.case_no, e.segment, e.customer_name, e.customer_mobile, e.city, e.state,
+                   e.stage, e.sub_status, e.temperature, e.product_interest,
+                   u.name AS owner, e.assigned_role, e.next_follow_up_at, e.next_appointment_at,
+                   e.queue_entered_at, e.assigned_at, e.created_at, e.closure_reason
+              FROM ecofy_leads e
+              LEFT JOIN users u ON u.id::text = e.assigned_to_user_id::text
+             WHERE ${ecofyWhere(ctx)}
+             ORDER BY e.created_at DESC
+             LIMIT ${rowLimit(ctx)}
+        `);
+        return [
+            {
+                ...this.sheets[0],
+                rows: data.map((r) => {
+                    const stage = r.stage ? String(r.stage) : null;
+                    const role = r.assigned_role ? String(r.assigned_role) : null;
+                    return {
+                        ...r,
+                        // Through the same label maps the workspace CSV uses.
+                        stage: stage ? `${stage} · ${ECOFY_STAGE_LABELS[stage] ?? stage}` : null,
+                        sub_status: csvPretty(r.sub_status) || null,
+                        temperature: csvPretty(r.temperature) || null,
+                        product_interest: csvPretty(r.product_interest) || null,
+                        owner_role: role ? ECOFY_ROLE_LABEL[role] ?? role : null,
+                    };
+                }),
+            },
+        ];
+    },
+};
+
 export const DATASETS: readonly Dataset[] = [
     leads, leadEvents, calls, visits, quotes, targets, dealerAccounts, dealerOnboarding,
-    invoicesDataset, expenses, customerLoanFiles, buyback, inventoryDataset,
+    invoicesDataset, expenses, customerLoanFiles, buyback, inventoryDataset, ecofyLeadsDataset,
 ];
 
 export function datasetById(id: string): Dataset | undefined {
