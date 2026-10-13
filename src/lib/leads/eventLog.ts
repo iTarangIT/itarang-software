@@ -43,6 +43,7 @@ import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { humanCall } from "@/lib/reports/metricDefinitions";
 import { eventTypeMatchers, type LeadEventTypeValue } from "@/lib/leads/eventTypes";
+import { limitPassedLabel, ownerInferredLabel } from "@/lib/leads/eventClockFlags";
 
 export const EVENT_LOG_ROW_CAP = 50_000;
 
@@ -83,6 +84,18 @@ export type EventLogRow = {
     outcome: string | null;
     duration_sec: number | null;
     remarks: string | null;
+    /**
+     * ID 35 — the clocks (E-337 lead_clocks) running when the event happened,
+     * IST text. Absent / NULL on a host without lead_clocks or with no clock.
+     */
+    lead_clock_started_at?: string | null;
+    /** "No" / "Yes, <when>" — had the lead clock passed its limit BY this event. */
+    lead_limit_passed?: string | null;
+    /** The owner clock whose window (started ≤ event < ended) holds the event. */
+    owner_clock_started_at?: string | null;
+    owner_limit_passed?: string | null;
+    /** "Yes" when that owner was inferred from assigned_at (ID 86 back-fill). */
+    owner_inferred?: string | null;
 };
 
 type Sources = { interestHistory: boolean; fieldChanges: boolean; clocks: boolean };
@@ -396,6 +409,31 @@ export async function countEvents(f: EventLogFilters): Promise<number> {
 
 export async function fetchEvents(f: EventLogFilters): Promise<EventLogRow[]> {
     const s = await sources();
+    // ID 35 — lead clock and owner clock per event, only where E-337's
+    // lead_clocks exists. The "passed" time comes back only when the limit
+    // had passed by the event, so the flag reads as of that moment.
+    const clockCols = s.clocks
+        ? sql`,
+               (lc.started_at AT TIME ZONE 'Asia/Kolkata')::text  AS lead_clock_started_at,
+               CASE WHEN lc.limit_passed_at <= ev.event_at
+                    THEN (lc.limit_passed_at AT TIME ZONE 'Asia/Kolkata')::text END AS lead_limit_passed_at,
+               (oc.started_at AT TIME ZONE 'Asia/Kolkata')::text  AS owner_clock_started_at,
+               CASE WHEN oc.limit_passed_at <= ev.event_at
+                    THEN (oc.limit_passed_at AT TIME ZONE 'Asia/Kolkata')::text END AS owner_limit_passed_at,
+               oc.owner_inferred                                   AS owner_inferred_raw`
+        : sql``;
+    const clockJoins = s.clocks
+        ? sql`
+          LEFT JOIN LATERAL (
+              SELECT c.started_at, c.limit_passed_at FROM lead_clocks c
+               WHERE c.dealer_lead_id = ev.lead_id AND c.clock = 'lead' AND c.started_at <= ev.event_at
+               ORDER BY c.started_at DESC LIMIT 1) lc ON TRUE
+          LEFT JOIN LATERAL (
+              SELECT c.started_at, c.limit_passed_at, c.owner_inferred FROM lead_clocks c
+               WHERE c.dealer_lead_id = ev.lead_id AND c.clock = 'owner' AND c.started_at <= ev.event_at
+                 AND (c.ended_at IS NULL OR c.ended_at > ev.event_at)
+               ORDER BY c.started_at DESC LIMIT 1) oc ON TRUE`
+        : sql``;
     const rows = (await db.execute(sql`
         SELECT (ev.event_at AT TIME ZONE 'Asia/Kolkata')::text AS event_at,
                ev.lead_id,
@@ -405,15 +443,23 @@ export async function fetchEvents(f: EventLogFilters): Promise<EventLogRow[]> {
                to_jsonb(dl) ->> 'sales_ready_at'        AS sales_ready_at,
                ev.event_type, ev.from_value, ev.to_value,
                COALESCE(u.name, ev.actor)               AS performed_by,
-               u.role, ev.channel, ev.outcome, ev.duration_sec, ev.remarks
+               u.role, ev.channel, ev.outcome, ev.duration_sec, ev.remarks${clockCols}
           FROM (${eventsUnion(f, s)}) ev
           LEFT JOIN dealer_leads dl ON dl.id = ev.lead_id
-          LEFT JOIN users u ON u.id::text = ev.actor
+          LEFT JOIN users u ON u.id::text = ev.actor${clockJoins}
           ${scope(f)}
          ORDER BY ev.event_at DESC
          LIMIT ${EVENT_LOG_ROW_CAP}::int
-    `)) as unknown as EventLogRow[];
-    return rows;
+    `)) as unknown as Array<
+        EventLogRow & { lead_limit_passed_at?: string | null; owner_limit_passed_at?: string | null; owner_inferred_raw?: boolean | null }
+    >;
+    if (!s.clocks) return rows;
+    return rows.map(({ lead_limit_passed_at, owner_limit_passed_at, owner_inferred_raw, ...r }) => ({
+        ...r,
+        lead_limit_passed: limitPassedLabel(r.lead_clock_started_at, lead_limit_passed_at),
+        owner_limit_passed: limitPassedLabel(r.owner_clock_started_at, owner_limit_passed_at),
+        owner_inferred: ownerInferredLabel(r.owner_clock_started_at, owner_inferred_raw),
+    }));
 }
 
 /** Whether this host records interest history and field edits (E-304). */

@@ -828,6 +828,12 @@ const leadEvents: Dataset = {
                 { key: "duration_sec", header: "Seconds", meaning: "Call duration, when recorded.", kind: "number" },
                 { key: "remarks", header: "Remarks", meaning: "What was written on the event.", width: 50 },
                 { key: "hours_since_sales_ready", header: "Hours since sales-ready", meaning: "Hours from the lead becoming sales-ready to this event. Blank when the lead was never marked sales-ready, or the event came first.", kind: "number" },
+                // ID 35 — the clocks running when the event happened (E-337 lead_clocks).
+                { key: "lead_clock_started_at", header: "Lead clock started", meaning: "When the lead's clock (sales-ready → first call or visit by anyone) started, if it had started by this event. Blank = no lead clock yet.", kind: "datetime" },
+                { key: "lead_limit_passed", header: "Lead limit passed", meaning: "Had the lead clock passed its limit by this event: No, or Yes with when (IST). Blank = no lead clock.", width: 22 },
+                { key: "owner_clock_started_at", header: "Owner clock started", meaning: "When the clock of the owner holding the lead at this event started (their assignment → their first call or visit). Blank = no owner clock covers the event.", kind: "datetime" },
+                { key: "owner_limit_passed", header: "Owner limit passed", meaning: "Had that owner clock passed its limit by this event: No, or Yes with when (IST). Blank = no owner clock.", width: 22 },
+                { key: "owner_inferred", header: "Owner inferred", meaning: "Yes = that owner was inferred from the lead's assigned date because no assignment record exists (back-filled). Blank = no owner clock." },
             ],
         },
     ],
@@ -841,11 +847,14 @@ const leadEvents: Dataset = {
                 ...this.sheets[0],
                 rows: events.map((e) => {
                   // IST wall-clock text from SQL → an instant the file can show as IST.
-                  const at = e.event_at ? `${e.event_at.replace(" ", "T").slice(0, 19)}+05:30` : null;
+                  const ist = (t: string | null | undefined) => (t ? `${t.replace(" ", "T").slice(0, 19)}+05:30` : null);
+                  const at = ist(e.event_at);
                   const gap = at && e.sales_ready_at ? (new Date(at).getTime() - new Date(e.sales_ready_at).getTime()) / 3_600_000 : null;
                   return {
                     ...e,
                     event_at: at,
+                    lead_clock_started_at: ist(e.lead_clock_started_at),
+                    owner_clock_started_at: ist(e.owner_clock_started_at),
                     hours_since_sales_ready: gap != null && Number.isFinite(gap) && gap >= 0 ? Math.round(gap * 10) / 10 : null,
                     business_type: businessTypeLabel(e.business_type),
                     role: (e.role ?? "").replace(/_/g, " ") || null,
