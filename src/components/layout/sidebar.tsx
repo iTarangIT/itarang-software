@@ -441,6 +441,16 @@ function timeLimitsItem(idPrefix: string) {
   };
 }
 
+// ID 166 — who opened which customer KYC file, and when (E-339). Admin and CEO.
+function kycFileOpensItem(idPrefix: string) {
+  return {
+    id: `${idPrefix}-kyc-file-opens`,
+    label: "KYC file opens",
+    icon: ShieldCheck,
+    href: "/admin/settings/file-access-log",
+  };
+}
+
 // B9 — the buyback team's per-SPOC morning mail.
 function buybackDailyDigestItem(idPrefix: string) {
   return {
@@ -747,6 +757,7 @@ const roleNavigation: Record<string, any[]> = {
           href: "/ceo/news",
         },
         timeLimitsItem("ceo"),
+        kycFileOpensItem("ceo"),
       ],
     },
     {
@@ -1605,6 +1616,7 @@ const roleNavigation: Record<string, any[]> = {
         targetsPendingDigestItem("admin"),
         buybackDailyDigestItem("admin"),
         timeLimitsItem("admin"),
+        kycFileOpensItem("admin"),
         loanProductSettingsItem("admin"),
         nbfcSettingsSubnav("admin"),
         whatsappSettingsSubnav("admin"),

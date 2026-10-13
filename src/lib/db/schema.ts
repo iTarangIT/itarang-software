@@ -13752,3 +13752,27 @@ export const featureRequestEvents = pgTable(
     frIdx: index("feature_request_events_fr_idx").on(t.feature_request_id, t.created_at),
   }),
 );
+
+// E-339 — every open of a customer KYC file, allowed or refused (tracker ID 166).
+// Append-only; written by src/lib/storage/fileAuthz.ts logFileOpen.
+export const fileAccessLog = pgTable(
+  "file_access_log",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    opened_at: timestamp("opened_at", { withTimezone: true }).defaultNow().notNull(),
+    bucket: varchar("bucket", { length: 64 }).notNull(),
+    object_key: text("object_key").notNull(),
+    lead_id: varchar("lead_id", { length: 255 }),
+    user_id: uuid("user_id"),
+    role: varchar("role", { length: 64 }),
+    // 'session' | 'signed_link'
+    via: varchar("via", { length: 16 }).notNull(),
+    allowed: boolean("allowed").notNull(),
+    ip: varchar("ip", { length: 64 }),
+  },
+  (t) => ({
+    openedIdx: index("file_access_log_opened_idx").on(t.opened_at),
+    leadIdx: index("file_access_log_lead_idx").on(t.lead_id, t.opened_at),
+    userIdx: index("file_access_log_user_idx").on(t.user_id, t.opened_at),
+  }),
+);

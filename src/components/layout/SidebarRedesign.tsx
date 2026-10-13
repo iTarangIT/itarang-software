@@ -239,6 +239,7 @@ const ADMIN_SALES_HEAD_GROUPS: LayoutGroup[] = [
             ...both("kyc-automation"),
             // ID 85 — admin only (sales_head has no such item, so it is skipped).
             { id: "admin-time-limits", isNew: true },
+            { id: "admin-kyc-file-opens", isNew: true },
             {
                 node: "Email reports",
                 children: [

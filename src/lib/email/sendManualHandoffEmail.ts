@@ -1,8 +1,10 @@
 /**
  * Manual Handoff (Model M2) emails — BRD Addendum V0.2 §11.7.
  *
- *  sendManualHandoffEmail   — one email PER off-platform NBFC, each carrying the
- *                              customer KYC document (a separate copy each).
+ *  sendManualHandoffEmail   — one email PER off-platform NBFC. ID 166 (Kartik,
+ *                              10 Oct): the customer's KYC never travels as an
+ *                              attachment; the email points to the NBFC portal,
+ *                              where every open needs a login and is logged.
  *  sendManualHandoffNudge   — the 24-hour recurring reminder to the admin to
  *                              chase the off-platform NBFC(s) (MH-4).
  *
@@ -21,15 +23,14 @@ export interface ManualHandoffEmailPayload {
   customerName: string;
   customerPhone?: string | null;
   loanAmount?: string | number | null;
-  /** Optional customer KYC document, attached to every recipient's copy. */
-  kycPdf?: Buffer | null;
-  kycPdfFilename?: string;
 }
 
 export async function sendManualHandoffEmail(p: ManualHandoffEmailPayload): Promise<{ ok: boolean; sent: number; messageIds: string[] }> {
   const transporter = await getMailer();
   const from = process.env.MAIL_FROM || process.env.SMTP_USER;
   const subject = `iTarang — Loan financing request for ${p.customerName} (Lead ${p.leadId})`;
+  const origin = (process.env.NEXT_PUBLIC_APP_URL || "").replace(/\/+$/, "");
+  const portal = origin ? `${origin}/nbfc` : "";
   const html = `
     <div style="font-family:Arial,sans-serif;font-size:14px;color:#1e293b">
       <p>Dear Partner,</p>
@@ -40,18 +41,15 @@ export async function sendManualHandoffEmail(p: ManualHandoffEmailPayload): Prom
         ${p.customerPhone ? `<tr><td style="padding:4px 12px 4px 0;color:#64748b">Phone</td><td>${esc(p.customerPhone)}</td></tr>` : ""}
         ${p.loanAmount != null ? `<tr><td style="padding:4px 12px 4px 0;color:#64748b">Indicative amount</td><td>₹${esc(p.loanAmount)}</td></tr>` : ""}
       </table>
-      <p>The customer KYC document is attached. Please verify and sanction on your systems; reply with your decision so we can record the outcome.</p>
+      <p>For the customer's KYC documents, sign in to the iTarang NBFC portal${portal ? ` (<a href="${esc(portal)}">${esc(portal)}</a>)` : ""} or reply to this email to request access. The documents are not sent by email.</p>
+      <p>Please verify and sanction on your systems; reply with your decision so we can record the outcome.</p>
       <p style="color:#94a3b8;font-size:12px">iTarang facilitates and files but is not a party to the loan agreement.</p>
     </div>`;
-
-  const attachments = p.kycPdf
-    ? [{ filename: p.kycPdfFilename || `KYC-${p.leadId}.pdf`, content: p.kycPdf, contentType: "application/pdf" }]
-    : undefined;
 
   const messageIds: string[] = [];
   // Each NBFC gets its own separate email (§11.7).
   for (const to of p.toEmails) {
-    const info = await transporter.sendMail({ from, to, subject, html, attachments });
+    const info = await transporter.sendMail({ from, to, subject, html });
     messageIds.push(info.messageId);
   }
   return { ok: true, sent: messageIds.length, messageIds };
