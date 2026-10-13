@@ -70,8 +70,9 @@ export default async function NeedsActionListPage({
         listSalesHeadAction(k, {}),
         getTimeLimits(),
     ]);
-    // ID 88 #3 — the dealer's number for the row's Call button.
-    const phones = await phonesForActionRows(rows);
+    // ID 88 #3 — the dealer's number for the row's Call button. Onboarding
+    // stalled has no Call button (asked for on 13 Oct): no number, no button.
+    const phones = k === "onboarding_stalled" ? {} : await phonesForActionRows(rows);
     const states = [...new Set(all.map((r) => r.state?.trim()).filter((v): v is string => !!v))].sort();
     if (sp.state && !states.includes(sp.state)) states.unshift(sp.state);
     const owners = [...new Map(all.filter((r) => r.owner_id).map((r) => [r.owner_id!, r.owner_name ?? r.owner_id!])).entries()].sort((a, b) =>
