@@ -19,6 +19,7 @@ import { db } from "@/lib/db";
 import { leads } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 import { listLeadOffers } from "@/lib/leads/offers";
+import { dealerMayActOnLead } from "@/lib/auth/requireLeadAccess";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -36,7 +37,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     if (!lead) {
       return NextResponse.json({ success: false, error: { message: "Lead not found" } }, { status: 404 });
     }
-    if (lead.dealer_id !== user.dealer_id) {
+    if (!(await dealerMayActOnLead(user, lead.dealer_id))) {
       return NextResponse.json({ success: false, error: { message: "Access denied" } }, { status: 403 });
     }
 

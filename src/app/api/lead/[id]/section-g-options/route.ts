@@ -18,6 +18,7 @@ import { db } from "@/lib/db";
 import { leads } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 import { loadSectionGOptions } from "@/lib/leads/section-g";
+import { dealerMayActOnLead } from "@/lib/auth/requireLeadAccess";
 
 const querySchema = z.object({
   loanAmount: z.coerce.number().min(0).optional(),
@@ -50,7 +51,7 @@ export async function GET(
         { status: 404 },
       );
     }
-    if (lead.dealer_id !== user.dealer_id) {
+    if (!(await dealerMayActOnLead(user, lead.dealer_id))) {
       return NextResponse.json(
         { success: false, error: { message: "Access denied" } },
         { status: 403 },

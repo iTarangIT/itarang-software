@@ -6,6 +6,7 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { leads, otpConfirmations } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
+import { dealerMayActOnLead } from "@/lib/auth/requireLeadAccess";
 
 // BRD V2 §3.3 — Step 5 OTP verification (non-consuming pre-check).
 // Confirms the 6-digit OTP the customer read out matches, so the UI can enable
@@ -41,7 +42,7 @@ export async function POST(
         { status: 404 },
       );
     }
-    if (lead.dealer_id !== user.dealer_id) {
+    if (!(await dealerMayActOnLead(user, lead.dealer_id))) {
       return NextResponse.json(
         { success: false, error: { message: "Access denied" } },
         { status: 403 },
