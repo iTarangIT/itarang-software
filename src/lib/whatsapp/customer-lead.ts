@@ -23,6 +23,7 @@ import { actorOf, recordLeadFlowEvent } from "./lead-events";
 import { notifyLeadCreated } from "@/lib/notifications/events";
 import {
   adminVerificationQueue,
+  auditLogs,
   dealerOnboardingApplications,
   dealerSalespersons,
   dealers,
@@ -75,6 +76,12 @@ export interface ActiveDealer {
   financeEnabled: boolean;
   /** E-277 — who is driving the console. Absent = the dealer themselves. */
   actor?: ActorContext;
+  /**
+   * ID 33: set when an iTarang operator named this dealer for a customer KYC
+   * on WhatsApp. createCustomerLead then records the push (E-264 columns +
+   * LEAD_PUSHED_TO_DEALER audit) and tells the dealer.
+   */
+  pushedBy?: { fromDealerCode: string; byUserId: string | null; byName: string };
 }
 
 /**
@@ -160,6 +167,41 @@ export async function resolveHouseDealer(): Promise<ActiveDealer | null> {
     uploaderId: u.id,
     dealerName: "iTarang",
     financeEnabled: await resolveDealerFinanceEnabled(u.dealerId),
+  };
+}
+
+/**
+ * ID 33: an onboarded dealer as the ActiveDealer for an operator-run customer
+ * KYC. uploader_id is the dealer's own login (users.dealer_id = code), so the
+ * lead is fully theirs; with no login row it falls back to the house uploader.
+ * Null when the house dealer is missing (the caller then stays with nothing).
+ */
+export async function resolvePushedCustomerDealer(target: {
+  dealerCode: string;
+  name: string;
+  byUserId: string | null;
+  byName: string;
+}): Promise<ActiveDealer | null> {
+  const house = await resolveHouseDealer();
+  if (!house) return null;
+  const [u] = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(
+      and(
+        eq(users.dealer_id, target.dealerCode),
+        eq(users.role, "dealer"),
+        eq(users.is_active, true),
+      ),
+    )
+    .orderBy(users.created_at)
+    .limit(1);
+  return {
+    dealerCode: target.dealerCode,
+    uploaderId: u?.id ?? house.uploaderId,
+    dealerName: target.name,
+    financeEnabled: await resolveDealerFinanceEnabled(target.dealerCode),
+    pushedBy: { fromDealerCode: house.dealerCode, byUserId: target.byUserId, byName: target.byName },
   };
 }
 
@@ -259,13 +301,45 @@ export async function createCustomerLead(
       salesperson_id: dealer.actor?.salespersonId ?? null,
       state: "Unknown",
       city: "Unknown",
+      // ID 33: an operator named this dealer — same E-264 stamp as a CRM push.
+      ...(dealer.pushedBy
+        ? {
+            assignment_status: "assigned",
+            dealer_assigned_at: new Date(),
+            dealer_assigned_by: dealer.pushedBy.byUserId,
+          }
+        : {}),
     });
 
     await tx.insert(personalDetails).values({
       id: crypto.randomUUID(),
       lead_id: leadId,
     });
+
+    if (dealer.pushedBy) {
+      await tx.insert(auditLogs).values({
+        id: `AUDIT-${Date.now()}-push`,
+        entity_type: "lead",
+        entity_id: leadId,
+        action: "LEAD_PUSHED_TO_DEALER",
+        changes: {
+          from_dealer_id: dealer.pushedBy.fromDealerCode,
+          to_dealer_id: dealer.dealerCode,
+          to_dealer_name: dealer.dealerName,
+          by_name: dealer.pushedBy.byName,
+          via: "whatsapp_operator",
+        },
+        performed_by: dealer.pushedBy.byUserId,
+        timestamp: new Date(),
+      });
+    }
   });
+
+  // ID 33: tell the dealer the lead is theirs. Best-effort, never throws.
+  if (dealer.pushedBy) {
+    const { notifyDealerOfPushedLead } = await import("./pushedLeadNotice");
+    await notifyDealerOfPushedLead(leadId);
+  }
 
   // E-278 — the "created by X" line of the lead's history. Explicit rather than
   // left to the console choke point, which cannot see parkCurrentLead's

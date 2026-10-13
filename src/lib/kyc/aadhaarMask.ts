@@ -26,7 +26,10 @@ export function isMaskedAadhaar(value: unknown): boolean {
   return /^[Xx*]{4}[\s-]?[Xx*]{4}[\s-]?(\d{4}|[Xx*]{4})$/.test(value.trim());
 }
 
-const AADHAAR_KEY = /aadhaar|aadhar|\buid\b/i;
+// `id_number` / `idNumber`: what OCR and provider responses call the number on
+// an Aadhaar card. Only a 12-digit value is masked, so a PAN there is left to
+// panMask.ts.
+const AADHAAR_KEY = /aadhaar|aadhar|\buid\b|^id_?number$/i;
 
 /**
  * A copy of `value` with every Aadhaar-looking field masked, at any depth.

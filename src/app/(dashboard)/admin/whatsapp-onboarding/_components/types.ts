@@ -213,4 +213,8 @@ export type PartialCustomerLead = {
     docTypes: string[];
     createdAt: string;
     updatedAt: string;
+    /** ID 33: the lead is with the iTarang house dealer. */
+    isHouse?: boolean;
+    /** ID 33: this viewer may push it to a dealer now (house file, no consent, Admin / Sales Head). */
+    pushable?: boolean;
 };

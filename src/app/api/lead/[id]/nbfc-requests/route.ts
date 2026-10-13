@@ -16,6 +16,7 @@ import { db } from "@/lib/db";
 import { leads } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 import { listDealerRequestsForLead } from "@/lib/nbfc/doc-requests";
+import { dealerMayActOnLead } from "@/lib/auth/requireLeadAccess";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -36,7 +37,7 @@ export async function GET(
     if (!lead) {
       return NextResponse.json({ ok: false, error: "Lead not found" }, { status: 404 });
     }
-    if (lead.dealer_id !== user.dealer_id) {
+    if (!(await dealerMayActOnLead(user, lead.dealer_id))) {
       return NextResponse.json({ ok: false, error: "Access denied" }, { status: 403 });
     }
 

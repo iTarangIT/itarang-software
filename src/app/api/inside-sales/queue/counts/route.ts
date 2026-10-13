@@ -8,6 +8,7 @@ import { ISR_POOL_TABS, claimsByNumberOnly } from "@/lib/leads/claimScope";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
 import { countFinalisedNotWon, fetchAllTabCounts } from "@/lib/inside-sales/queryBuilder";
 import { readQueueFilters } from "@/lib/leads/queueFilters";
+import { teamForOwnScopedViewer } from "@/lib/users/team";
 
 export const dynamic = "force-dynamic";
 
@@ -32,6 +33,8 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
             callbackOnly: sp.get("callback") === "1",
             finalisedOnly: sp.get("finalised") === "1",
             filters: readQueueFilters(sp),
+            // ID 155: a manager's own-tab badges include the team, like the table.
+            teamMemberIds: await teamForOwnScopedViewer(user),
         }),
         countFinalisedNotWon(user.id),
     ]);

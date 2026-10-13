@@ -5,7 +5,9 @@ import { and, eq } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import { nbfcLeadAssignments } from "@/lib/db/schema";
-import { getCurrentTenant, requireNbfcAccess } from "@/lib/nbfc/tenant";
+import { getCurrentTenant, getSessionUser, requireNbfcAccess } from "@/lib/nbfc/tenant";
+import { logFileOpen } from "@/lib/storage/fileAuthz";
+import { classifyFile } from "@/lib/storage/fileRules";
 import { buildProfileZip } from "@/lib/lead/profile-export";
 
 // NBFC Acquire — "Download customer dossier" (Addendum V0.2 §6 / §7).
@@ -15,7 +17,7 @@ import { buildProfileZip } from "@/lib/lead/profile-export";
 // this lead — mirrors the Acquire lead-detail page guard. No DB mutation.
 
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ leadId: string }> },
 ) {
   try {
@@ -41,6 +43,20 @@ export async function GET(
         { status: 404 },
       );
     }
+
+    // ID 166: the share is checked above; the download is logged as a KYC open.
+    const session = await getSessionUser();
+    const zipKey = `kyc/${leadId}/customer_dossier.zip`;
+    await logFileOpen({
+      file: classifyFile("documents", zipKey),
+      bucket: "documents",
+      key: zipKey,
+      userId: session?.id ?? null,
+      role: session?.role ?? null,
+      via: "session",
+      allowed: true,
+      ip: req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || null,
+    });
 
     const zipBuffer = await buildProfileZip(leadId, {
       generatedBy: tenant.display_name,

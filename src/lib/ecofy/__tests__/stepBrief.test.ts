@@ -79,7 +79,8 @@ describe("stepBrief — who acts, per stage", () => {
 
     it("S6 AWAITING_DECISION waits on Ecofy; the manager gets the form only when a decision is open", () => {
         expect(asm({ stage: "S6", subStatus: "AWAITING_DECISION", facts: { openDecision: true } })).toMatchObject({ primary: "await_decision", party: "ecofy" });
-        expect(head({ stage: "S6", subStatus: "AWAITING_DECISION", facts: { openDecision: true } })).toMatchObject({ primary: "financing_decision", party: "ecofy", tone: "waiting" });
+        // ID 51 #1: Ecofy's own financing is decided by Ecofy Admin in Ecofy — no CRM form.
+        expect(head({ stage: "S6", subStatus: "AWAITING_DECISION", facts: { openDecision: true } })).toMatchObject({ primary: "await_decision", party: "ecofy", tone: "waiting" });
         expect(head({ stage: "S6", subStatus: "AWAITING_DECISION", facts: { openDecision: false } }).primary).toBe("await_decision");
         expect(head({ stage: "S6", subStatus: "AWAITING_DECISION", financierName: "Bajaj", facts: { openDecision: true } })).toMatchObject({ primary: "financing_decision", party: "you", tone: "action" });
     });

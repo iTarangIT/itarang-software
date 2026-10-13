@@ -13,6 +13,10 @@
  *                                 originator, or recipient of a recorded hop).
  *                                 The CSV, which carries the phone, only for a
  *                                 lead they own now (ID 58, ownsLeadForExport).
+ *   ID 155: a manager (anyone with direct reports) also reads, and downloads,
+ *   the tracking of a lead a direct report owns now — the same widening as the
+ *   /leads list and its export (leadVisibleTo). Read-only. Team members still
+ *   see only what they have handled themselves.
  * Lives under /api/dealer-leads, not /api/leads: that prefix is the OTHER lead
  * family (the `leads` table, customers of a dealer).
  */
@@ -26,6 +30,7 @@ import {
 import { buildLeadTracking, canViewLeadTracking, ownsLeadForExport } from "@/lib/leads/tracking";
 import { trackingCsvResponse } from "@/lib/leads/trackingCsv";
 import { logDataDownload } from "@/lib/exports/downloadLog";
+import { leadVisibleTo } from "@/lib/users/team";
 
 export const dynamic = "force-dynamic";
 
@@ -37,7 +42,7 @@ export const GET = withErrorHandler(
 
         const ownOnly = (LEAD_TRACKING_OWN_ONLY_ROLES as readonly string[]).includes(user.role);
         if (ownOnly) {
-            const ok = await canViewLeadTracking(user.id, id);
+            const ok = (await canViewLeadTracking(user.id, id)) || (await leadVisibleTo(id, user.id));
             if (!ok) {
                 return errorResponse(
                     "You can only track leads you have handled.",
@@ -48,7 +53,8 @@ export const GET = withErrorHandler(
         // ID 58: the CSV carries the dealer's phone, so a rep downloads it only
         // for a lead they own NOW. Having handled it once opens the journey on
         // screen, not the file.
-        const canExport = !ownOnly || (await ownsLeadForExport(user.id, id));
+        // ID 155: or one a direct report owns now (leadVisibleTo = own + team).
+        const canExport = !ownOnly || (await ownsLeadForExport(user.id, id)) || (await leadVisibleTo(id, user.id));
 
         const tracking = (await buildLeadTracking([id])).get(id);
         if (!tracking) return errorResponse("Lead not found", 404);

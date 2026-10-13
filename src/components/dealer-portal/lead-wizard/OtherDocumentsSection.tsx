@@ -5,6 +5,7 @@ import {
     AlertCircle, CheckCircle2, Clock, Eye, Loader2, Plus, Upload, X,
 } from 'lucide-react';
 import { SectionCard } from './shared';
+import { onFreshFileClick } from '@/lib/storage/freshFileLink';
 
 export type RequestedDoc = {
     id: string;
@@ -117,6 +118,7 @@ function DocCard({
                 {doc.file_url && (
                     <a
                         href={doc.file_url}
+                        onClick={(e) => onFreshFileClick(e, doc.file_url)}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-gray-200 rounded-lg text-[11px] font-bold text-gray-700 hover:bg-gray-50"

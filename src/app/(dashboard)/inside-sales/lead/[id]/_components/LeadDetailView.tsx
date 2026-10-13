@@ -16,7 +16,7 @@ import { UpdateCommercialsModal } from "../../../_components/modals/UpdateCommer
 import { TransferAsmModal } from "../../../_components/modals/TransferAsmModal";
 import { MarkLostModal } from "../../../_components/modals/MarkLostModal";
 import { MarkConvertedModal } from "../../../_components/modals/MarkConvertedModal";
-import { ReassignLeadModal } from "../../../_components/modals/ReassignLeadModal";
+import { ReassignLeadModal, type TeamTarget } from "../../../_components/modals/ReassignLeadModal";
 import { EscalateModal } from "../../../_components/modals/EscalateModal";
 import { ClaimLeadConfirm } from "../../../_components/modals/ClaimLeadConfirm";
 import { canExportLeadHistory } from "@/lib/leads/access";
@@ -34,6 +34,9 @@ export type ActiveModal =
     | "reassign"
     | "escalate"
     | "claim";
+
+/** ID 155: the roles POST/GET /api/inside-sales/lead/[id]/reassign accept (its MUTATE_ROLES). */
+const TEAM_REASSIGN_ROLES = ["inside_sales_rep", "asm", "admin", "partner"];
 
 type Props = {
     leadId: string;
@@ -66,6 +69,22 @@ export function LeadDetailView({ leadId, viewerId, viewerRole, backHref = "/insi
         retry: (count, err) => (err as Error).message !== LEAD_NOT_ACCESSIBLE && count < 3,
         refetchOnWindowFocus: true,
     });
+
+    // ID 155: a manager viewing a direct report's lead may move it within the
+    // team. Asked only when the viewer is not the owner and their role can
+    // reach the reassign route at all.
+    const ownerId = query.data?.data?.lead?.current_owner_id ?? null;
+    const teamQuery = useQuery<{ can_team_reassign: boolean; targets: TeamTarget[] }>({
+        queryKey: ["inside-sales-lead", leadId, "team-reassign", ownerId],
+        enabled: !!ownerId && ownerId !== viewerId && TEAM_REASSIGN_ROLES.includes(viewerRole),
+        queryFn: async () => {
+            const res = await fetch(`/api/inside-sales/lead/${encodeURIComponent(leadId)}/reassign`, { cache: "no-store" });
+            const json = await res.json().catch(() => null);
+            if (!res.ok || !json?.success) return { can_team_reassign: false, targets: [] };
+            return json.data;
+        },
+    });
+    const canTeamReassign = Boolean(teamQuery.data?.can_team_reassign && teamQuery.data.targets.length > 0);
 
     const invalidate = useCallback(() => {
         qc.invalidateQueries({ queryKey: ["inside-sales-lead", leadId] });
@@ -158,6 +177,7 @@ export function LeadDetailView({ leadId, viewerId, viewerRole, backHref = "/insi
                 viewerRole={viewerRole}
                 onAction={setActiveModal}
                 onChanged={invalidate}
+                canTeamReassign={!isOwner && canTeamReassign}
             />
 
             {/* Modals — render only when active to keep the tree small. */}
@@ -217,6 +237,7 @@ export function LeadDetailView({ leadId, viewerId, viewerRole, backHref = "/insi
                 leadId={leadId}
                 viewerId={viewerId}
                 onSuccess={onActionSuccess}
+                teamTargets={!isOwner && canTeamReassign ? teamQuery.data?.targets : undefined}
             />
             <EscalateModal
                 open={activeModal === "escalate"}

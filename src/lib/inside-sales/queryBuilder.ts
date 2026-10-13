@@ -18,6 +18,7 @@ import {
 import type { QueueRegion } from "@/lib/leads/queueFilters";
 import { finalisedNotWonSql } from "@/lib/leads/finalisedNotWon";
 import type { QueueSort } from "@/lib/leads/queueSort";
+import { ownerScopeSql } from "@/lib/users/teamSql";
 
 const OPEN_LIST = sql.raw(
     OPEN_STATUSES.map((s) => `'${s}'`).join(", "),
@@ -71,6 +72,14 @@ type BuildArgs = {
      * over the rep's own leads rather than over the whole tab.
      */
     ownedBy?: string | null;
+    /**
+     * ID 155: the viewer's direct reports (getTeamMemberIds). A manager's own
+     * tabs (my_open, follow_ups, my_closed) and `ownedBy` then also cover the
+     * team's leads — read-only, the rows open the lead page, which allows a
+     * manager to look and to reassign within the team, nothing else. Absent /
+     * empty = exactly the old SQL.
+     */
+    teamMemberIds?: readonly string[] | null;
 };
 
 /**
@@ -89,14 +98,16 @@ const ISR_DATE_COLUMN = sql`dl.created_at`;
  * clauses — so what the Assistant can see is, by construction, what this
  * rep's queue shows. Guarded by assistant/__tests__/tabFilter-golden.test.ts.
  */
-export function tabFilter(tab: QueueTab, userId: string) {
+export function tabFilter(tab: QueueTab, userId: string, teamMemberIds?: readonly string[] | null) {
+    // ID 155: `= me`, or `IN (me, my direct reports)` for a manager.
+    const mine = ownerScopeSql(sql`dl.current_owner_id`, userId, teamMemberIds);
     switch (tab) {
         // ID 36: a dead / non-responsive number leaves the working tabs (it is
         // in Number Repair, owner kept). Read via to_jsonb: E-314 may be absent.
         case "my_open":
-            return sql`dl.current_owner_id = ${userId} AND dl.lead_status IN (${OPEN_LIST}) AND dl.is_active IS NOT FALSE AND (to_jsonb(dl) ->> 'contactability') IS NULL`;
+            return sql`${mine} AND dl.lead_status IN (${OPEN_LIST}) AND dl.is_active IS NOT FALSE AND (to_jsonb(dl) ->> 'contactability') IS NULL`;
         case "follow_ups":
-            return sql`dl.current_owner_id = ${userId} AND dl.next_follow_up_at IS NOT NULL AND dl.next_follow_up_at <= NOW() AND dl.lead_status IN (${OPEN_LIST}) AND dl.is_active IS NOT FALSE AND (to_jsonb(dl) ->> 'contactability') IS NULL`;
+            return sql`${mine} AND dl.next_follow_up_at IS NOT NULL AND dl.next_follow_up_at <= NOW() AND dl.lead_status IN (${OPEN_LIST}) AND dl.is_active IS NOT FALSE AND (to_jsonb(dl) ->> 'contactability') IS NULL`;
         case "unassigned":
             // "Claimable" = anything nobody owns and isn't terminal — not just
             // lead_status = 'New_Unassigned'. Manual-upload / scraped leads are
@@ -110,7 +121,7 @@ export function tabFilter(tab: QueueTab, userId: string) {
             // ID 36: dead / non-responsive numbers are in Number Repair.
             return sql`dl.current_owner_id IS NOT NULL AND dl.lead_status IN (${OPEN_LIST}) AND dl.is_active IS NOT FALSE AND (to_jsonb(dl) ->> 'contactability') IS NULL`;
         case "my_closed":
-            return sql`dl.current_owner_id = ${userId} AND dl.lead_status IN (${TERMINAL_LIST}) AND dl.closed_at >= NOW() - INTERVAL '90 days' AND dl.is_active IS NOT FALSE`;
+            return sql`${mine} AND dl.lead_status IN (${TERMINAL_LIST}) AND dl.closed_at >= NOW() - INTERVAL '90 days' AND dl.is_active IS NOT FALSE`;
     }
 }
 
@@ -129,9 +140,10 @@ function extraFilters({
     finalisedOnly,
     filters,
     ownedBy,
-}: Pick<BuildArgs, "q" | "neodoveOnly" | "callbackOnly" | "finalisedOnly" | "filters" | "ownedBy">) {
+    teamMemberIds,
+}: Pick<BuildArgs, "q" | "neodoveOnly" | "callbackOnly" | "finalisedOnly" | "filters" | "ownedBy" | "teamMemberIds">) {
     const parts: SQL[] = [];
-    if (ownedBy) parts.push(sql` AND dl.current_owner_id = ${ownedBy}`);
+    if (ownedBy) parts.push(sql` AND ${ownerScopeSql(sql`dl.current_owner_id`, ownedBy, teamMemberIds)}`);
     if (q) parts.push(leadSearchClause(q));
     if (neodoveOnly) {
         parts.push(sql` AND ${NEODOVE_STATUS} IN (${NEODOVE_LINKED_LIST})`);
@@ -196,11 +208,12 @@ export async function fetchQueueRows({
     filters,
     sort,
     ownedBy,
+    teamMemberIds,
 }: BuildArgs): Promise<QueueRow[]> {
     const offset = (page - 1) * limit;
-    const where = tabFilter(tab, userId);
+    const where = tabFilter(tab, userId, teamMemberIds);
     const order = queueSortOrder(sort, tabOrder(tab));
-    const search = extraFilters({ q, neodoveOnly, callbackOnly, finalisedOnly, filters, ownedBy });
+    const search = extraFilters({ q, neodoveOnly, callbackOnly, finalisedOnly, filters, ownedBy, teamMemberIds });
 
     const rows = await db.execute<QueueRow>(sql`
         SELECT
@@ -274,12 +287,13 @@ export async function countQueueRows({
     finalisedOnly,
     filters,
     ownedBy,
+    teamMemberIds,
 }: Pick<
     BuildArgs,
-    "tab" | "userId" | "q" | "neodoveOnly" | "callbackOnly" | "finalisedOnly" | "filters" | "ownedBy"
+    "tab" | "userId" | "q" | "neodoveOnly" | "callbackOnly" | "finalisedOnly" | "filters" | "ownedBy" | "teamMemberIds"
 >): Promise<number> {
-    const where = tabFilter(tab, userId);
-    const search = extraFilters({ q, neodoveOnly, callbackOnly, finalisedOnly, filters, ownedBy });
+    const where = tabFilter(tab, userId, teamMemberIds);
+    const search = extraFilters({ q, neodoveOnly, callbackOnly, finalisedOnly, filters, ownedBy, teamMemberIds });
     const rows = await db.execute<{ c: string }>(sql`
         SELECT COUNT(*)::text AS c FROM dealer_leads dl WHERE ${where} ${search}
     `);
@@ -297,8 +311,10 @@ export async function countQueueRows({
  */
 export async function fetchAllTabCounts(
     userId: string,
-    opts?: Pick<BuildArgs, "neodoveOnly" | "callbackOnly" | "finalisedOnly" | "filters">,
+    opts?: Pick<BuildArgs, "neodoveOnly" | "callbackOnly" | "finalisedOnly" | "filters" | "teamMemberIds">,
 ): Promise<Record<QueueTab, number>> {
+    // ID 155: a manager's own-tab badges count the team too, like the tables.
+    const team = opts?.teamMemberIds;
     const extra = extraFilters({
         neodoveOnly: opts?.neodoveOnly,
         callbackOnly: opts?.callbackOnly,
@@ -313,11 +329,11 @@ export async function fetchAllTabCounts(
         my_closed: string;
     }>(sql`
         SELECT
-            (SELECT COUNT(*)::text FROM dealer_leads dl WHERE ${tabFilter("my_open", userId)} ${extra}) AS my_open,
-            (SELECT COUNT(*)::text FROM dealer_leads dl WHERE ${tabFilter("follow_ups", userId)} ${extra}) AS follow_ups,
+            (SELECT COUNT(*)::text FROM dealer_leads dl WHERE ${tabFilter("my_open", userId, team)} ${extra}) AS my_open,
+            (SELECT COUNT(*)::text FROM dealer_leads dl WHERE ${tabFilter("follow_ups", userId, team)} ${extra}) AS follow_ups,
             (SELECT COUNT(*)::text FROM dealer_leads dl WHERE ${tabFilter("unassigned", userId)} ${extra}) AS unassigned,
             (SELECT COUNT(*)::text FROM dealer_leads dl WHERE ${tabFilter("team", userId)} ${extra}) AS team,
-            (SELECT COUNT(*)::text FROM dealer_leads dl WHERE ${tabFilter("my_closed", userId)} ${extra}) AS my_closed
+            (SELECT COUNT(*)::text FROM dealer_leads dl WHERE ${tabFilter("my_closed", userId, team)} ${extra}) AS my_closed
     `);
     const r = rows[0]!;
     return {
@@ -353,9 +369,11 @@ export async function countFinalisedNotWon(userId: string): Promise<number> {
 export async function fetchQueueRegions(
     userId: string,
     tab: QueueTab,
+    /** ID 155: a manager's direct reports — the facets span what the table shows. */
+    teamMemberIds?: readonly string[] | null,
 ): Promise<QueueRegion[]> {
     const rows = await db.execute<{ state: string | null; city: string | null }>(
-        regionFacetQuery(tabFilter(tab, userId)),
+        regionFacetQuery(tabFilter(tab, userId, teamMemberIds)),
     );
     return foldRegionFacets(rows as unknown as { state: string | null; city: string | null }[]);
 }

@@ -10,20 +10,27 @@
  * <img>/<iframe>/<audio src> resolve here. Old rows holding absolute Supabase
  * URLs keep working until the Part C backfill rewrites them.
  *
- * Backend: reads from S3 when STORAGE_BACKEND=s3, else Supabase — with a fallback
- * to the other backend so nothing breaks mid-migration.
+ * Backend: reads from S3 when STORAGE_BACKEND=s3, else Supabase. There is no
+ * fallback to the other backend any more (ID 166).
  *
  * AUTH: these include KYC PII and dealer financials, so EVERY read needs a
  * valid Supabase session (same as /api/nbfc-uploads) or a signed, expiring
  * link (?exp=&sig=, see fileAccess.ts). No bucket is open (ID 119): the
  * pre-login dealer onboarding form gets a signed link back from its upload,
  * and WhatsApp delivery signs what it sends.
+ *
+ * ID 166: a session alone is no longer enough. The file must be one this
+ * login may open (fileRules.ts: Admin, Sales Head, CEO, the owner of the lead
+ * or account, the dealer for its own customers, an NBFC for applications
+ * shared with it, Finance for bills). Every customer KYC open is logged.
  */
 import { NextRequest, NextResponse } from "next/server";
 
-import { createClient } from "@/lib/supabase/server";
+import { getAuthenticatedAppUser } from "@/lib/kyc/admin-workflow";
 import { readBucketObject, contentTypeForName } from "@/lib/storage/readStoredDocument";
-import { fileLinkValid, safeStorageKey } from "@/lib/storage/fileAccess";
+import { fileLinkTooLong, fileLinkValid, safeStorageKey } from "@/lib/storage/fileAccess";
+import { canOpenStoredFile, logFileOpen } from "@/lib/storage/fileAuthz";
+import { classifyFile, isKycFile } from "@/lib/storage/fileRules";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -56,25 +63,40 @@ export async function GET(
   // A session, or a signed link for exactly this file. `dealer-documents` used
   // to be readable by anyone holding the link (it backed the pre-login
   // onboarding form); ID 119 closed it — that form now gets a signed link.
-  const signedLink = fileLinkValid(
-    bucket,
-    key,
-    req.nextUrl.searchParams.get("exp"),
-    req.nextUrl.searchParams.get("sig"),
-  );
-  if (!signedLink) {
+  // `by` is the user a fresh in-app link was minted for (GET /api/files/link);
+  // it is inside the signature, so it cannot be swapped.
+  const exp = req.nextUrl.searchParams.get("exp");
+  const by = req.nextUrl.searchParams.get("by") || null;
+  const file = classifyFile(bucket, key);
+  // ID 166: a link to a customer KYC file lives 15 minutes at most. A KYC link
+  // expiring further out was minted with a longer life, so it is not honoured
+  // (the viewer can still open the file with a session if allowed).
+  const signedLink =
+    fileLinkValid(bucket, key, exp, req.nextUrl.searchParams.get("sig"), Date.now(), by) &&
+    !(isKycFile(file) && fileLinkTooLong(exp));
+  const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || null;
+  if (signedLink) {
+    // The signature was minted for exactly this file by someone allowed to
+    // open or share it (a fresh in-app link, WhatsApp delivery, the pre-login
+    // onboarding form).
+    await logFileOpen({ file, bucket, key, userId: by, role: null, via: "signed_link", allowed: true, ip });
+  } else {
+    let user: Awaited<ReturnType<typeof getAuthenticatedAppUser>> = null;
     try {
-      const supabase = await createClient();
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return unauthorized(req);
+      user = await getAuthenticatedAppUser();
     } catch {
       return unauthorized(req);
     }
+    if (!user) return unauthorized(req);
+
+    const { allowed } = await canOpenStoredFile(user, bucket, key);
+    await logFileOpen({ file, bucket, key, userId: user.id, role: user.role, via: "session", allowed, ip });
+    if (!allowed) return forbidden(req);
   }
 
   const contentType = contentTypeForName(key);
 
-  // The active backend (plus the other one only when STORAGE_SUPABASE_FALLBACK=1).
+  // The active backend only (the old-storage fallback was removed, ID 166).
   const buf = await readBucketObject(bucket, key);
   if (!buf) return notFound(req, key);
 
@@ -91,7 +113,9 @@ export async function GET(
       // of shared/CDN caches while still letting the browser reuse the bytes,
       // so preview thumbnails stop re-downloading the full file (and re-hitting
       // the Supabase auth check) on every page load and re-render.
-      "Cache-Control": "private, max-age=3600, immutable",
+      // ID 166: a KYC file is fetched (and so logged) on every open; other
+      // files keep the browser cache.
+      "Cache-Control": isKycFile(file) ? "private, no-store" : "private, max-age=3600, immutable",
     },
   });
 }
@@ -107,6 +131,20 @@ function unauthorized(req: NextRequest) {
       `<h1 style="font-size:1.25rem;margin:0 0 .75rem">Unauthorized</h1>` +
       `<p style="margin:0;color:#475569">Please log in to the iTarang CRM to view this document.</p></div>`,
     { status: 401, headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } },
+  );
+}
+
+/** 403 for a signed-in user this file is not for (ID 166). */
+function forbidden(req: NextRequest) {
+  if (!(req.headers.get("accept") || "").includes("text/html")) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+  return new NextResponse(
+    `<!doctype html><meta charset="utf-8"><title>Not available</title>` +
+      `<div style="font:15px/1.6 system-ui,sans-serif;max-width:34rem;margin:15vh auto;padding:0 1.5rem;color:#0f172a">` +
+      `<h1 style="font-size:1.25rem;margin:0 0 .75rem">You can't open this file</h1>` +
+      `<p style="margin:0;color:#475569">Files open only for Admin, the Sales Head, the CEO and the owner of the lead or account. Ask one of them if you need it.</p></div>`,
+    { status: 403, headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } },
   );
 }
 
