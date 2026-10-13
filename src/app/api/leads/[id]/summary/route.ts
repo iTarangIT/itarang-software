@@ -2,8 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { dealerLeads } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
-import { LEADS_PAGE_ROLES, exportsOwnLeadsOnly } from "@/lib/leads/access";
-import { leadOwnedBy } from "@/lib/ai-dialer/campaignAccess";
+import { LEADS_PAGE_ROLES, canEditLead } from "@/lib/leads/access";
 import { guardApi } from "@/lib/auth/apiGuard";
 
 export async function POST(req: NextRequest, { params }: any) {
@@ -18,10 +17,16 @@ export async function POST(req: NextRequest, { params }: any) {
     return NextResponse.json({ success: false });
   }
 
-  // A rep / ASM / partner may only write the summary of a lead they own (the
-  // ID 58 own-leads-only roles). 404, not 403 — same answer as "no such lead".
+  // ID 118 (Q3, option A): the summary follows the Edit lead rule, so a
+  // back-office role that cannot edit the lead cannot overwrite it either.
+  // 404, not 403 — same answer as "no such lead".
   const { user } = authGate;
-  if (exportsOwnLeadsOnly(user.role) && !(await leadOwnedBy(id, user.id))) {
+  const [lead] = await db
+    .select({ current_owner_id: dealerLeads.current_owner_id, asm_id: dealerLeads.asm_id })
+    .from(dealerLeads)
+    .where(eq(dealerLeads.id, id))
+    .limit(1);
+  if (!lead || !canEditLead({ role: user.role, userId: user.id, currentOwnerId: lead.current_owner_id, asmId: lead.asm_id })) {
     return NextResponse.json({ success: false, error: { message: "Lead not found" } }, { status: 404 });
   }
 
