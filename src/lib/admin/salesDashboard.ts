@@ -158,8 +158,14 @@ function leadScope(f: SalesDashboardFilters): SQL {
     return leadScopeSql(f);
 }
 
-/** `AND <col> = spoc` when a rep is pinned; nothing otherwise. */
+/**
+ * `AND <col> = spoc` when a rep is pinned; `AND <col> IN (...)` for a group
+ * (ID 156 manager "Team total"); nothing otherwise.
+ */
 function spocClause(col: SQL, f: SalesDashboardFilters): SQL {
+    if (f.spoc_ids && f.spoc_ids.length > 0) {
+        return sql` AND (${col})::text IN (${sql.join(f.spoc_ids.map((id) => sql`${id}`), sql`, `)})`;
+    }
     return f.spoc_id ? sql` AND ${col} = ${f.spoc_id}` : sql``;
 }
 
@@ -849,7 +855,7 @@ export async function buildSalesDashboard(
     input: SalesDashboardInput,
 ): Promise<SalesDashboard> {
     const today = await istToday();
-    const f = resolveSalesDashboardFilters(
+    const resolved = resolveSalesDashboardFilters(
         {
             from: input.from || undefined,
             to: input.to || undefined,
@@ -861,8 +867,11 @@ export async function buildSalesDashboard(
         },
         today,
     );
+    // ID 156: a group of reps (manager's Team total) — same queries, IN-list.
+    const group = input.spoc_ids?.filter(Boolean) ?? [];
+    const f: SalesDashboardFilters = group.length > 0 ? { ...resolved, spoc_id: null, spoc_ids: group } : resolved;
     const daysInRange = daysBetweenInclusive(f.from, f.to);
-    const bySpoc = !f.spoc_id;
+    const bySpoc = !f.spoc_id && !f.spoc_ids?.length;
 
     // Whole-scope pass (A–D). The daily series doubles as the source of C; when
     // the caller asked for days it IS the series, otherwise the requested

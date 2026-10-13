@@ -21,6 +21,12 @@ export interface SalesDashboardInput {
     city?: string | null;
     state?: string | null;
     spoc_id?: string | null;
+    /**
+     * ID 156: several reps at once — a manager's "Team total" (themself +
+     * direct reports). Takes precedence over spoc_id; A–D are the group's, E
+     * is omitted. Empty / absent = no effect.
+     */
+    spoc_ids?: string[] | null;
     business_type?: string | null;
     granularity: SalesDashboardGranularity;
 }
@@ -34,6 +40,8 @@ export interface SalesDashboardFilters {
     state?: string | null;
     /** users.id of one rep. Present → sections A–D are that rep's; E is omitted. */
     spoc_id?: string | null;
+    /** ID 156: a group of reps (manager's Team total). Present → A–D are the group's; E is omitted. */
+    spoc_ids?: string[] | null;
     /** A BUSINESS_TYPES value or "unset" (E-296). */
     business_type?: string | null;
     granularity: SalesDashboardGranularity;

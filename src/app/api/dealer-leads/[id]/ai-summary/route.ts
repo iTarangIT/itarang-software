@@ -23,7 +23,8 @@ import { db } from "@/lib/db";
 import { requireRole } from "@/lib/auth-utils";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
 import { LEADS_PAGE_ROLES, readsOwnLeadsOnly } from "@/lib/leads/access";
-import { leadOwnedBy } from "@/lib/ai-dialer/campaignAccess";
+// ID 155: read access = own leads, or a direct report's (manager).
+import { leadVisibleTo } from "@/lib/users/team";
 import { readIntentProvenance } from "@/lib/leads/intentOverride";
 
 type LatestCallRow = {
@@ -65,7 +66,7 @@ export const GET = withErrorHandler(
 
     const { id } = await ctx.params;
     // ID 45: a rep reads only leads they own; anything else is "no such lead".
-    if (readsOwnLeadsOnly(user.role) && !(await leadOwnedBy(id, user.id))) {
+    if (readsOwnLeadsOnly(user.role) && !(await leadVisibleTo(id, user.id))) {
       return errorResponse("Lead not found", 404);
     }
     const url = new URL(req.url);

@@ -1091,6 +1091,28 @@ export const accountClosures = pgTable("account_closures", {
   closed_at: timestamp("closed_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
+// E-338 (ID 155) — dated history of who reports to whom. Open row
+// (effective_to NULL) = the current manager, kept equal to users.reports_to
+// (E-335, deliberately not mirrored on `users`). effective_to is exclusive.
+// Readers use raw SQL behind the to_regclass probe in src/lib/users/team.ts.
+export const userReportingLines = pgTable(
+  "user_reporting_lines",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    user_id: uuid("user_id").notNull(),
+    manager_id: uuid("manager_id").notNull(),
+    effective_from: date("effective_from").notNull(),
+    effective_to: date("effective_to"),
+    changed_by: uuid("changed_by"),
+    reason: text(),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    managerOpenIdx: index("user_reporting_lines_manager_open_idx").on(t.manager_id),
+    userFromIdx: index("user_reporting_lines_user_from_idx").on(t.user_id, t.effective_from),
+  }),
+);
+
 // E-334 (ID 5) — "Order placed" claims: pause a dealer's ageing for 15 days
 // from order_date; an invoice in that window confirms it. Status is computed
 // (src/lib/accounts/orderClaims.ts), never stored. Readers use raw SQL behind
