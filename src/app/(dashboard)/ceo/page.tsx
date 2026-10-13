@@ -1063,7 +1063,9 @@ export default function CEODashboard() {
                 </div>
               ))}
               <div className="flex items-baseline justify-between border-t border-border pt-2.5">
-                <span className="text-sm font-semibold">Net of purchases</span>
+                {/* ID 89 — was "Net of purchases", which read as if only purchases
+                    came off; it is revenue less stock bought and running expenses. */}
+                <span className="text-sm font-semibold">Revenue minus purchases and expenses</span>
                 <span
                   className={`text-lg font-bold tabular-nums ${spent.net >= 0 ? "text-success" : "text-danger"}`}
                 >

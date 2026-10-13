@@ -53,8 +53,24 @@ export async function GET(req: NextRequest) {
       );
     }
 
+    // ID 89 — the "Revenue & costs" page asks with its own window control
+    // (period=ytd | inception | range&from&to), so a range is accepted too.
+    const from = sp.get("from");
+    const to = sp.get("to");
+    if ((from && !/^\d{4}-\d{2}-\d{2}$/.test(from)) || (to && !/^\d{4}-\d{2}-\d{2}$/.test(to))) {
+      return NextResponse.json(
+        { success: false, error: { message: "invalid date range" } },
+        { status: 400 },
+      );
+    }
+
     // [start, end) local date strings; endStr is null for the open-ended FY.
-    const { startStr, endStr, label: windowLabel } = resolveWindow(monthParam, period);
+    const {
+      startStr,
+      endStr,
+      period: windowPeriod,
+      label: windowLabel,
+    } = resolveWindow(monthParam, period, null, { from, to });
 
     // Human label + the period token echoed back to the client.
     let resolvedPeriod: string;
@@ -63,12 +79,16 @@ export async function GET(req: NextRequest) {
       resolvedPeriod = monthParam;
       // resolveWindow already formats an explicit month as "Jun 2026".
       label = windowLabel;
-    } else if (period === "fy") {
+    } else if (windowPeriod === "fy") {
       resolvedPeriod = "fy";
       label = "Financial year";
-    } else {
+    } else if (windowPeriod === "mtd") {
       resolvedPeriod = "mtd";
       label = "This month";
+    } else {
+      // ytd / inception / range — resolveWindow's own label.
+      resolvedPeriod = windowPeriod;
+      label = windowLabel;
     }
 
     // purchases — inventory.oem_invoice_date is a timestamptz; compare ::date.

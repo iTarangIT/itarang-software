@@ -285,14 +285,24 @@ export const NAV_LAYOUTS: Record<string, Layout> = {
                 section: "BUSINESS",
                 defaultOpen: true,
                 items: [
-                    { id: "revenue-costs", label: "Revenue & costs" },
-                    { node: "Invoices", children: [{ id: "sales-invoices", label: "Sales invoices" }, "ceo-invoice-ledger"] },
                     {
                         node: "Account management",
                         children: [{ id: "ceo-accounts", label: "Accounts" }, "ceo-dealer-health"],
                     },
                     "ceo-targets",
                     "deals",
+                ],
+            },
+            {
+                // ID 89 — the money pages in their own group ("'Revenue & costs'
+                // under Money", 29 Sep), moved out of BUSINESS.
+                section: "MONEY",
+                items: [
+                    { id: "revenue-costs", label: "Revenue & costs" },
+                    // A page with no menu entry until now (ceo/receivables).
+                    { add: "ceo-receivables", label: "Money owed to us", href: "/ceo/receivables" },
+                    { node: "Invoices", children: [{ id: "sales-invoices", label: "Sales invoices" }, "ceo-invoice-ledger"] },
+                    { id: "submit-expense", label: "Submit expense" },
                 ],
             },
             {
