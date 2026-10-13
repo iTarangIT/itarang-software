@@ -134,3 +134,34 @@ export function checkLineStart(input: {
     }
     return { ok: true };
 }
+
+/**
+ * ID 156: a per-person list in team order — each manager followed by their
+ * direct reports that are in the list (marked `member`), the rest after in
+ * their original order. `managerOf` is member id → manager id.
+ */
+export function orderByTeam<T extends { spoc_id: string }>(
+    list: readonly T[],
+    managerOf: ReadonlyMap<string, string>,
+): Array<T & { member: boolean }> {
+    const ids = new Set(list.map((p) => p.spoc_id));
+    const under = (p: T) => {
+        const m = managerOf.get(p.spoc_id);
+        return !!m && m !== p.spoc_id && ids.has(m);
+    };
+    const out: Array<T & { member: boolean }> = [];
+    const placed = new Set<string>();
+    for (const p of list) {
+        if (placed.has(p.spoc_id) || under(p)) continue;
+        out.push({ ...p, member: false });
+        placed.add(p.spoc_id);
+        for (const q of list) {
+            if (!placed.has(q.spoc_id) && managerOf.get(q.spoc_id) === p.spoc_id) {
+                out.push({ ...q, member: true });
+                placed.add(q.spoc_id);
+            }
+        }
+    }
+    for (const p of list) if (!placed.has(p.spoc_id)) out.push({ ...p, member: under(p) });
+    return out;
+}
