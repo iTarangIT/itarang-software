@@ -205,7 +205,10 @@ async function revenueUnion(): Promise<SQL> {
 
   // E-322 (ID 71): credit notes reduce revenue in the month they are issued —
   // a negative amount on the issue date, matched to a dealer like an invoice.
-  // Status 'credit_note' keeps them out of the outstanding rule (balance 0).
+  // Balance = the negative amount: a credit note also reduces what the dealer
+  // owes us (Kartik, 10 Oct) — REVENUE_OWED, netted per customer GSTIN and
+  // never below zero (owedTotalSql). Its lines are negative too (source
+  // 'credit'), so batteries sold, By SKU and gross margin net it the same way.
   const credit = sql`
     SELECT
       'credit'::text                                                 AS source,
@@ -215,7 +218,7 @@ async function revenueUnion(): Promise<SQL> {
       NULL::date                                                     AS due_date,
       cn.customer_name                                               AS customer_name,
       -(COALESCE(cn.total, 0))                                       AS total,
-      0::numeric                                                     AS balance,
+      -(COALESCE(cn.total, 0))                                       AS balance,
       CASE WHEN cv.invoice_id IS NOT NULL THEN 'void' ELSE 'credit_note' END AS status,
       cn.organization_id                                             AS organization_id,
       cn.document_url                                                AS document_url,
@@ -339,6 +342,23 @@ export const REVENUE_OUTSTANDING = sql`(
   AND COALESCE(r.balance, 0) > 0
 )`;
 
+/**
+ * ID 71 — a credit note (non-void) is money back to the dealer, not an order:
+ * it nets revenue and what they owe, but never counts as an order, a last or
+ * first order, or confirms an "Order placed" claim.
+ */
+export const REVENUE_IS_CREDIT = sql`(r.source = 'credit')`;
+export const REVENUE_IS_ORDER = sql`(${REVENUE_NOT_VOID} AND r.source <> 'credit')`;
+
+/** Money owed rule: an outstanding invoice, or a non-void credit note (negative balance) netted against it. */
+export const REVENUE_OWED = sql`(${REVENUE_OUTSTANDING} OR (r.source = 'credit' AND r.status = 'credit_note'))`;
+
+/**
+ * The customer a balance is netted under: the GSTIN key; a row without one
+ * stands alone (an un-keyed credit note then nets nothing).
+ */
+export const OWED_KEY = sql`COALESCE(r.gstin_key, r.source || ':' || r.id)`;
+
 /** `invoice_date >= start AND invoice_date < end`, either bound optional. */
 function windowClause(startStr?: string | null, endStr?: string | null): SQL {
   const parts: SQL[] = [];
@@ -378,10 +398,14 @@ export async function outstandingTotal(
   endStr?: string | null,
 ): Promise<number> {
   const src = await revenueUnion();
+  // ID 71: credit notes net against the same customer's unpaid invoices; a
+  // customer's net is never below zero (a refund owed is not money owed to us).
   const res = await db.execute<{ total: string }>(sql`
-    SELECT COALESCE(SUM(r.balance), 0) AS total
-    FROM ${src} AS r
-    WHERE ${REVENUE_OUTSTANDING} AND ${windowClause(startStr, endStr)}
+    SELECT COALESCE(SUM(GREATEST(owed, 0)), 0) AS total
+      FROM (SELECT ${OWED_KEY} AS k, SUM(r.balance) AS owed
+              FROM ${src} AS r
+             WHERE ${REVENUE_OWED} AND ${windowClause(startStr, endStr)}
+             GROUP BY 1) per_customer
   `);
   return Number(rowsOf<{ total: string }>(res)[0]?.total ?? 0);
 }
@@ -592,22 +616,25 @@ export async function drillDownRows(
   cap = 500,
 ): Promise<RevenueInvoiceRow[]> {
   const src = await revenueUnion();
-  const where =
+  // Outstanding is an all-time snapshot in the drill-down, matching what
+  // /api/dashboard/ceo and drill-down/outstanding did before. ID 71: with the
+  // credit notes of customers who still owe something (receivables.ts).
+  const res = await db.execute(
     kind === "sales"
-      ? sql`${REVENUE_NOT_VOID} AND ${windowClause(startStr, endStr)}`
-      : // Outstanding is an all-time snapshot in the drill-down, matching what
-        // /api/dashboard/ceo and drill-down/outstanding did before.
-        REVENUE_OUTSTANDING;
-  const order =
-    kind === "sales"
-      ? sql`r.invoice_date DESC NULLS LAST`
-      : sql`r.balance DESC NULLS LAST`;
-  const res = await db.execute(sql`
+      ? sql`
     SELECT * FROM ${src} AS r
-    WHERE ${where}
-    ORDER BY ${order}
-    LIMIT ${cap}
-  `);
+    WHERE ${REVENUE_NOT_VOID} AND ${windowClause(startStr, endStr)}
+    ORDER BY r.invoice_date DESC NULLS LAST
+    LIMIT ${cap}`
+      : sql`
+    WITH x AS MATERIALIZED (
+      SELECT r.*, ${OWED_KEY} AS owe_key, ${REVENUE_OUTSTANDING} AS outstanding
+        FROM ${src} AS r WHERE ${REVENUE_OWED})
+    SELECT * FROM x r
+    WHERE r.owe_key IN (SELECT owe_key FROM x WHERE outstanding)
+    ORDER BY r.balance DESC NULLS LAST
+    LIMIT ${cap}`,
+  );
   return rowsOf<RevenueInvoiceRow>(res);
 }
 
@@ -634,5 +661,6 @@ export async function matchedLinesUnion(): Promise<SQL | null> {
       JOIN invoice_line_items l
         ON l.invoice_id = r.id
        AND (l.source = r.source OR (r.source = 'drive' AND l.source IN ('vyapar', 'drive')))
+       -- ID 71: credit-note lines (source 'credit') are stored negative, so every sum nets them.
   )`;
 }

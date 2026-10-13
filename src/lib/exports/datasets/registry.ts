@@ -408,10 +408,12 @@ const leads: Dataset = {
         for (const i of invoiceRows) {
             const k = String(i.lead_id);
             const b = billing.get(k) ?? { n: 0, total: 0, last: null };
-            b.n += 1;
+            // ID 71: a credit note nets the amount but is not an invoice / order.
+            const credit = i.source === "credit";
+            if (!credit) b.n += 1;
             b.total += Number(i.total ?? 0);
             const d = i.invoice_date ? String(i.invoice_date).slice(0, 10) : null;
-            if (d && (!b.last || d > b.last)) b.last = d;
+            if (!credit && d && (!b.last || d > b.last)) b.last = d;
             billing.set(k, b);
         }
 

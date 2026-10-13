@@ -29,7 +29,7 @@
 import { sql } from "drizzle-orm";
 
 import { db } from "@/lib/db";
-import { matchedUnion, REVENUE_NOT_VOID } from "@/lib/dashboard/revenueSource";
+import { matchedUnion, REVENUE_IS_ORDER, REVENUE_NOT_VOID } from "@/lib/dashboard/revenueSource";
 import { summarizeNeedsAttention } from "@/lib/leads/needsAttention";
 import { listSaidYesNotWon, summarizeSaidYes } from "@/lib/leads/saidYesNotWon";
 import { getTimeLimits } from "@/lib/timeLimits/store";
@@ -243,7 +243,8 @@ async function moneyTile(from: string, toExcl: string, prevFrom: string | null, 
         // which is blank on nearly every lead. Each invoice's total (with GST)
         // is spread over its lines by their share of amount_excl_gst, so the
         // rows add up to the Revenue card exactly. An invoice with no lines
-        // (or lines summing to 0), and every credit note, is "not classified".
+        // (or lines summing to 0) is "not classified"; a credit note's lines are
+        // negative (ID 71), so it takes its share off the types it returned.
         rows(sql`
             WITH inv AS (
                 SELECT r.source, r.id, COALESCE(r.total, 0) AS total
@@ -320,7 +321,7 @@ async function engineTile(from: string, toExcl: string, prevFrom: string | null,
               (SELECT COUNT(*) FROM dealer_leads dl WHERE dl.lead_status = 'Converted' AND ${inWin(sql`dl.closed_at`, a, b)}) AS converted,
               (SELECT COUNT(*) FROM (
                   SELECT r.dealer_lead_id, MIN(r.invoice_date) AS first_d
-                    FROM ${inv} r WHERE r.dealer_lead_id IS NOT NULL AND ${REVENUE_NOT_VOID}
+                    FROM ${inv} r WHERE r.dealer_lead_id IS NOT NULL AND ${REVENUE_IS_ORDER}
                    GROUP BY 1) f
                 WHERE f.first_d >= ${a}::date AND f.first_d < ${b}::date) AS first_orders`);
         return r;

@@ -137,7 +137,11 @@ export default async function CeoBatteriesPage({
         }
     }
     const dealers = [...byDealer.values()].sort((a, b) => b.n - a.n || a.name.localeCompare(b.name));
-    const invoiceCount = new Set(lineRows.map((r) => `${r.source}:${r.id}`)).size;
+    const invoiceCount = new Set(lineRows.filter((r) => r.source !== "credit").map((r) => `${r.source}:${r.id}`)).size;
+    // ID 71: a credit note's battery lines are stored negative, so they net the total.
+    const creditRows = lineRows.filter((r) => r.source === "credit");
+    const creditUnits = -creditRows.reduce((a, r) => a + r.quantity, 0);
+    const creditCount = new Set(creditRows.map((r) => r.id)).size;
 
     return (
         <div className="space-y-6 pb-12">
@@ -150,14 +154,22 @@ export default async function CeoBatteriesPage({
                     {label ? `${label} · ` : ""}
                     {fmtDate(from)} – {fmtDate(to)}.{" "}
                     {lines
-                        ? "Battery lines on non-void invoices matched to a dealer, dated in the period. Credit notes subtract."
+                        ? "Battery lines on non-void invoices matched to a dealer, dated in the period, less the battery lines of credit notes issued in the period."
                         : "Batteries allocated to a dealer account in the period. Invoice lines are not set up on this database, so stock allocation is used instead."}
                 </p>
             </div>
 
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                 {[
-                    { k: "Batteries", v: num(total), s: lines ? `${invoiceCount} invoice${invoiceCount === 1 ? "" : "s"}` : `${stockRows.length} units` },
+                    {
+                        k: "Batteries",
+                        v: num(total),
+                        s: lines
+                            ? `${invoiceCount} invoice${invoiceCount === 1 ? "" : "s"}${
+                                  creditCount ? ` · less ${num(creditUnits)} returned on ${creditCount} credit note${creditCount === 1 ? "" : "s"}` : ""
+                              }`
+                            : `${stockRows.length} units`,
+                    },
                     { k: "Dealers", v: num(dealers.length), s: "Received at least one" },
                     {
                         k: "Top dealer",

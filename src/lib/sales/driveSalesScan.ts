@@ -586,6 +586,19 @@ async function processFile(
       ON CONFLICT DO NOTHING
       RETURNING id::text AS id
     `)) as unknown as Array<{ id: string }>;
+    // ID 71: its items table too — stored negative, so batteries sold, By SKU
+    // and gross margin take the returned items off. Best-effort and bounded,
+    // like a sale invoice's lines: the credit note itself is already saved.
+    if (inserted[0]) {
+      try {
+        await Promise.race([
+          readAndSaveInvoiceLines(inserted[0].id, buffer, file.mimeType, file.name, value.sub_total, "credit"),
+          new Promise((_, reject) => setTimeout(() => reject(new Error("line-item read timed out")), LINES_READ_TIMEOUT_MS)),
+        ]);
+      } catch (e) {
+        console.warn(`[sales-scan] credit-note lines not stored for ${file.name}: ${errText(e)}`);
+      }
+    }
     return {
       outcome: inserted.length
         ? { status: "imported", reason: formatSalesAttention(attention), invoiceIds: [], storageKey }

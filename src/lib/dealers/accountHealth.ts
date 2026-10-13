@@ -34,7 +34,7 @@
 import { sql } from "drizzle-orm";
 
 import { db } from "@/lib/db";
-import { matchedUnion, REVENUE_NOT_VOID } from "@/lib/dashboard/revenueSource";
+import { matchedUnion, REVENUE_IS_ORDER, REVENUE_NOT_VOID } from "@/lib/dashboard/revenueSource";
 import { hasAccountOwnershipTables } from "@/lib/accounts/tables";
 import { dealerAccountSql, invoiceAccountSql } from "@/lib/accounts/accountList";
 import { closedColumns } from "@/lib/accounts/accountClosures";
@@ -102,14 +102,15 @@ export async function listDealerHealth(): Promise<DealerHealthRow[]> {
     const claimsOn = accountsOn && (await hasOrderClaimTables());
     const orders = sql`
         orders AS (
+            -- ID 71: a credit note nets revenue but is never an order.
             SELECT ${keyCol}                         AS k,
-                   COUNT(*)                          AS n,
-                   MIN(r.invoice_date)               AS first_order,
-                   MAX(r.invoice_date)               AS last_order,
+                   COUNT(*) FILTER (WHERE r.source <> 'credit')                    AS n,
+                   MIN(r.invoice_date) FILTER (WHERE r.source <> 'credit')         AS first_order,
+                   MAX(r.invoice_date) FILTER (WHERE r.source <> 'credit')         AS last_order,
                    COALESCE(SUM(r.total), 0)         AS lifetime,
                    COALESCE(SUM(r.total) FILTER (
                        WHERE r.invoice_date > (SELECT d FROM today) - 90), 0) AS last_90d,
-                   COUNT(DISTINCT r.invoice_date)    AS order_days
+                   COUNT(DISTINCT r.invoice_date) FILTER (WHERE r.source <> 'credit') AS order_days
               FROM ${invoices} AS r
              WHERE ${keyCol} IS NOT NULL AND ${REVENUE_NOT_VOID}
              GROUP BY ${keyCol}
@@ -128,14 +129,15 @@ export async function listDealerHealth(): Promise<DealerHealthRow[]> {
         WITH today AS (SELECT (now() AT TIME ZONE 'Asia/Kolkata')::date AS d),
         ${await invoicesByAccountCte()},
         orders AS (
+            -- ID 71: a credit note nets revenue but is never an order.
             SELECT inv.k,
-                   COUNT(*)                          AS n,
-                   MIN(inv.invoice_date)             AS first_order,
-                   MAX(inv.invoice_date)             AS last_order,
+                   COUNT(*) FILTER (WHERE NOT inv.is_credit)                    AS n,
+                   MIN(inv.invoice_date) FILTER (WHERE NOT inv.is_credit)       AS first_order,
+                   MAX(inv.invoice_date) FILTER (WHERE NOT inv.is_credit)       AS last_order,
                    COALESCE(SUM(inv.total), 0)       AS lifetime,
                    COALESCE(SUM(inv.total) FILTER (
                        WHERE inv.invoice_date > (SELECT d FROM today) - 90), 0) AS last_90d,
-                   COUNT(DISTINCT inv.invoice_date)  AS order_days
+                   COUNT(DISTINCT inv.invoice_date) FILTER (WHERE NOT inv.is_credit) AS order_days
               FROM inv
              GROUP BY inv.k
         )${claimsOn ? sql`,
@@ -268,7 +270,7 @@ export async function summarizeDealerHealth(
                bool_or(r.invoice_date <  (SELECT start FROM w)) AS before,
                bool_or(r.invoice_date >= (SELECT start FROM w)) AS within
           FROM ${invoices} AS r
-         WHERE ${keyCol} IS NOT NULL AND ${REVENUE_NOT_VOID}
+         WHERE ${keyCol} IS NOT NULL AND ${REVENUE_IS_ORDER}
          GROUP BY ${keyCol}
     `)) as unknown as Array<{ k: string; before: boolean; within: boolean }>;
     const re = new Map(reorder.map((x) => [x.k, x]));
