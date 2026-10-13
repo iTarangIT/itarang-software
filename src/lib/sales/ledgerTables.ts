@@ -28,3 +28,27 @@ export async function hasInvoiceLedgerTables(): Promise<boolean> {
     probedAt = now;
     return present;
 }
+
+let refusedCols: boolean | null = null;
+let refusedAt = 0;
+
+/**
+ * E-340 (ID 62): zoho_customer_gstins.refused_gstin / refused_reason — a Zoho
+ * customer GSTIN that failed the check, shown in Needs attention.
+ */
+export async function hasZohoRefusedGstin(): Promise<boolean> {
+    const now = Date.now();
+    if (refusedCols !== null && now - refusedAt < PROBE_TTL_MS) return refusedCols;
+    try {
+        const res = (await db.execute(sql`
+            SELECT COUNT(*) = 2 AS ok FROM information_schema.columns
+             WHERE table_schema = 'public' AND table_name = 'zoho_customer_gstins'
+               AND column_name IN ('refused_gstin', 'refused_reason')
+        `)) as unknown as Array<{ ok: boolean }>;
+        refusedCols = Boolean(res[0]?.ok);
+    } catch {
+        refusedCols = false;
+    }
+    refusedAt = now;
+    return refusedCols;
+}

@@ -29,7 +29,16 @@ import { exportsOwnLeadsOnly } from "@/lib/exports/downloadLog";
 export async function parseLeadListFilters(
     searchParams: URLSearchParams,
     caps: LeadsCapabilities,
-    viewer?: { id: string; role: string | null | undefined },
+    viewer?: {
+        id: string;
+        role: string | null | undefined;
+        /**
+         * ID 155: the viewer's direct reports. Only GET /api/dealer-leads (the
+         * list) passes it, widening a manager's scope to their team's leads;
+         * exports omit it and stay own-only (ID 58).
+         */
+        teamMemberIds?: string[];
+    },
 ): Promise<LeadListFilters> {
     const intentParam = searchParams.get("intent");
     const connectStatusParam = searchParams.get("connect_status");
@@ -62,6 +71,7 @@ export async function parseLeadListFilters(
         // ID 36: "Hide dead & disqualified" — on unless the URL says hide_dead=0.
         hideDead: searchParams.get("hide_dead") !== "0",
         ownerScopeId: viewer && exportsOwnLeadsOnly(viewer.role) ? viewer.id : null,
+        ownerScopeTeamIds: viewer && exportsOwnLeadsOnly(viewer.role) ? (viewer.teamMemberIds ?? null) : null,
         from: searchParams.get("from")?.trim() || null,
         to: searchParams.get("to")?.trim() || null,
         connectStatus: isConnectStatus(connectStatusParam) ? connectStatusParam : null,

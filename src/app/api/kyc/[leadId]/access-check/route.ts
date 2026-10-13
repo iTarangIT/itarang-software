@@ -4,6 +4,7 @@ import { kycVerificationMetadata, leads, personalDetails } from '@/lib/db/schema
 import { eq } from 'drizzle-orm';
 import { requireLeadAccess } from "@/lib/auth/requireLeadAccess";
 import { maskAadhaar, maskAadhaarDeep } from "@/lib/kyc/aadhaarMask";
+import { maskPan, maskPanDeep } from "@/lib/kyc/panMask";
 
 const FINANCE_METHODS = ['finance', 'other_finance', 'dealer_finance'];
 
@@ -64,7 +65,8 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ lead
             // ID 119: never send the full Aadhaar to the browser — the screens
             // only display it masked, and nothing on them needs the digits.
             aadhaar_no: maskAadhaar(pd?.aadhaar_no),
-            pan_no: pd?.pan_no ?? null,
+            // ID 119 / 166: full PAN only for Admin, Sales Head, CEO and the lead's owner.
+            pan_no: leadGate.user.fullIds ? pd?.pan_no ?? null : maskPan(pd?.pan_no),
             asset_model: l.asset_model,
             asset_category: null, // column not present on current leads schema
             payment_method: l.payment_method,
@@ -76,7 +78,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ lead
             coupon_status: l.coupon_status,
             lead_status: l.lead_status,
             has_co_borrower: l.has_co_borrower,
-            kyc_draft_data: maskAadhaarDeep(l.kyc_draft_data),
+            kyc_draft_data: maskAadhaarDeep(leadGate.user.fullIds ? l.kyc_draft_data : maskPanDeep(l.kyc_draft_data)),
             draft_updated_at: l.updated_at,
             final_decision: finalDecision,
         };

@@ -16,7 +16,12 @@ export interface TabProps {
 
 export function useCan(p: Pick<TabProps, "viewer" | "assignedTo" | "c">) {
     return (action: EcofyAction) =>
-        canDoEcofyAction(p.viewer, { assigned_to_user_id: p.assignedTo, stage: p.c.stage }, action);
+        canDoEcofyAction(
+            p.viewer,
+            // financier_name: ID 51 #1 — no sanction / payment forms on Ecofy's own financing.
+            { assigned_to_user_id: p.assignedTo, stage: p.c.stage, financier_name: p.c.financierName ?? null },
+            action,
+        );
 }
 
 /** Runs an action with a busy flag, a toast either way and a refresh on success. */

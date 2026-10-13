@@ -7,7 +7,9 @@ import {
     isDealerKycEditsLocked,
 } from '@/lib/kyc/admin-workflow';
 import { requireRole } from '@/lib/auth-utils';
+import { requireLeadAccess } from '@/lib/auth/requireLeadAccess';
 import { restoreMaskedAadhaarDeep } from '@/lib/kyc/aadhaarMask';
+import { restoreMaskedPanDeep } from '@/lib/kyc/panMask';
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
     try {
@@ -26,19 +28,16 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ le
             return NextResponse.json({ success: false, error: { message: 'Lead not found' } }, { status: 404 });
         }
 
-        const isOwner = lead.uploader_id === user.id;
-        const isSameDealer = user.dealer_id && lead.dealer_id === user.dealer_id;
-        if (!isOwner && !isSameDealer) {
-            return NextResponse.json(
-                { success: false, error: { message: 'Forbidden: You do not have permission to edit this lead' } },
-                { status: 403 }
-            );
-        }
+        // ID 119: the one ownership rule (uploader, or the dealership — falling
+        // back to the onboarding dealer code for a login with no dealer_id).
+        const access = await requireLeadAccess(leadId);
+        if (!access.ok) return access.response;
 
         const { step, data: rawData } = await req.json();
         // ID 119: borrower-details hands the form a masked Aadhaar and the form
         // autosaves it straight back — keep the stored number, not the mask.
-        const data = restoreMaskedAadhaarDeep(rawData, lead.kyc_draft_data);
+        // Same for a PAN masked for a role that may not see it (ID 119 / 166).
+        const data = restoreMaskedPanDeep(restoreMaskedAadhaarDeep(rawData, lead.kyc_draft_data), lead.kyc_draft_data);
 
         const savedAt = new Date();
         await db.update(leads)

@@ -14,6 +14,7 @@
 // marked-seen but unprocessed.
 
 import { sql } from "drizzle-orm";
+import { rehostRecording } from "@/lib/ai/storage/recordingStore";
 import crypto from "crypto";
 import { db } from "@/lib/db";
 import { isEngagedCall } from "@/lib/lifecycle/touchpointTypes";
@@ -561,10 +562,17 @@ export async function attachCallEvidence(
     ) {
         return;
     }
+    // ID 166 (Q13): keep our own copy of the recording, so it opens under the
+    // file rule (/api/files) instead of NeoDove's open link. rehostRecording
+    // falls back to NeoDove's URL when the download fails, so nothing is lost.
+    const recordingUrl = event.recordingUrl
+        ? (await rehostRecording({ provider: "neodove", callId: touchpointId, recordingUrl: event.recordingUrl })) ||
+          event.recordingUrl
+        : null;
     try {
         await db.execute(sql`
             UPDATE lead_touchpoints
-               SET recording_url = COALESCE(${event.recordingUrl}, recording_url),
+               SET recording_url = COALESCE(${recordingUrl}, recording_url),
                    external_agent_name = COALESCE(${event.agentName}, external_agent_name),
                    disposition = COALESCE(${disposition?.label ?? null}, disposition),
                    disposition_bucket = COALESCE(${disposition?.bucket ?? null}, disposition_bucket),

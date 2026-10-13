@@ -27,20 +27,25 @@ export async function readInvoiceLines(
   return { lines, addUp: linesAddUp(lines, subTotal) };
 }
 
-/** Read and store in the ledger — only lines that check out (driveLedgerLines.reconcileDriveLines). */
+/**
+ * Read and store in the ledger — only lines that check out
+ * (driveLedgerLines.reconcileDriveLines). `source` 'credit' is a credit note
+ * (ID 71): same items table, stored negative under the credit_notes id.
+ */
 export async function readAndSaveInvoiceLines(
   invoiceId: string,
   buffer: Buffer,
   mimeType: string,
   fileName: string,
   subTotal: number | null,
+  source: "drive" | "credit" = "drive",
 ): Promise<StoredLines> {
   const read = await readInvoiceLines(buffer, mimeType, fileName, subTotal);
   // Into the E-322 ledger that batteries sold, By SKU and gross margin read —
   // only when it checks out against the invoice (driveLedgerLines.ts).
   // Best-effort: a failure here costs this invoice's lines, never the scan.
   try {
-    const ledger = await saveDriveLedgerLines(invoiceId, read.lines, subTotal);
+    const ledger = await saveDriveLedgerLines(invoiceId, read.lines, subTotal, source);
     if (!ledger.saved) console.warn(`[sales-scan] ledger lines not stored for ${fileName}: ${ledger.reason}`);
   } catch (e) {
     console.warn(`[sales-scan] ledger lines failed for ${fileName}: ${e instanceof Error ? e.message : String(e)}`);

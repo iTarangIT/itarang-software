@@ -7,7 +7,7 @@
 // stage × sub-status × the facts (BRD §4.2 transitions; sub-statuses from the
 // Ecofy m07/m09/m10/m11/m12 services). Ecofy still re-checks every gate.
 
-import { ECOFY_ROLE_LABEL } from "./access";
+import { ECOFY_ROLE_LABEL, isEcofyFinancier } from "./access";
 
 export type StepParty = "you" | "owner" | "sales_head" | "ecofy" | "epc";
 export type StepTone = "action" | "waiting" | "done";
@@ -77,15 +77,8 @@ export interface StepBrief {
     primary: StepPrimary;
 }
 
-/**
- * The seeded financier is named "Ecofy"; any other name is a lender the Sales
- * Head (iTarang Admin) records decisions for. A null name means the default,
- * which is Ecofy. Heuristic on purpose — Ecofy exposes no "is own financier"
- * flag on the case.
- */
-export function isEcofyFinancier(name: string | null | undefined): boolean {
-    return !name || /ecofy/i.test(name);
-}
+// isEcofyFinancier lives in access.ts (the money-action gate uses it too).
+export { isEcofyFinancier };
 
 type Draft = Omit<StepBrief, "party" | "partyLabel" | "tone"> & { who: "owner" | "sales_head" | "ecofy" | "epc"; done?: boolean };
 
@@ -276,7 +269,8 @@ function draft(i: StepBriefInput): Draft {
                     ? "Ecofy records the sanction or rejection. Installation may be created in parallel (with a warning while no sanction is recorded)."
                     : `The Sales Head records ${lender}'s sanction or rejection. Installation may be created in parallel.`,
                 next: "Sanction → Installation (S7). A lower sanction → re-acceptance OTP. Rejection → next financier.",
-                primary: i.viewerKind === "manager" && f.openDecision ? "financing_decision" : "await_decision",
+                // Ecofy's own financing: Ecofy Admin decides in Ecofy (ID 51 #1, access.ts money gate).
+                primary: !ecofyLender && i.viewerKind === "manager" && f.openDecision ? "financing_decision" : "await_decision",
             };
         }
 

@@ -15,7 +15,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { canDoEcofyAction } from "@/lib/ecofy/access";
+import { canDoEcofyAction, isEcofyFinancier } from "@/lib/ecofy/access";
 import type { EcofyCase } from "./client";
 import { FinancingDecisionForm } from "./tabs/LaterStageTabs";
 import { Btn } from "./ui";
@@ -35,7 +35,13 @@ export function FinancingQueueAction({
     const router = useRouter();
     const [open, setOpen] = useState(false);
     // Same gate as the lead's Financing tab (manager, stage S6).
-    const canDecide = canDoEcofyAction(viewer, { assigned_to_user_id: null, stage: c.stage }, "financing_decision");
+    // ID 51 #1: Ecofy-financed rows are Ecofy Admin's to decide (role per financier).
+    const ecofyFinanced = isEcofyFinancier(c.financierName);
+    const canDecide = canDoEcofyAction(
+        viewer,
+        { assigned_to_user_id: null, stage: c.stage, financier_name: c.financierName ?? null },
+        "financing_decision",
+    );
 
     if (!leadId || !leadHref) {
         return <span className="text-xs text-gray-500">Not in the CRM — decide in Ecofy</span>;
@@ -56,6 +62,9 @@ export function FinancingQueueAction({
                     </Btn>
                 )}
             </div>
+            {ecofyFinanced && (
+                <span className="text-xs text-gray-500">Ecofy financing — Ecofy Admin records the decision in Ecofy</span>
+            )}
             {open && canDecide && (
                 <div className="w-full min-w-[320px] rounded-lg border border-gray-200 bg-gray-50 p-3">
                     <p className="mb-2 text-xs text-gray-600">

@@ -6,6 +6,7 @@ import { leads } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 import { step5ProductSelectionSchema } from "@/lib/leads/productSelectionSchema";
 import { saveStep5ProductSelection } from "@/lib/leads/step5-product";
+import { dealerMayActOnLead } from "@/lib/auth/requireLeadAccess";
 
 /**
  * Step 5 product save.
@@ -38,7 +39,7 @@ export async function POST(
         { status: 404 },
       );
     }
-    if (lead.dealer_id !== user.dealer_id) {
+    if (!(await dealerMayActOnLead(user, lead.dealer_id))) {
       return NextResponse.json(
         { success: false, error: { message: "Access denied" } },
         { status: 403 },

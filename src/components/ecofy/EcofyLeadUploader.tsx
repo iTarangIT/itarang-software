@@ -22,6 +22,7 @@ import {
     type EcofyImport,
     type EcofyImportPreview,
 } from "@/lib/ecofy/intake";
+import type { ImportSyncResult } from "@/lib/ecofy/importSync";
 import { ecofyGet, ecofyPost, ecofyUpload, useLookup, type ListItem } from "./client";
 import { Btn, Chip, Field, FormBox, fileInputCls, inputCls, KV, Panel } from "./ui";
 
@@ -353,6 +354,10 @@ function BulkImportWizard() {
     const [imp, setImp] = useState<EcofyImport | null>(null);
     const [busy, setBusy] = useState(false);
     const [err, setErr] = useState<string | null>(null);
+    // ID 51 #3: the committed import's leads, put in the CRM at once.
+    const [synced, setSynced] = useState<ImportSyncResult | null>(null);
+    const [syncing, setSyncing] = useState(false);
+    const [syncTried, setSyncTried] = useState(false);
 
     const missing = useMemo(() => (started ? unmappedRequiredColumns(mapping) : []), [started, mapping]);
     const targets = Object.values(mapping);
@@ -371,6 +376,28 @@ function BulkImportWizard() {
         return () => clearInterval(t);
     }, [imp, started]);
 
+    async function syncToCrm() {
+        if (!started) return;
+        setSyncing(true);
+        try {
+            const r = await ecofyPost<ImportSyncResult>(`/api/ecofy/imports/${started.importId}/sync`, {});
+            setSynced(r);
+            if (r.added + r.updated > 0) toast.success(`${r.added + r.updated} imported lead(s) are in the CRM now`);
+        } catch (e) {
+            setErr(e instanceof Error ? e.message : "Could not bring the imported leads into the CRM");
+        } finally {
+            setSyncing(false);
+        }
+    }
+
+    // Once COMMITTED, bring the leads into the CRM without waiting for Ecofy's push.
+    useEffect(() => {
+        if (imp?.status !== "COMMITTED" || syncTried || !started) return;
+        setSyncTried(true);
+        void syncToCrm();
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once per committed import
+    }, [imp?.status, syncTried, started]);
+
     function reset() {
         setFile(null);
         setStarted(null);
@@ -382,6 +409,8 @@ function BulkImportWizard() {
         setCommitKey(crypto.randomUUID());
         setImp(null);
         setErr(null);
+        setSynced(null);
+        setSyncTried(false);
     }
 
     async function step<T>(fn: () => Promise<T>): Promise<T | undefined> {
@@ -570,13 +599,36 @@ function BulkImportWizard() {
                     {imp.status === "COMMITTED" && (
                         <KV
                             rows={[
-                                ["Next", "Created leads appear in the Pickup Queue once Ecofy sends them to the CRM."],
+                                [
+                                    "In the CRM",
+                                    syncing
+                                        ? "Adding the imported leads to the CRM…"
+                                        : synced
+                                          ? `${synced.added} added, ${synced.updated} already in the CRM (updated)` +
+                                            (synced.skippedS0 ? `, ${synced.skippedS0} with Ecofy for qualification (S0)` : "") +
+                                            (synced.notFound + synced.failed
+                                                ? `, ${synced.notFound + synced.failed} not read yet — they arrive when Ecofy sends them`
+                                                : "") +
+                                            (synced.cases > synced.checked ? `; ${synced.cases - synced.checked} more arrive when Ecofy sends them` : "") +
+                                            "."
+                                          : "Created leads appear in the Pickup Queue once Ecofy sends them to the CRM.",
+                                ],
                                 ["Rejected rows", "Fix them from the row report and upload only those rows again."],
                             ]}
                         />
                     )}
-                    <div className="mt-3">
+                    <div className="mt-3 flex flex-wrap gap-2">
                         <Btn onClick={reset}>Import another file</Btn>
+                        {imp.status === "COMMITTED" && (
+                            <Btn disabled={syncing} onClick={syncToCrm}>
+                                {syncing ? "Syncing…" : "Sync to CRM again"}
+                            </Btn>
+                        )}
+                        {synced && synced.added + synced.updated > 0 && (
+                            <Link href="/sales-head/ecofy/queue" className="inline-flex items-center rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-800 hover:bg-gray-50">
+                                Open Pickup Queue
+                            </Link>
+                        )}
                     </div>
                 </Panel>
             )}

@@ -2,8 +2,11 @@
 
 import { describe, expect, it } from "vitest";
 import {
+    ACCOUNT_BUCKETS,
     accountBucket,
     effectiveDaysSinceOrder,
+    isLiveBucket,
+    LIVE_BUCKETS,
     ORDER_CLAIM_WINDOW_DAYS,
     orderClaimStatus,
 } from "@/lib/dealers/accountHealthRules";
@@ -54,5 +57,14 @@ describe("ID 5 — Order placed claims (E-334)", () => {
         expect(accountBucket(effectiveDaysSinceOrder(38, 1), 400)).toBe("active");
         // A never-ordered dealer with a claim is no longer "never ordered".
         expect(accountBucket(effectiveDaysSinceOrder(null, 3), 90)).toBe("active");
+    });
+});
+
+describe("live dealers (ID 148)", () => {
+    it("every bucket but Closed is live", () => {
+        expect(LIVE_BUCKETS).toEqual(ACCOUNT_BUCKETS.filter((b) => b !== "closed"));
+        expect(isLiveBucket("closed")).toBe(false);
+        expect(isLiveBucket(accountBucket(90, 200))).toBe(true);
+        expect(isLiveBucket(accountBucket(5, 200, true))).toBe(false);
     });
 });

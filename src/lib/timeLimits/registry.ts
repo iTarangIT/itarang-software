@@ -20,7 +20,7 @@ export type LimitUnit = "working_hours" | "working_days" | "days";
 
 export type TimeLimitDef = {
     key: string;
-    group: "Lead clocks" | "Follow-up" | "Onboarding";
+    group: "Lead clocks" | "Follow-up" | "Onboarding" | "Invoices";
     label: string;
     unit: LimitUnit;
     default: number;
@@ -193,6 +193,17 @@ export const TIME_LIMITS = [
         min: 1,
         max: 30,
         help: "Onboarding stalled card (waiting on us).",
+    },
+    // ── ID 171 ────────────────────────────────────────────────────────────────
+    {
+        key: "invoice_stale_days",
+        group: "Invoices",
+        label: "No new invoice read",
+        unit: "working_days",
+        default: 3,
+        min: 1,
+        max: 15,
+        help: "Admin bell + a line in the daily Sales email; 'Invoices read up to' turns amber under revenue and battery numbers.",
     },
 ] as const satisfies readonly TimeLimitDef[];
 

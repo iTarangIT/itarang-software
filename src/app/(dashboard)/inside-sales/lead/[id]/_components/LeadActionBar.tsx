@@ -25,9 +25,11 @@ type Props = {
     onAction: (modal: ActiveModal) => void;
     /** Refresh the lead after an action that has no modal (Call now). */
     onChanged?: () => void;
+    /** ID 155: the viewer manages the current owner and may move the lead within their team. */
+    canTeamReassign?: boolean;
 };
 
-export function LeadActionBar({ bundle, isOwner, viewerRole, onAction, onChanged }: Props) {
+export function LeadActionBar({ bundle, isOwner, viewerRole, onAction, onChanged, canTeamReassign = false }: Props) {
     const lead = bundle.lead;
     const status = lead.lead_status as LeadStatus | null;
     const isUnassigned = !lead.current_owner_id && !(status && isTerminal(status));
@@ -81,7 +83,18 @@ export function LeadActionBar({ bundle, isOwner, viewerRole, onAction, onChanged
         const managerCanTransfer = open && canTransferAnyLead(viewerRole);
         return (
             <div className="sticky bottom-0 z-10 bg-white border-t border-gray-200 px-6 py-3 text-xs text-gray-500 flex flex-wrap items-center gap-3">
-                <span>{managerCanTransfer ? "Not your lead — you can still transfer it to an ASM." : helper}</span>
+                <span>
+                    {canTeamReassign
+                        ? "Your team member's lead — you can move it within your team."
+                        : managerCanTransfer
+                          ? "Not your lead — you can still transfer it to an ASM."
+                          : helper}
+                </span>
+                {canTeamReassign && (
+                    <ActionButton icon={Repeat} onClick={() => onAction("reassign")}>
+                        Reassign within team
+                    </ActionButton>
+                )}
                 {managerCanTransfer && (
                     <ActionButton icon={Send} onClick={() => onAction("transfer_asm")}>
                         Transfer to ASM

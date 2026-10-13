@@ -13,6 +13,7 @@
 
 import React from "react";
 import Link from "next/link";
+import { InvoicesReadUpTo } from "@/components/sales/InvoicesReadUpTo";
 import { useQuery } from "@tanstack/react-query";
 import {
   AlertCircle,
@@ -37,8 +38,8 @@ import {
 } from "@/lib/dashboard/companyTarget";
 import type { DealerHealthRow } from "@/lib/dealers/accountHealth";
 import {
-  ACCOUNT_BUCKETS,
   ACCOUNT_BUCKET_LABELS,
+  LIVE_BUCKETS,
   type AccountBucket,
 } from "@/lib/dealers/accountHealthRules";
 import type { FunnelCountsResult } from "@/lib/admin/funnelCountsTypes";
@@ -47,6 +48,7 @@ import type { SalesDashboard } from "@/lib/admin/salesDashboardTypes";
 import type { CeoOverviewData } from "@/components/dashboard/ceo/CeoOverviewCards";
 import { DashboardSkeleton } from "@/components/dashboard/ceo/DashboardSkeleton";
 import { GreenNewsCard } from "@/components/dashboard/ceo/GreenNewsCard";
+import { EcofyStageTile } from "@/components/ecofy/EcofyStageTile";
 import {
   ActionCard,
   CardLink,
@@ -533,7 +535,9 @@ export default function CEODashboard() {
           .reduce((a, r) => a + Number(r.revenue_90d || 0), 0)
       : null;
   const haveDealers = Boolean(dealerRows || baseBlock);
-  const liveDealers = ACCOUNT_BUCKETS.reduce((a, k) => a + bucketCount(k), 0);
+  // ID 148: live = every bucket but Closed — the same rule as Accounts and Dealer Health.
+  const liveDealers = LIVE_BUCKETS.reduce((a, k) => a + bucketCount(k), 0);
+  const closedDealers = bucketCount("closed");
   const ordering = bucketCount("active") + bucketCount("cooling");
 
   // "89% of target" pill + "Target to date ₹3.05 Cr" line for a tile.
@@ -799,6 +803,7 @@ export default function CEODashboard() {
           ]
             .filter(Boolean)
             .join(" · ")}
+          footer={<InvoicesReadUpTo />}
         />
         <KpiTile
           label="Gross margin"
@@ -833,11 +838,12 @@ export default function CEODashboard() {
               : [
                   batteriesTarget.line,
                   batteriesTarget.split,
-                  sales.data ? "Allocated to dealer accounts in the period" : "Not available yet",
+                  sales.data ? "Battery lines on dealer invoices in the period" : "Not available yet",
                 ]
                   .filter(Boolean)
                   .join(" · ")
           }
+          footer={<InvoicesReadUpTo />}
         />
         <KpiTile
           label="New dealers live"
@@ -1063,7 +1069,9 @@ export default function CEODashboard() {
                 </div>
               ))}
               <div className="flex items-baseline justify-between border-t border-border pt-2.5">
-                <span className="text-sm font-semibold">Net of purchases</span>
+                {/* ID 89 — was "Net of purchases", which read as if only purchases
+                    came off; it is revenue less stock bought and running expenses. */}
+                <span className="text-sm font-semibold">Revenue minus purchases and expenses</span>
                 <span
                   className={`text-lg font-bold tabular-nums ${spent.net >= 0 ? "text-success" : "text-danger"}`}
                 >
@@ -1148,14 +1156,14 @@ export default function CEODashboard() {
           ) : (
             <>
               <StackedBand
-                parts={ACCOUNT_BUCKETS.map((k) => ({
+                parts={LIVE_BUCKETS.map((k) => ({
                   key: k,
                   n: bucketCount(k),
                   color: BUCKET_COLOR[k],
                 }))}
               />
               <div className="flex flex-col">
-                {ACCOUNT_BUCKETS.map((k) => {
+                {LIVE_BUCKETS.map((k) => {
                   const [label, rule] = bucketParts(k);
                   const rev = bucketRevenue(k);
                   return (
@@ -1179,6 +1187,14 @@ export default function CEODashboard() {
                 })}
               </div>
               <span className="text-xs text-ink-muted">
+                {closedDealers > 0 && (
+                  <>
+                    <Link href="/admin/reports/dealer-health?bucket=closed" className="font-semibold text-ink hover:underline">
+                      {num(closedDealers)} closed
+                    </Link>{" "}
+                    dealer{closedDealers === 1 ? "" : "s"} not counted as live.{" "}
+                  </>
+                )}
                 Right column: billed in the last 90 days.{" "}
                 <Link href="/admin/reports/dealer-health" className="font-semibold text-brand-sky hover:underline">
                   Open dealer health
@@ -1188,6 +1204,9 @@ export default function CEODashboard() {
           )}
         </DashCard>
       </div>
+
+      {/* ID 51 #2 — Ecofy leads by stage: its own block, never in the funnel above. */}
+      <EcofyStageTile />
 
       {/* Team + finance + buyback */}
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-3">

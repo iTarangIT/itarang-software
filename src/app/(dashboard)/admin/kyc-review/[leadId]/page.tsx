@@ -1,5 +1,6 @@
 import CaseReview from "@/components/kyc/CaseReview";
 import ProductReviewLinkBanner from "@/components/kyc/ProductReviewLinkBanner";
+import PushToDealerPanel from "@/components/kyc/PushToDealerPanel";
 import DealerPaymentChip from "@/components/loans/DealerPaymentChip";
 
 export default async function CaseReviewPage({
@@ -16,6 +17,8 @@ export default async function CaseReviewPage({
       <div className="mb-3 empty:hidden">
         <DealerPaymentChip leadId={leadId} />
       </div>
+      {/* ID 33: Push to dealer (Admin / Sales Head) + push history. */}
+      <PushToDealerPanel leadId={leadId} />
       <CaseReview leadId={leadId} />
     </div>
   );

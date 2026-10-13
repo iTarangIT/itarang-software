@@ -183,6 +183,7 @@ export function Composer({
   canSend,
   disabled = false,
   placeholder,
+  limit,
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -192,7 +193,12 @@ export function Composer({
   canSend: boolean;
   disabled?: boolean;
   placeholder: string;
+  /** ID 32 — longest question allowed; a counter shows near it. */
+  limit?: number;
 }) {
+  const length = value.trim().length;
+  const showCount = limit != null && length > limit * 0.8;
+  const over = limit != null && length > limit;
   const textarea = useRef<HTMLTextAreaElement>(null);
 
   useLayoutEffect(() => {
@@ -257,6 +263,12 @@ export function Composer({
           </button>
         )}
       </form>
+      {showCount && (
+        <p className={cn("px-5 pt-1.5 text-right text-xs tabular-nums", over ? "font-semibold text-danger" : "text-ink-muted")} aria-live="polite">
+          {over ? "Too long — shorten your question. " : ""}
+          {length.toLocaleString("en-IN")} / {limit!.toLocaleString("en-IN")}
+        </p>
+      )}
       <p className="px-2 pt-2 text-center text-xs text-ink-muted/80">
         Read-only. The analyst never writes to the database. Check important numbers before acting on them.
       </p>

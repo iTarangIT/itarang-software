@@ -13,7 +13,10 @@
  * Usage (DATABASE_URL picks the database; Drive + OpenAI keys from .env.local):
  *   node --import tsx --env-file=.env.local scripts/backfill-drive-line-items.ts            # dry run: reads, writes nothing
  *   node --import tsx --env-file=.env.local scripts/backfill-drive-line-items.ts --commit
- *   … --id=ITG/202627/067     one invoice
+ *   … --credit-notes          credit notes instead of invoices (ID 71): their
+ *                             items table, stored NEGATIVE as source 'credit'
+ *                             so batteries sold, By SKU and gross margin net them
+ *   … --id=ITG/202627/067     one invoice (or credit note number)
  *   … --max=5                 stop after N invoices
  *   … --retries=2             re-read an invoice whose lines fail the check
  *                             (default 2). The model sometimes returns
@@ -36,6 +39,7 @@ import { classifyHsn } from "@/lib/sales/invoiceLines";
 
 const args = process.argv.slice(2);
 const COMMIT = args.includes("--commit");
+const CREDIT = args.includes("--credit-notes");
 const opt = (name: string) => args.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3) ?? null;
 const ONLY = opt("id");
 const MAX = opt("max") ? Number(opt("max")) : Infinity;
@@ -64,7 +68,17 @@ async function main() {
     const host = new URL(process.env.DATABASE_URL ?? "postgres://x").host.split(".")[0];
     console.log(`${COMMIT ? "COMMIT" : "DRY RUN"} against ${host}`);
 
-    const todo = (await db.execute(sql`
+    const todo = (await db.execute(CREDIT ? sql`
+        SELECT cn.id::text AS id, cn.note_number AS invoice_number, cn.issue_date::text AS invoice_date,
+               cn.total::text AS total, cn.sub_total::text AS sub_total, cn.drive_file_id, cn.file_name,
+               NULL::text AS storage_key
+          FROM credit_notes cn
+         WHERE cn.drive_file_id IS NOT NULL
+           AND NOT EXISTS (SELECT 1 FROM invoice_voids v WHERE v.source = 'credit' AND v.invoice_id = cn.id::text)
+           AND NOT EXISTS (SELECT 1 FROM invoice_line_items l WHERE l.source = 'credit' AND l.invoice_id = cn.id::text)
+           ${ONLY ? sql`AND cn.note_number = ${ONLY}` : sql``}
+         ORDER BY cn.issue_date DESC, cn.note_number
+    ` : sql`
         SELECT si.id::text AS id, si.invoice_number, si.invoice_date::text AS invoice_date,
                si.total::text AS total, si.sub_total::text AS sub_total, si.drive_file_id, si.file_name, si.storage_key
           FROM sales_invoices si
@@ -74,7 +88,7 @@ async function main() {
            ${ONLY ? sql`AND si.invoice_number = ${ONLY}` : sql``}
          ORDER BY si.invoice_date DESC, si.invoice_number
     `)) as unknown as Inv[];
-    console.log(`${todo.length} invoice(s) without lines${Number.isFinite(MAX) ? ` (max ${MAX})` : ""}\n`);
+    console.log(`${todo.length} ${CREDIT ? "credit note" : "invoice"}(s) without lines${Number.isFinite(MAX) ? ` (max ${MAX})` : ""}\n`);
 
     let stored = 0, rejected = 0, failed = 0, batteries = 0;
     for (const inv of todo.slice(0, MAX)) {
@@ -95,7 +109,7 @@ async function main() {
                 continue;
             }
             if (COMMIT) {
-                const r = await saveDriveLedgerLines(inv.id, lines, sub);
+                const r = await saveDriveLedgerLines(inv.id, lines, sub, CREDIT ? "credit" : "drive");
                 if (!r.saved) {
                     rejected++;
                     console.log(`✘ ${inv.invoice_number} not stored — ${r.reason}`);

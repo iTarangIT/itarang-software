@@ -6,6 +6,7 @@ import { db } from "@/lib/db";
 import { auditLogs, leads, nbfcLeadAssignments } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 import { purgeFinanceData } from "@/lib/nbfc/purge-finance-data";
+import { dealerMayActOnLead } from "@/lib/auth/requireLeadAccess";
 
 // BRD V2 §4.0 Scenario B + Addendum V0.2 §12.2 — Convert to Cash Sale (Option A).
 // Converts a finance lead that is either loan-rejected OR terminal
@@ -40,7 +41,7 @@ export async function POST(
         { status: 404 },
       );
     }
-    if (lead.dealer_id !== user.dealer_id) {
+    if (!(await dealerMayActOnLead(user, lead.dealer_id))) {
       return NextResponse.json(
         { success: false, error: { message: "Access denied" } },
         { status: 403 },

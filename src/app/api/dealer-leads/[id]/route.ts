@@ -103,6 +103,7 @@ export const PATCH = withErrorHandler(
         userId: user.id,
         currentOwnerId: existing.current_owner_id,
         asmId: existing.asm_id,
+        // ID 155: a team manager sees + reassigns, never edits, a report's lead.
       })
     ) {
       return NextResponse.json(

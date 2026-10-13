@@ -9,10 +9,13 @@
 // Filter state lives in the URL (useSalesDashboardFilters) so a view can be
 // refreshed or pasted into WhatsApp. The same query string is the fetch URL.
 
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, Inbox } from "lucide-react";
 
 import type { SalesDashboard } from "@/lib/admin/salesDashboardTypes";
+import { TEAM_TOTAL_PERSON } from "@/lib/users/teamRules";
+import { TeamTargetsCard } from "@/components/targets/TeamTargetsCard";
 import { SalesCharts, bucketLabel } from "./SalesCharts";
 import { SalesDashboardSkeleton } from "./SalesDashboardSkeleton";
 import { SalesFilterBar } from "./SalesFilterBar";
@@ -45,10 +48,36 @@ function hasNoData(d: SalesDashboard): boolean {
     );
 }
 
-export function SalesDashboardView({ mode }: { mode: SalesDashboardMode }) {
+const shortDay = (d: string) =>
+    new Date(`${d}T00:00:00Z`).toLocaleDateString("en-IN", { day: "numeric", month: "short", timeZone: "UTC" });
+
+/** "You + Ravi + Meena (from 12 Oct)": who the Team total counts, and for which days. */
+function teamLine(members: Array<{ name: string | null; from: string; to: string }> | undefined): string {
+    if (!members) return "Loading who is in your team…";
+    if (members.length === 0) return "Nobody reported to you in these dates, so this is your own numbers.";
+    const range = (m: { from: string; to: string }) => ` (${shortDay(m.from)}–${shortDay(m.to)})`;
+    return `You + ${members.map((m) => `${m.name ?? "(no name)"}${range(m)}`).join(" + ")}. Each person counts only for the days they were in your team.`;
+}
+
+export function SalesDashboardView({
+    mode,
+    people,
+}: {
+    mode: SalesDashboardMode;
+    /**
+     * ID 155/156: a manager on their own Performance page — themself first,
+     * then their direct reports. With more than one, a person picker shows and
+     * the pick is sent as ?person= (the API ignores anyone outside the team).
+     */
+    people?: Array<{ id: string; name: string }>;
+}) {
     const isAdmin = mode === "admin";
-    const { filters, granularity, qs, set, reset, dirty } = useSalesDashboardFilters(isAdmin);
+    const { filters, granularity, qs: filterQs, set, reset, dirty } = useSalesDashboardFilters(isAdmin);
     const endpoint = SALES_DASHBOARD_ENDPOINT[mode];
+    const [personId, setPersonId] = useState("");
+    const showPeople = !isAdmin && (people?.length ?? 0) > 1;
+    const qs = showPeople && personId ? [filterQs, `person=${encodeURIComponent(personId)}`].filter(Boolean).join("&") : filterQs;
+    const teamTotal = showPeople && personId === TEAM_TOTAL_PERSON;
 
     const query = useQuery<{ success: true; data: SalesDashboard }>({
         queryKey: ["sales-dashboard", mode, qs],
@@ -71,6 +100,33 @@ export function SalesDashboardView({ mode }: { mode: SalesDashboardMode }) {
 
     return (
         <div className="space-y-4">
+            {showPeople && (
+                <div className="flex flex-col gap-1 rounded-xl border border-border bg-surface px-4 py-3 shadow-card sm:flex-row sm:items-center sm:gap-3">
+                    <label className="flex items-center gap-2 text-sm text-ink">
+                        <span className="font-medium">Showing</span>
+                        <select
+                            value={personId}
+                            onChange={(e) => setPersonId(e.target.value)}
+                            className="h-9 min-w-[12rem] rounded-md border border-border bg-surface px-2 text-sm"
+                            aria-label="Whose numbers to show"
+                        >
+                            {people!.map((p, i) => (
+                                <option key={p.id} value={i === 0 ? "" : p.id}>
+                                    {i === 0 ? `Me (${p.name})` : p.name}
+                                </option>
+                            ))}
+                            {/* ID 156: me + each member for the days they were in the team. */}
+                            <option value={TEAM_TOTAL_PERSON}>Team total</option>
+                        </select>
+                    </label>
+                    <p className="text-xs text-ink-muted">
+                        {teamTotal
+                            ? teamLine(d?.team?.members)
+                            : "Same numbers as the Sales Head's per-person table. Pick Team total for you and your team together."}
+                    </p>
+                </div>
+            )}
+            {teamTotal && <TeamTargetsCard />}
             <SalesFilterBar
                 filters={filters}
                 onChange={set}

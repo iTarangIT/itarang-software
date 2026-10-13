@@ -13,6 +13,7 @@ import { fetchAssignedByForLeads } from "@/lib/leads/leadAssignedBy";
 import { BULK_CLAIM_CAP, QUEUE_TABS, type QueueResponse } from "@/lib/inside-sales/types";
 import { readQueueFilters } from "@/lib/leads/queueFilters";
 import { readQueueSort } from "@/lib/leads/queueSort";
+import { teamForOwnScopedViewer } from "@/lib/users/team";
 
 export const dynamic = "force-dynamic";
 
@@ -70,6 +71,10 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
     // Order only — validated the same way, so an unknown key falls back to the
     // tab's own order rather than reaching the SQL builder.
     const sort = readQueueSort(url.searchParams);
+    // ID 155: a manager (own-scoped role with direct reports) also sees the
+    // team's leads in their own tabs, read-only. ids_only (bulk claim) is not
+    // widened: it feeds actions, and those stay with the owner.
+    const teamMemberIds = await teamForOwnScopedViewer(user);
 
     if (parsed.ids_only === "1") {
         const ids = await fetchQueueIds({
@@ -98,6 +103,7 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
             finalisedOnly,
             filters,
             sort,
+            teamMemberIds,
         }),
         countQueueRows({
             tab: parsed.tab,
@@ -107,6 +113,7 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
             callbackOnly,
             finalisedOnly,
             filters,
+            teamMemberIds,
         }),
     ]);
 

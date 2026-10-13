@@ -6,6 +6,7 @@ import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { clientIp, takeIpToken } from "@/lib/auth/reset-throttle";
 import { findResumableApplication, isMissingTable } from "@/lib/onboarding/resumeLookup";
+import { signedFilePath } from "@/lib/storage/fileAccess";
 import {
   hashResumeOtp,
   RESUME_OTP_FORMAT_RE,
@@ -26,6 +27,9 @@ import {
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+// Same as the upload's own view link (uploads/dealer-documents).
+const DOCUMENT_LINK_TTL_SECONDS = 7 * 24 * 60 * 60;
 
 const WRONG = "That code is not right, or it has expired. Check the email, or request a new code.";
 const UNAVAILABLE =
@@ -88,10 +92,24 @@ export async function POST(req: NextRequest) {
     const resumeToken = used.length ? signResumeToken(application.id) : null;
     if (!resumeToken) return NextResponse.json({ success: false, message: WRONG }, { status: 400 });
 
+    // ID 166: the 7-day links the form got at upload may have run out. The
+    // code just proved this is the dealer, so hand fresh ones for the files
+    // already on this application, keyed by the stored (unsigned) URL.
+    const docs = (await db.execute(sql`
+        SELECT file_url FROM dealer_onboarding_documents
+         WHERE application_id = ${application.id}::uuid AND file_url IS NOT NULL
+    `)) as unknown as { file_url: string }[];
+    const documentLinks: Record<string, string> = {};
+    for (const d of Array.isArray(docs) ? docs : []) {
+      const fresh = signedFilePath(d.file_url, DOCUMENT_LINK_TTL_SECONDS);
+      if (fresh) documentLinks[d.file_url] = fresh;
+    }
+
     return NextResponse.json({
       success: true,
       applicationId: application.id,
       resumeToken,
+      documentLinks,
       expiresInSeconds: Math.round(RESUME_TOKEN_TTL_MS / 1000),
     });
   } catch (err) {

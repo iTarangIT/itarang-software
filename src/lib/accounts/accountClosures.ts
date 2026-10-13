@@ -24,6 +24,15 @@ export async function closedColumns(accountId: SQL): Promise<SQL> {
                (SELECT ac_c.reason FROM account_closures ac_c WHERE ac_c.account_id = ${accountId}) AS closed_reason`;
 }
 
+/**
+ * ID 148 — `TRUE` when the account `accountId` is live (not closed); `TRUE`
+ * for everyone on a database without E-332. The SQL half of isLiveBucket().
+ */
+export async function notClosedSql(accountId: SQL): Promise<SQL> {
+    if (!(await hasAccountClosuresTable())) return sql`TRUE`;
+    return sql`NOT EXISTS (SELECT 1 FROM account_closures ac_l WHERE ac_l.account_id = ${accountId})`;
+}
+
 export class ClosuresUnavailable extends Error {
     readonly status = 503;
     constructor() {

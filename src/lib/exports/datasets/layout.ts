@@ -48,7 +48,19 @@ export const DATASET_LAYOUT: Record<string, DatasetLayout> = {
         columnGroups: [
             { name: "Event", keys: ["event_at", "event_type", "from_value", "to_value", "channel", "outcome", "duration_sec", "remarks", "performed_by", "role"] },
             { name: "Lead", keys: ["lead_id", "dealer", "city", "state", "business_type"] },
-            { name: "Clocks", keys: ["hours_since_sales_ready"] },
+            // ID 35 — lead / owner clocks (E-337) as of each event.
+            { name: "Clocks", keys: ["hours_since_sales_ready", "lead_clock_started_at", "lead_limit_passed", "owner_clock_started_at", "owner_limit_passed", "owner_inferred"] },
+        ],
+    },
+    // ID 51 — Ecofy leads (E-305 / E-307).
+    ecofy_leads: {
+        section: "SALES",
+        grain: "One row per Ecofy lead",
+        who: "CEO, Admin, Sales Head (all); ASM and ISR (leads assigned to them)",
+        columnGroups: [
+            { name: "Case", keys: ["case_no", "segment", "customer_name", "customer_mobile", "city", "state", "product_interest"] },
+            { name: "Pipeline", keys: ["stage", "sub_status", "temperature", "closure_reason"] },
+            { name: "Owner and dates", keys: ["owner", "owner_role", "created_at", "queue_entered_at", "assigned_at", "next_follow_up_at", "next_appointment_at"] },
         ],
     },
     calls: {
