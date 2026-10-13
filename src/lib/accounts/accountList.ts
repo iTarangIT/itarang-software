@@ -146,18 +146,19 @@ export async function listAccounts(f: AccountFilters = {}): Promise<AccountRow[]
                   - CASE WHEN EXTRACT(MONTH FROM (SELECT d FROM today)) < 4 THEN 1 ELSE 0 END, 4, 1) AS start
         ),
         orders AS (
+            -- ID 71: a credit note nets revenue but is never an order.
             SELECT ${invoiceAccountSql()}            AS account_id,
-                   COUNT(*)                          AS n,
-                   MIN(r.invoice_date)               AS first_order,
-                   MAX(r.invoice_date)               AS last_order,
+                   COUNT(*) FILTER (WHERE r.source <> 'credit')                AS n,
+                   MIN(r.invoice_date) FILTER (WHERE r.source <> 'credit')     AS first_order,
+                   MAX(r.invoice_date) FILTER (WHERE r.source <> 'credit')     AS last_order,
                    COALESCE(SUM(r.total), 0)         AS lifetime,
                    COALESCE(SUM(r.total) FILTER (
                        WHERE r.invoice_date > (SELECT d FROM today) - 90), 0) AS last_90d,
                    COALESCE(SUM(r.total) FILTER (
                        WHERE r.invoice_date >= (SELECT start FROM fy)), 0)    AS this_fy,
-                   COUNT(DISTINCT r.invoice_date)    AS order_days,
-                   bool_or(r.invoice_date >= (SELECT d FROM today) - 30) AS within_30d,
-                   bool_or(r.invoice_date <  (SELECT d FROM today) - 30) AS before_30d
+                   COUNT(DISTINCT r.invoice_date) FILTER (WHERE r.source <> 'credit') AS order_days,
+                   COALESCE(bool_or(r.invoice_date >= (SELECT d FROM today) - 30) FILTER (WHERE r.source <> 'credit'), FALSE) AS within_30d,
+                   COALESCE(bool_or(r.invoice_date <  (SELECT d FROM today) - 30) FILTER (WHERE r.source <> 'credit'), FALSE) AS before_30d
               FROM ${invoices} AS r
              WHERE ${REVENUE_NOT_VOID}
              GROUP BY 1

@@ -63,6 +63,13 @@ describe("toLedgerRows", () => {
     });
 });
 
+describe("toLedgerRows — credit note (ID 71)", () => {
+    it("stores quantity and amount negative, the printed rate as is", () => {
+        const [r] = toLedgerRows([line({ quantity: 2, rate: 47500, amount: 95000 })], -1);
+        expect([r.quantity, r.amount_excl_gst, r.rate, r.product_class]).toEqual([-2, -95000, 47500, "battery"]);
+    });
+});
+
 describe("reconcileDriveLines", () => {
     // ITG/202627/059, read by eye 6 Oct 2026: the Vyapar "Amount" column is
     // GST-INCLUSIVE (₹2,89,100 for 5 batteries) while Price/Unit is pre-tax

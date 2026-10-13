@@ -16,7 +16,7 @@
 import { sql, type SQL } from "drizzle-orm";
 
 import { db } from "@/lib/db";
-import { matchedUnion, REVENUE_NOT_VOID } from "@/lib/dashboard/revenueSource";
+import { matchedUnion, REVENUE_IS_CREDIT, REVENUE_NOT_VOID } from "@/lib/dashboard/revenueSource";
 import {
     ORDER_CLAIM_WINDOW_DAYS,
     orderClaimStatus,
@@ -58,13 +58,14 @@ export class OrderClaimError extends Error {
 /**
  * `inv` CTE: every non-void invoice with the account it counts for (the
  * ID 148 key), materialised once so the orders and the claims read one scan.
- * Needs a `today` CTE before it, as accountHealth.ts has.
+ * Needs a `today` CTE before it, as accountHealth.ts has. `is_credit` marks a
+ * credit note (ID 71): it nets revenue but is never an order.
  */
 export async function invoicesByAccountCte(): Promise<SQL> {
     const invoices = await matchedUnion();
     const k = invoiceAccountSql();
     return sql`inv AS MATERIALIZED (
-        SELECT ${k} AS k, r.invoice_date, r.total
+        SELECT ${k} AS k, r.invoice_date, r.total, ${REVENUE_IS_CREDIT} AS is_credit
           FROM ${invoices} AS r
          WHERE ${k} IS NOT NULL AND ${REVENUE_NOT_VOID}
     )`;
@@ -80,7 +81,7 @@ export const claimStateCte = sql`claim_state AS (
            ((SELECT d FROM today) - c.order_date) AS days_since_order,
            (c.withdrawn_at IS NOT NULL) AS withdrawn,
            EXISTS (SELECT 1 FROM inv
-                    WHERE inv.k = c.account_id
+                    WHERE inv.k = c.account_id AND NOT inv.is_credit
                       AND inv.invoice_date BETWEEN c.order_date
                                                AND c.order_date + ${ORDER_CLAIM_WINDOW_DAYS}::int) AS invoiced
       FROM account_order_claims c

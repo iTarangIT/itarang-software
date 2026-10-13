@@ -35,27 +35,33 @@ export type SaveLedgerResult =
     | { saved: false; reason: string };
 
 /**
- * Store a Drive invoice's read lines as its invoice_line_items (source
- * 'drive'), replacing earlier 'drive' lines. Refuses lines that fail
- * reconcileDriveLines, and never touches an invoice that has Vyapar register lines.
+ * Store a Drive document's read lines as its invoice_line_items, replacing
+ * earlier ones of the same source. A sale invoice ('drive') never touches an
+ * invoice that has Vyapar register lines. A credit note ('credit', ID 71,
+ * invoice_id = credit_notes.id) is stored negative (toLedgerRows sign -1).
+ * Refuses lines that fail reconcileDriveLines — checked on the printed
+ * (positive) amounts against the document's own taxable value.
  */
 export async function saveDriveLedgerLines(
     invoiceId: string,
     lines: InvoiceLine[],
     subTotal: number | null | undefined,
+    source: "drive" | "credit" = "drive",
 ): Promise<SaveLedgerResult> {
     if (!(await hasInvoiceLedgerTables())) return { saved: false, reason: "E-322 not applied" };
     const fit = reconcileDriveLines(lines, subTotal);
     if (!fit.ok) return { saved: false, reason: fit.reason };
-    const rows = toLedgerRows(fit.lines);
+    const rows = toLedgerRows(fit.lines, source === "credit" ? -1 : 1);
 
     return db.transaction(async (tx) => {
-        const vyapar = (await tx.execute(sql`
-            SELECT 1 FROM invoice_line_items WHERE invoice_id = ${invoiceId} AND source = 'vyapar' LIMIT 1
-        `)) as unknown as unknown[];
-        if (vyapar.length > 0) return { saved: false as const, reason: "has Vyapar register lines" };
+        if (source === "drive") {
+            const vyapar = (await tx.execute(sql`
+                SELECT 1 FROM invoice_line_items WHERE invoice_id = ${invoiceId} AND source = 'vyapar' LIMIT 1
+            `)) as unknown as unknown[];
+            if (vyapar.length > 0) return { saved: false as const, reason: "has Vyapar register lines" };
+        }
 
-        await tx.execute(sql`DELETE FROM invoice_line_items WHERE invoice_id = ${invoiceId} AND source = 'drive'`);
+        await tx.execute(sql`DELETE FROM invoice_line_items WHERE invoice_id = ${invoiceId} AND source = ${source}`);
         // ID 147 — an item already mapped in Invoice Ledger › Item mapping lands linked.
         const mapped = await mappedItems(tx);
         for (const r of rows) {
@@ -63,7 +69,7 @@ export async function saveDriveLedgerLines(
             await tx.execute(sql`
                 INSERT INTO invoice_line_items (source, invoice_id, line_no, item_name, hsn, product_class,
                                                 asset_type, product_id, quantity, rate, amount_excl_gst)
-                VALUES ('drive', ${invoiceId}, ${r.line_no}, ${r.item_name}, ${r.hsn}, ${classFor(m, r.product_class)},
+                VALUES (${source}, ${invoiceId}, ${r.line_no}, ${r.item_name}, ${r.hsn}, ${classFor(m, r.product_class)},
                         ${m.asset_type}, ${m.product_id}, ${r.quantity}, ${r.rate}, ${r.amount_excl_gst})`);
         }
         const batteries = rows.filter((r) => r.product_class === "battery").reduce((s, r) => s + r.quantity, 0);
