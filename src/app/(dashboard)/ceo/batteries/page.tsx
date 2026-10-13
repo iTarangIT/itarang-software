@@ -9,6 +9,8 @@ import { sql } from "drizzle-orm";
 import { ArrowLeft, FileText } from "lucide-react";
 
 import { db } from "@/lib/db";
+import { invoiceFreshness } from "@/lib/sales/invoiceFreshness";
+import { InvoicesReadUpToLine } from "@/components/sales/InvoicesReadUpToLine";
 import { requireRole } from "@/lib/auth-utils";
 import { matchedLinesUnion, REVENUE_NOT_VOID } from "@/lib/dashboard/revenueSource";
 
@@ -157,6 +159,8 @@ export default async function CeoBatteriesPage({
                         ? "Battery lines on non-void invoices matched to a dealer, dated in the period, less the battery lines of credit notes issued in the period."
                         : "Batteries allocated to a dealer account in the period. Invoice lines are not set up on this database, so stock allocation is used instead."}
                 </p>
+                {/* ID 171 */}
+                <InvoicesReadUpToLine f={await invoiceFreshness()} className="mt-1" />
             </div>
 
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">

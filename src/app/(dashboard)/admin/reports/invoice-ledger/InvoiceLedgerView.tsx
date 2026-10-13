@@ -13,6 +13,7 @@ import { Loader2, Upload } from "lucide-react";
 import { Tabs } from "@/components/ui/tabs";
 import { OrderClaimsList } from "@/components/accounts/OrderClaims";
 import { Button } from "@/components/ui/button";
+import { InvoicesReadUpTo } from "@/components/sales/InvoicesReadUpTo";
 
 const TABS = ["import", "items", "sku", "invoices", "orders", "recon"] as const;
 type Tab = (typeof TABS)[number];
@@ -31,6 +32,8 @@ export function InvoiceLedgerView() {
     const [tab, setTab] = useState<Tab>(() => ((TABS as readonly string[]).includes(asked ?? "") ? (asked as Tab) : "import"));
     return (
         <div className="space-y-4">
+            {/* ID 171 — how far the invoice data goes. */}
+            <InvoicesReadUpTo className="text-xs" />
             <Tabs
                 value={tab}
                 onValueChange={(v) => setTab(v as Tab)}

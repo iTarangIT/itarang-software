@@ -88,6 +88,7 @@ import {
   repBlockTableRows,
 } from "../salesDailyBlocks";
 import { formatSlotTime } from "../schedule";
+import { fmtDay, staleAlertText } from "@/lib/sales/invoiceFreshnessRules";
 import { ECOFY_STAGE_LABELS } from "@/lib/ecofy/access";
 import type {
   DigestDetail,
@@ -435,6 +436,9 @@ async function collect(
     // ID 156: each rep's manager today, so Blocks B / C show a team subtotal
     // under each manager. Imported here, not at module scope (needs the db).
     const teamOf = await (await import("@/lib/users/team")).currentTeamOf();
+    // ID 171: how far the invoice data behind Revenue / Batteries goes, and the
+    // Admin alert line when no new invoice was read for the limit's working days.
+    const invoices = await (await import("@/lib/sales/invoiceFreshness")).invoiceFreshness({ fresh: true }).catch(() => null);
     // "Right now" / "Position at" name the moment the figures were taken — a
     // test sent at 14:03 used to say "Right now · 09:00".
     const asOf = computedAt.toLocaleTimeString("en-GB", {
@@ -537,6 +541,19 @@ async function collect(
                   alert: now.oldestDays != null && now.oldestDays >= 2,
                 },
                 { label: "Median wait, sales-ready → assigned (MTD)", value: waitValue, hint: waitHint },
+                ...(invoices
+                  ? [
+                      {
+                        label: "Invoices read up to",
+                        value: invoices.read_up_to ? fmtDay(invoices.read_up_to) : "No invoices read yet",
+                        // Revenue and Batteries sold above count invoices up to this date.
+                        hint:
+                          staleAlertText(invoices) ??
+                          `Revenue and Batteries sold count invoices up to this date · alert after ${invoices.stale_after} working days with no new invoice`,
+                        alert: invoices.stale,
+                      },
+                    ]
+                  : []),
               ],
             },
             legend: [

@@ -59,6 +59,7 @@ import { useSalesDashboardFilters } from "./useSalesDashboardFilters";
 import { ResponseTimeCard } from "./ResponseTimeCard";
 import { BUSINESS_TYPE_OPTIONS, BUSINESS_TYPE_UNSET, BUSINESS_TYPE_UNSET_LABEL } from "@/lib/leads/businessType";
 import { orderByTeam } from "@/lib/users/teamRules";
+import { InvoicesReadUpTo } from "@/components/sales/InvoicesReadUpTo";
 
 type Period = "today" | "week" | "month";
 type TeamSeg = "all" | "field" | "inside";
@@ -777,6 +778,8 @@ export function SalesHeadOpsView() {
                         );
                     })()
                 )}
+                {/* ID 171 — revenue and batteries are only as fresh as the invoices read. */}
+                {score === "field" && <InvoicesReadUpTo />}
                 {score === "inside" && (
                     <span className="text-xs text-ink-muted">
                         Hot leads to field counts leads that were Hot at the moment of transfer. &ldquo;Of which visited&rdquo; shows whether the ASM

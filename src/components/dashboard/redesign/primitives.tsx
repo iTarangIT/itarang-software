@@ -426,6 +426,7 @@ export function KpiTile({
     delta,
     spark,
     sub,
+    footer,
     href,
 }: {
     label: string;
@@ -437,6 +438,8 @@ export function KpiTile({
     delta?: { text: string; good: boolean } | null;
     spark?: number[];
     sub?: string;
+    /** A line under `sub`, e.g. ID 171's "Invoices read up to <date>". */
+    footer?: React.ReactNode;
 }) {
     const body = (
         <>
@@ -450,6 +453,7 @@ export function KpiTile({
             </div>
             {spark && spark.length > 1 ? <Sparkline values={spark} /> : null}
             {sub && <span className="text-xs leading-snug text-ink-muted">{sub}</span>}
+            {footer}
         </>
     );
     const box = "flex flex-col gap-2 rounded-2xl border border-border bg-surface p-[18px] shadow-card";

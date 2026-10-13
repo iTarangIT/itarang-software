@@ -13,6 +13,7 @@
 
 import React from "react";
 import Link from "next/link";
+import { InvoicesReadUpTo } from "@/components/sales/InvoicesReadUpTo";
 import { useQuery } from "@tanstack/react-query";
 import {
   AlertCircle,
@@ -802,6 +803,7 @@ export default function CEODashboard() {
           ]
             .filter(Boolean)
             .join(" · ")}
+          footer={<InvoicesReadUpTo />}
         />
         <KpiTile
           label="Gross margin"
@@ -836,11 +838,12 @@ export default function CEODashboard() {
               : [
                   batteriesTarget.line,
                   batteriesTarget.split,
-                  sales.data ? "Allocated to dealer accounts in the period" : "Not available yet",
+                  sales.data ? "Battery lines on dealer invoices in the period" : "Not available yet",
                 ]
                   .filter(Boolean)
                   .join(" · ")
           }
+          footer={<InvoicesReadUpTo />}
         />
         <KpiTile
           label="New dealers live"

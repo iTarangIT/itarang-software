@@ -1968,3 +1968,45 @@ export async function startLeadClocksTicker() {
 
   console.log("[instrumentation] lead clocks (hourly) started in-process");
 }
+
+// ---------------------------------------------------------------------------
+// Tracker ID 171 — invoice data gap alert. Hourly from office opening (10:00
+// IST): when no new invoice has been read for the `invoice_stale_days` time
+// limit (3 working days by default, office calendar), every admin gets ONE
+// bell a day — claimed in digest_runs, so restarts and several processes never
+// ring twice (src/lib/sales/invoiceFreshness.ts).
+// ---------------------------------------------------------------------------
+export async function startInvoiceFreshnessTicker() {
+  if (process.env.VERCEL === "1") return;
+
+  const TICK_INTERVAL_MS = 60 * 60_000;
+  let inFlight = false;
+
+  const tick = async () => {
+    if (inFlight) return;
+    const istHour = Number(
+      new Date().toLocaleString("en-GB", { timeZone: "Asia/Kolkata", hour: "2-digit", hour12: false }),
+    );
+    if (istHour < 10) return;
+    inFlight = true;
+    try {
+      const { alertIfInvoicesStale } = await import("@/lib/sales/invoiceFreshness");
+      const outcome = await alertIfInvoicesStale();
+      if (outcome === "sent") console.log("[instrumentation:invoice-freshness] stale-invoice alert sent to admins");
+    } catch (err) {
+      console.error(
+        "[instrumentation:invoice-freshness] tick failed:",
+        err instanceof Error ? err.message : err,
+      );
+    } finally {
+      inFlight = false;
+    }
+  };
+
+  const kickoff = setTimeout(tick, 245_000);
+  if (typeof kickoff.unref === "function") kickoff.unref();
+  const interval = setInterval(tick, TICK_INTERVAL_MS);
+  if (typeof interval.unref === "function") interval.unref();
+
+  console.log("[instrumentation] invoice freshness alert (hourly from 10:00 IST) started in-process");
+}

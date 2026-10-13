@@ -137,9 +137,10 @@ export function DealerHealthView({ initialBucket = "" }: { initialBucket?: Deale
                 <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
                     {noGstin} of {live.length} live dealers have no usable GSTIN (blank, pending, or failing the
                     check), so their invoices cannot be matched to them. Fix it with Correct GSTIN on the{" "}
-                    <Link href="/admin/accounts?tab=gstin_missing" className="font-semibold underline">
+                    <Link href="/admin/accounts" className="font-semibold underline">
                         Accounts screen
-                    </Link>
+                    </Link>{" "}
+                    (GSTIN missing tab)
                     .
                 </p>
             )}
