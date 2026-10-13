@@ -25,6 +25,8 @@ import { aiCallLogs } from "@/lib/db/schema";
 import { eq, sql } from "drizzle-orm";
 import { rehostElevenLabsRecording } from "@/lib/ai/storage/recordingStore";
 import { LEADS_PAGE_ROLES, readsOwnLeadsOnly } from "@/lib/leads/access";
+import { getTeamMemberIds } from "@/lib/users/team";
+import { ownerScopeIds } from "@/lib/users/teamRules";
 import { guardApi } from "@/lib/auth/apiGuard";
 
 function redirectTo(url: string): Response {
@@ -66,10 +68,12 @@ export async function GET(
   // number. Anything else is "not found", same as no such call.
   if (readsOwnLeadsOnly(authGate.user.role)) {
     const userId = authGate.user.id;
+    // ID 155: a manager also plays calls on their direct reports' leads.
+    const owners = ownerScopeIds(userId, await getTeamMemberIds(userId));
     const last10 = (row.phoneNumber ?? "").replace(/\D/g, "").slice(-10);
     const owned = (await db.execute<{ ok: boolean }>(sql`
       SELECT TRUE AS ok FROM dealer_leads
-       WHERE current_owner_id = ${userId}
+       WHERE current_owner_id IN (${sql.join(owners.map((o) => sql`${o}`), sql`, `)})
          AND (
            id = ${row.leadId ?? ""}
            OR (${last10} <> '' AND RIGHT(regexp_replace(COALESCE(phone, ''), '[^0-9]', '', 'g'), 10) = ${last10})

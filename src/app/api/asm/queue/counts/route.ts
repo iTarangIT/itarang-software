@@ -8,6 +8,7 @@ import { ASM_POOL_TABS, claimsByNumberOnly } from "@/lib/leads/claimScope";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
 import { countAsmFinalisedNotWon, fetchAllAsmTabCounts } from "@/lib/asm/queryBuilder";
 import { readAsmQueueFilters } from "@/lib/asm/queueFilterParams";
+import { teamForOwnScopedViewer } from "@/lib/users/team";
 
 export const dynamic = "force-dynamic";
 
@@ -26,7 +27,8 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
     // never disagree about how many leads there are.
     const filters = readAsmQueueFilters(new URL(req.url).searchParams);
     const [counts, finalisedNotWon] = await Promise.all([
-        fetchAllAsmTabCounts(user.id, filters),
+        // ID 155: a manager's own-tab badges include the team, like the table.
+        fetchAllAsmTabCounts(user.id, { ...filters, teamMemberIds: await teamForOwnScopedViewer(user) }),
         countAsmFinalisedNotWon(user.id),
     ]);
     // ID 45: no pool counts for reps — they claim by number search only.

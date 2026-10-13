@@ -10,14 +10,12 @@
  * dealer_id = the house dealer's code), so that login is admitted separately
  * by canUsePushToDealer — an ordinary dealer is not.
  */
-export const PUSH_TO_DEALER_INTERNAL_ROLES = [
-  "admin",
-  "ceo",
-  "business_head",
-  "sales_head",
-  "sales_manager",
-  "partner",
-] as const;
+// ID 33: narrowed to the decision of 8 Oct — Admin and Sales Head only. (Was
+// admin/ceo/business_head/sales_head/sales_manager/partner.)
+export const PUSH_TO_DEALER_INTERNAL_ROLES = ["admin", "sales_head"] as const;
+
+/** ID 33: only an admin may move a file a second time (still before consent). */
+export const PUSH_AGAIN_ROLES = ["admin"] as const;
 
 /** Last 10 digits of an Indian mobile, or null when it isn't one. */
 export function tenDigitMobile(input: string | null | undefined): string | null {
@@ -48,3 +46,186 @@ export function canUsePushToDealer(input: {
 }
 
 export const NO_ACTIVE_DEALER_MESSAGE = "No active dealer with this number";
+
+// ── ID 33: consent gate ─────────────────────────────────────────────────────
+//
+// Decided 10 Oct: a file may move to another dealer only until the customer
+// signs consent — the consent PDF prints the dealer's name, so a signed consent
+// pins the file to that dealer. Every push path (Step 1, bulk, the CRM action,
+// WhatsApp) refuses once any consent on the file is signed.
+
+/**
+ * consent_records / leads consent statuses that mean "the customer has signed".
+ * esign_completed + admin_review_pending = signed, awaiting admin; verified =
+ * OTP consent or admin-approved; digitally_signed / manual_uploaded / signed =
+ * the older names the same states go by. Pending, link-sent, failed, expired
+ * and admin-rejected consents do not count: a fresh consent would be needed
+ * anyway and it would carry the new dealer's name.
+ */
+export const SIGNED_CONSENT_STATUSES = [
+  "signed",
+  "esign_completed",
+  "admin_review_pending",
+  "digitally_signed",
+  "manual_uploaded",
+  "verified",
+] as const;
+
+export function isConsentSigned(status: string | null | undefined): boolean {
+  return (SIGNED_CONSENT_STATUSES as readonly string[]).includes(
+    String(status ?? "").trim().toLowerCase(),
+  );
+}
+
+/** True when any of the given consent statuses (customer or co-borrower) is signed. */
+export function anyConsentSigned(statuses: ReadonlyArray<string | null | undefined>): boolean {
+  return statuses.some(isConsentSigned);
+}
+
+/** The exact refusal text agreed with business (10 Oct). */
+export function consentSignedMessage(dealerName: string | null | undefined): string {
+  const name = (dealerName ?? "").trim() || "the current dealer";
+  return `Consent is already signed under ${name}; this file can't be moved.`;
+}
+
+/** leads.payment_method values that mean the customer needs a loan. */
+export const FINANCE_PAYMENT_METHODS = ["finance", "other_finance", "dealer_finance"] as const;
+
+export function needsLoan(paymentMethod: string | null | undefined): boolean {
+  return (FINANCE_PAYMENT_METHODS as readonly string[]).includes(paymentMethod ?? "");
+}
+
+export interface PushCheckInput {
+  /** Who is pushing (users.role). */
+  actorRole: string | null | undefined;
+  /** True for the house-dealer login path (Step 1 / bulk); its role is 'dealer'. */
+  actorIsHouseLogin?: boolean;
+  /** leads.dealer_id today. */
+  currentDealerId: string | null | undefined;
+  /** Display name of the current dealer, for the consent message. */
+  currentDealerName?: string | null;
+  houseDealerCode: string;
+  /** Any consent on the file signed (see anyConsentSigned). */
+  consentSigned: boolean;
+  /** The file was pushed before (a LEAD_PUSHED_TO_DEALER row exists). */
+  pushedBefore: boolean;
+  paymentMethod: string | null | undefined;
+  target: { dealerId: string; name: string; financeEnabled: boolean };
+}
+
+export type PushCheck = { ok: true } | { ok: false; status: number; message: string };
+
+export const PUSHED_BEFORE_MESSAGE =
+  "This file was already pushed to a dealer. Moving it again needs an admin.";
+export const NOT_HOUSE_MESSAGE = "Only files with the iTarang house dealer can be pushed to a dealer.";
+
+/**
+ * ID 33: why this file can't be pushed right now by this actor, whatever the
+ * target dealer — or null when it can. Shared by the CRM button (GET: show or
+ * hide it), the CRM push, the bulk push and the Step-1 push.
+ *  1. never after consent is signed (exact agreed message);
+ *  2. one push per file: once a file carries a push, only an admin (never the
+ *     house-dealer login) may move it again — even if it is back with the
+ *     house dealer;
+ *  3. a file that is not with the house dealer and was never pushed is a
+ *     dealer's own lead and never movable.
+ */
+export function pushBlockedReason(
+  input: Omit<PushCheckInput, "target" | "paymentMethod">,
+): { status: number; message: string } | null {
+  if (input.consentSigned) {
+    return { status: 409, message: consentSignedMessage(input.currentDealerName) };
+  }
+  const adminAgain =
+    !input.actorIsHouseLogin &&
+    (PUSH_AGAIN_ROLES as readonly string[]).includes(input.actorRole ?? "") &&
+    input.pushedBefore;
+  if (input.pushedBefore && !adminAgain) return { status: 409, message: PUSHED_BEFORE_MESSAGE };
+  const withHouse = !!input.houseDealerCode && input.currentDealerId === input.houseDealerCode;
+  if (!withHouse && !adminAgain) return { status: 409, message: NOT_HOUSE_MESSAGE };
+  return null;
+}
+
+/**
+ * ID 33: the push rules, in the order business sees them:
+ *  1. never after consent is signed (exact agreed message);
+ *  2. not to the dealer it is already with;
+ *  3. one push per file (see pushBlockedReason);
+ *  4. a customer who needs a loan only to a finance-enabled dealer.
+ */
+export function checkPush(input: PushCheckInput): PushCheck {
+  if (input.consentSigned) {
+    return { ok: false, status: 409, message: consentSignedMessage(input.currentDealerName) };
+  }
+  if (input.currentDealerId === input.target.dealerId) {
+    return { ok: false, status: 409, message: `This file is already with ${input.target.name}.` };
+  }
+  const blocked = pushBlockedReason(input);
+  if (blocked) return { ok: false, ...blocked };
+  if (needsLoan(input.paymentMethod) && !input.target.financeEnabled) {
+    return { ok: false, status: 422, message: `${input.target.name} is not enabled for finance leads.` };
+  }
+  return { ok: true };
+}
+
+/**
+ * ID 33: the dealer picker — when the customer needs a loan only
+ * finance-enabled dealers are offered (the push would be refused anyway).
+ */
+export function pickerDealers<T extends { financeEnabled: boolean }>(
+  dealers: T[],
+  opts: { financeOnly?: boolean } = {},
+): T[] {
+  return opts.financeOnly ? dealers.filter((d) => d.financeEnabled) : dealers;
+}
+
+// ── ID 33: reason ───────────────────────────────────────────────────────────
+
+export const PUSH_REASON_MIN = 3;
+export const PUSH_REASON_MAX = 500;
+export const PUSH_REASON_REQUIRED_MESSAGE = "Give a reason for the push";
+
+/** Trimmed reason when it is long enough, else null. Over-long text is cut. */
+export function normalizePushReason(reason: unknown): string | null {
+  if (typeof reason !== "string") return null;
+  const r = reason.trim();
+  return r.length >= PUSH_REASON_MIN ? r.slice(0, PUSH_REASON_MAX) : null;
+}
+
+// ── ID 33: what leaves with the old dealer ──────────────────────────────────
+//
+// A coupon is the dealer's own stock (coupon_codes.dealer_id): a coupon the old
+// dealer reserved on this file goes back to that dealer's pool and the new
+// dealer applies their own. A coupon already USED (fee paid at KYC submission)
+// is spent — it stays on the file as a record; there is nothing to give back.
+// The old dealer's salesperson (leads.salesperson_id, E-277) is cleared too —
+// the new dealer assigns their own.
+
+export type CouponOnPush = "none" | "release" | "keep_used";
+
+export function couponOnPush(
+  couponCode: string | null | undefined,
+  couponStatus: string | null | undefined,
+): CouponOnPush {
+  if (!couponCode || !couponCode.trim()) return "none";
+  return String(couponStatus ?? "").trim().toLowerCase() === "used" ? "keep_used" : "release";
+}
+
+// ── ID 33: WhatsApp operator "Which dealer is this for?" answer ─────────────
+
+export const OPERATOR_DEALER_SKIP_ID = "op_cust_skip";
+
+export type OperatorDealerAnswer =
+  | { kind: "skip" }
+  | { kind: "mobile"; mobile: string }
+  | { kind: "invalid" };
+
+/** Parse the operator's reply: the Skip button / word, a mobile, or neither. */
+export function parseOperatorDealerAnswer(text: string | null | undefined): OperatorDealerAnswer {
+  const t = (text ?? "").trim();
+  if (t.toLowerCase() === OPERATOR_DEALER_SKIP_ID || /^(skip|no|none|house|itarang)$/i.test(t)) {
+    return { kind: "skip" };
+  }
+  const mobile = tenDigitMobile(t);
+  return mobile ? { kind: "mobile", mobile } : { kind: "invalid" };
+}

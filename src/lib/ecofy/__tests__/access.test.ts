@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
     ECOFY_OUTBOUND_ACTOR,
     ECOFY_OUTBOUND_ASSIGNEE,
+    ECOFY_OWN_FINANCING_REASON,
+    isEcofyFinancier,
     canViewEcofyLead,
     checkEcofyAction,
     ecofyLeadHref,
@@ -103,5 +105,38 @@ describe("Ecofy action schema (E-307)", () => {
         expect(ecofyActionSchema.safeParse({ action: "advance", version: 3 }).success).toBe(true);
         expect(ecofyActionSchema.safeParse({ action: "close", version: 3, closureReason: "UNREACHABLE" }).success).toBe(true);
         expect(ecofyActionSchema.safeParse({ action: "close", version: 3, closureReason: "BORED" }).success).toBe(false);
+    });
+});
+
+describe("ID 51 #1 - money actions follow the financier (role per financier)", () => {
+    const s6 = (financier_name?: string | null) => ({ assigned_to_user_id: null, stage: "S6", financier_name });
+    const s7 = (financier_name?: string | null) => ({ assigned_to_user_id: null, stage: "S7", financier_name });
+
+    it("refuses sanction, down payment and disbursement on Ecofy's own financing", () => {
+        for (const name of ["Ecofy", "ECOFY Finance", null]) {
+            const d = checkEcofyAction(SH, s6(name), "financing_decision");
+            expect(d).toMatchObject({ ok: false, status: 403 });
+            expect(checkEcofyAction(SH, s6(name), "down_payment").ok).toBe(false);
+            expect(checkEcofyAction(SH, s7(name), "disbursement").ok).toBe(false);
+        }
+        expect(checkEcofyAction(SH, s6("Ecofy"), "financing_decision")).toMatchObject({ reason: ECOFY_OWN_FINANCING_REASON });
+    });
+
+    it("allows them for another financier, and leaves an unknown financier to Ecofy", () => {
+        expect(checkEcofyAction(SH, s6("Bajaj Finance"), "financing_decision").ok).toBe(true);
+        expect(checkEcofyAction(SH, s7("Bajaj Finance"), "down_payment").ok).toBe(true);
+        expect(checkEcofyAction(SH, s7("Bajaj Finance"), "disbursement").ok).toBe(true);
+        expect(checkEcofyAction(SH, s6(undefined), "financing_decision").ok).toBe(true);
+    });
+
+    it("does not touch other actions on an Ecofy-financed case", () => {
+        expect(checkEcofyAction(SH, s6("Ecofy"), "route_financier").ok).toBe(true);
+        expect(checkEcofyAction(SH, s7("Ecofy"), "create_installation").ok).toBe(true);
+    });
+
+    it("isEcofyFinancier: null = default (Ecofy), name match is case-insensitive", () => {
+        expect(isEcofyFinancier(null)).toBe(true);
+        expect(isEcofyFinancier("ecofy")).toBe(true);
+        expect(isEcofyFinancier("Bajaj")).toBe(false);
     });
 });

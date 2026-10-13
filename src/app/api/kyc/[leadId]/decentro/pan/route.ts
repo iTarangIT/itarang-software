@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { executePanVerification } from '@/lib/kyc/pan-verification';
 import { requireLeadAccess } from '@/lib/auth/requireLeadAccess';
+import { isMaskedPan } from '@/lib/kyc/panMask';
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
     try {
@@ -14,6 +15,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         const leadGate = await requireLeadAccess(leadId);
         if (!leadGate.ok) return leadGate.response;
         const { pan_number, dob, document_type } = await req.json();
+        // ID 119 / 166: a role that may not see the full PAN only has the mask.
+        if (isMaskedPan(pan_number)) {
+            return NextResponse.json(
+                { success: false, error: 'The full PAN is hidden for your role. Ask the lead owner, the Sales Head or Admin to verify it.' },
+                { status: 403 },
+            );
+        }
 
         const result = await executePanVerification(leadId, {
             panNumber: pan_number,

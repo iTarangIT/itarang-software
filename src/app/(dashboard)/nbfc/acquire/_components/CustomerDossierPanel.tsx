@@ -10,6 +10,7 @@ import type { CustomerDossier } from "@/lib/nbfc/dossier";
 import { extractOcrFields, type OcrField } from "@/lib/nbfc/ocr-display";
 import DossierActions from "./DossierActions";
 import KycVerificationDetails from "./KycVerificationDetails";
+import FreshFileLink from "@/components/shared/FreshFileLink";
 
 // Verification-step customer dossier (Addendum V0.2 §6/§7) — the read-only
 // review surface the NBFC sees before underwriting: everything the dealer
@@ -142,9 +143,8 @@ function DocTile({
   const img = isImageUrl(url, type);
   return (
     <div className="overflow-hidden rounded-lg border border-slate-200">
-      <a
-        href={url ?? undefined}
-        target="_blank"
+      <FreshFileLink
+        href={url}
         rel="noreferrer"
         className={`flex h-28 items-center justify-center bg-slate-50 ${
           url ? "hover:opacity-90" : "cursor-not-allowed"
@@ -156,7 +156,7 @@ function DocTile({
         ) : (
           <FileText className="h-8 w-8 text-slate-300" />
         )}
-      </a>
+      </FreshFileLink>
       <div className="flex items-center justify-between gap-2 px-2.5 py-2">
         <span className="truncate text-xs font-medium text-slate-600" title={label}>
           {titleCase(label)}
@@ -435,15 +435,14 @@ export default function CustomerDossierPanel({
                         key={`${d.url}-${i}`}
                         className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 px-3 py-1.5 text-sm"
                       >
-                        <a
+                        <FreshFileLink
                           href={d.url}
-                          target="_blank"
                           rel="noreferrer"
                           className="min-w-0 flex-1 truncate font-medium text-[color:var(--color-brand-sky)] hover:underline"
                           title={d.name}
                         >
                           {d.name}
-                        </a>
+                        </FreshFileLink>
                         <span className="shrink-0 text-[10px] uppercase tracking-wide text-slate-400">
                           {(d.type?.split("/")[1] || d.type || "file").slice(0, 8)}
                         </span>

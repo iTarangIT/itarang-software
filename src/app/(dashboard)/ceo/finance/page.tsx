@@ -6,11 +6,13 @@
 // realization, the business snapshot, expenses by department and project, the
 // procurement summary and the full expense ledger. One window control drives
 // the windowed panels, as it did on the overview.
+//
+// ID 89 — revenue, costs, the net and money owed by age now sit on this one
+// page: a net strip for the selected window and the receivables ageing (the
+// same buckets as "Money owed to us"), in the redesign's card style.
 
 import React from "react";
-import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowRight, Briefcase } from "lucide-react";
 
 import { GrossMarginPanel } from "@/components/dashboard/ceo/GrossMarginPanel";
 import { BusinessSnapshotPanel } from "@/components/dashboard/ceo/BusinessSnapshotPanel";
@@ -25,7 +27,22 @@ import {
 import { RealizationCard, type CeoOverviewData } from "@/components/dashboard/ceo/CeoOverviewCards";
 import { RealizationDrillDown } from "@/components/dashboard/ceo/RealizationDrillDown";
 import { DrillDownModal, type DrillMetric } from "@/components/dashboard/ceo/DrillDownModal";
-import { formatINRCompact } from "@/lib/format";
+import {
+    CardLink,
+    DashCard,
+    DashPageHeader,
+    KpiTile,
+    LoadingBlock,
+    NotAvailable,
+    inr,
+} from "@/components/dashboard/redesign/primitives";
+import type { ReceivablesAgeing } from "@/lib/dashboard/receivables";
+
+/** The snapshot-summary payload: sales − purchases − other expenses for a window. */
+type NetSummary = { purchases: number; sales: number; otherExpenses: number; net: number; label: string };
+
+/** primitives' inr() is for positive figures; the net can go negative. */
+const signedInr = (n: number) => `${n < 0 ? "−" : ""}${inr(Math.abs(n))}`;
 
 export default function RevenueAndCostsPage() {
     const [win, setWin] = React.useState<CeoWindow>(DEFAULT_CEO_WINDOW);
@@ -51,32 +68,120 @@ export default function RevenueAndCostsPage() {
         },
         refetchInterval: 60000,
     });
+    // ID 89 — the net for the page's window. Same route and rule as the Business
+    // snapshot below (and the overview's "Revenue minus purchases and
+    // expenses" line), asked with this page's window.
+    const net = useQuery<NetSummary>({
+        queryKey: ["ceo-snapshot-summary", "window", windowParams],
+        queryFn: async () => {
+            const res = await fetch(`/api/dashboard/ceo/snapshot-summary?${windowParams}`, { cache: "no-store" });
+            if (!res.ok) throw new Error("Failed to load the net");
+            return (await res.json()).data as NetSummary;
+        },
+        placeholderData: (prev) => prev,
+    });
+    // ID 89 — money owed by age; all-time as of today, like /ceo/receivables.
+    const ageing = useQuery<ReceivablesAgeing>({
+        queryKey: ["ceo-receivables-ageing"],
+        queryFn: async () => {
+            const res = await fetch(`/api/dashboard/ceo/receivables-ageing`, { cache: "no-store" });
+            if (!res.ok) throw new Error("Failed to load money owed");
+            return (await res.json()).data as ReceivablesAgeing;
+        },
+        refetchInterval: 5 * 60_000,
+    });
 
     const m = metrics || {};
     const windowLabel = overview?.label ?? "this period";
 
     return (
         <div className="space-y-6 pb-12">
-            <div>
-                <h1 className="text-xl font-semibold text-gray-900">Revenue &amp; costs</h1>
-                <p className="text-sm text-gray-500">
-                    A management view, not the accountant&apos;s books.{" "}
-                    <Link href="/ceo/invoices" className="font-semibold text-brand-700 hover:underline">
-                        Sales invoices
-                    </Link>
-                    {" · "}
-                    <Link href="/ceo/expenses" className="font-semibold text-brand-700 hover:underline">
-                        Expense approvals
-                    </Link>
-                </p>
-            </div>
+            <DashPageHeader
+                sticky
+                eyebrow="Money"
+                title="Revenue & costs"
+                subtitle="A management view, not the accountant's books."
+                footer={
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                        <CeoFilterBar value={win} onChange={setWin} />
+                        {overview && <span className="text-xs font-medium text-ink-muted">Showing {overview.label}</span>}
+                    </div>
+                }
+            >
+                <CardLink href="/ceo/invoices">Sales invoices</CardLink>
+                <CardLink href="/ceo/expenses">Expense approvals</CardLink>
+            </DashPageHeader>
+
+            {/* E-224 removed a "Net" strip from the Business snapshot because it
+                sat under the tiles reading like Realization. This one is named for
+                exactly what it subtracts and says how it differs. */}
+            <DashCard
+                title="Revenue minus purchases and expenses"
+                caption={net.data ? net.data.label : windowLabel}
+            >
+                {net.isLoading ? (
+                    <LoadingBlock />
+                ) : net.isError || !net.data ? (
+                    <NotAvailable reason="The figures for this window could not be loaded." />
+                ) : (
+                    <>
+                        <div data-testid="net-strip" className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                            <KpiTile label="Revenue" value={inr(net.data.sales)} sub="Sales invoices, void excluded" />
+                            <KpiTile
+                                label="Stock bought from OEMs"
+                                value={`−${inr(net.data.purchases)}`}
+                                sub="By OEM invoice date"
+                            />
+                            <KpiTile
+                                label="Running expenses"
+                                value={`−${inr(net.data.otherExpenses)}`}
+                                sub="Approved expenses"
+                            />
+                            <KpiTile
+                                label="Net"
+                                value={signedInr(net.data.net)}
+                                pill={{ text: net.data.net >= 0 ? "Positive" : "Negative", tone: net.data.net >= 0 ? "good" : "bad" }}
+                            />
+                        </div>
+                        <span className="text-xs leading-relaxed text-ink-muted">
+                            This counts stock bought, not stock sold, so a window of heavy stocking reads negative. It is
+                            not Realization (revenue − expense, below), which leaves OEM purchases out.
+                        </span>
+                    </>
+                )}
+            </DashCard>
+
+            <DashCard
+                title="Money owed to us, by age"
+                caption="As of today, every unpaid invoice whatever its date — the period above does not apply."
+                action={<CardLink href="/ceo/receivables">Open money owed to us</CardLink>}
+            >
+                {ageing.isLoading ? (
+                    <LoadingBlock />
+                ) : ageing.isError || !ageing.data ? (
+                    <NotAvailable reason="Money owed could not be loaded." />
+                ) : (
+                    <>
+                        <div data-testid="receivables-ageing" className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                            {ageing.data.buckets.map((b) => (
+                                <KpiTile
+                                    key={b.key}
+                                    label={b.label}
+                                    value={inr(b.amount)}
+                                    sub={`${b.invoices} invoice${b.invoices === 1 ? "" : "s"}`}
+                                    href={`/ceo/receivables?age=${b.key}`}
+                                />
+                            ))}
+                        </div>
+                        <span className="text-xs text-ink-muted">
+                            Total owed {inr(ageing.data.owed)} across {ageing.data.invoices} invoice
+                            {ageing.data.invoices === 1 ? "" : "s"}. Age is days since the invoice date.
+                        </span>
+                    </>
+                )}
+            </DashCard>
 
             <GrossMarginPanel showMapping />
-
-            <div className="flex items-center justify-between gap-4 flex-wrap">
-                <CeoFilterBar value={win} onChange={setWin} />
-                {overview && <span className="text-xs font-medium text-gray-400">Showing {overview.label}</span>}
-            </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
                 <div className="lg:col-span-2 space-y-6">
@@ -112,31 +217,21 @@ export default function RevenueAndCostsPage() {
                         byProject={m.expenses_by_project || []}
                     />
 
-                    <div className="p-6 rounded-2xl bg-white border border-gray-100 shadow-sm flex flex-col">
-                        <h3 className="text-sm font-semibold text-gray-900 mb-4 flex items-center gap-2">
-                            <Briefcase className="w-4 h-4 text-brand-600" />
-                            Procurement Overview
-                        </h3>
-                        <div className="space-y-4 flex-1 flex flex-col">
-                            <div className="flex items-center justify-between p-3 rounded-xl bg-gray-50 border border-gray-100">
-                                <span className="text-xs font-medium text-gray-600">Pending Approvals</span>
-                                <span className="text-xs font-bold text-brand-700">
-                                    {m.procurementStats?.pendingApprovals || 0} Items
-                                </span>
-                            </div>
-                            <div className="flex items-center justify-between p-3 rounded-xl bg-gray-50 border border-gray-100">
-                                <span className="text-xs font-medium text-gray-600">Active Procurement</span>
-                                <span className="text-xs font-bold text-blue-700">
-                                    {formatINRCompact(Number(m.procurementStats?.activeValue ?? 0))}
-                                </span>
-                            </div>
-                            <Link href="/procurement" className="mt-auto">
-                                <button className="w-full py-2.5 text-xs font-semibold text-brand-700 hover:bg-brand-50 rounded-xl transition-colors flex items-center justify-center gap-2 mt-2">
-                                    Review Procurement <ArrowRight className="w-3 h-3" />
-                                </button>
-                            </Link>
+                    <DashCard title="Procurement">
+                        <div className="flex items-center justify-between rounded-xl border border-border bg-bg px-3 py-2.5">
+                            <span className="text-[13px] font-medium text-ink-muted">Pending approvals</span>
+                            <span className="text-[13px] font-bold tabular-nums text-brand-navy">
+                                {m.procurementStats?.pendingApprovals || 0} items
+                            </span>
                         </div>
-                    </div>
+                        <div className="flex items-center justify-between rounded-xl border border-border bg-bg px-3 py-2.5">
+                            <span className="text-[13px] font-medium text-ink-muted">Active procurement</span>
+                            <span className="text-[13px] font-bold tabular-nums text-brand-navy">
+                                {inr(Number(m.procurementStats?.activeValue ?? 0))}
+                            </span>
+                        </div>
+                        <CardLink href="/procurement">Review procurement</CardLink>
+                    </DashCard>
                 </div>
             </div>
 

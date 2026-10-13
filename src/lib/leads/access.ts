@@ -94,6 +94,11 @@ export function canEditRegionGroup(input: {
  * ⚠ This IS the rule PATCH /api/dealer-leads/[id] and /leads/[id]/edit
  * enforce, and the one the list uses to show the Edit link, so the link never
  * leads to a refusal.
+ *
+ * ID 155 (decided 12 Oct): a manager (anyone with direct reports) may SEE
+ * their team's leads and REASSIGN them within the team, but NOT edit them.
+ * So there is deliberately no team input here — editing stays with the
+ * owner / assigned ASM / oversight roles.
  */
 export function canEditLead(input: {
   role: string | null | undefined;
@@ -186,6 +191,10 @@ export function exportsOwnLeadsOnly(role: string | null | undefined): boolean {
  * Roles that may READ only the leads they own (dealer_leads.current_owner_id)
  * — lead detail / edit pages, call logs, recordings, AI summaries (tracker ID
  * 45). Anything else is a 404 "Lead not found", same as no such lead.
+ *
+ * ID 155: "own" includes a manager's team — a lead owned by one of their
+ * direct reports (src/lib/users/team.ts leadVisibleTo). Team members still
+ * read only their own.
  *
  * partner is deliberately NOT here (unlike OWN_LEADS_EXPORT_ROLES): its read
  * scope is open business question Q3, so it keeps today's access until decided.

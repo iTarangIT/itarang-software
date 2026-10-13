@@ -1,7 +1,7 @@
 "use client";
 
-// Tracker ID 88 #3 — the rows behind a "Needs action now" tile, with assign /
-// reassign on the row. Reuses the admin BulkActionBar (real user picker,
+// Tracker ID 88 #3 — the rows behind a "Needs action now" tile, with call,
+// assign and reassign on the row. Reuses the admin BulkActionBar (real user picker,
 // /api/admin/leads/bulk) exactly as Needs Attention and Ready to Assign do:
 // tick rows for a batch, or press a row's Assign / Reassign to open the picker
 // for that one lead. A lead that leaves the tile's rule drops off on refresh.
@@ -9,6 +9,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { Phone } from "lucide-react";
 import { BulkActionBar } from "@/app/(dashboard)/admin/_components/BulkActionBar";
 import type { ActionRow } from "@/lib/dashboard/salesHeadActions";
 
@@ -17,11 +18,14 @@ const inr = (n: number) =>
 
 export function NeedsActionTable({
     rows,
+    phones,
     ownerHeading,
     hasValue,
     canAssign,
 }: {
     rows: ActionRow[];
+    /** ID 88 #3 — lead id → the dealer's phone, for the row's Call button. */
+    phones: Record<string, string>;
     ownerHeading: string;
     hasValue: boolean;
     /** The viewer is in the bulk route's role list; others only read. */
@@ -80,7 +84,7 @@ export function NeedsActionTable({
                             <th className="px-4 py-3">{ownerHeading}</th>
                             <th className="px-4 py-3">Why it is here</th>
                             {hasValue && <th className="px-4 py-3 text-right">Value</th>}
-                            {canAssign && <th className="px-4 py-3 text-right">Action</th>}
+                            <th className="px-4 py-3 text-right">Action</th>
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
@@ -112,20 +116,33 @@ export function NeedsActionTable({
                                         {r.value == null ? "—" : inr(r.value)}
                                     </td>
                                 )}
-                                {canAssign && (
-                                    <td className="px-4 py-3 text-right">
-                                        <button
-                                            type="button"
-                                            onClick={() => {
-                                                setSelected(new Set([r.lead_id]));
-                                                setReassignSignal((n) => n + 1);
-                                            }}
-                                            className="rounded-md border border-border px-2.5 py-1 text-xs font-medium text-ink hover:bg-bg"
-                                        >
-                                            {r.owner_id ? "Reassign" : "Assign"}
-                                        </button>
-                                    </td>
-                                )}
+                                <td className="whitespace-nowrap px-4 py-3 text-right">
+                                    <div className="inline-flex items-center gap-1.5">
+                                        {/* ID 88 #3 — dials from the phone (tel:); no number, no button. */}
+                                        {phones[r.lead_id] && (
+                                            <a
+                                                href={`tel:${phones[r.lead_id].replace(/[^\d+]/g, "")}`}
+                                                title={`Call ${phones[r.lead_id]}`}
+                                                className="inline-flex items-center gap-1 rounded-md border border-border px-2.5 py-1 text-xs font-medium text-ink hover:bg-bg"
+                                            >
+                                                <Phone className="h-3 w-3" aria-hidden /> Call
+                                            </a>
+                                        )}
+                                        {canAssign && (
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    setSelected(new Set([r.lead_id]));
+                                                    setReassignSignal((n) => n + 1);
+                                                }}
+                                                className="rounded-md border border-border px-2.5 py-1 text-xs font-medium text-ink hover:bg-bg"
+                                            >
+                                                {r.owner_id ? "Reassign" : "Assign"}
+                                            </button>
+                                        )}
+                                        {!phones[r.lead_id] && !canAssign && <span className="text-xs text-ink-muted">—</span>}
+                                    </div>
+                                </td>
                             </tr>
                         ))}
                     </tbody>

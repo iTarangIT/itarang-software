@@ -1,13 +1,17 @@
 import { NextResponse } from "next/server";
 import { and, desc, eq, isNotNull } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { dealerOnboardingApplications, leads } from "@/lib/db/schema";
+import { accountOwnership, dealerOnboardingApplications, leads } from "@/lib/db/schema";
 import { getAuthenticatedAppUser } from "@/lib/kyc/admin-workflow";
-import { dealerOwnsLead } from "@/lib/auth/leadAccessRules";
+import { dealerOwnsLead, mayReadFullIds, FULL_ID_ROLES } from "@/lib/auth/leadAccessRules";
 
 // Back-office roles may read/write any lead's data (review, verification,
 // sanction). Mirrors ADMIN_ROLES in src/lib/kyc/admin-workflow.ts, plus
 // finance_controller who works loan files across dealers.
+//
+// ID 119 / ID 166 (10 Oct): reaching the lead is not the same as reading the
+// customer's full PAN. That is only for Admin, the Sales Head, the CEO and the
+// lead's owner — see `fullIds` on the result and mayReadFullIds().
 const BACK_OFFICE_ROLES = new Set([
   "admin",
   "ceo",
@@ -19,7 +23,16 @@ const BACK_OFFICE_ROLES = new Set([
 ]);
 
 export type LeadAccessResult =
-  | { ok: true; user: { id: string; role: string; dealer_id: string | null } }
+  | {
+      ok: true;
+      user: {
+        id: string;
+        role: string;
+        dealer_id: string | null;
+        /** May this caller see the customer's full PAN? Else mask it (maskPan). */
+        fullIds: boolean;
+      };
+    }
   | { ok: false; response: NextResponse };
 
 /**
@@ -49,7 +62,15 @@ export async function requireLeadAccess(leadId: string): Promise<LeadAccessResul
   }
 
   if (BACK_OFFICE_ROLES.has(user.role)) {
-    return { ok: true, user: { id: user.id, role: user.role, dealer_id: user.dealer_id } };
+    return {
+      ok: true,
+      user: {
+        id: user.id,
+        role: user.role,
+        dealer_id: user.dealer_id,
+        fullIds: await fullIdsForLead(user, leadId),
+      },
+    };
   }
 
   // Dealer (or any other non-back-office role): must own the lead.
@@ -83,7 +104,80 @@ export async function requireLeadAccess(leadId: string): Promise<LeadAccessResul
     };
   }
 
-  return { ok: true, user: { id: user.id, role: user.role, dealer_id: dealerCode } };
+  // Past the gate, a dealer (or uploader) is the lead's owner: full PAN.
+  return { ok: true, user: { id: user.id, role: user.role, dealer_id: dealerCode, fullIds: true } };
+}
+
+/**
+ * May this signed-in user read lead `leadId`'s full PAN (ID 119 / ID 166)?
+ * For routes that gate the lead some other way (the admin case review uses
+ * requireAdminAppUser). Admin, Sales Head and CEO never touch the database.
+ */
+export async function fullIdsForLead(
+  user: { id: string; role: string | null; dealer_id?: string | null },
+  leadId: string,
+): Promise<boolean> {
+  const role = (user.role ?? "").toLowerCase();
+  if ((FULL_ID_ROLES as readonly string[]).includes(role)) return true;
+  try {
+    const [lead] = await db
+      .select({ dealer_id: leads.dealer_id, uploader_id: leads.uploader_id })
+      .from(leads)
+      .where(eq(leads.id, leadId))
+      .limit(1);
+    if (!lead) return false;
+    let accountOwnerId: string | null = null;
+    if (lead.dealer_id) {
+      // leads.dealer_id is the dealer's account id (users.dealer_id = accounts.id).
+      const [own] = await db
+        .select({ owner: accountOwnership.owner_user_id })
+        .from(accountOwnership)
+        .where(eq(accountOwnership.account_id, lead.dealer_id))
+        .limit(1);
+      accountOwnerId = own?.owner ?? null;
+    }
+    const dealerCode = role === "dealer" ? await resolveDealerCode({ id: user.id, role, dealer_id: user.dealer_id ?? null }) : null;
+    return mayReadFullIds({
+      role,
+      userId: user.id,
+      leadUploaderId: lead.uploader_id,
+      accountOwnerId,
+      dealerOwnsLead: role === "dealer" && dealerOwnsLead(lead.dealer_id, dealerCode),
+    });
+  } catch (err) {
+    console.error("[fullIdsForLead] owner lookup failed:", err);
+    return false;
+  }
+}
+
+/**
+ * The dealer code a dealer login acts under: users.dealer_id, or — for a
+ * dealer login whose users.dealer_id was never filled in — the code on its
+ * approved onboarding application (ID 119). Null for any other role without
+ * a dealer_id.
+ */
+export async function resolveDealerCode(user: {
+  id: string;
+  role: string | null;
+  dealer_id: string | null;
+}): Promise<string | null> {
+  const own = user.dealer_id?.trim();
+  if (own) return own;
+  if ((user.role ?? "").toLowerCase() !== "dealer") return null;
+  return dealerCodeFromApplication(user.id);
+}
+
+/**
+ * May this dealer act on a lead whose leads.dealer_id is `leadDealerId`?
+ * Replaces the raw `lead.dealer_id !== user.dealer_id` compare in the dealer
+ * lead routes, which refused a dealer login with no users.dealer_id on its own
+ * leads (ID 119) — and let two empty values count as the same dealer.
+ */
+export async function dealerMayActOnLead(
+  user: { id: string; role: string | null; dealer_id: string | null },
+  leadDealerId: string | null | undefined,
+): Promise<boolean> {
+  return dealerOwnsLead(leadDealerId, await resolveDealerCode(user));
 }
 
 /** Dealer code on the latest onboarding application this user owns, or null. */

@@ -6,6 +6,7 @@
 // Assignment history lives in the Timeline tab (FollowUpTabs).
 
 import { useRef, useState } from "react";
+import { isEcofyFinancier } from "@/lib/ecofy/access";
 import { formatIst, inr } from "../badges";
 import { ecofyGet, ecofyUpload, todayIso, useLeadData, useLookup, type ListItem } from "../client";
 import { EpcPartnerPicker } from "../EpcPartnerPicker";
@@ -227,7 +228,11 @@ export function FinancingTab(p: TabProps) {
                     </ul>
                 )}
                 {!can("down_payment") && !can("disbursement") && (
-                    <p className="text-sm text-gray-500">Payments are recorded by the Sales Head (or by Ecofy for its own financing).</p>
+                    <p className="text-sm text-gray-500">
+                        {isEcofyFinancier(c.financierName)
+                            ? "Ecofy financing: Ecofy Admin records the sanction, down payment and disbursement in Ecofy. The CRM shows whether each is recorded; the amounts stay with Ecofy."
+                            : "Payments are recorded by the Sales Head."}
+                    </p>
                 )}
                 {!status.data?.downPaymentRecorded && <DownPaymentForm {...p} />}
                 <DisbursementForm {...p} />

@@ -35,6 +35,7 @@ import {
 import { notifyDealerRepliedToNbfc } from "@/lib/notifications/events";
 import { dealerDisplayName } from "@/lib/notifications/emit";
 import { sendNbfcEventEmail } from "@/lib/nbfc/event-mailer";
+import { dealerMayActOnLead } from "@/lib/auth/requireLeadAccess";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -57,7 +58,7 @@ export async function POST(
     if (!lead) {
       return NextResponse.json({ ok: false, error: "Lead not found" }, { status: 404 });
     }
-    if (lead.dealer_id !== user.dealer_id) {
+    if (!(await dealerMayActOnLead(user, lead.dealer_id))) {
       return NextResponse.json({ ok: false, error: "Access denied" }, { status: 403 });
     }
 
@@ -166,7 +167,7 @@ export async function POST(
       }
     }
 
-    const replyDealerName = await dealerDisplayName(user.dealer_id);
+    const replyDealerName = await dealerDisplayName(lead.dealer_id);
     await notifyDealerRepliedToNbfc({
       leadId,
       requestId,

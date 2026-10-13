@@ -9,8 +9,12 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+    FRESH_LINK_TTL_SECONDS,
     fileLinkSignature,
+    fileLinkTooLong,
     fileLinkValid,
+    filesProxyTarget,
+    linkTtl,
     isPrivateDealerDocument,
     publicUploadFolder,
     safeStorageKey,
@@ -18,6 +22,7 @@ import {
     shareableFileUrl,
     signedFilePath,
 } from "../fileAccess";
+import { isStoredFileUrl, onFreshFileClick } from "../freshFileLink";
 
 afterEach(() => vi.unstubAllEnvs());
 
@@ -182,16 +187,19 @@ describe("signedFilePath (ID 119)", () => {
 describe("the routes use these rules", () => {
     const read = (...parts: string[]) => readFileSync(join(process.cwd(), "src", ...parts), "utf8");
 
-    it("the file link checks the path, then login-or-signature, before it reads storage", () => {
+    it("the file link checks the path, then login-or-signature and the file rule, before it reads storage", () => {
         const route = read("app", "api", "files", "[bucket]", "[...path]", "route.ts");
         const keyAt = route.indexOf("safeStorageKey(segments)");
         const signAt = route.indexOf("fileLinkValid(");
-        const authAt = route.indexOf("auth.getUser()");
+        const authAt = route.indexOf("getAuthenticatedAppUser()");
+        // ID 166: a login alone is not enough — the role / owner rule runs too.
+        const ruleAt = route.indexOf("canOpenStoredFile(user, bucket, key)");
         const readAt = route.indexOf("readBucketObject(bucket, key)");
         expect(keyAt).toBeGreaterThan(-1);
         expect(signAt).toBeGreaterThan(keyAt);
         expect(authAt).toBeGreaterThan(signAt);
-        expect(readAt).toBeGreaterThan(authAt);
+        expect(ruleAt).toBeGreaterThan(authAt);
+        expect(readAt).toBeGreaterThan(ruleAt);
         expect(route).not.toMatch(/segments\.join\(/);
         // ID 119: no bucket is exempt from the login check any more.
         expect(route).not.toMatch(/AUTH_REQUIRED_BUCKETS/);
@@ -203,8 +211,126 @@ describe("the routes use these rules", () => {
         expect(route).toMatch(/safeUploadFileName\(/);
     });
 
-    it("the Supabase fallback is opt-in", () => {
+    it("there is no fallback to the old storage any more (ID 166)", () => {
         const reader = read("lib", "storage", "readStoredDocument.ts");
-        expect(reader).toMatch(/if \(!buf && storageFallbackEnabled\(\)\)/);
+        expect(reader).not.toMatch(/storageFallbackEnabled/);
+        expect(reader).not.toMatch(/process\.env\.STORAGE_SUPABASE_FALLBACK/);
+        // A miss on the active backend is a miss: one read, no second backend.
+        const start = reader.indexOf("export async function readBucketObject");
+        const fn = reader.slice(start, reader.indexOf("\n}", start));
+        expect(fn.match(/getObject\(|fromSupabase\(/g)?.length).toBe(2); // the one ternary
+        expect(fn).not.toMatch(/if \(!buf/);
+    });
+
+    it("a KYC signed link longer than 15 minutes is not honoured, and `by` is part of the check (ID 166)", () => {
+        const route = read("app", "api", "files", "[bucket]", "[...path]", "route.ts");
+        expect(route).toMatch(/isKycFile\(file\) && fileLinkTooLong\(exp\)/);
+        expect(route).toContain('fileLinkValid(bucket, key, exp, req.nextUrl.searchParams.get("sig"), Date.now(), by)');
+    });
+
+    it("the fresh-link endpoint checks the file rule before it signs, for 15 minutes, for this user (ID 166)", () => {
+        const route = read("app", "api", "files", "link", "route.ts");
+        const authAt = route.indexOf("getAuthenticatedAppUser()");
+        const ruleAt = route.indexOf("canOpenStoredFile(user, bucket, key)");
+        const signAt = route.indexOf("signedFilePath(target.path, FRESH_LINK_TTL_SECONDS, { by: user.id })");
+        expect(authAt).toBeGreaterThan(-1);
+        expect(ruleAt).toBeGreaterThan(authAt);
+        expect(signAt).toBeGreaterThan(ruleAt);
+        expect(route).toMatch(/safeStorageKey\(/);
+    });
+});
+
+describe("fresh 15-minute links (ID 166)", () => {
+    const KYC = "kyc/LEAD-1/aadhaar_front_1.jpg";
+
+    it("a link minted for a user validates only with that user", () => {
+        vi.stubEnv("FILE_LINK_SECRET", "test-secret-0123456789");
+        const now = 1_800_000_000_000;
+        const link = fileLinkSignature("documents", KYC, FRESH_LINK_TTL_SECONDS, now, "user-a")!;
+        expect(fileLinkValid("documents", KYC, String(link.exp), link.sig, now, "user-a")).toBe(true);
+        expect(fileLinkValid("documents", KYC, String(link.exp), link.sig, now, "user-b")).toBe(false);
+        expect(fileLinkValid("documents", KYC, String(link.exp), link.sig, now)).toBe(false);
+        // Dead after 15 minutes.
+        expect(fileLinkValid("documents", KYC, String(link.exp), link.sig, now + 15 * 60_000 + 1000, "user-a")).toBe(false);
+        // A link minted with no user (WhatsApp delivery) signs exactly as before.
+        const plain = fileLinkSignature("documents", KYC, 60, now)!;
+        expect(fileLinkValid("documents", KYC, String(plain.exp), plain.sig, now)).toBe(true);
+    });
+
+    it("signedFilePath carries the user and stays relative", () => {
+        vi.stubEnv("FILE_LINK_SECRET", "test-secret-0123456789");
+        const signed = signedFilePath(`/api/files/documents/${KYC}`, FRESH_LINK_TTL_SECONDS, { by: "user-a" })!;
+        expect(signed).toMatch(/^\/api\/files\/documents\/kyc\/LEAD-1\/aadhaar_front_1\.jpg\?exp=\d+&sig=[0-9a-f]{64}&by=user-a$/);
+        const q = new URL(signed, "https://x.test").searchParams;
+        expect(fileLinkValid("documents", KYC, q.get("exp"), q.get("sig"), Date.now(), q.get("by"))).toBe(true);
+    });
+
+    it("no signer gives a customer KYC file more than 15 minutes; other files keep their life", () => {
+        expect(linkTtl("documents", KYC, 7 * 24 * 3600)).toBe(FRESH_LINK_TTL_SECONDS);
+        expect(linkTtl("documents", KYC, 300)).toBe(300);
+        expect(linkTtl("dealer-documents", "owner-photograph/a.jpg", 7 * 24 * 3600)).toBe(7 * 24 * 3600);
+        vi.stubEnv("FILE_LINK_SECRET", "test-secret-0123456789");
+        const kyc = new URL(shareableFileUrl(`/api/files/documents/${KYC}`, { origin: "https://crm.test", ttlSeconds: 3600 })!);
+        expect(Number(kyc.searchParams.get("exp")) * 1000 - Date.now()).toBeLessThanOrEqual(FRESH_LINK_TTL_SECONDS * 1000 + 1000);
+        const week = new URL(signedFilePath(`/api/files/documents/${KYC}`, 7 * 24 * 3600)!, "https://x.test");
+        expect(Number(week.searchParams.get("exp")) * 1000 - Date.now()).toBeLessThanOrEqual(FRESH_LINK_TTL_SECONDS * 1000 + 1000);
+    });
+
+    it("fileLinkTooLong spots a link minted for longer than 15 minutes", () => {
+        const now = 1_800_000_000_000;
+        const s = Math.floor(now / 1000);
+        expect(fileLinkTooLong(s + 15 * 60, undefined, now)).toBe(false);
+        expect(fileLinkTooLong(s + 15 * 60 + 30, undefined, now)).toBe(false); // clock skew
+        expect(fileLinkTooLong(s + 60 * 60, undefined, now)).toBe(true);
+        expect(fileLinkTooLong(s + 7 * 24 * 3600, undefined, now)).toBe(true);
+        expect(fileLinkTooLong("not-a-number", undefined, now)).toBe(true);
+    });
+
+    it("filesProxyTarget finds bucket and key in relative and absolute links", () => {
+        expect(filesProxyTarget(`/api/files/documents/${KYC}?exp=1&sig=x`)).toEqual({
+            path: `/api/files/documents/${KYC}`,
+            bucket: "documents",
+            key: KYC,
+        });
+        expect(filesProxyTarget(`https://crm.test/api/files/documents/${KYC}`)?.key).toBe(KYC);
+        expect(filesProxyTarget("/api/files/documents/../x")).toBeNull();
+        expect(filesProxyTarget("https://elsewhere.test/x.pdf")).toBeNull();
+    });
+
+    it("the click helper only takes over plain clicks on stored files", async () => {
+        expect(isStoredFileUrl(`/api/files/documents/${KYC}`)).toBe(true);
+        expect(isStoredFileUrl("https://crm.test/api/files/documents/a.pdf")).toBe(true);
+        expect(isStoredFileUrl("/api/files/link?u=x")).toBe(false);
+        expect(isStoredFileUrl("/api/nbfc-uploads/a.pdf")).toBe(false);
+        expect(isStoredFileUrl(null)).toBe(false);
+
+        const ev = (over: Record<string, unknown> = {}) => {
+            const e = {
+                prevented: false,
+                preventDefault() {
+                    e.prevented = true;
+                },
+                button: 0,
+                ...over,
+            };
+            return e;
+        };
+        const openSpy = vi.fn(() => null);
+        vi.stubGlobal("window", { open: openSpy, alert: vi.fn() });
+        vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ url: "/signed" }), { status: 200 })));
+        const ctrl = ev({ ctrlKey: true });
+        onFreshFileClick(ctrl, `/api/files/documents/${KYC}`);
+        expect(ctrl.prevented).toBe(false);
+        const other = ev();
+        onFreshFileClick(other, "https://elsewhere.test/x.pdf");
+        expect(other.prevented).toBe(false);
+        const plain = ev();
+        onFreshFileClick(plain, `/api/files/documents/${KYC}`);
+        expect(plain.prevented).toBe(true);
+        expect(openSpy).toHaveBeenCalledWith("about:blank", "_blank");
+        // The pop-up was blocked (open returned null), so the signed link opens directly.
+        await new Promise((r) => setTimeout(r, 0));
+        expect(openSpy).toHaveBeenLastCalledWith("/signed", "_blank", "noopener,noreferrer");
+        vi.unstubAllGlobals();
     });
 });

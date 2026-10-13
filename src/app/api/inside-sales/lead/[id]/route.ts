@@ -6,7 +6,8 @@ import { requireRole } from "@/lib/auth-utils";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
 import { fetchLeadDetailBundle } from "@/lib/inside-sales/leadDetail";
 import { readsOwnLeadsOnly } from "@/lib/leads/access";
-import { leadOwnedBy } from "@/lib/ai-dialer/campaignAccess";
+// ID 155: read access = own leads, or a direct report's (manager).
+import { leadVisibleTo } from "@/lib/users/team";
 
 export const dynamic = "force-dynamic";
 
@@ -27,7 +28,7 @@ export const GET = withErrorHandler(
         const { id } = await ctx.params;
         if (!id) return errorResponse("Lead id required", 400);
         // ID 45: a rep reads only leads they own; anything else is "no such lead".
-        if (readsOwnLeadsOnly(user.role) && !(await leadOwnedBy(id, user.id))) {
+        if (readsOwnLeadsOnly(user.role) && !(await leadVisibleTo(id, user.id))) {
             return errorResponse("Lead not found", 404);
         }
 

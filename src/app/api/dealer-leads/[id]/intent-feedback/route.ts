@@ -35,6 +35,8 @@ import { QualificationSignalsSchema } from "@/lib/ai/scoring/signals";
 import { statusToBand } from "@/lib/ai/scoring";
 import { exportsOwnLeadsOnly } from "@/lib/exports/downloadLog";
 import { leadOwnedBy } from "@/lib/ai-dialer/campaignAccess";
+// ID 155: read access = own leads, or a direct report's (manager).
+import { leadVisibleTo } from "@/lib/users/team";
 import {
   applyIntentOverride,
   stampHumanBandOnCall,
@@ -202,7 +204,7 @@ export const GET = withErrorHandler(
     const user = await requireRole([...INTENT_REVIEW_ROLES]);
 
     const { id: leadId } = await ctx.params;
-    if (exportsOwnLeadsOnly(user.role) && !(await leadOwnedBy(leadId, user.id))) {
+    if (exportsOwnLeadsOnly(user.role) && !(await leadVisibleTo(leadId, user.id))) {
       return errorResponse("Lead not found", 404);
     }
     const callId = new URL(req.url).searchParams.get("callId");

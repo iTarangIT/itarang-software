@@ -10,6 +10,7 @@ import {
   STEP4_UNLOCKED_STATUSES,
   submitStep4ProductSelection,
 } from "@/lib/leads/submit-step4";
+import { dealerMayActOnLead } from "@/lib/auth/requireLeadAccess";
 
 // BRD V2 §2.4 — finance path submit for Step 4.
 // Stores the product selection, advances the lead to 'pending_final_approval'
@@ -45,7 +46,7 @@ export async function POST(
         { status: 404 },
       );
     }
-    if (lead.dealer_id !== user.dealer_id) {
+    if (!(await dealerMayActOnLead(user, lead.dealer_id))) {
       return NextResponse.json(
         { success: false, error: { message: "Access denied" } },
         { status: 403 },
@@ -71,7 +72,7 @@ export async function POST(
       lead,
       body,
       submittedBy: user.id,
-      dealerCode: user.dealer_id,
+      dealerCode: lead.dealer_id, // = this dealer's code, checked above (ID 119)
     });
 
     // E-275 — the Bajaj Finance card bypasses the NBFC fan-out: the lead is

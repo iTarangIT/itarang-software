@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { createContext, useContext, useMemo, useRef, useState } from "react";
 import {
   CheckCircle2,
   AlertTriangle,
@@ -56,10 +56,15 @@ type PreviewDoc = {
   isPdf: boolean;
 };
 
-function resolveDocUrl(item: UploadItemLike) {
+// ID 166: fresh signed links handed back by the resume code, keyed by the
+// stored URL, for a dealer whose 7-day upload links ran out.
+const FreshLinksContext = createContext<Record<string, string>>({});
+
+function resolveDocUrl(item: UploadItemLike, fresh: Record<string, string> = {}) {
   if (!item) return null;
+  const stored = item.uploadedUrl ? fresh[item.uploadedUrl] : undefined;
   // viewUrl is signed — it opens without a login (ID 119).
-  return (item as any).viewUrl || item.uploadedUrl || (item as any).previewUrl || null;
+  return stored || (item as any).viewUrl || item.uploadedUrl || (item as any).previewUrl || null;
 }
 
 function inferKindFromUrl(url: string, fileName?: string) {
@@ -80,7 +85,7 @@ function DocumentTile({
   item: UploadItemLike;
   onOpen: (doc: PreviewDoc) => void;
 }) {
-  const url = resolveDocUrl(item);
+  const url = resolveDocUrl(item, useContext(FreshLinksContext));
   const fileName = item?.file?.name || "";
   const uploaded = Boolean(url);
 
@@ -372,6 +377,7 @@ export default function StepReview() {
   // has not proved it owns it (no login). The server mails a code to the email
   // ON that application; entering it here yields a token the submit accepts.
   const resumeTokenRef = useRef<string | null>(null);
+  const [freshLinks, setFreshLinks] = useState<Record<string, string>>({});
   const [resume, setResume] = useState<{
     sentTo: string | null;
     code: string;
@@ -458,6 +464,7 @@ export default function StepReview() {
         return;
       }
       resumeTokenRef.current = json.resumeToken;
+      if (json.documentLinks) setFreshLinks(json.documentLinks);
       setResume(null);
       setErrors({});
       // Submit again, now carrying the proof.
@@ -692,6 +699,7 @@ export default function StepReview() {
   };
 
   return (
+    <FreshLinksContext.Provider value={freshLinks}>
     <div className="space-y-6">
       {/* ── Header ── */}
       <div className="rounded-3xl border border-[#E3E8EF] bg-gradient-to-br from-white to-[#F7FAFD] p-6 shadow-sm md:p-8">
@@ -1326,5 +1334,6 @@ export default function StepReview() {
         onClose={() => setPreviewDoc(null)}
       />
     </div>
+    </FreshLinksContext.Provider>
   );
 }

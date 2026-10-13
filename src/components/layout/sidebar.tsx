@@ -441,6 +441,16 @@ function timeLimitsItem(idPrefix: string) {
   };
 }
 
+// ID 166 — who opened which customer KYC file, and when (E-339). Admin and CEO.
+function kycFileOpensItem(idPrefix: string) {
+  return {
+    id: `${idPrefix}-kyc-file-opens`,
+    label: "KYC file opens",
+    icon: ShieldCheck,
+    href: "/admin/settings/file-access-log",
+  };
+}
+
 // B9 — the buyback team's per-SPOC morning mail.
 function buybackDailyDigestItem(idPrefix: string) {
   return {
@@ -619,7 +629,7 @@ const roleNavigation: Record<string, any[]> = {
         ...reportsNav("ceo"),
         {
           id: "ceo-sales-dashboard",
-          label: "Sales Dashboard",
+          label: "Sales dashboard",
           icon: TrendingUp,
           href: "/admin/reports/sales-dashboard",
         },
@@ -747,6 +757,7 @@ const roleNavigation: Record<string, any[]> = {
           href: "/ceo/news",
         },
         timeLimitsItem("ceo"),
+        kycFileOpensItem("ceo"),
       ],
     },
     {
@@ -833,7 +844,7 @@ const roleNavigation: Record<string, any[]> = {
       items: [
         {
           id: "dashboard",
-          label: "Dashboard",
+          label: "Sales dashboard",
           icon: LayoutDashboard,
           href: "/sales-head",
         },
@@ -911,7 +922,7 @@ const roleNavigation: Record<string, any[]> = {
         ...reportsNav("sh"),
         {
           id: "sh-sales-dashboard",
-          label: "Sales Dashboard",
+          label: "Sales dashboard",
           icon: TrendingUp,
           href: "/admin/reports/sales-dashboard",
         },
@@ -1297,7 +1308,7 @@ const roleNavigation: Record<string, any[]> = {
         },
         {
           id: "partner-sales-dashboard",
-          label: "Sales Dashboard",
+          label: "Sales dashboard",
           icon: TrendingUp,
           href: "/admin/reports/sales-dashboard",
         },
@@ -1456,7 +1467,7 @@ const roleNavigation: Record<string, any[]> = {
       items: [
         {
           id: "dashboard",
-          label: "Dashboard",
+          label: "Sales dashboard",
           icon: LayoutDashboard,
           href: "/admin",
         },
@@ -1514,7 +1525,7 @@ const roleNavigation: Record<string, any[]> = {
         ...reportsNav("admin"),
         {
           id: "admin-sales-dashboard",
-          label: "Sales Dashboard",
+          label: "Sales dashboard",
           icon: TrendingUp,
           href: "/admin/reports/sales-dashboard",
         },
@@ -1605,6 +1616,7 @@ const roleNavigation: Record<string, any[]> = {
         targetsPendingDigestItem("admin"),
         buybackDailyDigestItem("admin"),
         timeLimitsItem("admin"),
+        kycFileOpensItem("admin"),
         loanProductSettingsItem("admin"),
         nbfcSettingsSubnav("admin"),
         whatsappSettingsSubnav("admin"),
@@ -1821,7 +1833,7 @@ const roleNavigation: Record<string, any[]> = {
       items: [
         {
           id: "bh-sales-dashboard",
-          label: "Sales Dashboard",
+          label: "Sales dashboard",
           icon: TrendingUp,
           href: "/admin/reports/sales-dashboard",
         },
@@ -2544,6 +2556,70 @@ interface NavGroupForActive {
   items: NavItemForActive[];
 }
 
+// Universal nav items (e.g. Submit Expense) appended to every role except:
+//  · "user" — the unauthenticated path-inferred fallback view;
+//  · "scrap_vendor" — a vendor is a COUNTERPARTY, not staff. "Submit Expense"
+//    files a business expense for a CEO to approve; offering that to the firm
+//    we are selling scrap to is not a universal action, it is a wrong one.
+//  · "it" — the IT console is a single-purpose security surface (scanner
+//    findings + live attacks); expense filing is out of scope for it.
+//  · "operations" — a shared monitoring login, not a person. Nobody files an
+//    expense as operations@itarang.com, and the console is meant to be one
+//    screen with nothing on it that isn't monitoring.
+//  · "partner" — an external partner, not iTarang staff. Their expenses are
+//    settled under the partner agreement, not filed for CEO approval here.
+const NO_COMMON_ITEMS = new Set([
+  "user",
+  "scrap_vendor",
+  "refurbisher",
+  "it",
+  "operations",
+  "partner",
+  // E-316 — feature-request-only logins; no expense submission.
+  "product_head",
+  "tech_head",
+  "developer",
+]);
+
+/**
+ * A role's menu before any badge pass: its own sections (`own`, already
+ * filtered for a dealer), the shared COMMON_ITEMS and any trailing sections,
+ * with duplicate EXPENSES groups merged. Exported so the menu tests (ID 90)
+ * read the real menus instead of restating them.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- the role menus (roleNavigation) are untyped
+export function assembleRoleMenu(role: string, own: any[] = roleNavigation[role] ?? []): any[] {
+  const all = [
+    ...own,
+    ...(NO_COMMON_ITEMS.has(role) ? [] : COMMON_ITEMS),
+    // Anything that must render below the shared EXPENSES group. Empty for
+    // every role but sales_head, so this is a no-op elsewhere.
+    ...(ROLE_TRAILING_SECTIONS[role] ?? []),
+  ];
+
+  // Merge duplicate EXPENSES groups so a role with its own EXPENSES section
+  // gets the shared "Submit Expense" item inside it instead of rendering two
+  // separate headings.
+  return all.reduce((acc: any[], group: any) => {
+    if (group.section !== "EXPENSES") {
+      acc.push(group);
+      return acc;
+    }
+
+    const existingExpenses = acc.find((item) => item.section === "EXPENSES");
+    if (!existingExpenses) {
+      acc.push({
+        section: "EXPENSES",
+        items: [...group.items],
+      });
+      return acc;
+    }
+
+    existingExpenses.items.push(...group.items);
+    return acc;
+  }, []);
+}
+
 // U5 — /dealer-portal/buyback/<id> detail routes have no nav entry of their
 // own. "Buyback Dashboard" is `exact` (Task 6), so it never matches by
 // prefix here, and no sibling item's href (new/requests/pickups/payments) is
@@ -3048,59 +3124,8 @@ export function Sidebar() {
       .filter((group: any) => group.items.length > 0);
   }, [inferredRole, dealerFinanceEnabled, dealerType]);
 
-  // Universal nav items (e.g. Submit Expense) appended to every role except:
-  //  · "user" — the unauthenticated path-inferred fallback view;
-  //  · "scrap_vendor" — a vendor is a COUNTERPARTY, not staff. "Submit Expense"
-  //    files a business expense for a CEO to approve; offering that to the firm
-  //    we are selling scrap to is not a universal action, it is a wrong one.
-  //  · "it" — the IT console is a single-purpose security surface (scanner
-  //    findings + live attacks); expense filing is out of scope for it.
-  //  · "operations" — a shared monitoring login, not a person. Nobody files an
-  //    expense as operations@itarang.com, and the console is meant to be one
-  //    screen with nothing on it that isn't monitoring.
-  //  · "partner" — an external partner, not iTarang staff. Their expenses are
-  //    settled under the partner agreement, not filed for CEO approval here.
-  const NO_COMMON_ITEMS = new Set([
-    "user",
-    "scrap_vendor",
-    "refurbisher",
-    "it",
-    "operations",
-    "partner",
-    // E-316 — feature-request-only logins; no expense submission.
-    "product_head",
-    "tech_head",
-    "developer",
-  ]);
-  let menuItems = [
-    ...filteredMenuItems,
-    ...(NO_COMMON_ITEMS.has(inferredRole) ? [] : COMMON_ITEMS),
-    // Anything that must render below the shared EXPENSES group. Empty for
-    // every role but sales_head, so this is a no-op elsewhere.
-    ...(ROLE_TRAILING_SECTIONS[inferredRole] ?? []),
-  ];
-
-  // Merge duplicate EXPENSES groups so a role with its own EXPENSES section
-  // gets the shared "Submit Expense" item inside it instead of rendering two
-  // separate headings.
-  menuItems = menuItems.reduce((acc: any[], group: any) => {
-    if (group.section !== "EXPENSES") {
-      acc.push(group);
-      return acc;
-    }
-
-    const existingExpenses = acc.find((item) => item.section === "EXPENSES");
-    if (!existingExpenses) {
-      acc.push({
-        section: "EXPENSES",
-        items: [...group.items],
-      });
-      return acc;
-    }
-
-    existingExpenses.items.push(...group.items);
-    return acc;
-  }, []);
+  // Shared items, trailing sections and the EXPENSES merge: assembleRoleMenu.
+  let menuItems = assembleRoleMenu(inferredRole, filteredMenuItems);
 
   // E-307 — Ecofy badges. Sales Head: leads waiting in the pickup queue (on
   // the Pickup Queue child AND the collapsed "Ecofy" node, so it shows while

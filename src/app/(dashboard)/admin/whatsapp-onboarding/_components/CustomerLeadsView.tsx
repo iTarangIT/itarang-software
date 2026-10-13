@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ExternalLink, Loader2, RefreshCw, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import PushToDealerPanel from "@/components/kyc/PushToDealerPanel";
 import type { PartialCustomerLead } from "./types";
 
 type Response = {
@@ -27,9 +28,14 @@ export function CustomerLeadsView() {
     const [search, setSearch] = useState("");
     const [applied, setApplied] = useState("");
     const [page, setPage] = useState(1);
+    // ID 33: "whatsapp" = dealer-started WhatsApp leads (as before); "house" =
+    // the iTarang house dealer's unsubmitted files from every channel, the
+    // ones Admin / Sales Head push to an onboarded dealer before consent.
+    const [scope, setScope] = useState<"whatsapp" | "house">("whatsapp");
 
     const params = new URLSearchParams({ page: String(page), limit: "25" });
     if (applied) params.set("q", applied);
+    if (scope === "house") params.set("scope", "house");
 
     const query = useQuery<Response>({
         queryKey: ["admin-whatsapp-customer-leads", params.toString()],
@@ -56,9 +62,35 @@ export function CustomerLeadsView() {
                         Customer leads in progress
                     </h2>
                     <p className="text-xs text-ink-muted">
-                        Started by a dealer over WhatsApp and not yet sent to
-                        iTarang for KYC review.
+                        {scope === "house"
+                            ? "With the iTarang house dealer (any channel) and not yet sent for KYC review. Push a file to a dealer before the customer signs consent."
+                            : "Started by a dealer over WhatsApp and not yet sent to iTarang for KYC review."}
                     </p>
+                </div>
+
+                <div className="ml-2 inline-flex rounded-md border border-border p-0.5 text-xs">
+                    {(
+                        [
+                            ["whatsapp", "WhatsApp"],
+                            ["house", "iTarang house"],
+                        ] as const
+                    ).map(([key, label]) => (
+                        <button
+                            key={key}
+                            type="button"
+                            onClick={() => {
+                                setScope(key);
+                                setPage(1);
+                            }}
+                            className={`rounded px-2 py-1 ${
+                                scope === key
+                                    ? "bg-brand-sky/10 font-medium text-ink"
+                                    : "text-ink-muted hover:text-ink"
+                            }`}
+                        >
+                            {label}
+                        </button>
+                    ))}
                 </div>
 
                 <form
@@ -228,7 +260,19 @@ export function CustomerLeadsView() {
                                         ).toLocaleDateString()}
                                     </td>
                                     <td className="px-4 py-3 align-top">
-                                        <div className="flex justify-end">
+                                        <div className="flex flex-col items-end gap-1.5">
+                                            {/* ID 33: house file, no signed consent, Admin / Sales Head. */}
+                                            {r.pushable && (
+                                                <PushToDealerPanel
+                                                    leadId={r.leadId}
+                                                    variant="button"
+                                                    onPushed={() =>
+                                                        qc.invalidateQueries({
+                                                            queryKey: ["admin-whatsapp-customer-leads"],
+                                                        })
+                                                    }
+                                                />
+                                            )}
                                             <a
                                                 href={`/admin/kyc-review/${r.leadId}`}
                                                 className="inline-flex items-center gap-1 text-xs text-primary hover:underline"

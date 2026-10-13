@@ -18,6 +18,7 @@ import { db } from "@/lib/db";
 import { leads } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 import { reselectFinancing, ReselectError } from "@/lib/leads/reselect-financing";
+import { dealerMayActOnLead } from "@/lib/auth/requireLeadAccess";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -50,13 +51,15 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       .where(eq(leads.id, leadId))
       .limit(1);
     if (!lead) return bad("Lead not found", 404);
-    if (!user.dealer_id || lead.dealer_id !== user.dealer_id) return bad("Access denied", 403);
+    if (!(await dealerMayActOnLead(user, lead.dealer_id))) return bad("Access denied", 403);
 
     const result = await reselectFinancing({
       leadId,
       nbfcId: Number(parsed.data.nbfcId),
       loanProductId: Number(parsed.data.loanProductId),
-      dealerCode: user.dealer_id,
+      // The access check above proved lead.dealer_id is this dealer's code (ID 119:
+      // also when the login has no users.dealer_id of its own).
+      dealerCode: lead.dealer_id as string,
     });
 
     return NextResponse.json({ success: true, data: result });

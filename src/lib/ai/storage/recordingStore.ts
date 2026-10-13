@@ -65,7 +65,8 @@ export async function rehostRecording(opts: {
   try {
     // Both Bolna and ElevenLabs serve directly-fetchable HTTPS/S3 URLs — no
     // auth header is needed to download the bytes.
-    const res = await fetch(recordingUrl);
+    // Bounded: this runs inside provider webhooks (Bolna, NeoDove — ID 166).
+    const res = await fetch(recordingUrl, { signal: AbortSignal.timeout(20_000) });
     if (!res.ok) {
       throw new Error(`download failed: HTTP ${res.status}`);
     }

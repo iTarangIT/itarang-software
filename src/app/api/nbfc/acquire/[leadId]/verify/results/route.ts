@@ -16,6 +16,7 @@ import { digilockerTransactions, kycVerifications } from "@/lib/db/schema";
 import { clientError } from "@/lib/nbfc/http-error";
 import { resolveActor } from "@/lib/nbfc/dual-approval/auth";
 import { getActiveAssignment } from "@/lib/nbfc/vkyc";
+import { maskAadhaarDeep } from "@/lib/kyc/aadhaarMask";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -87,7 +88,8 @@ export async function GET(
     return NextResponse.json({
       ok: true,
       results: Array.from(latest.values()),
-      digilocker: digi[0] ?? null,
+      // ID 119: DigiLocker data leaves with the Aadhaar number masked.
+      digilocker: maskAadhaarDeep(digi[0] ?? null),
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
