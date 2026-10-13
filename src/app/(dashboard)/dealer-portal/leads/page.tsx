@@ -48,6 +48,8 @@ function DealerLeadsContent() {
     const [selected, setSelected] = useState<Set<string>>(new Set());
     const [pushOpen, setPushOpen] = useState(false);
     const [pushMobile, setPushMobile] = useState('');
+    // ID 33: a reason is required, same as the single CRM push.
+    const [pushReason, setPushReason] = useState('');
     const [pushMatch, setPushMatch] = useState<{ dealerId: string; name: string } | null>(null);
     const [pushLookupMsg, setPushLookupMsg] = useState<string | null>(null);
     const [pushLookupLoading, setPushLookupLoading] = useState(false);
@@ -95,16 +97,16 @@ function DealerLeadsContent() {
     const toggleAll = () =>
         setSelected(allSelected ? new Set() : new Set(leads.map((l: any) => l.id)));
 
-    const closePush = () => { setPushOpen(false); setPushMobile(''); };
+    const closePush = () => { setPushOpen(false); setPushMobile(''); setPushReason(''); };
 
     const handlePush = async () => {
-        if (!pushMatch || selected.size === 0) return;
+        if (!pushMatch || selected.size === 0 || pushReason.trim().length < 3) return;
         setPushing(true);
         try {
             const res = await fetch('/api/leads/push-to-dealer', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ leadIds: Array.from(selected), dealer_mobile: pushMobile }),
+                body: JSON.stringify({ leadIds: Array.from(selected), dealer_mobile: pushMobile, reason: pushReason.trim() }),
             });
             const j = await res.json().catch(() => null);
             if (!j?.success) {
@@ -569,6 +571,18 @@ function DealerLeadsContent() {
                             ) : pushLookupMsg ? (
                                 <p className="text-xs text-red-600">{pushLookupMsg}</p>
                             ) : null}
+                            <label className="block text-sm font-semibold text-gray-700 pt-1">Reason</label>
+                            <textarea
+                                value={pushReason}
+                                onChange={(e) => setPushReason(e.target.value)}
+                                rows={2}
+                                maxLength={500}
+                                placeholder="Why are these leads going to this dealer?"
+                                className="w-full px-4 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent"
+                            />
+                            <p className="text-xs text-gray-500">
+                                Leads whose customer already signed consent are not moved. Any coupon the house reserved on a lead is released, and its salesperson is cleared.
+                            </p>
                             <p className="text-xs text-gray-500">
                                 Finance leads move only to a finance-enabled dealer. A lead can be pushed once; moving it again needs an admin.
                             </p>
@@ -578,7 +592,7 @@ function DealerLeadsContent() {
                                 className="flex-1 px-4 py-3 border-2 border-gray-200 rounded-xl font-semibold text-sm text-gray-600 hover:bg-gray-50 transition-all">
                                 Cancel
                             </button>
-                            <button onClick={handlePush} disabled={pushing || !pushMatch}
+                            <button onClick={handlePush} disabled={pushing || !pushMatch || pushReason.trim().length < 3}
                                 className="flex-1 px-4 py-3 bg-brand-600 text-white rounded-xl font-semibold text-sm hover:bg-brand-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2">
                                 {pushing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
                                 {pushing ? 'Pushing...' : 'Push leads'}

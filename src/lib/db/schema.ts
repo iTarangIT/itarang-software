@@ -1091,6 +1091,28 @@ export const accountClosures = pgTable("account_closures", {
   closed_at: timestamp("closed_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
+// E-338 (ID 155) — dated history of who reports to whom. Open row
+// (effective_to NULL) = the current manager, kept equal to users.reports_to
+// (E-335, deliberately not mirrored on `users`). effective_to is exclusive.
+// Readers use raw SQL behind the to_regclass probe in src/lib/users/team.ts.
+export const userReportingLines = pgTable(
+  "user_reporting_lines",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    user_id: uuid("user_id").notNull(),
+    manager_id: uuid("manager_id").notNull(),
+    effective_from: date("effective_from").notNull(),
+    effective_to: date("effective_to"),
+    changed_by: uuid("changed_by"),
+    reason: text(),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    managerOpenIdx: index("user_reporting_lines_manager_open_idx").on(t.manager_id),
+    userFromIdx: index("user_reporting_lines_user_from_idx").on(t.user_id, t.effective_from),
+  }),
+);
+
 // E-334 (ID 5) — "Order placed" claims: pause a dealer's ageing for 15 days
 // from order_date; an invoice in that window confirms it. Status is computed
 // (src/lib/accounts/orderClaims.ts), never stored. Readers use raw SQL behind
@@ -13728,5 +13750,29 @@ export const featureRequestEvents = pgTable(
   },
   (t) => ({
     frIdx: index("feature_request_events_fr_idx").on(t.feature_request_id, t.created_at),
+  }),
+);
+
+// E-339 — every open of a customer KYC file, allowed or refused (tracker ID 166).
+// Append-only; written by src/lib/storage/fileAuthz.ts logFileOpen.
+export const fileAccessLog = pgTable(
+  "file_access_log",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    opened_at: timestamp("opened_at", { withTimezone: true }).defaultNow().notNull(),
+    bucket: varchar("bucket", { length: 64 }).notNull(),
+    object_key: text("object_key").notNull(),
+    lead_id: varchar("lead_id", { length: 255 }),
+    user_id: uuid("user_id"),
+    role: varchar("role", { length: 64 }),
+    // 'session' | 'signed_link'
+    via: varchar("via", { length: 16 }).notNull(),
+    allowed: boolean("allowed").notNull(),
+    ip: varchar("ip", { length: 64 }),
+  },
+  (t) => ({
+    openedIdx: index("file_access_log_opened_idx").on(t.opened_at),
+    leadIdx: index("file_access_log_lead_idx").on(t.lead_id, t.opened_at),
+    userIdx: index("file_access_log_user_idx").on(t.user_id, t.opened_at),
   }),
 );

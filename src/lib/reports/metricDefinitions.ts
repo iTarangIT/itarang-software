@@ -134,25 +134,96 @@ export function isFirstQuote(c: SQL = sql`c`): SQL {
     )`;
 }
 
+/** What a rule is about — picks the rules a question needs (src/lib/analyst/metricRules.ts). */
+export type AnalystTopic =
+    | "leads"
+    | "calls"
+    | "quotes"
+    | "won"
+    | "visits"
+    | "business"
+    | "revenue"
+    | "margin"
+    | "batteries"
+    | "people";
+
 /**
  * ID 32 — the agreed rules above, in words, for the AI Analyst (a separate
  * service that writes its own SQL), so the CEO gets one answer to one question.
  * Kept here, beside the SQL it describes: change a rule, change this line.
- * Sent with every question, so it stays short (src/lib/analyst/metricRules.ts).
+ * A rule with no topics goes with every question; the rest go with questions
+ * about their topic (metricRules.ts), so a long question still carries the
+ * rules it needs inside the agent's 2,000-character limit.
  */
-export const ANALYST_METRIC_RULES = [
-    "Days, yesterday and months are IST calendar days.",
-    "Leads in = every active dealer_leads row created in the period, whatever its source (bulk imports included).",
-    "Dealers converted = dealer_leads.lead_status 'Converted' with closed_at in the period, credited to closing_owner_id.",
-    "Calls / dealers called = human calls only: lead_touchpoints.touchpoint_type 'inside_sales_call' (AI dialer 'ai_call' excluded); " +
-        `a NeoDove call within ${NEODOVE_CALL_MERGE_WINDOW} of an earlier one by the same agent on the same lead is the same call.`,
-    "Engaged call = such a call that connected (call_status 'connected' or is_engaged), any outcome; duration never counts.",
-    "Quotes created = the first quote per lead (dealer_lead_commercials quote_issue); revisions counted apart.",
-    "Hot handed to field = asm_transfer touchpoints where the lead was Hot when transferred, each dealer once.",
+export const ANALYST_RULES: ReadonlyArray<{ topics: readonly AnalystTopic[]; text: string }> = [
+    { topics: [], text: "Days, yesterday and months are IST calendar days." },
+    {
+        topics: ["leads"],
+        text: "Leads in = every active dealer_leads row created in the period, whatever its source (bulk imports included).",
+    },
+    {
+        topics: ["won", "people"],
+        text: "Dealers converted = dealer_leads.lead_status 'Converted' with closed_at in the period, credited to closing_owner_id.",
+    },
     // ID 169 (10 Oct): Undo Mark Won leaves the history row; won_undone_at marks it.
-    "Marked Won = status history to_status 'Won' with won_undone_at NULL, credited to closing_owner_id.",
-    "A Lost to Lost history row is a reason change, not a loss.",
-    "Visits = lead_visits visit_status 'visited'.",
+    {
+        topics: ["won", "people"],
+        text:
+            "Marked Won = status history to_status 'Won' with won_undone_at NULL, credited to closing_owner_id. " +
+            "Won is the rep's mark; Converted is onboarding approved — targets, credit and incentives use Converted.",
+    },
+    {
+        topics: ["calls", "people"],
+        text:
+            "Calls / dealers called = human calls only: lead_touchpoints.touchpoint_type 'inside_sales_call' (AI dialer 'ai_call' excluded); " +
+            `a NeoDove call within ${NEODOVE_CALL_MERGE_WINDOW} of an earlier one by the same agent on the same lead is the same call.`,
+    },
+    {
+        topics: ["calls", "people"],
+        text: "Engaged call = such a call that connected (call_status 'connected' or is_engaged), any outcome; duration never counts.",
+    },
+    {
+        topics: ["quotes", "people"],
+        text: "Quotes created = the first quote per lead (dealer_lead_commercials quote_issue); revisions counted apart.",
+    },
+    {
+        topics: ["calls", "people"],
+        text: "Hot handed to field = asm_transfer touchpoints where the lead was Hot when transferred, each dealer once.",
+    },
+    { topics: ["won", "leads"], text: "A Lost to Lost history row is a reason change, not a loss." },
+    { topics: ["visits", "people"], text: "Visits = lead_visits visit_status 'visited'." },
     // ID 11 — Finance was folded into Battery sale (E-331).
-    "business_type 'finance' means battery_sale.",
-].join(" ");
+    { topics: ["business", "leads"], text: "business_type 'finance' means battery_sale." },
+    // ID 32 / 71 / 147 — money, read the way the CEO dashboard reads it (revenueSource.ts).
+    {
+        topics: ["revenue", "people"],
+        text:
+            "Revenue = invoice total incl. GST by invoice date: zoho_invoices + sales_invoices, minus credit_notes by issue date; " +
+            "skip any invoice or credit note with an invoice_voids row (source + invoice_id) or status 'void'.",
+    },
+    {
+        topics: ["revenue", "people"],
+        text: "A salesperson's revenue = invoices of dealer accounts they owned on the invoice date (account_owner_history).",
+    },
+    {
+        topics: ["revenue"],
+        text:
+            "A credit note is never an order: leave it out of order counts and last order. " +
+            "Money owed = unpaid invoice balances less that customer's credit notes, never below zero per customer.",
+    },
+    {
+        topics: ["batteries"],
+        text:
+            "Batteries sold = SUM(quantity) of invoice_line_items with product_class 'battery' on non-void invoices of a dealer; " +
+            "credit-note lines (source 'credit') are negative, so they net.",
+    },
+    {
+        topics: ["margin"],
+        text:
+            "Gross margin = line amount before GST minus mapped cost (vyapar_item_map product, latest stock or price-book cost); " +
+            "lines without a mapped product are 'not costed', never zero cost.",
+    },
+];
+
+/** Every rule, in one string — what a question gets when no topic matches (and what the tests read). */
+export const ANALYST_METRIC_RULES = ANALYST_RULES.map((r) => r.text).join(" ");

@@ -211,7 +211,7 @@ const num = (v: unknown): number | null => (typeof v === "number" && Number.isFi
  * CRM sent. queueEnteredAt falls back to stageEnteredAt only at S1 (the stage
  * the pickup queue lists).
  */
-export function caseToLeadSnapshot(kase: Rec, sent: CaseCreateInput): Rec & { ecofyCaseId: string; version: number } {
+export function caseToLeadSnapshot(kase: Rec, sent?: CaseCreateInput): Rec & { ecofyCaseId: string; version: number } {
     const c = (kase.customer && typeof kase.customer === "object" ? kase.customer : {}) as Rec;
     const stage = str(kase.stage);
     return {
@@ -220,32 +220,32 @@ export function caseToLeadSnapshot(kase: Rec, sent: CaseCreateInput): Rec & { ec
         version: num(kase.version) ?? 0,
         stage,
         subStatus: str(kase.subStatus),
-        segment: str(kase.segment) ?? sent.segment,
+        segment: str(kase.segment) ?? sent?.segment ?? null,
         temperature: str(kase.temperature),
         source: str(kase.source),
         owner: str(kase.owner),
         qualifiedByName: str(kase.qualifiedByName),
         queueEnteredAt: str(kase.queueEnteredAt) ?? (stage === "S1" ? str(kase.stageEnteredAt) : null),
-        productInterest: str(kase.productInterest) ?? sent.productInterest ?? null,
-        avgMonthlyBillInr: num(kase.avgMonthlyBillInr) ?? sent.avgMonthlyBillInr ?? null,
-        sanctionedLoadKw: num(kase.sanctionedLoadKw) ?? sent.sanctionedLoadKw ?? null,
-        existingBackup: str(kase.existingBackup) ?? sent.existingBackup ?? null,
-        preferredCallTime: str(kase.preferredCallTime) ?? sent.preferredCallTime ?? null,
+        productInterest: str(kase.productInterest) ?? sent?.productInterest ?? null,
+        avgMonthlyBillInr: num(kase.avgMonthlyBillInr) ?? sent?.avgMonthlyBillInr ?? null,
+        sanctionedLoadKw: num(kase.sanctionedLoadKw) ?? sent?.sanctionedLoadKw ?? null,
+        existingBackup: str(kase.existingBackup) ?? sent?.existingBackup ?? null,
+        preferredCallTime: str(kase.preferredCallTime) ?? sent?.preferredCallTime ?? null,
         closureReason: str(kase.closureReason),
         ecofyUrl: str(kase.ecofyUrl),
         customer: {
-            fullName: str(c.fullName) ?? sent.customer.fullName,
-            mobile: str(c.mobile) ?? sent.customer.mobile,
-            altMobile: str(c.altMobile) ?? sent.customer.altMobile ?? null,
-            email: str(c.email) ?? sent.customer.email ?? null,
-            customerType: str(c.customerType) ?? sent.customer.customerType,
-            businessName: str(c.businessName) ?? sent.customer.businessName ?? null,
-            address: str(c.address) ?? sent.customer.address,
-            city: str(c.city) ?? sent.customer.city,
-            state: str(c.state) ?? sent.customer.state,
-            pincode: str(c.pincode) ?? sent.customer.pincode,
-            preferredLanguage: str(c.preferredLanguage) ?? sent.customer.preferredLanguage ?? null,
-            propertyType: str(c.propertyType) ?? sent.customer.propertyType ?? null,
+            fullName: str(c.fullName) ?? sent?.customer.fullName ?? null,
+            mobile: str(c.mobile) ?? sent?.customer.mobile ?? null,
+            altMobile: str(c.altMobile) ?? sent?.customer.altMobile ?? null,
+            email: str(c.email) ?? sent?.customer.email ?? null,
+            customerType: str(c.customerType) ?? sent?.customer.customerType ?? null,
+            businessName: str(c.businessName) ?? sent?.customer.businessName ?? null,
+            address: str(c.address) ?? sent?.customer.address ?? null,
+            city: str(c.city) ?? sent?.customer.city ?? null,
+            state: str(c.state) ?? sent?.customer.state ?? null,
+            pincode: str(c.pincode) ?? sent?.customer.pincode ?? null,
+            preferredLanguage: str(c.preferredLanguage) ?? sent?.customer.preferredLanguage ?? null,
+            propertyType: str(c.propertyType) ?? sent?.customer.propertyType ?? null,
         },
     };
 }

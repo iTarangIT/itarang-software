@@ -11,8 +11,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 
 import { db } from "@/lib/db";
-import { digilockerTransactions } from "@/lib/db/schema";
+import { digilockerTransactions, leads } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
+import { dealerMayActOnLead } from "@/lib/auth/requireLeadAccess";
+import { maskAadhaarDeep } from "@/lib/kyc/aadhaarMask";
 
 export async function GET(
     _req: NextRequest,
@@ -36,14 +38,24 @@ export async function GET(
             );
         }
 
-        // Light ownership check: the txn must be tied to a lead owned
-        // by this dealer's account. We use dealer_id on the user; a
-        // full join isn't needed because txn.lead_id uniquely binds
-        // the row to one dealer lead.
-        if (!user.dealer_id) {
+        // ID 119: the transaction's lead must be this dealer's (its dealership,
+        // with the onboarding-code fallback for a login with no dealer_id, or
+        // the person who created it). The old check only asked whether the
+        // caller had ANY dealer code, so any dealer could read any customer's
+        // DigiLocker data by transaction id.
+        const [lead] = txn.lead_id
+            ? await db
+                  .select({ dealer_id: leads.dealer_id, uploader_id: leads.uploader_id })
+                  .from(leads)
+                  .where(eq(leads.id, txn.lead_id))
+                  .limit(1)
+            : [];
+        const mine =
+            !!lead && (lead.uploader_id === user.id || (await dealerMayActOnLead(user, lead.dealer_id)));
+        if (!mine) {
             return NextResponse.json(
-                { success: false, error: { message: "Dealer not provisioned" } },
-                { status: 403 },
+                { success: false, error: { message: "Transaction not found" } },
+                { status: 404 },
             );
         }
 
@@ -53,9 +65,11 @@ export async function GET(
                 transactionId: txn.id,
                 leadId: txn.lead_id,
                 status: txn.status,
+                // ID 119: the Aadhaar number leaves masked; the prefill uses
+                // the name, date of birth, address and photo, not the digits.
                 data:
                     txn.status === "document_fetched"
-                        ? txn.aadhaar_extracted_data
+                        ? maskAadhaarDeep(txn.aadhaar_extracted_data)
                         : null,
                 verificationId: txn.verification_id ?? null,
             },

@@ -17,6 +17,7 @@ import {
 import type { QueueRegion } from "@/lib/leads/queueFilters";
 import { finalisedNotWonSql } from "@/lib/leads/finalisedNotWon";
 import type { QueueSort } from "@/lib/leads/queueSort";
+import { ownerScopeSql } from "@/lib/users/teamSql";
 
 const TERMINAL_LIST = sql.raw(
     TERMINAL_STATUSES.map((s) => `'${s}'`).join(", "),
@@ -44,6 +45,13 @@ type BuildArgs = {
      * over the ASM's own leads rather than over the whole tab.
      */
     ownedBy?: string | null;
+    /**
+     * ID 155: the viewer's direct reports (getTeamMemberIds). A manager's own
+     * tabs (my_visits, today, my_closed) and `ownedBy` then also cover the
+     * team's leads — read-only (the lead page lets a manager look and reassign
+     * within the team, nothing else). Absent / empty = exactly the old SQL.
+     */
+    teamMemberIds?: readonly string[] | null;
 };
 
 /**
@@ -52,7 +60,10 @@ type BuildArgs = {
  * caller must also join LATEST_VISIT_JOIN. Guarded by
  * assistant/__tests__/tabFilter-golden.test.ts.
  */
-export function tabFilter(tab: AsmQueueTab, asmId: string) {
+export function tabFilter(tab: AsmQueueTab, asmId: string, teamMemberIds?: readonly string[] | null) {
+    // ID 155: `= me`, or `IN (me, my direct reports)` for a manager. The pool
+    // tabs (territory, unclaimed) stay the viewer's own territory.
+    const mine = (col: SQL) => ownerScopeSql(col, asmId, teamMemberIds);
     switch (tab) {
         case "my_visits":
             // Any open lead the ASM owns — not just Transferred_to_ASM. The
@@ -60,10 +71,10 @@ export function tabFilter(tab: AsmQueueTab, asmId: string) {
             // any other path set current_owner_id without flipping the status.
             // Ownership + not-terminal is the natural definition of "my active".
             // ID 36: dead / non-responsive numbers are in Number Repair, not here.
-            return sql`dl.current_owner_id = ${asmId} AND dl.lead_status NOT IN (${TERMINAL_LIST}) AND dl.is_active IS NOT FALSE AND (to_jsonb(dl) ->> 'contactability') IS NULL`;
+            return sql`${mine(sql`dl.current_owner_id`)} AND dl.lead_status NOT IN (${TERMINAL_LIST}) AND dl.is_active IS NOT FALSE AND (to_jsonb(dl) ->> 'contactability') IS NULL`;
         case "today":
             // ID 36: a dead / non-responsive number is in Number Repair, not on today's route.
-            return sql`dl.asm_id = ${asmId} AND lv.scheduled_date = CURRENT_DATE AND lv.visit_status IN ('scheduled','pending_scheduling') AND dl.is_active IS NOT FALSE AND (to_jsonb(dl) ->> 'contactability') IS NULL`;
+            return sql`${mine(sql`dl.asm_id`)} AND lv.scheduled_date = CURRENT_DATE AND lv.visit_status IN ('scheduled','pending_scheduling') AND dl.is_active IS NOT FALSE AND (to_jsonb(dl) ->> 'contactability') IS NULL`;
         case "territory":
             // In-territory leads, OR any lead nobody owns yet — so the ASM sees
             // the same unassigned pool the Inside Sales claim queue surfaces
@@ -97,7 +108,7 @@ export function tabFilter(tab: AsmQueueTab, asmId: string) {
                 AND dl.current_owner_id IS NULL
                 AND dl.lead_status IS DISTINCT FROM 'Converted' AND dl.lead_status IS DISTINCT FROM 'Lost' AND dl.is_active IS NOT FALSE`;
         case "my_closed":
-            return sql`dl.closing_owner_id = ${asmId} AND dl.lead_status IN (${TERMINAL_LIST}) AND dl.closed_at >= NOW() - INTERVAL '90 days' AND dl.is_active IS NOT FALSE`;
+            return sql`${mine(sql`dl.closing_owner_id`)} AND dl.lead_status IN (${TERMINAL_LIST}) AND dl.closed_at >= NOW() - INTERVAL '90 days' AND dl.is_active IS NOT FALSE`;
     }
 }
 
@@ -162,9 +173,10 @@ function extraFilters({
     visitOutcome,
     finalisedOnly,
     ownedBy,
-}: Pick<BuildArgs, "q" | "filters" | "visitStatus" | "visitOutcome" | "finalisedOnly" | "ownedBy">): SQL {
+    teamMemberIds,
+}: Pick<BuildArgs, "q" | "filters" | "visitStatus" | "visitOutcome" | "finalisedOnly" | "ownedBy" | "teamMemberIds">): SQL {
     const parts: SQL[] = [];
-    if (ownedBy) parts.push(sql` AND dl.current_owner_id = ${ownedBy}`);
+    if (ownedBy) parts.push(sql` AND ${ownerScopeSql(sql`dl.current_owner_id`, ownedBy, teamMemberIds)}`);
     if (q) parts.push(leadSearchClause(q));
     if (filters) parts.push(...queueFilterClauses(filters, ASM_DATE_COLUMN));
     // The LATEST visit's state, which is what the row's Visit column shows. A
@@ -189,11 +201,12 @@ export async function fetchAsmQueueRows({
     finalisedOnly,
     sort,
     ownedBy,
+    teamMemberIds,
 }: BuildArgs): Promise<AsmQueueRow[]> {
     const offset = (page - 1) * limit;
-    const where = tabFilter(tab, asmId);
+    const where = tabFilter(tab, asmId, teamMemberIds);
     const order = queueSortOrder(sort, tabOrder(tab));
-    const search = extraFilters({ q, filters, visitStatus, visitOutcome, finalisedOnly, ownedBy });
+    const search = extraFilters({ q, filters, visitStatus, visitOutcome, finalisedOnly, ownedBy, teamMemberIds });
 
     const rows = await db.execute<AsmQueueRow>(sql`
         SELECT
@@ -237,12 +250,13 @@ export async function countAsmQueueRows({
     visitOutcome,
     finalisedOnly,
     ownedBy,
+    teamMemberIds,
 }: Pick<
     BuildArgs,
-    "tab" | "asmId" | "q" | "filters" | "visitStatus" | "visitOutcome" | "finalisedOnly" | "ownedBy"
+    "tab" | "asmId" | "q" | "filters" | "visitStatus" | "visitOutcome" | "finalisedOnly" | "ownedBy" | "teamMemberIds"
 >): Promise<number> {
-    const where = tabFilter(tab, asmId);
-    const search = extraFilters({ q, filters, visitStatus, visitOutcome, finalisedOnly, ownedBy });
+    const where = tabFilter(tab, asmId, teamMemberIds);
+    const search = extraFilters({ q, filters, visitStatus, visitOutcome, finalisedOnly, ownedBy, teamMemberIds });
     const rows = await db.execute<{ c: string }>(sql`
         SELECT COUNT(*)::text AS c FROM dealer_leads dl ${LATEST_VISIT_JOIN} WHERE ${where} ${search}
     `);
@@ -307,8 +321,10 @@ export async function countAsmFinalisedNotWon(asmId: string): Promise<number> {
  */
 export async function fetchAllAsmTabCounts(
     asmId: string,
-    opts?: Pick<BuildArgs, "filters" | "visitStatus" | "visitOutcome" | "finalisedOnly">,
+    opts?: Pick<BuildArgs, "filters" | "visitStatus" | "visitOutcome" | "finalisedOnly" | "teamMemberIds">,
 ): Promise<Record<AsmQueueTab, number>> {
+    // ID 155: a manager's own-tab badges count the team too, like the tables.
+    const team = opts?.teamMemberIds;
     const extra = extraFilters({
         filters: opts?.filters,
         visitStatus: opts?.visitStatus,
@@ -323,11 +339,11 @@ export async function fetchAllAsmTabCounts(
         my_closed: string;
     }>(sql`
         SELECT
-            (SELECT COUNT(*)::text FROM dealer_leads dl ${LATEST_VISIT_JOIN} WHERE ${tabFilter("my_visits", asmId)} ${extra}) AS my_visits,
-            (SELECT COUNT(*)::text FROM dealer_leads dl ${LATEST_VISIT_JOIN} WHERE ${tabFilter("today", asmId)} ${extra}) AS today,
+            (SELECT COUNT(*)::text FROM dealer_leads dl ${LATEST_VISIT_JOIN} WHERE ${tabFilter("my_visits", asmId, team)} ${extra}) AS my_visits,
+            (SELECT COUNT(*)::text FROM dealer_leads dl ${LATEST_VISIT_JOIN} WHERE ${tabFilter("today", asmId, team)} ${extra}) AS today,
             (SELECT COUNT(*)::text FROM dealer_leads dl ${LATEST_VISIT_JOIN} WHERE ${tabFilter("territory", asmId)} ${extra}) AS territory,
             (SELECT COUNT(*)::text FROM dealer_leads dl ${LATEST_VISIT_JOIN} WHERE ${tabFilter("unclaimed", asmId)} ${extra}) AS unclaimed,
-            (SELECT COUNT(*)::text FROM dealer_leads dl ${LATEST_VISIT_JOIN} WHERE ${tabFilter("my_closed", asmId)} ${extra}) AS my_closed
+            (SELECT COUNT(*)::text FROM dealer_leads dl ${LATEST_VISIT_JOIN} WHERE ${tabFilter("my_closed", asmId, team)} ${extra}) AS my_closed
     `);
     const r = rows[0]!;
     return {
@@ -351,9 +367,11 @@ export async function fetchAllAsmTabCounts(
 export async function fetchAsmQueueRegions(
     asmId: string,
     tab: AsmQueueTab,
+    /** ID 155: a manager's direct reports — the facets span what the table shows. */
+    teamMemberIds?: readonly string[] | null,
 ): Promise<QueueRegion[]> {
     const rows = await db.execute<{ state: string | null; city: string | null }>(
-        regionFacetQuery(tabFilter(tab, asmId), LATEST_VISIT_JOIN),
+        regionFacetQuery(tabFilter(tab, asmId, teamMemberIds), LATEST_VISIT_JOIN),
     );
     return foldRegionFacets(
         rows as unknown as { state: string | null; city: string | null }[],

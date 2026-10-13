@@ -88,6 +88,8 @@ import {
   repBlockTableRows,
 } from "../salesDailyBlocks";
 import { formatSlotTime } from "../schedule";
+import { fmtDay, staleAlertText } from "@/lib/sales/invoiceFreshnessRules";
+import { ECOFY_STAGE_LABELS } from "@/lib/ecofy/access";
 import type {
   DigestDetail,
   DigestFigures,
@@ -114,6 +116,7 @@ import type {
 //                               field visit, and sales-ready leads with no owner.
 //   E Today and tomorrow        scheduled visits and follow-ups per owner.
 //   F Oldest overdue            the 10 oldest overdue items, by name and city — no phone numbers.
+//   G Ecofy                     pickup queue, new Ecofy leads yesterday, leads by stage (ID 51).
 const SECTIONS: DigestSection[] = [
   { key: "summary", label: "Headline", hint: "One line: yesterday's outcome and what is behind target.", group: "activity" },
   { key: "block_a", label: "A · Company", hint: "22 metrics: yesterday, last 7 days, MTD, MTD target, % of target, same period last month, Δ.", group: "activity" },
@@ -123,6 +126,8 @@ const SECTIONS: DigestSection[] = [
   { key: "block_d", label: "D · Position this morning", hint: "Open Hot / Warm / Cold per owner, Hot rated 8+ days ago, awaiting field visit, and sales-ready leads with no owner — as of the send time.", group: "backlog" },
   { key: "block_e", label: "E · Today and tomorrow", hint: "Scheduled visits and follow-ups due, per owner.", group: "backlog" },
   { key: "block_f", label: "F · Oldest overdue", hint: "The 10 oldest overdue follow-ups and visits, by name.", group: "backlog" },
+  // ID 51 — Ecofy leads in the daily email.
+  { key: "block_g", label: "G · Ecofy", hint: "Ecofy pickup queue (unassigned), new Ecofy leads yesterday, and every Ecofy lead by stage.", group: "backlog" },
 ];
 
 // ─────────────────────────────── dates ──────────────────────────────────────
@@ -339,6 +344,61 @@ async function oldestOverdue(): Promise<DigestTable["rows"]> {
   });
 }
 
+/**
+ * ID 51 — Block G: Ecofy leads (E-305 / E-307) as of the send time. The
+ * pickup queue (S1 with no owner, the workspace's own rule in
+ * src/lib/ecofy/queries.ts), leads that came in on the covered day, and every
+ * lead by stage. null = no ecofy_leads table on this database, or the read
+ * failed — the block then says so instead of breaking the email.
+ */
+export type EcofySnapshot = { queue: number; newYesterday: number; byStage: Array<{ stage: string | null; n: number }> };
+
+async function ecofySnapshot(istDay: string): Promise<EcofySnapshot | null> {
+  try {
+    const { db } = await import("@/lib/db");
+    const probe = (await db.execute(sql`
+      SELECT to_regclass('public.ecofy_leads') IS NOT NULL AS ok
+    `)) as unknown as Array<{ ok: boolean }>;
+    if (!probe[0]?.ok) return null;
+    const [head] = (await db.execute(sql`
+      SELECT COUNT(*) FILTER (WHERE e.stage = 'S1' AND e.assigned_to_user_id IS NULL)::int AS queue,
+             COUNT(*) FILTER (WHERE (e.created_at AT TIME ZONE 'Asia/Kolkata')::date = ${istDay}::date)::int AS new_yesterday
+        FROM ecofy_leads e
+    `)) as unknown as Array<{ queue: number; new_yesterday: number }>;
+    const stages = (await db.execute(sql`
+      SELECT e.stage, COUNT(*)::int AS n FROM ecofy_leads e GROUP BY e.stage
+    `)) as unknown as Array<{ stage: string | null; n: number }>;
+    return {
+      queue: Number(head?.queue ?? 0),
+      newYesterday: Number(head?.new_yesterday ?? 0),
+      byStage: stages.map((s) => ({ stage: s.stage, n: Number(s.n) })),
+    };
+  } catch (e) {
+    console.warn("[sales-daily] Ecofy block not measured:", e instanceof Error ? e.message : e);
+    return null;
+  }
+}
+
+/** Block G rows: the two headline counts, then one row per stage in pipeline order (S0 … S8, Closed, unknown last). */
+export function ecofyBlockRows(s: EcofySnapshot, stageLabels: Record<string, string>): DigestTable["rows"] {
+  const order = Object.keys(stageLabels);
+  const rank = (st: string | null) => (st && order.includes(st) ? order.indexOf(st) : order.length);
+  const stages = [...s.byStage]
+    .filter((x) => x.n > 0)
+    .sort((a, b) => rank(a.stage) - rank(b.stage) || String(a.stage).localeCompare(String(b.stage)));
+  const total = stages.reduce((acc, x) => acc + x.n, 0);
+  return [
+    ["Pickup queue (unassigned)", s.queue],
+    ["New leads yesterday", s.newYesterday],
+    ["BY STAGE", ""],
+    ...stages.map((x): Array<string | number> => [
+      x.stage ? `${x.stage} · ${stageLabels[x.stage] ?? x.stage}` : "(no stage)",
+      x.n,
+    ]),
+    ["All Ecofy leads", total],
+  ];
+}
+
 // ─────────────────────────────── collect ────────────────────────────────────
 
 async function collect(
@@ -355,7 +415,7 @@ async function collect(
     const periods = salesDailyPeriods(istDay);
 
     const { getDigestSettings } = await import("../settings");
-    const [yesterday, last7, mtd, lastMonth, scheduled, followUps, now, overdue, settings, extrasY, extrasMtd, awaiting, unmatched, wait] = await Promise.all([
+    const [yesterday, last7, mtd, lastMonth, scheduled, followUps, now, overdue, settings, extrasY, extrasMtd, awaiting, unmatched, wait, ecofy] = await Promise.all([
       buildSalesDashboard({ ...periods.yesterday, granularity: "day" }),
       buildSalesDashboard({ ...periods.last7, granularity: "day" }),
       buildSalesDashboard({ ...periods.mtd, granularity: "day" }),
@@ -370,8 +430,15 @@ async function collect(
       loadAwaitingFieldVisit(db as never),
       unmatchedRevenuePerPeriod(periods),
       medianWaitToAssign(periods.mtd),
+      ecofySnapshot(istDay),
     ]);
     const blockA = await buildBlockA(db as never, periods, { yesterday, last7, mtd, lastMonth }, unmatched);
+    // ID 156: each rep's manager today, so Blocks B / C show a team subtotal
+    // under each manager. Imported here, not at module scope (needs the db).
+    const teamOf = await (await import("@/lib/users/team")).currentTeamOf();
+    // ID 171: how far the invoice data behind Revenue / Batteries goes, and the
+    // Admin alert line when no new invoice was read for the limit's working days.
+    const invoices = await (await import("@/lib/sales/invoiceFreshness")).invoiceFreshness({ fresh: true }).catch(() => null);
     // "Right now" / "Position at" name the moment the figures were taken — a
     // test sent at 14:03 used to say "Right now · 09:00".
     const asOf = computedAt.toLocaleTimeString("en-GB", {
@@ -474,6 +541,19 @@ async function collect(
                   alert: now.oldestDays != null && now.oldestDays >= 2,
                 },
                 { label: "Median wait, sales-ready → assigned (MTD)", value: waitValue, hint: waitHint },
+                ...(invoices
+                  ? [
+                      {
+                        label: "Invoices read up to",
+                        value: invoices.read_up_to ? fmtDay(invoices.read_up_to) : "No invoices read yet",
+                        // Revenue and Batteries sold above count invoices up to this date.
+                        hint:
+                          staleAlertText(invoices) ??
+                          `Revenue and Batteries sold count invoices up to this date · alert after ${invoices.stale_after} working days with no new invoice`,
+                        alert: invoices.stale,
+                      },
+                    ]
+                  : []),
               ],
             },
             legend: [
@@ -487,11 +567,12 @@ async function collect(
             key: "block_b",
             title: "B · Field team (ASM)",
             columns: BLOCK_B_COLUMNS,
-            rows: repBlockTableRows("asm", buildRepBlocks("asm", yesterday, mtd, extras, blockA.userTargets)),
+            rows: repBlockTableRows("asm", buildRepBlocks("asm", yesterday, mtd, extras, blockA.userTargets), teamOf),
             textColumns: 1,
             toneColumns: [BLOCK_B_PCT_COLUMN],
             note:
               "One row per ASM. % of target = dealers visited MTD against the ASM's MTD dealer-visit target (“—” = no target set). " +
+              "Under a manager: their team (↳) and a team subtotal — % of target against the manager's own target. " +
               "Total = the ASMs listed; Block A also counts work credited to nobody.",
             empty: "No ASMs on the Sales dashboard this month.",
           },
@@ -499,13 +580,14 @@ async function collect(
             key: "block_c",
             title: "C · Inside sales (ISR / CC)",
             columns: BLOCK_C_COLUMNS,
-            rows: repBlockTableRows("inside_sales_rep", buildRepBlocks("inside_sales_rep", yesterday, mtd, extras, blockA.userTargets)),
+            rows: repBlockTableRows("inside_sales_rep", buildRepBlocks("inside_sales_rep", yesterday, mtd, extras, blockA.userTargets), teamOf),
             textColumns: 1,
             toneColumns: [BLOCK_C_PCT_COLUMN],
             note:
               "One row per ISR / CC, and anyone else who made calls (named with their role). Connected = calls that connected, each counted once. " +
               "Engaged = connected, of any length (since 3 Oct). Hot to field = leads handed to an ASM that were Hot at that moment. " +
-              "% of target = calls MTD against the rep's MTD calls target (“—” = no target set).",
+              "% of target = calls MTD against the rep's MTD calls target (“—” = no target set). " +
+              "Under a manager: their team (↳) and a team subtotal against the manager's own target.",
             empty: "No inside-sales reps on the Sales dashboard this month.",
           },
           {
@@ -535,6 +617,19 @@ async function collect(
             textColumns: 5,
             empty: "Nothing overdue.",
           },
+          {
+            // ID 51 — Ecofy leads, as of the send time.
+            key: "block_g",
+            title: `G · Ecofy at ${asOf}`,
+            columns: ["Ecofy leads", "Leads"],
+            rows: ecofy ? ecofyBlockRows(ecofy, ECOFY_STAGE_LABELS) : [],
+            textColumns: 1,
+            groupHeaders: true,
+            note: ecofy
+              ? "Pickup queue: at S1 with no owner, as on the Ecofy Pickup Queue page. New leads yesterday: first received from Ecofy on the covered day."
+              : undefined,
+            empty: ecofy ? "No Ecofy leads yet." : "Ecofy leads could not be read on this database.",
+          },
         ],
       },
     };
@@ -558,7 +653,8 @@ export const salesDailyDigest: DigestKindDescriptor = {
     "(default 09:00 IST): a one-line headline, " +
     "A · Company (22 metrics with MTD target, % of target and the same period last month), " +
     "sales-ready leads waiting for an owner, B · Field team, C · Inside sales, D · Position " +
-    "as of the send time, E · Today and tomorrow, and F · the 10 oldest overdue items. No personal " +
+    "as of the send time, E · Today and tomorrow, F · the 10 oldest overdue items, and G · Ecofy " +
+    "(pickup queue, new leads yesterday, leads by stage). No personal " +
     "emails to reps. Nothing is sent until recipients are added here.",
   settingsKey: "sales_daily_digest",
   settingsHref: "/admin/settings/sales-daily",

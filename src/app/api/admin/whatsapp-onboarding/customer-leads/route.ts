@@ -11,6 +11,12 @@
 // it can afford to fetch every submitted id first; an admin-wide list can't.
 // `admin_verification_queue` may hold several rows per lead, but they all fail
 // the IS NULL test, so no row is duplicated into the result.
+//
+// ID 33: ?scope=house lists the iTarang house dealer's unsubmitted customer
+// files from EVERY channel (web Step 1 as well as WhatsApp) — the files Admin /
+// Sales Head push to an onboarded dealer before the customer signs consent.
+// Every row carries `pushable`: the "Push to dealer" action is offered (to
+// Admin / Sales Head only) when pushBlockedReason has nothing against it.
 
 import { and, desc, eq, ilike, isNull, or, sql } from "drizzle-orm";
 import { z } from "zod";
@@ -25,6 +31,9 @@ import {
 } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
+import { houseDealerCode } from "@/lib/leads/dealerByMobile";
+import { pushedBeforeLeadIds, signedConsentLeadIds } from "@/lib/leads/pushGuards";
+import { PUSH_TO_DEALER_INTERNAL_ROLES, pushBlockedReason } from "@/lib/leads/pushToDealer";
 
 const READ_ROLES = ["admin", "sales_head", "ceo", "partner"];
 
@@ -35,20 +44,30 @@ const QuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(25),
   q: z.string().trim().max(120).optional(),
+  scope: z.enum(["whatsapp", "house"]).optional(),
 });
 
 export const GET = withErrorHandler(async (req: Request) => {
-  await requireRole(READ_ROLES);
+  const user = await requireRole(READ_ROLES);
 
   const url = new URL(req.url);
-  const { page, limit, q } = QuerySchema.parse(
+  const { page, limit, q, scope } = QuerySchema.parse(
     Object.fromEntries(url.searchParams),
   );
+  const house = await houseDealerCode();
+  const houseOnly = scope === "house";
 
   const filters = [
-    eq(leads.source_channel, "whatsapp"),
+    // ID 33: the house scope is channel-agnostic; with no house dealer on
+    // this environment it lists nothing rather than everything.
+    houseOnly
+      ? eq(leads.dealer_id, house ?? "__no_house_dealer__")
+      : eq(leads.source_channel, "whatsapp"),
     isNull(adminVerificationQueue.id),
   ];
+  // ID 33: a web wizard opened and abandoned before Step 1 leaves a literal
+  // 'DRAFT' placeholder with no customer on it — nothing to push.
+  if (houseOnly) filters.push(sql`coalesce(${leads.owner_name}, '') <> 'DRAFT'`);
   if (q) {
     const like = `%${q}%`;
     filters.push(
@@ -135,6 +154,24 @@ export const GET = withErrorHandler(async (req: Request) => {
     }
   }
 
+  // ID 33: may this viewer push the row now? Batched — two queries per page.
+  const canPushRole = (PUSH_TO_DEALER_INTERNAL_ROLES as readonly string[]).includes(user.role);
+  const rowIds = rows.map((r) => r.leadId);
+  const [signed, pushed] =
+    canPushRole && house && rowIds.length
+      ? await Promise.all([signedConsentLeadIds(rowIds), pushedBeforeLeadIds(rowIds)])
+      : [new Set<string>(), new Set<string>()];
+  const pushable = (r: (typeof rows)[number]) =>
+    canPushRole &&
+    !!house &&
+    pushBlockedReason({
+      actorRole: user.role,
+      currentDealerId: r.dealerId,
+      houseDealerCode: house,
+      consentSigned: signed.has(r.leadId),
+      pushedBefore: pushed.has(r.leadId),
+    }) === null;
+
   const customerLeads = rows.map((r) => {
     const named =
       r.ownerName && r.ownerName !== PENDING_CUSTOMER_NAME
@@ -161,6 +198,8 @@ export const GET = withErrorHandler(async (req: Request) => {
       docTypes,
       createdAt: r.createdAt,
       updatedAt: r.updatedAt,
+      isHouse: !!house && r.dealerId === house,
+      pushable: pushable(r),
     };
   });
 

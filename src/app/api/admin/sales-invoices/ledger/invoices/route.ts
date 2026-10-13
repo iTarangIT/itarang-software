@@ -4,8 +4,10 @@
  * only place with the Void button, and finance could not open it).
  *
  * GET ?month=YYYY-MM&q=<number or customer>
- *     Zoho and Drive / Vyapar invoices in the month, newest first, each with
- *     its void (reason, when) when it has one. Voiding itself goes through
+ *     Zoho and Drive / Vyapar invoices and credit notes in the month, newest
+ *     first, each with its void (reason, when) when it has one and whether
+ *     its item lines are stored (a credit note nets batteries sold, By SKU and
+ *     gross margin only through its lines). Voiding itself goes through
  *     POST /api/dashboard/ceo/invoices/[id]/void, which already admits these
  *     roles and keeps the one audit trail (src/lib/sales/invoiceVoids.ts).
  */
@@ -32,11 +34,13 @@ export const GET = withErrorHandler(async (req: Request) => {
     const rows = await db.execute(sql`
         SELECT r.source, r.id, r.invoice_number, r.invoice_date, r.customer_name,
                r.total::float8 AS total, r.status,
-               v.reason AS void_reason, v.voided_at
+               v.reason AS void_reason, v.voided_at,
+               EXISTS (SELECT 1 FROM invoice_line_items l
+                        WHERE l.invoice_id = r.id
+                          AND (l.source = r.source OR (r.source = 'drive' AND l.source IN ('vyapar', 'drive')))) AS has_lines
           FROM ${invoices} AS r
-          LEFT JOIN invoice_voids v
-                 ON v.invoice_id = r.id AND (v.source = r.source OR (r.source = 'drive' AND v.source = 'vyapar'))
-         WHERE r.source IN ('zoho', 'drive')
+          LEFT JOIN invoice_voids v ON v.invoice_id = r.id AND v.source = r.source
+         WHERE r.source IN ('zoho', 'drive', 'credit')
            AND r.invoice_date >= ${`${month}-01`}::date
            AND r.invoice_date < (${`${month}-01`}::date + interval '1 month')
            AND (${q}::text IS NULL

@@ -7,6 +7,7 @@ import { requireRole } from "@/lib/auth-utils";
 import { markDispatchedAsSold } from "@/lib/sales/sale-finalization";
 import { notifyDelivered } from "@/lib/notifications";
 import { sendKycSms } from "@/lib/sms";
+import { dealerMayActOnLead } from "@/lib/auth/requireLeadAccess";
 
 // BRD V2 §3.5 — manual "Mark Delivered" endpoint.
 // Flips a lead that's currently in 'dispatched' state through to 'sold'.
@@ -28,7 +29,7 @@ export async function POST(
         { status: 404 },
       );
     }
-    if (lead.dealer_id !== user.dealer_id) {
+    if (!(await dealerMayActOnLead(user, lead.dealer_id))) {
       return NextResponse.json(
         { success: false, error: { message: "Access denied" } },
         { status: 403 },

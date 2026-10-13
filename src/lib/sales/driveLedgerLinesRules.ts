@@ -68,14 +68,19 @@ export type LedgerRow = {
     amount_excl_gst: number;
 };
 
-export function toLedgerRows(lines: InvoiceLine[]): LedgerRow[] {
+/**
+ * Ledger rows for read lines. `sign` -1 is a credit note (ID 71): quantity and
+ * amount are stored NEGATIVE (the rate stays the printed price), so batteries
+ * sold, By SKU and gross margin net the returned items by plain SUMs.
+ */
+export function toLedgerRows(lines: InvoiceLine[], sign: 1 | -1 = 1): LedgerRow[] {
     return lines.map((l) => ({
         line_no: l.line_no,
         item_name: l.description,
         hsn: normalizeHsn(l.hsn_code),
         product_class: classifyHsn(l.hsn_code),
-        quantity: l.quantity,
+        quantity: sign * l.quantity,
         rate: l.rate,
-        amount_excl_gst: l.amount,
+        amount_excl_gst: sign * l.amount,
     }));
 }

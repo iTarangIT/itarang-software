@@ -7,11 +7,15 @@
 // 2. Reports the stored GSTINs that fail the rule, per source — nothing is
 //    changed; they simply no longer match an invoice to a dealer.
 // 3. Reports the invoice-to-dealer links the guard removes.
+// 4. A Zoho invoice whose customer GSTIN was refused by the copy (E-340) is in
+//    Needs attention; no account carries iTarang's own GSTIN as an extra GSTIN.
 
 import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { checkCustomerGstin, screenCustomerGstin } from "@/lib/leads/gstin";
 import { accountsByGstinKey, GSTIN_KEY, gstinKeyIsMatchable, leadsByGstinKey } from "@/lib/leads/gstinMatch";
+import { matchedUnion } from "@/lib/dashboard/revenueSource";
+import { hasZohoRefusedGstin } from "@/lib/sales/ledgerTables";
 
 let failed = 0;
 function check(label: string, ok: boolean, detail?: unknown) {
@@ -122,6 +126,30 @@ async function main() {
         return ok ? s.gstin === null || s.attention !== null : s.gstin !== null || s.attention === null;
     });
     check("screenCustomerGstin keeps the good ones and flags every refused one", screenWrong.length === 0, screenWrong);
+
+    // 4 — Zoho refused GSTINs reach Needs attention; no own GSTIN as an account alias.
+    if (await hasZohoRefusedGstin()) {
+        const inv = await matchedUnion();
+        const [z] = (await db.execute(sql`
+            SELECT (SELECT COUNT(*)::int FROM zoho_invoices zi
+                      JOIN zoho_customer_gstins g ON g.organization_id = COALESCE(zi.organization_id, '')
+                                                 AND g.customer_id = zi.customer_id
+                     WHERE g.refused_gstin IS NOT NULL) AS refused,
+                   (SELECT COUNT(*)::int FROM ${inv} r WHERE r.source = 'zoho' AND r.needs_attention) AS flagged`)) as unknown as Array<{
+            refused: number;
+            flagged: number;
+        }>;
+        check(`Zoho invoices with a refused GSTIN in Needs attention: ${z.flagged} = ${z.refused}`, z.flagged === z.refused);
+    } else {
+        console.log("SKIP  Zoho refused GSTINs — E-340 not applied");
+    }
+    try {
+        const [own] = (await db.execute(sql`
+            SELECT COUNT(*)::int AS n FROM account_gstins WHERE upper(btrim(gstin)) IN ('06AALFI7813E1ZE', '07AALFI7813E1ZC')`)) as unknown as Array<{ n: number }>;
+        check("no account carries iTarang's own GSTIN as an extra GSTIN", own.n === 0, own.n);
+    } catch (e) {
+        console.log(`SKIP  account_gstins — ${(e as Error).message.split("\n")[0]}`);
+    }
 
     console.log(failed === 0 ? "\nAll checks passed." : `\n${failed} check(s) FAILED.`);
     process.exit(failed === 0 ? 0 : 1);

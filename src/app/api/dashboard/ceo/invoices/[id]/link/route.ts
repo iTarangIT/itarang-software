@@ -36,7 +36,7 @@ import {
 import { requireAuth } from "@/lib/auth-utils";
 import { errorMessage, generateId, isNextRedirectError } from "@/lib/api-utils";
 import { hasAccountOwnershipTables } from "@/lib/accounts/tables";
-import { isValidGstin, normalizeGstin } from "@/lib/leads/gstin";
+import { checkCustomerGstin, normalizeGstin } from "@/lib/leads/gstin";
 import { GSTIN_KEY } from "@/lib/leads/gstinMatch";
 
 export const runtime = "nodejs";
@@ -245,9 +245,10 @@ export async function POST(
 
     // Only a well-formed GSTIN is worth teaching the matcher; anything else
     // could never match a future invoice and would not fit the 15-char column.
+    // ID 62: never iTarang's own (the model sometimes reads the seller's).
     const gstin = normalizeGstin(invoice.gstin);
     const teachGstin =
-      isValidGstin(gstin) && gstin !== normalizeGstin(account.gstin) ? gstin : null;
+      checkCustomerGstin(gstin) === "ok" && gstin !== normalizeGstin(account.gstin) ? gstin : null;
 
     let gstinAdded = false;
     await db.transaction(async (tx) => {

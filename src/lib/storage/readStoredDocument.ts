@@ -107,23 +107,17 @@ async function fromSupabase(bucket: string, key: string): Promise<Buffer | null>
 }
 
 /**
- * Reading the OTHER backend when the active one has no such object was
- * migration safety. It is off unless STORAGE_SUPABASE_FALLBACK=1 (tracker
- * ID 128): on a miss the fallback asked Supabase storage with the service-role
- * key, which ignores bucket policies — so a path the active backend rightly
- * could not find was retried somewhere with no access rules. Checked on
- * 2026-10-05: the CRM's Supabase project holds no storage buckets, so there is
- * nothing left for it to find.
- */
-export function storageFallbackEnabled(raw: string | undefined = process.env.STORAGE_SUPABASE_FALLBACK): boolean {
-    const v = (raw ?? "").trim().toLowerCase();
-    return v === "1" || v === "true" || v === "yes";
-}
-
-/**
- * Read an object's bytes from the active storage backend (and, only with
- * STORAGE_SUPABASE_FALLBACK=1, from the other one on a miss). Returns null when
+ * Read an object's bytes from the active storage backend. Returns null when
  * the object is not found.
+ *
+ * There is no second try anywhere else (tracker ID 166, 12 Oct). Reading the
+ * OTHER backend on a miss was migration safety, already off by default since
+ * ID 128 (STORAGE_SUPABASE_FALLBACK): it asked Supabase storage with the
+ * service-role key, which ignores bucket policies. It is now removed. Checked
+ * read-only on 12 Oct (scripts/verify-id166-storage-coverage.ts): the Supabase
+ * project the app points at holds no storage buckets, and every stored
+ * Supabase URL names the old project (zziynf…), which was deleted — so the
+ * fallback could not serve a single file on either database.
  */
 export async function readBucketObject(
     bucket: string,
@@ -132,9 +126,6 @@ export async function readBucketObject(
     let buf: Buffer | null = null;
     try {
         buf = isS3Backend ? await getObject(bucket, key) : await fromSupabase(bucket, key);
-        if (!buf && storageFallbackEnabled()) {
-            buf = isS3Backend ? await fromSupabase(bucket, key) : await getObject(bucket, key);
-        }
     } catch (e) {
         console.error(`[readBucketObject] read failed for ${bucket}/${key}:`, e);
         buf = null;

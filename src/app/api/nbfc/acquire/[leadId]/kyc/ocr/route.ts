@@ -16,6 +16,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { resolveActor } from "@/lib/nbfc/dual-approval/auth";
 import { getActiveAssignment } from "@/lib/nbfc/vkyc";
 import { runKycOcr } from "@/lib/kyc/ocr-extract";
+import { maskAadhaarDeep } from "@/lib/kyc/aadhaarMask";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -46,5 +47,6 @@ export async function POST(
   const doc_for: string = typeof body.doc_for === "string" ? body.doc_for : "customer";
 
   const { status, ...result } = await runKycOcr(leadId, { docType: doc_type, docFor: doc_for });
-  return NextResponse.json(result, { status: status ?? 200 });
+  // ID 119: the full Aadhaar number never goes to the browser.
+  return NextResponse.json(maskAadhaarDeep(result), { status: status ?? 200 });
 }

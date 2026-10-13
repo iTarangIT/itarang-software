@@ -34,9 +34,9 @@
 import { sql } from "drizzle-orm";
 
 import { db } from "@/lib/db";
-import { matchedUnion, REVENUE_NOT_VOID } from "@/lib/dashboard/revenueSource";
+import { matchedUnion, REVENUE_IS_ORDER, REVENUE_NOT_VOID } from "@/lib/dashboard/revenueSource";
 import { hasAccountOwnershipTables } from "@/lib/accounts/tables";
-import { dealerAccountSql, invoiceAccountSql } from "@/lib/accounts/accountList";
+import { dealerAccountSql, gstinMissingSql, invoiceAccountSql } from "@/lib/accounts/accountList";
 import { closedColumns } from "@/lib/accounts/accountClosures";
 import { hasOrderClaimTables } from "@/lib/accounts/tables";
 import { claimStateCte, claimStatusSql, invoicesByAccountCte } from "@/lib/accounts/orderClaims";
@@ -45,11 +45,19 @@ import {
     ACCOUNT_BUCKETS,
     accountBucket,
     effectiveDaysSinceOrder,
+    isLiveBucket,
     type AccountBucket,
     type OrderClaimStatus,
 } from "@/lib/dealers/accountHealthRules";
 
-export { ACCOUNT_BUCKETS, ACCOUNT_BUCKET_LABELS, accountBucket, type AccountBucket } from "@/lib/dealers/accountHealthRules";
+export {
+    ACCOUNT_BUCKETS,
+    ACCOUNT_BUCKET_LABELS,
+    accountBucket,
+    isLiveBucket,
+    LIVE_BUCKETS,
+    type AccountBucket,
+} from "@/lib/dealers/accountHealthRules";
 
 export type DealerHealthRow = {
     /** Stable row key: the account id (E-321) or, pre-E-321, the lead id. */
@@ -62,6 +70,8 @@ export type DealerHealthRow = {
     came_through: string | null;
     dealer: string;
     gstin: string | null;
+    /** ID 148: the Accounts screen's GSTIN-missing rule (blank, PENDING, or fails the check). */
+    gstin_missing: boolean;
     city: string | null;
     state: string | null;
     business_type: string | null;
@@ -102,14 +112,15 @@ export async function listDealerHealth(): Promise<DealerHealthRow[]> {
     const claimsOn = accountsOn && (await hasOrderClaimTables());
     const orders = sql`
         orders AS (
+            -- ID 71: a credit note nets revenue but is never an order.
             SELECT ${keyCol}                         AS k,
-                   COUNT(*)                          AS n,
-                   MIN(r.invoice_date)               AS first_order,
-                   MAX(r.invoice_date)               AS last_order,
+                   COUNT(*) FILTER (WHERE r.source <> 'credit')                    AS n,
+                   MIN(r.invoice_date) FILTER (WHERE r.source <> 'credit')         AS first_order,
+                   MAX(r.invoice_date) FILTER (WHERE r.source <> 'credit')         AS last_order,
                    COALESCE(SUM(r.total), 0)         AS lifetime,
                    COALESCE(SUM(r.total) FILTER (
                        WHERE r.invoice_date > (SELECT d FROM today) - 90), 0) AS last_90d,
-                   COUNT(DISTINCT r.invoice_date)    AS order_days
+                   COUNT(DISTINCT r.invoice_date) FILTER (WHERE r.source <> 'credit') AS order_days
               FROM ${invoices} AS r
              WHERE ${keyCol} IS NOT NULL AND ${REVENUE_NOT_VOID}
              GROUP BY ${keyCol}
@@ -128,14 +139,15 @@ export async function listDealerHealth(): Promise<DealerHealthRow[]> {
         WITH today AS (SELECT (now() AT TIME ZONE 'Asia/Kolkata')::date AS d),
         ${await invoicesByAccountCte()},
         orders AS (
+            -- ID 71: a credit note nets revenue but is never an order.
             SELECT inv.k,
-                   COUNT(*)                          AS n,
-                   MIN(inv.invoice_date)             AS first_order,
-                   MAX(inv.invoice_date)             AS last_order,
+                   COUNT(*) FILTER (WHERE NOT inv.is_credit)                    AS n,
+                   MIN(inv.invoice_date) FILTER (WHERE NOT inv.is_credit)       AS first_order,
+                   MAX(inv.invoice_date) FILTER (WHERE NOT inv.is_credit)       AS last_order,
                    COALESCE(SUM(inv.total), 0)       AS lifetime,
                    COALESCE(SUM(inv.total) FILTER (
                        WHERE inv.invoice_date > (SELECT d FROM today) - 90), 0) AS last_90d,
-                   COUNT(DISTINCT inv.invoice_date)  AS order_days
+                   COUNT(DISTINCT inv.invoice_date) FILTER (WHERE NOT inv.is_credit) AS order_days
               FROM inv
              GROUP BY inv.k
         )${claimsOn ? sql`,
@@ -154,13 +166,16 @@ export async function listDealerHealth(): Promise<DealerHealthRow[]> {
                ao.came_through,
                a.business_entity_name                               AS dealer,
                a.gstin,
+               ${gstinMissingSql(sql`a.gstin`)}                     AS gstin_missing,
                COALESCE(a.city, dl.city)                            AS city,
                COALESCE(a.state, dl.state)                          AS state,
                to_jsonb(dl) ->> 'business_type'                     AS business_type,
                ao.owner_user_id::text                               AS owner_id,
                u.name                                               AS owner_name,
-               (a.created_at AT TIME ZONE 'Asia/Kolkata')::date     AS converted_on,
-               ((SELECT d FROM today) - (a.created_at AT TIME ZONE 'Asia/Kolkata')::date) AS days_since_conversion,
+               -- ID 148: the same "since activation" clock as the Accounts download.
+               (COALESCE((to_jsonb(a) ->> 'activated_at')::timestamptz, a.created_at) AT TIME ZONE 'Asia/Kolkata')::date AS converted_on,
+               ((SELECT d FROM today)
+                  - (COALESCE((to_jsonb(a) ->> 'activated_at')::timestamptz, a.created_at) AT TIME ZONE 'Asia/Kolkata')::date) AS days_since_conversion,
                ${closed},
                ${claimsOn
                    ? sql`oc.id AS claim_id, oc.order_date::text AS claim_order_date,
@@ -186,7 +201,7 @@ export async function listDealerHealth(): Promise<DealerHealthRow[]> {
                dl.id                                                AS lead_id,
                NULL::text                                           AS came_through,
                COALESCE(dl.shop_name, dl.dealer_name, '(unnamed)')  AS dealer,
-               dl.gstin, dl.city, dl.state,
+               dl.gstin, ${gstinMissingSql(sql`dl.gstin`)} AS gstin_missing, dl.city, dl.state,
                to_jsonb(dl) ->> 'business_type'                     AS business_type,
                dl.current_owner_id                                  AS owner_id,
                u.name                                               AS owner_name,
@@ -213,6 +228,7 @@ export async function listDealerHealth(): Promise<DealerHealthRow[]> {
             came_through: (r.came_through as string | null) ?? null,
             dealer: String(r.dealer),
             gstin: (r.gstin as string | null) ?? null,
+            gstin_missing: r.gstin_missing === true,
             city: (r.city as string | null) ?? null,
             state: (r.state as string | null) ?? null,
             business_type: (r.business_type as string | null) ?? null,
@@ -268,7 +284,7 @@ export async function summarizeDealerHealth(
                bool_or(r.invoice_date <  (SELECT start FROM w)) AS before,
                bool_or(r.invoice_date >= (SELECT start FROM w)) AS within
           FROM ${invoices} AS r
-         WHERE ${keyCol} IS NOT NULL AND ${REVENUE_NOT_VOID}
+         WHERE ${keyCol} IS NOT NULL AND ${REVENUE_IS_ORDER}
          GROUP BY ${keyCol}
     `)) as unknown as Array<{ k: string; before: boolean; within: boolean }>;
     const re = new Map(reorder.map((x) => [x.k, x]));
@@ -281,7 +297,8 @@ export async function summarizeDealerHealth(
               : (r.business_type ?? "Not set");
 
     const groups = new Map<string, DealerHealthGroup & { _before: number; _both: number }>();
-    for (const r of rows) {
+    // ID 148: groups count live dealers only — a closed dealer is in no total or reorder rate.
+    for (const r of rows.filter((x) => isLiveBucket(x.bucket))) {
         const k = keyOf(r);
         const g =
             groups.get(k) ??

@@ -1,46 +1,24 @@
 // What the CEO overview's "Money owed to us" card is made of: every invoice
-// still owed, with the same rule and source the card sums — outstandingTotal()
-// is SUM(balance) over revenueUnion() WHERE REVENUE_OUTSTANDING, all-time.
-// matchedUnion() is that same union plus the dealer match, so the total at the
-// top of this page is the card's number. Ageing is days since the invoice date
-// (and days past due where the invoice carries a due date).
+// still owed, with the same rule and source the card sums. The query and the
+// ageing buckets live in lib/dashboard/receivables.ts, which the ageing strip
+// on "Revenue & costs" (ID 89) reads too.
 
 import Link from "next/link";
-import { sql } from "drizzle-orm";
 import { ArrowLeft, FileText } from "lucide-react";
 
-import { db } from "@/lib/db";
 import { requireRole } from "@/lib/auth-utils";
-import { matchedUnion, REVENUE_OUTSTANDING } from "@/lib/dashboard/revenueSource";
+import {
+    listReceivables,
+    netOwed,
+    RECEIVABLE_AGES as AGES,
+    receivableAgeOf as ageOf,
+    type ReceivableAgeKey,
+    type ReceivableRow as Row,
+} from "@/lib/dashboard/receivables";
 
 export const dynamic = "force-dynamic";
 
-type Row = {
-    source: string;
-    id: string;
-    invoice_number: string | null;
-    invoice_date: string | null;
-    due_date: string | null;
-    customer_name: string | null;
-    total: number;
-    balance: number;
-    status: string | null;
-    document_url: string | null;
-    dealer_lead_id: string | null;
-    account_id: string | null;
-    dealer_name: string | null;
-    owner_name: string | null;
-    age_days: number | null;
-    overdue_days: number | null;
-};
-
-const AGES = [
-    { key: "0_30", label: "0–30 days", min: 0, max: 30 },
-    { key: "31_60", label: "31–60 days", min: 31, max: 60 },
-    { key: "61_90", label: "61–90 days", min: 61, max: 90 },
-    { key: "90_plus", label: "90+ days", min: 91, max: Infinity },
-] as const;
-type AgeKey = (typeof AGES)[number]["key"] | "all" | "no_date";
+type AgeKey = ReceivableAgeKey | "all";
 
 const SOURCE_LABEL: Record<string, string> = { zoho: "Zoho", drive: "Drive", credit: "Credit note" };
 
@@ -59,9 +37,6 @@ const fmtDate = (d: string) =>
         timeZone: "UTC",
     });
 
-const ageOf = (r: Row): AgeKey =>
-    r.age_days == null ? "no_date" : (AGES.find((a) => r.age_days! >= a.min && r.age_days! <= a.max)?.key ?? "0_30");
-
 export default async function CeoReceivablesPage({
     searchParams,
 }: {
@@ -72,33 +47,11 @@ export default async function CeoReceivablesPage({
     const validAges: string[] = ["all", "no_date", ...AGES.map((a) => a.key)];
     const age: AgeKey = validAges.includes(sp.age ?? "") ? (sp.age as AgeKey) : "all";
 
-    const inv = await matchedUnion();
-    const rows = (
-        (await db.execute(sql`
-            SELECT r.source, r.id, r.invoice_number, r.invoice_date::text AS invoice_date, r.due_date::text AS due_date,
-                   r.customer_name, COALESCE(r.total, 0) AS total, COALESCE(r.balance, 0) AS balance, r.status,
-                   r.document_url, r.dealer_lead_id, r.account_id, r.dealer_name, u.name AS owner_name,
-                   ((now() AT TIME ZONE 'Asia/Kolkata')::date - r.invoice_date::date) AS age_days,
-                   CASE WHEN r.due_date IS NOT NULL
-                        THEN ((now() AT TIME ZONE 'Asia/Kolkata')::date - r.due_date::date) END AS overdue_days
-              FROM ${inv} r
-              LEFT JOIN users u ON u.id::text = r.dealer_owner_id::text
-             WHERE ${REVENUE_OUTSTANDING}
-             ORDER BY r.balance DESC NULLS LAST
-        `)) as unknown as Array<Record<string, unknown>>
-    ).map(
-        (r) =>
-            ({
-                ...r,
-                total: Number(r.total),
-                balance: Number(r.balance),
-                age_days: r.age_days == null ? null : Number(r.age_days),
-                overdue_days: r.overdue_days == null ? null : Number(r.overdue_days),
-            }) as Row,
-    );
+    const rows = await listReceivables();
 
     const sum = (xs: Row[]) => xs.reduce((a, r) => a + r.balance, 0);
-    const owed = sum(rows);
+    const owed = netOwed(rows);
+    const credits = rows.filter((r) => r.source === "credit");
     const overdue = rows.filter((r) => r.overdue_days != null && r.overdue_days > 0);
     const unlinked = rows.filter((r) => r.account_id == null && r.dealer_lead_id == null);
     const byAge = AGES.map((a) => ({ ...a, rows: rows.filter((r) => ageOf(r) === a.key) }));
@@ -122,6 +75,7 @@ export default async function CeoReceivablesPage({
         if (r.age_days != null) d.oldest = Math.max(d.oldest ?? 0, r.age_days);
         byDealer.set(key, d);
     }
+    for (const d of byDealer.values()) d.owed = Math.max(0, d.owed);
     const debtors = [...byDealer.values()].sort((a, b) => b.owed - a.owed).slice(0, 15);
 
     const tab = (k: AgeKey, text: string, xs: Row[]) => (
@@ -161,13 +115,20 @@ export default async function CeoReceivablesPage({
                 <p className="mt-1 text-sm text-ink-muted">
                     Every Zoho and Drive invoice that is not paid, void or draft and still has a balance — as of now,
                     whatever date it was raised. The amount is the unpaid balance (invoice total minus what has been
-                    paid), including GST. Age is days since the invoice date.
+                    paid), including GST, less any credit note issued to the same customer (never below zero per
+                    customer). Age is days since the invoice or credit note date.
                 </p>
             </div>
 
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
                 {[
-                    { k: "Owed to us", v: inr(owed), s: `${rows.length} invoice${rows.length === 1 ? "" : "s"}` },
+                    {
+                        k: "Owed to us",
+                        v: inr(owed),
+                        s: `${rows.length - credits.length} invoice${rows.length - credits.length === 1 ? "" : "s"}${
+                            credits.length ? ` · less ${credits.length} credit note${credits.length === 1 ? "" : "s"} (${inr(-sum(credits))})` : ""
+                        }`,
+                    },
                     {
                         k: "Past due date",
                         v: inr(sum(overdue)),

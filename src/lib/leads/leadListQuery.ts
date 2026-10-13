@@ -21,6 +21,7 @@ import type { CampaignFacet } from "@/lib/leads/leadCampaign";
 // pulls in `db` and can never be reachable from a client component.
 import { CAMPAIGN_NONE } from "@/lib/leads/campaign";
 import { BUSINESS_TYPE_UNSET } from "@/lib/leads/businessType";
+import { ownerScopeIds } from "@/lib/users/teamRules";
 
 // Shared with the API route. Both ends of a created-at range must look like a
 // calendar date before it goes near SQL.
@@ -74,6 +75,13 @@ export type LeadListFilters = {
      * ANDed with ownerId (which reps cannot set anyway).
      */
     ownerScopeId?: string | null;
+    /**
+     * ID 155: the scoped viewer's direct reports. With ownerScopeId set, the
+     * scope widens to leads owned by the viewer OR one of these (a manager
+     * sees their team's leads). Only the /leads list passes it; exports stay
+     * own-only (ID 58).
+     */
+    ownerScopeTeamIds?: string[] | null;
     asmId?: string | null;
     source?: string | null;
     /**
@@ -362,7 +370,15 @@ function buildWhere(f: LeadListFilters, opts?: { ignoreIntent?: boolean }) {
         conds.push(sql`dl.lead_status = ${f.status}`);
     }
     if (f.ownerId) conds.push(sql`dl.current_owner_id = ${f.ownerId}`);
-    if (f.ownerScopeId) conds.push(sql`dl.current_owner_id = ${f.ownerScopeId}`);
+    if (f.ownerScopeId) {
+        // ID 155: a manager's scope = themself + their direct reports.
+        const scope = ownerScopeIds(f.ownerScopeId, f.ownerScopeTeamIds);
+        conds.push(
+            scope.length === 1
+                ? sql`dl.current_owner_id = ${f.ownerScopeId}`
+                : sql`dl.current_owner_id IN (${sql.join(scope.map((id) => sql`${id}`), sql`, `)})`,
+        );
+    }
     if (f.asmId) conds.push(sql`dl.asm_id = ${f.asmId}`);
     if (f.source) conds.push(sql`dl.source = ${f.source}`);
     if (f.neodoveOnly) {
@@ -616,6 +632,7 @@ export async function fetchNumberSearchMisses(
     if (missed.length > 0) {
         exists = await matchedMobiles({
             ownerScopeId: f.ownerScopeId,
+            ownerScopeTeamIds: f.ownerScopeTeamIds,
             search: missed.join(","),
             hideDead: false,
             contactability: "include",

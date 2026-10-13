@@ -101,6 +101,7 @@ import {
   requiresConsent,
   resolveActiveDealer,
   resolveHouseDealer,
+  resolvePushedCustomerDealer,
 } from "./customer-lead";
 // E-278 — the per-lead history stream (Team Leads / History). Both recorders
 // swallow their own errors; a missing lead_flow_events table costs nothing.
@@ -881,11 +882,16 @@ async function onGeneralInfo(
 // thin dispatcher over the DC_LEAD_* subset only — reuses the exact lead-capture
 // handlers the dealer console uses, but with the house dealer as the attributed
 // dealer and WITHOUT ever exposing the dealer menu (Drafts/Inventory/Help).
-async function runCustomerTurn(
+//
+// ID 33: also driven by an iTarang operator's hub (operator-orchestrator) for a
+// customer KYC; when the operator named an onboarded dealer, that dealer (not
+// the house) is the attributed dealer for every turn — `houseDealer` below is
+// then that dealer.
+export async function runCustomerTurn(
   session: SessionRow,
   event: InboundEvent,
 ): Promise<void> {
-  const houseDealer = await resolveHouseDealer();
+  const houseDealer = await resolveCustomerFlowDealer(session);
   if (!houseDealer) {
     console.error(
       "[WhatsApp/customer] house dealer unresolved mid-flow — resetting",
@@ -962,6 +968,40 @@ async function runCustomerTurn(
       "Sorry, something went wrong on our side. Please send *hi* to start again.",
     );
   }
+}
+
+// ID 33: the dealer a customer-flow turn is attributed to — the onboarded
+// dealer an operator named (ctx.op.customerDealer), else the house dealer.
+async function resolveCustomerFlowDealer(
+  session: SessionRow,
+): Promise<ActiveDealer | null> {
+  const picked = ((session.context ?? {}) as Ctx).op?.customerDealer;
+  if (picked) {
+    const dealer = await resolvePushedCustomerDealer(picked);
+    if (dealer) return dealer;
+  }
+  return await resolveHouseDealer();
+}
+
+/**
+ * ID 33: an iTarang operator starts a customer KYC from their hub, for the
+ * dealer they named (null = Skip → house dealer). Same lead capture as the
+ * customer flow; the hub keeps routing turns here while ctx.flow = "customer"
+ * (see runOperatorTurn).
+ */
+export async function startOperatorCustomerFlow(
+  hub: SessionRow,
+  dealer: ActiveDealer,
+): Promise<void> {
+  await mergeContext(hub, (ctx) => {
+    ctx.flow = "customer";
+  });
+  await reply(
+    hub,
+    `👤 *Customer KYC* for *${dealer.dealerName}*` +
+      (dealer.pushedBy ? " — the lead goes to this dealer and they get a WhatsApp." : "."),
+  );
+  return await startNewLead(await loadSession(hub.id), dealer);
 }
 
 // End a customer lead flow: clear the flow/lead context and reset to GREETING so

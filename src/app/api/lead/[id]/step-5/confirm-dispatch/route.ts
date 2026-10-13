@@ -7,6 +7,7 @@ import { leads } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 import { InventoryLifecycleError } from "@/lib/inventory/lifecycle";
 import { DispatchError, confirmDispatch } from "@/lib/leads/confirm-dispatch";
+import { dealerMayActOnLead } from "@/lib/auth/requireLeadAccess";
 
 // BRD V2 §3.3 — Step 5 OTP validation + dispatch confirmation.
 //
@@ -39,7 +40,7 @@ export async function POST(
         { status: 404 },
       );
     }
-    if (lead.dealer_id !== user.dealer_id) {
+    if (!(await dealerMayActOnLead(user, lead.dealer_id))) {
       return NextResponse.json(
         { success: false, error: { message: "Access denied" } },
         { status: 403 },
@@ -50,7 +51,7 @@ export async function POST(
       leadId,
       otp,
       performedBy: user.id,
-      dealerId: user.dealer_id!,
+      dealerId: lead.dealer_id!, // = this dealer's code, checked above (ID 119)
     });
 
     return NextResponse.json({

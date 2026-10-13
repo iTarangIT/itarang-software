@@ -6,7 +6,8 @@ import { leads } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { requireRole } from "@/lib/auth-utils";
 import { requireLeadAccess } from "@/lib/auth/requireLeadAccess";
-import { maskAadhaar } from "@/lib/kyc/aadhaarMask";
+import { maskAadhaar } from "@/lib/kyc/aadhaarMask";
+import { maskPan } from "@/lib/kyc/panMask";
 import { isNextRedirectError } from "@/lib/api-utils";
 
 type RouteContext = {
@@ -61,7 +62,9 @@ export async function GET(_req: NextRequest, { params }: RouteContext) {
                 father_husband_name: borrowerForm.father_or_husband_name || null,
                 dob: borrowerForm.dob || null,
                 email: borrowerForm.email || null,
-                pan_no: borrowerForm.pan_no || null,
+                // ID 119 / 166: full PAN only for Admin, Sales Head, CEO and the
+                // lead's owner; save-draft keeps the stored PAN on a masked save.
+                pan_no: leadGate.user.fullIds ? borrowerForm.pan_no || null : maskPan(borrowerForm.pan_no),
                 // ID 119: masked (XXXX XXXX 1234). The form saves it back as
                 // is; save-draft and POST /api/coborrower/[leadId] keep the
                 // stored number when they receive the mask.

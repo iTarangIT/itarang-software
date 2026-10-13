@@ -117,6 +117,18 @@ describe("Block B (ASM) — one row per rep", () => {
         expect(rows[2]).toEqual(["Total", 3, 50, 0, 7, 2, 11, 1, 6, 4, 3, REP_NOT_MEASURED, 2, "₹25.0 L", "80%"]);
     });
 
+    it("ID 156: a manager's team under them, with a subtotal against the MANAGER's own target", () => {
+        const blocks = buildRepBlocks("asm", y, mtd, extras, targets);
+        // Amy (a2) reports to Zed (a1).
+        const rows = repBlockTableRows("asm", blocks, new Map([["a2", "a1"]]));
+        expect(rows.map((r) => r[0])).toEqual(["Zed", "↳ Amy", "Team subtotal · Zed", "Total"]);
+        // Team: 40 + 10 = 50 dealers visited MTD against Zed's own target of 50 = 100%.
+        expect(rows[2][2]).toBe(50);
+        expect(rows[2][rows[2].length - 1]).toBe("100%");
+        // The block Total is unchanged: % over reps that have a target (Zed alone).
+        expect(rows[3][rows[3].length - 1]).toBe("80%");
+    });
+
     it("no Total row for a single rep, and none for no reps", () => {
         const one = buildRepBlocks("asm", { per_spoc: [] }, { per_spoc: [spoc("a1", "Zed", "asm")] }, extras, new Map());
         expect(repBlockTableRows("asm", one)).toHaveLength(1);

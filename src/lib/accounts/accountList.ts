@@ -29,7 +29,7 @@ import { db } from "@/lib/db";
 import { matchedUnion, REVENUE_NOT_VOID } from "@/lib/dashboard/revenueSource";
 import { accountBucket, type AccountBucket } from "@/lib/dealers/accountHealthRules";
 import { GSTIN_KEY, gstinKeyIsMatchable } from "@/lib/leads/gstinMatch";
-import { closedColumns } from "./accountClosures";
+import { closedColumns, notClosedSql } from "./accountClosures";
 import { suggestedOwners } from "./ownership";
 
 /** What the approve route writes when the onboarding carried no GSTIN. */
@@ -146,18 +146,19 @@ export async function listAccounts(f: AccountFilters = {}): Promise<AccountRow[]
                   - CASE WHEN EXTRACT(MONTH FROM (SELECT d FROM today)) < 4 THEN 1 ELSE 0 END, 4, 1) AS start
         ),
         orders AS (
+            -- ID 71: a credit note nets revenue but is never an order.
             SELECT ${invoiceAccountSql()}            AS account_id,
-                   COUNT(*)                          AS n,
-                   MIN(r.invoice_date)               AS first_order,
-                   MAX(r.invoice_date)               AS last_order,
+                   COUNT(*) FILTER (WHERE r.source <> 'credit')                AS n,
+                   MIN(r.invoice_date) FILTER (WHERE r.source <> 'credit')     AS first_order,
+                   MAX(r.invoice_date) FILTER (WHERE r.source <> 'credit')     AS last_order,
                    COALESCE(SUM(r.total), 0)         AS lifetime,
                    COALESCE(SUM(r.total) FILTER (
                        WHERE r.invoice_date > (SELECT d FROM today) - 90), 0) AS last_90d,
                    COALESCE(SUM(r.total) FILTER (
                        WHERE r.invoice_date >= (SELECT start FROM fy)), 0)    AS this_fy,
-                   COUNT(DISTINCT r.invoice_date)    AS order_days,
-                   bool_or(r.invoice_date >= (SELECT d FROM today) - 30) AS within_30d,
-                   bool_or(r.invoice_date <  (SELECT d FROM today) - 30) AS before_30d
+                   COUNT(DISTINCT r.invoice_date) FILTER (WHERE r.source <> 'credit') AS order_days,
+                   COALESCE(bool_or(r.invoice_date >= (SELECT d FROM today) - 30) FILTER (WHERE r.source <> 'credit'), FALSE) AS within_30d,
+                   COALESCE(bool_or(r.invoice_date <  (SELECT d FROM today) - 30) FILTER (WHERE r.source <> 'credit'), FALSE) AS before_30d
               FROM ${invoices} AS r
              WHERE ${REVENUE_NOT_VOID}
              GROUP BY 1
@@ -255,6 +256,12 @@ export async function listAccounts(f: AccountFilters = {}): Promise<AccountRow[]
             bucket: accountBucket(sinceOrder, sinceActivation, r.closed === true),
         };
     });
+    // ID 148 — one bucket rule: Dealer Health's, which also applies an open
+    // "Order placed" claim (E-334), so the download and Dealer Health never
+    // show the same dealer in two buckets. Lazy import: accountHealth imports this file.
+    const { listDealerHealth } = await import("@/lib/dealers/accountHealth");
+    const health = new Map((await listDealerHealth()).map((h) => [h.account_id, h.bucket]));
+    for (const r of mapped) r.bucket = health.get(r.account_id) ?? r.bucket;
     // ID 148 — the same suggestion the Accounts screen shows, for the unowned.
     const hints = await suggestedOwners(mapped.filter((r) => !r.owner_id).map((r) => r.account_id));
     for (const r of mapped) {
@@ -268,15 +275,22 @@ export async function listAccounts(f: AccountFilters = {}): Promise<AccountRow[]
     return f.bucket ? mapped.filter((r) => r.bucket === f.bucket) : mapped;
 }
 
-/** Headline counts for the Account management tabs. */
-export async function countAccounts(): Promise<{ total: number; no_owner: number; gstin_missing: number }> {
+/** Headline counts for the Account management tabs — live dealers (ID 148), plus the closed. */
+export async function countAccounts(): Promise<{ total: number; no_owner: number; gstin_missing: number; closed: number }> {
+    const live = await notClosedSql(sql`a.id`);
     const [r] = (await db.execute(sql`
-        SELECT COUNT(*)                                                         AS total,
-               COUNT(*) FILTER (WHERE ao.owner_user_id IS NULL)               AS no_owner,
-               COUNT(*) FILTER (WHERE ${gstinMissingSql(sql`a.gstin`)})       AS gstin_missing
+        SELECT COUNT(*) FILTER (WHERE ${live})                                                     AS total,
+               COUNT(*) FILTER (WHERE ${live} AND ao.owner_user_id IS NULL)                        AS no_owner,
+               COUNT(*) FILTER (WHERE ${live} AND ${gstinMissingSql(sql`a.gstin`)})                AS gstin_missing,
+               COUNT(*) FILTER (WHERE NOT ${live})                                                 AS closed
           FROM accounts a
             LEFT JOIN account_ownership ao ON ao.account_id = a.id
          WHERE ${dealerAccountSql()}
     `)) as unknown as Array<Record<string, unknown>>;
-    return { total: Number(r?.total ?? 0), no_owner: Number(r?.no_owner ?? 0), gstin_missing: Number(r?.gstin_missing ?? 0) };
+    return {
+        total: Number(r?.total ?? 0),
+        no_owner: Number(r?.no_owner ?? 0),
+        gstin_missing: Number(r?.gstin_missing ?? 0),
+        closed: Number(r?.closed ?? 0),
+    };
 }

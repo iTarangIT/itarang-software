@@ -11,6 +11,7 @@ import { isPoolTabFor } from "@/lib/leads/claimScope";
 import { successResponse, withErrorHandler, errorResponse } from "@/lib/api-utils";
 import { fetchQueueRegions } from "@/lib/inside-sales/queryBuilder";
 import { QUEUE_TABS } from "@/lib/inside-sales/types";
+import { teamForOwnScopedViewer } from "@/lib/users/team";
 
 export const dynamic = "force-dynamic";
 
@@ -40,6 +41,6 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
         return errorResponse("Search by mobile number to find and claim a lead.", 403);
     }
 
-    const regions = await fetchQueueRegions(user.id, parsed.tab);
+    const regions = await fetchQueueRegions(user.id, parsed.tab, await teamForOwnScopedViewer(user)); // ID 155: + a manager's team
     return successResponse({ regions });
 });

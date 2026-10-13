@@ -5,6 +5,7 @@ import { requireRole } from '@/lib/auth-utils';
 import { eq, and, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { markLeadDeleted } from '@/lib/leads/multi-party-delete';
+import { dealerMayActOnLead } from '@/lib/auth/requireLeadAccess';
 
 const updateSchema = z.object({
     full_name: z.string().optional().nullable(),
@@ -54,7 +55,8 @@ export const GET = withErrorHandler(async (_req: Request, { params }: { params: 
     if (lead.deleted_by_dealer_at) return errorResponse('Lead not found', 404);
 
     const isOwner = lead.uploader_id === user.id;
-    const isSameDealer = user.dealer_id && lead.dealer_id === user.dealer_id;
+    // ID 119: resolves a dealer login with no users.dealer_id via its onboarding code.
+    const isSameDealer = await dealerMayActOnLead(user, lead.dealer_id);
     if (!isOwner && !isSameDealer) {
         return errorResponse('Forbidden: You do not have permission to view this lead', 403);
     }
@@ -169,7 +171,8 @@ export const PATCH = withErrorHandler(async (req: Request, { params }: { params:
     if (!lead) return errorResponse('Lead not found', 404);
     // Allow edit if user is the uploader OR if the lead belongs to the same dealer
     const isOwner = lead.uploader_id === user.id;
-    const isSameDealer = user.dealer_id && lead.dealer_id === user.dealer_id;
+    // ID 119: resolves a dealer login with no users.dealer_id via its onboarding code.
+    const isSameDealer = await dealerMayActOnLead(user, lead.dealer_id);
     if (!isOwner && !isSameDealer) return errorResponse('Forbidden: You do not have permission to edit this lead', 403);
 
     if (data.commitStep) {
