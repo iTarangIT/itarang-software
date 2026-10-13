@@ -4,6 +4,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { leads, productSelections } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
+import { dealerMayActOnLead } from "@/lib/auth/requireLeadAccess";
 
 // E-103 (Sync Audit G-05) — GET /api/product-selections/{id}
 // Returns the renamed product_selections.model_number column under JSON key
@@ -47,7 +48,7 @@ export async function GET(
         .from(leads)
         .where(eq(leads.id, selection.lead_id))
         .limit(1);
-      if (!lead || lead.dealer_id !== user.dealer_id) {
+      if (!lead || !(await dealerMayActOnLead(user, lead.dealer_id))) {
         return NextResponse.json(
           { success: false, error: { message: "Access denied" } },
           { status: 403 },

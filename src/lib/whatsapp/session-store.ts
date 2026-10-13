@@ -240,6 +240,13 @@ export type Ctx = {
      *  possible when their number is also an approved dealer), so the operator
      *  turn knows to hand the message to runConsoleTurn. */
     inDealerConsole?: boolean;
+    /** ID 33: the operator is running a customer KYC (ctx.flow = "customer")
+     *  for this onboarded dealer instead of the house dealer. Absent = house.
+     *  byUserId / byName are the operator, for the push audit. */
+    customerDealer?: { dealerCode: string; name: string; byUserId: string | null; byName: string };
+    /** ID 33: the "Which dealer is this for?" question was already re-asked
+     *  once after an unknown mobile; the next miss falls back to the house. */
+    dealerAskRetried?: boolean;
   };
   /** "Active batteries" browser (DC_ACTIVE_BATT) — paging cursor only. */
   ab?: { page?: number };

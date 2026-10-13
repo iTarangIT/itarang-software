@@ -21,6 +21,7 @@ import { fetchAssignedByForLeads } from "@/lib/leads/leadAssignedBy";
 import { fetchBusinessTypeForLeads } from "@/lib/leads/leadListQuery";
 import { businessTypeLabel } from "@/lib/leads/businessType";
 import { exportsOwnLeadsOnly, logDataDownload } from "@/lib/exports/downloadLog";
+import { teamForOwnScopedViewer } from "@/lib/users/team";
 import {
     ASM_QUEUE_TABS,
     ASM_TAB_LABELS,
@@ -121,6 +122,9 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
     // road, so there the scope is the assignment, not the ownership.
     const ownOnly = exportsOwnLeadsOnly(user.role);
     const ownedBy = ownOnly && parsed.tab !== "today" ? user.id : null;
+    // ID 155: a manager's export covers what their table shows — their own
+    // leads plus their direct reports'.
+    const teamMemberIds = ownOnly ? await teamForOwnScopedViewer(user) : [];
 
     const [rows, total] = await Promise.all([
         fetchAsmQueueRows({
@@ -131,6 +135,7 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
             q: parsed.q ?? null,
             ...filters,
             ownedBy,
+            teamMemberIds,
         }),
         countAsmQueueRows({
             tab: parsed.tab,
@@ -138,6 +143,7 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
             q: parsed.q ?? null,
             ...filters,
             ownedBy,
+            teamMemberIds,
         }),
     ]);
 

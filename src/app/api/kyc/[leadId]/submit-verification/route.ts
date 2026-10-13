@@ -8,6 +8,7 @@ import { notifyKycSubmitted } from '@/lib/notifications/events';
 import { dealerDisplayName } from '@/lib/notifications/emit';
 import { getKycAutoApprovalSettings, slaStampFor } from '@/lib/kyc/auto-approval-settings';
 import { requireLeadAccess } from "@/lib/auth/requireLeadAccess";
+import { isMaskedPan } from "@/lib/kyc/panMask";
 
 const VERIFICATION_LABELS: Record<string, string> = {
     aadhaar: 'Aadhaar Verification',
@@ -61,12 +62,18 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
     if (!leadGate.ok) return leadGate.response;
     try {
         const { leadId } = await params;
-        const { couponCode, pan_number, account_number, ifsc, account_holder_name } = await req.json();
+        const { couponCode, pan_number: sentPan, account_number, ifsc, account_holder_name } = await req.json();
 
         const lead = await db.select().from(leads).where(eq(leads.id, leadId)).limit(1);
         if (!lead.length) {
             return NextResponse.json({ success: false, error: { message: 'Lead not found' } }, { status: 404 });
         }
+        // ID 119 / 166: a role that may not see the full PAN was shown a mask;
+        // verify the stored PAN then, never the mask.
+        const draftPan = (lead[0].kyc_draft_data as any)?.borrowerForm?.pan_no;
+        const pan_number = isMaskedPan(sentPan)
+            ? (typeof draftPan === 'string' && !isMaskedPan(draftPan) ? draftPan : null)
+            : sentPan;
 
         // Server-side precondition gate: admin must have verified the customer
         // consent AND every required document must be uploaded AND a coupon

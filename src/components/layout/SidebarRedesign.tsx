@@ -12,7 +12,7 @@
 // does not mention lands in a trailing MORE group — a page can never drop out
 // of the menu because someone forgot to place it here.
 
-import React, { useId, useMemo, useState } from "react";
+import React, { useId, useMemo, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ChevronRight, Search } from "lucide-react";
@@ -46,7 +46,14 @@ type Ref =
 type AddRef = { add: string; label: string; href: string; isNew?: boolean };
 
 type LayoutGroup = { section: string; fixed?: boolean; defaultOpen?: boolean; items: Ref[] };
-type Layout = { roleLabel: string; hide?: string[]; groups: LayoutGroup[] };
+/**
+ * ID 90 — `counts` is the allow-list of item ids that may show a count in this
+ * role's menu ("each menu shows counts for what that role acts on", Kartik
+ * 10 Oct). sidebar.tsx attaches badges by id for every role that has the item;
+ * any id not listed here has its badge dropped, so a new badge never shows up
+ * on a menu until someone decides that role acts on it. Omit to keep all.
+ */
+type Layout = { roleLabel: string; hide?: string[]; counts?: string[]; groups: LayoutGroup[] };
 
 const BUYBACK: Ref = {
     node: "Buyback",
@@ -95,10 +102,12 @@ const ADMIN_SALES_HEAD_GROUPS: LayoutGroup[] = [
             { node: "Reviews", urgent: true, children: ["kyc-review", "dealer-validation", "product-review"] },
             ...both("escalations"),
             ...both("ready-to-assign"),
-            ...both("needs-attention"),
+            // ID 90 — five lines for the work queues (spec: "9 lines to 5"):
+            // idle leads join the clean-up folder, whose header sums its counts.
             {
                 node: "Lead clean-up",
                 children: [
+                    ...bothAs("needs-attention", { label: "Needs attention (idle)" }),
                     ...both("merge-requests"),
                     ...both("number-repair"),
                     ...bothAs("onboarding-dropouts", { label: "Onboarding drop-outs" }),
@@ -239,6 +248,7 @@ const ADMIN_SALES_HEAD_GROUPS: LayoutGroup[] = [
             ...both("kyc-automation"),
             // ID 85 — admin only (sales_head has no such item, so it is skipped).
             { id: "admin-time-limits", isNew: true },
+            { id: "admin-kyc-file-opens", isNew: true },
             {
                 node: "Email reports",
                 children: [
@@ -261,13 +271,31 @@ const ADMIN_SALES_HEAD_GROUPS: LayoutGroup[] = [
     },
 ];
 
+// ID 90 — Admin / Sales Head counts: their own work queues (review arrivals,
+// WhatsApp onboarding, the Ecofy pickup queue, buyback negotiations). The
+// buyback "Notifications" unread total is left off — the header bell has it.
+const ADMIN_SALES_HEAD_COUNTS = [
+    "kyc-review",
+    "dealer-validation",
+    "product-review",
+    ...both("whatsapp-onboarding"),
+    "sh-ecofy",
+    "sh-ecofy-queue",
+    "buyback-negotiations",
+];
+
 export const NAV_LAYOUTS: Record<string, Layout> = {
     ceo: {
         roleLabel: "CEO",
         // ID 88 — /admin is the Sales dashboard now, the same screen as the
-        // "Sales dashboard" row; the old Operations Dashboard is off the menu
-        // (still at /admin/ops-dashboard, linked from Reports).
+        // "Sales dashboard" row; the old Operations Dashboard is retired
+        // (/admin/ops-dashboard redirects to /admin).
         hide: ["ceo-admin-dashboard"],
+        // ID 90 — the CEO's menu counts only what waits on the CEO's decision:
+        // the four approvals and Escalations (spec, 29 Sep). Review-queue
+        // arrivals, the Ecofy pickup queue and buyback unread are other
+        // people's work, so their badges stay off this menu.
+        counts: ["ceo-quotations", "expense-approvals", "nbfc-approvals", "financing-offer-approvals", "ceo-escalations"],
         groups: [
             { section: "HOME", fixed: true, items: [{ id: "dashboard", label: "Overview" }, "ceo-ai-analyst"] },
             {
@@ -284,14 +312,24 @@ export const NAV_LAYOUTS: Record<string, Layout> = {
                 section: "BUSINESS",
                 defaultOpen: true,
                 items: [
-                    { id: "revenue-costs", label: "Revenue & costs" },
-                    { node: "Invoices", children: [{ id: "sales-invoices", label: "Sales invoices" }, "ceo-invoice-ledger"] },
                     {
                         node: "Account management",
                         children: [{ id: "ceo-accounts", label: "Accounts" }, "ceo-dealer-health"],
                     },
                     "ceo-targets",
                     "deals",
+                ],
+            },
+            {
+                // ID 89 — the money pages in their own group ("'Revenue & costs'
+                // under Money", 29 Sep), moved out of BUSINESS.
+                section: "MONEY",
+                items: [
+                    { id: "revenue-costs", label: "Revenue & costs" },
+                    // A page with no menu entry until now (ceo/receivables).
+                    { add: "ceo-receivables", label: "Money owed to us", href: "/ceo/receivables" },
+                    { node: "Invoices", children: [{ id: "sales-invoices", label: "Sales invoices" }, "ceo-invoice-ledger"] },
+                    { id: "submit-expense", label: "Submit expense" },
                 ],
             },
             {
@@ -345,9 +383,14 @@ export const NAV_LAYOUTS: Record<string, Layout> = {
                         isNew: true,
                         children: ["ceo-data-downloads", "ceo-scheduled-emails", "ceo-report-catalogue"],
                     },
+                    // ID 90 — "the More group goes" (spec, 29 Sep): the news feed is
+                    // read like a report, so it sits here rather than in its own group.
+                    { id: "ceo-news", label: "Green energy news" },
                 ],
             },
-            { section: "MORE", items: ["ceo-news", { id: "ceo-time-limits", isNew: true }, "submit-expense"] },
+            // ID 90 — the rest of the old MORE group: the settings and the log
+            // the CEO shares with Admin (IDs 85, 166). Folded like every group.
+            { section: "SETTINGS", items: [{ id: "ceo-time-limits", isNew: true }, { id: "ceo-kyc-file-opens", isNew: true }] },
         ],
     },
     // ID 88 — every "Sales dashboard" entry is the one screen (SalesHeadOpsView)
@@ -356,11 +399,13 @@ export const NAV_LAYOUTS: Record<string, Layout> = {
     sales_head: {
         roleLabel: "Sales Head",
         hide: ["sh-sales-dashboard", "sh-admin-dashboard"],
+        counts: ADMIN_SALES_HEAD_COUNTS,
         groups: ADMIN_SALES_HEAD_GROUPS,
     },
     admin: {
         roleLabel: "Admin",
         hide: ["admin-sales-dashboard"],
+        counts: ADMIN_SALES_HEAD_COUNTS,
         groups: ADMIN_SALES_HEAD_GROUPS,
     },
 };
@@ -452,7 +497,79 @@ export function applyNavLayout(layout: Layout, source: SourceGroup[]): RedesignG
         if (more) more.items.push(...rest);
         else groups.push({ section: "MORE", items: rest });
     }
+
+    // ID 90 — counts only on what this role acts on (see Layout.counts).
+    if (layout.counts) {
+        const allowed = new Set(layout.counts);
+        const gate = <T extends RedesignChild>(i: T): T => (i.badge == null || allowed.has(i.id) ? i : { ...i, badge: undefined });
+        return groups.map((g) => ({
+            ...g,
+            items: g.items.map((i) => ({ ...gate(i), children: i.children?.map(gate) })),
+        }));
+    }
     return groups;
+}
+
+/** The row is the current page, or a folder holding it. */
+const holdsItem = (item: RedesignItem, activeItemId: string | null) =>
+    activeItemId != null && (item.id === activeItemId || Boolean(item.children?.some((c) => c.id === activeItemId)));
+
+/**
+ * Is a group open before anyone folds or unfolds it? HOME (fixed) always; a
+ * group the layout opens by default (the spec's Needs you / Business for the
+ * CEO, Work queues / Sales for Admin and Sales Head); and the group holding
+ * the current page. Every other group starts folded.
+ */
+export function groupStartsOpen(g: RedesignGroup, activeItemId: string | null): boolean {
+    return Boolean(g.fixed || g.defaultOpen || g.items.some((i) => holdsItem(i, activeItemId)));
+}
+
+/**
+ * ID 90 — the lines the menu shows before anyone opens or closes anything
+ * (the spec's "about 20 lines for the CEO, about 22 for Admin / Sales Head,
+ * by default"): one per group header (HOME's label too), the rows of every
+ * group that starts open, and a folder's rows only when it holds the current
+ * page. Mirrors RedesignedSidebarNav's render; the search box is not counted.
+ */
+export function defaultMenuLines(groups: RedesignGroup[], activeItemId: string | null = null): number {
+    let lines = 0;
+    for (const g of groups) {
+        lines += 1;
+        if (!groupStartsOpen(g, activeItemId)) continue;
+        for (const it of g.items) {
+            lines += 1;
+            if (it.children?.length && holdsItem(it, activeItemId)) lines += it.children.length;
+        }
+    }
+    return lines;
+}
+
+/** Every href the menu can reach — rows, and rows inside folders. */
+export function menuHrefs(groups: RedesignGroup[]): string[] {
+    return groups.flatMap((g) => g.items.flatMap((i) => (i.children?.length ? i.children.map((c) => c.href) : [i.href])));
+}
+
+// ── Remembered folds (ID 90) — per browser, per role; never required ────────
+const subscribeStorage = (onChange: () => void) => {
+    window.addEventListener("storage", onChange);
+    return () => window.removeEventListener("storage", onChange);
+};
+const readStorage = (key: string): string | null => {
+    try {
+        return window.localStorage.getItem(key);
+    } catch {
+        return null;
+    }
+};
+function parseFolds(raw: string | null): Map<string, boolean> {
+    if (!raw) return new Map();
+    try {
+        const v = JSON.parse(raw) as unknown;
+        if (!v || typeof v !== "object") return new Map();
+        return new Map(Object.entries(v as Record<string, unknown>).filter((e): e is [string, boolean] => typeof e[1] === "boolean"));
+    } catch {
+        return new Map();
+    }
 }
 
 const badgeNumber = (b: Badge | undefined) => (b == null ? 0 : typeof b === "number" ? b : Number.parseInt(b, 10) || 0);
@@ -498,13 +615,28 @@ export function RedesignedSidebarNav({
     const [query, setQuery] = useState("");
     // Explicit toggles only; anything absent falls back to its default (see
     // SidebarNav in sidebar.tsx for why this is derived rather than stored).
+    // ID 90 — "the menu remembers what each person opened" (spec, 29 Sep):
+    // the toggles are kept in this browser per role, read after mount so the
+    // server render and the first client render agree.
+    const storageKey = `itarang:menu-folds:v1:${roleLabel}`;
+    // The server snapshot is null, so the server render and hydration agree;
+    // the saved folds apply right after.
+    const savedRaw = useSyncExternalStore(subscribeStorage, () => readStorage(storageKey), () => null);
+    const saved = useMemo(() => parseFolds(savedRaw), [savedRaw]);
     const [toggled, setToggled] = useState<Map<string, boolean>>(new Map());
 
-    const holdsActive = (item: RedesignItem) =>
-        item.id === activeItemId || Boolean(item.children?.some((c) => c.id === activeItemId));
-    const isOpen = (key: string, fallback: boolean) => (toggled.has(key) ? (toggled.get(key) as boolean) : fallback);
-    const toggle = (key: string, fallback: boolean) =>
-        setToggled((prev) => new Map(prev).set(key, !(prev.has(key) ? (prev.get(key) as boolean) : fallback)));
+    const holdsActive = (item: RedesignItem) => holdsItem(item, activeItemId);
+    const isOpen = (key: string, fallback: boolean) =>
+        toggled.has(key) ? (toggled.get(key) as boolean) : saved.has(key) ? (saved.get(key) as boolean) : fallback;
+    const toggle = (key: string, fallback: boolean) => {
+        const next = new Map(toggled).set(key, !isOpen(key, fallback));
+        setToggled(next);
+        try {
+            window.localStorage.setItem(storageKey, JSON.stringify({ ...Object.fromEntries(saved), ...Object.fromEntries(next) }));
+        } catch {
+            /* not remembered — still toggles */
+        }
+    };
 
     // Searching flattens the menu to the rows that match.
     const q = query.trim().toLowerCase();
@@ -596,7 +728,7 @@ export function RedesignedSidebarNav({
                     </div>
                 ) : (
                     groups.map((g) => {
-                        const open = g.fixed || isOpen(g.section, Boolean(g.defaultOpen) || g.items.some(holdsActive));
+                        const open = g.fixed || isOpen(g.section, groupStartsOpen(g, activeItemId));
                         const pages = g.items.reduce((a, it) => a + (it.children?.length || 1), 0);
                         const itemCount = (it: RedesignItem) =>
                             it.children?.length ? it.children.reduce((a, c) => a + badgeNumber(c.badge), 0) : badgeNumber(it.badge);

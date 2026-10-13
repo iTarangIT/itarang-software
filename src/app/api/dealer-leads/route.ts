@@ -4,8 +4,9 @@ import { inArray, sql } from "drizzle-orm";
 import { NextRequest, NextResponse } from "next/server";
 import { requireRole } from "@/lib/auth-utils";
 import { withErrorHandler } from "@/lib/api-utils";
-import { LEADS_PAGE_ROLES, canEditLead, capabilitiesFor } from "@/lib/leads/access";
+import { LEADS_PAGE_ROLES, canEditLead, capabilitiesFor, exportsOwnLeadsOnly } from "@/lib/leads/access";
 import { parseLeadListFilters } from "@/lib/leads/leadListParams";
+import { getTeamMemberIds } from "@/lib/users/team";
 import {
   BULK_ID_CAP,
   fetchBusinessTypeCounts,
@@ -308,7 +309,10 @@ export const GET = withErrorHandler(async (req: Request) => {
   // gated on caps.canSeeOwnerAsm there. Passing `user` scopes a rep role
   // (asm, inside_sales_rep, partner) to the leads it owns — ID 45: a rep cannot
   // browse the pool here, in ids_only, or in the stats.
-  const filters: LeadListFilters = await parseLeadListFilters(searchParams, caps, user);
+  // ID 155: a manager (anyone with direct reports) also sees their team's
+  // leads; only looked up for the own-scoped roles, everyone else sees more.
+  const teamMemberIds = exportsOwnLeadsOnly(user.role) ? await getTeamMemberIds(user.id) : [];
+  const filters: LeadListFilters = await parseLeadListFilters(searchParams, caps, { ...user, teamMemberIds });
 
   // ?ids_only=1 — every id matching these filters, for "select all N matching".
   // Returned on its own: the caller wants ids to feed a bulk action, not rows,
@@ -458,6 +462,7 @@ export const GET = withErrorHandler(async (req: Request) => {
         userId: user.id,
         currentOwnerId: l.current_owner_id,
         asmId: l.asm_id,
+        // ID 155: no team here — a manager sees team leads but cannot edit.
       }),
       neodove_sync_status: neodoveStatus[l.id] ?? null,
       campaign: campaigns[l.id] ?? null,

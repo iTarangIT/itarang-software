@@ -93,6 +93,12 @@ export const GET = withErrorHandler(async (req: Request) => {
         { header: "Outcome / disposition", width: 24, value: (r) => r.outcome },
         { header: "Duration (s)", width: 11, value: (r) => r.duration_sec },
         { header: "Remarks", width: 50, value: (r) => r.remarks },
+        // ID 35 — the clocks running when the event happened (E-337); blank without lead_clocks.
+        { header: "Lead clock started", width: 19, value: (r) => excelIst(r.lead_clock_started_at ?? null), numFmt: "dd-mmm-yyyy hh:mm" },
+        { header: "Lead limit passed", width: 22, value: (r) => r.lead_limit_passed ?? null },
+        { header: "Owner clock started", width: 19, value: (r) => excelIst(r.owner_clock_started_at ?? null), numFmt: "dd-mmm-yyyy hh:mm" },
+        { header: "Owner limit passed", width: 22, value: (r) => r.owner_limit_passed ?? null },
+        { header: "Owner inferred", width: 14, value: (r) => r.owner_inferred ?? null },
     ];
     ws.columns = COLS.map((c) => ({ header: c.header, width: c.width }));
     styleHeader(ws.getRow(1));

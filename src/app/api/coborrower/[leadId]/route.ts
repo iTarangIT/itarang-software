@@ -4,6 +4,7 @@ import { coBorrowers, leads } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
 import { requireLeadAccess } from '@/lib/auth/requireLeadAccess';
 import { isMaskedAadhaar, maskAadhaar, restoreMaskedAadhaar } from '@/lib/kyc/aadhaarMask';
+import { isMaskedPan, maskPan, restoreMaskedPan } from '@/lib/kyc/panMask';
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
     try {
@@ -11,8 +12,15 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ lead
         const access = await requireLeadAccess(leadId);
         if (!access.ok) return access.response;
         const cob = await db.select().from(coBorrowers).where(eq(coBorrowers.lead_id, leadId)).limit(1);
-        // ID 119: the co-borrower's Aadhaar leaves the server masked.
-        const row = cob[0] ? { ...cob[0], aadhaar_no: maskAadhaar(cob[0].aadhaar_no) } : null;
+        // ID 119: the co-borrower's Aadhaar leaves the server masked; the PAN
+        // too, unless the caller is Admin, Sales Head, CEO or the lead's owner.
+        const row = cob[0]
+            ? {
+                ...cob[0],
+                aadhaar_no: maskAadhaar(cob[0].aadhaar_no),
+                pan_no: access.user.fullIds ? cob[0].pan_no : maskPan(cob[0].pan_no),
+            }
+            : null;
         return NextResponse.json({ success: true, data: row });
     } catch (error) {
         return NextResponse.json({ success: false, error: { message: 'Server error' } }, { status: 500 });
@@ -28,7 +36,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         const now = new Date();
 
         const [existing] = await db
-            .select({ id: coBorrowers.id, aadhaar_no: coBorrowers.aadhaar_no })
+            .select({ id: coBorrowers.id, aadhaar_no: coBorrowers.aadhaar_no, pan_no: coBorrowers.pan_no })
             .from(coBorrowers)
             .where(eq(coBorrowers.lead_id, leadId))
             .limit(1);
@@ -46,6 +54,17 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             const draftAadhaar = (lead?.kyc_draft_data as any)?.borrowerForm?.aadhaar_no;
             storedAadhaar = typeof draftAadhaar === 'string' && !isMaskedAadhaar(draftAadhaar) ? draftAadhaar : null;
         }
+        // Same for a masked PAN (ID 119 / 166: masked for roles that may not see it).
+        let storedPan: string | null = existing?.pan_no ?? null;
+        if (!storedPan && isMaskedPan(body.pan_no)) {
+            const [lead] = await db
+                .select({ kyc_draft_data: leads.kyc_draft_data })
+                .from(leads)
+                .where(eq(leads.id, leadId))
+                .limit(1);
+            const draftPan = (lead?.kyc_draft_data as any)?.borrowerForm?.pan_no;
+            storedPan = typeof draftPan === 'string' && !isMaskedPan(draftPan) ? draftPan : null;
+        }
 
         const fields = {
             full_name: body.full_name ?? null,
@@ -57,7 +76,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             permanent_address: body.permanent_address ?? null,
             current_address: body.current_address ?? null,
             is_current_same: !!body.is_current_same,
-            pan_no: body.pan_no ?? null,
+            pan_no: (restoreMaskedPan(body.pan_no ?? null, storedPan) as string | null) ?? null,
             aadhaar_no: (restoreMaskedAadhaar(body.aadhaar_no ?? null, storedAadhaar) as string | null) ?? null,
             updated_at: now,
         };

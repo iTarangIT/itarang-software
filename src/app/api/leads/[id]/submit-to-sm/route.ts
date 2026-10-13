@@ -3,6 +3,7 @@ import { leads } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
 import { withErrorHandler, successResponse, errorResponse } from '@/lib/api-utils';
 import { requireRole } from '@/lib/auth-utils';
+import { dealerMayActOnLead } from '@/lib/auth/requireLeadAccess';
 
 // kyc_status values that indicate the lead is currently in a Step 3 "dealer
 // action required" state and is being re-submitted after the dealer has
@@ -27,7 +28,7 @@ export const POST = withErrorHandler(async (req: Request, { params }: { params: 
     }).from(leads).where(eq(leads.id, leadId)).limit(1);
 
     if (!lead) return errorResponse('Lead not found', 404);
-    if (lead.dealer_id !== user.dealer_id) return errorResponse('Access denied', 403);
+    if (!(await dealerMayActOnLead(user, lead.dealer_id))) return errorResponse('Access denied', 403);
 
     const currentKycStatus = String(lead.kyc_status || '');
     const isStep3Resubmission = STEP_3_AWAITING_STATES.has(currentKycStatus);

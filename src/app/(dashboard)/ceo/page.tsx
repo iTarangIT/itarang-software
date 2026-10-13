@@ -47,6 +47,7 @@ import type { SalesDashboard } from "@/lib/admin/salesDashboardTypes";
 import type { CeoOverviewData } from "@/components/dashboard/ceo/CeoOverviewCards";
 import { DashboardSkeleton } from "@/components/dashboard/ceo/DashboardSkeleton";
 import { GreenNewsCard } from "@/components/dashboard/ceo/GreenNewsCard";
+import { EcofyStageTile } from "@/components/ecofy/EcofyStageTile";
 import {
   ActionCard,
   CardLink,
@@ -1063,7 +1064,9 @@ export default function CEODashboard() {
                 </div>
               ))}
               <div className="flex items-baseline justify-between border-t border-border pt-2.5">
-                <span className="text-sm font-semibold">Net of purchases</span>
+                {/* ID 89 — was "Net of purchases", which read as if only purchases
+                    came off; it is revenue less stock bought and running expenses. */}
+                <span className="text-sm font-semibold">Revenue minus purchases and expenses</span>
                 <span
                   className={`text-lg font-bold tabular-nums ${spent.net >= 0 ? "text-success" : "text-danger"}`}
                 >
@@ -1188,6 +1191,9 @@ export default function CEODashboard() {
           )}
         </DashCard>
       </div>
+
+      {/* ID 51 #2 — Ecofy leads by stage: its own block, never in the funnel above. */}
+      <EcofyStageTile />
 
       {/* Team + finance + buyback */}
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-3">

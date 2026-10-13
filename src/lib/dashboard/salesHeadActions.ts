@@ -450,6 +450,21 @@ export async function listSalesHeadActionFiltered(key: ActionKey, p: URLSearchPa
     return searchActionRows(await listSalesHeadAction(key, actionScopeFrom(p)), p.get("q"));
 }
 
+/**
+ * ID 88 #3 — the dealer's phone for each row, for the list page's Call button.
+ * One lookup for the rows on screen, kept out of the tile builders so the
+ * dashboard's counts pay nothing for it. Lead ids absent from the map have no phone.
+ */
+export async function phonesForActionRows(rows: ActionRow[]): Promise<Record<string, string>> {
+    const ids = [...new Set(rows.map((r) => r.lead_id))];
+    if (!ids.length) return {};
+    const found = await run(sql`
+        SELECT dl.id AS lead_id, dl.phone FROM dealer_leads dl
+         WHERE dl.id IN (${sql.join(ids.map((id) => sql`${id}`), sql`, `)}) AND NULLIF(trim(dl.phone), '') IS NOT NULL
+    `);
+    return Object.fromEntries(found.map((r) => [String(r.lead_id), String(r.phone).trim()]));
+}
+
 export const ACTION_CSV_COLUMNS: Array<{ header: string; value: (r: ActionRow) => string }> = [
     { header: "Lead ID", value: (r) => r.lead_id },
     { header: "Dealer", value: (r) => r.dealer },

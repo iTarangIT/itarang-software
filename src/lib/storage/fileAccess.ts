@@ -19,6 +19,8 @@
 
 import { createHmac, timingSafeEqual } from "node:crypto";
 
+import { classifyFile, isKycFile } from "@/lib/storage/fileRules";
+
 /** Decode until it stops changing; a string that is not valid encoding is final. */
 function decodings(segment: string): string[] {
     const seen = [segment];
@@ -118,9 +120,27 @@ function linkSecret(): string | null {
     return master ? createHmac("sha256", master).update("file-link-v1").digest("hex") : null;
 }
 
-function sign(secret: string, bucket: string, key: string, exp: number): string {
-    return createHmac("sha256", secret).update(`${bucket}\n${key}\n${exp}`).digest("hex");
+// `by` (ID 166): the user a fresh in-app link was minted for. It is part of the
+// signature, so the open is logged against that person and the value cannot
+// be swapped. Links minted for an outside service carry none and sign exactly
+// as before, so links already sent keep working.
+function sign(secret: string, bucket: string, key: string, exp: number, by?: string | null): string {
+    const payload = by ? `${bucket}\n${key}\n${exp}\n${by}` : `${bucket}\n${key}\n${exp}`;
+    return createHmac("sha256", secret).update(payload).digest("hex");
 }
+
+/**
+ * ID 166 (10 Oct): "Fresh link on each click, valid 15 minutes. A link pasted
+ * into WhatsApp stops working after 15 minutes." Every in-app open mints one
+ * of these (GET /api/files/link), and a signed link to a customer KYC file is
+ * never honoured for longer than this (fileLinkTooLong).
+ */
+export const FRESH_LINK_TTL_SECONDS = 15 * 60;
+/** Clock skew allowed between the server that signed and the one checking. */
+const LINK_SKEW_SECONDS = 60;
+
+/** The logical buckets the /api/files proxy serves. */
+export const FILE_PROXY_BUCKETS = ["documents", "dealer-documents", "call-recordings"] as const;
 
 /** `exp` and `sig` query values for a link to bucket/key, valid for ttlSeconds. */
 export function fileLinkSignature(
@@ -128,11 +148,12 @@ export function fileLinkSignature(
     key: string,
     ttlSeconds: number,
     now: number = Date.now(),
+    by?: string | null,
 ): { exp: number; sig: string } | null {
     const secret = linkSecret();
     if (!secret) return null;
     const exp = Math.floor(now / 1000) + ttlSeconds;
-    return { exp, sig: sign(secret, bucket, key, exp) };
+    return { exp, sig: sign(secret, bucket, key, exp, by) };
 }
 
 export function fileLinkValid(
@@ -141,16 +162,46 @@ export function fileLinkValid(
     exp: string | null | undefined,
     sig: string | null | undefined,
     now: number = Date.now(),
+    by?: string | null,
 ): boolean {
     const secret = linkSecret();
     const until = Number(exp);
     if (!secret || !sig || !Number.isInteger(until) || until * 1000 < now) return false;
-    const want = Buffer.from(sign(secret, bucket, key, until));
+    const want = Buffer.from(sign(secret, bucket, key, until, by));
     const got = Buffer.from(sig);
     return want.length === got.length && timingSafeEqual(want, got);
 }
 
-/** bucket + key of a files-proxy URL (relative or absolute), or null. */
+/**
+ * Does this signed link expire further out than `maxSeconds` from now? The
+ * expiry is the only time a link carries, so a link minted with a longer life
+ * shows up here. For a customer KYC file the files route refuses such a link,
+ * which caps every KYC link at 15 minutes whatever minted it.
+ */
+export function fileLinkTooLong(
+    exp: string | number | null | undefined,
+    maxSeconds: number = FRESH_LINK_TTL_SECONDS,
+    now: number = Date.now(),
+): boolean {
+    const until = Number(exp);
+    if (!Number.isFinite(until)) return true;
+    return until * 1000 - now > (maxSeconds + LINK_SKEW_SECONDS) * 1000;
+}
+
+/**
+ * The life a new link to bucket/key gets: what the caller asked for, but never
+ * more than 15 minutes for a customer KYC file (ID 166), whoever signs it.
+ */
+export function linkTtl(bucket: string, key: string, ttlSeconds: number): number {
+    return isKycFile(classifyFile(bucket, key)) ? Math.min(ttlSeconds, FRESH_LINK_TTL_SECONDS) : ttlSeconds;
+}
+
+/** bucket + key (and the bare path) of a files-proxy URL, relative or absolute; else null. */
+export function filesProxyTarget(url: string): { path: string; bucket: string; key: string } | null {
+    const t = proxyTarget(url);
+    return t ? { path: t.path, bucket: t.bucket, key: t.key } : null;
+}
+
 function proxyTarget(url: string): { at: number; path: string; bucket: string; key: string } | null {
     const at = url.indexOf("/api/files/");
     if (at === -1) return null;
@@ -172,12 +223,18 @@ function proxyTarget(url: string): { at: number; path: string; bucket: string; k
  * what it just uploaded, the dealer correction link. Stays relative. Any other
  * URL comes back unchanged. Never store the result — store the plain path.
  */
-export function signedFilePath(url: string | null | undefined, ttlSeconds: number): string | null {
+export function signedFilePath(
+    url: string | null | undefined,
+    ttlSeconds: number,
+    opts: { by?: string | null } = {},
+): string | null {
     if (!url) return null;
     const t = proxyTarget(url);
     if (!t) return url;
-    const signed = fileLinkSignature(t.bucket, t.key, ttlSeconds);
-    return signed ? `${t.path}?exp=${signed.exp}&sig=${signed.sig}` : t.path;
+    const signed = fileLinkSignature(t.bucket, t.key, linkTtl(t.bucket, t.key, ttlSeconds), Date.now(), opts.by);
+    if (!signed) return t.path;
+    const by = opts.by ? `&by=${encodeURIComponent(opts.by)}` : "";
+    return `${t.path}?exp=${signed.exp}&sig=${signed.sig}${by}`;
 }
 
 /**
@@ -195,6 +252,6 @@ export function shareableFileUrl(
     const t = proxyTarget(url);
     if (!t) return url;
     const absolute = /^https?:\/\//i.test(url) ? url.split("?")[0] : `${origin}${t.path}`;
-    const signed = fileLinkSignature(t.bucket, t.key, opts.ttlSeconds ?? 60 * 60);
+    const signed = fileLinkSignature(t.bucket, t.key, linkTtl(t.bucket, t.key, opts.ttlSeconds ?? 60 * 60));
     return signed ? `${absolute}?exp=${signed.exp}&sig=${signed.sig}` : absolute;
 }

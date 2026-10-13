@@ -6,6 +6,7 @@ import { leads, loanSanctions } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 import { evaluateEnachGate } from "@/lib/nbfc/enach";
 import { externalLenderName } from "@/lib/leads/bajaj-fallback-text";
+import { dealerMayActOnLead } from "@/lib/auth/requireLeadAccess";
 
 // BRD V2 §4.0 — access gate for Step 5 (Loan Review + OTP + Dispatch).
 //   loan_sanctioned → scenario A (OTP + dispatch)
@@ -40,7 +41,7 @@ export async function GET(
         { status: 404 },
       );
     }
-    if (lead.dealer_id !== user.dealer_id) {
+    if (!(await dealerMayActOnLead(user, lead.dealer_id))) {
       return NextResponse.json(
         { success: false, error: { message: "Access denied" } },
         { status: 403 },

@@ -24,7 +24,9 @@ import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-util
 import { and, desc, eq } from "drizzle-orm";
 import { deriveDurationSeconds } from "@/lib/ai-dialer/call-duration/derive";
 import { loadLeadCallAttempts } from "@/lib/ai-dialer/leadCallAttempts";
-import { leadOwnedBy, requireCampaignReader } from "@/lib/ai-dialer/campaignAccess";
+import { requireCampaignReader } from "@/lib/ai-dialer/campaignAccess";
+// ID 155: read access = own leads, or a direct report's (manager).
+import { leadVisibleTo } from "@/lib/users/team";
 
 type SubScores = {
   next_step_commitment: number;
@@ -190,7 +192,7 @@ export const GET = withErrorHandler(
     if (!campaignId || !leadId) {
       return errorResponse("Campaign id and lead id required", 400);
     }
-    if (ownOnly && !(await leadOwnedBy(leadId, user.id))) {
+    if (ownOnly && !(await leadVisibleTo(leadId, user.id))) {
       return errorResponse("Lead not found", 404);
     }
 

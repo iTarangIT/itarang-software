@@ -1264,6 +1264,14 @@ export default function LeadsUnifiedPage() {
     }, 350);
     return () => window.clearTimeout(t);
   }, [draft]);
+  // ID 90 — the left menu's "Find a dealer" opens /leads?search=<name>. When
+  // Leads is already open the page stays mounted and the seed above never
+  // re-runs, so follow a new ?search= from the URL.
+  const urlSearch = searchParams?.get("search") ?? "";
+  useEffect(() => {
+    if (!urlSearch) return;
+    setDraft((d) => (d.search === urlSearch ? d : { ...d, search: urlSearch }));
+  }, [urlSearch]);
 
   const setFilter = useCallback((key: keyof LeadFilters, value: string) => {
     setDraft((d) => ({ ...d, [key]: value }));

@@ -10,13 +10,13 @@
 // and replayed to Ecofy by the ticker, so the lead can still be worked.
 import { requireRole } from "@/lib/auth-utils";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
-import { checkEcofyAction, ECOFY_ALL_ROLES } from "@/lib/ecofy/access";
+import { checkEcofyAction, ECOFY_ALL_ROLES, ECOFY_FINANCIER_MONEY_ACTIONS } from "@/lib/ecofy/access";
 import { calculatorAssessmentRefusal, ecofyActionSchema } from "@/lib/ecofy/actionSchemas";
 import { notifyEcofyAction } from "@/lib/ecofy/notify";
 import { ecofyActorName, getEcofyLeadForViewer } from "@/lib/ecofy/queries";
 import { recordEcofyDueTimes } from "@/lib/ecofy/reminders";
 import { isEcofyUnavailable, localKindFor, saveLocalActivity } from "@/lib/ecofy/localActivities";
-import { refreshLeadFromEcofy, runEcofyAction } from "@/lib/ecofy/service";
+import { readEcofyCaseFinancier, refreshLeadFromEcofy, runEcofyAction } from "@/lib/ecofy/service";
 
 export const dynamic = "force-dynamic";
 
@@ -32,7 +32,11 @@ export const POST = withErrorHandler(async (req: Request, ctx: { params: Promise
     const lead = await getEcofyLeadForViewer(id, user);
     const input = ecofyActionSchema.parse(await req.json());
 
-    const allowed = checkEcofyAction({ id: user.id, role: user.role }, lead, input.action);
+    // ID 51 #1: sanction / down payment / disbursement follow the financier —
+    // Ecofy's own financing is Ecofy Admin's (access.ts money gate).
+    const isMoney = (ECOFY_FINANCIER_MONEY_ACTIONS as readonly string[]).includes(input.action);
+    const view = isMoney ? { ...lead, financier_name: await readEcofyCaseFinancier(lead.ecofy_case_id) } : lead;
+    const allowed = checkEcofyAction({ id: user.id, role: user.role }, view, input.action);
     if (!allowed.ok) throw new ActionRefused(allowed.reason, allowed.status);
     // FR-07.11 + segment match for a CALCULATOR assessment (Ecofy checks again).
     const calcRefusal = calculatorAssessmentRefusal(lead.segment, input);

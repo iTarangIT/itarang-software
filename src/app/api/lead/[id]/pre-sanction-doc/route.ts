@@ -29,6 +29,7 @@ import {
   coerceBucketItems,
   replacePreSanctionDocs,
 } from "@/lib/leads/pre-sanction-bucket";
+import { dealerMayActOnLead } from "@/lib/auth/requireLeadAccess";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -58,7 +59,7 @@ export async function POST(
         { status: 404 },
       );
     }
-    if (lead.dealer_id !== user.dealer_id) {
+    if (!(await dealerMayActOnLead(user, lead.dealer_id))) {
       return NextResponse.json({ ok: false, error: "Access denied" }, { status: 403 });
     }
 
@@ -174,7 +175,7 @@ export async function PATCH(
     if (!lead) {
       return NextResponse.json({ ok: false, error: "Lead not found" }, { status: 404 });
     }
-    if (lead.dealer_id !== user.dealer_id) {
+    if (!(await dealerMayActOnLead(user, lead.dealer_id))) {
       return NextResponse.json({ ok: false, error: "Access denied" }, { status: 403 });
     }
 
@@ -208,7 +209,7 @@ export async function PATCH(
     // and for items the dealer might still remove. PATCH is the moment the
     // bucket is committed to the lead — i.e. actually shared.
     if (items.length > 0) {
-      const bucketDealerName = await dealerDisplayName(user.dealer_id);
+      const bucketDealerName = await dealerDisplayName(lead.dealer_id);
       await notifyDocsShared({
         leadId,
         docLabel: "pre-sanction documents",

@@ -7,6 +7,7 @@ import { leads } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 import { storedFileUrl } from "@/lib/api-utils";
 import { CashSaleError, confirmCashSale } from "@/lib/leads/confirm-cash-sale";
+import { dealerMayActOnLead } from "@/lib/auth/requireLeadAccess";
 
 // BRD V2 §2.5 — cash path confirmation for Step 4.
 // No admin approval step. All writes (product_selection + inventory + warranty
@@ -88,7 +89,7 @@ export async function POST(
         { status: 404 },
       );
     }
-    if (lead.dealer_id !== user.dealer_id) {
+    if (!(await dealerMayActOnLead(user, lead.dealer_id))) {
       return NextResponse.json(
         { success: false, error: { message: "Access denied" } },
         { status: 403 },
@@ -99,7 +100,7 @@ export async function POST(
       leadId,
       body,
       performedBy: user.id,
-      dealerId: user.dealer_id!,
+      dealerId: lead.dealer_id!, // = this dealer's code, checked above (ID 119)
     });
 
     return NextResponse.json({

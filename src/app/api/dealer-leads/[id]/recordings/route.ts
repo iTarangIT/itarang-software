@@ -32,6 +32,8 @@ import { requireRole } from "@/lib/auth-utils";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
 import { INTENT_REVIEW_ROLES, readsOwnLeadsOnly } from "@/lib/leads/access";
 import { leadOwnedBy } from "@/lib/ai-dialer/campaignAccess";
+// ID 155: read access = own leads, or a direct report's (manager).
+import { leadVisibleTo } from "@/lib/users/team";
 import { filesProxyPath, putObjectStream } from "@/lib/storage/s3";
 import {
   MAX_RECORDING_BYTES,
@@ -190,7 +192,7 @@ export const GET = withErrorHandler(
     const user = await requireRole([...INTENT_REVIEW_ROLES]);
     const { id: leadId } = await ctx.params;
     // ID 45: a rep reads only leads they own; anything else is "no such lead".
-    if (readsOwnLeadsOnly(user.role) && !(await leadOwnedBy(leadId, user.id))) {
+    if (readsOwnLeadsOnly(user.role) && !(await leadVisibleTo(leadId, user.id))) {
       return errorResponse("Lead not found", 404);
     }
 

@@ -13,6 +13,7 @@ import { toast } from 'sonner';
 // lead from the file-tracker API and merged client-side; no separate tab.
 import LeadNbfcUpdates, { LenderChip, type TrackerRow } from './_components/LeadNbfcUpdates';
 import DeleteApplicationButton from '@/components/shared/DeleteApplicationButton';
+import { onFreshFileClick } from '@/lib/storage/freshFileLink';
 
 type ReviewableDoc = {
     id: string;
@@ -490,7 +491,7 @@ export default function AdminKYCReviewPage() {
                                                         <td className="py-3 px-3">
                                                             <div className="flex items-center gap-2">
                                                                 {doc.document_url && (
-                                                                    <a href={doc.document_url} target="_blank" rel="noopener noreferrer" className="p-1.5 bg-gray-50 rounded-lg hover:bg-gray-100 text-gray-600">
+                                                                    <a href={doc.document_url} onClick={(e) => onFreshFileClick(e, doc.document_url)} target="_blank" rel="noopener noreferrer" className="p-1.5 bg-gray-50 rounded-lg hover:bg-gray-100 text-gray-600">
                                                                         <Eye className="w-3.5 h-3.5" />
                                                                     </a>
                                                                 )}

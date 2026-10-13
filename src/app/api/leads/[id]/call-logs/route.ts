@@ -5,7 +5,8 @@ import { eq, desc } from 'drizzle-orm';
 import { withErrorHandler, successResponse, errorResponse } from '@/lib/api-utils';
 import { LEADS_PAGE_ROLES, readsOwnLeadsOnly } from "@/lib/leads/access";
 import { requireRole } from "@/lib/auth-utils";
-import { leadOwnedBy } from "@/lib/ai-dialer/campaignAccess";
+// ID 155: read access = own leads, or a direct report's (manager).
+import { leadVisibleTo } from "@/lib/users/team";
 
 // Next 16: route params arrive as a Promise.
 export const GET = withErrorHandler(async (req: Request, ctx: { params: Promise<{ id: string }> }) => {
@@ -18,7 +19,7 @@ export const GET = withErrorHandler(async (req: Request, ctx: { params: Promise<
     }
 
     // ID 45: a rep reads only leads they own; anything else is "no such lead".
-    if (readsOwnLeadsOnly(user.role) && !(await leadOwnedBy(id, user.id))) {
+    if (readsOwnLeadsOnly(user.role) && !(await leadVisibleTo(id, user.id))) {
         return errorResponse('Lead not found', 404);
     }
 

@@ -175,7 +175,34 @@ export interface EcofyActor {
 export interface EcofyLeadAccessView {
     assigned_to_user_id: string | null;
     stage: string | null;
+    /**
+     * ID 51 #1 — the case's current financier, when the caller knows it
+     * (Ecofy Case.financierName). Absent (undefined) = unknown: the money
+     * gate below is then left to Ecofy. null = Ecofy's default financier.
+     */
+    financier_name?: string | null;
 }
+
+/**
+ * The seeded financier is named "Ecofy"; any other name is a lender the Sales
+ * Head (iTarang Admin) records decisions for. A null name means the default,
+ * which is Ecofy. Heuristic on purpose — Ecofy exposes no "is own financier"
+ * flag on the case.
+ */
+export function isEcofyFinancier(name: string | null | undefined): boolean {
+    return !name || /ecofy/i.test(name);
+}
+
+/**
+ * Sanction / rejection, down payment and disbursement. BRD v1.4 §2 + FR-11.2 /
+ * FR-12.5 + OpenAPI "role per financier": on Ecofy's OWN financing these are
+ * Ecofy Admin's records, and the amounts are readable only by Ecofy Admin
+ * (financiers.values_visible_to = ECOFY_ADMIN, earned rule 5, RLS). iTarang
+ * Admin — the CRM — records them only for the other financiers.
+ */
+export const ECOFY_FINANCIER_MONEY_ACTIONS = ["financing_decision", "down_payment", "disbursement"] as const;
+export const ECOFY_OWN_FINANCING_REASON =
+    "Ecofy records the sanction, down payment and disbursement on its own financing (Ecofy Admin, in Ecofy). The CRM records them only for other financiers.";
 
 export type EcofyAccessResult = { ok: true } | { ok: false; status: 403 | 404 | 409; reason: string };
 
@@ -206,6 +233,13 @@ export function checkEcofyAction(
             status: 409,
             reason: `Not allowed at stage ${lead.stage ?? "unknown"}`,
         };
+    }
+    if (
+        (ECOFY_FINANCIER_MONEY_ACTIONS as readonly string[]).includes(action) &&
+        lead.financier_name !== undefined &&
+        isEcofyFinancier(lead.financier_name)
+    ) {
+        return { ok: false, status: 403, reason: ECOFY_OWN_FINANCING_REASON };
     }
     return { ok: true };
 }
