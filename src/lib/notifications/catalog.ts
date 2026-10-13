@@ -361,6 +361,8 @@ export const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   "nbfc.wallet_low": "System",
   // ID 130 — a webhook or cron route is missing its secret (security/configAlert.ts).
   "security.secret_missing": "System",
+  // ID 171 — no new invoice read for N working days (sales/invoiceFreshness.ts).
+  "invoices.stale": "System",
   // 141 live rows on sandbox and NO emitter anywhere in src/ — found by
   // `npm run verify:notifications`. Mapped rather than left unmapped so the
   // rows already in people's bells file correctly and the type is governable
@@ -433,6 +435,8 @@ const CRITICAL = new Set([
 
 /** Waiting on the recipient to act — surfaced amber. */
 const WARNING = new Set([
+  // ID 171 — someone has to drop the invoices into Drive / import the register.
+  "invoices.stale",
   "recovery.visit",
   "recovery.collected",
   "kyc.docs_requested",
