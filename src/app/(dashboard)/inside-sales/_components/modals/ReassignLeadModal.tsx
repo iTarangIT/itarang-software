@@ -13,9 +13,17 @@ type Props = {
     leadId: string;
     viewerId: string;
     onSuccess: () => void;
+    /**
+     * ID 155: a manager moving a direct report's lead picks from these
+     * (themself + their team) instead of pasting a user id.
+     */
+    teamTargets?: TeamTarget[];
 };
 
-export function ReassignLeadModal({ open, onClose, leadId, viewerId, onSuccess }: Props) {
+export type TeamTarget = { id: string; name: string; role: string; is_self: boolean };
+
+export function ReassignLeadModal({ open, onClose, leadId, viewerId, onSuccess, teamTargets }: Props) {
+    const teamMode = !!teamTargets && teamTargets.length > 0;
     const [targetId, setTargetId] = useState("");
     const [reason, setReason] = useState("");
     const [notifyAdmin, setNotifyAdmin] = useState(true);
@@ -27,7 +35,8 @@ export function ReassignLeadModal({ open, onClose, leadId, viewerId, onSuccess }
             toast.error("Target user id required.");
             return;
         }
-        if (targetId.trim() === viewerId) {
+        // ID 155: in team mode the manager may take the lead themself.
+        if (!teamMode && targetId.trim() === viewerId) {
             toast.error("Cannot reassign to yourself.");
             return;
         }
@@ -76,18 +85,39 @@ export function ReassignLeadModal({ open, onClose, leadId, viewerId, onSuccess }
             }
         >
             <form onSubmit={submit} className="space-y-4">
-                <div>
-                    <Label>Target user id (UUID)</Label>
-                    <Input
-                        value={targetId}
-                        onChange={(e) => setTargetId(e.target.value)}
-                        placeholder="e.g. 42d4131a-560b-4266-a2de-6acb40393ed5"
-                        className="mt-1 font-mono text-xs"
-                    />
-                    <p className="text-[11px] text-gray-500 mt-1">
-                        Module 3 will replace this with a typeahead. For now, paste the target user&apos;s UUID.
-                    </p>
-                </div>
+                {teamMode ? (
+                    <div>
+                        <Label>Move to</Label>
+                        <select
+                            value={targetId}
+                            onChange={(e) => setTargetId(e.target.value)}
+                            className="mt-1 h-9 w-full rounded-md border border-gray-200 bg-white px-2 text-sm"
+                        >
+                            <option value="">Pick yourself or a team member</option>
+                            {teamTargets!.map((t) => (
+                                <option key={t.id} value={t.id}>
+                                    {t.is_self ? `Me (${t.name})` : t.name} · {t.role.replace(/_/g, " ")}
+                                </option>
+                            ))}
+                        </select>
+                        <p className="text-[11px] text-gray-500 mt-1">
+                            As their manager you can move this lead to yourself or someone in your team.
+                        </p>
+                    </div>
+                ) : (
+                    <div>
+                        <Label>Target user id (UUID)</Label>
+                        <Input
+                            value={targetId}
+                            onChange={(e) => setTargetId(e.target.value)}
+                            placeholder="e.g. 42d4131a-560b-4266-a2de-6acb40393ed5"
+                            className="mt-1 font-mono text-xs"
+                        />
+                        <p className="text-[11px] text-gray-500 mt-1">
+                            Module 3 will replace this with a typeahead. For now, paste the target user&apos;s UUID.
+                        </p>
+                    </div>
+                )}
                 <div>
                     <Label>Reason <span className="text-rose-600">*</span> <span className="text-[11px] text-gray-500">(min 20 chars)</span></Label>
                     <textarea

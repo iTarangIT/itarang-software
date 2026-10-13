@@ -9,10 +9,12 @@
 // Filter state lives in the URL (useSalesDashboardFilters) so a view can be
 // refreshed or pasted into WhatsApp. The same query string is the fetch URL.
 
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, Inbox } from "lucide-react";
 
 import type { SalesDashboard } from "@/lib/admin/salesDashboardTypes";
+import { TEAM_TOTAL_PERSON } from "@/lib/users/teamRules";
 import { SalesCharts, bucketLabel } from "./SalesCharts";
 import { SalesDashboardSkeleton } from "./SalesDashboardSkeleton";
 import { SalesFilterBar } from "./SalesFilterBar";
@@ -45,10 +47,24 @@ function hasNoData(d: SalesDashboard): boolean {
     );
 }
 
-export function SalesDashboardView({ mode }: { mode: SalesDashboardMode }) {
+export function SalesDashboardView({
+    mode,
+    people,
+}: {
+    mode: SalesDashboardMode;
+    /**
+     * ID 155/156: a manager on their own Performance page — themself first,
+     * then their direct reports. With more than one, a person picker shows and
+     * the pick is sent as ?person= (the API ignores anyone outside the team).
+     */
+    people?: Array<{ id: string; name: string }>;
+}) {
     const isAdmin = mode === "admin";
-    const { filters, granularity, qs, set, reset, dirty } = useSalesDashboardFilters(isAdmin);
+    const { filters, granularity, qs: filterQs, set, reset, dirty } = useSalesDashboardFilters(isAdmin);
     const endpoint = SALES_DASHBOARD_ENDPOINT[mode];
+    const [personId, setPersonId] = useState("");
+    const showPeople = !isAdmin && (people?.length ?? 0) > 1;
+    const qs = showPeople && personId ? [filterQs, `person=${encodeURIComponent(personId)}`].filter(Boolean).join("&") : filterQs;
 
     const query = useQuery<{ success: true; data: SalesDashboard }>({
         queryKey: ["sales-dashboard", mode, qs],
@@ -71,6 +87,25 @@ export function SalesDashboardView({ mode }: { mode: SalesDashboardMode }) {
 
     return (
         <div className="space-y-4">
+            {showPeople && (
+                <label className="flex items-center gap-2 text-sm text-gray-700">
+                    <span className="font-medium">Showing</span>
+                    <select
+                        value={personId}
+                        onChange={(e) => setPersonId(e.target.value)}
+                        className="h-9 rounded-md border border-border bg-surface px-2 text-sm"
+                        aria-label="Whose numbers to show"
+                    >
+                        {people!.map((p, i) => (
+                            <option key={p.id} value={i === 0 ? "" : p.id}>
+                                {i === 0 ? `Me (${p.name})` : p.name}
+                            </option>
+                        ))}
+                        {/* ID 156: me + the whole team, the same builder over the group. */}
+                        <option value={TEAM_TOTAL_PERSON}>Team total</option>
+                    </select>
+                </label>
+            )}
             <SalesFilterBar
                 filters={filters}
                 onChange={set}

@@ -31,6 +31,7 @@ export default async function EditLeadPage({
 
   // ID 132: only the lead's owner, its assigned ASM, or a manager. Same page
   // as a missing lead, so an id cannot be probed.
+  // ID 155: a manager may see and reassign their team's leads, not edit them.
   const mayEdit =
     !!lead &&
     canEditLead({

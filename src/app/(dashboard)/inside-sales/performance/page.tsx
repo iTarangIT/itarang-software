@@ -1,6 +1,7 @@
 import { requireRole } from "@/lib/auth-utils";
 import { SalesDashboardView } from "@/components/dashboard/sales/SalesDashboardView";
 import { MyTargetsCard } from "@/components/targets/MyTargetsCard";
+import { getTeamPeople } from "@/lib/users/team";
 
 export const dynamic = "force-dynamic";
 
@@ -9,6 +10,8 @@ export const dynamic = "force-dynamic";
 // there is no rep picker and no per-rep table.
 export default async function InsideSalesPerformancePage() {
     const user = await requireRole(["inside_sales_rep"]);
+    // ID 155/156: a manager (anyone with direct reports) can pick a team member.
+    const team = await getTeamPeople(user.id);
 
     return (
         <div className="px-6 md:px-8 py-6 space-y-5 max-w-[1400px]">
@@ -23,7 +26,7 @@ export default async function InsideSalesPerformancePage() {
             </header>
             {/* R-17 — accept pushed targets; actual vs target this month. */}
             <MyTargetsCard />
-            <SalesDashboardView mode="isr" />
+            <SalesDashboardView mode="isr" people={team.length ? [{ id: user.id, name: user.name }, ...team] : undefined} />
         </div>
     );
 }

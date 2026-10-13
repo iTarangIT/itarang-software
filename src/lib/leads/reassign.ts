@@ -10,7 +10,10 @@
 // ONE transaction: the owner change and the ownership_transfer touchpoint
 // commit together (the route used to run them as two separate statements).
 //
-// Ownership is the CALLER's job (assertOwner before calling).
+// Ownership is the CALLER's job (assertOwner before calling). ID 155: a
+// manager may also move a direct report's lead within their team — the route
+// checks that (checkTeamReassign) and passes fromOwnerId, so the touchpoint
+// records the real previous owner and the manager as the actor.
 
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
@@ -38,11 +41,22 @@ export type ReassignInput = {
     actorId: string;
     targetUserId: string;
     reason: string;
+    /**
+     * ID 155: the owner the lead is taken FROM, when that is not the actor —
+     * a manager moving a direct report's lead (the caller checked the team
+     * rule, checkTeamReassign). Omitted = the actor owns the lead.
+     */
+    fromOwnerId?: string;
 };
 
 export async function reassignLead(input: ReassignInput, opts?: { tx?: Tx }): Promise<void> {
-    if (input.targetUserId === input.actorId) {
-        throw new ReassignError("self", "Cannot reassign to yourself.", 400);
+    const fromOwnerId = input.fromOwnerId ?? input.actorId;
+    if (input.targetUserId === fromOwnerId) {
+        throw new ReassignError(
+            "self",
+            input.fromOwnerId ? "The lead is already with that person." : "Cannot reassign to yourself.",
+            400,
+        );
     }
     const run = async (tx: Tx) => {
         const targets = await tx.execute<{ id: string; is_active: boolean | null; role: string | null; name: string | null }>(sql`
@@ -82,8 +96,9 @@ export async function reassignLead(input: ReassignInput, opts?: { tx?: Tx }): Pr
                 touchpointType: "ownership_transfer",
                 performedBy: input.actorId,
                 remarks: input.reason,
-                // E-295: the caller's assertOwner proved the actor held the lead.
-                fromOwnerId: input.actorId,
+                // E-295: the caller's assertOwner proved the actor held the lead
+                // (ID 155: or the manager path proved who did).
+                fromOwnerId,
                 toOwnerId: input.targetUserId,
                 ...(backTo
                     ? {
