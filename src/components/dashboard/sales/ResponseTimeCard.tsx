@@ -7,6 +7,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 
+import { useAuth } from "@/components/auth/AuthProvider";
 import type { ClockStats } from "@/lib/leads/clocks";
 import { CardLink, DashCard, LoadingBlock, NotAvailable, num } from "@/components/dashboard/redesign/primitives";
 
@@ -43,6 +44,10 @@ function Clock({ title, s, note }: { title: string; s: ClockStats | null; note: 
 }
 
 export function ResponseTimeCard({ from, to, spocId }: { from: string; to: string; spocId?: string }) {
+    // The Time limits page is admin and CEO only (decided 10 Oct); other roles
+    // got an application error from the card's link.
+    const { user } = useAuth();
+    const canSeeLimits = user?.role === "admin" || user?.role === "ceo";
     const qs = new URLSearchParams({ from, to });
     if (spocId) qs.set("spoc_id", spocId);
     const q = useQuery<Payload>({
@@ -67,7 +72,7 @@ export function ResponseTimeCard({ from, to, spocId }: { from: string; to: strin
                     {d?.limits_passed != null ? ` · ${num(d.limits_passed)} time limits passed` : ""}
                 </span>
             }
-            action={<CardLink href="/admin/settings/time-limits">Time limits</CardLink>}
+            action={canSeeLimits ? <CardLink href="/admin/settings/time-limits">Time limits</CardLink> : undefined}
         >
             {q.isLoading ? (
                 <LoadingBlock />
