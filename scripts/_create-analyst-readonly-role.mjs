@@ -53,6 +53,11 @@ const ALLOWED = [
   // revenue, orders, expenses
   "invoices", "invoice_lines", "zoho_invoices", "sales_invoices", "proforma_invoices",
   "proforma_invoice_lines", "orders", "purchase_orders", "purchase_order_lines", "expense_submissions",
+  // ID 32 — what the metric rules (src/lib/reports/metricDefinitions.ts ANALYST_RULES) name:
+  // voids, credit notes, invoice item lines, item → product mapping, quotes and who owned an
+  // account on a date. Their GSTIN / customer-name / raw columns stay withheld by WITHHELD.
+  "invoice_voids", "credit_notes", "invoice_line_items", "vyapar_item_map", "dealer_lead_commercials",
+  "account_owner_history",
   // inventory & products
   "inventory", "inventory_events", "inventory_transfers", "products", "product_categories",
   "product_master_batteries", "product_master_chargers", "deployed_assets", "after_sales_records",

@@ -5,7 +5,7 @@ import { z } from "zod";
 import { ownsThread, requireAnalystUser } from "@/lib/analyst/access";
 import { agentFetch, agentJson } from "@/lib/analyst/client";
 import { errorResponse, normalizeAgentError } from "@/lib/analyst/errors";
-import { stripMetricRules, withMetricRules } from "@/lib/analyst/metricRules";
+import { ANALYST_QUESTION_MAX, stripMetricRules, withMetricRules } from "@/lib/analyst/metricRules";
 import type { RunPage } from "@/lib/analyst/types";
 
 export const dynamic = "force-dynamic";
@@ -17,7 +17,12 @@ export const maxDuration = 180;
 const RunBody = z.object({
   connection_id: z.string().min(1).max(100),
   thread_id: z.string().min(1).max(100),
-  question: z.string().trim().min(3).max(2000),
+  // ID 32: capped so the CRM metric rules always ride with it (metricRules.ts).
+  question: z
+    .string()
+    .trim()
+    .min(3)
+    .max(ANALYST_QUESTION_MAX, `Questions can be up to ${ANALYST_QUESTION_MAX} characters — please shorten it.`),
 });
 
 const encoder = new TextEncoder();
@@ -51,7 +56,12 @@ export async function POST(request: Request) {
 
   const parsed = RunBody.safeParse(await request.json().catch(() => null));
   if (!parsed.success) {
-    return Response.json({ error: "that question could not be sent", code: "invalid_request" }, { status: 422 });
+    // ID 32: say so when it is only too long, so the user can shorten it.
+    const tooLong = parsed.error.issues.find((i) => i.code === "too_big" && i.path[0] === "question");
+    return Response.json(
+      { error: tooLong ? tooLong.message : "that question could not be sent", code: "invalid_request" },
+      { status: 422 },
+    );
   }
   if (!ownsThread(user, parsed.data.thread_id)) {
     return Response.json({ error: "that conversation is not yours", code: "forbidden" }, { status: 403 });
