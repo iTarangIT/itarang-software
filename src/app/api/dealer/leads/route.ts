@@ -1,5 +1,6 @@
 
 import { createClient } from '@/lib/supabase/server';
+import { maskAadhaarDeep } from '@/lib/kyc/aadhaarMask';
 import { withErrorHandler, successResponse, errorResponse, generateId } from '@/lib/api-utils';
 import { z } from 'zod';
 import { db } from '@/lib/db';
@@ -296,6 +297,9 @@ export const GET = withErrorHandler(async (req: Request) => {
         const ps = psByLead.get(l.id);
         return {
             ...l,
+            // ID 119: the list never shows the draft, but it carried the full
+            // Aadhaar to the browser.
+            kyc_draft_data: maskAadhaarDeep(l.kyc_draft_data),
             final_price: ps?.final_price ?? null,
             product_payment_mode: ps?.payment_mode ?? null,
             has_product_selection: !!ps,

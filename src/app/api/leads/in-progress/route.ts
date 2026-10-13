@@ -3,6 +3,7 @@ import { leads, personalDetails } from '@/lib/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { successResponse, withErrorHandler } from '@/lib/api-utils';
 import { requireRole } from '@/lib/auth-utils';
+import { maskAadhaar } from '@/lib/kyc/aadhaarMask';
 
 export const GET = withErrorHandler(async () => {
     const user = await requireRole(['dealer']);
@@ -28,6 +29,7 @@ export const GET = withErrorHandler(async () => {
 
     return successResponse({
         ...activeLead,
-        personalDetails: details
+        // ID 119: never send the full Aadhaar to the browser.
+        personalDetails: details ? { ...details, aadhaar_no: maskAadhaar(details.aadhaar_no) } : details
     });
 });

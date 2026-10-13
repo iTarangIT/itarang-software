@@ -14,6 +14,9 @@ import {
   users,
 } from "@/lib/db/schema";
 import { and, desc, eq, inArray, isNotNull, isNull } from "drizzle-orm";
+import { FULL_ID_ROLES } from "@/lib/auth/leadAccessRules";
+import { maskAadhaarDeep } from "@/lib/kyc/aadhaarMask";
+import { maskPanDeep } from "@/lib/kyc/panMask";
 
 const ADMIN_ROLES = ["admin", "ceo", "business_head", "sales_head", "sales_manager", "sales_executive"] as const;
 const REVIEW_OUTCOMES = ["verified", "rejected", "request_additional"] as const;
@@ -676,7 +679,12 @@ export async function GET(req: NextRequest) {
         return rightTime - leftTime;
       });
 
-    return NextResponse.json({ success: true, data: result });
+    // ID 119: OCR data leaves with the Aadhaar number masked; the PAN in full
+    // only for Admin, Sales Head and CEO (this list spans every lead, so no
+    // per-lead owner check — a sales manager sees it masked here).
+    const fullIds = (FULL_ID_ROLES as readonly string[]).includes(String(admin.role ?? "").toLowerCase());
+    const safe = fullIds ? maskAadhaarDeep(result) : maskPanDeep(maskAadhaarDeep(result));
+    return NextResponse.json({ success: true, data: safe });
   } catch (error) {
     console.error("Admin KYC review fetch error:", error);
     return NextResponse.json(

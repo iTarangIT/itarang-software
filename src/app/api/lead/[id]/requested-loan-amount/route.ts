@@ -23,6 +23,7 @@ import {
   MAX_REQUESTED_LOAN,
   MIN_REQUESTED_LOAN,
 } from "@/lib/leads/requested-loan-amount-parse";
+import { dealerMayActOnLead } from "@/lib/auth/requireLeadAccess";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -46,7 +47,7 @@ async function ownedLead(leadId: string) {
     .where(eq(leads.id, leadId))
     .limit(1);
   if (!lead) return { error: bad("Lead not found", 404) };
-  if (lead.dealer_id !== user.dealer_id) return { error: bad("Access denied", 403) };
+  if (!(await dealerMayActOnLead(user, lead.dealer_id))) return { error: bad("Access denied", 403) };
   return { lead };
 }
 

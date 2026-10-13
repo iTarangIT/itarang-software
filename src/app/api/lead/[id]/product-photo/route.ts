@@ -10,6 +10,7 @@ import { leads } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { requireRole } from "@/lib/auth-utils";
 import { uploadFileToStorage } from "@/lib/storage";
+import { dealerMayActOnLead } from "@/lib/auth/requireLeadAccess";
 
 const ALLOWED_TYPES = new Set(["image/png", "image/jpeg", "image/jpg"]);
 const MAX_BYTES = 5 * 1024 * 1024;
@@ -60,7 +61,7 @@ export async function POST(
         { status: 404 },
       );
     }
-    if (lead.dealer_id !== user.dealer_id) {
+    if (!(await dealerMayActOnLead(user, lead.dealer_id))) {
       return NextResponse.json(
         { success: false, error: { message: "Access denied" } },
         { status: 403 },

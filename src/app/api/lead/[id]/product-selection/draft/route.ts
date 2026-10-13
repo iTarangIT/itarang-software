@@ -6,6 +6,7 @@ import { db } from "@/lib/db";
 import { leads, productSelections } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 import { generateId } from "@/lib/api-utils";
+import { dealerMayActOnLead } from "@/lib/auth/requireLeadAccess";
 
 // BRD V2 §2.4 — Step 4 "Save Draft" persistence.
 // Upserts a product_selections row with admin_decision='draft'. Does NOT
@@ -87,7 +88,7 @@ export async function POST(
         { status: 404 },
       );
     }
-    if (lead.dealer_id !== user.dealer_id) {
+    if (!(await dealerMayActOnLead(user, lead.dealer_id))) {
       return NextResponse.json(
         { success: false, error: { message: "Access denied" } },
         { status: 403 },
