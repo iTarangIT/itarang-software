@@ -2,6 +2,7 @@ import { db } from "@/lib/db";
 import { accounts, dealerOnboardingApplications } from "@/lib/db/schema";
 import { eq, inArray } from "drizzle-orm";
 import { addressesMatch, type AddressParts } from "./address-match";
+import { checkCustomerGstin } from "@/lib/leads/gstin";
 
 type Application = typeof dealerOnboardingApplications.$inferSelect;
 type Account = typeof accounts.$inferSelect;
@@ -123,7 +124,9 @@ export async function classifyGstinConflict(
   application: Application
 ): Promise<DuplicateClassification> {
   const gstin = normalizeGstin(application.gst_number);
-  if (!gstin) return CLASSIFIED_CLEAN;
+  // ID 62: an invalid or iTarang-own GSTIN is refused at approval anyway, and
+  // must never flag a real dealer as this application's duplicate.
+  if (!gstin || checkCustomerGstin(gstin) !== "ok") return CLASSIFIED_CLEAN;
 
   // If the application is itself already approved as a branch (or shares a
   // dealer_code with the matching account), don't re-flag it.

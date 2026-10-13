@@ -65,9 +65,30 @@ type Preview = {
     unknown_columns: string[];
     warnings: string[];
     period: { from: string | null; to: string | null };
-    totals: { documents: number; update: number; create: number; cancelled: number; lines: number; batteries: number; unmapped_items: number };
+    totals: {
+        documents: number;
+        update: number;
+        create: number;
+        cancelled: number;
+        lines: number;
+        batteries: number;
+        unmapped_items: number;
+        gstin_refused?: number;
+    };
     unmapped_items: string[];
-    rows: Array<{ number: string; date: string | null; party: string | null; gstin: string | null; doc_type: string; cancelled: boolean; lines: number; batteries: number; taxable: number | null; action: string }>;
+    rows: Array<{
+        number: string;
+        date: string | null;
+        party: string | null;
+        gstin: string | null;
+        gstin_attention?: string | null;
+        doc_type: string;
+        cancelled: boolean;
+        lines: number;
+        batteries: number;
+        taxable: number | null;
+        action: string;
+    }>;
 };
 
 function ImportTab() {
@@ -103,10 +124,12 @@ function ImportTab() {
                 return;
             }
             const s = data.summary ?? {};
+            // ID 62: a GSTIN that fails the check is never silently dropped — say how many.
+            const refused = s.gstin_refused ? ` ${s.gstin_refused} GSTIN${s.gstin_refused === 1 ? "" : "s"} failed the check and match no dealer.` : "";
             toast.success(
                 kind === "gstr1"
-                    ? `GSTR-1 imported: ${s.documents ?? 0} documents.`
-                    : `Imported ${s.documents ?? 0} invoices (${s.created_ids ?? 0} new, ${s.voided ?? 0} voided as cancelled).`,
+                    ? `GSTR-1 imported: ${s.documents ?? 0} documents.${refused}`
+                    : `Imported ${s.documents ?? 0} invoices (${s.created_ids ?? 0} new, ${s.voided ?? 0} voided as cancelled).${refused}`,
             );
             setPreview(null);
             setFile(null);
@@ -174,6 +197,13 @@ function ImportTab() {
                                 .join(", ")}
                         </p>
                         {preview.unknown_columns.length > 0 && <p>Not used: {preview.unknown_columns.join(", ")}</p>}
+                        {(preview.totals.gstin_refused ?? 0) > 0 && (
+                            <p className="text-rose-700">
+                                {preview.totals.gstin_refused} GSTIN(s) fail the check (wrong last character, or iTarang&apos;s own) —
+                                those documents are not matched to any dealer
+                                {preview.kind === "vyapar_register" ? " and show in Needs attention as “Customer GSTIN fails check”" : ""}.
+                            </p>
+                        )}
                         {preview.unmapped_items.length > 0 && (
                             <p className="text-amber-700">
                                 {preview.unmapped_items.length} item name(s) not mapped to a CRM product yet — map them on the Item
@@ -201,7 +231,15 @@ function ImportTab() {
                                         <td className="px-2 py-1 font-mono">{r.number}</td>
                                         <td className="px-2 py-1">{r.date ?? "—"}</td>
                                         <td className="px-2 py-1">{r.party ?? "—"}</td>
-                                        <td className="px-2 py-1 font-mono">{r.gstin ?? "—"}</td>
+                                        <td className="px-2 py-1 font-mono">
+                                            {r.gstin_attention ? (
+                                                <span className="font-sans text-rose-700" title={r.gstin_attention}>
+                                                    Fails check
+                                                </span>
+                                            ) : (
+                                                (r.gstin ?? "—")
+                                            )}
+                                        </td>
                                         <td className="px-2 py-1 text-right">{r.lines}</td>
                                         <td className="px-2 py-1 text-right">{r.batteries}</td>
                                         <td className="px-2 py-1 text-right">{inr(r.taxable)}</td>

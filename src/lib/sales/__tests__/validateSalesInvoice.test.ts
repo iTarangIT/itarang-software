@@ -196,6 +196,14 @@ describe("validateSalesInvoice", () => {
     expect(r.attention.join(" ")).toMatch(/No invoice date/i);
   });
 
+  it("flags a misread GSTIN (not 15 characters) instead of dropping it silently (ID 62)", () => {
+    const r = validateSalesInvoice(candidate({ customer_gstin: null, customer_gstin_misread: "06AAOCP8906F1Z" }));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.value.customer_gstin).toBeNull();
+    expect(r.attention.join(" ")).toMatch(/Customer GSTIN is not valid \(06AAOCP8906F1Z\)/);
+  });
+
   it("skips the month check when the folder does not name a month", () => {
     const r = validateSalesInvoice(candidate(), { folderPath: "Sale / Delhi" });
     expect(r.ok).toBe(true);
