@@ -30,6 +30,8 @@ export interface SalesInvoiceCandidate {
   due_date: string | null;
   customer_name: string | null;
   customer_gstin: string | null;
+  /** A customer GSTIN read off the page that is not 15 characters (ID 62). */
+  customer_gstin_misread?: string | null;
   seller_gstin: string | null;
   place_of_supply: string | null;
   sub_total: number | null;
@@ -189,7 +191,8 @@ export function validateSalesInvoice(
   // ID 62: a customer GSTIN that fails the check digit, or is one of ours (the
   // model picked the seller's), is dropped from the row so it can never match
   // a dealer. The raw value stays readable in the flag.
-  const screened = screenCustomerGstin(candidate.customer_gstin);
+  // A misread (not 15 characters) is flagged the same way, never dropped silently.
+  const screened = screenCustomerGstin(candidate.customer_gstin ?? candidate.customer_gstin_misread ?? null);
   const customerGstin = screened.gstin;
   if (screened.attention) attention.push(screened.attention);
 

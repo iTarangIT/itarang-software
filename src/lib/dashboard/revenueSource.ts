@@ -41,7 +41,7 @@ import {
   leadKeyValidOn,
 } from "@/lib/leads/gstinMatch";
 import { hasAccountOwnershipTables } from "@/lib/accounts/tables";
-import { hasInvoiceLedgerTables } from "@/lib/sales/ledgerTables";
+import { hasInvoiceLedgerTables, hasZohoRefusedGstin } from "@/lib/sales/ledgerTables";
 
 /**
  * 'credit' (E-322, tracker ID 71) is a credit note: a NEGATIVE amount dated on
@@ -144,6 +144,9 @@ async function revenueUnion(): Promise<SQL> {
   // E-322 (IDs 70, 71): GSTIN backfill, voids and credit notes. Without it the
   // union is exactly the pre-E-322 shape.
   const ledger = await hasInvoiceLedgerTables();
+  // E-340 (ID 62): a Zoho invoice whose customer GSTIN failed the check goes to
+  // Needs attention ("Customer GSTIN fails check" / "is ours"), like a Drive one.
+  const refused = ledger && (await hasZohoRefusedGstin());
   const zoho = sql`
     SELECT
       'zoho'::text                                                   AS source,
@@ -158,8 +161,8 @@ async function revenueUnion(): Promise<SQL> {
       zi.organization_id                                             AS organization_id,
       ('/api/admin/zoho/invoices/' || zi.zoho_invoice_id || '/pdf')  AS document_url,
       zi.payment_reference                                           AS payment_reference,
-      false                                                          AS needs_attention,
-      NULL::text                                                     AS attention_reason,
+      ${refused ? sql`(zcg.refused_gstin IS NOT NULL)` : sql`false`}  AS needs_attention,
+      ${refused ? sql`zcg.refused_reason` : sql`NULL::text`}          AS attention_reason,
       -- Zoho's invoice LIST payload (what the sync stores) carries no GSTIN.
       -- E-322 (ID 70): the one-time backfill's zoho_customer_gstins first,
       -- then raw_json's gst_no in case a richer sync ever stores it.

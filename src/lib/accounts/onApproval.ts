@@ -21,7 +21,7 @@ import { hasAccountOwnershipTables } from "@/lib/accounts/tables";
 import { assignOwner, recordAccountOrigin } from "@/lib/accounts/ownership";
 import { SALESPERSON_ROLES } from "@/lib/onboarding/salesperson";
 import { linkOnboardingToLead } from "@/lib/onboarding/linkToLead";
-import { isValidGstin, normalizeGstin } from "@/lib/leads/gstin";
+import { checkCustomerGstin, normalizeGstin } from "@/lib/leads/gstin";
 
 export async function onDealerAccountApproved(input: {
     applicationId: string;
@@ -54,7 +54,8 @@ export async function onDealerAccountApproved(input: {
             if (link.leadId) await defaultOwnerToCloser(input.accountId, link.leadId, input.approvedBy ?? null);
         }
 
-        if (link.leadId && app?.gst_number && isValidGstin(app.gst_number)) {
+        // ID 62: valid AND not iTarang's own.
+        if (link.leadId && app?.gst_number && checkCustomerGstin(app.gst_number) === "ok") {
             await db.execute(sql`
                 UPDATE dealer_leads SET gstin = ${normalizeGstin(app.gst_number)}, updated_at = now()
                  WHERE id = ${link.leadId} AND (gstin IS NULL OR btrim(gstin) = '')
