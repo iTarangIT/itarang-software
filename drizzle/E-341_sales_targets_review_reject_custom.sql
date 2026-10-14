@@ -1,5 +1,5 @@
 -- =============================================================================
--- E-340 — SALES TARGETS: Sales Head review, reject with comment, custom metrics
+-- E-341 — SALES TARGETS: Sales Head review, reject with comment, custom metrics
 -- (2026-10-14)
 -- =============================================================================
 -- WHY. Team Scorecard & Target Management, item 3: the CEO creates a person's
@@ -22,7 +22,7 @@
 -- status gains 'rejected' (vocabulary in src/lib/targets/rules.ts; enforced in
 -- code, no CHECK, as E-303 decided).
 --
--- Code on a DB without E-340: the targets page and "My targets" still load
+-- Code on a DB without E-341: the targets page and "My targets" still load
 -- (the new columns are read through to_jsonb and come back null); send for
 -- review, reject, custom metrics and manual progress fail with a "column does
 -- not exist" error. Apply before the code that uses them.
@@ -42,5 +42,5 @@ DO $do$ BEGIN
     ALTER TABLE sales_targets ADD COLUMN IF NOT EXISTS manual_actual_at   timestamptz;
     ALTER TABLE sales_targets ADD COLUMN IF NOT EXISTS manual_actual_by   text;
 EXCEPTION WHEN undefined_table THEN
-    RAISE NOTICE 'E-340 skipped: sales_targets does not exist (apply E-303 first)';
+    RAISE NOTICE 'E-341 skipped: sales_targets does not exist (apply E-303 first)';
 END; $do$;

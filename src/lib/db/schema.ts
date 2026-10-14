@@ -13167,7 +13167,7 @@ export const salesTargets = pgTable(
     pushed_at: timestamp("pushed_at", { withTimezone: true }),
     accepted_at: timestamp("accepted_at", { withTimezone: true }),
     reminded_at: timestamp("reminded_at", { withTimezone: true }),
-    // E-340 — Sales Head review, reject with comment, custom metrics.
+    // E-341 — Sales Head review, reject with comment, custom metrics.
     review_requested_at: timestamp("review_requested_at", { withTimezone: true }),
     review_requested_by: text("review_requested_by"),
     rejected_at: timestamp("rejected_at", { withTimezone: true }),
@@ -13178,7 +13178,7 @@ export const salesTargets = pgTable(
     manual_actual: numeric("manual_actual", { precision: 14, scale: 2 }),
     manual_actual_at: timestamp("manual_actual_at", { withTimezone: true }),
     manual_actual_by: text("manual_actual_by"),
-    // E-341 — the Sales Head's own number; when > 0 it replaces the CEO target.
+    // E-342 — the Sales Head's own number; when > 0 it replaces the CEO target.
     sales_head_target: numeric("sales_head_target", { precision: 14, scale: 2 }),
     created_by: text("created_by"),
     updated_by: text("updated_by"),
