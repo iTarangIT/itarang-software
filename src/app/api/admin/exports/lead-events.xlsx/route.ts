@@ -80,6 +80,7 @@ export const GET = withErrorHandler(async (req: Request) => {
     const COLS: Array<{ header: string; width: number; value: (r: (typeof rows)[number]) => ExcelJS.CellValue; numFmt?: string }> = [
         { header: "Event time (IST)", width: 19, value: (r) => excelIst(r.event_at), numFmt: "dd-mmm-yyyy hh:mm" },
         { header: "Lead ID", width: 24, value: (r) => r.lead_id },
+        { header: "Lead created at (IST)", width: 19, value: (r) => excelIst(r.lead_created_at), numFmt: "dd-mmm-yyyy hh:mm" },
         { header: "Dealer / shop", width: 28, value: (r) => r.dealer },
         { header: "City", width: 14, value: (r) => r.city },
         { header: "State", width: 14, value: (r) => r.state },
