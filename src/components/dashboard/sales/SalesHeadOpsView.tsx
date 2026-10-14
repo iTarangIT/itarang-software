@@ -21,7 +21,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { Check, Download, Search } from "lucide-react";
 
-import type { SalesDashboard, SalesSpocBlock } from "@/lib/admin/salesDashboardTypes";
+import { SALES_DASHBOARD_MAX_DAYS, type SalesDashboard, type SalesSpocBlock } from "@/lib/admin/salesDashboardTypes";
 import type { ReportResult, UserOption } from "@/lib/admin/types";
 import type { TargetRow } from "@/lib/targets/service";
 import type { TargetMetric } from "@/lib/targets/rules";
@@ -56,6 +56,9 @@ import {
     toneText,
 } from "@/components/dashboard/redesign/primitives";
 import { useSalesDashboardFilters } from "./useSalesDashboardFilters";
+import { DrillLeadsModal, type DrillTarget } from "@/app/(dashboard)/admin/reports/_components/DrillLeadsModal";
+import { SalesDrillModal, type SalesDrillTarget } from "./SalesDrillModal";
+import type { DrillKind, DrillRow } from "@/lib/dashboard/salesDrill";
 import { ResponseTimeCard } from "./ResponseTimeCard";
 import { BUSINESS_TYPE_OPTIONS, BUSINESS_TYPE_UNSET, BUSINESS_TYPE_UNSET_LABEL } from "@/lib/leads/businessType";
 
@@ -73,6 +76,12 @@ const inSeg = (role: string | null | undefined, seg: TeamSeg) => {
 
 const pad2 = (n: number) => String(n).padStart(2, "0");
 const ymd = (d: Date) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+/** YYYY-MM-DD moved by `days`. */
+const addDays = (day: string, days: number) => {
+    const d = new Date(`${day}T00:00:00`);
+    d.setDate(d.getDate() + days);
+    return ymd(d);
+};
 
 function presets(now: Date): Record<Period, { from: string; to: string }> {
     const today = ymd(now);
@@ -119,6 +128,10 @@ export function SalesHeadOpsView() {
     const [pressed, setPressed] = React.useState<Period | null>(null);
     // ID 88 — "Where open leads are sitting": activity in the period, or time in stage.
     const [cells, setCells] = React.useState<"count" | "aged">("count");
+    // A clicked number in "Where open leads are sitting" — its lead list popup.
+    const [drill, setDrill] = React.useState<DrillTarget | null>(null);
+    // Any other clicked number on the screen (salesDrill.ts) — its rows popup.
+    const [sdrill, setSdrill] = React.useState<SalesDrillTarget | null>(null);
 
     const now = React.useMemo(() => new Date(), []);
     const preset = React.useMemo(() => presets(now), [now]);
@@ -434,6 +447,14 @@ export function SalesHeadOpsView() {
     );
     const heatLabel = (k: string) => byOwner.data?.columns.find((c) => c.key === k)?.label ?? k;
     const heatMax = Object.fromEntries(HEAT_COLS.map((k) => [k, Math.max(0, ...ownerRows.map((r) => Number(r[k] ?? 0)))]));
+    // A column's CSV: every lead behind that column, for the people on screen.
+    const columnCsvHref = (k: string) => {
+        const p = new URLSearchParams(reportQs);
+        p.set("metric", k);
+        p.set("format", "csv");
+        if (idKey) p.set("person_ids", ownerRows.map((r) => String(r[idKey] ?? "")).filter(Boolean).join(","));
+        return `/api/admin/reports/owner-leads?${p}`;
+    };
     const worst = [...ownerRows].sort((a, b) => Number(b.not_worked ?? 0) - Number(a.not_worked ?? 0))[0];
 
     // ── Why we lost ──────────────────────────────────────────────────────────
@@ -443,6 +464,51 @@ export function SalesHeadOpsView() {
     const dropouts = lostRows.filter((r) => r.category !== "Sales lost").reduce((a, r) => a + r.n, 0);
 
     const csvHref = `/api/admin/reports/sales-dashboard?${dashQs}&format=csv`;
+
+    // ── Click a number → its rows (salesDrill.ts) ───────────────────────────
+    /** The screen's filters + which number; `extra` = person / persons / key. */
+    const drillQuery = (kind: DrillKind, extra: Record<string, string> = {}) => {
+        const q = new URLSearchParams(dashQs);
+        q.set("kind", kind);
+        for (const [k, v] of Object.entries(extra)) if (v) q.set(k, v);
+        return q.toString();
+    };
+    const openDrill = (title: string, count: number, kind: DrillKind, extra: Record<string, string> = {}) => {
+        if (count > 0) setSdrill({ title, count, query: drillQuery(kind, extra) });
+    };
+    /** A column's CSV: every row behind that column for the people listed. */
+    const columnCsv = (kind: DrillKind, people: SalesSpocBlock[]) =>
+        `/api/admin/reports/sales-drill?${drillQuery(kind, { persons: people.map((p) => p.spoc_id).join(",") })}&format=csv`;
+    // Accounts by owner: the page already holds every account row.
+    const accountRows = (group: string, buckets: string[] | null): DrillRow[] =>
+        (health.data?.rows ?? [])
+            .filter((r) => (r.owner_name ?? "(unassigned)") === group && (!buckets || buckets.includes(r.bucket)))
+            .map((r) => ({
+                id: r.account_id ?? r.key,
+                href: r.account_id ? `/admin/accounts/${encodeURIComponent(r.account_id)}` : r.lead_id ? `/inside-sales/lead/${encodeURIComponent(r.lead_id)}` : null,
+                name: r.dealer,
+                phone: null,
+                city: r.city,
+                state: r.state,
+                status: r.bucket,
+                rating: r.gstin,
+                person_id: r.owner_id,
+                person_name: r.owner_name,
+                owner_name: r.business_type ? r.business_type.replace(/_/g, " ") : null,
+                at: r.last_order,
+                detail: [
+                    r.last_order ? `last order ${r.last_order}` : "no order yet",
+                    `${r.orders} order${r.orders === 1 ? "" : "s"}`,
+                    r.revenue_90d ? `${inr(r.revenue_90d)} billed in 90 days` : null,
+                    r.closed_reason,
+                ]
+                    .filter(Boolean)
+                    .join(" · "),
+            }));
+    const openAccounts = (group: string, label: string, buckets: string[] | null) => {
+        const rows = accountRows(group, buckets);
+        if (rows.length > 0) setSdrill({ title: `${group} — ${label}`, count: rows.length, rows, csvName: `accounts-${group}-${label}`.toLowerCase().replace(/[^a-z0-9]+/g, "-") });
+    };
 
     // Pinned with the page header while scrolling, so it is sized to sit on one
     // row on a laptop screen: long state names and the search box are capped.
@@ -555,19 +621,57 @@ export function SalesHeadOpsView() {
                     }
                     footer={filterBar}
                 >
-                    <SegmentedControl
-                        label="Period"
-                        options={[
-                            { value: "today", label: "Today" },
-                            { value: "week", label: "This week" },
-                            { value: "month", label: "This month" },
-                        ]}
-                        value={(period ?? "") as Period}
-                        onChange={(p) => {
-                            setPressed(p);
-                            update(p === "month" ? { from: "", to: "" } : preset[p]);
-                        }}
-                    />
+                    <div className="flex flex-wrap items-center justify-end gap-2.5">
+                        <SegmentedControl
+                            label="Period"
+                            options={[
+                                { value: "today", label: "Today" },
+                                { value: "week", label: "This week" },
+                                { value: "month", label: "This month" },
+                            ]}
+                            value={(period ?? "") as Period}
+                            onChange={(p) => {
+                                setPressed(p);
+                                update(p === "month" ? { from: "", to: "" } : preset[p]);
+                            }}
+                        />
+                        {/* Any date range: the presets above are shortcuts for it. A
+                            From after To pulls the other end along, never past today, and the range stays within the API's SALES_DASHBOARD_MAX_DAYS. */}
+                        <div className="flex items-center gap-1.5">
+                            <label className="text-[13px] text-ink-muted" htmlFor="sales-dash-from">
+                                From
+                            </label>
+                            <input
+                                id="sales-dash-from"
+                                type="date"
+                                value={from}
+                                max={preset.today.to}
+                                onChange={(e) => {
+                                    const v = e.target.value;
+                                    if (!v) return;
+                                    setPressed(null);
+                                    update({ from: v, to: v > to ? v : to > addDays(v, SALES_DASHBOARD_MAX_DAYS - 1) ? addDays(v, SALES_DASHBOARD_MAX_DAYS - 1) : to });
+                                }}
+                                className={SELECT}
+                            />
+                            <label className="text-[13px] text-ink-muted" htmlFor="sales-dash-to">
+                                To
+                            </label>
+                            <input
+                                id="sales-dash-to"
+                                type="date"
+                                value={to}
+                                max={preset.today.to}
+                                onChange={(e) => {
+                                    const v = e.target.value;
+                                    if (!v) return;
+                                    setPressed(null);
+                                    update({ from: v < from ? v : from < addDays(v, 1 - SALES_DASHBOARD_MAX_DAYS) ? addDays(v, 1 - SALES_DASHBOARD_MAX_DAYS) : from, to: v });
+                                }}
+                                className={SELECT}
+                            />
+                        </div>
+                    </div>
                 </DashPageHeader>
 
             {dash.error && (
@@ -602,7 +706,9 @@ export function SalesHeadOpsView() {
                     </Link>
                     .
                 </p>
-                <OutsideTerritoryClaims />
+                <OutsideTerritoryClaims
+                    filters={{ from, to, state: filters.state, city: filters.city, spoc_id: filters.spoc_id, team }}
+                />
             </div>
 
             {/* Team scorecard */}
@@ -829,17 +935,47 @@ export function SalesHeadOpsView() {
                                 <div className={`grid grid-cols-[150px_repeat(8,minmax(0,1fr))] gap-1 ${TABLE_HEAD} !tracking-[0.04em]`}>
                                     <span />
                                     {HEAT_COLS.map((k) => (
-                                        <span key={k} className="text-center leading-snug">
+                                        <span key={k} className="flex flex-col items-center gap-1 text-center leading-snug">
                                             {heatLabel(k)}
+                                            <a
+                                                href={columnCsvHref(k)}
+                                                download
+                                                title={`Download every lead in "${heatLabel(k)}" for the people shown (CSV)`}
+                                                aria-label={`Download ${heatLabel(k)} leads as CSV`}
+                                                className="inline-flex items-center gap-0.5 rounded-md px-1.5 py-0.5 text-[10px] font-semibold normal-case tracking-normal text-brand-sky hover:bg-bg"
+                                            >
+                                                <Download className="h-3 w-3" aria-hidden /> CSV
+                                            </a>
                                         </span>
                                     ))}
                                 </div>
                                 {ownerRows.map((r, i) => (
                                     <div key={idKey ? String(r[idKey]) : i} className="grid grid-cols-[150px_repeat(8,minmax(0,1fr))] items-center gap-1">
                                         <span className="truncate text-[13px] font-semibold text-ink">{String(r.person)}</span>
-                                        {HEAT_COLS.map((k) => (
-                                            <HeatCell key={k} value={Number(r[k] ?? 0)} max={heatMax[k]} />
-                                        ))}
+                                        {HEAT_COLS.map((k) => {
+                                            const v = Number(r[k] ?? 0);
+                                            const personId = idKey ? String(r[idKey] ?? "") : "";
+                                            return (
+                                                <HeatCell
+                                                    key={k}
+                                                    value={v}
+                                                    max={heatMax[k]}
+                                                    title={v > 0 && personId ? `See ${String(r.person)}'s ${heatLabel(k).toLowerCase()} leads` : undefined}
+                                                    onClick={
+                                                        v > 0 && personId
+                                                            ? () =>
+                                                                  setDrill({
+                                                                      personId,
+                                                                      personName: String(r.person),
+                                                                      metric: k,
+                                                                      metricLabel: heatLabel(k),
+                                                                      count: v,
+                                                                  })
+                                                            : undefined
+                                                    }
+                                                />
+                                            );
+                                        })}
                                     </div>
                                 ))}
                             </div>
@@ -850,9 +986,9 @@ export function SalesHeadOpsView() {
                         {HEAT_LEGEND.map((c) => (
                             <span key={c} className="h-3 w-[22px] rounded-[3px]" style={{ background: c }} />
                         ))}
-                        <span>More · shaded within each column ·</span>
+                        <span>More · shaded within each column · click a number for its leads, or CSV on a column for all of them ·</span>
                         <Link href="/admin/reports" className="font-semibold text-brand-sky hover:underline">
-                            open Funnel by Owner for the lead lists
+                            open Funnel by Owner
                         </Link>
                         <span>·</span>
                         {/* ID 91 */}
@@ -860,6 +996,7 @@ export function SalesHeadOpsView() {
                             which lead sources convert
                         </Link>
                     </div>
+                    {drill && <DrillLeadsModal target={drill} qs={reportQs.toString()} onClose={() => setDrill(null)} />}
                 </DashCard>
 
                 <DashCard
@@ -884,9 +1021,25 @@ export function SalesHeadOpsView() {
                                     className="grid min-h-10 grid-cols-[minmax(0,1.4fr)_repeat(3,minmax(0,1fr))] items-center gap-2.5 border-b border-[#f1f4f7] text-[13.5px] tabular-nums"
                                 >
                                     <span className="truncate font-semibold">{String(r.asm_name ?? "Unassigned")}</span>
-                                    <span className="text-right">{num(Number(r.handoffs ?? 0))}</span>
                                     <span className="text-right">
-                                        {num(Number(r.converted ?? 0))}
+                                        <DrillNum
+                                            value={Number(r.handoffs ?? 0)}
+                                            onClick={() =>
+                                                openDrill(`${String(r.asm_name ?? "Unassigned")} — handoffs`, Number(r.handoffs ?? 0), "handoffs", {
+                                                    person: r.asm_id == null ? "__none__" : String(r.asm_id),
+                                                })
+                                            }
+                                        />
+                                    </span>
+                                    <span className="text-right">
+                                        <DrillNum
+                                            value={Number(r.converted ?? 0)}
+                                            onClick={() =>
+                                                openDrill(`${String(r.asm_name ?? "Unassigned")} — handoffs converted`, Number(r.converted ?? 0), "handoff_converted", {
+                                                    person: r.asm_id == null ? "__none__" : String(r.asm_id),
+                                                })
+                                            }
+                                        />
                                         {r.conversion_rate != null && <span className="text-ink-muted"> · {r.conversion_rate}%</span>}
                                     </span>
                                     <span className="text-right">{r.avg_days_to_close == null ? "—" : r.avg_days_to_close}</span>
@@ -938,6 +1091,13 @@ export function SalesHeadOpsView() {
                         loading={dash.isLoading}
                         people={shown.filter((p) => inSeg(p.role, "inside"))}
                         heads={["Calls", "Per day", "Dealers called", "Engaged", "WhatsApp", "New hot", "Converted"]}
+                        kinds={["calls", null, "dealers_called", "engaged", "whatsapp", "new_hot", "converted"]}
+                        counts={(p) => {
+                            const c = m?.calling?.find((x) => x.user_id === p.spoc_id);
+                            return [p.totals.calls, 0, p.totals.dealers_called, c?.engaged ?? 0, c?.whatsapp ?? 0, p.totals.new_hot, p.totals.converted];
+                        }}
+                        onDrill={(p, kind, label, n) => openDrill(`${p.name ?? "Unnamed"} — ${label}`, n, kind, { person: p.spoc_id })}
+                        columnCsv={columnCsv}
                         row={(p) => {
                             // ID 88 — engaged = connected calls (share of calls); WhatsApp =
                             // chats that count as contact (dealer replied + a fresh screenshot),
@@ -968,6 +1128,21 @@ export function SalesHeadOpsView() {
                         loading={dash.isLoading}
                         people={shown.filter((p) => inSeg(p.role, "field"))}
                         heads={["Visits", "Dealers visited", "New dealers", "Verified", "Productive", "Planned today", "KYC submitted"]}
+                        kinds={["visits", "dealers_visited", "new_dealers", "verified", "productive", "planned_today", "kyc_submitted"]}
+                        counts={(p) => {
+                            const v = m?.field?.find((x) => x.user_id === p.spoc_id);
+                            return [
+                                p.totals.visits,
+                                p.totals.unique_visits,
+                                p.totals.new_visits,
+                                v?.verified ?? 0,
+                                v?.productive ?? 0,
+                                p.snapshot.planned_visits_today,
+                                p.outcome.kyc_submitted,
+                            ];
+                        }}
+                        onDrill={(p, kind, label, n) => openDrill(`${p.name ?? "Unnamed"} — ${label}`, n, kind, { person: p.spoc_id })}
+                        columnCsv={columnCsv}
                         row={(p) => {
                             // ID 88 — of the visits marked visited in the period.
                             const v = m?.field?.find((x) => x.user_id === p.spoc_id);
@@ -1002,18 +1177,20 @@ export function SalesHeadOpsView() {
                 <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
                     {(
                         [
-                            ["Quotes issued", d ? num(d.outcome.quotes_issued) : "—", "Leads with a first quote"],
-                            ["Revised quotes", d ? num(d.outcome.quote_revisions) : "—", "Later versions of a quote"],
+                            ["Quotes issued", d ? d.outcome.quotes_issued : null, "Leads with a first quote", "quotes_issued"],
+                            ["Revised quotes", d ? d.outcome.quote_revisions : null, "Later versions of a quote", "quote_revisions"],
                             // ID 88 — where each lead's latest quote created in the period stands.
-                            ["Waiting for approval", m?.quotes ? num(m.quotes.waiting_approval) : "—", "With the CEO, not yet released"],
-                            ["Delivered, no answer", m?.quotes ? num(m.quotes.delivered_no_answer) : "—", "Sent to the dealer, no reply logged"],
-                            ["Dealer said yes", m?.quotes ? num(m.quotes.dealer_yes) : "—", "Dealer approved the quote"],
-                            ["Declined", m?.quotes ? num(m.quotes.dealer_declined) : "—", "Dealer declined the quote"],
+                            ["Waiting for approval", m?.quotes ? m.quotes.waiting_approval : null, "With the CEO, not yet released", "waiting_approval"],
+                            ["Delivered, no answer", m?.quotes ? m.quotes.delivered_no_answer : null, "Sent to the dealer, no reply logged", "delivered_no_answer"],
+                            ["Dealer said yes", m?.quotes ? m.quotes.dealer_yes : null, "Dealer approved the quote", "dealer_yes"],
+                            ["Declined", m?.quotes ? m.quotes.dealer_declined : null, "Dealer declined the quote", "dealer_declined"],
                         ] as const
-                    ).map(([label, value, sub]) => (
+                    ).map(([label, value, sub, kind]) => (
                         <div key={label} className="flex flex-col gap-1.5 rounded-xl border border-border bg-[#fbfcfd] p-4">
                             <span className="text-[13px] font-semibold">{label}</span>
-                            <span className="text-[26px] font-bold text-brand-navy tabular-nums">{value}</span>
+                            <span className="text-[26px] font-bold text-brand-navy tabular-nums">
+                                {value == null ? "—" : <DrillNum value={value} onClick={() => openDrill(label, value, kind)} />}
+                            </span>
                             <span className="text-[12.5px] text-ink-muted">{sub}</span>
                         </div>
                     ))}
@@ -1063,9 +1240,18 @@ export function SalesHeadOpsView() {
                                             className="grid min-h-[38px] grid-cols-[minmax(0,1.4fr)_repeat(4,minmax(0,1fr))] items-center gap-2.5 border-b border-[#f1f4f7] text-[13.5px] tabular-nums"
                                         >
                                             <span className="truncate font-semibold">{g.group}</span>
-                                            <span className="text-right">{num(g.dealers)}</span>
-                                            <span className="text-right">{num((g.by_bucket.active ?? 0) + (g.by_bucket.cooling ?? 0))}</span>
-                                            <span className={`text-right font-bold ${risk >= 8 ? "text-danger" : ""}`}>{num(risk)}</span>
+                                            <span className="text-right">
+                                                <DrillNum value={g.dealers} onClick={() => openAccounts(g.group, "accounts", null)} />
+                                            </span>
+                                            <span className="text-right">
+                                                <DrillNum
+                                                    value={(g.by_bucket.active ?? 0) + (g.by_bucket.cooling ?? 0)}
+                                                    onClick={() => openAccounts(g.group, "ordering", ["active", "cooling"])}
+                                                />
+                                            </span>
+                                            <span className={`text-right font-bold ${risk >= 8 ? "text-danger" : ""}`}>
+                                                <DrillNum value={risk} onClick={() => openAccounts(g.group, "red + dormant", ["red", "dormant"])} />
+                                            </span>
                                             <span className="text-right">{g.revenue_90d ? inr(g.revenue_90d) : "—"}</span>
                                         </div>
                                     );
@@ -1094,7 +1280,9 @@ export function SalesHeadOpsView() {
                                 <div key={l.reason} className="grid grid-cols-[minmax(0,190px)_minmax(0,1fr)_44px] items-center gap-3">
                                     <span className="truncate text-[13.5px] font-semibold capitalize">{l.reason.replace(/_/g, " ")}</span>
                                     <ProgressBar pct={(l.n / salesLost[0].n) * 100} />
-                                    <span className="text-right text-[13.5px] font-bold tabular-nums">{num(l.n)}</span>
+                                    <span className="text-right text-[13.5px] font-bold tabular-nums">
+                                        <DrillNum value={l.n} onClick={() => openDrill(`Lost — ${l.reason.replace(/_/g, " ")}`, l.n, "lost_reason", { key: l.reason })} />
+                                    </span>
                                 </div>
                             ))}
                         </div>
@@ -1113,14 +1301,42 @@ export function SalesHeadOpsView() {
                                         {LEAD_STATUS_LABEL[s.stage as LeadStatus] ?? (s.stage === "Unknown" ? "Not recorded" : s.stage.replace(/_/g, " "))}
                                     </span>
                                     <ProgressBar pct={(s.n / m.lost_stage![0].n) * 100} />
-                                    <span className="text-right text-[13px] font-bold tabular-nums">{num(s.n)}</span>
+                                    <span className="text-right text-[13px] font-bold tabular-nums">
+                                        <DrillNum
+                                            value={s.n}
+                                            onClick={() =>
+                                                openDrill(
+                                                    `Lost at — ${LEAD_STATUS_LABEL[s.stage as LeadStatus] ?? (s.stage === "Unknown" ? "Not recorded" : s.stage.replace(/_/g, " "))}`,
+                                                    s.n,
+                                                    "lost_stage",
+                                                    { key: s.stage },
+                                                )
+                                            }
+                                        />
+                                    </span>
                                 </div>
                             ))
                         )}
                     </div>
                 </DashCard>
             </div>
+            {sdrill && <SalesDrillModal target={sdrill} onClose={() => setSdrill(null)} />}
         </div>
+    );
+}
+
+/** A number that opens its rows; plain text when there is nothing behind it. */
+function DrillNum({ value, onClick }: { value: number; onClick: () => void }) {
+    if (!value) return <>{num(value)}</>;
+    return (
+        <button
+            type="button"
+            onClick={onClick}
+            title="See the rows behind this number"
+            className="cursor-pointer tabular-nums underline-offset-2 hover:text-brand-sky hover:underline"
+        >
+            {num(value)}
+        </button>
     );
 }
 
@@ -1129,11 +1345,22 @@ function PeopleTable({
     heads,
     row,
     loading,
+    kinds,
+    counts,
+    onDrill,
+    columnCsv,
 }: {
     people: SalesSpocBlock[];
     heads: string[];
     row: (p: SalesSpocBlock) => string[];
     loading: boolean;
+    /** Per column: the number it drills into (salesDrill.ts), or null (a rate, not a count). */
+    kinds?: (DrillKind | null)[];
+    /** Per column: the raw count behind the shown text — 0 makes the cell plain. */
+    counts?: (p: SalesSpocBlock) => number[];
+    onDrill?: (p: SalesSpocBlock, kind: DrillKind, label: string, n: number) => void;
+    /** A column's CSV link for the people listed. */
+    columnCsv?: (kind: DrillKind, people: SalesSpocBlock[]) => string;
 }) {
     if (loading && people.length === 0) return <LoadingBlock />;
     if (people.length === 0) return <NotAvailable empty reason="No one in this team has activity for these filters." />;
@@ -1144,11 +1371,24 @@ function PeopleTable({
             <div style={{ minWidth: Math.max(520, 140 + heads.length * 90) }}>
                 <div className={`grid gap-2.5 border-b border-border pb-2 ${TABLE_HEAD}`} style={columns}>
                     <span>Person</span>
-                    {heads.map((h) => (
-                        <span key={h} className="text-right">
-                            {h}
-                        </span>
-                    ))}
+                    {heads.map((h, i) => {
+                        const kind = kinds?.[i];
+                        return (
+                            <span key={h} className="flex flex-col items-end gap-0.5 text-right">
+                                {h}
+                                {kind && columnCsv && (
+                                    <a
+                                        href={columnCsv(kind, people)}
+                                        download
+                                        title={`Download every row behind "${h}" for the people shown (CSV)`}
+                                        className="inline-flex items-center gap-0.5 text-[10px] font-semibold normal-case tracking-normal text-brand-sky hover:underline"
+                                    >
+                                        <Download className="h-3 w-3" aria-hidden /> CSV
+                                    </a>
+                                )}
+                            </span>
+                        );
+                    })}
                 </div>
                 {people.map((p) => (
                     <div
@@ -1157,11 +1397,29 @@ function PeopleTable({
                         style={columns}
                     >
                         <span className="truncate font-semibold">{p.name ?? "Unnamed"}</span>
-                        {row(p).map((v, i) => (
-                            <span key={i} className="text-right">
-                                {v}
-                            </span>
-                        ))}
+                        {(() => {
+                            const n = counts?.(p);
+                            return row(p).map((v, i) => {
+                                const kind = kinds?.[i];
+                                const c = n?.[i] ?? 0;
+                                return (
+                                    <span key={i} className="text-right">
+                                        {kind && onDrill && c > 0 ? (
+                                            <button
+                                                type="button"
+                                                onClick={() => onDrill(p, kind, heads[i].toLowerCase(), c)}
+                                                title="See the rows behind this number"
+                                                className="cursor-pointer tabular-nums underline-offset-2 hover:text-brand-sky hover:underline"
+                                            >
+                                                {v}
+                                            </button>
+                                        ) : (
+                                            v
+                                        )}
+                                    </span>
+                                );
+                            });
+                        })()}
                     </div>
                 ))}
             </div>
