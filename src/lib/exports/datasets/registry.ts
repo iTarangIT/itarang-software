@@ -1278,9 +1278,10 @@ const targets: Dataset = {
                 { key: "user_role", header: "Role", meaning: "That person's role." },
                 { key: "metric_label", header: "Metric", meaning: "What is being targeted.", width: 30 },
                 { key: "ceo_target", header: "CEO target", meaning: "The target the CEO set.", kind: "number" },
-                { key: "admin_addon", header: "Admin add-on", meaning: "What Admin added on top; never negative.", kind: "number" },
-                { key: "final_target", header: "Final target", meaning: "CEO target plus Admin add-on.", kind: "number" },
-                { key: "status", header: "Status", meaning: "Draft, pending approval, pushed or accepted." },
+                { key: "sales_head_target", header: "Sales Head target", meaning: "The Sales Head's own number; blank = the CEO target went to the person.", kind: "number" },
+                { key: "admin_addon", header: "Admin add-on", meaning: "Legacy: what Admin added on top of the CEO target (no longer edited).", kind: "number" },
+                { key: "final_target", header: "Final target", meaning: "The Sales Head target when entered, else the CEO target (plus any legacy add-on).", kind: "number" },
+                { key: "status", header: "Status", meaning: "Draft, with the Sales Head for review, sent, accepted or rejected." },
                 { key: "pushed_at", header: "Pushed on", meaning: "When the target was pushed to the person.", kind: "datetime" },
                 { key: "accepted_at", header: "Accepted on", meaning: "When the person accepted it.", kind: "datetime" },
                 { key: "mtd_target", header: "Target to date", meaning: "The share of the target due by today, by working days.", kind: "number" },
@@ -1297,7 +1298,9 @@ const targets: Dataset = {
         const [r] = await rows<{ n: number }>(sql`
             SELECT COUNT(*)::int AS n FROM sales_targets t
              WHERE t.month = ${`${month}-01`}::date
-               AND t.metric IN (${sql.join(TARGET_METRIC_KEYS.map((m) => sql`${m}`), sql`, `)})
+               -- The rows listTargets() returns: built-in metrics and named custom ones.
+               AND (t.metric IN (${sql.join(TARGET_METRIC_KEYS.map((m) => sql`${m}`), sql`, `)})
+                    OR (left(t.metric, 7) = 'custom_' AND (to_jsonb(t) ->> 'custom_label') IS NOT NULL))
                ${ctx.ownOnly ? sql`AND t.user_id = ${ctx.user.id}` : sql``}
                ${status ? sql`AND t.status = ${status}` : sql``}
                ${sql.join(commonConds(ctx, { person: sql`t.user_id` }).map((c) => sql`AND ${c}`), sql` `)}
