@@ -5,6 +5,7 @@ import {
     LEAD_ORIGINS,
     LIST_DEFAULT_ORIGIN,
     campaignRequired,
+    leadSourceLabel,
     listCampaignName,
     scrapeCampaignName,
     uploadCampaignName,
@@ -82,5 +83,21 @@ describe("who may add a campaign", () => {
         for (const r of ["inside_sales_rep", "asm", "sales_executive", "dealer", "", null, undefined]) {
             expect(canManageCampaigns(r)).toBe(false);
         }
+    });
+});
+
+describe("leadSourceLabel (/leads Source column)", () => {
+    it("prefers the stamped door", () => {
+        expect(leadSourceLabel("scraper", "manual_upload_lead")).toBe("Scraper");
+        expect(leadSourceLabel("ai_dialer", null)).toBe("AI-dialer list");
+    });
+    it("falls back to the door the legacy source implies", () => {
+        expect(leadSourceLabel(null, "google_places")).toBe("Scraper");
+        expect(leadSourceLabel(null, "manual_upload_lead")).toBe("Bulk upload");
+        expect(leadSourceLabel(undefined, "ai_dialer_lead")).toBe("AI-dialer list");
+    });
+    it("prettifies an unknown legacy value and returns null for nothing", () => {
+        expect(leadSourceLabel(null, "trade_show")).toBe("trade show");
+        expect(leadSourceLabel(null, null)).toBeNull();
     });
 });

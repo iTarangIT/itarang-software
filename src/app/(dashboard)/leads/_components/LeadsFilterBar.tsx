@@ -38,6 +38,11 @@ import {
 } from "@/lib/leads/campaign";
 import { IDLE_RANGES, IDLE_RANGE_KEYS } from "@/lib/leads/idle";
 import {
+    LEAD_DOORS,
+    LEAD_DOOR_LABEL,
+    SOURCE_DOOR_NONE,
+} from "@/lib/leads/leadSourceVocab";
+import {
     BUSINESS_TYPE_OPTIONS,
     BUSINESS_TYPE_UNSET,
     BUSINESS_TYPE_UNSET_LABEL,
@@ -358,6 +363,56 @@ export function LeadsFilterBar({
                     </select>
                 )}
 
+                {/* Campaign — both systems in one control, grouped. Only
+                    campaigns that actually have leads are offered. PRIMARY row:
+                    "which campaign's leads are these?" is a first question, not
+                    a refinement (it was behind More filters until 14 Oct). */}
+                <select
+                    aria-label="Campaign"
+                    className={`${SELECT_CLASS} min-w-[170px] flex-1`}
+                    value={draft.campaign}
+                    onChange={(e) => onChange("campaign", e.target.value)}
+                >
+                    <option value="">All campaigns</option>
+                    <option value={CAMPAIGN_NONE}>Not in a campaign</option>
+                    {CAMPAIGN_SYSTEMS.map((system) => {
+                        const items = (facets?.campaigns ?? []).filter(
+                            (c) => c.system === system,
+                        );
+                        if (!items.length) return null;
+                        return (
+                            <optgroup
+                                key={system}
+                                label={CAMPAIGN_SYSTEM_LABEL[system]}
+                            >
+                                {items.map((c) => (
+                                    <option key={c.id} value={c.id}>
+                                        {campaignLabel(c)} ({c.lead_count})
+                                    </option>
+                                ))}
+                            </optgroup>
+                        );
+                    })}
+                </select>
+
+                {/* Lead source — the E-314 door (Scraper / Bulk upload /
+                    AI-dialer list / …). Paired with Campaign: Scraper + "Not in a
+                    campaign" is the scraper-only pool. */}
+                <select
+                    aria-label="Lead source"
+                    className={`${SELECT_CLASS} min-w-[150px] flex-1`}
+                    value={draft.sourceDoor}
+                    onChange={(e) => onChange("sourceDoor", e.target.value)}
+                >
+                    <option value="">All lead sources</option>
+                    {LEAD_DOORS.map((d) => (
+                        <option key={d} value={d}>
+                            {LEAD_DOOR_LABEL[d]}
+                        </option>
+                    ))}
+                    <option value={SOURCE_DOOR_NONE}>Unknown</option>
+                </select>
+
                 {/* NeoDove — a toggle in the PRIMARY row, not an option in the
                     "Source" select behind More filters. Two reasons: it is not a
                     source (a scraped lead we pushed keeps source = 'scraper', so
@@ -594,12 +649,12 @@ export function LeadsFilterBar({
                         </select>
                     )}
                     <select
-                        aria-label="Source"
+                        aria-label="Raw source"
                         className={`${SELECT_CLASS} w-full`}
                         value={draft.source}
                         onChange={(e) => onChange("source", e.target.value)}
                     >
-                        <option value="">All sources</option>
+                        <option value="">All raw sources</option>
                         {(facets?.sources ?? []).map((s) => (
                             <option key={s} value={s}>
                                 {pretty(s)}
@@ -621,35 +676,6 @@ export function LeadsFilterBar({
                                 {IDLE_RANGES[k].label}
                             </option>
                         ))}
-                    </select>
-                    {/* Campaign — both systems in one control, grouped. Only
-                        campaigns that actually have leads are offered. */}
-                    <select
-                        aria-label="Campaign"
-                        className={`${SELECT_CLASS} w-full`}
-                        value={draft.campaign}
-                        onChange={(e) => onChange("campaign", e.target.value)}
-                    >
-                        <option value="">All campaigns</option>
-                        <option value={CAMPAIGN_NONE}>Not in a campaign</option>
-                        {CAMPAIGN_SYSTEMS.map((system) => {
-                            const items = (facets?.campaigns ?? []).filter(
-                                (c) => c.system === system,
-                            );
-                            if (!items.length) return null;
-                            return (
-                                <optgroup
-                                    key={system}
-                                    label={CAMPAIGN_SYSTEM_LABEL[system]}
-                                >
-                                    {items.map((c) => (
-                                        <option key={c.id} value={c.id}>
-                                            {campaignLabel(c)} ({c.lead_count})
-                                        </option>
-                                    ))}
-                                </optgroup>
-                            );
-                        })}
                     </select>
                     <Input
                         value={draft.state}
