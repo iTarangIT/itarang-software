@@ -48,7 +48,7 @@ export async function GET(
         .from(leads)
         .where(eq(leads.id, selection.lead_id))
         .limit(1);
-      if (!lead || !(await dealerMayActOnLead(user, lead.dealer_id))) {
+      if (!lead || !(await dealerMayActOnLead(user, lead.dealer_id, selection.lead_id))) {
         return NextResponse.json(
           { success: false, error: { message: "Access denied" } },
           { status: 403 },

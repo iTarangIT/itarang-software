@@ -14,6 +14,10 @@
 //     the single CRM push; the old dealer's reserved coupon goes back to their
 //     pool and their salesperson comes off the file (detachFromOldDealer).
 // Leads that break a rule are skipped and reported back; the rest move.
+//
+// 14 Oct: the house login may also push AGAIN a file it pushed out before —
+// to the same dealer or another — wherever the file is now (never after
+// consent). The dealer it leaves loses its reserved coupon and salesperson.
 
 import { z } from "zod";
 import { and, eq, inArray } from "drizzle-orm";
@@ -37,6 +41,7 @@ import {
     detachFromOldDealer,
     LEAD_PUSHED_TO_DEALER,
     logPushCouponRelease,
+    houseOriginatedLeadIds,
     pushedBeforeLeadIds,
     signedConsentLeadIds,
     type DetachResult,
@@ -94,11 +99,13 @@ export const POST = withErrorHandler(async (req: Request) => {
     // ID 33: consent gate — a signed consent pins the file to its dealer.
     // One push per file: a lead that already carries a push never moves again
     // from this list, even if it is back with the house dealer.
-    const [signed, pushedBefore, names] = await Promise.all([
+    // 14 Oct: a file the house pushed out before may be pushed again from here.
+    const [signed, pushedBefore, houseFiles] = await Promise.all([
         signedConsentLeadIds(leadIds),
         pushedBeforeLeadIds(leadIds),
-        dealerDisplayNames([house]),
+        houseOriginatedLeadIds(house, leadIds),
     ]);
+    const names = await dealerDisplayNames([house, ...rows.map((r) => r.dealerId ?? "").filter(Boolean)]);
 
     const skipped: { leadId: string; reason: string }[] = [];
     const movable: string[] = [];
@@ -108,20 +115,22 @@ export const POST = withErrorHandler(async (req: Request) => {
             skipped.push({ leadId: id, reason: "Lead not found" });
             continue;
         }
-        if (r.dealerId !== house) {
-            skipped.push({ leadId: id, reason: "Already belongs to another dealer — moving it again needs an admin" });
+        // A dealer's own lead (never with the house) is never movable from here.
+        if (r.dealerId !== house && !houseFiles.has(id)) {
+            skipped.push({ leadId: id, reason: "This is the dealer's own lead — moving it needs an admin" });
             continue;
         }
-        // ID 33: same rules as the CRM action. The bulk list is first-push
-        // only (actorIsHouseLogin), so a second move always goes via the CRM.
+        // ID 33: same rules as the CRM action (consent, finance, same dealer);
+        // a house file may go again (houseOriginated, 14 Oct).
         const verdict = checkPush({
             actorRole: user.role,
             actorIsHouseLogin: true,
             currentDealerId: r.dealerId,
-            currentDealerName: names.get(house) ?? null,
+            currentDealerName: (r.dealerId ? names.get(r.dealerId) : null) ?? null,
             houseDealerCode: house,
             consentSigned: signed.has(id),
             pushedBefore: pushedBefore.has(id),
+            houseOriginated: houseFiles.has(id),
             paymentMethod: r.paymentMethod,
             target,
         });
@@ -133,25 +142,31 @@ export const POST = withErrorHandler(async (req: Request) => {
     const detachedById = new Map<string, DetachResult>();
     if (movable.length) {
         const now = new Date();
-        const fromName = names.get(house) ?? house;
+        const fromOf = (leadId: string) => byId.get(leadId)?.dealerId ?? house;
         await db.transaction(async (tx) => {
-            // dealer_id = house in the WHERE as well, so a lead someone else
-            // moved between the read above and now is left alone.
-            const moved = await tx
-                .update(leads)
-                .set({
-                    dealer_id: target.dealerId,
-                    assignment_status: "assigned",
-                    dealer_assigned_at: now,
-                    dealer_assigned_by: user.id,
-                    updated_at: now,
-                })
-                .where(and(inArray(leads.id, movable), eq(leads.dealer_id, house)))
-                .returning({ id: leads.id });
-            pushed.push(...moved.map((m) => m.id));
+            // dealer_id = the dealer the file had when checked, in the WHERE as
+            // well, so a lead someone else moved in between is left alone.
+            for (const leadId of movable) {
+                const moved = await tx
+                    .update(leads)
+                    .set({
+                        dealer_id: target.dealerId,
+                        assignment_status: "assigned",
+                        dealer_assigned_at: now,
+                        dealer_assigned_by: user.id,
+                        // 14 Oct: a delete by the dealer it leaves does not follow the file —
+                        // the dealer receiving it starts with it on their list.
+                        deleted_by_dealer_at: null,
+                        deleted_by_dealer_user: null,
+                        updated_at: now,
+                    })
+                    .where(and(eq(leads.id, leadId), eq(leads.dealer_id, fromOf(leadId))))
+                    .returning({ id: leads.id });
+                if (moved.length) pushed.push(leadId);
+            }
 
-            // ID 33: release the house dealer's reserved coupon and clear its
-            // salesperson on every lead that moved.
+            // ID 33: release the old dealer's (house or dealer) reserved coupon
+            // and clear its salesperson on every lead that moved.
             for (const leadId of pushed) detachedById.set(leadId, await detachFromOldDealer(tx, leadId));
 
             if (pushed.length) {
@@ -162,8 +177,9 @@ export const POST = withErrorHandler(async (req: Request) => {
                         entity_id: leadId,
                         action: LEAD_PUSHED_TO_DEALER,
                         changes: {
-                            from_dealer_id: house,
-                            from_dealer_name: fromName,
+                            from_dealer_id: fromOf(leadId),
+                            from_dealer_name: names.get(fromOf(leadId)) ?? fromOf(leadId),
+                            repush: fromOf(leadId) !== house,
                             to_dealer_id: target.dealerId,
                             to_dealer_name: target.name,
                             reason,
@@ -181,7 +197,7 @@ export const POST = withErrorHandler(async (req: Request) => {
         for (const [leadId, d] of detachedById) await logPushCouponRelease(d, leadId, user.id, target.name);
         for (const id of movable) {
             if (!pushed.includes(id)) {
-                skipped.push({ leadId: id, reason: "Already belongs to another dealer — moving it again needs an admin" });
+                skipped.push({ leadId: id, reason: "This file changed while you were pushing it — reload and try again" });
             }
         }
     }

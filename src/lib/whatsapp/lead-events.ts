@@ -88,6 +88,21 @@ export async function recordLeadFlowEvent(evt: LeadFlowEventInput): Promise<void
     // E-278 not applied, or a transient DB error — history is best-effort.
     console.error("[WhatsApp/lead-events] record failed:", err);
   }
+  // 14 Oct: the iTarang house dealer hears when the dealer moves, on WhatsApp,
+  // a file the house pushed to them — the submit and each lead action, not
+  // every screen step. Best-effort; never throws.
+  if (evt.actorKind === "dealer" || evt.actorKind === "salesperson") {
+    const step =
+      evt.action === "submitted"
+        ? "submitted the file on WhatsApp"
+        : evt.action.startsWith("action:")
+          ? `took the "${evt.action.slice(7).replace(/_/g, " ")}" step on WhatsApp`
+          : null;
+    if (step) {
+      const { notifyHouseOfDealerStep } = await import("@/lib/leads/pushNotices");
+      await notifyHouseOfDealerStep(evt.leadId, step, evt.dealerCode);
+    }
+  }
 }
 
 // Console states that are browsing, not a customer journey. A transition INTO

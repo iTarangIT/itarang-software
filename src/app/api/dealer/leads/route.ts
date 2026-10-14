@@ -4,11 +4,13 @@ import { maskAadhaarDeep } from '@/lib/kyc/aadhaarMask';
 import { withErrorHandler, successResponse, errorResponse, generateId } from '@/lib/api-utils';
 import { z } from 'zod';
 import { db } from '@/lib/db';
-import { leads, loanDetails, personalDetails, documents, auditLogs, accounts, dealerOnboardingApplications, productSelections } from '@/lib/db/schema'; // Added accounts
+import { leads, loanDetails, personalDetails, documents, auditLogs, accounts, dealerOnboardingApplications, productSelections, users } from '@/lib/db/schema'; // Added accounts
 import { eq, and, desc, ilike, or, ne, isNull, inArray } from 'drizzle-orm';
 import { resolveDealerProfile } from '@/lib/supabase/identity';
 import { requireRole } from '@/lib/auth-utils';
 import { recordLeadCapture } from '@/lib/leads/lead-registry';
+import { houseDealerCode } from '@/lib/leads/dealerByMobile';
+import { dealerContacts, houseOriginatedLeadIds } from '@/lib/leads/pushGuards';
 
 
 // Extended Zod Schema
@@ -235,11 +237,22 @@ export const GET = withErrorHandler(async (req: Request) => {
     const status = searchParams.get('status');
     const type = searchParams.get('type');
 
+    // 14 Oct: the iTarang house dealer keeps every file it pushed out on its
+    // list (whichever dealer has it now, shown with that dealer's name and
+    // mobile) — it has full access to them and may push them again.
+    const house = await houseDealerCode();
+    const houseFiles = house && dealer_id === house ? [...(await houseOriginatedLeadIds(house))] : [];
+
     const conditions = [
-        eq(leads.dealer_id, dealer_id),
-        // E-285 — the dealer deleted it from THIS dashboard. The application
-        // itself may still be live with the admin and the lender.
-        isNull(leads.deleted_by_dealer_at),
+        or(
+            and(
+                eq(leads.dealer_id, dealer_id),
+                // E-285 — the dealer deleted it from THIS dashboard. The
+                // application itself may still be live with the admin and lender.
+                isNull(leads.deleted_by_dealer_at),
+            ),
+            ...(houseFiles.length ? [inArray(leads.id, houseFiles)] : []),
+        )!,
         or(
             isNull(leads.status),
             and(
@@ -293,10 +306,37 @@ export const GET = withErrorHandler(async (req: Request) => {
             }
         }
     }
+    // 14 Oct: who has each pushed file now — name + mobile.
+    const elsewhere = data.filter((l) => l.dealer_id && l.dealer_id !== dealer_id).map((l) => l.dealer_id!);
+    const contacts = elsewhere.length ? await dealerContacts(elsewhere) : new Map<string, { name: string; mobile: string | null }>();
+    // …and what happened on it last (audit log), so the house sees the dealer's work.
+    const pushedIds = data.filter((l) => l.dealer_id && l.dealer_id !== dealer_id).map((l) => l.id);
+    const lastActivity = new Map<string, { action: string; at: string; by: string | null }>();
+    if (pushedIds.length) {
+        const acts = await db
+            .selectDistinctOn([auditLogs.entity_id], {
+                id: auditLogs.entity_id,
+                action: auditLogs.action,
+                at: auditLogs.timestamp,
+                by: users.name,
+            })
+            .from(auditLogs)
+            .leftJoin(users, eq(users.id, auditLogs.performed_by))
+            .where(and(eq(auditLogs.entity_type, 'lead'), inArray(auditLogs.entity_id, pushedIds)))
+            .orderBy(auditLogs.entity_id, desc(auditLogs.timestamp));
+        for (const a of acts) {
+            if (a.id) lastActivity.set(a.id, { action: a.action ?? "updated", at: new Date(a.at as unknown as string).toISOString(), by: a.by ?? null });
+        }
+    }
     const enriched = data.map((l) => {
         const ps = psByLead.get(l.id);
+        const withDealer = l.dealer_id && l.dealer_id !== dealer_id ? contacts.get(l.dealer_id) : undefined;
         return {
             ...l,
+            // 14 Oct: set when the file is with another dealer (house list only).
+            current_dealer: withDealer
+                ? { dealer_id: l.dealer_id, name: withDealer.name, mobile: withDealer.mobile, last_activity: lastActivity.get(l.id) ?? null }
+                : null,
             // ID 119: the list never shows the draft, but it carried the full
             // Aadhaar to the browser.
             kyc_draft_data: maskAadhaarDeep(l.kyc_draft_data),

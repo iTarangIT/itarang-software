@@ -113,6 +113,9 @@ function NewLeadWizardContent() {
     const [savingDraft, setSavingDraft] = useState(false);
     const [initLoading, setInitLoading] = useState(true);
     const [lastSaved, setLastSaved] = useState<string | null>(null);
+    // 14 Oct: the file's version when loaded — a save on a stale copy (the other
+    // side changed it meanwhile) is refused instead of overwriting their work.
+    const [loadedVersion, setLoadedVersion] = useState<string | null>(null);
     const [isModified, setIsModified] = useState(false);
 
     const [formData, setFormData] = useState<any>(emptyFormData);
@@ -235,6 +238,7 @@ function NewLeadWizardContent() {
                 setReferenceId(result.data.referenceId);
                 setFormData((prev: any) => ({ ...prev, ...normalizeLoadedPhones(result.data.formData) }));
                 setAdditionalProducts(result.data.additional_products ?? []);
+                setLoadedVersion(result.data.updatedAt ?? null);
                 setLastSaved('Loaded for editing');
             } else {
                 setApiError(readApiError(result, 'Could not load lead.'));
@@ -436,6 +440,7 @@ function NewLeadWizardContent() {
                     ...formData,
                     leadId,
                     commitStep: true,
+                    expected_updated_at: loadedVersion ?? undefined,
                     lead_score: leadScoreMap[formData.interest_level] || 30,
                     additional_products: additionalProducts.filter(p => p.product_id),
                     // ID 33 — only sent once the number resolved to a dealer.
@@ -494,12 +499,14 @@ function NewLeadWizardContent() {
                     ...formData,
                     leadId,
                     saveDraft: true,
+                    expected_updated_at: loadedVersion ?? undefined,
                     additional_products: additionalProducts.filter(p => p.product_id),
                 })
             });
             const result = await res.json();
             if (result.success) {
                 setIsModified(false);
+                if (result.data?.updatedAt) setLoadedVersion(result.data.updatedAt);
                 setLastSaved(`Draft saved ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`);
             } else {
                 setApiError(readApiError(result, 'Could not save draft. Please try again.'));
