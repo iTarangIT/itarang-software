@@ -30,6 +30,8 @@ export type LeadFilters = {
     ownerId: string;
     asmId: string;
     source: string;
+    /** E-314 door ("Lead source"): scraper / bulk_upload / ai_dialer / … */
+    sourceDoor: string;
     /**
      * "1" = only leads handed to the NeoDove calling team.
      *
@@ -98,6 +100,7 @@ export const EMPTY_FILTERS: LeadFilters = {
     ownerId: "",
     asmId: "",
     source: "",
+    sourceDoor: "",
     neodove: "",
     idle: "",
     campaign: "",
@@ -127,7 +130,6 @@ export const SECONDARY_KEYS: (keyof LeadFilters)[] = [
     "asmId",
     "source",
     "idle",
-    "campaign",
     "state",
     "city",
     "connectStatus",
@@ -177,6 +179,7 @@ export function toSearchParams(
     if (f.ownerId) p.set("owner_id", f.ownerId);
     if (f.asmId) p.set("asm_id", f.asmId);
     if (f.source) p.set("source", f.source);
+    if (f.sourceDoor) p.set("source_door", f.sourceDoor);
     if (f.neodove) p.set("neodove", f.neodove);
     if (f.idle) p.set("idle", f.idle);
     if (f.campaign) p.set("campaign", f.campaign);
@@ -214,6 +217,7 @@ export function fromSearchParams(sp: URLSearchParams): LeadFilters {
         ownerId: sp.get("owner_id") ?? "",
         asmId: sp.get("asm_id") ?? "",
         source: sp.get("source") ?? "",
+        sourceDoor: sp.get("source_door") ?? "",
         neodove: sp.get("neodove") === "1" ? "1" : "",
         // Validated against the closed band vocabulary, like connectStatus: an
         // unrecognised value would seed a <select> with no matching option and

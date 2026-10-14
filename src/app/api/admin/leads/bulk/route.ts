@@ -12,9 +12,11 @@ import { db } from "@/lib/db";
 import { requireRole } from "@/lib/auth-utils";
 import {
     errorResponse,
+    generateId,
     successResponse,
     withErrorHandler,
 } from "@/lib/api-utils";
+import { auditLogs } from "@/lib/db/schema";
 import { StatusGuardError, writeTouchpoint } from "@/lib/touchpoints/write";
 import {
     CompetitorRequiredError,
@@ -282,6 +284,29 @@ export const POST = withErrorHandler(async (req: Request) => {
             actorId: user.id,
             reason: body.reason ?? null,
         });
+        // One row for the batch as a whole ("who moved these 400 leads, when,
+        // to whom"). The per-lead touchpoints written by assignLeadOwner stay
+        // the source of truth, so a failure here is logged, never surfaced.
+        try {
+            await db.insert(auditLogs).values({
+                id: await generateId("AUDIT", auditLogs),
+                entity_type: "dealer_leads_bulk",
+                entity_id: target.id,
+                action: "bulk_reassign",
+                performed_by: user.id,
+                new_data: {
+                    target_user_id: target.id,
+                    target_role: target.role,
+                    requested: leads.length,
+                    affected,
+                    skipped_visit_booked: skippedVisitBooked,
+                    reason: body.reason ?? null,
+                    lead_ids: leads.map((l) => l.id),
+                },
+            });
+        } catch (e) {
+            console.error("[bulk reassign] batch audit row failed", e);
+        }
     } else if (body.action === "mark_lost") {
         if (!body.lost_reason) {
             return errorResponse("lost_reason is required to mark lost.", 400);
