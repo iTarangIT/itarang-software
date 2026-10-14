@@ -4,10 +4,12 @@
  * holds it, how long it has sat, and what happened last — so the manager can
  * reassign from the row instead of opening each lead.
  *
- *   Idle      working days (Mon–Sat, active holidays off) since
- *             dealer_leads.last_worked_at — the E-300 clock: only a call, visit
- *             or status change resets it. Never-worked leads count from when
- *             the holder got them.
+ *   Idle      working days (Mon–Sat, active holidays off) since the
+ *             follow-up ageing basis (src/lib/leads/followUpAgeing.ts): a
+ *             follow-up still ahead keeps the lead off the list; a passed one
+ *             counts from its date; otherwise the later of the last work (the
+ *             E-300 clock: a call, visit or status change) and the date the
+ *             holder got the lead.
  *   Threshold #6: a CC / inside-sales holder is listed from idle_cc idle days
  *             (default 5), an ASM from idle_asm (default 7) — ID 85 time
  *             limits, read per call. Other holders use idle_cc.
@@ -30,6 +32,7 @@ import { WORKABLE_STATUSES } from "@/lib/lifecycle/transitions";
 import { nonResponsiveSql } from "@/lib/leads/nonResponsive";
 import { transferVisitOverdueSql } from "@/lib/asm/transferVisitLimit";
 import { workingDaysSinceSql } from "@/lib/calendar/holidays";
+import { FOLLOW_UP_AGEING_BASIS } from "@/lib/leads/followUpAgeing";
 import { TIME_LIMIT_DEFAULTS, type TimeLimits } from "@/lib/timeLimits/registry";
 import { getTimeLimits } from "@/lib/timeLimits/store";
 
@@ -57,7 +60,7 @@ export type NeedsAttentionRow = {
 
 // ID 74 — Won is open but waits on onboarding, not on the rep: not "idle".
 const OPEN_LIST = sql.raw(WORKABLE_STATUSES.map((s) => `'${s}'`).join(", "));
-const IDLE_BASIS = sql`COALESCE(dl.last_worked_at, dl.assigned_at, dl.created_at)`;
+const IDLE_BASIS = FOLLOW_UP_AGEING_BASIS;
 /** Working days elapsed since the basis (Mon–Sat, holidays off) — as the admin dashboard counts. */
 const DAYS_IDLE = workingDaysSinceSql(IDLE_BASIS);
 
