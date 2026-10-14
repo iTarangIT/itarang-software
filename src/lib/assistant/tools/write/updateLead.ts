@@ -54,7 +54,9 @@ export const UpdateLeadPlan = z.object({
     location: z.string().nullable().optional(),
     source: PlannedFile.nullable(),
     source_doc_type: z.enum(DOC_TYPES).nullable(),
-});
+})
+    // ID 62: the stored plan is re-checked when it is applied, not only when asked.
+    .refine((p) => !p.set.gstin || checkCustomerGstin(p.set.gstin) === "ok", { message: "GSTIN fails the check" });
 export type UpdateLeadPlan = z.infer<typeof UpdateLeadPlan>;
 
 const opt = (max: number) => z.string().trim().min(1).max(max).optional();

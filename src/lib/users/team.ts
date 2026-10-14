@@ -80,3 +80,30 @@ export async function leadVisibleTo(leadId: string, userId: string): Promise<boo
 export async function teamForOwnScopedViewer(user: { id: string; role: string | null | undefined }): Promise<string[]> {
     return exportsOwnLeadsOnly(user.role) ? getTeamMemberIds(user.id) : [];
 }
+
+/**
+ * ID 156: every person's manager on their current line (member id → manager
+ * id), for grouping the daily Sales email's rep tables. Empty on a database
+ * with neither E-338 nor E-335, or on error — the email then lists reps flat.
+ */
+export async function currentTeamOf(): Promise<Map<string, string>> {
+    try {
+        const rows = (await hasReportingHistoryTable())
+            ? ((await db.execute(sql`
+                SELECT l.user_id::text AS member, l.manager_id::text AS manager
+                  FROM user_reporting_lines l
+                 WHERE l.effective_to IS NULL
+                   AND l.effective_from <= (now() AT TIME ZONE 'Asia/Kolkata')::date
+            `)) as unknown as Array<{ member: string; manager: string }>)
+            : (await hasReportsToColumn())
+              ? ((await db.execute(sql`
+                SELECT u.id::text AS member, to_jsonb(u) ->> 'reports_to' AS manager
+                  FROM users u WHERE to_jsonb(u) ->> 'reports_to' IS NOT NULL
+            `)) as unknown as Array<{ member: string; manager: string }>)
+              : [];
+        return new Map(rows.map((r) => [r.member, r.manager]));
+    } catch (err) {
+        console.warn("[team] currentTeamOf failed; listing reps without teams", err);
+        return new Map();
+    }
+}

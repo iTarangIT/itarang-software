@@ -102,7 +102,11 @@ export const GET = withErrorHandler(async (req: Request) => {
     else if (f.came_through) where.push(sql`b.came_through = ${f.came_through}`);
     // ID 5 — "closed" is a closure (E-332), not an accounts.status value.
     if (f.status === "closed") where.push(sql`b.closed`);
-    else if (f.status) where.push(sql`b.status = ${f.status} AND NOT b.closed`);
+    else {
+        // ID 148: every other tab lists live (not closed) dealers.
+        where.push(sql`NOT b.closed`);
+        if (f.status) where.push(sql`b.status = ${f.status}`);
+    }
     const whereSql = where.length ? sql`WHERE ${sql.join(where, sql` AND `)}` : sql``;
 
     const [rowsRes, countsRes] = await Promise.all([
@@ -116,9 +120,10 @@ export const GET = withErrorHandler(async (req: Request) => {
         `),
         db.execute(sql`
             WITH b AS (${base})
-            SELECT count(*)                                          AS total,
-                   count(*) FILTER (WHERE b.owner_user_id IS NULL)   AS no_owner,
-                   count(*) FILTER (WHERE b.gstin_missing)           AS gstin_missing
+            SELECT count(*) FILTER (WHERE NOT b.closed)                               AS total,
+                   count(*) FILTER (WHERE NOT b.closed AND b.owner_user_id IS NULL)   AS no_owner,
+                   count(*) FILTER (WHERE NOT b.closed AND b.gstin_missing)           AS gstin_missing,
+                   count(*) FILTER (WHERE b.closed)                                   AS closed
               FROM b
         `),
     ]);
@@ -144,6 +149,7 @@ export const GET = withErrorHandler(async (req: Request) => {
             total: Number(c.total ?? 0),
             no_owner: Number(c.no_owner ?? 0),
             gstin_missing: Number(c.gstin_missing ?? 0),
+            closed: Number(c.closed ?? 0),
         },
         limit: f.limit,
         offset: f.offset,

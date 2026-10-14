@@ -61,6 +61,8 @@ import { SalesDrillModal, type SalesDrillTarget } from "./SalesDrillModal";
 import type { DrillKind, DrillRow } from "@/lib/dashboard/salesDrill";
 import { ResponseTimeCard } from "./ResponseTimeCard";
 import { BUSINESS_TYPE_OPTIONS, BUSINESS_TYPE_UNSET, BUSINESS_TYPE_UNSET_LABEL } from "@/lib/leads/businessType";
+import { orderByTeam } from "@/lib/users/teamRules";
+import { InvoicesReadUpTo } from "@/components/sales/InvoicesReadUpTo";
 
 type Period = "today" | "week" | "month";
 type TeamSeg = "all" | "field" | "inside";
@@ -192,6 +194,17 @@ export function SalesHeadOpsView() {
         staleTime: 5 * 60 * 1000,
         retry: false,
     });
+    // ID 156: who reports to whom, so the scorecard lists each team under its manager.
+    const lines = useQuery<{ rows: Array<{ user_id: string; reports_to: string | null }> }>({
+        queryKey: ["sales-head-ops", "reporting-lines"],
+        queryFn: () => getData("/api/admin/reporting-lines"),
+        staleTime: 10 * 60 * 1000,
+        retry: false,
+    });
+    const managerOf = React.useMemo(
+        () => new Map((lines.data?.rows ?? []).filter((r) => r.reports_to).map((r) => [r.user_id, r.reports_to as string])),
+        [lines.data],
+    );
     const health = useQuery<{ rows: DealerHealthRow[]; summary: DealerHealthGroup[] }>({
         queryKey: ["sales-head-ops", "dealer-health"],
         queryFn: () => getData("/api/admin/dealer-health?group=owner"),
@@ -348,7 +361,8 @@ export function SalesHeadOpsView() {
     const groups = health.data?.summary ?? [];
     const redDormant = groups.reduce((a, g) => a + (g.by_bucket.red ?? 0) + (g.by_bucket.dormant ?? 0), 0);
     const atRisk = groups.reduce((a, g) => a + g.at_risk_90d, 0);
-    const unowned = (health.data?.rows ?? []).filter((r) => !r.owner_id).length;
+    // ID 148: live dealers only — a closed dealer needs no owner (summary groups are live already).
+    const unowned = (health.data?.rows ?? []).filter((r) => !r.owner_id && r.bucket !== "closed").length;
     const hot = d?.interest.rows.find((r) => r.interest_level === "hot");
     const hotAged = hot ? hot.age_8_14 + hot.age_15_30 + hot.age_30_plus : 0;
     const hotQs = new URLSearchParams();
@@ -736,7 +750,8 @@ export function SalesHeadOpsView() {
                     dash.isLoading ? <LoadingBlock /> : <NotAvailable />
                 ) : (
                     (() => {
-                        const list = score === "field" ? fieldPeople : insidePeople;
+                        // ID 156: each manager's team right under them (↳).
+                        const list = orderByTeam(score === "field" ? fieldPeople : insidePeople, managerOf);
                         const heads =
                             score === "field"
                                 ? ["Dealer visits", "New dealer visits", "Batteries sold", "KYC submitted", "Revenue"]
@@ -801,6 +816,7 @@ export function SalesHeadOpsView() {
                                                     className="truncate text-left text-[13.5px] font-semibold text-ink hover:text-brand-sky"
                                                     title="Show only this person"
                                                 >
+                                                    {p.member && <span className="mr-1 font-normal text-ink-muted" aria-label="reports to the person above">↳</span>}
                                                     {p.name ?? "Unnamed"}
                                                 </button>
                                                 {cells.map((c, i) => {
@@ -867,6 +883,8 @@ export function SalesHeadOpsView() {
                         );
                     })()
                 )}
+                {/* ID 171 — revenue and batteries are only as fresh as the invoices read. */}
+                {score === "field" && <InvoicesReadUpTo />}
                 {score === "inside" && (
                     <span className="text-xs text-ink-muted">
                         Hot leads to field counts leads that were Hot at the moment of transfer. &ldquo;Of which visited&rdquo; shows whether the ASM

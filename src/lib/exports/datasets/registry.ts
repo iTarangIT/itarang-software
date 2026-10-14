@@ -408,10 +408,12 @@ const leads: Dataset = {
         for (const i of invoiceRows) {
             const k = String(i.lead_id);
             const b = billing.get(k) ?? { n: 0, total: 0, last: null };
-            b.n += 1;
+            // ID 71: a credit note nets the amount but is not an invoice / order.
+            const credit = i.source === "credit";
+            if (!credit) b.n += 1;
             b.total += Number(i.total ?? 0);
             const d = i.invoice_date ? String(i.invoice_date).slice(0, 10) : null;
-            if (d && (!b.last || d > b.last)) b.last = d;
+            if (!credit && d && (!b.last || d > b.last)) b.last = d;
             billing.set(k, b);
         }
 
@@ -752,7 +754,7 @@ const dealerAccounts: Dataset = {
                 { key: "first_order", header: "First invoice", meaning: "Date of the first invoice matched to the account's GSTIN.", kind: "date" },
                 { key: "last_order", header: "Last invoice", meaning: "Date of the latest matched invoice.", kind: "date" },
                 { key: "days_since_last_order", header: "Days since last invoice", meaning: "Calendar days (IST) since the last invoice. Blank = never invoiced.", kind: "number" },
-                { key: "bucket_label", header: "Health", meaning: "Active 0–20 days, Cooling 21–30, Orange 31–45, Red 46–60, Dormant 60+; never invoiced: Not ordered yet (≤30 days since activation) or Never ordered.", width: 30 },
+                { key: "bucket_label", header: "Health", meaning: "Active 0–20 days, Cooling 21–30, Orange 31–45, Red 46–60, Dormant 60+; never invoiced: Not ordered yet (≤30 days since activation) or Never ordered; an open \"Order placed\" pauses the ageing (same as Dealer Health). Closed = closed by hand — not counted as a live dealer anywhere.", width: 30 },
                 { key: "revenue_90d", header: "Billed, last 90 days (₹)", meaning: "Invoice totals in the last 90 days. Void excluded, drafts counted.", kind: "money" },
                 { key: "revenue_fy", header: "Billed, this FY (₹)", meaning: "Invoice totals since 1 April.", kind: "money" },
                 { key: "revenue_lifetime", header: "Billed, lifetime (₹)", meaning: "Invoice totals, all time. Void excluded, drafts counted.", kind: "money" },
@@ -817,6 +819,7 @@ const leadEvents: Dataset = {
             columns: [
                 { key: "event_at", header: "Event time", meaning: "When it happened (IST).", kind: "datetime" },
                 { key: "lead_id", header: "Lead ID", meaning: "The lead the event is on.", width: 24 },
+                { key: "lead_created_at", header: "Lead created at", meaning: "When the lead was created (IST).", kind: "datetime" },
                 { key: "dealer", header: "Dealer / shop", meaning: "Shop or dealer name on the lead.", width: 28 },
                 { key: "city", header: "City", meaning: "Lead's city." },
                 { key: "state", header: "State", meaning: "Lead's state." },
@@ -856,6 +859,7 @@ const leadEvents: Dataset = {
                   return {
                     ...e,
                     event_at: at,
+                    lead_created_at: ist(e.lead_created_at),
                     lead_clock_started_at: ist(e.lead_clock_started_at),
                     owner_clock_started_at: ist(e.owner_clock_started_at),
                     hours_since_sales_ready: gap != null && Number.isFinite(gap) && gap >= 0 ? Math.round(gap * 10) / 10 : null,

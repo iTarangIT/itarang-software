@@ -41,6 +41,12 @@ export interface ExtractedSalesInvoice {
   due_date: string | null; // ISO yyyy-mm-dd
   customer_name: string | null;
   customer_gstin: string | null;
+  /**
+   * ID 62: what was printed in the customer GSTIN box when it is NOT 15
+   * characters (customer_gstin is then null) — so the invoice is flagged
+   * "Customer GSTIN fails check" instead of silently carrying no GSTIN.
+   */
+  customer_gstin_misread?: string | null;
   seller_gstin: string | null;
   place_of_supply: string | null;
   sub_total: number | null;
@@ -261,6 +267,7 @@ export async function extractSalesInvoice(
     due_date: str(parsed.due_date),
     customer_name: str(parsed.customer_name),
     customer_gstin: gstin(parsed.customer_gstin),
+    customer_gstin_misread: gstin(parsed.customer_gstin) ? null : str(parsed.customer_gstin),
     seller_gstin: gstin(parsed.seller_gstin),
     place_of_supply: str(parsed.place_of_supply),
     sub_total: num(parsed.sub_total),

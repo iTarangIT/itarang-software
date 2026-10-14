@@ -1,7 +1,8 @@
 /**
  * E-322 (tracker ID 39) — "CRM reads SKUs and number billed per SKU, amount by
  * SKU excl. GST" from invoice lines (Vyapar register + Zoho backfill).
- * Void invoices excluded; credit notes carry no lines. A SKU is the mapped CRM
+ * Void invoices excluded; a credit note's lines are stored negative (source
+ * 'credit', ID 71), so its items come off the month it is issued. A SKU is the mapped CRM
  * product where the Vyapar item name has been mapped, else the item name as
  * billed.
  */

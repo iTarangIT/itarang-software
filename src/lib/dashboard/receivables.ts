@@ -7,11 +7,15 @@
 // REVENUE_OUTSTANDING, all-time. matchedUnion() is that same union plus the
 // dealer match, so the total here is the card's number. Ageing is days since
 // the invoice date (and days past due where the invoice carries a due date).
+//
+// ID 71: a non-void credit note is listed beside the unpaid invoices of the
+// same customer (GSTIN) as a negative balance, and nets them; a customer's net
+// never goes below zero (netOwed), exactly as outstandingTotal() sums it.
 
 import { sql } from "drizzle-orm";
 
 import { db } from "@/lib/db";
-import { matchedUnion, REVENUE_OUTSTANDING } from "@/lib/dashboard/revenueSource";
+import { matchedUnion, OWED_KEY, REVENUE_OUTSTANDING, REVENUE_OWED } from "@/lib/dashboard/revenueSource";
 
 export type ReceivableRow = {
     source: string;
@@ -30,7 +34,18 @@ export type ReceivableRow = {
     owner_name: string | null;
     age_days: number | null;
     overdue_days: number | null;
+    /** The customer the balance nets under (GSTIN key, or the row itself). */
+    owe_key: string;
 };
+
+/** Σ per customer of max(0, Σ balance) — the "Money owed to us" figure. */
+export function netOwed(rows: Pick<ReceivableRow, "owe_key" | "balance">[]): number {
+    const per = new Map<string, number>();
+    for (const r of rows) per.set(r.owe_key, (per.get(r.owe_key) ?? 0) + r.balance);
+    let owed = 0;
+    for (const v of per.values()) owed += Math.max(0, v);
+    return owed;
+}
 
 export const RECEIVABLE_AGES = [
     { key: "0_30", label: "0–30 days", min: 0, max: 30 },
@@ -45,19 +60,25 @@ export const receivableAgeOf = (r: Pick<ReceivableRow, "age_days">): ReceivableA
         ? "no_date"
         : (RECEIVABLE_AGES.find((a) => r.age_days! >= a.min && r.age_days! <= a.max)?.key ?? "0_30");
 
-/** Every invoice still owed, largest balance first. */
+/** Every invoice still owed (and the credit notes netting it), largest balance first. */
 export async function listReceivables(): Promise<ReceivableRow[]> {
     const inv = await matchedUnion();
+    // One scan: owed rows, then only the credit notes of customers who still owe.
     const rows = (await db.execute(sql`
+        WITH x AS MATERIALIZED (
+            SELECT r.*, ${OWED_KEY} AS owe_key, ${REVENUE_OUTSTANDING} AS outstanding
+              FROM ${inv} r
+             WHERE ${REVENUE_OWED})
         SELECT r.source, r.id, r.invoice_number, r.invoice_date::text AS invoice_date, r.due_date::text AS due_date,
                r.customer_name, COALESCE(r.total, 0) AS total, COALESCE(r.balance, 0) AS balance, r.status,
                r.document_url, r.dealer_lead_id, r.account_id, r.dealer_name, u.name AS owner_name,
                ((now() AT TIME ZONE 'Asia/Kolkata')::date - r.invoice_date::date) AS age_days,
                CASE WHEN r.due_date IS NOT NULL
-                    THEN ((now() AT TIME ZONE 'Asia/Kolkata')::date - r.due_date::date) END AS overdue_days
-          FROM ${inv} r
+                    THEN ((now() AT TIME ZONE 'Asia/Kolkata')::date - r.due_date::date) END AS overdue_days,
+               r.owe_key
+          FROM x r
           LEFT JOIN users u ON u.id::text = r.dealer_owner_id::text
-         WHERE ${REVENUE_OUTSTANDING}
+         WHERE r.owe_key IN (SELECT owe_key FROM x WHERE outstanding)
          ORDER BY r.balance DESC NULLS LAST
     `)) as unknown as Array<Record<string, unknown>>;
     return rows.map(
@@ -86,8 +107,8 @@ export function ageReceivables(rows: ReceivableRow[]): ReceivablesAgeing {
     };
     const noDate = bucket("no_date", "No invoice date");
     return {
-        owed: rows.reduce((a, r) => a + r.balance, 0),
-        invoices: rows.length,
+        owed: netOwed(rows),
+        invoices: rows.filter((r) => r.source !== "credit").length,
         buckets: [...RECEIVABLE_AGES.map((a) => bucket(a.key, a.label)), ...(noDate.invoices ? [noDate] : [])],
     };
 }

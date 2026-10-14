@@ -25,6 +25,15 @@ import type { UserOption } from "@/lib/admin/types";
 
 type Mode = null | "reassign" | "mark_lost";
 
+// Reassign targets, split so nobody has to read "(asm)" / "(inside_sales_rep)"
+// off a mixed list. `partner` sits with ISR: assignLeadOwner gives it the same
+// path (owner + Assigned_Not_Contacted), not the ASM transfer.
+const TARGET_GROUPS = {
+    isr: { label: "ISR", roles: "inside_sales_rep,partner" },
+    asm: { label: "ASM", roles: "asm" },
+} as const;
+type TargetGroup = keyof typeof TARGET_GROUPS;
+
 export function BulkActionBar({
     selectedIds,
     onClear,
@@ -45,6 +54,9 @@ export function BulkActionBar({
         if (reassignSignal) setMode("reassign");
     }, [reassignSignal]);
     const [targetUserId, setTargetUserId] = useState("");
+    const [targetGroup, setTargetGroup] = useState<TargetGroup>("isr");
+    // Reassign is two clicks: Apply shows "Assign N leads to X?", Confirm sends.
+    const [confirming, setConfirming] = useState(false);
     const [lostReason, setLostReason] = useState<string>(LOST_REASON[0]);
     const [reason, setReason] = useState("");
     // ID 57 — the two answers the single-lead Mark Lost asks for.
@@ -58,17 +70,30 @@ export function BulkActionBar({
         null | "export" | "export_touchpoints" | "export_tracking"
     >(null);
 
+    // Keyed by group, never the bare ["admin-user-options"] the default-list
+    // pickers share (see LEAD_ASSIGNEE_ROLES in lib/leads/access.ts).
     const usersQuery = useQuery<{ success: true; data: { users: UserOption[] } }>({
-        queryKey: ["admin-user-options"],
+        queryKey: ["admin-user-options", "bulk", targetGroup],
         enabled: mode === "reassign",
         queryFn: async () => {
-            const res = await fetch("/api/admin/users", { cache: "no-store" });
+            const res = await fetch(
+                `/api/admin/users?roles=${TARGET_GROUPS[targetGroup].roles}`,
+                { cache: "no-store" },
+            );
             if (!res.ok) throw new Error("Failed to load users");
             return res.json();
         },
         staleTime: 5 * 60 * 1000,
     });
     const users = usersQuery.data?.data.users ?? [];
+    const targetUser = users.find((u) => u.user_id === targetUserId) ?? null;
+    const n = selectedIds.length;
+    const leadsWord = `${n.toLocaleString("en-IN")} lead${n === 1 ? "" : "s"}`;
+
+    function closeModal() {
+        setMode(null);
+        setConfirming(false);
+    }
 
     const highImpact = (HIGH_IMPACT_LOST_REASONS as readonly string[]).includes(
         lostReason,
@@ -139,6 +164,10 @@ export function BulkActionBar({
             toast.error("Tick the confirmation for this high-impact reason.");
             return;
         }
+        if (mode === "reassign" && !confirming) {
+            setConfirming(true);
+            return;
+        }
         setBusy(true);
         try {
             const res = await fetch("/api/admin/leads/bulk", {
@@ -176,7 +205,7 @@ export function BulkActionBar({
                         : ""
                 }`,
             );
-            setMode(null);
+            closeModal();
             setReason("");
             setTargetUserId("");
             setCompetitorName("");
@@ -282,13 +311,13 @@ export function BulkActionBar({
 
             <Modal
                 open={mode !== null}
-                onClose={() => setMode(null)}
+                onClose={closeModal}
                 title={
                     mode === "reassign"
                         ? "Bulk Reassign"
                         : "Bulk Mark Lost"
                 }
-                subtitle={`${selectedIds.length} lead(s) selected`}
+                subtitle={`${leadsWord} selected`}
                 width="sm"
                 footer={
                     <>
@@ -296,9 +325,11 @@ export function BulkActionBar({
                             type="button"
                             variant="outline"
                             size="sm"
-                            onClick={() => setMode(null)}
+                            onClick={() =>
+                                confirming ? setConfirming(false) : closeModal()
+                            }
                         >
-                            Cancel
+                            {confirming ? "Back" : "Cancel"}
                         </Button>
                         <Button
                             type="button"
@@ -309,17 +340,61 @@ export function BulkActionBar({
                             {busy && (
                                 <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
                             )}
-                            Apply
+                            {mode !== "reassign"
+                                ? "Apply"
+                                : confirming
+                                  ? "Confirm"
+                                  : `Assign ${leadsWord}${
+                                        targetUser
+                                            ? ` to ${targetUser.name ?? targetUser.email}`
+                                            : ""
+                                    }`}
                         </Button>
                     </>
                 }
             >
                 <div className="space-y-4">
-                    {mode === "reassign" && (
+                    {mode === "reassign" && confirming && (
+                        <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                            Assign <strong>{leadsWord}</strong> to{" "}
+                            <strong>
+                                {targetUser?.name ?? targetUser?.email ?? "the selected user"}
+                            </strong>{" "}
+                            ({TARGET_GROUPS[targetGroup].label})? Each lead gets a
+                            touchpoint with your reason. Leads with a booked field
+                            visit stay with their ASM.
+                        </div>
+                    )}
+                    {mode === "reassign" && !confirming && (
                         <div>
                             <label className="block text-xs font-medium text-ink-muted mb-1">
                                 Reassign to
                             </label>
+                            <div
+                                role="radiogroup"
+                                aria-label="Assign to role"
+                                className="mb-2 inline-flex rounded-md border border-border p-0.5"
+                            >
+                                {(Object.keys(TARGET_GROUPS) as TargetGroup[]).map((g) => (
+                                    <button
+                                        key={g}
+                                        type="button"
+                                        role="radio"
+                                        aria-checked={targetGroup === g}
+                                        onClick={() => {
+                                            setTargetGroup(g);
+                                            setTargetUserId("");
+                                        }}
+                                        className={`rounded px-3 py-1 text-xs font-semibold ${
+                                            targetGroup === g
+                                                ? "bg-brand-600 text-white"
+                                                : "text-ink-muted hover:bg-brand-50"
+                                        }`}
+                                    >
+                                        {TARGET_GROUPS[g].label}
+                                    </button>
+                                ))}
+                            </div>
                             <select
                                 value={targetUserId}
                                 onChange={(e) =>
@@ -327,7 +402,11 @@ export function BulkActionBar({
                                 }
                                 className="w-full h-9 rounded-md border border-border px-2 text-sm"
                             >
-                                <option value="">Select a rep or ASM…</option>
+                                <option value="">
+                                    {usersQuery.isLoading
+                                        ? "Loading…"
+                                        : `Select an ${TARGET_GROUPS[targetGroup].label}…`}
+                                </option>
                                 {users.map((u) => (
                                     <option key={u.user_id} value={u.user_id}>
                                         {u.name ?? u.email} ({u.role})
@@ -381,6 +460,7 @@ export function BulkActionBar({
                             )}
                         </div>
                     )}
+                    {!confirming && (
                     <div>
                         <label className="block text-xs font-medium text-ink-muted mb-1">
                             Reason <span className="text-ink-muted">(required)</span>
@@ -393,6 +473,7 @@ export function BulkActionBar({
                             className="w-full rounded-md border border-border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-100"
                         />
                     </div>
+                    )}
                 </div>
             </Modal>
         </>

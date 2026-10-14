@@ -23,7 +23,7 @@ import {
     auditLogs,
 } from "@/lib/db/schema";
 import { generateId } from "@/lib/api-utils";
-import { GSTIN_KEY } from "@/lib/leads/gstinMatch";
+import { GSTIN_KEY, gstinKeyIsMatchable } from "@/lib/leads/gstinMatch";
 import { SALESPERSON_ROLES } from "@/lib/onboarding/salesperson";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -286,8 +286,8 @@ export async function suggestedOwners(
             SELECT acc.account_id, sl.closing_owner_id, 'Closed a lead with the same GSTIN or phone', 7
               FROM acc
               JOIN dealer_leads sl
-                ON (${GSTIN_KEY(sql`sl.gstin`)} IS NOT NULL
-                    AND upper(btrim(acc.gstin)) <> 'PENDING'
+                -- ID 62: only a GSTIN that passes the check (not PENDING, not ours) links two dealers.
+                ON (${gstinKeyIsMatchable(GSTIN_KEY(sql`acc.gstin`))}
                     AND ${GSTIN_KEY(sql`sl.gstin`)} = ${GSTIN_KEY(sql`acc.gstin`)})
                 OR (length(${last10(sql`acc.contact_phone`)}) = 10
                     AND ${last10(sql`sl.phone`)} = ${last10(sql`acc.contact_phone`)})

@@ -192,4 +192,9 @@ export interface SalesDashboard extends SalesDashboardSections {
      * spoc_id was given or nothing is unassigned.
      */
     unassigned: SalesDashboardSections | null;
+    /**
+     * ID 156: on a manager's "Team total" — who is in it and for which days
+     * (each member counts only for the days they were in the team).
+     */
+    team?: { members: Array<{ id: string; name: string | null; from: string; to: string }> };
 }

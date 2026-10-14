@@ -11,6 +11,7 @@ import {
 import { recordLeadCapture } from "@/lib/leads/lead-registry";
 import { markDocsSubmitted } from "@/lib/onboarding/leadMilestones";
 import { resolveSalesperson, salespersonMobile } from "@/lib/onboarding/salesperson";
+import { checkCustomerGstin, GSTIN_CHECK_MESSAGE } from "@/lib/leads/gstin";
 
 type NullableString = string | null;
 type SafeRecord = Record<string, unknown>;
@@ -143,6 +144,17 @@ export async function POST(req: NextRequest) {
     // already submitted (or that the admin moved to correction_requested /
     // rejected). See the computation block after the `existing` query below.
     const isExplicitSubmission = body.onboardingStatus === "submitted";
+
+    // ID 62: a submission through this route gets the same GSTIN check as
+    // /api/dealer/onboarding/submit (shape, check digit, never iTarang's own).
+    // A draft autosave keeps what is typed — the dealer may be mid-entry — and
+    // is checked again on submit and at approval.
+    if (isExplicitSubmission && gstNumber) {
+      const gst = checkCustomerGstin(gstNumber);
+      if (gst !== "ok") {
+        return NextResponse.json({ success: false, message: GSTIN_CHECK_MESSAGE[gst] }, { status: 400 });
+      }
+    }
 
     const ownerName = cleanString(body.ownerName);
     const ownerPhone = cleanPhone(body.ownerPhone);

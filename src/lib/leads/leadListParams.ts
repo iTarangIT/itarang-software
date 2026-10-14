@@ -26,6 +26,8 @@ import { neodoveTablesPresent } from "@/lib/leads/leadCampaign";
 import { businessTypeFilterParam } from "@/lib/leads/businessType";
 import { exportsOwnLeadsOnly } from "@/lib/exports/downloadLog";
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export async function parseLeadListFilters(
     searchParams: URLSearchParams,
     caps: LeadsCapabilities,
@@ -46,6 +48,9 @@ export async function parseLeadListFilters(
     const idleParam = searchParams.get("idle");
     const idleRange = isIdleRangeKey(idleParam) ? IDLE_RANGES[idleParam] : null;
     const campaignParam = searchParams.get("campaign")?.trim() || null;
+    // Cast to uuid in SQL, so anything else is dropped here rather than 500ing.
+    const scrapeRunParam = searchParams.get("scrape_run")?.trim() ?? "";
+    const scrapeRun = UUID_RE.test(scrapeRunParam) ? scrapeRunParam : null;
     const scoreRange = normalizeScoreRange(
         parseScoreBound(searchParams.get("score_min")),
         parseScoreBound(searchParams.get("score_max")),
@@ -58,6 +63,8 @@ export async function parseLeadListFilters(
         scoreMin: scoreRange.min,
         scoreMax: scoreRange.max,
         source: searchParams.get("source") || null,
+        sourceDoor: searchParams.get("source_door") || null,
+        scrapeRun,
         neodoveOnly: searchParams.get("neodove") === "1",
         idleMinDays: idleRange?.min ?? null,
         idleMaxDays: idleRange?.max ?? null,

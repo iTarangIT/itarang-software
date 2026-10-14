@@ -9,6 +9,7 @@ import { ArrowLeft, FileText } from "lucide-react";
 import { requireRole } from "@/lib/auth-utils";
 import {
     listReceivables,
+    netOwed,
     RECEIVABLE_AGES as AGES,
     receivableAgeOf as ageOf,
     type ReceivableAgeKey,
@@ -49,7 +50,8 @@ export default async function CeoReceivablesPage({
     const rows = await listReceivables();
 
     const sum = (xs: Row[]) => xs.reduce((a, r) => a + r.balance, 0);
-    const owed = sum(rows);
+    const owed = netOwed(rows);
+    const credits = rows.filter((r) => r.source === "credit");
     const overdue = rows.filter((r) => r.overdue_days != null && r.overdue_days > 0);
     const unlinked = rows.filter((r) => r.account_id == null && r.dealer_lead_id == null);
     const byAge = AGES.map((a) => ({ ...a, rows: rows.filter((r) => ageOf(r) === a.key) }));
@@ -73,6 +75,7 @@ export default async function CeoReceivablesPage({
         if (r.age_days != null) d.oldest = Math.max(d.oldest ?? 0, r.age_days);
         byDealer.set(key, d);
     }
+    for (const d of byDealer.values()) d.owed = Math.max(0, d.owed);
     const debtors = [...byDealer.values()].sort((a, b) => b.owed - a.owed).slice(0, 15);
 
     const tab = (k: AgeKey, text: string, xs: Row[]) => (
@@ -112,13 +115,20 @@ export default async function CeoReceivablesPage({
                 <p className="mt-1 text-sm text-ink-muted">
                     Every Zoho and Drive invoice that is not paid, void or draft and still has a balance — as of now,
                     whatever date it was raised. The amount is the unpaid balance (invoice total minus what has been
-                    paid), including GST. Age is days since the invoice date.
+                    paid), including GST, less any credit note issued to the same customer (never below zero per
+                    customer). Age is days since the invoice or credit note date.
                 </p>
             </div>
 
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
                 {[
-                    { k: "Owed to us", v: inr(owed), s: `${rows.length} invoice${rows.length === 1 ? "" : "s"}` },
+                    {
+                        k: "Owed to us",
+                        v: inr(owed),
+                        s: `${rows.length - credits.length} invoice${rows.length - credits.length === 1 ? "" : "s"}${
+                            credits.length ? ` · less ${credits.length} credit note${credits.length === 1 ? "" : "s"} (${inr(-sum(credits))})` : ""
+                        }`,
+                    },
                     {
                         k: "Past due date",
                         v: inr(sum(overdue)),

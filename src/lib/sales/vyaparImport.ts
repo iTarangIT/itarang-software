@@ -39,6 +39,8 @@ export interface ImportPlanRow {
     date: string | null;
     party: string | null;
     gstin: string | null;
+    /** ID 62: the GSTIN printed for this party failed the check — why (null = fine). */
+    gstin_attention: string | null;
     doc_type: "invoice" | "credit_note";
     cancelled: boolean;
     lines: number;
@@ -64,6 +66,8 @@ export interface ImportPreview {
         lines: number;
         batteries: number;
         unmapped_items: number;
+        /** ID 62: documents whose GSTIN failed the check (kept off any dealer match). */
+        gstin_refused: number;
     };
     unmapped_items: string[];
     rows: ImportPlanRow[];
@@ -102,6 +106,7 @@ export async function previewImport(parsed: ParseResult): Promise<ImportPreview>
             date: d.date,
             party: d.party,
             gstin: d.gstin,
+            gstin_attention: d.gstin_attention,
             doc_type: d.doc_type,
             cancelled: d.cancelled,
             lines: d.lines.length,
@@ -127,6 +132,7 @@ export async function previewImport(parsed: ParseResult): Promise<ImportPreview>
             lines: sum(rows.map((r) => r.lines)),
             batteries: sum(rows.map((r) => r.batteries)),
             unmapped_items: unmapped.size,
+            gstin_refused: rows.filter((r) => r.gstin_attention).length,
         },
         unmapped_items: [...unmapped].sort(),
         rows,
