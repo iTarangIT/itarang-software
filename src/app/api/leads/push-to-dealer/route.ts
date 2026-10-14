@@ -26,7 +26,7 @@ import { db } from "@/lib/db";
 import { auditLogs, leads } from "@/lib/db/schema";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
 import { requireAuth } from "@/lib/auth-utils";
-import { findActiveDealerByMobile, houseDealerCode } from "@/lib/leads/dealerByMobile";
+import { findActiveDealerById, findActiveDealerByMobile, houseDealerCode } from "@/lib/leads/dealerByMobile";
 import {
     canUsePushToDealer,
     checkPush,
@@ -53,10 +53,31 @@ const MAX_LEADS = 100;
 
 const bodySchema = z.object({
     leadIds: z.array(z.string().min(1)).min(1).max(MAX_LEADS),
-    dealer_mobile: z.string().min(1).max(20),
+    // 14 Oct: the dealer picked from the name/mobile search (its dealer code),
+    // or a typed dealer mobile as before. One of the two.
+    dealer_id: z.string().min(1).max(64).optional(),
+    dealer_mobile: z.string().min(1).max(20).optional(),
     // ID 33: required, same rule as the single CRM push.
     reason: z.string().trim().min(PUSH_REASON_MIN, PUSH_REASON_REQUIRED_MESSAGE).max(PUSH_REASON_MAX),
 });
+
+/** The active dealer the leads go to: by picked dealer code, else by mobile. */
+async function resolveTarget(body: { dealer_id?: string; dealer_mobile?: string }) {
+    if (body.dealer_id) {
+        const d = await findActiveDealerById(body.dealer_id);
+        return d ?? { error: NO_ACTIVE_DEALER_MESSAGE, status: 422 };
+    }
+    if (!body.dealer_mobile) return { error: "Pick the dealer to push to.", status: 400 };
+    const found = await findActiveDealerByMobile(body.dealer_mobile);
+    if (found.status === "found") return found.dealer;
+    const error =
+        found.status === "invalid_mobile"
+            ? "Enter a 10-digit dealer mobile number"
+            : found.status === "ambiguous"
+              ? "More than one active dealer uses this number — ask an admin to fix the dealer records"
+              : NO_ACTIVE_DEALER_MESSAGE;
+    return { error, status: 422 };
+}
 
 export const POST = withErrorHandler(async (req: Request) => {
     const user = await requireAuth();
@@ -72,24 +93,15 @@ export const POST = withErrorHandler(async (req: Request) => {
         return errorResponse(
             reasonIssue
                 ? PUSH_REASON_REQUIRED_MESSAGE
-                : `Select between 1 and ${MAX_LEADS} leads and enter the dealer mobile.`,
+                : `Select between 1 and ${MAX_LEADS} leads and pick a dealer.`,
             400,
         );
     }
     const leadIds = Array.from(new Set(parsed.data.leadIds));
     const reason = parsed.data.reason;
 
-    const found = await findActiveDealerByMobile(parsed.data.dealer_mobile);
-    if (found.status !== "found") {
-        const why =
-            found.status === "invalid_mobile"
-                ? "Enter a 10-digit dealer mobile number"
-                : found.status === "ambiguous"
-                  ? "More than one active dealer uses this number — ask an admin to fix the dealer records"
-                  : NO_ACTIVE_DEALER_MESSAGE;
-        return errorResponse(why, 422);
-    }
-    const target = found.dealer;
+    const target = await resolveTarget(parsed.data);
+    if ("error" in target) return errorResponse(target.error, target.status);
 
     const rows = await db
         .select({ id: leads.id, dealerId: leads.dealer_id, paymentMethod: leads.payment_method })
