@@ -118,3 +118,30 @@ export function originLabel(v: string | null | undefined): string | null {
     if (!v) return null;
     return LEAD_ORIGIN_LABEL[v as LeadOrigin] ?? v.replace(/_/g, " ");
 }
+
+/** /leads "Lead source" filter sentinel: leads with no door stamped. */
+export const SOURCE_DOOR_NONE = "__none";
+
+// Legacy dealer_leads.source values that pre-date the door, mapped to the door
+// they imply. Only used for display when no door is stamped.
+const LEGACY_SOURCE_DOOR: Record<string, LeadDoor> = {
+    google_places: "scraper",
+    manual_upload_lead: "bulk_upload",
+    ai_dialer_lead: "ai_dialer",
+    neodove: "neodove",
+    whatsapp: "whatsapp_assistant",
+};
+
+/**
+ * What the /leads row shows as the lead's source: the stamped door, else the
+ * door the legacy `source` implies, else the raw legacy value prettified.
+ */
+export function leadSourceLabel(
+    door: string | null | undefined,
+    legacySource: string | null | undefined,
+): string | null {
+    if (door) return doorLabel(door);
+    if (!legacySource) return null;
+    const implied = LEGACY_SOURCE_DOOR[legacySource];
+    return implied ? LEAD_DOOR_LABEL[implied] : legacySource.replace(/_/g, " ");
+}

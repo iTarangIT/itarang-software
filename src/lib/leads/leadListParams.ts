@@ -58,6 +58,7 @@ export async function parseLeadListFilters(
         scoreMin: scoreRange.min,
         scoreMax: scoreRange.max,
         source: searchParams.get("source") || null,
+        sourceDoor: searchParams.get("source_door") || null,
         neodoveOnly: searchParams.get("neodove") === "1",
         idleMinDays: idleRange?.min ?? null,
         idleMaxDays: idleRange?.max ?? null,
