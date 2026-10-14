@@ -434,6 +434,18 @@ export type OwnerDrillLead = {
     interest_level: string | null;
     current_status: string | null;
     last_touchpoint_at: string | null;
+    /** Whose number the lead counts toward, and their name. */
+    person_id?: string | null;
+    person_name?: string | null;
+    owner_name?: string | null;
+    source?: string | null;
+    area?: string | null;
+    pincode?: string | null;
+    created_at?: string | null;
+    assigned_at?: string | null;
+    last_worked_at?: string | null;
+    next_follow_up_at?: string | null;
+    lost_reason?: string | null;
 };
 
 // ──────────────────────────── Bulk upload ─────────────────────────────────

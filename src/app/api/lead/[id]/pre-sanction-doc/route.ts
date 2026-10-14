@@ -59,7 +59,7 @@ export async function POST(
         { status: 404 },
       );
     }
-    if (!(await dealerMayActOnLead(user, lead.dealer_id))) {
+    if (!(await dealerMayActOnLead(user, lead.dealer_id, leadId))) {
       return NextResponse.json({ ok: false, error: "Access denied" }, { status: 403 });
     }
 
@@ -175,7 +175,7 @@ export async function PATCH(
     if (!lead) {
       return NextResponse.json({ ok: false, error: "Lead not found" }, { status: 404 });
     }
-    if (!(await dealerMayActOnLead(user, lead.dealer_id))) {
+    if (!(await dealerMayActOnLead(user, lead.dealer_id, leadId))) {
       return NextResponse.json({ ok: false, error: "Access denied" }, { status: 403 });
     }
 

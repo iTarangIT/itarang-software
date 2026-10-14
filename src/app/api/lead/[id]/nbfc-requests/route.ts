@@ -37,7 +37,7 @@ export async function GET(
     if (!lead) {
       return NextResponse.json({ ok: false, error: "Lead not found" }, { status: 404 });
     }
-    if (!(await dealerMayActOnLead(user, lead.dealer_id))) {
+    if (!(await dealerMayActOnLead(user, lead.dealer_id, leadId))) {
       return NextResponse.json({ ok: false, error: "Access denied" }, { status: 403 });
     }
 

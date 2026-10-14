@@ -16,7 +16,7 @@ export const GET = withErrorHandler(async (req: Request, { params }: { params: P
     }).from(leads).where(eq(leads.id, leadId)).limit(1);
 
     if (!lead) return errorResponse('Lead not found', 404);
-    if (user.role === 'dealer' && !(await dealerMayActOnLead(user, lead.dealer_id))) return errorResponse('Access denied', 403);
+    if (user.role === 'dealer' && !(await dealerMayActOnLead(user, lead.dealer_id, leadId))) return errorResponse('Access denied', 403);
 
     const offers = await db.select().from(loanOffers)
         .where(eq(loanOffers.lead_id, leadId));

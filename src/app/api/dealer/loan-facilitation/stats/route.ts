@@ -3,6 +3,7 @@ import { leads, loanApplications } from '@/lib/db/schema';
 import { and, eq } from 'drizzle-orm';
 import { successResponse, withErrorHandler } from '@/lib/api-utils';
 import { requireRole } from '@/lib/auth-utils';
+import { dealerVisibleLeads } from '@/lib/leads/dealerLeadScope';
 
 const EMPTY_STATS = {
     total: 0,
@@ -15,6 +16,8 @@ const EMPTY_STATS = {
 // Dashboard card stats for Loan Facilitation
 export const GET = withErrorHandler(async () => {
     const user = await requireRole(['dealer']);
+    // 14 Oct: the house dealer also sees the files it pushed out (dealerLeadScope.ts).
+    const visible = await dealerVisibleLeads(user?.dealer_id ?? "");
 
     let rows: { facilitation_fee_status: string | null; company_validation_status: string }[];
     try {
@@ -27,7 +30,7 @@ export const GET = withErrorHandler(async () => {
             .innerJoin(leads, eq(loanApplications.lead_id, leads.id))
             .where(
                 and(
-                    eq(leads.dealer_id, user.dealer_id!),
+                    visible,
                     eq(loanApplications.documents_uploaded, true)
                 )
             );

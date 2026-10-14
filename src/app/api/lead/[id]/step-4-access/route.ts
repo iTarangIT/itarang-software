@@ -9,7 +9,8 @@ import {
   products,
   kycVerificationMetadata,
 } from "@/lib/db/schema";
-import { requireRole } from "@/lib/auth-utils";
+import { requireRole } from "@/lib/auth-utils";
+import { dealerMayActOnLead } from "@/lib/auth/requireLeadAccess";
 
 // BRD V2 Part E §2.1 — access gate for Step 4 Product Selection.
 //   Finance path: allowed only when kyc_status is step_3_cleared or kyc_approved
@@ -43,13 +44,14 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    await requireRole(["dealer"]);
+    const user = await requireRole(["dealer"]);
     const { id: leadId } = await params;
 
     const [lead] = await db
       .select({
         id: leads.id,
         dealer_id: leads.dealer_id,
+        uploader_id: leads.uploader_id,
         full_name: leads.full_name,
         payment_method: leads.payment_method,
         interest_level: leads.interest_level,
@@ -66,7 +68,14 @@ export async function GET(
       .where(eq(leads.id, leadId))
       .limit(1);
 
-    if (!lead) {
+    // 14 Oct: this gate checked the role only, so any dealer login could read
+    // any file's Step 4 state by id. Same rule as the other lead routes: the
+    // owning dealer, the person who created it, or the house on a file it
+    // pushed out. "Not found" and "not yours" answer alike.
+    if (
+      !lead ||
+      (lead.uploader_id !== user.id && !(await dealerMayActOnLead(user, lead.dealer_id, leadId)))
+    ) {
       return NextResponse.json(
         { success: false, error: { message: "Lead not found" } },
         { status: 404 },

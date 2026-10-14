@@ -5,6 +5,7 @@
 // "Download CSV" sends the same query string to the API, so the file holds
 // exactly the rows on screen.
 
+import type { ReactNode } from "react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft, Download } from "lucide-react";
@@ -12,6 +13,7 @@ import { ArrowLeft, Download } from "lucide-react";
 import { requireRole } from "@/lib/auth-utils";
 import {
     ACTION_KEYS,
+    actionScopeFrom,
     ACTION_TITLES,
     listSalesHeadAction,
     listSalesHeadActionFiltered,
@@ -22,6 +24,8 @@ import { LEADS_BULK_ROLES } from "@/lib/leads/access";
 import { formatLimit, type TimeLimits } from "@/lib/timeLimits/registry";
 import { getTimeLimits } from "@/lib/timeLimits/store";
 import { NeedsActionTable } from "./NeedsActionTable";
+import { FieldVisitTrend } from "./FieldVisitTrend";
+import { dayOr, fieldVisitPeriod, istToday, shiftDay } from "@/lib/dashboard/fieldVisitTrend";
 
 export const dynamic = "force-dynamic";
 
@@ -79,6 +83,51 @@ export default async function NeedsActionListPage({
         a[1].localeCompare(b[1]),
     );
     if (sp.spoc_id && !owners.some(([id]) => id === sp.spoc_id)) owners.unshift([sp.spoc_id, "Selected person"]);
+    // Waiting for a field visit: ageing now and two periods side by side.
+    // Default: the last 7 days (B) against the 7 before them (A).
+    const PERIOD_KEYS = ["a_from", "a_to", "b_from", "b_to"] as const;
+    let trend: ReactNode = null;
+    if (k === "visit_overdue") {
+        const today = istToday();
+        const bTo = dayOr(sp.b_to, today);
+        const bFrom = dayOr(sp.b_from, shiftDay(bTo, -6));
+        const aTo = dayOr(sp.a_to, shiftDay(bFrom, -1));
+        const aFrom = dayOr(sp.a_from, shiftDay(aTo, -6));
+        const scope = actionScopeFrom(qs);
+        const [now, pa, pb] = await Promise.all([
+            fieldVisitPeriod(scope, today, today),
+            fieldVisitPeriod(scope, aFrom, aTo),
+            fieldVisitPeriod(scope, bFrom, bTo),
+        ]);
+        const listFilters = Object.fromEntries(
+            [...qs.entries()].filter(([key]) => !(PERIOD_KEYS as readonly string[]).includes(key)),
+        );
+        const preset = (label: string, a: [string, string], b: [string, string]) => ({
+            label,
+            href: `/admin/reports/needs-action/${k}?${new URLSearchParams({ ...listFilters, a_from: a[0], a_to: a[1], b_from: b[0], b_to: b[1] })}`,
+        });
+        const monthStart = `${today.slice(0, 8)}01`;
+        const lastMonthEnd = shiftDay(monthStart, -1);
+        const lastMonthStart = `${lastMonthEnd.slice(0, 8)}01`;
+        const dom = Number(today.slice(8, 10));
+        const lastMonthSameDay = shiftDay(lastMonthStart, Math.min(dom, Number(lastMonthEnd.slice(8, 10))) - 1);
+        trend = (
+            <FieldVisitTrend
+                now={now}
+                a={pa}
+                b={pb}
+                limitDays={limits.asm_transfer_first_visit}
+                hidden={listFilters}
+                presets={[
+                    preset("Last 7 days vs the 7 before", [shiftDay(today, -13), shiftDay(today, -7)], [shiftDay(today, -6), today]),
+                    preset("This month vs same days last month", [lastMonthStart, lastMonthSameDay], [monthStart, today]),
+                ]}
+            />
+        );
+    }
+    const periodHidden = PERIOD_KEYS.filter((key) => sp[key]).map((key) => (
+        <input key={key} type="hidden" name={key} value={sp[key]} />
+    ));
     const csvHref = `/api/admin/reports/needs-action/${k}${qs.toString() ? `?${qs}` : ""}`;
     const anyFilter = Boolean(sp.q || sp.state || sp.spoc_id || (sp.team && sp.team !== "all"));
     const hasValue = rows.some((r) => r.value != null);
@@ -96,7 +145,10 @@ export default async function NeedsActionListPage({
                 <p className="mt-1 max-w-3xl text-sm text-ink-muted">{rules(limits)[k]}</p>
             </div>
 
+            {trend}
+
             <form method="get" className="flex flex-wrap items-center gap-2.5 rounded-[14px] border border-border bg-surface px-3.5 py-3">
+                {periodHidden}
                 <input
                     type="search"
                     name="q"

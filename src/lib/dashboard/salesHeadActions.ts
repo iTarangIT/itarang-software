@@ -39,11 +39,12 @@ import { sql, type SQL } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import { ONB_LAST, ONB_WAITING_ON, onboardingStalledSql, WON_WITHOUT_QUOTE } from "@/lib/admin/dashboard";
-import { awaitingAssignment, daysAwaitingAssignment } from "@/lib/leads/salesReady";
+import { awaitingAssignment, daysAwaitingAssignment, salesReadyReasonLabel } from "@/lib/leads/salesReady";
 import { listSaidYesNotWon } from "@/lib/leads/saidYesNotWon";
 import {
     TRANSFER_AT_EXPR,
     TRANSFER_WORKING_DAYS_SQL,
+    awaitingFieldVisitSql,
     transferVisitOverdueSql,
 } from "@/lib/asm/transferVisitLimit";
 import { WORKABLE_STATUSES } from "@/lib/lifecycle/transitions";
@@ -129,6 +130,9 @@ function scope(s: ActionScope, holder: "owner" | "owner_or_asm" | "none"): SQL {
     return parts.length ? sql` AND ${sql.join(parts, sql` AND `)}` : sql``;
 }
 
+/** The page filters on `dl`, for other reports built on the same screen. */
+export const actionScopeSql = scope;
+
 type Raw = Record<string, unknown>;
 const run = async (q: SQL) => (await db.execute(q)) as unknown as Raw[];
 const str = (v: unknown) => (v == null ? null : String(v));
@@ -154,16 +158,26 @@ type Built = { rows: ActionRow[]; sub: string };
 async function salesReady(s: ActionScope): Promise<Built> {
     const raw = await run(sql`
         SELECT dl.id AS lead_id, ${NAME} AS dealer, dl.city, dl.state, NULL AS owner_name, NULL AS owner_id,
-               ${daysAwaitingAssignment()} AS days, dl.interest_level
+               ${daysAwaitingAssignment()} AS days, dl.interest_level,
+               to_jsonb(dl) ->> 'sales_ready_reason' AS reason
           FROM dealer_leads dl
          WHERE ${awaitingAssignment()} ${scope(s, "none")}
          ORDER BY days DESC NULLS LAST`);
     const rows = raw.map((r) =>
-        base(r, `Waiting ${plural(Number(r.days ?? 0), "day")}${r.interest_level ? ` · ${String(r.interest_level)}` : ""}`),
+        base(
+            r,
+            `Waiting ${plural(Number(r.days ?? 0), "day")}${r.interest_level ? ` · ${String(r.interest_level)}` : ""}${r.reason ? ` · ${salesReadyReasonLabel(String(r.reason))}` : ""}`,
+        ),
     );
     const oldest = raw.length ? Math.max(...raw.map((r) => Number(r.days ?? 0))) : 0;
     const hot = raw.filter((r) => String(r.interest_level ?? "").toLowerCase() === "hot").length;
-    return { rows, sub: `Oldest waiting ${plural(oldest, "day")} · ${hot} Hot` };
+    // Where they came from: AI-qualified and rep-created named, the rest summed.
+    const byReason = (k: string) => raw.filter((r) => r.reason === k).length;
+    const ai = byReason("ai_qualified");
+    const rep = byReason("rep_created");
+    const other = raw.length - ai - rep;
+    const from = [`${ai} AI qualified`, `${rep} created by a rep`, ...(other > 0 ? [`${other} other`] : [])].join(" · ");
+    return { rows, sub: `${from} · oldest waiting ${plural(oldest, "day")} · ${hot} Hot` };
 }
 
 async function hotNotCalled(s: ActionScope): Promise<Built> {
@@ -214,7 +228,15 @@ async function visitOverdue(s: ActionScope): Promise<Built> {
         byCity.set(c, (byCity.get(c) ?? 0) + 1);
     }
     const top = [...byCity.entries()].sort((a, b) => b[1] - a[1]).slice(0, 2).map(([c, n]) => `${c} ${n}`).join(", ");
-    return { rows, sub: `Over ${plural(limitDays, "working day")} since transfer${top ? ` · ${top}` : ""}` };
+    // Everyone waiting for a first visit, inside the limit or past it.
+    const waiting = await run(sql`
+            SELECT COUNT(*)::int AS n FROM dealer_leads dl
+             WHERE ${awaitingFieldVisitSql()} ${scope(s, "owner_or_asm")}`);
+    const all = Number(waiting[0]?.n ?? 0);
+    return {
+        rows,
+        sub: `Over ${plural(limitDays, "working day")} since transfer · ${all} waiting in all${top ? ` · ${top}` : ""}`,
+    };
 }
 
 async function quotesNoAnswer(s: ActionScope): Promise<Built> {

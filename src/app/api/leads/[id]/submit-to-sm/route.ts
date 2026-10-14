@@ -28,7 +28,7 @@ export const POST = withErrorHandler(async (req: Request, { params }: { params: 
     }).from(leads).where(eq(leads.id, leadId)).limit(1);
 
     if (!lead) return errorResponse('Lead not found', 404);
-    if (!(await dealerMayActOnLead(user, lead.dealer_id))) return errorResponse('Access denied', 403);
+    if (!(await dealerMayActOnLead(user, lead.dealer_id, leadId))) return errorResponse('Access denied', 403);
 
     const currentKycStatus = String(lead.kyc_status || '');
     const isStep3Resubmission = STEP_3_AWAITING_STATES.has(currentKycStatus);

@@ -4,6 +4,8 @@ import { db } from "@/lib/db";
 import { accountOwnership, dealerOnboardingApplications, leads } from "@/lib/db/schema";
 import { getAuthenticatedAppUser } from "@/lib/kyc/admin-workflow";
 import { dealerOwnsLead, mayReadFullIds, FULL_ID_ROLES } from "@/lib/auth/leadAccessRules";
+import { houseDealerCode } from "@/lib/leads/dealerByMobile";
+import { houseOriginatedLeadIds } from "@/lib/leads/pushGuards";
 
 // Back-office roles may read/write any lead's data (review, verification,
 // sanction). Mirrors ADMIN_ROLES in src/lib/kyc/admin-workflow.ts, plus
@@ -93,8 +95,12 @@ export async function requireLeadAccess(leadId: string): Promise<LeadAccessResul
   // ID 33: a lead the iTarang House login pushed to another dealer keeps
   // uploader_id = the person who created it, so they can still finish its KYC.
   const isUploader = !!lead && lead.uploader_id === user.id;
+  // 14 Oct: the house login keeps FULL access to every file it pushed out, at
+  // every step, wherever the file is now (houseMayActOnLead).
+  const houseFile =
+    !!lead && !isUploader && !dealerOwnsLead(lead.dealer_id, dealerCode) && (await houseMayActOnLead(dealerCode, leadId));
 
-  if (!lead || (!isUploader && !dealerOwnsLead(lead.dealer_id, dealerCode))) {
+  if (!lead || (!isUploader && !houseFile && !dealerOwnsLead(lead.dealer_id, dealerCode))) {
     return {
       ok: false,
       response: NextResponse.json(
@@ -176,8 +182,27 @@ export async function resolveDealerCode(user: {
 export async function dealerMayActOnLead(
   user: { id: string; role: string | null; dealer_id: string | null },
   leadDealerId: string | null | undefined,
+  /** The lead's id — lets the house login act on files it pushed out (14 Oct). */
+  leadId?: string | null,
 ): Promise<boolean> {
-  return dealerOwnsLead(leadDealerId, await resolveDealerCode(user));
+  const code = await resolveDealerCode(user);
+  if (dealerOwnsLead(leadDealerId, code)) return true;
+  return !!leadId && houseMayActOnLead(code, leadId);
+}
+
+/**
+ * 14 Oct: the iTarang house dealer keeps full access to a customer file after
+ * pushing it to a dealer — every step, wherever the file is now — so it can
+ * see and continue what the dealer does, and push it again. True when the
+ * caller's dealer code IS the house code and the file carries a push FROM the
+ * house (houseOriginatedLeadIds).
+ */
+export async function houseMayActOnLead(callerDealerCode: string | null | undefined, leadId: string): Promise<boolean> {
+  const code = (callerDealerCode ?? "").trim();
+  if (!code || !leadId) return false;
+  const house = await houseDealerCode();
+  if (!house || code !== house) return false;
+  return (await houseOriginatedLeadIds(house, [leadId])).has(leadId);
 }
 
 /** Dealer code on the latest onboarding application this user owns, or null. */

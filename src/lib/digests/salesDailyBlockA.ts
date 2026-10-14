@@ -21,6 +21,7 @@ import { sql } from "drizzle-orm";
 import type { SalesDashboard } from "@/lib/admin/salesDashboardTypes";
 import { engagedCall, wasHotAt } from "@/lib/reports/metricDefinitions";
 import { monthEnd, workingDaysBetween } from "@/lib/targets/rules";
+import { finalTargetSql } from "@/lib/targets/sql";
 import { scrapKgSourced } from "@/lib/buyback/scrapKgSourced";
 import { clockStats, limitsPassed } from "@/lib/leads/clocks";
 import { istRangeNaive, istRangeTz } from "./window";
@@ -325,7 +326,7 @@ async function companyTargets(db: Exec, monthFirst: string, upTo: string) {
         const total = workingDaysBetween(monthFirst, monthEnd(monthFirst), set);
         const elapsed = workingDaysBetween(monthFirst, upTo, set);
         const rows = (await db.execute(sql`
-            SELECT user_id::text AS user_id, metric, SUM(ceo_target + admin_addon)::float8 AS monthly
+            SELECT user_id::text AS user_id, metric, SUM(${finalTargetSql(sql`sales_targets`)})::float8 AS monthly
               FROM sales_targets
              WHERE month = ${monthFirst}::date AND status IN ('pushed', 'accepted')
              GROUP BY user_id, metric

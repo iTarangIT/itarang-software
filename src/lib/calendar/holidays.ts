@@ -35,10 +35,19 @@ export function forgetHolidays(): void {
  * workingDaysSince(). `ts` is a timestamptz expression.
  */
 export function workingDaysSinceSql(ts: SQL): SQL {
+    return workingDaysBetweenSql(ts, sql`NOW()`);
+}
+
+/**
+ * Working days after the IST day of `from` up to and including the IST day of
+ * `to` (Mon–Sat, active holidays skipped); 0 when `to` is not after `from`.
+ * Both are timestamptz expressions.
+ */
+export function workingDaysBetweenSql(from: SQL, to: SQL): SQL {
     return sql`(
         SELECT COUNT(*) FROM generate_series(
-            ((${ts}) AT TIME ZONE 'Asia/Kolkata')::date + 1,
-            (NOW() AT TIME ZONE 'Asia/Kolkata')::date, INTERVAL '1 day'
+            ((${from}) AT TIME ZONE 'Asia/Kolkata')::date + 1,
+            ((${to}) AT TIME ZONE 'Asia/Kolkata')::date, INTERVAL '1 day'
         ) gs
          WHERE EXTRACT(DOW FROM gs) <> 0
            AND gs::date NOT IN (SELECT hc.holiday_date FROM holiday_calendar hc
