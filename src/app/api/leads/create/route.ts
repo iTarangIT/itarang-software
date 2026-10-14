@@ -8,7 +8,7 @@ import { recordLeadCapture } from '@/lib/leads/lead-registry';
 import { capabilitiesFor } from '@/lib/dealer/dealer-capabilities';
 import { notifyLeadCreated } from '@/lib/notifications/events';
 import { dealerDisplayName } from '@/lib/notifications/emit';
-import { findActiveDealerByMobile, houseDealerCode, type PushTargetDealer } from '@/lib/leads/dealerByMobile';
+import { findActiveDealerById, findActiveDealerByMobile, houseDealerCode, type PushTargetDealer } from '@/lib/leads/dealerByMobile';
 import { canUsePushToDealer, consentSignedMessage, NO_ACTIVE_DEALER_MESSAGE, PUSHED_BEFORE_MESSAGE } from '@/lib/leads/pushToDealer';
 import {
     detachAuditChanges,
@@ -206,6 +206,9 @@ const step1Schema = z.object({
     // onboarded dealer this customer file belongs to. Blank = keep it with
     // the house dealer (iTarang House).
     push_to_dealer_mobile: z.string().max(20).optional().nullable(),
+    // 14 Oct: or the dealer code picked from the name/mobile search. Wins
+    // over push_to_dealer_mobile when both are sent.
+    push_to_dealer_id: z.string().max(80).optional().nullable(),
     // 14 Oct: the lead's updated_at when the editor loaded it (Step-1 GET).
     expected_updated_at: z.string().max(40).optional().nullable(),
 }).passthrough();
@@ -651,7 +654,8 @@ export const POST = withErrorHandler(async (req: Request) => {
         // can still finish KYC. Blank keeps it with the house dealer.
         let pushTarget: PushTargetDealer | null = null;
         const pushMobile = data.push_to_dealer_mobile?.trim();
-        if (pushMobile) {
+        const pushDealerId = data.push_to_dealer_id?.trim();
+        if (pushMobile || pushDealerId) {
             const house = await houseDealerCode();
             if (!canUsePushToDealer({ role: user.role, dealerId: dealer_id, houseDealerCode: house })) {
                 return errorResponse('Only the iTarang team can submit a lead for another dealer.', 403);
@@ -676,22 +680,31 @@ export const POST = withErrorHandler(async (req: Request) => {
             if (!houseFile && (await pushedBeforeLeadIds([data.leadId!])).has(data.leadId!)) {
                 return errorResponse(PUSHED_BEFORE_MESSAGE, 409);
             }
-            const found = await findActiveDealerByMobile(pushMobile);
-            if (found.status !== 'found') {
-                const why = found.status === 'invalid_mobile'
-                    ? 'Enter a 10-digit dealer mobile number'
-                    : found.status === 'ambiguous'
-                        ? 'More than one active dealer uses this number'
-                        : NO_ACTIVE_DEALER_MESSAGE;
-                return errorResponse(`${why}. Clear the dealer mobile to keep this lead with iTarang House.`, 422);
+            let target: PushTargetDealer | null;
+            if (pushDealerId) {
+                target = await findActiveDealerById(pushDealerId);
+                if (!target) {
+                    return errorResponse(`${NO_ACTIVE_DEALER_MESSAGE}. Clear the dealer to keep this lead with iTarang House.`, 422);
+                }
+            } else {
+                const found = await findActiveDealerByMobile(pushMobile!);
+                if (found.status !== 'found') {
+                    const why = found.status === 'invalid_mobile'
+                        ? 'Enter a 10-digit dealer mobile number'
+                        : found.status === 'ambiguous'
+                            ? 'More than one active dealer uses this number'
+                            : NO_ACTIVE_DEALER_MESSAGE;
+                    return errorResponse(`${why}. Clear the dealer mobile to keep this lead with iTarang House.`, 422);
+                }
+                target = found.dealer;
             }
-            if (_isFinanceLead && !found.dealer.financeEnabled) {
+            if (_isFinanceLead && !target.financeEnabled) {
                 return errorResponse(
-                    `${found.dealer.name} is not enabled for finance leads. Choose cash, or clear the dealer mobile to keep this lead with iTarang House.`,
+                    `${target.name} is not enabled for finance leads. Choose cash, or clear the dealer to keep this lead with iTarang House.`,
                     422,
                 );
             }
-            pushTarget = found.dealer;
+            pushTarget = target;
         }
 
         const normPhone = normalizePhone(data.phone)!;
