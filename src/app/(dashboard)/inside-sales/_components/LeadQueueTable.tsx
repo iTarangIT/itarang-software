@@ -18,6 +18,7 @@ import { OwnerIndicator } from "./OwnerIndicator";
 import { NeodoveTag } from "@/components/leads/neodove-tag";
 import { SentByStamp } from "@/components/leads/sent-by-stamp";
 import { staleSeverity, workingDaysSince, type StaleThresholds } from "@/lib/inside-sales/staleness";
+import { followUpAgeingBasis } from "@/lib/leads/followUpAgeing";
 import { wonWithoutQuote, type QueueRow, type QueueTab } from "@/lib/inside-sales/types";
 import { WonWithoutQuoteChip } from "@/components/leads/won-without-quote-chip";
 
@@ -162,9 +163,11 @@ export function LeadQueueTable({
                             </tr>
                         )}
                         {rows.map((row) => {
-                            // Stale cue runs on the work clock (E-300, R-04):
-                            // a claim, dial request or comment is not work.
-                            const days = workingDaysSince(row.last_worked_at ?? row.assigned_at, holidaySet);
+                            // Stale cue runs on the follow-up ageing clock
+                            // (followUpAgeing.ts): a follow-up still ahead reads
+                            // 0, a passed one counts from its date, otherwise the
+                            // later of the last work and the assignment.
+                            const days = workingDaysSince(followUpAgeingBasis(row, nowMs), holidaySet);
                             const sev = staleSeverity(days, staleThresholds);
                             const followUpOverdue =
                                 row.next_follow_up_at && new Date(row.next_follow_up_at).getTime() < nowMs;
