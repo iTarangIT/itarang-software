@@ -5,13 +5,13 @@
  * WHO MAY DO WHAT (sheet 8 + item 3, 14 Oct 2026):
  *   CEO           adds people to a month, sets the CEO target, sends them to
  *                 the Sales Head
- *   sales_head    sets the Sales Head target (E-341): empty / 0 = the CEO's
+ *   sales_head    sets the Sales Head target (E-342): empty / 0 = the CEO's
  *                 number goes to the member; any other number — higher or
  *                 lower — replaces it
  *   CEO / sales_head   add a metric (built-in or custom), remove one, enter a
  *                 custom metric's progress
  *   admin         adds people and may do what the Sales Head does. The old
- *                 admin add-on is no longer edited (0 on every row at E-341)
+ *                 admin add-on is no longer edited (0 on every row at E-342)
  *   sales_head / admin   send to the member (after review, or again after a reject)
  *   the employee  accepts or rejects (with a comment) their own sent targets,
  *                 and enters progress on their own custom metrics
@@ -59,7 +59,7 @@ import { ADMIN_PARTY } from "@/lib/notifications/provenance";
 export const TARGET_METRIC_ROLES = ["ceo", "sales_head", "admin"];
 /** Set the CEO target number. */
 export const TARGET_CEO_ROLES = ["ceo"];
-/** Set the Sales Head target number (E-341). */
+/** Set the Sales Head target number (E-342). */
 export const TARGET_SALES_HEAD_ROLES = ["sales_head", "admin"];
 /** Legacy admin add-on — no longer edited on screen; kept for the API. */
 export const TARGET_ADDON_ROLES = ["admin"];
@@ -90,7 +90,7 @@ export type TargetRow = {
     unit: string | null;
     kind: MetricKind;
     ceo_target: number;
-    /** E-341 — the Sales Head's number; null / 0 = the CEO target goes. */
+    /** E-342 — the Sales Head's number; null / 0 = the CEO target goes. */
     sales_head_target: number | null;
     admin_addon: number;
     final_target: number;
@@ -205,7 +205,7 @@ export async function listTargets(opts: { month: string; userId?: string }): Pro
         SELECT t.id, t.month::text AS month, t.user_id, u.name AS user_name, u.role AS user_role,
                t.metric, t.ceo_target::float8 AS ceo_target, t.admin_addon::float8 AS admin_addon,
                t.status, t.pushed_at, t.accepted_at,
-               -- E-340 columns through to_jsonb: null on a DB without them.
+               -- E-341 columns through to_jsonb: null on a DB without them.
                to_jsonb(t) ->> 'custom_label' AS custom_label,
                to_jsonb(t) ->> 'custom_unit' AS custom_unit,
                (to_jsonb(t) ->> 'manual_actual')::float8 AS manual_actual,

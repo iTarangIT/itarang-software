@@ -9,7 +9,7 @@
 // with a comment. A reject shows here with the comment, ready to edit and send
 // again. The rules live in src/lib/targets/service.ts.
 //
-// Numbers (E-341): the CEO target, and the Sales Head target — empty means the
+// Numbers (E-342): the CEO target, and the Sales Head target — empty means the
 // CEO's number goes to the member; any number the Sales Head enters (higher or
 // lower) goes instead. Monthly target = what the member gets.
 

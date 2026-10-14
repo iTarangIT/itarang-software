@@ -86,7 +86,7 @@ export const GET = withErrorHandler(async (req: Request) => {
         can: {
             add_person: TARGET_ADD_PERSON_ROLES.includes(r),
             set_ceo_target: TARGET_CEO_ROLES.includes(r),
-            // E-341 — the Sales Head's own number (empty = the CEO's goes).
+            // E-342 — the Sales Head's own number (empty = the CEO's goes).
             set_sales_head_target: TARGET_SALES_HEAD_ROLES.includes(r),
             set_addon: TARGET_ADDON_ROLES.includes(r),
             approve: TARGET_APPROVER_ROLES.includes(r),
