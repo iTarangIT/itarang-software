@@ -243,6 +243,58 @@ export async function campaignForUploadBatch(p: {
     }
 }
 
+/** One scrape run in the /leads "Scrape run" dropdown. */
+export type ScrapeRunFacet = {
+    id: string;
+    name: string;
+    created_at: string;
+    lead_count: number;
+    /** Of lead_count: no current owner yet — what is left to hand out. */
+    unassigned: number;
+};
+
+/**
+ * Every scrape run that put at least one active lead on /leads, newest first.
+ * One GROUP BY over the partial dealer_leads_acquisition_campaign_idx (E-319),
+ * so it costs one index scan however many runs there are. Fail-soft: a
+ * database without E-314/E-319 gets no dropdown, not a broken list.
+ */
+export async function fetchScrapeRunFacets(): Promise<ScrapeRunFacet[]> {
+    try {
+        const rows = await db.execute<ScrapeRunFacet>(sql`
+            SELECT ac.id::text AS id,
+                   ac.name,
+                   COALESCE(sr.started_at, ac.created_at)::text AS created_at,
+                   x.lead_count,
+                   x.unassigned
+              FROM (
+                    SELECT dl.acquisition_campaign_id AS cid,
+                           COUNT(*)::int AS lead_count,
+                           (COUNT(*) FILTER (WHERE dl.current_owner_id IS NULL))::int AS unassigned
+                      FROM dealer_leads dl
+                     WHERE dl.acquisition_campaign_id IS NOT NULL
+                       AND dl.is_active IS NOT FALSE
+                     GROUP BY dl.acquisition_campaign_id
+                   ) x
+              JOIN acquisition_campaigns ac ON ac.id = x.cid
+              -- When the run actually happened: older campaigns were all made by
+              -- one backfill, so their own created_at is the same instant.
+              LEFT JOIN LATERAL (
+                    SELECT MAX(r.started_at) AS started_at
+                      FROM scraper_runs r
+                     WHERE r.acquisition_campaign_id = ac.id
+                   ) sr ON TRUE
+             WHERE ac.kind = 'scrape_run'
+             ORDER BY COALESCE(sr.started_at, ac.created_at) DESC
+             LIMIT 1000
+        `);
+        return rows as unknown as ScrapeRunFacet[];
+    } catch (e) {
+        console.warn("[campaigns] scrape-run facets unavailable (E-319 applied?):", e instanceof Error ? e.message : e);
+        return [];
+    }
+}
+
 /** The campaign of one scrape run, linked on scraper_runs; made on first use. */
 export async function campaignForScrapeRun(runId: string): Promise<string | null> {
     try {

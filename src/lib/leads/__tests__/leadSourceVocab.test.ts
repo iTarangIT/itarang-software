@@ -6,6 +6,7 @@ import {
     LIST_DEFAULT_ORIGIN,
     campaignRequired,
     leadSourceLabel,
+    scrapeRunLabels,
     listCampaignName,
     scrapeCampaignName,
     uploadCampaignName,
@@ -99,5 +100,24 @@ describe("leadSourceLabel (/leads Source column)", () => {
     it("prettifies an unknown legacy value and returns null for nothing", () => {
         expect(leadSourceLabel(null, "trade_show")).toBe("trade show");
         expect(leadSourceLabel(null, null)).toBeNull();
+    });
+});
+
+describe("scrapeRunLabels (/leads Scrape run dropdown)", () => {
+    it("drops the Scrape prefix and run-id tail", () => {
+        const [r] = scrapeRunLabels([{ name: "Scrape · cln distributor in bhopal · 14 Oct 2026 · 9c797299" }]);
+        expect(r.label).toBe("cln distributor in bhopal · 14 Oct 2026");
+    });
+    it("keeps the tail when two runs would read the same", () => {
+        const out = scrapeRunLabels([
+            { name: "Scrape · cln in patna · 14 Oct 2026 · aaaaaaaa" },
+            { name: "Scrape · cln in patna · 14 Oct 2026 · bbbbbbbb" },
+            { name: "Scrape · 9ap in patna · 14 Oct 2026 · cccccccc" },
+        ]);
+        expect(out.map((r) => r.label)).toEqual([
+            "cln in patna · 14 Oct 2026 · aaaaaaaa",
+            "cln in patna · 14 Oct 2026 · bbbbbbbb",
+            "9ap in patna · 14 Oct 2026",
+        ]);
     });
 });
