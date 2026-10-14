@@ -168,6 +168,8 @@ export const TYPE_LABELS: Record<string, string> = {
   "lead.closed": "Lead closed",
   "lead.qualified": "Lead qualified",
   "lead.reinquiry": "Known dealer came in again (re-inquiry)",
+  "lead.pushed_to_dealer": "Customer file pushed to a dealer by iTarang",
+  "lead.dealer_progress": "Dealer moved a file iTarang pushed to them",
   "lead.called_on_behalf": "Your lead was called on your behalf (after Call now)",
   "lead.system_correction": "System correction to your leads' stages",
 
@@ -410,6 +412,12 @@ export const TYPE_LABELS: Record<string, string> = {
   "quote.dealer_decision": "Dealer responded to a quotation",
   // ID 135. The CEO rejected a quotation — to the lead owner, with his reason.
   "quote.rejected": "Quotation rejected by CEO",
+
+  // --- Sales targets (item 3) ---
+  "targets.review_requested": "Targets sent to the Sales Head for review",
+  "targets.sent": "Targets sent to a member to accept",
+  "targets.rejected": "Targets rejected by a member",
+  "targets.accepted": "Targets accepted by a member",
 
   // --- Buyback: negotiation ---
   "buyback.negotiate": "Buyback price negotiation opened",

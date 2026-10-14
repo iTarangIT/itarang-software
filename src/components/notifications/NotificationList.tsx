@@ -36,6 +36,7 @@ import {
   Handshake,
   Landmark,
   Leaf,
+  Target,
   Loader2,
   MapPin,
   Megaphone,
@@ -89,6 +90,7 @@ const CATEGORY_META: Record<NotificationCategory, { icon: LucideIcon; tint: stri
   // changes, reminders, sync failures). Every catalogue category must appear
   // here or tsc fails on Record<NotificationCategory, …> exhaustiveness.
   Ecofy: { icon: Leaf, tint: "bg-green-50", fg: "text-green-700" },
+  Targets: { icon: Target, tint: "bg-indigo-50", fg: "text-indigo-700" },
   // Buyback's own eight, unchanged
   Negotiation: { icon: Handshake, tint: "bg-violet-50", fg: "text-violet-600" },
   "Buyback Requests": { icon: Recycle, tint: "bg-emerald-50", fg: "text-emerald-600" },

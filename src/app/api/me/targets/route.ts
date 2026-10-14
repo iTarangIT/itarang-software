@@ -4,14 +4,24 @@
 //                         plus `next`: the following month's rows, because a
 //                         CEO sets next month's targets before it starts and
 //                         the rep must be able to accept them then
-//   POST { ids }          accept my pushed targets (never anyone else's —
-//                         acceptTargets() scopes the UPDATE to the caller)
+//   POST { ids }                         accept my sent targets (never anyone
+//                                        else's — the UPDATE is scoped to me)
+//   POST { action: "accept", ids }       the same
+//   POST { action: "reject", ids, comment }  reject them; comment required
+//   POST { action: "set_actual", id, value } my progress on a custom metric
 
 import { z } from "zod";
 
 import { requireAuth } from "@/lib/auth-utils";
-import { successResponse, withErrorHandler } from "@/lib/api-utils";
-import { acceptTargets, listTargets, workingDayContext } from "@/lib/targets/service";
+import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
+import {
+    acceptTargets,
+    listTargets,
+    rejectTargets,
+    setManualActual,
+    TargetError,
+    workingDayContext,
+} from "@/lib/targets/service";
 
 export const dynamic = "force-dynamic";
 
@@ -31,8 +41,23 @@ export const GET = withErrorHandler(async (req: Request) => {
     return successResponse({ month, rows, context, next: { month: nextMonth, rows: nextRows } });
 });
 
+const Ids = z.array(z.string().uuid()).max(100);
+const BodySchema = z.union([
+    z.object({ action: z.literal("accept").optional(), ids: Ids }),
+    z.object({ action: z.literal("reject"), ids: Ids, comment: z.string().max(1000) }),
+    z.object({ action: z.literal("set_actual"), id: z.string().uuid(), value: z.number().nullable() }),
+]);
+
 export const POST = withErrorHandler(async (req: Request) => {
     const user = await requireAuth();
-    const { ids } = z.object({ ids: z.array(z.string().uuid()).max(100) }).parse(await req.json());
-    return successResponse(await acceptTargets(ids, { id: user.id, role: String(user.role ?? "") }));
+    const actor = { id: user.id, role: String(user.role ?? "") };
+    const body = BodySchema.parse(await req.json());
+    try {
+        if ("comment" in body) return successResponse(await rejectTargets(body.ids, body.comment, actor));
+        if ("value" in body) return successResponse(await setManualActual(body.id, body.value, actor));
+        return successResponse(await acceptTargets(body.ids, actor));
+    } catch (e) {
+        if (e instanceof TargetError) return errorResponse(e.message, 400);
+        throw e;
+    }
 });
