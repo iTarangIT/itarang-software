@@ -24,8 +24,8 @@ import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { normalizeInvoiceNumber } from "@/lib/sales/normalizeInvoiceNumber";
 import { resolveSalesOrg } from "@/lib/sales/resolveSalesOrg";
-import { itemKey } from "@/lib/sales/invoiceLines";
-import { classFor, itemKeySql, mappedItems } from "@/lib/sales/itemMap";
+import { itemFamilyKey, itemKey } from "@/lib/sales/invoiceLines";
+import { classFor, isMapped, mappedItems, productFor } from "@/lib/sales/itemMap";
 import { voidInvoice } from "@/lib/sales/invoiceVoids";
 import type { ImportKind, ParseResult, ParsedDocument } from "@/lib/sales/vyaparParse";
 
@@ -95,7 +95,7 @@ export async function previewImport(parsed: ParseResult): Promise<ImportPreview>
     const mapped = await mappedItems(db);
     const unmapped = new Set<string>();
     const rows: ImportPlanRow[] = docs.map((d) => {
-        for (const l of d.lines) if (l.item_name && !mapped.has(itemKey(l.item_name))) unmapped.add(l.item_name);
+        for (const l of d.lines) if (l.item_name && !isMapped(mapped, l.item_name)) unmapped.add(l.item_name);
         const id = existing.get(keyOf(d) ?? "") ?? null;
         return {
             number: d.number,
@@ -216,7 +216,7 @@ export async function commitImport(
                 let n = 0;
                 for (const l of d.lines) {
                     n++;
-                    const m = l.item_name ? mapped.get(itemKey(l.item_name)) : undefined;
+                    const m = l.item_name ? productFor(mapped, l.item_name) : undefined;
                     const productClass = m ? classFor(m, l.product_class) : l.product_class;
                     await tx.execute(sql`
                         INSERT INTO invoice_line_items (source, invoice_id, line_no, item_name, hsn, product_class,
@@ -244,30 +244,55 @@ export async function commitImport(
     });
 }
 
-/** Map a Vyapar item name to a CRM product; back-fills lines already imported. */
+/**
+ * Map a Vyapar item name to a CRM product; back-fills lines already imported.
+ *
+ * The mapping is saved for the exact spelling AND its product family
+ * (itemFamilyKey: product code, else cleaned name), and reaches every line of
+ * that family — other spellings, and the same product billed with different
+ * serial numbers. A sibling spelling someone mapped on its own keeps its own
+ * mapping.
+ */
 export async function mapVyaparItem(input: {
     itemName: string;
     assetType: string | null;
     productId: string | null;
     actorId: string;
-}): Promise<{ lines_updated: number }> {
+}): Promise<{ lines_updated: number; spellings: number }> {
     const key = itemKey(input.itemName);
+    const family = itemFamilyKey(input.itemName);
     return db.transaction(async (tx) => {
-        await tx.execute(sql`
-            INSERT INTO vyapar_item_map (item_key, item_name, asset_type, product_id, mapped_by)
-            VALUES (${key}, ${input.itemName}, ${input.assetType}, ${input.productId}, ${input.actorId}::uuid)
-            ON CONFLICT (item_key) DO UPDATE SET asset_type = EXCLUDED.asset_type, product_id = EXCLUDED.product_id,
-                                                 mapped_by = EXCLUDED.mapped_by, updated_at = now()`);
+        for (const k of family && family !== key ? [key, family] : [key]) {
+            await tx.execute(sql`
+                INSERT INTO vyapar_item_map (item_key, item_name, asset_type, product_id, mapped_by)
+                VALUES (${k}, ${input.itemName}, ${input.assetType}, ${input.productId}, ${input.actorId}::uuid)
+                ON CONFLICT (item_key) DO UPDATE SET asset_type = EXCLUDED.asset_type, product_id = EXCLUDED.product_id,
+                                                     mapped_by = EXCLUDED.mapped_by, updated_at = now()`);
+        }
+        // Every spelling on a line that belongs to this family, minus siblings
+        // with their own exact mapping (an explicit choice wins over the family).
+        const seen = rowsOf<{ item_name: string }>(
+            await tx.execute(sql`SELECT DISTINCT item_name FROM invoice_line_items WHERE item_name IS NOT NULL`),
+        );
+        const own = new Set(
+            rowsOf<{ item_key: string }>(
+                await tx.execute(sql`SELECT item_key FROM vyapar_item_map WHERE product_id IS NOT NULL AND item_key NOT LIKE 'code:%' AND item_key NOT LIKE 'name:%'`),
+            ).map((r) => r.item_key),
+        );
+        const names = seen
+            .map((r) => r.item_name)
+            .filter((n) => itemKey(n) === key || (family != null && itemFamilyKey(n) === family && !own.has(itemKey(n))));
+        if (names.length === 0) return { lines_updated: 0, spellings: 0 };
         const res = rowsOf<{ n: number }>(
             await tx.execute(sql`
                 WITH u AS (
                     UPDATE invoice_line_items SET asset_type = ${input.assetType}, product_id = ${input.productId},
                            -- ID 172: an onboarding-fee line is revenue, never a battery.
                            product_class = CASE WHEN ${input.assetType} = 'onboarding_fee' THEN 'other' ELSE product_class END
-                     WHERE ${itemKeySql(sql`item_name`)} = ${key}
+                     WHERE item_name IN (${sql.join(names.map((n) => sql`${n}`), sql`, `)})
                     RETURNING 1)
                 SELECT count(*)::int AS n FROM u`),
         );
-        return { lines_updated: res[0]?.n ?? 0 };
+        return { lines_updated: res[0]?.n ?? 0, spellings: new Set(names.map(itemKey)).size };
     });
 }

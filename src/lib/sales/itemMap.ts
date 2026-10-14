@@ -10,7 +10,7 @@
  */
 import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { itemKey } from "@/lib/sales/invoiceLines";
+import { itemFamilyKey, itemKey } from "@/lib/sales/invoiceLines";
 
 export type ItemProduct = { asset_type: string | null; product_id: string | null };
 
@@ -23,7 +23,7 @@ export function itemKeySql(col: SQL): SQL {
     return sql`lower(regexp_replace(btrim(${col}), '\\s+', ' ', 'g'))`;
 }
 
-/** Every mapped item (product set), by item key. */
+/** Every mapped item (product set), by item key — exact keys and "code:" / "name:" family keys. */
 export async function mappedItems(runner: Runner = db): Promise<Map<string, ItemProduct>> {
     const rows = rowsOf<ItemProduct & { item_key: string }>(
         await runner.execute(sql`SELECT item_key, asset_type, product_id FROM vyapar_item_map WHERE product_id IS NOT NULL`),
@@ -31,9 +31,20 @@ export async function mappedItems(runner: Runner = db): Promise<Map<string, Item
     return new Map(rows.map((r) => [r.item_key, { asset_type: r.asset_type, product_id: r.product_id }]));
 }
 
-/** The mapped product for an item name, or nulls when it is not mapped. */
+/**
+ * The mapped product for an item name, or nulls when it is not mapped: the
+ * exact spelling's own mapping first, else its product family's (code, else
+ * cleaned name — itemFamilyKey).
+ */
 export function productFor(mapped: Map<string, ItemProduct>, itemName: string | null | undefined): ItemProduct {
-    return (itemName ? mapped.get(itemKey(itemName)) : undefined) ?? { asset_type: null, product_id: null };
+    if (!itemName) return { asset_type: null, product_id: null };
+    const family = itemFamilyKey(itemName);
+    return mapped.get(itemKey(itemName)) ?? (family ? mapped.get(family) : undefined) ?? { asset_type: null, product_id: null };
+}
+
+/** Whether an item name has a mapping, exact or by family. */
+export function isMapped(mapped: Map<string, ItemProduct>, itemName: string | null | undefined): boolean {
+    return productFor(mapped, itemName).product_id != null;
 }
 
 /** A line's product class once its mapping is known: an onboarding-fee item is revenue, never a battery (ID 172). */
