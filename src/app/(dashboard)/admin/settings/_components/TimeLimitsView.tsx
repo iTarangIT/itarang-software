@@ -28,7 +28,7 @@ type Payload = {
 };
 
 const QUERY_KEY = ["time-limits"];
-const GROUPS = ["Lead clocks", "Follow-up", "Onboarding"] as const;
+const GROUPS = ["Lead clocks", "Follow-up", "Onboarding", "Invoices"] as const;
 
 function istDate(iso: string): string {
     return new Date(iso).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", year: "numeric" });

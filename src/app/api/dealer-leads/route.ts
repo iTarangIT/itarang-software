@@ -48,7 +48,11 @@ import {
   loadExistingByPhone,
   normalizePhone,
 } from "@/lib/leads/dedupe";
-import { CampaignError, resolveLeadCampaign } from "@/lib/leads/acquisitionCampaigns";
+import {
+  CampaignError,
+  fetchScrapeRunFacets,
+  resolveLeadCampaign,
+} from "@/lib/leads/acquisitionCampaigns";
 import { BUSINESS_TYPE_OPTIONS, normalizeBusinessType } from "@/lib/leads/businessType";
 
 export async function POST(req: NextRequest) {
@@ -331,12 +335,13 @@ export const GET = withErrorHandler(async (req: Request) => {
     });
   }
 
-  const [rows, stats, allFacets, campaignFacets, businessTypeCounts, numberSearch] =
+  const [rows, stats, allFacets, campaignFacets, scrapeRuns, businessTypeCounts, numberSearch] =
     await Promise.all([
       fetchLeadListRows(filters, page, limit),
       fetchLeadListStats(filters),
       fetchLeadListFacets(),
       fetchCampaignFacets(),
+      fetchScrapeRunFacets(),
       // Per-type chips (E-296). null when the column does not exist here.
       fetchBusinessTypeCounts(filters),
       // ID 46: numbers typed in the search that were unreadable or matched nothing.
@@ -347,13 +352,14 @@ export const GET = withErrorHandler(async (req: Request) => {
   // lists are not. Campaigns go with the source list — which campaign a lead is
   // in is a property of the lead, not of the reporting structure.
   const facets = caps.canSeeOwnerAsm
-    ? { ...allFacets, campaigns: campaignFacets }
+    ? { ...allFacets, campaigns: campaignFacets, scrapeRuns }
     : {
         owners: [],
         asms: [],
         sources: allFacets.sources,
         dispositions: allFacets.dispositions,
         campaigns: campaignFacets,
+        scrapeRuns,
       };
 
   // NeoDove sync state and the latest call disposition for the rows on this

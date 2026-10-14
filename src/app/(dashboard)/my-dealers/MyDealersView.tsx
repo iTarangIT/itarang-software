@@ -114,7 +114,7 @@ export function MyDealersView() {
                                 <td className="px-3 py-2">
                                     <span className="font-medium text-ink">{r.dealer}</span>
                                     <div className="text-[11px] text-ink-muted">
-                                        {[r.city, r.gstin ?? "no GSTIN"].filter(Boolean).join(" · ")}
+                                        {[r.city, r.gstin_missing ? "GSTIN missing" : r.gstin].filter(Boolean).join(" · ")}
                                     </div>
                                 </td>
                                 <td className="px-3 py-2">

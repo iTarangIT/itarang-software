@@ -17,10 +17,12 @@ import { UNASSIGNED_FILTER } from "@/lib/admin/leadsInfoFilters";
 import type { IntentBucket } from "@/lib/leads/intentBucket";
 import { NEODOVE_LINKED_SYNC_STATUSES } from "@/lib/neodove/syncStatus";
 import type { CampaignFacet } from "@/lib/leads/leadCampaign";
+import type { ScrapeRunFacet } from "@/lib/leads/acquisitionCampaigns";
 // Value import, so it must come from the dependency-free module — this file
 // pulls in `db` and can never be reachable from a client component.
 import { CAMPAIGN_NONE } from "@/lib/leads/campaign";
 import { BUSINESS_TYPE_UNSET } from "@/lib/leads/businessType";
+import { SOURCE_DOOR_NONE } from "@/lib/leads/leadSourceVocab";
 import { ownerScopeIds } from "@/lib/users/teamRules";
 
 // Shared with the API route. Both ends of a created-at range must look like a
@@ -39,6 +41,11 @@ export type LeadListRow = {
     /** For "Change Lost reason" in the drawer (ID 136). */
     lost_reason: string | null;
     source: string | null;
+    /**
+     * E-314/E-319 door the lead came in through (scraper / bulk_upload /
+     * ai_dialer / …). Read via to_jsonb — the column is not in schema.ts.
+     */
+    source_door: string | null;
     final_intent_score: number | null;
     interest_level: string | null;
     current_owner_id: string | null;
@@ -84,6 +91,10 @@ export type LeadListFilters = {
     ownerScopeTeamIds?: string[] | null;
     asmId?: string | null;
     source?: string | null;
+    /** E-314 source_door, or SOURCE_DOOR_NONE for leads with no door stamped. */
+    sourceDoor?: string | null;
+    /** One scrape run's acquisition campaign id (uuid, validated by the parser). */
+    scrapeRun?: string | null;
     /**
      * Only leads that are with the NeoDove calling team (E-224 sync state), NOT
      * `source = 'neodove'` — see the note on LeadFilters.neodove.
@@ -198,6 +209,8 @@ export type LeadListFacets = {
      * module's single-statement facets query cannot express.
      */
     campaigns?: CampaignFacet[];
+    /** Scrape runs with active leads, newest first. From fetchScrapeRunFacets(). */
+    scrapeRuns?: ScrapeRunFacet[];
     /**
      * How far the AI dialer has actually got.
      *
@@ -381,6 +394,19 @@ function buildWhere(f: LeadListFilters, opts?: { ignoreIntent?: boolean }) {
     }
     if (f.asmId) conds.push(sql`dl.asm_id = ${f.asmId}`);
     if (f.source) conds.push(sql`dl.source = ${f.source}`);
+    // Through to_jsonb, like business_type's decorator: source_door is not in
+    // schema.ts, and a database without E-314 must still serve this filter
+    // (it just matches nothing / everything-unknown) rather than 500 the list.
+    // Named directly, not via to_jsonb, so dealer_leads_acquisition_campaign_idx
+    // serves it — and only emitted when set, like business_type above.
+    if (f.scrapeRun) {
+        conds.push(sql`dl.acquisition_campaign_id = ${f.scrapeRun}::uuid`);
+    }
+    if (f.sourceDoor === SOURCE_DOOR_NONE) {
+        conds.push(sql`(to_jsonb(dl) ->> 'source_door') IS NULL`);
+    } else if (f.sourceDoor) {
+        conds.push(sql`(to_jsonb(dl) ->> 'source_door') = ${f.sourceDoor}`);
+    }
     if (f.neodoveOnly) {
         conds.push(sql`${NEODOVE_STATUS} IN (${NEODOVE_LINKED_LIST})`);
     }
@@ -562,6 +588,7 @@ export async function fetchLeadListRows(
             dl.lead_status,
             dl.lost_reason,
             dl.source,
+            to_jsonb(dl) ->> 'source_door' AS source_door,
             dl.final_intent_score,
             dl.interest_level,
             dl.current_owner_id,

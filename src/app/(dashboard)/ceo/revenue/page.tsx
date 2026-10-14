@@ -9,6 +9,8 @@ import { sql } from "drizzle-orm";
 import { ArrowLeft, FileText } from "lucide-react";
 
 import { db } from "@/lib/db";
+import { invoiceFreshness } from "@/lib/sales/invoiceFreshness";
+import { InvoicesReadUpToLine } from "@/components/sales/InvoicesReadUpToLine";
 import { requireRole } from "@/lib/auth-utils";
 import { matchedUnion, REVENUE_NOT_VOID } from "@/lib/dashboard/revenueSource";
 
@@ -128,6 +130,8 @@ export default async function CeoRevenuePage({
                     {fmtDate(from)} – {fmtDate(to)}. Every non-void invoice dated in the period, from Zoho and Drive,
                     with credit notes subtracted. Totals include GST; this is billed, not collected.
                 </p>
+                {/* ID 171 */}
+                <InvoicesReadUpToLine f={await invoiceFreshness()} className="mt-1" />
             </div>
 
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">

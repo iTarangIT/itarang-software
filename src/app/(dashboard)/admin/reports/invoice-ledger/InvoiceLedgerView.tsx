@@ -13,6 +13,7 @@ import { Loader2, Upload } from "lucide-react";
 import { Tabs } from "@/components/ui/tabs";
 import { OrderClaimsList } from "@/components/accounts/OrderClaims";
 import { Button } from "@/components/ui/button";
+import { InvoicesReadUpTo } from "@/components/sales/InvoicesReadUpTo";
 
 const TABS = ["import", "items", "sku", "invoices", "orders", "recon"] as const;
 type Tab = (typeof TABS)[number];
@@ -31,6 +32,8 @@ export function InvoiceLedgerView() {
     const [tab, setTab] = useState<Tab>(() => ((TABS as readonly string[]).includes(asked ?? "") ? (asked as Tab) : "import"));
     return (
         <div className="space-y-4">
+            {/* ID 171 — how far the invoice data goes. */}
+            <InvoicesReadUpTo className="text-xs" />
             <Tabs
                 value={tab}
                 onValueChange={(v) => setTab(v as Tab)}
@@ -65,9 +68,30 @@ type Preview = {
     unknown_columns: string[];
     warnings: string[];
     period: { from: string | null; to: string | null };
-    totals: { documents: number; update: number; create: number; cancelled: number; lines: number; batteries: number; unmapped_items: number };
+    totals: {
+        documents: number;
+        update: number;
+        create: number;
+        cancelled: number;
+        lines: number;
+        batteries: number;
+        unmapped_items: number;
+        gstin_refused?: number;
+    };
     unmapped_items: string[];
-    rows: Array<{ number: string; date: string | null; party: string | null; gstin: string | null; doc_type: string; cancelled: boolean; lines: number; batteries: number; taxable: number | null; action: string }>;
+    rows: Array<{
+        number: string;
+        date: string | null;
+        party: string | null;
+        gstin: string | null;
+        gstin_attention?: string | null;
+        doc_type: string;
+        cancelled: boolean;
+        lines: number;
+        batteries: number;
+        taxable: number | null;
+        action: string;
+    }>;
 };
 
 function ImportTab() {
@@ -103,10 +127,12 @@ function ImportTab() {
                 return;
             }
             const s = data.summary ?? {};
+            // ID 62: a GSTIN that fails the check is never silently dropped — say how many.
+            const refused = s.gstin_refused ? ` ${s.gstin_refused} GSTIN${s.gstin_refused === 1 ? "" : "s"} failed the check and match no dealer.` : "";
             toast.success(
                 kind === "gstr1"
-                    ? `GSTR-1 imported: ${s.documents ?? 0} documents.`
-                    : `Imported ${s.documents ?? 0} invoices (${s.created_ids ?? 0} new, ${s.voided ?? 0} voided as cancelled).`,
+                    ? `GSTR-1 imported: ${s.documents ?? 0} documents.${refused}`
+                    : `Imported ${s.documents ?? 0} invoices (${s.created_ids ?? 0} new, ${s.voided ?? 0} voided as cancelled).${refused}`,
             );
             setPreview(null);
             setFile(null);
@@ -174,6 +200,13 @@ function ImportTab() {
                                 .join(", ")}
                         </p>
                         {preview.unknown_columns.length > 0 && <p>Not used: {preview.unknown_columns.join(", ")}</p>}
+                        {(preview.totals.gstin_refused ?? 0) > 0 && (
+                            <p className="text-rose-700">
+                                {preview.totals.gstin_refused} GSTIN(s) fail the check (wrong last character, or iTarang&apos;s own) —
+                                those documents are not matched to any dealer
+                                {preview.kind === "vyapar_register" ? " and show in Needs attention as “Customer GSTIN fails check”" : ""}.
+                            </p>
+                        )}
                         {preview.unmapped_items.length > 0 && (
                             <p className="text-amber-700">
                                 {preview.unmapped_items.length} item name(s) not mapped to a CRM product yet — map them on the Item
@@ -201,7 +234,15 @@ function ImportTab() {
                                         <td className="px-2 py-1 font-mono">{r.number}</td>
                                         <td className="px-2 py-1">{r.date ?? "—"}</td>
                                         <td className="px-2 py-1">{r.party ?? "—"}</td>
-                                        <td className="px-2 py-1 font-mono">{r.gstin ?? "—"}</td>
+                                        <td className="px-2 py-1 font-mono">
+                                            {r.gstin_attention ? (
+                                                <span className="font-sans text-rose-700" title={r.gstin_attention}>
+                                                    Fails check
+                                                </span>
+                                            ) : (
+                                                (r.gstin ?? "—")
+                                            )}
+                                        </td>
                                         <td className="px-2 py-1 text-right">{r.lines}</td>
                                         <td className="px-2 py-1 text-right">{r.batteries}</td>
                                         <td className="px-2 py-1 text-right">{inr(r.taxable)}</td>
@@ -536,11 +577,18 @@ function DiffList({ title, rows }: { title: string; rows: string[][] }) {
 }
 
 // ── Invoices (ID 71) ────────────────────────────────────────────────────────
-// Void a cancelled invoice with a reason, or restore it — the same action and
-// audit trail as the CEO's Sales invoices page, reachable by finance and Admin.
+// Void a cancelled invoice (or a wrongly read credit note) with a reason, or
+// restore it — the same action and audit trail as the CEO's Sales invoices
+// page, reachable by finance and Admin.
+
+const LEDGER_SOURCE_LABEL: Record<LedgerInvoice["source"], string> = {
+    zoho: "Zoho",
+    drive: "Drive / Vyapar",
+    credit: "Credit note",
+};
 
 type LedgerInvoice = {
-    source: "zoho" | "drive";
+    source: "zoho" | "drive" | "credit";
     id: string;
     invoice_number: string | null;
     invoice_date: string | null;
@@ -549,6 +597,7 @@ type LedgerInvoice = {
     status: string | null;
     void_reason: string | null;
     voided_at: string | null;
+    has_lines: boolean;
 };
 
 function InvoicesTab() {
@@ -581,7 +630,8 @@ function InvoicesTab() {
                 "Could not update the invoice",
             ),
         onSuccess: (_d, args) => {
-            toast.success(args.action === "void" ? "Invoice voided — it no longer counts in revenue." : "Invoice restored.");
+            const what = args.row.source === "credit" ? "Credit note" : "Invoice";
+            toast.success(args.action === "void" ? `${what} voided — it no longer counts in revenue.` : `${what} restored.`);
             setEditing(null);
             setReason("");
             queryClient.invalidateQueries({ queryKey: ["ledger-invoices"] });
@@ -598,16 +648,18 @@ function InvoicesTab() {
                     <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} className="mt-1 block rounded-lg border border-border px-2 py-1.5 text-sm" />
                 </label>
                 <label className="text-xs text-ink-muted">
-                    Invoice number or customer
+                    Number or customer
                     <input value={q} onChange={(e) => setQ(e.target.value)} className="mt-1 block w-64 rounded-lg border border-border px-2 py-1.5 text-sm" />
                 </label>
                 <p className="text-xs text-ink-muted">
-                    A void invoice stops counting in revenue, gross margin and By SKU everywhere. Every void and restore is logged.
+                    A void invoice stops counting in revenue, gross margin and By SKU everywhere. A credit note takes its
+                    amount off revenue and what the dealer owes, and its items off batteries sold, By SKU and gross
+                    margin — but is never an order. Every void and restore is logged.
                 </p>
             </div>
             {list.isLoading && <p className="text-sm text-ink-muted">Loading…</p>}
             {list.isError && <p className="text-sm text-danger">{(list.error as Error).message}</p>}
-            {list.data && rows.length === 0 && <p className="text-sm text-ink-muted">No invoices in this month.</p>}
+            {list.data && rows.length === 0 && <p className="text-sm text-ink-muted">No invoices or credit notes in this month.</p>}
             {rows.length > 0 && (
                 <div className="overflow-x-auto">
                     <table className="w-full min-w-[720px] text-sm">
@@ -625,11 +677,26 @@ function InvoicesTab() {
                             {rows.map((r) => {
                                 const key = `${r.source}:${r.id}`;
                                 const isVoid = r.status === "void";
+                                const isCredit = r.source === "credit";
                                 return (
                                     <tr key={key} className="border-b border-border/60 align-top">
                                         <td className="py-2 pr-3 font-medium">
                                             {r.invoice_number ?? "—"}
-                                            <span className="ml-1 text-[10px] uppercase text-ink-muted">{r.source === "zoho" ? "Zoho" : "Drive / Vyapar"}</span>
+                                            {isCredit ? (
+                                                <span className="ml-1 rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-amber-800 ring-1 ring-amber-200">
+                                                    Credit note
+                                                </span>
+                                            ) : (
+                                                <span className="ml-1 text-[10px] uppercase text-ink-muted">{LEDGER_SOURCE_LABEL[r.source]}</span>
+                                            )}
+                                            {!r.has_lines && !isVoid && (
+                                                <span
+                                                    className="mt-0.5 block text-[11px] font-normal text-ink-muted"
+                                                    title="Its items table has not been read, so batteries sold, By SKU and gross margin do not include its items."
+                                                >
+                                                    No item lines read
+                                                </span>
+                                            )}
                                         </td>
                                         <td className="py-2 pr-3 tabular-nums">{r.invoice_date?.slice(0, 10) ?? "—"}</td>
                                         <td className="py-2 pr-3">{r.customer_name ?? "—"}</td>
@@ -640,14 +707,20 @@ function InvoicesTab() {
                                                     Void{r.void_reason ? ` — ${r.void_reason}` : ""}
                                                 </span>
                                             ) : (
-                                                <span className="text-ink-muted">{r.status ?? "—"}</span>
+                                                <span className="text-ink-muted">{isCredit ? "Credit note" : (r.status ?? "—")}</span>
                                             )}
                                             {editing === key && (
                                                 <div className="mt-2 flex flex-wrap items-center gap-2">
                                                     <input
                                                         value={reason}
                                                         onChange={(e) => setReason(e.target.value)}
-                                                        placeholder={isVoid ? "Why restore it?" : "Why is it void? e.g. cancelled in Vyapar"}
+                                                        placeholder={
+                                                            isVoid
+                                                                ? "Why restore it?"
+                                                                : isCredit
+                                                                  ? "Why is it void? e.g. read twice, wrong customer"
+                                                                  : "Why is it void? e.g. cancelled in Vyapar"
+                                                        }
                                                         className="w-72 max-w-full rounded-lg border border-border px-2 py-1 text-sm"
                                                     />
                                                     <Button
@@ -656,7 +729,7 @@ function InvoicesTab() {
                                                         disabled={save.isPending || reason.trim().length < 3}
                                                         onClick={() => save.mutate({ row: r, action: isVoid ? "restore" : "void" })}
                                                     >
-                                                        {save.isPending ? "Saving…" : isVoid ? "Restore" : "Void invoice"}
+                                                        {save.isPending ? "Saving…" : isVoid ? "Restore" : isCredit ? "Void credit note" : "Void invoice"}
                                                     </Button>
                                                 </div>
                                             )}

@@ -54,6 +54,7 @@ import {
 import type { LeadsCapabilities } from "@/lib/leads/access";
 import type { LeadListRow } from "@/lib/leads/leadListQuery";
 import { businessTypeLabel, businessTypeTone } from "@/lib/leads/businessType";
+import { leadSourceLabel, SOURCE_LABELS } from "@/lib/leads/leadSourceVocab";
 
 // Statuses where calling is pointless or forbidden. Carried over verbatim from
 // the pre-merge Leads tab.
@@ -172,7 +173,7 @@ export function LeadsTable({
     const allOnPageSelected =
         rows.length > 0 && rows.every((r) => selected.has(r.id));
     // Fixed columns: Dealer/Shop, Phone, Region, Qualification, Business Type,
-    // Intent, Visit/Outcome, Last Touch, Idle, Campaign/Created, Actions = 11.
+    // Intent, Visit/Outcome, Last Touch, Idle, Source/Campaign/Created, Actions = 11.
     // Then the optional checkbox and the optional Owner + ASM pair. Used by the
     // loading and empty rows.
     const colSpan = 11 + (selectable ? 1 : 0) + (caps.canSeeOwnerAsm ? 2 : 0);
@@ -239,7 +240,7 @@ export function LeadsTable({
                                 Idle
                             </th>
                             <th className="min-w-[170px] px-4 py-3 text-left font-semibold">
-                                Campaign / Created
+                                Source / Campaign
                             </th>
                             <th className="min-w-[300px] px-4 py-3 text-right font-semibold">
                                 Actions
@@ -293,6 +294,10 @@ export function LeadsTable({
                                     nowMs,
                                 );
                                 const idleText = formatIdle(idle);
+                                const sourceLabel = leadSourceLabel(
+                                    row.source_door,
+                                    row.source,
+                                );
                                 return (
                                     <tr
                                         key={row.id}
@@ -570,10 +575,19 @@ export function LeadsTable({
                                             )}
                                         </td>
 
-                                        {/* Campaign / Created — which campaign the lead
-                                            belongs to (either system), and when the lead
-                                            itself entered the CRM. */}
+                                        {/* Source / Campaign / Created — how the lead
+                                            entered the CRM (door), which campaign it
+                                            belongs to (either system), and when. A
+                                            scraper lead later dialled shows both. */}
                                         <td className="px-4 py-3 align-middle">
+                                            {sourceLabel && (
+                                                <div
+                                                    className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-gray-500"
+                                                    title={`${SOURCE_LABELS.door}: ${sourceLabel}`}
+                                                >
+                                                    {sourceLabel}
+                                                </div>
+                                            )}
                                             {row.campaign ? (
                                                 <div
                                                     className="flex flex-col gap-1"

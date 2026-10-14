@@ -12,14 +12,12 @@ import { z } from "zod";
 import { requireRole } from "@/lib/auth-utils";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
 import {
-    buildSalesDashboard,
     parseSalesDashboardParams,
     resolveSalesDashboardFilters,
     salesDashboardCsv,
 } from "@/lib/admin/salesDashboard";
 import { csvResponse } from "@/lib/leads/queueCsv";
-import { getTeamMemberIds } from "@/lib/users/team";
-import { pickPerformanceScope } from "@/lib/users/teamRules";
+import { buildPerformanceDashboard } from "@/lib/admin/teamPerformance";
 
 export const dynamic = "force-dynamic";
 
@@ -45,15 +43,14 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
         }
     }
 
-    const dashboard = await buildSalesDashboard({
+    // Pinned to the session, never to the URL — except ID 155/156: a manager
+    // may pick a direct report, or "team" (themself + each member for the dates
+    // they were in the team), with ?person= (teamPerformance.ts).
+    const dashboard = await buildPerformanceDashboard(user.id, new URL(req.url).searchParams.get("person"), {
         from: params.from ?? null,
         to: params.to ?? null,
         city: params.city ?? null,
         state: params.state ?? null,
-        // Pinned to the session, never to the URL — except ID 155/156: a
-        // manager may pick a direct report, or "team" (themself + the whole
-        // team, same builder with an IN-list), with ?person=.
-        ...pickPerformanceScope(user.id, new URL(req.url).searchParams.get("person"), await getTeamMemberIds(user.id)),
         business_type: params.business_type ?? null,
         granularity: params.granularity,
     });

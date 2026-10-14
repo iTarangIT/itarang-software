@@ -25,6 +25,7 @@ import { dealerLeads } from "@/lib/db/schema";
 import { AttachmentId, DOC_TYPE_LABEL, DOC_TYPES, PlannedFile, plannedFile, resolveAttachments } from "../attachments";
 import { fileDocuments } from "./attachDocument";
 import { gstinQuestion } from "./updateLead";
+import { checkCustomerGstin } from "@/lib/leads/gstin";
 import { LEAD_ORIGIN_LABEL, LEAD_ORIGINS, campaignRequired } from "@/lib/leads/leadSourceVocab";
 import { proposeReinquiry } from "./recordReinquiry";
 import { findCampaignByName, listCampaigns } from "@/lib/leads/acquisitionCampaigns";
@@ -58,7 +59,9 @@ export const CreateLeadPlan = z.object({
     /** E-311 — the card / certificate itself, filed on the new lead. */
     source: PlannedFile.nullable().default(null),
     source_doc_type: z.enum(DOC_TYPES).nullable().default(null),
-});
+})
+    // ID 62: the stored plan is re-checked when it is applied, not only when asked.
+    .refine((p) => !p.extra?.gstin || checkCustomerGstin(p.extra.gstin) === "ok", { message: "GSTIN fails the check" });
 export type CreateLeadPlan = z.infer<typeof CreateLeadPlan>;
 
 const ask = (question: string): ToolResult => ({ kind: "question", question });

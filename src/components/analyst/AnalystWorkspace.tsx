@@ -19,6 +19,7 @@ import { useCallback, useEffect, useState, useTransition } from "react";
 
 import { buildChart, forecastTable } from "@/lib/analyst/chart";
 import { isRunning, type RunState } from "@/lib/analyst/run-types";
+import { ANALYST_QUESTION_MAX } from "@/lib/analyst/questionLimit";
 import { withAskedThread } from "@/lib/analyst/threads";
 import type { Connection, RunSummary, Thread } from "@/lib/analyst/types";
 import { cn } from "@/lib/utils";
@@ -93,7 +94,7 @@ export function AnalystWorkspace({
   // The agent refuses a source whose tables were listed but none chosen.
   const needsTables = active !== null && active.total_tables > 0 && active.selected_tables === 0;
   const ready = connectionId !== "" && !needsTables && !unreachable;
-  const canSend = question.trim().length >= 3 && ready && !busy;
+  const canSend = question.trim().length >= 3 && question.trim().length <= ANALYST_QUESTION_MAX && ready && !busy;
 
   const refreshConnections = useCallback(async () => {
     try {
@@ -256,6 +257,7 @@ export function AnalystWorkspace({
               onStop={cancel}
               busy={busy}
               canSend={canSend}
+              limit={ANALYST_QUESTION_MAX}
               disabled={!ready && !busy}
               placeholder={
                 unreachable
