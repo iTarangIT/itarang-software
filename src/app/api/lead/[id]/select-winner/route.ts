@@ -53,7 +53,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     if (!lead) {
       return NextResponse.json({ success: false, error: { message: "Lead not found" } }, { status: 404 });
     }
-    if (!(await dealerMayActOnLead(user, lead.dealer_id))) {
+    if (!(await dealerMayActOnLead(user, lead.dealer_id, leadId))) {
       return NextResponse.json({ success: false, error: { message: "Access denied" } }, { status: 403 });
     }
 

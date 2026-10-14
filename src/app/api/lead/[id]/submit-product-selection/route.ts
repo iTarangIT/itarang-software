@@ -11,6 +11,7 @@ import {
   submitStep4ProductSelection,
 } from "@/lib/leads/submit-step4";
 import { dealerMayActOnLead } from "@/lib/auth/requireLeadAccess";
+import { notifyHouseOfDealerStep } from "@/lib/leads/pushNotices";
 
 // BRD V2 §2.4 — finance path submit for Step 4.
 // Stores the product selection, advances the lead to 'pending_final_approval'
@@ -46,7 +47,7 @@ export async function POST(
         { status: 404 },
       );
     }
-    if (!(await dealerMayActOnLead(user, lead.dealer_id))) {
+    if (!(await dealerMayActOnLead(user, lead.dealer_id, leadId))) {
       return NextResponse.json(
         { success: false, error: { message: "Access denied" } },
         { status: 403 },
@@ -77,6 +78,8 @@ export async function POST(
 
     // E-275 — the Bajaj Finance card bypasses the NBFC fan-out: the lead is
     // already `loan_sanctioned` (external sanction row) and goes to Step 5.
+    // 14 Oct: tell the iTarang house dealer when the dealer moves a file it pushed.
+    await notifyHouseOfDealerStep(leadId, "submitted the product selection (Step 4)", user.dealer_id);
     return NextResponse.json({
       success: true,
       data: {

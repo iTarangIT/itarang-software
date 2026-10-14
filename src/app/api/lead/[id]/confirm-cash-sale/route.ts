@@ -8,6 +8,7 @@ import { requireRole } from "@/lib/auth-utils";
 import { storedFileUrl } from "@/lib/api-utils";
 import { CashSaleError, confirmCashSale } from "@/lib/leads/confirm-cash-sale";
 import { dealerMayActOnLead } from "@/lib/auth/requireLeadAccess";
+import { notifyHouseOfDealerStep } from "@/lib/leads/pushNotices";
 
 // BRD V2 §2.5 — cash path confirmation for Step 4.
 // No admin approval step. All writes (product_selection + inventory + warranty
@@ -89,7 +90,7 @@ export async function POST(
         { status: 404 },
       );
     }
-    if (!(await dealerMayActOnLead(user, lead.dealer_id))) {
+    if (!(await dealerMayActOnLead(user, lead.dealer_id, leadId))) {
       return NextResponse.json(
         { success: false, error: { message: "Access denied" } },
         { status: 403 },
@@ -103,6 +104,8 @@ export async function POST(
       dealerId: lead.dealer_id!, // = this dealer's code, checked above (ID 119)
     });
 
+    // 14 Oct: tell the iTarang house dealer when the dealer moves a file it pushed.
+    await notifyHouseOfDealerStep(leadId, "confirmed a cash sale", user.dealer_id);
     return NextResponse.json({
       success: true,
       data: {

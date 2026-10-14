@@ -15,6 +15,9 @@ import { pushedLeadNoticeBody } from "./pushedLeads";
  * a WhatsApp hiccup must not turn a successful create into an error.
  */
 export async function notifyDealerOfPushedLead(leadId: string): Promise<void> {
+  // 14 Oct: bell + email too, so a dealer with no WhatsApp chat still hears.
+  const { notifyDealerOfPush } = await import("@/lib/leads/pushNotices");
+  await notifyDealerOfPush(leadId);
   try {
     const target = await resolveLeadTarget(leadId);
     if (!target || target.audience !== "dealer") return;

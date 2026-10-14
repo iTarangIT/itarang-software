@@ -24,6 +24,7 @@ import {
   slaStampFor,
 } from "@/lib/kyc/auto-approval-settings";
 import { requireLeadAccess } from "@/lib/auth/requireLeadAccess";
+import { notifyHouseOfDealerStep } from "@/lib/leads/pushNotices";
 
 const DEFAULT_ESTIMATED_REVIEW_TIME = "10-12 hours";
 
@@ -223,6 +224,8 @@ export async function POST(
         .where(eq(dealerLeads.id, leadId));
     });
 
+    // 14 Oct: tell the iTarang house dealer when the dealer moves a file it pushed.
+    await notifyHouseOfDealerStep(leadId, "submitted the KYC for verification", leadGate.user.dealer_id);
     return NextResponse.json({
       success: true,
       leadStatus: "pending_itarang_verification",

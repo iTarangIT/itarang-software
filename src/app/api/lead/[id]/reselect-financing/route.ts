@@ -51,7 +51,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       .where(eq(leads.id, leadId))
       .limit(1);
     if (!lead) return bad("Lead not found", 404);
-    if (!(await dealerMayActOnLead(user, lead.dealer_id))) return bad("Access denied", 403);
+    if (!(await dealerMayActOnLead(user, lead.dealer_id, leadId))) return bad("Access denied", 403);
 
     const result = await reselectFinancing({
       leadId,

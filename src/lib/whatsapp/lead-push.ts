@@ -399,6 +399,7 @@ export async function resolveLeadTarget(
       mobile: leads.mobile,
       phone: leads.phone,
       owner_contact: leads.owner_contact,
+      dealer_assigned_at: leads.dealer_assigned_at,
     })
     .from(leads)
     .where(eq(leads.id, leadId))
@@ -448,6 +449,11 @@ export async function resolveLeadTarget(
   const isDealerChat = Boolean(
     session?.wa_phone && channel?.waPhones.includes(session.wa_phone),
   );
+  // 14 Oct: a file iTarang pushed to a dealer is the dealer's to work. With no
+  // dealer chat, never fall back to a cold message on the CUSTOMER's number —
+  // they never chatted with us and the action is the dealer's. A customer who
+  // is chatting with us themselves (a session of their own) still hears.
+  if (lead.dealer_assigned_at && !session) return null;
   return {
     leadId,
     audience: isDealerChat ? "dealer" : "customer",
@@ -639,7 +645,12 @@ export async function pushToLeadBoth(
 ): Promise<LeadFanOut> {
   try {
     const primary = await resolveLeadTarget(leadId);
-    if (!primary) return { dealer: "none", customer: "none" };
+    if (!primary) {
+      // A pushed file with no dealer chat (resolveLeadTarget): the dealer
+      // arm has nobody, but this message is meant for the customer as well.
+      const customerOnly = await resolveCustomerTarget(leadId);
+      return { dealer: "none", customer: customerOnly ? await deliverTo(customerOnly, msg) : "none" };
+    }
 
     const first = await deliverTo(primary, msg);
     // Already the customer's chat — there is no dealer chat to tell as well.
