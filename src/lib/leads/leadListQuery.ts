@@ -21,6 +21,7 @@ import type { CampaignFacet } from "@/lib/leads/leadCampaign";
 // pulls in `db` and can never be reachable from a client component.
 import { CAMPAIGN_NONE } from "@/lib/leads/campaign";
 import { BUSINESS_TYPE_UNSET } from "@/lib/leads/businessType";
+import { SOURCE_DOOR_NONE } from "@/lib/leads/leadSourceVocab";
 import { ownerScopeIds } from "@/lib/users/teamRules";
 
 // Shared with the API route. Both ends of a created-at range must look like a
@@ -39,6 +40,11 @@ export type LeadListRow = {
     /** For "Change Lost reason" in the drawer (ID 136). */
     lost_reason: string | null;
     source: string | null;
+    /**
+     * E-314/E-319 door the lead came in through (scraper / bulk_upload /
+     * ai_dialer / …). Read via to_jsonb — the column is not in schema.ts.
+     */
+    source_door: string | null;
     final_intent_score: number | null;
     interest_level: string | null;
     current_owner_id: string | null;
@@ -84,6 +90,8 @@ export type LeadListFilters = {
     ownerScopeTeamIds?: string[] | null;
     asmId?: string | null;
     source?: string | null;
+    /** E-314 source_door, or SOURCE_DOOR_NONE for leads with no door stamped. */
+    sourceDoor?: string | null;
     /**
      * Only leads that are with the NeoDove calling team (E-224 sync state), NOT
      * `source = 'neodove'` — see the note on LeadFilters.neodove.
@@ -381,6 +389,14 @@ function buildWhere(f: LeadListFilters, opts?: { ignoreIntent?: boolean }) {
     }
     if (f.asmId) conds.push(sql`dl.asm_id = ${f.asmId}`);
     if (f.source) conds.push(sql`dl.source = ${f.source}`);
+    // Through to_jsonb, like business_type's decorator: source_door is not in
+    // schema.ts, and a database without E-314 must still serve this filter
+    // (it just matches nothing / everything-unknown) rather than 500 the list.
+    if (f.sourceDoor === SOURCE_DOOR_NONE) {
+        conds.push(sql`(to_jsonb(dl) ->> 'source_door') IS NULL`);
+    } else if (f.sourceDoor) {
+        conds.push(sql`(to_jsonb(dl) ->> 'source_door') = ${f.sourceDoor}`);
+    }
     if (f.neodoveOnly) {
         conds.push(sql`${NEODOVE_STATUS} IN (${NEODOVE_LINKED_LIST})`);
     }
@@ -562,6 +578,7 @@ export async function fetchLeadListRows(
             dl.lead_status,
             dl.lost_reason,
             dl.source,
+            to_jsonb(dl) ->> 'source_door' AS source_door,
             dl.final_intent_score,
             dl.interest_level,
             dl.current_owner_id,
