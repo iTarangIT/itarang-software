@@ -411,6 +411,7 @@ async function sourcePerformance(f: DashboardFilters): Promise<ReportResult> {
 // Each lead is counted once however many times it was handed to the same ASM.
 async function asmHandoff(f: DashboardFilters): Promise<ReportResult> {
     const rows = await db.execute<{
+        asm_id: string | null;
         asm_name: string | null;
         handoffs: string;
         converted: string;
@@ -444,6 +445,7 @@ async function asmHandoff(f: DashboardFilters): Promise<ReportResult> {
             GROUP BY h.asm_id, h.dealer_lead_id
         )
         SELECT
+            p.asm_id::text AS asm_id,
             u.name AS asm_name,
             SUM(p.handoffs)::text AS handoffs,
             COUNT(*) FILTER (WHERE p.closed_by_asm AND p.lead_status = 'Converted')::text AS converted,
@@ -473,6 +475,9 @@ async function asmHandoff(f: DashboardFilters): Promise<ReportResult> {
             const closed = num(r.closed);
             const rate = ratio(conv, closed);
             return {
+                // The drill id (Sales dashboard › Handoffs) — not a column, so
+                // never rendered or exported by the report screen.
+                asm_id: r.asm_id,
                 asm_name: r.asm_name ?? "(unassigned)",
                 handoffs: num(r.handoffs),
                 converted: conv,
@@ -874,55 +879,74 @@ async function funnelByOwner(f: DashboardFilters): Promise<ReportResult> {
  * whose dealer_leads row is gone is counted by the report (LEFT JOIN) but has
  * nothing to list; that is the only way the two can differ.
  */
-export async function funnelByOwnerLeads(
-    personId: string,
+/**
+ * The leads behind one Funnel-by-Owner number — for one person (the popup) or
+ * for several at once (a whole column's CSV). Each row says whose number it
+ * counts toward (person_id / person_name), with the lead's details. Same lead
+ * sets as the counts (ownerCtes), so a list can never disagree with its cell.
+ */
+export async function ownerMetricLeads(
     metric: OwnerDrillMetric,
     f: DashboardFilters,
+    opts: { personIds?: string[] | null; limit?: number } = {},
 ): Promise<OwnerDrillLead[]> {
-    const inOwned = sql`EXISTS (SELECT 1 FROM owned o
-                                 WHERE o.person_id = ${personId}
-                                   AND o.dealer_lead_id = dl.id)`;
-    const inWorked = sql`EXISTS (SELECT 1 FROM worked w
-                                  WHERE w.performed_by::text = ${personId}
-                                    AND w.dealer_lead_id = dl.id)`;
-    let where: SQL;
+    // FROM <set> x — x.person is whose number the lead counts toward.
+    let from: SQL;
+    let extra: SQL = sql`TRUE`;
     switch (metric) {
         case "owned_open":
-            where = inOwned;
+            from = sql`(SELECT person_id AS person, dealer_lead_id FROM owned) x`;
             break;
         case "not_worked":
-            where = sql`${inOwned} AND NOT ${inWorked}`;
+            from = sql`(SELECT person_id AS person, dealer_lead_id FROM owned) x`;
+            extra = sql`NOT EXISTS (SELECT 1 FROM worked w WHERE w.performed_by::text = x.person AND w.dealer_lead_id = x.dealer_lead_id)`;
             break;
         case "touched":
-            where = inWorked;
+            from = sql`(SELECT performed_by::text AS person, dealer_lead_id FROM worked) x`;
             break;
         case "connected":
-            where = sql`EXISTS (SELECT 1 FROM connected c
-                                 WHERE c.performed_by::text = ${personId}
-                                   AND c.dealer_lead_id = dl.id)`;
+            from = sql`(SELECT performed_by::text AS person, dealer_lead_id FROM connected) x`;
             break;
         case "converted":
-            // ID 117: the leads this person CLOSED in the period — not the
-            // converted leads they happened to touch.
-            where = sql`EXISTS (SELECT 1 FROM closed_by cb
-                                 WHERE cb.person_id = ${personId}
-                                   AND cb.dealer_lead_id = dl.id)`;
+            // ID 117: the leads this person CLOSED in the period.
+            from = sql`(SELECT person_id AS person, dealer_lead_id FROM closed_by) x`;
             break;
         default:
-            where = sql`${inWorked} AND ${OWNER_RATING_FILTERS[metric]}`;
+            from = sql`(SELECT performed_by::text AS person, dealer_lead_id FROM worked) x`;
+            extra = OWNER_RATING_FILTERS[metric];
     }
+    const ids = opts.personIds?.filter(Boolean) ?? null;
+    const who = ids && ids.length ? sql`AND x.person IN (${sql.join(ids.map((i) => sql`${i}`), sql`, `)})` : sql``;
+    const limit = Math.min(Math.max(opts.limit ?? 500, 1), 20000);
 
     const rows = await db.execute<OwnerDrillLead>(sql`
         ${ownerCtes(f)}
         SELECT dl.id, dl.dealer_name, dl.shop_name, dl.phone, dl.city, dl.state,
                dl.lead_status, dl.interest_level, dl.current_status,
-               dl.last_touchpoint_at::text AS last_touchpoint_at
-        FROM dealer_leads dl
-        WHERE ${where}
-        ORDER BY dl.last_touchpoint_at DESC NULLS LAST, dl.id
-        LIMIT 500
+               dl.last_touchpoint_at::text AS last_touchpoint_at,
+               x.person AS person_id, pu.name AS person_name,
+               ou.name AS owner_name, dl.source, dl.area, dl.pincode,
+               dl.created_at::text AS created_at, dl.assigned_at::text AS assigned_at,
+               dl.last_worked_at::text AS last_worked_at, dl.next_follow_up_at::text AS next_follow_up_at,
+               dl.lost_reason
+        FROM ${from}
+        JOIN dealer_leads dl ON dl.id = x.dealer_lead_id
+        LEFT JOIN users pu ON pu.id::text = x.person
+        LEFT JOIN users ou ON ou.id::text = dl.current_owner_id
+        WHERE ${extra} ${who}
+        ORDER BY pu.name NULLS LAST, dl.last_touchpoint_at DESC NULLS LAST, dl.id
+        LIMIT ${limit}
     `);
     return [...rows];
+}
+
+/** One person's leads behind one number (the popup) — first 500. */
+export async function funnelByOwnerLeads(
+    personId: string,
+    metric: OwnerDrillMetric,
+    f: DashboardFilters,
+): Promise<OwnerDrillLead[]> {
+    return ownerMetricLeads(metric, f, { personIds: [personId], limit: 500 });
 }
 
 export async function runReport(

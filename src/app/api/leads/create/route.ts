@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import crypto from 'crypto';
 import { db } from '@/lib/db';
-import { leads, personalDetails, auditLogs, accounts, leadProducts } from '@/lib/db/schema';
+import { leads, personalDetails, auditLogs, accounts, leadProducts, users } from '@/lib/db/schema';
 import { successResponse, errorResponse, withErrorHandler, generateId } from '@/lib/api-utils';
 import { requireRole } from '@/lib/auth-utils';
 import { recordLeadCapture } from '@/lib/leads/lead-registry';
@@ -17,7 +17,9 @@ import {
     pushedBeforeLeadIds,
     signedConsentLeadIds,
     type DetachResult,
+    houseOriginatedLeadIds,
 } from '@/lib/leads/pushGuards';
+import { dealerMayActOnLead } from '@/lib/auth/requireLeadAccess';
 import { z } from 'zod';
 import { eq, and, sql, desc } from 'drizzle-orm';
 import {
@@ -204,6 +206,8 @@ const step1Schema = z.object({
     // onboarded dealer this customer file belongs to. Blank = keep it with
     // the house dealer (iTarang House).
     push_to_dealer_mobile: z.string().max(20).optional().nullable(),
+    // 14 Oct: the lead's updated_at when the editor loaded it (Step-1 GET).
+    expected_updated_at: z.string().max(40).optional().nullable(),
 }).passthrough();
 
 // Compute the next reference sequence by taking the NUMERIC max of the trailing
@@ -266,6 +270,60 @@ function tryTestBypass(req: Request): { id: string; name: string; email: string;
         role: 'dealer',
         dealer_id: dealerCode,
     };
+}
+
+/**
+ * 14 Oct: may this user save Step 1 of lead `leadId`? The person who created
+ * it, the dealer that has the file now, or the iTarang house on a file it
+ * pushed out (dealerMayActOnLead). Returns the refusal, or null to go on.
+ * "Not found" and "not yours" answer alike.
+ */
+async function step1AccessDenied(
+    user: { id: string; role: string; dealer_id: string | null },
+    leadId: string,
+    /** 14 Oct: the version the editor loaded; a newer save by someone else refuses. */
+    expectedUpdatedAt?: string | null,
+): Promise<Response | null> {
+    const [row] = await db
+        .select({ dealerId: leads.dealer_id, uploaderId: leads.uploader_id, updatedAt: leads.updated_at })
+        .from(leads)
+        .where(eq(leads.id, leadId))
+        .limit(1);
+    if (!row) return errorResponse('Lead not found', 404);
+    const mine = row.uploaderId === user.id || (await dealerMayActOnLead(user, row.dealerId, leadId));
+    if (!mine) return errorResponse('Lead not found', 404);
+    // The house and the dealer can both work a pushed file: refuse a save made
+    // on a stale copy instead of silently overwriting the other side's changes.
+    const expected = expectedUpdatedAt ? Date.parse(expectedUpdatedAt) : NaN;
+    const current = row.updatedAt ? new Date(row.updatedAt).getTime() : NaN;
+    if (Number.isFinite(expected) && Number.isFinite(current) && current - expected > 1000) {
+        const [last] = await db
+            .select({ by: users.name, byId: auditLogs.performed_by })
+            .from(auditLogs)
+            .leftJoin(users, eq(users.id, auditLogs.performed_by))
+            .where(and(eq(auditLogs.entity_type, 'lead'), eq(auditLogs.entity_id, leadId)))
+            .orderBy(desc(auditLogs.timestamp))
+            .limit(1);
+        const who = last?.byId && last.byId !== user.id ? last.by || 'someone else' : 'someone else';
+        const when = new Date(current).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' });
+        return NextResponse.json(
+            {
+                success: false,
+                error: {
+                    code: 'STALE_EDIT',
+                    message: `This file was changed by ${who} at ${when} after you opened it. Reload to see their changes, then make yours.`,
+                },
+            },
+            { status: 409 },
+        );
+    }
+    return null;
+}
+
+/** The lead's current updated_at (ISO), for the editor's next save. */
+async function leadVersion(leadId: string): Promise<string | null> {
+    const [r] = await db.select({ u: leads.updated_at }).from(leads).where(eq(leads.id, leadId)).limit(1);
+    return r?.u ? new Date(r.u).toISOString() : null;
 }
 
 export const POST = withErrorHandler(async (req: Request) => {
@@ -451,6 +509,10 @@ export const POST = withErrorHandler(async (req: Request) => {
     // kyc_status='draft' so it surfaces in the drafts list.
     if (data.saveDraft) {
         if (!data.leadId) return errorResponse('leadId required to save draft', 400);
+        // 14 Oct: who may save — the creator, the dealer that has the file, or
+        // the house on a file it pushed out (step1AccessDenied).
+        const draftDenied = await step1AccessDenied(user, data.leadId, data.expected_updated_at);
+        if (draftDenied) return draftDenied;
 
         const normPhone = data.phone ? normalizePhone(data.phone) : null;
         const _isFinanceLead = data.payment_method === 'finance'
@@ -497,7 +559,7 @@ export const POST = withErrorHandler(async (req: Request) => {
                     status: 'INCOMPLETE',
                     workflow_step: 1,
                     updated_at: new Date(),
-                }).where(and(eq(leads.id, data.leadId!), eq(leads.uploader_id, user.id)));
+                }).where(eq(leads.id, data.leadId!));
 
                 // Keep the lead's extra-product rows in sync on draft save too.
                 await tx.delete(leadProducts).where(eq(leadProducts.lead_id, data.leadId!));
@@ -517,7 +579,7 @@ export const POST = withErrorHandler(async (req: Request) => {
                 }
             });
 
-            return successResponse({ success: true, leadId: data.leadId, saved: true });
+            return successResponse({ success: true, leadId: data.leadId, saved: true, updatedAt: await leadVersion(data.leadId!) });
         } catch (err) {
             console.error('Draft save failed:', err);
             return errorResponse('Could not save draft. Please try again.', 500);
@@ -527,6 +589,10 @@ export const POST = withErrorHandler(async (req: Request) => {
     // MODE 2: COMMIT STEP 1
     if (data.commitStep) {
         if (!data.leadId) return errorResponse('leadId required for commit', 400);
+        // 14 Oct: the commit had no ownership check — any dealer could overwrite
+        // any file's Step 1 by id. Same rule as every lead route now.
+        const denied = await step1AccessDenied(user, data.leadId, data.expected_updated_at);
+        if (denied) return denied;
 
         // Server-side strict validation
         if (!data.full_name || data.full_name.trim().length < 2) return errorResponse('Full name required', 400);
@@ -596,7 +662,9 @@ export const POST = withErrorHandler(async (req: Request) => {
                 .where(eq(leads.id, data.leadId!))
                 .limit(1);
             if (!current) return errorResponse('Lead not found', 404);
-            if (current.dealerId !== dealer_id) {
+            // 14 Oct: a file the house pushed out may be pushed again from here.
+            const houseFile = !!house && dealer_id === house && (await houseOriginatedLeadIds(house, [data.leadId!])).has(data.leadId!);
+            if (current.dealerId !== dealer_id && !houseFile) {
                 return errorResponse('This lead already belongs to another dealer. Moving it again needs an admin.', 409);
             }
             // ID 33: consent gate — a re-submitted Step 1 on a file whose
@@ -605,7 +673,7 @@ export const POST = withErrorHandler(async (req: Request) => {
                 return errorResponse(consentSignedMessage(await dealerDisplayName(dealer_id)), 409);
             }
             // ID 33: one push per file — a second move needs an admin (CRM).
-            if ((await pushedBeforeLeadIds([data.leadId!])).has(data.leadId!)) {
+            if (!houseFile && (await pushedBeforeLeadIds([data.leadId!])).has(data.leadId!)) {
                 return errorResponse(PUSHED_BEFORE_MESSAGE, 409);
             }
             const found = await findActiveDealerByMobile(pushMobile);
@@ -683,6 +751,9 @@ export const POST = withErrorHandler(async (req: Request) => {
                             assignment_status: 'assigned',
                             dealer_assigned_at: new Date(),
                             dealer_assigned_by: user.id,
+                            // 14 Oct: the receiving dealer starts with it on their list.
+                            deleted_by_dealer_at: null,
+                            deleted_by_dealer_user: null,
                         }
                         : {}),
                     updated_at: new Date()

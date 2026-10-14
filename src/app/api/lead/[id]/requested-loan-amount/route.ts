@@ -47,7 +47,7 @@ async function ownedLead(leadId: string) {
     .where(eq(leads.id, leadId))
     .limit(1);
   if (!lead) return { error: bad("Lead not found", 404) };
-  if (!(await dealerMayActOnLead(user, lead.dealer_id))) return { error: bad("Access denied", 403) };
+  if (!(await dealerMayActOnLead(user, lead.dealer_id, leadId))) return { error: bad("Access denied", 403) };
   return { lead };
 }
 

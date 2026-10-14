@@ -517,9 +517,29 @@ export function heatColor(v: number, max: number): string {
     return HEAT_RAMP[Math.min(5, 1 + Math.floor((v / max) * 4.999))];
 }
 
-export function HeatCell({ value, max, href }: { value: number; max: number; href?: string }) {
+export function HeatCell({
+    value,
+    max,
+    href,
+    onClick,
+    title,
+}: {
+    value: number;
+    max: number;
+    href?: string;
+    /** Opens something (a lead list popup) instead of navigating. */
+    onClick?: () => void;
+    title?: string;
+}) {
     const cls = "flex min-h-[38px] items-center justify-center rounded-lg text-[13.5px] font-semibold text-ink tabular-nums";
     const style = { background: heatColor(value, max) };
+    if (onClick) {
+        return (
+            <button type="button" onClick={onClick} title={title} className={cn(cls, "cursor-pointer hover:ring-2 hover:ring-brand-200")} style={style}>
+                {num(value)}
+            </button>
+        );
+    }
     return href ? (
         <Link href={href} className={cn(cls, "hover:ring-2 hover:ring-brand-200")} style={style}>
             {num(value)}

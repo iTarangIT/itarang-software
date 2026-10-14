@@ -4,7 +4,7 @@
 // before, what is the current dealer called — plus the push history shown on
 // the CRM KYC file screen.
 
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
 
 import { logCouponAction } from "@/lib/coupon-audit";
 import { db } from "@/lib/db";
@@ -69,6 +69,30 @@ export async function pushedBeforeLeadIds(leadIds: string[]): Promise<Set<string
   return new Set(rows.map((r) => r.id).filter((x): x is string => !!x));
 }
 
+/**
+ * 14 Oct: lead ids (of those given — or, with none given, every such lead)
+ * the house dealer pushed out at some point: a LEAD_PUSHED_TO_DEALER row whose
+ * from_dealer_id is the house. The house login keeps full access to these and
+ * may push them again; they stay on its lead list.
+ */
+export async function houseOriginatedLeadIds(houseCode: string, leadIds?: string[]): Promise<Set<string>> {
+  if (!houseCode) return new Set();
+  const ids = leadIds ? Array.from(new Set(leadIds.filter(Boolean))) : null;
+  if (ids && !ids.length) return new Set();
+  const rows = await db
+    .select({ id: auditLogs.entity_id })
+    .from(auditLogs)
+    .where(
+      and(
+        eq(auditLogs.entity_type, "lead"),
+        eq(auditLogs.action, LEAD_PUSHED_TO_DEALER),
+        sql`${auditLogs.changes} ->> 'from_dealer_id' = ${houseCode}`,
+        ...(ids ? [inArray(auditLogs.entity_id, ids)] : []),
+      ),
+    );
+  return new Set(rows.map((r) => r.id).filter((x): x is string => !!x));
+}
+
 /** Display name per dealer code (legal entity name, else company name, else the code). */
 export async function dealerDisplayNames(codes: string[]): Promise<Map<string, string>> {
   const ids = Array.from(new Set(codes.filter(Boolean)));
@@ -81,6 +105,36 @@ export async function dealerDisplayNames(codes: string[]): Promise<Map<string, s
   for (const r of dealerRows) if (r.id && r.name) out.set(r.id, r.name);
   for (const r of accRows) if (r.name) out.set(r.id, r.name);
   for (const id of ids) if (!out.has(id)) out.set(id, id);
+  return out;
+}
+
+/**
+ * 14 Oct: name + mobile per dealer code — the "With dealer" line the house
+ * dealer sees on a file it pushed out. Mobile from the dealer record (owner
+ * phone), else the dealer account's contact phone.
+ */
+export async function dealerContacts(codes: string[]): Promise<Map<string, { name: string; mobile: string | null }>> {
+  const ids = Array.from(new Set(codes.filter(Boolean)));
+  const out = new Map<string, { name: string; mobile: string | null }>();
+  if (!ids.length) return out;
+  const [names, dealerRows, accRows] = await Promise.all([
+    dealerDisplayNames(ids),
+    db.select({ id: dealers.dealer_id, phone: dealers.owner_phone, trade: dealers.company_name }).from(dealers).where(inArray(dealers.dealer_id, ids)),
+    db.select({ id: accounts.id, phone: accounts.contact_phone }).from(accounts).where(inArray(accounts.id, ids)),
+  ]);
+  const phone = new Map<string, string>();
+  for (const r of accRows) if (r.phone) phone.set(r.id, r.phone);
+  for (const r of dealerRows) if (r.id && r.phone) phone.set(r.id, r.phone);
+  // The account's legal name leads (what the push lookup shows); the dealer
+  // record's trade name follows in brackets when the two disagree, so the
+  // house recognises the dealer by either.
+  const trade = new Map(dealerRows.filter((r) => r.id && r.trade).map((r) => [r.id as string, String(r.trade).trim()]));
+  for (const id of ids) {
+    const legal = names.get(id) ?? id;
+    const t = trade.get(id);
+    const name = t && t.toLowerCase() !== legal.trim().toLowerCase() ? `${legal} (${t})` : legal;
+    out.set(id, { name, mobile: phone.get(id) ?? null });
+  }
   return out;
 }
 

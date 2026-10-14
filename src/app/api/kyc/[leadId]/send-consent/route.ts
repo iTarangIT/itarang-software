@@ -15,6 +15,7 @@ import {
 import { requireLeadAccess } from "@/lib/auth/requireLeadAccess";
 import { isNextRedirectError } from "@/lib/api-utils";
 
+import { notifyHouseOfDealerStep } from "@/lib/leads/pushNotices";
 type RouteContext = {
   params: Promise<{ leadId: string }>;
 };
@@ -74,6 +75,8 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
         );
       }
 
+      // 14 Oct: tell the iTarang house dealer when the dealer moves a file it pushed.
+      await notifyHouseOfDealerStep(leadId, "sent the consent to the customer", leadGate.user.dealer_id);
       return NextResponse.json({
         success: true,
         hasDigioIntegration: false,
@@ -110,6 +113,8 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
       );
     }
 
+    // 14 Oct: tell the iTarang house dealer when the dealer moves a file it pushed.
+    await notifyHouseOfDealerStep(leadId, "sent the consent to the customer", leadGate.user.dealer_id);
     return NextResponse.json({
       success: true,
       alreadyActive: result.alreadyActive,

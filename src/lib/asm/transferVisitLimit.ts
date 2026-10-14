@@ -28,10 +28,14 @@ export const TRANSFER_WORKING_DAYS_SQL: SQL = workingDaysSinceSql(sql.raw(TRANSF
 /** Boolean predicate over `dl`: the transfer's first visit is overdue at `limitDays`. */
 export function transferVisitOverdueSql(limitDays: number): SQL {
     const limit = sql.raw(String(Math.max(0, Math.floor(limitDays))));
+    return sql`(${awaitingFieldVisitSql()} AND ${TRANSFER_WORKING_DAYS_SQL} > ${limit})`;
+}
+
+/** Boolean predicate over `dl`: waiting for the ASM's first visit, past the limit or not. */
+export function awaitingFieldVisitSql(): SQL {
     return sql`(
     dl.lead_status = 'Transferred_to_ASM'
     AND dl.is_active IS NOT FALSE
-    AND ${TRANSFER_WORKING_DAYS_SQL} > ${limit}
     AND NOT EXISTS (
         SELECT 1 FROM lead_visits v
          WHERE v.dealer_lead_id = dl.id

@@ -292,8 +292,22 @@ function ImportTab() {
 
 // ── Item mapping ────────────────────────────────────────────────────────────
 
+// An item name can carry its serial numbers on the next line; show only the first.
+const FIRST_LINE = /\r?\n/;
+
 type ItemsPayload = {
-    items: Array<{ item_key: string; item_name: string; lines: number; units: number; product_class: string | null; asset_type: string | null; product_id: string | null }>;
+    items: Array<{
+        item_key: string;
+        item_name: string;
+        lines: number;
+        units: number;
+        product_class: string | null;
+        asset_type: string | null;
+        product_id: string | null;
+        /** Every spelling folded into this product family (code, else cleaned name). */
+        spellings?: string[];
+        family_key?: string;
+    }>;
     products: Array<{ asset_type: string; product_id: string; product_name: string; model_id: string | null }>;
 };
 
@@ -306,7 +320,7 @@ function ItemsTab() {
     const map = useMutation({
         mutationFn: async (args: { item_name: string; value: string }) => {
             const [asset_type, product_id] = args.value ? args.value.split("|") : [null, null];
-            return readData<{ lines_updated: number }>(
+            return readData<{ lines_updated: number; spellings?: number }>(
                 await fetch("/api/admin/sales-invoices/ledger/items", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
@@ -316,7 +330,7 @@ function ItemsTab() {
             );
         },
         onSuccess: (d) => {
-            toast.success(`Saved — ${d.lines_updated} line(s) updated.`);
+            toast.success(`Saved — ${d.lines_updated} line(s) updated${d.spellings && d.spellings > 1 ? ` across ${d.spellings} spellings` : ""}.`);
             qc.invalidateQueries({ queryKey: ["invoice-ledger-items"] });
         },
         onError: (e) => toast.error((e as Error).message),
@@ -329,7 +343,9 @@ function ItemsTab() {
     return (
         <div className="space-y-3">
             <p className="text-xs text-ink-muted">
-                Vyapar names items freely; map each to a CRM product so units are counted per SKU. {unmapped} unmapped.
+                Vyapar names items freely; map each to a CRM product so units are counted per SKU. Spellings of one product —
+                same product code, or the same name once serial numbers, colour and warranty text are taken out — are one row,
+                and new invoices for it are mapped on arrival. {unmapped} unmapped.
             </p>
             <table className="w-full text-xs">
                 <thead className="text-left text-ink-muted">
@@ -343,8 +359,18 @@ function ItemsTab() {
                 </thead>
                 <tbody>
                     {q.data.items.map((i) => (
-                        <tr key={i.item_key} className="border-t border-border">
-                            <td className="py-1.5">{i.item_name}</td>
+                        <tr key={i.family_key ?? i.item_key} className="border-t border-border">
+                            <td className="py-1.5">
+                                {i.item_name.split(FIRST_LINE)[0]}
+                                {(i.spellings?.length ?? 1) > 1 && (
+                                    <span
+                                        className="ml-1.5 rounded-full bg-bg px-1.5 py-0.5 text-[10px] font-semibold text-ink-muted"
+                                        title={i.spellings!.map((x) => x.split(FIRST_LINE)[0]).join("\n")}
+                                    >
+                                        {i.spellings!.length} spellings
+                                    </span>
+                                )}
+                            </td>
                             <td className="py-1.5">{i.product_class ?? "—"}</td>
                             <td className="py-1.5 text-right">{i.lines}</td>
                             <td className="py-1.5 text-right">{i.units}</td>

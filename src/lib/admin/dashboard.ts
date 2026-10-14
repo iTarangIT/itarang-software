@@ -42,6 +42,7 @@ import { onboardingClockSql } from "@/lib/onboarding/clock";
 import { workingDaysSinceSql } from "@/lib/calendar/holidays";
 import type { TimeLimits } from "@/lib/timeLimits/registry";
 import { getTimeLimits } from "@/lib/timeLimits/store";
+import { FOLLOW_UP_AGEING_BASIS_TEXT } from "@/lib/leads/followUpAgeing";
 
 // ID 122: the one onboarding clock (src/lib/onboarding/clock.ts).
 const ONBOARDING_CLOCK = sql.raw(onboardingClockSql("oa"));
@@ -106,11 +107,12 @@ export function onboardingStalledSql(l: TimeLimits): SQL {
 const finalisedNotWon = (l: TimeLimits) => finalisedNotWonSql({ overWorkingDays: l.said_yes_not_won });
 const FINALISED_APPROVED_AT = DEALER_YES_AT_SQL;
 
-// The idle clock (E-300, review R-04): last call / visit / status change only.
-// last_touchpoint_at also moves on assignment, claims, dial requests and
-// comments, so reading it here let a hand-off hide a neglected lead. A lead
-// never worked falls back to when its holder got it, then to creation.
-const LAST_TOUCH = "COALESCE(dl.last_worked_at, dl.assigned_at, dl.created_at)";
+// The idle clock: the follow-up ageing basis (src/lib/leads/followUpAgeing.ts).
+// A follow-up still ahead holds it (0 days, never stale); a passed one counts
+// from its date; otherwise the later of the last call / visit / status change
+// (E-300 — last_touchpoint_at also moves on claims, dial requests and comments,
+// so it is not read) and the date the holder got the lead; then creation.
+const LAST_TOUCH = FOLLOW_UP_AGEING_BASIS_TEXT;
 
 // R-16 — a lead whose number never answers (6 unanswered call days in 45) is not
 // "idle": nobody can work it. It is counted in its own panel and kept OUT of

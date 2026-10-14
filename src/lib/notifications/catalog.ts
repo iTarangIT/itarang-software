@@ -64,6 +64,8 @@ export type NotificationCategory =
   // by the Sales Head, ASMs and ISRs through the Ecofy API. Its own category:
   // a separate pipeline with its own stages (S1–S8), not a dealer lead.
   | "Ecofy"
+  // Item 3 (14 Oct 2026) — monthly sales targets: CEO → Sales Head → member.
+  | "Targets"
   | "Escalations";
 
 /** Ordered exactly as the filter bar should list them. "System" stays last. */
@@ -92,6 +94,7 @@ export const CATEGORIES: NotificationCategory[] = [
   "Recovery",
   "Refurbishment",
   "Ecofy",
+  "Targets",
   "Escalations",
   // Buyback's own categories, minus the "System" catch-all it shares with us.
   ...BUYBACK_CATEGORIES.filter((c) => c !== "System"),
@@ -129,6 +132,9 @@ export const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   "lead.qualified": "Leads",
   // ID 81 — a dealer we already hold arrived again through one of the doors.
   "lead.reinquiry": "Leads",
+  // 14 Oct — a customer file pushed between the iTarang house dealer and a dealer.
+  "lead.pushed_to_dealer": "Leads",
+  "lead.dealer_progress": "Leads",
   // ID 83 — a NeoDove agent called the owner's lead after their "Call now".
   "lead.called_on_behalf": "Leads",
   // ID 75.2 — a one-off "System correction" telling an owner which of their
@@ -145,6 +151,12 @@ export const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   "quote.pending_approval": "Leads",
   // ID 135 — the CEO rejected a quote; the owner must revise or talk to the dealer.
   "quote.rejected": "Leads",
+
+  // --- Sales targets (item 3, src/lib/targets/service.ts) ---
+  "targets.review_requested": "Targets",
+  "targets.sent": "Targets",
+  "targets.rejected": "Targets",
+  "targets.accepted": "Targets",
 
   // --- Dealer onboarding (portal + WhatsApp) ---
   "onboarding.chat_started": "Onboarding",
@@ -435,6 +447,8 @@ const CRITICAL = new Set([
 
 /** Waiting on the recipient to act — surfaced amber. */
 const WARNING = new Set([
+  // 14 Oct — a file iTarang pushed is waiting on the dealer to continue it.
+  "lead.pushed_to_dealer",
   // ID 171 — someone has to drop the invoices into Drive / import the register.
   "invoices.stale",
   "recovery.visit",
@@ -502,6 +516,12 @@ const WARNING = new Set([
   // ID 135 — a refused quote leaves the dealer with nothing to answer; the
   // owner has to act today.
   "quote.rejected",
+  // Item 3 — each is a target waiting on the recipient: the Sales Head to
+  // review, the member to accept, the managers to answer a reject.
+  // `targets.accepted` closes an action and is deliberately not amber.
+  "targets.review_requested",
+  "targets.sent",
+  "targets.rejected",
   // You are no longer winning, and the window is finite — both are "act now or
   // lose it", which is the definition of amber. `auction.lost` is NOT here: by
   // the time it arrives there is nothing left to act on.
@@ -544,6 +564,9 @@ const WARNING = new Set([
  * than an extra message.
  */
 const NO_EMAIL = new Set([
+  // 14 Oct — the house hears every step a dealer takes on a file it pushed;
+  // the bell carries it (email can be switched on in Settings).
+  "lead.dealer_progress",
   // ID 81 — a re-inquiry is a prompt to look at a lead, and a scrape or an
   // upload can raise it for many dealers at once; the bell carries it.
   "lead.reinquiry",

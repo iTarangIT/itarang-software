@@ -108,3 +108,25 @@ describe("pickerDealers", () => {
     expect(pickerDealers(list, { financeOnly: true }).map((d) => d.dealerId)).toEqual(["A"]);
   });
 });
+
+describe("14 Oct: the house login re-pushes a file it pushed out", () => {
+  const target = { dealerId: "DLR-C", name: "City Motors", financeEnabled: true };
+  const withB = { ...base, actorRole: "dealer", actorIsHouseLogin: true, currentDealerId: "DLR-B", currentDealerName: "B Motors", pushedBefore: true };
+  it("may push it again to another dealer, wherever it is now", () => {
+    expect(pushBlockedReason({ ...withB, houseOriginated: true })).toBeNull();
+    expect(checkPush({ ...withB, houseOriginated: true, paymentMethod: "cash", target })).toEqual({ ok: true });
+  });
+  it("may push it again even when it is back with the house", () => {
+    expect(pushBlockedReason({ ...withB, currentDealerId: HOUSE, houseOriginated: true })).toBeNull();
+  });
+  it("still never after consent", () => {
+    expect(pushBlockedReason({ ...withB, houseOriginated: true, consentSigned: true })?.message).toBe(consentSignedMessage("B Motors"));
+  });
+  it("still not to the dealer it is already with, and finance only to a finance dealer", () => {
+    expect(checkPush({ ...withB, houseOriginated: true, paymentMethod: "cash", target: { ...target, dealerId: "DLR-B" } }).ok).toBe(false);
+    expect(checkPush({ ...withB, houseOriginated: true, paymentMethod: "finance", target: { ...target, financeEnabled: false } }).ok).toBe(false);
+  });
+  it("a dealer's own lead (never house-pushed) stays unmovable for the house login", () => {
+    expect(pushBlockedReason({ ...withB, pushedBefore: false, houseOriginated: false })?.message).toBe(NOT_HOUSE_MESSAGE);
+  });
+});

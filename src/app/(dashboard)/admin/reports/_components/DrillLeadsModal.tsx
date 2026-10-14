@@ -1,11 +1,13 @@
 "use client";
 
-// Funnel-by-Owner drill-down — the leads behind one clicked number.
+// Funnel-by-Owner drill-down — the leads behind one clicked number. Used by
+// the Reports page and the Sales dashboard's "Where open leads are sitting".
+// The list shows the first 500; "Download CSV" has every lead with details.
 
 import { useEffect } from "react";
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, Inbox, Loader2, X } from "lucide-react";
+import { AlertTriangle, Download, Inbox, Loader2, X } from "lucide-react";
 import type { OwnerDrillLead } from "@/lib/admin/types";
 import { LEAD_STATUS_LABEL } from "@/lib/leads/queueFilters";
 
@@ -50,6 +52,10 @@ export function DrillLeadsModal({
         },
     });
     const leads = query.data?.data.leads ?? [];
+    // Same query, as a file: every lead behind this number with full details.
+    const csv = new URLSearchParams(params);
+    csv.set("format", "csv");
+    const csvHref = `/api/admin/reports/owner-leads?${csv}`;
 
     // Escape closes; body scroll locked while open (same as confirm-dialog).
     useEffect(() => {
@@ -83,8 +89,18 @@ export function DrillLeadsModal({
                         </h3>
                         <p className="text-xs text-ink-muted mt-0.5">
                             {target.count} lead{target.count === 1 ? "" : "s"}
+                            {leads.length >= 500 && target.count > leads.length
+                                ? ` · showing the first ${leads.length} — download the CSV for all`
+                                : ""}
                         </p>
                     </div>
+                    <a
+                        href={csvHref}
+                        download
+                        className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-xs font-semibold text-brand-navy hover:bg-bg"
+                    >
+                        <Download className="h-3.5 w-3.5" aria-hidden /> Download CSV
+                    </a>
                     <button
                         type="button"
                         onClick={onClose}

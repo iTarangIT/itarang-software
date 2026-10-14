@@ -3,19 +3,22 @@ import { leads, loanApplications } from '@/lib/db/schema';
 import { and, eq, sql } from 'drizzle-orm';
 import { successResponse, withErrorHandler } from '@/lib/api-utils';
 import { requireRole } from '@/lib/auth-utils';
+import { dealerVisibleLeads } from '@/lib/leads/dealerLeadScope';
 
 // Loan Facilitation Queue (Dealer)
 // BRD logic: Payment_Method = Finance/Loan AND documents_uploaded = true AND facilitation_fee_status != PAID
 // Payment method is tracked at Lead level in the current schema; docs & fee status are on loan_applications.
 export const GET = withErrorHandler(async (req: Request) => {
     const user = await requireRole(['dealer']);
+    // 14 Oct: the house dealer also sees the files it pushed out (dealerLeadScope.ts).
+    const visible = await dealerVisibleLeads(user?.dealer_id ?? "");
     const { searchParams } = new URL(req.url);
 
     // Optional filters (UI pills)
     const filter = (searchParams.get('filter') || '').toLowerCase();
     // filter values supported: uploaded | under_validation | validation_passed | fee_pending
 
-    const baseWhere = and(eq(leads.dealer_id, user.dealer_id!), eq(loanApplications.documents_uploaded, true));
+    const baseWhere = and(visible, eq(loanApplications.documents_uploaded, true));
 
     // Compose additional conditions
     const conditions: any[] = [baseWhere];
