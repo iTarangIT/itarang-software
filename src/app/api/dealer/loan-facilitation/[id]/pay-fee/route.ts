@@ -3,11 +3,14 @@ import { leads, loanApplications } from '@/lib/db/schema';
 import { and, eq } from 'drizzle-orm';
 import { successResponse, errorResponse, withErrorHandler } from '@/lib/api-utils';
 import { requireRole } from '@/lib/auth-utils';
+import { dealerVisibleLeads } from '@/lib/leads/dealerLeadScope';
 
 // NOTE: This is a stubbed "payment" endpoint.
 // In production, replace with payment gateway integration + webhook.
 export const POST = withErrorHandler(async (_req: Request, ctx: { params: Promise<{ id: string }> }) => {
     const user = await requireRole(['dealer']);
+    // 14 Oct: the house dealer also sees the files it pushed out (dealerLeadScope.ts).
+    const visible = await dealerVisibleLeads(user?.dealer_id ?? "");
     const id = (await ctx.params).id;
 
     // Validate ownership
@@ -15,7 +18,7 @@ export const POST = withErrorHandler(async (_req: Request, ctx: { params: Promis
         .select({ id: loanApplications.id })
         .from(loanApplications)
         .innerJoin(leads, eq(loanApplications.lead_id, leads.id))
-        .where(and(eq(loanApplications.id, id), eq(leads.dealer_id, user.dealer_id!)))
+        .where(and(eq(loanApplications.id, id), visible))
         .limit(1);
 
     if (!rows.length) return errorResponse('Loan application not found', 404);

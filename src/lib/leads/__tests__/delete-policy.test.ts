@@ -83,3 +83,14 @@ describe("isFullyDeleted", () => {
     expect(isFullyDeleted(state({ liveNbfcAssignments: 0 }))).toBe(false);
   });
 });
+
+describe("14 Oct: a file the house pushed out", () => {
+  const T = new Date("2026-10-14T10:00:00Z");
+  it("is never purged by the dealer deleting it — the house still holds it", () => {
+    expect(isFullyDeleted(state({ dealerDeletedAt: T, houseHolds: true }))).toBe(false);
+  });
+  it("a plain dealer lead nobody else holds is still purged on delete", () => {
+    expect(isFullyDeleted(state({ dealerDeletedAt: T, houseHolds: false }))).toBe(true);
+    expect(isFullyDeleted(state({ dealerDeletedAt: T }))).toBe(true);
+  });
+});

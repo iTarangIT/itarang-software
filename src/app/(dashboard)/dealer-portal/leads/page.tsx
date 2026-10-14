@@ -378,6 +378,7 @@ function DealerLeadsContent() {
                                         <td className="px-6 py-4">
                                             <div className="font-medium text-gray-900">{lead.owner_name}</div>
                                             <div className="text-gray-500 text-xs">{lead.owner_contact}</div>
+                                            <WithDealer dealer={lead.current_dealer} />
                                         </td>
                                         <td className="px-6 py-4">
                                             {(() => {
@@ -480,6 +481,7 @@ function DealerLeadsContent() {
                                     <div className="min-w-0 flex-1">
                                         <div className="font-medium text-gray-900 truncate">{lead.owner_name}</div>
                                         <div className="text-gray-500 text-xs">{lead.owner_contact}</div>
+                                        <WithDealer dealer={lead.current_dealer} />
                                         <div className="mt-1">{paymentPendingBadge(lead.id)}</div>
                                     </div>
                                     {(() => {
@@ -753,5 +755,39 @@ export default function DealerLeadsPage() {
         }>
             <DealerLeadsContent />
         </Suspense>
+    );
+}
+
+/**
+ * 14 Oct: on the iTarang house dealer's list, a file it pushed out shows which
+ * dealer has it now (name + mobile). The house keeps full access to it and may
+ * push it again; the dealer works it on the CRM and on WhatsApp.
+ */
+function WithDealer({
+    dealer,
+}: {
+    dealer?: { name: string; mobile: string | null; last_activity?: { action: string; at: string; by: string | null } | null } | null;
+}) {
+    if (!dealer) return null;
+    const last = dealer.last_activity;
+    return (
+        <div className="mt-1 flex flex-col items-start gap-0.5">
+            <div className="inline-flex flex-wrap items-center gap-1 rounded-md bg-sky-50 px-1.5 py-0.5 text-[11px] text-sky-800">
+                <span className="font-semibold">With dealer:</span>
+                <span>{dealer.name}</span>
+                {dealer.mobile && (
+                    <a href={`tel:${dealer.mobile}`} className="tabular-nums underline-offset-2 hover:underline">
+                        · {dealer.mobile}
+                    </a>
+                )}
+            </div>
+            {last && (
+                <span className="text-[10.5px] text-gray-500">
+                    Last: {last.action.replace(/^LEAD_/, '').replace(/_/g, ' ').toLowerCase()} ·{' '}
+                    {new Date(last.at).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                    {last.by ? ` · ${last.by}` : ''}
+                </span>
+            )}
+        </div>
     );
 }

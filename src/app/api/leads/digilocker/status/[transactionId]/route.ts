@@ -51,7 +51,7 @@ export async function GET(
                   .limit(1)
             : [];
         const mine =
-            !!lead && (lead.uploader_id === user.id || (await dealerMayActOnLead(user, lead.dealer_id)));
+            !!lead && (lead.uploader_id === user.id || (await dealerMayActOnLead(user, lead.dealer_id, txn.lead_id)));
         if (!mine) {
             return NextResponse.json(
                 { success: false, error: { message: "Transaction not found" } },

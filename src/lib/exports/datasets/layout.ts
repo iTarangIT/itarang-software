@@ -107,7 +107,7 @@ export const DATASET_LAYOUT: Record<string, DatasetLayout> = {
         grain: "One row per person, metric and month",
         who: "CEO, Admin, Sales Head; each rep sees their own",
         columnGroups: [
-            { name: "Target", keys: ["month", "user_name", "user_role", "metric_label", "ceo_target", "admin_addon", "final_target", "status", "pushed_at", "accepted_at"] },
+            { name: "Target", keys: ["month", "user_name", "user_role", "metric_label", "ceo_target", "sales_head_target", "admin_addon", "final_target", "status", "pushed_at", "accepted_at"] },
             { name: "Progress", keys: ["mtd_target", "actual", "pct_of_mtd", "remaining", "required_per_day"] },
         ],
     },

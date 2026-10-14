@@ -72,6 +72,7 @@ import { dealerLeadByGstin, GSTIN_KEY } from "@/lib/leads/gstinMatch";
 import { isTestLogin } from "@/lib/users/testLogin";
 import { humanCall } from "@/lib/reports/metricDefinitions";
 import { monthEnd, workingDaysBetween } from "@/lib/targets/rules";
+import { finalTargetSql } from "@/lib/targets/sql";
 
 import { istRangeTz } from "../window";
 import { digestDateForSlot } from "../schedule";
@@ -426,7 +427,7 @@ async function scrapDealTargets(monthFirst: string, upTo: string): Promise<Targe
     const total = workingDaysBetween(monthFirst, monthEnd(monthFirst), holidays);
     const elapsed = workingDaysBetween(monthFirst, upTo, holidays);
     const rows = (await db.execute(sql`
-      SELECT user_id, SUM(ceo_target + admin_addon)::float8 AS monthly
+      SELECT user_id, SUM(${finalTargetSql(sql`sales_targets`)})::float8 AS monthly
         FROM sales_targets
        WHERE month = ${monthFirst}::date AND metric = 'scrap_deals' AND status IN ('pushed', 'accepted')
        GROUP BY user_id

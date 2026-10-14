@@ -20,7 +20,7 @@
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { isForward } from "@/lib/lifecycle/statusRules";
-import { OUTSIDE_TERRITORY_MARKER } from "@/lib/leads/claimScope";
+import { CLAIM_TERRITORY_MARKER, claimTerritoryStatusSql, type ClaimTerritoryStatus } from "@/lib/leads/claimTerritory";
 import { markSalesReady } from "@/lib/leads/salesReady";
 import { writeTouchpoint } from "@/lib/touchpoints/write";
 import type { LeadStatus } from "@/lib/lifecycle/transitions";
@@ -88,22 +88,17 @@ export async function claimLead(
         // Zero rows = someone else won between our SELECT and UPDATE.
         if (updated.length === 0) return { ok: false, reason: "already_owned" };
 
-        // ID 45: an ASM may claim in any territory; a claim outside their own
-        // is marked on the touchpoint so the Sales Head sees it.
-        let outsideTerritory = false;
+        // ID 45: an ASM may claim in any territory. Where the claim sits
+        // against their territory is marked on the touchpoint — outside, no
+        // location on the lead, or no territory set up for the ASM
+        // (claimTerritory.ts) — so the timeline says which.
+        let territoryStatus: ClaimTerritoryStatus = "in";
         if (opts?.actorRole === "asm") {
-            const inTerritory = await tx.execute<{ ok: boolean }>(sql`
-                SELECT EXISTS (
-                    SELECT 1 FROM dealer_leads dl
-                      JOIN asm_territories t ON t.asm_id = ${actorId}
-                                            AND t.state = dl.state
-                                            AND (t.city IS NULL OR t.city = dl.city)
-                                            AND (t.active_from IS NULL OR t.active_from <= CURRENT_DATE)
-                                            AND (t.active_to IS NULL OR t.active_to >= CURRENT_DATE)
-                     WHERE dl.id = ${leadId}
-                ) AS ok
+            const st = await tx.execute<{ status: ClaimTerritoryStatus }>(sql`
+                SELECT ${claimTerritoryStatusSql(sql`${actorId}`)} AS status
+                  FROM dealer_leads dl WHERE dl.id = ${leadId}
             `);
-            outsideTerritory = !inTerritory[0]?.ok;
+            territoryStatus = st[0]?.status ?? "in";
         }
 
         await writeTouchpoint(
@@ -111,9 +106,10 @@ export async function claimLead(
                 dealerLeadId: leadId,
                 touchpointType: "lead_claimed",
                 performedBy: actorId,
-                remarks: outsideTerritory
-                    ? `Claimed ${OUTSIDE_TERRITORY_MARKER}`
-                    : "Claimed from unassigned queue",
+                remarks:
+                    territoryStatus === "in"
+                        ? "Claimed from unassigned queue"
+                        : `Claimed ${CLAIM_TERRITORY_MARKER[territoryStatus]}`,
                 // E-295: the guarded UPDATE guarantees the lead was unowned.
                 fromOwnerId: null,
                 toOwnerId: actorId,
