@@ -69,6 +69,8 @@ export type EventLogFilters = {
 export type EventLogRow = {
     event_at: string;
     lead_id: string;
+    /** When the lead was created, IST wall-clock text like event_at. */
+    lead_created_at: string | null;
     dealer: string | null;
     city: string | null;
     state: string | null;
@@ -437,6 +439,8 @@ export async function fetchEvents(f: EventLogFilters): Promise<EventLogRow[]> {
     const rows = (await db.execute(sql`
         SELECT (ev.event_at AT TIME ZONE 'Asia/Kolkata')::text AS event_at,
                ev.lead_id,
+               -- created_at has no time zone and is stored as UTC.
+               ((dl.created_at AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Kolkata')::text AS lead_created_at,
                COALESCE(dl.shop_name, dl.dealer_name)   AS dealer,
                dl.city, dl.state,
                to_jsonb(dl) ->> 'business_type'         AS business_type,

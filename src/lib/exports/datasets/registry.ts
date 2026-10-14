@@ -819,6 +819,7 @@ const leadEvents: Dataset = {
             columns: [
                 { key: "event_at", header: "Event time", meaning: "When it happened (IST).", kind: "datetime" },
                 { key: "lead_id", header: "Lead ID", meaning: "The lead the event is on.", width: 24 },
+                { key: "lead_created_at", header: "Lead created at", meaning: "When the lead was created (IST).", kind: "datetime" },
                 { key: "dealer", header: "Dealer / shop", meaning: "Shop or dealer name on the lead.", width: 28 },
                 { key: "city", header: "City", meaning: "Lead's city." },
                 { key: "state", header: "State", meaning: "Lead's state." },
@@ -858,6 +859,7 @@ const leadEvents: Dataset = {
                   return {
                     ...e,
                     event_at: at,
+                    lead_created_at: ist(e.lead_created_at),
                     lead_clock_started_at: ist(e.lead_clock_started_at),
                     owner_clock_started_at: ist(e.owner_clock_started_at),
                     hours_since_sales_ready: gap != null && Number.isFinite(gap) && gap >= 0 ? Math.round(gap * 10) / 10 : null,
