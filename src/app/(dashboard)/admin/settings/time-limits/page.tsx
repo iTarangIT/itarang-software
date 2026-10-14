@@ -1,4 +1,4 @@
-import { requireRole } from "@/lib/auth-utils";
+import { requireAuth } from "@/lib/auth-utils";
 import { TimeLimitsView } from "../_components/TimeLimitsView";
 
 export const dynamic = "force-dynamic";
@@ -8,7 +8,17 @@ export const dynamic = "force-dynamic";
 // the CEO sees the same page read-only (decided 10 Oct: "Admin only; every
 // change logged; the CEO sees the log").
 export default async function TimeLimitsPage() {
-    const user = await requireRole(["admin", "ceo"]);
+    // A plain message for other roles instead of requireRole's throw, which
+    // rendered as an "Application error" screen.
+    const user = await requireAuth();
+    if (user.role !== "admin" && user.role !== "ceo") {
+        return (
+            <div className="px-6 md:px-8 py-6">
+                <h1 className="text-2xl font-semibold tracking-tight text-ink">Time limits</h1>
+                <p className="mt-2 text-sm text-ink-muted">Only Admin and the CEO can open this page.</p>
+            </div>
+        );
+    }
 
     return (
         <div className="px-6 md:px-8 py-6 space-y-5 max-w-[1100px]">

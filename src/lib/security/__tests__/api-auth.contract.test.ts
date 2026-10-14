@@ -415,4 +415,28 @@ describe("the middleware gate", () => {
     expect(apiGate({ ...anon, mode: "report" })).toBe("report");
     expect(apiGate({ ...anon, mode: "off" })).toBe("allow");
   });
+
+  // ID 118 log review (13 Oct): these were "would refuse" lines that enforce
+  // mode would have turned into broken links and lost onboarding saves.
+  it("the pre-login onboarding autosave passes", () => {
+    expect(apiGate({ pathname: "/api/dealer-onboarding/save", hasSession: false, mode: "enforce" })).toBe("allow");
+  });
+
+  it("a signed file link reaches the files route, which checks the signature; an unsigned one does not", () => {
+    const signed = "?exp=1760000000&sig=" + "a".repeat(64);
+    for (const p of [
+      "/api/files/documents/whatsapp/W-1/gst/a.pdf",
+      "/api/files/documents/kyc/L-1/pan.jpg",
+      "/api/files/call-recordings/bolna/a.mp3",
+    ]) {
+      expect(apiGate({ pathname: p, hasSession: false, mode: "enforce", search: signed }), p).toBe("allow");
+      expect(apiGate({ pathname: p, hasSession: false, mode: "enforce" }), `${p} unsigned`).toBe("refuse");
+      expect(apiGate({ pathname: p, hasSession: false, mode: "enforce", search: "?exp=1760000000" }), `${p} no sig`).toBe("refuse");
+      expect(apiGate({ pathname: p, hasSession: false, mode: "enforce", search: "?sig=x" }), `${p} no exp`).toBe("refuse");
+    }
+    // A signature only opens the files proxy, not any other route.
+    expect(apiGate({ pathname: "/api/files/link", hasSession: false, mode: "enforce", search: signed })).toBe("refuse");
+    expect(apiGate({ pathname: "/api/dealer-leads", hasSession: false, mode: "enforce", search: signed })).toBe("refuse");
+    expect(apiGate({ pathname: "/api/files/other-bucket/a.pdf", hasSession: false, mode: "enforce", search: signed })).toBe("refuse");
+  });
 });
