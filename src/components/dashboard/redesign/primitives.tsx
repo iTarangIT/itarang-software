@@ -373,12 +373,15 @@ export function ActionTile({
     label,
     sub,
     href,
+    clear = false,
 }: {
     severity: "now" | "soon" | "info";
     count: string;
     label: string;
     sub?: string;
     href: string;
+    /** Nothing waiting: the tile stays on screen, marked "All clear". */
+    clear?: boolean;
 }) {
     const s = SEVERITY[severity];
     return (
@@ -386,13 +389,15 @@ export function ActionTile({
             href={href}
             className="grid min-h-[84px] grid-cols-[12px_auto_minmax(0,1fr)_auto] items-center gap-3 rounded-[14px] border border-border bg-surface px-4 py-3.5 text-ink shadow-card transition-colors hover:border-brand-200"
         >
-            <span className={cn("h-2.5 w-2.5 rounded-full", s.dot)} />
-            <span className="min-w-[56px] text-[28px] font-bold tracking-tight text-brand-navy tabular-nums">{count}</span>
+            <span className={cn("h-2.5 w-2.5 rounded-full", clear ? "bg-success" : s.dot)} />
+            <span className={cn("min-w-[56px] text-[28px] font-bold tracking-tight tabular-nums", clear ? "text-ink-muted" : "text-brand-navy")}>
+                {count}
+            </span>
             <span className="flex min-w-0 flex-col gap-0.5">
                 <span className="text-[13.5px] font-semibold leading-snug">{label}</span>
                 {sub && <span className="text-xs leading-snug text-ink-muted">{sub}</span>}
             </span>
-            <StatusPill tone={s.tone}>{s.tag}</StatusPill>
+            <StatusPill tone={clear ? "good" : s.tone}>{clear ? "All clear" : s.tag}</StatusPill>
         </Link>
     );
 }

@@ -421,8 +421,10 @@ export function SalesHeadOpsView() {
         actionTile("won_without_quote", "Won without an approved quote", "info"),
         actionTile("won_undone_week", "Won undone in the last 7 days", "info"),
     ];
-    const openTiles = tiles.filter((t) => t.ready && t.n > 0);
-    const clearTiles = tiles.filter((t) => t.ready && t.n === 0);
+    // A tile whose source failed on this database (not ready) is left out;
+    // a zero tile is shown, marked "All clear".
+    const readyTiles = tiles.filter((t) => t.ready);
+    const openTiles = readyTiles.filter((t) => t.n > 0);
 
     // ── Where open leads are sitting ─────────────────────────────────────────
     const HEAT_COLS = ["owned_open", "not_worked", "touched", "connected", "hot", "warm", "cold", "converted"] as const;
@@ -577,23 +579,20 @@ export function SalesHeadOpsView() {
             {/* Needs action now */}
             <div className="flex flex-col gap-3">
                 <SectionHeading title="Needs action now" note="Each opens its list with the actions on the row: assign, reassign, call, open lead." />
-                {openTiles.length > 0 ? (
+                {/* Every tile stays on screen, a zero one marked "All clear", so
+                    the grid reads the same on every database and every day. */}
+                {readyTiles.length > 0 ? (
                     <div className="grid grid-cols-1 gap-3.5 md:grid-cols-2 xl:grid-cols-3">
-                        {tiles.map(({ key, n, ready, ...t }) => (ready && n > 0 ? <ActionTile key={key} {...t} /> : null))}
+                        {readyTiles.map((t) => (
+                            <ActionTile key={t.key} severity={t.severity} count={t.count} label={t.label} sub={t.sub} href={t.href} clear={t.n === 0} />
+                        ))}
                     </div>
                 ) : dash.isLoading || idle.isLoading || health.isLoading || actions.isLoading ? (
                     <LoadingBlock />
-                ) : (
-                    <div className="flex items-center gap-2 rounded-2xl border border-border bg-surface px-5 py-4 text-sm font-semibold text-success shadow-card">
+                ) : null}
+                {readyTiles.length > 0 && openTiles.length === 0 && (
+                    <div className="flex items-center gap-2 text-[13px] font-semibold text-success">
                         <Check className="h-4 w-4" aria-hidden /> Nothing is past its limit right now.
-                    </div>
-                )}
-                {clearTiles.length > 0 && openTiles.length > 0 && (
-                    <div className="flex items-start gap-2 text-[13px] text-ink-muted">
-                        <Check className="mt-0.5 h-4 w-4 shrink-0 text-success" aria-hidden />
-                        <span>
-                            <span className="font-semibold text-success">All clear:</span> {clearTiles.map((t) => t.label.toLowerCase()).join(" · ")}
-                        </span>
                     </div>
                 )}
                 <p className="text-xs text-ink-muted">
