@@ -109,6 +109,12 @@ export interface PushCheckInput {
   consentSigned: boolean;
   /** The file was pushed before (a LEAD_PUSHED_TO_DEALER row exists). */
   pushedBefore: boolean;
+  /**
+   * 14 Oct: the house dealer pushed this file out at some point (a push row
+   * from the house). The house login keeps full access to such a file and may
+   * push it again — to the same dealer or another — until consent is signed.
+   */
+  houseOriginated?: boolean;
   paymentMethod: string | null | undefined;
   target: { dealerId: string; name: string; financeEnabled: boolean };
 }
@@ -129,6 +135,8 @@ export const NOT_HOUSE_MESSAGE = "Only files with the iTarang house dealer can b
  *     house dealer;
  *  3. a file that is not with the house dealer and was never pushed is a
  *     dealer's own lead and never movable.
+ * 14 Oct: the house login may push a file it pushed out before again, to
+ * any dealer, wherever it is now — still never after consent.
  */
 export function pushBlockedReason(
   input: Omit<PushCheckInput, "target" | "paymentMethod">,
@@ -136,6 +144,7 @@ export function pushBlockedReason(
   if (input.consentSigned) {
     return { status: 409, message: consentSignedMessage(input.currentDealerName) };
   }
+  if (input.actorIsHouseLogin && input.houseOriginated) return null;
   const adminAgain =
     !input.actorIsHouseLogin &&
     (PUSH_AGAIN_ROLES as readonly string[]).includes(input.actorRole ?? "") &&

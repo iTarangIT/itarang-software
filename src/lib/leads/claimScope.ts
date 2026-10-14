@@ -123,5 +123,4 @@ export function numberSearchMode(search: string | null | undefined): MobileList 
     return parsed.mobiles.length > 0 ? parsed : null;
 }
 
-/** Marker written into the claim touchpoint's remarks; the Sales Head list keys on it. */
-export const OUTSIDE_TERRITORY_MARKER = "[outside territory]";
+// The claim touchpoint's territory markers live in claimTerritory.ts (server-only).

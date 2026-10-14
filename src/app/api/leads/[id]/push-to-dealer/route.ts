@@ -172,6 +172,10 @@ export const POST = withErrorHandler(async (req: Request, { params }: { params: 
         assignment_status: "assigned",
         dealer_assigned_at: now,
         dealer_assigned_by: user.id,
+        // 14 Oct: a delete by the dealer it leaves does not follow the file —
+        // the dealer receiving it starts with it on their list.
+        deleted_by_dealer_at: null,
+        deleted_by_dealer_user: null,
         updated_at: now,
       })
       .where(and(eq(leads.id, lead.id), eq(leads.dealer_id, lead.dealerId!)))

@@ -5,7 +5,8 @@ import { requireRole } from '@/lib/auth-utils';
 import { eq, and, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { markLeadDeleted } from '@/lib/leads/multi-party-delete';
-import { dealerMayActOnLead } from '@/lib/auth/requireLeadAccess';
+import { dealerMayActOnLead, resolveDealerCode } from '@/lib/auth/requireLeadAccess';
+import { dealerOwnsLead } from '@/lib/auth/leadAccessRules';
 
 const updateSchema = z.object({
     full_name: z.string().optional().nullable(),
@@ -52,11 +53,15 @@ export const GET = withErrorHandler(async (_req: Request, { params }: { params: 
     if (!lead) return errorResponse('Lead not found', 404);
     // E-285 — deleted from the dealer side. It may still be live for the admin
     // and the lender, but it is gone as far as this dashboard is concerned.
-    if (lead.deleted_by_dealer_at) return errorResponse('Lead not found', 404);
+    // 14 Oct: only for the dealer that has it — the house keeps a file it
+    // pushed out even after that dealer deletes it from their dashboard.
+    if (lead.deleted_by_dealer_at && dealerOwnsLead(lead.dealer_id, await resolveDealerCode(user))) {
+        return errorResponse('Lead not found', 404);
+    }
 
     const isOwner = lead.uploader_id === user.id;
     // ID 119: resolves a dealer login with no users.dealer_id via its onboarding code.
-    const isSameDealer = await dealerMayActOnLead(user, lead.dealer_id);
+    const isSameDealer = await dealerMayActOnLead(user, lead.dealer_id, id);
     if (!isOwner && !isSameDealer) {
         return errorResponse('Forbidden: You do not have permission to view this lead', 403);
     }
@@ -116,6 +121,9 @@ export const GET = withErrorHandler(async (_req: Request, { params }: { params: 
     return successResponse({
         leadId: lead.id,
         referenceId: lead.reference_id,
+        // 14 Oct: the version the editor loaded — sent back on save so a change
+        // made meanwhile by the other side (house / dealer) is not overwritten.
+        updatedAt: lead.updated_at ? new Date(lead.updated_at).toISOString() : null,
         formData: {
             full_name: lead.full_name || '',
             phone: lead.phone || '',
@@ -172,7 +180,7 @@ export const PATCH = withErrorHandler(async (req: Request, { params }: { params:
     // Allow edit if user is the uploader OR if the lead belongs to the same dealer
     const isOwner = lead.uploader_id === user.id;
     // ID 119: resolves a dealer login with no users.dealer_id via its onboarding code.
-    const isSameDealer = await dealerMayActOnLead(user, lead.dealer_id);
+    const isSameDealer = await dealerMayActOnLead(user, lead.dealer_id, id);
     if (!isOwner && !isSameDealer) return errorResponse('Forbidden: You do not have permission to edit this lead', 403);
 
     if (data.commitStep) {
@@ -255,6 +263,12 @@ export const DELETE = withErrorHandler(async (req: Request, { params }: { params
 
     if (!lead) return errorResponse('Lead not found', 404);
     if (lead.uploader_id !== user.id) return errorResponse('Forbidden: You can only delete your own leads', 403);
+    // 14 Oct: "delete" hides the file from the dealer side as a whole — so a
+    // file pushed to another dealer can't be deleted by the house, or it would
+    // vanish from that dealer's list too. Push it back first if needed.
+    if (!dealerOwnsLead(lead.dealer_id, await resolveDealerCode(user))) {
+        return errorResponse('This file is with another dealer now, so it can’t be deleted from here.', 409);
+    }
     if (lead.deleted_by_dealer_at) return errorResponse('Lead already deleted', 404);
 
     try {

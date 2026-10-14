@@ -11,6 +11,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { leads, loanSanctions } from "@/lib/db/schema";
 import { getAuthenticatedAppUser } from "@/lib/kyc/admin-workflow";
+import { dealerVisibleLeads } from '@/lib/leads/dealerLeadScope';
 
 export const dynamic = "force-dynamic";
 
@@ -23,6 +24,8 @@ export async function GET() {
     if ((user.role ?? "").toLowerCase() !== "dealer" || !user.dealer_id) {
       return NextResponse.json({ success: true, data: { leadIds: [] } });
     }
+    // 14 Oct: the house dealer also sees the files it pushed out (dealerLeadScope.ts).
+    const visible = await dealerVisibleLeads(user.dealer_id);
 
     const rows = await db
       .selectDistinct({ lead_id: loanSanctions.lead_id })
@@ -30,7 +33,7 @@ export async function GET() {
       .innerJoin(leads, eq(leads.id, loanSanctions.lead_id))
       .where(
         and(
-          eq(leads.dealer_id, user.dealer_id),
+          visible,
           sql`${loanSanctions.dealer_payment_status} = 'pending'`,
         ),
       );
