@@ -41,6 +41,7 @@ import {
     LEAD_DOORS,
     LEAD_DOOR_LABEL,
     SOURCE_DOOR_NONE,
+    scrapeRunLabels,
 } from "@/lib/leads/leadSourceVocab";
 import {
     BUSINESS_TYPE_OPTIONS,
@@ -147,6 +148,7 @@ export function LeadsFilterBar({
 }: Props) {
     const moreCount = countSecondary(draft);
     const aiFacets = facets?.aiSignals;
+    const scrapeRunOptions = scrapeRunLabels(facets?.scrapeRuns ?? []);
 
     // Dispositions present in the data but NOT in the CC sheet — a campaign
     // configured with NeoDove's stock vocabulary, or a value added in their
@@ -411,6 +413,24 @@ export function LeadsFilterBar({
                         </option>
                     ))}
                     <option value={SOURCE_DOOR_NONE}>Unknown</option>
+                </select>
+
+                {/* Scrape run — every scraper run you have done, newest first,
+                    with how many of its leads are still unassigned. Pick one,
+                    Select all matching, Reassign → ISR: a run handed out whole. */}
+                <select
+                    aria-label="Scrape run"
+                    className={`${SELECT_CLASS} min-w-[220px] flex-1`}
+                    value={draft.scrapeRun}
+                    onChange={(e) => onChange("scrapeRun", e.target.value)}
+                >
+                    <option value="">All scrape runs</option>
+                    {scrapeRunOptions.map((r) => (
+                        <option key={r.id} value={r.id}>
+                            {r.label} — {r.lead_count} lead{r.lead_count === 1 ? "" : "s"}
+                            {r.unassigned ? ` (${r.unassigned} unassigned)` : " (all assigned)"}
+                        </option>
+                    ))}
                 </select>
 
                 {/* NeoDove — a toggle in the PRIMARY row, not an option in the

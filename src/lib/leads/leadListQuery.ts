@@ -17,6 +17,7 @@ import { UNASSIGNED_FILTER } from "@/lib/admin/leadsInfoFilters";
 import type { IntentBucket } from "@/lib/leads/intentBucket";
 import { NEODOVE_LINKED_SYNC_STATUSES } from "@/lib/neodove/syncStatus";
 import type { CampaignFacet } from "@/lib/leads/leadCampaign";
+import type { ScrapeRunFacet } from "@/lib/leads/acquisitionCampaigns";
 // Value import, so it must come from the dependency-free module — this file
 // pulls in `db` and can never be reachable from a client component.
 import { CAMPAIGN_NONE } from "@/lib/leads/campaign";
@@ -92,6 +93,8 @@ export type LeadListFilters = {
     source?: string | null;
     /** E-314 source_door, or SOURCE_DOOR_NONE for leads with no door stamped. */
     sourceDoor?: string | null;
+    /** One scrape run's acquisition campaign id (uuid, validated by the parser). */
+    scrapeRun?: string | null;
     /**
      * Only leads that are with the NeoDove calling team (E-224 sync state), NOT
      * `source = 'neodove'` — see the note on LeadFilters.neodove.
@@ -206,6 +209,8 @@ export type LeadListFacets = {
      * module's single-statement facets query cannot express.
      */
     campaigns?: CampaignFacet[];
+    /** Scrape runs with active leads, newest first. From fetchScrapeRunFacets(). */
+    scrapeRuns?: ScrapeRunFacet[];
     /**
      * How far the AI dialer has actually got.
      *
@@ -392,6 +397,11 @@ function buildWhere(f: LeadListFilters, opts?: { ignoreIntent?: boolean }) {
     // Through to_jsonb, like business_type's decorator: source_door is not in
     // schema.ts, and a database without E-314 must still serve this filter
     // (it just matches nothing / everything-unknown) rather than 500 the list.
+    // Named directly, not via to_jsonb, so dealer_leads_acquisition_campaign_idx
+    // serves it — and only emitted when set, like business_type above.
+    if (f.scrapeRun) {
+        conds.push(sql`dl.acquisition_campaign_id = ${f.scrapeRun}::uuid`);
+    }
     if (f.sourceDoor === SOURCE_DOOR_NONE) {
         conds.push(sql`(to_jsonb(dl) ->> 'source_door') IS NULL`);
     } else if (f.sourceDoor) {
