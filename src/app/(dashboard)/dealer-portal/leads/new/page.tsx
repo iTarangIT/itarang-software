@@ -134,8 +134,10 @@ function NewLeadWizardContent() {
     // Shown only to the house-dealer login / internal roles (the lookup API
     // answers 403 to anyone else). Blank keeps the lead with iTarang House.
     const [pushEligible, setPushEligible] = useState(false);
-    const [dealerMobile, setDealerMobile] = useState('');
+    // 14 Oct: search by dealer company name OR mobile, then pick from the list.
+    const [dealerQuery, setDealerQuery] = useState('');
     const [dealerMatch, setDealerMatch] = useState<{ dealerId: string; name: string } | null>(null);
+    const [dealerResults, setDealerResults] = useState<{ dealerId: string; name: string }[]>([]);
     const [dealerLookupMsg, setDealerLookupMsg] = useState<string | null>(null);
     const [dealerLookupLoading, setDealerLookupLoading] = useState(false);
 
@@ -147,21 +149,30 @@ function NewLeadWizardContent() {
         return () => { alive = false; };
     }, []);
 
+    const dealerFinanceOnly = isFinanceMethod(formData.payment_method);
     useEffect(() => {
-        setDealerMatch(null);
+        setDealerResults([]);
         setDealerLookupMsg(null);
-        const digits = dealerMobile.replace(/\D/g, '');
-        if (!pushEligible || !digits) return;
-        if (digits.length < 10) { setDealerLookupMsg('Enter the 10-digit dealer mobile number'); return; }
+        const q = dealerQuery.trim();
+        if (!pushEligible || !q || dealerMatch) return;
+        const digits = q.replace(/\D/g, '');
+        const looksLikeMobile = /^[\d\s+()-]+$/.test(q);
+        if (looksLikeMobile && digits.length < 10) { setDealerLookupMsg('Keep typing — a mobile needs 10 digits'); return; }
+        if (!looksLikeMobile && q.length < 2) return;
         let alive = true;
         setDealerLookupLoading(true);
         const t = setTimeout(async () => {
             try {
-                const r = await fetch(`/api/leads/dealer-lookup?mobile=${encodeURIComponent(digits)}`, { cache: 'no-store' });
+                const finance = dealerFinanceOnly ? '&finance=1' : '';
+                const r = await fetch(`/api/leads/dealer-lookup?q=${encodeURIComponent(looksLikeMobile ? digits : q)}${finance}`, { cache: 'no-store' });
                 const j = await r.json().catch(() => null);
                 if (!alive) return;
-                if (j?.success && j.data?.found) setDealerMatch(j.data.dealer);
-                else setDealerLookupMsg(j?.data?.message || j?.error?.message || 'No active dealer with this number');
+                const found: { dealerId: string; name: string }[] = j?.success ? j.data?.dealers ?? [] : [];
+                if (found.length) setDealerResults(found);
+                else setDealerLookupMsg(
+                    j?.error?.message
+                    || (dealerFinanceOnly ? 'No finance-enabled dealer matches' : looksLikeMobile ? 'No active dealer with this number' : 'No active dealer matches this name'),
+                );
             } catch {
                 if (alive) setDealerLookupMsg('Could not look up the dealer. Try again.');
             } finally {
@@ -169,7 +180,9 @@ function NewLeadWizardContent() {
             }
         }, 400);
         return () => { alive = false; clearTimeout(t); setDealerLookupLoading(false); };
-    }, [dealerMobile, pushEligible]);
+    }, [dealerQuery, dealerMatch, dealerFinanceOnly, pushEligible]);
+
+    const clearDealerPick = () => { setDealerMatch(null); setDealerQuery(''); setDealerResults([]); setDealerLookupMsg(null); };
 
     // ─── Draft Init ─────────────────────────────────────────────────────────
 
@@ -419,9 +432,9 @@ function NewLeadWizardContent() {
             }, 60);
             return;
         }
-        // ID 33 — a typed dealer mobile must resolve to an active dealer.
-        if (pushEligible && dealerMobile.trim() && !dealerMatch) {
-            setApiError(`${dealerLookupMsg || 'No active dealer with this number'}. Clear the dealer mobile to keep this lead with iTarang House.`);
+        // ID 33 — typed text in the dealer search must end in a picked dealer.
+        if (pushEligible && dealerQuery.trim() && !dealerMatch) {
+            setApiError('Pick the dealer from the list, or clear the dealer search to keep this lead with iTarang House.');
             return;
         }
         setShowConfirm(true);
@@ -443,8 +456,8 @@ function NewLeadWizardContent() {
                     expected_updated_at: loadedVersion ?? undefined,
                     lead_score: leadScoreMap[formData.interest_level] || 30,
                     additional_products: additionalProducts.filter(p => p.product_id),
-                    // ID 33 — only sent once the number resolved to a dealer.
-                    push_to_dealer_mobile: pushEligible && dealerMatch ? dealerMobile.trim() : undefined,
+                    // ID 33 — only sent once a dealer was picked from the search.
+                    push_to_dealer_id: pushEligible && dealerMatch ? dealerMatch.dealerId : undefined,
                 })
             });
             const result = await res.json();
@@ -970,27 +983,54 @@ function NewLeadWizardContent() {
                     {pushEligible && (
                         <SectionCard title="Submitting for a dealer? (iTarang team)">
                             <div className="space-y-2">
-                                <InputField
-                                    label="Dealer mobile number (optional)"
-                                    value={dealerMobile}
-                                    onChange={(v) => setDealerMobile(v.replace(/[^0-9+ ]/g, ''))}
-                                    placeholder="Leave blank to keep this lead with iTarang House"
-                                    inputMode="tel"
-                                    maxLength={14}
-                                />
-                                {dealerLookupLoading ? (
-                                    <p className="px-1 text-xs text-gray-500">Looking up the dealer…</p>
-                                ) : dealerMatch ? (
+                                {dealerMatch ? (
+                                    <>
+                                        <label className="block text-sm font-semibold text-gray-700">Dealer (optional)</label>
+                                        <div className="flex items-center justify-between gap-2 px-4 py-2.5 border border-green-200 bg-green-50 rounded-xl">
+                                            <div className="min-w-0">
+                                                <p className="text-sm font-semibold text-green-800 truncate">{dealerMatch.name}</p>
+                                                <p className="text-xs text-green-700">{dealerMatch.dealerId}</p>
+                                            </div>
+                                            <button type="button" onClick={clearDealerPick}
+                                                className="text-xs font-semibold text-gray-600 hover:text-gray-900 shrink-0">
+                                                Change
+                                            </button>
+                                        </div>
+                                    </>
+                                ) : (
+                                    <InputField
+                                        label="Dealer (optional)"
+                                        value={dealerQuery}
+                                        onChange={(v) => setDealerQuery(v)}
+                                        placeholder="Dealer company name or 10-digit mobile — leave blank for iTarang House"
+                                        maxLength={80}
+                                    />
+                                )}
+                                {dealerMatch ? (
                                     <p className="px-1 text-xs font-semibold text-emerald-700">
                                         This lead will be created under {dealerMatch.name}. It will show in their portal; you can still finish the KYC.
                                     </p>
+                                ) : dealerLookupLoading ? (
+                                    <p className="px-1 text-xs text-gray-500 flex items-center gap-1.5"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Searching dealers…</p>
+                                ) : dealerResults.length ? (
+                                    <ul className="max-h-56 overflow-y-auto border border-gray-200 rounded-xl divide-y divide-gray-100">
+                                        {dealerResults.map((d) => (
+                                            <li key={d.dealerId}>
+                                                <button type="button" onClick={() => { setDealerMatch(d); setDealerResults([]); }}
+                                                    className="w-full text-left px-4 py-2 hover:bg-gray-50">
+                                                    <span className="block text-sm font-medium text-gray-900">{d.name}</span>
+                                                    <span className="block text-xs text-gray-500">{d.dealerId}</span>
+                                                </button>
+                                            </li>
+                                        ))}
+                                    </ul>
                                 ) : dealerLookupMsg ? (
                                     <p className="px-1 text-xs font-semibold text-amber-700">
-                                        {dealerLookupMsg}. Clear the number to keep this lead with iTarang House.
+                                        {dealerLookupMsg}. Clear the search to keep this lead with iTarang House.
                                     </p>
                                 ) : (
                                     <p className="px-1 text-xs text-gray-500">
-                                        If the customer came through an onboarded dealer, enter that dealer&apos;s mobile and the lead is created under them.
+                                        If the customer came through an onboarded dealer, type the dealer&apos;s company name or mobile and pick them from the list.
                                     </p>
                                 )}
                             </div>
