@@ -7,7 +7,7 @@
 
 import { useCallback, useRef, useState } from "react";
 import { toast } from "sonner";
-import { ImagePlus, Loader2, X } from "lucide-react";
+import { FileText, ImagePlus, Loader2, X } from "lucide-react";
 
 type Props = {
     value: string[];
@@ -17,8 +17,16 @@ type Props = {
 };
 
 // Matches the allow-list enforced by /api/uploads/dealer-documents.
-const ACCEPTED_TYPES = ["image/jpeg", "image/jpg", "image/png", "image/webp"];
+const ACCEPTED_TYPES = [
+    "image/jpeg",
+    "image/jpg",
+    "image/png",
+    "image/webp",
+    "application/pdf",
+];
 const UPLOAD_FOLDER = "visit-photos";
+// Matches the server cap in /api/uploads/dealer-documents.
+const MAX_FILE_BYTES = 25 * 1024 * 1024;
 
 async function uploadOne(file: File): Promise<string> {
     const fd = new FormData();
@@ -57,7 +65,13 @@ export function PhotoUploader({ value, onChange, max = 10, disabled }: Props) {
             const valid: File[] = [];
             for (const f of incoming) {
                 if (!ACCEPTED_TYPES.includes(f.type)) {
-                    toast.error(`${f.name}: only JPG, PNG or WEBP images are allowed.`);
+                    toast.error(`${f.name}: only JPG, PNG, WEBP or PDF files are allowed.`);
+                    continue;
+                }
+                if (f.size > MAX_FILE_BYTES) {
+                    toast.error(
+                        `${f.name}: you cannot upload a file larger than 25 MB.`,
+                    );
                     continue;
                 }
                 valid.push(f);
@@ -98,7 +112,7 @@ export function PhotoUploader({ value, onChange, max = 10, disabled }: Props) {
             <input
                 ref={inputRef}
                 type="file"
-                accept="image/png,image/jpeg,image/webp"
+                accept="image/png,image/jpeg,image/webp,application/pdf"
                 multiple
                 className="hidden"
                 onChange={(e) => {
@@ -141,7 +155,7 @@ export function PhotoUploader({ value, onChange, max = 10, disabled }: Props) {
                             : "Drag & drop photos here, or click to choose"}
                 </span>
                 <span className="text-[11px] text-gray-400">
-                    JPG, PNG or WEBP · up to 10 MB each
+                    JPG, PNG, WEBP or PDF · up to 25 MB each
                 </span>
             </button>
 
@@ -152,12 +166,25 @@ export function PhotoUploader({ value, onChange, max = 10, disabled }: Props) {
                             key={`${url}-${i}`}
                             className="group relative aspect-square overflow-hidden rounded-md border border-gray-200 bg-gray-50"
                         >
-                            {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img
-                                src={url}
-                                alt={`Visit photo ${i + 1}`}
-                                className="h-full w-full object-cover"
-                            />
+                            {/\.pdf($|\?)/i.test(url) ? (
+                                <a
+                                    href={url}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    title="Open PDF"
+                                    className="flex h-full w-full flex-col items-center justify-center gap-1 text-[10px] text-gray-500"
+                                >
+                                    <FileText className="h-8 w-8 text-red-500" />
+                                    PDF
+                                </a>
+                            ) : (
+                                // eslint-disable-next-line @next/next/no-img-element
+                                <img
+                                    src={url}
+                                    alt={`Visit photo ${i + 1}`}
+                                    className="h-full w-full object-cover"
+                                />
+                            )}
                             {!disabled && (
                                 <button
                                     type="button"
