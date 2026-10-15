@@ -18,6 +18,14 @@ const nextConfig: NextConfig = {
   images: {
     unoptimized: true,
   },
+  experimental: {
+    // The proxy (src/middleware.ts) buffers request bodies and silently
+    // truncates past this (default 10 MB), so a bigger upload reaches the
+    // route cut short and req.formData() throws "Failed to parse body as
+    // FormData." Upload routes allow 25 MB; the headroom covers the
+    // multipart boundaries and the other form fields.
+    proxyClientMaxBodySize: "26mb",
+  },
   typescript: {
     ignoreBuildErrors: true,
   },
