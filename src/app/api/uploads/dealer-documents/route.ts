@@ -54,13 +54,15 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // optional size check: 10 MB
-    const maxSize = 10 * 1024 * 1024;
+    // 25 MB — keep in step with proxyClientMaxBodySize in next.config.ts,
+    // which must sit above this or the body is truncated before we get here
+    // and formData() throws "Failed to parse body as FormData."
+    const maxSize = 25 * 1024 * 1024;
     if (file.size > maxSize) {
       return NextResponse.json(
         {
           success: false,
-          message: "File size must be less than 10 MB",
+          message: "You cannot upload a file larger than 25 MB",
         },
         { status: 400 }
       );
