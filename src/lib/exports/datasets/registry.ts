@@ -38,6 +38,7 @@ import { BUSINESS_TYPE_OPTIONS, BUSINESS_TYPE_UNSET, BUSINESS_TYPE_UNSET_LABEL }
 import { houseDealerCode } from "@/lib/leads/dealerByMobile";
 import { LEAD_PUSHED_TO_DEALER } from "@/lib/leads/pushGuards";
 import { assistedByLabel, assistedBySql } from "@/lib/exports/assistedBy";
+import { billCell, exportOrigin, recordingCell } from "@/lib/exports/fileLinks";
 
 // ID 122: the one onboarding clock (src/lib/onboarding/clock.ts).
 const ONBOARDING_CLOCK = sql.raw(onboardingClockSql("app"));
@@ -958,7 +959,7 @@ const calls: Dataset = {
                 { key: "call_duration_sec", header: "Seconds", meaning: "Recorded duration.", kind: "number" },
                 { key: "engaged", header: "Engaged", meaning: "Yes = a connected call where the rep spoke with the dealer, any duration; on an AI call, the flag stored with the call." },
                 { key: "ai_band", header: "AI band", meaning: "On an AI call: Qualified, Warm, Cold or Disqualified." },
-                { key: "recording_url", header: "Recording", meaning: "Link to the recording, when there is one.", width: 40 },
+                { key: "recording_url", header: "Recording", meaning: "A CRM link to the recording, when there is one. Clicking it checks who you are (logged in, allowed to hear this call) and then plays it through a fresh link that lasts 15 minutes; the file itself never sits in this download. A recording still only on NeoDove says so instead.", width: 40 },
                 { key: "remarks", header: "Remarks", meaning: "What the caller wrote; on an AI call, the AI's summary.", width: 50 },
             ],
         },
@@ -982,7 +983,8 @@ const calls: Dataset = {
                    ${engagedState(t)} AS engaged,
                    (SELECT a.band FROM ai_call_logs a
                      WHERE ${AI_CALL} AND a.call_id = t.external_event_id LIMIT 1) AS ai_band,
-                   t.recording_url, t.remarks
+                   t.recording_url, t.remarks,
+                   CASE WHEN ${AI_CALL} THEN t.external_event_id END AS ai_call_id
               FROM lead_touchpoints t
               LEFT JOIN dealer_leads dl ON dl.id = t.dealer_lead_id
               LEFT JOIN users u ON u.id::text = t.performed_by
@@ -990,7 +992,14 @@ const calls: Dataset = {
              ORDER BY t.performed_at DESC
              LIMIT ${rowLimit(ctx)}
         `);
-        return [{ ...this.sheets[0], rows: data }];
+        // ID 166: never the stored or provider link itself — a checked CRM link.
+        const origin = exportOrigin();
+        return [
+            {
+                ...this.sheets[0],
+                rows: data.map(({ ai_call_id, recording_url, ...r }) => ({ ...r, recording_url: recordingCell(recording_url, ai_call_id, origin) })),
+            },
+        ];
     },
 };
 
@@ -1577,7 +1586,7 @@ const expenses: Dataset = {
                 { key: "rejection_reason", header: "Rejection reason", meaning: "Why it was rejected, when it was.", width: 30 },
                 { key: "source", header: "Entered through", meaning: "'manual' = typed in; 'ai' = read from an uploaded or Drive bill." },
                 { key: "attention_reason", header: "Needs checking", meaning: "Why the row was flagged when it was read, if it was.", width: 30 },
-                { key: "bill_url", header: "Bill link", meaning: "Link to the bill.", width: 40 },
+                { key: "bill_url", header: "Bill link", meaning: "A CRM link to the bill. Clicking it checks who you are (Finance, Admin, CEO or whoever submitted it) and then opens it through a fresh link that lasts 15 minutes; the file itself never sits in this download.", width: 40 },
             ],
         },
     ],
@@ -1600,7 +1609,9 @@ const expenses: Dataset = {
              ORDER BY expense_date DESC
              LIMIT ${rowLimit(ctx)}
         `);
-        return [{ ...this.sheets[0], rows: data }];
+        // ID 166: a checked CRM link, never the stored bill link.
+        const origin = exportOrigin();
+        return [{ ...this.sheets[0], rows: data.map((r) => ({ ...r, bill_url: billCell(r.bill_url, origin) })) }];
     },
 };
 
