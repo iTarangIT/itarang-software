@@ -13,7 +13,8 @@
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { errorMessage } from "@/lib/api-utils";
-import { getNeodoveConfig, redactEndpoint, resolveEndpoint } from "./config";
+import { getNeodoveConfig, redactEndpoint } from "./config";
+import { resolveCampaignEndpoint } from "./endpointStore";
 import type { NeodovePushLead, NeodovePushResult } from "./types";
 
 const MAX_ATTEMPTS = 3;
@@ -36,7 +37,8 @@ export async function pushLead(opts: {
 
     let url: string;
     try {
-        url = resolveEndpoint(opts.endpointRef);
+        // A32: an env var name, or "DB" = the campaign's stored, encrypted endpoint (E-344).
+        url = await resolveCampaignEndpoint(opts.endpointRef, opts.campaignId);
     } catch (err) {
         const result: NeodovePushResult = {
             ok: false,
