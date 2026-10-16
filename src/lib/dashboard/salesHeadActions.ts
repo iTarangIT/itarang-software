@@ -451,7 +451,7 @@ async function stockToUpload(): Promise<Built> {
     if (tasks == null) throw new Error("stock_upload_tasks missing (E-348 not applied)");
     const rows: ActionRow[] = tasks.map((t) => ({
         lead_id: `stock-task-${t.id}`,
-        dealer: t.accountName ?? t.customerName ?? "Buyer not matched",
+        dealer: t.accountName ?? (t.customerName ? `${t.customerName} (buyer not linked)` : "Buyer not linked"),
         city: null,
         state: null,
         owner_name: null,

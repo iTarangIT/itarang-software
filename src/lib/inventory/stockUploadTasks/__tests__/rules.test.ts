@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import {
+    BUYER_NOT_LINKED,
+    STOCK_TASKS_LIVE_FROM,
     batterySerialLines,
+    escalationMessage,
+    importedInvoiceOpensTask,
+    invoiceReversal,
+    zohoLinesForSerials,
     classifySerials,
     cleanSerials,
     invoiceSerialTotals,
@@ -97,7 +103,72 @@ describe("escalation and copy (ID 174)", () => {
     it("writes the email line and the progress line", () => {
         expect(stockTaskLine(3, 1)).toBe("3 open, 1 overdue");
         expect(stockTaskProgress({ expected: 5, read: 4, inStock: 2, otherDealer: 1, buyerKnown: false })).toBe(
-            "2 of 5 serials in the dealer's stock · 1 under another dealer · 1 serial not read from the invoice · buyer not matched to a dealer account",
+            "2 of 5 serials in the dealer's stock · 1 under another dealer · 1 serial not read from the invoice · " + BUYER_NOT_LINKED,
+        );
+    });
+});
+
+describe("Zoho / Vyapar invoices (ID 174)", () => {
+    it("reads Zoho lines: HSN, quantity and serials from name or description", () => {
+        const lines = zohoLinesForSerials([
+            { name: "Trontek Li Battery Pack 51v 105Ah", description: "Serial No: ZB1001, ZB1002", quantity: 2, hsn_or_sac: "8507.60.00" },
+            { name: "Charger 10A", quantity: 1, hsn_or_sac: "85044030" },
+        ]);
+        expect(lines[0]).toMatchObject({ line_no: 1, hsn_code: "85076000", quantity: 2 });
+        const battery = batterySerialLines(lines);
+        expect(battery).toHaveLength(1);
+        expect(battery[0].serials).toEqual(["ZB1001", "ZB1002"]);
+    });
+
+    it("takes a mapped class over the HSN (Vyapar Item mapping)", () => {
+        const lines = [
+            { line_no: 1, hsn_code: null, quantity: 3, description: "Battery 51V Serial No: V0001", product_class: "battery" },
+            { line_no: 2, hsn_code: "85076000", quantity: 1, description: "Onboarding fee", product_class: "other" },
+        ];
+        const battery = batterySerialLines(lines);
+        expect(battery.map((l) => l.line_no)).toEqual([1]);
+        expect(invoiceSerialTotals(battery)).toEqual({ expected: 3, serials: ["V0001"] });
+    });
+
+    it("a battery line with no quantity still yields a line (task opens, cannot auto-close)", () => {
+        const battery = batterySerialLines([{ line_no: 1, hsn_code: "85076000", quantity: 0, description: "Battery" }]);
+        expect(battery).toHaveLength(1);
+        expect(invoiceSerialTotals(battery).expected).toBe(0);
+        expect(taskComplete({ buyerAccountId: "ACC-1", expected: 0, statuses: [] })).toBe(false);
+        expect(stockTaskProgress({ expected: 0, read: 0, inStock: 0, otherDealer: 0, buyerKnown: true })).toContain("serials not read");
+    });
+
+    it("opens tasks for imported invoices only from the go-live date", () => {
+        expect(importedInvoiceOpensTask(STOCK_TASKS_LIVE_FROM)).toBe(true);
+        expect(importedInvoiceOpensTask("2026-10-20")).toBe(true);
+        expect(importedInvoiceOpensTask("2026-07-31")).toBe(false);
+        expect(importedInvoiceOpensTask(null)).toBe(true);
+    });
+});
+
+describe("voided / credit-noted invoices (ID 174)", () => {
+    it("closes on a void, or on credit notes covering the invoice", () => {
+        expect(invoiceReversal({ voided: true, invoiceTotal: 1000, credited: 0 })).toBe("Invoice voided");
+        expect(invoiceReversal({ voided: false, invoiceTotal: 1000, credited: 999.5, creditNotes: ["CN/1"] })).toBe(
+            "Invoice fully reversed by credit note CN/1",
+        );
+        expect(invoiceReversal({ voided: false, invoiceTotal: 1000, credited: 1000, creditNotes: ["CN/1", "CN/2"] })).toBe(
+            "Invoice fully reversed by credit notes CN/1, CN/2",
+        );
+    });
+
+    it("keeps the task open on a partial credit note or an unknown total", () => {
+        expect(invoiceReversal({ voided: false, invoiceTotal: 1000, credited: 400 })).toBeNull();
+        expect(invoiceReversal({ voided: false, invoiceTotal: null, credited: 400 })).toBeNull();
+    });
+});
+
+describe("escalation (ID 174)", () => {
+    it("says when the buyer is not linked", () => {
+        const m = escalationMessage({ invoiceNumber: "ITG/1", customerName: "X Motors", inStock: 0, expected: 2, buyerKnown: false });
+        expect(m).toContain(BUYER_NOT_LINKED);
+        expect(escalationMessage({ invoiceNumber: "ITG/1", customerName: null, inStock: 1, expected: 2, buyerKnown: true })).toBe(
+            "Invoice ITG/1 · buyer unknown: 1 of 2 batteries in the dealer's stock after 2 working days.",
         );
     });
 });
