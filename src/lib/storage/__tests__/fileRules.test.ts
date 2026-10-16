@@ -85,6 +85,12 @@ describe("mayOpenFile (ID 166)", () => {
         expect(mayOpenFile(viewer("asm"), kyc, { accountOwnerId: "u-1" })).toBe(true);
     });
 
+    it("opens KYC for the lead's assignee and sales manager, like the KYC screens (ID 119)", () => {
+        expect(mayOpenFile(viewer("sales_manager"), kyc, { leadSmAssignedTo: "u-1" })).toBe(true);
+        expect(mayOpenFile(viewer("sales_executive"), kyc, { leadAssignedTo: "u-1" })).toBe(true);
+        expect(mayOpenFile(viewer("sales_manager"), kyc, { leadSmAssignedTo: "u-2", leadAssignedTo: null })).toBe(false);
+    });
+
     it("gives a dealer only its own customers, and the uploader its upload", () => {
         expect(mayOpenFile(viewer("dealer", { dealerCode: "D1" }), kyc, { leadDealerId: "D1" })).toBe(true);
         expect(mayOpenFile(viewer("dealer", { dealerCode: "D1" }), kyc, { leadDealerId: "D2" })).toBe(false);
