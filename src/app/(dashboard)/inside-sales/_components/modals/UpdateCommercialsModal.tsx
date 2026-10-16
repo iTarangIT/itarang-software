@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { DEAL_CARD_QUESTIONS } from "@/lib/leads/dealCardRules";
+import type { DealerOnboardedVerdict } from "@/lib/leads/dealerOnboardedRules";
 import type {
     AssetType,
     CommercialsProductLine,
@@ -71,6 +72,10 @@ export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercia
     const [batteriesPerMonth, setBatteriesPerMonth] = useState(prevCard ? String(prevCard.batteries_per_month) : "");
     const [financeFiles, setFinanceFiles] = useState(prevCard ? String(prevCard.finance_files_per_month) : "");
     const cardLocked = currentCommercials?.deal_card_locked ?? null;
+    // ID 186 (Kartik, 14 Oct): the card is asked only for a dealer who is not
+    // onboarded yet. null = still checking (or the check failed: then asked).
+    const [onboarded, setOnboarded] = useState<DealerOnboardedVerdict | null>(null);
+    const askCard = !onboarded?.onboarded;
     const [standardTerms, setStandardTerms] = useState<{ warranty: string; delivery: string } | null>(null);
     const [quoteUrl, setQuoteUrl] = useState(currentCommercials?.quote_document_url ?? "");
     const [quoteFileName, setQuoteFileName] = useState("");
@@ -112,6 +117,25 @@ export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercia
             }
         })();
     }, [open, standardTerms]);
+
+    // ID 186: is the dealer already onboarded? The server decides again on
+    // save; this only hides the card.
+    useEffect(() => {
+        if (!open) return;
+        let cancelled = false;
+        (async () => {
+            try {
+                const res = await fetch(`/api/inside-sales/lead/${encodeURIComponent(leadId)}/commercials`);
+                const json = await res.json();
+                if (!cancelled && res.ok && json?.success) setOnboarded(json.data.dealer_onboarded ?? null);
+            } catch {
+                // The card stays asked.
+            }
+        })();
+        return () => {
+            cancelled = true;
+        };
+    }, [open, leadId]);
 
     const productsRequested = useRef(false);
     useEffect(() => {
@@ -215,11 +239,12 @@ export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercia
             toast.error("Enter the credit period in days (1–180).");
             return;
         }
-        // ID 172: every quote states the deal card.
+        // ID 172: a quote states the deal card — ID 186: only for a dealer
+        // who is not onboarded yet.
         const feeN = Number(fee);
         const batN = Number(batteriesPerMonth);
         const finN = Number(financeFiles);
-        if (isQuote) {
+        if (isQuote && askCard) {
             if (fee.trim() === "" || !Number.isFinite(feeN) || feeN < 0) {
                 toast.error("Enter the onboarding fee (₹, 0 if waived).");
                 return;
@@ -251,10 +276,13 @@ export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercia
                     dealer_payment_terms: payTerms || "cash",
                     credit_days: payTerms === "credit" ? days : null,
                     // ID 172: derived on the server from finance files / month.
-                    customer_finance: prevCard ? prevCard.finance_files_per_month > 0 : null,
+                    // ID 186: no card for an onboarded dealer — keep the quote's.
+                    customer_finance: prevCard
+                        ? prevCard.finance_files_per_month > 0
+                        : (currentCommercials?.customer_finance ?? null),
                 };
             }
-            if (isQuote) {
+            if (isQuote && askCard) {
                 body.deal_card = {
                     onboarding_fee: feeN,
                     fee_waived_reason: feeN === 0 ? feeWaivedReason.trim() : null,
@@ -509,8 +537,14 @@ export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercia
                 </div>
                 )}
 
-                {/* ── ID 172: Deal card — required on every quote ─────────── */}
-                {(eventType === "quote_issue" || eventType === "quote_revision") && (
+                {/* ── ID 186: an onboarded dealer gets no deal card ──────── */}
+                {(eventType === "quote_issue" || eventType === "quote_revision") && !askCard && onboarded && (
+                    <p className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 text-xs text-gray-600">
+                        No deal card on this quote. {onboarded.reason} The quotation prints no onboarding fee.
+                    </p>
+                )}
+                {/* ── ID 172: Deal card — required for a dealer not onboarded yet ─ */}
+                {(eventType === "quote_issue" || eventType === "quote_revision") && askCard && (
                     <div className="rounded-lg border border-indigo-100 bg-indigo-50/40 p-3 space-y-3">
                         <div className="flex items-center justify-between">
                             <Label className="!mb-0">Deal card</Label>

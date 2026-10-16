@@ -263,18 +263,21 @@ export function CommercialsDetail({
     cc,
     onSend,
     onWithdraw,
+    hideDealCard,
 }: {
     cc: LeadDetailCommercials;
     /** Omitted on a superseded version — see QuoteApprovalBlock. */
     onSend?: () => void;
     onWithdraw?: () => void;
+    /** ID 186: the dealer is already onboarded — no deal card is shown. */
+    hideDealCard?: boolean;
 }) {
     return (
         <div className="grid grid-cols-2 gap-3">
             <Field label="Price Quoted" value={cc.price_quoted ? `₹${cc.price_quoted}` : null} />
             <Field label="Final Price" value={cc.final_price ? `₹${cc.final_price}` : null} />
             <Field label="Payment Method" value={cc.payment_method} />
-            {cc.deal_card && (
+            {cc.deal_card && !hideDealCard && (
                 <>
                     {/* ID 172: the deal card on every version, history included. */}
                     <Field
@@ -389,8 +392,11 @@ function StatusChip({ cc }: { cc: LeadDetailCommercials }) {
  */
 export function CommercialsVersionHistory({
     history,
+    hideDealCard,
 }: {
     history: LeadDetailCommercials[];
+    /** ID 186: see CommercialsDetail. */
+    hideDealCard?: boolean;
 }) {
     const [open, setOpen] = useState<string | null>(null);
 
@@ -466,7 +472,7 @@ export function CommercialsVersionHistory({
 
                             {expanded && (
                                 <div className="mt-2 border-t border-gray-100 pt-2">
-                                    <CommercialsDetail cc={c} />
+                                    <CommercialsDetail cc={c} hideDealCard={hideDealCard} />
                                 </div>
                             )}
                         </li>

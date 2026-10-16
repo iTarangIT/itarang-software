@@ -4,6 +4,7 @@
 
 import type { LeadStatus, LostReason } from "@/lib/lifecycle/transitions";
 import type { LeadAssignedBy } from "@/lib/leads/leadAssignedBy";
+import type { DealerOnboardedVerdict } from "@/lib/leads/dealerOnboardedRules";
 import type {
     CallStatus,
     NextAction,
@@ -309,6 +310,11 @@ export type LeadDetailBundle = {
      * (NeoDove › Agents) assigns the lead, dated at that call.
      */
     caller_not_linked?: { agent_name: string | null; first_call_at: string } | null;
+    /**
+     * ID 186: is the dealer already onboarded (approved onboarding or a
+     * battery invoice)? Then the deal card is neither asked nor shown.
+     */
+    dealer_onboarded?: DealerOnboardedVerdict | null;
 };
 
 export type LeadOnboardingMilestones = {
