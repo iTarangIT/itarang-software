@@ -190,6 +190,13 @@ export const ANALYST_RULES: ReadonlyArray<{ topics: readonly AnalystTopic[]; tex
         topics: ["calls", "people"],
         text: "Hot handed to field = asm_transfer touchpoints where the lead was Hot when transferred, each dealer once.",
     },
+    // ID 189 — one row per person / metric / month, the version in force (src/lib/targets/sql.ts).
+    {
+        topics: ["people"],
+        text:
+            "Targets = sales_targets rows with status 'pushed' or 'accepted'; a person's target = ceo_target + admin_addon (the Sales Head stretch; " +
+            "ignore sales_head_target); company % of target uses ceo_target only; custom_* metrics use manual_actual.",
+    },
     { topics: ["won", "leads"], text: "A Lost to Lost history row is a reason change, not a loss." },
     { topics: ["visits", "people"], text: "Visits = lead_visits visit_status 'visited'." },
     // ID 11 — Finance was folded into Battery sale (E-331).

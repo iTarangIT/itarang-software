@@ -3,13 +3,17 @@
 //   GET  ?month=YYYY-MM          register + actual vs target, working-day
 //                                context, the people who can be given targets,
 //                                and what the caller may do
+//   GET  ?awaiting=1             ID 189: "Targets waiting for your approval"
+//                                (posted, not pushed yet) for the Sales dashboard
+//   GET  ?history=<user>&month=  ID 189: every version of a person's targets
 //   POST { action, ... }         add_person | add_metric | remove | update |
-//                                set_actual | send_for_review (= submit) |
+//                                set_actual | post (= send_for_review, submit) |
 //                                send_to_member (= approve_push)
 //
-// Per-action permissions live in src/lib/targets/service.ts (CEO creates and
-// sends to the Sales Head; CEO / Sales Head edit and add metrics; Sales Head
-// sends to the member) and are enforced there, not just here.
+// Per-action permissions live in src/lib/targets/service.ts (ID 189: only the
+// CEO adds people and posts; the Sales Head / Admin add the stretch and push
+// posted targets) and are enforced there, not just here. The CEO's unposted
+// drafts are left out of every answer to anyone but the CEO.
 
 import { sql } from "drizzle-orm";
 import { z } from "zod";
@@ -20,19 +24,22 @@ import { db } from "@/lib/db";
 import {
     addMetric,
     addPersonToMonth,
+    awaitingPush,
     listTargets,
+    postTargets,
     removeTarget,
-    sendForReview,
     sendToMember,
     setManualActual,
     TARGET_ADD_PERSON_ROLES,
-    TARGET_ADDON_ROLES,
     TARGET_APPROVER_ROLES,
     TARGET_CEO_ROLES,
     TARGET_METRIC_ROLES,
-    TARGET_SALES_HEAD_ROLES,
+    TARGET_POST_ROLES,
+    TARGET_STRETCH_ROLES,
     TARGET_VIEW_ROLES,
     TargetError,
+    targetHistory,
+    targetViewerFor,
     updateTarget,
     workingDayContext,
 } from "@/lib/targets/service";
@@ -47,10 +54,13 @@ const BodySchema = z.discriminatedUnion("action", [
         action: z.literal("update"),
         id: z.string().uuid(),
         ceo_target: z.number().optional(),
-        sales_head_target: z.number().nullable().optional(),
+        stretch: z.number().optional(),
+        stretch_note: z.string().max(1000).nullable().optional(),
+        // Old clients: the add-on is the stretch; the E-342 number is refused by the service.
         admin_addon: z.number().optional(),
+        sales_head_target: z.number().nullable().optional(),
     }),
-    z.object({ action: z.enum(["submit", "send_for_review"]), ids: z.array(z.string().uuid()).max(500) }),
+    z.object({ action: z.enum(["post", "submit", "send_for_review"]), ids: z.array(z.string().uuid()).max(500) }),
     z.object({ action: z.enum(["approve_push", "send_to_member"]), ids: z.array(z.string().uuid()).max(500) }),
     z.object({
         action: z.literal("add_metric"),
@@ -66,10 +76,16 @@ const BodySchema = z.discriminatedUnion("action", [
 
 export const GET = withErrorHandler(async (req: Request) => {
     const user = await requireRole(TARGET_VIEW_ROLES);
-    const m = new URL(req.url).searchParams.get("month") ?? "";
+    const sp = new URL(req.url).searchParams;
+    const r = (user.role ?? "").toLowerCase();
+    const viewer = targetViewerFor(r);
+    if (sp.get("awaiting")) return successResponse(await awaitingPush());
+    const m = sp.get("month") ?? "";
     const month = MONTH.test(m) ? m : new Date().toISOString().slice(0, 7);
+    const historyOf = sp.get("history");
+    if (historyOf) return successResponse({ month, rows: await targetHistory({ month, userId: historyOf, viewer }) });
     const [rows, context, people] = await Promise.all([
-        listTargets({ month }),
+        listTargets({ month, viewer }),
         workingDayContext(month),
         db.execute(sql`
             SELECT id::text AS user_id, name, role FROM users
@@ -77,7 +93,6 @@ export const GET = withErrorHandler(async (req: Request) => {
              ORDER BY name NULLS LAST
         `),
     ]);
-    const r = (user.role ?? "").toLowerCase();
     return successResponse({
         month,
         rows,
@@ -86,13 +101,12 @@ export const GET = withErrorHandler(async (req: Request) => {
         can: {
             add_person: TARGET_ADD_PERSON_ROLES.includes(r),
             set_ceo_target: TARGET_CEO_ROLES.includes(r),
-            // E-342 — the Sales Head's own number (empty = the CEO's goes).
-            set_sales_head_target: TARGET_SALES_HEAD_ROLES.includes(r),
-            set_addon: TARGET_ADDON_ROLES.includes(r),
+            // ID 189 — the Sales Head's add-only stretch (Admin too).
+            set_stretch: TARGET_STRETCH_ROLES.includes(r),
             approve: TARGET_APPROVER_ROLES.includes(r),
-            // Item 3: CEO / Sales Head add or remove metrics; CEO sends to review.
             edit_metrics: TARGET_METRIC_ROLES.includes(r),
-            send_for_review: TARGET_ADD_PERSON_ROLES.includes(r),
+            // ID 189 — "Post to Sales Head" is the CEO's alone.
+            post: TARGET_POST_ROLES.includes(r),
             send_to_member: TARGET_APPROVER_ROLES.includes(r),
         },
     });
@@ -109,13 +123,20 @@ export const POST = withErrorHandler(async (req: Request) => {
             case "update":
                 await updateTarget(
                     body.id,
-                    { ceo_target: body.ceo_target, sales_head_target: body.sales_head_target, admin_addon: body.admin_addon },
+                    {
+                        ceo_target: body.ceo_target,
+                        stretch: body.stretch,
+                        stretch_note: body.stretch_note,
+                        admin_addon: body.admin_addon,
+                        sales_head_target: body.sales_head_target,
+                    },
                     actor,
                 );
                 return successResponse({ ok: true });
+            case "post":
             case "submit":
             case "send_for_review":
-                return successResponse(await sendForReview(body.ids, actor));
+                return successResponse(await postTargets(body.ids, actor));
             case "approve_push":
             case "send_to_member":
                 return successResponse(await sendToMember(body.ids, actor));

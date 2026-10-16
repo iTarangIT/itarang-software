@@ -241,6 +241,15 @@ export function SalesHeadOpsView() {
         staleTime: 60 * 1000,
         retry: false,
     });
+    // ID 189 — targets the CEO posted that are not pushed to the team yet (this
+    // month and later), and open "Ask for correction" requests. A role without
+    // the Targets page gets a 403 and the tile is simply left out.
+    const awaitingTargets = useQuery<{ targets: number; people: number; corrections: number; first_month: string | null }>({
+        queryKey: ["sales-head-ops", "targets-awaiting"],
+        queryFn: () => getData("/api/admin/targets?awaiting=1"),
+        staleTime: 60 * 1000,
+        retry: false,
+    });
     // Inside-sales scorecard figures the sales dashboard does not carry
     // (engaged calls, hot leads visited, quotes delivered, Won).
     const isrQs = new URLSearchParams({ from, to });
@@ -411,6 +420,19 @@ export function SalesHeadOpsView() {
             label: "Dealers in Red or Dormant",
             sub: `${inr(atRisk)} billed to them in the last 90 days`,
             href: "/admin/reports/dealer-health",
+        },
+        {
+            key: "targets_awaiting",
+            ready: Boolean(awaitingTargets.data),
+            n: (awaitingTargets.data?.targets ?? 0) + (awaitingTargets.data?.corrections ?? 0),
+            severity: "soon",
+            count: num(awaitingTargets.data?.targets ?? 0),
+            label: "Targets waiting for your approval",
+            sub: awaitingTargets.data
+                ? `Posted by the CEO, not pushed yet · ${num(awaitingTargets.data.people)} ${awaitingTargets.data.people === 1 ? "person" : "people"}` +
+                  (awaitingTargets.data.corrections ? ` · ${num(awaitingTargets.data.corrections)} correction${awaitingTargets.data.corrections === 1 ? "" : "s"} asked` : "")
+                : undefined,
+            href: `/admin/targets${awaitingTargets.data?.first_month ? `?month=${awaitingTargets.data.first_month.slice(0, 7)}` : ""}`,
         },
         actionTile("quotes_no_answer", "Quotes with no answer", "soon"),
         actionTile("said_yes", "Dealer approved, but not marked Won", "soon"),

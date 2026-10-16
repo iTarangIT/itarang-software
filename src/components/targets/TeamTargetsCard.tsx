@@ -8,7 +8,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 
-import { PROGRESS_HEADERS, TargetProgressCells, fmtTarget } from "@/components/targets/TargetProgressCells";
+import { TargetProgressCells, fmtTargetPer, fmtTargetSum, progressHeaders } from "@/components/targets/TargetProgressCells";
 import type { TargetRow } from "@/lib/targets/service";
 
 type TeamTargets = {
@@ -54,10 +54,10 @@ export function TeamTargetsCard() {
                     <thead className="bg-bg/60 text-[11px] uppercase tracking-wide text-ink-muted">
                         <tr>
                             <th className="px-3 py-2 text-left font-semibold">Metric</th>
-                            <th className="px-3 py-2 text-right font-semibold">Your monthly target</th>
-                            {PROGRESS_HEADERS.map((h) => (
+                            <th className="px-3 py-2 text-right font-semibold">Your target</th>
+                            {progressHeaders(data.context).map((h) => (
                                 <th key={h} className="px-3 py-2 text-right font-semibold">
-                                    {h === "MTD actual" ? "Team MTD actual" : h}
+                                    {h === "Actual to date" ? "Team actual to date" : h}
                                 </th>
                             ))}
                         </tr>
@@ -66,8 +66,14 @@ export function TeamTargetsCard() {
                         {data.rows.map((r) => (
                             <tr key={r.id}>
                                 <td className="px-3 py-2 text-ink">{r.metric_label}</td>
-                                <td className="px-3 py-2 text-right tabular-nums">{fmtTarget(r.metric, r.final_target)}</td>
-                                <TargetProgressCells metric={r.metric} p={r.progress} />
+                                <td className="px-3 py-2 text-right tabular-nums">
+                                    {fmtTargetPer(r.metric, r.final_target, r.unit, r.kind)}
+                                    {/* ID 189: the sum, so a stretch is visible. */}
+                                    {r.stretch > 0 && (
+                                        <span className="block text-[10px] text-ink-muted">{fmtTargetSum(r.metric, r.ceo_target, r.stretch, r.unit)}</span>
+                                    )}
+                                </td>
+                                <TargetProgressCells metric={r.metric} p={r.progress} unit={r.unit} kind={r.kind} />
                             </tr>
                         ))}
                     </tbody>
