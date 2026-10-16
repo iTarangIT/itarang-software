@@ -27,6 +27,7 @@ interface HistoryRow {
   fromDealerName: string | null;
   toDealerName: string | null;
   byName: string | null;
+  byRole?: string | null;
   reason: string | null;
   via: string | null;
   couponReleased?: string | null;
@@ -49,6 +50,13 @@ const VIA_LABEL: Record<string, string> = {
   bulk_dealer_mobile: "Lead list",
   step1_dealer_mobile: "New lead Step 1",
   whatsapp_operator: "WhatsApp",
+};
+
+// ID 182: who pushed — a "dealer" role here is an iTarang house login.
+const ROLE_LABEL: Record<string, string> = {
+  admin: "Admin",
+  sales_head: "Sales Head",
+  dealer: "iTarang team",
 };
 
 function fmtWhen(iso: string): string {
@@ -317,6 +325,7 @@ export default function PushToDealerPanel({
               <li key={i}>
                 <span className="text-gray-500">{fmtWhen(h.at)}</span> · {h.fromDealerName ?? "—"} → <b>{h.toDealerName ?? "—"}</b>
                 {h.byName ? ` · by ${h.byName}` : ""}
+                {h.byRole ? ` (${ROLE_LABEL[h.byRole] ?? h.byRole})` : ""}
                 {h.via ? ` · ${VIA_LABEL[h.via] ?? h.via}` : ""}
                 {h.reason ? <span className="block pl-4 text-xs text-gray-500">Reason: {h.reason}</span> : null}
                 {h.couponReleased || h.salespersonCleared ? (

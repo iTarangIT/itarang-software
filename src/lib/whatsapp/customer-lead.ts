@@ -21,6 +21,7 @@ import { nextReference } from "@/lib/leads/draftService";
 // E-278 — best-effort history stream; both imports swallow their own errors.
 import { actorOf, recordLeadFlowEvent } from "./lead-events";
 import { notifyLeadCreated } from "@/lib/notifications/events";
+import { checkPush, ITARANG_TEAM_PUSH_REASON } from "@/lib/leads/pushToDealer";
 import {
   adminVerificationQueue,
   auditLogs,
@@ -81,7 +82,13 @@ export interface ActiveDealer {
    * on WhatsApp. createCustomerLead then records the push (E-264 columns +
    * LEAD_PUSHED_TO_DEALER audit) and tells the dealer.
    */
-  pushedBy?: { fromDealerCode: string; byUserId: string | null; byName: string };
+  pushedBy?: {
+    fromDealerCode: string;
+    byUserId: string | null;
+    byName: string;
+    /** ID 182: the operator's users.role, for the push history. */
+    byRole?: string | null;
+  };
 }
 
 /**
@@ -184,6 +191,21 @@ export async function resolvePushedCustomerDealer(target: {
 }): Promise<ActiveDealer | null> {
   const house = await resolveHouseDealer();
   if (!house) return null;
+  const financeEnabled = await resolveDealerFinanceEnabled(target.dealerCode);
+  // ID 33 / 182: the same push rule as every other path. The lead is new and
+  // starts with the house, so this only ever refuses a push to the house itself.
+  const verdict = checkPush({
+    actorRole: "operator",
+    via: "whatsapp_operator",
+    currentDealerId: house.dealerCode,
+    currentDealerName: house.dealerName,
+    houseDealerCode: house.dealerCode,
+    consentSigned: false,
+    pushedBefore: false,
+    paymentMethod: null,
+    target: { dealerId: target.dealerCode, name: target.name, financeEnabled },
+  });
+  if (!verdict.ok) return null;
   const [u] = await db
     .select({ id: users.id })
     .from(users)
@@ -196,12 +218,20 @@ export async function resolvePushedCustomerDealer(target: {
     )
     .orderBy(users.created_at)
     .limit(1);
+  const [op] = target.byUserId
+    ? await db.select({ role: users.role }).from(users).where(eq(users.id, target.byUserId)).limit(1)
+    : [];
   return {
     dealerCode: target.dealerCode,
     uploaderId: u?.id ?? house.uploaderId,
     dealerName: target.name,
-    financeEnabled: await resolveDealerFinanceEnabled(target.dealerCode),
-    pushedBy: { fromDealerCode: house.dealerCode, byUserId: target.byUserId, byName: target.byName },
+    financeEnabled,
+    pushedBy: {
+      fromDealerCode: house.dealerCode,
+      byUserId: target.byUserId,
+      byName: target.byName,
+      byRole: op?.role ?? null,
+    },
   };
 }
 
@@ -324,9 +354,13 @@ export async function createCustomerLead(
         action: "LEAD_PUSHED_TO_DEALER",
         changes: {
           from_dealer_id: dealer.pushedBy.fromDealerCode,
+          from_dealer_name: "iTarang",
           to_dealer_id: dealer.dealerCode,
           to_dealer_name: dealer.dealerName,
+          // ID 182: automatic reason + the operator's own name and role.
+          reason: ITARANG_TEAM_PUSH_REASON,
           by_name: dealer.pushedBy.byName,
+          by_role: dealer.pushedBy.byRole ?? null,
           via: "whatsapp_operator",
         },
         performed_by: dealer.pushedBy.byUserId,
@@ -338,7 +372,7 @@ export async function createCustomerLead(
   // ID 33: tell the dealer the lead is theirs. Best-effort, never throws.
   if (dealer.pushedBy) {
     const { notifyDealerOfPushedLead } = await import("./pushedLeadNotice");
-    await notifyDealerOfPushedLead(leadId);
+    await notifyDealerOfPushedLead(leadId, { reason: ITARANG_TEAM_PUSH_REASON });
   }
 
   // E-278 — the "created by X" line of the lead's history. Explicit rather than
