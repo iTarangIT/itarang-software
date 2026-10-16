@@ -76,7 +76,7 @@ import { cn } from "@/lib/utils";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { useUIStore } from "@/store/uiStore";
 import { useBuybackNotificationSummary } from "@/hooks/useBuybackNotificationSummary";
-import { useNavActivity } from "@/hooks/useNavActivity";
+import { useNavCounts } from "@/hooks/useNavCounts";
 import {
   normalizeDealerType,
   type DealerTypeValue,
@@ -1335,6 +1335,38 @@ const roleNavigation: Record<string, any[]> = {
         },
       ],
     },
+    {
+      // ID 174 decision 5 — partner (Chirag) gets inventory; adding stock
+      // follows the ID 173 rule (any dealer).
+      section: "INVENTORY",
+      items: [
+        {
+          id: "partner-inventory",
+          label: "Inventory",
+          icon: PieChart,
+          href: "/admin/inventory",
+        },
+        {
+          id: "partner-product-master",
+          label: "Product Master",
+          icon: Package,
+          href: "/admin/product-master",
+        },
+        {
+          id: "partner-inventory-upload",
+          label: "Bulk Upload",
+          icon: ShoppingCart,
+          href: "/admin/inventory/upload",
+        },
+        {
+          // ID 174 — new battery invoices whose serials are not in stock yet.
+          id: "partner-stock-tasks",
+          label: "Stock to upload",
+          icon: Package,
+          href: "/admin/inventory/stock-tasks",
+        },
+      ],
+    },
     NEODOVE_SECTION,
     BUYBACK_ADMIN_SECTION,
   ],
@@ -1444,6 +1476,13 @@ const roleNavigation: Record<string, any[]> = {
           label: "Bulk Upload",
           icon: ShoppingCart,
           href: "/admin/inventory/upload",
+        },
+        {
+          // ID 174 — new battery invoices whose serials are not in stock yet.
+          id: "im-stock-tasks",
+          label: "Stock to upload",
+          icon: Package,
+          href: "/admin/inventory/stock-tasks",
         },
         {
           id: "admin-inventory-ageing",
@@ -3261,20 +3300,22 @@ export function Sidebar() {
   const totalUnread = notifSummary.unread.total;
   const negotiationUnread = notifSummary.unread.byCategory.Negotiation ?? 0;
 
-  // New arrivals in the admin work queues since this person last opened each
-  // page — Dealer Validation, KYC Review, WhatsApp Onboarding. Clears on visit.
-  const navActivity = useNavActivity(
-    ["admin", "sales_head", "ceo", "business_head", "partner"].includes(inferredRole),
-    pathname,
-  );
+  // ID 90 — how many items WAIT in each work queue for this role (Approvals,
+  // Reviews, Escalations, Ready to assign, Lead clean-up, WhatsApp onboarding,
+  // Expense / Financing approvals): one count route, polled every 60s. Put on
+  // rows AND folder children, since several queues sit inside a folder.
+  const navCounts = useNavCounts(["admin", "sales_head", "ceo", "business_head"].includes(inferredRole));
 
-  if (Object.keys(navActivity).length > 0) {
-    menuItems = menuItems.map((group) => ({
+  if (Object.keys(navCounts).length > 0) {
+    type CountNode = { id: string; badge?: number | string; children?: CountNode[] };
+    const withCount = <T extends CountNode>(item: T): T => {
+      const n = navCounts[item.id];
+      const next = item.children ? { ...item, children: item.children.map(withCount) } : item;
+      return n ? { ...next, badge: n > 99 ? "99+" : n } : next;
+    };
+    menuItems = menuItems.map((group: { items: CountNode[] }) => ({
       ...group,
-      items: group.items.map((item: { id: string }) => {
-        const n = navActivity[item.id];
-        return n ? { ...item, badge: n > 99 ? "99+" : n } : item;
-      }),
+      items: group.items.map(withCount),
     }));
   }
 
