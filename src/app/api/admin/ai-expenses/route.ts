@@ -12,6 +12,7 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { expenseSubmissions, users } from "@/lib/db/schema";
 import { requireApiAdmin } from "@/lib/auth/requireApiAdmin";
+import { withAllowedBill } from "@/lib/expenses/billAccess";
 import { isNextRedirectError, errorMessage } from "@/lib/api-utils";
 import {
   EXPENSE_BUCKET_VALUES,
@@ -286,6 +287,7 @@ export async function GET(req: NextRequest) {
         original_amount: expenseSubmissions.original_amount,
         fx_rate: expenseSubmissions.fx_rate,
         submitter_name: users.name,
+        submitted_by: expenseSubmissions.submitted_by,
       })
       .from(expenseSubmissions)
       .leftJoin(users, eq(expenseSubmissions.submitted_by, users.id))
@@ -299,10 +301,15 @@ export async function GET(req: NextRequest) {
       .limit(LIST_LIMIT + 1);
 
     const capped = rows.length > LIST_LIMIT;
+    // ID 166: the Sales Head runs the tracker but sees a bill link only on
+    // expenses they submitted themselves; Finance, Admin and CEO see all.
+    const shown = (capped ? rows.slice(0, LIST_LIMIT) : rows).map(({ submitted_by, ...row }) =>
+      withAllowedBill(row, submitted_by, guard.user),
+    );
 
     return NextResponse.json({
       success: true,
-      data: capped ? rows.slice(0, LIST_LIMIT) : rows,
+      data: shown,
       meta: { capped, limit: LIST_LIMIT, range: range.label },
     });
   } catch (e: unknown) {

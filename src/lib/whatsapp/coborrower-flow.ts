@@ -45,6 +45,7 @@ import {
   storeSignedConsent,
   verifyConsentOtp,
 } from "@/lib/kyc/consent-service";
+import { stampUploader, whatsappUploaderId } from "@/lib/storage/uploaderStamp";
 
 import type { ActiveDealer } from "./customer-lead";
 import {
@@ -542,6 +543,7 @@ async function onCoBorrowerDocs(
     docType,
     saved,
     fields: classified.fields,
+    applicationId: session.application_id,
   });
 
   // Extracted identity numbers belong on co_borrowers — and ONLY there.
@@ -1016,6 +1018,7 @@ async function ingestCoBorrowerZip(
       docType,
       saved,
       fields: classified.fields,
+      applicationId: session.application_id,
     });
     await applyExtractedFields(leadId, docType, classified.fields);
     docs[docType] = true;
@@ -1233,6 +1236,8 @@ async function persistCoBorrowerDoc(opts: {
   docType: string;
   saved: { fileUrl: string; fileName: string; fileSize: number; mimeType: string };
   fields: Record<string, unknown>;
+  /** The session's dealer application — its dealer login is the uploader (ID 166). */
+  applicationId: string | null;
 }): Promise<void> {
   const { leadId, coBorrowerId, docType, saved, fields } = opts;
   const now = new Date();
@@ -1284,8 +1289,9 @@ async function persistCoBorrowerDoc(opts: {
         eq(coBorrowerDocuments.document_type, docType),
       ),
     );
+  const cobDocId = `COBDOC-${dateStr}-${seq}`;
   await db.insert(coBorrowerDocuments).values({
-    id: `COBDOC-${dateStr}-${seq}`,
+    id: cobDocId,
     lead_id: leadId,
     co_borrower_id: coBorrowerId,
     document_type: docType,
@@ -1299,6 +1305,12 @@ async function persistCoBorrowerDoc(opts: {
     created_at: now,
     updated_at: now,
   });
+  // ID 166: sent on the dealer's own WhatsApp console, so the dealer uploaded it.
+  await stampUploader(
+    "co_borrower_documents",
+    { id: cobDocId },
+    { userId: await whatsappUploaderId(opts.applicationId), source: "whatsapp" },
+  );
 }
 
 async function showReview(session: SessionRow, leadId: string): Promise<void> {

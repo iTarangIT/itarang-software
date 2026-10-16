@@ -2,7 +2,9 @@
 //
 // The rule: Admin, the Sales Head, the CEO, or the owner of the lead or
 // account. On top of that:
-//   - a dealer opens only the files of its own customers / its own onboarding;
+//   - a dealer opens only the files of its own customers / its own onboarding,
+//     and on a customer's application only the files it uploaded itself
+//     (16 Oct, E-349 — dealerUploadedFile);
 //   - an NBFC opens only the files of applications shared with it;
 //   - expense bills and scanned invoices: Finance, Admin, CEO and the person
 //     who submitted the expense (the Sales Head does NOT see them);
@@ -232,6 +234,32 @@ export type FileViewer = {
     refurbisherId?: string | null;
 };
 
+/** One row that records a customer file and who uploaded it (ID 166, E-349). */
+export type FileUpload = {
+    /** users.id of the uploader; null for a customer upload or an old row. */
+    uploaderId: string | null;
+    /** users.dealer_id of the uploader, when there is one. */
+    uploaderDealerCode: string | null;
+    /** 'portal' | 'public_link' | 'whatsapp'; null on rows from before E-349. */
+    source: string | null;
+};
+
+/**
+ * ID 166 (decided 10 Oct, 15 Oct check): a dealer opens only the files it
+ * uploaded itself on its customer's application — not what the customer sent
+ * through the public link, nor what Admin or the NBFC added. A file no row
+ * records, or a row from before uploaders were recorded (no uploader, no
+ * source), keeps the old rule: the lead's dealer opens it.
+ */
+export function dealerUploadedFile(viewer: FileViewer, uploads: readonly FileUpload[] | undefined): boolean {
+    if (!uploads || uploads.length === 0) return true;
+    return uploads.some((u) => {
+        if (!u.uploaderId && !u.source) return true;
+        if (!u.uploaderId) return false;
+        return u.uploaderId === viewer.id || sameDealer(viewer, u.uploaderDealerCode);
+    });
+}
+
 /** What the database says about the file; only what the kind needs is filled. */
 export type FileFacts = {
     /** Customer lead: leads.dealer_id (a dealer code / account id). */
@@ -240,6 +268,12 @@ export type FileFacts = {
     /** Customer lead: leads.assigned_to and leads.sm_assigned_to (ID 119 owners). */
     leadAssignedTo?: string | null;
     leadSmAssignedTo?: string | null;
+    /**
+     * ID 166 (E-349): the KYC / co-borrower / requested-document rows that hold
+     * this exact file, with who uploaded each. Loaded for a dealer viewer only;
+     * undefined or empty = no row records the file (consent PDFs, photos, …).
+     */
+    fileUploads?: readonly FileUpload[];
     /** NBFC tenants the customer lead is shared with (nbfc_lead_assignments). */
     sharedTenantIds?: readonly string[];
     /** Owners on the dealer lead: current owner and ASM. */
@@ -327,21 +361,19 @@ export function mayOpenFile(viewer: FileViewer, file: FileKind, facts: FileFacts
             return top || file.userId === viewer.id;
         case "customer_lead": {
             if (top || ownsAccount) return true;
+            const ownsLead = [facts.leadUploaderId, facts.leadAssignedTo, facts.leadSmAssignedTo].some(
+                (o) => !!o && o === viewer.id,
+            );
+            if (role === "dealer") {
+                // Its own customer (or a lead it uploaded), and then only the
+                // files it uploaded itself (ID 166, E-349).
+                const ownCustomer = ownsLead || sameDealer(viewer, facts.leadDealerId);
+                return ownCustomer && dealerUploadedFile(viewer, facts.fileUploads);
+            }
             // ID 119: the lead's owner is whoever uploaded it, has it assigned
             // or is its sales manager — the same rule as backOfficeOwnsLead, so
             // an owning sales manager opens the files the KYC screens show them.
-            if (
-                [facts.leadUploaderId, facts.leadAssignedTo, facts.leadSmAssignedTo].some(
-                    (o) => !!o && o === viewer.id,
-                )
-            ) {
-                return true;
-            }
-            if (role === "dealer") {
-                const lead = (facts.leadDealerId ?? "").trim();
-                const mine = (viewer.dealerCode ?? "").trim();
-                return !!lead && !!mine && lead === mine;
-            }
+            if (ownsLead) return true;
             const shared = facts.sharedTenantIds ?? [];
             return viewer.nbfcTenantIds.some((t) => shared.includes(t));
         }

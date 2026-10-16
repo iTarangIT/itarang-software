@@ -6,6 +6,7 @@ import {
     BUYBACK_FILE_ROLES,
     NBFC_FILE_BUCKET,
     classifyFile,
+    dealerUploadedFile,
     isLoggedFile,
     loggedLeadId,
     mayOpenFile,
@@ -96,6 +97,36 @@ describe("mayOpenFile (ID 166)", () => {
         expect(mayOpenFile(viewer("dealer", { dealerCode: "D1" }), kyc, { leadDealerId: "D2" })).toBe(false);
         expect(mayOpenFile(viewer("dealer"), kyc, { leadDealerId: "" })).toBe(false);
         expect(mayOpenFile(viewer("dealer"), kyc, { leadDealerId: "D2", leadUploaderId: "u-1" })).toBe(true);
+    });
+
+    it("on its own customer, gives a dealer only the files it uploaded itself (ID 166, E-349)", () => {
+        const dealer = viewer("dealer", { dealerCode: "D1" });
+        const own = { leadDealerId: "D1" };
+        const up = (uploaderId: string | null, uploaderDealerCode: string | null, source: string | null) => ({
+            uploaderId,
+            uploaderDealerCode,
+            source,
+        });
+        // its own login, or another login of the same dealership
+        expect(mayOpenFile(dealer, kyc, { ...own, fileUploads: [up("u-1", null, "portal")] })).toBe(true);
+        expect(mayOpenFile(dealer, kyc, { ...own, fileUploads: [up("u-7", "D1", "whatsapp")] })).toBe(true);
+        // Admin, the NBFC or another dealer uploaded it; the customer sent it by link
+        expect(mayOpenFile(dealer, kyc, { ...own, fileUploads: [up("admin-1", null, "portal")] })).toBe(false);
+        expect(mayOpenFile(dealer, kyc, { ...own, fileUploads: [up("u-9", "D2", "portal")] })).toBe(false);
+        expect(mayOpenFile(dealer, kyc, { ...own, fileUploads: [up(null, null, "public_link")] })).toBe(false);
+        // rows from before E-349, or no row for the file: the old rule
+        expect(mayOpenFile(dealer, kyc, { ...own, fileUploads: [up(null, null, null)] })).toBe(true);
+        expect(mayOpenFile(dealer, kyc, { ...own, fileUploads: [] })).toBe(true);
+        // never on another dealer's customer, whoever uploaded
+        expect(mayOpenFile(dealer, kyc, { leadDealerId: "D2", fileUploads: [up("u-1", "D1", "portal")] })).toBe(false);
+        // the upload rule is for dealers only
+        expect(mayOpenFile(viewer("admin"), kyc, { fileUploads: [up(null, null, "public_link")] })).toBe(true);
+    });
+
+    it("dealerUploadedFile: a lookup failure refuses", () => {
+        const dealer = viewer("dealer", { dealerCode: "D1" });
+        expect(dealerUploadedFile(dealer, [{ uploaderId: null, uploaderDealerCode: null, source: "unknown" }])).toBe(false);
+        expect(dealerUploadedFile(dealer, undefined)).toBe(true);
     });
 
     it("gives an NBFC only applications shared with it", () => {

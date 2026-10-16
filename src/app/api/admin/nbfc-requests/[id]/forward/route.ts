@@ -16,6 +16,7 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { nbfcDocRequests } from "@/lib/db/schema";
 import { requireAdminAppUser } from "@/lib/kyc/admin-workflow";
+import { adminMayActOnNbfcLead, nbfcLeadNotYours } from "@/lib/nbfc/adminRequestAccess";
 import {
   declineNbfcDocRequest,
   forwardNbfcDocRequest,
@@ -82,6 +83,7 @@ export async function POST(
         { status: 404 },
       );
     }
+    if (!(await adminMayActOnNbfcLead(appUser, wrapper.lead_id))) return nbfcLeadNotYours();
 
     if (parsed.data.action === "decline") {
       await declineNbfcDocRequest({
