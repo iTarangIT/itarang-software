@@ -455,6 +455,7 @@ async function queryInterest(
 type TotalsRow = {
     spoc: string | null;
     visits: string;
+    fresh_visits: string;
     unique_visits: string;
     new_visits: string;
     calls: string;
@@ -493,14 +494,23 @@ async function queryTotals(
              WHERE actual_visit_date IS NOT NULL
              GROUP BY dealer_lead_id
         ),
+        -- ID 185: each person's first visit to each dealer, over the whole table.
+        rv AS (
+            SELECT asm_id, dealer_lead_id, MIN(actual_visit_date) AS first_d
+              FROM lead_visits
+             WHERE actual_visit_date IS NOT NULL
+             GROUP BY asm_id, dealer_lead_id
+        ),
         vis AS (
             SELECT ${spocKey(sql`v.asm_id`, bySpoc)} AS spoc,
                    v.asm_id, v.actual_visit_date,
                    v.dealer_lead_id,
-                   (v.actual_visit_date = fv.first_d) AS is_new
+                   (v.actual_visit_date = fv.first_d) AS is_new,
+                   (v.actual_visit_date = rv.first_d) AS is_fresh
               FROM lead_visits v
               JOIN dealer_leads dl ON dl.id = v.dealer_lead_id
               LEFT JOIN fv ON fv.dealer_lead_id = v.dealer_lead_id
+              LEFT JOIN rv ON rv.dealer_lead_id = v.dealer_lead_id AND rv.asm_id IS NOT DISTINCT FROM v.asm_id
              WHERE v.actual_visit_date >= ${f.from}::date
                AND v.actual_visit_date <= ${f.to}::date
                ${leadScope(f)} ${spocClause(sql`v.asm_id`, f)}
@@ -542,17 +552,19 @@ async function queryTotals(
                    COUNT(DISTINCT dealer_lead_id)                       AS unique_visits,
                    COUNT(DISTINCT dealer_lead_id) FILTER (WHERE is_new) AS new_visits,
                    0::bigint AS calls, 0::bigint AS dealers_called, 0::bigint AS converted,
-                   0::bigint AS new_hot, 0::bigint AS hot_converted
+                   0::bigint AS new_hot, 0::bigint AS hot_converted,
+                   COUNT(DISTINCT ${VISIT_KEY}) FILTER (WHERE is_fresh)  AS fresh_visits
               FROM vis GROUP BY spoc
             UNION ALL
-            SELECT spoc, 0, 0, 0, COUNT(*), COUNT(DISTINCT dealer_lead_id), 0, 0, 0 FROM calls GROUP BY spoc
+            SELECT spoc, 0, 0, 0, COUNT(*), COUNT(DISTINCT dealer_lead_id), 0, 0, 0, 0 FROM calls GROUP BY spoc
             UNION ALL
-            SELECT spoc, 0, 0, 0, 0, 0, COUNT(*), 0, COUNT(*) FILTER (WHERE was_hot) FROM conv GROUP BY spoc
+            SELECT spoc, 0, 0, 0, 0, 0, COUNT(*), 0, COUNT(*) FILTER (WHERE was_hot), 0 FROM conv GROUP BY spoc
             UNION ALL
-            SELECT spoc, 0, 0, 0, 0, 0, 0, COUNT(*), 0 FROM newhot GROUP BY spoc
+            SELECT spoc, 0, 0, 0, 0, 0, 0, COUNT(*), 0, 0 FROM newhot GROUP BY spoc
         )
         SELECT spoc,
                SUM(visits)::text         AS visits,
+               SUM(fresh_visits)::text   AS fresh_visits,
                SUM(unique_visits)::text  AS unique_visits,
                SUM(new_visits)::text     AS new_visits,
                SUM(calls)::text          AS calls,
@@ -567,6 +579,7 @@ async function queryTotals(
     for (const r of rows as unknown as TotalsRow[]) {
         out.set(r.spoc, {
             visits: num(r.visits),
+            fresh_visits: num(r.fresh_visits),
             unique_visits: num(r.unique_visits),
             new_visits: num(r.new_visits),
             calls: num(r.calls),
@@ -581,6 +594,7 @@ async function queryTotals(
 
 const EMPTY_TOTALS: SalesTotals = {
     visits: 0,
+    fresh_visits: 0,
     unique_visits: 0,
     new_visits: 0,
     calls: 0,
