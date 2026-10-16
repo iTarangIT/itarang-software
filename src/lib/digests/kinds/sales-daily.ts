@@ -670,7 +670,9 @@ async function collect(
             note:
               "One row per ASM. % of target = dealers visited MTD against the ASM's MTD dealer-visit target (“—” = no target set). " +
               "Under a manager: their team (↳) and a team subtotal — % of target against the manager's own target. " +
-              "Total = the ASMs listed; Block A also counts work credited to nobody.",
+              "Total = the ASMs listed; Block A also counts work credited to nobody. " +
+              // A26: the same figures as Admin › Targets, which runs to today.
+              `MTD = ${periods.mtd.from} to ${periods.mtd.to}, the same per-person figures as Admin › Targets (which also counts today).`,
             empty: "No ASMs on the Sales dashboard this month.",
           },
           {

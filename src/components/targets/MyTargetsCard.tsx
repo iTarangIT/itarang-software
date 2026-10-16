@@ -21,7 +21,7 @@ import type { TargetRow } from "@/lib/targets/service";
 
 type MyTargets = {
     rows: TargetRow[];
-    context: { working_days_total: number; working_days_elapsed: number };
+    context: { working_days_total: number; working_days_elapsed: number; actuals_up_to?: string | null };
     next?: { month: string; rows: TargetRow[] };
 };
 
@@ -96,6 +96,7 @@ export function MyTargetsCard() {
                     <p className="text-[11px] text-ink-muted">
                         {data?.context.working_days_elapsed} of {data?.context.working_days_total} working days of
                         this month gone. MTD target is your monthly target spread over working days.
+                        {data?.context.actuals_up_to ? ` Actuals up to ${data.context.actuals_up_to}.` : ""}
                     </p>
                 </div>
                 {waiting.length > 0 && !rejecting && (
