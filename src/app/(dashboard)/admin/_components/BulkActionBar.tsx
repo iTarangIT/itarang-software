@@ -203,6 +203,10 @@ export function BulkActionBar({
                     json.data.skipped_visit_booked
                         ? ` ${json.data.skipped_visit_booked} kept with the ASM — a visit is booked; cancel or complete it first.`
                         : ""
+                }${
+                    json.data.skipped_won_to_asm
+                        ? ` ${json.data.skipped_won_to_asm} Won — a Won lead can't be given to an ASM.`
+                        : ""
                 }`,
             );
             closeModal();

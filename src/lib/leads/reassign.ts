@@ -18,7 +18,7 @@
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { writeTouchpoint } from "@/lib/touchpoints/write";
-import { statusBeforeTransfer } from "@/lib/leads/assignOwner";
+import { statusBeforeTransfer, wonToAsmRefusal } from "@/lib/leads/assignOwner";
 import { handBackRefusal, isHandBack, releaseAsm, releaseNote } from "@/lib/leads/asmHandBack";
 import type { LeadStatus } from "@/lib/lifecycle/transitions";
 
@@ -28,7 +28,7 @@ export const REASSIGN_REASON_MIN = 20;
 
 export class ReassignError extends Error {
     constructor(
-        readonly code: "self" | "target_not_found" | "target_inactive" | "visit_booked",
+        readonly code: "self" | "target_not_found" | "target_inactive" | "visit_booked" | "won_to_asm",
         message: string,
         readonly status: 400 | 404 | 409,
     ) {
@@ -71,6 +71,9 @@ export async function reassignLead(input: ReassignInput, opts?: { tx?: Tx }): Pr
         const locked = (await tx.execute<{ lead_status: string | null; pre_transfer_status: string | null }>(sql`
             SELECT lead_status, pre_transfer_status FROM dealer_leads WHERE id = ${input.leadId} FOR UPDATE
         `)) as unknown as Array<{ lead_status: string | null; pre_transfer_status: string | null }>;
+        // ID 179: a Won lead is never given to an ASM.
+        const wonRefusal = wonToAsmRefusal(locked[0]?.lead_status, target.role);
+        if (wonRefusal) throw new ReassignError("won_to_asm", wonRefusal, 409);
         const handBack = isHandBack(locked[0]?.lead_status, target.role);
         if (handBack) {
             const refusal = await handBackRefusal(tx, input.leadId);
