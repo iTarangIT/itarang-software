@@ -13,31 +13,37 @@
 import { z } from "zod";
 import { buildSalesDashboard, type SalesDashboard } from "@/lib/admin/salesDashboard";
 import { listTargets, type TargetRow } from "@/lib/targets/service";
-import { monthEnd } from "@/lib/targets/rules";
+import { monthEnd, TARGET_METRICS, type TargetMetric } from "@/lib/targets/rules";
 import type { AssistantUser, ToolResult } from "../../types";
 import { istNow } from "../../prompt";
 import { defineTool, type ToolFactory } from "../spec";
 import { performanceUrl } from "../leads";
 
-/** What each figure means — stated in the reply (UC-09 "stating the definition used"). */
+/**
+ * What each figure means — stated in the reply (UC-09 "stating the definition
+ * used"). Worded for ANY period (the reply says which one), and each matches
+ * what buildSalesDashboard / the targets service actually count.
+ */
 export const METRIC_DEFINITIONS: Readonly<Record<string, string>> = Object.freeze({
-    visits: "lead visits you logged with a visit date in the period",
-    unique_visits: "distinct dealers you visited",
-    new_visits: "dealers visited for the first time ever",
-    calls: "calls you made yourself (AI-dialer calls NOT counted); a NeoDove call re-dispositioned within 3 minutes counts once",
-    converted: "leads that closed as Converted while you held them",
-    interest: "open leads you own, by current temperature",
-    calls_per_day: "your logged inside-sales calls (AI-dialer calls NOT counted) per working day so far",
+    visits: "visits you completed (an actual visit date logged), counted on the actual visit date — one per dealer per day",
+    unique_visits: "distinct dealers you visited in the period (a dealer visited twice counts once)",
+    new_visits: "dealers whose first-ever visit was in the period",
+    planned_visits: "your open visits (not visited, cancelled or no-show) scheduled for today / the next 7 days — as of now",
+    calls: "calls you made yourself in the period (AI-dialer calls NOT counted); a NeoDove call re-dispositioned within 3 minutes counts once",
+    converted: "leads closed as Converted in the period while you held them",
+    interest: "open leads you own today, by current temperature — a snapshot as of now, the same for any period",
+    calls_per_day: "your logged inside-sales calls (AI-dialer calls NOT counted) per working day so far — a DAILY target",
     // ID 179: credited to the owner at the moment of transfer, whoever pressed Transfer.
     hot_to_ground: "your Hot leads handed to an ASM (by you or your manager), Hot at the moment of transfer, each dealer once",
-    dealer_visits: "distinct dealers you visited this month, new and existing (two visits to one dealer count once)",
-    new_dealer_visits: "dealers visited for the first time ever",
-    batteries_sold: "batteries to dealers this month",
-    kyc_submitted: "KYC files submitted this month",
+    dealer_visits: "distinct dealers you visited in the month, new and existing (two visits to one dealer count once)",
+    new_dealer_visits: "dealers visited for the first time ever, in the month",
+    batteries_sold: "batteries to dealers in the month",
+    kyc_submitted: "KYC files submitted in the month",
     kyc_disbursed: "not measured in the CRM yet",
     scrap_deals: "buyback deals the dealer accepted",
-    revenue: "revenue this month (₹)",
-    target: "target = CEO target + the Sales Head's stretch, monthly (or per day for calls), pro-rated over working days (Mon–Sat, minus holidays) from the 1st; RAG: green ≥100%, amber 80–99%, red <80%",
+    revenue: "revenue in the month (₹)",
+    // ID 189: the version in force is CEO target + the Sales Head's stretch.
+    target: "target = CEO target + the Sales Head's stretch; a monthly target is pro-rated over working days (Mon–Sat, minus holidays) from the 1st; a per-day target (e.g. calls per day) is the same every day, not pro-rated; RAG: green ≥100%, amber 80–99%, red <80%",
 });
 
 export type NumbersPeriod = "this_month" | "last_month";
@@ -96,41 +102,72 @@ export function shapeNumbers(
               }
             : {}),
         interest,
-        targets: shown.map((t) => ({
-            metric: t.metric,
-            label: t.metric_label,
-            monthly_target: t.progress.monthly_target,
-            // ID 189 — "CEO 100 + 50 = 150"; unit for custom metrics.
-            ceo_target: t.ceo_target,
-            stretch: t.stretch,
-            unit: t.unit,
-            per: t.kind === "per_day" ? "per day" : "per month",
-            status:
-                t.status === "rejected"
-                    ? "rejected, waiting for the Sales Head"
-                    : t.correction_open
-                      ? "correction asked, waiting for the Sales Head"
-                      : t.status === "pushed"
-                        ? "sent, not accepted yet"
-                        : "accepted",
-            mtd_target: t.progress.mtd_target,
-            actual: t.progress.actual,
-            not_measured_reason: t.progress.not_measured_reason ?? null,
-            pct_of_mtd: t.progress.pct_of_mtd,
-            rag: t.progress.rag,
-            definition: METRIC_DEFINITIONS[t.metric] ?? null,
-        })),
+        targets: shown.map((t) => {
+            // ID 189 — "CEO 100 + 50 = 150"; unit for custom metrics; status as MyTargetsCard shows it.
+            const common = {
+                metric: t.metric,
+                label: t.metric_label,
+                ceo_target: t.ceo_target,
+                stretch: t.stretch,
+                unit: t.unit,
+                status:
+                    t.status === "rejected"
+                        ? "rejected, waiting for the Sales Head"
+                        : t.correction_open
+                          ? "correction asked, waiting for the Sales Head"
+                          : t.status === "pushed"
+                            ? "sent, not accepted yet"
+                            : "accepted",
+                not_measured_reason: t.progress.not_measured_reason ?? null,
+                rag: t.progress.rag,
+                definition: METRIC_DEFINITIONS[t.metric] ?? null,
+            };
+            // A per-day target (calls_per_day) is a DAILY number — progress()
+            // keeps it un-pro-rated, so it must not be read out as a monthly one.
+            const kind = t.kind ?? TARGET_METRICS[t.metric as TargetMetric]?.kind;
+            return kind === "per_day"
+                ? {
+                      ...common,
+                      per: "per day",
+                      daily_target: t.progress.monthly_target,
+                      actual_per_day: t.progress.actual,
+                      pct_of_target: t.progress.pct_of_mtd,
+                  }
+                : {
+                      ...common,
+                      per: "per month",
+                      monthly_target: t.progress.monthly_target,
+                      mtd_target: t.progress.mtd_target,
+                      actual: t.progress.actual,
+                      pct_of_mtd: t.progress.pct_of_mtd,
+                  };
+        }),
         targets_note:
             shown.length === 0
                 ? "No targets have been pushed to you for this month."
                 : METRIC_DEFINITIONS.target,
+        // Last month's activity is last month's; these two are today's.
+        ...(period === "last_month"
+            ? {
+                  as_of_now_note:
+                      user.role === "asm"
+                          ? "interest and planned_visits are as of now, not as of last month"
+                          : "interest is as of now, not as of last month",
+              }
+            : {}),
+        // One definition for every figure returned above.
         definitions: {
             visits: METRIC_DEFINITIONS.visits,
+            unique_visits: METRIC_DEFINITIONS.unique_visits,
+            new_visits: METRIC_DEFINITIONS.new_visits,
             calls: METRIC_DEFINITIONS.calls,
             converted: METRIC_DEFINITIONS.converted,
             interest: METRIC_DEFINITIONS.interest,
+            ...(user.role === "asm" ? { planned_visits: METRIC_DEFINITIONS.planned_visits } : {}),
         },
-        crm_url: performanceUrl(user),
+        // The performance page reads ?from=&to= (useSalesDashboardFilters), so
+        // the link opens on the same range these figures cover.
+        crm_url: `${performanceUrl(user)}?from=${range.from}&to=${range.to}`,
     };
 }
 

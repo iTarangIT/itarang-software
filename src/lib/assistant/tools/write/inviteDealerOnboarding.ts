@@ -46,7 +46,7 @@ export const inviteDealerOnboarding: ToolFactory = () =>
                     kind: "declined",
                     reason:
                         prep.reason === "no_application"
-                            ? "This lead has no onboarding application yet — mark it Converted first."
+                            ? "This lead has no onboarding application yet — Mark Won first (it needs the dealer's GSTIN)."
                             : "This lead has no valid phone number for WhatsApp.",
                     crm_url: crmUrl,
                 };
@@ -99,4 +99,6 @@ export const inviteDealerOnboardingApplier = defineApplier<InviteDealerPlan>({
             };
         },
     }),
+    // Not delivered (or the send threw): a repeat tap must not say "Already saved."
+    sendFailed: (extra) => extra?.delivered !== true,
 });

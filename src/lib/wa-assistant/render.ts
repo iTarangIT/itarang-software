@@ -2,9 +2,10 @@
 // limits (BRD §9.4, plan §6). Lists and lead cards are built DETERMINISTICALLY
 // from tool results — the model's wording never decides what a row says.
 //
-//   text     ≤ 1,000 chars (WhatsApp allows 4,096; the BRD keeps it short)
+//   text     ≤ 1,000 chars (WhatsApp allows 4,096; the BRD keeps it short);
+//            a lead report ≤ 2,000 so all 10 of its rows fit
 //   list     ≤ 10 rows; row title ≤ 24 (shop, truncated); description ≤ 72
-//            (status · interest · next date); row id ast:lead:<id>; body ≤ 1,024
+//            (status · interest · next date · phone); row id ast:lead:<id>; body ≤ 1,024
 //   format   *bold* for a heading only; no markdown tables or links
 //
 // Truncation never splits a grapheme (emoji, Devanagari conjuncts) and keeps
@@ -15,9 +16,12 @@ import type { LeadSummary, Preview, ToolResult } from "@/lib/assistant/types";
 import type { CancelOutcome, ExecOutcome } from "@/lib/assistant/executor";
 import { PENDING_TTL_MINUTES } from "@/lib/assistant/actions";
 import type { ListRow } from "./client";
+import type { AgentStop } from "@/lib/assistant/agent";
 
 export const RENDER_LIMITS = {
     text: 1000,
+    /** A Hot / Warm / Cold lead report: up to 10 lines with phone + ageing must fit whole. */
+    report: 2000,
     previewBody: 900,
     listBody: 1024,
     header: 60,
@@ -54,20 +58,31 @@ export function fit(s: string, max: number): string {
 
 // IST dates with fixed names — shared with the core's previews.
 export { fmtDate } from "@/lib/assistant/format";
-import { fmtDate } from "@/lib/assistant/format";
+import { fmtDate, fmtDay, statusLabel } from "@/lib/assistant/format";
 
-function statusLabel(s: string | null): string | null {
-    return s ? s.replace(/_/g, " ") : null;
-}
-
-/** One list row. The title falls back shop → dealer → id; never empty. */
+/**
+ * One list row. The title falls back shop → dealer → id; never empty. The
+ * description is status · interest · next date · phone; when it is too long
+ * the other parts are cut first, so the phone (prompt rule 19) always shows.
+ */
 export function leadRow(lead: LeadSummary): ListRow {
     const title = lead.shop_name?.trim() || lead.dealer_name?.trim() || lead.id;
-    const parts = [statusLabel(lead.status), lead.interest, fmtDate(lead.next_date)].filter(Boolean) as string[];
+    const phone = lead.phone?.trim() || null;
+    const parts = [lead.status ? statusLabel(lead.status) : null, lead.interest, fmtDate(lead.next_date)].filter(
+        Boolean,
+    ) as string[];
+    const sep = " · ";
+    let description: string;
+    if (!phone) description = fit(parts.join(sep), RENDER_LIMITS.rowDescription);
+    else if (!parts.length) description = fit(phone, RENDER_LIMITS.rowDescription);
+    else {
+        const room = RENDER_LIMITS.rowDescription - phone.length - sep.length;
+        description = room >= 4 ? `${fit(parts.join(sep), room)}${sep}${phone}` : fit(phone, RENDER_LIMITS.rowDescription);
+    }
     return {
         id: `ast:lead:${lead.id}`,
         title: fit(title, RENDER_LIMITS.rowTitle),
-        ...(parts.length ? { description: fit(parts.join(" · "), RENDER_LIMITS.rowDescription) } : {}),
+        ...(description ? { description } : {}),
     };
 }
 
@@ -83,6 +98,90 @@ export function whatsappText(s: string): string {
 }
 
 const LIST_BUTTON = "View leads";
+
+type LeadReport = Extract<ToolResult, { kind: "lead_report" }>;
+
+/** The model's lead-in only (prompt rule 11 asks for one sentence) — the rows are ours. */
+function firstLine(s: string): string {
+    return s.split("\n").map((l) => l.trim()).find(Boolean) ?? "";
+}
+
+/** One report line: "3. Kaycee Battery House (Malout) · 9896880001 · Awaiting field visit · Hot 13 days · last activity Wed 30 Sep". */
+function reportLine(n: number, lead: LeadReport["rows"][number], level: string): string {
+    const name = lead.shop_name?.trim() || lead.dealer_name?.trim() || lead.id;
+    const parts = [
+        `${n}. ${name}${lead.city ? ` (${lead.city})` : ""}`,
+        lead.phone,
+        lead.status ? statusLabel(lead.status) : null,
+        `${level} ${lead.age_days} ${lead.age_days === 1 ? "day" : "days"}`,
+        lead.last_activity_at ? `last activity ${fmtDay(lead.last_activity_at)}` : "no activity yet",
+    ].filter(Boolean);
+    return fit(parts.join(" · "), 200);
+}
+
+/**
+ * The leads behind a Hot / Warm / Cold card as text (BRD §9.4: built from the
+ * tool result, never from model wording). The heading always carries the exact
+ * total; rows that don't fit are summarised as "+N more" with the CRM link, so
+ * the count stays true even when the list is cut.
+ */
+export function renderLeadReport(report: LeadReport, lead: string, max: number = RENDER_LIMITS.report): string {
+    const level = report.title.split(" ")[0] ?? "";
+    const head = `*${report.title} — ${report.total}*\n(${report.definition})`;
+    const intro = lead ? `${lead}\n\n` : "";
+    if (report.total === 0) return fit(`${intro}${head}\n\nNone right now.`, max);
+    const lines = report.rows.map((r, i) => reportLine(i + 1, r, level));
+    const tail = (shown: number) =>
+        report.total > shown ? `\n\n+${report.total - shown} more${report.crm_url ? `: ${report.crm_url}` : ""}` : "";
+    let shown = lines.length;
+    const body = () => `${intro}${head}\n\n${lines.slice(0, shown).join("\n")}${tail(shown)}`;
+    while (shown > 0 && body().length > max) shown--;
+    return fit(body(), max);
+}
+
+/** Every number in a line ("5 hot leads", "2 of 7"). */
+function numbersIn(s: string): number[] {
+    return (s.match(/\d+(?:[.,]\d+)?/g) ?? []).map((n) => Number(n.replace(",", "")));
+}
+
+/**
+ * A model line may stand next to our rows only if each number in it is one
+ * of the true totals: "You have 5 hot leads" over a report of 7 is dropped.
+ * A line with no number passes.
+ */
+function countsAgree(line: string, totals: number[]): boolean {
+    return numbersIn(line).every((n) => totals.includes(n));
+}
+
+/** Does a model line just repeat one of the rows (its name or phone, or a numbered item)? */
+function repeatsRow(line: string, rows: LeadSummary[]): boolean {
+    if (/^\s*(\d+[.)]|[-•*])\s/.test(line)) return true;
+    const l = line.toLowerCase();
+    return rows.some((r) => {
+        const name = (r.shop_name?.trim() || r.dealer_name?.trim() || "").toLowerCase();
+        const phone = r.phone?.replace(/\D/g, "") ?? "";
+        return (name.length >= 3 && l.includes(name)) || (phone.length >= 6 && line.replace(/\D/g, "").includes(phone));
+    });
+}
+
+/**
+ * Every lead report of the turn (hot AND warm when both were asked), each with
+ * its own heading and exact total, within RENDER_LIMITS.report together. The
+ * model's lines stay above them unless they repeat a row or state a count the
+ * reports don't.
+ */
+function renderLeadReports(reports: LeadReport[], text: string): string {
+    const totals = reports.map((r) => r.total);
+    const rows = reports.flatMap((r) => r.rows);
+    const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+    const kept = lines.filter((l, i) => (i === 0 || !repeatsRow(l, rows)) && countsAgree(l, totals));
+    const intro = fit(kept.join("\n"), 300);
+    const gap = 2; // "\n\n" between reports
+    const room = RENDER_LIMITS.report - (intro ? intro.length + gap : 0) - gap * (reports.length - 1);
+    const each = Math.floor(room / reports.length);
+    const parts = reports.map((r) => renderLeadReport(r, "", each));
+    return fit([intro, ...parts].filter(Boolean).join("\n\n"), RENDER_LIMITS.report);
+}
 
 const PREVIEW_VALUE_MAX = 200;
 
@@ -124,12 +223,22 @@ const REJECTED: Record<Extract<ExecOutcome, { kind: "rejected" }>["reason"], str
     writes_disabled: "Saving from WhatsApp is switched off for you. Nothing was saved.",
     lead_missing: "That lead no longer exists. Nothing was saved.",
     not_claimable: "That lead can no longer be claimed. Nothing was saved.",
-    duplicate_phone: "A lead with this phone number already exists. Nothing was saved.",
+    duplicate_phone:
+        "A lead with this phone number was added meanwhile, so nothing was saved. Ask me to add it again to record a Re-inquiry on it.",
     target_unavailable: "That person is no longer active, so nothing was saved. Pick someone else.",
     visit_booked: "The ASM has a visit booked on this lead, so nothing was saved. Cancel or complete the visit first.",
     already_transferred: "This lead was already transferred to an ASM, so nothing was saved.",
     attachment_used: "That photo or file was already used for another change, so nothing was saved. Send it again.",
+    // Only without the writer's sentence (an old row); normally `message` carries it.
+    refused: "The CRM refused this change, so nothing was saved.",
 };
+
+/** A refusal after Confirm: the CRM writer's own sentence when there is one, else the reason's. */
+function renderRejected(o: Extract<ExecOutcome, { kind: "rejected" }>): string {
+    const said = o.message?.trim();
+    if (!said) return REJECTED[o.reason];
+    return fit(`${/[.!?]$/.test(said) ? said : `${said}.`} Nothing was saved.`, RENDER_LIMITS.text);
+}
 
 /**
  * A confirmed write. After a conversion the reply OFFERS the dealer invite as a
@@ -140,10 +249,12 @@ function renderConfirmed(o: Extract<ExecOutcome, { kind: "confirmed" }>): WaPayl
     const saved = fit(`✅ Saved: ${o.title.replace(/^\*|\*$/g, "")}\n${o.crmUrl}`, RENDER_LIMITS.text);
     // ID 137 — the card's title is the question; the answer reads as what happened.
     if (o.tool === "record_reinquiry") {
-        return {
-            kind: "text",
-            body: fit(`✅ Re-inquiry recorded. The lead's owner and the Sales Head have been told.\n${o.crmUrl}`, RENDER_LIMITS.text),
-        };
+        // The rep is not "told" about their own lead; a lead with no owner has only the Sales Head.
+        const told =
+            o.after.owner_is_actor === true || !o.after.current_owner_id
+                ? "The Sales Head has been told."
+                : "The lead's owner and the Sales Head have been told.";
+        return { kind: "text", body: fit(`✅ Re-inquiry recorded. ${told}\n${o.crmUrl}`, RENDER_LIMITS.text) };
     }
     if (o.tool === "invite_dealer_onboarding") {
         if (o.extra?.delivered === true) return { kind: "text", body: `✅ Onboarding invite sent to the dealer.\n${o.crmUrl}` };
@@ -237,6 +348,8 @@ export function renderTapOutcome(o: ExecOutcome | CancelOutcome): WaPayload {
             return text("This action expired. Nothing was saved. Send it again if you still want it.");
         case "already_done":
             return text("Already saved.");
+        case "send_failed":
+            return text("That send didn't go through, and this card can't be used again. Ask me again for a new card to retry.");
         case "already_cancelled":
             return text("That was cancelled. Nothing was saved.");
         case "superseded":
@@ -250,52 +363,110 @@ export function renderTapOutcome(o: ExecOutcome | CancelOutcome): WaPayload {
         case "not_found":
             return text("I couldn't find that action.");
         case "rejected":
-            return text(REJECTED[o.reason]);
+            return text(renderRejected(o));
         case "error":
             return text("Something went wrong, nothing was changed. Please try again.");
     }
 }
 
 /**
- * The reply for one agent turn. A write preview (if any) wins and is sent with
- * its buttons, the model's wording dropped. Otherwise the last list-shaped
- * result (candidates, or a queue/search with 2+ rows) becomes a tappable list;
- * everything else is text.
+ * Said only when the turn ended without the model's words AND no tool result
+ * answers on its own — one per cause. Never "send a shorter message": the
+ * message was rarely the problem.
  */
-export function renderTurn(turn: { text: string; results: { tool: string; result: ToolResult }[] }): WaPayload {
+export const SORRY: Record<Exclude<AgentStop, "done">, string> = {
+    timeout: "That took too long — please try again.",
+    cap: "Sorry, I couldn't work that out. Please try again, or ask one thing at a time.",
+    empty: "Sorry, I didn't get an answer just now. Please try again.",
+};
+
+type ListResult = Extract<ToolResult, { kind: "leads" | "candidates" }>;
+
+/** A list's body: our first line (the true count / the question), the model's line only if its counts agree. */
+function listBody(first: string, text: string, totals: number[]): string {
+    const line = firstLine(text);
+    return line && line !== first && countsAgree(line, totals) ? `${first}\n${line}` : first;
+}
+
+function renderList(r: ListResult, text: string): WaPayload {
+    let body =
+        r.kind === "leads" ? listBody(`${r.title}: ${r.total}`, text, [r.total]) : listBody(r.question, text, [r.rows.length]);
+    if (r.kind === "leads" && r.total > r.rows.length && r.crm_url) {
+        const more = `\n\nAll ${r.total}: ${r.crm_url}`;
+        if (body.length + more.length <= RENDER_LIMITS.listBody) body += more;
+    }
+    return {
+        kind: "list",
+        header: fit(r.kind === "leads" ? r.title : "Which one?", RENDER_LIMITS.header),
+        body: fit(body, RENDER_LIMITS.listBody),
+        button: LIST_BUTTON,
+        rows: r.rows.slice(0, RENDER_LIMITS.rows).map(leadRow),
+    };
+}
+
+/**
+ * The reply for one agent turn. A write preview (if any) wins and is sent with
+ * its buttons, the model's wording dropped (plus "Next: …" when the one-change
+ * limit held a second write back). Otherwise the NEWEST result that answers
+ * decides the shape, built from the result, not from the model's wording:
+ *   lead_report → every report of the turn, as text
+ *   leads (2+ rows) / candidates → a tappable list whose first body line is
+ *     the true total (or the question)
+ *   lead → the model's answer about it, or the lead card when it gave none
+ * With no such result the model's text is the reply; with no text either, a
+ * question / refusal / not-found result speaks for itself, and only when
+ * nothing answered is it a per-cause SORRY.
+ */
+export function renderTurn(turn: {
+    text: string;
+    results: { tool: string; result: ToolResult }[];
+    stop?: AgentStop;
+    next?: string | null;
+}): WaPayload {
     const last = [...turn.results].reverse().find((r) => r.result.kind === "preview");
     if (last?.result.kind === "preview") {
         // A send has nothing to edit: it goes to the lead's own phone / email.
-        return renderPreview(last.result.preview, last.result.action_id, { edit: last.tool !== "send_quote" });
+        const card = renderPreview(last.result.preview, last.result.action_id, { edit: last.tool !== "send_quote" });
+        if (turn.next && card.kind === "buttons") {
+            const room = RENDER_LIMITS.previewBody - card.body.length - 1;
+            if (room >= 12) return { ...card, body: `${card.body}\n${fit(turn.next, room)}` };
+        }
+        return card;
     }
     const text = whatsappText(turn.text);
-    const listy = [...turn.results]
+    const results = turn.results.map((r) => r.result);
+    // The newest answering result wins: a lead opened after a search, a report after a list, and vice versa.
+    const answer = [...results]
         .reverse()
-        .map((r) => r.result)
-        .find(
-            (r): r is Extract<ToolResult, { kind: "leads" | "candidates" }> =>
-                (r.kind === "candidates" && r.rows.length > 0) || (r.kind === "leads" && r.rows.length >= 2),
-        );
-    if (listy) {
-        const heading = listy.kind === "leads" ? listy.title : "Which one?";
-        const fallback =
-            listy.kind === "candidates"
-                ? listy.question
-                : `${listy.rows.length} of ${listy.total}. Tap one for details.`;
-        let body = text || fallback;
-        if (listy.kind === "leads" && listy.total > listy.rows.length && listy.crm_url) {
-            const more = `\n\nAll ${listy.total}: ${listy.crm_url}`;
-            if (body.length + more.length <= RENDER_LIMITS.listBody) body += more;
-        }
-        return {
-            kind: "list",
-            header: fit(heading, RENDER_LIMITS.header),
-            body: fit(body, RENDER_LIMITS.listBody),
-            button: LIST_BUTTON,
-            rows: listy.rows.slice(0, RENDER_LIMITS.rows).map(leadRow),
-        };
+        .find((r) => r.kind === "lead_report" || r.kind === "leads" || r.kind === "candidates" || r.kind === "lead");
+    if (answer?.kind === "lead_report") {
+        return { kind: "text", body: renderLeadReports(results.filter((r): r is LeadReport => r.kind === "lead_report"), text) };
     }
-    return { kind: "text", body: fit(text || "Done.", RENDER_LIMITS.text) };
+    if (answer?.kind === "lead") {
+        return { kind: "text", body: text ? fit(text, RENDER_LIMITS.text) : renderLeadCard(answer.lead as Detail) };
+    }
+    if (answer?.kind === "candidates" && answer.rows.length > 0) return renderList(answer, text);
+    if (answer?.kind === "leads") {
+        // One row reads better as the model's answer about it; without one, it is still a list.
+        if (answer.rows.length >= 2 || (!text && answer.rows.length === 1)) return renderList(answer, text);
+        if (!text) {
+            const more = answer.total > 0 && answer.crm_url ? `\n${answer.crm_url}` : "";
+            return { kind: "text", body: fit(`${answer.title}: ${answer.total}${more}`, RENDER_LIMITS.text) };
+        }
+    }
+    if (text) return { kind: "text", body: fit(text, RENDER_LIMITS.text) };
+
+    // No words from the model: a result that speaks for itself, else sorry.
+    const said = [...results]
+        .reverse()
+        .find((r) => r.kind === "question" || r.kind === "declined" || r.kind === "not_found" || r.kind === "unavailable");
+    if (said?.kind === "question") return { kind: "text", body: fit(said.question, RENDER_LIMITS.text) };
+    if (said?.kind === "declined") {
+        return { kind: "text", body: said.crm_url ? withLink(said.reason, said.crm_url) : fit(said.reason, RENDER_LIMITS.text) };
+    }
+    if (said?.kind === "not_found") return { kind: "text", body: "I couldn't find that lead." };
+    if (said?.kind === "unavailable") return { kind: "text", body: fit(said.message, RENDER_LIMITS.text) };
+    return { kind: "text", body: turn.stop && turn.stop !== "done" ? SORRY[turn.stop] : "Done." };
 }
 
 type Detail = Record<string, unknown> & {
@@ -315,7 +486,7 @@ export function renderLeadCard(lead: Detail): string {
     if (lead.phone) lines.push(`Phone: ${lead.phone}`);
     lines.push(
         [
-            `Status: ${statusLabel(str(lead.status)) ?? "none"}`,
+            `Status: ${statusLabel(str(lead.status))}`,
             lead.interest ? `Interest: ${lead.interest}` : null,
         ].filter(Boolean).join(" · "),
     );

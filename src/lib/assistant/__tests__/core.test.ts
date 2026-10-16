@@ -10,7 +10,7 @@ const findLeadInScope = vi.fn();
 vi.mock("../scope", async (orig) => ({ ...(await orig<typeof import("../scope")>()), findLeadInScope }));
 
 const { toolNamesFor, toolsFor, ROLE_TOOLS } = await import("../registry");
-const { scopePredicate, scopeJoin, claimPoolPredicate, ownScopePredicate, readScopePredicate } = await import("../scope");
+const { scopePredicate, scopeJoin, claimPoolPredicate, ownScopePredicate, readScopePredicate, ownedOpenPredicate } = await import("../scope");
 const { tabFilter: isrTab } = await import("@/lib/inside-sales/queryBuilder");
 const { tabFilter: asmTab } = await import("@/lib/asm/queryBuilder");
 const { runAgentTurn, sanitizeResult, AGENT_LIMITS } = await import("../agent");
@@ -47,16 +47,16 @@ describe("registry", () => {
     });
 
     it("off the pilot list → read tools only; on it → the role's writes", () => {
-        expect(toolNamesFor("inside_sales_rep", false)).toEqual(["my_queue", "search_lead", "get_lead_details", "my_numbers", "product_catalogue", "quote_status", "read_document"]);
-        expect(toolNamesFor("asm", false)).toEqual(["my_queue", "search_lead", "get_lead_details", "my_numbers", "product_catalogue", "quote_status", "read_document"]);
+        expect(toolNamesFor("inside_sales_rep", false)).toEqual(["my_queue", "search_lead", "get_lead_details", "my_numbers", "my_leads_by_temperature", "product_catalogue", "quote_status", "read_document"]);
+        expect(toolNamesFor("asm", false)).toEqual(["my_queue", "search_lead", "get_lead_details", "my_numbers", "my_leads_by_temperature", "product_catalogue", "quote_status", "read_document"]);
         expect(toolNamesFor("asm", true)).toContain("log_visit");
         expect(toolNamesFor("inside_sales_rep", true)).not.toContain("log_visit");
         expect(toolNamesFor("inside_sales_rep", true)).toEqual([...ROLE_TOOLS.inside_sales_rep]);
     });
 
-    it("all twenty-three tools have a Zod schema that rejects junk (unknown keys are stripped, never acted on)", () => {
+    it("all twenty-four tools have a Zod schema that rejects junk (unknown keys are stripped, never acted on)", () => {
         const all = [...toolsFor("asm", true), ...toolsFor("inside_sales_rep", true)];
-        expect(new Set(all.map((t) => t.name)).size).toBe(23);
+        expect(new Set(all.map((t) => t.name)).size).toBe(24);
         // my_numbers and product_catalogue take no lead: checked on their own below.
         for (const t of all.filter((x) => x.name !== "my_numbers" && x.name !== "product_catalogue")) {
             expect(t.schema.safeParse({ lead_id: "", evil: 1 }).success, t.name).toBe(false);
@@ -67,6 +67,9 @@ describe("registry", () => {
         const catalogue = all.find((t) => t.name === "product_catalogue")!;
         expect(catalogue.schema.safeParse({ asset_type: "scooter" }).success).toBe(false);
         expect(catalogue.schema.parse({ lead_id: "DL-1", query: "105ah" })).toEqual({ query: "105ah" });
+        const temperature = all.find((t) => t.name === "my_leads_by_temperature")!;
+        expect(temperature.schema.safeParse({ interest: "lava" }).success).toBe(false);
+        expect(temperature.schema.parse({ interest: "hot", user_id: "someone-else" })).toEqual({ interest: "hot" });
     });
 
     it("my_queue's tab enum is the role's own tabs — never a pool tab (ID 45)", () => {
@@ -113,21 +116,41 @@ describe("scope predicate (INV1)", () => {
         expect(render(scopeJoin(ASM)).sql).toMatch(/LEFT JOIN LATERAL/);
     });
 
-    it("own scope (search_lead, ID 45) is the union of the OWN tabs only — no pool / team / territory", () => {
+    it("own scope (search_lead, ID 45) is the union of the OWN tabs + own open leads — no pool / team / territory", () => {
         const isr = (["my_open", "follow_ups", "my_closed"] as const).map((t) => shape(isrTab(t, ISR.id)));
-        expect(shape(ownScopePredicate(ISR))).toBe(`(${isr.map((t) => `(${t})`).join(" OR ")})`);
+        expect(shape(ownScopePredicate(ISR))).toBe(`(${[...isr, shape(ownedOpenPredicate(ISR))].map((t) => `(${t})`).join(" OR ")})`);
         const asm = (["my_visits", "today", "my_closed"] as const).map((t) => shape(asmTab(t, ASM.id)));
-        expect(shape(ownScopePredicate(ASM))).toBe(`(${asm.map((t) => `(${t})`).join(" OR ")})`);
+        expect(shape(ownScopePredicate(ASM))).toBe(`(${[...asm, shape(ownedOpenPredicate(ASM))].map((t) => `(${t})`).join(" OR ")})`);
         expect(render(ownScopePredicate(ISR)).sql).not.toMatch(/current_owner_id IS NULL/);
         expect(render(ownScopePredicate({ id: "x", role: "admin" })).sql).toBe("FALSE");
     });
 
-    it("read scope (findLeadInScope, ID 45) = own tabs + ISR team — never a pool tab", () => {
+    it("own open leads no tab shows (Number Repair, NULL status) are the user's alone, never terminal", () => {
+        const q = render(ownedOpenPredicate(ISR));
+        expect(q.sql).toBe(
+            "dl.current_owner_id = $1 AND dl.is_active IS NOT FALSE AND dl.lead_status IS DISTINCT FROM 'Converted' AND dl.lead_status IS DISTINCT FROM 'Lost'",
+        );
+        expect(q.params).toEqual([ISR.id]);
+        expect(q.sql).not.toMatch(/contactability/);
+    });
+
+    it("ID 155: a manager's team widens the own tabs exactly as tabFilter does; ownership stays the user's", () => {
+        const team = ["isr-7", "isr-8"];
+        const isr = (["my_open", "follow_ups", "my_closed"] as const).map((t) => shape(isrTab(t, ISR.id, team)));
+        expect(shape(ownScopePredicate(ISR, team))).toBe(`(${[...isr, shape(ownedOpenPredicate(ISR))].map((t) => `(${t})`).join(" OR ")})`);
+        expect(render(readScopePredicate(ISR, team)).params).toEqual(expect.arrayContaining(team));
+        const asm = (["my_visits", "today", "my_closed"] as const).map((t) => shape(asmTab(t, ASM.id, team)));
+        expect(shape(readScopePredicate(ASM, team))).toBe(`(${[...asm, shape(ownedOpenPredicate(ASM))].map((t) => `(${t})`).join(" OR ")})`);
+        // No team = byte-for-byte the old clauses.
+        expect(shape(readScopePredicate(ASM, []))).toBe(shape(readScopePredicate(ASM)));
+    });
+
+    it("read scope (findLeadInScope, ID 45) = own tabs + ISR team + own open leads — never a pool tab", () => {
         const isr = (["my_open", "follow_ups", "my_closed", "team"] as const).map((t) => shape(isrTab(t, ISR.id)));
-        expect(shape(readScopePredicate(ISR))).toBe(`(${isr.map((t) => `(${t})`).join(" OR ")})`);
+        expect(shape(readScopePredicate(ISR))).toBe(`(${[...isr, shape(ownedOpenPredicate(ISR))].map((t) => `(${t})`).join(" OR ")})`);
         expect(shape(readScopePredicate(ISR))).not.toContain(shape(isrTab("unassigned", ISR.id)));
         const asm = (["my_visits", "today", "my_closed"] as const).map((t) => shape(asmTab(t, ASM.id)));
-        expect(shape(readScopePredicate(ASM))).toBe(`(${asm.map((t) => `(${t})`).join(" OR ")})`);
+        expect(shape(readScopePredicate(ASM))).toBe(`(${[...asm, shape(ownedOpenPredicate(ASM))].map((t) => `(${t})`).join(" OR ")})`);
         expect(shape(readScopePredicate(ASM))).not.toContain(shape(asmTab("territory", ASM.id)));
         expect(shape(readScopePredicate(ASM))).not.toContain(shape(asmTab("unclaimed", ASM.id)));
         expect(render(readScopePredicate({ id: "x", role: "admin" })).sql).toBe("FALSE");
@@ -164,7 +187,7 @@ describe("scope predicate (INV1)", () => {
             const input =
                 t.name === "log_visit" ? { lead_id: "DL-1", visit_status: "visited", outcome: "productive", remarks: "x", next_action: "escalate" }
                 : t.name === "mark_lost" ? { lead_id: "DL-1", lost_reason: "not_interested" }
-                : t.name === "set_follow_up" ? { lead_id: "DL-1", visit_date: "2026-09-26", note: "x" }
+                : t.name === "set_follow_up" ? { lead_id: "DL-1", kind: "visit", visit_date: "2026-09-26", note: "x" }
                 : t.name === "reassign_lead" ? { lead_id: "DL-1", to: "Priya", reason: "x" }
                 : t.name === "escalate_lead" ? { lead_id: "DL-1", reason: "Other", urgency: "normal", notes: "x" }
                 : t.name === "mark_converted" ? { lead_id: "DL-1", gstin: "x" }
@@ -219,7 +242,7 @@ describe("runAgentTurn", () => {
             { model, tools: [tool], ctx: ctx(ISR), logToolCall },
         );
         expect(out.text).toBe("Couldn't find it.");
-        expect(tool.run).toHaveBeenCalledWith(ctx(ISR), { lead_id: "DL-1" });
+        expect(tool.run).toHaveBeenCalledWith({ ...ctx(ISR), deadline: expect.any(Number) }, { lead_id: "DL-1" });
         const toolMsg = model.seen[1].at(-1) as ToolMessage;
         expect(JSON.parse(String(toolMsg.content))).toEqual({ kind: "not_found" });
         expect(logToolCall).toHaveBeenCalledWith(expect.objectContaining({ userId: "isr-1", tool: "get_lead_details", ok: true }));
@@ -229,7 +252,7 @@ describe("runAgentTurn", () => {
         const tool = fakeTool("get_lead_details", "read", { kind: "not_found" });
         const model = scripted([call("get_lead_details", { lead_id: "DL-1", user_id: "admin-9", role: "admin" }), new AIMessage("ok")]);
         await runAgentTurn({ system: "s", history: [], userText: "x" }, { model, tools: [tool], ctx: ctx(ISR), logToolCall });
-        expect(tool.run).toHaveBeenCalledWith(ctx(ISR), { lead_id: "DL-1" });
+        expect(tool.run).toHaveBeenCalledWith({ ...ctx(ISR), deadline: expect.any(Number) }, { lead_id: "DL-1" });
     });
 
     it("invalid arguments never reach the tool; unknown tools are refused", async () => {
@@ -267,7 +290,10 @@ describe("runAgentTurn", () => {
         const model = scripted([call("get_lead_details", { lead_id: "DL-1" })]);
         const out = await runAgentTurn({ system: "s", history: [], userText: "x" }, { model, tools: [tool], ctx: ctx(ISR), logToolCall });
         expect(out.modelCalls).toBe(AGENT_LIMITS.maxModelCalls);
-        expect(out.text).toMatch(/couldn't finish/i);
+        // No canned "Sorry" as text: the channel decides from `stop` and the results.
+        expect(out).toMatchObject({ text: "", stop: "cap" });
+        // The stored turn still closes with an AI message (history stays alternating).
+        expect(out.turnMessages.at(-1)?.getType()).toBe("ai");
     });
 
     it("a throwing tool becomes a generic error, and the turn goes on", async () => {
@@ -306,7 +332,7 @@ describe("runAgentTurn", () => {
             { system: "s", history: [], userText: "x" },
             { model, tools: [], ctx: ctx(ISR), logToolCall, modelCallTimeoutMs: 20 },
         );
-        expect(out.text).toMatch(/couldn't finish/i);
+        expect(out).toMatchObject({ text: "", stop: "timeout" });
         expect(model.invoke).toHaveBeenCalledTimes(AGENT_LIMITS.maxFailedModelCalls + 1);
     });
 
@@ -359,13 +385,20 @@ describe("runAgentTurn", () => {
 
 describe("sanitizeResult", () => {
     const row = (i: number) => ({
-        id: `DL-${i}`, shop_name: "S", dealer_name: "D", city: null, status: null, interest: null,
+        id: `DL-${i}`, shop_name: "S", dealer_name: "D", city: null, status: null, status_label: null, interest: null,
+        phone: null, last_activity_at: null,
         owner_name: null, owned_by_you: true, next_date: null, crm_url: `https://crm/x/${i}`,
     });
 
     it("INV5: never more than 10 rows", () => {
         const r = sanitizeResult({ kind: "leads", title: "t", rows: Array.from({ length: 25 }, (_, i) => row(i)), total: 25, crm_url: null });
         expect(r.kind === "leads" && r.rows.length).toBe(10);
+        const report = sanitizeResult({
+            kind: "lead_report", title: "Hot leads", definition: "d",
+            rows: Array.from({ length: 25 }, (_, i) => ({ ...row(i), age_days: i })), total: 25, crm_url: null,
+        });
+        expect(report.kind === "lead_report" && report.rows.length).toBe(10);
+        expect(report.kind === "lead_report" && report.total).toBe(25);
     });
 
     it("INV8_no_sensitive_fields: Aadhaar / PAN / IFSC / account / DOB scrubbed; ids, links, dealer phone kept", () => {

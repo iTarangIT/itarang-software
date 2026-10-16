@@ -390,12 +390,29 @@ type InterestDbRow = {
 };
 
 /**
- * Section D. Active, open leads only: a Converted or Lost lead's temperature is
- * history, and counting it would make "hot" read as a backlog that is not
- * there. Ageing = days since AGEING_BASIS, measured in IST calendar days.
+ * Section D's population: active, open leads with a temperature. A Converted or
+ * Lost lead's temperature is history, and counting it would make "hot" read as
+ * a backlog that is not there. Exported so the Assistant's
+ * my_leads_by_temperature lists exactly the leads behind the Hot / Warm / Cold
+ * cards (never restated). Case-insensitive: a "Hot" written by an import is the
+ * same temperature (Section D groups on lower() too).
+ */
+export const OPEN_RATED_LEAD = sql`lower(dl.interest_level) IN ('hot', 'warm', 'cold')
+               AND dl.is_active IS NOT FALSE
+               AND dl.lead_status IS DISTINCT FROM 'Converted'
+               AND dl.lead_status IS DISTINCT FROM 'Lost'`;
+
+/**
+ * Section D's ageing: days since AGEING_BASIS, measured in IST calendar days.
  * COALESCE to created_at is defensive only — the trigger stamps every rating
  * and E-301 backfilled every existing one.
  */
+export function interestAgeSql(today: string): SQL {
+    return sql`(${today}::date
+                    - (COALESCE(dl.interest_changed_at, dl.created_at) AT TIME ZONE ${IST})::date)`;
+}
+
+/** Section D. Hot / warm / cold over OPEN_RATED_LEAD, aged by interestAgeSql. */
 async function queryInterest(
     f: SalesDashboardFilters,
     today: string,
@@ -404,14 +421,10 @@ async function queryInterest(
     const rows = await db.execute<InterestDbRow>(sql`
         WITH l AS (
             SELECT ${spocKey(sql`dl.current_owner_id`, bySpoc)} AS spoc,
-                   dl.interest_level,
-                   (${today}::date
-                    - (COALESCE(dl.interest_changed_at, dl.created_at) AT TIME ZONE ${IST})::date) AS age
+                   lower(dl.interest_level) AS interest_level,
+                   ${interestAgeSql(today)} AS age
               FROM dealer_leads dl
-             WHERE dl.interest_level IN ('hot', 'warm', 'cold')
-               AND dl.is_active IS NOT FALSE
-               AND dl.lead_status IS DISTINCT FROM 'Converted'
-               AND dl.lead_status IS DISTINCT FROM 'Lost'
+             WHERE ${OPEN_RATED_LEAD}
                ${leadScope(f)} ${spocClause(sql`dl.current_owner_id`, f)}
         )
         SELECT spoc, interest_level,

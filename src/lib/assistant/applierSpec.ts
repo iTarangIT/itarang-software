@@ -32,12 +32,22 @@ export type RejectReason =
     /** A second Transfer to ASM on a lead already awaiting the visit (ID 120). */
     | "already_transferred"
     /** A photo / file on the plan was consumed by another confirmed action meanwhile (E-311). */
-    | "attachment_used";
+    | "attachment_used"
+    /**
+     * The CRM writer refused the change with its own sentence (StatusGuardError,
+     * WithdrawQuoteError, … — any error carrying an HTTP 4xx status). The
+     * sentence travels on the outcome as `message`; it is what the rep reads.
+     */
+    | "refused";
 
 /** A rejection the executor maps to a reply; the action is marked failed with it. Appliers may throw it too. */
 export class ActionRejected extends Error {
-    constructor(readonly reason: RejectReason) {
-        super(`rejected: ${reason}`);
+    constructor(
+        readonly reason: RejectReason,
+        /** The writer's own sentence, for reason "refused". */
+        readonly detail: string | null = null,
+    ) {
+        super(`rejected: ${reason}${detail ? ` — ${detail}` : ""}`);
     }
 }
 
@@ -67,6 +77,13 @@ export type Applier<P> = {
     secondConfirmWarning: (plan: P) => string;
     /** Every CRM write for this action. */
     apply: (ctx: ApplyContext, plan: P) => Promise<ApplyOutput>;
+    /**
+     * Only for an applier whose afterCommit is an external send (send_quote,
+     * the dealer invite): did NOTHING go out? `extra` is what afterCommit
+     * resolved to — null when it threw. The executor notes it on the confirmed
+     * action, so a second Confirm tap says "ask again", never "Already saved."
+     */
+    sendFailed?: (extra: Record<string, unknown> | null) => boolean;
 };
 
 type ApplierInput<P> = Pick<Applier<P>, "schema" | "apply"> & Partial<Omit<Applier<P>, "schema" | "apply">>;

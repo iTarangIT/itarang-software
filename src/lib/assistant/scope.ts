@@ -13,6 +13,16 @@
 //     asm               my_visits ∪ today ∪ my_closed
 //   ownScopePredicate (what it LISTS / SEARCHES — my_queue, search_lead):
 //     the OWN tabs only.
+//   Both read and own scope also take OWNED_OPEN: an open lead the user owns
+//   that no tab shows (Number Repair, NULL status) — the Hot / Warm / Cold
+//   cards count those, so a lead a report lists can always be opened and
+//   worked (the call that clears Number Repair is logged on it).
+//
+// ID 155 (managers): every predicate takes the viewer's direct reports
+// (teamForOwnScopedViewer), passed to tabFilter exactly as the queue routes
+// pass them — a manager's own tabs then cover the team, read-only. The async
+// lookups below resolve it themselves; ownership (`owned`) is still
+// current_owner_id = the user, so writes stay with the owner.
 //
 // ID 45 (reps cannot browse or read the pool): the pool tabs (ISR unassigned;
 // ASM territory / unclaimed) are out of the read scope, so a pool lead's
@@ -35,9 +45,27 @@ import { tabFilter as isrTab } from "@/lib/inside-sales/queryBuilder";
 import { tabFilter as asmTab, LATEST_VISIT_JOIN } from "@/lib/asm/queryBuilder";
 import { QUEUE_TABS, type QueueTab } from "@/lib/inside-sales/types";
 import { ASM_QUEUE_TABS, type AsmQueueTab } from "@/lib/asm/types";
+import { teamForOwnScopedViewer } from "@/lib/users/team";
 import type { AssistantUser } from "./types";
 
 type ScopeUser = Pick<AssistantUser, "id"> & { role: string };
+
+/** ID 155: a manager's direct reports (empty / absent = the user alone). */
+export type TeamIds = readonly string[] | null | undefined;
+
+/** The viewer's direct reports, as the queue routes look them up. */
+export function scopeTeam(user: ScopeUser): Promise<string[]> {
+    return teamForOwnScopedViewer(user);
+}
+
+/**
+ * An open lead the user OWNS, whatever tab (if any) shows it — Number Repair
+ * (contactability set) and NULL-status leads included. The owner only, never
+ * the team: the same population as OPEN_RATED_LEAD minus the rating.
+ */
+export function ownedOpenPredicate(user: ScopeUser): SQL {
+    return sql`dl.current_owner_id = ${user.id} AND dl.is_active IS NOT FALSE AND dl.lead_status IS DISTINCT FROM 'Converted' AND dl.lead_status IS DISTINCT FROM 'Lost'`;
+}
 
 function union(clauses: SQL[]): SQL {
     return sql`(${sql.join(
@@ -47,12 +75,12 @@ function union(clauses: SQL[]): SQL {
 }
 
 /** WHERE fragment over `dealer_leads dl` (+ `lv` for ASM). Unknown role → FALSE. */
-export function scopePredicate(user: ScopeUser): SQL {
+export function scopePredicate(user: ScopeUser, team?: TeamIds): SQL {
     switch (user.role) {
         case "inside_sales_rep":
-            return union(QUEUE_TABS.map((t) => isrTab(t, user.id)));
+            return union(QUEUE_TABS.map((t) => isrTab(t, user.id, team)));
         case "asm":
-            return union(ASM_QUEUE_TABS.map((t) => asmTab(t, user.id)));
+            return union(ASM_QUEUE_TABS.map((t) => asmTab(t, user.id, team)));
         default:
             return sql`FALSE`;
     }
@@ -72,30 +100,31 @@ export const ASM_READ_TABS = ASM_OWN_TABS;
 
 /**
  * ID 45: WHERE fragment for what findLeadInScope may return — own tabs + ISR
- * team, no pool. Same joins as scopePredicate (scopeJoin). Unknown role → FALSE.
+ * team + the user's own open leads (ownedOpenPredicate), no pool. Same joins
+ * as scopePredicate (scopeJoin). Unknown role → FALSE.
  */
-export function readScopePredicate(user: ScopeUser): SQL {
+export function readScopePredicate(user: ScopeUser, team?: TeamIds): SQL {
     switch (user.role) {
         case "inside_sales_rep":
-            return union(ISR_READ_TABS.map((t) => isrTab(t, user.id)));
+            return union([...ISR_READ_TABS.map((t) => isrTab(t, user.id, team)), ownedOpenPredicate(user)]);
         case "asm":
-            return union(ASM_READ_TABS.map((t) => asmTab(t, user.id)));
+            return union([...ASM_READ_TABS.map((t) => asmTab(t, user.id, team)), ownedOpenPredicate(user)]);
         default:
             return sql`FALSE`;
     }
 }
 
 /**
- * ID 45: WHERE fragment for the user's OWN tabs only (no pool / team /
- * territory) — what search_lead searches. Same joins as scopePredicate
- * (scopeJoin). Unknown role → FALSE.
+ * ID 45: WHERE fragment for the user's OWN tabs (no pool / ISR team tab /
+ * territory) plus their own open leads no tab shows — what search_lead
+ * searches. Same joins as scopePredicate (scopeJoin). Unknown role → FALSE.
  */
-export function ownScopePredicate(user: ScopeUser): SQL {
+export function ownScopePredicate(user: ScopeUser, team?: TeamIds): SQL {
     switch (user.role) {
         case "inside_sales_rep":
-            return union(ISR_OWN_TABS.map((t) => isrTab(t, user.id)));
+            return union([...ISR_OWN_TABS.map((t) => isrTab(t, user.id, team)), ownedOpenPredicate(user)]);
         case "asm":
-            return union(ASM_OWN_TABS.map((t) => asmTab(t, user.id)));
+            return union([...ASM_OWN_TABS.map((t) => asmTab(t, user.id, team)), ownedOpenPredicate(user)]);
         default:
             return sql`FALSE`;
     }
@@ -145,12 +174,14 @@ export type ScopedLead = {
 
 /**
  * The lead if — and only if — it is in the user's READ scope (own tabs + ISR
- * team; never a pool tab, ID 45). null for BOTH "does not exist" and "exists
- * but you can't see it"; callers must not distinguish.
+ * team + own open leads, a manager's team included; never a pool tab, ID 45).
+ * null for BOTH "does not exist" and "exists but you can't see it"; callers
+ * must not distinguish. `owned` is the user alone — a team lead is read-only.
  */
 export async function findLeadInScope(user: ScopeUser, leadId: string): Promise<ScopedLead | null> {
     const id = leadId.trim();
     if (!id) return null;
+    const team = await scopeTeam(user);
     const rows = await db.execute<{
         id: string;
         shop_name: string | null;
@@ -169,7 +200,7 @@ export async function findLeadInScope(user: ScopeUser, leadId: string): Promise<
                dl.interest_level, dl.next_follow_up_at, dl.updated_at
           FROM dealer_leads dl
           ${scopeJoin(user)}
-         WHERE dl.id = ${id} AND ${readScopePredicate(user)}
+         WHERE dl.id = ${id} AND ${readScopePredicate(user, team)}
          LIMIT 1
     `);
     const r = rows[0];
@@ -205,13 +236,14 @@ export async function findClaimState(
 ): Promise<{ owned: boolean; has_owner: boolean; readable: boolean } | null> {
     const id = leadId.trim();
     if (!id) return null;
+    const team = await scopeTeam(user);
     const rows = await db.execute<{ owned: boolean; has_owner: boolean; readable: boolean }>(sql`
         SELECT (dl.current_owner_id = ${user.id}) IS TRUE AS owned,
                (dl.current_owner_id IS NOT NULL) AS has_owner,
-               (${readScopePredicate(user)}) IS TRUE AS readable
+               (${readScopePredicate(user, team)}) IS TRUE AS readable
           FROM dealer_leads dl
           ${scopeJoin(user)}
-         WHERE dl.id = ${id} AND ${scopePredicate(user)}
+         WHERE dl.id = ${id} AND (${scopePredicate(user, team)} OR ${ownScopePredicate(user, team)})
          LIMIT 1
     `);
     const r = rows[0];

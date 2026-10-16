@@ -11,7 +11,14 @@
 // back to Under discussion only when no other quote is left in play.
 
 import { z } from "zod";
-import { withdrawQuote as withdrawLeadQuote, withdrawRefusal } from "@/lib/leads/withdrawQuote";
+import { db } from "@/lib/db";
+import {
+    leadMoveOnWithdraw,
+    quotesInPlay,
+    withdrawQuote as withdrawLeadQuote,
+    withdrawRefusal,
+} from "@/lib/leads/withdrawQuote";
+import { isWorkedTouchpoint } from "@/lib/lifecycle/touchpointTypes";
 import { createPending } from "../../actions";
 import { statusLabel } from "../../format";
 import type { Preview, ToolResult } from "../../types";
@@ -19,6 +26,7 @@ import { defineTool, LeadId, ownedLeadOr, type ToolFactory } from "../spec";
 import { leadUrl } from "../leads";
 import { defineApplier } from "../../applierSpec";
 import { APPROVAL_LABEL, inr, loadLatestQuote } from "../quotes";
+import { preTransferStatusFor } from "./quoteMove";
 
 /** The route's own bounds (POST …/commercials/[commercialId]/withdraw). */
 const REASON_MIN = 5;
@@ -89,15 +97,35 @@ export const withdrawQuote: ToolFactory = () =>
                         (latest.total != null ? ` · ${inr(latest.total)}` : ""),
                 },
                 { label: "Reason", value: reason },
-                { label: "Lead status now", value: statusLabel(lead.lead_status) },
             ];
+            // What the writer will do to the lead — its own pure rule, on the
+            // quotes that stay in play once this one is gone.
+            const others = (await quotesInPlay(db as unknown as Parameters<typeof quotesInPlay>[0], lead.id)).filter(
+                (q) => q.version_no !== latest.version_no,
+            );
+            const move = leadMoveOnWithdraw({
+                leadStatus: lead.lead_status,
+                preTransferStatus: await preTransferStatusFor(lead.id, lead.lead_status),
+                quoteStillInPlay: others.length > 0,
+            });
+            const live = others.find((q) => q.approval_status === "approved");
+            lines.push({
+                label: "Status",
+                value:
+                    move === "back"
+                        ? `${statusLabel(lead.lead_status)} → ${statusLabel("Under_Discussion")}`
+                        : move === "pre_transfer"
+                          ? `${statusLabel(lead.lead_status)} (unchanged; after the visit it returns to ${statusLabel("Under_Discussion")})`
+                          : others.length
+                            ? `no change — v${(live ?? others[0]!).version_no} is still ${live ? "live" : "with the CEO"}`
+                            : "no change",
+            });
             const preview: Preview = {
                 title: `Withdraw quote — ${lead.shop_name || lead.dealer_name || lead.id}`,
                 lines,
-                // A withdrawal is work on the lead (it writes a status note).
-                resets_idle_clock: true,
-                warning:
-                    "The dealer can no longer answer this quote. If no other quote is open, the lead goes back to Under discussion.",
+                // The withdrawal writes a status note; it is work only when it moves the status.
+                resets_idle_clock: isWorkedTouchpoint("status_change_note", move === "back", "quote_withdrawn"),
+                warning: "The dealer can no longer answer this quote.",
                 needs_second_confirm: false,
                 crm_url: crmUrl,
             };

@@ -16,6 +16,7 @@ import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { claimLead as claimLeadWrite } from "@/lib/inside-sales/claimLead";
 import { parseMobileList } from "@/lib/leads/claimScope";
+import { isForward } from "@/lib/lifecycle/statusRules";
 import { claimPoolPredicate, findClaimState, scopeJoin } from "../../scope";
 import { createPending } from "../../actions";
 import { statusLabel } from "../../format";
@@ -53,6 +54,22 @@ async function findInPool(user: AssistantUser, by: { id: string } | { mobiles: s
          ORDER BY dl.created_at DESC, dl.id
          LIMIT ${MAX_TOOL_ROWS}
     `);
+}
+
+/** Is the lead inside the ASM's active territory? The same EXISTS claimLead() flags the claim with. */
+async function inAsmTerritory(asmId: string, leadId: string): Promise<boolean> {
+    const rows = await db.execute<{ ok: boolean }>(sql`
+        SELECT EXISTS (
+            SELECT 1 FROM dealer_leads dl
+              JOIN asm_territories t ON t.asm_id = ${asmId}
+                                    AND t.state = dl.state
+                                    AND (t.city IS NULL OR t.city = dl.city)
+                                    AND (t.active_from IS NULL OR t.active_from <= CURRENT_DATE)
+                                    AND (t.active_to IS NULL OR t.active_to >= CURRENT_DATE)
+             WHERE dl.id = ${leadId}
+        ) AS ok
+    `);
+    return rows[0]?.ok === true;
 }
 
 /**
@@ -114,18 +131,29 @@ export const claimLead: ToolFactory = () =>
             }
 
             const lead = rows[0]!;
+            // The writer lifts only a New / unstatused lead; a released lead keeps its stage (S3).
+            const lifts = isForward(lead.lead_status, "Assigned_Not_Contacted");
             const lines: Preview["lines"] = [
-                { label: "Status", value: `${statusLabel(lead.lead_status ?? "New_Unassigned")} → Assigned Not Contacted` },
+                {
+                    label: "Status",
+                    value: lifts
+                        ? `${statusLabel(lead.lead_status ?? "New_Unassigned")} → ${statusLabel("Assigned_Not_Contacted")}`
+                        : `no change (${statusLabel(lead.lead_status)})`,
+                },
                 { label: "Owner", value: "you" },
             ];
             if (ctx.user.role === "asm") lines.push({ label: "Field ASM", value: "you (visits go to your Today's Schedule)" });
             if (lead.city) lines.push({ label: "City", value: lead.city });
+            // ID 45: the writer marks an ASM's claim outside their territory for the Sales Head.
+            const outside = ctx.user.role === "asm" && !(await inAsmTerritory(ctx.user.id, lead.id));
             const preview: Preview = {
                 title: `Claim — ${lead.shop_name || lead.dealer_name || lead.id}`,
                 lines,
                 // A claim is not work on the lead (isWorkedTouchpoint): the idle clock starts from here.
                 resets_idle_clock: false,
-                warning: null,
+                warning: outside
+                    ? "This dealer is outside your territory. You can still claim it; the claim is flagged for the Sales Head."
+                    : null,
                 needs_second_confirm: false,
                 crm_url: leadUrl(ctx.user, lead.id),
             };
