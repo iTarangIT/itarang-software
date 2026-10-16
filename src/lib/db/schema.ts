@@ -9617,44 +9617,12 @@ export const salesInvoices = pgTable(
   }),
 );
 
-// E-326 — line items of a sales invoice (tracker ID 72). `amount` is the
-// taxable value before GST. `item_key` joins to sales_invoice_item_products.
-export const salesInvoiceLines = pgTable(
-  "sales_invoice_lines",
-  {
-    id: uuid().defaultRandom().primaryKey().notNull(),
-    // 'drive' (read off the PDF); 'vyapar' / 'zoho' reserved for IDs 39 / 70.
-    source: varchar("source", { length: 16 }).default("drive").notNull(),
-    sales_invoice_id: uuid("sales_invoice_id").notNull(),
-    line_no: integer("line_no").notNull(),
-    description: text("description"),
-    item_key: text("item_key"),
-    hsn_code: varchar("hsn_code", { length: 16 }),
-    quantity: numeric("quantity", { precision: 12, scale: 3 }),
-    rate: numeric("rate", { precision: 14, scale: 2 }),
-    amount: numeric("amount", { precision: 14, scale: 2 }),
-    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-  },
-  (table) => ({
-    salesInvoiceLinesInvoiceLineUnique: uniqueIndex("sales_invoice_lines_invoice_line_unique").on(
-      table.sales_invoice_id,
-      table.line_no,
-    ),
-    salesInvoiceLinesItemKeyIdx: index("sales_invoice_lines_item_key_idx").on(table.item_key),
-  }),
-);
-
-// E-326 — invoice item name → CRM product, mapped once per item (ID 72).
-// product_id NULL = seen, not mapped; auto_matched = proposed, not confirmed.
-export const salesInvoiceItemProducts = pgTable("sales_invoice_item_products", {
-  item_key: text("item_key").primaryKey().notNull(),
-  item_name: text("item_name").notNull(),
-  product_id: uuid("product_id"),
-  auto_matched: boolean("auto_matched").default(false).notNull(),
-  mapped_by: uuid("mapped_by"),
-  created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-  updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
-});
+// E-326 (sales_invoice_lines, sales_invoice_item_products) — RETIRED (ID 147,
+// A16, 16 Oct 2026). The tables stay in the databases (migrations are
+// additive) but nothing reads or writes them: invoice lines are
+// invoice_line_items and the ONE item → product mapping is vyapar_item_map
+// (Invoice Ledger › Item mapping, src/lib/sales/itemMap.ts). Their Drizzle
+// definitions were removed so no new code can pick up the second mapping.
 
 export const salesInvoiceFolders = pgTable(
   "sales_invoice_folders",
