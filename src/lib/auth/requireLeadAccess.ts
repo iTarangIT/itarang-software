@@ -241,23 +241,24 @@ export async function resolveDealerCode(user: {
  * users.dealer_id on its own leads (ID 119) — and let two empty values count
  * as the same dealer.
  *
- * 16 Oct (ID 183): the file's own dealer only. The house login no longer acts
- * on a file it pushed to another dealer (the dealer is the only owner); it
- * still SEES it — dealerMayViewLead.
+ * 16 Oct evening (user): the file's own dealer AND the iTarang house login on
+ * a file the house pushed out — the house keeps FULL access at every step,
+ * like the dealer (houseMayActOnLead). Pass the lead id, or the house is not
+ * recognised.
  */
 export async function dealerMayActOnLead(
   user: { id: string; role: string | null; dealer_id: string | null },
   leadDealerId: string | null | undefined,
-  /** The lead's id. Kept for the callers; until 16 Oct it let the house act. */
   leadId?: string | null,
 ): Promise<boolean> {
-  void leadId;
-  return dealerOwnsLead(leadDealerId, await resolveDealerCode(user));
+  const code = await resolveDealerCode(user);
+  if (dealerOwnsLead(leadDealerId, code)) return true;
+  return leadId ? houseMayActOnLead(code, leadId) : false;
 }
 
 /**
  * May this dealer login SEE a lead: its own dealer's file, or — for a house
- * login — a file the house pushed out (Pushed files opens it read-only).
+ * login — a file the house pushed out (Pushed files).
  */
 export async function dealerMayViewLead(
   user: { id: string; role: string | null; dealer_id: string | null },
@@ -270,25 +271,27 @@ export async function dealerMayViewLead(
 }
 
 /**
- * ID 183 (16 Oct): the steps iTarang never takes — Step 5 (the dealer's stock,
- * the customer's dispatch OTP, dispatch), the cash sale and "delivered". Only
- * the dealer the file belongs to; the house login loses them too.
+ * Step 5 (the dealer's stock, the customer's dispatch OTP, dispatch), the cash
+ * sale and "delivered": the dealer the file belongs to, and — 16 Oct evening
+ * (user) — the iTarang house login on a file it pushed out, when the lead id
+ * is passed. Admin / Sales Head acting for the dealer never dispatch.
  */
 export async function dealerMayDispatch(
   user: { id: string; role: string | null; dealer_id: string | null },
   leadDealerId: string | null | undefined,
+  leadId?: string | null,
 ): Promise<boolean> {
-  return dealerOwnsLead(leadDealerId, await resolveDealerCode(user));
+  const code = await resolveDealerCode(user);
+  if (dealerOwnsLead(leadDealerId, code)) return true;
+  return leadId ? houseMayActOnLead(code, leadId) : false;
 }
 
 /**
  * 14 Oct: the iTarang house dealer keeps access to a customer file after
  * pushing it to a dealer so it can see and continue what the dealer does.
- * 16 Oct (ID 33 / 183): SEE only — no step on it at all (gateLeadActor /
- * leadActorVerdict refuse the house's writes), no second push
- * (pushBlockedReason), and the file leaves the house's own lists and counts —
- * the dealer is its only owner; the house sees it on Pushed files. The name
- * is kept for its callers. True when the caller's dealer code IS the house code (any house
+ * 16 Oct evening (user): FULL access at every step again, Step 5 included —
+ * like the file's dealer. Still no second push (pushBlockedReason: Admin
+ * only), the delete stays the dealer's, and the file is found on Pushed files. True when the caller's dealer code IS the house code (any house
  * login) and the file carries a push FROM the house (houseOriginatedLeadIds).
  */
 export async function houseMayActOnLead(callerDealerCode: string | null | undefined, leadId: string): Promise<boolean> {
