@@ -5,6 +5,7 @@
 // screen reads (fetchLeadDetailBundle), then an ALLOWLIST projection — the
 // bundle's commercials, onboarding and address history never leave here.
 // Free text is scrubbed afterwards by the agent's sanitizeResult (Invariant 8).
+// Timestamps go out as IST ("…+05:30"); visit dates stay plain dates.
 // Also serves a tap on a list row (ast:lead:<id>), with no model involved.
 
 import { z } from "zod";
@@ -14,6 +15,7 @@ import { fetchLeadDetailBundle } from "@/lib/inside-sales/leadDetail";
 import type { ToolResult } from "../../types";
 import { defineTool, LeadId, NOT_FOUND, scopedLeadOr, type ToolFactory } from "../spec";
 import { leadUrl } from "../leads";
+import { istIso, statusLabel } from "../../format";
 
 export const HISTORY_ROWS = 5;
 
@@ -65,21 +67,22 @@ export const getLeadDetails: ToolFactory = () =>
                     state: l.state,
                     area: l.area,
                     status: l.lead_status,
+                    status_label: l.lead_status ? statusLabel(l.lead_status) : null,
                     interest: l.interest_level,
                     owner_name: l.current_owner_name,
                     owned_by_you: l.current_owner_id === ctx.user.id,
                     asm_name: l.asm_name,
-                    next_follow_up_at: l.next_follow_up_at,
-                    last_activity_at: l.last_touchpoint_at,
+                    next_follow_up_at: istIso(l.next_follow_up_at),
+                    last_activity_at: istIso(l.last_touchpoint_at),
                     lost_reason: l.lost_reason,
                     recent_touchpoints: bundle.touchpoints.slice(0, HISTORY_ROWS).map((t) => ({
                         type: t.touchpoint_type,
-                        at: t.performed_at,
+                        at: istIso(t.performed_at),
                         by: t.performed_by_name,
                         call_status: t.call_status,
                         remarks: t.remarks,
                         next_action: t.next_action,
-                        next_action_at: t.next_action_at,
+                        next_action_at: istIso(t.next_action_at),
                     })),
                     recent_visits: visits.map((v) => ({
                         status: v.visit_status,

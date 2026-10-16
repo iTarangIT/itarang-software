@@ -31,7 +31,8 @@ export const readDocument: ToolFactory = () =>
             const m = found.rows[0];
             const bytes = await mediaBytes(m);
             if (!bytes || !m.mime_type) return { kind: "unavailable", message: "I couldn't open that file. Please send it again." };
-            const read = await readWithModel({ bytes, mimeType: m.mime_type });
+            // The turn's remaining budget caps the read (vision.ts readTimeoutMs).
+            const read = await readWithModel({ bytes, mimeType: m.mime_type, deadline: ctx.deadline });
             if (read.kind !== "ok") {
                 log.warn("[assistant] read_document failed", { userId: ctx.user.id, ref: m.ref, error: read.error });
                 return { kind: "unavailable", message: "I couldn't read that file just now. Please try again, or type the details." };
