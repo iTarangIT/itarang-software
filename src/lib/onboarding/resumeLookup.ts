@@ -11,6 +11,8 @@ import { db } from "@/lib/db";
 export type ResumableApplication = {
     id: string;
     owner_email: string | null;
+    /** Where the resume code goes first (ID 166 decision 5: a mobile OTP). */
+    owner_phone: string | null;
     owner_name: string | null;
     company_name: string | null;
     onboarding_status: string | null;
@@ -30,7 +32,7 @@ export async function findResumableApplication(input: {
     if (!id && !email && !code) return null;
 
     const rows = (await db.execute(sql`
-        SELECT app.id::text AS id, app.owner_email, app.owner_name, app.company_name, app.onboarding_status
+        SELECT app.id::text AS id, app.owner_email, app.owner_phone, app.owner_name, app.company_name, app.onboarding_status
           FROM dealer_onboarding_applications app
          WHERE COALESCE(app.onboarding_status, 'draft') <> 'approved'
            AND (
