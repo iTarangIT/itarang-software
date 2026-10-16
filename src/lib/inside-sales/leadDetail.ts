@@ -29,6 +29,7 @@ import { onboardingClockSql } from "@/lib/onboarding/clock";
 import { dealCardJson } from "@/lib/leads/dealCard";
 import { dealCardLockedBy, parseDealCard } from "@/lib/leads/dealCardRules";
 import { dealCardActualsSql } from "@/lib/leads/dealCardActuals";
+import { isDealerOnboarded } from "@/lib/leads/dealerOnboarded";
 
 // ID 122: the one onboarding clock (src/lib/onboarding/clock.ts).
 const ONBOARDING_CLOCK = sql.raw(onboardingClockSql("oa"));
@@ -334,6 +335,8 @@ export async function fetchLeadDetailBundle(leadId: string): Promise<LeadDetailB
         // ID 83: an unowned lead whose first human call was by a NeoDove agent
         // nobody has linked to a CRM user — it is waiting on that link.
         caller_not_linked: (lead as LeadDetailLead).current_owner_id ? null : await callerNotLinkedFor(leadId),
+        // ID 186: an onboarded dealer's lead shows no deal card (never throws).
+        dealer_onboarded: await isDealerOnboarded(leadId),
     };
     return bundle;
 }
