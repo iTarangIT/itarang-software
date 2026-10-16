@@ -250,6 +250,10 @@ export const logCall: ToolFactory = () =>
                     );
                 }
                 touchpointType = input.channel === "whatsapp" ? "whatsapp" : "status_change_note";
+                // As the CRM's WhatsApp log (whatsapp-contact route): remarks are required.
+                if (input.channel === "whatsapp" && !remarks) {
+                    return ask("What was the WhatsApp chat about? I need a short note to log it.");
+                }
                 if (input.channel === "note" && input.screenshot_attachment_id) {
                     return ask("A screenshot goes with a WhatsApp chat. Was this a WhatsApp chat with the dealer?");
                 }

@@ -9,8 +9,11 @@
 // only PROPOSES invite_dealer_onboarding — its own Confirm sends.
 
 import { z } from "zod";
+import { sql } from "drizzle-orm";
+import { db } from "@/lib/db";
 import { checkCustomerGstin, normalizeGstin } from "@/lib/leads/gstin";
 import { markLeadConverted } from "@/lib/leads/markConverted";
+import { checkStatusMove } from "@/lib/lifecycle/statusRules";
 import { isWorkedTouchpoint } from "@/lib/lifecycle/touchpointTypes";
 import { createPending } from "../../actions";
 import { statusLabel } from "../../format";
@@ -30,6 +33,22 @@ export const MarkConvertedPlan = z.object({
 export type MarkConvertedPlan = z.infer<typeof MarkConvertedPlan>;
 
 const ask = (question: string): ToolResult => ({ kind: "question", question });
+
+/**
+ * ID 74: does the lead have a dealer-approved, not-withdrawn quote? The same
+ * EXISTS attachOnboardingToWonLead writes won_without_approved_quote from.
+ */
+async function hasDealerApprovedQuote(leadId: string): Promise<boolean> {
+    const rows = (await db.execute<{ ok: boolean }>(sql`
+        SELECT EXISTS (
+            SELECT 1 FROM dealer_lead_commercials c
+             WHERE c.dealer_lead_id = ${leadId}
+               AND c.event_type IN ('quote_issue', 'quote_revision')
+               AND c.dealer_decision = 'approved'
+               AND c.withdrawn_at IS NULL) AS ok
+    `)) as unknown as Array<{ ok: boolean }>;
+    return rows[0]?.ok === true;
+}
 
 export const markConverted: ToolFactory = () =>
     defineTool({
@@ -52,9 +71,14 @@ export const markConverted: ToolFactory = () =>
             if (lead.lead_status === "Converted" || lead.lead_status === "Won") {
                 return { kind: "declined", reason: `This lead is already ${lead.lead_status}.`, crm_url: crmUrl };
             }
+            // The S3 rule the writer enforces (a Lost lead cannot be marked Won) — refused now, not after Confirm.
+            const verdict = checkStatusMove({ from: lead.lead_status, to: "Won", event: "mark_won" });
+            if (!verdict.ok) return { kind: "declined", reason: verdict.reason, crm_url: crmUrl };
             const gstin = normalizeGstin(input.gstin);
             const gstinAsk = gstinQuestion(gstin);
             if (gstinAsk) return ask(gstinAsk);
+            // ID 74: the same test the writer flags with (won_without_approved_quote).
+            const approvedQuote = await hasDealerApprovedQuote(lead.id);
 
             const plan: MarkConvertedPlan = { lead_id: lead.id, gstin, notes: input.notes?.trim() || null };
             const lines: Preview["lines"] = [
@@ -67,7 +91,12 @@ export const markConverted: ToolFactory = () =>
                 title: `Mark Won — ${lead.shop_name || lead.dealer_name || lead.id}`,
                 lines,
                 resets_idle_clock: isWorkedTouchpoint("status_change_note", true),
-                warning: "Undoing a conversion can only be done on the CRM screen.",
+                warning:
+                    (approvedQuote
+                        ? ""
+                        : "No dealer-approved quote on this lead. You can still mark it Won; it will be flagged " +
+                          "Won without an approved quote for the admin and sales head. ") +
+                    "Undoing a conversion can only be done on the CRM screen.",
                 needs_second_confirm: false,
                 crm_url: crmUrl,
             };

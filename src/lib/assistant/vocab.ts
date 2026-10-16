@@ -115,6 +115,25 @@ export const CALL_VOCAB: readonly CallVocabRow[] = deepFreeze<CallVocabRow[]>([
         extra: "Follow-up date",
     },
     {
+        // The sheet's other Cold outcomes: spoke to the dealer, nothing now.
+        id: "cold_issue",
+        said: "loan / finance trouble, service complaint, no requirement right now, bad experience with Trontek, hung up quickly",
+        connect: "connected",
+        labels: [
+            "Loan Procedure Issue",
+            "Service Issue",
+            "No requirement in current",
+            "Bad Experience with Trontek",
+            "Short Hang up",
+        ],
+        buckets: ["Cold"],
+        askBucket: false,
+        status: { options: ["Under_Discussion"], whenUnstated: "no_change", question: "" },
+        lostReasonByLabel: {},
+        interest: null,
+        extra: "Follow-up date if given; not Lost unless the rep says so (then a Lost outcome)",
+    },
+    {
         id: "commercials_explained",
         said: "explained commercials, gave the price",
         connect: "connected",
@@ -145,9 +164,10 @@ export const CALL_VOCAB: readonly CallVocabRow[] = deepFreeze<CallVocabRow[]>([
     },
     {
         id: "quote_negotiation",
-        said: "quote sent, negotiating, deal final",
+        said: "quote sent, negotiating, documents received, deal final",
         connect: "connected",
-        labels: ["Quotation Sent", "Under Negotiation", "Commercials Finalised"],
+        // "Documents Recieved" is the sheet's own spelling (dispositions.ts).
+        labels: ["Quotation Sent", "Under Negotiation", "Documents Recieved", "Commercials Finalised"],
         buckets: ["Hot"],
         askBucket: false,
         status: {
@@ -161,6 +181,20 @@ export const CALL_VOCAB: readonly CallVocabRow[] = deepFreeze<CallVocabRow[]>([
         extra: "Interest hot; link to Transfer or Mark Won; no quote yet → offer create_quote (ID 75)",
     },
     {
+        // The sheet's Converted outcomes. A call never sets Won / Converted
+        // (ID 115): the rep marks it Won with the GSTIN (mark_converted).
+        id: "converted",
+        said: "deal closed, order received, full payment received, onboarding done",
+        connect: "connected",
+        labels: ["Deal Closed", "Order Received", "Full Payment Received", "Onboarding Done"],
+        buckets: ["Converted"],
+        askBucket: false,
+        status: { options: [NO_CHANGE], whenUnstated: "no_change", question: "" },
+        lostReasonByLabel: {},
+        interest: null,
+        extra: "Status unchanged by the call; offer mark_converted (Mark Won, needs the GSTIN)",
+    },
+    {
         id: "lost",
         said: "not interested; went elsewhere; moved to another business; shop closed; we rejected them (credit or geography)",
         connect: "connected",
@@ -168,9 +202,10 @@ export const CALL_VOCAB: readonly CallVocabRow[] = deepFreeze<CallVocabRow[]>([
         buckets: ["Lost"],
         askBucket: false,
         status: {
-            options: ["Lost"],
+            // A Lost outcome may be logged with the lead kept open, when the rep says so.
+            options: ["Lost", NO_CHANGE],
             whenUnstated: "ask",
-            question: "Should I mark this lead Lost?",
+            question: "Should I mark this lead Lost, or just log the call and keep it open?",
         },
         lostReasonByLabel: {
             ...lostReasonsFor(["Not Interested", "Lost to Competition", "Some other Business", "Business Closed"]),
@@ -212,6 +247,17 @@ export const VISIT_VOCAB: readonly VisitVocabRow[] = deepFreeze<VisitVocabRow[]>
         },
         lostReasons: ["not_interested", "other"],
         extra: "Reschedule: next visit date",
+    },
+    {
+        id: "visit_other",
+        said: "ASM: couldn't fix a time / visit got muddled; anything else",
+        outcomes: ["scheduling_issue", "other"],
+        statusByOutcome: {
+            scheduling_issue: { options: [NO_CHANGE], whenUnstated: "no_change", question: "" },
+            other: { options: [NO_CHANGE], whenUnstated: "no_change", question: "" },
+        },
+        lostReasons: [],
+        extra: "Remarks say what happened; next visit date",
     },
 ]);
 
@@ -287,6 +333,11 @@ function settleStatus(
     return { ok: true, status };
 }
 
+/** The buckets a row allows for one label: the row's, narrowed to where the sheet files that label. */
+export function labelBuckets(row: CallVocabRow, label: string): DispositionBucket[] {
+    return (row.buckets ?? []).filter((b) => CONNECTED_DISPOSITIONS[b].includes(label));
+}
+
 /** The §9.3 row a sheet label belongs to, if any. */
 export function callRowFor(label: string, connect: "connected" | "not_connected"): CallVocabRow | null {
     return CALL_VOCAB.find((r) => r.connect === connect && r.labels.includes(label)) ?? null;
@@ -308,13 +359,13 @@ export function checkCallProposal(input: {
         return ask("I couldn't match that to a call outcome. What happened on the call?");
     }
     if (row.buckets) {
+        // The buckets THIS label is filed under on the sheet — a row can mix
+        // labels from two buckets (call_back: Cold and Warm ones).
+        const allowed = labelBuckets(row, input.label);
         if (!input.bucket) {
-            if (row.askBucket) return ask("Is the dealer warm or hot?");
-        } else if (
-            !row.buckets.includes(input.bucket) ||
-            !CONNECTED_DISPOSITIONS[input.bucket].includes(input.label)
-        ) {
-            return ask(`Is the dealer ${row.buckets.map((b) => b.toLowerCase()).join(" or ")}?`);
+            if (row.askBucket) return ask(`Is the dealer ${allowed.map((b) => b.toLowerCase()).join(" or ")}?`);
+        } else if (!allowed.includes(input.bucket)) {
+            return ask(`Is the dealer ${allowed.map((b) => b.toLowerCase()).join(" or ")}?`);
         }
     }
     const settled = settleStatus(row.status, input.status);

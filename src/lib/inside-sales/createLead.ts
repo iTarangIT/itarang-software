@@ -104,7 +104,18 @@ export async function findLeadIdByPhone(phone: string): Promise<string | null> {
 
 export async function createInsideSalesLead(
     input: CreateLeadInput,
-    opts?: { tx?: Tx },
+    opts?: {
+        tx?: Tx;
+        /**
+         * Do not log a Re-inquiry on the existing lead when the phone is a
+         * duplicate — just throw DuplicatePhoneError. The WhatsApp Assistant
+         * passes it: its executor rolls the whole action back and replies
+         * "Nothing was saved", so a Re-inquiry committed outside that
+         * transaction would make the reply untrue (it asks Yes / No instead,
+         * ID 137). Screens leave it unset — behaviour unchanged.
+         */
+        skipReinquiry?: boolean;
+    },
 ): Promise<CreateLeadResult> {
     const exec = opts?.tx ?? db;
 
@@ -115,7 +126,9 @@ export async function createInsideSalesLead(
     const normalised = normalizePhone(input.phone);
     const existing = normalised ? (await loadExistingByPhone([normalised])).get(normalised) : undefined;
     if (existing) {
-        await recordReinquiry({ leadId: existing.id, door, actorId: input.actor.id, note: input.dealerName });
+        if (!opts?.skipReinquiry) {
+            await recordReinquiry({ leadId: existing.id, door, actorId: input.actor.id, note: input.dealerName });
+        }
         throw new DuplicatePhoneError(existing.id);
     }
     if (await phoneExists(exec, input.phone)) throw new DuplicatePhoneError();

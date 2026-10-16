@@ -20,6 +20,8 @@ import { ActionRejected, defineApplier } from "../../applierSpec";
 import { notifyLeadsReassigned } from "@/lib/leads/newOwnerNotice";
 import { matchPeople, nameList } from "./people";
 import { handBackRefusal, isHandBack } from "@/lib/leads/asmHandBack";
+import { statusBeforeTransfer } from "@/lib/leads/assignOwner";
+import { statusLabel } from "../../format";
 
 export const ReassignLeadPlan = z.object({
     lead_id: z.string().min(1),
@@ -73,10 +75,11 @@ export const reassignLead: ToolFactory = () =>
             const targetName = target.name?.trim() || target.id;
 
             // ID 121: say so now rather than after Confirm.
-            const status = await db.execute<{ lead_status: string | null }>(sql`
-                SELECT lead_status FROM dealer_leads WHERE id = ${lead.id} LIMIT 1
+            const status = await db.execute<{ lead_status: string | null; pre_transfer_status: string | null }>(sql`
+                SELECT lead_status, pre_transfer_status FROM dealer_leads WHERE id = ${lead.id} LIMIT 1
             `);
-            if (isHandBack(status[0]?.lead_status, target.role)) {
+            const handBack = isHandBack(status[0]?.lead_status, target.role);
+            if (handBack) {
                 const refusal = await handBackRefusal(db, lead.id);
                 if (refusal) return { kind: "declined", reason: refusal };
             }
@@ -93,13 +96,29 @@ export const reassignLead: ToolFactory = () =>
                 target_role: target.role,
                 reason,
             };
+            const lines: Preview["lines"] = [
+                { label: "Owner", value: `you → ${targetName} (${ROLE_LABEL[target.role] ?? target.role})` },
+            ];
+            // ID 121: what reassignLead() does on a hand-back — the lead goes
+            // back to its pre-transfer stage, the ASM is unlinked and the open
+            // visits are cancelled (asmHandBack.releaseAsm).
+            if (handBack) {
+                const backTo = statusBeforeTransfer(status[0]?.pre_transfer_status ?? null);
+                const open = await db.execute<{ n: number }>(sql`
+                    SELECT count(*)::int AS n FROM lead_visits
+                     WHERE dealer_lead_id = ${lead.id} AND visit_status IN ('scheduled', 'pending_scheduling')
+                `);
+                const n = Number(open[0]?.n ?? 0);
+                lines.push({ label: "Status", value: `${statusLabel("Transferred_to_ASM")} → ${statusLabel(backTo)}` });
+                lines.push({ label: "Field ASM", value: "unlinked" });
+                if (n > 0) lines.push({ label: "Open visits", value: `${n} cancelled` });
+            }
+            lines.push({ label: "Reason", value: reason });
             const preview: Preview = {
                 title: `Reassign ${lead.shop_name || lead.dealer_name || lead.id} → ${targetName}`,
-                lines: [
-                    { label: "Owner", value: `you → ${targetName} (${ROLE_LABEL[target.role] ?? target.role})` },
-                    { label: "Reason", value: reason },
-                ],
-                resets_idle_clock: isWorkedTouchpoint("ownership_transfer", false),
+                lines,
+                // An ownership change is not work; nor is the hand-back's status restore (a correction).
+                resets_idle_clock: isWorkedTouchpoint("ownership_transfer", handBack, handBack ? "correction" : null),
                 warning: `After this the lead belongs to ${targetName} and is read-only for you.`,
                 needs_second_confirm: false,
                 crm_url: leadUrl(ctx.user, lead.id),
@@ -130,7 +149,10 @@ export const reassignLeadApplier = defineApplier<ReassignLeadPlan>({
             // The person was deactivated (or removed) after the preview — or,
             // ID 121, the ASM booked a visit after it.
             if (err instanceof ReassignError) {
-                throw new ActionRejected(err.code === "visit_booked" ? "visit_booked" : "target_unavailable");
+                // A booked visit carries the writer's sentence (who, which day).
+                throw err.code === "visit_booked"
+                    ? new ActionRejected("visit_booked", err.message)
+                    : new ActionRejected("target_unavailable");
             }
             throw err;
         }

@@ -18,6 +18,7 @@ import {
     type VisitType,
 } from "@/lib/leads/transferToAsm";
 import { isWorkedTouchpoint } from "@/lib/lifecycle/touchpointTypes";
+import { checkStatusMove } from "@/lib/lifecycle/statusRules";
 import { createPending } from "../../actions";
 import { fmtDate, reasonLabel, statusLabel } from "../../format";
 import type { Preview, ToolResult } from "../../types";
@@ -76,6 +77,10 @@ export const transferToAsm: ToolFactory = () =>
                     crm_url: crmUrl,
                 };
             }
+            // The S3 rule the writer enforces (a Won / Lost / Converted lead
+            // cannot be transferred) — refused here, not after Confirm.
+            const verdict = checkStatusMove({ from: lead.lead_status, to: "Transferred_to_ASM", event: "transfer" });
+            if (!verdict.ok) return { kind: "declined", reason: verdict.reason, crm_url: crmUrl };
 
             const { asms } = await listAsmOptions({ state: lead.state, city: lead.city, includeOutOfTerritory: true });
             const people = asms.map((a) => ({ ...a, id: a.user_id }));

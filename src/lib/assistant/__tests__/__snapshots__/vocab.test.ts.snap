@@ -60,6 +60,32 @@ exports[`INV6_closed_vocabulary: §9.3 map is a subset of the existing enums > m
       },
     },
     {
+      "askBucket": false,
+      "buckets": [
+        "Cold",
+      ],
+      "connect": "connected",
+      "extra": "Follow-up date if given; not Lost unless the rep says so (then a Lost outcome)",
+      "id": "cold_issue",
+      "interest": null,
+      "labels": [
+        "Loan Procedure Issue",
+        "Service Issue",
+        "No requirement in current",
+        "Bad Experience with Trontek",
+        "Short Hang up",
+      ],
+      "lostReasonByLabel": {},
+      "said": "loan / finance trouble, service complaint, no requirement right now, bad experience with Trontek, hung up quickly",
+      "status": {
+        "options": [
+          "Under_Discussion",
+        ],
+        "question": "",
+        "whenUnstated": "no_change",
+      },
+    },
+    {
       "askBucket": true,
       "buckets": [
         "Warm",
@@ -121,13 +147,39 @@ exports[`INV6_closed_vocabulary: §9.3 map is a subset of the existing enums > m
       "labels": [
         "Quotation Sent",
         "Under Negotiation",
+        "Documents Recieved",
         "Commercials Finalised",
       ],
       "lostReasonByLabel": {},
-      "said": "quote sent, negotiating, deal final",
+      "said": "quote sent, negotiating, documents received, deal final",
       "status": {
         "options": [
           "Under_Discussion",
+        ],
+        "question": "",
+        "whenUnstated": "no_change",
+      },
+    },
+    {
+      "askBucket": false,
+      "buckets": [
+        "Converted",
+      ],
+      "connect": "connected",
+      "extra": "Status unchanged by the call; offer mark_converted (Mark Won, needs the GSTIN)",
+      "id": "converted",
+      "interest": null,
+      "labels": [
+        "Deal Closed",
+        "Order Received",
+        "Full Payment Received",
+        "Onboarding Done",
+      ],
+      "lostReasonByLabel": {},
+      "said": "deal closed, order received, full payment received, onboarding done",
+      "status": {
+        "options": [
+          "no_change",
         ],
         "question": "",
         "whenUnstated": "no_change",
@@ -171,8 +223,9 @@ exports[`INV6_closed_vocabulary: §9.3 map is a subset of the existing enums > m
       "status": {
         "options": [
           "Lost",
+          "no_change",
         ],
-        "question": "Should I mark this lead Lost?",
+        "question": "Should I mark this lead Lost, or just log the call and keep it open?",
         "whenUnstated": "ask",
       },
     },
@@ -271,6 +324,32 @@ exports[`INV6_closed_vocabulary: §9.3 map is a subset of the existing enums > m
           ],
           "question": "Keep the lead open, or mark it Lost?",
           "whenUnstated": "ask",
+        },
+      },
+    },
+    {
+      "extra": "Remarks say what happened; next visit date",
+      "id": "visit_other",
+      "lostReasons": [],
+      "outcomes": [
+        "scheduling_issue",
+        "other",
+      ],
+      "said": "ASM: couldn't fix a time / visit got muddled; anything else",
+      "statusByOutcome": {
+        "other": {
+          "options": [
+            "no_change",
+          ],
+          "question": "",
+          "whenUnstated": "no_change",
+        },
+        "scheduling_issue": {
+          "options": [
+            "no_change",
+          ],
+          "question": "",
+          "whenUnstated": "no_change",
         },
       },
     },

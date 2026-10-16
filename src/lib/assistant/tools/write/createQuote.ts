@@ -10,8 +10,18 @@
 // name, model and asset type on the line are the server's, never the model's.
 // Price and quantity come only from the rep — a missing one is a question.
 // The approval forecast never shows a reference price: it says auto or CEO.
+//
+// ID 172: every quote states the deal card (onboarding fee, batteries and
+// finance files per month), as Update commercials requires — the applier
+// passes requireDealCard like the route. Once the CEO approved a quote or the
+// dealer said yes, the lead's card is LOCKED: the card carries the locked one
+// (only the Sales Head changes it) and the rep is not asked again. Customer
+// finance is not asked either: the writer sets it from finance files > 0.
 
 import { z } from "zod";
+import { db } from "@/lib/db";
+import { DEAL_CARD_QUESTIONS, DealCardSchema, normaliseDealCard, type DealCard } from "@/lib/leads/dealCardRules";
+import { readLockedDealCard, type LockedDealCard } from "@/lib/leads/dealCard";
 import { loadLiveOemPrices } from "@/lib/leads/oemPrices";
 import { evaluateAgainstOemPrices, linesNeedingAttention } from "@/lib/leads/oemPricing";
 import type { CommercialsProductLine } from "@/lib/inside-sales/types";
@@ -21,6 +31,7 @@ import { defineTool, LeadId, ownedLeadOr, type ToolFactory } from "../spec";
 import { leadUrl } from "../leads";
 import { defineApplier } from "../../applierSpec";
 import { APPROVAL_LABEL, inr, loadCatalogue, loadLatestQuote } from "../quotes";
+import { preTransferStatusFor, quoteMovePreview } from "./quoteMove";
 import {
     MAX_CREDIT_DAYS,
     QuoteTermsSchema,
@@ -55,10 +66,59 @@ export const CreateQuotePlan = z.object({
     warranty_terms: z.string().nullable().optional(),
     payment_method: z.enum(["cash", "finance"]).nullable().optional(),
     deal_notes: z.string().nullable(),
+    // ID 172. Optional only so a preview saved before the deal card still
+    // parses — the applier refuses it rather than send the writer a quote it
+    // would refuse with a form's wording.
+    deal_card: DealCardSchema.nullable().optional(),
 });
 export type CreateQuotePlan = z.infer<typeof CreateQuotePlan>;
 
 const ask = (question: string): ToolResult => ({ kind: "question", question });
+
+/** "Ask: “…”" (the form's hint) → the question itself. */
+const cardQuestion = (k: keyof typeof DEAL_CARD_QUESTIONS) =>
+    DEAL_CARD_QUESTIONS[k].replace(/^Ask:\s*/, "").replace(/[“”]/g, "\"");
+
+/** The lead's locked card, or null — a database without E-336 has none. */
+async function lockedCard(leadId: string): Promise<LockedDealCard | null> {
+    try {
+        return await readLockedDealCard(db, leadId);
+    } catch (err) {
+        console.warn("[assistant] create_quote: locked deal card not read:", err instanceof Error ? err.message : err);
+        return null;
+    }
+}
+
+/**
+ * The card the quote will carry: the locked one, or the rep's answers — a
+ * question when one is missing. Never a default: each number is the dealer's.
+ */
+function settleDealCard(
+    locked: LockedDealCard | null,
+    said: { onboarding_fee?: number; fee_waived_reason?: string; batteries_per_month?: number; finance_files_per_month?: number },
+): { ok: true; card: DealCard } | { ok: false; question: string } {
+    if (locked) return { ok: true, card: normaliseDealCard(locked.card) };
+    if (said.onboarding_fee == null) {
+        return { ok: false, question: `Deal card — onboarding fee: ${cardQuestion("onboarding_fee")} (0 if it is waived)` };
+    }
+    if (said.onboarding_fee === 0 && (said.fee_waived_reason?.trim().length ?? 0) < 5) {
+        return { ok: false, question: "The onboarding fee is 0 — why is it waived?" };
+    }
+    if (said.batteries_per_month == null) {
+        return { ok: false, question: `Deal card — batteries a month: ${cardQuestion("batteries_per_month")}` };
+    }
+    if (said.finance_files_per_month == null) {
+        return { ok: false, question: `Deal card — finance files a month: ${cardQuestion("finance_files_per_month")}` };
+    }
+    const card = DealCardSchema.safeParse({
+        onboarding_fee: said.onboarding_fee,
+        fee_waived_reason: said.fee_waived_reason ?? null,
+        batteries_per_month: said.batteries_per_month,
+        finance_files_per_month: said.finance_files_per_month,
+    });
+    if (!card.success) return { ok: false, question: card.error.issues[0]?.message ?? "Please check the deal card numbers." };
+    return { ok: true, card: normaliseDealCard(card.data) };
+}
 
 /** Σ price × qty, in paise so 0.1 + 0.2 never shows up on a quote. */
 export function quoteTotal(lines: Pick<CommercialsProductLine, "unit_price" | "quantity">[]): number {
@@ -73,9 +133,11 @@ export const createQuote: ToolFactory = () =>
         description:
             "Propose a quote (or a revised quote, when the lead already has one) on a lead the user owns: product lines " +
             "from product_catalogue with the quantity and unit price (₹, before GST) the user gave, the dealer payment " +
-            "terms (cash, or credit with a number of days) and whether the END CUSTOMER needs NBFC finance. Warranty and " +
-            "delivery are standard and cannot be changed. Any credit needs CEO approval. Shows whether it will be " +
-            "auto-approved or needs CEO approval. Nothing is saved until Confirm.",
+            "terms (cash, or credit with a number of days) and the deal card: the onboarding fee the dealer agreed " +
+            "(0 = waived, with the reason), batteries a month they will buy from us, and how many of their customers a " +
+            "month buy on a loan (finance files). Ask for any the user did not say — unless the lead's card is locked, " +
+            "then it is used as it is. Warranty and delivery are standard and cannot be changed. Any credit needs CEO " +
+            "approval. Shows whether it will be auto-approved or needs CEO approval. Nothing is saved until Confirm.",
         schema: z.object({
             lead_id: LeadId,
             lines: z
@@ -104,10 +166,27 @@ export const createQuote: ToolFactory = () =>
                 .max(MAX_CREDIT_DAYS)
                 .optional()
                 .describe("Days of credit, only when payment_terms is credit"),
-            customer_finance: z
-                .boolean()
+            onboarding_fee: z
+                .number()
+                .min(0)
+                .max(10_000_000)
                 .optional()
-                .describe("Does the dealer's END CUSTOMER need NBFC finance? Not a dealer payment term."),
+                .describe("Deal card: onboarding fee in ₹ the dealer agreed; 0 = waived"),
+            fee_waived_reason: z.string().trim().max(500).optional().describe("Why the fee is waived — only when it is 0"),
+            batteries_per_month: z
+                .number()
+                .int()
+                .min(1)
+                .max(100_000)
+                .optional()
+                .describe("Deal card: batteries a month the dealer will buy from us (after the first order)"),
+            finance_files_per_month: z
+                .number()
+                .int()
+                .min(0)
+                .max(100_000)
+                .optional()
+                .describe("Deal card: how many of the dealer's customers a month buy on a loan (0 if none)"),
             deal_notes: Terms.optional(),
         }),
         run: async (ctx, input): Promise<ToolResult> => {
@@ -153,6 +232,12 @@ export const createQuote: ToolFactory = () =>
                 return ask(`How many days of credit (1–${MAX_CREDIT_DAYS})?`);
             }
 
+            // ID 172: the deal card — locked, or the rep's three answers.
+            const locked = await lockedCard(lead.id);
+            const settled = settleDealCard(locked, input);
+            if (!settled.ok) return ask(settled.question);
+            const card = settled.card;
+
             const previous = await loadLatestQuote(lead.id);
             const plan: CreateQuotePlan = {
                 lead_id: lead.id,
@@ -162,10 +247,18 @@ export const createQuote: ToolFactory = () =>
                 terms: {
                     dealer_payment_terms: input.payment_terms,
                     credit_days: input.payment_terms === "credit" ? (input.credit_days ?? null) : null,
-                    customer_finance: input.customer_finance ?? null,
+                    // What the writer stores whenever a card is present (finance files > 0).
+                    customer_finance: card.finance_files_per_month > 0,
                 },
                 deal_notes: input.deal_notes ?? null,
+                deal_card: card,
             };
+            // ID 75: what saving the quote does to the lead (advanceLeadOnQuoteEvent, after commit).
+            const move = quoteMovePreview({
+                event: "created",
+                leadStatus: lead.lead_status,
+                preTransferStatus: await preTransferStatusFor(lead.id, lead.lead_status),
+            });
             const credit = input.payment_terms === "credit";
             const standard = await getStandardQuoteTerms();
 
@@ -187,6 +280,7 @@ export const createQuote: ToolFactory = () =>
                     label: "Approval",
                     value: auto ? "Auto-approved on Confirm — PDF made, ready to send" : "Goes to the CEO for approval",
                 },
+                { label: "Status", value: move.status },
                 ...lines.map((l, i) => ({
                     label: `Item ${i + 1}`,
                     value: `${l.quantity} × ${l.product_name} @ ${inr(l.unit_price)} = ${inr(l.unit_price * l.quantity)}`,
@@ -196,9 +290,19 @@ export const createQuote: ToolFactory = () =>
                 label: "Payment terms",
                 value: formatCreditTerms(input.payment_terms, plan.terms?.credit_days ?? null),
             });
-            if (input.customer_finance != null) {
-                out.push({ label: "Customer finance (NBFC)", value: input.customer_finance ? "Yes" : "No" });
-            }
+            const lockNote = locked
+                ? ` (locked: ${locked.by === "ceo" ? "the CEO approved" : "the dealer said yes to"} v${locked.versionNo})`
+                : "";
+            out.push({
+                label: "Onboarding fee",
+                value:
+                    (card.onboarding_fee > 0
+                        ? inr(card.onboarding_fee)
+                        : `Waived${card.fee_waived_reason ? ` — ${card.fee_waived_reason}` : ""}`) + lockNote,
+            });
+            out.push({ label: "Batteries / month", value: String(card.batteries_per_month) });
+            out.push({ label: "Finance files / month", value: String(card.finance_files_per_month) });
+            out.push({ label: "Customer finance (NBFC)", value: plan.terms?.customer_finance ? "Yes" : "No" });
             out.push({ label: "Warranty", value: standard.warranty });
             out.push({ label: "Delivery", value: standard.delivery });
             if (plan.deal_notes) out.push({ label: "Notes", value: plan.deal_notes });
@@ -216,8 +320,9 @@ export const createQuote: ToolFactory = () =>
             const preview: Preview = {
                 title: `${previous ? "Revised quote" : "Quote"} — ${name}`,
                 lines: out,
-                // Quotes are not "worked" touchpoints (isWorkedTouchpoint).
-                resets_idle_clock: false,
+                // The quote touchpoints are not work (isWorkedTouchpoint); the
+                // status move a new quote makes is (quoteMovePreview).
+                resets_idle_clock: move.resetsIdleClock,
                 warning: auto
                     ? null
                     : "Needs CEO approval: " +
@@ -263,17 +368,27 @@ export const createQuoteApplier = defineApplier<CreateQuotePlan>({
                 409,
             );
         }
+        if (!p.deal_card) {
+            // ID 172: a preview saved before the deal card — ask for it again.
+            throw new CommercialInputError(
+                "This quote was prepared before the deal card was added. Please ask for the quote again.",
+                409,
+            );
+        }
         const res = await createLeadCommercial(
             {
                 leadId: p.lead_id,
-                actor: { id: user.id, name: user.name },
+                actor: { id: user.id, name: user.name, role: user.role },
                 body: {
                     event_type: p.event_type,
                     product_lines: p.product_lines,
                     final_price: p.final_price,
                     terms: p.terms,
                     deal_notes: p.deal_notes,
+                    deal_card: p.deal_card,
                 },
+                // ID 172: as the commercials route — a quote states its deal card.
+                requireDealCard: true,
             },
             { tx },
         );
