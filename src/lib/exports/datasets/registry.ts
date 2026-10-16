@@ -35,6 +35,8 @@ import { DOWNLOAD_ROW_CAP, initialsOf, TEAM_ROLES, type DatasetInfo, type Datase
 import { onboardingClockSql } from "@/lib/onboarding/clock";
 import { dealCardActualsSql } from "@/lib/leads/dealCardActuals";
 import { BUSINESS_TYPE_OPTIONS, BUSINESS_TYPE_UNSET, BUSINESS_TYPE_UNSET_LABEL } from "@/lib/leads/businessType";
+import { houseDealerCode } from "@/lib/leads/dealerByMobile";
+import { LEAD_PUSHED_TO_DEALER } from "@/lib/leads/pushGuards";
 
 // ID 122: the one onboarding clock (src/lib/onboarding/clock.ts).
 const ONBOARDING_CLOCK = sql.raw(onboardingClockSql("app"));
@@ -648,7 +650,10 @@ const customerLoanFiles: Dataset = {
             columns: [
                 { key: "file_id", header: "File ID", meaning: "The customer lead's id.", width: 26 },
                 { key: "submitted_on", header: "Submitted on", meaning: "When the file first reached KYC review.", kind: "datetime" },
-                { key: "dealer", header: "Dealer account", meaning: "The dealer that raised the file.", width: 28 },
+                { key: "dealer", header: "Dealer account", meaning: "The dealer the file is with today. For a file iTarang raised and pushed to a dealer, that dealer — see 'Pushed by iTarang'.", width: 28 },
+                { key: "pushed_by_itarang_on", header: "Pushed by iTarang (date)", meaning: "When iTarang raised this file under its own house dealer and pushed it to the dealer above (the latest such push). Blank for a file the dealer raised.", kind: "datetime" },
+                { key: "pushed_by", header: "Pushed by", meaning: "The iTarang person who made that push.", width: 22 },
+                { key: "pushed_to", header: "Pushed to", meaning: "The dealer that push sent the file to.", width: 28 },
                 { key: "account_owner", header: "Account owner", meaning: "The salesperson who owns that dealer account today.", width: 22 },
                 { key: "customer", header: "Customer", meaning: "Customer's initials only — the name, phone and identity numbers are never downloaded." },
                 { key: "city", header: "City", meaning: "Customer's city." },
@@ -669,10 +674,15 @@ const customerLoanFiles: Dataset = {
         return Number(r?.n ?? 0);
     },
     async build(ctx) {
+        // ID 33: a file the house dealer pushed out — the LEAD_PUSHED_TO_DEALER
+        // row whose from_dealer_id is the house (src/lib/leads/pushGuards.ts).
+        // No house dealer configured → the comparison is NULL and the columns stay blank.
+        const house = await houseDealerCode();
         const data = await rows(sql`
             SELECT l.id::text AS file_id,
                    q.submitted_on AS submitted_on,
                    a.business_entity_name AS dealer, ow.name AS account_owner,
+                   hp.pushed_at AS pushed_by_itarang_on, hp.pushed_by, hp.pushed_to,
                    COALESCE(l.full_name, l.owner_name) AS customer_name,
                    l.city, l.kyc_status,
                    COALESCE(nt.display_name, ls.external_lender) AS nbfc,
@@ -682,6 +692,19 @@ const customerLoanFiles: Dataset = {
                    ls.disbursed_at AS disbursed_at,
                    ls.disbursement_amount
               ${loanFrom}
+              LEFT JOIN LATERAL (
+                  SELECT pa.timestamp AS pushed_at,
+                         COALESCE(pu.name, pa.changes ->> 'by_name') AS pushed_by,
+                         COALESCE(pa.changes ->> 'to_dealer_name', pta.business_entity_name, pa.changes ->> 'to_dealer_id') AS pushed_to
+                    FROM audit_logs pa
+                    LEFT JOIN users pu ON pu.id = pa.performed_by
+                    LEFT JOIN accounts pta ON pta.id = pa.changes ->> 'to_dealer_id'
+                   WHERE pa.entity_type = 'lead' AND pa.entity_id = l.id::text
+                     AND pa.action = ${LEAD_PUSHED_TO_DEALER}
+                     AND pa.changes ->> 'from_dealer_id' = ${house}
+                   ORDER BY pa.timestamp DESC
+                   LIMIT 1
+              ) hp ON TRUE
              WHERE ${loanWhere(ctx)}
              ORDER BY q.submitted_on DESC
              LIMIT ${rowLimit(ctx)}
