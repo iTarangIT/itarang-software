@@ -50,6 +50,7 @@ import { db } from "@/lib/db";
 import {
     isCustomMetric,
     isCeoTarget,
+    maySalesHeadAddMetric,
     isTargetMetric,
     mayAddTarget,
     mayRemoveTarget,
@@ -78,8 +79,11 @@ import { emit, type EmitInput } from "@/lib/notifications/emit";
 import { finalTargetSql, targetVisibleSql } from "@/lib/targets/sql";
 import { ADMIN_PARTY } from "@/lib/notifications/provenance";
 
-/** Add a metric (lands as the CEO's draft) — the CEO only (ID 189, 16 Oct). */
-export const TARGET_METRIC_ROLES = ["ceo"];
+/**
+ * Add a metric. The CEO's lands as his draft; the Sales Head's (ISR / ASM only,
+ * maySalesHeadAddMetric) lands in his own queue, ready to push (ID 189, 16 Oct).
+ */
+export const TARGET_METRIC_ROLES = ["ceo", "sales_head"];
 /** Remove a target: the CEO any; the Sales Head / Admin only one that is not the CEO's (mayRemoveTarget). */
 export const TARGET_REMOVE_ROLES = ["ceo", "sales_head", "admin"];
 /** Enter a custom metric's progress for someone else. */
@@ -554,6 +558,60 @@ function reviveRemoved(ceoTarget: number, actor: Actor): SQL {
 }
 
 /**
+ * ID 189 (16 Oct): a metric the Sales Head adds for an ISR / ASM. No CEO
+ * number (0); the Sales Head's number is the stretch, so final = 0 + number.
+ * It lands with the Sales Head ('pending_approval'), ready to push like a
+ * posted target, and is not the CEO's (isCeoTarget false) — the Sales Head
+ * may change or remove it. A metric removed earlier this month comes back
+ * this way too. One history row records who added it.
+ */
+async function addSalesHeadMetric(
+    input: { userId: string; metric?: string; custom?: { label: string; unit?: string | null } },
+    target: number,
+    monthFirst: string,
+    actor: Actor,
+) {
+    const note = "Added by the Sales Head";
+    let metric: string;
+    let label: string;
+    if (input.custom) {
+        const bad = validateCustomMetric(input.custom.label, input.custom.unit);
+        if (bad) throw new TargetError(bad);
+        metric = newCustomMetricKey();
+        label = input.custom.label.trim();
+    } else {
+        if (!input.metric || !isTargetMetric(input.metric)) throw new TargetError("Pick a metric.");
+        metric = input.metric;
+        label = TARGET_METRICS[input.metric].label;
+    }
+    const r = (await db.execute(sql`
+        INSERT INTO sales_targets (month, user_id, metric, ceo_target, admin_addon, stretch_note, stretch_by, stretch_at,
+                                   status, version, review_requested_at, review_requested_by,
+                                   custom_label, custom_unit, created_by, updated_by)
+        VALUES (${monthFirst}::date, ${input.userId}, ${metric}, 0, ${target}, ${note}, ${actor.id}, now(),
+                'pending_approval', 1, now(), ${actor.id},
+                ${input.custom ? input.custom.label.trim() : null}, ${input.custom ? (input.custom.unit ?? "").trim() || null : null},
+                ${actor.id}, ${actor.id})
+        ON CONFLICT (month, user_id, metric) DO UPDATE
+           SET status = 'pending_approval', ceo_target = 0, admin_addon = ${target}::numeric, stretch_note = ${note},
+               stretch_by = ${actor.id}, stretch_at = now(),
+               draft_ceo_target = NULL, next_ceo_target = NULL, next_stretch = NULL, next_stretch_note = NULL,
+               review_requested_at = now(), review_requested_by = ${actor.id},
+               approved_by = NULL, approved_at = NULL, pushed_at = NULL, first_pushed_at = NULL,
+               accepted_at = NULL, accept_remark = NULL, reminded_at = NULL,
+               correction_requested_at = NULL, correction_requested_by = NULL, correction_remark = NULL,
+               rejected_at = NULL, rejected_by = NULL, reject_comment = NULL,
+               version = sales_targets.version + 1,
+               created_by = ${actor.id}, updated_by = ${actor.id}, updated_at = now()
+         WHERE sales_targets.status = ${TARGET_REMOVED_STATUS}
+        RETURNING id::text AS id, version
+    `)) as unknown as Array<{ id: string; version: number }>;
+    if (!r.length) throw new TargetError(`${label} is already a target for this person this month.`);
+    await logVersions(db, [{ target_id: r[0].id, version: r[0].version, event: "stretch", ceo_target: 0, stretch: target, note }], actor);
+    return { id: r[0].id };
+}
+
+/**
  * Add a person to a month: one draft row per metric their role carries. CEO
  * only (ID 189). A metric removed earlier this month comes back as a draft.
  */
@@ -995,16 +1053,24 @@ export async function addMetric(
     input: { month: string; userId: string; metric?: string; custom?: { label: string; unit?: string | null }; target?: number },
     actor: Actor,
 ) {
-    if (!mayAddTarget(actor.role) || !has(TARGET_METRIC_ROLES, actor)) {
-        throw new TargetError("Only the CEO adds a metric. Add a stretch to a target the CEO has posted instead.");
+    if (!has(TARGET_METRIC_ROLES, actor)) {
+        throw new TargetError("Only the CEO or the Sales Head adds a metric.");
     }
     const u = (await db.execute(sql`
-        SELECT 1 FROM users WHERE id::text = ${input.userId} AND is_active = TRUE
-    `)) as unknown as unknown[];
+        SELECT role FROM users WHERE id::text = ${input.userId} AND is_active = TRUE
+    `)) as unknown as Array<{ role: string | null }>;
     if (!u.length) throw new TargetError("That person does not exist or is inactive.");
     const target = input.target ?? 0;
     if (!Number.isFinite(target) || target < 0) throw new TargetError("The target must be zero or more.");
     const monthFirst = `${input.month.slice(0, 7)}-01`;
+
+    // ID 189 (16 Oct): the Sales Head's own metric — ISR / ASM only.
+    if (!mayAddTarget(actor.role)) {
+        if (!maySalesHeadAddMetric(actor.role, u[0].role)) {
+            throw new TargetError("The Sales Head adds metrics only for an inside sales rep or an ASM.");
+        }
+        return addSalesHeadMetric(input, target, monthFirst, actor);
+    }
 
     if (input.custom) {
         const bad = validateCustomMetric(input.custom.label, input.custom.unit);
