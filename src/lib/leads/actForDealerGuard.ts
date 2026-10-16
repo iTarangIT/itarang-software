@@ -1,0 +1,427 @@
+// ID 183 — the database half of "iTarang acts for the dealer". The rules are
+// pure (./actForDealer); this file gathers the facts and does the writes:
+//
+//   gateLeadActor()     who is acting (dealer / house login / Admin-Sales Head),
+//                       may they, is the file being worked by someone else,
+//                       did the dealer change it since — and takes the
+//                       30-minute note (iTarang) or stamps the dealer's action
+//                       and clears the note (dealer wins).
+//   recordActorStep()   after the step: "Done by <name> for <dealer>" on the
+//                       file's history (audit_logs ACTED_FOR_DEALER) and the
+//                       dealer's bell + WhatsApp (throttled to one per person
+//                       per file per 30 minutes).
+//   readActState()      what the CRM panel shows.
+//
+// lead_work_locks (E-344) and lead_assist_requests (E-345) are read and
+// written with raw SQL inside try/catch: on a database without them every
+// dealer step still works, the note is skipped (logged) and the 1-working-day
+// rule falls back to leads.updated_at.
+
+import { and, desc, eq, sql } from "drizzle-orm";
+
+import { db } from "@/lib/db";
+import { auditLogs, leads, users } from "@/lib/db/schema";
+import { dealerOwnsLead } from "@/lib/auth/leadAccessRules";
+import { houseMayActOnLead, resolveDealerCode } from "@/lib/auth/requireLeadAccess";
+import { loadHolidays } from "@/lib/calendar/holidays";
+import { houseDealerCode } from "@/lib/leads/dealerByMobile";
+import { dealerDisplayNames, houseOriginatedLeadIds } from "@/lib/leads/pushGuards";
+
+import {
+  ACTED_FOR_DEALER,
+  actForDealerPermission,
+  beingWorkedMessage,
+  DEALER_CHANGED_MESSAGE,
+  DEALER_ONLY_MESSAGE,
+  dealerChangedSince,
+  doneByLine,
+  isActForDealerRole,
+  isLockLive,
+  lockVerdict,
+  parseSeenHeader,
+  SEEN_DEALER_ACTION_HEADER,
+  WORK_LOCK_MINUTES,
+  type ActPermission,
+  type LeadActorKind,
+  type WorkLock,
+} from "./actForDealer";
+
+export interface ActorUser {
+  id: string;
+  role: string | null;
+  dealer_id: string | null;
+  name?: string | null;
+}
+
+export interface LeadActor {
+  kind: LeadActorKind;
+  userId: string;
+  userName: string;
+  role: string;
+  leadId: string;
+  /** The FILE's dealer — every step runs as this dealer. */
+  leadDealerId: string | null;
+  housePushed: boolean;
+}
+
+export type GateResult =
+  | { ok: true; actor: LeadActor }
+  | { ok: false; status: number; message: string };
+
+export interface GateOptions {
+  /** The step changes the file (takes the note / stamps the dealer). */
+  write?: boolean;
+  /** Step 5 / cash sale / delivered: the file's own dealer only. */
+  dispatch?: boolean;
+  /** What the panel saw as the dealer's last action (header); see dealerChangedSince. */
+  seenDealerActionAt?: Date | null;
+  /**
+   * An Admin action from the KYC review itself (e.g. regenerate a rejected
+   * consent on a file already with iTarang for review): skip the idle /
+   * asked permission — the file is in iTarang's hands — but keep the note,
+   * the record and the dealer notice.
+   */
+  adminReview?: boolean;
+}
+
+/** The panel's "x-seen-dealer-action-at" header from a request. */
+export function seenFromRequest(req: Request): Date | null | undefined {
+  return parseSeenHeader(req.headers.get(SEEN_DEALER_ACTION_HEADER));
+}
+
+async function userName(user: ActorUser): Promise<string> {
+  if (user.name) return user.name;
+  try {
+    const [u] = await db.select({ name: users.name }).from(users).where(eq(users.id, user.id)).limit(1);
+    return u?.name || "iTarang";
+  } catch {
+    return "iTarang";
+  }
+}
+
+/** True when the house pushed this file out at some point. */
+export async function isHousePushedFile(leadId: string): Promise<boolean> {
+  const house = await houseDealerCode();
+  if (!house) return false;
+  return (await houseOriginatedLeadIds(house, [leadId])).has(leadId);
+}
+
+interface WorkState {
+  now: Date;
+  lock: WorkLock | null;
+  dealerLastActionAt: Date | null;
+  dealerAsked: boolean;
+}
+
+const asDate = (v: unknown): Date | null => (v ? (v instanceof Date ? v : new Date(String(v))) : null);
+const rowsOf = (r: unknown): Record<string, unknown>[] =>
+  (Array.isArray(r) ? r : ((r as { rows?: unknown[] })?.rows ?? [])) as Record<string, unknown>[];
+
+/** The note, the dealer's last action and the open ask — all against Postgres now(). */
+export async function readWorkState(leadId: string): Promise<WorkState> {
+  let now = new Date();
+  let lock: WorkLock | null = null;
+  let dealerLastActionAt: Date | null = null;
+  let dealerAsked = false;
+  try {
+    const [r] = rowsOf(
+      await db.execute(sql`
+        SELECT now() AS now, COALESCE(l.updated_at, l.created_at) AS lead_updated_at,
+               w.lead_id AS has_row, w.holder_user_id, w.holder_name, w.expires_at, w.dealer_last_action_at
+          FROM leads l LEFT JOIN lead_work_locks w ON w.lead_id = l.id
+         WHERE l.id = ${leadId}
+      `),
+    );
+    if (r) {
+      now = asDate(r.now) ?? now;
+      lock = { holderUserId: (r.holder_user_id as string) ?? null, holderName: (r.holder_name as string) ?? null, expiresAt: asDate(r.expires_at) };
+      dealerLastActionAt = r.has_row ? asDate(r.dealer_last_action_at) : asDate(r.lead_updated_at);
+    }
+  } catch (err) {
+    console.error("[actForDealer] work-lock read failed (is E-344 applied?):", err);
+    try {
+      const [r] = rowsOf(await db.execute(sql`SELECT now() AS now, COALESCE(updated_at, created_at) AS u FROM leads WHERE id = ${leadId}`));
+      if (r) {
+        now = asDate(r.now) ?? now;
+        dealerLastActionAt = asDate(r.u);
+      }
+    } catch {
+      /* keep the Node clock */
+    }
+  }
+  try {
+    const [a] = rowsOf(
+      await db.execute(sql`SELECT 1 AS open FROM lead_assist_requests WHERE lead_id = ${leadId} AND withdrawn_at IS NULL LIMIT 1`),
+    );
+    dealerAsked = !!a;
+  } catch (err) {
+    console.error("[actForDealer] assist-request read failed (is E-345 applied?):", err);
+  }
+  return { now, lock, dealerLastActionAt, dealerAsked };
+}
+
+/**
+ * The dealer acted: stamp it and clear any iTarang note (dealer wins).
+ * Never throws — a dealer step must not fail over the note.
+ */
+export async function stampDealerAction(leadId: string, userId: string | null): Promise<void> {
+  try {
+    await db.execute(sql`
+      INSERT INTO lead_work_locks (lead_id, dealer_last_action_at, dealer_last_action_by, updated_at)
+      VALUES (${leadId}, now(), ${userId}::uuid, now())
+      ON CONFLICT (lead_id) DO UPDATE SET
+        dealer_last_action_at = now(),
+        dealer_last_action_by = EXCLUDED.dealer_last_action_by,
+        holder_user_id = NULL, holder_name = NULL, holder_role = NULL,
+        locked_at = NULL, expires_at = NULL,
+        updated_at = now()
+    `);
+  } catch (err) {
+    console.error("[actForDealer] dealer stamp failed (is E-344 applied?):", err);
+  }
+}
+
+/**
+ * Take (or refresh) the 30-minute note for an iTarang actor. Atomic: the
+ * conditional upsert only lands when nobody else holds a live note. Returns
+ * false when someone else got there first; true when taken — or when E-344 is
+ * missing (no note to take; logged).
+ */
+async function takeLock(leadId: string, user: ActorUser, name: string): Promise<boolean> {
+  try {
+    const rows = rowsOf(
+      await db.execute(sql`
+        INSERT INTO lead_work_locks (lead_id, holder_user_id, holder_name, holder_role, locked_at, expires_at, dealer_last_action_at, updated_at)
+        SELECT l.id, ${user.id}::uuid, ${name}, ${user.role}, now(),
+               now() + make_interval(mins => ${WORK_LOCK_MINUTES}),
+               COALESCE(l.updated_at, l.created_at), now()
+          FROM leads l WHERE l.id = ${leadId}
+        ON CONFLICT (lead_id) DO UPDATE SET
+          holder_user_id = EXCLUDED.holder_user_id,
+          holder_name = EXCLUDED.holder_name,
+          holder_role = EXCLUDED.holder_role,
+          locked_at = CASE WHEN lead_work_locks.holder_user_id = EXCLUDED.holder_user_id
+                            AND lead_work_locks.expires_at > now()
+                           THEN lead_work_locks.locked_at ELSE now() END,
+          expires_at = EXCLUDED.expires_at,
+          updated_at = now()
+        WHERE lead_work_locks.holder_user_id IS NULL
+           OR lead_work_locks.expires_at IS NULL
+           OR lead_work_locks.expires_at <= now()
+           OR lead_work_locks.holder_user_id = EXCLUDED.holder_user_id
+        RETURNING lead_id
+      `),
+    );
+    return rows.length > 0;
+  } catch (err) {
+    console.error("[actForDealer] work-lock take failed (is E-344 applied?):", err);
+    return true;
+  }
+}
+
+/**
+ * Who is acting on this file, and may they take this step now?
+ *  - the file's own dealer: always (writes stamp + clear the iTarang note);
+ *  - an iTarang house login on a file the house pushed out: yes, except the
+ *    dealer-only (dispatch) steps; writes take the note;
+ *  - Admin / Sales Head: reads always; writes need the permission (house
+ *    pushed, dealer asked, or 1 working day idle), no newer dealer action
+ *    than the panel saw, and the note; never the dispatch steps;
+ *  - anyone else: refused.
+ */
+export async function gateLeadActor(
+  user: ActorUser,
+  lead: { id: string; dealer_id: string | null },
+  opts: GateOptions = {},
+): Promise<GateResult> {
+  const role = (user.role ?? "").toLowerCase();
+  let kind: LeadActorKind;
+  let housePushed = false;
+
+  if (role === "dealer") {
+    const code = await resolveDealerCode(user);
+    if (dealerOwnsLead(lead.dealer_id, code)) {
+      if (opts.write) await stampDealerAction(lead.id, user.id);
+      return {
+        ok: true,
+        actor: { kind: "dealer", userId: user.id, userName: user.name ?? "", role, leadId: lead.id, leadDealerId: lead.dealer_id, housePushed: false },
+      };
+    }
+    if (!(await houseMayActOnLead(code, lead.id))) return { ok: false, status: 403, message: "Access denied" };
+    if (opts.dispatch) return { ok: false, status: 403, message: DEALER_ONLY_MESSAGE };
+    kind = "house";
+    housePushed = true;
+  } else if (isActForDealerRole(role)) {
+    if (opts.dispatch) return { ok: false, status: 403, message: DEALER_ONLY_MESSAGE };
+    kind = "itarang";
+    housePushed = await isHousePushedFile(lead.id);
+  } else {
+    return { ok: false, status: 403, message: "Only Admin or Sales Head can act for the dealer on this file." };
+  }
+
+  const name = await userName(user);
+  const actor: LeadActor = { kind, userId: user.id, userName: name, role, leadId: lead.id, leadDealerId: lead.dealer_id, housePushed };
+  if (!opts.write) return { ok: true, actor };
+
+  const state = await readWorkState(lead.id);
+  if (kind === "itarang" && !opts.adminReview) {
+    const perm = actForDealerPermission({
+      housePushed,
+      dealerAsked: state.dealerAsked,
+      lastDealerActionAt: state.dealerLastActionAt,
+      now: state.now,
+      holidays: await loadHolidays(),
+    });
+    if (!perm.ok) return { ok: false, status: 403, message: perm.message };
+  }
+  if (dealerChangedSince(state.dealerLastActionAt, opts.seenDealerActionAt)) {
+    return { ok: false, status: 409, message: DEALER_CHANGED_MESSAGE };
+  }
+  const v = lockVerdict({ lock: state.lock, actorUserId: user.id, actorKind: kind, now: state.now });
+  if (!v.ok) return { ok: false, status: 409, message: v.message };
+  if (!(await takeLock(lead.id, user, name))) {
+    const again = await readWorkState(lead.id);
+    const msg = isLockLive(again.lock, again.now)
+      ? beingWorkedMessage(again.lock!.holderName, again.lock!.expiresAt!)
+      : DEALER_CHANGED_MESSAGE;
+    return { ok: false, status: 409, message: msg };
+  }
+  return { ok: true, actor };
+}
+
+/** The file's dealer: display name, and the name of its dealer login (what the consent PDF prints). */
+export async function fileDealerNames(dealerId: string | null): Promise<{ display: string | null; loginName: string | null }> {
+  if (!dealerId) return { display: null, loginName: null };
+  const [names, login] = await Promise.all([
+    dealerDisplayNames([dealerId]),
+    db
+      .select({ name: users.name })
+      .from(users)
+      .where(and(eq(users.dealer_id, dealerId), eq(users.role, "dealer"), eq(users.is_active, true)))
+      .orderBy(users.created_at)
+      .limit(1),
+  ]);
+  return { display: names.get(dealerId) ?? dealerId, loginName: login[0]?.name ?? null };
+}
+
+/**
+ * After an iTarang step succeeded: "Done by <name> for <dealer>" on the file's
+ * history and the dealer told (bell + WhatsApp, at most once per person per
+ * file per 30 minutes). Nothing for the dealer's own steps. Never throws.
+ */
+export async function recordActorStep(actor: LeadActor, step: string, extra: Record<string, unknown> = {}): Promise<void> {
+  if (actor.kind === "dealer") return;
+  try {
+    const { display } = await fileDealerNames(actor.leadDealerId);
+    const line = doneByLine(actor.userName, display);
+    let notify = true;
+    try {
+      const [r] = rowsOf(
+        await db.execute(sql`
+          SELECT 1 AS recent FROM audit_logs
+           WHERE entity_type = 'lead' AND entity_id = ${actor.leadId}
+             AND action = ${ACTED_FOR_DEALER} AND performed_by = ${actor.userId}::uuid
+             AND timestamp > now() - make_interval(mins => ${WORK_LOCK_MINUTES})
+           LIMIT 1
+        `),
+      );
+      notify = !r;
+    } catch {
+      notify = true;
+    }
+    await db.insert(auditLogs).values({
+      id: `AUDIT-${Date.now()}-${Math.random().toString(36).slice(2, 8)}-afd`,
+      entity_type: "lead",
+      entity_id: actor.leadId,
+      action: ACTED_FOR_DEALER,
+      changes: {
+        step,
+        line,
+        by_name: actor.userName,
+        by_role: actor.role,
+        for_dealer_id: actor.leadDealerId,
+        for_dealer_name: display,
+        via: actor.kind === "house" ? "house_login" : "act_for_dealer",
+        dealer_notified: notify,
+        ...extra,
+      },
+      performed_by: actor.userId,
+      timestamp: new Date(),
+    });
+    if (notify) {
+      const { notifyDealerOfAssist } = await import("./pushNotices");
+      await notifyDealerOfAssist(actor.leadId, line, step);
+    }
+  } catch (err) {
+    console.error(`[actForDealer] record for ${actor.leadId} failed:`, err);
+  }
+}
+
+export interface ActHistoryRow {
+  at: string;
+  line: string;
+  step: string | null;
+  byName: string | null;
+  via: string | null;
+}
+
+/** Every "Done by <name> for <dealer>" line on a file, newest first. */
+export async function actHistory(leadId: string, limit = 50): Promise<ActHistoryRow[]> {
+  const rows = await db
+    .select({ at: auditLogs.timestamp, changes: auditLogs.changes, byName: users.name })
+    .from(auditLogs)
+    .leftJoin(users, eq(users.id, auditLogs.performed_by))
+    .where(and(eq(auditLogs.entity_type, "lead"), eq(auditLogs.entity_id, leadId), eq(auditLogs.action, ACTED_FOR_DEALER)))
+    .orderBy(desc(auditLogs.timestamp))
+    .limit(limit);
+  return rows.map((r) => {
+    const c = (r.changes ?? {}) as Record<string, unknown>;
+    const s = (v: unknown) => (typeof v === "string" && v ? v : null);
+    return {
+      at: (r.at instanceof Date ? r.at : new Date(r.at)).toISOString(),
+      line: s(c.line) ?? doneByLine(r.byName ?? s(c.by_name), s(c.for_dealer_name)),
+      step: s(c.step),
+      byName: r.byName ?? s(c.by_name),
+      via: s(c.via),
+    };
+  });
+}
+
+export interface ActState {
+  /** May this caller act for the dealer now (writes)? */
+  permission: ActPermission;
+  housePushed: boolean;
+  dealerAsked: boolean;
+  dealerLastActionAt: string | null;
+  lock: { holderName: string | null; expiresAt: string; mine: boolean } | null;
+  now: string;
+}
+
+/** What the "Act for dealer" panel shows for this caller. */
+export async function readActState(leadId: string, user: ActorUser): Promise<ActState> {
+  const [state, housePushed] = await Promise.all([readWorkState(leadId), isHousePushedFile(leadId)]);
+  const permission = actForDealerPermission({
+    housePushed,
+    dealerAsked: state.dealerAsked,
+    lastDealerActionAt: state.dealerLastActionAt,
+    now: state.now,
+    holidays: await loadHolidays(),
+  });
+  const live = isLockLive(state.lock, state.now);
+  return {
+    permission,
+    housePushed,
+    dealerAsked: state.dealerAsked,
+    dealerLastActionAt: state.dealerLastActionAt?.toISOString() ?? null,
+    lock: live
+      ? { holderName: state.lock!.holderName, expiresAt: state.lock!.expiresAt!.toISOString(), mine: state.lock!.holderUserId === user.id }
+      : null,
+    now: state.now.toISOString(),
+  };
+}
+
+/** The lead row the gate needs. */
+export async function leadForGate(leadId: string): Promise<{ id: string; dealer_id: string | null } | null> {
+  const [l] = await db.select({ id: leads.id, dealer_id: leads.dealer_id }).from(leads).where(eq(leads.id, leadId)).limit(1);
+  return l ?? null;
+}

@@ -4,7 +4,8 @@ import { eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { leads } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
-import { dealerMayActOnLead } from "@/lib/auth/requireLeadAccess";
+import { ACT_FOR_DEALER_ROLES } from "@/lib/leads/actForDealer";
+import { gateLeadActor, recordActorStep, seenFromRequest } from "@/lib/leads/actForDealerGuard";
 import { notifyHouseOfDealerStep } from "@/lib/leads/pushNotices";
 
 // BRD V2 §4.0 Scenario B — Close Lead action.
@@ -17,7 +18,7 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const user = await requireRole(["dealer"]);
+    const user = await requireRole(["dealer", ...ACT_FOR_DEALER_ROLES]);
     const { id: leadId } = await params;
 
     const [lead] = await db
@@ -36,10 +37,13 @@ export async function POST(
         { status: 404 },
       );
     }
-    if (!(await dealerMayActOnLead(user, lead.dealer_id, leadId))) {
+    // ID 183: the dealer, the house on a file it pushed out, or Admin / Sales
+    // Head acting for the dealer (permission, "being worked by", dealer wins).
+    const gate = await gateLeadActor(user, lead, { write: true, seenDealerActionAt: seenFromRequest(_req) });
+    if (!gate.ok) {
       return NextResponse.json(
-        { success: false, error: { message: "Access denied" } },
-        { status: 403 },
+        { success: false, error: { message: gate.message } },
+        { status: gate.status },
       );
     }
     if (lead.kyc_status !== "loan_rejected") {
@@ -61,6 +65,7 @@ export async function POST(
 
     // 14 Oct: tell the iTarang house dealer when the dealer moves a file it pushed.
     await notifyHouseOfDealerStep(leadId, "closed the file (loan rejected)", user.dealer_id);
+    await recordActorStep(gate.actor, "closed the file (loan rejected)");
     return NextResponse.json({
       success: true,
       data: { leadStatus: "closed_loan_rejected" },

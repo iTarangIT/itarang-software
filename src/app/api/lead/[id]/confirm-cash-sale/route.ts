@@ -7,7 +7,8 @@ import { leads } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 import { storedFileUrl } from "@/lib/api-utils";
 import { CashSaleError, confirmCashSale } from "@/lib/leads/confirm-cash-sale";
-import { dealerMayActOnLead } from "@/lib/auth/requireLeadAccess";
+// ID 183 (16 Oct): dispatch is the dealer's alone — never iTarang, not even the house login.
+import { dealerMayDispatch } from "@/lib/auth/requireLeadAccess";
 import { notifyHouseOfDealerStep } from "@/lib/leads/pushNotices";
 
 // BRD V2 §2.5 — cash path confirmation for Step 4.
@@ -90,7 +91,7 @@ export async function POST(
         { status: 404 },
       );
     }
-    if (!(await dealerMayActOnLead(user, lead.dealer_id, leadId))) {
+    if (!(await dealerMayDispatch(user, lead.dealer_id))) {
       return NextResponse.json(
         { success: false, error: { message: "Access denied" } },
         { status: 403 },
