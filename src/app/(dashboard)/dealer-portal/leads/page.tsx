@@ -279,10 +279,18 @@ function DealerLeadsContent() {
                     <h1 className="text-2xl font-bold text-gray-900">Lead Management</h1>
                     <p className="text-gray-500 text-sm">Track and manage your customer pipeline</p>
                 </div>
-                <Link href="/dealer-portal/leads/new" className="inline-flex items-center gap-2 px-4 py-2 bg-brand-600 text-white font-medium rounded-lg hover:bg-brand-700 transition-colors shadow-sm">
-                    <PlusCircle className="w-5 h-5" />
-                    New Lead
-                </Link>
+                <div className="flex items-center gap-2">
+                    {/* ID 183: files the house pushed out are the dealer's now — listed apart. */}
+                    {pushEligible && (
+                        <Link href="/dealer-portal/pushed-files" className="inline-flex items-center gap-2 px-4 py-2 border border-gray-200 bg-white text-gray-700 font-medium rounded-lg hover:bg-gray-50 transition-colors shadow-sm">
+                            Pushed files
+                        </Link>
+                    )}
+                    <Link href="/dealer-portal/leads/new" className="inline-flex items-center gap-2 px-4 py-2 bg-brand-600 text-white font-medium rounded-lg hover:bg-brand-700 transition-colors shadow-sm">
+                        <PlusCircle className="w-5 h-5" />
+                        New Lead
+                    </Link>
+                </div>
             </div>
 
             {/* Filters */}

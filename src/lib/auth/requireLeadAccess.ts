@@ -3,26 +3,75 @@ import { and, desc, eq, isNotNull } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { accountOwnership, dealerOnboardingApplications, leads } from "@/lib/db/schema";
 import { getAuthenticatedAppUser } from "@/lib/kyc/admin-workflow";
-import { dealerOwnsLead, mayReadFullIds, FULL_ID_ROLES } from "@/lib/auth/leadAccessRules";
+import {
+  ALL_LEADS_KYC_ROLES,
+  backOfficeOwnsLead,
+  dealerOwnsLead,
+  mayReadFullIds,
+  FULL_ID_ROLES,
+  OWN_LEADS_KYC_ROLES,
+} from "@/lib/auth/leadAccessRules";
 import { houseDealerCode } from "@/lib/leads/dealerByMobile";
 import { houseOriginatedLeadIds } from "@/lib/leads/pushGuards";
 
-// Back-office roles may read/write any lead's data (review, verification,
-// sanction). Mirrors ADMIN_ROLES in src/lib/kyc/admin-workflow.ts, plus
-// finance_controller who works loan files across dealers.
+// ID 119 (decided 16 Oct): only Admin, the CEO and the Sales Head reach every
+// customer file's KYC. Sales Manager, Sales Executive, Business Head and
+// Finance Controller reach only the files they own (uploader, assigned_to,
+// sm_assigned_to, or owner of the dealer's account) — backOfficeOwnsLead.
+// Mirrored by requireAdminAppUserForLead in src/lib/kyc/admin-workflow.ts.
 //
 // ID 119 / ID 166 (10 Oct): reaching the lead is not the same as reading the
 // customer's full PAN. That is only for Admin, the Sales Head, the CEO and the
 // lead's owner — see `fullIds` on the result and mayReadFullIds().
-const BACK_OFFICE_ROLES = new Set([
-  "admin",
-  "ceo",
-  "business_head",
-  "sales_head",
-  "sales_manager",
-  "sales_executive",
-  "finance_controller",
-]);
+const ALL_LEADS_ROLES = new Set<string>(ALL_LEADS_KYC_ROLES);
+const OWN_LEADS_ROLES = new Set<string>(OWN_LEADS_KYC_ROLES);
+
+/**
+ * ID 119: may this OWN-LEADS back-office user (sales manager, sales
+ * executive, business head, finance controller) reach lead `leadId`?
+ */
+export async function backOfficeReachesLead(userId: string, leadId: string): Promise<boolean> {
+  try {
+    const [lead] = await db
+      .select({
+        dealer_id: leads.dealer_id,
+        uploader_id: leads.uploader_id,
+        assigned_to: leads.assigned_to,
+        sm_assigned_to: leads.sm_assigned_to,
+      })
+      .from(leads)
+      .where(eq(leads.id, leadId))
+      .limit(1);
+    if (!lead) return false;
+    let accountOwnerId: string | null = null;
+    if (lead.dealer_id) {
+      const [own] = await db
+        .select({ owner: accountOwnership.owner_user_id })
+        .from(accountOwnership)
+        .where(eq(accountOwnership.account_id, lead.dealer_id))
+        .limit(1);
+      accountOwnerId = own?.owner ?? null;
+    }
+    return backOfficeOwnsLead({
+      userId,
+      uploaderId: lead.uploader_id,
+      assignedTo: lead.assigned_to,
+      smAssignedTo: lead.sm_assigned_to,
+      accountOwnerId,
+    });
+  } catch (err) {
+    console.error("[backOfficeReachesLead] lookup failed:", err);
+    return false;
+  }
+}
+
+/** ID 119: may this back-office role reach this lead's KYC at all? */
+export async function backOfficeMayReachLead(user: { id: string; role: string | null }, leadId: string): Promise<boolean> {
+  const role = (user.role ?? "").toLowerCase();
+  if (ALL_LEADS_ROLES.has(role)) return true;
+  if (OWN_LEADS_ROLES.has(role)) return backOfficeReachesLead(user.id, leadId);
+  return false;
+}
 
 export type LeadAccessResult =
   | {
@@ -63,7 +112,17 @@ export async function requireLeadAccess(leadId: string): Promise<LeadAccessResul
     };
   }
 
-  if (BACK_OFFICE_ROLES.has(user.role)) {
+  if (ALL_LEADS_ROLES.has(user.role) || OWN_LEADS_ROLES.has(user.role)) {
+    // ID 119: own-leads roles are refused on someone else's file (same 403).
+    if (!ALL_LEADS_ROLES.has(user.role) && !(await backOfficeReachesLead(user.id, leadId))) {
+      return {
+        ok: false,
+        response: NextResponse.json(
+          { success: false, error: { message: "Forbidden" } },
+          { status: 403 }
+        ),
+      };
+    }
     return {
       ok: true,
       user: {
@@ -95,8 +154,10 @@ export async function requireLeadAccess(leadId: string): Promise<LeadAccessResul
   // ID 33: a lead the iTarang House login pushed to another dealer keeps
   // uploader_id = the person who created it, so they can still finish its KYC.
   const isUploader = !!lead && lead.uploader_id === user.id;
-  // 14 Oct: the house login keeps FULL access to every file it pushed out, at
-  // every step, wherever the file is now (houseMayActOnLead).
+  // 14 Oct: the house login keeps access to every file it pushed out, wherever
+  // the file is now (houseMayActOnLead). 16 Oct (ID 183): to SEE it only —
+  // every write route also runs requireLeadWriter / gateLeadActor, which
+  // refuses the house on a file that is with another dealer.
   const houseFile =
     !!lead && !isUploader && !dealerOwnsLead(lead.dealer_id, dealerCode) && (await houseMayActOnLead(dealerCode, leadId));
 
@@ -174,28 +235,61 @@ export async function resolveDealerCode(user: {
 }
 
 /**
- * May this dealer act on a lead whose leads.dealer_id is `leadDealerId`?
- * Replaces the raw `lead.dealer_id !== user.dealer_id` compare in the dealer
- * lead routes, which refused a dealer login with no users.dealer_id on its own
- * leads (ID 119) — and let two empty values count as the same dealer.
+ * May this dealer act on (change) a lead whose leads.dealer_id is
+ * `leadDealerId`? Replaces the raw `lead.dealer_id !== user.dealer_id` compare
+ * in the dealer lead routes, which refused a dealer login with no
+ * users.dealer_id on its own leads (ID 119) — and let two empty values count
+ * as the same dealer.
+ *
+ * 16 Oct (ID 183): the file's own dealer only. The house login no longer acts
+ * on a file it pushed to another dealer (the dealer is the only owner); it
+ * still SEES it — dealerMayViewLead.
  */
 export async function dealerMayActOnLead(
   user: { id: string; role: string | null; dealer_id: string | null },
   leadDealerId: string | null | undefined,
-  /** The lead's id — lets the house login act on files it pushed out (14 Oct). */
+  /** The lead's id. Kept for the callers; until 16 Oct it let the house act. */
   leadId?: string | null,
 ): Promise<boolean> {
-  const code = await resolveDealerCode(user);
-  if (dealerOwnsLead(leadDealerId, code)) return true;
-  return !!leadId && houseMayActOnLead(code, leadId);
+  void leadId;
+  return dealerOwnsLead(leadDealerId, await resolveDealerCode(user));
 }
 
 /**
- * 14 Oct: the iTarang house dealer keeps full access to a customer file after
- * pushing it to a dealer — every step, wherever the file is now — so it can
- * see and continue what the dealer does, and push it again. True when the
- * caller's dealer code IS the house code and the file carries a push FROM the
- * house (houseOriginatedLeadIds).
+ * May this dealer login SEE a lead: its own dealer's file, or — for a house
+ * login — a file the house pushed out (Pushed files opens it read-only).
+ */
+export async function dealerMayViewLead(
+  user: { id: string; role: string | null; dealer_id: string | null },
+  leadDealerId: string | null | undefined,
+  leadId: string,
+): Promise<boolean> {
+  const code = await resolveDealerCode(user);
+  if (dealerOwnsLead(leadDealerId, code)) return true;
+  return houseMayActOnLead(code, leadId);
+}
+
+/**
+ * ID 183 (16 Oct): the steps iTarang never takes — Step 5 (the dealer's stock,
+ * the customer's dispatch OTP, dispatch), the cash sale and "delivered". Only
+ * the dealer the file belongs to; the house login loses them too.
+ */
+export async function dealerMayDispatch(
+  user: { id: string; role: string | null; dealer_id: string | null },
+  leadDealerId: string | null | undefined,
+): Promise<boolean> {
+  return dealerOwnsLead(leadDealerId, await resolveDealerCode(user));
+}
+
+/**
+ * 14 Oct: the iTarang house dealer keeps access to a customer file after
+ * pushing it to a dealer so it can see and continue what the dealer does.
+ * 16 Oct (ID 33 / 183): SEE only — no step on it at all (gateLeadActor /
+ * leadActorVerdict refuse the house's writes), no second push
+ * (pushBlockedReason), and the file leaves the house's own lists and counts —
+ * the dealer is its only owner; the house sees it on Pushed files. The name
+ * is kept for its callers. True when the caller's dealer code IS the house code (any house
+ * login) and the file carries a push FROM the house (houseOriginatedLeadIds).
  */
 export async function houseMayActOnLead(callerDealerCode: string | null | undefined, leadId: string): Promise<boolean> {
   const code = (callerDealerCode ?? "").trim();

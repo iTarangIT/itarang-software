@@ -15,6 +15,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 import { requireAdminAppUser } from "@/lib/kyc/admin-workflow";
+import { nbfcObjectGate } from "@/lib/nbfc/adminRequestAccess";
 import { forwardVerdictToDealer } from "@/lib/nbfc/doc-requests";
 import { notifyDealerOfVerdictForward } from "@/lib/nbfc/doc-request-notify";
 
@@ -52,6 +53,8 @@ export async function POST(
         { status: 400 },
       );
     }
+    const notYours = await nbfcObjectGate(appUser, "verdict", verdictId);
+    if (notYours) return notYours;
 
     const parsed = Body.safeParse(await _req.json().catch(() => ({})));
     if (!parsed.success) {

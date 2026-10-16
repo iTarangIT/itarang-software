@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 import { submitCoBorrowerVerification } from '@/lib/kyc/coborrower-submit';
 import { requireLeadAccess } from "@/lib/auth/requireLeadAccess";
+import { recordActorStep, requireLeadWriter } from "@/lib/leads/actForDealerGuard";
 
 // BRD §2.9.3 step 5 — When dealer submits Step 3 (co-borrower KYC), the
 // lead must move to 'pending_itarang_reverification' and a high-priority
@@ -15,9 +16,13 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ le
     // ID 118: signed in, and this lead is the caller's to touch (a dealer's own lead, or back office).
     const leadGate = await requireLeadAccess((await params).leadId);
     if (!leadGate.ok) return leadGate.response;
+    // ID 183: a change to the file — its own dealer, or Admin / Sales Head acting for the dealer.
+    const writer = await requireLeadWriter((await params).leadId, _req, leadGate.user);
+    if (!writer.ok) return writer.response;
     try {
         const { leadId } = await params;
         const result = await submitCoBorrowerVerification(leadId);
+        await recordActorStep(writer.actor, 'submitted the co-borrower KYC for verification');
         return NextResponse.json({ success: true, ...result });
     } catch (error) {
         console.error('[Co-borrower Submit Verification] Error:', error);

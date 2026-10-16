@@ -16,6 +16,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { nbfcDocumentVerifications } from "@/lib/db/schema";
 import { requireAdminAppUser } from "@/lib/kyc/admin-workflow";
+import { adminMayActOnNbfcLead, nbfcLeadNotYours } from "@/lib/nbfc/adminRequestAccess";
 import { sendVerdictDocumentToNbfc } from "@/lib/nbfc/doc-requests";
 import { notifyNbfcOfUpdate } from "@/lib/nbfc/doc-request-notify";
 import { uploadAdminAttachments } from "@/lib/nbfc/request-uploads";
@@ -80,6 +81,7 @@ export async function POST(
         { status: 404 },
       );
     }
+    if (!(await adminMayActOnNbfcLead(appUser, verdict.lead_id))) return nbfcLeadNotYours();
 
     const attachments = await uploadAdminAttachments(form, verdict.lead_id);
     if (attachments.length === 0) {

@@ -17,6 +17,18 @@ import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { matchedUnion, OWED_KEY, REVENUE_OUTSTANDING, REVENUE_OWED } from "@/lib/dashboard/revenueSource";
 
+// The pure netting / ageing rules (unit-tested) — re-exported so callers keep
+// importing from here.
+export {
+    ageReceivables,
+    netInvoicesAfterCredits,
+    netOwed,
+    RECEIVABLE_AGES,
+    receivableAgeOf,
+    type ReceivableAgeKey,
+    type ReceivablesAgeing,
+} from "@/lib/dashboard/receivablesAgeing";
+
 export type ReceivableRow = {
     source: string;
     id: string;
@@ -37,28 +49,6 @@ export type ReceivableRow = {
     /** The customer the balance nets under (GSTIN key, or the row itself). */
     owe_key: string;
 };
-
-/** Σ per customer of max(0, Σ balance) — the "Money owed to us" figure. */
-export function netOwed(rows: Pick<ReceivableRow, "owe_key" | "balance">[]): number {
-    const per = new Map<string, number>();
-    for (const r of rows) per.set(r.owe_key, (per.get(r.owe_key) ?? 0) + r.balance);
-    let owed = 0;
-    for (const v of per.values()) owed += Math.max(0, v);
-    return owed;
-}
-
-export const RECEIVABLE_AGES = [
-    { key: "0_30", label: "0–30 days", min: 0, max: 30 },
-    { key: "31_60", label: "31–60 days", min: 31, max: 60 },
-    { key: "61_90", label: "61–90 days", min: 61, max: 90 },
-    { key: "90_plus", label: "90+ days", min: 91, max: Infinity },
-] as const;
-export type ReceivableAgeKey = (typeof RECEIVABLE_AGES)[number]["key"] | "no_date";
-
-export const receivableAgeOf = (r: Pick<ReceivableRow, "age_days">): ReceivableAgeKey =>
-    r.age_days == null
-        ? "no_date"
-        : (RECEIVABLE_AGES.find((a) => r.age_days! >= a.min && r.age_days! <= a.max)?.key ?? "0_30");
 
 /** Every invoice still owed (and the credit notes netting it), largest balance first. */
 export async function listReceivables(): Promise<ReceivableRow[]> {
@@ -91,24 +81,4 @@ export async function listReceivables(): Promise<ReceivableRow[]> {
                 overdue_days: r.overdue_days == null ? null : Number(r.overdue_days),
             }) as ReceivableRow,
     );
-}
-
-export type ReceivablesAgeing = {
-    owed: number;
-    invoices: number;
-    buckets: Array<{ key: ReceivableAgeKey; label: string; amount: number; invoices: number }>;
-};
-
-/** The ageing buckets of listReceivables(); "No invoice date" only when present. */
-export function ageReceivables(rows: ReceivableRow[]): ReceivablesAgeing {
-    const bucket = (key: ReceivableAgeKey, label: string) => {
-        const xs = rows.filter((r) => receivableAgeOf(r) === key);
-        return { key, label, amount: xs.reduce((a, r) => a + r.balance, 0), invoices: xs.length };
-    };
-    const noDate = bucket("no_date", "No invoice date");
-    return {
-        owed: netOwed(rows),
-        invoices: rows.filter((r) => r.source !== "credit").length,
-        buckets: [...RECEIVABLE_AGES.map((a) => bucket(a.key, a.label)), ...(noDate.invoices ? [noDate] : [])],
-    };
 }

@@ -21,6 +21,7 @@ import { useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { diffCommercials, summariseChanges } from "@/lib/inside-sales/commercialsDiff";
 import type { LeadDetailCommercials } from "@/lib/inside-sales/types";
+import { failedLines, sentLine } from "@/lib/leads/quoteSends";
 
 export function fmtDate(iso: string | null | undefined): string {
     if (!iso) return "—";
@@ -179,6 +180,22 @@ export function QuoteApprovalBlock({
             )}
 
             {/*
+              * ID 191 — how this quote went out: each send with channel, to
+              * whom and when; a failed one in red with its reason. No
+              * delivered / read ticks (decided 14 Oct: not now).
+              */}
+            {cc.sends && cc.sends.length > 0 && (
+                <div className="mt-2 space-y-1 text-[11px]">
+                    {sentLine(cc.sends) && <p className="opacity-90">{sentLine(cc.sends)}</p>}
+                    {failedLines(cc.sends).map((line, i) => (
+                        <p key={i} className="rounded bg-rose-50 px-2 py-1 font-medium text-rose-700">
+                            {line}
+                        </p>
+                    ))}
+                </div>
+            )}
+
+            {/*
               * E-243 — what the DEALER said back. Separate from the block above
               * because they answer different questions: that one is whether
               * iTarang released the number, this one is whether the dealer
@@ -263,18 +280,21 @@ export function CommercialsDetail({
     cc,
     onSend,
     onWithdraw,
+    hideDealCard,
 }: {
     cc: LeadDetailCommercials;
     /** Omitted on a superseded version — see QuoteApprovalBlock. */
     onSend?: () => void;
     onWithdraw?: () => void;
+    /** ID 186: the dealer is already onboarded — no deal card is shown. */
+    hideDealCard?: boolean;
 }) {
     return (
         <div className="grid grid-cols-2 gap-3">
             <Field label="Price Quoted" value={cc.price_quoted ? `₹${cc.price_quoted}` : null} />
             <Field label="Final Price" value={cc.final_price ? `₹${cc.final_price}` : null} />
             <Field label="Payment Method" value={cc.payment_method} />
-            {cc.deal_card && (
+            {cc.deal_card && !hideDealCard && (
                 <>
                     {/* ID 172: the deal card on every version, history included. */}
                     <Field
@@ -389,8 +409,11 @@ function StatusChip({ cc }: { cc: LeadDetailCommercials }) {
  */
 export function CommercialsVersionHistory({
     history,
+    hideDealCard,
 }: {
     history: LeadDetailCommercials[];
+    /** ID 186: see CommercialsDetail. */
+    hideDealCard?: boolean;
 }) {
     const [open, setOpen] = useState<string | null>(null);
 
@@ -466,7 +489,7 @@ export function CommercialsVersionHistory({
 
                             {expanded && (
                                 <div className="mt-2 border-t border-gray-100 pt-2">
-                                    <CommercialsDetail cc={c} />
+                                    <CommercialsDetail cc={c} hideDealCard={hideDealCard} />
                                 </div>
                             )}
                         </li>

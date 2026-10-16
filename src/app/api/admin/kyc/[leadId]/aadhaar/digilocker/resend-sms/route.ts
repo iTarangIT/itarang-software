@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { executeDigilockerResendSms } from "@/lib/kyc/digilocker";
-import { requireAdminAppUser } from "@/lib/kyc/admin-workflow";
+import { requireAdminAppUserForLead } from "@/lib/kyc/admin-workflow";
 
 /**
  * Resend the DigiLocker SMS for the customer WITHOUT recreating the
@@ -19,7 +19,7 @@ export async function POST(
   { params }: { params: Promise<{ leadId: string }> },
 ) {
   try {
-    const appUser = await requireAdminAppUser();
+    const appUser = await requireAdminAppUserForLead((await params).leadId);
     if (!appUser) {
       return NextResponse.json(
         { success: false, error: { message: "Unauthorized" } },

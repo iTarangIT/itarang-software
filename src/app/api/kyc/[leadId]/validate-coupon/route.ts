@@ -4,6 +4,8 @@ import { couponCodes, leads } from '@/lib/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { calculateDiscount } from '@/lib/razorpay';
 import { requireLeadAccess } from "@/lib/auth/requireLeadAccess";
+import { isItarangActor } from "@/lib/leads/actForDealer";
+import { recordActorStep, requireLeadWriter } from "@/lib/leads/actForDealerGuard";
 
 const BASE_FEE = Number(process.env.FACILITATION_FEE_BASE_AMOUNT) || 1500;
 
@@ -16,6 +18,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
     // ID 118: signed in, and this lead is the caller's to touch (a dealer's own lead, or back office).
     const leadGate = await requireLeadAccess((await params).leadId);
     if (!leadGate.ok) return leadGate.response;
+    // ID 183: the dealer, or iTarang acting for the dealer — who must use a
+    // coupon from the FILE's dealer's pool (checked below).
+    const gate = await requireLeadWriter((await params).leadId, req, leadGate.user);
+    if (!gate.ok) return NextResponse.json({ valid: false, message: gate.message }, { status: gate.status });
+    const gateLead = gate.lead;
     try {
         const { leadId } = await params;
         const { couponCode } = await req.json();
@@ -75,6 +82,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
 
         const coupon = coupons[0];
 
+        // ID 183: iTarang acting for the dealer spends the dealer's own coupon
+        // (credit goes to the dealer) — never another dealer's.
+        if (isItarangActor(gate.actor.kind) && coupon.dealer_id && coupon.dealer_id !== gateLead.dealer_id) {
+            return NextResponse.json({ valid: false, message: "This coupon belongs to another dealer. Use one from this file's dealer." });
+        }
+
         // Check expiry
         if (coupon.expires_at && new Date(coupon.expires_at) < new Date()) {
             return NextResponse.json({ valid: false, message: 'Coupon has expired' });
@@ -111,6 +124,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             return NextResponse.json({ valid: false, message: 'Coupon unavailable' });
         }
 
+        await recordActorStep(gate.actor, `applied verification coupon ${coupon.code}`);
         return NextResponse.json({
             valid: true,
             success: true,

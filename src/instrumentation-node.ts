@@ -2010,3 +2010,48 @@ export async function startInvoiceFreshnessTicker() {
 
   console.log("[instrumentation] invoice freshness alert (hourly from 10:00 IST) started in-process");
 }
+
+// ---------------------------------------------------------------------------
+// Tracker ID 174 — "Stock to upload" sweep (E-348). Hourly from 10:00 IST: re-checks every
+// open task's serials against the buyer dealer's stock (closes complete ones)
+// and escalates tasks still open after 2 working days — one bell to Admin and
+// the CEO, claimed by the UPDATE so restarts never ring twice
+// (src/lib/inventory/stockUploadTasks/service.ts). No-op without E-348.
+// ---------------------------------------------------------------------------
+export async function startStockUploadSweepTicker() {
+  if (process.env.VERCEL === "1") return;
+
+  const TICK_INTERVAL_MS = 60 * 60_000;
+  let inFlight = false;
+
+  const tick = async () => {
+    if (inFlight) return;
+    // Office hours only (from 10:00 IST): an escalation bell at 01:00 helps nobody.
+    const istHour = Number(
+      new Date().toLocaleString("en-GB", { timeZone: "Asia/Kolkata", hour: "2-digit", hour12: false }),
+    );
+    if (istHour < 10) return;
+    inFlight = true;
+    try {
+      const { sweepStockTasks } = await import("@/lib/inventory/stockUploadTasks/service");
+      const r = await sweepStockTasks();
+      if (r.closed || r.escalated) {
+        console.log(`[instrumentation:stock-upload] closed=${r.closed} escalated=${r.escalated}`);
+      }
+    } catch (err) {
+      console.error(
+        "[instrumentation:stock-upload] tick failed:",
+        err instanceof Error ? err.message : err,
+      );
+    } finally {
+      inFlight = false;
+    }
+  };
+
+  const kickoff = setTimeout(tick, 250_000);
+  if (typeof kickoff.unref === "function") kickoff.unref();
+  const interval = setInterval(tick, TICK_INTERVAL_MS);
+  if (typeof interval.unref === "function") interval.unref();
+
+  console.log("[instrumentation] stock-upload task sweep (hourly) started in-process");
+}

@@ -44,6 +44,7 @@ import { sql } from "drizzle-orm";
 // that wants a kind's label. A top-level `import { db }` makes merely *listing*
 // the digests require DATABASE_URL.
 
+import { assistedBySql, withAssistedBy } from "@/lib/exports/assistedBy";
 import { istDayWindowTz } from "../window";
 import type {
   DigestDetail,
@@ -273,7 +274,8 @@ async function collectDetail(
               acc.business_entity_name AS subtitle,
               l.city, l.state,
               COALESCE(a.changes->>'decided_by', 'admin') AS source,
-              a.created_at AS at
+              a.created_at AS at,
+              ${assistedBySql(sql`a.entity_id`)} AS assisted
          FROM audit_logs a
          LEFT JOIN leads l ON l.id = a.entity_id
          LEFT JOIN accounts acc ON acc.id = l.dealer_id
@@ -292,7 +294,8 @@ async function collectDetail(
            SELECT DISTINCT ON (q.lead_id) q.lead_id AS id,
                   COALESCE(l.owner_name, '(lead deleted)') AS title,
                   acc.business_entity_name AS subtitle,
-                  l.city, l.state, q.priority AS source, q.created_at AS at
+                  l.city, l.state, q.priority AS source, q.created_at AS at,
+                  ${assistedBySql(sql`q.lead_id`)} AS assisted
              FROM admin_verification_queue q
              LEFT JOIN leads l ON l.id = q.lead_id
              LEFT JOIN accounts acc ON acc.id = l.dealer_id
@@ -302,14 +305,25 @@ async function collectDetail(
     `)) as unknown as Array<Record<string, unknown>>;
 
     const r = rows?.[0] ?? {};
+    // ID 183: "Dealer · Assisted by <iTarang names> (n steps)" when iTarang
+    // acted for the dealer on the case.
+    const rowsOf = (raw: unknown) =>
+      toDetailRows(
+        Array.isArray(raw)
+          ? raw.map((x) => {
+              const o = (x ?? {}) as Record<string, unknown>;
+              return { ...o, subtitle: withAssistedBy(o.subtitle, o.assisted) };
+            })
+          : raw,
+      );
 
     return {
       ok: true,
       detail: {
-        approved: toDetailRows(r.approved),
-        rejected: toDetailRows(r.rejected),
-        correction: toDetailRows(r.correction),
-        submissions: toDetailRows(r.submissions),
+        approved: rowsOf(r.approved),
+        rejected: rowsOf(r.rejected),
+        correction: rowsOf(r.correction),
+        submissions: rowsOf(r.submissions),
       },
     };
   } catch (err) {

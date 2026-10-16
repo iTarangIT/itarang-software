@@ -29,6 +29,8 @@ import {
   type TimelineLimitEvent,
 } from "@/components/leads/touchpoint-timeline";
 import { limitPassedEvents } from "@/lib/leads/clocks";
+import { failedSendTimelineEntries, mergeNewestFirst } from "@/lib/leads/quoteSends";
+import { listLeadQuoteSends } from "@/lib/leads/quoteSendsStore";
 
 export const dynamic = "force-dynamic";
 
@@ -159,6 +161,21 @@ export default async function LeadDetailPage({ params }: any) {
   // rendered "No calls made yet" directly above an Activity timeline entry
   // describing the call, which reads as the integration being broken.
   //
+  // ID 191: failed quote sends (quotation_dispatches) join the Activity
+  // timeline in red with their reason — display only, never touchpoints. A
+  // send that reached the dealer already has its "Quote sent to dealer" entry.
+  const timeline = mergeNewestFirst<LeadTouchpoint>(
+    touchpoints,
+    failedSendTimelineEntries(await listLeadQuoteSends(id)).map((e) => ({
+      ...e,
+      call_status: null,
+      call_duration_sec: null,
+      is_engaged: null,
+      external_system: null,
+      sync_method: null,
+    })),
+  );
+
   // Reuses the rows already fetched above rather than issuing a second query.
   const externalCalls = touchpoints
     .filter((t) => isExternalCallTouchpoint(t))
@@ -241,7 +258,7 @@ export default async function LeadDetailPage({ params }: any) {
 
         <div className="mt-6">
           <TouchpointTimeline
-            touchpoints={touchpoints}
+            touchpoints={timeline}
             limitEvents={limitEvents}
             leadId={id}
             canExport={canExportLeadHistory({

@@ -3,8 +3,9 @@
 //   POST mapping   {mapping: sourceHeader → template column, saveAs?}  → Import
 //   POST validate  (no body) → ImportPreview: counts + sample row errors
 //   POST commit    {consentAttested: true, attestationText, idempotencyKey} → Import
-//   POST sync      (no body) → ImportSyncResult: the COMMITTED import's leads
-//                  upserted into ecofy_leads now (ID 51 #3, importSync.ts)
+//   POST sync      {from?} → ImportSyncResult: the COMMITTED import's leads
+//                  upserted into ecofy_leads now (ID 51 #3, importSync.ts), up
+//                  to 500 a run; call again with {from: nextFrom} until null
 //
 // Shapes follow OpenAPI ImportMapping / ImportPreview / ImportCommit; commit
 // carries the required Idempotency-Key. Every step is a write in
@@ -54,10 +55,15 @@ export const POST = withErrorHandler(async (req: Request, ctx: { params: Promise
                     202,
                 );
             }
-            case "sync":
+            case "sync": {
                 // ID 51 #3: once COMMITTED, put the imported leads in the CRM now
-                // (reads + local upsert only; safe to repeat).
-                return successResponse(await syncEcofyImportToCrm(id));
+                // (reads + local upsert only; safe to repeat). ID 51 (15 Oct):
+                // { from } continues a large import where the last run stopped
+                // (the result's nextFrom); no body = from the first case.
+                const body = (await req.json().catch(() => null)) as { from?: unknown } | null;
+                const from = typeof body?.from === "number" ? body.from : 0;
+                return successResponse(await syncEcofyImportToCrm(id, { from }));
+            }
             default:
                 return errorResponse("Unknown import step", 404);
         }

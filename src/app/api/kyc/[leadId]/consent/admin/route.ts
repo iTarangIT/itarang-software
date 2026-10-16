@@ -5,10 +5,14 @@ import { db } from '@/lib/db';
 import { leads, consentRecords } from '@/lib/db/schema';
 import { eq, and, desc } from 'drizzle-orm';
 import { requireRole } from '@/lib/auth-utils';
+import { backOfficeMayReachLead } from '@/lib/auth/requireLeadAccess';
 
 type RouteContext = {
     params: Promise<{ leadId: string }>;
 };
+
+const forbidden = () =>
+    NextResponse.json({ success: false, error: { message: 'Forbidden' } }, { status: 403 });
 
 /**
  * POST /api/kyc/:leadId/consent/admin
@@ -20,6 +24,8 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
     try {
         const user = await requireRole(['admin', 'ceo', 'business_head', 'sales_head']);
         const { leadId } = await params;
+        // ID 119: a Business Head decides only on customers they own.
+        if (!(await backOfficeMayReachLead(user, leadId))) return forbidden();
         const body = await req.json();
 
         const { decision, reviewerNotes, rejectionReason, consent_for: consentForParam } = body;
@@ -125,8 +131,9 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
  */
 export async function GET(req: NextRequest, { params }: RouteContext) {
     try {
-        await requireRole(['admin', 'ceo', 'business_head', 'sales_head']);
+        const user = await requireRole(['admin', 'ceo', 'business_head', 'sales_head']);
         const { leadId } = await params;
+        if (!(await backOfficeMayReachLead(user, leadId))) return forbidden();
 
         const consentFor = req.nextUrl.searchParams.get('consent_for') || 'customer';
         const dbConsentFor = consentFor === 'customer' ? 'primary' : consentFor;

@@ -5,7 +5,7 @@ import { db } from "@/lib/db";
 import { auditLogs, kycVerifications, leads } from "@/lib/db/schema";
 import {
   createWorkflowId,
-  requireAdminAppUser,
+  requireAdminAppUserForLead,
 } from "@/lib/kyc/admin-workflow";
 import { notifyKycCardAction } from "@/lib/notifications";
 
@@ -31,7 +31,7 @@ export async function POST(
   }: { params: Promise<{ leadId: string; verificationId: string }> },
 ) {
   try {
-    const appUser = await requireAdminAppUser();
+    const appUser = await requireAdminAppUserForLead((await params).leadId);
     if (!appUser) {
       console.error("[Verification Action] Unauthorized - user not found or role not allowed. Allowed roles: admin, ceo, business_head, sales_head, sales_manager, sales_executive");
       return NextResponse.json(

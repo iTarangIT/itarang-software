@@ -35,6 +35,7 @@ import { Button } from "@/components/ui/button";
 import { startScanAndWait } from "@/lib/drive/scanClient";
 import { EXPENSE_DEPARTMENTS } from "@/lib/expenses";
 
+import { onFreshFileClick } from "@/lib/storage/freshFileLink";
 interface FlaggedExpense {
   id: string;
   vendor: string | null;
@@ -290,6 +291,7 @@ function FlaggedRow({ row, onSaved }: { row: FlaggedExpense; onSaved: () => void
           {row.bill_url && (
             <a
               href={row.bill_url}
+              onClick={(e) => onFreshFileClick(e, row.bill_url)}
               target="_blank"
               rel="noreferrer"
               className="p-1.5 rounded-lg text-gray-400 hover:text-brand-600 hover:bg-brand-50"

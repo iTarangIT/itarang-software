@@ -7,7 +7,11 @@
  *                     "engaged" is a connected call, metricDefinitions.ts)
  *   hot_to_field      transfers to an ASM of a lead that was Hot AT THE MOMENT
  *                     of transfer (wasHotAt) — counted per transfer, exactly as
- *                     the hot_to_ground target's actual (targets/service.ts)
+ *                     the hot_to_ground target's actual (targets/service.ts).
+ *                     ID 179: credited to the lead's owner AT THE MOMENT of
+ *                     transfer (from_owner_id), so a manager's transfer of a
+ *                     rep's lead counts for the rep; old rows without it fall
+ *                     back to who pressed (transferCredit)
  *   hot_visited       of those transfers, how many the ASM went on to visit
  *                     (a lead_visits row marked visited after the transfer —
  *                     the same "visited" test as transferVisitLimit.ts)
@@ -16,14 +20,15 @@
  *   won               leads Won in the period, credited to the lead's closer
  *                     (closing_owner_id; ID 159, 10 Oct), else who clicked
  *
- * Every other count is credited to the person who did it (performed_by),
+ * Every other count (bar hot_to_field / hot_visited, above) is credited to
+ * the person who did it (performed_by),
  * not the lead's current owner. `state` narrows by the lead.
  * ID 169 (10 Oct): a dealer handed to the field twice counts once.
  */
 import { sql, type SQL } from "drizzle-orm";
 
 import { db } from "@/lib/db";
-import { engagedCall, humanCall, wasHotAt } from "@/lib/reports/metricDefinitions";
+import { engagedCall, humanCall, transferCredit, wasHotAt } from "@/lib/reports/metricDefinitions";
 import { dealCardActualsSql, VOLUME_CHECK_DAYS } from "@/lib/leads/dealCardActuals";
 
 export type IsrScore = {
@@ -60,10 +65,10 @@ export async function buildIsrScorecard(f: { from: string; to: string; state?: s
              GROUP BY 1
         ),
         hot AS (
-            SELECT t.performed_by AS u, t.dealer_lead_id, t.performed_at AS at
+            SELECT ${transferCredit()} AS u, t.dealer_lead_id, t.performed_at AS at
               FROM lead_touchpoints t
               JOIN dealer_leads dl ON dl.id = t.dealer_lead_id
-             WHERE t.touchpoint_type = 'asm_transfer' AND t.performed_by IS NOT NULL
+             WHERE t.touchpoint_type = 'asm_transfer' AND ${transferCredit()} IS NOT NULL
                AND ${wasHotAt(sql`t.dealer_lead_id`, sql`t.performed_at`, sql`dl.interest_level`)}
                AND ${inRange(sql`t.performed_at`, f.from, f.to)} ${st}
         ),

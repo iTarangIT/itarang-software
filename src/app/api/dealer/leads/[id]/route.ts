@@ -5,8 +5,10 @@ import { requireRole } from '@/lib/auth-utils';
 import { eq, and, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { markLeadDeleted } from '@/lib/leads/multi-party-delete';
-import { dealerMayActOnLead, resolveDealerCode } from '@/lib/auth/requireLeadAccess';
+import { dealerMayActOnLead, dealerMayViewLead, resolveDealerCode } from '@/lib/auth/requireLeadAccess';
 import { dealerOwnsLead } from '@/lib/auth/leadAccessRules';
+import { HOUSE_READ_ONLY_MESSAGE } from '@/lib/leads/actForDealer';
+import { isHousePushedFile, stampDealerAction } from '@/lib/leads/actForDealerGuard';
 
 const updateSchema = z.object({
     full_name: z.string().optional().nullable(),
@@ -61,7 +63,8 @@ export const GET = withErrorHandler(async (_req: Request, { params }: { params: 
 
     const isOwner = lead.uploader_id === user.id;
     // ID 119: resolves a dealer login with no users.dealer_id via its onboarding code.
-    const isSameDealer = await dealerMayActOnLead(user, lead.dealer_id, id);
+    // 16 Oct (ID 183): the house login still SEES a file it pushed out (Pushed files).
+    const isSameDealer = await dealerMayViewLead(user, lead.dealer_id, id);
     if (!isOwner && !isSameDealer) {
         return errorResponse('Forbidden: You do not have permission to view this lead', 403);
     }
@@ -177,11 +180,19 @@ export const PATCH = withErrorHandler(async (req: Request, { params }: { params:
     }
 
     if (!lead) return errorResponse('Lead not found', 404);
-    // Allow edit if user is the uploader OR if the lead belongs to the same dealer
+    // Allow edit if the lead belongs to this dealer, or the user created a lead
+    // that has no dealer yet.
     const isOwner = lead.uploader_id === user.id;
     // ID 119: resolves a dealer login with no users.dealer_id via its onboarding code.
+    // 16 Oct (ID 183): the dealer is the only owner — the house login (often
+    // the creator) no longer edits a file it pushed to another dealer.
     const isSameDealer = await dealerMayActOnLead(user, lead.dealer_id, id);
-    if (!isOwner && !isSameDealer) return errorResponse('Forbidden: You do not have permission to edit this lead', 403);
+    if (!isSameDealer && !(isOwner && !lead.dealer_id)) {
+        if (isOwner) return errorResponse(HOUSE_READ_ONLY_MESSAGE, 403);
+        return errorResponse('Forbidden: You do not have permission to edit this lead', 403);
+    }
+    // The dealer acted: the 1-working-day idle rule reads this; clears any iTarang note.
+    if (isSameDealer) await stampDealerAction(id, user.id);
 
     if (data.commitStep) {
         if (!data.full_name || data.full_name.trim().length < 2) return errorResponse('Full name required', 400);
@@ -262,11 +273,16 @@ export const DELETE = withErrorHandler(async (req: Request, { params }: { params
     const [lead] = await db.select().from(leads).where(eq(leads.id, id)).limit(1);
 
     if (!lead) return errorResponse('Lead not found', 404);
-    if (lead.uploader_id !== user.id) return errorResponse('Forbidden: You can only delete your own leads', 403);
+    const ownsFile = dealerOwnsLead(lead.dealer_id, await resolveDealerCode(user));
+    // 16 Oct (ID 183): the dealer is the only owner of a file the house pushed
+    // to him, though the house login created it — he may delete it, and the
+    // delete is followed (multi-party-delete no longer keeps it for the house).
+    const pushedToMe = ownsFile && lead.uploader_id !== user.id && (await isHousePushedFile(id));
+    if (lead.uploader_id !== user.id && !pushedToMe) return errorResponse('Forbidden: You can only delete your own leads', 403);
     // 14 Oct: "delete" hides the file from the dealer side as a whole — so a
     // file pushed to another dealer can't be deleted by the house, or it would
     // vanish from that dealer's list too. Push it back first if needed.
-    if (!dealerOwnsLead(lead.dealer_id, await resolveDealerCode(user))) {
+    if (!ownsFile) {
         return errorResponse('This file is with another dealer now, so it can’t be deleted from here.', 409);
     }
     if (lead.deleted_by_dealer_at) return errorResponse('Lead already deleted', 404);

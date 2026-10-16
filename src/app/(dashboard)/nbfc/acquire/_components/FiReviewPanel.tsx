@@ -12,6 +12,7 @@
  */
 import { useState } from "react";
 
+import { onFreshFileClick } from "@/lib/storage/freshFileLink";
 export interface FiAgentLite {
   id: string;
   name: string;
@@ -167,7 +168,7 @@ export default function FiReviewPanel({
       <Section icon="image" title="Evidence photos">
         <div className="grid grid-cols-3 gap-2">
           {evidencePhotos.map((p) => (
-            <a key={p.id} href={p.image_url} target="_blank" rel="noreferrer" className="group block">
+            <a key={p.id} href={p.image_url} onClick={(e) => onFreshFileClick(e, p.image_url)} target="_blank" rel="noreferrer" className="group block">
               <div className="relative overflow-hidden rounded-lg border border-slate-200 bg-slate-100">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img src={p.image_url} alt={p.photo_type} className="h-20 w-full object-cover transition duration-300 group-hover:scale-105" />

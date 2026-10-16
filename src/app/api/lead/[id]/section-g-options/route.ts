@@ -18,7 +18,8 @@ import { db } from "@/lib/db";
 import { leads } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 import { loadSectionGOptions } from "@/lib/leads/section-g";
-import { dealerMayActOnLead } from "@/lib/auth/requireLeadAccess";
+import { ACT_FOR_DEALER_ROLES } from "@/lib/leads/actForDealer";
+import { gateLeadActor } from "@/lib/leads/actForDealerGuard";
 
 const querySchema = z.object({
   loanAmount: z.coerce.number().min(0).optional(),
@@ -29,7 +30,7 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const user = await requireRole(["dealer"]);
+    const user = await requireRole(["dealer", ...ACT_FOR_DEALER_ROLES]);
     const { id: leadId } = await params;
 
     const { searchParams } = new URL(req.url);
@@ -51,10 +52,13 @@ export async function GET(
         { status: 404 },
       );
     }
-    if (!(await dealerMayActOnLead(user, lead.dealer_id, leadId))) {
+    // ID 183: the dealer, the house on a file it pushed out, or Admin / Sales
+    // Head acting for the dealer.
+    const gate = await gateLeadActor(user, lead);
+    if (!gate.ok) {
       return NextResponse.json(
-        { success: false, error: { message: "Access denied" } },
-        { status: 403 },
+        { success: false, error: { message: gate.message } },
+        { status: gate.status },
       );
     }
 

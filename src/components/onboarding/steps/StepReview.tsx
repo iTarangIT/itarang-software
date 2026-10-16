@@ -438,7 +438,8 @@ export default function StepReview() {
       });
       const json = await res.json();
       setResume({
-        sentTo: json.sentTo ?? null,
+        // "XXXXXX1234 by SMS" (ID 166 decision 5: a mobile code; email is the fallback).
+        sentTo: json.sentWhere ?? json.sentTo ?? null,
         code: "",
         busy: false,
         error: res.ok && json.success ? null : json.message || "Could not send the code.",
@@ -1248,8 +1249,8 @@ export default function StepReview() {
             </p>
             <p className="mt-1 text-sm text-slate-600">
               {resume.sentTo
-                ? `To continue it, enter the 6-digit code we emailed to ${resume.sentTo}.`
-                : "To continue it, enter the 6-digit code emailed to the owner's registered address."}
+                ? `To continue it, enter the 6-digit code we sent to ${resume.sentTo}.`
+                : "To continue it, enter the 6-digit code sent to the owner's registered mobile number."}
             </p>
             <div className="mt-3 flex flex-wrap items-center gap-2">
               <input
@@ -1260,7 +1261,7 @@ export default function StepReview() {
                 inputMode="numeric"
                 autoComplete="one-time-code"
                 placeholder="6-digit code"
-                aria-label="Email verification code"
+                aria-label="Verification code"
                 className="w-40 rounded-xl border border-slate-300 px-3 py-2 text-sm tracking-widest focus:border-[#1F5C8F] focus:outline-none"
               />
               <button

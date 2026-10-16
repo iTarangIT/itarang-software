@@ -6,6 +6,7 @@ import { consentRecords, leads } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { requireRole } from "@/lib/auth-utils";
 import { requireLeadAccess } from "@/lib/auth/requireLeadAccess";
+import { requireLeadWriter } from "@/lib/leads/actForDealerGuard";
 
 type RouteContext = {
     params: Promise<{ leadId: string }>;
@@ -49,6 +50,10 @@ export async function POST(_req: NextRequest, { params }: RouteContext) {
         // had no recorded creator, which let any dealer through.
         const leadGate = await requireLeadAccess(leadId);
         if (!leadGate.ok) return leadGate.response;
+        // ID 183: the file's own dealer (stamps the dealer's action); the
+        // house login only sees a file it pushed to another dealer.
+        const writer = await requireLeadWriter(leadId, _req, leadGate.user);
+        if (!writer.ok) return writer.response;
 
         // Step 3 access rule: must be hot + non-cash
         const paymentMethod = String(lead.payment_method || "").toLowerCase();

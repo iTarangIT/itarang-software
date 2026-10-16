@@ -510,6 +510,51 @@ export async function pushToLead(
   }
 }
 
+/**
+ * ID 33 / 183 — a message for the DEALER of a file and nobody else: their chat
+ * when they have one, else the approved template to the dealer's own number
+ * (a dealer with no chat with iTarang still hears). Never falls back to the
+ * customer. `dealerCode` names another dealer than the file's — the dealer a
+ * file was just moved AWAY from. Same best-effort contract as `pushToLead`.
+ */
+export async function pushToLeadDealer(
+  leadId: string,
+  msg: LeadMessageSpec,
+  opts: { dealerCode?: string | null } = {},
+): Promise<PushResult> {
+  try {
+    const [lead] = await db
+      .select({
+        reference_id: leads.reference_id,
+        full_name: leads.full_name,
+        owner_name: leads.owner_name,
+        dealer_id: leads.dealer_id,
+      })
+      .from(leads)
+      .where(eq(leads.id, leadId))
+      .limit(1);
+    if (!lead) return "none";
+    const channel = await dealerChannelForLead(opts.dealerCode ?? lead.dealer_id);
+    if (!channel) return "none";
+    const session = await newestSessionForPhones(channel.waPhones);
+    return await deliverTo(
+      {
+        leadId,
+        audience: "dealer",
+        greetName: channel.name || "there",
+        customerName: lead.full_name || lead.owner_name || "a customer",
+        referenceId: lead.reference_id || leadId,
+        session,
+        waPhone: session?.wa_phone || channel.waPhones[0] || null,
+      },
+      msg,
+    );
+  } catch (err) {
+    console.error(`[WhatsApp/lead-push] dealer push for ${leadId} failed:`, err);
+    return "none";
+  }
+}
+
 /** Word the message for this target and send it. Shared by all three arms. */
 async function deliverTo(
   target: LeadPushTarget,

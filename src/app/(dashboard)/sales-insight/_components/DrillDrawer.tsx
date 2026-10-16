@@ -9,6 +9,7 @@ import { useQuery } from "@tanstack/react-query";
 import { X, Phone, MapPin, Loader2, AlertCircle, Sparkles, Receipt, Landmark, ShieldCheck } from "lucide-react";
 import type { ConvertedRow } from "@/lib/sales-insight/types";
 
+import { onFreshFileClick } from "@/lib/storage/freshFileLink";
 type Props = {
     row: ConvertedRow | null;
     onClose: () => void;
@@ -185,6 +186,7 @@ export function DrillDrawer({ row, onClose }: Props) {
                             {get<string>(detail, "latest_call.recording_url") && (
                                 <a
                                     href={get<string>(detail, "latest_call.recording_url")}
+                                    onClick={(e) => onFreshFileClick(e, get<string>(detail, "latest_call.recording_url"))}
                                     target="_blank"
                                     rel="noreferrer"
                                     className="inline-block text-sm text-blue-600 hover:underline"

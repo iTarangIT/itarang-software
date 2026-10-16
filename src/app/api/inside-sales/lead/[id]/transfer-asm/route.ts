@@ -7,8 +7,12 @@
 // Partner, CEO, Admin) on any lead. The ASM is notified with a link that opens
 // the lead on their page.
 
+import { sql } from "drizzle-orm";
 import { z } from "zod";
+import { db } from "@/lib/db";
 import { requireRole } from "@/lib/auth-utils";
+import { managerMayTransferStatus } from "@/lib/leads/access";
+import { isOpen, type LeadStatus } from "@/lib/lifecycle/transitions";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
 import { assertOwner } from "@/lib/leads/ownership";
 import {
@@ -40,8 +44,28 @@ export const POST = withErrorHandler(
         if (!id) return errorResponse("Lead id required", 400);
         const body = BodySchema.parse(await req.json());
 
-        // A rep transfers only their own lead; a manager may transfer any lead.
-        if (!canTransferAnyLead(user.role)) await assertOwner(id, user.id);
+        // A rep transfers only their own lead; a manager may transfer any lead —
+        // ID 179: any lead that can still go to the field, the same rule that
+        // hides the button (not Won, not already with an ASM, not closed). The
+        // owner's own transfer keeps the lifecycle guard's answer.
+        if (!canTransferAnyLead(user.role)) {
+            await assertOwner(id, user.id);
+        } else {
+            const rows = (await db.execute(sql`
+                SELECT lead_status, current_owner_id FROM dealer_leads WHERE id = ${id}
+            `)) as unknown as Array<{ lead_status: string | null; current_owner_id: string | null }>;
+            if (!rows.length) return errorResponse("Lead not found", 404);
+            const st = rows[0].lead_status;
+            const open = st == null || isOpen(st as LeadStatus);
+            if (rows[0].current_owner_id !== user.id && !managerMayTransferStatus(st, open)) {
+                return errorResponse(
+                    st === "Transferred_to_ASM"
+                        ? "This lead is already with an ASM, waiting for a field visit."
+                        : `A ${(st ?? "").replace(/_/g, " ")} lead cannot be transferred to an ASM.`,
+                    409,
+                );
+            }
+        }
 
         try {
             await transferLeadToAsm({

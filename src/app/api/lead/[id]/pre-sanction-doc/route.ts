@@ -29,7 +29,8 @@ import {
   coerceBucketItems,
   replacePreSanctionDocs,
 } from "@/lib/leads/pre-sanction-bucket";
-import { dealerMayActOnLead } from "@/lib/auth/requireLeadAccess";
+import { ACT_FOR_DEALER_ROLES } from "@/lib/leads/actForDealer";
+import { gateLeadActor, recordActorStep, seenFromRequest } from "@/lib/leads/actForDealerGuard";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -49,7 +50,7 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const user = await requireRole(["dealer"]);
+    const user = await requireRole(["dealer", ...ACT_FOR_DEALER_ROLES]);
     const { id: leadId } = await params;
 
     const [lead] = await db.select().from(leads).where(eq(leads.id, leadId)).limit(1);
@@ -59,9 +60,10 @@ export async function POST(
         { status: 404 },
       );
     }
-    if (!(await dealerMayActOnLead(user, lead.dealer_id, leadId))) {
-      return NextResponse.json({ ok: false, error: "Access denied" }, { status: 403 });
-    }
+    // ID 183: the dealer, the house, or Admin / Sales Head acting for the
+    // dealer (permission, "being worked by", dealer wins).
+    const gate = await gateLeadActor(user, lead, { write: true, seenDealerActionAt: seenFromRequest(req) });
+    if (!gate.ok) return NextResponse.json({ ok: false, error: gate.message }, { status: gate.status });
 
     let form: FormData;
     try {
@@ -168,16 +170,17 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const user = await requireRole(["dealer"]);
+    const user = await requireRole(["dealer", ...ACT_FOR_DEALER_ROLES]);
     const { id: leadId } = await params;
 
     const [lead] = await db.select().from(leads).where(eq(leads.id, leadId)).limit(1);
     if (!lead) {
       return NextResponse.json({ ok: false, error: "Lead not found" }, { status: 404 });
     }
-    if (!(await dealerMayActOnLead(user, lead.dealer_id, leadId))) {
-      return NextResponse.json({ ok: false, error: "Access denied" }, { status: 403 });
-    }
+    // ID 183: the dealer, the house, or Admin / Sales Head acting for the
+    // dealer (permission, "being worked by", dealer wins).
+    const gate = await gateLeadActor(user, lead, { write: true, seenDealerActionAt: seenFromRequest(req) });
+    if (!gate.ok) return NextResponse.json({ ok: false, error: gate.message }, { status: gate.status });
 
     let body: { items?: unknown };
     try {
@@ -238,6 +241,7 @@ export async function PATCH(
       }
     }
 
+    await recordActorStep(gate.actor, "updated the pre-sanction documents (Step 4)");
     return NextResponse.json({ ok: true, persisted: true, items });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Save failed";

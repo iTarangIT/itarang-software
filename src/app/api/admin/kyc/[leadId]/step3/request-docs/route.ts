@@ -12,7 +12,7 @@ import {
 } from "@/lib/db/schema";
 import {
   createWorkflowId,
-  requireAdminAppUser,
+  requireAdminAppUserForLead,
 } from "@/lib/kyc/admin-workflow";
 
 // BRD §2.9.3 "Request Additional Documents" — admin opens the Request More Docs
@@ -49,7 +49,7 @@ export async function POST(
   { params }: { params: Promise<{ leadId: string }> },
 ) {
   try {
-    const appUser = await requireAdminAppUser();
+    const appUser = await requireAdminAppUserForLead((await params).leadId);
     if (!appUser) {
       return NextResponse.json(
         { success: false, error: { message: "Unauthorized" } },

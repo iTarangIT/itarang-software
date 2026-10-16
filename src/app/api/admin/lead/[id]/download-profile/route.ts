@@ -2,7 +2,7 @@ export const runtime = "nodejs";
 
 import { NextRequest, NextResponse } from "next/server";
 
-import { requireAdminAppUser } from "@/lib/kyc/admin-workflow";
+import { requireAdminAppUserForLead } from "@/lib/kyc/admin-workflow";
 import { buildProfileZip, loadProfileLead } from "@/lib/lead/profile-export";
 import { canOpenStoredFile, logFileOpen } from "@/lib/storage/fileAuthz";
 
@@ -28,7 +28,7 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const admin = await requireAdminAppUser();
+    const admin = await requireAdminAppUserForLead((await params).id);
     if (!admin) {
       return NextResponse.json(
         { success: false, error: { message: "Unauthorized" } },
