@@ -9,6 +9,7 @@ import { InventoryLifecycleError } from "@/lib/inventory/lifecycle";
 import { DispatchError, confirmDispatch } from "@/lib/leads/confirm-dispatch";
 // ID 183 (16 Oct): dispatch is the dealer's alone — never iTarang, not even the house login.
 import { dealerMayDispatch } from "@/lib/auth/requireLeadAccess";
+import { stampDealerAction } from "@/lib/leads/actForDealerGuard";
 import { notifyHouseOfDealerStep } from "@/lib/leads/pushNotices";
 
 // BRD V2 §3.3 — Step 5 OTP validation + dispatch confirmation.
@@ -48,6 +49,8 @@ export async function POST(
         { status: 403 },
       );
     }
+    // ID 183: the dealer acted — the 1-working-day idle rule reads this; clears any iTarang note.
+    await stampDealerAction(leadId, user.id);
 
     const result = await confirmDispatch({
       leadId,

@@ -1,7 +1,9 @@
 // ID 183 — the database half of "iTarang acts for the dealer". The rules are
 // pure (./actForDealer); this file gathers the facts and does the writes:
 //
-//   gateLeadActor()     who is acting (dealer / house login / Admin-Sales Head),
+//   requireLeadWriter() the one write check for the KYC routes (wraps the gate).
+//   gateLeadActor()     who is acting (dealer / house login, read only /
+//                       Admin-Sales Head),
 //                       may they, is the file being worked by someone else,
 //                       did the dealer change it since — and takes the
 //                       30-minute note (iTarang) or stamps the dealer's action
@@ -17,6 +19,7 @@
 // dealer step still works, the note is skipped (logged) and the 1-working-day
 // rule falls back to leads.updated_at.
 
+import { NextResponse } from "next/server";
 import { and, desc, eq, sql } from "drizzle-orm";
 
 import { db } from "@/lib/db";
@@ -32,11 +35,10 @@ import {
   actForDealerPermission,
   beingWorkedMessage,
   DEALER_CHANGED_MESSAGE,
-  DEALER_ONLY_MESSAGE,
   dealerChangedSince,
   doneByLine,
-  isActForDealerRole,
   isLockLive,
+  leadActorVerdict,
   lockVerdict,
   parseSeenHeader,
   SEEN_DEALER_ACTION_HEADER,
@@ -221,13 +223,14 @@ async function takeLock(leadId: string, user: ActorUser, name: string): Promise<
 
 /**
  * Who is acting on this file, and may they take this step now?
+ * (leadActorVerdict holds the rule.)
  *  - the file's own dealer: always (writes stamp + clear the iTarang note);
- *  - an iTarang house login on a file the house pushed out: yes, except the
- *    dealer-only (dispatch) steps; writes take the note;
+ *  - an iTarang house login on a file the house pushed out: reads only
+ *    (16 Oct, ID 183: the dealer is the only owner);
  *  - Admin / Sales Head: reads always; writes need the permission (house
  *    pushed, dealer asked, or 1 working day idle), no newer dealer action
  *    than the panel saw, and the note; never the dispatch steps;
- *  - anyone else: refused.
+ *  - anyone else (CEO, other back-office roles): refused.
  */
 export async function gateLeadActor(
   user: ActorUser,
@@ -235,29 +238,21 @@ export async function gateLeadActor(
   opts: GateOptions = {},
 ): Promise<GateResult> {
   const role = (user.role ?? "").toLowerCase();
-  let kind: LeadActorKind;
-  let housePushed = false;
+  const code = role === "dealer" ? await resolveDealerCode(user) : null;
+  const ownsFile = role === "dealer" && dealerOwnsLead(lead.dealer_id, code);
+  const houseOnPushedFile = role === "dealer" && !ownsFile && (await houseMayActOnLead(code, lead.id));
+  const verdict = leadActorVerdict({ role, ownsFile, houseOnPushedFile, write: !!opts.write, dispatch: !!opts.dispatch });
+  if (!verdict.ok) return { ok: false, status: verdict.status, message: verdict.message };
+  const kind: LeadActorKind = verdict.kind;
 
-  if (role === "dealer") {
-    const code = await resolveDealerCode(user);
-    if (dealerOwnsLead(lead.dealer_id, code)) {
-      if (opts.write) await stampDealerAction(lead.id, user.id);
-      return {
-        ok: true,
-        actor: { kind: "dealer", userId: user.id, userName: user.name ?? "", role, leadId: lead.id, leadDealerId: lead.dealer_id, housePushed: false },
-      };
-    }
-    if (!(await houseMayActOnLead(code, lead.id))) return { ok: false, status: 403, message: "Access denied" };
-    if (opts.dispatch) return { ok: false, status: 403, message: DEALER_ONLY_MESSAGE };
-    kind = "house";
-    housePushed = true;
-  } else if (isActForDealerRole(role)) {
-    if (opts.dispatch) return { ok: false, status: 403, message: DEALER_ONLY_MESSAGE };
-    kind = "itarang";
-    housePushed = await isHousePushedFile(lead.id);
-  } else {
-    return { ok: false, status: 403, message: "Only Admin or Sales Head can act for the dealer on this file." };
+  if (kind === "dealer") {
+    if (opts.write) await stampDealerAction(lead.id, user.id);
+    return {
+      ok: true,
+      actor: { kind: "dealer", userId: user.id, userName: user.name ?? "", role, leadId: lead.id, leadDealerId: lead.dealer_id, housePushed: false },
+    };
   }
+  const housePushed = kind === "house" ? true : await isHousePushedFile(lead.id);
 
   const name = await userName(user);
   const actor: LeadActor = { kind, userId: user.id, userName: name, role, leadId: lead.id, leadDealerId: lead.dealer_id, housePushed };
@@ -424,4 +419,47 @@ export async function readActState(leadId: string, user: ActorUser): Promise<Act
 export async function leadForGate(leadId: string): Promise<{ id: string; dealer_id: string | null } | null> {
   const [l] = await db.select({ id: leads.id, dealer_id: leads.dealer_id }).from(leads).where(eq(leads.id, leadId)).limit(1);
   return l ?? null;
+}
+
+export type LeadWriterResult =
+  | { ok: true; actor: LeadActor; lead: { id: string; dealer_id: string | null } }
+  | { ok: false; status: number; message: string; response: NextResponse };
+
+/**
+ * ID 183 (16 Oct) — THE check for every step that changes a customer file
+ * (the KYC / co-borrower write routes; the lender journey calls
+ * gateLeadActor(user, lead, { write: true }) directly, which this wraps).
+ * Call it after requireLeadAccess(leadId), with that user:
+ *  - the file's own dealer → allowed; stamps the dealer's action and clears
+ *    any iTarang "being worked by" note (dealer wins; the 1-working-day idle
+ *    rule reads this stamp);
+ *  - Admin / Sales Head → the act-for-dealer checks (permission, the
+ *    30-minute note, dealer-changed-since) — the route then calls
+ *    recordActorStep() for the "Done by" record and the dealer notice;
+ *  - everyone else (CEO, other back-office roles, the house login on a file
+ *    it pushed to a dealer) → refused. Reads are not affected.
+ * `response` is the standard { success: false, error: { message } } shape.
+ */
+export async function requireLeadWriter(
+  leadId: string,
+  req: Request | null,
+  user: ActorUser,
+  opts: { dispatch?: boolean; adminReview?: boolean; lead?: { id: string; dealer_id: string | null } } = {},
+): Promise<LeadWriterResult> {
+  const refuse = (status: number, message: string): LeadWriterResult => ({
+    ok: false,
+    status,
+    message,
+    response: NextResponse.json({ success: false, error: { message } }, { status }),
+  });
+  const lead = opts.lead ?? (await leadForGate(leadId));
+  if (!lead) return refuse(403, "Forbidden");
+  const gate = await gateLeadActor(user, lead, {
+    write: true,
+    dispatch: opts.dispatch,
+    adminReview: opts.adminReview,
+    seenDealerActionAt: req ? seenFromRequest(req) : undefined,
+  });
+  if (!gate.ok) return refuse(gate.status, gate.message);
+  return { ok: true, actor: gate.actor, lead };
 }

@@ -6,6 +6,7 @@ import { db } from '@/lib/db';
 import { kycVerifications } from '@/lib/db/schema';
 import { createWorkflowId } from '@/lib/kyc/admin-workflow';
 import { requireLeadAccess } from '@/lib/auth/requireLeadAccess';
+import { recordActorStep, requireLeadWriter } from '@/lib/leads/actForDealerGuard';
 
 const ALLOWED_TYPES: OcrDocType[] = ['PAN', 'AADHAAR', 'DRIVING_LICENSE', 'VOTERID'];
 
@@ -30,6 +31,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         // ID 119: signed in AND this lead is the caller's (a dealer's own lead, or back office).
         const leadGate = await requireLeadAccess(leadId);
         if (!leadGate.ok) return leadGate.response;
+        // ID 183: a change to the file — its own dealer, or Admin / Sales Head acting for the dealer.
+        const writer = await requireLeadWriter(leadId, req, leadGate.user);
+        if (!writer.ok) return writer.response;
 
         const formData = await req.formData();
         const file = formData.get('file') as File | null;
@@ -76,6 +80,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             console.error('[kyc/ocr] kyc_verifications insert failed:', persistErr);
         }
 
+        await recordActorStep(writer.actor, `read ${document_type} (${side}) by OCR`);
         return NextResponse.json({
             success: decentroRes.responseStatus === 'SUCCESS',
             responseStatus: decentroRes.responseStatus,

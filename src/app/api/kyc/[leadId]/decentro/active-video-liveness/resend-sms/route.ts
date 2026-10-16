@@ -6,6 +6,7 @@ import { kycVerifications, leads } from '@/lib/db/schema';
 import { sendKycSms } from '@/lib/sms';
 import { createClient } from '@/lib/supabase/server';
 import { requireLeadAccess } from '@/lib/auth/requireLeadAccess';
+import { recordActorStep, requireLeadWriter } from '@/lib/leads/actForDealerGuard';
 
 function buildSmsMessage(url: string): string {
     return `Complete Video KYC for your Itarang loan: ${url} (valid 24h)`;
@@ -26,6 +27,9 @@ export async function POST(
         // ID 119: signed in AND this lead is the caller's (a dealer's own lead, or back office).
         const leadGate = await requireLeadAccess(leadId);
         if (!leadGate.ok) return leadGate.response;
+        // ID 183: a change to the file — its own dealer, or Admin / Sales Head acting for the dealer.
+        const writer = await requireLeadWriter(leadId, req, leadGate.user);
+        if (!writer.ok) return writer.response;
 
         const [row] = await db
             .select()
@@ -121,6 +125,7 @@ export async function POST(
             })
             .where(eq(kycVerifications.id, row.id));
 
+        await recordActorStep(writer.actor, 'resent the video KYC link to the customer');
         return NextResponse.json({
             success: sms.success,
             data: {

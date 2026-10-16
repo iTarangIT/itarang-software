@@ -312,7 +312,9 @@ async function step1AccessDenied(
         await stampDealerAction(leadId, user.id);
         return null;
     }
-    if (row.dealerId && row.uploaderId !== user.id) {
+    // 16 Oct (ID 183): the creator too — the house login that created a file
+    // and pushed it to a dealer only sees it now (the gate refuses).
+    if (row.dealerId) {
         const gate = await gateLeadActor(user, { id: leadId, dealer_id: row.dealerId }, { write: true });
         if (!gate.ok) return errorResponse(gate.message, gate.status);
     }

@@ -9,6 +9,7 @@ import { notifyDelivered } from "@/lib/notifications";
 import { sendKycSms } from "@/lib/sms";
 // ID 183 (16 Oct): dispatch is the dealer's alone — never iTarang, not even the house login.
 import { dealerMayDispatch } from "@/lib/auth/requireLeadAccess";
+import { stampDealerAction } from "@/lib/leads/actForDealerGuard";
 
 // BRD V2 §3.5 — manual "Mark Delivered" endpoint.
 // Flips a lead that's currently in 'dispatched' state through to 'sold'.
@@ -36,6 +37,8 @@ export async function POST(
         { status: 403 },
       );
     }
+    // ID 183: the dealer acted — the 1-working-day idle rule reads this; clears any iTarang note.
+    await stampDealerAction(leadId, user.id);
 
     if (lead.kyc_status === "sold") {
       return NextResponse.json({

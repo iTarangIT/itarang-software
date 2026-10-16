@@ -240,7 +240,10 @@ export type FileUpload = {
     uploaderId: string | null;
     /** users.dealer_id of the uploader, when there is one. */
     uploaderDealerCode: string | null;
-    /** 'portal' | 'public_link' | 'whatsapp'; null on rows from before E-349. */
+    /**
+     * 'portal' | 'public_link' | 'whatsapp' | 'act_for_dealer' (ID 183);
+     * null on rows from before E-349.
+     */
     source: string | null;
 };
 
@@ -255,6 +258,9 @@ export function dealerUploadedFile(viewer: FileViewer, uploads: readonly FileUpl
     if (!uploads || uploads.length === 0) return true;
     return uploads.some((u) => {
         if (!u.uploaderId && !u.source) return true;
+        // ID 183: Admin / Sales Head uploaded it ACTING FOR this dealer — the
+        // dealer's own upload. (Called only on the dealer's own customer.)
+        if (u.source === "act_for_dealer") return true;
         if (!u.uploaderId) return false;
         return u.uploaderId === viewer.id || sameDealer(viewer, u.uploaderDealerCode);
     });

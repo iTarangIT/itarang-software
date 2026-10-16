@@ -6,12 +6,16 @@ import {
   actForDealerPermission,
   consentOtpResendBlocked,
   DEALER_ACTIVE_MESSAGE,
+  DEALER_ONLY_MESSAGE,
   dealerChangedSince,
   doneByLine,
+  HOUSE_READ_ONLY_MESSAGE,
   isActForDealerRole,
   isLockLive,
+  leadActorVerdict,
   lockVerdict,
   parseSeenHeader,
+  WRITE_REFUSED_MESSAGE,
 } from "../actForDealer";
 
 const NONE = new Set<string>();
@@ -123,5 +127,45 @@ describe("doneByLine", () => {
   it("names the person and the dealer", () => {
     expect(doneByLine("Anirudh", "Acme Motors")).toBe("Done by Anirudh for Acme Motors");
     expect(doneByLine(null, "")).toBe("Done by iTarang for the dealer");
+  });
+});
+
+describe("leadActorVerdict — who may write on a customer file (16 Oct)", () => {
+  const base = { ownsFile: false, houseOnPushedFile: false, write: true, dispatch: false };
+
+  it("the file's own dealer writes, dispatch included", () => {
+    expect(leadActorVerdict({ ...base, role: "dealer", ownsFile: true })).toEqual({ ok: true, kind: "dealer" });
+    expect(leadActorVerdict({ ...base, role: "dealer", ownsFile: true, dispatch: true })).toEqual({ ok: true, kind: "dealer" });
+  });
+
+  it("the house login only sees a file it pushed to another dealer", () => {
+    const house = { ...base, role: "dealer", houseOnPushedFile: true };
+    expect(leadActorVerdict({ ...house, write: false })).toEqual({ ok: true, kind: "house" });
+    expect(leadActorVerdict(house)).toEqual({ ok: false, status: 403, message: HOUSE_READ_ONLY_MESSAGE });
+    expect(leadActorVerdict({ ...house, dispatch: true })).toEqual({ ok: false, status: 403, message: DEALER_ONLY_MESSAGE });
+  });
+
+  it("the house still fully works a file that is with the house (it owns it)", () => {
+    expect(leadActorVerdict({ ...base, role: "dealer", ownsFile: true, houseOnPushedFile: false })).toEqual({ ok: true, kind: "dealer" });
+  });
+
+  it("another dealer is refused", () => {
+    expect(leadActorVerdict({ ...base, role: "dealer" }).ok).toBe(false);
+    expect(leadActorVerdict({ ...base, role: "dealer", write: false }).ok).toBe(false);
+  });
+
+  it("Admin and Sales Head go through act-for-dealer, never dispatch", () => {
+    for (const role of ["admin", "sales_head", "ADMIN"]) {
+      expect(leadActorVerdict({ ...base, role })).toEqual({ ok: true, kind: "itarang" });
+      expect(leadActorVerdict({ ...base, role, dispatch: true })).toEqual({ ok: false, status: 403, message: DEALER_ONLY_MESSAGE });
+    }
+  });
+
+  it("the CEO, other back-office roles and placeholders are refused for writes", () => {
+    for (const role of ["ceo", "business_head", "sales_manager", "sales_executive", "finance_controller", "partner", "user", "", null]) {
+      expect(leadActorVerdict({ ...base, role }), String(role)).toEqual({ ok: false, status: 403, message: WRITE_REFUSED_MESSAGE });
+      // Even if the caller "owns" the file in some other sense.
+      expect(leadActorVerdict({ ...base, role, ownsFile: true }).ok, String(role)).toBe(false);
+    }
   });
 });

@@ -8,6 +8,7 @@ import { leads, otpConfirmations } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 // ID 183 (16 Oct): dispatch is the dealer's alone — never iTarang, not even the house login.
 import { dealerMayDispatch } from "@/lib/auth/requireLeadAccess";
+import { stampDealerAction } from "@/lib/leads/actForDealerGuard";
 
 // BRD V2 §3.3 — Step 5 OTP verification (non-consuming pre-check).
 // Confirms the 6-digit OTP the customer read out matches, so the UI can enable
@@ -49,6 +50,8 @@ export async function POST(
         { status: 403 },
       );
     }
+    // ID 183: the dealer acted — the 1-working-day idle rule reads this; clears any iTarang note.
+    await stampDealerAction(leadId, user.id);
     if (lead.kyc_status !== "loan_sanctioned") {
       return NextResponse.json(
         { success: false, error: { message: `Lead not awaiting dispatch (kyc_status=${lead.kyc_status})` } },

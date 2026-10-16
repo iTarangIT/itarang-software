@@ -9,7 +9,7 @@ import {
     isDealerKycEditsLocked,
 } from '@/lib/kyc/admin-workflow';
 import { requireLeadAccess } from "@/lib/auth/requireLeadAccess";
-import { gateLeadActor, leadForGate, recordActorStep, seenFromRequest } from "@/lib/leads/actForDealerGuard";
+import { recordActorStep, requireLeadWriter } from "@/lib/leads/actForDealerGuard";
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
     // ID 118: signed in, and this lead is the caller's to touch (a dealer's own lead, or back office).
@@ -17,12 +17,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
     if (!leadGate.ok) return leadGate.response;
     // ID 183: the dealer, or iTarang acting for the dealer (permission,
     // "being worked by", dealer wins). Every document records who uploaded it.
-    const gateLead = await leadForGate((await params).leadId);
-    if (!gateLead) return NextResponse.json({ success: false, error: { message: 'Forbidden' } }, { status: 403 });
-    const gate = await gateLeadActor(leadGate.user, gateLead, { write: true, seenDealerActionAt: seenFromRequest(req) });
-    if (!gate.ok) {
-        return NextResponse.json({ success: false, error: { message: gate.message } }, { status: gate.status });
-    }
+    const gate = await requireLeadWriter((await params).leadId, req, leadGate.user);
+    if (!gate.ok) return gate.response;
     try {
         const { leadId } = await params;
 
@@ -124,7 +120,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             });
         }
 
-        await recordActorStep(gate.actor, `uploaded ${docType.replace(/_/g, ' ')}${docFor === 'borrower' ? ' (co-borrower)' : ''}`);
+        // file_url on the record: the dealer opens a file iTarang uploaded for
+        // him (ID 166 rule, fileAuthz — kyc_documents has no upload_source).
+        await recordActorStep(gate.actor, `uploaded ${docType.replace(/_/g, ' ')}${docFor === 'borrower' ? ' (co-borrower)' : ''}`, { file_url: fileUrl });
         return NextResponse.json({
             success: true,
             fileUrl,
