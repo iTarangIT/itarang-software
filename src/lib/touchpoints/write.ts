@@ -36,6 +36,8 @@ import type { Interest } from "@/lib/leads/autoProgress";
 import { planOutcome, type TouchpointOutcome } from "@/lib/leads/outcomeRule";
 import { setInterestLevel } from "@/lib/leads/interestLevel";
 import { cancelPendingWonUndo } from "@/lib/leads/wonUndoCancel";
+import { scheduleOverallSummaryRefresh } from "@/lib/leads/overallSummary";
+import { isSummaryCallTouchpoint } from "@/lib/leads/overallSummaryRules";
 
 /**
  * A status move the S3 rules refuse (statusRules.ts). Carries an HTTP status so
@@ -475,5 +477,14 @@ export async function writeTouchpoint(
     };
   };
 
-  return opts?.tx ? run(opts.tx) : db.transaction(run);
+  const result = await (opts?.tx ? run(opts.tx) : db.transaction(run));
+
+  // ID 118 option B: after a call, the server refreshes the lead's Overall
+  // Summary from the call transcripts — in the background, so this write
+  // never waits on (or fails because of) the model. It no-ops when no
+  // transcript is newer than the last summary (a NeoDove or manual call).
+  if (isSummaryCallTouchpoint(input.touchpointType)) {
+    scheduleOverallSummaryRefresh(input.dealerLeadId);
+  }
+  return result;
 }
