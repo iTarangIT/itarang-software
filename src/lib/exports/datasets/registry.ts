@@ -28,8 +28,8 @@ import { getTimeLimits } from "@/lib/timeLimits/store";
 import { doorLabel, originLabel } from "@/lib/leads/leadSourceVocab";
 import { onboardingStall, STALL_LABEL } from "@/lib/onboarding/stall";
 import { connectedCall, engagedCall, engagedState, humanCall } from "@/lib/reports/metricDefinitions";
-import { TARGET_METRIC_KEYS, TARGET_STATUSES } from "@/lib/targets/rules";
-import { listTargets } from "@/lib/targets/service";
+import { TARGET_METRIC_KEYS, TARGET_STATUS_LABEL, TARGET_STATUSES } from "@/lib/targets/rules";
+import { listTargets, targetViewerFor } from "@/lib/targets/service";
 
 import { DOWNLOAD_ROW_CAP, initialsOf, TEAM_ROLES, type DatasetInfo, type DatasetSheet } from "./types";
 import { onboardingClockSql } from "@/lib/onboarding/clock";
@@ -1015,6 +1015,7 @@ const visits: Dataset = {
                 { key: "location_pin", header: "Location pin", meaning: "Latitude, longitude captured at check-in. Blank = none captured.", width: 24 },
                 { key: "transferred_on", header: "Transferred on", meaning: "When the lead was last handed to an ASM.", kind: "datetime" },
                 { key: "transferred_by", header: "Transferred by", meaning: "Who handed it over.", width: 22 },
+                { key: "owner_at_transfer", header: "Lead owner at transfer", meaning: "ID 179: who owned the lead when it was handed over — the person 'Hot to field' is credited to (Transferred by, on old rows that did not record it).", width: 22 },
                 { key: "days_transfer_to_visit", header: "Days from transfer to visit", meaning: "Calendar days from that transfer to this visit. Blank when the visit is not done or came before the transfer.", kind: "number" },
             ],
         },
@@ -1036,15 +1037,16 @@ const visits: Dataset = {
                    CASE WHEN jsonb_typeof(v.photos) = 'array' THEN jsonb_array_length(v.photos) ELSE 0 END AS photos,
                    CASE WHEN v.gps_check_in_lat IS NOT NULL AND v.gps_check_in_lng IS NOT NULL
                         THEN v.gps_check_in_lat::text || ', ' || v.gps_check_in_lng::text END AS location_pin,
-                   tr.performed_at AS transferred_on, tr.name AS transferred_by,
+                   tr.performed_at AS transferred_on, tr.name AS transferred_by, tr.owner_name AS owner_at_transfer,
                    CASE WHEN v.actual_visit_date >= (tr.performed_at AT TIME ZONE 'Asia/Kolkata')::date
                         THEN v.actual_visit_date - (tr.performed_at AT TIME ZONE 'Asia/Kolkata')::date END AS days_transfer_to_visit
               FROM lead_visits v
               LEFT JOIN dealer_leads dl ON dl.id = v.dealer_lead_id
               LEFT JOIN users u ON u.id::text = v.asm_id
               LEFT JOIN LATERAL (
-                  SELECT tt.performed_at, tu.name FROM lead_touchpoints tt
+                  SELECT tt.performed_at, tu.name, COALESCE(fo.name, tu.name) AS owner_name FROM lead_touchpoints tt
                     LEFT JOIN users tu ON tu.id::text = tt.performed_by
+                    LEFT JOIN users fo ON fo.id::text = tt.from_owner_id
                    WHERE tt.dealer_lead_id = v.dealer_lead_id AND tt.touchpoint_type = 'asm_transfer'
                    ORDER BY tt.performed_at DESC LIMIT 1) tr ON TRUE
              WHERE ${visitsWhere(ctx)}
@@ -1152,9 +1154,9 @@ const quotes: Dataset = {
                 { key: "list_total", header: "List price total (₹)", meaning: "Quantity × list price over the lines, at the list prices frozen on the quote. Blank on quotes raised before list prices existed.", kind: "money" },
                 { key: "discount", header: "Discount on list (₹)", meaning: "List price total minus the quoted total, over the lines that carry a list price.", kind: "money" },
                 { key: "lowest_vs_oem", header: "Lowest line vs OEM price (₹)", meaning: "The smallest gap between a line's quoted unit price and its OEM price; negative = quoted below OEM price.", kind: "money" },
-                { key: "onboarding_fee", header: "Onboarding fee (₹)", meaning: "Deal card (ID 172): the onboarding fee agreed on this quote; 0 = waived. Prints on the dealer's quotation.", kind: "money" },
+                { key: "onboarding_fee", header: "Onboarding fee (₹)", meaning: "Deal card (ID 172): the onboarding fee agreed on this quote; 0 = waived; blank = not asked (dealer already onboarded, ID 186, or a quote from before the deal card). Prints on the dealer's quotation.", kind: "money" },
                 { key: "fee_waived_reason", header: "Why waived", meaning: "Deal card: why the onboarding fee is 0.", width: 28 },
-                { key: "expected_batteries_per_month", header: "Expected batteries per month", meaning: "Deal card: batteries the dealer said they will buy from us a month after the first order. Internal.", kind: "number" },
+                { key: "expected_batteries_per_month", header: "Expected batteries per month", meaning: "Deal card: batteries the dealer said they will buy from us a month after the first order. Internal. Blank = not asked (dealer already onboarded).", kind: "number" },
                 { key: "expected_finance_files_per_month", header: "Expected finance files per month", meaning: "Deal card: of the dealer's monthly customers, how many buy on a loan. Internal; replaced Customer finance Yes / No.", kind: "number" },
                 { key: "fee_invoiced", header: "Fee invoiced (₹)", meaning: "Onboarding fee actually invoiced to this dealer (before GST): invoice lines mapped 'Onboarding fee' in Invoice Ledger › Item mapping. Same for every version of the lead.", kind: "money" },
                 { key: "batteries_60d_after_won", header: "Batteries ordered in the 60 days after Won", meaning: "Battery units invoiced to this dealer in the 60 days from the day the lead was marked Won (invoice lines, HSN 8507). Blank when the lead was never Won.", kind: "number" },
@@ -1271,7 +1273,7 @@ const targets: Dataset = {
     commonFilters: ["team", "person"],
     filters: [
         { key: "month", label: "Month (YYYY-MM; blank = this month)", type: "text" },
-        { key: "status", label: "Target status", type: "select", options: TARGET_STATUSES.map((s) => ({ value: s, label: s.replace(/_/g, " ") })) },
+        { key: "status", label: "Target status", type: "select", options: TARGET_STATUSES.filter((s) => s !== "rejected").map((s) => ({ value: s, label: TARGET_STATUS_LABEL[s] })) },
     ],
     sheets: [
         {
@@ -1281,15 +1283,26 @@ const targets: Dataset = {
                 { key: "user_name", header: "Person", meaning: "Whose target it is.", width: 22 },
                 { key: "user_role", header: "Role", meaning: "That person's role." },
                 { key: "metric_label", header: "Metric", meaning: "What is being targeted.", width: 30 },
-                { key: "ceo_target", header: "CEO target", meaning: "The target the CEO set.", kind: "number" },
-                { key: "sales_head_target", header: "Sales Head target", meaning: "The Sales Head's own number; blank = the CEO target went to the person.", kind: "number" },
-                { key: "admin_addon", header: "Admin add-on", meaning: "Legacy: what Admin added on top of the CEO target (no longer edited).", kind: "number" },
-                { key: "final_target", header: "Final target", meaning: "The Sales Head target when entered, else the CEO target (plus any legacy add-on).", kind: "number" },
-                { key: "status", header: "Status", meaning: "Draft, with the Sales Head for review, sent, accepted or rejected." },
-                { key: "pushed_at", header: "Pushed on", meaning: "When the target was pushed to the person.", kind: "datetime" },
+                { key: "ceo_target", header: "CEO target", meaning: "The CEO target in force (the version the person was sent).", kind: "number" },
+                { key: "stretch", header: "Stretch", meaning: "ID 189: what the Sales Head added on top of the CEO target (never below 0).", kind: "number" },
+                { key: "final_target", header: "Final target", meaning: "CEO target + stretch, the version in force.", kind: "number" },
+                { key: "stretch_note", header: "Stretch note", meaning: "The Sales Head's optional note on the stretch.", width: 30 },
+                { key: "version", header: "Version", meaning: "The version in force (0 = never posted by the CEO).", kind: "number" },
+                { key: "posted_at", header: "Posted on", meaning: "When the CEO last posted it to the Sales Head.", kind: "datetime" },
+                { key: "waiting_push", header: "Change waiting to push", meaning: "Yes = a posted change (or first post) the Sales Head has not pushed yet; the numbers above stay in force until then." },
+                { key: "status", header: "Status", meaning: "Draft (CEO only), posted (with the Sales Head), sent, accepted; 'rejected' only on old rows." },
+                { key: "pushed_at", header: "Pushed on", meaning: "When the latest version was pushed to the person (the date it arrived).", kind: "datetime" },
+                { key: "first_pushed_at", header: "First pushed on", meaning: "The first push: the 48-hour acceptance clock runs from here.", kind: "datetime" },
                 { key: "accepted_at", header: "Accepted on", meaning: "When the person accepted it.", kind: "datetime" },
+                { key: "accept_remark", header: "Accept remark", meaning: "The person's optional remark on accepting.", width: 30 },
+                { key: "correction_requested_at", header: "Correction asked on", meaning: "When the person last asked for a correction.", kind: "datetime" },
+                { key: "correction_remark", header: "Correction remark", meaning: "What the person asked to correct.", width: 30 },
+                { key: "reject_comment", header: "Reject comment (old flow)", meaning: "Only on targets rejected before 16 Oct 2026.", width: 30 },
+                { key: "unit", header: "Unit", meaning: "A custom metric's unit; blank for built-in metrics." },
+                { key: "is_custom", header: "Custom metric", meaning: "Yes = progress is typed in by hand." },
                 { key: "mtd_target", header: "Target to date", meaning: "The share of the target due by today, by working days.", kind: "number" },
-                { key: "actual", header: "Actual to date", meaning: "Month-to-date actual, counted the same way as the Sales dashboard. Blank = not measurable yet.", kind: "number" },
+                { key: "actual", header: "Actual to date", meaning: "Month-to-date actual, counted the same way as the Sales dashboard. Blank = not measured (see the next column).", kind: "number" },
+                { key: "not_measured_reason", header: "Why not measured", meaning: "Why the actual is blank, in words.", width: 30 },
                 { key: "pct_of_mtd", header: "% of target to date", meaning: "Actual ÷ target to date.", kind: "number" },
                 { key: "remaining", header: "Remaining", meaning: "Final target minus actual.", kind: "number" },
                 { key: "required_per_day", header: "Needed per remaining day", meaning: "Remaining ÷ working days left in the month.", kind: "number" },
@@ -1306,6 +1319,8 @@ const targets: Dataset = {
                AND (t.metric IN (${sql.join(TARGET_METRIC_KEYS.map((m) => sql`${m}`), sql`, `)})
                     OR (left(t.metric, 7) = 'custom_' AND (to_jsonb(t) ->> 'custom_label') IS NOT NULL))
                ${ctx.ownOnly ? sql`AND t.user_id = ${ctx.user.id}` : sql``}
+               -- ID 189: the CEO's unposted drafts are his alone.
+               ${targetViewerFor(ctx.user.role) === "ceo" && !ctx.ownOnly ? sql`` : sql`AND t.status <> 'draft'`}
                ${status ? sql`AND t.status = ${status}` : sql``}
                ${sql.join(commonConds(ctx, { person: sql`t.user_id` }).map((c) => sql`AND ${c}`), sql` `)}
         `);
@@ -1315,7 +1330,13 @@ const targets: Dataset = {
         const month = await targetMonth(ctx.params);
         const status = ctx.params.get("status");
         const role = teamRole(ctx);
-        const list = (await listTargets({ month, userId: ctx.ownOnly ? ctx.user.id : (personParam(ctx) ?? undefined) })).filter(
+        const list = (
+            await listTargets({
+                month,
+                userId: ctx.ownOnly ? ctx.user.id : (personParam(ctx) ?? undefined),
+                viewer: ctx.ownOnly ? "member" : targetViewerFor(ctx.user.role),
+            })
+        ).filter(
             (t) => !role || t.user_role === role,
         );
         return [
@@ -1323,7 +1344,14 @@ const targets: Dataset = {
                 ...this.sheets[0],
                 rows: list
                     .filter((t) => !status || t.status === status)
-                    .map(({ progress, ...t }) => ({ ...t, ...progress, user_role: (t.user_role ?? "").replace(/_/g, " ") || null })),
+                    // ceo_progress rides along unused: only the columns above are written.
+                    .map(({ progress, ...t }) => ({
+                        ...t,
+                        ...progress,
+                        waiting_push: t.waiting_push ? "Yes" : "",
+                        is_custom: t.is_custom ? "Yes" : "",
+                        user_role: (t.user_role ?? "").replace(/_/g, " ") || null,
+                    })),
             },
         ];
     },
