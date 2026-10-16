@@ -26,7 +26,7 @@ import type { TargetRow } from "@/lib/targets/service";
 type Data = {
     month: string;
     rows: TargetRow[];
-    context: { working_days_total: number; working_days_elapsed: number };
+    context: { working_days_total: number; working_days_elapsed: number; actuals_up_to?: string | null };
     people: Array<{ user_id: string; name: string | null; role: string | null }>;
     can: {
         add_person: boolean;
@@ -139,6 +139,14 @@ export function TargetsView() {
                     <p className="pb-1 text-xs text-ink-muted">
                         {data.context.working_days_elapsed} of {data.context.working_days_total} working days
                         elapsed
+                        {data.context.actuals_up_to && (
+                            <span
+                                title="Revenue, batteries and visits come from the Sales dashboard's per-person figures, up to and including this day. The daily Sales email shows the same figures up to the day it covers (yesterday), so an invoice read today appears here first."
+                            >
+                                {" "}
+                                · actuals up to {data.context.actuals_up_to} (live)
+                            </span>
+                        )}
                     </p>
                 )}
                 {can?.add_person && (
