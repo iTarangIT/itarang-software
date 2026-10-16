@@ -1,12 +1,20 @@
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { inventory } from "@/lib/db/schema";
+import { inventory, inventoryUploadReports } from "@/lib/db/schema";
 import { requireAuth } from "@/lib/auth-utils";
 import { successResponse, withErrorHandler, generateId } from "@/lib/api-utils";
 import { priceInclusiveGst } from "@/lib/inventory/pricing";
+import {
+  ownDealerCodeOf,
+  requireStockDealerAccount,
+  requireStockUploader,
+} from "@/lib/inventory/stockUploadGuard";
+import { stockUploadMode } from "@/lib/inventory/stockUploadRules";
 
+// ID 173: dealerId is optional — a dealer login always uploads to its own
+// account (taken from the login); Admin, Inventory Manager and partner pick it.
 const bodySchema = z.object({
-  dealerId: z.string().min(1, "dealerId is required"),
+  dealerId: z.string().trim().optional().nullable(),
   assetType: z.enum(["battery", "charger", "paraphernalia"]),
   rows: z.array(z.record(z.string(), z.any())).min(1, "rows are required"),
 });
@@ -40,11 +48,33 @@ function getPgCode(error: unknown): string | null {
   return null;
 }
 
-export const POST = withErrorHandler(async (req: Request) => {
+/**
+ * ID 173 — what the upload page should offer the caller: a dealer picker
+ * ('any'), its own account only ('own', with the account), or a refusal
+ * ('none').
+ */
+export const GET = withErrorHandler(async () => {
   const user = await requireAuth();
+  const mode = stockUploadMode(user.role);
+  if (mode !== "own") return successResponse({ mode, ownDealer: null });
+  const code = await ownDealerCodeOf(user);
+  if (!code) return successResponse({ mode, ownDealer: null });
+  try {
+    const dealer = await requireStockDealerAccount(code);
+    return successResponse({ mode, ownDealer: dealer });
+  } catch {
+    return successResponse({ mode, ownDealer: { id: code, name: null } });
+  }
+});
 
+export const POST = withErrorHandler(async (req: Request) => {
   const body = bodySchema.parse(await req.json());
-  const { dealerId, assetType, rows } = body;
+  // ID 173: one rule for both stock uploads (stockUploadRules.ts). Refuses
+  // anyone but Admin / Inventory Manager / partner (any dealer) and a dealer
+  // (own account only); the account must exist, be active and have a login.
+  const { user, dealerId } = await requireStockUploader(body.dealerId);
+  await requireStockDealerAccount(dealerId);
+  const { assetType, rows } = body;
 
   const results = {
     uploadEventId: await generateId("UPL"),
@@ -216,6 +246,33 @@ export const POST = withErrorHandler(async (req: Request) => {
         });
       }
     }
+  }
+
+  // ID 173: one batch record per upload — who uploaded, to which dealer, how
+  // many rows went in. Same table Admin › Inventory › Upload reports reads.
+  try {
+    const skippedRowCount = new Set(results.errors.map((e) => e.row)).size;
+    await db.insert(inventoryUploadReports).values({
+      id: results.uploadEventId,
+      dealer_id: dealerId,
+      asset_type: assetType,
+      inventory_type: assetType,
+      upload_method: "json",
+      uploaded_by: user.id,
+      uploaded_at: new Date(),
+      total_rows: rows.length,
+      inserted_rows: results.imported,
+      skipped_rows: skippedRowCount,
+      rows_imported: results.imported,
+      rows_skipped: skippedRowCount,
+      errors_json: results.errors,
+      inserted_inventory_ids: results.insertedIds,
+      source: "inventory_page",
+      report_url: `/api/admin/inventory/upload-report/${results.uploadEventId}`,
+    });
+  } catch (reportError) {
+    // The stock is already in; a missing batch row must not undo the upload.
+    console.error("[inventory/bulk-upload] batch record failed:", reportError);
   }
 
   return successResponse({

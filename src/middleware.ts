@@ -674,6 +674,8 @@ export async function middleware(request: NextRequest) {
     // the NBFC directory; writes are still admin-gated by the API.
     "/admin/loan-products": ["admin", "ceo", "business_head", "sales_head"],
     "/admin/product-review": ["admin", "sales_head", "business_head", "ceo"],
+    // ID 174 decision 5: partner (Chirag) gets inventory. Who may ADD stock
+    // is narrower and enforced by the API (ID 173, stockUploadRules.ts).
     "/admin/inventory": [
       "admin",
       "ops_manager",
@@ -681,6 +683,7 @@ export async function middleware(request: NextRequest) {
       "inventory_manager",
       "ceo",
       "sales_head",
+      "partner",
     ],
     "/admin/product-master": [
       "admin",
@@ -689,6 +692,7 @@ export async function middleware(request: NextRequest) {
       "inventory_manager",
       "ceo",
       "sales_head",
+      "partner",
     ],
     // Battery-buyback admin pages (M06). Must be above the bare "/admin"
     // entry below — it admits business_head to buyback only, and the bare
