@@ -184,8 +184,8 @@ export const PATCH = withErrorHandler(async (req: Request, { params }: { params:
     // that has no dealer yet.
     const isOwner = lead.uploader_id === user.id;
     // ID 119: resolves a dealer login with no users.dealer_id via its onboarding code.
-    // 16 Oct (ID 183): the dealer is the only owner — the house login (often
-    // the creator) no longer edits a file it pushed to another dealer.
+    // 16 Oct evening (user): the house login keeps full access on a file it
+    // pushed to another dealer — dealerMayActOnLead says yes for it too.
     const isSameDealer = await dealerMayActOnLead(user, lead.dealer_id, id);
     if (!isSameDealer && !(isOwner && !lead.dealer_id)) {
         if (isOwner) return errorResponse(HOUSE_READ_ONLY_MESSAGE, 403);

@@ -118,7 +118,7 @@ describe("dealer lead routes resolve the dealer, never compare users.dealer_id r
     // 14 Oct added the leadId (house access); 16 Oct (ID 183) routes the lender
     // journey through gateLeadActor (dealer / house / Admin acting for the
     // dealer) and the dispatch steps through dealerMayDispatch (owner only).
-    const RESOLVED = /dealerMayActOnLead\(user, lead\.dealer_id(, [\w.]+)?\)|dealerMayDispatch\(user, lead\.dealer_id\)|gateLeadActor\(user, lead\b/;
+    const RESOLVED = /dealerMayActOnLead\(user, lead\.dealer_id(, [\w.]+)?\)|dealerMayDispatch\(user, lead\.dealer_id(, leadId)?\)|gateLeadActor\(user, lead\b/;
     it.each(ROUTES)("%s", (route) => {
         const src = code(route);
         expect(src).toMatch(RESOLVED);
@@ -126,7 +126,10 @@ describe("dealer lead routes resolve the dealer, never compare users.dealer_id r
     });
 });
 
-describe("ID 183: dispatch stays the dealer's alone", () => {
+// 16 Oct evening (user): the iTarang house login on a file it pushed out may
+// dispatch too (dealerMayDispatch with the lead id → houseMayActOnLead). What
+// stays pinned: no Admin / Sales Head acting for the dealer on these steps.
+describe("ID 183: dispatch is the file's dealer's (or the house's), never iTarang staff", () => {
     it.each([
         "lead/[id]/step-5/confirm-dispatch",
         "lead/[id]/step-5/product-selection",
@@ -136,9 +139,9 @@ describe("ID 183: dispatch stays the dealer's alone", () => {
         "lead/[id]/step-5-access",
         "lead/[id]/confirm-cash-sale",
         "lead/[id]/mark-delivered",
-    ])("%s is owner-only (no house, no iTarang)", (route) => {
+    ])("%s is the dealer's or the house's (no iTarang staff)", (route) => {
         const src = code(route);
-        expect(src).toMatch(/dealerMayDispatch\(user, lead\.dealer_id\)/);
+        expect(src).toMatch(/dealerMayDispatch\(user, lead\.dealer_id, leadId\)/);
         expect(src).not.toMatch(/dealerMayActOnLead|gateLeadActor/);
     });
 });
