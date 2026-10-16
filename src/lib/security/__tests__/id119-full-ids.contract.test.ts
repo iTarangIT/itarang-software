@@ -80,7 +80,7 @@ describe("no customer-KYC route sends the full Aadhaar", () => {
     });
 
     it("the DigiLocker poll checks the lead is the dealer's own", () => {
-        expect(code("leads/digilocker/status/[transactionId]")).toMatch(/dealerMayActOnLead\(user, lead\.dealer_id\)/);
+        expect(code("leads/digilocker/status/[transactionId]")).toMatch(/dealerMayActOnLead\(user, lead\.dealer_id(, [\w.]+)?\)/);
     });
 });
 
@@ -115,9 +115,30 @@ describe("dealer lead routes resolve the dealer, never compare users.dealer_id r
         "leads/[id]/submit-to-sm",
         "product-selections/[id]",
     ];
+    // 14 Oct added the leadId (house access); 16 Oct (ID 183) routes the lender
+    // journey through gateLeadActor (dealer / house / Admin acting for the
+    // dealer) and the dispatch steps through dealerMayDispatch (owner only).
+    const RESOLVED = /dealerMayActOnLead\(user, lead\.dealer_id(, [\w.]+)?\)|dealerMayDispatch\(user, lead\.dealer_id\)|gateLeadActor\(user, lead\b/;
     it.each(ROUTES)("%s", (route) => {
         const src = code(route);
-        expect(src).toMatch(/dealerMayActOnLead\(user, lead\.dealer_id\)/);
+        expect(src).toMatch(RESOLVED);
         expect(src).not.toMatch(/lead\.dealer_id\s*[!=]==?\s*user\.dealer_id/);
+    });
+});
+
+describe("ID 183: dispatch stays the dealer's alone", () => {
+    it.each([
+        "lead/[id]/step-5/confirm-dispatch",
+        "lead/[id]/step-5/product-selection",
+        "lead/[id]/step-5/send-otp",
+        "lead/[id]/step-5/status",
+        "lead/[id]/step-5/verify-otp",
+        "lead/[id]/step-5-access",
+        "lead/[id]/confirm-cash-sale",
+        "lead/[id]/mark-delivered",
+    ])("%s is owner-only (no house, no iTarang)", (route) => {
+        const src = code(route);
+        expect(src).toMatch(/dealerMayDispatch\(user, lead\.dealer_id\)/);
+        expect(src).not.toMatch(/dealerMayActOnLead|gateLeadActor/);
     });
 });

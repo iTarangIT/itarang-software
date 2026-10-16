@@ -25,6 +25,35 @@ export function dealerOwnsLead(
 export const FULL_ID_ROLES = ["admin", "ceo", "sales_head"] as const;
 
 /**
+ * ID 119 (decided 16 Oct): the back-office roles that reach EVERY customer
+ * file's KYC. Same three as the full-PAN rule. Every other back-office role
+ * (sales manager, sales executive, business head, finance controller) reaches
+ * only the files it owns — see backOfficeOwnsLead.
+ */
+export const ALL_LEADS_KYC_ROLES = FULL_ID_ROLES;
+
+/** Back-office roles that reach a lead's KYC only when they own the lead. */
+export const OWN_LEADS_KYC_ROLES = ["business_head", "sales_manager", "sales_executive", "finance_controller"] as const;
+
+/**
+ * ID 119: does this back-office user own the lead? They uploaded it, it is
+ * assigned to them (leads.assigned_to), they are its sales manager
+ * (leads.sm_assigned_to), or they own the account of the lead's dealer
+ * (account_ownership.owner_user_id). A missing fact is a refusal.
+ */
+export function backOfficeOwnsLead(input: {
+  userId: string | null | undefined;
+  uploaderId?: string | null;
+  assignedTo?: string | null;
+  smAssignedTo?: string | null;
+  accountOwnerId?: string | null;
+}): boolean {
+  const me = (input.userId ?? "").trim();
+  if (!me) return false;
+  return [input.uploaderId, input.assignedTo, input.smAssignedTo, input.accountOwnerId].some((v) => !!v && v === me);
+}
+
+/**
  * May this caller read the lead's full PAN? Admin, Sales Head, CEO; the dealer
  * whose lead it is; the person who uploaded the lead; the iTarang owner of the
  * dealer's account. Every other back-office role (sales manager, sales

@@ -47,6 +47,8 @@ export type AppUser = {
   dealer_id: string | null;
 };
 
+// ID 119: the admin KYC screens. On one customer file use
+// requireAdminAppUserForLead — only admin / ceo / sales_head reach every file.
 const ADMIN_ROLES = new Set(["admin", "ceo", "business_head", "sales_head", "sales_manager", "sales_executive"]);
 const DEALER_ROLES = new Set(["dealer"]);
 const CONSENT_COMPLETE_STATUSES = new Set([
@@ -117,6 +119,20 @@ export async function requireAdminAppUser(): Promise<AppUser | null> {
   const appUser = await getAuthenticatedAppUser();
   if (!appUser || !ADMIN_ROLES.has(appUser.role)) return null;
   return appUser;
+}
+
+/**
+ * ID 119 (decided 16 Oct): the per-lead admin KYC routes. ADMIN_ROLES still
+ * opens the admin screens, but on ONE customer file only Admin, CEO and Sales
+ * Head pass on any file; Business Head, Sales Manager and Sales Executive pass
+ * only on files they own (requireLeadAccess backOfficeMayReachLead). Null =
+ * refuse, exactly like requireAdminAppUser.
+ */
+export async function requireAdminAppUserForLead(leadId: string): Promise<AppUser | null> {
+  const appUser = await requireAdminAppUser();
+  if (!appUser || !leadId) return null;
+  const { backOfficeMayReachLead } = await import("@/lib/auth/requireLeadAccess");
+  return (await backOfficeMayReachLead(appUser, leadId)) ? appUser : null;
 }
 
 export async function requireDealerAppUser(): Promise<AppUser | null> {
