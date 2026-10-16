@@ -110,7 +110,7 @@ export function LedgerSummaryTable({
 
   if (departments.length === 0) {
     return (
-      <p className="text-[11px] text-gray-400 italic">
+      <p className="text-[11px] text-ink-muted italic">
         No expenses match these filters.
       </p>
     );
@@ -120,7 +120,7 @@ export function LedgerSummaryTable({
     <div className="overflow-x-auto">
       <table className="w-full min-w-[520px] text-sm">
         <thead>
-          <tr className="text-left text-[10px] uppercase tracking-wider text-gray-500 border-b border-gray-100">
+          <tr className="text-left text-[11px] font-bold uppercase tracking-[0.06em] text-ink-muted border-b border-border">
             <SortableTh
               label="Department"
               sortKey="department"
@@ -159,7 +159,7 @@ export function LedgerSummaryTable({
             return (
               <Fragment key={d.key}>
                 <tr
-                  className={`border-b border-gray-50 ${isOpen ? "bg-gray-50/60" : ""}`}
+                  className={`border-b border-border/60 ${isOpen ? "bg-bg/60" : ""}`}
                 >
                   <td className={`py-3 ${CELL}`}>
                     {/* A real button, not a clickable <tr>: the row has to be
@@ -170,23 +170,23 @@ export function LedgerSummaryTable({
                       onClick={() => toggleRow(d.key)}
                       aria-expanded={isOpen}
                       aria-controls={panelId}
-                      className="inline-flex items-center gap-1.5 text-xs font-semibold text-gray-900 hover:text-brand-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-100 rounded"
+                      className="inline-flex items-center gap-1.5 text-xs font-semibold text-brand-navy hover:text-brand-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-100 rounded"
                     >
                       {isOpen ? (
-                        <ChevronDown className="w-3.5 h-3.5 shrink-0 text-gray-400" />
+                        <ChevronDown className="w-3.5 h-3.5 shrink-0 text-ink-muted" />
                       ) : (
-                        <ChevronRight className="w-3.5 h-3.5 shrink-0 text-gray-400" />
+                        <ChevronRight className="w-3.5 h-3.5 shrink-0 text-ink-muted" />
                       )}
                       {d.label}
                     </button>
                   </td>
                   <td
-                    className={`py-3 ${CELL} text-xs text-gray-700 text-right whitespace-nowrap tabular-nums`}
+                    className={`py-3 ${CELL} text-xs text-ink text-right whitespace-nowrap tabular-nums`}
                   >
                     {d.count.toLocaleString("en-IN")}
                   </td>
                   <td
-                    className={`py-3 ${CELL} text-xs font-bold text-gray-900 text-right whitespace-nowrap tabular-nums`}
+                    className={`py-3 ${CELL} text-xs font-bold text-brand-navy text-right whitespace-nowrap tabular-nums`}
                     title={formatINRExact(d.total)}
                   >
                     {formatINRCompact(d.total)}
@@ -194,13 +194,13 @@ export function LedgerSummaryTable({
                 </tr>
 
                 {isOpen && (
-                  <tr className="border-b border-gray-50 bg-gray-50/40">
+                  <tr className="border-b border-border/60 bg-bg/60">
                     {/* The nested list is its own table inside one spanning
                         cell, so its columns cannot pull the summary's three
                         out of alignment. */}
                     <td id={panelId} colSpan={3} className="px-3 py-3 first:pl-0 last:pr-0">
                       {shown.length === 0 ? (
-                        <p className="text-[11px] text-gray-400 italic">
+                        <p className="text-[11px] text-ink-muted italic">
                           No invoices fetched for this department.
                         </p>
                       ) : (
@@ -208,12 +208,12 @@ export function LedgerSummaryTable({
                           <tbody>
                             {shown.map((r) => (
                               <tr key={r.id} className="align-top">
-                                <td className="py-1.5 pr-3 text-[11px] text-gray-500 whitespace-nowrap">
+                                <td className="py-1.5 pr-3 text-[11px] text-ink-muted whitespace-nowrap">
                                   {r.expense_date
                                     ? new Date(r.expense_date).toLocaleDateString("en-IN")
                                     : new Date(r.created_at).toLocaleDateString("en-IN")}
                                 </td>
-                                <td className="py-1.5 pr-3 text-[11px] font-medium text-gray-800">
+                                <td className="py-1.5 pr-3 text-[11px] font-medium text-ink">
                                   <span
                                     className="block max-w-[240px] truncate"
                                     title={r.vendor || undefined}
@@ -221,7 +221,7 @@ export function LedgerSummaryTable({
                                     {r.vendor || "—"}
                                   </span>
                                 </td>
-                                <td className="py-1.5 pr-3 text-[11px] text-gray-500 whitespace-nowrap">
+                                <td className="py-1.5 pr-3 text-[11px] text-ink-muted whitespace-nowrap">
                                   <span className="inline-flex items-center gap-1.5">
                                     <span
                                       className="w-1.5 h-1.5 rounded-full shrink-0"
@@ -230,7 +230,7 @@ export function LedgerSummaryTable({
                                     {expenseBucketLabel(r.bucket)}
                                   </span>
                                 </td>
-                                <td className="py-1.5 pr-3 text-[11px] text-gray-500">
+                                <td className="py-1.5 pr-3 text-[11px] text-ink-muted">
                                   <span
                                     className="block max-w-[140px] truncate"
                                     title={r.project_tag || undefined}
@@ -238,7 +238,7 @@ export function LedgerSummaryTable({
                                     {r.project_tag || "—"}
                                   </span>
                                 </td>
-                                <td className="py-1.5 pr-3 text-[11px] font-semibold text-gray-900 text-right whitespace-nowrap tabular-nums">
+                                <td className="py-1.5 pr-3 text-[11px] font-semibold text-brand-navy text-right whitespace-nowrap tabular-nums">
                                   ₹{Number(r.amount).toLocaleString("en-IN")}
                                 </td>
                                 <td className="py-1.5 text-[11px] text-right whitespace-nowrap">
@@ -252,7 +252,7 @@ export function LedgerSummaryTable({
                                       <FileText className="w-3 h-3 shrink-0" /> View
                                     </a>
                                   ) : (
-                                    <span className="text-gray-300">—</span>
+                                    <span className="text-ink-muted/50">—</span>
                                   )}
                                 </td>
                               </tr>
@@ -280,19 +280,19 @@ export function LedgerSummaryTable({
         <tfoot>
           {/* Totals every matching invoice in the window, not the departments
               on screen — this is the ledger's bottom line. */}
-          <tr className="border-t border-gray-100">
+          <tr className="border-t border-border">
             <td
-              className={`py-3 ${CELL} text-[11px] font-semibold uppercase tracking-wider text-gray-500`}
+              className={`py-3 ${CELL} text-[11px] font-semibold uppercase tracking-wider text-ink-muted`}
             >
               Total ({totalCaption})
             </td>
             <td
-              className={`py-3 ${CELL} text-xs font-semibold text-gray-700 text-right whitespace-nowrap tabular-nums`}
+              className={`py-3 ${CELL} text-xs font-semibold text-ink text-right whitespace-nowrap tabular-nums`}
             >
               {grandCount.toLocaleString("en-IN")}
             </td>
             <td
-              className={`py-3 ${CELL} text-sm font-bold text-gray-900 text-right whitespace-nowrap tabular-nums`}
+              className={`py-3 ${CELL} text-sm font-bold text-brand-navy text-right whitespace-nowrap tabular-nums`}
               title={formatINRExact(grandTotal)}
             >
               {formatINRCompact(grandTotal)}

@@ -47,15 +47,25 @@ export function RealizationCard({
   windowLabel: string;
   onClick: () => void;
 }) {
+  // ID 89 — KpiTile's look (redesign primitives), as a button: the tile opens
+  // the realization breakdown. Only the Revenue & costs page uses it.
   return (
-    <KPICard
-      title="Realization"
-      value={formatINRCompact(data.realization)}
-      exactValue={formatINRExact(data.realization)}
-      subtitle={`Revenue − expense · ${windowLabel}`}
-      icon={Wallet}
+    <button
+      type="button"
       onClick={onClick}
-    />
+      title={formatINRExact(data.realization)}
+      className="flex w-full flex-col gap-2 rounded-2xl border border-border bg-surface p-[18px] text-left shadow-card transition hover:border-brand-sky hover:shadow-md"
+    >
+      <span className="flex items-center gap-2 text-[13px] font-semibold text-ink-muted">
+        <Wallet className="h-4 w-4 text-brand-royal" aria-hidden />
+        Realization
+      </span>
+      <span className="text-[27px] font-bold leading-tight tracking-tight text-brand-navy tabular-nums">
+        {formatINRCompact(data.realization)}
+      </span>
+      <span className="text-xs leading-snug text-ink-muted">Revenue − expense · {windowLabel}</span>
+      <span className="text-xs font-semibold text-brand-navy">See how it adds up →</span>
+    </button>
   );
 }
 

@@ -183,11 +183,18 @@ export default function RevenueAndCostsPage() {
 
             <GrossMarginPanel showMapping />
 
+            {/* ID 89 — every panel in the redesign's card look. The business
+                snapshot gets the wide column so its three tiles sit in a row. */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
-                <div className="lg:col-span-2 space-y-6">
-                    {/* Full expense ledger — fetches, filters and totals server-side for
-                        the window selected above. */}
-                    <ExpenseLedgerPanel params={windowParams} />
+                <div className="lg:col-span-2" data-testid="business-snapshot-panel-wrapper">
+                    <BusinessSnapshotPanel
+                        purchasesMtd={Number(m.purchases_mtd ?? 0)}
+                        salesMtd={Number(m.revenue_mtd ?? 0)}
+                        otherExpensesMtd={Number(m.other_expenses_mtd ?? 0)}
+                        recentInvoices={m.recent_invoices || []}
+                        recentExpenses={m.recent_expenses || []}
+                        onTileClick={(metric, title, params) => setDrill({ metric, title, params })}
+                    />
                 </div>
 
                 <div className="space-y-6">
@@ -200,22 +207,6 @@ export default function RevenueAndCostsPage() {
                             />
                         </div>
                     )}
-
-                    <div data-testid="business-snapshot-panel-wrapper">
-                        <BusinessSnapshotPanel
-                            purchasesMtd={Number(m.purchases_mtd ?? 0)}
-                            salesMtd={Number(m.revenue_mtd ?? 0)}
-                            otherExpensesMtd={Number(m.other_expenses_mtd ?? 0)}
-                            recentInvoices={m.recent_invoices || []}
-                            recentExpenses={m.recent_expenses || []}
-                            onTileClick={(metric, title, params) => setDrill({ metric, title, params })}
-                        />
-                    </div>
-
-                    <ExpenseBreakdownPanel
-                        byDepartment={m.expenses_by_department || []}
-                        byProject={m.expenses_by_project || []}
-                    />
 
                     <DashCard title="Procurement">
                         <div className="flex items-center justify-between rounded-xl border border-border bg-bg px-3 py-2.5">
@@ -233,6 +224,18 @@ export default function RevenueAndCostsPage() {
                         <CardLink href="/procurement">Review procurement</CardLink>
                     </DashCard>
                 </div>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
+                <div className="lg:col-span-2">
+                    {/* Full expense ledger — fetches, filters and totals server-side for
+                        the window selected above. */}
+                    <ExpenseLedgerPanel params={windowParams} />
+                </div>
+                <ExpenseBreakdownPanel
+                    byDepartment={m.expenses_by_department || []}
+                    byProject={m.expenses_by_project || []}
+                />
             </div>
 
             {realizationOpen && overview && (

@@ -102,7 +102,7 @@ export function LedgerDetailTable({
       <div className="overflow-x-auto">
         <table className="w-full min-w-[920px] text-sm">
           <thead>
-            <tr className="text-left text-[10px] uppercase tracking-wider text-gray-500 border-b border-gray-100">
+            <tr className="text-left text-[11px] font-bold uppercase tracking-[0.06em] text-ink-muted border-b border-border">
               <SortableTh label="Date" sortKey="date" sort={sort} onToggle={toggle} className={HEAD_CELL} />
               <SortableTh label="Vendor" sortKey="vendor" sort={sort} onToggle={toggle} className={HEAD_CELL} />
               <SortableTh label="Department" sortKey="department" sort={sort} onToggle={toggle} className={HEAD_CELL} />
@@ -117,8 +117,8 @@ export function LedgerDetailTable({
             {paged.pageItems.map((r) => (
               // align-top: a two-line vendor cell must not drag the single
               // line values in every other column down to its middle.
-              <tr key={r.id} className="border-b border-gray-50 align-top">
-                <td className={`py-3 ${CELL} text-xs text-gray-600 whitespace-nowrap`}>
+              <tr key={r.id} className="border-b border-border/60 align-top">
+                <td className={`py-3 ${CELL} text-xs text-ink-muted whitespace-nowrap`}>
                   {r.expense_date
                     ? new Date(r.expense_date).toLocaleDateString("en-IN")
                     : new Date(r.created_at).toLocaleDateString("en-IN")}
@@ -127,23 +127,23 @@ export function LedgerDetailTable({
                     to be bounded — an unclipped legal name like "BHARATNXT
                     WAVE SERVICES PRIVATE LIMITED" otherwise steals width from
                     every column to its right. Full text stays on hover. */}
-                <td className={`py-3 ${CELL} text-xs font-semibold text-gray-900`}>
+                <td className={`py-3 ${CELL} text-xs font-semibold text-brand-navy`}>
                   <span className="block max-w-[220px] truncate" title={r.vendor || undefined}>
                     {r.vendor || "—"}
                   </span>
                   {r.description && (
                     <span
-                      className="block text-[10px] font-normal text-gray-400 truncate max-w-[220px]"
+                      className="block text-[10px] font-normal text-ink-muted truncate max-w-[220px]"
                       title={r.description}
                     >
                       {r.description}
                     </span>
                   )}
                 </td>
-                <td className={`py-3 ${CELL} text-xs text-gray-700 whitespace-nowrap`}>
+                <td className={`py-3 ${CELL} text-xs text-ink whitespace-nowrap`}>
                   {expenseDepartmentLabel(r.department)}
                 </td>
-                <td className={`py-3 ${CELL} text-xs text-gray-700 whitespace-nowrap`}>
+                <td className={`py-3 ${CELL} text-xs text-ink whitespace-nowrap`}>
                   <span className="inline-flex items-center gap-1.5">
                     <span
                       className="w-1.5 h-1.5 rounded-full shrink-0"
@@ -152,16 +152,16 @@ export function LedgerDetailTable({
                     {expenseBucketLabel(r.bucket)}
                   </span>
                 </td>
-                <td className={`py-3 ${CELL} text-xs text-gray-700`}>
+                <td className={`py-3 ${CELL} text-xs text-ink`}>
                   <span className="block max-w-[160px] truncate" title={r.project_tag || undefined}>
                     {r.project_tag || "—"}
                   </span>
                 </td>
-                <td className={`py-3 ${CELL} text-xs text-gray-500 whitespace-nowrap`}>
+                <td className={`py-3 ${CELL} text-xs text-ink-muted whitespace-nowrap`}>
                   {r.submitter_name || "—"}
                 </td>
                 <td
-                  className={`py-3 ${CELL} text-xs font-bold text-gray-900 text-right whitespace-nowrap tabular-nums`}
+                  className={`py-3 ${CELL} text-xs font-bold text-brand-navy text-right whitespace-nowrap tabular-nums`}
                   title={formatINRExact(Number(r.amount))}
                 >
                   ₹{Number(r.amount).toLocaleString("en-IN")}
@@ -177,7 +177,7 @@ export function LedgerDetailTable({
                       <FileText className="w-3 h-3 shrink-0" /> View
                     </a>
                   ) : (
-                    <span className="text-gray-300">—</span>
+                    <span className="text-ink-muted/50">—</span>
                   )}
                 </td>
               </tr>
@@ -186,16 +186,16 @@ export function LedgerDetailTable({
           <tfoot>
             {/* The server's total over the whole window — not a reduce over the
                 rows in hand, which would drop everything past the cap. */}
-            <tr className="border-t border-gray-100">
+            <tr className="border-t border-border">
               <td
                 colSpan={6}
-                className={`py-3 ${CELL} text-[11px] font-semibold uppercase tracking-wider text-gray-500`}
+                className={`py-3 ${CELL} text-[11px] font-semibold uppercase tracking-wider text-ink-muted`}
               >
                 Total ({totalCaption}) · {grandCount}{" "}
                 {grandCount === 1 ? "invoice" : "invoices"}
               </td>
               <td
-                className={`py-3 ${CELL} text-sm font-bold text-gray-900 text-right whitespace-nowrap tabular-nums`}
+                className={`py-3 ${CELL} text-sm font-bold text-brand-navy text-right whitespace-nowrap tabular-nums`}
                 title={formatINRExact(grandTotal)}
               >
                 {formatINRCompact(grandTotal)}
