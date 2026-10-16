@@ -2,9 +2,11 @@
 // builders, pinned to the caller, never restated:
 //   • buildSalesDashboard({ spoc_id: user.id, … }) — as /api/{inside-sales,asm}/
 //     reports/sales-dashboard call it — for activity and hot/warm/cold;
-//   • listTargets({ month, userId }) — as /api/me/targets does — for each target
-//     with its pro-rated MTD value and RAG; only pushed/accepted rows, which is
-//     what MyTargetsCard shows.
+//   • listTargets({ month, userId, viewer: "member" }) — as /api/me/targets
+//     does — for each target with its pro-rated MTD value and RAG; the rows
+//     MyTargetsCard shows (pushed / accepted, and old-flow rejected ones as
+//     "rejected, waiting for the Sales Head"), in the version in force (ID 189:
+//     CEO target + stretch; a revision not pushed yet is not shown).
 // Period is month-to-date (UC-09), not the dashboard screen's default 30 days.
 // The reply states the definition behind every figure.
 
@@ -31,7 +33,8 @@ export const METRIC_DEFINITIONS: Readonly<Record<string, string>> = Object.freez
     converted: "leads closed as Converted in the period while you held them",
     interest: "open leads you own today, by current temperature — a snapshot as of now, the same for any period",
     calls_per_day: "your logged inside-sales calls (AI-dialer calls NOT counted) per working day so far — a DAILY target",
-    hot_to_ground: "leads you transferred to an ASM that were Hot at the moment of transfer",
+    // ID 179: credited to the owner at the moment of transfer, whoever pressed Transfer.
+    hot_to_ground: "your Hot leads handed to an ASM (by you or your manager), Hot at the moment of transfer, each dealer once",
     dealer_visits: "distinct dealers you visited in the month, new and existing (two visits to one dealer count once)",
     new_dealer_visits: "dealers visited for the first time ever, in the month",
     batteries_sold: "batteries to dealers in the month",
@@ -39,7 +42,8 @@ export const METRIC_DEFINITIONS: Readonly<Record<string, string>> = Object.freez
     kyc_disbursed: "not measured in the CRM yet",
     scrap_deals: "buyback deals the dealer accepted",
     revenue: "revenue in the month (₹)",
-    target: "monthly target pro-rated over working days (Mon–Sat, minus holidays); a per-day target (e.g. calls per day) is the same every day, not pro-rated; RAG: green ≥100%, amber 80–99%, red <80%",
+    // ID 189: the version in force is CEO target + the Sales Head's stretch.
+    target: "target = CEO target + the Sales Head's stretch; a monthly target is pro-rated over working days (Mon–Sat, minus holidays) from the 1st; a per-day target (e.g. calls per day) is the same every day, not pro-rated; RAG: green ≥100%, amber 80–99%, red <80%",
 });
 
 export type NumbersPeriod = "this_month" | "last_month";
@@ -75,7 +79,7 @@ export function shapeNumbers(
     dashboard: SalesDashboard,
     targets: TargetRow[],
 ): Record<string, unknown> {
-    const shown = targets.filter((t) => t.status === "pushed" || t.status === "accepted");
+    const shown = targets.filter((t) => t.status === "pushed" || t.status === "accepted" || t.status === "rejected");
     const interest = Object.fromEntries(dashboard.interest.rows.map((r) => [r.interest_level, r.total]));
     return {
         period,
@@ -98,30 +102,46 @@ export function shapeNumbers(
               }
             : {}),
         interest,
-        targets: shown.map((t) =>
+        targets: shown.map((t) => {
+            // ID 189 — "CEO 100 + 50 = 150"; unit for custom metrics; status as MyTargetsCard shows it.
+            const common = {
+                metric: t.metric,
+                label: t.metric_label,
+                ceo_target: t.ceo_target,
+                stretch: t.stretch,
+                unit: t.unit,
+                status:
+                    t.status === "rejected"
+                        ? "rejected, waiting for the Sales Head"
+                        : t.correction_open
+                          ? "correction asked, waiting for the Sales Head"
+                          : t.status === "pushed"
+                            ? "sent, not accepted yet"
+                            : "accepted",
+                not_measured_reason: t.progress.not_measured_reason ?? null,
+                rag: t.progress.rag,
+                definition: METRIC_DEFINITIONS[t.metric] ?? null,
+            };
             // A per-day target (calls_per_day) is a DAILY number — progress()
             // keeps it un-pro-rated, so it must not be read out as a monthly one.
-            TARGET_METRICS[t.metric as TargetMetric]?.kind === "per_day"
+            const kind = t.kind ?? TARGET_METRICS[t.metric as TargetMetric]?.kind;
+            return kind === "per_day"
                 ? {
-                      metric: t.metric,
-                      label: t.metric_label,
+                      ...common,
+                      per: "per day",
                       daily_target: t.progress.monthly_target,
                       actual_per_day: t.progress.actual,
                       pct_of_target: t.progress.pct_of_mtd,
-                      rag: t.progress.rag,
-                      definition: METRIC_DEFINITIONS[t.metric] ?? null,
                   }
                 : {
-                      metric: t.metric,
-                      label: t.metric_label,
+                      ...common,
+                      per: "per month",
                       monthly_target: t.progress.monthly_target,
                       mtd_target: t.progress.mtd_target,
                       actual: t.progress.actual,
                       pct_of_mtd: t.progress.pct_of_mtd,
-                      rag: t.progress.rag,
-                      definition: METRIC_DEFINITIONS[t.metric] ?? null,
-                  },
-        ),
+                  };
+        }),
         targets_note:
             shown.length === 0
                 ? "No targets have been pushed to you for this month."
@@ -166,7 +186,7 @@ export const myNumbers: ToolFactory = () =>
             const { from, to, month, dashboardInput } = numbersInputs(ctx.user, period, ctx.now);
             const [dashboard, targets] = await Promise.all([
                 buildSalesDashboard(dashboardInput),
-                listTargets({ month, userId: ctx.user.id }),
+                listTargets({ month, userId: ctx.user.id, viewer: "member" }),
             ]);
             return { kind: "numbers", data: shapeNumbers(ctx.user, period, { from, to }, dashboard, targets) };
         },

@@ -150,6 +150,27 @@ export function canTransferAnyLead(role: string | null | undefined): boolean {
 }
 
 /**
+ * ID 179 (Kartik 15 Oct): a manager's Transfer to ASM on a lead they do not
+ * own is offered — and accepted by the route — only on a lead that can still
+ * go to the field: not Won (past transfer), not already with an ASM
+ * (Transferred_to_ASM), not closed. Pass `isOpen(status)` as `open` (this file
+ * stays free of the lifecycle import).
+ */
+export function managerMayTransferStatus(status: string | null | undefined, open: boolean): boolean {
+  return open && status !== "Won" && status !== "Transferred_to_ASM";
+}
+
+/**
+ * ID 179 — "Reassign to ISR" on the lead page: the roles of the Leads page's
+ * bulk Reassign (LEADS_BULK_ROLES — the bulk route's MUTATE_ROLES), which the
+ * button posts to, so the same rules apply (reason, a lead with a field visit
+ * booked stays with the ASM).
+ */
+export function canReassignToIsr(role: string | null | undefined): boolean {
+  return (LEADS_BULK_ROLES as readonly string[]).includes(role ?? "");
+}
+
+/**
  * Roles that may download a single lead's touchpoint history as .xlsx — the
  * "Export to Excel" button on the inside-sales pane and on the CRM lead-detail
  * Activity timeline.

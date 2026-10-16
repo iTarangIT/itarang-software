@@ -9,11 +9,15 @@ import {
     isDealerKycEditsLocked,
 } from '@/lib/kyc/admin-workflow';
 import { requireLeadAccess } from "@/lib/auth/requireLeadAccess";
+import { recordActorStep, requireLeadWriter } from "@/lib/leads/actForDealerGuard";
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
     // ID 118: signed in, and this lead is the caller's to touch (a dealer's own lead, or back office).
     const leadGate = await requireLeadAccess((await params).leadId);
     if (!leadGate.ok) return leadGate.response;
+    // ID 183: a change to the file — its own dealer, or Admin / Sales Head acting for the dealer.
+    const writer = await requireLeadWriter((await params).leadId, req, leadGate.user);
+    if (!writer.ok) return writer.response;
     try {
         const { leadId } = await params;
 
@@ -75,6 +79,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
                 file_url: fileUrl,
                 verification_status: 'pending',
                 failed_reason: null,
+                // ID 166: who uploaded the file decides whether the dealer opens it.
+                uploaded_by: leadGate.user.id,
                 updated_at: now,
             })
             .where(and(
@@ -98,6 +104,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
 
         // TODO: Re-trigger specific verification API
 
+        // file_url on the record: the dealer opens a file iTarang uploaded for him (fileAuthz).
+        await recordActorStep(writer.actor, `re-uploaded for the ${verificationType} check`, { file_url: fileUrl });
         return NextResponse.json({ success: true, newStatus: 'awaiting_action' });
     } catch {
         return NextResponse.json({ success: false, error: { message: 'Server error' } }, { status: 500 });

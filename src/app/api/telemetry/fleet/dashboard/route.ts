@@ -1,17 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/lib/auth-utils';
+import { requireTelemetryViewer, telemetryErrorResponse } from '@/lib/telemetry/vehicleAccess';
 import { fetchFleetDashboardCEO, fetchFleetDashboardDealer } from '@/lib/telemetry/queries';
 import { isVpsUnreachable, vpsDegradedReason } from '@/lib/telemetry/vps-status';
 
 export async function GET(req: NextRequest) {
     let user;
     try {
-        user = await requireRole(['ceo', 'dealer']);
+        user = await requireTelemetryViewer();
     } catch (error) {
-        // Auth failures keep their original 5xx shape — the degraded path only
+        // Auth failures answer 401 / 403 (ID 181) — the degraded path only
         // applies once we've authed and *then* fail to reach the VPS.
-        const message = error instanceof Error ? error.message : 'Server error';
-        return NextResponse.json({ success: false, error: { message } }, { status: 500 });
+        return telemetryErrorResponse(error, 'Telemetry Dashboard');
     }
 
     try {
@@ -20,7 +19,7 @@ export async function GET(req: NextRequest) {
         const city = searchParams.get('city')?.trim() || undefined;
         const data = user.role === 'ceo'
             ? await fetchFleetDashboardCEO({ state, city })
-            : await fetchFleetDashboardDealer(user.dealer_id || '');
+            : await fetchFleetDashboardDealer(user.dealerCode || '');
         return NextResponse.json({ success: true, data });
     } catch (error) {
         if (isVpsUnreachable(error)) {

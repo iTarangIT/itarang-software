@@ -9,8 +9,7 @@ import { eq, and, desc, ilike, or, ne, isNull, inArray } from 'drizzle-orm';
 import { resolveDealerProfile } from '@/lib/supabase/identity';
 import { requireRole } from '@/lib/auth-utils';
 import { recordLeadCapture } from '@/lib/leads/lead-registry';
-import { houseDealerCode } from '@/lib/leads/dealerByMobile';
-import { dealerContacts, houseOriginatedLeadIds } from '@/lib/leads/pushGuards';
+import { dealerContacts } from '@/lib/leads/pushGuards';
 
 
 // Extended Zod Schema
@@ -237,21 +236,15 @@ export const GET = withErrorHandler(async (req: Request) => {
     const status = searchParams.get('status');
     const type = searchParams.get('type');
 
-    // 14 Oct: the iTarang house dealer keeps every file it pushed out on its
-    // list (whichever dealer has it now, shown with that dealer's name and
-    // mobile) — it has full access to them and may push them again.
-    const house = await houseDealerCode();
-    const houseFiles = house && dealer_id === house ? [...(await houseOriginatedLeadIds(house))] : [];
-
+    // 16 Oct (ID 183): the dealer is the only owner of a file the house pushed
+    // out — it is no longer on the house's own list (the 14 Oct house rows are
+    // gone). The house sees those files on Pushed files (/api/leads/pushed-files).
     const conditions = [
-        or(
-            and(
-                eq(leads.dealer_id, dealer_id),
-                // E-285 — the dealer deleted it from THIS dashboard. The
-                // application itself may still be live with the admin and lender.
-                isNull(leads.deleted_by_dealer_at),
-            ),
-            ...(houseFiles.length ? [inArray(leads.id, houseFiles)] : []),
+        and(
+            eq(leads.dealer_id, dealer_id),
+            // E-285 — the dealer deleted it from THIS dashboard. The
+            // application itself may still be live with the admin and lender.
+            isNull(leads.deleted_by_dealer_at),
         )!,
         or(
             isNull(leads.status),

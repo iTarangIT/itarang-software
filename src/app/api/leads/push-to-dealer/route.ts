@@ -15,9 +15,11 @@
 //     pool and their salesperson comes off the file (detachFromOldDealer).
 // Leads that break a rule are skipped and reported back; the rest move.
 //
-// 14 Oct: the house login may also push AGAIN a file it pushed out before —
-// to the same dealer or another — wherever the file is now (never after
-// consent). The dealer it leaves loses its reserved coupon and salesperson.
+// 16 Oct (ID 33 / 182): the house pushes a file ONCE. A file that carries a
+// push is skipped here ("Moving it again needs an admin") — the second move is
+// Admin's, through the CRM push on the file. Every row records the reason and
+// the person's own login (each iTarang team member has a login under the
+// house code), and the dealer is told with the reason.
 
 import { z } from "zod";
 import { and, eq, inArray } from "drizzle-orm";
@@ -30,6 +32,7 @@ import { findActiveDealerById, findActiveDealerByMobile, houseDealerCode } from 
 import {
     canUsePushToDealer,
     checkPush,
+    isHouseLogin,
     NO_ACTIVE_DEALER_MESSAGE,
     PUSH_REASON_MAX,
     PUSH_REASON_MIN,
@@ -41,7 +44,6 @@ import {
     detachFromOldDealer,
     LEAD_PUSHED_TO_DEALER,
     logPushCouponRelease,
-    houseOriginatedLeadIds,
     pushedBeforeLeadIds,
     signedConsentLeadIds,
     type DetachResult,
@@ -111,12 +113,11 @@ export const POST = withErrorHandler(async (req: Request) => {
     // ID 33: consent gate — a signed consent pins the file to its dealer.
     // One push per file: a lead that already carries a push never moves again
     // from this list, even if it is back with the house dealer.
-    // 14 Oct: a file the house pushed out before may be pushed again from here.
-    const [signed, pushedBefore, houseFiles] = await Promise.all([
+    const [signed, pushedBefore] = await Promise.all([
         signedConsentLeadIds(leadIds),
         pushedBeforeLeadIds(leadIds),
-        houseOriginatedLeadIds(house, leadIds),
     ]);
+    const actorIsHouseLogin = isHouseLogin({ role: user.role, dealerId: user.dealer_id, houseDealerCode: house });
     const names = await dealerDisplayNames([house, ...rows.map((r) => r.dealerId ?? "").filter(Boolean)]);
 
     const skipped: { leadId: string; reason: string }[] = [];
@@ -127,22 +128,17 @@ export const POST = withErrorHandler(async (req: Request) => {
             skipped.push({ leadId: id, reason: "Lead not found" });
             continue;
         }
-        // A dealer's own lead (never with the house) is never movable from here.
-        if (r.dealerId !== house && !houseFiles.has(id)) {
-            skipped.push({ leadId: id, reason: "This is the dealer's own lead — moving it needs an admin" });
-            continue;
-        }
-        // ID 33: same rules as the CRM action (consent, finance, same dealer);
-        // a house file may go again (houseOriginated, 14 Oct).
+        // ID 33 / 182: the one push rule every path uses (consent, one push per
+        // file, a dealer's own lead never moves, same dealer, finance).
         const verdict = checkPush({
             actorRole: user.role,
-            actorIsHouseLogin: true,
+            actorIsHouseLogin,
+            via: "bulk_dealer_mobile",
             currentDealerId: r.dealerId,
             currentDealerName: (r.dealerId ? names.get(r.dealerId) : null) ?? null,
             houseDealerCode: house,
             consentSigned: signed.has(id),
             pushedBefore: pushedBefore.has(id),
-            houseOriginated: houseFiles.has(id),
             paymentMethod: r.paymentMethod,
             target,
         });
@@ -195,8 +191,10 @@ export const POST = withErrorHandler(async (req: Request) => {
                             to_dealer_id: target.dealerId,
                             to_dealer_name: target.name,
                             reason,
+                            // ID 182: the person's own login (per-person house logins).
                             by_name: user.name ?? null,
                             by_role: user.role,
+                            by_house_login: actorIsHouseLogin,
                             via: "bulk_dealer_mobile",
                             ...detachAuditChanges(detachedById.get(leadId)!),
                         },
@@ -218,7 +216,9 @@ export const POST = withErrorHandler(async (req: Request) => {
     // push). Best-effort, never throws — the move is already committed.
     if (pushed.length) {
         const { notifyDealerOfPushedLead } = await import("@/lib/whatsapp/pushedLeadNotice");
-        for (const id of pushed) await notifyDealerOfPushedLead(id);
+        for (const id of pushed) {
+            await notifyDealerOfPushedLead(id, { reason, fromDealerId: byId.get(id)?.dealerId ?? null });
+        }
     }
 
     return successResponse({

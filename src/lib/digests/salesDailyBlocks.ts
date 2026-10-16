@@ -35,8 +35,11 @@
 // Who is credited (direct counts):
 //   Hot received         the ASM a Hot lead was transferred TO (to_owner_id,
 //                        else the lead's asm_id)
-//   Hot handed to field  the ISR who performed the asm_transfer (distinct leads:
-//                        a lead handed over twice in a window counts once)
+//   Hot handed to field  the lead's owner AT THE MOMENT of the asm_transfer
+//                        (from_owner_id — ID 179: a manager's transfer of an
+//                        ISR's lead counts for the ISR; old rows without it,
+//                        whoever performed it). Distinct leads: a lead handed
+//                        over twice in a window counts once
 //   Connected / Engaged  the caller (performed_by); connectedCall() and
 //                        engagedCall() — since ID 59 an engaged call is a
 //                        connected one, so the two match
@@ -50,7 +53,7 @@
 import { sql } from "drizzle-orm";
 
 import type { SalesDashboard, SalesSpocBlock } from "@/lib/admin/salesDashboardTypes";
-import { connectedCall, engagedCall, wasHotAt } from "@/lib/reports/metricDefinitions";
+import { connectedCall, engagedCall, transferCredit, wasHotAt } from "@/lib/reports/metricDefinitions";
 import { fmtValue, pctOfTarget, type Period } from "./salesDailyBlockA";
 import { istRangeTz } from "./window";
 
@@ -470,7 +473,7 @@ export async function loadRepExtras(db: Exec, p: Period): Promise<RepExtras> {
         ),
         perRep(
             db,
-            sql`SELECT t.performed_by AS u, COUNT(DISTINCT t.dealer_lead_id) AS n
+            sql`SELECT ${transferCredit()} AS u, COUNT(DISTINCT t.dealer_lead_id) AS n
                   FROM lead_touchpoints t JOIN dealer_leads dl ON dl.id = t.dealer_lead_id
                  WHERE t.touchpoint_type = 'asm_transfer' AND ${win(sql`t.performed_at`)}
                    AND ${wasHotAt(sql`t.dealer_lead_id`, sql`t.performed_at`, sql`dl.interest_level`)}

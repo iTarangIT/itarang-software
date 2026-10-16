@@ -15,6 +15,7 @@ import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-util
 import { assertOwner } from "@/lib/leads/ownership";
 import { COMMERCIAL_EVENT_TYPES, createLeadCommercial } from "@/lib/leads/createCommercial";
 import { DealCardSchema } from "@/lib/leads/dealCardRules";
+import { isDealerOnboarded } from "@/lib/leads/dealerOnboarded";
 
 const MUTATE_ROLES = ["inside_sales_rep", "asm", "admin", "partner"];
 
@@ -49,9 +50,23 @@ const BodySchema = z.object({
         .max(100)
         .optional(),
     notes: z.string().max(5000).nullable().optional(),
-    // ID 172: required on a quote issue / revision (createLeadCommercial).
+    // ID 172: required on a quote issue / revision (createLeadCommercial) —
+    // ID 186: only when the dealer is not onboarded yet.
     deal_card: DealCardSchema.nullable().optional(),
 });
+
+// GET /api/inside-sales/lead/[id]/commercials — ID 186: is the dealer already
+// onboarded? The Update commercials form asks for the deal card only when not.
+export const GET = withErrorHandler(
+    async (_req: Request, ctx: { params: Promise<{ id: string }> }) => {
+        const user = await requireRole(MUTATE_ROLES);
+        const { id } = await ctx.params;
+        if (!id) return errorResponse("Lead id required", 400);
+        await assertOwner(id, user.id);
+        const verdict = await isDealerOnboarded(id);
+        return successResponse({ dealer_onboarded: verdict });
+    },
+);
 
 export const POST = withErrorHandler(
     async (req: Request, ctx: { params: Promise<{ id: string }> }) => {
@@ -66,8 +81,10 @@ export const POST = withErrorHandler(
             leadId: id,
             actor: { id: user.id, name: user.name ?? user.email ?? null, role: user.role ?? null },
             body,
-            // ID 172 (Kartik, 10 Oct): every quote from Update commercials
-            // states the deal card. The WhatsApp Assistant does not ask yet.
+            // ID 172 (Kartik, 10 Oct): a quote from Update commercials states
+            // the deal card — ID 186 (Kartik, 14 Oct): only for a dealer not
+            // onboarded yet; an onboarded dealer's card is ignored, not stored.
+            // The WhatsApp Assistant does not ask yet.
             requireDealCard: true,
         });
         // Draft PDF, paired touchpoint and notifications — after the commit.

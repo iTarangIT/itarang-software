@@ -3,7 +3,7 @@ import { and, eq } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import { coBorrowers, consentRecords, leads } from "@/lib/db/schema";
-import { requireAdminAppUser } from "@/lib/kyc/admin-workflow";
+import { requireAdminAppUserForLead } from "@/lib/kyc/admin-workflow";
 
 const ALLOWED_ACTIONS = new Set(["approve", "reject"]);
 
@@ -14,7 +14,7 @@ export async function POST(
   }: { params: Promise<{ leadId: string; consentId: string }> },
 ) {
   try {
-    const appUser = await requireAdminAppUser();
+    const appUser = await requireAdminAppUserForLead((await params).leadId);
     if (!appUser) {
       return NextResponse.json(
         { success: false, error: { message: "Unauthorized" } },

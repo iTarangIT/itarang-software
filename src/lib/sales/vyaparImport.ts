@@ -27,6 +27,8 @@ import { resolveSalesOrg } from "@/lib/sales/resolveSalesOrg";
 import { itemFamilyKey, itemKey } from "@/lib/sales/invoiceLines";
 import { classFor, isMapped, mappedItems, productFor } from "@/lib/sales/itemMap";
 import { voidInvoice } from "@/lib/sales/invoiceVoids";
+import { recheckStockTasks, recordInvoiceSerials } from "@/lib/inventory/stockUploadTasks/service";
+import type { LineForSerials } from "@/lib/inventory/stockUploadTasks/rules";
 import type { ImportKind, ParseResult, ParsedDocument } from "@/lib/sales/vyaparParse";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -146,7 +148,12 @@ export async function commitImport(
     const preview = await previewImport(parsed);
     if (!parsed.documents.length) throw new Error("Nothing to import — no documents were read from the file.");
 
-    return db.transaction(async (tx) => {
+    // ID 174: invoices whose lines this import wrote, for the "Stock to upload"
+    // tasks opened after the transaction commits (they must read its rows).
+    const stockTaskInputs: Array<{ id: string; lines: LineForSerials[] }> = [];
+    let voidedAny = false;
+
+    const result = await db.transaction(async (tx) => {
         const [imp] = rowsOf<{ id: string }>(
             await tx.execute(sql`
                 INSERT INTO invoice_imports (kind, file_name, period_from, period_to, summary, imported_by)
@@ -219,11 +226,21 @@ export async function commitImport(
 
             if (d.lines.length) {
                 await tx.execute(sql`DELETE FROM invoice_line_items WHERE invoice_id = ${id} AND source IN ('vyapar', 'drive')`);
+                const taskLines: LineForSerials[] = [];
+                if (!d.cancelled) stockTaskInputs.push({ id, lines: taskLines });
                 let n = 0;
                 for (const l of d.lines) {
                     n++;
                     const m = l.item_name ? productFor(mapped, l.item_name) : undefined;
                     const productClass = m ? classFor(m, l.product_class) : l.product_class;
+                    // Serials, when printed, sit in the item name ("… Serial No: X, Y").
+                    taskLines.push({
+                        line_no: n,
+                        hsn_code: l.hsn,
+                        quantity: l.quantity ?? 0,
+                        description: l.item_name ?? "",
+                        product_class: productClass,
+                    });
                     await tx.execute(sql`
                         INSERT INTO invoice_line_items (source, invoice_id, line_no, item_name, hsn, product_class,
                                                         asset_type, product_id, quantity, rate, amount_excl_gst, import_id)
@@ -238,6 +255,7 @@ export async function commitImport(
                     tx,
                 );
                 if (r.voided) voided++;
+                voidedAny = true;
             }
         }
         // Remember every item name seen, mapped or not, so the mapping list is complete.
@@ -248,6 +266,17 @@ export async function commitImport(
         }
         return { import_id: imp.id, summary: { ...preview.totals, voided, created_ids: created } };
     });
+
+    // ID 174 (E-348): a "Stock to upload" task per battery invoice — the same
+    // sales_invoices row the Drive scan uses, so an invoice both read from
+    // Drive and listed here keeps one task. Only invoices dated from the day
+    // tasks went live (an old register must not open a task per past sale).
+    // A cancelled invoice closes its task on the recheck. Never throws.
+    for (const t of stockTaskInputs) {
+        await recordInvoiceSerials(t.id, t.lines, { source: "drive", origin: "vyapar" });
+    }
+    if (voidedAny) await recheckStockTasks();
+    return result;
 }
 
 /**

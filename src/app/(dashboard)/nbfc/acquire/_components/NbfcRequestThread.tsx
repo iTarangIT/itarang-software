@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 
+import { onFreshFileClick } from "@/lib/storage/freshFileLink";
 // The NBFC's request/message thread for a lead (Changes 2 & 3, NBFC view). Shows
 // every request the NBFC raised + every admin message, each with its current hop
 // status and any linked documents. When a request is pushed back, the NBFC can
@@ -117,6 +118,7 @@ function AttachmentChips({ files }: { files: Attachment[] }) {
         <a
           key={`${a.url}-${i}`}
           href={a.url}
+          onClick={(e) => onFreshFileClick(e, a.url)}
           target="_blank"
           rel="noreferrer"
           className="inline-flex items-center gap-1 rounded border border-sky-200 bg-sky-50 px-2 py-0.5 text-[11px] font-medium text-sky-700 hover:bg-sky-100"
@@ -143,6 +145,7 @@ function LinkifiedText({ text }: { text: string }) {
           <a
             key={i}
             href={p}
+            onClick={(e) => onFreshFileClick(e, p)}
             target="_blank"
             rel="noreferrer"
             className="font-medium text-[color:var(--color-brand-sky)] hover:underline break-all"
@@ -286,6 +289,7 @@ export default function NbfcRequestThread({
                     <a
                       key={i}
                       href={a.url}
+                      onClick={(e) => onFreshFileClick(e, a.url)}
                       target="_blank"
                       rel="noreferrer"
                       className="inline-flex items-center gap-1 rounded border border-sky-200 bg-sky-50 px-2 py-0.5 text-[11px] font-medium text-sky-700 hover:bg-sky-100"
@@ -355,6 +359,7 @@ export default function NbfcRequestThread({
                     {it.file_url && request.status === "pushed_to_nbfc" ? (
                       <a
                         href={it.file_url}
+                        onClick={(e) => onFreshFileClick(e, it.file_url)}
                         target="_blank"
                         rel="noreferrer"
                         className="font-medium text-[color:var(--color-brand-sky)] hover:underline"

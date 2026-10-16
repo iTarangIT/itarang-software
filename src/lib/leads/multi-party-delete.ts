@@ -21,7 +21,6 @@
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { isFullyDeleted, type LeadDeleteState } from "./delete-policy";
-import { houseDealerCode } from "./dealerByMobile";
 
 export type DeleteScope = "dealer" | "admin" | "nbfc";
 
@@ -92,12 +91,17 @@ export async function purgeLeadCascade(tx: Executor, leadId: string): Promise<vo
   await tx.execute(sql`DELETE FROM leads WHERE id = ${leadId}`);
 }
 
-/** Read the three parties' delete state for one lead. */
+/**
+ * Read the three parties' delete state for one lead.
+ *
+ * 16 Oct (ID 183): the iTarang house is no longer a party. A file the house
+ * pushed to a dealer belongs to that dealer alone, so the dealer's delete is
+ * followed (the 14 Oct "house_holds" party is gone); the admin and NBFC
+ * parties stay as E-285 set them.
+ */
 export async function readDeleteState(
   tx: Executor,
   leadId: string,
-  /** The house dealer's code — the house holds a file it pushed out (14 Oct). */
-  houseCode?: string | null,
 ): Promise<LeadDeleteState | null> {
   const result = await tx.execute(sql`
     SELECT
@@ -110,15 +114,7 @@ export async function readDeleteState(
       (
         SELECT COUNT(*) FROM nbfc_lead_assignments a
         WHERE a.lead_id = l.id AND a.deleted_at IS NULL
-      )::int AS live_nbfc,
-      (
-        ${houseCode ?? null}::text IS NOT NULL
-        AND l.dealer_id IS DISTINCT FROM ${houseCode ?? null}::text
-        AND EXISTS (SELECT 1 FROM audit_logs al
-                     WHERE al.entity_type = 'lead' AND al.entity_id = l.id
-                       AND al.action = 'LEAD_PUSHED_TO_DEALER'
-                       AND al.changes ->> 'from_dealer_id' = ${houseCode ?? null}::text)
-      ) AS house_holds
+      )::int AS live_nbfc
     FROM leads l
     WHERE l.id = ${leadId}
   `);
@@ -131,7 +127,6 @@ export async function readDeleteState(
     adminDeletedAt: (row.admin_deleted_at as Date | null) ?? null,
     adminHolds: Boolean(row.admin_holds),
     liveNbfcAssignments: Number(row.live_nbfc ?? 0),
-    houseHolds: Boolean(row.house_holds),
   };
 }
 
@@ -168,7 +163,6 @@ export async function markLeadDeleted(
     throw new Error("markLeadDeleted: scope 'nbfc' requires a tenantId");
   }
 
-  const house = await houseDealerCode();
   return db.transaction(async (tx) => {
     await tx.execute(sql`SELECT id FROM leads WHERE id = ${leadId} FOR UPDATE`);
 
@@ -196,7 +190,7 @@ export async function markLeadDeleted(
       `);
     }
 
-    const state = await readDeleteState(tx, leadId, house);
+    const state = await readDeleteState(tx, leadId);
     if (!state) throw new Error(`markLeadDeleted: lead ${leadId} not found`);
 
     await tx.execute(sql`

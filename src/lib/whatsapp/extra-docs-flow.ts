@@ -66,6 +66,8 @@ import {
   reply,
   setSession,
 } from "./session-store";
+import { stampUploader } from "@/lib/storage/uploaderStamp";
+
 import { saveMedia } from "./storage";
 import type { InboundEvent, ReplyButton } from "./types";
 import { oneLine } from "./window";
@@ -330,7 +332,7 @@ async function onExtraDocsWait(
   // the wrapper re-projects and the admin is notified exactly as a web upload.
   let answered: string | null = null;
   if (xd.requestId) {
-    answered = await fulfilNextRequestChild(xd.requestId, item.url);
+    answered = await fulfilNextRequestChild(xd.requestId, item.url, dealer.uploaderId);
   }
 
   const count = result.items.length;
@@ -473,6 +475,8 @@ async function openRequestChildren(requestId: string) {
 async function fulfilNextRequestChild(
   requestId: string,
   fileUrl: string,
+  /** The dealer login driving the console — the uploader (ID 166). */
+  uploaderId: string,
 ): Promise<string | null> {
   const [target] = await openRequestChildren(requestId);
   if (!target) return null;
@@ -481,6 +485,7 @@ async function fulfilNextRequestChild(
     .update(otherDocumentRequests)
     .set({ file_url: fileUrl, upload_status: "uploaded", uploaded_at: new Date() })
     .where(eq(otherDocumentRequests.id, target.id));
+  await stampUploader("other_document_requests", { id: target.id }, { userId: uploaderId, source: "whatsapp" });
   try {
     const { recomputeWrapperStatus } = await import("@/lib/nbfc/doc-requests");
     await recomputeWrapperStatus(requestId);

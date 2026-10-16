@@ -24,6 +24,7 @@ import {
   slaStampFor,
 } from "@/lib/kyc/auto-approval-settings";
 import { requireLeadAccess } from "@/lib/auth/requireLeadAccess";
+import { requireLeadWriter } from "@/lib/leads/actForDealerGuard";
 import { notifyHouseOfDealerStep } from "@/lib/leads/pushNotices";
 
 const DEFAULT_ESTIMATED_REVIEW_TIME = "10-12 hours";
@@ -45,6 +46,10 @@ export async function POST(
     // ID 119: signed in AND this lead is the caller's (a dealer's own lead, or back office).
     const leadGate = await requireLeadAccess(leadId);
     if (!leadGate.ok) return leadGate.response;
+    // ID 183: the file's own dealer (stamps the dealer's action); the house
+    // login only sees a file it pushed to another dealer.
+    const writer = await requireLeadWriter(leadId, _req, leadGate.user);
+    if (!writer.ok) return writer.response;
 
     const leadRows = await db
       .select({

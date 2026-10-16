@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { CameThroughBadge } from "./AccountsView";
 import { AssignOwnerDialog, api, fmtDate, inputCls } from "./shared";
 
+import { onFreshFileClick } from "@/lib/storage/freshFileLink";
 type Detail = {
     account: {
         id: string;
@@ -301,7 +302,7 @@ function GstinSection({ data, onDone }: { data: Detail; onDone: (msg: string) =>
                           <span key={c.id}>
                               {i > 0 ? ", " : ""}
                               {c.file_url ? (
-                                  <a href={c.file_url} target="_blank" rel="noreferrer" className="text-blue-700 hover:underline">
+                                  <a href={c.file_url} onClick={(e) => onFreshFileClick(e, c.file_url)} target="_blank" rel="noreferrer" className="text-blue-700 hover:underline">
                                       {c.file_name}
                                   </a>
                               ) : (

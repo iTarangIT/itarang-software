@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { executeCoBorrowerDigilockerResendSms } from "@/lib/kyc/coborrower-verification";
-import { requireAdminAppUser } from "@/lib/kyc/admin-workflow";
+import { requireAdminAppUserForLead } from "@/lib/kyc/admin-workflow";
 
 /**
  * Co-borrower variant of the DigiLocker resend-sms endpoint.
@@ -16,7 +16,7 @@ export async function POST(
   { params }: { params: Promise<{ leadId: string }> },
 ) {
   try {
-    const appUser = await requireAdminAppUser();
+    const appUser = await requireAdminAppUserForLead((await params).leadId);
     if (!appUser) {
       return NextResponse.json(
         { success: false, error: { message: "Unauthorized" } },

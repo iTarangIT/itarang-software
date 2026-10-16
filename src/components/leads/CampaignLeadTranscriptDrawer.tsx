@@ -42,6 +42,7 @@ import {
   type CampaignLeadStatus,
 } from "@/lib/ai-dialer/campaignLeadStatus";
 
+import { onFreshFileClick } from "@/lib/storage/freshFileLink";
 // Legacy 6-dimension analysis (pre-band rows). Kept only so old
 // follow_up_history rows still render their bars.
 type SubScores = {
@@ -1294,6 +1295,7 @@ function DetailsTab({ data }: { data: TranscriptPayload }) {
             data.recordingUrl ? (
               <a
                 href={data.recordingUrl}
+                onClick={(e) => onFreshFileClick(e, data.recordingUrl)}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-1 text-emerald-700 hover:text-emerald-800 font-medium"

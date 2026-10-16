@@ -72,8 +72,10 @@ export async function pushedBeforeLeadIds(leadIds: string[]): Promise<Set<string
 /**
  * 14 Oct: lead ids (of those given — or, with none given, every such lead)
  * the house dealer pushed out at some point: a LEAD_PUSHED_TO_DEALER row whose
- * from_dealer_id is the house. The house login keeps full access to these and
- * may push them again; they stay on its lead list.
+ * from_dealer_id is the house. 16 Oct (ID 183): the house logins keep working
+ * these (never dispatch) and see them on Pushed files; they are no longer on
+ * the house's own lead list, counts or cards, and the house never pushes them
+ * again (a second move is Admin's).
  */
 export async function houseOriginatedLeadIds(houseCode: string, leadIds?: string[]): Promise<Set<string>> {
   if (!houseCode) return new Set();
@@ -146,6 +148,8 @@ export interface PushHistoryRow {
   toDealerName: string | null;
   byUserId: string | null;
   byName: string | null;
+  /** ID 182: the pusher's role at the time (admin, sales_head, dealer = a house login …). */
+  byRole: string | null;
   reason: string | null;
   via: string | null;
   /** Coupon code given back to the old dealer's pool on this push, if any. */
@@ -191,6 +195,7 @@ export async function pushHistory(leadId: string): Promise<PushHistoryRow[]> {
       toDealerName: str(c.to_dealer_name) ?? (to ? names.get(to) ?? to : null),
       byUserId: r.by,
       byName: r.byName ?? str(c.by_name),
+      byRole: str(c.by_role),
       reason: str(c.reason),
       via: str(c.via),
       couponReleased: str(c.coupon_released),

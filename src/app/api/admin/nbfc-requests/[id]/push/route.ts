@@ -13,6 +13,7 @@ import { db } from "@/lib/db";
 import { leads, nbfcDocRequests, otherDocumentRequests } from "@/lib/db/schema";
 import { dealerDisplayName } from "@/lib/notifications/emit";
 import { requireAdminAppUser } from "@/lib/kyc/admin-workflow";
+import { adminMayActOnNbfcLead, nbfcLeadNotYours } from "@/lib/nbfc/adminRequestAccess";
 import { pushNbfcDocRequest } from "@/lib/nbfc/doc-requests";
 import { notifyNbfcOfUpdate } from "@/lib/nbfc/doc-request-notify";
 import { sendNbfcEventEmail } from "@/lib/nbfc/event-mailer";
@@ -55,6 +56,7 @@ export async function POST(
         { status: 404 },
       );
     }
+    if (!(await adminMayActOnNbfcLead(appUser, wrapper.lead_id))) return nbfcLeadNotYours();
 
     await pushNbfcDocRequest({ requestId: id, adminUserId: appUser.id });
 

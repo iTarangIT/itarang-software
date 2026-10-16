@@ -8,6 +8,7 @@ import {
 } from '@/lib/kyc/admin-workflow';
 import { requireRole } from '@/lib/auth-utils';
 import { requireLeadAccess } from '@/lib/auth/requireLeadAccess';
+import { requireLeadWriter } from '@/lib/leads/actForDealerGuard';
 import { restoreMaskedAadhaarDeep } from '@/lib/kyc/aadhaarMask';
 import { restoreMaskedPanDeep } from '@/lib/kyc/panMask';
 
@@ -32,6 +33,11 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ le
         // back to the onboarding dealer code for a login with no dealer_id).
         const access = await requireLeadAccess(leadId);
         if (!access.ok) return access.response;
+        // ID 183: the file's own dealer — stamps the dealer's action (the
+        // 1-working-day idle rule) and clears any iTarang note. The house login
+        // only sees a file it pushed to another dealer.
+        const writer = await requireLeadWriter(leadId, req, access.user, { lead: { id: lead.id, dealer_id: lead.dealer_id } });
+        if (!writer.ok) return writer.response;
 
         const { step, data: rawData } = await req.json();
         // ID 119: borrower-details hands the form a masked Aadhaar and the form

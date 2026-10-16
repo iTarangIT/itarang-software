@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { requireRole } from '@/lib/auth-utils';
+import { requireTelemetryViewer, telemetryErrorResponse } from '@/lib/telemetry/vehicleAccess';
 import { fetchFleetLocations } from '@/lib/telemetry/queries';
 
 // Distinct State/City options for the Fleet Overview filter dropdowns. Reads the
@@ -7,14 +7,17 @@ import { fetchFleetLocations } from '@/lib/telemetry/queries';
 export async function GET() {
     let user;
     try {
-        user = await requireRole(['ceo', 'dealer']);
+        user = await requireTelemetryViewer();
     } catch (error) {
-        const message = error instanceof Error ? error.message : 'Server error';
-        return NextResponse.json({ success: false, error: { message } }, { status: 500 });
+        return telemetryErrorResponse(error, 'Fleet Locations');
     }
 
     try {
-        const dealerId = user.role === 'dealer' ? user.dealer_id || undefined : undefined;
+        // ID 181: a dealer login with no dealer code gets no locations, not the whole fleet's.
+        if (user.role === 'dealer' && !user.dealerCode) {
+            return NextResponse.json({ success: true, data: { states: [], citiesByState: {} } });
+        }
+        const dealerId = user.role === 'dealer' ? user.dealerCode ?? undefined : undefined;
         const data = await fetchFleetLocations(dealerId);
         return NextResponse.json({ success: true, data });
     } catch (error) {
