@@ -99,7 +99,8 @@ const ADMIN_SALES_HEAD_GROUPS: LayoutGroup[] = [
         defaultOpen: true,
         items: [
             { id: "approvals", label: "Approvals", urgent: true },
-            { node: "Reviews", urgent: true, children: ["kyc-review", "dealer-validation", "product-review"] },
+            // ID 182 / 183: Pushed files sits with KYC review (open one to act for its dealer).
+            { node: "Reviews", urgent: true, children: ["kyc-review", "pushed-files", "dealer-validation", "product-review"] },
             ...both("escalations"),
             ...both("ready-to-assign"),
             // ID 90 — five lines for the work queues (spec: "9 lines to 5"):
@@ -265,6 +266,8 @@ const ADMIN_SALES_HEAD_GROUPS: LayoutGroup[] = [
             ...both("nbfc-settings"),
             ...both("whatsapp-settings"),
             ...both("gdrive-mirror"),
+            // ID 182 — admin only (sales_head has no such item, so it is skipped).
+            "house-team-logins",
             // Anything else the Sales Head's Settings section gains later.
             { section: "Settings" },
         ],
