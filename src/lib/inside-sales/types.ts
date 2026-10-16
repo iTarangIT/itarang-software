@@ -5,6 +5,7 @@
 import type { LeadStatus, LostReason } from "@/lib/lifecycle/transitions";
 import type { LeadAssignedBy } from "@/lib/leads/leadAssignedBy";
 import type { DealerOnboardedVerdict } from "@/lib/leads/dealerOnboardedRules";
+import type { QuoteSend } from "@/lib/leads/quoteSends";
 import type {
     CallStatus,
     NextAction,
@@ -178,6 +179,10 @@ export type LeadDetailTouchpoint = {
     next_action_at: string | null;
     /** ID 83: a NeoDove call made after the owner's "Call now" request, by someone else. */
     called_on_behalf?: boolean;
+    /** ID 191: a display-only entry merged from a failed quote send — its label. */
+    display_label?: string;
+    /** ID 191: "failed" shows the entry in red. */
+    tone?: "failed";
 };
 
 // One product line-item on a commercials quote (E-128). asset_type maps to
@@ -243,6 +248,8 @@ export type LeadDetailCommercials = {
     deal_card_locked?: "ceo" | "dealer" | null;
     /** ID 172 item 5: onboarding fee invoiced to this dealer (₹, before GST); null = not computable. */
     fee_invoiced?: number | null;
+    /** ID 191: every send of this quote (quotation_dispatches), newest first; phone numbers masked. */
+    sends?: QuoteSend[];
     deal_notes: string | null;
     product_lines: CommercialsProductLine[];
     notes: string | null;

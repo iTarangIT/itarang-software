@@ -21,6 +21,7 @@ import { useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { diffCommercials, summariseChanges } from "@/lib/inside-sales/commercialsDiff";
 import type { LeadDetailCommercials } from "@/lib/inside-sales/types";
+import { failedLines, sentLine } from "@/lib/leads/quoteSends";
 
 export function fmtDate(iso: string | null | undefined): string {
     if (!iso) return "—";
@@ -175,6 +176,22 @@ export function QuoteApprovalBlock({
                             {cc.dealer_decision ? "Resend / view" : "Send to dealer"}
                         </button>
                     )}
+                </div>
+            )}
+
+            {/*
+              * ID 191 — how this quote went out: each send with channel, to
+              * whom and when; a failed one in red with its reason. No
+              * delivered / read ticks (decided 14 Oct: not now).
+              */}
+            {cc.sends && cc.sends.length > 0 && (
+                <div className="mt-2 space-y-1 text-[11px]">
+                    {sentLine(cc.sends) && <p className="opacity-90">{sentLine(cc.sends)}</p>}
+                    {failedLines(cc.sends).map((line, i) => (
+                        <p key={i} className="rounded bg-rose-50 px-2 py-1 font-medium text-rose-700">
+                            {line}
+                        </p>
+                    ))}
                 </div>
             )}
 
