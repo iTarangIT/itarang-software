@@ -2337,6 +2337,11 @@ export const coBorrowers = pgTable(
   },
 );
 
+// E-349 (ID 166) adds uploaded_by uuid + upload_source varchar(16) to this
+// table and to other_document_requests. NOT mirrored here on purpose (INSERT
+// trap: Drizzle lists every schema column in its INSERTs, which would break
+// every upload on a DB without E-349). Written by src/lib/storage/
+// uploaderStamp.ts, read via to_jsonb in src/lib/storage/fileAuthz.ts.
 export const coBorrowerDocuments = pgTable("co_borrower_documents", {
   id: varchar({ length: 255 }).primaryKey().notNull(),
   lead_id: varchar("lead_id", { length: 255 }).notNull(),
