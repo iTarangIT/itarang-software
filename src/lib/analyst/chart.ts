@@ -25,6 +25,19 @@ import type { Cell, ResultTable } from "./run-types";
 /** How many series the neutral ramp can separate. See the note above. */
 export const MAX_SERIES = 3;
 
+/**
+ * A35: a trend is a line. The agent sometimes answers "how did X move" with a
+ * bar chart; when the x axis is a run of dates, months, weeks or years (three
+ * or more of them), the chart is drawn as a line whatever type was asked.
+ */
+const TIME_LABEL =
+  /^(\d{4}-\d{2}(-\d{2})?([ T].*)?|(19|20)\d{2}-?W\d{1,2}|(19|20)\d{2}|(19|20)\d{2}-Q[1-4]|Q[1-4][ -](19|20)\d{2}|(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*[ -'’]*(\d{2}|\d{4})?|\d{1,2}[ -/](jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*([ -/]\d{2,4})?|\d{1,2}\/\d{1,2}\/\d{2,4})$/i;
+
+export function isTimeAxis(categories: readonly string[]): boolean {
+  if (categories.length < 3) return false;
+  return categories.every((c) => TIME_LABEL.test(c.trim()));
+}
+
 export type ChartPoint = {
   /** For geometry only. Never printed. */
   value: number;
@@ -107,7 +120,7 @@ export function buildChart(spec: ChartSpec, result: ResultTable): PlottableChart
 
   return {
     kind: "chart",
-    type: spec.type,
+    type: spec.type === "bar" && isTimeAxis(categories) ? "line" : spec.type,
     xColumn: spec.x,
     categories,
     series,

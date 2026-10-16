@@ -145,7 +145,8 @@ export type AnalystTopic =
     | "revenue"
     | "margin"
     | "batteries"
-    | "people";
+    | "people"
+    | "trend";
 
 /**
  * ID 32 — the agreed rules above, in words, for the AI Analyst (a separate
@@ -222,6 +223,11 @@ export const ANALYST_RULES: ReadonlyArray<{ topics: readonly AnalystTopic[]; tex
         text:
             "Gross margin = line amount before GST minus mapped cost (vyapar_item_map product, latest stock or price-book cost); " +
             "lines without a mapped product are 'not costed', never zero cost.",
+    },
+    // A35 — trends and forecasts.
+    {
+        topics: ["trend"],
+        text: "A figure over time (by day, week or month) is a line chart, never bars. To forecast, project the next 2 months.",
     },
 ];
 
