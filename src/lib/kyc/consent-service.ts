@@ -24,7 +24,9 @@ import {
   consentRecords,
   kycVerifications,
   leads,
+  users,
 } from "@/lib/db/schema";
+import { consentOtpResendBlocked } from "@/lib/leads/actForDealer";
 import { generateConsentHtml } from "@/lib/consent/consent-pdf-template";
 import { sendEmail } from "@/lib/email/mailer";
 import { sendMsg91Otp } from "@/lib/msg91";
@@ -771,6 +773,12 @@ export async function sendConsentOtp(opts: {
   documentOverride?: { pdfBase64: string; fileName: string; url: string };
   // Stamp the consent_records row with the acting NBFC tenant (Req 1).
   initiatedByTenantId?: string;
+  /**
+   * ID 183: the sender is iTarang acting for the dealer. One live consent OTP
+   * at a time: refuse while a code someone ELSE sent is still live (the
+   * dealer is never blocked — dealer wins). See consentOtpResendBlocked.
+   */
+  requesterIsItarang?: boolean;
 }): Promise<SendConsentOtpResult> {
   const role = toRole(opts.consentFor);
   const channel: ConsentOtpChannel =
@@ -840,6 +848,23 @@ export async function sendConsentOtp(opts: {
     .limit(1);
 
   const now = new Date();
+  // ID 183: one live consent OTP at a time for iTarang senders.
+  if (opts.requesterIsItarang && existingSession) {
+    const [sender] = existingSession.requestedBy
+      ? await db.select({ name: users.name }).from(users).where(eq(users.id, existingSession.requestedBy)).limit(1)
+      : [];
+    const blocked = consentOtpResendBlocked({
+      live: {
+        requestedBy: existingSession.requestedBy ?? null,
+        requestedByName: sender?.name ?? null,
+        expiresAt: existingSession.expiresAt,
+      },
+      requesterId: opts.requestedBy ?? null,
+      requesterIsItarang: true,
+      now,
+    });
+    if (blocked) return { ok: false, status: 409, error: blocked };
+  }
   let session: typeof existingSession | undefined = existingSession;
   if (session && session.sendCount >= OTP_MAX_SENDS) {
     const cutoff = new Date(session.createdAt.getTime() + OTP_COOLDOWN_MS);
@@ -1002,6 +1027,8 @@ export async function sendConsentOtp(opts: {
         deliveryStatus,
         consentRecordId: consentId,
         phone: storedPhone,
+        // ID 183: who sent THIS code (a resend by someone else takes it over).
+        ...(opts.requestedBy ? { requestedBy: opts.requestedBy } : {}),
       })
       .where(eq(consentOtpVerifications.id, session.id));
   } else {

@@ -24,14 +24,15 @@ import { leads } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 import { OfferActionError } from "@/lib/leads/negotiate-offer";
 import { selectOfferWinner } from "@/lib/leads/select-winner";
-import { dealerMayActOnLead } from "@/lib/auth/requireLeadAccess";
+import { ACT_FOR_DEALER_ROLES } from "@/lib/leads/actForDealer";
+import { gateLeadActor, recordActorStep, seenFromRequest } from "@/lib/leads/actForDealerGuard";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const user = await requireRole(["dealer"]);
+    const user = await requireRole(["dealer", ...ACT_FOR_DEALER_ROLES]);
     const { id: leadId } = await params;
 
     let body: { nbfcId?: number | string } = {};
@@ -53,11 +54,14 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     if (!lead) {
       return NextResponse.json({ success: false, error: { message: "Lead not found" } }, { status: 404 });
     }
-    if (!(await dealerMayActOnLead(user, lead.dealer_id, leadId))) {
-      return NextResponse.json({ success: false, error: { message: "Access denied" } }, { status: 403 });
+    // ID 183: the dealer, the house, or Admin / Sales Head acting for the dealer.
+    const gate = await gateLeadActor(user, lead, { write: true, seenDealerActionAt: seenFromRequest(req) });
+    if (!gate.ok) {
+      return NextResponse.json({ success: false, error: { message: gate.message } }, { status: gate.status });
     }
 
     const result = await selectOfferWinner({ leadId, nbfcId: chosenNbfcId });
+    await recordActorStep(gate.actor, "picked the winning lender offer");
 
     return NextResponse.json({
       success: true,

@@ -12,10 +12,19 @@ import {
   type ConsentFor,
   type ConsentOtpChannel,
 } from "@/lib/kyc/consent-service";
-import { requireLeadAccess } from "@/lib/auth/requireLeadAccess";
+import { requireLeadAccess } from "@/lib/auth/requireLeadAccess";
 import { isNextRedirectError } from "@/lib/api-utils";
 
 import { notifyHouseOfDealerStep } from "@/lib/leads/pushNotices";
+import { getOpenQueueEntryForLead } from "@/lib/kyc/admin-workflow";
+import { isActForDealerRole, isItarangActor } from "@/lib/leads/actForDealer";
+import {
+  fileDealerNames,
+  gateLeadActor,
+  leadForGate,
+  recordActorStep,
+  seenFromRequest,
+} from "@/lib/leads/actForDealerGuard";
 type RouteContext = {
   params: Promise<{ leadId: string }>;
 };
@@ -40,6 +49,18 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
     // ID 119: signed in AND this lead is the caller's (a dealer's own lead, or back office).
     const leadGate = await requireLeadAccess(leadId);
     if (!leadGate.ok) return leadGate.response;
+    // ID 183: who is sending — the file's dealer, the house on a file it
+    // pushed out, or Admin / Sales Head acting for the dealer (permission,
+    // "being worked by", dealer wins). An Admin regenerating a consent on a
+    // file already with iTarang for review is that review, not act-for-dealer.
+    const lead = await leadForGate(leadId);
+    if (!lead) return NextResponse.json({ success: false, error: { message: "Forbidden" } }, { status: 403 });
+    const adminReview = isActForDealerRole(user.role) && !!(await getOpenQueueEntryForLead(leadId));
+    const gate = await gateLeadActor(user, lead, { write: true, seenDealerActionAt: seenFromRequest(req), adminReview });
+    if (!gate.ok) {
+      return NextResponse.json({ success: false, error: { message: gate.message } }, { status: gate.status });
+    }
+    const actor = gate.actor;
     const body = await req.json().catch(() => ({}));
     const channel = String(body?.channel || "call").toLowerCase();
 
@@ -50,8 +71,14 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
       );
     }
 
+    // The consent PDF prints the dealer's name. ID 183: always the FILE's
+    // dealer — for iTarang (house login or Admin / Sales Head) that is the
+    // dealer the file belongs to, never the caller.
     let dealerName = "";
-    if (user.id) {
+    if (isItarangActor(actor.kind)) {
+      const names = await fileDealerNames(lead.dealer_id);
+      dealerName = names.loginName || names.display || "";
+    } else if (user.id) {
       const userRows = await db.select().from(users).where(eq(users.id, user.id)).limit(1);
       if (userRows.length) dealerName = userRows[0].name || "";
     }
@@ -66,6 +93,7 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
         consentFor,
         dealerName,
         requestedBy: user.id ?? null,
+        requesterIsItarang: isItarangActor(actor.kind),
       });
 
       if (!otpResult.ok) {
@@ -77,6 +105,8 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
 
       // 14 Oct: tell the iTarang house dealer when the dealer moves a file it pushed.
       await notifyHouseOfDealerStep(leadId, "sent the consent to the customer", leadGate.user.dealer_id);
+      // ID 183: "Done by <name> for <dealer>" + the dealer told.
+      await recordActorStep(actor, `sent the consent code to the customer (${otpResult.channel})`);
       return NextResponse.json({
         success: true,
         hasDigioIntegration: false,
@@ -115,6 +145,7 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
 
     // 14 Oct: tell the iTarang house dealer when the dealer moves a file it pushed.
     await notifyHouseOfDealerStep(leadId, "sent the consent to the customer", leadGate.user.dealer_id);
+    await recordActorStep(actor, "sent the consent link to the customer");
     return NextResponse.json({
       success: true,
       alreadyActive: result.alreadyActive,

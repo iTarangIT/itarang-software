@@ -6,8 +6,9 @@ import { z } from "zod";
 
 import { requireRole } from "@/lib/auth-utils";
 import { verifyConsentOtp, type ConsentFor } from "@/lib/kyc/consent-service";
-import { requireLeadAccess } from "@/lib/auth/requireLeadAccess";
+import { requireLeadAccess } from "@/lib/auth/requireLeadAccess";
 import { isNextRedirectError } from "@/lib/api-utils";
+import { gateLeadActor, leadForGate, recordActorStep, seenFromRequest } from "@/lib/leads/actForDealerGuard";
 
 type RouteContext = {
   params: Promise<{ leadId: string }>;
@@ -28,6 +29,14 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
     // ID 119: signed in AND this lead is the caller's (a dealer's own lead, or back office).
     const leadGate = await requireLeadAccess(leadId);
     if (!leadGate.ok) return leadGate.response;
+    // ID 183: the dealer, or iTarang acting for the dealer (permission, note,
+    // dealer wins). Who entered the code is consent_records.verified_by.
+    const lead = await leadForGate(leadId);
+    if (!lead) return NextResponse.json({ success: false, error: { message: "Forbidden" } }, { status: 403 });
+    const gate = await gateLeadActor(user, lead, { write: true, seenDealerActionAt: seenFromRequest(req) });
+    if (!gate.ok) {
+      return NextResponse.json({ success: false, error: { message: gate.message } }, { status: gate.status });
+    }
     const parsed = bodySchema.safeParse(await req.json().catch(() => ({})));
     if (!parsed.success) {
       return NextResponse.json(
@@ -56,6 +65,7 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
       );
     }
 
+    await recordActorStep(gate.actor, "entered the customer's consent code (consent verified)");
     return NextResponse.json({
       success: true,
       data: {

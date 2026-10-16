@@ -6,7 +6,8 @@ import { leads } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 import { step5ProductSelectionSchema } from "@/lib/leads/productSelectionSchema";
 import { saveStep5ProductSelection } from "@/lib/leads/step5-product";
-import { dealerMayActOnLead } from "@/lib/auth/requireLeadAccess";
+// ID 183 (16 Oct): dispatch is the dealer's alone — never iTarang, not even the house login.
+import { dealerMayDispatch } from "@/lib/auth/requireLeadAccess";
 
 /**
  * Step 5 product save.
@@ -39,7 +40,7 @@ export async function POST(
         { status: 404 },
       );
     }
-    if (!(await dealerMayActOnLead(user, lead.dealer_id, leadId))) {
+    if (!(await dealerMayDispatch(user, lead.dealer_id))) {
       return NextResponse.json(
         { success: false, error: { message: "Access denied" } },
         { status: 403 },

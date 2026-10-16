@@ -9,11 +9,20 @@ import {
     isDealerKycEditsLocked,
 } from '@/lib/kyc/admin-workflow';
 import { requireLeadAccess } from "@/lib/auth/requireLeadAccess";
+import { gateLeadActor, leadForGate, recordActorStep, seenFromRequest } from "@/lib/leads/actForDealerGuard";
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
     // ID 118: signed in, and this lead is the caller's to touch (a dealer's own lead, or back office).
     const leadGate = await requireLeadAccess((await params).leadId);
     if (!leadGate.ok) return leadGate.response;
+    // ID 183: the dealer, or iTarang acting for the dealer (permission,
+    // "being worked by", dealer wins). Every document records who uploaded it.
+    const gateLead = await leadForGate((await params).leadId);
+    if (!gateLead) return NextResponse.json({ success: false, error: { message: 'Forbidden' } }, { status: 403 });
+    const gate = await gateLeadActor(leadGate.user, gateLead, { write: true, seenDealerActionAt: seenFromRequest(req) });
+    if (!gate.ok) {
+        return NextResponse.json({ success: false, error: { message: gate.message } }, { status: gate.status });
+    }
     try {
         const { leadId } = await params;
 
@@ -93,6 +102,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
                     file_type: file.type,
                     verification_status: 'pending',
                     failed_reason: null,
+                    uploaded_by: leadGate.user.id,
+                    uploaded_at: now,
                     updated_at: now,
                 })
                 .where(eq(kycDocuments.id, existing[0].id));
@@ -109,9 +120,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
                 file_size: file.size,
                 file_type: file.type,
                 verification_status: 'pending',
+                uploaded_by: leadGate.user.id,
             });
         }
 
+        await recordActorStep(gate.actor, `uploaded ${docType.replace(/_/g, ' ')}${docFor === 'borrower' ? ' (co-borrower)' : ''}`);
         return NextResponse.json({
             success: true,
             fileUrl,

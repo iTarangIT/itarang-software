@@ -18,7 +18,8 @@ import { db } from "@/lib/db";
 import { leads } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 import { reselectFinancing, ReselectError } from "@/lib/leads/reselect-financing";
-import { dealerMayActOnLead } from "@/lib/auth/requireLeadAccess";
+import { ACT_FOR_DEALER_ROLES } from "@/lib/leads/actForDealer";
+import { gateLeadActor, recordActorStep, seenFromRequest } from "@/lib/leads/actForDealerGuard";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -33,7 +34,7 @@ const bad = (message: string, status = 400) =>
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const user = await requireRole(["dealer"]);
+    const user = await requireRole(["dealer", ...ACT_FOR_DEALER_ROLES]);
     const { id: leadId } = await params;
 
     let raw: unknown;
@@ -46,12 +47,15 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     if (!parsed.success) return bad(parsed.error.issues[0]?.message ?? "Invalid request");
 
     const [lead] = await db
-      .select({ dealer_id: leads.dealer_id })
+      .select({ id: leads.id, dealer_id: leads.dealer_id })
       .from(leads)
       .where(eq(leads.id, leadId))
       .limit(1);
     if (!lead) return bad("Lead not found", 404);
-    if (!(await dealerMayActOnLead(user, lead.dealer_id, leadId))) return bad("Access denied", 403);
+    // ID 183: the dealer, the house, or Admin / Sales Head acting for the
+    // dealer (permission, "being worked by", dealer wins).
+    const gate = await gateLeadActor(user, lead, { write: true, seenDealerActionAt: seenFromRequest(req) });
+    if (!gate.ok) return bad(gate.message, gate.status);
 
     const result = await reselectFinancing({
       leadId,
@@ -62,6 +66,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       dealerCode: lead.dealer_id as string,
     });
 
+    await recordActorStep(gate.actor, "sent the file to another lender");
     return NextResponse.json({ success: true, data: result });
   } catch (error) {
     if (error instanceof ReselectError) return bad(error.message, error.status);

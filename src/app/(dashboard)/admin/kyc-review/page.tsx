@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import Link from 'next/link';
 import {
     Loader2, Search, CheckCircle2, XCircle, AlertTriangle,
     FileText, User, ChevronDown, ChevronRight, Eye, Download,
@@ -257,9 +258,15 @@ export default function AdminKYCReviewPage() {
     return (
         <div className="min-h-screen bg-[#F8F9FB]">
             <div className="max-w-[1400px] mx-auto px-6 py-8">
-                <header className="mb-8">
-                    <h1 className="text-[28px] font-black text-gray-900 tracking-tight">KYC Document Review</h1>
-                    <p className="text-sm text-gray-500 mt-1">Review and validate KYC documents submitted by dealers for their leads</p>
+                <header className="mb-8 flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                        <h1 className="text-[28px] font-black text-gray-900 tracking-tight">KYC Document Review</h1>
+                        <p className="text-sm text-gray-500 mt-1">Review and validate KYC documents submitted by dealers for their leads</p>
+                    </div>
+                    {/* ID 183: files iTarang pushed to dealers (Admin, Sales Head). */}
+                    <Link href="/admin/kyc-review/pushed-files" className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">
+                        Pushed files
+                    </Link>
                 </header>
 
                 {/* KPI Cards */}
