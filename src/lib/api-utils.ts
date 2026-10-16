@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { ZodError, z } from 'zod';
 import crypto from 'crypto';
 import { sanitizeDbError } from '@/lib/error-utils';
+import { downloadLogStore, isAttachmentResponse } from '@/lib/exports/downloadContext';
 
 /**
  * Validates a stored file reference. Since the Supabase→S3 migration,
@@ -45,7 +46,16 @@ export function withErrorHandler(handler: Function) {
             if (context?.params && typeof context.params.then === 'function') {
                 context = { ...context, params: await context.params };
             }
-            return await handler(req, context);
+            // A39: every file download is logged with who took it. A route that
+            // logs its own (logDataDownload) marks the context; any other file
+            // response is recorded here.
+            const store = { logged: false };
+            const res = await downloadLogStore.run(store, () => handler(req, context));
+            if (!store.logged && isAttachmentResponse(res)) {
+                const { logAttachmentDownload } = await import('@/lib/exports/logAttachment');
+                await logAttachmentDownload(req, res);
+            }
+            return res;
         } catch (error: any) {
             // Re-throw Next.js redirect errors
             if (error.digest?.startsWith('NEXT_REDIRECT')) {
