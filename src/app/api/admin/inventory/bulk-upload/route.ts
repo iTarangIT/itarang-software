@@ -10,6 +10,7 @@ import {
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { requireStockUploader } from "@/lib/inventory/stockUploadGuard";
+import { recheckAfterStockUpload } from "@/lib/inventory/stockUploadTasks/service";
 import {
   successResponse,
   errorResponse,
@@ -899,6 +900,10 @@ export const POST = withErrorHandler(async (req: Request) => {
       reportUrl,
     });
   });
+
+  // ID 174: the upload may complete "Stock to upload" tasks for this dealer
+  // (after the transaction, so the check sees the new stock). Never throws.
+  await recheckAfterStockUpload(dealerId);
 
   return response;
 });

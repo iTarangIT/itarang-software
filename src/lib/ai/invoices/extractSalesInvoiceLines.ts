@@ -50,6 +50,14 @@ const RESPONSE_SCHEMA = {
             description:
               "Taxable value of the row BEFORE GST, after any discount — the 'Taxable amount' column. Never the row total including GST.",
           },
+          // ID 174 — the stock-upload check compares these with the buyer dealer's stock.
+          serial_numbers: {
+            type: "ARRAY",
+            nullable: true,
+            items: { type: "STRING" },
+            description:
+              "Every serial number printed for this row (often after 'Serial No:' under the item name), in the order printed. Empty when none is printed.",
+          },
         },
         required: ["description", "hsn_code", "quantity", "rate", "amount"],
       },
@@ -67,6 +75,7 @@ const SYSTEM_PROMPT = [
   "rate is the price of one unit before GST. quantity is the number of units.",
   "Copy description and hsn_code exactly as printed. Amounts are printed in the Indian grouping style (29,500.00); return plain numbers.",
   "If a value is not printed, return null. Never guess a quantity, a price or an HSN code.",
+  "serial_numbers: copy every serial number printed for the row (battery rows list them under or after the item name, usually one per unit, so their count normally equals the quantity). Copy each exactly; never invent one; return an empty list when the row prints none.",
 ].join(" ");
 
 function num(v: unknown): number | null {
@@ -167,5 +176,8 @@ export async function extractSalesInvoiceLines(
     quantity: num(r.quantity),
     rate: num(r.rate),
     amount: num(r.amount),
+    serial_numbers: Array.isArray(r.serial_numbers)
+      ? (r.serial_numbers as unknown[]).map((s) => str(s)).filter((s): s is string => !!s)
+      : [],
   }));
 }
