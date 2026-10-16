@@ -12,8 +12,11 @@
  * like TRANSFER_AT_EXPR.
  *
  * Ages are working days (Mon–Sat, active holidays off, IST) from the move to
- * the day measured, and "past the limit" uses today's asm_transfer_first_visit
- * time limit — so a period ending today matches the card.
+ * the day measured. "Past the limit" judges each wait by the
+ * asm_transfer_first_visit limit in force on the day of its transfer (ID 85:
+ * dated limits, 15 Oct) — so a past period keeps the limit it was run under,
+ * and a period ending today matches the card. The ageing buckets are drawn at
+ * the limit in force on the period's last day.
  *
  * The filters (state / person / team) read the lead as it is today, and
  * deactivated leads are left out, as on the card.
@@ -22,7 +25,7 @@ import { sql, type SQL } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import { workingDaysBetweenSql } from "@/lib/calendar/holidays";
-import { getTimeLimits } from "@/lib/timeLimits/store";
+import { getTimeLimits, limitOnDay } from "@/lib/timeLimits/store";
 import { actionScopeSql, type ActionScope } from "@/lib/dashboard/salesHeadActions";
 
 export type AgeBucket = { label: string; count: number; overLimit: boolean };
@@ -89,7 +92,9 @@ function buckets(limit: number, ages: number[]): AgeBucket[] {
 /** The visit queue for one period, [from, to] inclusive, IST days. */
 export async function fieldVisitPeriod(s: ActionScope, fromDay: string, toDay: string): Promise<FieldVisitPeriod> {
     if (fromDay > toDay) [fromDay, toDay] = [toDay, fromDay];
-    const limit = Math.max(0, Math.floor((await getTimeLimits()).asm_transfer_first_visit));
+    const limit = Math.max(0, Math.floor((await getTimeLimits(toDay)).asm_transfer_first_visit));
+    const limitOn = await limitOnDay("asm_transfer_first_visit");
+    const lim = sql`FLOOR(${limitOn(sql`(start_at AT TIME ZONE 'Asia/Kolkata')::date`)})`;
     // Period bounds as instants: IST midnight of the first day, IST midnight after the last.
     const A = sql`((${fromDay})::date::timestamp AT TIME ZONE 'Asia/Kolkata')`;
     const B = sql`(((${toDay})::date + 1)::timestamp AT TIME ZONE 'Asia/Kolkata')`;
@@ -143,7 +148,7 @@ export async function fieldVisitPeriod(s: ActionScope, fromDay: string, toDay: s
              WHERE end_at IS NULL OR end_at >= ${A}
         ),
         x AS (
-            SELECT m.*,
+            SELECT m.*, ${lim} AS lim,
                    CASE WHEN waiting_end THEN ${workingDaysBetweenSql(sql`start_at`, lastMoment)} END AS age_end,
                    CASE WHEN by_visit AND ${inPeriod(sql`end_at`)}
                         THEN ${workingDaysBetweenSql(sql`start_at`, sql`end_at`)} END AS days_to_visit
@@ -154,7 +159,8 @@ export async function fieldVisitPeriod(s: ActionScope, fromDay: string, toDay: s
             COUNT(*) FILTER (WHERE waiting_end)::int AS waiting_end,
             COUNT(*) FILTER (WHERE is_new AND ${inPeriod(sql`start_at`)})::int AS transferred,
             COUNT(days_to_visit)::int AS visited,
-            COUNT(*) FILTER (WHERE days_to_visit <= ${limit})::int AS visited_in_limit,
+            COUNT(*) FILTER (WHERE days_to_visit <= lim)::int AS visited_in_limit,
+            COUNT(*) FILTER (WHERE age_end > lim)::int AS overdue_end,
             AVG(days_to_visit)::float AS avg_days,
             COUNT(*) FILTER (WHERE NOT by_visit AND end_at IS NOT NULL AND ${inPeriod(sql`end_at`)}
                               AND left_to IS DISTINCT FROM 'Transferred_to_ASM')::int AS left_without_visit,
@@ -168,7 +174,7 @@ export async function fieldVisitPeriod(s: ActionScope, fromDay: string, toDay: s
         to: toDay,
         waitingAtStart: Number(r.waiting_start ?? 0),
         waitingAtEnd: Number(r.waiting_end ?? 0),
-        overdueAtEnd: ages.filter((a) => a > limit).length,
+        overdueAtEnd: Number(r.overdue_end ?? 0),
         transferred: Number(r.transferred ?? 0),
         visited: Number(r.visited ?? 0),
         visitedInLimit: Number(r.visited_in_limit ?? 0),

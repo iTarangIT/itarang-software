@@ -21,6 +21,7 @@ import { staleSeverity, workingDaysSince, type StaleThresholds } from "@/lib/ins
 import { followUpAgeingBasis } from "@/lib/leads/followUpAgeing";
 import { wonWithoutQuote, type QueueRow, type QueueTab } from "@/lib/inside-sales/types";
 import { WonWithoutQuoteChip } from "@/components/leads/won-without-quote-chip";
+import { PastLimitChip } from "@/components/leads/past-limit-chip";
 
 type Props = {
     tab: QueueTab;
@@ -208,6 +209,7 @@ export function LeadQueueTable({
                                                 calling team — see NeodoveTag. */}
                                             <NeodoveTag syncStatus={row.neodove_sync_status} />
                                             {wonWithoutQuote(row) && <WonWithoutQuoteChip />}
+                                            {row.past_limit && <PastLimitChip />}
                                         </div>
                                         {row.shop_name && row.dealer_name && (
                                             <div className="text-[11px] text-gray-500 mt-0.5">{row.shop_name}</div>

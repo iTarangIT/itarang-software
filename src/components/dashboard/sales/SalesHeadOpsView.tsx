@@ -15,6 +15,7 @@
 // Filters live in the URL (same keys as the sales dashboard API), so a view
 // survives a refresh and can be shared.
 
+import { idleLimitLabel } from "@/lib/timeLimits/labels";
 import React from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
@@ -188,7 +189,10 @@ export function SalesHeadOpsView() {
         staleTime: 5 * 60 * 1000,
         retry: false,
     });
-    const idle = useQuery<{ holders: NeedsAttentionHolderSummary[] }>({
+    const idle = useQuery<{
+        holders: NeedsAttentionHolderSummary[];
+        limits?: { idle_cc: number; idle_asm: number; stale_critical: number };
+    }>({
         queryKey: ["sales-head-ops", "idle"],
         queryFn: () => getData("/api/admin/needs-attention"),
         staleTime: 5 * 60 * 1000,
@@ -421,7 +425,10 @@ export function SalesHeadOpsView() {
             severity: "soon",
             count: num(idleTotal),
             label: "Idle leads",
-            sub: `No work logged: ISR over 5, ASM over 7 working days · ${num(idleOver14)} over 14`,
+            // Labelled from Admin › Time limits (ID 85 Decision 6), never fixed numbers.
+            sub: idle.data?.limits
+                ? `No work logged: ${idleLimitLabel(idle.data.limits)} · ${num(idleOver14)} at ${Math.floor(idle.data.limits.stale_critical)}+`
+                : `No work logged past the idle limit · ${num(idleOver14)} critical`,
             href: "/admin/reports/needs-attention",
         },
         actionTile("onboarding_stalled", "Onboarding stalled", "soon"),

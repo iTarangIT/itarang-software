@@ -45,6 +45,7 @@ import {
     TRANSFER_AT_EXPR,
     TRANSFER_WORKING_DAYS_SQL,
     awaitingFieldVisitSql,
+    transferLimitSql,
     transferVisitOverdueSql,
 } from "@/lib/asm/transferVisitLimit";
 import { WORKABLE_STATUSES } from "@/lib/lifecycle/transitions";
@@ -209,7 +210,12 @@ async function hotNotCalled(s: ActionScope): Promise<Built> {
 }
 
 async function visitOverdue(s: ActionScope): Promise<Built> {
-    const limitDays = (await getTimeLimits()).asm_transfer_first_visit;
+    // Each transfer judged by the limit in force on its day (dated limits);
+    // the label shows today's.
+    const [transferLimit, limitDays] = await Promise.all([
+        transferLimitSql(),
+        getTimeLimits().then((l) => l.asm_transfer_first_visit),
+    ]);
     const raw = await run(sql`
             SELECT dl.id AS lead_id, ${NAME} AS dealer, dl.city, dl.state,
                    COALESCE(a.name, u.name) AS owner_name,
@@ -219,7 +225,7 @@ async function visitOverdue(s: ActionScope): Promise<Built> {
               FROM dealer_leads dl
               LEFT JOIN users a ON a.id::text = dl.asm_id
               LEFT JOIN users u ON u.id::text = dl.current_owner_id
-             WHERE ${transferVisitOverdueSql(limitDays)} ${scope(s, "owner_or_asm")}
+             WHERE ${transferVisitOverdueSql(transferLimit)} ${scope(s, "owner_or_asm")}
              ORDER BY days DESC`);
     const rows = raw.map((r) => base(r, `Transferred ${String(r.transferred_on)} · ${plural(Number(r.days), "working day")}, no visit`));
     const byCity = new Map<string, number>();

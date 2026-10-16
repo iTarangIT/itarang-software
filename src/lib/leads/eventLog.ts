@@ -100,15 +100,21 @@ export type EventLogRow = {
     owner_inferred?: string | null;
 };
 
-type Sources = { interestHistory: boolean; fieldChanges: boolean; clocks: boolean };
+type Sources = { interestHistory: boolean; fieldChanges: boolean; clocks: boolean; limitEvents: boolean };
 
 async function sources(): Promise<Sources> {
     const r = (await db.execute(sql`
         SELECT to_regclass('public.dealer_lead_interest_history') IS NOT NULL AS ih,
                to_regclass('public.dealer_lead_field_changes') IS NOT NULL AS fc,
-               to_regclass('public.lead_clocks') IS NOT NULL AS lc
-    `)) as unknown as Array<{ ih: boolean; fc: boolean; lc: boolean }>;
-    return { interestHistory: Boolean(r[0]?.ih), fieldChanges: Boolean(r[0]?.fc), clocks: Boolean(r[0]?.lc) };
+               to_regclass('public.lead_clocks') IS NOT NULL AS lc,
+               to_regclass('public.lead_limit_events') IS NOT NULL AS le
+    `)) as unknown as Array<{ ih: boolean; fc: boolean; lc: boolean; le: boolean }>;
+    return {
+        interestHistory: Boolean(r[0]?.ih),
+        fieldChanges: Boolean(r[0]?.fc),
+        clocks: Boolean(r[0]?.lc),
+        limitEvents: Boolean(r[0]?.le),
+    };
 }
 
 /** `ts` inside [from, to] as IST calendar days. */
@@ -155,13 +161,30 @@ function eventsUnion(f: EventLogFilters, s: Sources): SQL {
          WHERE ${inRange(sql`fc.changed_at`, f)}`
         : null;
 
-    // ID 86 — a clock that passed its limit, dated when it fell due.
-    const limitPassed = s.clocks
+    // ID 86 — a clock that passed its limit, dated when it fell due. From the
+    // fixed records (E-343) when present: written once, charged to the owner
+    // at that moment, never rebuilt. Else from the hourly-derived clocks.
+    const clockName = (c: SQL) => sql`CASE ${c} WHEN 'lead' THEN 'Lead clock' WHEN 'owner' THEN 'Owner clock'
+                   WHEN 'transfer' THEN 'Transfer clock' WHEN 'hot_assign' THEN 'Hot: ready to assigned'
+                   WHEN 'hot_owner' THEN 'Hot: owner clock' WHEN 'retry' THEN 'Retry clock'
+                   WHEN 'quote' THEN 'CEO quote approval' ELSE ${c} END`;
+    const clockGoal = (c: SQL) => sql`CASE ${c} WHEN 'transfer' THEN 'First visit' WHEN 'hot_assign' THEN 'An owner'
+                   WHEN 'quote' THEN 'A decision' WHEN 'retry' THEN 'Next attempt' ELSE 'First call or visit' END`;
+    const unitWords = (u: SQL) => sql`CASE ${u} WHEN 'working_days' THEN ' working days' WHEN 'days' THEN ' days' ELSE ' working hours' END`;
+    const limitPassed = s.limitEvents
         ? sql`
+        SELECT e.passed_at, e.dealer_lead_id, 'Limit passed',
+               ${clockName(sql`e.clock`)},
+               ${clockGoal(sql`e.clock`)} || ' within ' || round(e.limit_value)::int::text || ${unitWords(sql`e.limit_unit`)},
+               e.owner_id, NULL, NULL, NULL,
+               CASE WHEN e.owner_inferred THEN 'Owner not on record (before 10 Sep 2026 or inferred) — left out of per-person counts' END
+          FROM lead_limit_events e
+         WHERE ${inRange(sql`e.passed_at`, f)}`
+        : s.clocks
+          ? sql`
         SELECT c.limit_passed_at, c.dealer_lead_id, 'Limit passed',
-               CASE c.clock WHEN 'lead' THEN 'Lead clock' WHEN 'owner' THEN 'Owner clock' ELSE 'Transfer clock' END,
-               CASE c.clock WHEN 'transfer' THEN 'First visit' ELSE 'First call or visit' END || ' within '
-                   || round(c.limit_value)::int::text
+               ${clockName(sql`c.clock`)},
+               ${clockGoal(sql`c.clock`)} || ' within ' || round(c.limit_value)::int::text
                    || CASE WHEN c.clock = 'transfer' THEN ' working days' ELSE ' working hours' END,
                c.owner_id, NULL,
                CASE WHEN c.first_attempt_at IS NULL THEN 'not attempted' ELSE 'attempted late' END,
@@ -169,7 +192,7 @@ function eventsUnion(f: EventLogFilters, s: Sources): SQL {
                CASE WHEN c.owner_inferred THEN 'Owner inferred from assigned_at (no assignment record)' END
           FROM lead_clocks c
          WHERE c.limit_passed_at IS NOT NULL AND ${inRange(sql`c.limit_passed_at`, f)}`
-        : null;
+          : null;
 
     // Each source, tagged with the event types (eventTypes.ts values) it can
     // produce: a source none of whose types were asked for is not run at all.

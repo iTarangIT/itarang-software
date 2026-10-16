@@ -1016,6 +1016,15 @@ const visits: Dataset = {
                 { key: "transferred_on", header: "Transferred on", meaning: "When the lead was last handed to an ASM.", kind: "datetime" },
                 { key: "transferred_by", header: "Transferred by", meaning: "Who handed it over.", width: 22 },
                 { key: "days_transfer_to_visit", header: "Days from transfer to visit", meaning: "Calendar days from that transfer to this visit. Blank when the visit is not done or came before the transfer.", kind: "number" },
+                // IDs 85 / 86 — the field-visit (transfer) clock covering this visit.
+                { key: "visit_limit_days", header: "Field-visit limit (working days)", meaning: "Transfer clock (ID 86): the first-visit limit in force on the day of the transfer this visit answers. Blank = no transfer clock.", kind: "number" },
+                { key: "visit_limit_passed", header: "Field-visit limit passed", meaning: "No, or Yes with when (IST): the first visit after that transfer came after the limit, or has not come. Blank = no transfer clock." , width: 22 },
+                // ID A18 — lead-by-lead review: where the lead stands now.
+                { key: "lead_status_now", header: "Lead status now", meaning: "The lead's status today (A18: review each visited lead and what happened next)." },
+                { key: "interest_now", header: "Interest now", meaning: "Hot / Warm / Cold today." },
+                { key: "next_follow_up", header: "Next follow-up", meaning: "The lead's next follow-up date, if one is set.", kind: "datetime" },
+                { key: "last_disposition", header: "Last call outcome", meaning: "The latest call disposition on the lead.", width: 24 },
+                { key: "owner_now", header: "Owner now", meaning: "Who holds the lead today.", width: 22 },
             ],
         },
     ],
@@ -1024,6 +1033,22 @@ const visits: Dataset = {
         return Number(r?.n ?? 0);
     },
     async build(ctx) {
+        // IDs 85 / 86 — the transfer clock this visit answers (latest started
+        // on or before the visit day), when E-337's lead_clocks exists.
+        const clocks = await hasLeadClocks();
+        const clockJoin = clocks
+            ? sql`LEFT JOIN LATERAL (
+                  SELECT c.limit_value, c.limit_passed_at FROM lead_clocks c
+                   WHERE c.dealer_lead_id = v.dealer_lead_id AND c.clock = 'transfer'
+                     AND (c.started_at AT TIME ZONE 'Asia/Kolkata')::date <= COALESCE(v.actual_visit_date, v.scheduled_date, CURRENT_DATE)
+                   ORDER BY c.started_at DESC LIMIT 1) tc ON TRUE`
+            : sql``;
+        const clockCols = clocks
+            ? sql`tc.limit_value::int AS visit_limit_days,
+                   CASE WHEN tc.limit_value IS NULL THEN NULL
+                        WHEN tc.limit_passed_at IS NULL THEN 'No'
+                        ELSE 'Yes · ' || to_char(tc.limit_passed_at AT TIME ZONE 'Asia/Kolkata', 'DD Mon YYYY HH24:MI') END AS visit_limit_passed`
+            : sql`NULL::int AS visit_limit_days, NULL::text AS visit_limit_passed`;
         const data = await rows(sql`
             SELECT COALESCE(v.actual_visit_date, v.scheduled_date) AS visit_date, v.scheduled_date,
                    v.dealer_lead_id AS lead_id,
@@ -1038,10 +1063,15 @@ const visits: Dataset = {
                         THEN v.gps_check_in_lat::text || ', ' || v.gps_check_in_lng::text END AS location_pin,
                    tr.performed_at AS transferred_on, tr.name AS transferred_by,
                    CASE WHEN v.actual_visit_date >= (tr.performed_at AT TIME ZONE 'Asia/Kolkata')::date
-                        THEN v.actual_visit_date - (tr.performed_at AT TIME ZONE 'Asia/Kolkata')::date END AS days_transfer_to_visit
+                        THEN v.actual_visit_date - (tr.performed_at AT TIME ZONE 'Asia/Kolkata')::date END AS days_transfer_to_visit,
+                   ${clockCols},
+                   replace(dl.lead_status, '_', ' ') AS lead_status_now, dl.interest_level AS interest_now,
+                   dl.next_follow_up_at AS next_follow_up, dl.last_disposition, ou.name AS owner_now
               FROM lead_visits v
               LEFT JOIN dealer_leads dl ON dl.id = v.dealer_lead_id
               LEFT JOIN users u ON u.id::text = v.asm_id
+              LEFT JOIN users ou ON ou.id::text = dl.current_owner_id
+              ${clockJoin}
               LEFT JOIN LATERAL (
                   SELECT tt.performed_at, tu.name FROM lead_touchpoints tt
                     LEFT JOIN users tu ON tu.id::text = tt.performed_by
@@ -1165,6 +1195,9 @@ const quotes: Dataset = {
                 { key: "approved_by", header: "Approver", meaning: "Who approved or rejected it.", width: 22 },
                 { key: "approved_at", header: "Decided on", meaning: "When it was approved or rejected.", kind: "datetime" },
                 { key: "approval_wait_hours", header: "Approval wait (hours)", meaning: "Hours from raising the quote to the decision.", kind: "number" },
+                // IDs 85 / 86 — the CEO quote-approval clock (E-343).
+                { key: "approval_working_hours", header: "Approval wait (working hours)", meaning: "CEO quote-approval clock: working hours (Mon–Sat 10:00–19:00, holidays off) from the quote reaching the CEO to the decision. Blank for auto-approved quotes and before E-343.", kind: "number" },
+                { key: "approval_limit_passed", header: "Approval limit passed", meaning: "No, or Yes with when (IST): the CEO decided after the limit (Admin › Time limits), or has not decided. Blank for auto-approved quotes.", width: 22 },
                 { key: "rejection_reason", header: "Rejection reason", meaning: "Why it was rejected, when it was.", width: 36 },
                 { key: "delivered_at", header: "Delivered on", meaning: "First successful send of the quotation to the dealer.", kind: "datetime" },
                 { key: "channels", header: "Delivered through", meaning: "Email, WhatsApp, or both." },
@@ -1201,6 +1234,17 @@ const quotes: Dataset = {
         const actualCols = actuals
             ? sql`da.fee_invoiced, CASE WHEN (to_jsonb(dl) ->> 'won_at') IS NOT NULL THEN COALESCE(da.batteries_60d, 0) END AS batteries_60d_after_won`
             : sql`NULL::float8 AS fee_invoiced, NULL::float8 AS batteries_60d_after_won`;
+        // IDs 85 / 86 — the CEO quote-approval clock for this version.
+        const clocks = await hasLeadClocks();
+        const qcJoin = clocks
+            ? sql`LEFT JOIN lead_clocks qc ON qc.dealer_lead_id = c.dealer_lead_id AND qc.clock = 'quote' AND qc.started_at = date_trunc('milliseconds', c.created_at)`
+            : sql``;
+        const qcCols = clocks
+            ? sql`ROUND((qc.attempt_working_minutes / 60.0)::numeric, 1) AS approval_working_hours,
+                   CASE WHEN qc.limit_value IS NULL THEN NULL
+                        WHEN qc.limit_passed_at IS NULL THEN 'No'
+                        ELSE 'Yes · ' || to_char(qc.limit_passed_at AT TIME ZONE 'Asia/Kolkata', 'DD Mon YYYY HH24:MI') END AS approval_limit_passed`
+            : sql`NULL::numeric AS approval_working_hours, NULL::text AS approval_limit_passed`;
         const [quoteRows, lineRows] = await Promise.all([
             rows(sql`
                 SELECT c.quote_number, c.version_no, c.is_current, c.dealer_lead_id AS lead_id,
@@ -1223,9 +1267,11 @@ const quotes: Dataset = {
                        to_jsonb(c) ->> 'fee_waived_reason' AS fee_waived_reason,
                        (to_jsonb(c) ->> 'expected_batteries_per_month')::int AS expected_batteries_per_month,
                        (to_jsonb(c) ->> 'expected_finance_files_per_month')::int AS expected_finance_files_per_month,
-                       ${actualCols}
+                       ${actualCols},
+                       ${qcCols}
                   ${quoteFrom}
                   ${actualsJoin}
+                  ${qcJoin}
                  WHERE ${quotesWhere(ctx)}
                  ORDER BY c.created_at DESC
                  LIMIT ${rowLimit(ctx)}

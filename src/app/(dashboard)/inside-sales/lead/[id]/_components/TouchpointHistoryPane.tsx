@@ -1,10 +1,12 @@
 "use client";
 
-import { Download } from "lucide-react";
+import { AlarmClock, Download } from "lucide-react";
 import type {
+    LeadDetailLimitEvent,
     LeadDetailStatusHistory,
     LeadDetailTouchpoint,
 } from "@/lib/inside-sales/types";
+import { limitEventOwnerLine, limitEventTitle } from "@/lib/leads/limitEventLabels";
 import {
     TOUCHPOINT_ICONS as ICONS,
     TOUCHPOINT_TYPE_LABEL as TYPE_LABEL,
@@ -14,6 +16,8 @@ type Props = {
     leadId: string;
     touchpoints: LeadDetailTouchpoint[];
     statusHistory: LeadDetailStatusHistory[];
+    /** IDs 85 / 86 — missed time limits on this lead, listed above the touchpoints. */
+    limitEvents?: LeadDetailLimitEvent[];
     /**
      * Offer "Export to Excel". Defaults to true for the admin-only escalation
      * view; the lead pages pass canExportLeadHistory() so a rep sees the button
@@ -90,7 +94,7 @@ function formatTime(iso: string): string {
     });
 }
 
-export function TouchpointHistoryPane({ leadId, touchpoints, canExport = true }: Props) {
+export function TouchpointHistoryPane({ leadId, touchpoints, limitEvents = [], canExport = true }: Props) {
     return (
         <div className="overflow-y-auto border-r border-gray-100 bg-white">
             <div className="px-6 py-4 sticky top-0 bg-white border-b border-gray-100 z-[1] flex items-start justify-between gap-3">
@@ -111,6 +115,22 @@ export function TouchpointHistoryPane({ leadId, touchpoints, canExport = true }:
                 )}
             </div>
             <div className="px-6 py-4">
+                {limitEvents.length > 0 && (
+                    <div className="mb-4 rounded-lg border border-rose-100 bg-rose-50/50 px-3 py-2">
+                        <div className="flex items-center gap-1.5 text-xs font-semibold text-rose-800">
+                            <AlarmClock className="h-3.5 w-3.5" />
+                            {limitEvents.length} time limit{limitEvents.length === 1 ? "" : "s"} passed
+                        </div>
+                        <ul className="mt-1.5 space-y-1">
+                            {limitEvents.map((e) => (
+                                <li key={`${e.clock}-${e.passed_at}`} className="text-[11px] text-gray-700">
+                                    <span className="font-medium text-rose-800">{limitEventTitle(e)}</span>
+                                    <span className="text-gray-500"> · {formatTime(e.passed_at)} · {limitEventOwnerLine(e)}</span>
+                                </li>
+                            ))}
+                        </ul>
+                    </div>
+                )}
                 {touchpoints.length === 0 ? (
                     <div className="text-sm text-gray-500 py-10 text-center">
                         No touchpoints logged yet. Use the action bar below to log the first one.
