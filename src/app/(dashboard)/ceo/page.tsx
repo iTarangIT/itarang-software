@@ -45,6 +45,7 @@ import {
 import type { FunnelCountsResult } from "@/lib/admin/funnelCountsTypes";
 import type { ReportResult } from "@/lib/admin/types";
 import type { SalesDashboard } from "@/lib/admin/salesDashboardTypes";
+import { batteryReading } from "@/lib/admin/batteryReading";
 import type { CeoOverviewData } from "@/components/dashboard/ceo/CeoOverviewCards";
 import { DashboardSkeleton } from "@/components/dashboard/ceo/DashboardSkeleton";
 import { GreenNewsCard } from "@/components/dashboard/ceo/GreenNewsCard";
@@ -571,11 +572,10 @@ export default function CEODashboard() {
     return { pill: { text: `${v.pct}% of target`, tone: toneForPct(v.pct) }, line, split };
   };
   const revenueTarget = vsTarget(money ? money.revenue.now : null, "revenue", inr);
-  const batteriesTarget = vsTarget(
-    sales.data ? sales.data.outcome.batteries_to_dealers : null,
-    "batteries_sold",
-    num,
-  );
+  // A14: read through batteryReading — invoices with no item lines read make
+  // the count unknown ("—"), never a bare 0; some missing makes it a floor (+).
+  const batteries = sales.data ? batteryReading(sales.data.outcome) : null;
+  const batteriesTarget = vsTarget(batteries ? batteries.value : null, "batteries_sold", num);
 
   // ── Revenue pace ─────────────────────────────────────────────────────────
   const chart = ov?.chart ?? [];
@@ -830,7 +830,11 @@ export default function CEODashboard() {
         <KpiTile
           label="Batteries to dealers"
           href={`/ceo/batteries?from=${win.from}&to=${win.to}&label=${encodeURIComponent(periodLabel)}`}
-          value={sales.data ? num(sales.data.outcome.batteries_to_dealers) : "—"}
+          value={
+            !batteries || batteries.value == null
+              ? "—"
+              : `${num(batteries.value)}${batteries.state === "partial" ? "+" : ""}`
+          }
           pill={batteriesTarget.pill}
           sub={
             sales.isLoading
@@ -838,7 +842,13 @@ export default function CEODashboard() {
               : [
                   batteriesTarget.line,
                   batteriesTarget.split,
-                  sales.data ? "Battery lines on dealer invoices in the period" : "Not available yet",
+                  !batteries
+                    ? "Not available yet"
+                    : batteries.state === "unknown"
+                      ? `No item lines read on the ${num(batteries.invoices ?? 0)} invoices in the period`
+                      : batteries.state === "partial"
+                        ? `At least — ${num(batteries.with_lines ?? 0)} of ${num(batteries.invoices ?? 0)} invoices have item lines`
+                        : "Battery units on dealer invoices in the period (HSN 8507, credit notes netted)",
                 ]
                   .filter(Boolean)
                   .join(" · ")

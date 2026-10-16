@@ -416,7 +416,7 @@ function SkuTab() {
     const q = useQuery({
         queryKey: ["invoice-ledger-sku", from, to],
         queryFn: async () =>
-            readData<{ available: boolean; rows: Array<{ month: string; product_class: string; sku: string; mapped: boolean; quantity: number; amount_excl_gst: number; invoices: number }> }>(
+            readData<{ available: boolean; rows: Array<{ month: string; product_class: string; sku: string; mapped: boolean; quantity: number; dealer_quantity?: number; amount_excl_gst: number; invoices: number }> }>(
                 await fetch(`/api/admin/sales-invoices/ledger/sku?from=${from}&to=${to}`),
                 "Could not load the SKU report",
             ),
@@ -425,6 +425,7 @@ function SkuTab() {
         const rows = q.data?.rows ?? [];
         return {
             batteries: rows.filter((r) => r.product_class === "battery").reduce((s, r) => s + r.quantity, 0),
+            dealerBatteries: rows.filter((r) => r.product_class === "battery").reduce((s, r) => s + (r.dealer_quantity ?? r.quantity), 0),
             amount: rows.reduce((s, r) => s + r.amount_excl_gst, 0),
         };
     }, [q.data]);
@@ -440,6 +441,13 @@ function SkuTab() {
                 </label>
                 <span className="text-ink-muted">
                     {totals.batteries} batteries · {inr(totals.amount)} before GST
+                </span>
+                {/* A14: the ledger counts every invoice; the Sales dashboard only dealer-matched ones. */}
+                <span
+                    className="text-ink-muted"
+                    title="Batteries sold on the Sales dashboard, Targets and the daily email count only invoices matched to a dealer (account or lead). Match the rest on Needs attention."
+                >
+                    · {totals.dealerBatteries} on dealer-matched invoices (= Batteries sold)
                 </span>
             </div>
             {q.isLoading ? (
