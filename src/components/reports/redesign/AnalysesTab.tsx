@@ -26,6 +26,9 @@ import {
     type LeadSourceRow,
     type LeadSourcesResult,
     type MeetingsResult,
+    type GridResult,
+    gridCell,
+    isGridAnalysis,
 } from "@/lib/reports/analysesShared";
 import { BTN_OUTLINE, C, CARD, CheckPill, ErrorLine, Loading, PANEL, PILL, RuleLine, SELECT, Segmented, TH, getJson, Bar } from "./ui";
 
@@ -112,7 +115,7 @@ export function AnalysesTab({ onDownload }: { onDownload: (params: Record<string
         } else if (an === "ai_score") {
             if (source) p.set("source", source);
             if (team) p.set("team", team);
-        } else {
+        } else if (an === "meetings") {
             if (manager) p.set("manager", manager);
             if (city) p.set("city", city);
         }
@@ -121,7 +124,7 @@ export function AnalysesTab({ onDownload }: { onDownload: (params: Record<string
 
     const q = useQuery({
         queryKey: ["reports-analysis", an, qs],
-        queryFn: () => getJson<LeadSourcesResult | AiScoreResult | MeetingsResult>(`/api/reports/analyses/${an}?${qs}`),
+        queryFn: () => getJson<LeadSourcesResult | AiScoreResult | MeetingsResult | GridResult>(`/api/reports/analyses/${an}?${qs}`),
         // Keep the last answer for the SAME analysis on screen while a filter
         // change loads, so the filter controls never vanish mid-click.
         placeholderData: (prev, prevQuery) => (prevQuery?.queryKey[1] === an ? prev : undefined),
@@ -135,6 +138,9 @@ export function AnalysesTab({ onDownload }: { onDownload: (params: Record<string
         if (an === "lead_sources" && period) {
             Object.assign(p, { from: period.from, to: period.to, contactability: "include" });
             if (state.trim()) p.state = state.trim();
+        } else if (isGridAnalysis(an) && period) {
+            // A22–A24 count leads by their creation date — the Leads download's default.
+            Object.assign(p, { from: period.from, to: period.to });
         } else if (an === "meetings" && period) {
             // Visits that happened — the rows this analysis counts.
             Object.assign(p, { from: period.from, to: period.to, date_field: "visit", status: "visited" });
@@ -325,8 +331,9 @@ export function AnalysesTab({ onDownload }: { onDownload: (params: Record<string
                         </div>
 
                         {an === "lead_sources" && "group" in data && <SourcesTable data={data} show={show} />}
-                        {an === "ai_score" && !("group" in data) && !("managers" in data) && <AiTable data={data} />}
+                        {an === "ai_score" && !("group" in data) && !("managers" in data) && !("kind" in data) && <AiTable data={data} />}
                         {an === "meetings" && "managers" in data && <MeetingsTable data={data} />}
+                        {isGridAnalysis(an) && "kind" in data && data.kind === "grid" && <GridTable data={data} />}
                     </>
                 )}
 
@@ -372,6 +379,41 @@ export function AnalysesTab({ onDownload }: { onDownload: (params: Record<string
 }
 
 // ──────────────────────────────── Tables ────────────────────────────────────
+
+/** A22–A24: one plain table — columns and rows from the server, a total row last. */
+function GridTable({ data }: { data: GridResult }) {
+    const rows = data.total ? [...data.rows, data.total] : data.rows;
+    const cols = data.columns;
+    return (
+        <div className="overflow-x-auto">
+            <table className="min-w-[640px] w-full text-[14px] tabular-nums">
+                <thead>
+                    <tr className={`border-b border-[#e3e8ef] text-left ${TH}`}>
+                        {cols.map((c) => (
+                            <th key={c.key} title={c.hint} className={`px-3 pb-2 ${c.kind === "text" ? "" : "text-right"}`}>
+                                {c.label}
+                            </th>
+                        ))}
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows.map((r, i) => {
+                        const isTotal = data.total != null && i === rows.length - 1;
+                        return (
+                            <tr key={i} className={`border-b border-[#f1f4f7] ${isTotal ? "bg-[#f8fafc] font-bold" : ""}`}>
+                                {cols.map((c) => (
+                                    <td key={c.key} className={`px-3 py-2.5 ${c.kind === "text" ? C.ink : "text-right"}`}>
+                                        {gridCell(r[c.key], c.kind)}
+                                    </td>
+                                ))}
+                            </tr>
+                        );
+                    })}
+                </tbody>
+            </table>
+        </div>
+    );
+}
 
 const SRC_GRID =
     "grid grid-cols-[minmax(150px,1.6fr)_repeat(7,minmax(72px,1fr))_minmax(110px,1.2fr)_minmax(140px,1.5fr)] gap-3";
