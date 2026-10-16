@@ -5,6 +5,7 @@ import { kycVerifications } from '@/lib/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { aadhaarValidateOtp } from '@/lib/decentro';
 import { requireLeadAccess } from '@/lib/auth/requireLeadAccess';
+import { recordActorStep, requireLeadWriter } from '@/lib/leads/actForDealerGuard';
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
     try {
@@ -16,6 +17,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         // ID 119: signed in AND this lead is the caller's (a dealer's own lead, or back office).
         const leadGate = await requireLeadAccess(leadId);
         if (!leadGate.ok) return leadGate.response;
+        // ID 183: a change to the file — its own dealer, or Admin / Sales Head acting for the dealer.
+        const writer = await requireLeadWriter(leadId, req, leadGate.user);
+        if (!writer.ok) return writer.response;
         const { decentro_txn_id, otp } = await req.json();
 
         if (!decentro_txn_id || !otp) {
@@ -34,6 +38,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             updated_at: now,
         }).where(and(eq(kycVerifications.lead_id, leadId), eq(kycVerifications.verification_type, 'aadhaar')));
 
+        await recordActorStep(writer.actor, 'entered the customer\'s Aadhaar OTP');
         return NextResponse.json({
             success,
             responseStatus: decentroRes.responseStatus,

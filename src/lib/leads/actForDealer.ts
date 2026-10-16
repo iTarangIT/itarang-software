@@ -3,8 +3,8 @@
 // shared by the routes, the CRM "Act for dealer" panel and the house login.
 //
 //   Who:    Admin and Sales Head, from the CRM file screen (ACT_FOR_DEALER_ROLES).
-//           The iTarang house logins keep working files the house pushed out,
-//           under the same lock and record rules.
+//           The iTarang house logins only SEE files the house pushed out
+//           (16 Oct: the dealer is the only owner) — leadActorVerdict.
 //   When:   a file iTarang pushed from the house — any time; the dealer's own
 //           file — only after the dealer has done nothing for 1 working day,
 //           or while the dealer has asked iTarang to help.
@@ -38,7 +38,7 @@ export const ACTED_FOR_DEALER = "ACTED_FOR_DEALER";
 /**
  * Who is acting on a file:
  *   dealer  — the dealer the file belongs to (its owner)
- *   house   — an iTarang house login on a file the house pushed out
+ *   house   — an iTarang house login on a file the house pushed out (reads only)
  *   itarang — Admin / Sales Head from the CRM "Act for dealer" panel
  */
 export type LeadActorKind = "dealer" | "house" | "itarang";
@@ -189,3 +189,54 @@ export const DEALER_ONLY_STEPS = [
 
 export const DEALER_ONLY_MESSAGE =
   "Only the dealer can do this step (it uses the dealer's stock and the customer's dispatch code).";
+
+/**
+ * 16 Oct (ID 183): the house login keeps SEEING a file it pushed to a dealer
+ * (Pushed files), but no longer changes it — the dealer is the only owner.
+ */
+export const HOUSE_READ_ONLY_MESSAGE =
+  "This file is with the dealer now. Only the dealer, or Admin / Sales Head through \"Act for dealer\" in the CRM, can change it. You can still see it on Pushed files.";
+
+export const WRITE_REFUSED_MESSAGE =
+  "Only the file's dealer, or Admin / Sales Head acting for the dealer, can change this file.";
+
+export type LeadActorVerdict =
+  | { ok: true; kind: LeadActorKind }
+  | { ok: false; status: 403; message: string };
+
+/**
+ * Who may take a step on a customer file (ID 183, decided 16 Oct):
+ *  - the file's own dealer: everything, dispatch included;
+ *  - a house login on a file the house pushed to another dealer: read only;
+ *  - Admin / Sales Head: reads, and writes through the act-for-dealer checks
+ *    (permission, note, record, notice) — never dispatch;
+ *  - anyone else (CEO, other back-office roles, other dealers): refused for
+ *    writes; reads are not decided here (requireLeadAccess).
+ * `houseOnPushedFile` = the caller is a house login AND the house pushed
+ * this file out (houseMayActOnLead).
+ */
+export function leadActorVerdict(input: {
+  role: string | null | undefined;
+  ownsFile: boolean;
+  houseOnPushedFile: boolean;
+  write: boolean;
+  dispatch: boolean;
+}): LeadActorVerdict {
+  const role = (input.role ?? "").toLowerCase();
+  if (role === "dealer") {
+    if (input.ownsFile) return { ok: true, kind: "dealer" };
+    if (!input.houseOnPushedFile) return { ok: false, status: 403, message: "Access denied" };
+    if (input.dispatch) return { ok: false, status: 403, message: DEALER_ONLY_MESSAGE };
+    if (input.write) return { ok: false, status: 403, message: HOUSE_READ_ONLY_MESSAGE };
+    return { ok: true, kind: "house" };
+  }
+  if (isActForDealerRole(role)) {
+    if (input.dispatch) return { ok: false, status: 403, message: DEALER_ONLY_MESSAGE };
+    return { ok: true, kind: "itarang" };
+  }
+  return {
+    ok: false,
+    status: 403,
+    message: input.write ? WRITE_REFUSED_MESSAGE : "Only Admin or Sales Head can act for the dealer on this file.",
+  };
+}

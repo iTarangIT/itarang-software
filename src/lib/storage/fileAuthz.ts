@@ -215,7 +215,18 @@ async function customerFileUploads(leadId: string, bucket: string, key: string):
             await db.execute(sql`
                 SELECT x.uploaded_by, x.upload_source, u.dealer_id AS uploader_dealer
                   FROM (
-                    SELECT k.uploaded_by::text AS uploaded_by, NULL::text AS upload_source
+                    SELECT k.uploaded_by::text AS uploaded_by,
+                           -- ID 183: kyc_documents has no upload_source; an upload
+                           -- Admin / Sales Head made acting for the dealer is
+                           -- known by its "Done by" record (ACTED_FOR_DEALER,
+                           -- changes.file_url) and counts as the dealer's own.
+                           CASE WHEN EXISTS (
+                             SELECT 1 FROM audit_logs a
+                              WHERE a.entity_type = 'lead' AND a.entity_id = k.lead_id
+                                AND a.action = 'ACTED_FOR_DEALER'
+                                AND a.performed_by = k.uploaded_by
+                                AND a.changes ->> 'file_url' = k.file_url
+                           ) THEN 'act_for_dealer' END AS upload_source
                       FROM kyc_documents k WHERE k.lead_id = ${leadId} AND k.file_url LIKE ${like}
                     UNION ALL
                     SELECT to_jsonb(c) ->> 'uploaded_by', to_jsonb(c) ->> 'upload_source'

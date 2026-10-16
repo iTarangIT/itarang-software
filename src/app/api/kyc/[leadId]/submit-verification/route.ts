@@ -9,7 +9,7 @@ import { dealerDisplayName } from '@/lib/notifications/emit';
 import { getKycAutoApprovalSettings, slaStampFor } from '@/lib/kyc/auto-approval-settings';
 import { requireLeadAccess } from "@/lib/auth/requireLeadAccess";
 import { isMaskedPan } from "@/lib/kyc/panMask";
-import { gateLeadActor, leadForGate, recordActorStep, seenFromRequest } from "@/lib/leads/actForDealerGuard";
+import { recordActorStep, requireLeadWriter } from "@/lib/leads/actForDealerGuard";
 
 const VERIFICATION_LABELS: Record<string, string> = {
     aadhaar: 'Aadhaar Verification',
@@ -63,12 +63,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
     if (!leadGate.ok) return leadGate.response;
     // ID 183: the dealer, or iTarang acting for the dealer (permission,
     // "being worked by", dealer wins). Recorded "Done by <name> for <dealer>".
-    const gateLead = await leadForGate((await params).leadId);
-    if (!gateLead) return NextResponse.json({ success: false, error: { message: 'Forbidden' } }, { status: 403 });
-    const gate = await gateLeadActor(leadGate.user, gateLead, { write: true, seenDealerActionAt: seenFromRequest(req) });
-    if (!gate.ok) {
-        return NextResponse.json({ success: false, error: { message: gate.message } }, { status: gate.status });
-    }
+    const gate = await requireLeadWriter((await params).leadId, req, leadGate.user);
+    if (!gate.ok) return gate.response;
     try {
         const { leadId } = await params;
         const { couponCode, pan_number: sentPan, account_number, ifsc, account_holder_name } = await req.json();

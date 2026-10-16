@@ -3,11 +3,15 @@ import { db } from '@/lib/db';
 import { leads, kycDocuments, kycVerifications, consentRecords } from '@/lib/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { requireLeadAccess } from "@/lib/auth/requireLeadAccess";
+import { recordActorStep, requireLeadWriter } from "@/lib/leads/actForDealerGuard";
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
     // ID 118: signed in, and this lead is the caller's to touch (a dealer's own lead, or back office).
     const leadGate = await requireLeadAccess((await params).leadId);
     if (!leadGate.ok) return leadGate.response;
+    // ID 183: a change to the file — its own dealer, or Admin / Sales Head acting for the dealer.
+    const writer = await requireLeadWriter((await params).leadId, req, leadGate.user);
+    if (!writer.ok) return writer.response;
     try {
         const { leadId } = await params;
         const { paymentMethod } = await req.json();
@@ -71,6 +75,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
                 })
                 .where(eq(leads.id, leadId));
 
+            await recordActorStep(writer.actor, 'completed the KYC step');
             return NextResponse.json({
                 success: true,
                 requiresInterim: true,
@@ -94,6 +99,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         // - Email to dealer: 'KYC approved for {customer_name}'
         // - SMS to customer: 'Your KYC is verified. Next: Select product.'
 
+        await recordActorStep(writer.actor, 'completed the KYC step');
         return NextResponse.json({
             success: true,
             requiresInterim: false,

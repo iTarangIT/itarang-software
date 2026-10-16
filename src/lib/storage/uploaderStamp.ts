@@ -12,7 +12,15 @@ import { and, desc, eq, isNotNull, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { dealerOnboardingApplications } from "@/lib/db/schema";
 
-export type UploadSource = "portal" | "public_link" | "whatsapp";
+export type UploadSource = "portal" | "public_link" | "whatsapp" | "act_for_dealer";
+
+/**
+ * ID 183: an upload Admin / Sales Head made ACTING FOR THE DEALER (the CRM
+ * "Act for dealer" panel, through the act-for-dealer gate). It counts as the
+ * file's dealer's own upload — the dealer opens it (fileRules
+ * dealerUploadedFile) — while uploaded_by still names the staff member.
+ */
+export const ACT_FOR_DEALER_UPLOAD_SOURCE = "act_for_dealer" as const;
 
 export type UploaderStampTable = "co_borrower_documents" | "other_document_requests";
 
@@ -24,9 +32,15 @@ export type UploaderStampTable = "co_borrower_documents" | "other_document_reque
 export async function stampUploader(
   table: UploaderStampTable,
   where: { id: string } | { leadId: string; docKey: string },
-  uploader: { userId: string | null | undefined; source: UploadSource },
+  uploader: {
+    userId: string | null | undefined;
+    source: UploadSource;
+    /** ID 183: made by Admin / Sales Head acting for the dealer → stored as 'act_for_dealer'. */
+    actForDealer?: boolean;
+  },
 ): Promise<void> {
   const userId = uploader.userId?.trim() || null;
+  const source: UploadSource = uploader.actForDealer ? ACT_FOR_DEALER_UPLOAD_SOURCE : uploader.source;
   const tableSql = sql.raw(table === "co_borrower_documents" ? "co_borrower_documents" : "other_document_requests");
   const cond =
     "id" in where
@@ -35,7 +49,7 @@ export async function stampUploader(
   try {
     await db.execute(sql`
       UPDATE ${tableSql}
-         SET uploaded_by = ${userId}::uuid, upload_source = ${uploader.source}
+         SET uploaded_by = ${userId}::uuid, upload_source = ${source}
        WHERE ${cond}
     `);
   } catch (err) {

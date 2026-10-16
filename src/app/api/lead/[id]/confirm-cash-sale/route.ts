@@ -9,6 +9,7 @@ import { storedFileUrl } from "@/lib/api-utils";
 import { CashSaleError, confirmCashSale } from "@/lib/leads/confirm-cash-sale";
 // ID 183 (16 Oct): dispatch is the dealer's alone — never iTarang, not even the house login.
 import { dealerMayDispatch } from "@/lib/auth/requireLeadAccess";
+import { stampDealerAction } from "@/lib/leads/actForDealerGuard";
 import { notifyHouseOfDealerStep } from "@/lib/leads/pushNotices";
 
 // BRD V2 §2.5 — cash path confirmation for Step 4.
@@ -97,6 +98,8 @@ export async function POST(
         { status: 403 },
       );
     }
+    // ID 183: the dealer acted — the 1-working-day idle rule reads this; clears any iTarang note.
+    await stampDealerAction(leadId, user.id);
 
     const result = await confirmCashSale({
       leadId,

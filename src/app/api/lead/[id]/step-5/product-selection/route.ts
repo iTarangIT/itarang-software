@@ -8,6 +8,7 @@ import { step5ProductSelectionSchema } from "@/lib/leads/productSelectionSchema"
 import { saveStep5ProductSelection } from "@/lib/leads/step5-product";
 // ID 183 (16 Oct): dispatch is the dealer's alone — never iTarang, not even the house login.
 import { dealerMayDispatch } from "@/lib/auth/requireLeadAccess";
+import { stampDealerAction } from "@/lib/leads/actForDealerGuard";
 
 /**
  * Step 5 product save.
@@ -46,6 +47,8 @@ export async function POST(
         { status: 403 },
       );
     }
+    // ID 183: the dealer acted — the 1-working-day idle rule reads this; clears any iTarang note.
+    await stampDealerAction(leadId, user.id);
     if (lead.kyc_status !== "loan_sanctioned") {
       return NextResponse.json(
         {

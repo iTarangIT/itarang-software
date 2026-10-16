@@ -11,6 +11,7 @@ import {
     type ConsentFor,
 } from '@/lib/kyc/consent-service';
 import { requireLeadAccess } from '@/lib/auth/requireLeadAccess';
+import { requireLeadWriter } from '@/lib/leads/actForDealerGuard';
 
 type RouteContext = { params: Promise<{ leadId: string }> };
 
@@ -23,6 +24,10 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
         // ID 119: signed in AND this lead is the caller's (a dealer's own lead, or back office).
         const leadGate = await requireLeadAccess(leadId);
         if (!leadGate.ok) return leadGate.response;
+        // ID 183: the file's own dealer (stamps the dealer's action); the
+        // house login only sees a file it pushed to another dealer.
+        const writer = await requireLeadWriter(leadId, req, leadGate.user);
+        if (!writer.ok) return writer.response;
         const body = await req.json().catch(() => ({}));
 
         let dealerName = '';

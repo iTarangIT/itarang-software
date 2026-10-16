@@ -7,8 +7,10 @@
 //
 //   Phase 1: documents (with "uploaded by"), the consent code (send + enter,
 //            with who sent / entered each), coupon, submit for verification.
-//   Phase 2: loan amount asked, lender pick, offers + pick the winner, lender
-//            document questions, another lender, switch to cash, close.
+//   Phase 2: Step 4 product selection draft (cash file, the dealer's stock) and
+//            pre-sanction documents (ActForDealerStep4), loan amount asked,
+//            lender pick, offers + pick the winner, lender document
+//            questions, another lender, switch to cash, close.
 //   Never:   Step 5 (dispatch), cash sale, delivered — the dealer's alone.
 //
 // May act: house-pushed files any time; the dealer's own files after 1 working
@@ -21,6 +23,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Handshake, History, Lock, RefreshCw } from "lucide-react";
+
+import ActForDealerStep4 from "./ActForDealerStep4";
 
 interface ActState {
   lead: {
@@ -313,6 +317,21 @@ export default function ActForDealerPanel({ leadId }: { leadId: string }) {
                 {busy === "submit" ? "Submitting…" : "Submit for verification"}
               </button>
             </div>
+          </section>
+
+          {/* Phase 2 — Step 4 product selection draft + pre-sanction documents */}
+          <section className="border-t border-gray-100 pt-4">
+            <h3 className="mb-2 font-semibold text-gray-900">Product selection and pre-sanction documents (Step 4)</h3>
+            <ActForDealerStep4
+              leadId={leadId}
+              seenHeader={state.seenHeader}
+              seen={seen}
+              disabled={!canAct}
+              onDone={async () => {
+                await load();
+                await loadPhase2();
+              }}
+            />
           </section>
 
           {/* Phase 2 — lender journey */}

@@ -123,6 +123,16 @@ describe("mayOpenFile (ID 166)", () => {
         expect(mayOpenFile(viewer("admin"), kyc, { fileUploads: [up(null, null, "public_link")] })).toBe(true);
     });
 
+    it("ID 183: an upload Admin / Sales Head made acting for the dealer is the dealer's own", () => {
+        const dealer = viewer("dealer", { dealerCode: "D1" });
+        const afd = { uploaderId: "admin-1", uploaderDealerCode: null, source: "act_for_dealer" };
+        expect(mayOpenFile(dealer, kyc, { leadDealerId: "D1", fileUploads: [afd] })).toBe(true);
+        // still never on another dealer's customer
+        expect(mayOpenFile(dealer, kyc, { leadDealerId: "D2", fileUploads: [afd] })).toBe(false);
+        // a plain Admin upload (the KYC review) stays closed to the dealer
+        expect(mayOpenFile(dealer, kyc, { leadDealerId: "D1", fileUploads: [{ ...afd, source: "portal" }] })).toBe(false);
+    });
+
     it("dealerUploadedFile: a lookup failure refuses", () => {
         const dealer = viewer("dealer", { dealerCode: "D1" });
         expect(dealerUploadedFile(dealer, [{ uploaderId: null, uploaderDealerCode: null, source: "unknown" }])).toBe(false);

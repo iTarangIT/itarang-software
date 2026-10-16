@@ -5,6 +5,7 @@ import { kycVerifications } from '@/lib/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { aadhaarGenerateOtp } from '@/lib/decentro';
 import { requireLeadAccess } from '@/lib/auth/requireLeadAccess';
+import { recordActorStep, requireLeadWriter } from '@/lib/leads/actForDealerGuard';
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
     try {
@@ -16,6 +17,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         // ID 119: signed in AND this lead is the caller's (a dealer's own lead, or back office).
         const leadGate = await requireLeadAccess(leadId);
         if (!leadGate.ok) return leadGate.response;
+        // ID 183: a change to the file — its own dealer, or Admin / Sales Head acting for the dealer.
+        const writer = await requireLeadWriter(leadId, req, leadGate.user);
+        if (!writer.ok) return writer.response;
         const { aadhaar_number } = await req.json();
 
         if (!aadhaar_number || !/^\d{12}$/.test(aadhaar_number)) {
@@ -65,6 +69,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             });
         }
 
+        await recordActorStep(writer.actor, 'sent the Aadhaar OTP to the customer');
         return NextResponse.json({
             success,
             responseStatus: decentroRes.responseStatus,

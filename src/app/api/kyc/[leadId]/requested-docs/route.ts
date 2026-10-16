@@ -6,6 +6,8 @@ import { isS3Backend, putObject, filesProxyPath } from "@/lib/storage/s3";
 import { recomputeWrapperStatus } from "@/lib/nbfc/doc-requests";
 import { notifyAdminsOfUpload } from "@/lib/nbfc/doc-request-notify";
 import { requireLeadAccess } from "@/lib/auth/requireLeadAccess";
+import { stampUploader } from "@/lib/storage/uploaderStamp";
+import { recordActorStep, requireLeadWriter } from "@/lib/leads/actForDealerGuard";
 
 /**
  * GET — Fetch all document requests for a lead (from admin "Request More Docs")
@@ -66,6 +68,9 @@ export async function POST(
     // ID 118: signed in, and this lead is the caller's to touch (a dealer's own lead, or back office).
     const leadGate = await requireLeadAccess((await params).leadId);
     if (!leadGate.ok) return leadGate.response;
+    // ID 183: a change to the file — its own dealer, or Admin / Sales Head acting for the dealer.
+    const writer = await requireLeadWriter((await params).leadId, req, leadGate.user);
+    if (!writer.ok) return writer.response;
     try {
         const { leadId } = await params;
         const formData = await req.formData();
@@ -142,6 +147,8 @@ export async function POST(
                 uploaded_at: new Date(),
             })
             .where(eq(otherDocumentRequests.id, requestId));
+        // ID 166: who uploaded it decides whether the dealer may open it later.
+        await stampUploader("other_document_requests", { id: requestId }, { userId: leadGate.user.id, source: "portal", actForDealer: writer.actor.kind === "itarang" });
 
         // E-200 — if this doc belongs to an NBFC request wrapper, reproject its
         // hop-status and notify the admins that an upload is ready to review.
@@ -155,6 +162,7 @@ export async function POST(
             }).catch(() => {});
         }
 
+        await recordActorStep(writer.actor, `uploaded the requested document "${request.doc_label}"`);
         return NextResponse.json({
             success: true,
             fileUrl,

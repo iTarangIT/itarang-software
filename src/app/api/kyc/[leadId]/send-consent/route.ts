@@ -18,13 +18,7 @@ import { isNextRedirectError } from "@/lib/api-utils";
 import { notifyHouseOfDealerStep } from "@/lib/leads/pushNotices";
 import { getOpenQueueEntryForLead } from "@/lib/kyc/admin-workflow";
 import { isActForDealerRole, isItarangActor } from "@/lib/leads/actForDealer";
-import {
-  fileDealerNames,
-  gateLeadActor,
-  leadForGate,
-  recordActorStep,
-  seenFromRequest,
-} from "@/lib/leads/actForDealerGuard";
+import { fileDealerNames, recordActorStep, requireLeadWriter } from "@/lib/leads/actForDealerGuard";
 type RouteContext = {
   params: Promise<{ leadId: string }>;
 };
@@ -49,18 +43,15 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
     // ID 119: signed in AND this lead is the caller's (a dealer's own lead, or back office).
     const leadGate = await requireLeadAccess(leadId);
     if (!leadGate.ok) return leadGate.response;
-    // ID 183: who is sending — the file's dealer, the house on a file it
-    // pushed out, or Admin / Sales Head acting for the dealer (permission,
-    // "being worked by", dealer wins). An Admin regenerating a consent on a
-    // file already with iTarang for review is that review, not act-for-dealer.
-    const lead = await leadForGate(leadId);
-    if (!lead) return NextResponse.json({ success: false, error: { message: "Forbidden" } }, { status: 403 });
+    // ID 183: who is sending — the file's dealer, or Admin / Sales Head acting
+    // for the dealer (permission, "being worked by", dealer wins); never the
+    // house on a file it pushed out, never the CEO. An Admin regenerating a
+    // consent on a file already with iTarang for review is that review, not
+    // act-for-dealer.
     const adminReview = isActForDealerRole(user.role) && !!(await getOpenQueueEntryForLead(leadId));
-    const gate = await gateLeadActor(user, lead, { write: true, seenDealerActionAt: seenFromRequest(req), adminReview });
-    if (!gate.ok) {
-      return NextResponse.json({ success: false, error: { message: gate.message } }, { status: gate.status });
-    }
-    const actor = gate.actor;
+    const gate = await requireLeadWriter(leadId, req, user, { adminReview });
+    if (!gate.ok) return gate.response;
+    const { actor, lead } = gate;
     const body = await req.json().catch(() => ({}));
     const channel = String(body?.channel || "call").toLowerCase();
 

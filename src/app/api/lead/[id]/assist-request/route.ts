@@ -1,6 +1,6 @@
 // ID 183 — the dealer's "Ask iTarang to help" on one of his customer files.
 //
-//   GET    → is an ask open on this file?
+//   GET    → is an ask open on this file? + what iTarang did on it (history)
 //   POST   { note? } → open one (Admin / Sales Head may then act for him at
 //            once, instead of waiting 1 working day with no dealer action).
 //   DELETE → withdraw it.
@@ -19,6 +19,7 @@ import { dealerMayDispatch } from "@/lib/auth/requireLeadAccess";
 import { emit } from "@/lib/notifications/emit";
 import { dealerParty } from "@/lib/notifications/provenance";
 import { dealerDisplayNames } from "@/lib/leads/pushGuards";
+import { actHistory } from "@/lib/leads/actForDealerGuard";
 
 export const dynamic = "force-dynamic";
 
@@ -51,11 +52,16 @@ async function openAsk(leadId: string): Promise<{ requestedAt: string; by: strin
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const g = await gate((await params).id);
   if (!g) return json({ success: false, error: { message: "Access denied" } }, 403);
+  // ID 183: the dealer's own file timeline of "Done by <name> for <dealer>" lines.
+  const history = await actHistory(g.lead.id, 20).catch((err) => {
+    console.error("[assist-request] act history read failed:", err);
+    return [];
+  });
   try {
-    return json({ success: true, data: { open: await openAsk(g.lead.id) } });
+    return json({ success: true, data: { open: await openAsk(g.lead.id), history } });
   } catch (err) {
     console.error("[assist-request] read failed (is E-345 applied?):", err);
-    return json({ success: true, data: { open: null, unavailable: NOT_SET_UP } });
+    return json({ success: true, data: { open: null, unavailable: NOT_SET_UP, history } });
   }
 }
 

@@ -5,7 +5,7 @@ import { eq, and } from 'drizzle-orm';
 import { calculateDiscount } from '@/lib/razorpay';
 import { requireLeadAccess } from "@/lib/auth/requireLeadAccess";
 import { isItarangActor } from "@/lib/leads/actForDealer";
-import { gateLeadActor, leadForGate, recordActorStep, seenFromRequest } from "@/lib/leads/actForDealerGuard";
+import { recordActorStep, requireLeadWriter } from "@/lib/leads/actForDealerGuard";
 
 const BASE_FEE = Number(process.env.FACILITATION_FEE_BASE_AMOUNT) || 1500;
 
@@ -20,10 +20,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
     if (!leadGate.ok) return leadGate.response;
     // ID 183: the dealer, or iTarang acting for the dealer — who must use a
     // coupon from the FILE's dealer's pool (checked below).
-    const gateLead = await leadForGate((await params).leadId);
-    if (!gateLead) return NextResponse.json({ valid: false, message: 'Forbidden' }, { status: 403 });
-    const gate = await gateLeadActor(leadGate.user, gateLead, { write: true, seenDealerActionAt: seenFromRequest(req) });
+    const gate = await requireLeadWriter((await params).leadId, req, leadGate.user);
     if (!gate.ok) return NextResponse.json({ valid: false, message: gate.message }, { status: gate.status });
+    const gateLead = gate.lead;
     try {
         const { leadId } = await params;
         const { couponCode } = await req.json();

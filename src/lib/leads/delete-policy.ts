@@ -22,13 +22,8 @@ export interface LeadDeleteState {
   adminDeletedAt: Date | string | null;
   /** NBFC assignments for this lead that have NOT been deleted by their tenant. */
   liveNbfcAssignments: number;
-  /**
-   * 14 Oct: the iTarang house dealer still holds this file — it pushed the
-   * file out and the file is with another dealer now. The house keeps full
-   * access to such a file, so the dealer deleting it only takes it off THAT
-   * dealer's list; it is never purged from under the house.
-   */
-  houseHolds?: boolean;
+  // 16 Oct (ID 183): the 14 Oct "house holds" party is gone. A file the house
+  // pushed to a dealer is that dealer's alone, so his delete is followed.
 }
 
 /**
@@ -42,6 +37,5 @@ export function isFullyDeleted(state: LeadDeleteState): boolean {
   if (!state.dealerDeletedAt) return false;
   if (state.adminHolds && !state.adminDeletedAt) return false;
   if (state.liveNbfcAssignments > 0) return false;
-  if (state.houseHolds) return false;
   return true;
 }

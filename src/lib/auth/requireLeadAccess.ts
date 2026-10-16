@@ -155,7 +155,9 @@ export async function requireLeadAccess(leadId: string): Promise<LeadAccessResul
   // uploader_id = the person who created it, so they can still finish its KYC.
   const isUploader = !!lead && lead.uploader_id === user.id;
   // 14 Oct: the house login keeps access to every file it pushed out, wherever
-  // the file is now (houseMayActOnLead) — 16 Oct: never the dispatch steps.
+  // the file is now (houseMayActOnLead). 16 Oct (ID 183): to SEE it only —
+  // every write route also runs requireLeadWriter / gateLeadActor, which
+  // refuses the house on a file that is with another dealer.
   const houseFile =
     !!lead && !isUploader && !dealerOwnsLead(lead.dealer_id, dealerCode) && (await houseMayActOnLead(dealerCode, leadId));
 
@@ -233,20 +235,38 @@ export async function resolveDealerCode(user: {
 }
 
 /**
- * May this dealer act on a lead whose leads.dealer_id is `leadDealerId`?
- * Replaces the raw `lead.dealer_id !== user.dealer_id` compare in the dealer
- * lead routes, which refused a dealer login with no users.dealer_id on its own
- * leads (ID 119) — and let two empty values count as the same dealer.
+ * May this dealer act on (change) a lead whose leads.dealer_id is
+ * `leadDealerId`? Replaces the raw `lead.dealer_id !== user.dealer_id` compare
+ * in the dealer lead routes, which refused a dealer login with no
+ * users.dealer_id on its own leads (ID 119) — and let two empty values count
+ * as the same dealer.
+ *
+ * 16 Oct (ID 183): the file's own dealer only. The house login no longer acts
+ * on a file it pushed to another dealer (the dealer is the only owner); it
+ * still SEES it — dealerMayViewLead.
  */
 export async function dealerMayActOnLead(
   user: { id: string; role: string | null; dealer_id: string | null },
   leadDealerId: string | null | undefined,
-  /** The lead's id — lets the house login act on files it pushed out (14 Oct). */
+  /** The lead's id. Kept for the callers; until 16 Oct it let the house act. */
   leadId?: string | null,
+): Promise<boolean> {
+  void leadId;
+  return dealerOwnsLead(leadDealerId, await resolveDealerCode(user));
+}
+
+/**
+ * May this dealer login SEE a lead: its own dealer's file, or — for a house
+ * login — a file the house pushed out (Pushed files opens it read-only).
+ */
+export async function dealerMayViewLead(
+  user: { id: string; role: string | null; dealer_id: string | null },
+  leadDealerId: string | null | undefined,
+  leadId: string,
 ): Promise<boolean> {
   const code = await resolveDealerCode(user);
   if (dealerOwnsLead(leadDealerId, code)) return true;
-  return !!leadId && houseMayActOnLead(code, leadId);
+  return houseMayActOnLead(code, leadId);
 }
 
 /**
@@ -264,10 +284,11 @@ export async function dealerMayDispatch(
 /**
  * 14 Oct: the iTarang house dealer keeps access to a customer file after
  * pushing it to a dealer so it can see and continue what the dealer does.
- * 16 Oct (ID 33 / 183): no longer the dispatch steps (dealerMayDispatch), no
- * second push (pushBlockedReason), and the file leaves the house's own lists
- * and counts — the dealer is its only owner; the house sees it on Pushed
- * files. True when the caller's dealer code IS the house code (any house
+ * 16 Oct (ID 33 / 183): SEE only — no step on it at all (gateLeadActor /
+ * leadActorVerdict refuse the house's writes), no second push
+ * (pushBlockedReason), and the file leaves the house's own lists and counts —
+ * the dealer is its only owner; the house sees it on Pushed files. The name
+ * is kept for its callers. True when the caller's dealer code IS the house code (any house
  * login) and the file carries a push FROM the house (houseOriginatedLeadIds).
  */
 export async function houseMayActOnLead(callerDealerCode: string | null | undefined, leadId: string): Promise<boolean> {
