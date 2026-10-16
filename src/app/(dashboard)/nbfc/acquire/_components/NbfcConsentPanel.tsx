@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 
+import { onFreshFileClick } from "@/lib/storage/freshFileLink";
 // Change 7 — DPDP consent surface for the NBFC. View/track the consent status
 // per applicant AND re-initiate consent capture (e-sign via Digio, or OTP) for
 // the customer or the co-borrower.
@@ -140,6 +141,7 @@ export default function NbfcConsentPanel({ leadId }: { leadId: string }) {
         {template ? (
           <a
             href={template.url}
+            onClick={(e) => onFreshFileClick(e, template.url)}
             target="_blank"
             rel="noreferrer"
             className="text-xs font-semibold text-[color:var(--color-brand-sky)] hover:underline"
@@ -181,6 +183,7 @@ export default function NbfcConsentPanel({ leadId }: { leadId: string }) {
                 {(c.signed_consent_url || c.generated_pdf_url) ? (
                   <a
                     href={(c.signed_consent_url || c.generated_pdf_url) as string}
+                    onClick={(e) => onFreshFileClick(e, (c.signed_consent_url || c.generated_pdf_url) as string)}
                     target="_blank"
                     rel="noreferrer"
                     className="text-xs font-medium text-[color:var(--color-brand-sky)] hover:underline"
