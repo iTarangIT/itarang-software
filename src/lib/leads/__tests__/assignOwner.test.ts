@@ -14,7 +14,7 @@ vi.mock("@/lib/touchpoints/write", () => ({ writeTouchpoint }));
 const markSalesReady = vi.fn(async () => true);
 vi.mock("@/lib/leads/salesReady", () => ({ markSalesReady }));
 
-const { assignLeadOwner } = await import("../assignOwner");
+const { assignLeadOwner, WON_TO_ASM_REFUSED, wonToAsmRefusal } = await import("../assignOwner");
 
 const asm = { id: "asm-1", role: "asm" };
 const assign = (fromStatus: string | null, target = asm) =>
@@ -42,7 +42,7 @@ describe("assignLeadOwner → Sales-ready", () => {
         for (const [status, target] of [
             ["Under_Discussion", asm],
             ["Transferred_to_ASM", asm],
-            ["Won", asm],
+            ["Won", { id: "isr-1", role: "inside_sales_rep" }],
             [null, { id: "isr-1", role: "inside_sales_rep" }],
             ["Under_Discussion", { id: "isr-1", role: "inside_sales_rep" }],
         ] as const) {
@@ -74,17 +74,33 @@ describe("assignLeadOwner → ASM", () => {
         expect((await assign(null)).path).toBe("asm_lift");
     });
 
-    // ID 74: Won is open, but the S3 guard refuses a transfer from it. The owner
-    // swap commits on its own, so asking for the move used to leave the new
-    // owner in place and then fail with a 409 and no touchpoint.
-    it("a Won lead changes hands with NO status move and no transfer stamps", async () => {
+    // ID 179: a Won lead is closed business — a manager's Transfer to ASM is
+    // hidden on it, and a reassign must not hand it to an ASM either. Nothing
+    // is written (no owner swap, no touchpoint, no Sales-ready event).
+    it("a Won lead is refused for an ASM and nothing is written", async () => {
         const out = await assign("Won");
-        expect(out).toEqual({ assigned: true, path: "owner_swap", statusLiftedTo: null });
-        expect(statements).toHaveLength(1);
+        expect(out).toEqual({ assigned: false, path: "asm_blocked", statusLiftedTo: null, blockedReason: WON_TO_ASM_REFUSED });
+        expect(statements).toHaveLength(0);
+        expect(writeTouchpoint).not.toHaveBeenCalled();
+        expect(markSalesReady).not.toHaveBeenCalled();
+    });
+
+    // ID 74: Won is open, but the S3 guard refuses a transfer from it — giving
+    // it to an ISR is a plain owner swap with NO status move.
+    it("a Won lead given to an ISR changes hands with NO status move", async () => {
+        const out = await assign("Won", { id: "isr-1", role: "inside_sales_rep" } as never);
+        expect(out.assigned).toBe(true);
+        expect(out.statusLiftedTo).toBeNull();
         expect(statements[0]).not.toMatch(/pre_transfer_status|asm_id/);
-        expect(writeTouchpoint).toHaveBeenCalledTimes(1);
         expect(lastInput().statusChange).toBeUndefined();
-        expect(lastInput()).toMatchObject({ fromOwnerId: "rep-old", toOwnerId: "asm-1" });
+    });
+
+    it("wonToAsmRefusal: only Won → ASM is refused", () => {
+        expect(wonToAsmRefusal("Won", "asm")).toBe(WON_TO_ASM_REFUSED);
+        expect(wonToAsmRefusal("Won", "inside_sales_rep")).toBeNull();
+        expect(wonToAsmRefusal("Transferred_to_ASM", "asm")).toBeNull();
+        expect(wonToAsmRefusal("Under_Discussion", "asm")).toBeNull();
+        expect(wonToAsmRefusal(null, "asm")).toBeNull();
     });
 
     it("a closed lead also takes the plain swap", async () => {

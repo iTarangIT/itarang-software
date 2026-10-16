@@ -12,7 +12,7 @@ import { sql } from "drizzle-orm";
 import type { db } from "@/lib/db";
 import { writeTouchpoint } from "@/lib/touchpoints/write";
 import { markSalesReady } from "@/lib/leads/salesReady";
-import { statusBeforeTransfer } from "@/lib/leads/assignOwner";
+import { statusBeforeTransfer, WonToAsmError, wonToAsmRefusal } from "@/lib/leads/assignOwner";
 import {
     AsmVisitBookedError,
     handBackRefusal,
@@ -67,6 +67,10 @@ export async function reassignFromEscalation(
           FROM dealer_leads WHERE id = ${input.leadId} FOR UPDATE
     `)) as unknown as Array<{ current_owner_id: string | null; lead_status: string | null; pre_transfer_status: string | null }>;
     const prev = locked[0];
+
+    // ID 179: a Won lead is never given to an ASM (409, nothing written).
+    const wonRefusal = wonToAsmRefusal(prev?.lead_status, target.role);
+    if (wonRefusal) throw new WonToAsmError(wonRefusal);
 
     const handBack = isHandBack(prev?.lead_status, target.role);
     if (handBack) {
