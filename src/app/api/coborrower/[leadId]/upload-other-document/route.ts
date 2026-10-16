@@ -5,11 +5,16 @@ import { eq, and } from 'drizzle-orm';
 import { createClient } from '@/lib/supabase/server';
 import { isS3Backend, putObject, filesProxyPath } from '@/lib/storage/s3';
 import { requireLeadAccess } from "@/lib/auth/requireLeadAccess";
+import { stampUploader } from '@/lib/storage/uploaderStamp';
+import { recordActorStep, requireLeadWriter } from "@/lib/leads/actForDealerGuard";
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
     // ID 118: signed in, and this lead is the caller's to touch (a dealer's own lead, or back office).
     const leadGate = await requireLeadAccess((await params).leadId);
     if (!leadGate.ok) return leadGate.response;
+    // ID 183: a change to the file — its own dealer, or Admin / Sales Head acting for the dealer.
+    const writer = await requireLeadWriter((await params).leadId, req, leadGate.user);
+    if (!writer.ok) return writer.response;
     try {
         const { leadId } = await params;
         const formData = await req.formData();
@@ -51,7 +56,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
                 eq(otherDocumentRequests.lead_id, leadId),
                 eq(otherDocumentRequests.doc_key, docKey)
             ));
+        // ID 166: who uploaded it decides whether the dealer may open it later.
+        await stampUploader('other_document_requests', { leadId, docKey }, { userId: leadGate.user.id, source: 'portal', actForDealer: writer.actor.kind === 'itarang' });
 
+        await recordActorStep(writer.actor, 'uploaded a co-borrower supporting document');
         return NextResponse.json({ success: true, file_url: fileUrl });
     } catch (error) {
         return NextResponse.json({ success: false, error: { message: 'Server error' } }, { status: 500 });

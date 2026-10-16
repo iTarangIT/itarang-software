@@ -337,8 +337,8 @@ export default function CEODashboard() {
       ),
     staleTime: 5 * 60 * 1000,
   });
-  // Company targets = the sum of everyone's monthly targets (the register on
-  // /admin/targets). A past month counts in full; the current month counts to
+  // Company targets = the sum of everyone's posted monthly targets (the register
+  // on /admin/targets). A past month counts in full; the current month counts to
   // date (pro-rata over working days). A custom range that does not cover whole
   // months has no target.
   const targetMonths = React.useMemo(() => {
@@ -494,7 +494,7 @@ export default function CEODashboard() {
           tone: "bad",
           label: "People below 80% of target",
           count: num(x.spocs_below_80 ?? 0),
-          sub: "Against their target to date",
+          sub: "Against their CEO target to date (built-in metrics)",
           href: "#team",
           cta: "See team",
         },
@@ -542,8 +542,10 @@ export default function CEODashboard() {
   const ordering = bucketCount("active") + bucketCount("cooling");
 
   // "89% of target" pill + "Target to date ₹3.05 Cr" line for a tile.
-  // ID 157 (10 Oct): the target keeps counting every status; under it,
-  // "Accepted ₹A · Not yet accepted ₹B" (Draft + Pending approval + Pushed).
+  // ID 157 (10 Oct): under it, "Accepted ₹A · Not yet accepted ₹B" (Posted +
+  // Pushed). ID 189 (16 Oct): only the version in force counts — the CEO's own
+  // never-posted drafts (in his /api/admin/targets answer) are left out by
+  // summariseCompanyTargets.
   const includesToday = win.to >= todayStr;
   const vsTarget = (
     actual: number | null,
@@ -551,10 +553,18 @@ export default function CEODashboard() {
     fmt: (v: number) => string,
   ): { pill: { text: string; tone: Tone }; line: string | null; split: string | null } => {
     const t = targets.data?.[metric];
+    // ID 189 (Kartik 14 Oct): the tile reads the CEO target; the Sales Head's
+    // stretch on top is its own line, never folded into the %.
+    const stretch = t && t.stretch > 0 ? `Sales Head stretch +${fmt(Math.round(t.stretch))} on top` : null;
     const split =
-      t && t.sum > 0
-        ? `Accepted ${fmt(Math.round(t.accepted))} · Not yet accepted ${fmt(Math.round(t.notAccepted))}`
-        : null;
+      [
+        t && t.sum > 0
+          ? `Accepted ${fmt(Math.round(t.accepted))} · Not yet accepted ${fmt(Math.round(t.notAccepted))}`
+          : null,
+        stretch,
+      ]
+        .filter(Boolean)
+        .join(" · ") || null;
     const v = targetVerdict(t, actual, targetMonths ?? [], ym(now));
     if (v.kind === "none") return { pill: { text: "No target", tone: "neutral" }, line: null, split: null };
     if (v.kind === "partial") {
@@ -567,7 +577,7 @@ export default function CEODashboard() {
         split,
       };
     }
-    const line = `${includesToday ? "Target to date" : "Target"} ${fmt(Math.round(v.goal))}`;
+    const line = `${includesToday ? "CEO target to date" : "CEO target"} ${fmt(Math.round(v.goal))}`;
     if (v.pct == null) return { pill: { text: "Target set", tone: "neutral" }, line, split };
     return { pill: { text: `${v.pct}% of target`, tone: toneForPct(v.pct) }, line, split };
   };
@@ -1242,7 +1252,7 @@ export default function CEODashboard() {
                   className={`grid grid-cols-[minmax(0,1.3fr)_minmax(0,1.6fr)_100px_84px_84px_84px] gap-3 border-b border-border pb-2 ${TABLE_HEAD}`}
                 >
                   <span>Person</span>
-                  <span>% of target to date</span>
+                  <span>% of CEO target to date</span>
                   <span className="text-right">Revenue</span>
                   <span className="text-right">Converted</span>
                   <span

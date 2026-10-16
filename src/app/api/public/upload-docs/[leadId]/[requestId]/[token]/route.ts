@@ -6,6 +6,7 @@ import { createClient } from '@supabase/supabase-js';
 import { isS3Backend, putObject, filesProxyPath } from '@/lib/storage/s3';
 import { recomputeWrapperStatus } from '@/lib/nbfc/doc-requests';
 import { notifyAdminsOfUpload } from '@/lib/nbfc/doc-request-notify';
+import { stampUploader } from '@/lib/storage/uploaderStamp';
 
 const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -99,6 +100,8 @@ export const POST = withErrorHandler(async (req: Request, { params }: { params: 
         upload_status: 'uploaded',
         uploaded_at: new Date(),
     }).where(eq(otherDocumentRequests.id, requestId));
+    // ID 166: the customer sent this, not the dealer — the dealer does not open it.
+    await stampUploader('other_document_requests', { id: requestId }, { userId: null, source: 'public_link' });
 
     // E-200 — NBFC request child: reproject the wrapper + notify admins.
     if (docRequest.nbfc_request_id) {

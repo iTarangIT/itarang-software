@@ -10,6 +10,7 @@ import { activeVideoLivenessInitiate } from '@/lib/decentro';
 import { publicOrigin, PublicOriginError } from '@/lib/public-origin';
 import { sendKycSms } from '@/lib/sms';
 import { requireLeadAccess } from '@/lib/auth/requireLeadAccess';
+import { recordActorStep, requireLeadWriter } from '@/lib/leads/actForDealerGuard';
 
 function buildSmsMessage(url: string): string {
     return `Complete Video KYC for your Itarang loan: ${url} (valid 24h)`;
@@ -30,6 +31,9 @@ export async function POST(
         // ID 119: signed in AND this lead is the caller's (a dealer's own lead, or back office).
         const leadGate = await requireLeadAccess(leadId);
         if (!leadGate.ok) return leadGate.response;
+        // ID 183: a change to the file — its own dealer, or Admin / Sales Head acting for the dealer.
+        const writer = await requireLeadWriter(leadId, req, leadGate.user);
+        if (!writer.ok) return writer.response;
 
         // Resolve public origin for redirect/callback URLs that Decentro can reach.
         let origin: string;
@@ -207,6 +211,7 @@ export async function POST(
             });
         }
 
+        await recordActorStep(writer.actor, 'started the video KYC');
         return NextResponse.json({
             success: true,
             data: {

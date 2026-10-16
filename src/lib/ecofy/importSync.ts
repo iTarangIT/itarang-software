@@ -90,8 +90,16 @@ export interface ImportSyncResult {
     reportRows: number;
     /** Distinct cases the report points at. */
     cases: number;
-    /** Cases looked at in this run (capped; the rest arrive with Ecofy's push). */
+    /** Where in the report's case list this run started (0 = the first case). */
+    from: number;
+    /** Cases looked at in this run (at most IMPORT_SYNC_BATCH). */
     checked: number;
+    /**
+     * ID 51 (15 Oct): where the next run continues; null = every case has been
+     * looked at. An import with more than one batch of cases is brought in by
+     * calling sync again with { from: nextFrom } — never repeating a case.
+     */
+    nextFrom: number | null;
     added: number;
     updated: number;
     skippedS0: number;
@@ -99,18 +107,79 @@ export interface ImportSyncResult {
     failed: number;
 }
 
+/** Cases looked up per sync run (one request); the caller continues with nextFrom. */
+export const IMPORT_SYNC_BATCH = 500;
+
+/** A run also stops after this long (request time limits); the rest continue with nextFrom. */
+export const IMPORT_SYNC_TIME_BUDGET_MS = 45_000;
+
+/** The cursor a caller sent, made safe: a whole number from 0 to the case count. */
+export function clampSyncFrom(from: unknown, cases: number): number {
+    const n = typeof from === "number" && Number.isFinite(from) ? Math.floor(from) : 0;
+    return Math.min(Math.max(n, 0), Math.max(cases, 0));
+}
+
 export function tallyImportSync(
-    base: Pick<ImportSyncResult, "importId" | "status" | "reportRows" | "cases">,
+    base: Pick<ImportSyncResult, "importId" | "status" | "reportRows" | "cases"> & { from?: number },
     outcomes: ImportSyncOutcome[],
 ): ImportSyncResult {
     const n = (o: ImportSyncOutcome) => outcomes.filter((x) => x === o).length;
+    const from = base.from ?? 0;
+    const reached = from + outcomes.length;
     return {
         ...base,
+        from,
         checked: outcomes.length,
+        nextFrom: reached < base.cases ? reached : null,
         added: n("added"),
         updated: n("updated"),
         skippedS0: n("skipped_s0"),
         notFound: n("not_found"),
         failed: n("failed"),
+    };
+}
+
+/**
+ * One sync run over caseNos[from …]: at most `batch` cases, `concurrency` at
+ * a time, stopping early (between groups) once `now()` passes the deadline.
+ * `one` does the I/O for a case and must not throw (service.ts maps errors to
+ * "failed"). Returns the outcomes in case order; their count is how far the
+ * cursor moves. Pure apart from `one` / `now` — tested without Ecofy.
+ */
+export async function runImportSyncBatch(args: {
+    caseNos: string[];
+    from: number;
+    batch?: number;
+    concurrency?: number;
+    deadline?: number;
+    now?: () => number;
+    one: (caseNo: string) => Promise<ImportSyncOutcome>;
+}): Promise<ImportSyncOutcome[]> {
+    const batch = Math.max(1, args.batch ?? IMPORT_SYNC_BATCH);
+    const concurrency = Math.max(1, args.concurrency ?? 4);
+    const now = args.now ?? Date.now;
+    const from = clampSyncFrom(args.from, args.caseNos.length);
+    const todo = args.caseNos.slice(from, from + batch);
+    const outcomes: ImportSyncOutcome[] = [];
+    for (let i = 0; i < todo.length; i += concurrency) {
+        // Always make progress: the first group runs even past the deadline.
+        if (i > 0 && args.deadline != null && now() > args.deadline) break;
+        outcomes.push(...(await Promise.all(todo.slice(i, i + concurrency).map(args.one))));
+    }
+    return outcomes;
+}
+
+/** The client's running total over several runs of one import (cursor order). */
+export function addImportSync(total: ImportSyncResult | null, run: ImportSyncResult): ImportSyncResult {
+    if (!total) return run;
+    return {
+        ...run,
+        from: total.from,
+        checked: total.checked + run.checked,
+        added: total.added + run.added,
+        updated: total.updated + run.updated,
+        skippedS0: total.skippedS0 + run.skippedS0,
+        notFound: total.notFound + run.notFound,
+        failed: total.failed + run.failed,
     };
 }

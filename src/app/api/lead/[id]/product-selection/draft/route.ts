@@ -6,7 +6,8 @@ import { db } from "@/lib/db";
 import { leads, productSelections } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 import { generateId } from "@/lib/api-utils";
-import { dealerMayActOnLead } from "@/lib/auth/requireLeadAccess";
+import { ACT_FOR_DEALER_ROLES } from "@/lib/leads/actForDealer";
+import { gateLeadActor, recordActorStep, seenFromRequest } from "@/lib/leads/actForDealerGuard";
 
 // BRD V2 §2.4 — Step 4 "Save Draft" persistence.
 // Upserts a product_selections row with admin_decision='draft'. Does NOT
@@ -77,7 +78,7 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const user = await requireRole(["dealer"]);
+    const user = await requireRole(["dealer", ...ACT_FOR_DEALER_ROLES]);
     const { id: leadId } = await params;
     const body = BodySchema.parse(await req.json());
 
@@ -88,10 +89,14 @@ export async function POST(
         { status: 404 },
       );
     }
-    if (!(await dealerMayActOnLead(user, lead.dealer_id, leadId))) {
+    // ID 183: the file's own dealer (stamps the dealer's action), or Admin /
+    // Sales Head acting for the dealer from the CRM panel (permission, "being
+    // worked by", dealer wins). The house only sees a file it pushed out.
+    const gate = await gateLeadActor(user, lead, { write: true, seenDealerActionAt: seenFromRequest(req) });
+    if (!gate.ok) {
       return NextResponse.json(
-        { success: false, error: { message: "Access denied" } },
-        { status: 403 },
+        { success: false, error: { message: gate.message } },
+        { status: gate.status },
       );
     }
 
@@ -170,6 +175,7 @@ export async function POST(
         .where(eq(leads.id, leadId));
     });
 
+    await recordActorStep(gate.actor, "saved the product selection draft (Step 4)");
     return NextResponse.json({
       success: true,
       data: {

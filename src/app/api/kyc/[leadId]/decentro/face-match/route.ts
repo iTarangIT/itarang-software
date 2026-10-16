@@ -5,6 +5,7 @@ import { db } from '@/lib/db';
 import { kycVerifications } from '@/lib/db/schema';
 import { createWorkflowId } from '@/lib/kyc/admin-workflow';
 import { requireLeadAccess } from '@/lib/auth/requireLeadAccess';
+import { recordActorStep, requireLeadWriter } from '@/lib/leads/actForDealerGuard';
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
     try {
@@ -16,6 +17,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         // ID 119: signed in AND this lead is the caller's (a dealer's own lead, or back office).
         const leadGate = await requireLeadAccess(leadId);
         if (!leadGate.ok) return leadGate.response;
+        // ID 183: a change to the file — its own dealer, or Admin / Sales Head acting for the dealer.
+        const writer = await requireLeadWriter(leadId, req, leadGate.user);
+        if (!writer.ok) return writer.response;
 
         const formData = await req.formData();
         const image1 = formData.get('image1') as File | null;
@@ -54,6 +58,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             console.error('[kyc/face-match] kyc_verifications insert failed:', persistErr);
         }
 
+        await recordActorStep(writer.actor, 'ran the face match');
         return NextResponse.json({
             success,
             responseStatus: decentroRes.responseStatus,

@@ -4,7 +4,7 @@ import { z } from "zod";
 
 import { db } from "@/lib/db";
 import { leads, loanSanctions, productSelections } from "@/lib/db/schema";
-import { requireAdminAppUser } from "@/lib/kyc/admin-workflow";
+import { requireAdminAppUserForLead } from "@/lib/kyc/admin-workflow";
 import { generateId } from "@/lib/api-utils";
 import { notifyLoanRejected } from "@/lib/notifications";
 import { InventoryLifecycleError, releaseInventorySerial } from "@/lib/inventory/lifecycle";
@@ -45,7 +45,7 @@ async function _POST_ORIGINAL_IMPL(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const admin = await requireAdminAppUser();
+    const admin = await requireAdminAppUserForLead((await params).id);
     if (!admin) {
       return NextResponse.json(
         { success: false, error: { message: "Unauthorized" } },

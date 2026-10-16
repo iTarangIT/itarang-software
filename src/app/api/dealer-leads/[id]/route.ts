@@ -55,7 +55,12 @@ const PatchSchema = z.object({
   pincode: z.string().trim().optional(),
   language: z.string().trim().optional(),
   source: z.string().trim().max(40).optional(),
+  // ID 118 option B: the Overall Summary is written by the server from the
+  // call transcripts; what a person types goes to its own field (E-346
+  // dealer_leads.summary_notes, raw UPDATE below). `overall_summary` from an
+  // older form is taken as notes, never written over the summary.
   overall_summary: z.string().trim().max(5000).optional(),
+  summary_notes: z.string().trim().max(5000).optional(),
   // E-296 "Type of Business". null / "" clears it. Not on the Drizzle object —
   // written by a raw UPDATE below.
   business_type: z
@@ -163,9 +168,6 @@ export const PATCH = withErrorHandler(
     if (body.source !== undefined) updates.source = body.source || null;
     if (body.area !== undefined) updates.area = body.area || null;
     if (body.pincode !== undefined) updates.pincode = body.pincode || null;
-    if (body.overall_summary !== undefined) {
-      updates.overall_summary = body.overall_summary || null;
-    }
 
     // Region: canonicalise city/state the way the create route does, and fall
     // back to `location` as a city string so a lead edited here still shows up
@@ -180,8 +182,10 @@ export const PATCH = withErrorHandler(
     );
 
     const businessTypeTouched = body.business_type !== undefined;
+    const notes = body.summary_notes ?? body.overall_summary;
+    const notesTouched = notes !== undefined;
 
-    if (Object.keys(updates).length === 0 && !businessTypeTouched) {
+    if (Object.keys(updates).length === 0 && !businessTypeTouched && !notesTouched) {
       return NextResponse.json({ success: true, id, updated: 0 });
     }
 
@@ -214,11 +218,31 @@ export const PATCH = withErrorHandler(
       }
     }
 
+    // E-346 notes, same pattern: allowed to fail on a database without it.
+    let notesSaved: boolean | undefined;
+    if (notesTouched) {
+      try {
+        await withLeadActor(user.id, (tx) =>
+          tx.execute(
+            sql`UPDATE dealer_leads
+                   SET summary_notes = ${notes || null},
+                       updated_at = NOW()
+                 WHERE id = ${id}`,
+          ),
+        );
+        notesSaved = true;
+      } catch (e) {
+        notesSaved = false;
+        console.warn("[DEALER-LEADS] summary_notes not saved (E-346 applied?):", e);
+      }
+    }
+
     return NextResponse.json({
       success: true,
       id,
-      updated: Object.keys(updates).length + (businessTypeSaved ? 1 : 0),
+      updated: Object.keys(updates).length + (businessTypeSaved ? 1 : 0) + (notesSaved ? 1 : 0),
       ...(businessTypeTouched ? { business_type_saved: businessTypeSaved } : {}),
+      ...(notesTouched ? { notes_saved: notesSaved } : {}),
     });
   },
 );

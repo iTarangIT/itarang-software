@@ -11,7 +11,8 @@
 // (assertOwner); a manager in TRANSFER_ANY_LEAD_ROLES may transfer any lead.
 //
 // After the commit the caller runs notifyAsmOfTransfer(): the ASM gets a bell
-// that opens the lead on their own page (/asm/lead/[id]).
+// that opens the lead on their own page (/asm/lead/[id]) — and (ID 179) the
+// rep who owned the lead gets one when a manager pressed Transfer.
 
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
@@ -19,6 +20,7 @@ import { leadVisits } from "@/lib/db/schema";
 import { writeTouchpoint } from "@/lib/touchpoints/write";
 import { type LeadStatus } from "@/lib/lifecycle/transitions";
 import { notifyUser } from "@/lib/notifications/notify";
+import { notifyPreviousOwners } from "@/lib/leads/newOwnerNotice";
 
 // Role lists live in the client-safe access.ts (the lead page's action bar
 // reads them); re-exported here for the route and the Assistant.
@@ -137,6 +139,24 @@ export async function notifyAsmOfTransfer(input: {
     visitType?: string | null;
     suggestedVisitDate?: string | null;
 }): Promise<void> {
+    // ID 179: the rep who owned the lead at the transfer (from_owner_id of the
+    // asm_transfer just written) hears that it moved, when someone else pressed.
+    try {
+        const prev = (await db.execute<{ owner: string | null }>(sql`
+            SELECT from_owner_id AS owner FROM lead_touchpoints
+             WHERE dealer_lead_id = ${input.leadId} AND touchpoint_type = 'asm_transfer'
+             ORDER BY performed_at DESC LIMIT 1
+        `)) as unknown as Array<{ owner: string | null }>;
+        const visit = input.visitType ? input.visitType.replace(/_/g, " ").toLowerCase() : null;
+        await notifyPreviousOwners({
+            moves: [{ leadId: input.leadId, fromOwnerId: prev[0]?.owner ?? null }],
+            toUserId: input.asmId,
+            actorId: input.actorId,
+            reason: visit ? `handed to the field (${visit})` : "handed to the field",
+        });
+    } catch (err) {
+        console.error("[transfer-asm] previous-owner notification failed:", err);
+    }
     if (!input.asmId || input.asmId === input.actorId) return;
     try {
         const rows = (await db.execute<{ dealer: string | null; city: string | null; actor: string | null; actor_role: string | null }>(sql`

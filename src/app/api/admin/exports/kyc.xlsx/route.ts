@@ -85,6 +85,8 @@ async function exportKyc(userId: string, raw: unknown): Promise<Response> {
         { header: "Applicant name", width: 26, value: (r) => r.applicant_name ?? null },
         { header: "Phone", width: 12, value: (r) => (r.phone ? maskPhone(r.phone) : null) },
         { header: "Dealer", width: 26, value: (r) => r.dealer_name ?? null },
+        // ID 183: who from iTarang did steps on the file for the dealer.
+        { header: "Assisted by (iTarang)", width: 30, value: (r) => r.assisted_by ?? null },
         { header: "City", width: 16, value: (r) => r.city ?? null },
         { header: "KYC status", width: 16, value: (r) => r.kyc_status ?? null },
         { header: "KYC score", width: 10, value: (r) => r.kyc_score },

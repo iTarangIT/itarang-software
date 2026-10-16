@@ -11,6 +11,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { leads, loanSanctions, nbfc, nbfcLeadAssignments } from "@/lib/db/schema";
 import { requireAdminAppUser } from "@/lib/kyc/admin-workflow";
+import { adminMayActOnNbfcLead, nbfcLeadNotYours } from "@/lib/nbfc/adminRequestAccess";
 import { RECALLABLE_KYC_STATUSES, isLeadRecalled } from "@/lib/nbfc/recall";
 import { getNbfcRequestSlaSettings } from "@/lib/nbfc/request-sla-settings";
 
@@ -27,6 +28,7 @@ export async function GET(req: NextRequest) {
     if (!leadId) {
       return NextResponse.json({ success: false, error: { message: "leadId is required" } }, { status: 400 });
     }
+    if (!(await adminMayActOnNbfcLead(appUser, leadId))) return nbfcLeadNotYours();
 
     const rows = await db
       .select({

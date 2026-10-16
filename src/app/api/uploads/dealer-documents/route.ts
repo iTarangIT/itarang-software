@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { randomUUID } from "crypto";
 import { isS3Backend, putObject, filesProxyPath } from "@/lib/storage/s3";
-import { publicUploadFolder, safeUploadFileName, signedFilePath } from "@/lib/storage/fileAccess";
+import { FRESH_LINK_TTL_SECONDS, publicUploadFolder, safeUploadFileName, signedFilePath } from "@/lib/storage/fileAccess";
+import { classifyFile } from "@/lib/storage/fileRules";
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -10,7 +11,9 @@ const supabase = createClient(
 );
 
 const BUCKET_NAME = "dealer-documents";
-// A draft can be resumed days later in the same browser.
+// A draft can be resumed days later in the same browser. ID 119: when this
+// runs out, the file route offers "Continue my application" (a code to the
+// registered mobile gives fresh links) instead of a dead end.
 const VIEW_LINK_TTL_SECONDS = 7 * 24 * 60 * 60;
 
 export async function POST(req: NextRequest) {
@@ -114,7 +117,13 @@ export async function POST(req: NextRequest) {
         // ID 119: /api/files needs a login or a signature, and this form has no
         // login. `viewUrl` is a signed link for the uploader to preview the
         // file; store `url`, never `viewUrl`.
-        viewUrl: signedFilePath(publicUrl, VIEW_LINK_TTL_SECONDS),
+        // ID 166: only the pre-login onboarding papers get the 7-day link. Staff
+        // uploads through this form (commercials, visit photos) preview with a
+        // 15-minute one; afterwards they open under the file rule.
+        viewUrl: signedFilePath(
+          publicUrl,
+          classifyFile(BUCKET_NAME, filePath).kind === "dealer_onboarding" ? VIEW_LINK_TTL_SECONDS : FRESH_LINK_TTL_SECONDS,
+        ),
         type: file.type,
         size: file.size,
         bucketName: BUCKET_NAME,

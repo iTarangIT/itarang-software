@@ -8,22 +8,26 @@
 // directly and nothing was ever stored.
 //
 // On hit:
-//   - call already has a stored recording_url → 302 redirect to it (Bolna, or an
-//     ElevenLabs call we've already re-hosted).
+//   - call already has our copy → 302 to a fresh 15-minute link to it;
+//   - call still on Bolna's link → copy it into our storage, repoint the row,
+//     then the same (ID 166);
 //   - ElevenLabs call with no URL yet → pull the audio, re-host it to the public
 //     bucket, BACKFILL ai_call_logs.recording_url so we only do it once, then
 //     302 redirect.
 //   - otherwise (audio not ready yet / no API key / unknown call) → 404, and the
 //     drawer player shows "Recording unavailable".
 //
-// The redirect target is the same public Supabase URL the drawer would have
-// gotten directly, so this adds no new exposure — it just lazily produces that
-// URL the first time someone opens/plays an older ElevenLabs recording.
+// ID 166 (16 Oct): the redirect target is always our own storage, through a
+// fresh 15-minute link signed for the player, after the file rule — never the
+// provider's open link (a Bolna call still on one is copied over first).
 
 import { db } from "@/lib/db";
 import { aiCallLogs } from "@/lib/db/schema";
 import { eq, sql } from "drizzle-orm";
-import { rehostElevenLabsRecording } from "@/lib/ai/storage/recordingStore";
+import { isOwnRecordingUrl, ownRecordingUrl, rehostElevenLabsRecording } from "@/lib/ai/storage/recordingStore";
+import { FRESH_LINK_TTL_SECONDS, signedFilePath } from "@/lib/storage/fileAccess";
+import { canOpenStoredFile } from "@/lib/storage/fileAuthz";
+import { filesProxyPath, parseFilesProxyRef } from "@/lib/storage/s3";
 import { LEADS_PAGE_ROLES, readsOwnLeadsOnly } from "@/lib/leads/access";
 import { getTeamMemberIds } from "@/lib/users/team";
 import { ownerScopeIds } from "@/lib/users/teamRules";
@@ -85,16 +89,18 @@ export async function GET(
     }
   }
 
-  // Already have a playable URL — hand it straight back.
-  if (row.recordingUrl) {
-    return redirectTo(row.recordingUrl);
-  }
-
-  // ElevenLabs: the audio lives behind an authenticated endpoint (call_id IS the
-  // conversation id). Pull + re-host to the public bucket. Returns "" if the
-  // audio isn't ready yet or the key is missing.
-  let playable = "";
-  if (row.provider === "elevenlabs") {
+  // ID 166: only ever OUR copy, through a fresh 15-minute link for this
+  // user — never Bolna's open link. A call still on the provider link is
+  // copied into our storage now (and the row repointed); the rest of the old
+  // ones are copied by scripts/backfill-recordings-rehost.ts.
+  let playable = row.recordingUrl ?? "";
+  if (playable && !isOwnRecordingUrl(playable)) {
+    const copied = await ownRecordingUrl({ provider: row.provider || "bolna", callId, recordingUrl: playable });
+    playable = copied && isOwnRecordingUrl(copied) ? copied : "";
+    if (!playable) return new Response("Recording not available yet", { status: 404 });
+  } else if (!playable && row.provider === "elevenlabs") {
+    // ElevenLabs: the audio lives behind an authenticated endpoint (call_id IS
+    // the conversation id). Pull + re-host. "" if not ready or no key.
     playable = await rehostElevenLabsRecording(callId);
   }
 
@@ -102,17 +108,25 @@ export async function GET(
     return new Response("Recording unavailable", { status: 404 });
   }
 
-  // Lazy backfill so subsequent loads skip the re-host entirely and the Details
-  // tab + the drawer player can use the URL directly next time.
-  try {
-    await db
-      .update(aiCallLogs)
-      .set({ recording_url: playable, updated_at: new Date() })
-      .where(eq(aiCallLogs.call_id, callId));
-  } catch (err) {
-    // Backfill is best-effort — the redirect below still works this time.
-    console.error("[ai-dialer:recording] backfill failed for", callId, err);
+  if (playable !== row.recordingUrl) {
+    // Lazy backfill so later loads skip the copy.
+    try {
+      await db
+        .update(aiCallLogs)
+        .set({ recording_url: playable, updated_at: new Date() })
+        .where(eq(aiCallLogs.call_id, callId));
+    } catch (err) {
+      // Best-effort — the redirect below still works this time.
+      console.error("[ai-dialer:recording] backfill failed for", callId, err);
+    }
   }
 
-  return redirectTo(playable);
+  // The file rule (Admin, Sales Head, CEO, the lead's owner / ASM), then a
+  // fresh link signed for this user.
+  const ref = parseFilesProxyRef(playable);
+  if (!ref) return new Response("Recording unavailable", { status: 404 });
+  const { allowed } = await canOpenStoredFile(authGate.user, ref.bucket, ref.key);
+  if (!allowed) return new Response("Call not found", { status: 404 });
+  const fresh = signedFilePath(filesProxyPath(ref.bucket, ref.key), FRESH_LINK_TTL_SECONDS, { by: authGate.user.id });
+  return redirectTo(fresh ?? filesProxyPath(ref.bucket, ref.key));
 }

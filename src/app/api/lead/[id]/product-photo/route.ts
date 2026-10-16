@@ -10,7 +10,7 @@ import { leads } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { requireRole } from "@/lib/auth-utils";
 import { uploadFileToStorage } from "@/lib/storage";
-import { dealerMayActOnLead } from "@/lib/auth/requireLeadAccess";
+import { gateLeadActor, seenFromRequest } from "@/lib/leads/actForDealerGuard";
 
 const ALLOWED_TYPES = new Set(["image/png", "image/jpeg", "image/jpg"]);
 const MAX_BYTES = 5 * 1024 * 1024;
@@ -61,10 +61,13 @@ export async function POST(
         { status: 404 },
       );
     }
-    if (!(await dealerMayActOnLead(user, lead.dealer_id, leadId))) {
+    // ID 183: the file's own dealer (the photos are of the dealer's stock);
+    // stamps the dealer's action. The house only sees a file it pushed out.
+    const gate = await gateLeadActor(user, lead, { write: true, seenDealerActionAt: seenFromRequest(req) });
+    if (!gate.ok) {
       return NextResponse.json(
-        { success: false, error: { message: "Access denied" } },
-        { status: 403 },
+        { success: false, error: { message: gate.message } },
+        { status: gate.status },
       );
     }
 

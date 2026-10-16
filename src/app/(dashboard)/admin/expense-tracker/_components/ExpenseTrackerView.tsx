@@ -28,6 +28,7 @@ import { DriveFoldersPanel, SALES_PANEL } from "./DriveFoldersPanel";
 import { SalesScanAttentionPanel } from "./SalesScanAttentionPanel";
 import { NeedsAttentionPanel } from "./NeedsAttentionPanel";
 
+import { onFreshFileClick } from "@/lib/storage/freshFileLink";
 interface ExtractedInvoice {
   vendor: string | null;
   amount: number | null;
@@ -535,6 +536,7 @@ export function ExpenseTrackerView() {
               {billUrl ? (
                 <a
                   href={billUrl}
+                  onClick={(e) => onFreshFileClick(e, billUrl)}
                   target="_blank"
                   rel="noreferrer"
                   className="text-xs font-semibold text-brand-600 hover:underline"
@@ -862,7 +864,7 @@ function RecordedRow({ row }: { row: RecordedExpense }) {
       </td>
       <td className="py-3 text-xs">
         {row.bill_url ? (
-          <a href={row.bill_url} target="_blank" rel="noreferrer" className="text-brand-600 hover:underline font-semibold">
+          <a href={row.bill_url} onClick={(e) => onFreshFileClick(e, row.bill_url)} target="_blank" rel="noreferrer" className="text-brand-600 hover:underline font-semibold">
             View
           </a>
         ) : (

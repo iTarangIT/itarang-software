@@ -44,6 +44,7 @@ export async function register() {
       startDealerReorderReminderTicker,
       startLeadClocksTicker,
       startInvoiceFreshnessTicker,
+      startStockUploadSweepTicker,
     } = await import("./instrumentation-node");
     // ID 125 — every ticker runs as a named job. Its timers inherit the job
     // context, so the email / WhatsApp / Telegram senders drop what a job tries
@@ -74,6 +75,8 @@ export async function register() {
     await runAsJob("lead-clocks", startLeadClocksTicker);
     // ID 171 — no new invoice for 3 working days → one Admin bell a day (kickoff 245s out).
     await runAsJob("invoice-freshness", startInvoiceFreshnessTicker);
+    // ID 174 — "Stock to upload" tasks: re-check + escalate, hourly (kickoff 250s out).
+    await runAsJob("stock-upload-sweep", startStockUploadSweepTicker);
     await runAsJob("recording-transcription", startRecordingTranscriptionTicker);
     await runAsJob("drive-mirror", startDriveMirrorTicker);
     // E-280 — Drive sales-invoice scan. Kickoff staggered 195s out, the last

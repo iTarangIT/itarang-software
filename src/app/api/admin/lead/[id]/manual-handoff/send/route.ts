@@ -11,7 +11,7 @@ import { and, desc, eq } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import { leads, manualHandoffs, productSelections } from "@/lib/db/schema";
-import { requireAdminAppUser } from "@/lib/kyc/admin-workflow";
+import { requireAdminAppUserForLead } from "@/lib/kyc/admin-workflow";
 import { sendManualHandoffEmail } from "@/lib/email/sendManualHandoffEmail";
 
 export const runtime = "nodejs";
@@ -26,7 +26,7 @@ const Body = z.object({
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const admin = await requireAdminAppUser();
+    const admin = await requireAdminAppUserForLead((await params).id);
     if (!admin) {
       return NextResponse.json({ success: false, error: { message: "Unauthorized" } }, { status: 403 });
     }

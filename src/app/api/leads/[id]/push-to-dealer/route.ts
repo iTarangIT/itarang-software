@@ -5,7 +5,8 @@
 //   POST { dealer_id | dealer_mobile, reason } → move the file.
 //
 // Decided 8 + 10 Oct: Admin and Sales Head; first push only from the house
-// dealer; one push per file — a second move only by an admin; never after the
+// dealer; one push per file — a second move only by an admin, and (16 Oct,
+// ID 182) only through this route; never after the
 // customer signs consent ("Consent is already signed under <dealer>; this file
 // can't be moved."); a customer who needs a loan only to a finance-enabled
 // dealer. The rules live in checkPush / pushBlockedReason (lib/leads/
@@ -14,7 +15,7 @@
 // both are recorded on the push history row.
 
 import { z } from "zod";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import { auditLogs, leads } from "@/lib/db/schema";
@@ -89,6 +90,7 @@ export const GET = withErrorHandler(async (_req: Request, { params }: { params: 
     ? "The iTarang house dealer is not set up on this environment."
     : (pushBlockedReason({
         actorRole: user.role,
+        via: "crm_push",
         currentDealerId: lead.dealerId,
         currentDealerName,
         houseDealerCode: house,
@@ -150,6 +152,7 @@ export const POST = withErrorHandler(async (req: Request, { params }: { params: 
 
   const verdict = checkPush({
     actorRole: user.role,
+    via: "crm_push",
     currentDealerId: lead.dealerId,
     currentDealerName: fromName,
     houseDealerCode: house,
@@ -178,7 +181,8 @@ export const POST = withErrorHandler(async (req: Request, { params }: { params: 
         deleted_by_dealer_user: null,
         updated_at: now,
       })
-      .where(and(eq(leads.id, lead.id), eq(leads.dealer_id, lead.dealerId!)))
+      // A file with no dealer yet: `dealer_id = NULL` never matches in SQL.
+      .where(and(eq(leads.id, lead.id), lead.dealerId ? eq(leads.dealer_id, lead.dealerId) : isNull(leads.dealer_id)))
       .returning({ id: leads.id });
     if (!rows.length) return null;
 
@@ -211,9 +215,11 @@ export const POST = withErrorHandler(async (req: Request, { params }: { params: 
   if (!moved) return errorResponse("This file changed while you were pushing it. Reload and try again.", 409);
   await logPushCouponRelease(moved, lead.id, user.id, target.name);
 
-  // Tell the dealer on WhatsApp. Best-effort, never throws.
+  // Tell the dealer (bell, email, WhatsApp — template when there is no chat)
+  // with the reason, and on a second move the dealer who loses the file too.
+  // Best-effort, never throws.
   const { notifyDealerOfPushedLead } = await import("@/lib/whatsapp/pushedLeadNotice");
-  await notifyDealerOfPushedLead(lead.id);
+  await notifyDealerOfPushedLead(lead.id, { reason, fromDealerId: lead.dealerId });
 
   return successResponse({ dealer: { dealerId: target.dealerId, name: target.name }, history: await pushHistory(lead.id) });
 });

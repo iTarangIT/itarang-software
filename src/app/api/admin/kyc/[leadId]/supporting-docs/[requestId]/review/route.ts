@@ -9,7 +9,7 @@ import {
 } from "@/lib/db/schema";
 import {
   createWorkflowId,
-  requireAdminAppUser,
+  requireAdminAppUserForLead,
 } from "@/lib/kyc/admin-workflow";
 import {
   autoPushNbfcIfAllVerified,
@@ -35,7 +35,7 @@ export async function POST(
   }: { params: Promise<{ leadId: string; requestId: string }> },
 ) {
   try {
-    const appUser = await requireAdminAppUser();
+    const appUser = await requireAdminAppUserForLead((await params).leadId);
     if (!appUser) {
       return NextResponse.json(
         { success: false, error: { message: "Unauthorized" } },

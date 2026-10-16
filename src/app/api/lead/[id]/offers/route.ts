@@ -19,14 +19,15 @@ import { db } from "@/lib/db";
 import { leads } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 import { listLeadOffers } from "@/lib/leads/offers";
-import { dealerMayActOnLead } from "@/lib/auth/requireLeadAccess";
+import { ACT_FOR_DEALER_ROLES } from "@/lib/leads/actForDealer";
+import { gateLeadActor } from "@/lib/leads/actForDealerGuard";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const user = await requireRole(["dealer"]);
+    const user = await requireRole(["dealer", ...ACT_FOR_DEALER_ROLES]);
     const { id: leadId } = await params;
 
     const [lead] = await db
@@ -37,8 +38,10 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     if (!lead) {
       return NextResponse.json({ success: false, error: { message: "Lead not found" } }, { status: 404 });
     }
-    if (!(await dealerMayActOnLead(user, lead.dealer_id, leadId))) {
-      return NextResponse.json({ success: false, error: { message: "Access denied" } }, { status: 403 });
+    // ID 183: the dealer, the house, or Admin / Sales Head acting for the dealer.
+    const gate = await gateLeadActor(user, lead);
+    if (!gate.ok) {
+      return NextResponse.json({ success: false, error: { message: gate.message } }, { status: gate.status });
     }
 
     const data = await listLeadOffers(leadId);

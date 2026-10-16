@@ -7,6 +7,7 @@ import { triggerBolnaCall } from '@/lib/bolna';
 import { after } from 'next/server';
 import { handleBolnaWebhook } from '@/lib/ai/bolna_ai';
 import { guardBolnaCall } from '@/lib/security/webhookAuth';
+import { ownRecordingUrl } from '@/lib/ai/storage/recordingStore';
 
 export const POST = withErrorHandler(async (req: Request) => {
     // ID 118: this legacy URL takes the same bearer as /api/bolna/webhook once
@@ -99,7 +100,8 @@ export const POST = withErrorHandler(async (req: Request) => {
     await db.update(callRecords).set({
         status: 'completed',
         duration_seconds: conversation_duration,
-        recording_url: recording_url,
+        // ID 166: our own copy, never Bolna's open link (same key finalize uses).
+        recording_url: await ownRecordingUrl({ provider: 'bolna', callId: call_id, recordingUrl: recording_url }),
         summary: summary,
         transcript: transcript,
         ended_at: new Date()

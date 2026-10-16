@@ -200,8 +200,11 @@ async function exceptionsTile(): Promise<NonNullable<ControlTower["exceptions"]>
             const byUser = new Map<string, number[]>();
             for (const r of t) {
                 if (r.status !== "accepted" && r.status !== "pushed") continue;
-                if (r.progress.pct_of_mtd == null) continue;
-                byUser.set(r.user_id, [...(byUser.get(r.user_id) ?? []), r.progress.pct_of_mtd]);
+                // ID 189: CEO tiles read the CEO target (the stretch is the Sales
+                // Head's own push); a custom metric is typed in by hand, so it
+                // stays out of the average.
+                if (r.is_custom || r.ceo_progress.pct_of_mtd == null) continue;
+                byUser.set(r.user_id, [...(byUser.get(r.user_id) ?? []), r.ceo_progress.pct_of_mtd]);
             }
             return [...byUser.values()].filter((p) => p.reduce((a, b) => a + b, 0) / p.length < 80).length;
         }),
@@ -446,8 +449,9 @@ async function peopleTile(from: string, toIncl: string) {
             const t = await listTargets({ month: toIncl.slice(0, 7) });
             const m = new Map<string, number[]>();
             for (const r of t) {
-                if ((r.status === "accepted" || r.status === "pushed") && r.progress.pct_of_mtd != null) {
-                    m.set(r.user_id, [...(m.get(r.user_id) ?? []), r.progress.pct_of_mtd]);
+                // ID 189: against the CEO target, built-in metrics only (as above).
+                if ((r.status === "accepted" || r.status === "pushed") && !r.is_custom && r.ceo_progress.pct_of_mtd != null) {
+                    m.set(r.user_id, [...(m.get(r.user_id) ?? []), r.ceo_progress.pct_of_mtd]);
                 }
             }
             return new Map([...m.entries()].map(([k, v]) => [k, Math.round(v.reduce((a, b) => a + b, 0) / v.length)]));

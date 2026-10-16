@@ -124,6 +124,8 @@ export const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   "lead.transferred_to_asm": "Leads",
   // A lead reassigned to this person — the bell opens it on their page.
   "lead.reassigned_to_you": "Leads",
+  // ID 179 — the rep a manager moved a lead away from (reassign or transfer).
+  "lead.moved_away": "Leads",
   "lead.reactivated": "Leads",
   "lead.visit_update": "Leads",
   "lead.deal_card_changed": "Leads",
@@ -135,6 +137,12 @@ export const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   // 14 Oct — a customer file pushed between the iTarang house dealer and a dealer.
   "lead.pushed_to_dealer": "Leads",
   "lead.dealer_progress": "Leads",
+  // ID 33 / 183 (16 Oct) — the dealer a file was moved away from; iTarang
+  // worked the dealer's file for him ("Done by <name> for <dealer>").
+  "lead.pushed_away": "Leads",
+  "lead.acted_for_dealer": "Leads",
+  // ID 183 — a dealer asked iTarang to help on one of his files.
+  "lead.assist_requested": "Leads",
   // ID 83 — a NeoDove agent called the owner's lead after their "Call now".
   "lead.called_on_behalf": "Leads",
   // ID 75.2 — a one-off "System correction" telling an owner which of their
@@ -157,6 +165,10 @@ export const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   "targets.sent": "Targets",
   "targets.rejected": "Targets",
   "targets.accepted": "Targets",
+  // ID 189 — the member's "Ask for correction" (replaces reject).
+  "targets.correction_requested": "Targets",
+  // ID 189 (16 Oct) — the CEO removed a target the member or Sales Head had.
+  "targets.removed": "Targets",
 
   // --- Dealer onboarding (portal + WhatsApp) ---
   "onboarding.chat_started": "Onboarding",
@@ -298,6 +310,10 @@ export const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   inventory_assigned: "Inventory",
   inventory_transfer_incoming: "Inventory",
   inventory_transfer_acknowledged: "Inventory",
+  // ID 174 — a new battery invoice whose serials must be uploaded to the
+  // buyer dealer's stock, and the same task still open after 2 working days.
+  "stock_upload.task_created": "Inventory",
+  "stock_upload.task_overdue": "Inventory",
   // E-230 — the OEM price register. Filed under Inventory rather than System
   // because the thing being nagged about is a product's price, and the person
   // who fixes it goes to the same place they maintain models.
@@ -524,6 +540,7 @@ const WARNING = new Set([
   "targets.review_requested",
   "targets.sent",
   "targets.rejected",
+  "targets.correction_requested",
   // You are no longer winning, and the window is finite — both are "act now or
   // lose it", which is the definition of amber. `auction.lost` is NOT here: by
   // the time it arrives there is nothing left to act on.
@@ -569,6 +586,8 @@ const NO_EMAIL = new Set([
   // 14 Oct — the house hears every step a dealer takes on a file it pushed;
   // the bell carries it (email can be switched on in Settings).
   "lead.dealer_progress",
+  // ID 183 — every iTarang step on a dealer's file; the bell + WhatsApp carry it.
+  "lead.acted_for_dealer",
   // ID 81 — a re-inquiry is a prompt to look at a lead, and a scrape or an
   // upload can raise it for many dealers at once; the bell carries it.
   "lead.reinquiry",

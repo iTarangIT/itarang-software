@@ -15,7 +15,9 @@ export const DELETE = withErrorHandler(async (_req: Request, { params }: { param
     const isOwner = lead.uploader_id === user.id;
     // ID 119: resolves a dealer login with no users.dealer_id via its onboarding code.
     const isSameDealer = await dealerMayActOnLead(user, lead.dealer_id, leadId);
-    if (!isOwner && !isSameDealer) {
+    // 16 Oct (ID 183): the creator only while the lead has no dealer — the house
+    // login no longer changes a file it pushed to another dealer.
+    if (!isSameDealer && !(isOwner && !lead.dealer_id)) {
         return errorResponse('Forbidden: You do not have permission to delete this draft', 403);
     }
 

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { executePanVerification } from '@/lib/kyc/pan-verification';
 import { requireLeadAccess } from '@/lib/auth/requireLeadAccess';
+import { recordActorStep, requireLeadWriter } from '@/lib/leads/actForDealerGuard';
 import { isMaskedPan } from '@/lib/kyc/panMask';
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
@@ -14,6 +15,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         // ID 119: signed in AND this lead is the caller's (a dealer's own lead, or back office).
         const leadGate = await requireLeadAccess(leadId);
         if (!leadGate.ok) return leadGate.response;
+        // ID 183: a change to the file — its own dealer, or Admin / Sales Head acting for the dealer.
+        const writer = await requireLeadWriter(leadId, req, leadGate.user);
+        if (!writer.ok) return writer.response;
         const { pan_number, dob, document_type } = await req.json();
         // ID 119 / 166: a role that may not see the full PAN only has the mask.
         if (isMaskedPan(pan_number)) {
@@ -36,6 +40,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             );
         }
 
+        await recordActorStep(writer.actor, 'ran the PAN check');
         return NextResponse.json(result);
     } catch (error) {
         console.error('Decentro PAN verification error:', error);

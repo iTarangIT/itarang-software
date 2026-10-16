@@ -9,7 +9,8 @@ import {
 } from "@/lib/db/schema";
 import { and, eq, sql } from "drizzle-orm";
 import { z } from "zod";
-import { requireInventoryAdmin } from "@/lib/auth-utils";
+import { requireStockUploader } from "@/lib/inventory/stockUploadGuard";
+import { recheckAfterStockUpload } from "@/lib/inventory/stockUploadTasks/service";
 import { successResponse, errorResponse, withErrorHandler, generateId } from "@/lib/api-utils";
 import { ASSET_TYPES, AssetType } from "@/lib/inventory/csv-templates";
 import { formatZodErrors, getRowSchema, normalizeLegacyKeys } from "@/lib/inventory/validation";
@@ -26,10 +27,10 @@ const bodySchema = z.object({
 });
 
 export const POST = withErrorHandler(async (req: Request) => {
-  const user = await requireInventoryAdmin();
   const body = bodySchema.parse(await req.json());
-  const { dealerId, assetType, data: rawData } = body as {
-    dealerId: string;
+  // ID 173: same stock-upload rule as both bulk uploads.
+  const { user, dealerId } = await requireStockUploader(body.dealerId);
+  const { assetType, data: rawData } = body as {
     assetType: AssetType;
     data: Record<string, unknown>;
   };
@@ -475,6 +476,9 @@ export const POST = withErrorHandler(async (req: Request) => {
     count: 1,
     reportId,
   });
+
+  // ID 174: the item may complete a "Stock to upload" task for this dealer.
+  await recheckAfterStockUpload(dealerId);
 
   return successResponse({ id: inventoryId, reportId });
 });

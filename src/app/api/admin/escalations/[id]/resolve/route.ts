@@ -55,9 +55,12 @@ export const POST = withErrorHandler(
             dealer_lead_id: string;
             status: string;
             raised_by: string | null;
+            owner_id: string | null;
         }>(sql`
-            SELECT dealer_lead_id, status, raised_by FROM lead_escalations
-            WHERE escalation_id = ${id} LIMIT 1
+            SELECT e.dealer_lead_id, e.status, e.raised_by,
+                   (SELECT dl.current_owner_id FROM dealer_leads dl WHERE dl.id = e.dealer_lead_id) AS owner_id
+              FROM lead_escalations e
+            WHERE e.escalation_id = ${id} LIMIT 1
         `);
         const esc = escRows[0];
         if (!esc) return errorResponse("Escalation not found.", 404);
@@ -152,6 +155,9 @@ export const POST = withErrorHandler(
                 targetUserId: body.target_user_id,
                 actorId: user.id,
                 reason: `Escalation resolved — ${body.resolution_notes}`,
+                // ID 179: the rep it was taken from — unless they raised the
+                // escalation and already heard the outcome above.
+                fromOwners: { [esc.dealer_lead_id]: esc.owner_id === esc.raised_by ? null : esc.owner_id },
             });
         }
 

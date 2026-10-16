@@ -5,7 +5,7 @@ import { db } from "@/lib/db";
 import { kycDataAudit } from "@/lib/db/schema";
 import {
   createWorkflowId,
-  requireAdminAppUser,
+  requireAdminAppUserForLead,
 } from "@/lib/kyc/admin-workflow";
 
 const VALID_DATA_SOURCES = ["ocr", "api", "manual"] as const;
@@ -15,7 +15,7 @@ export async function GET(
   { params }: { params: Promise<{ leadId: string }> },
 ) {
   try {
-    const appUser = await requireAdminAppUser();
+    const appUser = await requireAdminAppUserForLead((await params).leadId);
     if (!appUser) {
       return NextResponse.json(
         { success: false, error: { message: "Unauthorized" } },
@@ -51,7 +51,7 @@ export async function POST(
   { params }: { params: Promise<{ leadId: string }> },
 ) {
   try {
-    const appUser = await requireAdminAppUser();
+    const appUser = await requireAdminAppUserForLead((await params).leadId);
     if (!appUser) {
       return NextResponse.json(
         { success: false, error: { message: "Unauthorized" } },
