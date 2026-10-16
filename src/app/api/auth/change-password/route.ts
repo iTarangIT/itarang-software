@@ -66,6 +66,12 @@ export async function POST(req: NextRequest) {
           .returning({ id: users.id })
       : [];
 
+    // A39: start the 90-day clock (E-345).
+    if (updated[0]) {
+      const { recordPasswordChange } = await import("@/lib/auth/passwordMeta");
+      await recordPasswordChange(updated[0].id);
+    }
+
     if (updated.length === 0) {
       console.error(`CHANGE PASSWORD: no users row for auth id ${user.id} (${user.email})`);
       return NextResponse.json(
