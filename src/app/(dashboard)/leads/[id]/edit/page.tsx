@@ -52,15 +52,19 @@ export default async function EditLeadPage({
   // E-296 "Type of Business" — not on the Drizzle object (see schema.ts), so
   // read separately through to_jsonb: NULL, not an error, on a database
   // without the migration.
+  // ID 118 option B: typed notes (E-346 summary_notes), same way.
   let businessType: string | null = null;
+  let summaryNotes: string | null = null;
   try {
-    const rows = (await db.execute<{ business_type: string | null }>(sql`
-      SELECT to_jsonb(dl) ->> 'business_type' AS business_type
+    const rows = (await db.execute<{ business_type: string | null; summary_notes: string | null }>(sql`
+      SELECT to_jsonb(dl) ->> 'business_type' AS business_type,
+             to_jsonb(dl) ->> 'summary_notes' AS summary_notes
         FROM dealer_leads dl
        WHERE dl.id = ${id}
        LIMIT 1
-    `)) as unknown as { business_type: string | null }[];
+    `)) as unknown as { business_type: string | null; summary_notes: string | null }[];
     businessType = rows[0]?.business_type ?? null;
+    summaryNotes = rows[0]?.summary_notes ?? null;
   } catch {
     // leave null → "Not set"
   }
@@ -80,7 +84,7 @@ export default async function EditLeadPage({
       <div className="bg-white border rounded-2xl shadow-sm p-8">
         <h1 className="text-2xl font-semibold mb-6">Edit Lead</h1>
         <EditLeadForm
-          initialData={{ ...lead, business_type: businessType }}
+          initialData={{ ...lead, business_type: businessType, summary_notes: summaryNotes }}
           leadId={id}
         />
       </div>

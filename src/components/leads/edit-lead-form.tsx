@@ -45,7 +45,9 @@ const leadSchema = z.object({
   city: z.string().trim().optional(),
   area: z.string().trim().optional(),
   pincode: z.string().trim().optional(),
-  overall_summary: z.string().trim().optional(),
+  // ID 118 option B: typed notes have their own field (E-346); the Overall
+  // Summary is written by the server from the call transcripts.
+  summary_notes: z.string().trim().optional(),
   // E-296. '' = Not set.
   business_type: z.union([z.enum(BUSINESS_TYPES), z.literal('')]).optional(),
 });
@@ -74,6 +76,7 @@ type DealerLeadRow = {
   area: string | null;
   pincode: string | null;
   overall_summary: string | null;
+  summary_notes?: string | null;
   business_type?: string | null;
 };
 
@@ -106,7 +109,7 @@ export function EditLeadForm({
       city: initialData.city ?? '',
       area: initialData.area ?? '',
       pincode: initialData.pincode ?? '',
-      overall_summary: initialData.overall_summary ?? '',
+      summary_notes: initialData.summary_notes ?? '',
       business_type: ((BUSINESS_TYPES as readonly string[]).includes(
         initialData.business_type ?? '',
       )
@@ -122,11 +125,15 @@ export function EditLeadForm({
       // business_type is sent only when it changed: it is written by its own
       // statement (E-296), and re-sending an untouched value would make every
       // save on a database without the migration report a failed type write.
-      const { business_type, ...rest } = data;
-      const payload =
-        (business_type ?? '') !== (initialData.business_type ?? '')
-          ? { ...rest, business_type: business_type || null }
-          : rest;
+      // Notes (E-346) the same way, for the same reason.
+      const { business_type, summary_notes, ...rest } = data;
+      const payload = {
+        ...rest,
+        ...((business_type ?? '') !== (initialData.business_type ?? '')
+          ? { business_type: business_type || null }
+          : {}),
+        ...((summary_notes ?? '') !== (initialData.summary_notes ?? '') ? { summary_notes: summary_notes ?? '' } : {}),
+      };
       const res = await fetch(`/api/dealer-leads/${leadId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -142,6 +149,8 @@ export function EditLeadForm({
       }
       if (json.business_type_saved === false) {
         toast.warning('Lead updated, but Type of Business could not be saved on this database.');
+      } else if (json.notes_saved === false) {
+        toast.warning('Lead updated, but the notes could not be saved on this database.');
       } else {
         toast.success('Lead updated.');
       }
@@ -258,13 +267,22 @@ export function EditLeadForm({
       <div className="space-y-5">
         <h2 className="text-lg font-semibold text-gray-900">Notes</h2>
         <div>
-          <Label>Summary</Label>
+          <Label>Notes</Label>
           <textarea
-            {...register('overall_summary')}
+            {...register('summary_notes')}
             rows={4}
             className="mt-1 w-full rounded-lg border px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500"
             placeholder="Anything worth knowing about this dealer…"
           />
+        </div>
+        <div>
+          <Label>Overall summary</Label>
+          <p className="mt-1 whitespace-pre-wrap rounded-lg border border-dashed bg-gray-50 px-3 py-2 text-sm text-gray-600">
+            {initialData.overall_summary?.trim() || 'No summary yet.'}
+          </p>
+          <p className="mt-1 text-xs text-gray-500">
+            Written by the system from the call transcripts and refreshed after each new call. Your notes above are kept separately.
+          </p>
         </div>
       </div>
 
