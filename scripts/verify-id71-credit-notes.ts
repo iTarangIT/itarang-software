@@ -10,6 +10,8 @@
 // 3. Orders: no account's order count / last order comes from a credit note —
 //    Dealer Health and the Accounts download agree with an order-only count.
 // 4. Lines: By SKU = gross margin line value per month (credits netted in both).
+// 1b (16 Oct): no credit-note folder still filters on "sale"; the credit-note
+//    fill-in runs are recorded (invoice_imports, kind credit_lines_fill).
 
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
@@ -47,6 +49,16 @@ async function main() {
             `      ${cn.notes - cn.voided - cn.with_lines} live credit note(s) have no item lines — run scripts/backfill-drive-line-items.ts --credit-notes`,
         );
     }
+
+    // 1b — 16 Oct: folders and the fill-in record
+    const fold = await one<{ credit: number; bad: number }>(sql`
+        SELECT COUNT(*) FILTER (WHERE doc_kind = 'credit_note')::int AS credit,
+               COUNT(*) FILTER (WHERE doc_kind = 'credit_note' AND lower(btrim(include_names)) = 'sale')::int AS bad
+          FROM sales_invoice_folders`);
+    check(`no credit-note folder still filters on "sale" (${fold.credit} credit-note folder(s))`, fold.bad === 0, fold.bad);
+    const fill = await one<{ n: number; last: string | null }>(sql`
+        SELECT COUNT(*)::int AS n, MAX(created_at)::text AS last FROM invoice_imports WHERE kind = 'credit_lines_fill'`);
+    console.log(`      credit-note fill-in runs recorded: ${fill.n}${fill.last ? ` (last ${fill.last})` : ""}`);
 
     // 2 — money owed
     const [card, rows] = await Promise.all([outstandingTotal(), listReceivables()]);
