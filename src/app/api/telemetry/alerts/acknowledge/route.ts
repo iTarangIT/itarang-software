@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { acknowledgeAlert } from '@/lib/telemetry/queries';
-import { resolveTelemetryViewer, telemetryErrorResponse, viewerMayOpenVehicle } from '@/lib/telemetry/vehicleAccess';
+import { requireTelemetryViewer, telemetryErrorResponse, viewerMayOpenVehicle } from '@/lib/telemetry/vehicleAccess';
 import { alertVehicleNumber } from '@/lib/telemetry/vehicleAccessRules';
 
 export async function POST(req: NextRequest) {
     try {
-        const viewer = await resolveTelemetryViewer();
+        const viewer = await requireTelemetryViewer();
         const { alertId } = await req.json();
         if (!alertId) {
             return NextResponse.json({ success: false, error: { message: 'alertId required' } }, { status: 400 });

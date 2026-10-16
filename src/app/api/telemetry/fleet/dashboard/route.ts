@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { resolveTelemetryViewer, telemetryErrorResponse } from '@/lib/telemetry/vehicleAccess';
+import { requireTelemetryViewer, telemetryErrorResponse } from '@/lib/telemetry/vehicleAccess';
 import { fetchFleetDashboardCEO, fetchFleetDashboardDealer } from '@/lib/telemetry/queries';
 import { isVpsUnreachable, vpsDegradedReason } from '@/lib/telemetry/vps-status';
 
 export async function GET(req: NextRequest) {
     let user;
     try {
-        user = await resolveTelemetryViewer();
+        user = await requireTelemetryViewer();
     } catch (error) {
         // Auth failures answer 401 / 403 (ID 181) — the degraded path only
         // applies once we've authed and *then* fail to reach the VPS.

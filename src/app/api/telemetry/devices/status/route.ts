@@ -1,10 +1,10 @@
 import { NextResponse } from 'next/server';
 import { fetchDeviceStatus } from '@/lib/telemetry/queries';
-import { resolveTelemetryViewer, telemetryErrorResponse, viewerVehicleScope } from '@/lib/telemetry/vehicleAccess';
+import { requireTelemetryViewer, telemetryErrorResponse, viewerVehicleScope } from '@/lib/telemetry/vehicleAccess';
 
 export async function GET() {
     try {
-        const viewer = await resolveTelemetryViewer();
+        const viewer = await requireTelemetryViewer();
         // ID 181: a dealer gets only its mapped vehicles (none without a dealer code).
         const scope = await viewerVehicleScope(viewer);
         const data = await fetchDeviceStatus(scope ?? undefined);
