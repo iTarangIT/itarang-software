@@ -108,6 +108,12 @@ const NEW_BATTERY_SECTIONS = new Set(["SALES", "OPERATIONS"]);
  * points at.
  */
 const REDUNDANT_FOR_SCRAP_ITEM_IDS = new Set(["buyback"]);
+/**
+ * ID 182 / 183: dealer-menu items for the iTarang house logins only. Whether
+ * this login is a house login comes from the push-eligibility probe
+ * (/api/leads/dealer-lookup answers 200 only for the house among dealers).
+ */
+const HOUSE_ONLY_ITEM_IDS = new Set(["pushed-files"]);
 
 /**
  * peakAmp Battery Buyback — the iTarang-staff side.
@@ -1093,6 +1099,14 @@ const roleNavigation: Record<string, any[]> = {
           href: "/admin/kyc-review",
         },
         {
+          // ID 182 / 183: files the iTarang house pushed to dealers — open one
+          // to act for its dealer.
+          id: "pushed-files",
+          label: "Pushed Files",
+          icon: Handshake,
+          href: "/admin/kyc-review/pushed-files",
+        },
+        {
           id: "product-review",
           label: "Product Review",
           icon: Package,
@@ -1679,10 +1693,25 @@ const roleNavigation: Record<string, any[]> = {
           href: "/admin/kyc-review",
         },
         {
+          // ID 182 / 183: files the iTarang house pushed to dealers — open one
+          // to act for its dealer.
+          id: "pushed-files",
+          label: "Pushed Files",
+          icon: Handshake,
+          href: "/admin/kyc-review/pushed-files",
+        },
+        {
           id: "product-review",
           label: "Product Review",
           icon: Package,
           href: "/admin/product-review",
+        },
+        {
+          // ID 182: one login per iTarang team member under the house dealer.
+          id: "house-team-logins",
+          label: "House Team Logins",
+          icon: UserPlus,
+          href: "/admin/house-team-logins",
         },
       ],
     },
@@ -2275,6 +2304,14 @@ const roleNavigation: Record<string, any[]> = {
           label: "My Drafts",
           icon: FileText,
           href: "/dealer-portal/leads/drafts",
+        },
+        {
+          // ID 182 / 183: iTarang house logins only (HOUSE_ONLY_ITEM_IDS) —
+          // the files the house pushed to dealers, to look at.
+          id: "pushed-files",
+          label: "Pushed Files",
+          icon: Handshake,
+          href: "/dealer-portal/pushed-files",
         },
         {
           id: "calculator",
@@ -3127,6 +3164,24 @@ export function Sidebar() {
     };
   }, [inferredRole]);
 
+  // ID 182 / 183: is this dealer login an iTarang house login? Gates
+  // HOUSE_ONLY_ITEM_IDS. Hidden until the probe answers (the safe direction).
+  const [isHouseLogin, setIsHouseLogin] = useState(false);
+  useEffect(() => {
+    if (inferredRole !== "dealer") return;
+    let cancelled = false;
+    fetch("/api/leads/dealer-lookup", { cache: "no-store" })
+      .then((r) => {
+        if (!cancelled) setIsHouseLogin(r.ok);
+      })
+      .catch(() => {
+        /* not a house login as far as the menu knows */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [inferredRole]);
+
   // E-202 / E-225 — which modules this dealer type has at all.
   //  · new   → no buyback (they don't sell old batteries back to us)
   //  · scrap → ONLY buyback (no leads, loans, assets, orders, inventory…)
@@ -3155,13 +3210,14 @@ export function Sidebar() {
           // would normally drop it.
           if (dealerFinanceEnabled === false && FINANCE_GATED_ITEM_IDS.has(item.id)) return false;
           if (!caps.newBattery && REDUNDANT_FOR_SCRAP_ITEM_IDS.has(item.id)) return false;
+          if (!isHouseLogin && HOUSE_ONLY_ITEM_IDS.has(item.id)) return false;
           return true;
         }),
       }))
       // A section whose every item was filtered out would otherwise render as a
       // bare heading with nothing under it.
       .filter((group: any) => group.items.length > 0);
-  }, [inferredRole, dealerFinanceEnabled, dealerType]);
+  }, [inferredRole, dealerFinanceEnabled, dealerType, isHouseLogin]);
 
   // Shared items, trailing sections and the EXPENSES merge: assembleRoleMenu.
   let menuItems = assembleRoleMenu(inferredRole, filteredMenuItems);

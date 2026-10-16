@@ -647,6 +647,20 @@ export async function middleware(request: NextRequest) {
   // permissive default and rendered for every signed-in role — dealers and
   // NBFC partners included — and those pages read every row. The lists live in
   // staffPageRoles.ts because the pages re-check them with requireRole.
+  // ID 182 / 183: two iTarang-team screens whose page and API admit fewer
+  // roles than the prefix rows below ("/admin/kyc-review" admits business_head
+  // and the CEO; the CEO passes every dashboard). Same lists as the pages'
+  // requireRole and their APIs: Pushed files (/api/leads/pushed-files) for
+  // Admin and Sales Head; House team logins for Admin only.
+  const teamPageRoles = path.startsWith("/admin/kyc-review/pushed-files")
+    ? ["admin", "sales_head"]
+    : path.startsWith("/admin/house-team-logins")
+      ? ["admin"]
+      : null;
+  if (teamPageRoles && !teamPageRoles.includes(role)) {
+    return finalize(NextResponse.redirect(new URL(myDashboard, request.url)));
+  }
+
   const staffPageRoles = staffPageRolesFor(path);
   if (staffPageRoles && !staffPageRoles.includes(role)) {
     return finalize(NextResponse.redirect(new URL(myDashboard, request.url)));

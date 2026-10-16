@@ -15,7 +15,7 @@
 // both are recorded on the push history row.
 
 import { z } from "zod";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import { auditLogs, leads } from "@/lib/db/schema";
@@ -181,7 +181,8 @@ export const POST = withErrorHandler(async (req: Request, { params }: { params: 
         deleted_by_dealer_user: null,
         updated_at: now,
       })
-      .where(and(eq(leads.id, lead.id), eq(leads.dealer_id, lead.dealerId!)))
+      // A file with no dealer yet: `dealer_id = NULL` never matches in SQL.
+      .where(and(eq(leads.id, lead.id), lead.dealerId ? eq(leads.dealer_id, lead.dealerId) : isNull(leads.dealer_id)))
       .returning({ id: leads.id });
     if (!rows.length) return null;
 
