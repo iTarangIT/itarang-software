@@ -54,6 +54,19 @@ export function backOfficeOwnsLead(input: {
 }
 
 /**
+ * ID 119: which customer files a back-office role's KYC LISTS may show —
+ * "all" (Admin, CEO, Sales Head), "own" (Business Head, Sales Manager, Sales
+ * Executive, Finance Controller: backOfficeOwnsLead) or "none" (anyone else).
+ * ownedLeadsWhere() turns this into SQL for the list endpoints.
+ */
+export function kycLeadScope(role: string | null | undefined): "all" | "own" | "none" {
+  const r = (role ?? "").toLowerCase();
+  if ((ALL_LEADS_KYC_ROLES as readonly string[]).includes(r)) return "all";
+  if ((OWN_LEADS_KYC_ROLES as readonly string[]).includes(r)) return "own";
+  return "none";
+}
+
+/**
  * May this caller read the lead's full PAN? Admin, Sales Head, CEO; the dealer
  * whose lead it is; the person who uploaded the lead; the iTarang owner of the
  * dealer's account. Every other back-office role (sales manager, sales

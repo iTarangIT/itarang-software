@@ -3,6 +3,7 @@ import { db } from '@/lib/db';
 import { couponCodes, leads } from '@/lib/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { requireRole } from '@/lib/auth-utils';
+import { backOfficeMayReachLead } from '@/lib/auth/requireLeadAccess';
 import { logCouponAction } from '@/lib/coupon-audit';
 import { z } from 'zod';
 
@@ -19,6 +20,10 @@ export async function POST(req: NextRequest, context: RouteContext) {
     try {
         const user = await requireRole(['admin', 'ceo', 'business_head']);
         const { leadId } = await context.params;
+        // ID 119: a Business Head cancels only on customers they own.
+        if (!(await backOfficeMayReachLead(user, leadId))) {
+            return NextResponse.json({ success: false, error: { message: 'Forbidden' } }, { status: 403 });
+        }
         const body = await req.json();
 
         const parsed = cancelSchema.safeParse(body);

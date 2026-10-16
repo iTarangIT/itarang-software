@@ -104,7 +104,12 @@ async function dealerLeadAttachmentOwners(bucket: string, key: string): Promise<
 /** Customer lead facts, shared by customer KYC files and the NBFC store's per-lead files. */
 async function customerLeadFacts(leadId: string): Promise<FileFacts> {
     const [lead] = await db
-        .select({ dealer_id: leads.dealer_id, uploader_id: leads.uploader_id })
+        .select({
+            dealer_id: leads.dealer_id,
+            uploader_id: leads.uploader_id,
+            assigned_to: leads.assigned_to,
+            sm_assigned_to: leads.sm_assigned_to,
+        })
         .from(leads)
         .where(eq(leads.id, leadId))
         .limit(1);
@@ -116,6 +121,8 @@ async function customerLeadFacts(leadId: string): Promise<FileFacts> {
     return {
         leadDealerId: lead.dealer_id,
         leadUploaderId: lead.uploader_id,
+        leadAssignedTo: lead.assigned_to,
+        leadSmAssignedTo: lead.sm_assigned_to,
         sharedTenantIds: shared.map((s) => s.tenant_id),
         // leads.dealer_id is the dealer's account id (users.dealer_id = accounts.id).
         accountOwnerId: await accountOwnerOf(lead.dealer_id),

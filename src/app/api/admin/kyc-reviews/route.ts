@@ -15,6 +15,8 @@ import {
 } from "@/lib/db/schema";
 import { and, desc, eq, inArray, isNotNull, isNull } from "drizzle-orm";
 import { FULL_ID_ROLES } from "@/lib/auth/leadAccessRules";
+import { ownedLeadsWhere } from "@/lib/auth/ownedLeadsWhere";
+import { backOfficeMayReachLead } from "@/lib/auth/requireLeadAccess";
 import { maskAadhaarDeep } from "@/lib/kyc/aadhaarMask";
 import { maskPanDeep } from "@/lib/kyc/panMask";
 
@@ -546,7 +548,15 @@ export async function GET(req: NextRequest) {
         .leftJoin(accounts, eq(accounts.id, leads.dealer_id))
         // E-285 — an application the admin deleted drops out of this queue.
         // The dealer and the lender keep their own copies.
-        .where(and(inArray(leads.id, leadIds), isNull(leads.deleted_by_admin_at))),
+        // ID 119: Business Head, Sales Manager and Sales Executive see only the
+        // customer files they own; Admin, CEO and Sales Head see every one.
+        .where(
+          and(
+            inArray(leads.id, leadIds),
+            isNull(leads.deleted_by_admin_at),
+            ownedLeadsWhere(admin, leads.id),
+          ),
+        ),
       db
         .select({ lead_id: coBorrowers.lead_id })
         .from(coBorrowers)
@@ -680,8 +690,8 @@ export async function GET(req: NextRequest) {
       });
 
     // ID 119: OCR data leaves with the Aadhaar number masked; the PAN in full
-    // only for Admin, Sales Head and CEO (this list spans every lead, so no
-    // per-lead owner check — a sales manager sees it masked here).
+    // only for Admin, Sales Head and CEO (an owning sales manager still sees it
+    // masked on this list).
     const fullIds = (FULL_ID_ROLES as readonly string[]).includes(String(admin.role ?? "").toLowerCase());
     const safe = fullIds ? maskAadhaarDeep(result) : maskPanDeep(maskAadhaarDeep(result));
     return NextResponse.json({ success: true, data: safe });
@@ -747,6 +757,15 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(
         { success: false, error: "Additional document request is required" },
         { status: 400 },
+      );
+    }
+
+    // ID 119: reviewing one customer's document needs the same reach as
+    // reading it — owners only, below Admin / CEO / Sales Head.
+    if (!(await backOfficeMayReachLead(admin, leadId))) {
+      return NextResponse.json(
+        { success: false, error: "Unauthorized" },
+        { status: 403 },
       );
     }
 

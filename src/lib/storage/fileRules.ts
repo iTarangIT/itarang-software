@@ -237,6 +237,9 @@ export type FileFacts = {
     /** Customer lead: leads.dealer_id (a dealer code / account id). */
     leadDealerId?: string | null;
     leadUploaderId?: string | null;
+    /** Customer lead: leads.assigned_to and leads.sm_assigned_to (ID 119 owners). */
+    leadAssignedTo?: string | null;
+    leadSmAssignedTo?: string | null;
     /** NBFC tenants the customer lead is shared with (nbfc_lead_assignments). */
     sharedTenantIds?: readonly string[];
     /** Owners on the dealer lead: current owner and ASM. */
@@ -324,7 +327,16 @@ export function mayOpenFile(viewer: FileViewer, file: FileKind, facts: FileFacts
             return top || file.userId === viewer.id;
         case "customer_lead": {
             if (top || ownsAccount) return true;
-            if (facts.leadUploaderId && facts.leadUploaderId === viewer.id) return true;
+            // ID 119: the lead's owner is whoever uploaded it, has it assigned
+            // or is its sales manager — the same rule as backOfficeOwnsLead, so
+            // an owning sales manager opens the files the KYC screens show them.
+            if (
+                [facts.leadUploaderId, facts.leadAssignedTo, facts.leadSmAssignedTo].some(
+                    (o) => !!o && o === viewer.id,
+                )
+            ) {
+                return true;
+            }
             if (role === "dealer") {
                 const lead = (facts.leadDealerId ?? "").trim();
                 const mine = (viewer.dealerCode ?? "").trim();
