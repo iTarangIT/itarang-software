@@ -27,6 +27,7 @@ import { and, desc, eq, isNull, or } from "drizzle-orm";
 
 import { db } from "@/lib/db/index";
 import { otherDocumentRequests } from "@/lib/db/schema";
+import { stampUploader, whatsappUploaderId } from "@/lib/storage/uploaderStamp";
 
 import type { ActiveDealer } from "./customer-lead";
 import {
@@ -282,6 +283,12 @@ async function onDocRequestWait(
       uploaded_at: new Date(),
     })
     .where(eq(otherDocumentRequests.id, target.id));
+  // ID 166: sent on the dealer's own WhatsApp console, so the dealer uploaded it.
+  await stampUploader(
+    "other_document_requests",
+    { id: target.id },
+    { userId: await whatsappUploaderId(session.application_id), source: "whatsapp" },
+  );
 
   // E-200 — an NBFC-originated child re-projects its wrapper and notifies the
   // admins, exactly as the web upload does. Best-effort: a notification failure

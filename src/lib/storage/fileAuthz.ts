@@ -24,6 +24,7 @@ import {
     FILE_TOP_ROLES,
     type FileFacts,
     type FileKind,
+    type FileUpload,
     type FileViewer,
 } from "@/lib/storage/fileRules";
 
@@ -200,9 +201,53 @@ async function leadsForRecording(key: string): Promise<string[]> {
     return rowsOf<{ id: string }>(result).map((r) => r.id);
 }
 
+/**
+ * ID 166 (E-349): the rows on this lead that hold exactly this file, with who
+ * uploaded each — KYC documents, co-borrower documents and requested
+ * documents. The E-349 columns are read through to_jsonb so a DB without the
+ * migration reads them as NULL (an old row: the old rule). A failed lookup
+ * refuses (one row with a source and no uploader), never opens.
+ */
+async function customerFileUploads(leadId: string, bucket: string, key: string): Promise<FileUpload[]> {
+    const like = `%/${bucket}/${key}`;
+    try {
+        const rows = rowsOf<{ uploaded_by: string | null; upload_source: string | null; uploader_dealer: string | null }>(
+            await db.execute(sql`
+                SELECT x.uploaded_by, x.upload_source, u.dealer_id AS uploader_dealer
+                  FROM (
+                    SELECT k.uploaded_by::text AS uploaded_by, NULL::text AS upload_source
+                      FROM kyc_documents k WHERE k.lead_id = ${leadId} AND k.file_url LIKE ${like}
+                    UNION ALL
+                    SELECT to_jsonb(c) ->> 'uploaded_by', to_jsonb(c) ->> 'upload_source'
+                      FROM co_borrower_documents c WHERE c.lead_id = ${leadId} AND c.document_url LIKE ${like}
+                    UNION ALL
+                    SELECT to_jsonb(o) ->> 'uploaded_by', to_jsonb(o) ->> 'upload_source'
+                      FROM other_document_requests o
+                     WHERE o.lead_id = ${leadId} AND (o.file_url LIKE ${like} OR o.document_url LIKE ${like})
+                  ) x
+                  LEFT JOIN users u ON u.id::text = x.uploaded_by
+                 LIMIT 20
+            `),
+        );
+        return rows.map((r) => ({
+            uploaderId: r.uploaded_by,
+            uploaderDealerCode: r.uploader_dealer,
+            source: r.upload_source,
+        }));
+    } catch (err) {
+        console.error("[files] uploader lookup failed:", err instanceof Error ? err.message : err);
+        return [{ uploaderId: null, uploaderDealerCode: null, source: "unknown" }];
+    }
+}
+
 async function factsFor(file: FileKind, bucket: string, key: string, viewer: FileViewer): Promise<FileFacts> {
     switch (file.kind) {
-        case "customer_lead":
+        case "customer_lead": {
+            const facts = await customerLeadFacts(file.leadId);
+            // Only a dealer is limited to its own uploads; nobody else pays for the lookup.
+            if (viewer.role !== "dealer") return facts;
+            return { ...facts, fileUploads: await customerFileUploads(file.leadId, bucket, key) };
+        }
         case "nbfc_lead":
             return customerLeadFacts(file.leadId);
         case "nbfc_case":
