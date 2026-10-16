@@ -41,13 +41,13 @@ function TaskCard({ t, canClose }: { t: StockTask; canClose: boolean }) {
                     </h2>
                     <p className="text-xs text-gray-500">
                         Dated {day(t.invoiceDate)} · Bill To GSTIN {t.customerGstin ?? "—"}
-                        {t.accountId ? ` · dealer account ${t.accountId}` : " · no dealer account matched: link the invoice in Invoice Ledger"}
+                        {t.accountId ? ` · dealer account ${t.accountId}` : " · buyer not linked to a dealer account: link the invoice in Invoice Ledger"}
                     </p>
                 </div>
                 <div className="text-right text-xs">
                     {t.status === "closed" ? (
                         <span className="rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 font-semibold text-gray-700">
-                            Closed {day(t.closedAt)} · {t.closedHow === "by_hand" ? "by hand" : "all serials in stock"}
+                            Closed {day(t.closedAt)} · {t.closedHow === "by_hand" ? "by hand" : t.closedHow === "voided" ? "invoice voided / credit-noted" : "all serials in stock"}
                         </span>
                     ) : (
                         <span

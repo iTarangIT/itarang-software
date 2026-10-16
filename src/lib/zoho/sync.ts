@@ -15,6 +15,7 @@ import { iterateAllInvoices } from "./invoices";
 import { iterateAllPayments } from "./payments";
 import { getOrganizationIds, listOrganizationIdsFromApi } from "./client";
 import type { ZohoInvoice, ZohoPayment } from "./types";
+import { recordNewZohoInvoice } from "@/lib/inventory/stockUploadTasks/zohoHook";
 
 export interface SyncResult {
   upserted: number;
@@ -216,7 +217,7 @@ async function upsertInvoice(
 ): Promise<void> {
   if (!inv.invoice_id) return;
   const now = new Date();
-  await db
+  const [row] = await db
     .insert(zohoInvoices)
     .values({
       zoho_invoice_id: inv.invoice_id,
@@ -253,7 +254,20 @@ async function upsertInvoice(
         // payment_* columns are owned by applyPaymentReference — don't reset
         // them here or each invoice re-pull would wipe the txn reference.
       },
+    })
+    // xmax = 0 only on a fresh INSERT, never on the conflict UPDATE.
+    .returning({ id: zohoInvoices.id, inserted: sql<boolean>`(xmax = 0)` });
+
+  // ID 174: a NEW invoice opens a "Stock to upload" task when it sells
+  // batteries (dated from the day tasks went live; one detail call). Never throws.
+  if (row?.inserted) {
+    await recordNewZohoInvoice({
+      zohoRowId: row.id,
+      zohoInvoiceId: inv.invoice_id,
+      organizationId,
+      invoiceDate: parseInvoiceDate(inv.date),
     });
+  }
 }
 
 // Stamp a payment's reference (UTR / bank txn id) onto every invoice it
