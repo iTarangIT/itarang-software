@@ -13,6 +13,17 @@
  */
 import { sql, type SQL } from "drizzle-orm";
 
+import { visibleStatuses } from "@/lib/targets/rules";
+
 export function finalTargetSql(t: SQL = sql`t`): SQL {
     return sql`(${t}.ceo_target + GREATEST(COALESCE(${t}.admin_addon, 0), 0))`;
+}
+
+/**
+ * ID 189 — the rows a viewer may see, as SQL (visibleStatuses in ./rules.ts):
+ * never a removed row; a CEO draft for the CEO only; for the member, only what
+ * was pushed to them. One definition for the service and the export count.
+ */
+export function targetVisibleSql(viewer: "ceo" | "manager" | "member", t: SQL = sql`t`): SQL {
+    return sql`${t}.status IN (${sql.join(visibleStatuses(viewer).map((s) => sql`${s}`), sql`, `)})`;
 }

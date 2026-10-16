@@ -27,11 +27,11 @@ export type TargetRowLite = {
 };
 
 export type CompanyTarget = {
-    /** Target over the months that have one — every status counts (ID 157). */
+    /** Target over the months that have one — posted, pushed and accepted (ID 157, 189: never a CEO draft). */
     sum: number;
     /**
      * ID 157 (10 Oct): the part of `sum` its people have accepted, and the rest
-     * (Draft + Pending approval + Pushed). accepted + notAccepted === sum.
+     * (Posted + Pushed). accepted + notAccepted === sum.
      */
     accepted: number;
     notAccepted: number;
@@ -40,6 +40,18 @@ export type CompanyTarget = {
     /** Months of the period ("YYYY-MM") with no target for the metric. */
     missing: string[];
 };
+
+/**
+ * ID 189 (16 Oct gap fix): only the version in force counts — posted, pushed,
+ * accepted (and the old-flow rejected). The CEO's never-posted draft (his
+ * /api/admin/targets answer includes it) and a removed row do not; a draft
+ * REVISION of a posted target is not in these rows (it sits apart in
+ * draft_ceo_target), so the posted number is what counts. No status = an old
+ * payload that only ever carried posted rows.
+ */
+function inForce(status: string | null | undefined): boolean {
+    return status == null || status === "pending_approval" || status === "pushed" || status === "accepted" || status === "rejected";
+}
 
 export function summariseCompanyTargets(
     lists: ReadonlyArray<{ month: string; rows: ReadonlyArray<TargetRowLite> }>,
@@ -55,6 +67,7 @@ export function summariseCompanyTargets(
     for (const { month, rows } of lists) {
         for (const r of rows) {
             if (r.metric !== "revenue" && r.metric !== "batteries_sold") continue;
+            if (!inForce(r.status)) continue;
             const ceo = r.ceo_progress ?? r.progress;
             const pick = (p: { monthly_target: number; mtd_target: number }) =>
                 Number((month === thisMonth ? p.mtd_target : p.monthly_target) || 0);

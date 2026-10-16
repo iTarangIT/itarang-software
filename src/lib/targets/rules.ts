@@ -105,6 +105,7 @@ export function metricsForRole(role: string | null | undefined): TargetMetric[] 
     return TARGET_METRIC_KEYS.filter((m) => (TARGET_METRICS[m].roles as readonly string[]).includes(r));
 }
 
+/** Live statuses. A removed target is "removed" (TARGET_REMOVED_STATUS) — never listed. */
 export const TARGET_STATUSES = ["draft", "pending_approval", "pushed", "accepted", "rejected"] as const;
 export type TargetStatus = (typeof TARGET_STATUSES)[number];
 
@@ -176,6 +177,67 @@ export function postLands(status: string): "first_post" | "in_place" | "next" {
 export function clockAfterPush(prevStatus: string, firstPushedAt: string | null): "keep" | "start" {
     if (!firstPushedAt) return "start";
     return prevStatus === "accepted" ? "start" : "keep";
+}
+
+// ── ID 189: who adds and removes a target (16 Oct gap fixes) ────────────────
+
+/**
+ * A removed target keeps its row and its history (sales_target_versions) with
+ * this status; every reader leaves it out. Not in TARGET_STATUSES, so no
+ * filter or label offers it.
+ */
+export const TARGET_REMOVED_STATUS = "removed";
+
+/**
+ * Which rows a viewer sees, as statuses:
+ *   ceo     everything but removed rows (his own unposted drafts included)
+ *   manager posted and later — never a CEO draft
+ *   member  only what was pushed to them (a posted-but-not-pushed target is
+ *           still with the Sales Head)
+ */
+export function visibleStatuses(viewer: "ceo" | "manager" | "member"): readonly string[] {
+    if (viewer === "member") return ["pushed", "accepted", "rejected"];
+    if (viewer === "manager") return ["pending_approval", "pushed", "accepted", "rejected"];
+    return ["draft", "pending_approval", "pushed", "accepted", "rejected"];
+}
+
+/**
+ * A new person or metric is the CEO's alone: it lands as his draft and goes
+ * out with his Post. The Sales Head / Admin only add a stretch to targets the
+ * CEO has posted.
+ */
+export function mayAddTarget(role: string | null | undefined): boolean {
+    return (role ?? "").toLowerCase() === "ceo";
+}
+
+/**
+ * Is a target the CEO's? Yes when the CEO created or posted it, or it carries
+ * a CEO number (in force, waiting or in draft). Only rows the old flow let a
+ * Sales Head add on their own (CEO target 0, created and posted by them) are not.
+ */
+export function isCeoTarget(t: {
+    createdByRole: string | null | undefined;
+    postedByRole: string | null | undefined;
+    ceoTarget: number;
+    pendingCeoTarget?: number | null;
+}): boolean {
+    const ceo = (r: string | null | undefined) => (r ?? "").toLowerCase() === "ceo";
+    return ceo(t.createdByRole) || ceo(t.postedByRole) || Number(t.ceoTarget) > 0 || t.pendingCeoTarget != null;
+}
+
+/** The CEO removes any target; the Sales Head / Admin only one that is not the CEO's. */
+export function mayRemoveTarget(role: string | null | undefined, ceoTarget: boolean): boolean {
+    const r = (role ?? "").toLowerCase();
+    if (r === "ceo") return true;
+    return (r === "sales_head" || r === "admin") && !ceoTarget;
+}
+
+/**
+ * Who is told (bell) when a target is removed: the member only if it had been
+ * pushed to them; the Sales Head once the CEO had posted it.
+ */
+export function removalAudience(status: string): { member: boolean; salesHead: boolean } {
+    return { member: isWithMember(status), salesHead: status !== "draft" };
 }
 
 /** "per day" / "per month": how a target number reads (calls per day is a rate). */

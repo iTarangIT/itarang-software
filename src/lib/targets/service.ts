@@ -9,8 +9,13 @@
  *   sales_head / admin   add an add-only STRETCH per target with an optional
  *                 note (final = CEO + stretch, no CEO re-confirmation) and push
  *                 POSTED targets to the member — never an unposted draft
- *   CEO / sales_head / admin   add a metric (built-in or custom), remove one,
- *                 enter a custom metric's progress
+ *   CEO           adds a metric (built-in or custom) — it lands as his draft —
+ *                 and removes any target (16 Oct gap fix: the Sales Head /
+ *                 Admin no longer create a target without a CEO post, and only
+ *                 remove a row the old flow let them add themselves)
+ *   CEO / sales_head / admin   enter a custom metric's progress
+ *   A removal is soft: status 'removed', a 'removed' history row, and a bell
+ *   to the member (if it had been pushed) and the Sales Head (if posted).
  *   the employee  accepts (optional remark) or asks for a correction (remark
  *                 required) on their own sent targets, and enters progress on
  *                 their own custom metrics. There is no reject.
@@ -44,8 +49,14 @@ import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
     isCustomMetric,
+    isCeoTarget,
     isTargetMetric,
+    mayAddTarget,
+    mayRemoveTarget,
     metricKind,
+    removalAudience,
+    TARGET_REMOVED_STATUS,
+    TARGET_STATUS_LABEL,
     metricsForRole,
     monthEnd,
     newCustomMetricKey,
@@ -63,12 +74,16 @@ import {
     type TargetMetric,
     type TargetStatus,
 } from "@/lib/targets/rules";
-import { emit } from "@/lib/notifications/emit";
-import { finalTargetSql } from "@/lib/targets/sql";
+import { emit, type EmitInput } from "@/lib/notifications/emit";
+import { finalTargetSql, targetVisibleSql } from "@/lib/targets/sql";
 import { ADMIN_PARTY } from "@/lib/notifications/provenance";
 
-/** Add / remove metrics, enter custom progress. */
-export const TARGET_METRIC_ROLES = ["ceo", "sales_head", "admin"];
+/** Add a metric (lands as the CEO's draft) — the CEO only (ID 189, 16 Oct). */
+export const TARGET_METRIC_ROLES = ["ceo"];
+/** Remove a target: the CEO any; the Sales Head / Admin only one that is not the CEO's (mayRemoveTarget). */
+export const TARGET_REMOVE_ROLES = ["ceo", "sales_head", "admin"];
+/** Enter a custom metric's progress for someone else. */
+export const TARGET_PROGRESS_ROLES = ["ceo", "sales_head", "admin"];
 /** Set the CEO target number. */
 export const TARGET_CEO_ROLES = ["ceo"];
 /** ID 189 — post the CEO's targets to the Sales Head: the CEO only (Admin's Submit removed). */
@@ -156,6 +171,8 @@ export type TargetRow = {
     review_requested_at: string | null;
     rejected_at: string | null;
     reject_comment: string | null;
+    /** ID 189 — the CEO created, posted or numbered it: only the CEO may remove it. */
+    ceo_owned: boolean;
     /** Against the final target (CEO + stretch) — reps, the Sales Head, daily emails. */
     progress: Progress;
     /** Against the CEO target alone — the CEO's tiles (stretch shown apart). */
@@ -316,13 +333,17 @@ export async function listTargets(opts: { month: string; userId?: string; viewer
                ${j("accept_remark")} AS accept_remark,
                CASE WHEN t.status IN ('pushed', 'rejected')
                     THEN FLOOR(EXTRACT(EPOCH FROM (now() - COALESCE(${j("first_pushed_at")}::timestamptz, t.pushed_at))) / 3600)::int
-               END AS hours_unaccepted
+               END AS hours_unaccepted,
+               cb.role AS created_by_role, pb.role AS posted_by_role
           FROM sales_targets t
           LEFT JOIN users u ON u.id::text = t.user_id
+          LEFT JOIN users cb ON cb.id::text = t.created_by
+          LEFT JOIN users pb ON pb.id::text = ${j("review_requested_by")}
          WHERE t.month = ${monthFirst}::date
            ${opts.userId ? sql`AND t.user_id = ${opts.userId}` : sql``}
-           -- ID 189: the CEO's unposted drafts are his alone.
-           ${viewer === "ceo" ? sql`` : sql`AND t.status <> 'draft'`}
+           -- ID 189: the CEO's unposted drafts are his alone; the member sees
+           -- only what was pushed to them; a removed target is nobody's.
+           AND ${targetVisibleSql(viewer)}
          ORDER BY u.name NULLS LAST, t.created_at, t.metric
     `)) as unknown as Array<Record<string, unknown>>;
 
@@ -395,6 +416,12 @@ export async function listTargets(opts: { month: string; userId?: string; viewer
                 review_requested_at: iso(r.review_requested_at),
                 rejected_at: iso(r.rejected_at),
                 reject_comment: (r.reject_comment as string | null) ?? null,
+                ceo_owned: isCeoTarget({
+                    createdByRole: r.created_by_role as string | null,
+                    postedByRole: r.posted_by_role as string | null,
+                    ceoTarget: ceo,
+                    pendingCeoTarget: numOrNull(r.next_ceo_target) ?? numOrNull(r.draft_ceo_target),
+                }),
                 progress: prog(finalTarget),
                 ceo_progress: prog(ceo),
             };
@@ -418,7 +445,7 @@ export async function workingDayContext(month: string) {
 
 type Exec = Pick<typeof db, "execute">;
 
-type VersionEvent = "ceo_draft" | "posted" | "stretch" | "pushed" | "accepted" | "correction_requested";
+type VersionEvent = "ceo_draft" | "posted" | "stretch" | "pushed" | "accepted" | "correction_requested" | "removed";
 
 type VersionEntry = {
     target_id: string;
@@ -478,7 +505,12 @@ export async function targetHistory(opts: { month: string; userId: string; viewe
           JOIN sales_targets t ON t.id = v.target_id
           LEFT JOIN users u ON u.id::text = v.changed_by
          WHERE t.month = ${monthFirst}::date AND t.user_id = ${opts.userId}
-           ${opts.viewer === "ceo" ? sql`` : sql`AND v.event <> 'ceo_draft' AND t.status <> 'draft'`}
+           -- A removed target's history is kept and shown; one removed before
+           -- it was ever posted (version 0) stays the CEO's alone.
+           ${opts.viewer === "ceo"
+               ? sql``
+               : sql`AND v.event <> 'ceo_draft' AND t.status <> 'draft'
+                     AND NOT (t.status = ${TARGET_REMOVED_STATUS} AND t.version = 0)`}
          ORDER BY v.changed_at DESC
          LIMIT 300
     `)) as unknown as Array<Record<string, unknown>>;
@@ -500,7 +532,31 @@ export async function targetHistory(opts: { month: string; userId: string; viewe
     }));
 }
 
-/** Add a person to a month: one draft row per metric their role carries. CEO only (ID 189). */
+/**
+ * ON CONFLICT clause that brings a REMOVED row back as a fresh CEO draft (the
+ * unique (month, user, metric) index keeps the removed row). Same id, so its
+ * history continues; everything about the old version is cleared, including
+ * the 48-hour clock. A live row is left alone (DO UPDATE ... WHERE no-ops).
+ */
+function reviveRemoved(ceoTarget: number, actor: Actor): SQL {
+    return sql`
+        ON CONFLICT (month, user_id, metric) DO UPDATE
+           SET status = 'draft', ceo_target = ${ceoTarget}::numeric, admin_addon = 0, stretch_note = NULL,
+               stretch_by = NULL, stretch_at = NULL,
+               draft_ceo_target = NULL, next_ceo_target = NULL, next_stretch = NULL, next_stretch_note = NULL,
+               review_requested_at = NULL, review_requested_by = NULL,
+               approved_by = NULL, approved_at = NULL, pushed_at = NULL, first_pushed_at = NULL,
+               accepted_at = NULL, accept_remark = NULL, reminded_at = NULL,
+               correction_requested_at = NULL, correction_requested_by = NULL, correction_remark = NULL,
+               rejected_at = NULL, rejected_by = NULL, reject_comment = NULL,
+               created_by = ${actor.id}, updated_by = ${actor.id}, updated_at = now()
+         WHERE sales_targets.status = ${TARGET_REMOVED_STATUS}`;
+}
+
+/**
+ * Add a person to a month: one draft row per metric their role carries. CEO
+ * only (ID 189). A metric removed earlier this month comes back as a draft.
+ */
 export async function addPersonToMonth(month: string, userId: string, actor: Actor) {
     if (!has(TARGET_ADD_PERSON_ROLES, actor)) throw new TargetError("Only the CEO adds people to a month's targets.");
     const u = (await db.execute(sql`
@@ -511,11 +567,15 @@ export async function addPersonToMonth(month: string, userId: string, actor: Act
     if (!metrics.length) throw new TargetError(`No target metrics are defined for the ${u[0].role} role.`);
     const monthFirst = `${month.slice(0, 7)}-01`;
     for (const m of metrics) {
-        await db.execute(sql`
+        const r = (await db.execute(sql`
             INSERT INTO sales_targets (month, user_id, metric, created_by, updated_by)
             VALUES (${monthFirst}::date, ${userId}, ${m}, ${actor.id}, ${actor.id})
-            ON CONFLICT (month, user_id, metric) DO NOTHING
-        `);
+            ${reviveRemoved(0, actor)}
+            RETURNING id::text AS id, version, (xmax::text <> '0') AS revived
+        `)) as unknown as Array<{ id: string; version: number; revived: boolean }>;
+        if (r[0]?.revived) {
+            await logVersions(db, [{ target_id: r[0].id, version: r[0].version, event: "ceo_draft", ceo_target: 0, stretch: 0, note: "Added again after it was removed" }], actor);
+        }
     }
     return { added: metrics.length };
 }
@@ -563,7 +623,7 @@ export async function updateTarget(
             user_id: string; month: string; status: string; version: number; ceo: number; stretch: number;
             draft: number | null; next_ceo: number | null; next_stretch: number | null; stretch_note: string | null;
         }>;
-        if (!cur.length) throw new TargetError("Target not found.");
+        if (!cur.length || cur[0].status === TARGET_REMOVED_STATUS) throw new TargetError("Target not found.");
         const c = cur[0];
         const withMember = c.status === "pushed" || c.status === "accepted" || c.status === "rejected";
         const log: VersionEntry[] = [];
@@ -634,6 +694,7 @@ export async function updateTarget(
               FROM sales_targets
              WHERE user_id = ${c.user_id} AND month = ${c.month}::date
                AND metric IN ('kyc_submitted', 'kyc_disbursed')
+               AND status <> ${TARGET_REMOVED_STATUS}
         `)) as unknown as Array<{ metric: string; f: number }>;
         const sub = kyc.find((k) => k.metric === "kyc_submitted")?.f ?? null;
         const dis = kyc.find((k) => k.metric === "kyc_disbursed")?.f ?? null;
@@ -709,6 +770,7 @@ export async function postTargets(ids: string[], actor: Actor) {
             SELECT id, status AS old_status, draft_ceo_target AS old_draft
               FROM sales_targets
              WHERE id IN (${idList(ids)}) AND (status = 'draft' OR draft_ceo_target IS NOT NULL)
+               AND status <> ${TARGET_REMOVED_STATUS}
              FOR UPDATE
         )
         UPDATE sales_targets t
@@ -924,15 +986,18 @@ export const rejectTargets = (ids: string[], comment: string, actor: Actor) => a
 
 /**
  * Add one metric to a person's month — a built-in metric (any, not only the
- * role's defaults) or a custom one. The CEO's lands as his draft (posted with
- * the rest); a Sales Head's or admin's is their own, so it lands posted with
- * the number as its stretch on a CEO target of 0, ready to push.
+ * role's defaults) or a custom one. CEO only (ID 189, 16 Oct): it lands as his
+ * draft and goes out with his Post. The Sales Head / Admin cannot create a
+ * target; they add a stretch to one the CEO has posted. A built-in metric
+ * removed earlier this month comes back as a fresh draft.
  */
 export async function addMetric(
     input: { month: string; userId: string; metric?: string; custom?: { label: string; unit?: string | null }; target?: number },
     actor: Actor,
 ) {
-    if (!has(TARGET_METRIC_ROLES, actor)) throw new TargetError("Only the CEO or the Sales Head adds metrics.");
+    if (!mayAddTarget(actor.role) || !has(TARGET_METRIC_ROLES, actor)) {
+        throw new TargetError("Only the CEO adds a metric. Add a stretch to a target the CEO has posted instead.");
+    }
     const u = (await db.execute(sql`
         SELECT 1 FROM users WHERE id::text = ${input.userId} AND is_active = TRUE
     `)) as unknown as unknown[];
@@ -940,53 +1005,120 @@ export async function addMetric(
     const target = input.target ?? 0;
     if (!Number.isFinite(target) || target < 0) throw new TargetError("The target must be zero or more.");
     const monthFirst = `${input.month.slice(0, 7)}-01`;
-    const byCeo = has(TARGET_CEO_ROLES, actor);
-    const ceoTarget = byCeo ? target : 0;
-    const stretch = byCeo ? 0 : target;
-    const status = byCeo ? "draft" : "pending_approval";
-    const version = byCeo ? 0 : 1;
-    const postedBy = byCeo ? null : actor.id;
 
-    let id: string;
     if (input.custom) {
         const bad = validateCustomMetric(input.custom.label, input.custom.unit);
         if (bad) throw new TargetError(bad);
         const r = (await db.execute(sql`
-            INSERT INTO sales_targets (month, user_id, metric, ceo_target, admin_addon, status, version,
-                                       review_requested_at, review_requested_by, custom_label, custom_unit, created_by, updated_by)
-            VALUES (${monthFirst}::date, ${input.userId}, ${newCustomMetricKey()}, ${ceoTarget}, ${stretch}, ${status}, ${version},
-                    ${postedBy ? sql`now()` : sql`NULL`}, ${postedBy},
+            INSERT INTO sales_targets (month, user_id, metric, ceo_target, status, version,
+                                       custom_label, custom_unit, created_by, updated_by)
+            VALUES (${monthFirst}::date, ${input.userId}, ${newCustomMetricKey()}, ${target}, 'draft', 0,
                     ${input.custom.label.trim()}, ${(input.custom.unit ?? "").trim() || null}, ${actor.id}, ${actor.id})
             RETURNING id::text AS id
         `)) as unknown as Array<{ id: string }>;
-        id = r[0].id;
-    } else {
-        if (!input.metric || !isTargetMetric(input.metric)) throw new TargetError("Pick a metric.");
-        const r = (await db.execute(sql`
-            INSERT INTO sales_targets (month, user_id, metric, ceo_target, admin_addon, status, version,
-                                       review_requested_at, review_requested_by, created_by, updated_by)
-            VALUES (${monthFirst}::date, ${input.userId}, ${input.metric}, ${ceoTarget}, ${stretch}, ${status}, ${version},
-                    ${postedBy ? sql`now()` : sql`NULL`}, ${postedBy}, ${actor.id}, ${actor.id})
-            ON CONFLICT (month, user_id, metric) DO NOTHING
-            RETURNING id::text AS id
-        `)) as unknown as Array<{ id: string }>;
-        if (!r.length) throw new TargetError(`${TARGET_METRICS[input.metric].label} is already a target for this person this month.`);
-        id = r[0].id;
+        return { id: r[0].id };
     }
-    if (!byCeo) {
-        await logVersions(db, [{ target_id: id, version, event: "stretch", ceo_target: 0, stretch, note: "Metric added by the Sales Head" }], actor);
+    if (!input.metric || !isTargetMetric(input.metric)) throw new TargetError("Pick a metric.");
+    const r = (await db.execute(sql`
+        INSERT INTO sales_targets (month, user_id, metric, ceo_target, status, version, created_by, updated_by)
+        VALUES (${monthFirst}::date, ${input.userId}, ${input.metric}, ${target}, 'draft', 0, ${actor.id}, ${actor.id})
+        ${reviveRemoved(target, actor)}
+        RETURNING id::text AS id, version, (xmax::text <> '0') AS revived
+    `)) as unknown as Array<{ id: string; version: number; revived: boolean }>;
+    if (!r.length) throw new TargetError(`${TARGET_METRICS[input.metric].label} is already a target for this person this month.`);
+    if (r[0].revived) {
+        await logVersions(db, [{ target_id: r[0].id, version: r[0].version, event: "ceo_draft", ceo_target: target, stretch: 0, note: "Added again after it was removed" }], actor);
     }
-    return { id };
+    return { id: r[0].id };
 }
 
-/** Remove one target row (CEO / Sales Head), at any stage — never someone else's unposted CEO draft. */
+/**
+ * Remove one target (ID 189, 16 Oct). The CEO removes any; the Sales Head /
+ * Admin only a row that is not the CEO's (isCeoTarget — in practice the ones
+ * the old flow let them add on their own). Soft: the row stays with status
+ * 'removed' and its history, a 'removed' version row is written, and every
+ * reader leaves it out. The member is told by bell if it had been pushed to
+ * them, and the Sales Head(s) if the CEO had posted it.
+ */
 export async function removeTarget(id: string, actor: Actor) {
-    if (!has(TARGET_METRIC_ROLES, actor)) throw new TargetError("Only the CEO or the Sales Head removes metrics.");
-    const byCeo = has(TARGET_CEO_ROLES, actor);
-    const r = (await db.execute(sql`
-        DELETE FROM sales_targets WHERE id = ${id}::uuid ${byCeo ? sql`` : sql`AND status <> 'draft'`} RETURNING id
-    `)) as unknown as unknown[];
-    if (!r.length) throw new TargetError("Target not found.");
+    if (!has(TARGET_REMOVE_ROLES, actor)) throw new TargetError("Only the CEO removes a target.");
+    const removed = await db.transaction(async (tx) => {
+        const cur = (await tx.execute(sql`
+            SELECT t.user_id, t.month::text AS month, t.status, t.version,
+                   t.ceo_target::float8 AS ceo, t.admin_addon::float8 AS stretch,
+                   t.next_ceo_target::float8 AS next_ceo, t.draft_ceo_target::float8 AS draft,
+                   cb.role AS created_by_role, pb.role AS posted_by_role
+              FROM sales_targets t
+              LEFT JOIN users cb ON cb.id::text = t.created_by
+              LEFT JOIN users pb ON pb.id::text = t.review_requested_by
+             WHERE t.id = ${id}::uuid
+             FOR UPDATE OF t
+        `)) as unknown as Array<{
+            user_id: string; month: string; status: string; version: number; ceo: number; stretch: number;
+            next_ceo: number | null; draft: number | null; created_by_role: string | null; posted_by_role: string | null;
+        }>;
+        const c = cur[0];
+        // Someone else's unposted CEO draft is as good as not there.
+        if (!c || c.status === TARGET_REMOVED_STATUS || (c.status === "draft" && !has(TARGET_CEO_ROLES, actor))) {
+            throw new TargetError("Target not found.");
+        }
+        const ceoOwned = isCeoTarget({
+            createdByRole: c.created_by_role,
+            postedByRole: c.posted_by_role,
+            ceoTarget: Number(c.ceo),
+            pendingCeoTarget: c.next_ceo ?? c.draft,
+        });
+        if (!mayRemoveTarget(actor.role, ceoOwned)) {
+            throw new TargetError("Only the CEO removes a target he has set. Ask the CEO, or change the stretch instead.");
+        }
+        await tx.execute(sql`
+            UPDATE sales_targets
+               SET status = ${TARGET_REMOVED_STATUS},
+                   draft_ceo_target = NULL, next_ceo_target = NULL, next_stretch = NULL, next_stretch_note = NULL,
+                   updated_by = ${actor.id}, updated_at = now()
+             WHERE id = ${id}::uuid
+        `);
+        await logVersions(
+            tx,
+            [
+                {
+                    target_id: id,
+                    version: c.version,
+                    event: "removed",
+                    ceo_target: Number(c.ceo),
+                    stretch: Number(c.stretch),
+                    note: `Removed — was ${TARGET_STATUS_LABEL[c.status as TargetStatus] ?? c.status}`,
+                },
+            ],
+            actor,
+        );
+        return c;
+    });
+
+    const tell = removalAudience(removed.status);
+    if (tell.member || tell.salesHead) {
+        const what = await labelsOf([id]);
+        const names = await namesOf([actor.id, removed.user_id]);
+        const member = names.get(removed.user_id);
+        const to: EmitInput["to"] = [];
+        if (tell.member) {
+            to.push({ audience: { kind: "user", userId: removed.user_id }, as: ADMIN_PARTY, href: performanceHrefFor(member?.role) });
+        }
+        if (tell.salesHead) {
+            to.push({ audience: { kind: "roles", roles: ["sales_head"] }, as: ADMIN_PARTY, href: registerHref(removed.month) });
+        }
+        await emit({
+            type: "targets.removed",
+            title: "A target was removed",
+            message:
+                `${names.get(actor.id)?.name ?? "The CEO"} removed the ${what} target for ${member?.name ?? "a member"} ` +
+                `for ${monthName(removed.month)}. It no longer counts.`,
+            from: ADMIN_PARTY,
+            email: false,
+            data: { id, month: removed.month },
+            to,
+        });
+    }
     return { removed: 1 };
 }
 
@@ -997,11 +1129,11 @@ export async function removeTarget(id: string, actor: Actor) {
 export async function setManualActual(id: string, value: number | null, actor: Actor) {
     if (value != null && (!Number.isFinite(value) || value < 0)) throw new TargetError("Progress must be zero or more.");
     const cur = (await db.execute(sql`
-        SELECT user_id, metric FROM sales_targets WHERE id = ${id}::uuid
-    `)) as unknown as Array<{ user_id: string; metric: string }>;
-    if (!cur.length) throw new TargetError("Target not found.");
+        SELECT user_id, metric, status FROM sales_targets WHERE id = ${id}::uuid
+    `)) as unknown as Array<{ user_id: string; metric: string; status: string }>;
+    if (!cur.length || cur[0].status === TARGET_REMOVED_STATUS) throw new TargetError("Target not found.");
     if (!isCustomMetric(cur[0].metric)) throw new TargetError("Only a custom metric's progress is entered by hand.");
-    if (cur[0].user_id !== actor.id && !has(TARGET_METRIC_ROLES, actor)) {
+    if (cur[0].user_id !== actor.id && !has(TARGET_PROGRESS_ROLES, actor)) {
         throw new TargetError("You can only update your own targets.");
     }
     await db.execute(sql`
@@ -1066,4 +1198,4 @@ export async function awaitingPush(): Promise<{
 }
 
 /** Exposed so readers outside this file use the same final-target rule. */
-export { finalTargetSql };
+export { finalTargetSql, targetVisibleSql };

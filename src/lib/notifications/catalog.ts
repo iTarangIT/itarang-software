@@ -167,6 +167,8 @@ export const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   "targets.accepted": "Targets",
   // ID 189 — the member's "Ask for correction" (replaces reject).
   "targets.correction_requested": "Targets",
+  // ID 189 (16 Oct) — the CEO removed a target the member or Sales Head had.
+  "targets.removed": "Targets",
 
   // --- Dealer onboarding (portal + WhatsApp) ---
   "onboarding.chat_started": "Onboarding",
