@@ -27,11 +27,22 @@ export async function loadCatalogue(): Promise<CatalogueProduct[]> {
     }));
 }
 
-const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9.]+/g, " ").trim();
+/**
+ * Lower-case words, and numbers without trailing decimal zeros — the masters
+ * store "51.20" / "105.00" while a rep types "51.2V 105Ah".
+ */
+const norm = (s: string) =>
+    s
+        .toLowerCase()
+        .replace(/[^a-z0-9.]+/g, " ")
+        .replace(/(\d+\.\d*?)0+(?!\d)/g, "$1")
+        .replace(/(\d)\.(?!\d)/g, "$1")
+        .trim();
 
 /**
  * Catalogue rows matching every word of `query` (name, model or detail), or all
- * of them for an empty query. "51.2v 105ah" finds "LFP 51.2V 105Ah".
+ * of them for an empty query. "51.2v 105ah" finds "LFP 51.2V 105Ah" and a
+ * detail stored as "51.20 V / 105.00 Ah".
  */
 export function filterCatalogue(
     rows: CatalogueProduct[],
