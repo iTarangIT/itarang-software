@@ -5,6 +5,10 @@
  * 'credit', ID 71), so its items come off the month it is issued. A SKU is the mapped CRM
  * product where the Vyapar item name has been mapped, else the item name as
  * billed.
+ *
+ * A14: the ledger counts EVERY invoice line, matched to a dealer or not;
+ * dealer_quantity is the part on invoices matched to a dealer — the Sales
+ * dashboard's "Batteries sold" — so the two can be read side by side.
  */
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
@@ -16,6 +20,8 @@ export interface SkuRow {
     sku: string;
     mapped: boolean;
     quantity: number;
+    /** Units on invoices matched to a dealer (account or lead) — what Batteries sold counts. */
+    dealer_quantity: number;
     amount_excl_gst: number;
     invoices: number;
 }
@@ -29,6 +35,8 @@ export async function skuReport(from: string, to: string): Promise<{ available: 
                COALESCE(pb.model_name, pc.model_name, pp.display_label, r.item_name, '(no item name)') AS sku,
                (r.product_id IS NOT NULL)                                           AS mapped,
                COALESCE(SUM(r.quantity), 0)::float8                                 AS quantity,
+               COALESCE(SUM(r.quantity) FILTER (WHERE r.account_id IS NOT NULL OR r.dealer_lead_id IS NOT NULL), 0)::float8
+                                                                                    AS dealer_quantity,
                COALESCE(SUM(r.amount_excl_gst), 0)::float8                          AS amount_excl_gst,
                COUNT(DISTINCT r.source || ':' || r.id)::int                         AS invoices
           FROM ${lines} AS r
