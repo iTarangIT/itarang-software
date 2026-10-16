@@ -10,6 +10,7 @@ import {
 import { and, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import { requireStockUploader } from "@/lib/inventory/stockUploadGuard";
+import { recheckAfterStockUpload } from "@/lib/inventory/stockUploadTasks/service";
 import { successResponse, errorResponse, withErrorHandler, generateId } from "@/lib/api-utils";
 import { ASSET_TYPES, AssetType } from "@/lib/inventory/csv-templates";
 import { formatZodErrors, getRowSchema, normalizeLegacyKeys } from "@/lib/inventory/validation";
@@ -475,6 +476,9 @@ export const POST = withErrorHandler(async (req: Request) => {
     count: 1,
     reportId,
   });
+
+  // ID 174: the item may complete a "Stock to upload" task for this dealer.
+  await recheckAfterStockUpload(dealerId);
 
   return successResponse({ id: inventoryId, reportId });
 });

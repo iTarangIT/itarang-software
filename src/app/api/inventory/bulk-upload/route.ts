@@ -10,6 +10,7 @@ import {
   requireStockUploader,
 } from "@/lib/inventory/stockUploadGuard";
 import { stockUploadMode } from "@/lib/inventory/stockUploadRules";
+import { recheckAfterStockUpload } from "@/lib/inventory/stockUploadTasks/service";
 
 // ID 173: dealerId is optional — a dealer login always uploads to its own
 // account (taken from the login); Admin, Inventory Manager and partner pick it.
@@ -274,6 +275,9 @@ export const POST = withErrorHandler(async (req: Request) => {
     // The stock is already in; a missing batch row must not undo the upload.
     console.error("[inventory/bulk-upload] batch record failed:", reportError);
   }
+
+  // ID 174: the upload may complete "Stock to upload" tasks for this dealer.
+  if (results.imported > 0) await recheckAfterStockUpload(dealerId);
 
   return successResponse({
     success: true,

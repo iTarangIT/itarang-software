@@ -439,6 +439,8 @@ async function collect(
     // ID 171: how far the invoice data behind Revenue / Batteries goes, and the
     // Admin alert line when no new invoice was read for the limit's working days.
     const invoices = await (await import("@/lib/sales/invoiceFreshness")).invoiceFreshness({ fresh: true }).catch(() => null);
+    // ID 174: "Stock to upload" tasks (E-348) — null on a database without them.
+    const stockTasks = await (await import("@/lib/inventory/stockUploadTasks/service")).stockTaskCounts().catch(() => null);
     // "Right now" / "Position at" name the moment the figures were taken — a
     // test sent at 14:03 used to say "Right now · 09:00".
     const asOf = computedAt.toLocaleTimeString("en-GB", {
@@ -551,6 +553,16 @@ async function collect(
                           staleAlertText(invoices) ??
                           `Revenue and Batteries sold count invoices up to this date · alert after ${invoices.stale_after} working days with no new invoice`,
                         alert: invoices.stale,
+                      },
+                    ]
+                  : []),
+                ...(stockTasks
+                  ? [
+                      {
+                        label: "Stock to upload",
+                        value: stockTasks.line,
+                        hint: "New battery invoices whose serials are not all in the buyer dealer's stock · overdue = open after 2 working days",
+                        alert: stockTasks.overdue > 0,
                       },
                     ]
                   : []),

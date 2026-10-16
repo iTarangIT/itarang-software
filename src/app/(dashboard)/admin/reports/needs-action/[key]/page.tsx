@@ -13,6 +13,7 @@ import { ArrowLeft, Download } from "lucide-react";
 import { requireRole } from "@/lib/auth-utils";
 import {
     ACTION_KEYS,
+    actionKeyVisibleTo,
     actionScopeFrom,
     ACTION_TITLES,
     listSalesHeadAction,
@@ -50,6 +51,8 @@ const rules = (l: TimeLimits): Record<ActionKey, string> => ({
         "A rep marked a lead Won by mistake and asked to undo it. Open the lead to approve (it goes back to its earlier stage, same owner) or refuse. Possible only until the dealer uploads any onboarding document; after that it is a drop-out. A request is cancelled on its own when the lead leaves Won.",
     won_undone_week:
         "Every Mark Won undone in the last 7 days: the lead went back to the stage it was at before Won, its empty onboarding application was withdrawn, and the Won is not counted anywhere.",
+    stock_to_upload:
+        "Each new battery invoice read from Drive opens a task: every serial on the invoice must be in the stock of the dealer it was billed to (Bill To GSTIN). The task closes by itself when all of them are uploaded; open after 2 working days it goes to Admin and the CEO. Open a row to see each serial as in stock, missing or under another dealer.",
 });
 
 export default async function NeedsActionListPage({
@@ -63,6 +66,7 @@ export default async function NeedsActionListPage({
     const { key } = await params;
     if (!(ACTION_KEYS as readonly string[]).includes(key)) notFound();
     const k = key as ActionKey;
+    if (!actionKeyVisibleTo(k, user.role)) notFound();
 
     const sp = await searchParams;
     const qs = new URLSearchParams(Object.entries(sp).filter((e): e is [string, string] => typeof e[1] === "string"));
@@ -76,7 +80,7 @@ export default async function NeedsActionListPage({
     ]);
     // ID 88 #3 — the dealer's number for the row's Call button. Onboarding
     // stalled has no Call button (asked for on 13 Oct): no number, no button.
-    const phones = k === "onboarding_stalled" ? {} : await phonesForActionRows(rows);
+    const phones = k === "onboarding_stalled" || k === "stock_to_upload" ? {} : await phonesForActionRows(rows);
     const states = [...new Set(all.map((r) => r.state?.trim()).filter((v): v is string => !!v))].sort();
     if (sp.state && !states.includes(sp.state)) states.unshift(sp.state);
     const owners = [...new Map(all.filter((r) => r.owner_id).map((r) => [r.owner_id!, r.owner_name ?? r.owner_id!])).entries()].sort((a, b) =>
@@ -220,7 +224,8 @@ export default async function NeedsActionListPage({
                     canAssign={
                         (LEADS_BULK_ROLES as readonly string[]).includes(user.role) &&
                         k !== "won_undo_requests" &&
-                        k !== "won_undone_week"
+                        k !== "won_undone_week" &&
+                        k !== "stock_to_upload"
                     }
                 />
             )}

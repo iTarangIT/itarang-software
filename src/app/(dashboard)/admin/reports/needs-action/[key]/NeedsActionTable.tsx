@@ -136,7 +136,7 @@ export function NeedsActionTable({
                                 )}
                                 <td className="px-4 py-3">
                                     <Link
-                                        href={`/inside-sales/lead/${encodeURIComponent(r.lead_id)}`}
+                                        href={r.href ?? `/inside-sales/lead/${encodeURIComponent(r.lead_id)}`}
                                         className="font-medium text-gray-900 hover:text-brand-sky hover:underline"
                                     >
                                         {r.dealer}

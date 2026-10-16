@@ -435,6 +435,8 @@ export function SalesHeadOpsView() {
             href: `/admin/targets${awaitingTargets.data?.first_month ? `?month=${awaitingTargets.data.first_month.slice(0, 7)}` : ""}`,
         },
         actionTile("quotes_no_answer", "Quotes with no answer", "soon"),
+        // ID 174 — Admin, CEO and partner only (the API returns null for others).
+        actionTile("stock_to_upload", "Stock to upload from new invoices", "soon"),
         actionTile("said_yes", "Dealer approved, but not marked Won", "soon"),
         {
             key: "idle",
