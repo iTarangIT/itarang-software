@@ -52,6 +52,10 @@ export type LeadTouchpoint = {
     disposition?: string | null;
     disposition_bucket?: string | null;
     connect_status?: string | null;
+    /** ID 191: a display-only entry merged from a failed quote send — its label. */
+    display_label?: string;
+    /** ID 191: "failed" shows the entry in red. */
+    tone?: "failed";
 };
 
 const PAGE = 8;
@@ -152,23 +156,33 @@ export function TouchpointTimeline({
                                 t.external_system,
                                 t.sync_method,
                             );
+                            // ID 191: a failed quote send (merged from
+                            // quotation_dispatches) shows in red.
+                            const failed = t.tone === "failed";
                             return (
                                 <li key={t.touchpoint_id} className="flex gap-3">
                                     <div className="shrink-0 mt-0.5">
                                         <div
                                             className={`h-8 w-8 rounded-lg flex items-center justify-center ${
-                                                t.is_engaged
-                                                    ? "bg-emerald-50 text-emerald-600"
-                                                    : "bg-gray-100 text-gray-500"
+                                                failed
+                                                    ? "bg-rose-50 text-rose-600"
+                                                    : t.is_engaged
+                                                      ? "bg-emerald-50 text-emerald-600"
+                                                      : "bg-gray-100 text-gray-500"
                                             }`}
                                         >
                                             <Icon className="h-4 w-4" />
                                         </div>
                                     </div>
-                                    <div className="flex-1 min-w-0 rounded-lg border border-gray-100 bg-gray-50/40 px-3 py-2">
+                                    <div
+                                        className={`flex-1 min-w-0 rounded-lg border px-3 py-2 ${
+                                            failed ? "border-rose-200 bg-rose-50/60" : "border-gray-100 bg-gray-50/40"
+                                        }`}
+                                    >
                                         <div className="flex items-baseline justify-between gap-2 flex-wrap">
-                                            <div className="text-sm font-medium text-gray-900">
-                                                {TOUCHPOINT_TYPE_LABEL[t.touchpoint_type] ??
+                                            <div className={`text-sm font-medium ${failed ? "text-rose-800" : "text-gray-900"}`}>
+                                                {t.display_label ??
+                                                    TOUCHPOINT_TYPE_LABEL[t.touchpoint_type] ??
                                                     t.touchpoint_type}
                                                 {t.call_status && (
                                                     <span className="ml-2 text-[10px] uppercase tracking-wide text-gray-500">
@@ -243,7 +257,11 @@ export function TouchpointTimeline({
                                             </div>
                                         )}
                                         {t.remarks && (
-                                            <p className="text-sm text-gray-700 mt-1.5 whitespace-pre-wrap">
+                                            <p
+                                                className={`text-sm mt-1.5 whitespace-pre-wrap ${
+                                                    failed ? "text-rose-800" : "text-gray-700"
+                                                }`}
+                                            >
                                                 {t.remarks}
                                             </p>
                                         )}
