@@ -22,7 +22,7 @@ import {
     type EcofyImport,
     type EcofyImportPreview,
 } from "@/lib/ecofy/intake";
-import type { ImportSyncResult } from "@/lib/ecofy/importSync";
+import { addImportSync, type ImportSyncResult } from "@/lib/ecofy/importSync";
 import { ecofyGet, ecofyPost, ecofyUpload, useLookup, type ListItem } from "./client";
 import { Btn, Chip, Field, FormBox, fileInputCls, inputCls, KV, Panel } from "./ui";
 
@@ -380,9 +380,25 @@ function BulkImportWizard() {
         if (!started) return;
         setSyncing(true);
         try {
-            const r = await ecofyPost<ImportSyncResult>(`/api/ecofy/imports/${started.importId}/sync`, {});
-            setSynced(r);
-            if (r.added + r.updated > 0) toast.success(`${r.added + r.updated} imported lead(s) are in the CRM now`);
+            // ID 51 (15 Oct): every case, a batch (up to 500) per request —
+            // each run says where the next one continues (nextFrom). After a
+            // run that stopped part-way (an error), "again" resumes there.
+            const resume = synced?.nextFrom != null ? synced : null;
+            let total: ImportSyncResult | null = resume;
+            let from = resume?.nextFrom ?? 0;
+            for (;;) {
+                const r: ImportSyncResult = await ecofyPost<ImportSyncResult>(
+                    `/api/ecofy/imports/${started.importId}/sync`,
+                    { from },
+                );
+                total = addImportSync(total, r);
+                setSynced(total);
+                if (r.nextFrom == null || r.nextFrom <= from) break;
+                from = r.nextFrom;
+            }
+            if (total && total.added + total.updated > 0) {
+                toast.success(`${total.added + total.updated} imported lead(s) are in the CRM now`);
+            }
         } catch (e) {
             setErr(e instanceof Error ? e.message : "Could not bring the imported leads into the CRM");
         } finally {
@@ -602,14 +618,18 @@ function BulkImportWizard() {
                                 [
                                     "In the CRM",
                                     syncing
-                                        ? "Adding the imported leads to the CRM…"
+                                        ? synced && synced.cases > 0
+                                            ? `Adding the imported leads to the CRM… ${synced.checked} of ${synced.cases} looked at`
+                                            : "Adding the imported leads to the CRM…"
                                         : synced
                                           ? `${synced.added} added, ${synced.updated} already in the CRM (updated)` +
                                             (synced.skippedS0 ? `, ${synced.skippedS0} with Ecofy for qualification (S0)` : "") +
                                             (synced.notFound + synced.failed
                                                 ? `, ${synced.notFound + synced.failed} not read yet — they arrive when Ecofy sends them`
                                                 : "") +
-                                            (synced.cases > synced.checked ? `; ${synced.cases - synced.checked} more arrive when Ecofy sends them` : "") +
+                                            (synced.cases > synced.checked
+                                                ? `; ${synced.cases - synced.checked} not looked at yet — press Sync to CRM again`
+                                                : "") +
                                             "."
                                           : "Created leads appear in the Pickup Queue once Ecofy sends them to the CRM.",
                                 ],
