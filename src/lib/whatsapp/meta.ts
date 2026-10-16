@@ -106,10 +106,14 @@ export class MetaWhatsAppAdapter implements WhatsAppAdapter {
     const mode = url.searchParams.get("hub.mode");
     const verifyToken = url.searchParams.get("hub.verify_token");
     const challenge = url.searchParams.get("hub.challenge");
+    // ID 130: constant-time, and an unset token never matches.
+    const expected = Buffer.from(process.env.META_WA_VERIFY_TOKEN ?? "");
+    const given = Buffer.from(verifyToken ?? "");
     if (
       mode === "subscribe" &&
-      verifyToken &&
-      verifyToken === process.env.META_WA_VERIFY_TOKEN
+      expected.length > 0 &&
+      given.length === expected.length &&
+      crypto.timingSafeEqual(given, expected)
     ) {
       return challenge;
     }
