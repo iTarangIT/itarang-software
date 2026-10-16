@@ -165,8 +165,9 @@ export const DATASET_LAYOUT: Record<string, DatasetLayout> = {
         who: "CEO, Admin, Sales Head",
         columnGroups: [
             { name: "File", keys: ["file_id", "submitted_on", "dealer", "account_owner", "customer", "city", "kyc_status"] },
-            // ID 33 — files iTarang raised under the house dealer and pushed out.
-            { name: "iTarang help", keys: ["pushed_by_itarang_on", "pushed_by", "pushed_to"] },
+            // ID 33 — files iTarang raised under the house dealer and pushed out;
+            // ID 183 — iTarang people who acted for the dealer on the file.
+            { name: "iTarang help", keys: ["pushed_by_itarang_on", "pushed_by", "pushed_to", "assisted_by"] },
             { name: "Decision", keys: ["nbfc", "loan_file_number", "loan_status", "rejection_reason", "decided_on", "loan_amount", "disbursed_at", "disbursement_amount"] },
         ],
     },
