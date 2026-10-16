@@ -7,13 +7,14 @@
  *                                                  requireLeadWriter wraps; the
  *                                                  ID 119 contract pins this
  *                                                  shape on /api/lead/[id])
- *   dealerMayDispatch(user, lead.dealer_id)        the dealer-only steps
+ *   dealerMayDispatch(user, lead.dealer_id, leadId) the dispatch steps
  *
  * so the file's own dealer passes (and stamps his action), Admin / Sales Head
  * pass the act-for-dealer checks (permission, 30-minute note, "Done by"
- * record, dealer notice), and the CEO, other back-office roles and the house
- * login on a file it pushed to a dealer are refused. requireLeadAccess alone
- * is a READ check and is not enough for a write.
+ * record, dealer notice), the house login on a file it pushed out passes
+ * (full access since 16 Oct evening, recorded), and the CEO and other
+ * back-office roles are refused. requireLeadAccess alone is a READ check and
+ * is not enough for a write.
  *
  * Source-text contract, like api-auth.contract.test.ts: the routes import the
  * database and cannot be loaded here. Every non-GET handler under the three
@@ -44,7 +45,7 @@ const EXEMPT: Record<string, string> = {
 const WRITE_CHECK = [
   /\brequireLeadWriter\s*\(/,
   /\bgateLeadActor\s*\(\s*user\s*,\s*lead\b[^;]*\bwrite:\s*true\b/,
-  /\bdealerMayDispatch\s*\(\s*user\s*,\s*lead\.dealer_?[iI]d\s*\)/,
+  /\bdealerMayDispatch\s*\(\s*user\s*,\s*lead\.dealer_?[iI]d\s*(,\s*leadId\s*)?\)/,
 ];
 const hasWriteCheck = (src: string) => WRITE_CHECK.some((re) => re.test(src));
 

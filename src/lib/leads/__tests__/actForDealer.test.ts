@@ -9,7 +9,6 @@ import {
   DEALER_ONLY_MESSAGE,
   dealerChangedSince,
   doneByLine,
-  HOUSE_READ_ONLY_MESSAGE,
   isActForDealerRole,
   isLockLive,
   leadActorVerdict,
@@ -138,11 +137,13 @@ describe("leadActorVerdict — who may write on a customer file (16 Oct)", () =>
     expect(leadActorVerdict({ ...base, role: "dealer", ownsFile: true, dispatch: true })).toEqual({ ok: true, kind: "dealer" });
   });
 
-  it("the house login only sees a file it pushed to another dealer", () => {
+  // 16 Oct evening (user): the house keeps FULL access on a file it pushed
+  // out — read, write and dispatch, like the file's dealer.
+  it("the house login works every step of a file it pushed to another dealer, dispatch included", () => {
     const house = { ...base, role: "dealer", houseOnPushedFile: true };
     expect(leadActorVerdict({ ...house, write: false })).toEqual({ ok: true, kind: "house" });
-    expect(leadActorVerdict(house)).toEqual({ ok: false, status: 403, message: HOUSE_READ_ONLY_MESSAGE });
-    expect(leadActorVerdict({ ...house, dispatch: true })).toEqual({ ok: false, status: 403, message: DEALER_ONLY_MESSAGE });
+    expect(leadActorVerdict(house)).toEqual({ ok: true, kind: "house" });
+    expect(leadActorVerdict({ ...house, dispatch: true })).toEqual({ ok: true, kind: "house" });
   });
 
   it("the house still fully works a file that is with the house (it owns it)", () => {

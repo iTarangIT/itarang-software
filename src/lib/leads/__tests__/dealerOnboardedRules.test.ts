@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { dealCardAsked, decideDealerOnboarded, shortDay } from "@/lib/leads/dealerOnboardedRules";
+import { decideDealerOnboarded, shortDay } from "@/lib/leads/dealerOnboardedRules";
+import { dealCardRequiredFor } from "@/lib/leads/dealCardRules";
 
 const invoice = { invoiceNumber: "ITG/202627/034", invoiceDate: "2026-08-08", via: "gstin" as const };
 const approved = { applicationId: "app-1", company: "SHARDA ENTERPRISES", approvedAt: "2026-08-03T10:00:00Z", via: "phone" as const };
@@ -40,15 +41,14 @@ describe("decideDealerOnboarded (ID 186)", () => {
     });
 });
 
-describe("dealCardAsked", () => {
-    it("asks on a quote issue / revision for a dealer not onboarded", () => {
-        expect(dealCardAsked("quote_issue", { onboarded: false })).toBe(true);
-        expect(dealCardAsked("quote_revision", null)).toBe(true);
+// ID 186 (16 Oct): the card is shown for every dealer; who must fill it
+// depends on the role, not on onboarding.
+describe("dealCardRequiredFor", () => {
+    it("optional for ISR, ASM and Sales Head", () => {
+        for (const role of ["inside_sales_rep", "asm", "sales_head"]) expect(dealCardRequiredFor(role), role).toBe(false);
     });
-    it("never asks for an onboarded dealer, nor on other events", () => {
-        expect(dealCardAsked("quote_issue", { onboarded: true })).toBe(false);
-        expect(dealCardAsked("terms_update", { onboarded: false })).toBe(false);
-        expect(dealCardAsked("brochure_share", { onboarded: false })).toBe(false);
+    it("required for any other role that saves a quote", () => {
+        for (const role of ["admin", "partner", "ceo", null, undefined, ""]) expect(dealCardRequiredFor(role), String(role)).toBe(true);
     });
 });
 

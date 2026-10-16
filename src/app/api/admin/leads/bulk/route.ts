@@ -236,6 +236,8 @@ export const POST = withErrorHandler(async (req: Request) => {
     let skippedWon = 0;
     // Of `skipped`: Awaiting-field-visit leads a reassign left with the ASM (ID 121).
     let skippedVisitBooked = 0;
+    // Of `skipped`: Won leads a reassign refused to give to an ASM (ID 179).
+    let skippedWonToAsm = 0;
     const reactivated: Array<{ id: string } & Awaited<ReturnType<typeof reactivateLead>>> = [];
 
     if (body.action === "reassign") {
@@ -276,6 +278,14 @@ export const POST = withErrorHandler(async (req: Request) => {
                 skippedVisitBooked++;
                 continue;
             }
+            // ID 179: a Won lead is never given to an ASM (Transfer to ASM is
+            // hidden on Won; this closes the reassign route to the same move).
+            if (outcome.path === "asm_blocked") {
+                if (leads.length === 1) return errorResponse(outcome.blockedReason ?? "A Won lead can't be given to an ASM.", 409);
+                skipped++;
+                skippedWonToAsm++;
+                continue;
+            }
             if (outcome.assigned) reassignedIds.push(lead.id);
             affected++;
         }
@@ -303,6 +313,7 @@ export const POST = withErrorHandler(async (req: Request) => {
                     requested: leads.length,
                     affected,
                     skipped_visit_booked: skippedVisitBooked,
+                    skipped_won_to_asm: skippedWonToAsm,
                     reason: body.reason ?? null,
                     lead_ids: leads.map((l) => l.id),
                 },
@@ -429,6 +440,7 @@ export const POST = withErrorHandler(async (req: Request) => {
         skipped,
         skipped_won: skippedWon,
         skipped_visit_booked: skippedVisitBooked,
+        skipped_won_to_asm: skippedWonToAsm,
         // reactivate only: where each lead went (owner back, or the unassigned pool).
         ...(body.action === "reactivate" ? { reactivated } : {}),
     });
