@@ -44,11 +44,27 @@ export async function withEditContext(user: AssistantUser, text: string): Promis
     if (!editing || new Date(editing.until).getTime() <= Date.now()) return text;
     const row = await livePending(editing.action_id, user.id);
     if (!row) return text;
+    return editRequestText(row, text);
+}
+
+/** The card's own part of an [EDIT] message; the user's words never count against it. */
+export const EDIT_CONTEXT_MAX_CHARS = 1200;
+
+function clipTo(s: string, max: number): string {
+    const chars = [...s];
+    return chars.length <= max ? s : chars.slice(0, max - 1).join("") + "…";
+}
+
+/**
+ * The [EDIT] message: the user's change FIRST, then the card. Anything that
+ * gets clipped later (the agent keeps the start of a long message) is the
+ * card's details, never what the user just said. Pure.
+ */
+export function editRequestText(row: Pick<PendingRow, "tool" | "lead_id" | "preview" | "input">, text: string): string {
     const shown = [row.preview.title, ...row.preview.lines.map((l) => `${l.label}: ${l.value}`)].join("; ");
-    return (
-        `[EDIT] The user tapped Edit on the pending "${row.tool}" card (lead_id ${row.lead_id ?? "new lead"}). ` +
-        `That card showed: ${shown}. Its resolved details: ${JSON.stringify(row.input)}. ` +
-        `Call ${row.tool} again with EVERY detail unchanged except what the user now asks to change. ` +
-        `The user's change: ${text}`
-    );
+    const context =
+        `They tapped Edit on the pending "${row.tool}" card (lead_id ${row.lead_id ?? "new lead"}). ` +
+        `Call ${row.tool} again with EVERY detail unchanged except that change. ` +
+        `That card showed: ${shown}. Its resolved details: ${JSON.stringify(row.input)}.`;
+    return `[EDIT] The user's change: ${text}\n${clipTo(context, EDIT_CONTEXT_MAX_CHARS)}`;
 }

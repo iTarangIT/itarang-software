@@ -21,19 +21,21 @@
 //                        Nothing heard / too long / failed → a fixed reply.
 //                        WA_ASSIST_VOICE_DISABLED → the UC-14 reply instead.
 //      Photo / PDF / location pin (E-311) → stored at once (Meta's media URLs
-//                        expire), then a short quiet wait: when a newer photo /
-//                        PDF / pin from the same sender is already recorded (an
-//                        album, several shop photos) this one ends as
-//                        media_batched and only the LAST message runs the agent,
+//                        expire), then a short quiet wait: when ANY newer
+//                        message from the same sender is already recorded (an
+//                        album, several shop photos, the text typed after the
+//                        photo) this one ends as media_batched and only the
+//                        LAST message runs the agent,
 //                        which sees every unused attachment of the last 15
 //                        minutes. The caption continues into step 6 as the text.
 //                        Too big / wrong type / failed → a fixed reply.
 //                        WA_ASSIST_MEDIA_DISABLED → the UC-14 reply instead.
 //      Other non-text  → the fixed UC-14 reply, counted by `type`.
 //   6. Text            → a bare "yes / haan / confirm" while a preview is
-//                        waiting gets the fixed "tap Confirm" reply (typing — or
-//                        saying — never saves); anything else → per-user lease →
-//                        agent → reply.
+//                        waiting AND is the last message we sent gets the fixed
+//                        "tap Confirm" reply (typing — or saying — never saves);
+//                        anything else → per-user lease → agent → reply.
+//   Taps are noted in the conversation memory after their reply (noteTap).
 //
 // Every message ends with a `handling` value on its row. Any unexpected error
 // is logged with the provider message id and answered with one generic
@@ -82,6 +84,11 @@ export type RouterDeps = {
     cancelAction: (user: AssistantUser, actionId: string) => Promise<WaPayload>;
     /** ASSISTANT_DISABLED, read per message. */
     isDisabled: () => boolean;
+    /**
+     * A change card is waiting AND it is the last thing we sent — only then is
+     * a bare "haan" an attempt to confirm it (otherwise it answers whatever we
+     * sent last, and goes to the agent).
+     */
     hasPendingAction: (userId: string) => Promise<boolean>;
     /** WA_ASSIST_VOICE_DISABLED, read per message: voice notes get the UC-14 reply. */
     isVoiceDisabled: () => boolean;
@@ -91,11 +98,17 @@ export type RouterDeps = {
     isMediaDisabled: () => boolean;
     /** Download (photo / PDF) or record (pin) one attachment for this user. Never throws. */
     storeMedia: (user: AssistantUser, msg: InboundMessage, messageRowId: string) => Promise<StoreMediaOutcome>;
-    /** Is a photo / PDF / pin from this sender recorded AFTER this row? (album batching) */
+    /** Is ANY message from this sender recorded AFTER this row? (album batching, photo-then-text) */
     hasNewerMedia: (waPhone: string, messageRowId: string) => Promise<boolean>;
     sleep: (ms: number) => Promise<void>;
     /** Lease → agent → memory, for one text message. */
     runTextTurn: (user: AssistantUser, text: string, messageRowId: string) => Promise<TextTurnOutcome>;
+    /**
+     * After a tap is answered: a short human / AI pair in the conversation
+     * memory ("[tapped lead …]" + what was shown), so the model knows about it
+     * next turn. Never throws; optional so a host without memory can skip it.
+     */
+    noteTap?: (user: AssistantUser, note: { human: string; ai: string }) => Promise<void>;
     log: (level: "info" | "warn" | "error", msg: string, meta: Record<string, unknown>) => void;
 };
 
@@ -123,6 +136,31 @@ const TYPED_CONFIRM_RE =
 
 export function isTypedConfirm(text: string | null | undefined): boolean {
     return TYPED_CONFIRM_RE.test(text ?? "");
+}
+
+const NOTE_MAX = 300;
+
+/** A sent reply as one line for memory: lines joined, *bold* stripped, capped. */
+function oneLine(body: string): string {
+    const s = body.replace(/\*/g, "").split("\n").map((l) => l.trim()).filter(Boolean).join(" · ");
+    const chars = [...s];
+    return chars.length <= NOTE_MAX ? s : chars.slice(0, NOTE_MAX - 1).join("") + "…";
+}
+
+/**
+ * The memory note for a tap: what the user did, and what they were shown. The
+ * model never ran for it, so without this "save hua?" or "iska number" next
+ * turn has nothing to refer to. Pure.
+ */
+export function tapNote(tap: "c" | "x" | "e" | "lead", rawId: string, payload: WaPayload): { human: string; ai: string } {
+    const id = rawId.slice(0, 64);
+    const shown = oneLine(payload.body);
+    if (tap === "lead") {
+        const shop = payload.body.split("\n")[0]?.replace(/\*/g, "").trim() ?? "";
+        return { human: `[tapped lead ${id}${shop ? ` "${shop}"` : ""}]`, ai: shown };
+    }
+    const what = tap === "c" ? "Confirm" : tap === "x" ? "Cancel" : "Edit";
+    return { human: `[tapped ${what} on card ${id}]`, ai: shown };
 }
 
 /** Mask a phone for logs: +9198•••••210. */
@@ -179,6 +217,14 @@ export async function routeMessage(msg: InboundMessage, rowId: string, deps: Rou
         // 4. Taps — never the model.
         if (msg.type === "interactive") {
             const tap = TAP_RE.exec(msg.replyId ?? "");
+            // After the reply is out: the tap goes into memory (best effort).
+            const note = async (kind: "c" | "x" | "e" | "lead", id: string, payload: WaPayload) => {
+                try {
+                    await deps.noteTap?.(user, tapNote(kind, id, payload));
+                } catch (err) {
+                    deps.log("warn", "[wa-assist] tap note failed", { ...meta, userId, error: err instanceof Error ? err.message : String(err) });
+                }
+            };
             if (tap?.[1] === "c" || tap?.[1] === "x") {
                 const actionId = UUID_RE.test(tap[2]) ? tap[2] : null;
                 const payload =
@@ -188,12 +234,14 @@ export async function routeMessage(msg: InboundMessage, rowId: string, deps: Rou
                 await deps.markHandled(rowId, tap[1] === "c" ? "tap_confirm" : "tap_cancel", { userId, actionId });
                 await deps.sendPayload(msg.waPhone, payload, userId);
                 deps.log("info", "[wa-assist] action tap", { ...meta, userId, actionId, tap: tap[1], latencyMs: Date.now() - started });
+                await note(tap[1], tap[2], payload);
                 return;
             }
             if (tap?.[1] === "e") {
                 const payload = await deps.editAction(user, tap[2]);
                 await deps.markHandled(rowId, "tap_edit", { userId, actionId: UUID_RE.test(tap[2]) ? tap[2] : null });
                 await deps.sendPayload(msg.waPhone, payload, userId);
+                await note("e", tap[2], payload);
                 return;
             }
             if (tap?.[1] === "inv") {
@@ -206,6 +254,7 @@ export async function routeMessage(msg: InboundMessage, rowId: string, deps: Rou
                 const payload = await deps.openLead(user, tap[2], rowId);
                 await deps.markHandled(rowId, "tap_lead", { userId });
                 await deps.sendPayload(msg.waPhone, payload, userId);
+                await note("lead", tap[2], payload);
                 return;
             }
             await deps.markHandled(rowId, "tap_ignored", { userId });
@@ -217,6 +266,8 @@ export async function routeMessage(msg: InboundMessage, rowId: string, deps: Rou
         let text: string;
         let transcript: string | undefined;
         let viaMedia = false;
+        /** Is the waiting change card the last thing we sent? (a spoken "haan" decides early) */
+        let cardIsLatest: boolean | undefined;
         if (ATTACHMENT_TYPES.has(msg.type) && !deps.isMediaDisabled()) {
             const stored = await deps.storeMedia(user, msg, rowId);
             if (stored.kind !== "stored") {
@@ -235,7 +286,8 @@ export async function routeMessage(msg: InboundMessage, rowId: string, deps: Rou
             }
             await deps.sleep(ALBUM_QUIET_MS);
             if (await deps.hasNewerMedia(msg.waPhone, rowId)) {
-                // A later attachment will answer for all of them.
+                // A later message — another photo, or the text typed right
+                // after this one — will answer for all of them.
                 await deps.markHandled(rowId, "media_batched", { userId });
                 deps.log("info", "[wa-assist] media batched", { ...meta, userId, ref: stored.ref });
                 return;
@@ -271,6 +323,9 @@ export async function routeMessage(msg: InboundMessage, rowId: string, deps: Rou
             }
             transcript = heard.text;
             text = heard.text;
+            // Decided BEFORE the "heard" echo goes out — the echo becomes our
+            // latest message and would hide the card the "haan" was meant for.
+            if (isTypedConfirm(text)) cardIsLatest = await deps.hasPendingAction(userId);
             // Shown on its own, before the answer: a preview body is never squeezed.
             await deps.replyText(msg.waPhone, heardReply(heard.text), userId);
             deps.log("info", "[wa-assist] voice transcribed", {
@@ -294,7 +349,9 @@ export async function routeMessage(msg: InboundMessage, rowId: string, deps: Rou
 
         // 6. Text — typed, or a voice note's transcript (stored on the row for review).
         const logged = transcript !== undefined ? { userId, text: transcript } : { userId };
-        if (!viaMedia && isTypedConfirm(text) && (await deps.hasPendingAction(userId))) {
+        // Only when the card is our latest message: after a list or an answer,
+        // "haan / ok" answers THAT, and goes to the agent.
+        if (!viaMedia && isTypedConfirm(text) && (cardIsLatest ?? (await deps.hasPendingAction(userId)))) {
             await deps.markHandled(rowId, "typed_confirm", logged);
             await deps.replyText(msg.waPhone, REPLY.tapConfirm, userId);
             return;
