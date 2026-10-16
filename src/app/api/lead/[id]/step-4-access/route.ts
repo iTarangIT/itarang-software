@@ -71,8 +71,8 @@ export async function GET(
 
     // 14 Oct: this gate checked the role only, so any dealer login could read
     // any file's Step 4 state by id. Same rule as the other lead routes: the
-    // owning dealer, the house on a file it pushed out (to look — 16 Oct, ID
-    // 183: read only), or Admin / Sales Head acting for the dealer from the
+    // owning dealer, the house on a file it pushed out (full access — 16 Oct
+    // evening, user), or Admin / Sales Head acting for the dealer from the
     // CRM panel. "Not found" and "not yours" answer alike.
     const gate = lead ? await gateLeadActor(user, lead) : null;
     if (!lead || !gate?.ok) {
@@ -81,8 +81,9 @@ export async function GET(
         { status: 404 },
       );
     }
-    // Only the file's dealer and Admin / Sales Head may change Step 4.
-    const viewOnly = gate.actor.kind === "house";
+    // Everyone who passes the gate may change Step 4 (the house too, since
+    // 16 Oct evening); kept as a flag for the read-only branches below.
+    const viewOnly = false;
 
     // final_decision lives on kyc_verification_metadata (NOT on leads). The
     // admin "final decision" writes it there, and the Step-3 client already
