@@ -30,7 +30,7 @@ export default async function TimeLimitsPage() {
                     hours 10:00 to 19:00, minus the holidays below.
                 </p>
             </header>
-            <TimeLimitsView canEditHolidays={user.role === "admin"} />
+            <TimeLimitsView />
         </div>
     );
 }

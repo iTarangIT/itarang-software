@@ -16,6 +16,7 @@ import { engagedState } from "@/lib/reports/metricDefinitions";
 import { fetchAssignedByForLeads } from "@/lib/leads/leadAssignedBy";
 import { onboardingStall, STALL_LABEL } from "@/lib/onboarding/stall";
 import { getTimeLimits } from "@/lib/timeLimits/store";
+import { limitPassedEvents } from "@/lib/leads/clocks";
 import { agreementOutcomeLabel } from "@/lib/onboarding/leadMilestones";
 import type {
     LeadDetailBundle,
@@ -330,6 +331,19 @@ export async function fetchLeadDetailBundle(leadId: string): Promise<LeadDetailB
         commercials_history: commercialsHistory as LeadDetailCommercials[],
         touchpoints: touchpoints as LeadDetailTouchpoint[],
         status_history: statusHistory as LeadDetailStatusHistory[],
+        // IDs 85 / 86 — never fails the page: [] when unavailable.
+        limit_events: await limitPassedEvents({ leadId })
+            .then((rows) =>
+                rows.map((e) => ({
+                    clock: e.clock,
+                    limit_value: e.limit_value,
+                    limit_unit: e.limit_unit,
+                    passed_at: new Date(e.passed_at).toISOString(),
+                    owner_name: e.owner_name,
+                    owner_inferred: e.owner_inferred,
+                })),
+            )
+            .catch(() => []),
         onboarding,
         // ID 83: an unowned lead whose first human call was by a NeoDove agent
         // nobody has linked to a CRM user — it is waiting on that link.

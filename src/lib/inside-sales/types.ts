@@ -70,6 +70,8 @@ export type QueueRow = {
      * be claiming a field its own query never selects.
      */
     assigned_by?: LeadAssignedBy | null;
+    /** IDs 85 / 86 — a clock on this lead is running past its limit (the "Past a limit" chip). */
+    past_limit?: boolean;
 };
 
 export type QueueResponse = {
@@ -286,12 +288,26 @@ export type LeadDetailStatusHistory = {
     reason_notes: string | null;
 };
 
+export type LeadDetailLimitEvent = {
+    clock: string;
+    limit_value: number;
+    limit_unit: string;
+    passed_at: string;
+    owner_name: string | null;
+    owner_inferred: boolean;
+};
+
 export type LeadDetailBundle = {
     lead: LeadDetailLead;
     current_commercials: LeadDetailCommercials | null;
     commercials_history: LeadDetailCommercials[];
     touchpoints: LeadDetailTouchpoint[];
     status_history: LeadDetailStatusHistory[];
+    /**
+     * IDs 85 / 86 — missed time limits on this lead (fixed records, E-343),
+     * newest first; [] without E-343. Shown in the Touchpoint History pane.
+     */
+    limit_events?: LeadDetailLimitEvent[];
     /**
      * Newest dialer campaign this lead appeared in, or null if it was never
      * dialled. Used only as a route parameter by the AI Call History tab — the

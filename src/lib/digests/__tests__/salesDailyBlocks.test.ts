@@ -59,6 +59,8 @@ const noExtras = {
     quotes_delivered: new Map<string, number | null>(),
     dealer_approved: new Map<string, number | null>(),
     won: new Map<string, number | null>(),
+    limits_passed: new Map<string, number | null>(),
+    owner_median_h: new Map<string, number | null>(),
 };
 
 describe("Block B (ASM) — one row per rep", () => {
@@ -98,6 +100,9 @@ describe("Block B (ASM) — one row per rep", () => {
             "Marked Won MTD",
             "Converted MTD",
             "Revenue ₹ MTD",
+            "Limits passed · Yesterday",
+            "MTD",
+            "First attempt, median working hrs MTD",
             "% of target",
         ]);
         expect(BLOCK_B_COLUMNS.some((c) => /last 7/i.test(c))).toBe(false);
@@ -110,11 +115,11 @@ describe("Block B (ASM) — one row per rep", () => {
         expect(rows).toHaveLength(3);
         for (const r of rows) expect(r).toHaveLength(BLOCK_B_COLUMNS.length);
         // Amy: no target → "—"; a failed direct query (Marked Won MTD) is not 0.
-        expect(rows[0]).toEqual(["Amy", 0, 10, 0, 0, 0, 0, 0, 0, 0, 0, REP_NOT_MEASURED, 0, "₹0", REP_NOT_MEASURED]);
+        expect(rows[0]).toEqual(["Amy", 0, 10, 0, 0, 0, 0, 0, 0, 0, 0, REP_NOT_MEASURED, 0, "₹0", 0, 0, REP_NOT_MEASURED, REP_NOT_MEASURED]);
         // Zed: 40 dealers visited MTD against a target of 50 = 80%.
-        expect(rows[1]).toEqual(["Zed", 3, 40, 0, 7, 2, 11, 1, 6, 4, 3, REP_NOT_MEASURED, 2, "₹25.0 L", "80%"]);
+        expect(rows[1]).toEqual(["Zed", 3, 40, 0, 7, 2, 11, 1, 6, 4, 3, REP_NOT_MEASURED, 2, "₹25.0 L", 0, 0, REP_NOT_MEASURED, "80%"]);
         // Total: sums of the reps; % of target only over reps that have one.
-        expect(rows[2]).toEqual(["Total", 3, 50, 0, 7, 2, 11, 1, 6, 4, 3, REP_NOT_MEASURED, 2, "₹25.0 L", "80%"]);
+        expect(rows[2]).toEqual(["Total", 3, 50, 0, 7, 2, 11, 1, 6, 4, 3, REP_NOT_MEASURED, 2, "₹25.0 L", 0, 0, REP_NOT_MEASURED, "80%"]);
     });
 
     it("ID 156: a manager's team under them, with a subtotal against the MANAGER's own target", () => {
@@ -151,6 +156,9 @@ describe("Block C (ISR / CC) — one row per rep", () => {
             "Quotes created MTD",
             "Marked Won MTD",
             "Converted MTD",
+            "Limits passed · Yesterday",
+            "MTD",
+            "First attempt, median working hrs MTD",
             "% of target",
         ]);
     });
@@ -179,10 +187,50 @@ describe("Block C (ISR / CC) — one row per rep", () => {
         const rows = repBlockTableRows("inside_sales_rep", buildRepBlocks("inside_sales_rep", y, mtd, extras, targets));
         expect(rows).toEqual([
             // Bo: 0 calls → Connect % "—"; engaged not measured → "—"; no target → "—".
-            ["Bo", 0, 0, 0, 0, 0, REP_NOT_MEASURED, REP_NOT_MEASURED, 0, 0, 0, 0, REP_NOT_MEASURED],
-            ["Ira", 9, 200, 7, 120, 50, "25%", 20, 4, 5, 2, 1, "80%"],
-            ["Total", 9, 200, 7, 120, 50, "25%", 20, 4, 5, 2, 1, "80%"],
+            ["Bo", 0, 0, 0, 0, 0, REP_NOT_MEASURED, REP_NOT_MEASURED, 0, 0, 0, 0, 0, 0, REP_NOT_MEASURED, REP_NOT_MEASURED],
+            ["Ira", 9, 200, 7, 120, 50, "25%", 20, 4, 5, 2, 1, 0, 0, REP_NOT_MEASURED, "80%"],
+            ["Total", 9, 200, 7, 120, 50, "25%", 20, 4, 5, 2, 1, 0, 0, REP_NOT_MEASURED, "80%"],
         ]);
+    });
+
+    it("clock columns (IDs 85 / 86): limits passed add up, the median is per person and blank on the Total", () => {
+        const mtd = {
+            per_spoc: [spoc("i1", "Ira", "inside_sales_rep", { calls: 10 }), spoc("i2", "Bo", "inside_sales_rep", { calls: 5 })],
+        };
+        const extras = {
+            y: { ...noExtras, limits_passed: new Map<string, number | null>([["i1", 1]]) },
+            mtd: {
+                ...noExtras,
+                limits_passed: new Map<string, number | null>([["i1", 3], ["i2", 2]]),
+                owner_median_h: new Map<string, number | null>([["i1", 2.345]]),
+            },
+        };
+        const rows = repBlockTableRows("inside_sales_rep", buildRepBlocks("inside_sales_rep", { per_spoc: [] }, mtd, extras, new Map()));
+        const at = (h: string, nth = 0) => BLOCK_C_COLUMNS.findIndex((c, i) => c === h && BLOCK_C_COLUMNS.slice(0, i).filter((x) => x === h).length === nth);
+        const yCol = at("Limits passed · Yesterday");
+        const median = at("First attempt, median working hrs MTD");
+        // Bo, Ira, Total
+        expect(rows.map((r) => [r[0], r[yCol], r[yCol + 1], r[median]])).toEqual([
+            ["Bo", 0, 2, REP_NOT_MEASURED],
+            ["Ira", 1, 3, 2.3],
+            ["Total", 1, 5, REP_NOT_MEASURED],
+        ]);
+    });
+
+    it("without the clock tables the clock columns read '—'", () => {
+        const mtd = { per_spoc: [spoc("i1", "Ira", "inside_sales_rep", { calls: 10 })] };
+        const rows = repBlockTableRows(
+            "inside_sales_rep",
+            buildRepBlocks(
+                "inside_sales_rep",
+                { per_spoc: [] },
+                mtd,
+                { y: { ...noExtras, limits_passed: null }, mtd: { ...noExtras, limits_passed: null, owner_median_h: null } },
+                new Map(),
+            ),
+        );
+        const yCol = BLOCK_C_COLUMNS.indexOf("Limits passed · Yesterday");
+        expect(rows[0].slice(yCol, yCol + 3)).toEqual([REP_NOT_MEASURED, REP_NOT_MEASURED, REP_NOT_MEASURED]);
     });
 
     it("a failed connected query reads '—' for Connected and Connect %", () => {

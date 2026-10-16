@@ -12,6 +12,7 @@ import { QuotationCcForm } from "./QuotationCcForm";
 import { QuotationTermsForm } from "./QuotationTermsForm";
 import { TerritoryManager } from "./TerritoryManager";
 import { ReportingLinesManager } from "./ReportingLinesManager";
+import { HolidaysPanel } from "./HolidaysPanel";
 import type { SettingsBundle } from "@/lib/admin/types";
 
 // Two sections, two channels: Notification Access (E-231) governs the in-app
@@ -45,6 +46,8 @@ const TAB_VALUES = [
     "territories",
     // ID 155 — who reports to whom (E-335).
     "reporting-lines",
+    // ID 85 Decision 4 — the office calendar, with its change log (E-343).
+    "holidays",
 ] as const;
 type TabValue = (typeof TAB_VALUES)[number];
 
@@ -91,6 +94,7 @@ export function SettingsView() {
                     { value: "quotation-terms", label: "Quotation terms" },
                     { value: "territories", label: "ASM Territories" },
                     { value: "reporting-lines", label: "Reporting lines" },
+                    { value: "holidays", label: "Holidays" },
                 ]}
             />
 
@@ -101,6 +105,7 @@ export function SettingsView() {
                     {active === "quotation-cc" && <QuotationCcForm />}
                     {active === "quotation-terms" && <QuotationTermsForm />}
                     {active === "reporting-lines" && <ReportingLinesManager />}
+                    {active === "holidays" && <HolidaysPanel />}
                     {active === "territories" &&
                         (bundleQuery.isLoading ? (
                             <div className="flex items-center gap-2 py-8 text-sm text-ink-muted">

@@ -1235,7 +1235,12 @@ export default function CEODashboard() {
                   <span>% of target to date</span>
                   <span className="text-right">Revenue</span>
                   <span className="text-right">Converted</span>
-                  <span className="text-right">Idle leads</span>
+                  <span
+                    className="text-right"
+                    title="Open leads past the holder's idle limit: inside sales and ASM limits from Admin › Time limits (ID 192)"
+                  >
+                    Idle leads
+                  </span>
                   <span className="text-right">Engaged</span>
                 </div>
                 {team.map((t) => {

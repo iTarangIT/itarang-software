@@ -54,11 +54,12 @@ export function KpiStrip({ kpis }: { kpis: AdminKpis }) {
             tone: "neutral",
         },
         {
-            label: "Avg Time to First Touch",
+            label: "Time to First Attempt",
             value: fmtHours(kpis.avg_time_to_first_touch_hours),
             icon: Timer,
             tone: "neutral",
-            hint: "leads assigned · last 7 days",
+            // IDs 85 / 86: the owner clock, office hours (Mon–Sat 10–19, holidays off).
+            hint: "median working hours, assignment → owner's first call or visit · last 7 days",
         },
         {
             label: "Leads Worked Today",

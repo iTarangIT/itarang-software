@@ -84,6 +84,8 @@ export function NeedsAttentionView() {
     const anyFilter = Boolean(q || role || status || interest || minDays);
     const totalIdle = (data?.holders ?? []).reduce((s, h) => s + h.idle, 0);
     const totalDead = (data?.holders ?? []).reduce((s, h) => s + h.non_responsive, 0);
+    // ID 192 point 2: leads parked by a follow-up more than 30 days ahead are not idle.
+    const totalParked = (data?.holders ?? []).reduce((s, h) => s + (h.parked ?? 0), 0);
     const capped = rows.length < totalIdle + totalDead;
     const idle = shown.filter((r) => !r.non_responsive);
     const deadNumbers = shown.filter((r) => r.non_responsive);
@@ -231,6 +233,11 @@ export function NeedsAttentionView() {
                 <span className="font-semibold text-ink">{totalIdle.toLocaleString("en-IN")}</span>
                 <span className="text-ink-muted">idle leads</span>
                 {totalDead > 0 && <span className="text-ink-muted">· {totalDead.toLocaleString("en-IN")} non-responsive</span>}
+                {totalParked > 0 && (
+                    <span className="text-ink-muted" title="A follow-up more than 30 days ahead parks the lead: not idle, not listed here.">
+                        · {totalParked.toLocaleString("en-IN")} parked (follow-up over 30 days ahead)
+                    </span>
+                )}
                 {anyFilter && (
                     <span className="text-ink-muted">
                         · <span className="font-semibold text-ink">{shown.length.toLocaleString("en-IN")}</span> match the filters

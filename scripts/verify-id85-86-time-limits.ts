@@ -12,6 +12,11 @@
 // 4. The month's "Limit passed" events in the Lead events download = the
 //    daily email's "Time limits missed" = lead_clocks; the email's "First
 //    attempt within limit" = the owner clock's figure.
+// 5. 15 Oct rework (E-343): the new limits resolve; the 18:00-Saturday Hot
+//    example lands at 13:00 Monday; every passed clock has its fixed "Limit
+//    passed" record; a missed lead clock is charged to the owner on record at
+//    the moment it fell due; per-person counts leave inferred owners out; the
+//    SQL "limit in force on a day" matches the TS one; holiday log present.
 
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
@@ -19,7 +24,10 @@ import { istDay, workingDaysSince } from "@/lib/calendar/officeCalendar";
 import { loadHolidays, workingDaysSinceSql } from "@/lib/calendar/holidays";
 import { TIME_LIMITS, formatLimit } from "@/lib/timeLimits/registry";
 import { getTimeLimits, hasTimeLimitTable, scheduledChanges, timeLimitLog } from "@/lib/timeLimits/store";
-import { clockStats, clocksComputedAt, hasLeadClocks, limitsPassed } from "@/lib/leads/clocks";
+import { clockStats, clocksComputedAt, hasLeadClocks, hasLimitEvents, limitsPassed, limitsPassedByOwner } from "@/lib/leads/clocks";
+import { dueAt } from "@/lib/leads/clockRules";
+import { hasHolidayLog } from "@/lib/calendar/holidays";
+import { limitOnDaySql, limitsOn } from "@/lib/timeLimits/store";
 import { countEvents } from "@/lib/leads/eventLog";
 
 let failed = 0;
@@ -84,6 +92,59 @@ async function main() {
         ]);
         check(`month's Limit passed: Lead events download ${events} = lead_clocks ${passed}`, events === passed);
         console.log(`      owner clock MTD: ${owner?.pct_in_limit ?? "—"}% within limit; first attempt median ${owner?.attempt_median_h ?? "—"} h, slowest 1 in 10 ${owner?.attempt_p90_h ?? "—"} h`);
+    }
+
+    // 5 — the 15 Oct rework
+    console.log("\n— 15 Oct rework (E-343) —");
+    for (const k of ["hot_ready_to_assigned", "hot_owner_first_attempt", "retry_gap", "retry_max_attempts", "ceo_quote_approval"] as const) {
+        check(`limit ${k} resolves (${values[k]})`, Number.isFinite(values[k]) && values[k] > 0);
+    }
+    const sat = new Date("2026-10-17T18:00:00+05:30");
+    const due = dueAt(sat, "hot_owner_first_attempt", 4, new Set());
+    check(`Hot lead reaching its owner 18:00 Sat 17 Oct → due ${due?.toISOString()} (13:00 Mon IST)`, due?.toISOString() === new Date("2026-10-19T13:00:00+05:30").toISOString());
+
+    // Dated limits in SQL = TS, on today and on a day before any change.
+    const rows = (await db.execute(sql`SELECT limit_key, value, effective_from::text AS effective_from, changed_at::text AS changed_at FROM time_limit_settings ORDER BY effective_from, changed_at, id`).catch(() => [])) as unknown as Array<{ limit_key: string; value: string; effective_from: string; changed_at: string }>;
+    for (const day of [today, "2026-01-01"]) {
+        const r = await one<{ v: string }>(sql`SELECT ${limitOnDaySql("asm_transfer_first_visit", sql`${day}::date`, await hasTimeLimitTable())} AS v`);
+        const ts = limitsOn(day, rows).asm_transfer_first_visit;
+        check(`asm_transfer_first_visit in force on ${day}: SQL ${r?.v} = TS ${ts}`, Number(r?.v) === ts);
+    }
+
+    check("E-343 holiday_calendar_log present", await hasHolidayLog());
+    if (!(await hasLimitEvents())) {
+        check("E-343 lead_limit_events present", false);
+    } else {
+        const ev = await one<Record<string, number>>(sql`
+            SELECT
+              (SELECT COUNT(*)::int FROM lead_clocks c
+                WHERE c.limit_passed_at IS NOT NULL AND c.limit_key IS NOT NULL
+                  AND NOT EXISTS (SELECT 1 FROM lead_limit_events e
+                                   WHERE e.dealer_lead_id = c.dealer_lead_id AND e.clock = c.clock AND e.clock_started_at = c.started_at)) AS passed_without_record,
+              (SELECT COUNT(*)::int FROM lead_limit_events) AS records,
+              (SELECT COUNT(*)::int FROM lead_limit_events WHERE owner_inferred) AS inferred,
+              -- A recorded lead-clock miss charged to someone other than the owner
+              -- on record (the last owner-change touchpoint at or before the miss).
+              (SELECT COUNT(*)::int FROM lead_limit_events e
+                 JOIN LATERAL (
+                     SELECT to_jsonb(t) ->> 'to_owner_id' AS owner FROM lead_touchpoints t
+                      WHERE t.dealer_lead_id = e.dealer_lead_id AND to_jsonb(t) ->> 'to_owner_id' IS NOT NULL
+                        AND t.performed_at <= e.passed_at
+                      ORDER BY t.performed_at DESC LIMIT 1) h ON TRUE
+                WHERE e.clock = 'lead' AND e.owner_inferred = false AND e.owner_id IS DISTINCT FROM h.owner) AS charged_wrong,
+              (SELECT COUNT(*)::int FROM lead_clocks WHERE clock IN ('hot_assign', 'hot_owner')) AS hot_clocks,
+              (SELECT COUNT(*)::int FROM lead_clocks WHERE clock = 'retry') AS retry_clocks,
+              (SELECT COUNT(*)::int FROM lead_clocks WHERE clock = 'quote') AS quote_clocks`);
+        check("every passed clock has its fixed Limit passed record", ev.passed_without_record === 0, ev.passed_without_record);
+        check("missed lead clocks are charged to the owner on record when they fell due", ev.charged_wrong === 0, ev.charged_wrong);
+        console.log(`      ${ev.records} fixed records (${ev.inferred} owner not on record); clocks: ${ev.hot_clocks} Hot, ${ev.retry_clocks} retry, ${ev.quote_clocks} CEO quote approval`);
+        const byOwner = await limitsPassedByOwner(monthFrom, today);
+        const sumPeople = [...byOwner.values()].reduce((a, b) => a + b, 0);
+        const onRecord = await one<{ n: number }>(sql`
+            SELECT COUNT(*)::int AS n FROM lead_limit_events
+             WHERE owner_id IS NOT NULL AND owner_inferred = false
+               AND (passed_at AT TIME ZONE 'Asia/Kolkata')::date BETWEEN ${monthFrom}::date AND ${today}::date`);
+        check(`per-person Limits passed MTD (${sumPeople}) = records with an owner on record (${onRecord?.n}) — inferred left out`, sumPeople === Number(onRecord?.n));
     }
 
     console.log(failed === 0 ? "\nAll checks passed." : `\n${failed} check(s) FAILED.`);

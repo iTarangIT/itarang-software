@@ -32,6 +32,7 @@ import { DEALER_YES_AT_SQL, finalisedNotWonSql } from "@/lib/leads/finalisedNotW
 import {
     TRANSFER_AT_EXPR,
     TRANSFER_WORKING_DAYS_SQL,
+    transferLimitSql,
     transferVisitOverdueSql,
 } from "@/lib/asm/transferVisitLimit";
 import {
@@ -42,6 +43,7 @@ import { onboardingClockSql } from "@/lib/onboarding/clock";
 import { workingDaysSinceSql } from "@/lib/calendar/holidays";
 import type { TimeLimits } from "@/lib/timeLimits/registry";
 import { getTimeLimits } from "@/lib/timeLimits/store";
+import { hasLeadClocks } from "@/lib/leads/clocks";
 import { FOLLOW_UP_AGEING_BASIS_TEXT } from "@/lib/leads/followUpAgeing";
 
 // ID 122: the one onboarding clock (src/lib/onboarding/clock.ts).
@@ -170,7 +172,20 @@ export async function fetchKpis(f: DashboardFilters): Promise<AdminKpis> {
                     (SELECT COUNT(*) FROM lead_escalations
                        WHERE status = 'pending_review') AS pending_escalations
             `),
-            db.execute<{ hrs: string | null }>(sql`
+            // IDs 85 / 86 (15 Oct): the owner clock — median WORKING hours
+            // from each assignment in the last 7 days to that owner's first
+            // call or visit (lead_clocks), not calendar hours to a connected
+            // call. Without E-337, the old calendar-hour average.
+            (async () =>
+                (await hasLeadClocks())
+                    ? db.execute<{ hrs: string | null }>(sql`
+                SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY c.attempt_working_minutes) / 60.0 AS hrs
+                FROM lead_clocks c
+                JOIN dealer_leads dl ON dl.id = c.dealer_lead_id
+                WHERE c.clock = 'owner' AND c.attempt_working_minutes IS NOT NULL
+                  AND c.started_at >= NOW() - INTERVAL '7 days' ${lf}
+            `)
+                    : db.execute<{ hrs: string | null }>(sql`
                 SELECT AVG(EXTRACT(EPOCH FROM (ft.first_touch - dl.assigned_at)) / 3600) AS hrs
                 FROM dealer_leads dl
                 JOIN LATERAL (
@@ -183,7 +198,7 @@ export async function fetchKpis(f: DashboardFilters): Promise<AdminKpis> {
                 ) ft ON TRUE
                 WHERE dl.assigned_at >= NOW() - INTERVAL '7 days'
                   AND ft.first_touch IS NOT NULL ${lf}
-            `),
+            `))(),
             closedWinRate(7, lf),
             closedWinRate(30, lf),
             db.execute<{ c: string }>(sql`
@@ -329,7 +344,29 @@ export async function fetchTeamPerformance(
         source: f.source,
         segment: f.segment,
     });
-    const limits = await getTimeLimits();
+    const [limits, clocks] = await Promise.all([getTimeLimits(), hasLeadClocks()]);
+    // IDs 85 / 86: per person, the median working hours from an assignment
+    // (last 30 days) to their own first call or visit — the owner clock,
+    // owners on record only. Without E-337, the old calendar-hour average.
+    const firstTouchSql = clocks
+        ? sql`(SELECT ROUND((percentile_cont(0.5) WITHIN GROUP (ORDER BY c.attempt_working_minutes) / 60.0)::numeric, 1)
+               FROM lead_clocks c
+               WHERE c.clock = 'owner' AND c.owner_id = u.id::text AND c.owner_inferred = false
+                 AND c.attempt_working_minutes IS NOT NULL
+                 AND c.started_at >= NOW() - INTERVAL '30 days')`
+        : sql`(SELECT ROUND(AVG(
+                EXTRACT(EPOCH FROM (ft.first_touch - dl.assigned_at)) / 3600)::numeric, 1)
+               FROM dealer_leads dl
+               JOIN LATERAL (
+                   SELECT MIN(t.performed_at) AS first_touch
+                   FROM lead_touchpoints t
+                   WHERE t.dealer_lead_id = dl.id
+                     AND t.touchpoint_type = 'inside_sales_call'
+                     AND t.call_status = 'connected'
+                     AND t.performed_at >= dl.assigned_at
+               ) ft ON TRUE
+               WHERE dl.originator_id = u.id::text
+                 AND ft.first_touch IS NOT NULL)`;
 
     const rows = await db.execute<TeamPerfRow>(sql`
         SELECT
@@ -356,19 +393,7 @@ export async function fetchTeamPerformance(
                FROM lead_touchpoints t
                WHERE t.performed_by = u.id::text
                  AND t.touchpoint_type <> 'record_correction') AS avg_touchpoints_per_lead,
-            (SELECT ROUND(AVG(
-                EXTRACT(EPOCH FROM (ft.first_touch - dl.assigned_at)) / 3600)::numeric, 1)
-               FROM dealer_leads dl
-               JOIN LATERAL (
-                   SELECT MIN(t.performed_at) AS first_touch
-                   FROM lead_touchpoints t
-                   WHERE t.dealer_lead_id = dl.id
-                     AND t.touchpoint_type = 'inside_sales_call'
-                     AND t.call_status = 'connected'
-                     AND t.performed_at >= dl.assigned_at
-               ) ft ON TRUE
-               WHERE dl.originator_id = u.id::text
-                 AND ft.first_touch IS NOT NULL) AS avg_time_to_first_touch_hours,
+            ${firstTouchSql} AS avg_time_to_first_touch_hours,
             (SELECT ROUND(
                 COUNT(*) FILTER (WHERE dl.lead_status = 'Converted')::numeric
                 / NULLIF(COUNT(*) FILTER (WHERE dl.lead_status IN ('Converted','Lost')), 0), 3)
@@ -420,7 +445,8 @@ export async function fetchTeamPerformance(
 
 // Each panel's COUNT(*) query. The drill-down query (fetchAlertPanel) reuses
 // the same FROM/WHERE and just selects display columns.
-function panelCountSql(key: AlertPanelKey, lf: SQL, limits: TimeLimits): SQL {
+/** `transferLimit`: transferLimitSql() — each transfer judged by the limit in force on its day. */
+function panelCountSql(key: AlertPanelKey, lf: SQL, limits: TimeLimits, transferLimit: SQL): SQL {
     switch (key) {
         case "no_touch_5d":
             return sql`SELECT COUNT(*)::text AS c FROM dealer_leads dl
@@ -464,7 +490,7 @@ function panelCountSql(key: AlertPanelKey, lf: SQL, limits: TimeLimits): SQL {
                 WHERE ${onboardingStalledSql(limits)} ${lf}`;
         case "transfer_visit_overdue":
             return sql`SELECT COUNT(*)::text AS c FROM dealer_leads dl
-                WHERE ${transferVisitOverdueSql(limits.asm_transfer_first_visit)} ${lf}`;
+                WHERE ${transferVisitOverdueSql(transferLimit)} ${lf}`;
         case "finalised_not_won":
             return sql`SELECT COUNT(*)::text AS c FROM dealer_leads dl
                 WHERE ${finalisedNotWon(limits)} ${lf}`;
@@ -498,9 +524,9 @@ export async function fetchAlertCounts(
     f: DashboardFilters,
 ): Promise<Record<AlertPanelKey, number>> {
     const lf = leadFilter(f);
-    const limits = await getTimeLimits();
+    const [limits, transferLimit] = await Promise.all([getTimeLimits(), transferLimitSql()]);
     const results = await Promise.all(
-        ALERT_PANELS.map((key) => db.execute<{ c: string }>(panelCountSql(key, lf, limits))),
+        ALERT_PANELS.map((key) => db.execute<{ c: string }>(panelCountSql(key, lf, limits, transferLimit))),
     );
     const out = {} as Record<AlertPanelKey, number>;
     ALERT_PANELS.forEach((key, i) => {
@@ -515,7 +541,7 @@ export async function fetchAlertPanel(
     limit = 50,
 ): Promise<AlertPanelRow[]> {
     const lf = leadFilter(f);
-    const limits = await getTimeLimits();
+    const [limits, transferLimit] = await Promise.all([getTimeLimits(), transferLimitSql()]);
 
     // Lead-based panels share one SELECT shape.
     const leadPanel = (where: SQL, meta: SQL, order: SQL) =>
@@ -654,7 +680,7 @@ export async function fetchAlertPanel(
         }
         case "transfer_visit_overdue": {
             const rows = await leadPanel(
-                sql`${transferVisitOverdueSql(limits.asm_transfer_first_visit)} ${lf}`,
+                sql`${transferVisitOverdueSql(transferLimit)} ${lf}`,
                 sql`CONCAT('transferred ',
                         TO_CHAR((${sql.raw(TRANSFER_AT_EXPR)}) AT TIME ZONE 'Asia/Kolkata', 'DD Mon'),
                         ' · ', ${TRANSFER_WORKING_DAYS_SQL}, ' working days, no visit')`,
