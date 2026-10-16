@@ -16,7 +16,7 @@ import type { ActiveModal } from "./LeadDetailView";
 import { CallNowButton } from "@/components/leads/call-now-button";
 import { CorrectLeadGstinButton } from "@/components/leads/CorrectLeadGstinButton";
 import { GSTIN_CORRECTION_MANAGER_ROLES } from "@/lib/leads/correctLeadGstinRules";
-import { canTransferAnyLead } from "@/lib/leads/access";
+import { canReassignToIsr, canTransferAnyLead, managerMayTransferStatus } from "@/lib/leads/access";
 
 type Props = {
     bundle: LeadDetailBundle;
@@ -46,11 +46,21 @@ export function LeadActionBar({ bundle, isOwner, viewerRole, onAction, onChanged
     // route accepts (CLAIM_ROLES). A manager reaching this page (Open lead page)
     // saw the button and got "Forbidden" on click; they assign from Leads.
     const canClaim = (CLAIM_ROLES as readonly string[]).includes(viewerRole);
+    // ID 179: Admin / Sales Head / CEO reassign from the lead page too, with the
+    // Leads page's Reassign rules (the same endpoint).
+    const canIsrReassign = canReassignToIsr(viewerRole);
     if (isUnassigned && !canClaim) {
         return (
-            <div className="sticky bottom-0 z-10 bg-white border-t border-gray-200 px-6 py-3 text-xs text-gray-500">
-                <span className="font-medium text-gray-700">Unassigned lead.</span> Assign it to a rep from
-                Leads (select the lead → Reassign).
+            <div className="sticky bottom-0 z-10 bg-white border-t border-gray-200 px-6 py-3 text-xs text-gray-500 flex flex-wrap items-center gap-3">
+                <span>
+                    <span className="font-medium text-gray-700">Unassigned lead.</span>{" "}
+                    {canIsrReassign ? "Give it to an inside sales rep." : "Assign it to a rep from Leads (select the lead → Reassign)."}
+                </span>
+                {canIsrReassign && (
+                    <ActionButton icon={Repeat} onClick={() => onAction("reassign_isr")}>
+                        Reassign to ISR
+                    </ActionButton>
+                )}
             </div>
         );
     }
@@ -79,8 +89,10 @@ export function LeadActionBar({ bundle, isOwner, viewerRole, onAction, onChanged
             : "Read-only — you are not the current owner.";
         // The Sales Head / admin may still correct a Won lead's GSTIN (ID 124).
         const managerCanFixGstin = isWon && (GSTIN_CORRECTION_MANAGER_ROLES as readonly string[]).includes(viewerRole);
-        // Sales Head / Partner / CEO / Admin may hand any open lead to an ASM.
-        const managerCanTransfer = open && canTransferAnyLead(viewerRole);
+        // Sales Head / Partner / CEO / Admin may hand any open lead to an ASM —
+        // ID 179: not a Won lead, nor one already with an ASM (the transfer
+        // route refuses both the same way).
+        const managerCanTransfer = managerMayTransferStatus(status, open) && canTransferAnyLead(viewerRole);
         return (
             <div className="sticky bottom-0 z-10 bg-white border-t border-gray-200 px-6 py-3 text-xs text-gray-500 flex flex-wrap items-center gap-3">
                 <span>
@@ -98,6 +110,11 @@ export function LeadActionBar({ bundle, isOwner, viewerRole, onAction, onChanged
                 {managerCanTransfer && (
                     <ActionButton icon={Send} onClick={() => onAction("transfer_asm")}>
                         Transfer to ASM
+                    </ActionButton>
+                )}
+                {canIsrReassign && (
+                    <ActionButton icon={Repeat} onClick={() => onAction("reassign_isr")}>
+                        Reassign to ISR
                     </ActionButton>
                 )}
                 {managerCanFixGstin && correctGstin}
