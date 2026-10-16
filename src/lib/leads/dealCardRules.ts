@@ -37,6 +37,19 @@ export const ONBOARDING_FEE_ITEM = "onboarding_fee";
 /** Who may change a locked deal card. */
 export const DEAL_CARD_EDIT_ROLES = ["sales_head"] as const;
 
+/**
+ * ID 186 (changed 16 Oct): the card is shown on every quote — new dealer or
+ * already onboarded — and is OPTIONAL for these roles: they may leave it
+ * empty and still save. A card that is started must be complete (all three
+ * answers). Any other role that saves a quote (admin, partner) must fill it.
+ */
+export const DEAL_CARD_OPTIONAL_ROLES = ["inside_sales_rep", "asm", "sales_head"] as const;
+
+/** Must this role fill the deal card on a quote? Pure. */
+export function dealCardRequiredFor(role: string | null | undefined): boolean {
+    return !(DEAL_CARD_OPTIONAL_ROLES as readonly string[]).includes(role ?? "");
+}
+
 export const DealCardSchema = z
     .object({
         onboarding_fee: z.number().min(0).max(10_000_000),
