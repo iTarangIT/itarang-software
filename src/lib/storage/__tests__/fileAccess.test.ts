@@ -13,14 +13,18 @@ import {
     fileLinkSignature,
     fileLinkTooLong,
     fileLinkValid,
+    fileOpenHref,
     filesProxyTarget,
+    isShortLinkFile,
     linkTtl,
+    nbfcUploadsTarget,
     isPrivateDealerDocument,
     publicUploadFolder,
     safeStorageKey,
     safeUploadFileName,
     shareableFileUrl,
     signedFilePath,
+    signedNbfcPath,
 } from "../fileAccess";
 import { isStoredFileUrl, onFreshFileClick } from "../freshFileLink";
 
@@ -301,7 +305,10 @@ describe("fresh 15-minute links (ID 166)", () => {
         expect(isStoredFileUrl(`/api/files/documents/${KYC}`)).toBe(true);
         expect(isStoredFileUrl("https://crm.test/api/files/documents/a.pdf")).toBe(true);
         expect(isStoredFileUrl("/api/files/link?u=x")).toBe(false);
-        expect(isStoredFileUrl("/api/nbfc-uploads/a.pdf")).toBe(false);
+        // 16 Oct: the NBFC store opens through a fresh link too.
+        expect(isStoredFileUrl("/api/nbfc-uploads/fi/1/a.jpg")).toBe(true);
+        expect(isStoredFileUrl("/nbfc-uploads/vkyc/2/liveness-1.webm")).toBe(true);
+        expect(isStoredFileUrl("/api/files/open?u=x")).toBe(false);
         expect(isStoredFileUrl(null)).toBe(false);
 
         const ev = (over: Record<string, unknown> = {}) => {
@@ -332,5 +339,48 @@ describe("fresh 15-minute links (ID 166)", () => {
         await new Promise((r) => setTimeout(r, 0));
         expect(openSpy).toHaveBeenLastCalledWith("/signed", "_blank", "noopener,noreferrer");
         vi.unstubAllGlobals();
+    });
+});
+
+describe("the NBFC store and spreadsheet links (ID 166, 16 Oct)", () => {
+    it("reads /nbfc-uploads and /api/nbfc-uploads paths, relative or absolute", () => {
+        expect(nbfcUploadsTarget("/nbfc-uploads/fi/F-1/a.jpg")).toEqual({
+            path: "/api/nbfc-uploads/fi/F-1/a.jpg",
+            bucket: "nbfc-documents",
+            key: "fi/F-1/a.jpg",
+        });
+        expect(nbfcUploadsTarget("https://crm.test/api/nbfc-uploads/vkyc/V-1/l.webm?x=1")?.key).toBe("vkyc/V-1/l.webm");
+        expect(nbfcUploadsTarget("/nbfc-uploads/%2e%2e/secret")).toBeNull();
+        expect(nbfcUploadsTarget("/api/files/documents/kyc/L/a.jpg")).toBeNull();
+        expect(nbfcUploadsTarget(null)).toBeNull();
+    });
+
+    it("signs an NBFC path for the person, never longer than 15 minutes for an identity file", () => {
+        vi.stubEnv("FILE_LINK_SECRET", "test-secret-0123456789");
+        const url = new URL(signedNbfcPath("/nbfc-uploads/fi/F-1/a.jpg", 7 * 24 * 3600, { by: "u-1" })!, "https://crm.test");
+        expect(url.pathname).toBe("/api/nbfc-uploads/fi/F-1/a.jpg");
+        const exp = Number(url.searchParams.get("exp"));
+        expect(exp * 1000 - Date.now()).toBeLessThanOrEqual(FRESH_LINK_TTL_SECONDS * 1000 + 1000);
+        expect(fileLinkValid("nbfc-documents", "fi/F-1/a.jpg", url.searchParams.get("exp"), url.searchParams.get("sig"), Date.now(), "u-1")).toBe(true);
+        expect(isShortLinkFile("nbfc-documents", "12/signer-identity/a.jpg")).toBe(true);
+        expect(isShortLinkFile("nbfc-documents", "12/lsp-agreement/a.pdf")).toBe(false);
+        // onboarding papers are logged but keep their 7-day form link (ID 119)
+        expect(isShortLinkFile("dealer-documents", "gst-certificate/a.pdf")).toBe(false);
+    });
+
+    it("gives a spreadsheet a checked link, never the file itself", () => {
+        expect(fileOpenHref("/api/files/documents/expenses/u-1/b.jpg", "https://crm.test/")).toBe(
+            "https://crm.test/api/files/open?u=%2Fapi%2Ffiles%2Fdocuments%2Fexpenses%2Fu-1%2Fb.jpg",
+        );
+        expect(fileOpenHref("/nbfc-uploads/fi/F-1/a.jpg", "https://crm.test")).toContain("/api/files/open?u=");
+        expect(fileOpenHref("https://provider.test/rec.mp3", "https://crm.test")).toBeNull();
+        expect(fileOpenHref(null, "https://crm.test")).toBeNull();
+    });
+
+    it("WhatsApp links are made at send time and live 15 minutes", () => {
+        vi.stubEnv("FILE_LINK_SECRET", "test-secret-0123456789");
+        const url = new URL(shareableFileUrl("/api/files/dealer-documents/agreements/x/signed-agreement.pdf", { origin: "https://crm.test" })!);
+        const exp = Number(url.searchParams.get("exp"));
+        expect(exp * 1000 - Date.now()).toBeLessThanOrEqual(FRESH_LINK_TTL_SECONDS * 1000 + 1000);
     });
 });

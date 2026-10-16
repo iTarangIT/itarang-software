@@ -10,22 +10,25 @@
  * URLs, and this route maps `<key>` to the bucket object — so existing rows
  * and display components need no change.
  *
- * AUTH: these files include KYC PII, so the route now requires an authenticated
- * Supabase session. (Previously they were world-readable from public/ via a
- * static path — that's the hole this migration closes.)
+ * AUTH (tracker ID 166, 16 Oct): a session alone is no longer enough — the
+ * same file rule as /api/files (src/lib/storage/fileRules.ts): Admin, Sales
+ * Head, CEO and the owner of the lead's dealer account; an NBFC login only for
+ * its own cases (field visits, video KYC, its own onboarding papers and agent
+ * photos) and for applications shared with it; the lead's dealer for its own
+ * customer's loan agreement. Or a signed link minted for exactly this file
+ * (GET /api/files/link, 15 minutes). Every open of an identity file (field
+ * visit photos, video KYC, signer ID, per-lead files) is logged.
  *
- * MIGRATION FALLBACK: if the object isn't in the bucket yet (not backfilled),
- * we fall back to reading the legacy file from `process.cwd()/public/
- * nbfc-uploads/` so nothing breaks during rollout. Run the backfill script
- * (scripts/backfill-nbfc-uploads-to-supabase.mjs) on the host, then the local
- * files can be removed.
+ * The local public-folder fallback is gone (ID 166 report row): a file that is
+ * not in the store is "not found", like /api/files.
  */
-import path from "node:path";
-import fs from "node:fs/promises";
 import { NextRequest, NextResponse } from "next/server";
 
-import { createClient } from "@/lib/supabase/server";
+import { getAuthenticatedAppUser } from "@/lib/kyc/admin-workflow";
 import { getNbfcObject } from "@/lib/nbfc/nbfc-storage";
+import { fileLinkTooLong, fileLinkValid, safeStorageKey } from "@/lib/storage/fileAccess";
+import { canOpenStoredFile, logFileOpen } from "@/lib/storage/fileAuthz";
+import { classifyFile, isLoggedFile, NBFC_FILE_BUCKET } from "@/lib/storage/fileRules";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -42,6 +45,12 @@ const CONTENT_TYPES: Record<string, string> = {
   ".webm": "video/webm",
   ".mp4": "video/mp4",
 };
+
+function extOf(key: string): string {
+  const name = key.split("/").pop() ?? "";
+  const dot = name.lastIndexOf(".");
+  return dot === -1 ? "" : name.slice(dot).toLowerCase();
+}
 
 function fileResponse(buf: Buffer, ext: string): NextResponse {
   const contentType = CONTENT_TYPES[ext] ?? "application/octet-stream";
@@ -66,44 +75,56 @@ export async function GET(
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  // Require an authenticated session — these are PII KYC documents.
-  try {
-    const supabase = await createClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  // The same path check as /api/files: no `..` in any encoding, no slash or
+  // control character inside a segment (the old check refused a plain ".."
+  // only).
+  const key = safeStorageKey(segments);
+  if (!key) {
+    return NextResponse.json({ error: "Invalid path" }, { status: 400 });
+  }
+
+  const bucket = NBFC_FILE_BUCKET;
+  const file = classifyFile(bucket, key);
+  const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || null;
+  const exp = req.nextUrl.searchParams.get("exp");
+  const by = req.nextUrl.searchParams.get("by") || null;
+  // A signed link for exactly this file, never honoured for more than 15
+  // minutes on an identity file whatever minted it.
+  const signedLink =
+    fileLinkValid(bucket, key, exp, req.nextUrl.searchParams.get("sig"), Date.now(), by) &&
+    !(isLoggedFile(file) && fileLinkTooLong(exp));
+
+  if (signedLink) {
+    await logFileOpen({ file, bucket, key, userId: by, role: null, via: "signed_link", allowed: true, ip });
+  } else {
+    let user: Awaited<ReturnType<typeof getAuthenticatedAppUser>> = null;
+    try {
+      user = await getAuthenticatedAppUser();
+    } catch {
+      user = null;
     }
-  } catch {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+    const { allowed } = await canOpenStoredFile(user, bucket, key);
+    await logFileOpen({ file, bucket, key, userId: user.id, role: user.role, via: "session", allowed, ip });
+    if (!allowed) return forbidden(req);
   }
 
-  // Reject path-traversal / absolute segments before forming the key.
-  if (segments.some((s) => s === ".." || s.includes("\0") || path.isAbsolute(s))) {
-    return NextResponse.json({ error: "Invalid path" }, { status: 400 });
-  }
-  const key = segments.join("/");
-  const ext = path.extname(key).toLowerCase();
+  const buf = await getNbfcObject(key);
+  if (!buf) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  return fileResponse(buf, extOf(key));
+}
 
-  // 1) Supabase (the new home).
-  const fromBucket = await getNbfcObject(key);
-  if (fromBucket) return fileResponse(fromBucket, ext);
-
-  // 2) Legacy local disk fallback (pre-backfill). Same path-traversal guard as
-  //    before: the resolved path must stay inside public/nbfc-uploads/.
-  const root = path.join(process.cwd(), "public", "nbfc-uploads");
-  const absPath = path.normalize(path.join(root, ...segments));
-  const rootWithSep = root.endsWith(path.sep) ? root : root + path.sep;
-  if (absPath !== root && !absPath.startsWith(rootWithSep)) {
-    return NextResponse.json({ error: "Invalid path" }, { status: 400 });
+/** 403 for a signed-in user this file is not for (ID 166). */
+function forbidden(req: NextRequest) {
+  if (!(req.headers.get("accept") || "").includes("text/html")) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
-  try {
-    const stat = await fs.stat(absPath);
-    if (!stat.isFile()) return NextResponse.json({ error: "Not found" }, { status: 404 });
-    const buf = await fs.readFile(absPath);
-    return fileResponse(buf, ext);
-  } catch {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
-  }
+  return new NextResponse(
+    `<!doctype html><meta charset="utf-8"><title>Not available</title>` +
+      `<div style="font:15px/1.6 system-ui,sans-serif;max-width:34rem;margin:15vh auto;padding:0 1.5rem;color:#0f172a">` +
+      `<h1 style="font-size:1.25rem;margin:0 0 .75rem">You can't open this file</h1>` +
+      `<p style="margin:0;color:#475569">NBFC files open only for Admin, the Sales Head, the CEO, the NBFC handling the application and the owner of the account.</p></div>`,
+    { status: 403, headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } },
+  );
 }

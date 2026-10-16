@@ -27,6 +27,7 @@ import {
 } from "@/lib/expenses";
 import { CELL, HEAD_CELL, type LedgerRow } from "./types";
 
+import { onFreshFileClick } from "@/lib/storage/freshFileLink";
 /**
  * E-224 — what each column sorts by.
  *
@@ -170,6 +171,7 @@ export function LedgerDetailTable({
                   {r.bill_url ? (
                     <a
                       href={r.bill_url}
+                      onClick={(e) => onFreshFileClick(e, r.bill_url)}
                       target="_blank"
                       rel="noreferrer"
                       className="inline-flex items-center gap-1 text-brand-600 hover:underline font-semibold"

@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
 
-import { classifyFile, mayOpenFile, type FileViewer } from "../fileRules";
+import { BUYBACK_ADMIN_ROLES } from "@/lib/buyback/roles";
+
+import {
+    BUYBACK_FILE_ROLES,
+    NBFC_FILE_BUCKET,
+    classifyFile,
+    isLoggedFile,
+    loggedLeadId,
+    mayOpenFile,
+    type FileViewer,
+} from "../fileRules";
 
 const APP = "3f1c2a7e-1b2c-4d5e-8f90-123456789abc";
 
@@ -43,11 +53,20 @@ describe("classifyFile (ID 166)", () => {
         expect(classifyFile("dealer-documents", `${APP}/audit-trail.pdf`)).toEqual({ kind: "dealer_agreement", applicationId: APP });
         expect(classifyFile("dealer-documents", "gst-certificate/1-x-gst.pdf").kind).toBe("dealer_onboarding");
         expect(classifyFile("dealer-documents", "agreement-template-file/t.docx").kind).toBe("agreement_template");
-        expect(classifyFile("dealer-documents", "buyback/1/a.jpg").kind).toBe("operational");
+        expect(classifyFile("dealer-documents", "buyback/1/a.jpg")).toEqual({ kind: "buyback", requestId: null });
     });
 
-    it("keeps operational photos open and unknown folders closed", () => {
-        expect(classifyFile("documents", "auction/batteries/1/a.jpg").kind).toBe("operational");
+    it("gives the formerly open folders an owner (16 Oct) and keeps unknown folders closed", () => {
+        expect(classifyFile("documents", "auction/batteries/B-1/a.jpg")).toEqual({ kind: "auction_battery", batteryId: "B-1" });
+        expect(classifyFile("documents", "refurb/lots/L-1/a.jpg")).toEqual({ kind: "refurb_lot", lotId: "L-1" });
+        expect(classifyFile("documents", "recovery/A-1/visit-1-0.jpg")).toEqual({ kind: "recovery_visit", assignmentId: "A-1" });
+        expect(classifyFile("documents", "quotations/Q-1.pdf")).toEqual({ kind: "dealer_lead_attachment", source: "quotation" });
+        expect(classifyFile("documents", "feature-requests/2026/10/x.png").kind).toBe("feature_request");
+        expect(classifyFile("dealer-documents", "commercials/1-x.pdf")).toEqual({ kind: "dealer_lead_attachment", source: "commercials" });
+        expect(classifyFile("dealer-documents", "visit-photos/1-x.jpg")).toEqual({ kind: "dealer_lead_attachment", source: "visit" });
+        expect(classifyFile("dealer-documents", `buyback/${APP}/evidence/a.pdf`)).toEqual({ kind: "buyback", requestId: APP });
+        // a folder shape the uploaders do not write: top roles only
+        expect(classifyFile("documents", "auction/settlements/1.pdf").kind).toBe("unknown");
         expect(classifyFile("documents", "something-new/a.pdf").kind).toBe("unknown");
     });
 });
@@ -106,5 +125,148 @@ describe("mayOpenFile (ID 166)", () => {
         const unknown = classifyFile("documents", "new-folder/a.pdf");
         expect(mayOpenFile(viewer("admin"), unknown)).toBe(true);
         expect(mayOpenFile(viewer("business_head"), unknown)).toBe(false);
+    });
+});
+
+
+const TENANT = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
+
+describe("classifyFile — the NBFC store (16 Oct)", () => {
+    const nbfc = (key: string) => classifyFile(NBFC_FILE_BUCKET, key);
+
+    it("reads lead, case, tenant and partner keys", () => {
+        expect(nbfc("agreements/LEAD-1/signed.pdf")).toEqual({ kind: "nbfc_lead", leadId: "LEAD-1", dealerMay: true });
+        expect(nbfc("admin-attachments/LEAD-1/1-a.pdf")).toEqual({ kind: "nbfc_lead", leadId: "LEAD-1", dealerMay: false });
+        expect(nbfc("verdict-attachments/LEAD-1/1-a.pdf")).toEqual({ kind: "nbfc_lead", leadId: "LEAD-1", dealerMay: false });
+        expect(nbfc("fi/F-1/exterior-1-0.jpg")).toEqual({ kind: "nbfc_case", table: "fi", id: "F-1" });
+        expect(nbfc("vkyc/V-1/liveness-1.webm")).toEqual({ kind: "nbfc_case", table: "vkyc", id: "V-1" });
+        expect(nbfc("emi-receipts/S-1/E-1/1.jpg")).toEqual({ kind: "nbfc_case", table: "emi", id: "S-1" });
+        expect(nbfc("fi-agents/0a1b2c3d4e5f4a6b8c7d9e0f1a2b3c4d/1.jpg")).toEqual({
+            kind: "nbfc_tenant",
+            tenantRef: "0a1b2c3d4e5f4a6b8c7d9e0f1a2b3c4d",
+        });
+        expect(nbfc(`${TENANT}/consent-template/1.pdf`)).toEqual({ kind: "nbfc_tenant", tenantRef: TENANT });
+        expect(nbfc("12/signer-identity/1-a.jpg")).toEqual({ kind: "nbfc_partner_doc", nbfcId: 12, personal: true });
+        expect(nbfc("12/lsp-agreement/signed.pdf")).toEqual({ kind: "nbfc_partner_doc", nbfcId: 12, personal: false });
+        expect(nbfc("12/1700000000-rbi-licence.pdf")).toEqual({ kind: "nbfc_partner_doc", nbfcId: 12, personal: false });
+        expect(nbfc("loose.pdf").kind).toBe("unknown");
+        expect(nbfc("whatever/x/y.pdf").kind).toBe("unknown");
+    });
+
+    it("logs the identity files only", () => {
+        expect(isLoggedFile(nbfc("fi/F-1/a.jpg"))).toBe(true);
+        expect(isLoggedFile(nbfc("vkyc/V-1/a.webm"))).toBe(true);
+        expect(isLoggedFile(nbfc("12/signer-identity/a.jpg"))).toBe(true);
+        expect(isLoggedFile(nbfc("agreements/LEAD-1/signed.pdf"))).toBe(true);
+        expect(isLoggedFile(nbfc("emi-receipts/S-1/E-1/1.jpg"))).toBe(false);
+        expect(isLoggedFile(nbfc("12/lsp-agreement/signed.pdf"))).toBe(false);
+        expect(isLoggedFile(classifyFile("dealer-documents", "gst-certificate/1.pdf"))).toBe(true);
+        expect(isLoggedFile(classifyFile("documents", "expenses/u/1.jpg"))).toBe(false);
+        expect(loggedLeadId(nbfc("agreements/LEAD-9/signed.pdf"))).toBe("LEAD-9");
+        expect(loggedLeadId(nbfc("fi/F-1/a.jpg"))).toBeNull();
+    });
+});
+
+describe("mayOpenFile — the NBFC store (16 Oct)", () => {
+    const nbfc = (key: string) => classifyFile(NBFC_FILE_BUCKET, key);
+    const partner = (tenants: string[], extra: Partial<FileViewer> = {}) =>
+        viewer("nbfc_partner", { nbfcTenantIds: tenants, ...extra });
+
+    it("opens a field visit / video KYC only for the NBFC that owns the case, the top roles and the account owner", () => {
+        const fi = nbfc("fi/F-1/a.jpg");
+        expect(mayOpenFile(partner(["T1"]), fi, { ownerTenantIds: ["T1"] })).toBe(true);
+        expect(mayOpenFile(partner(["T2"]), fi, { ownerTenantIds: ["T1"] })).toBe(false);
+        expect(mayOpenFile(viewer("dealer", { dealerCode: "D1" }), fi, { ownerTenantIds: ["T1"] })).toBe(false);
+        expect(mayOpenFile(viewer("sales_manager"), fi, { ownerTenantIds: ["T1"] })).toBe(false);
+        expect(mayOpenFile(viewer("asm"), fi, { ownerTenantIds: ["T1"], accountOwnerId: "u-1" })).toBe(true);
+        for (const role of ["admin", "ceo", "sales_head"]) expect(mayOpenFile(viewer(role), fi)).toBe(true);
+        // a missing fact is a refusal
+        expect(mayOpenFile(partner(["T1"]), fi)).toBe(false);
+    });
+
+    it("opens per-lead files for the NBFCs the application is shared with; the agreement also for the dealer of the lead", () => {
+        const agreement = nbfc("agreements/LEAD-1/signed.pdf");
+        const attachment = nbfc("admin-attachments/LEAD-1/a.pdf");
+        expect(mayOpenFile(partner(["T1"]), attachment, { sharedTenantIds: ["T1"] })).toBe(true);
+        expect(mayOpenFile(partner(["T3"]), attachment, { sharedTenantIds: ["T1"] })).toBe(false);
+        const dealer = viewer("dealer", { dealerCode: "D1" });
+        expect(mayOpenFile(dealer, agreement, { leadDealerId: "D1" })).toBe(true);
+        expect(mayOpenFile(dealer, agreement, { leadDealerId: "D2" })).toBe(false);
+        expect(mayOpenFile(dealer, attachment, { leadDealerId: "D1" })).toBe(false);
+    });
+
+    it("matches tenant-wide files by the tenant id, dashes or not", () => {
+        const agentPhoto = nbfc("fi-agents/0a1b2c3d4e5f4a6b8c7d9e0f1a2b3c4d/1.jpg");
+        expect(mayOpenFile(partner([TENANT]), agentPhoto)).toBe(true);
+        expect(mayOpenFile(partner(["11111111-2222-4333-8444-555555555555"]), agentPhoto)).toBe(false);
+        expect(mayOpenFile(partner([TENANT]), nbfc(`${TENANT}/consent-template/1.pdf`))).toBe(true);
+        expect(mayOpenFile(viewer("business_head"), agentPhoto)).toBe(false);
+    });
+
+    it("opens the onboarding papers of an NBFC for that NBFC and the top roles only", () => {
+        const signer = nbfc("12/signer-identity/a.jpg");
+        expect(mayOpenFile(partner(["T1"]), signer, { ownerTenantIds: ["T1"] })).toBe(true);
+        expect(mayOpenFile(partner(["T2"]), signer, { ownerTenantIds: ["T1"] })).toBe(false);
+        expect(mayOpenFile(viewer("business_head"), signer, { ownerTenantIds: ["T1"] })).toBe(false);
+        expect(mayOpenFile(viewer("admin"), signer)).toBe(true);
+    });
+});
+
+describe("mayOpenFile — folders that were open to any login (16 Oct)", () => {
+    it("quotations, commercials and visit photos: the owner / ASM of the dealer lead and the top roles", () => {
+        for (const key of ["commercials/1-q.pdf", "visit-photos/1-a.jpg"]) {
+            const f = classifyFile("dealer-documents", key);
+            expect(mayOpenFile(viewer("asm"), f, { dealerLeadOwnerIds: ["u-1"] })).toBe(true);
+            expect(mayOpenFile(viewer("asm"), f, { dealerLeadOwnerIds: ["u-2", null] })).toBe(false);
+            expect(mayOpenFile(viewer("dealer", { dealerCode: "D1" }), f)).toBe(false);
+            expect(mayOpenFile(viewer("sales_head"), f)).toBe(true);
+        }
+        const quote = classifyFile("documents", "quotations/Q-1.pdf");
+        expect(mayOpenFile(viewer("inside_sales_rep"), quote, { dealerLeadOwnerIds: ["u-1"] })).toBe(true);
+        expect(mayOpenFile(viewer("inside_sales_rep"), quote)).toBe(false);
+    });
+
+    it("buyback: buyback staff and the dealer that raised the request", () => {
+        const f = classifyFile("dealer-documents", `buyback/${APP}/evidence/a.pdf`);
+        for (const role of BUYBACK_FILE_ROLES) expect(mayOpenFile(viewer(role), f)).toBe(true);
+        expect(mayOpenFile(viewer("dealer", { dealerCode: "ACC-1" }), f, { buybackDealerId: "ACC-1" })).toBe(true);
+        expect(mayOpenFile(viewer("dealer", { dealerCode: "ACC-2" }), f, { buybackDealerId: "ACC-1" })).toBe(false);
+        expect(mayOpenFile(viewer("inside_sales_rep"), f, { buybackDealerId: "ACC-1" })).toBe(false);
+        // statements / vendor staging carry no request: buyback staff only
+        const statement = classifyFile("dealer-documents", "buyback/statements/1.xlsx");
+        expect(mayOpenFile(viewer("dealer", { dealerCode: "ACC-1" }), statement)).toBe(false);
+    });
+
+    it("the buyback staff list matches the one in the buyback module", () => {
+        expect([...BUYBACK_FILE_ROLES]).toEqual([...BUYBACK_ADMIN_ROLES]);
+    });
+
+    it("feature requests: seat holders", () => {
+        const f = classifyFile("documents", "feature-requests/2026/10/a.png");
+        expect(mayOpenFile(viewer("inside_sales_rep"), f, { hasFeatureSeat: true })).toBe(true);
+        expect(mayOpenFile(viewer("inside_sales_rep"), f, { hasFeatureSeat: false })).toBe(false);
+    });
+
+    it("auction battery photos: the owning NBFC, and a dealer in the audience of a lot", () => {
+        const f = classifyFile("documents", "auction/batteries/B-1/front.jpg");
+        expect(mayOpenFile(viewer("nbfc_partner", { nbfcTenantIds: ["T1"] }), f, { ownerTenantIds: ["T1"] })).toBe(true);
+        expect(mayOpenFile(viewer("nbfc_partner", { nbfcTenantIds: ["T2"] }), f, { ownerTenantIds: ["T1"] })).toBe(false);
+        expect(mayOpenFile(viewer("dealer", { dealerCode: "D1" }), f, { audienceDealerIds: ["D1"] })).toBe(true);
+        expect(mayOpenFile(viewer("dealer", { dealerCode: "D1" }), f, { audienceDealerIds: [] })).toBe(false);
+    });
+
+    it("refurbishment lots: the owning NBFC and the refurbisher on the lot", () => {
+        const f = classifyFile("documents", "refurb/lots/L-1/a.jpg");
+        expect(mayOpenFile(viewer("refurbisher", { refurbisherId: "R1" }), f, { refurbisherId: "R1" })).toBe(true);
+        expect(mayOpenFile(viewer("refurbisher", { refurbisherId: "R2" }), f, { refurbisherId: "R1" })).toBe(false);
+        expect(mayOpenFile(viewer("refurbisher"), f, { refurbisherId: null })).toBe(false);
+        expect(mayOpenFile(viewer("nbfc_partner", { nbfcTenantIds: ["T1"] }), f, { ownerTenantIds: ["T1"] })).toBe(true);
+    });
+
+    it("recovery visit photos: the owning NBFC and the top roles", () => {
+        const f = classifyFile("documents", "recovery/A-1/visit-1-0.jpg");
+        expect(mayOpenFile(viewer("nbfc_partner", { nbfcTenantIds: ["T1"] }), f, { ownerTenantIds: ["T1"] })).toBe(true);
+        expect(mayOpenFile(viewer("dealer", { dealerCode: "D1" }), f, { ownerTenantIds: ["T1"] })).toBe(false);
+        expect(mayOpenFile(viewer("ceo"), f)).toBe(true);
     });
 });

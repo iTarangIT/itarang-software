@@ -31,6 +31,8 @@ import {
     isDispositionBucket,
 } from "@/lib/leads/dispositions";
 
+import { onFreshFileClick } from "@/lib/storage/freshFileLink";
+import FreshAudio from "@/components/shared/FreshAudio";
 export type LeadTouchpoint = {
     touchpoint_id: string;
     touchpoint_type: TouchpointType;
@@ -281,14 +283,15 @@ export function TouchpointTimeline({
                                             and for downloading the file. */}
                                         {t.recording_url && (
                                             <div className="mt-2 space-y-1">
-                                                <audio
-                                                    controls
+                                                {/* ID 166: a fresh 15-minute link on Play. */}
+                                                <FreshAudio
                                                     preload="none"
                                                     src={t.recording_url}
                                                     className="w-full h-8"
                                                 />
                                                 <a
                                                     href={t.recording_url}
+                                                    onClick={(e) => onFreshFileClick(e, t.recording_url)}
                                                     target="_blank"
                                                     rel="noreferrer noopener"
                                                     className="inline-flex items-center gap-1 text-[11px] text-sky-700 underline"

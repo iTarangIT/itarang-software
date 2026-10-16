@@ -23,6 +23,7 @@ import {
   Upload,
 } from "lucide-react";
 
+import FreshAudio from "@/components/shared/FreshAudio";
 export interface AttachedRecording {
   id: string;
   callId: string | null;
@@ -311,8 +312,8 @@ export function AttachedRecordings({
                 )}
               </div>
 
-              <audio
-                controls
+              {/* ID 166: a fresh 15-minute link on Play. */}
+              <FreshAudio
                 preload="none"
                 src={r.url}
                 className="mt-2 w-full h-8"

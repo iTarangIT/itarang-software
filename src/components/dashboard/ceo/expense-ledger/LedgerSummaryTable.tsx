@@ -29,6 +29,7 @@ import {
   type LedgerRow,
 } from "./types";
 
+import { onFreshFileClick } from "@/lib/storage/freshFileLink";
 /**
  * How many invoices a department shows before deferring to "View all".
  *
@@ -245,6 +246,7 @@ export function LedgerSummaryTable({
                                   {r.bill_url ? (
                                     <a
                                       href={r.bill_url}
+                                      onClick={(e) => onFreshFileClick(e, r.bill_url)}
                                       target="_blank"
                                       rel="noreferrer"
                                       className="inline-flex items-center gap-1 text-brand-600 hover:underline font-semibold"
