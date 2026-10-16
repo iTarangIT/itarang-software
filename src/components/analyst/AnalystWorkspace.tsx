@@ -12,6 +12,7 @@
 //  - Every flex/grid ancestor of the result table carries `min-w-0`, or a wide result stretches
 //    the page instead of scrolling inside its own box.
 
+import { CRM_SOURCE_NAME } from "@/lib/analyst/sources-routes";
 import { BarChart3, ChevronDown, Database, FileSpreadsheet, MessageSquarePlus, Plus, Settings2, Sparkles } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -80,9 +81,12 @@ export function AnalystWorkspace({
   const [connections, setConnections] = useState(initialConnections);
   const [panel, setPanel] = useState<PanelView | null>(null);
   // A continued thread keeps asking the source it was asking, if that still exists.
+  // A35: otherwise the iTarang CRM database is selected by default.
   const [connectionId, setConnectionId] = useState(() => {
     const last = history[history.length - 1]?.connection_id;
-    return connections.some((c) => c.id === last) ? last : (connections[0]?.id ?? "");
+    if (connections.some((c) => c.id === last)) return last;
+    const crm = connections.find((c) => c.name === CRM_SOURCE_NAME);
+    return crm?.id ?? connections[0]?.id ?? "";
   });
 
   const busy = isRunning(state.phase);
