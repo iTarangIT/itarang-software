@@ -1,7 +1,8 @@
 /**
  * Tracker ID 173 — server guard for every stock upload (rule:
  * stockUploadRules.ts). Used by /api/inventory/bulk-upload,
- * /api/admin/inventory/bulk-upload and /api/admin/inventory/add-item.
+ * /api/admin/inventory/bulk-upload and /api/admin/inventory/add-item, and —
+ * through requireStockTransferer — /api/admin/inventory/transfer (POST).
  *
  * A dedicated guard on purpose: requireInventoryAdmin() also gates VIEWING
  * Admin › Inventory (all items, ageing, transfer, upload reports), and the
@@ -12,7 +13,7 @@ import { db } from "@/lib/db";
 import { accounts, users } from "@/lib/db/schema";
 import { requireAuth } from "@/lib/auth-utils";
 import { resolveDealerCode } from "@/lib/auth/requireLeadAccess";
-import { decideStockUpload } from "@/lib/inventory/stockUploadRules";
+import { decideStockTransfer, decideStockUpload } from "@/lib/inventory/stockUploadRules";
 
 /** Thrown refusal; withErrorHandler answers with `.status`. */
 export class StockUploadRefused extends Error {
@@ -77,4 +78,29 @@ export async function requireStockDealerAccount(dealerId: string): Promise<{ id:
         );
     }
     return { id: dealer.id, name: dealer.name };
+}
+
+/**
+ * Who is moving stock and between which dealers (ID 173 rule applied to
+ * transfers — decideStockTransfer). Throws 403 / 400. For a dealer login the
+ * source returned is always its own account.
+ */
+export async function requireStockTransferer(
+    sourceDealerId: string | null | undefined,
+    targetDealerId: string | null | undefined,
+): Promise<{ user: StockUploader; sourceDealerId: string; targetDealerId: string; scope: "any" | "own" }> {
+    const user = await requireAuth();
+    const decision = decideStockTransfer({
+        role: user.role,
+        sourceDealerId,
+        targetDealerId,
+        ownDealerCode: await ownDealerCodeOf(user),
+    });
+    if (!decision.ok) throw new StockUploadRefused(decision.message, decision.status);
+    return {
+        user,
+        sourceDealerId: decision.sourceDealerId,
+        targetDealerId: decision.targetDealerId,
+        scope: decision.scope,
+    };
 }
