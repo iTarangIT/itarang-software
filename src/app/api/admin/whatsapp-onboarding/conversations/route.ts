@@ -43,6 +43,7 @@ import {
   type WaStage,
 } from "@/lib/whatsapp/stage";
 import type { Ctx } from "@/lib/whatsapp/session-store";
+import { whatsappOnboardingSummary } from "@/lib/whatsapp/onboardingSummary";
 
 const READ_ROLES = ["admin", "sales_head", "ceo", "partner"];
 
@@ -373,51 +374,14 @@ export const GET = withErrorHandler(async (req: Request) => {
   });
 
   // Unfiltered stage tally for the tab badge, so it doesn't move as the admin
-  // types in the search box.
-  const summaryRows = await db
-    .select({
-      onboardingStatus: dealerOnboardingApplications.onboarding_status,
-      companyType: dealerOnboardingApplications.company_type,
-      currentState: dealerSession.current_state,
-      operatorState: operatorSession.current_state,
-      flow: sql<string | null>`dealer_session.context->>'flow'`,
-    })
-    .from(dealerOnboardingApplications)
-    .leftJoin(
-      dealerSession,
-      eq(dealerSession.id, dealerOnboardingApplications.wa_session_id),
-    )
-    .leftJoin(
-      operatorSession,
-      eq(operatorSession.id, dealerOnboardingApplications.wa_operator_session_id),
-    )
-    .where(eq(dealerOnboardingApplications.source, "whatsapp"));
-
-  const byStage = {} as Record<WaStage, number>;
-  const byType = {} as Record<string, number>;
-  let inProgress = 0;
-  for (const r of summaryRows) {
-    const state = r.currentState ?? r.operatorState ?? null;
-    const s = stageOf({
-      currentState: state,
-      onboardingStatus: r.onboardingStatus,
-    });
-    byStage[s] = (byStage[s] ?? 0) + 1;
-    const t = contactTypeOf({
-      currentState: state,
-      flow: r.flow,
-      companyType: r.companyType,
-      onboardingStatus: r.onboardingStatus,
-    });
-    byType[t] = (byType[t] ?? 0) + 1;
-    if (s !== "approved" && s !== "rejected" && s !== "submitted") inProgress++;
-  }
+  // types in the search box. Shared with the menu count (ID 90).
+  const summary = await whatsappOnboardingSummary();
 
   return successResponse({
     conversations,
     total: totals?.count ?? 0,
     page,
     limit,
-    summary: { total: summaryRows.length, inProgress, byStage, byType },
+    summary,
   });
 });
