@@ -336,8 +336,8 @@ export default function CEODashboard() {
       ),
     staleTime: 5 * 60 * 1000,
   });
-  // Company targets = the sum of everyone's monthly targets (the register on
-  // /admin/targets). A past month counts in full; the current month counts to
+  // Company targets = the sum of everyone's posted monthly targets (the register
+  // on /admin/targets). A past month counts in full; the current month counts to
   // date (pro-rata over working days). A custom range that does not cover whole
   // months has no target.
   const targetMonths = React.useMemo(() => {
@@ -541,8 +541,10 @@ export default function CEODashboard() {
   const ordering = bucketCount("active") + bucketCount("cooling");
 
   // "89% of target" pill + "Target to date ₹3.05 Cr" line for a tile.
-  // ID 157 (10 Oct): the target keeps counting every status; under it,
-  // "Accepted ₹A · Not yet accepted ₹B" (Draft + Pending approval + Pushed).
+  // ID 157 (10 Oct): under it, "Accepted ₹A · Not yet accepted ₹B" (Posted +
+  // Pushed). ID 189 (16 Oct): only the version in force counts — the CEO's own
+  // never-posted drafts (in his /api/admin/targets answer) are left out by
+  // summariseCompanyTargets.
   const includesToday = win.to >= todayStr;
   const vsTarget = (
     actual: number | null,

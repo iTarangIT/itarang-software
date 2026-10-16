@@ -9,6 +9,8 @@
 //   add-only stretch        no row has a negative stretch
 //   drafts stay the CEO's   a manager's listTargets() has no 'draft' row
 //   readers see in force    a member's listTargets() carries no revision
+//   member sees pushed only a member's listTargets() has no posted-not-pushed row
+//   soft removal            no list shows a removed row; each has its history row
 //   48-hour clock           every sent row has first_pushed_at <= pushed_at
 //   the E-342 leftovers     rows whose Sales Head number was BELOW the CEO's
 //                           (their final goes back up to the CEO target)
@@ -63,9 +65,36 @@ async function main() {
     if (member) {
         const mine = await listTargets({ month, userId: member.user_id, viewer: "member" });
         check("a member's rows carry no pending revision", mine.every((r) => r.next_ceo_target == null && r.next_stretch == null && r.draft_ceo_target == null));
+        check(
+            "a member sees only what was pushed to them (16 Oct)",
+            mine.every((r) => r.status === "pushed" || r.status === "accepted" || r.status === "rejected"),
+            mine.filter((r) => !["pushed", "accepted", "rejected"].includes(r.status)).map((r) => r.status),
+        );
     } else {
         console.log("SKIP  no sent target this month to check the member view");
     }
+    const posted = ceo.find((r) => r.status === "pending_approval");
+    if (posted) {
+        const mine = await listTargets({ month, userId: posted.user_id, viewer: "member" });
+        check("a posted-but-not-pushed target is not in the member's list", !mine.some((r) => r.id === posted.id));
+    }
+
+    // 16 Oct: removal is soft — the row and its history stay, no list shows it.
+    const removed = (await db.execute(sql`
+        SELECT t.id::text AS id,
+               (SELECT COUNT(*) FROM sales_target_versions v WHERE v.target_id = t.id AND v.event = 'removed')::int AS logged
+          FROM sales_targets t WHERE t.month = ${monthFirst}::date AND t.status = 'removed'
+    `)) as unknown as Array<{ id: string; logged: number }>;
+    const removedIds = new Set(removed.map((r) => r.id));
+    check("no list shows a removed target", ![...ceo, ...manager].some((r) => removedIds.has(r.id)), removed.length);
+    check("every removed target has its 'removed' history row", removed.every((r) => Number(r.logged) > 0));
+    const shAdded = (await db.execute(sql`
+        SELECT COUNT(*)::int AS n FROM sales_targets t
+          LEFT JOIN users cb ON cb.id::text = t.created_by
+         WHERE t.month = ${monthFirst}::date AND t.status <> 'removed'
+           AND COALESCE(LOWER(cb.role), '') <> 'ceo' AND t.ceo_target = 0
+    `)) as unknown as Array<{ n: number }>;
+    console.log(`INFO  live rows created by someone other than the CEO with a CEO target of 0 (old flow): ${shAdded[0]?.n ?? 0}`);
 
     const clock = (await db.execute(sql`
         SELECT COUNT(*)::int AS n FROM sales_targets t

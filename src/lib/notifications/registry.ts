@@ -426,6 +426,7 @@ export const TYPE_LABELS: Record<string, string> = {
   "targets.rejected": "Targets rejected by a member (old flow, no longer sent)",
   "targets.accepted": "Targets accepted by a member",
   "targets.correction_requested": "Member asked for a correction on their targets",
+  "targets.removed": "A target was removed after it was posted or pushed",
 
   // --- Buyback: negotiation ---
   "buyback.negotiate": "Buyback price negotiation opened",

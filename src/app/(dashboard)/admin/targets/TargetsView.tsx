@@ -5,7 +5,8 @@
 //
 // ID 189 (Kartik 14 Oct, confirmed 16 Oct):
 //   CEO        enters the CEO target per person (drafts nobody else sees) and
-//              presses "Post to Sales Head" — the only way targets move on
+//              presses "Post to Sales Head" — the only way targets move on;
+//              adds people and metrics and removes targets (16 Oct gap fix)
 //   Sales Head / Admin   see posted targets only, add an add-only STRETCH per
 //              target with an optional note (final = CEO + stretch, no CEO
 //              re-confirmation) and press "Approve & push"
@@ -36,7 +37,14 @@ type Data = {
         set_ceo_target: boolean;
         set_stretch?: boolean;
         approve: boolean;
+        /** ID 189 — add a metric: the CEO only. */
         edit_metrics?: boolean;
+        /** Remove any target (CEO). */
+        remove_any?: boolean;
+        /** Remove a target that is not the CEO's (Sales Head / Admin). */
+        remove_own?: boolean;
+        /** Type in a custom metric's progress. */
+        enter_progress?: boolean;
         post?: boolean;
         send_to_member?: boolean;
     };
@@ -58,6 +66,7 @@ const EVENT_LABEL: Record<string, string> = {
     pushed: "Pushed to the member",
     accepted: "Accepted",
     correction_requested: "Correction asked",
+    removed: "Removed",
 };
 
 async function post(body: unknown) {
@@ -277,7 +286,7 @@ function PersonCard({
             setLabel("");
             setUnit("");
             setTarget("");
-        }, can?.set_ceo_target ? "Metric added as a draft" : "Metric added — push it when ready");
+        }, "Metric added as a draft — post it to send it on");
 
     const saveActual = (r: TargetRow, raw: string) => {
         const v = raw.trim() === "" ? null : Number(raw);
@@ -397,13 +406,19 @@ function PersonCard({
                                         {r.is_custom && (
                                             <span className="rounded-full bg-violet-50 px-1.5 py-0.5 text-[10px] font-semibold text-violet-700">custom</span>
                                         )}
-                                        {can?.edit_metrics && (
+                                        {(can?.remove_any || (can?.remove_own && !r.ceo_owned)) && (
                                             <button
                                                 type="button"
                                                 disabled={busy}
-                                                title="Remove this metric"
+                                                title="Remove this metric (its history is kept)"
                                                 onClick={() => {
-                                                    if (confirm(`Remove "${r.metric_label}" from ${name}'s targets?`)) {
+                                                    const told =
+                                                        r.status === "pushed" || r.status === "accepted" || r.status === "rejected"
+                                                            ? ` ${name} and the Sales Head will be told.`
+                                                            : r.status === "pending_approval"
+                                                              ? " The Sales Head will be told."
+                                                              : "";
+                                                    if (confirm(`Remove "${r.metric_label}" from ${name}'s targets?${told}`)) {
                                                         run(() => post({ action: "remove", id: r.id }), "Metric removed");
                                                     }
                                                 }}
@@ -489,7 +504,7 @@ function PersonCard({
                                     unit={r.unit}
                                     kind={r.kind}
                                     actualSlot={
-                                        r.is_custom && can?.edit_metrics ? (
+                                        r.is_custom && (can?.enter_progress ?? can?.edit_metrics) ? (
                                             <input
                                                 key={`${r.id}:a:${r.progress.actual}`}
                                                 type="number"

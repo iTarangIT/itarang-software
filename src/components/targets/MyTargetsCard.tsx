@@ -251,8 +251,14 @@ function TargetsTable({
                                         rejected
                                     </span>
                                 )}
-                                {r.pushed_at && (
-                                    <span className="block text-[10px] text-ink-muted">Target arrived on {fmtDay(r.pushed_at)}</span>
+                                {/* ID 189: the day it FIRST arrived (the 48-hour clock); a later push of a new version is "updated on". */}
+                                {(r.first_pushed_at ?? r.pushed_at) && (
+                                    <span className="block text-[10px] text-ink-muted">
+                                        Target arrived on {fmtDay(r.first_pushed_at ?? r.pushed_at)}
+                                        {r.first_pushed_at && r.pushed_at && fmtDay(r.pushed_at) !== fmtDay(r.first_pushed_at) && (
+                                            <> · updated on {fmtDay(r.pushed_at)}</>
+                                        )}
+                                    </span>
                                 )}
                             </td>
                             <td className="px-3 py-2 text-right tabular-nums">

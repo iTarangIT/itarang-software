@@ -11,8 +11,9 @@
 //                                send_to_member (= approve_push)
 //
 // Per-action permissions live in src/lib/targets/service.ts (ID 189: only the
-// CEO adds people and posts; the Sales Head / Admin add the stretch and push
-// posted targets) and are enforced there, not just here. The CEO's unposted
+// CEO adds people and metrics, posts, and removes his targets; the Sales Head /
+// Admin add the stretch and push posted targets) and are enforced there, not
+// just here. "remove" is soft: the row is kept with its history. The CEO's unposted
 // drafts are left out of every answer to anyone but the CEO.
 
 import { sql } from "drizzle-orm";
@@ -35,6 +36,8 @@ import {
     TARGET_CEO_ROLES,
     TARGET_METRIC_ROLES,
     TARGET_POST_ROLES,
+    TARGET_PROGRESS_ROLES,
+    TARGET_REMOVE_ROLES,
     TARGET_STRETCH_ROLES,
     TARGET_VIEW_ROLES,
     TargetError,
@@ -104,7 +107,14 @@ export const GET = withErrorHandler(async (req: Request) => {
             // ID 189 — the Sales Head's add-only stretch (Admin too).
             set_stretch: TARGET_STRETCH_ROLES.includes(r),
             approve: TARGET_APPROVER_ROLES.includes(r),
+            // ID 189 (16 Oct) — adding a metric is the CEO's (it lands as his draft).
             edit_metrics: TARGET_METRIC_ROLES.includes(r),
+            // Remove: the CEO any target; Sales Head / Admin only a row with
+            // `ceo_owned` false (the service re-checks).
+            remove_any: TARGET_CEO_ROLES.includes(r),
+            remove_own: TARGET_REMOVE_ROLES.includes(r),
+            // A custom metric's progress, typed in for someone else.
+            enter_progress: TARGET_PROGRESS_ROLES.includes(r),
             // ID 189 — "Post to Sales Head" is the CEO's alone.
             post: TARGET_POST_ROLES.includes(r),
             send_to_member: TARGET_APPROVER_ROLES.includes(r),
