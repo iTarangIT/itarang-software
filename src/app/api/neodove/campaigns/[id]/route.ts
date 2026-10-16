@@ -6,6 +6,7 @@
 // vendor integration you cannot query: pushes that failed, and dispositions
 // that never came back.
 
+import { DB_ENDPOINT_REF, endpointStoreStatus, isCampaignWired, storedEndpointInfo } from "@/lib/neodove/endpointStore";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
@@ -16,7 +17,6 @@ import {
     withErrorHandler,
 } from "@/lib/api-utils";
 import { NEODOVE_ADMIN_ROLES } from "@/lib/neodove/roles";
-import { isEndpointWired } from "@/lib/neodove/config";
 import { mirrorConfigSchema } from "@/lib/neodove/types";
 import { resolveNeodoveAssignee } from "@/lib/neodove/assignAfterPush";
 import { resolveAudience, type AudienceSelection } from "@/lib/ai-dialer/audience";
@@ -197,13 +197,14 @@ export const GET = withErrorHandler(
         // and only failed when someone pushed to it.
         const endpointRef = (campaigns[0] as { push_endpoint_ref?: string | null })
             .push_endpoint_ref;
-        const isWired = isEndpointWired(endpointRef);
+        // A32: "DB" = the campaign's own stored endpoint (E-344).
+        const isWired = await isCampaignWired(endpointRef, id);
 
         // Other campaigns pointing at the SAME env var. The URL is the routing —
         // no campaign identifier travels in the push body — so those campaigns
         // deliver into the same NeoDove campaign as this one, and picking
         // between them in the destination dropdown changes nothing.
-        const sharedEndpoint = endpointRef
+        const sharedEndpoint = endpointRef && endpointRef !== DB_ENDPOINT_REF
             ? await db.execute<{ id: string; name: string }>(sql`
                   SELECT id, name FROM neodove_campaigns
                    WHERE push_endpoint_ref = ${endpointRef} AND id <> ${id}
@@ -217,6 +218,9 @@ export const GET = withErrorHandler(
                 ...(campaigns[0] as Record<string, unknown>),
                 is_wired: isWired,
                 endpoint_shared_with: sharedEndpoint,
+                // A32: what the Admin form may show — last 4 characters only.
+                stored_endpoints: await storedEndpointInfo(id),
+                endpoint_store: await endpointStoreStatus(),
             },
             pushBreakdown,
             dispositions,

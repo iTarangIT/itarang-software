@@ -33,7 +33,7 @@ async function perPersonSum(windows: TeamWindow[]) {
         const d = await buildSalesDashboard({ from: w.from, to: w.to, granularity: "day" });
         for (const p of d.per_spoc ?? []) {
             if (!w.ids.includes(p.spoc_id)) continue;
-            for (const k of KEYS) sum[k] += p.totals[k];
+            for (const k of KEYS) sum[k] += p.totals[k] ?? 0;
             revenue += p.outcome.revenue;
         }
     }

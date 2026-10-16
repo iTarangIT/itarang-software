@@ -44,8 +44,8 @@ async function main() {
             `${p.name}: drill lists match the card (visits ${dv.length}, fresh ${df.length}, repeat ${dr.length})`,
             dv.length === p.totals.visits && df.length === fresh && dr.length === repeat,
         );
-        const freshLeads = new Set(df.map((r) => r.lead_id));
-        check(`${p.name}: every new-to-iTarang dealer (${dn.length}) is a fresh visit`, dn.every((r) => freshLeads.has(r.lead_id)));
+        const freshLeads = new Set(df.map((r) => r.id));
+        check(`${p.name}: every new-to-iTarang dealer (${dn.length}) is a fresh visit`, dn.every((r) => freshLeads.has(r.id)));
     }
     console.log(`      ${people} field person(s) with visits in the range`);
     console.log(failed === 0 ? "\nAll checks passed." : `\n${failed} check(s) FAILED.`);
