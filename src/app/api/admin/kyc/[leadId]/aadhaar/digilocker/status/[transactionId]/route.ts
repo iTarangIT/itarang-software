@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { executeDigilockerStatus } from "@/lib/kyc/digilocker";
-import { requireAdminAppUser } from "@/lib/kyc/admin-workflow";
+import { requireAdminAppUserForLead } from "@/lib/kyc/admin-workflow";
 
 export async function GET(
   _req: NextRequest,
@@ -10,7 +10,7 @@ export async function GET(
   }: { params: Promise<{ leadId: string; transactionId: string }> },
 ) {
   try {
-    const appUser = await requireAdminAppUser();
+    const appUser = await requireAdminAppUserForLead((await params).leadId);
     if (!appUser) {
       return NextResponse.json(
         { success: false, error: { message: "Unauthorized" } },
