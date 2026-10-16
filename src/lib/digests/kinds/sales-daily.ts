@@ -229,7 +229,7 @@ type RightNow = {
   oldestDays: number | null;
   /** The sales_ready_unassigned limit in force (calendar days). */
   limitDays: number;
-  /** Hot, sales-ready leads with no owner (running hot_assign clocks, E-343); null = not measured. */
+  /** Hot, sales-ready leads with no owner (running hot_assign clocks, E-350); null = not measured. */
   hotWaiting: number | null;
   /** …of those, past the hot_ready_to_assigned limit. */
   hotPast: number | null;

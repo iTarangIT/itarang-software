@@ -1,5 +1,5 @@
 -- =============================================================================
--- E-345 — WHEN EACH PASSWORD WAS LAST CHANGED (A39, 13 Oct call)
+-- E-352 — WHEN EACH PASSWORD WAS LAST CHANGED (A39, 13 Oct call)
 -- =============================================================================
 -- WHY. Passwords were shared and never changed, so an ex-employee could log in
 -- and download data. Proposed answer (13 Oct): deactivate leavers, force every
@@ -27,4 +27,4 @@ CREATE TABLE IF NOT EXISTS user_password_meta (
 );
 
 COMMENT ON TABLE user_password_meta IS
-    'E-345 (A39) — when each user last set their password; the 90-day expiry reads it. No row = no expiry yet.';
+    'E-352 (A39) — when each user last set their password; the 90-day expiry reads it. No row = no expiry yet.';

@@ -3,7 +3,7 @@
 // NBFC partners, vendors and refurbishers have their own portals and are left
 // alone). The dashboard then sends each of them to /change-password at their
 // next page load; choosing a new password clears the flag and starts the
-// 90-day clock (E-345).
+// 90-day clock (E-352).
 //
 //   node --import tsx --env-file=.env.local scripts/force-password-change-all.ts                 # dry run: lists who
 //   node --import tsx --env-file=.env.local scripts/force-password-change-all.ts --commit

@@ -1195,8 +1195,8 @@ const quotes: Dataset = {
                 { key: "approved_by", header: "Approver", meaning: "Who approved or rejected it.", width: 22 },
                 { key: "approved_at", header: "Decided on", meaning: "When it was approved or rejected.", kind: "datetime" },
                 { key: "approval_wait_hours", header: "Approval wait (hours)", meaning: "Hours from raising the quote to the decision.", kind: "number" },
-                // IDs 85 / 86 — the CEO quote-approval clock (E-343).
-                { key: "approval_working_hours", header: "Approval wait (working hours)", meaning: "CEO quote-approval clock: working hours (Mon–Sat 10:00–19:00, holidays off) from the quote reaching the CEO to the decision. Blank for auto-approved quotes and before E-343.", kind: "number" },
+                // IDs 85 / 86 — the CEO quote-approval clock (E-350).
+                { key: "approval_working_hours", header: "Approval wait (working hours)", meaning: "CEO quote-approval clock: working hours (Mon–Sat 10:00–19:00, holidays off) from the quote reaching the CEO to the decision. Blank for auto-approved quotes and before E-350.", kind: "number" },
                 { key: "approval_limit_passed", header: "Approval limit passed", meaning: "No, or Yes with when (IST): the CEO decided after the limit (Admin › Time limits), or has not decided. Blank for auto-approved quotes.", width: 22 },
                 { key: "rejection_reason", header: "Rejection reason", meaning: "Why it was rejected, when it was.", width: 36 },
                 { key: "delivered_at", header: "Delivered on", meaning: "First successful send of the quotation to the dealer.", kind: "datetime" },

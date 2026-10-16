@@ -22,7 +22,7 @@
 //   Clocks (IDs 85 / 86, 15 Oct): both blocks end with Limits passed
 //                            (Yesterday, MTD) — misses charged to the owner at
 //                            the moment the limit fell due, from the fixed
-//                            records (E-343), inferred owners left out — and
+//                            records (E-350), inferred owners left out — and
 //                            the median working hours from assignment to the
 //                            owner's first call or visit (owner clocks
 //                            started MTD). A median is not summed: Total and
@@ -83,7 +83,7 @@ export type RepExtras = {
     quotes_delivered: PerRep;
     dealer_approved: PerRep;
     won: PerRep;
-    /** "Limit passed" records charged to the person (E-343; else lead_clocks). */
+    /** "Limit passed" records charged to the person (E-350; else lead_clocks). */
     limits_passed: PerRep;
     /** Median working hours from assignment to first attempt (owner clocks). */
     owner_median_h: PerRep;
@@ -549,7 +549,7 @@ export async function loadRepExtras(db: Exec, p: Period): Promise<RepExtras> {
 }
 
 /**
- * Limits passed per person in the period — the fixed records (E-343), else the
+ * Limits passed per person in the period — the fixed records (E-350), else the
  * derived clocks (E-337). Owners not on record (before 10 Sep, inferred) are
  * left out, as in every per-person figure. Null without either table.
  */

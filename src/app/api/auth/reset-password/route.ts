@@ -249,7 +249,7 @@ export async function POST(req: NextRequest) {
       .where(eq(users.id, claimed.user_id))
       .returning({ id: users.id });
 
-    // A39: start the 90-day clock (E-345).
+    // A39: start the 90-day clock (E-352).
     if (updated[0]) {
       const { recordPasswordChange } = await import("@/lib/auth/passwordMeta");
       await recordPasswordChange(updated[0].id);

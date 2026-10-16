@@ -1,7 +1,7 @@
 "use client";
 
 // A32 — Admin pastes a NeoDove campaign's Custom Integration URL here; it is
-// stored encrypted (E-344) and never shown again — only its last 4
+// stored encrypted (E-351) and never shown again — only its last 4
 // characters. Replaces "ask a developer to add an env var" for a new campaign.
 
 import { useState } from "react";

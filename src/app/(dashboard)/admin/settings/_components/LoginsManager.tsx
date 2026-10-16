@@ -3,7 +3,7 @@
 // A39 — Admin › Settings › Logins: who can sign in. Deactivate a leaver (every
 // page and API refuses them from the next request; their Supabase login is
 // banned), or force a password change at the next page load. Passwords older
-// than 90 days must be changed (dated from E-345 — "not recorded" until the
+// than 90 days must be changed (dated from E-352 — "not recorded" until the
 // person next sets one).
 
 import { useMemo, useState } from "react";

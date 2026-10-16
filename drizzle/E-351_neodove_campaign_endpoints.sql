@@ -1,5 +1,5 @@
 -- =============================================================================
--- E-344 — NEODOVE CAMPAIGN ENDPOINTS STORED ENCRYPTED (A32, 13 Oct call)
+-- E-351 — NEODOVE CAMPAIGN ENDPOINTS STORED ENCRYPTED (A32, 13 Oct call)
 -- =============================================================================
 -- Requires E-224 (neodove_campaigns).
 --
@@ -36,4 +36,4 @@ CREATE TABLE IF NOT EXISTS neodove_campaign_endpoints (
 );
 
 COMMENT ON TABLE neodove_campaign_endpoints IS
-    'E-344 (A32) — NeoDove Custom Integration endpoint URLs, AES-256-GCM sealed by the app; never returned to a browser. push_endpoint_ref = ''DB'' points a campaign here.';
+    'E-351 (A32) — NeoDove Custom Integration endpoint URLs, AES-256-GCM sealed by the app; never returned to a browser. push_endpoint_ref = ''DB'' points a campaign here.';

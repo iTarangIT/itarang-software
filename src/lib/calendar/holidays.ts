@@ -55,11 +55,11 @@ export function workingDaysBetweenSql(from: SQL, to: SQL): SQL {
     )::int`;
 }
 
-// ── Holiday change log (E-343, ID 85 item 7) ─────────────────────────────────
+// ── Holiday change log (E-350, ID 85 item 7) ─────────────────────────────────
 
 const rowsOf = <T>(r: unknown): T[] => (Array.isArray(r) ? r : ((r as { rows?: T[] })?.rows ?? [])) as T[];
 
-/** Is E-343's holiday_calendar_log on this database? */
+/** Is E-350's holiday_calendar_log on this database? */
 export async function hasHolidayLog(): Promise<boolean> {
     try {
         const r = rowsOf<{ ok: boolean }>(await db.execute(sql`SELECT to_regclass('public.holiday_calendar_log') IS NOT NULL AS ok`));
@@ -69,7 +69,7 @@ export async function hasHolidayLog(): Promise<boolean> {
     }
 }
 
-/** Record a holiday change. A no-op without E-343; never throws. */
+/** Record a holiday change. A no-op without E-350; never throws. */
 export async function logHolidayChange(input: {
     date: string;
     action: "add" | "remove" | "rename";
@@ -97,7 +97,7 @@ export type HolidayLogEntry = {
     changed_at: string;
 };
 
-/** The holiday log, newest first; [] without E-343. */
+/** The holiday log, newest first; [] without E-350. */
 export async function holidayLog(limit = 200): Promise<HolidayLogEntry[]> {
     if (!(await hasHolidayLog())) return [];
     return rowsOf<HolidayLogEntry>(
@@ -114,7 +114,7 @@ export async function holidayLog(limit = 200): Promise<HolidayLogEntry[]> {
 /**
  * The holidays as they stood at any moment: a holiday counts for a clock only
  * if it was on the calendar when the clock stopped (buildHolidayBook). Without
- * E-343 every moment sees today's list, as before.
+ * E-350 every moment sees today's list, as before.
  */
 export async function holidaysAsOf(): Promise<(at: Date) => ReadonlySet<string>> {
     const { buildHolidayBook } = await import("@/lib/calendar/holidayBook");

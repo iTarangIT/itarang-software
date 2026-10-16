@@ -199,7 +199,7 @@ describe("dated holidays and kinds", () => {
         expect(running.due_at?.toISOString()).toBe(ist("2026-10-19", "13:00").toISOString());
     });
 
-    it("only the asked-for kinds are computed (a database without E-343)", () => {
+    it("only the asked-for kinds are computed (a database without E-350)", () => {
         const kinds = new Set(BASE_CLOCK_KINDS);
         const clocks = clocksForLead(lead(), [call(ist("2026-10-12", "11:00"), "rep")], [], [], limits, NONE, LATER, {
             kinds,

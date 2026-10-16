@@ -30,7 +30,7 @@ export const PATCH = withErrorHandler(
         `)) as unknown as Array<{ holiday_date: string; holiday_name: string; was_active: boolean }>;
         if (res.length === 0) return errorResponse("Holiday not found.", 404);
         forgetHolidays();
-        // Logged (E-343) only when the state really changed.
+        // Logged (E-350) only when the state really changed.
         if (res[0].was_active !== b.is_active) {
             await logHolidayChange({
                 date: res[0].holiday_date,

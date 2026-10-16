@@ -1,5 +1,5 @@
 /**
- * A32 — NeoDove campaign endpoints kept in the database, encrypted (E-344),
+ * A32 — NeoDove campaign endpoints kept in the database, encrypted (E-351),
  * so Admin can wire a new campaign from the screen instead of asking a
  * developer to add an env var. The URL is the credential: it is sealed
  * (secretBox.ts), bound to its campaign and kind, decrypted only at push time,
@@ -14,7 +14,7 @@ import { db } from "@/lib/db";
 import { lastChars, open, seal, secretBoxEnabled } from "@/lib/security/secretBox";
 import { NeodoveEndpointMissingError, resolveEndpoint } from "./config";
 
-/** push_endpoint_ref / update_endpoint_ref value meaning "stored in E-344". */
+/** push_endpoint_ref / update_endpoint_ref value meaning "stored in E-351". */
 export const DB_ENDPOINT_REF = "DB";
 
 export type EndpointKind = "push" | "update";
@@ -22,7 +22,7 @@ export type EndpointKind = "push" | "update";
 const rowsOf = <T>(r: unknown): T[] => (Array.isArray(r) ? r : ((r as { rows?: T[] })?.rows ?? [])) as T[];
 const aad = (campaignId: string, kind: EndpointKind) => `neodove:${campaignId}:${kind}`;
 
-/** Is E-344 on this database? */
+/** Is E-351 on this database? */
 export async function hasEndpointStore(): Promise<boolean> {
     try {
         const r = rowsOf<{ ok: boolean }>(await db.execute(sql`SELECT to_regclass('public.neodove_campaign_endpoints') IS NOT NULL AS ok`));
@@ -34,7 +34,7 @@ export async function hasEndpointStore(): Promise<boolean> {
 
 /** Can Admin store endpoints here? The table and an encryption key are both needed. */
 export async function endpointStoreStatus(): Promise<{ ready: boolean; reason: string | null }> {
-    if (!(await hasEndpointStore())) return { ready: false, reason: "Migration E-344 is not on this database yet." };
+    if (!(await hasEndpointStore())) return { ready: false, reason: "Migration E-351 is not on this database yet." };
     if (!secretBoxEnabled()) return { ready: false, reason: "No encryption key on this server (APP_SECRETS_ENC_KEY)." };
     return { ready: true, reason: null };
 }

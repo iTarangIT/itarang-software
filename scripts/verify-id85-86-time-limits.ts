@@ -12,7 +12,7 @@
 // 4. The month's "Limit passed" events in the Lead events download = the
 //    daily email's "Time limits missed" = lead_clocks; the email's "First
 //    attempt within limit" = the owner clock's figure.
-// 5. 15 Oct rework (E-343): the new limits resolve; the 18:00-Saturday Hot
+// 5. 15 Oct rework (E-350): the new limits resolve; the 18:00-Saturday Hot
 //    example lands at 13:00 Monday; every passed clock has its fixed "Limit
 //    passed" record; a missed lead clock is charged to the owner on record at
 //    the moment it fell due; per-person counts leave inferred owners out; the
@@ -95,7 +95,7 @@ async function main() {
     }
 
     // 5 — the 15 Oct rework
-    console.log("\n— 15 Oct rework (E-343) —");
+    console.log("\n— 15 Oct rework (E-350) —");
     for (const k of ["hot_ready_to_assigned", "hot_owner_first_attempt", "retry_gap", "retry_max_attempts", "ceo_quote_approval"] as const) {
         check(`limit ${k} resolves (${values[k]})`, Number.isFinite(values[k]) && values[k] > 0);
     }
@@ -111,9 +111,9 @@ async function main() {
         check(`asm_transfer_first_visit in force on ${day}: SQL ${r?.v} = TS ${ts}`, Number(r?.v) === ts);
     }
 
-    check("E-343 holiday_calendar_log present", await hasHolidayLog());
+    check("E-350 holiday_calendar_log present", await hasHolidayLog());
     if (!(await hasLimitEvents())) {
-        check("E-343 lead_limit_events present", false);
+        check("E-350 lead_limit_events present", false);
     } else {
         const ev = await one<Record<string, number>>(sql`
             SELECT

@@ -47,7 +47,7 @@ const TAB_VALUES = [
     "territories",
     // ID 155 — who reports to whom (E-335).
     "reporting-lines",
-    // ID 85 Decision 4 — the office calendar, with its change log (E-343).
+    // ID 85 Decision 4 — the office calendar, with its change log (E-350).
     "holidays",
     // A39 — who can sign in: deactivate leavers, force a new password.
     "logins",

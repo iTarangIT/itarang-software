@@ -10,7 +10,7 @@
  * Readers (the daily email, dashboards, downloads, the event log) read the
  * table; without E-337 they report "not measured" instead of failing.
  *
- * E-343 (15 Oct rework): the Hot / retry / quote clocks are computed only
+ * E-350 (15 Oct rework): the Hot / retry / quote clocks are computed only
  * where lead_clocks accepts them, and every newly passed limit is copied once
  * into lead_limit_events — the fixed "Limit passed" record that the event
  * log, the lead timeline and the daily email read. A miss recorded there never
@@ -59,7 +59,7 @@ export async function hasLeadClocks(): Promise<boolean> {
     return tableExists("lead_clocks");
 }
 
-/** Is E-343 (fixed limit events, the wider clock CHECK) on this database? */
+/** Is E-350 (fixed limit events, the wider clock CHECK) on this database? */
 export async function hasLimitEvents(): Promise<boolean> {
     return tableExists("lead_limit_events");
 }
@@ -242,7 +242,7 @@ export async function refreshLeadClocks(now = new Date()): Promise<{ clocks: num
 }
 
 /**
- * Copy newly passed limits into lead_limit_events (E-343), once: a row already
+ * Copy newly passed limits into lead_limit_events (E-350), once: a row already
  * recorded for the same clock is never touched, so the record is the miss as
  * it stood on the day. Returns how many were added.
  */
@@ -357,7 +357,7 @@ export async function clockStats(
 
 /**
  * "Limit passed" events dated on IST days [from, to], any clock. Reads the
- * fixed records (E-343) when present, else the derived clocks. Per person
+ * fixed records (E-350) when present, else the derived clocks. Per person
  * (ownerIds) leaves out misses whose owner is inferred. Null without E-337.
  */
 export async function limitsPassed(from: string, to: string, opts: { ownerIds?: string[] } = {}): Promise<number | null> {
@@ -432,7 +432,7 @@ export type LimitPassedEvent = {
 
 /**
  * Fixed "Limit passed" records: for one lead (its timeline), or the oldest
- * still-unanswered ones (the daily email's Oldest overdue). [] without E-343.
+ * still-unanswered ones (the daily email's Oldest overdue). [] without E-350.
  */
 export async function limitPassedEvents(opts: { leadId?: string; openOnly?: boolean; limit?: number }): Promise<LimitPassedEvent[]> {
     if (!(await hasLimitEvents())) return [];

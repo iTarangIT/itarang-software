@@ -1,10 +1,10 @@
-// One-off (sandbox, 2026-10-16): E-343's first version back-filled
+// One-off (sandbox, 2026-10-16): E-350's first version back-filled
 // lead_limit_events from lead_clocks with the OLD rule (lead-clock misses
 // charged to today's owner). The table was created the same day, so it holds
 // nothing else: empty it, then run scripts/refresh-lead-clocks.ts to record
 // every miss under the new rule. Refuses on any table older than a day.
 //
-//   node scripts/_reset-limit-events-e343.mjs database-1
+//   node scripts/_reset-limit-events-e350.mjs database-1
 import postgres from "postgres";
 import { readFileSync } from "node:fs";
 

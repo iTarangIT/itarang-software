@@ -2,7 +2,7 @@
 
 // ID 85 Decision 4 — Admin › Settings › Holidays: the office calendar every
 // time limit and clock counts working days and hours on, with the log of every
-// change (E-343). Also shown read-only on Settings › Time limits.
+// change (E-350). Also shown read-only on Settings › Time limits.
 
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
