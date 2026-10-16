@@ -7,15 +7,17 @@ Run the steps in this order. Prod env changes go in **both** places: the box
 (`shared/.env`) and the `PROD_ENV_FILE_B64` GitHub secret, because prod's env
 is rewritten on every deploy.
 
-## 0. Before the deploy: migrations on db-2
+## 0. Migrations on db-2 — DONE 2026-10-16
+
+Applied to both DBs (renumbered from E-343..E-345, which main took). Kept here for the record.
 
 Each one is additive and idempotent, applied twice and re-checked on a fresh
 connection.
 
 ```bash
-node scripts/_apply-e343.mjs database-2   # fixed "Limit passed" records, Hot / retry / quote clocks, holiday log
-node scripts/_apply-e344.mjs database-2   # NeoDove endpoints stored encrypted
-node scripts/_apply-e345.mjs database-2   # password change dates (90-day expiry)
+node scripts/_apply-e350.mjs database-2   # fixed "Limit passed" records, Hot / retry / quote clocks, holiday log
+node scripts/_apply-e351.mjs database-2   # NeoDove endpoints stored encrypted
+node scripts/_apply-e352.mjs database-2   # password change dates (90-day expiry)
 ```
 
 Then tick the db-2 / prod boxes in `drizzle/MIGRATION_CHECKLIST.md`.

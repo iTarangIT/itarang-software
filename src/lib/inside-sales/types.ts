@@ -304,8 +304,8 @@ export type LeadDetailBundle = {
     touchpoints: LeadDetailTouchpoint[];
     status_history: LeadDetailStatusHistory[];
     /**
-     * IDs 85 / 86 — missed time limits on this lead (fixed records, E-343),
-     * newest first; [] without E-343. Shown in the Touchpoint History pane.
+     * IDs 85 / 86 — missed time limits on this lead (fixed records, E-350),
+     * newest first; [] without E-350. Shown in the Touchpoint History pane.
      */
     limit_events?: LeadDetailLimitEvent[];
     /**

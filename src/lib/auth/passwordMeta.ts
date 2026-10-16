@@ -1,6 +1,6 @@
 /**
  * A39 — server side of the account gate: when a password was last set
- * (E-345), and the check the dashboard layout runs on every page.
+ * (E-352), and the check the dashboard layout runs on every page.
  */
 import { sql } from "drizzle-orm";
 import { redirect } from "next/navigation";
@@ -34,7 +34,7 @@ export async function recordPasswordChange(userId: string, forcedBy: string | nu
     }
 }
 
-/** When the user last set their password; null when unknown (or no E-345). */
+/** When the user last set their password; null when unknown (or no E-352). */
 export async function passwordChangedAt(userId: string): Promise<Date | null> {
     try {
         if (!(await hasMeta())) return null;

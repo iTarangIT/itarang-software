@@ -13,7 +13,7 @@ node --import tsx --env-file=.env.production scripts/<script>.ts
 
 | Sheet row | Script | Proves | Result 16 Oct |
 |---|---|---|---|
-| 85 / 86 | `verify-id85-86-time-limits.ts` | New limits resolve. Sat 18:00 → Mon 13:00. Every passed clock has a fixed record. Misses charged to the owner when they fell due. Inferred owners kept out of per-person counts. Dated limits: SQL = TS. Holiday log present. | db-1 PASS (needs E-343; prod pending) |
+| 85 / 86 | `verify-id85-86-time-limits.ts` | New limits resolve. Sat 18:00 → Mon 13:00. Every passed clock has a fixed record. Misses charged to the owner when they fell due. Inferred owners kept out of per-person counts. Dated limits: SQL = TS. Holiday log present. | db-1 PASS (needs E-350; prod pending) |
 | 85 / 86 | `verify-id85-86-exports.ts` | Visits and Quotes downloads carry the clock columns and agree with `lead_clocks`. | db-1 PASS |
 | 192 | `verify-id192-idle.ts` | Role limits (ISR 5 / ASM 7). Parked leads (follow-up > 30 days) are not idle. A reassigned lead is not idle for its new holder. Email = CEO = Needs Attention. | db-1 PASS, db-2 PASS (77 idle) |
 | 11 | `npx vitest run src/lib/dashboard/__tests__/businessTypeParams.test.ts` | An old `finance` link reads as Battery sale. No route reads `business_type` raw. | PASS |

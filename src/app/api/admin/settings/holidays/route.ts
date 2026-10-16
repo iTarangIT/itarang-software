@@ -1,5 +1,5 @@
 // GET  /api/admin/settings/holidays — the office calendar and its change log
-//      (E-343). Admin, Sales Head (edit) and the CEO (reads, via Time limits).
+//      (E-350). Admin, Sales Head (edit) and the CEO (reads, via Time limits).
 // POST /api/admin/settings/holidays — add a working-day-calendar holiday
 // (BRD §0.1). Idempotent on holiday_date (unique) — re-adding reactivates it.
 
@@ -32,7 +32,7 @@ export const POST = withErrorHandler(async (req: Request) => {
     const user = await requireRole(EDITOR_ROLES);
     const b = BodySchema.parse(await req.json());
 
-    // Logged (E-343): a new or re-activated date is an "add", a new name on an
+    // Logged (E-350): a new or re-activated date is an "add", a new name on an
     // active date is a "rename". The clocks read the log, so a holiday added
     // today never moves a clock that had already stopped.
     const before = (await db.execute(sql`

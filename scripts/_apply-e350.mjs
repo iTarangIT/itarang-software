@@ -1,9 +1,9 @@
-// One-off: apply E-343 (fixed "Limit passed" records, Hot / retry / quote
+// One-off: apply E-350 (fixed "Limit passed" records, Hot / retry / quote
 // clocks, holiday change log — IDs 85, 86, 15 Oct rework) to database-1
 // (sandbox) or database-2 (prod).
 //
-//   node scripts/_apply-e343.mjs database-1
-//   node scripts/_apply-e343.mjs database-2
+//   node scripts/_apply-e350.mjs database-1
+//   node scripts/_apply-e350.mjs database-2
 //
 // DDL, additive. Reads that host's URL from .env.local (commented or not),
 // never prints it. Applies the file twice (the second pass must be a no-op),
@@ -24,7 +24,7 @@ const host = new URL(url).host;
 if (!host.startsWith(`${target}.`)) throw new Error(`host mismatch: ${host}`);
 console.log("target:", host.split(".")[0]);
 
-const file = readFileSync("drizzle/E-343_limit_events_hot_clocks_holiday_log.sql", "utf8");
+const file = readFileSync("drizzle/E-350_limit_events_hot_clocks_holiday_log.sql", "utf8");
 const opts = { max: 1, prepare: false, ssl: { rejectUnauthorized: false } };
 
 const sql = postgres(url, { ...opts, onnotice: (n) => console.log("notice:", n.message) });
@@ -51,7 +51,7 @@ try {
   if (c && !String(c.def).includes("hot_owner")) throw new Error("✗ lead_clocks_clock_check not widened");
   const [n] = await check`SELECT count(*)::int AS n, count(*) FILTER (WHERE owner_inferred)::int AS inferred FROM lead_limit_events`;
   console.log(`lead_limit_events: ${n.n} rows (${n.inferred} with the owner not on record) — run scripts/refresh-lead-clocks.ts to record the misses so far`);
-  console.log("✓ E-343 applied");
+  console.log("✓ E-350 applied");
 } finally {
   await check.end();
 }

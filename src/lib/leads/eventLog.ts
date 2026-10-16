@@ -162,7 +162,7 @@ function eventsUnion(f: EventLogFilters, s: Sources): SQL {
         : null;
 
     // ID 86 — a clock that passed its limit, dated when it fell due. From the
-    // fixed records (E-343) when present: written once, charged to the owner
+    // fixed records (E-350) when present: written once, charged to the owner
     // at that moment, never rebuilt. Else from the hourly-derived clocks.
     const clockName = (c: SQL) => sql`CASE ${c} WHEN 'lead' THEN 'Lead clock' WHEN 'owner' THEN 'Owner clock'
                    WHEN 'transfer' THEN 'Transfer clock' WHEN 'hot_assign' THEN 'Hot: ready to assigned'

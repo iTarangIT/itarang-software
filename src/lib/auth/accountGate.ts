@@ -8,7 +8,7 @@
  *   must_change  users.must_change_password: an Admin forced a reset (or a
  *                first login) — every role now, not only NBFC partners.
  *   expired      the password is older than PASSWORD_MAX_AGE_DAYS (90).
- *                Only for users whose change date is known (E-345).
+ *                Only for users whose change date is known (E-352).
  */
 
 export const PASSWORD_MAX_AGE_DAYS = 90;

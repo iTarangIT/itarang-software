@@ -1,5 +1,5 @@
 -- =============================================================================
--- E-343 — FIXED "LIMIT PASSED" RECORDS, HOT / RETRY / QUOTE CLOCKS, HOLIDAY LOG
+-- E-350 — FIXED "LIMIT PASSED" RECORDS, HOT / RETRY / QUOTE CLOCKS, HOLIDAY LOG
 --          (tracker IDs 85, 86 — 15 Oct rework)
 -- =============================================================================
 -- Requires E-337 (lead_clocks). Every block is guarded, so on a database
@@ -44,7 +44,7 @@
 DO $do$
 BEGIN
     IF to_regclass('public.lead_clocks') IS NULL THEN
-        RAISE NOTICE 'E-343: lead_clocks missing (E-337 not applied) — skipping the clock CHECK';
+        RAISE NOTICE 'E-350: lead_clocks missing (E-337 not applied) — skipping the clock CHECK';
         RETURN;
     END IF;
     ALTER TABLE lead_clocks DROP CONSTRAINT IF EXISTS lead_clocks_clock_check;
@@ -75,7 +75,7 @@ CREATE INDEX IF NOT EXISTS lead_limit_events_owner_idx ON lead_limit_events (own
 CREATE INDEX IF NOT EXISTS lead_limit_events_lead_idx ON lead_limit_events (dealer_lead_id, passed_at);
 
 COMMENT ON TABLE lead_limit_events IS
-    'E-343 (IDs 85/86) — one fixed row per missed time limit, written once by the hourly clock refresh and never changed. owner_id = owner when it fell due; owner_inferred rows stay out of per-person counts.';
+    'E-350 (IDs 85/86) — one fixed row per missed time limit, written once by the hourly clock refresh and never changed. owner_id = owner when it fell due; owner_inferred rows stay out of per-person counts.';
 
 -- 3. Holiday change log -------------------------------------------------------
 CREATE TABLE IF NOT EXISTS holiday_calendar_log (
@@ -92,4 +92,4 @@ CREATE INDEX IF NOT EXISTS holiday_calendar_log_date_idx ON holiday_calendar_log
 CREATE INDEX IF NOT EXISTS holiday_calendar_log_changed_idx ON holiday_calendar_log (changed_at DESC);
 
 COMMENT ON TABLE holiday_calendar_log IS
-    'E-343 (ID 85) — every holiday add / remove / rename. A holiday counts for a clock only if it was on the calendar when the clock stopped; holidays with no log row count always.';
+    'E-350 (ID 85) — every holiday add / remove / rename. A holiday counts for a clock only if it was on the calendar when the clock stopped; holidays with no log row count always.';

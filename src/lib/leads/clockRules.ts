@@ -58,7 +58,7 @@ import { timeLimitDef, type TimeLimitKey, type TimeLimits } from "@/lib/timeLimi
 
 export type ClockKind = "lead" | "owner" | "transfer" | "hot_assign" | "hot_owner" | "retry" | "quote";
 
-/** The kinds before E-343; the newer ones need its wider CHECK on lead_clocks.clock. */
+/** The kinds before E-350; the newer ones need its wider CHECK on lead_clocks.clock. */
 export const BASE_CLOCK_KINDS: readonly ClockKind[] = ["lead", "owner", "transfer"];
 export const ALL_CLOCK_KINDS: readonly ClockKind[] = ["lead", "owner", "transfer", "hot_assign", "hot_owner", "retry", "quote"];
 
@@ -111,7 +111,7 @@ export type ClockExtras = {
     interest?: readonly InterestChange[];
     /** This lead's quotes that went to the CEO. */
     quotes?: readonly QuoteGate[];
-    /** Kinds to compute; default all. Without E-343 the refresh asks for BASE_CLOCK_KINDS. */
+    /** Kinds to compute; default all. Without E-350 the refresh asks for BASE_CLOCK_KINDS. */
     kinds?: ReadonlySet<ClockKind>;
 };
 

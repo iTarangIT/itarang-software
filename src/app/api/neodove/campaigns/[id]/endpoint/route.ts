@@ -1,5 +1,5 @@
 // POST /api/neodove/campaigns/[id]/endpoint — A32: Admin pastes a campaign's
-// NeoDove Custom Integration URL; it is stored encrypted (E-344) and the
+// NeoDove Custom Integration URL; it is stored encrypted (E-351) and the
 // campaign is pointed at it. Write-only: the response, like every other route,
 // carries only the last 4 characters — the URL is the credential.
 //

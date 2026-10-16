@@ -197,7 +197,7 @@ export const GET = withErrorHandler(
         // and only failed when someone pushed to it.
         const endpointRef = (campaigns[0] as { push_endpoint_ref?: string | null })
             .push_endpoint_ref;
-        // A32: "DB" = the campaign's own stored endpoint (E-344).
+        // A32: "DB" = the campaign's own stored endpoint (E-351).
         const isWired = await isCampaignWired(endpointRef, id);
 
         // Other campaigns pointing at the SAME env var. The URL is the routing —

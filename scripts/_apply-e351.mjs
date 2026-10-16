@@ -1,9 +1,9 @@
-// One-off: apply E-345 (when each password was last changed — A39)
+// One-off: apply E-351 (NeoDove campaign endpoints stored encrypted — A32)
 // to database-1
 // (sandbox) or database-2 (prod).
 //
-//   node scripts/_apply-e345.mjs database-1
-//   node scripts/_apply-e345.mjs database-2
+//   node scripts/_apply-e351.mjs database-1
+//   node scripts/_apply-e351.mjs database-2
 //
 // DDL, additive. Reads that host's URL from .env.local (commented or not),
 // never prints it. Applies the file twice (the second pass must be a no-op),
@@ -23,11 +23,13 @@ const host = new URL(url).host;
 if (!host.startsWith(`${target}.`)) throw new Error(`host mismatch: ${host}`);
 console.log("target:", host.split(".")[0]);
 
-const file = readFileSync("drizzle/E-345_user_password_meta.sql", "utf8");
+const file = readFileSync("drizzle/E-351_neodove_campaign_endpoints.sql", "utf8");
 const opts = { max: 1, prepare: false, ssl: { rejectUnauthorized: false } };
 
 const sql = postgres(url, { ...opts, onnotice: (n) => console.log("notice:", n.message) });
 try {
+  const [pre] = await sql`SELECT to_regclass('public.neodove_campaigns') IS NOT NULL AS ok`;
+  if (!pre.ok) throw new Error("E-224 is not applied here (neodove_campaigns missing)");
   for (const pass of [1, 2]) {
     await sql.begin((tx) => tx.unsafe(file));
     console.log(`pass ${pass}: ok`);
@@ -38,11 +40,11 @@ try {
 
 const check = postgres(url, opts);
 try {
-  const [t] = await check`SELECT to_regclass('public.user_password_meta') IS NOT NULL AS ok`;
-  if (!t.ok) throw new Error("✗ user_password_meta missing");
-  const [n] = await check`SELECT count(*)::int AS n FROM user_password_meta`;
-  console.log(`user_password_meta rows: ${n.n}`);
-  console.log("✓ E-345 applied");
+  const [t] = await check`SELECT to_regclass('public.neodove_campaign_endpoints') IS NOT NULL AS ok`;
+  if (!t.ok) throw new Error("✗ neodove_campaign_endpoints missing");
+  const [n] = await check`SELECT count(*)::int AS n FROM neodove_campaign_endpoints`;
+  console.log(`neodove_campaign_endpoints rows: ${n.n}`);
+  console.log("✓ E-351 applied");
 } finally {
   await check.end();
 }

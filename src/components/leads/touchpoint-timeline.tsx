@@ -55,7 +55,7 @@ export type LeadTouchpoint = {
     connect_status?: string | null;
 };
 
-/** IDs 85 / 86 — a fixed "Limit passed" record (E-343), shown in the timeline. */
+/** IDs 85 / 86 — a fixed "Limit passed" record (E-350), shown in the timeline. */
 export type TimelineLimitEvent = LimitEventLike & { id: string; passed_at: string };
 
 type Entry =

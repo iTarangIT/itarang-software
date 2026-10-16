@@ -3,11 +3,11 @@
  * must not change past results). Pure; the server side is holidaysAsOf() in
  * holidays.ts.
  *
- * holiday_calendar holds today's list; holiday_calendar_log (E-343) holds
+ * holiday_calendar holds today's list; holiday_calendar_log (E-350) holds
  * every add / remove / rename since. A holiday's state at moment t is the
  * state after its last log row at or before t. Before its first log row it
  * was on the calendar unless that first row is the add — so every holiday
- * that predates the log counts always, exactly as before E-343.
+ * that predates the log counts always, exactly as before E-350.
  */
 
 export type HolidayNow = { date: string; active: boolean };

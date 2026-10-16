@@ -1,7 +1,7 @@
 // A39 — who can log in.
 //
 // GET  every staff login: active or not, forced reset pending, when the
-//      password was last set (E-345), last download. Admin and CEO read.
+//      password was last set (E-352), last download. Admin and CEO read.
 // POST { user_id, action: "deactivate" | "activate" | "force_reset" } — Admin.
 //      deactivate: users.is_active = false (every page and API refuses them
 //      from the next request) and the Supabase login is banned, so a leaver

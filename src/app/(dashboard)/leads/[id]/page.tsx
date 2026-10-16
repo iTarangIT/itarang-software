@@ -136,8 +136,8 @@ export default async function LeadDetailPage({ params }: any) {
     console.error("[leads/[id]] touchpoint history unavailable:", err);
   }
 
-  // IDs 85 / 86 — missed time limits on this lead (fixed records, E-343),
-  // merged into the timeline. [] on a database without E-343.
+  // IDs 85 / 86 — missed time limits on this lead (fixed records, E-350),
+  // merged into the timeline. [] on a database without E-350.
   let limitEvents: TimelineLimitEvent[] = [];
   try {
     limitEvents = (await limitPassedEvents({ leadId: id })).map((e) => ({
