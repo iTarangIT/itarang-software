@@ -1,5 +1,6 @@
 "use client";
 
+import { PastLimitChip } from "@/components/leads/past-limit-chip";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -228,6 +229,7 @@ export function AsmQueueTable({
                                         >
                                             {row.dealer_name || row.shop_name || "(unnamed dealer)"}
                                         </Link>
+                                        {row.past_limit && <PastLimitChip className="ml-1.5" />}
                                         {row.shop_name && row.dealer_name && (
                                             <div className="text-[11px] text-gray-500 mt-0.5">{row.shop_name}</div>
                                         )}

@@ -3,10 +3,16 @@
 // THEIR page: an ASM's /asm/lead/[id], everyone else's /inside-sales/lead/[id]
 // (the page that admits ISR, partner and the managers).
 //
-//   notifyLeadsReassigned   reassign (Leads page, owner's own, Assistant)
+//   notifyLeadsReassigned   reassign (Leads page, owner's own, Assistant) —
+//                           and, ID 179, the rep the lead was taken from
+//   notifyPreviousOwners    ID 179: the rep who LOSES a lead on a manager's
+//                           reassign or transfer ("Lead moved to <name> by
+//                           <manager>. Reason: …")
 //   notifyLeadsReturned     a reactivated lead back with its person
 //   notifyLeadPerson        one person, one lead, any message (visit done,
 //                           escalation resolved, deal card changed, …)
+//   transferWatchers        ID 179: who hears a visit update — the owner at
+//                           the moment of transfer and whoever pressed it
 //
 // Run AFTER the change is saved; never throws (best-effort). One bell per lead
 // up to BULK_NOTICE_LIMIT leads; above that, one summary row that opens the
@@ -89,12 +95,16 @@ async function notifyLeadsMoved(input: {
     }
 }
 
-/** Reassign: the new owner. */
+/**
+ * Reassign: the new owner — and (ID 179) each lead's previous owner, when the
+ * caller passes `fromOwners` (lead id → owner before the move).
+ */
 export async function notifyLeadsReassigned(input: {
     leadIds: string[];
     targetUserId: string;
     actorId: string;
     reason?: string | null;
+    fromOwners?: Record<string, string | null | undefined>;
 }): Promise<void> {
     await notifyLeadsMoved({
         ...input,
@@ -102,6 +112,67 @@ export async function notifyLeadsReassigned(input: {
         title: { one: "Lead assigned to you", many: (n) => `${n} leads assigned to you` },
         verb: "reassigned",
     });
+    if (input.fromOwners) {
+        await notifyPreviousOwners({
+            moves: input.leadIds.map((leadId) => ({ leadId, fromOwnerId: input.fromOwners?.[leadId] ?? null })),
+            toUserId: input.targetUserId,
+            actorId: input.actorId,
+            reason: input.reason,
+        });
+    }
+}
+
+/**
+ * ID 179 (Kartik 15 Oct) — the rep who loses a lead is told: "Lead moved to
+ * <name> by <manager>. Reason: …". Only when someone ELSE moved it (a rep's
+ * own reassign or transfer tells nobody they already know) and not when the
+ * lead comes back to the same person. One bell per lead up to
+ * BULK_NOTICE_LIMIT per previous owner, else one summary. The bell opens the
+ * person's queue — the lead is no longer theirs to open. Never throws.
+ */
+export async function notifyPreviousOwners(input: {
+    moves: Array<{ leadId: string; fromOwnerId: string | null | undefined }>;
+    toUserId: string;
+    actorId: string | null | undefined;
+    reason?: string | null;
+}): Promise<void> {
+    const byOwner = new Map<string, string[]>();
+    for (const m of input.moves) {
+        const from = m.fromOwnerId;
+        if (!from || from === input.actorId || from === input.toUserId || !m.leadId) continue;
+        byOwner.set(from, [...new Set([...(byOwner.get(from) ?? []), m.leadId])]);
+    }
+    if (byOwner.size === 0) return;
+    try {
+        const who = await people([...byOwner.keys(), input.toUserId, input.actorId ?? ""]);
+        const to = who.get(input.toUserId)?.name ?? "someone else";
+        const by = (input.actorId && who.get(input.actorId)?.name) || "your manager";
+        const why = input.reason?.trim() ? ` Reason: ${input.reason.trim()}` : "";
+        for (const [ownerId, leadIds] of byOwner) {
+            const href = queueHrefFor(who.get(ownerId)?.role);
+            if (leadIds.length > BULK_NOTICE_LIMIT) {
+                await notifyUser(ownerId, {
+                    type: "lead.moved_away",
+                    title: `${leadIds.length} of your leads moved to ${to}`,
+                    message: `${leadIds.length} of your leads moved to ${to} by ${by}.${why}`,
+                    data: { href, lead_ids: leadIds.slice(0, 200), to: input.toUserId, by: input.actorId ?? null },
+                });
+                continue;
+            }
+            const names = await leadNames(leadIds);
+            for (const id of leadIds) {
+                await notifyUser(ownerId, {
+                    type: "lead.moved_away",
+                    title: "Lead moved away from you",
+                    message: `${names.get(id) ?? "A lead"} moved to ${to} by ${by}.${why}`,
+                    leadId: id,
+                    data: { href, to: input.toUserId, by: input.actorId ?? null },
+                });
+            }
+        }
+    } catch (err) {
+        console.error("[lead-notice] lead.moved_away failed:", err);
+    }
 }
 
 /** Reactivation / drop-out re-engage: the person the lead went back to. */
@@ -146,7 +217,32 @@ export async function notifyLeadPerson(input: {
     }
 }
 
-/** The person who last handed this lead to the ASM (latest asm_transfer), for visit outcomes. */
+/**
+ * ID 179 — who hears a visit update (booked / done / not needed): the lead's
+ * owner AT THE MOMENT of the latest transfer (from_owner_id) and whoever
+ * pressed Transfer (performed_by) — once if they are the same person. Old
+ * rows without from_owner_id give just the presser. Empty on any failure.
+ */
+export async function transferWatchers(leadId: string): Promise<string[]> {
+    try {
+        const rows = (await db.execute<{ owner: string | null; by: string | null }>(sql`
+            SELECT from_owner_id AS owner, performed_by AS by FROM lead_touchpoints
+             WHERE dealer_lead_id = ${leadId} AND touchpoint_type = 'asm_transfer'
+               AND (performed_by IS NOT NULL OR from_owner_id IS NOT NULL)
+             ORDER BY performed_at DESC LIMIT 1
+        `)) as unknown as Array<{ owner: string | null; by: string | null }>;
+        const r = rows[0];
+        return r ? [...new Set([r.owner, r.by].filter((x): x is string => !!x))] : [];
+    } catch {
+        return [];
+    }
+}
+
+/**
+ * The person who last handed this lead to the ASM (latest asm_transfer).
+ * @deprecated visit outcomes go to transferWatchers() (ID 179) — the owner at
+ * the moment of transfer too, not only the manager who pressed.
+ */
 export async function lastTransferredBy(leadId: string): Promise<string | null> {
     try {
         const rows = (await db.execute<{ by: string | null }>(sql`

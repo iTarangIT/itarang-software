@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import { NeodovePushPanel } from "@/components/leads/neodove-push-panel";
 import { NeodoveCampaignModal } from "@/components/leads/neodove-campaign-modal";
+import { NeodoveEndpointForm } from "@/components/leads/neodove-endpoint-form";
 
 type Detail = {
     campaign: {
@@ -35,6 +36,9 @@ type Detail = {
         is_wired?: boolean;
         /** Other campaigns pushing into the SAME NeoDove campaign via this ref. */
         endpoint_shared_with?: { id: string; name: string }[];
+        /** A32 — stored (encrypted) endpoints: last 4 characters only. */
+        stored_endpoints?: Partial<Record<"push" | "update", { last4: string; updated_at: string }>>;
+        endpoint_store?: { ready: boolean; reason: string | null };
         // Passed straight back into the edit modal. Omitting it is not neutral:
         // the modal treats "every mirror field blank on an existing campaign" as
         // "this mirror was wrong, clear it", so a campaign edited from this page
@@ -208,7 +212,7 @@ export default function NeodoveCampaignDetailPage({
                 Distinct from the case above and far more dangerous: this campaign
                 looked configured, and before is_wired became a real check it was
                 offered as a destination in the Send-to-NeoDove dropdown. */}
-            {c.push_endpoint_ref && c.is_wired === false && (
+            {c.push_endpoint_ref && c.push_endpoint_ref !== "DB" && c.is_wired === false && (
                 <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800 flex gap-2">
                     <Info className="w-4 h-4 mt-0.5 shrink-0" />
                     <div>
@@ -251,6 +255,14 @@ export default function NeodoveCampaignDetailPage({
                     </p>
                 </div>
             )}
+
+            {/* A32 — Admin wires the campaign from here; no developer, no restart. */}
+            <NeodoveEndpointForm
+                campaignId={c.id}
+                stored={c.stored_endpoints}
+                store={c.endpoint_store}
+                onSaved={() => void queryClient.invalidateQueries({ queryKey: ["neodove-campaign", id] })}
+            />
 
             {editing && (
                 <NeodoveCampaignModal

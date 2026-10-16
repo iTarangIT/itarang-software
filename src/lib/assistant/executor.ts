@@ -67,7 +67,10 @@ export type ExecOutcome =
     | { kind: "failed_before" }
     | { kind: "awaiting_second_confirm" }
     | { kind: "not_found" }
-    | { kind: "rejected"; reason: RejectReason }
+    /** A second tap on a confirmed send (send_quote / dealer invite) where nothing went out. */
+    | { kind: "send_failed" }
+    /** `message`: the writer's own sentence, for reason "refused". */
+    | { kind: "rejected"; reason: RejectReason; message?: string }
     | { kind: "error"; message: string };
 
 /** Why a tap could not claim a pending action. */
@@ -77,6 +80,7 @@ type Unclaimable = Extract<
         kind:
             | "expired"
             | "already_done"
+            | "send_failed"
             | "already_cancelled"
             | "superseded"
             | "in_progress"
@@ -112,7 +116,9 @@ export async function classifyUnclaimable(actionId: string, userId: string): Pro
         case "expired":
             return { kind: "expired" };
         case "confirmed":
-            return { kind: "already_done" };
+            // The action was recorded, but its external send went nowhere
+            // (markSendFailed): a new card is the way to try again.
+            return r.error?.startsWith(SEND_FAILED) ? { kind: "send_failed" } : { kind: "already_done" };
         case "cancelled":
             return r.error?.startsWith("superseded") ? { kind: "superseded" } : { kind: "already_cancelled" };
         case "executing":
@@ -122,6 +128,33 @@ export async function classifyUnclaimable(actionId: string, userId: string): Pro
         default:
             return { kind: "failed_before" };
     }
+}
+
+/** `error` prefix on a CONFIRMED action whose afterCommit send delivered nothing. */
+const SEND_FAILED = "send_failed";
+
+/** The action stays confirmed (its write committed); the note only changes what a repeat tap says. */
+async function markSendFailed(actionId: string, why: string): Promise<void> {
+    await db.execute(sql`
+        UPDATE assistant_actions SET error = ${`${SEND_FAILED}: ${why}`.slice(0, 1000)}, updated_at = now()
+         WHERE id = ${actionId}::uuid AND status = 'confirmed'
+    `);
+}
+
+/**
+ * A CRM writer's refusal, as the sentence to show the rep — or null for a real
+ * crash. The writers mark a refusal by carrying an HTTP 4xx `status` (that is
+ * how withErrorHandler answers the screen with the same sentence):
+ * StatusGuardError, WithdrawQuoteError, CommercialInputError,
+ * AlreadyWonGstinChangeError, ReassignError, EscalateError, CampaignError,
+ * AsmVisitBookedError, …
+ */
+export function writerRefusal(err: unknown): string | null {
+    if (!(err instanceof Error)) return null;
+    const status = (err as { status?: unknown }).status;
+    if (typeof status !== "number" || status < 400 || status >= 500) return null;
+    const message = err.message.trim();
+    return message || null;
 }
 
 async function markFailed(actionId: string, error: string): Promise<void> {
@@ -262,21 +295,32 @@ export async function executeAction(
             } catch (err) {
                 console.error(`[assistant] afterCommit failed for ${action.tool} ${action.id}:`, err);
             }
+            if (applier.sendFailed?.(outcome.extra)) {
+                await markSendFailed(action.id, String(outcome.extra?.error ?? "nothing was sent")).catch((err) =>
+                    console.error(`[assistant] could not note the failed send on ${action.id}:`, err),
+                );
+            }
         }
         return outcome;
     } catch (err) {
-        const reason =
+        const refusal = err instanceof ActionRejected ? null : writerRefusal(err);
+        const reason: RejectReason | null =
             err instanceof ActionRejected
                 ? err.reason
                 : err instanceof StaleLeadError
                   ? "stale"
                   : err instanceof ForbiddenLeadAccessError
                     ? "not_owner"
-                    : null;
+                    : refusal
+                      ? "refused"
+                      : null;
         const message = err instanceof Error ? err.message : String(err);
-        await markFailed(action.id, reason ? `rejected: ${reason}` : message);
+        // The writer's sentence, when it refused: from an ActionRejected("refused", …) or the error itself.
+        const detail = err instanceof ActionRejected ? err.detail : refusal;
+        await markFailed(action.id, reason ? `rejected: ${reason}${detail ? ` — ${detail}` : ""}` : message);
         settled = true;
-        return reason ? { kind: "rejected", reason } : { kind: "error", message };
+        if (!reason) return { kind: "error", message };
+        return detail ? { kind: "rejected", reason, message: detail } : { kind: "rejected", reason };
     } finally {
         // Never leave an action `executing` — even if markFailed itself threw.
         if (!settled) await markFailed(action.id, "executor aborted").catch(() => {});

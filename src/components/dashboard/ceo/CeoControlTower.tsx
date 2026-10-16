@@ -114,7 +114,7 @@ export function CeoControlTower({ windowQs }: { windowQs: string }) {
                                     : undefined
                             }
                         />
-                        <Exception label="Leads idle over 7 working days" count={x.idle_over_7d} href="/admin/reports/needs-attention" />
+                        <Exception label={`Leads idle past the limit (${x.idle_limit_label ?? "Admin › Time limits"})`} count={x.idle_over_7d} href="/admin/reports/needs-attention" />
                         <Exception
                             label="Dealers in Red / Dormant"
                             count={x.red_dormant_dealers}

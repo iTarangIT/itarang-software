@@ -7,6 +7,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { requireAdminAppUser } from "@/lib/kyc/admin-workflow";
+import { nbfcObjectGate } from "@/lib/nbfc/adminRequestAccess";
 import { forwardRejectionToDealer } from "@/lib/nbfc/rejection-forward";
 
 export const runtime = "nodejs";
@@ -28,6 +29,8 @@ export async function POST(
       return NextResponse.json({ success: false, error: { message: "Unauthorized" } }, { status: 403 });
     }
     const { assignmentId } = await params;
+    const notYours = await nbfcObjectGate(appUser, "assignment", assignmentId);
+    if (notYours) return notYours;
     const result = await forwardRejectionToDealer({
       assignmentId,
       source: "admin",

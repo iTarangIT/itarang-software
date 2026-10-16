@@ -61,6 +61,8 @@ export function LeadDetailRightPane({ bundle, viewerRole }: Props) {
     const lead = bundle.lead;
     const cc = bundle.current_commercials;
     const queryClient = useQueryClient();
+    // ID 186: an onboarded dealer's quotes carry no deal card — none is shown.
+    const onboarded = bundle.dealer_onboarded?.onboarded ? bundle.dealer_onboarded : null;
 
     // ID 60 / 61: the quote the dealer can answer is the newest approved,
     // not-withdrawn QUOTE — which is not always the newest row. Final terms, a
@@ -248,9 +250,17 @@ export function LeadDetailRightPane({ bundle, viewerRole }: Props) {
                                                         cc={cc}
                                                         onSend={() => setSendFor(cc.commercial_id)}
                                                         onWithdraw={() => void withdraw(cc.commercial_id)}
+                                                        hideDealCard={!!onboarded}
                                                     />
-                                                    {/* ID 172: the deal card of the current version. */}
-                                                    <DealCardBlock leadId={lead.id} cc={cc} viewerRole={viewerRole} />
+                                                    {/* ID 172: the deal card of the current version —
+                                                        ID 186: none for an onboarded dealer. */}
+                                                    {onboarded ? (
+                                                        <p className="rounded-md border border-gray-100 bg-gray-50 px-2 py-1.5 text-[11px] text-gray-600">
+                                                            No deal card: {onboarded.reason}
+                                                        </p>
+                                                    ) : (
+                                                        <DealCardBlock leadId={lead.id} cc={cc} viewerRole={viewerRole} />
+                                                    )}
                                                     {liveQuoteBelow && (
                                                         <div className="space-y-1.5">
                                                             <p className="text-xs text-gray-500">
@@ -282,6 +292,7 @@ export function LeadDetailRightPane({ bundle, viewerRole }: Props) {
                                                     )}
                                                     <CommercialsVersionHistory
                                                         history={bundle.commercials_history}
+                                                        hideDealCard={!!onboarded}
                                                     />
                                                 </>
                                             ) : (

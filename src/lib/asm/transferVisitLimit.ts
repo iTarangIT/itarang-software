@@ -3,8 +3,9 @@
  * the ASM's first visit is due within N working days (Mon–Sat, active
  * holidays off) of the transfer. N is the `asm_transfer_first_visit` time
  * limit (ID 85, src/lib/timeLimits — dated, edited on Admin › Settings › Time
- * limits; E-337 copied the old app_settings value across), default 3 — read
- * it with getTimeLimits() and pass it to transferVisitOverdueSql().
+ * limits; E-337 copied the old app_settings value across), default 3. Each
+ * transfer is judged by the limit in force on the day it happened (dated
+ * limits, 15 Oct): pass transferLimitSql() to transferVisitOverdueSql().
  *
  * Overdue = the lead is STILL Transferred_to_ASM, more than N working days have
  * passed since its latest move into Transferred_to_ASM (lead_status_history;
@@ -15,6 +16,7 @@
 import { sql, type SQL } from "drizzle-orm";
 
 import { workingDaysSinceSql } from "@/lib/calendar/holidays";
+import { limitOnDay } from "@/lib/timeLimits/store";
 
 /** When the lead (aliased `dl`) last entered Transferred_to_ASM — raw SQL text. */
 export const TRANSFER_AT_EXPR = `COALESCE((
@@ -25,10 +27,20 @@ export const TRANSFER_AT_EXPR = `COALESCE((
 /** Working days (Mon–Sat, holidays off, IST) since the transfer — an int scalar. */
 export const TRANSFER_WORKING_DAYS_SQL: SQL = workingDaysSinceSql(sql.raw(TRANSFER_AT_EXPR));
 
-/** Boolean predicate over `dl`: the transfer's first visit is overdue at `limitDays`. */
-export function transferVisitOverdueSql(limitDays: number): SQL {
-    const limit = sql.raw(String(Math.max(0, Math.floor(limitDays))));
-    return sql`(${awaitingFieldVisitSql()} AND ${TRANSFER_WORKING_DAYS_SQL} > ${limit})`;
+/** The asm_transfer_first_visit limit in force on the IST day of the lead's (`dl`) transfer. */
+export async function transferLimitSql(): Promise<SQL> {
+    const onDay = await limitOnDay("asm_transfer_first_visit");
+    return onDay(sql`((${sql.raw(TRANSFER_AT_EXPR)}) AT TIME ZONE 'Asia/Kolkata')::date`);
+}
+
+/**
+ * Boolean predicate over `dl`: the transfer's first visit is overdue. `limit`
+ * is a number of working days, or transferLimitSql() — the limit in force on
+ * the transfer's day.
+ */
+export function transferVisitOverdueSql(limit: number | SQL): SQL {
+    const l = typeof limit === "number" ? sql.raw(String(Math.max(0, Math.floor(limit)))) : sql`FLOOR(${limit})`;
+    return sql`(${awaitingFieldVisitSql()} AND ${TRANSFER_WORKING_DAYS_SQL} > ${l})`;
 }
 
 /** Boolean predicate over `dl`: waiting for the ASM's first visit, past the limit or not. */

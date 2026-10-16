@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { safeEqual } from "@/lib/cron-auth";
 import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
 import { db } from "@/lib/db";
@@ -35,7 +36,9 @@ async function requireAdmin(req: NextRequest) {
     if (
       headerId &&
       allowedHeader &&
-      allowedHeader === (process.env.NBFC_TEST_BYPASS_SECRET || "test-bypass")
+      // ID 130: timing-safe, and no default secret — unset env = no bypass.
+      !!process.env.NBFC_TEST_BYPASS_SECRET &&
+      safeEqual(allowedHeader, process.env.NBFC_TEST_BYPASS_SECRET)
     ) {
       const numericId = Number(headerId);
       if (!Number.isFinite(numericId)) return null;

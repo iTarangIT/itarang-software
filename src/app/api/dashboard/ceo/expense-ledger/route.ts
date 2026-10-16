@@ -36,6 +36,7 @@ import {
 import { db } from "@/lib/db";
 import { expenseSubmissions, users } from "@/lib/db/schema";
 import { requireAuth } from "@/lib/auth-utils";
+import { withAllowedBill } from "@/lib/expenses/billAccess";
 import { errorMessage, isNextRedirectError } from "@/lib/api-utils";
 import { resolveWindowParams } from "@/lib/dashboard/salesWindow";
 import {
@@ -235,6 +236,7 @@ export async function GET(req: NextRequest) {
         bill_url: expenseSubmissions.bill_url,
         created_at: expenseSubmissions.created_at,
         submitter_name: users.name,
+        submitted_by: expenseSubmissions.submitted_by,
       })
       .from(expenseSubmissions)
       .leftJoin(users, eq(expenseSubmissions.submitted_by, users.id))
@@ -326,7 +328,11 @@ export async function GET(req: NextRequest) {
         departments,
         grandTotal,
         grandCount,
-        rows: capped ? fetchedRows.slice(0, ROW_CAP) : fetchedRows,
+        // ID 166: bill links only for Finance, Admin, CEO or the submitter —
+        // the Sales Head sees the ledger without other people's bills.
+        rows: (capped ? fetchedRows.slice(0, ROW_CAP) : fetchedRows).map(({ submitted_by, ...row }) =>
+          withAllowedBill(row, submitted_by, user),
+        ),
         vendors: vendorRows
           .map((v) => v.vendor)
           .filter((v): v is string => Boolean(v)),

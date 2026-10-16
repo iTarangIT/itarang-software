@@ -18,7 +18,7 @@
 
 import { z } from "zod";
 import { requireRole } from "@/lib/auth-utils";
-import { lastTransferredBy, notifyLeadPerson } from "@/lib/leads/newOwnerNotice";
+import { notifyLeadPerson, transferWatchers } from "@/lib/leads/newOwnerNotice";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
 import { recordVisit } from "@/lib/asm/recordVisit";
 import { applyVisitStatus } from "@/lib/asm/visitStatus";
@@ -122,11 +122,12 @@ export const POST = withErrorHandler(
         });
 
         // 12 Oct: the person who transferred the lead hears how the visit went
-        // (or when it is booked). The bell opens the lead.
+        // (or when it is booked). The bell opens the lead. ID 179: so does the
+        // rep who owned it at the transfer, when a manager pressed Transfer.
         if (visited || visit.visit_status === "scheduled") {
             const outcome = visit.visit_outcome ? visit.visit_outcome.replace(/_/g, " ") : null;
-            await notifyLeadPerson({
-                userId: await lastTransferredBy(id),
+            for (const watcher of await transferWatchers(id)) await notifyLeadPerson({
+                userId: watcher,
                 actorId: user.id,
                 leadId: id,
                 type: "lead.visit_update",

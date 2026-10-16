@@ -14,6 +14,8 @@
 
 import { sql } from "drizzle-orm";
 import {
+    AIMessage,
+    HumanMessage,
     ToolMessage,
     mapChatMessagesToStoredMessages,
     mapStoredMessagesToChatMessages,
@@ -25,19 +27,53 @@ import { db } from "@/lib/db";
 export const MAX_TURNS = 20;
 export const IDLE_RESET_MS = 24 * 60 * 60 * 1000;
 export const TOOL_MESSAGE_MAX_CHARS = 1500;
+/** A quote is re-sent whole on a revision (prompt rule 16) — clipping it loses lines. */
+export const QUOTE_MESSAGE_MAX_CHARS = 8000;
+/** A compacted list (10 rows of id / shop / city / phone) fits whole. */
+export const LIST_MESSAGE_MAX_CHARS = 2500;
 
-/** Keep the last `maxTurns` human-started turns; clip tool results. Pure. */
+type Row = Record<string, unknown>;
+
+/**
+ * A list result as memory keeps it: which leads, in the order shown, with what
+ * a follow-up needs to point at one ("teesre wale", "Sharma wala ka number").
+ * Clipping the raw JSON instead cut the list after two or three rows. Pure.
+ */
+export function compactToolContent(content: string): string {
+    let r: Row;
+    try {
+        r = JSON.parse(content) as Row;
+    } catch {
+        return content;
+    }
+    if (!r || typeof r !== "object" || !Array.isArray(r.rows)) return content;
+    if (r.kind !== "leads" && r.kind !== "candidates" && r.kind !== "lead_report") return content;
+    const rows = (r.rows as Row[]).map((x) => ({ id: x.id, shop_name: x.shop_name, city: x.city, phone: x.phone }));
+    return JSON.stringify({
+        kind: r.kind,
+        ...(r.kind === "candidates" ? { question: r.question } : { title: r.title, total: r.total }),
+        rows,
+    });
+}
+
+/** Keep the last `maxTurns` human-started turns; compact lists, clip tool results. Pure. */
 export function trimTurns(messages: BaseMessage[], maxTurns = MAX_TURNS): BaseMessage[] {
     const humanIdx = messages.flatMap((m, i) => (m.getType() === "human" ? [i] : []));
     const start = humanIdx.length > maxTurns ? humanIdx[humanIdx.length - maxTurns] : (humanIdx[0] ?? messages.length);
     return messages.slice(start).map((m) => {
         if (m.getType() !== "tool") return m;
-        const content = typeof m.content === "string" ? m.content : JSON.stringify(m.content);
-        if (content.length <= TOOL_MESSAGE_MAX_CHARS) return m;
+        const raw = typeof m.content === "string" ? m.content : JSON.stringify(m.content);
+        const content = compactToolContent(raw);
+        const max = content.startsWith('{"kind":"quote"')
+            ? QUOTE_MESSAGE_MAX_CHARS
+            : content !== raw
+              ? LIST_MESSAGE_MAX_CHARS
+              : TOOL_MESSAGE_MAX_CHARS;
+        if (content === raw && content.length <= max) return m;
         const t = m as ToolMessage;
         return new ToolMessage({
             tool_call_id: t.tool_call_id,
-            content: content.slice(0, TOOL_MESSAGE_MAX_CHARS) + "…(truncated)",
+            content: content.length <= max ? content : content.slice(0, max) + "…(truncated)",
         });
     });
 }
@@ -121,10 +157,37 @@ export async function saveHistory(
     channel = "whatsapp",
 ): Promise<void> {
     const stored = { toolset, messages: mapChatMessagesToStoredMessages(trimTurns(messages)) };
+    // Merged, not replaced: an Edit tap during this turn set `editing` beside
+    // the history, and it must survive this save.
     await db.execute(sql`
         INSERT INTO assistant_conversations (user_id, channel, messages, last_activity_at)
         VALUES (${userId}::uuid, ${channel}, ${JSON.stringify(stored)}::jsonb, now())
         ON CONFLICT (user_id, channel) DO UPDATE
-           SET messages = EXCLUDED.messages, last_activity_at = now(), updated_at = now()
+           SET messages = CASE WHEN jsonb_typeof(assistant_conversations.messages) = 'object'
+                               THEN assistant_conversations.messages ELSE '{}'::jsonb END || EXCLUDED.messages,
+               last_activity_at = now(), updated_at = now()
+    `);
+}
+
+/**
+ * A tap the model never saw (a list row, Confirm, Cancel, Edit) as a short
+ * human / AI pair at the end of the stored history, so "save hua?" or "uska
+ * number" after a tap has something to go on. Only onto a live history (same
+ * idle rule as loadHistory); no tool calls, so the call → result pairing is
+ * untouched. Run under the user's lease so an agent turn's save can't drop it.
+ */
+export async function appendHistory(
+    userId: string,
+    note: { human: string; ai: string },
+    channel = "whatsapp",
+): Promise<void> {
+    const pair = mapChatMessagesToStoredMessages([new HumanMessage(note.human), new AIMessage(note.ai)]);
+    await db.execute(sql`
+        UPDATE assistant_conversations
+           SET messages = jsonb_set(messages, '{messages}', (messages -> 'messages') || ${JSON.stringify(pair)}::jsonb),
+               last_activity_at = now(), updated_at = now()
+         WHERE user_id = ${userId}::uuid AND channel = ${channel}
+           AND jsonb_typeof(messages) = 'object' AND jsonb_typeof(messages -> 'messages') = 'array'
+           AND last_activity_at > now() - make_interval(secs => ${IDLE_RESET_MS / 1000})
     `);
 }

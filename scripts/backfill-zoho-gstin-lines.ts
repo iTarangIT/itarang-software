@@ -37,6 +37,7 @@ import { fetchContactGstin } from "@/lib/zoho/contacts";
 import { classifyHsn, normalizeHsn } from "@/lib/sales/invoiceLines";
 import { classFor, itemKeySql, mappedItems, productFor } from "@/lib/sales/itemMap";
 import { screenCustomerGstin } from "@/lib/leads/gstin";
+import { recordZohoInvoiceSerials } from "@/lib/inventory/stockUploadTasks/zohoHook";
 
 const args = process.argv.slice(2);
 const COMMIT = args.includes("--commit");
@@ -143,7 +144,7 @@ async function main() {
                         INSERT INTO invoice_line_items
                                (source, invoice_id, line_no, item_name, hsn, product_class, asset_type, product_id,
                                 quantity, rate, amount_excl_gst)
-                        VALUES ('zoho', ${inv.id}, ${n}, ${name}, ${hsn}, ${classFor(m, classifyHsn(hsn))}, ${m.asset_type},
+                        VALUES ('zoho', ${inv.id}, ${n}, ${name}, ${hsn}, ${classFor(m, classifyHsn(hsn), hsn)}, ${m.asset_type},
                                 ${m.product_id}, ${l.quantity ?? null}, ${l.rate ?? null}, ${l.item_total ?? null})
                     `);
                 }
@@ -154,6 +155,9 @@ async function main() {
                 }
                 lineRows += n;
             });
+            // ID 174: a battery invoice dated from the day stock tasks went live
+            // opens its "Stock to upload" task (older ones: nothing). Never throws.
+            await recordZohoInvoiceSerials(inv.id, d.line_items);
             const k = `${inv.organization_id}:${inv.customer_id}`;
             const g = screenCustomerGstin(d.gst_no);
             if (g.attention) {

@@ -90,6 +90,16 @@ export default function AddInventoryItemPage() {
   // Inline error for live duplicate-serial check on blur.
   const [serialError, setSerialError] = useState<string | null>(null);
 
+  // ID 173: only Admin, Inventory Manager and partner add stock here; the
+  // Sales Head, Ops and the CEO keep viewing inventory but get a refusal.
+  const [uploadMode, setUploadMode] = useState<"any" | "own" | "none" | null>(null);
+  useEffect(() => {
+    fetch("/api/inventory/bulk-upload")
+      .then((r) => r.json())
+      .then((j) => setUploadMode(j?.data?.mode ?? null))
+      .catch(() => setUploadMode(null));
+  }, []);
+
   useEffect(() => {
     (async () => {
       try {
@@ -360,6 +370,20 @@ export default function AddInventoryItemPage() {
       setSubmitting(false);
     }
   };
+
+  if (uploadMode === "none" || uploadMode === "own") {
+    return (
+      <div className="p-8 max-w-4xl mx-auto space-y-4">
+        <Link href="/admin/inventory" className="text-sm text-blue-600 hover:underline">
+          ← Back to inventory
+        </Link>
+        <div className="bg-amber-50 border border-amber-200 text-amber-900 rounded-lg p-4 text-sm">
+          Only Admin, the Inventory Manager and the partner login can add stock for a dealer.
+          You can still view inventory.
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="p-8 max-w-4xl mx-auto space-y-6">

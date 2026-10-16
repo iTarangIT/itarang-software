@@ -17,7 +17,16 @@ vi.mock("@/lib/leads/markLost", async (orig) => ({ ...(await orig<typeof import(
 const setInterestLevel = vi.fn<(...a: unknown[]) => Promise<unknown>>(async () => ({ changed: true }));
 vi.mock("@/lib/leads/interestLevel", () => ({ setInterestLevel }));
 const scheduleVisit = vi.fn<(...a: unknown[]) => Promise<unknown>>(async () => ({ visitId: "v-1" }));
-vi.mock("@/lib/asm/recordVisit", () => ({ scheduleVisit, recordVisit: vi.fn() }));
+const recordVisit = vi.fn<(...a: unknown[]) => Promise<unknown>>(async () => ({ visitId: "v-1", scheduledVisitId: null }));
+vi.mock("@/lib/asm/recordVisit", () => ({ scheduleVisit, recordVisit }));
+// The visit route's "Field visit booked" notice.
+const notifyLeadPerson = vi.fn<(...a: unknown[]) => Promise<void>>(async () => {});
+const lastTransferredBy = vi.fn<(...a: unknown[]) => Promise<string | null>>(async () => "isr-1");
+vi.mock("@/lib/leads/newOwnerNotice", async (orig) => ({
+    ...(await orig<typeof import("@/lib/leads/newOwnerNotice")>()),
+    notifyLeadPerson,
+    lastTransferredBy,
+}));
 
 const { toolsFor } = await import("../registry");
 const { APPLIERS } = await import("../appliers");
@@ -159,21 +168,38 @@ describe("set_follow_up proposals (UC-07)", () => {
 
     it("UC-07 ASM: 'Schedule Gupta Motors for Monday' → a scheduled visit that goes to Today's Schedule", async () => {
         findLeadInScope.mockResolvedValue(lead({ current_owner_id: "asm-1", asm_id: "asm-1", shop_name: "Gupta Motors" }));
-        const r = await run(ASM, "set_follow_up", { lead_id: "DL-1", visit_date: "2026-09-28", note: "discuss quote" });
+        const r = await run(ASM, "set_follow_up", { lead_id: "DL-1", kind: "visit", visit_date: "2026-09-28", note: "discuss quote" });
         expect(r.kind).toBe("preview");
         expect(stored().plan).toEqual({ kind: "asm_visit", lead_id: "DL-1", visit_date: "2026-09-28", note: "discuss quote" });
         expect(stored().preview).toMatchObject({ title: "Schedule visit — Gupta Motors", warning: null });
         expect(stored().preview.lines[0]).toEqual({ label: "Visit", value: "Mon 28 Sep (goes to Today's Schedule)" });
+        // Decided 15 Oct: a booked visit writes the screen's `visit` touchpoint — work, the idle clock resets.
+        expect(stored().preview.resets_idle_clock).toBe(true);
+    });
+
+    it("decided 15 Oct — ASM kind call: 'call back kal 4 baje' is a call follow-up with its time, like the ISR's", async () => {
+        findLeadInScope.mockResolvedValue(lead({ current_owner_id: "asm-1", asm_id: "asm-1" }));
+        const r = await run(ASM, "set_follow_up", { lead_id: "DL-1", kind: "call", follow_up_at: "2026-09-25T16:00:00+05:30", note: "call back" });
+        expect(r.kind).toBe("preview");
+        expect(stored().plan).toEqual({ kind: "isr_follow_up", lead_id: "DL-1", follow_up_at: "2026-09-25T10:30:00.000Z", note: "call back" });
+        expect(stored().preview.title).toBe("Set follow-up — Shree Motors");
+        expect(stored().preview.lines[0]).toEqual({ label: "Follow-up", value: "Fri 25 Sep, 16:00" });
+        expect(stored().preview.resets_idle_clock).toBe(false);
+        // A kind without its date → asked, nothing proposed.
+        createPending.mockClear();
+        expect((await run(ASM, "set_follow_up", { lead_id: "DL-1", kind: "call", note: "x" })).kind).toBe("question");
+        expect((await run(ASM, "set_follow_up", { lead_id: "DL-1", kind: "visit", note: "x" })).kind).toBe("question");
+        expect(createPending).not.toHaveBeenCalled();
     });
 
     it("ASM: warns when the lead's field ASM isn't them; declines an already-scheduled day; refuses past dates", async () => {
         findLeadInScope.mockResolvedValue(lead({ current_owner_id: "asm-1", asm_id: null }));
-        await run(ASM, "set_follow_up", { lead_id: "DL-1", visit_date: "2026-09-28", note: "x" });
+        await run(ASM, "set_follow_up", { lead_id: "DL-1", kind: "visit", visit_date: "2026-09-28", note: "x" });
         expect(stored().preview.warning).toMatch(/won't show in your Today's Schedule/);
         existingVisits.push({ id: "v" });
-        expect((await run(ASM, "set_follow_up", { lead_id: "DL-1", visit_date: "2026-09-28", note: "x" })).kind).toBe("declined");
+        expect((await run(ASM, "set_follow_up", { lead_id: "DL-1", kind: "visit", visit_date: "2026-09-28", note: "x" })).kind).toBe("declined");
         existingVisits.length = 0;
-        expect((await run(ASM, "set_follow_up", { lead_id: "DL-1", visit_date: "2026-09-20", note: "x" })).kind).toBe("question");
+        expect((await run(ASM, "set_follow_up", { lead_id: "DL-1", kind: "visit", visit_date: "2026-09-20", note: "x" })).kind).toBe("question");
     });
 });
 
@@ -216,13 +242,33 @@ describe("appliers (run inside the executor's transaction)", () => {
         expect(markLeadLost).not.toHaveBeenCalled();
     });
 
-    it("UC-07: ASM visit → scheduleVisit + a note, same tx; a plan can't be applied by the other role", async () => {
+    it("UC-07: ASM visit → the visit form's own writer (recordVisit, a scheduled row + `visit` touchpoint), same tx; booked notice after commit", async () => {
         const plan = { kind: "asm_visit", lead_id: "DL-1", visit_date: "2026-09-28", note: "discuss quote" };
         const after = await apply("set_follow_up", ASM, plan);
-        expect(scheduleVisit).toHaveBeenCalledWith({ leadId: "DL-1", asmId: "asm-1", date: "2026-09-28", remarks: "discuss quote" }, { tx: TX });
-        expect(logLeadTouchpoint).toHaveBeenCalledWith(expect.anything(), { tx: TX });
-        expect(after).toEqual({ scheduled_visit_id: "v-1", touchpoint_id: "tp-1" });
+        // What VisitFields posts to book a visit: status scheduled, the day, next visit that day.
+        expect(recordVisit).toHaveBeenCalledWith(
+            {
+                leadId: "DL-1", asmId: "asm-1", visit_status: "scheduled", scheduled_date: "2026-09-28",
+                visit_remarks: "discuss quote", next_action: "next_visit", next_visit_date: "2026-09-28",
+            },
+            { tx: TX },
+        );
+        expect(scheduleVisit).not.toHaveBeenCalled();
+        expect(logLeadTouchpoint).not.toHaveBeenCalled();
+        expect(after).toMatchObject({ scheduled_visit_id: "v-1" });
+        expect(notifyLeadPerson).not.toHaveBeenCalled();
+        await after.afterCommit!();
+        expect(notifyLeadPerson).toHaveBeenCalledWith({
+            userId: "isr-1", actorId: "asm-1", leadId: "DL-1", type: "lead.visit_update", title: "Field visit booked",
+            message: "{by} booked a visit to {lead} on 2026-09-28.",
+        });
         await expect(apply("set_follow_up", ISR, plan)).rejects.toThrow(/role/);
+        // A call follow-up is the same writer for either role.
+        await apply("set_follow_up", ASM, { kind: "isr_follow_up", lead_id: "DL-1", follow_up_at: "2026-09-25T10:30:00.000Z", note: "x" });
+        expect(logLeadTouchpoint).toHaveBeenCalledWith(
+            expect.objectContaining({ body: expect.objectContaining({ follow_up_at: "2026-09-25T10:30:00.000Z" }) }),
+            { tx: TX },
+        );
     });
 
     it("a tampered stored plan is refused before anything is written", async () => {

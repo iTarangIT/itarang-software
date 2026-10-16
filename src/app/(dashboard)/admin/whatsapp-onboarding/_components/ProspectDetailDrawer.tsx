@@ -13,6 +13,7 @@ import { formatWaPhone } from "@/lib/whatsapp/labels";
 import { ContactTypeBadge, StageBadge } from "./StageBadge";
 import type { ConversationDetail, TranscriptTarget } from "./types";
 
+import { onFreshFileClick } from "@/lib/storage/freshFileLink";
 const SOURCE_LABEL: Record<string, string> = {
     application: "Verified field",
     chat_answer: "Answered in chat",
@@ -192,6 +193,7 @@ export function ProspectDetailDrawer({
                                                     {d.fileUrl && (
                                                         <a
                                                             href={d.fileUrl}
+                                                            onClick={(e) => onFreshFileClick(e, d.fileUrl)}
                                                             target="_blank"
                                                             rel="noopener noreferrer"
                                                             className="ml-auto inline-flex items-center gap-1 text-xs text-primary hover:underline"

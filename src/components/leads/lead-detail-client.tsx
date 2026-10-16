@@ -171,28 +171,31 @@ function OverallSummary({ calls, lead }: { calls: CallItem[]; lead: any }) {
       return;
     }
 
+    // ID 118 option B: the server writes the summary from the call
+    // transcripts and saves it (and refreshes it after each new call). A
+    // viewer who may not edit the lead gets a summary to read, not saved.
     setLoading(true);
-    fetch("/api/leads/summary", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        transcripts,
-        dealerName: lead?.dealer_name,
-        shopName: lead?.shop_name,
-        location: lead?.location,
-      }),
-    })
-      .then((r) => r.json())
+    const generateOnly = () =>
+      fetch("/api/leads/summary", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          transcripts,
+          dealerName: lead?.dealer_name,
+          shopName: lead?.shop_name,
+          location: lead?.location,
+        }),
+      }).then((r) => r.json());
+    fetch(`/api/leads/${lead.id}/summary`, { method: "POST" })
+      .then(async (r) => {
+        const data = r.ok ? await r.json().catch(() => null) : null;
+        return data?.summary ? data : generateOnly();
+      })
       .then((data) => {
-        const generated = data.summary;
+        const generated = data?.summary;
         if (!generated) return;
         setSummary(generated);
         setSource("generated");
-        fetch(`/api/leads/${lead.id}/summary`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ summary: generated }),
-        }).catch(() => console.warn("[summary] failed to save to DB"));
       })
       .catch(() => setSummary("Unable to generate summary at this time."))
       .finally(() => setLoading(false));

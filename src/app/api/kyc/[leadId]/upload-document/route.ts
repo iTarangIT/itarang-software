@@ -9,11 +9,16 @@ import {
     isDealerKycEditsLocked,
 } from '@/lib/kyc/admin-workflow';
 import { requireLeadAccess } from "@/lib/auth/requireLeadAccess";
+import { recordActorStep, requireLeadWriter } from "@/lib/leads/actForDealerGuard";
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
     // ID 118: signed in, and this lead is the caller's to touch (a dealer's own lead, or back office).
     const leadGate = await requireLeadAccess((await params).leadId);
     if (!leadGate.ok) return leadGate.response;
+    // ID 183: the dealer, or iTarang acting for the dealer (permission,
+    // "being worked by", dealer wins). Every document records who uploaded it.
+    const gate = await requireLeadWriter((await params).leadId, req, leadGate.user);
+    if (!gate.ok) return gate.response;
     try {
         const { leadId } = await params;
 
@@ -93,6 +98,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
                     file_type: file.type,
                     verification_status: 'pending',
                     failed_reason: null,
+                    uploaded_by: leadGate.user.id,
+                    uploaded_at: now,
                     updated_at: now,
                 })
                 .where(eq(kycDocuments.id, existing[0].id));
@@ -109,9 +116,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
                 file_size: file.size,
                 file_type: file.type,
                 verification_status: 'pending',
+                uploaded_by: leadGate.user.id,
             });
         }
 
+        // file_url on the record: the dealer opens a file iTarang uploaded for
+        // him (ID 166 rule, fileAuthz — kyc_documents has no upload_source).
+        await recordActorStep(gate.actor, `uploaded ${docType.replace(/_/g, ' ')}${docFor === 'borrower' ? ' (co-borrower)' : ''}`, { file_url: fileUrl });
         return NextResponse.json({
             success: true,
             fileUrl,

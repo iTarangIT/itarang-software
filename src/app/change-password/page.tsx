@@ -1,12 +1,17 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 export default function ChangePasswordPage() {
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  // A39: why the user is here — a forced reset or a 90-day-old password.
+  const [expired, setExpired] = useState(false);
+  useEffect(() => {
+    setExpired(new URLSearchParams(window.location.search).get("expired") === "1");
+  }, []);
 
   const handleSubmit = async () => {
     setError("");
@@ -55,6 +60,11 @@ export default function ChangePasswordPage() {
         <h2 className="text-2xl font-bold mb-6 text-center">
           Change Your Password
         </h2>
+        <p className="text-sm text-gray-600 mb-4 text-center">
+          {expired
+            ? "Your password is more than 90 days old. Choose a new one to continue."
+            : "Choose a new password to continue. Do not reuse a shared one."}
+        </p>
 
         <input
           type="password"

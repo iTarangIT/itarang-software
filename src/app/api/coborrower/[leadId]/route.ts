@@ -3,6 +3,7 @@ import { db } from '@/lib/db';
 import { coBorrowers, leads } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
 import { requireLeadAccess } from '@/lib/auth/requireLeadAccess';
+import { requireLeadWriter } from '@/lib/leads/actForDealerGuard';
 import { isMaskedAadhaar, maskAadhaar, restoreMaskedAadhaar } from '@/lib/kyc/aadhaarMask';
 import { isMaskedPan, maskPan, restoreMaskedPan } from '@/lib/kyc/panMask';
 
@@ -32,6 +33,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         const { leadId } = await params;
         const access = await requireLeadAccess(leadId);
         if (!access.ok) return access.response;
+        // ID 183: a change to the file — its own dealer, or Admin / Sales Head acting for the dealer.
+        const writer = await requireLeadWriter(leadId, req, access.user);
+        if (!writer.ok) return writer.response;
         const body = await req.json();
         const now = new Date();
 

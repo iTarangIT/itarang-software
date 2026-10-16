@@ -94,6 +94,8 @@ export type AsmQueueRow = {
      * page in the route, never selected by fetchAsmQueueRows, hence optional.
      */
     assigned_by?: LeadAssignedBy | null;
+    /** IDs 85 / 86 — a clock on this lead is running past its limit (the "Past a limit" chip). */
+    past_limit?: boolean;
     /**
      * E-296 "Type of business". Decorated in the route via
      * fetchBusinessTypeForLeads (fail-tolerant, column is not in schema.ts),

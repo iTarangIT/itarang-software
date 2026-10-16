@@ -15,6 +15,7 @@
 // Filters live in the URL (same keys as the sales dashboard API), so a view
 // survives a refresh and can be shared.
 
+import { idleLimitLabel } from "@/lib/timeLimits/labels";
 import React from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
@@ -188,7 +189,10 @@ export function SalesHeadOpsView() {
         staleTime: 5 * 60 * 1000,
         retry: false,
     });
-    const idle = useQuery<{ holders: NeedsAttentionHolderSummary[] }>({
+    const idle = useQuery<{
+        holders: NeedsAttentionHolderSummary[];
+        limits?: { idle_cc: number; idle_asm: number; stale_critical: number };
+    }>({
         queryKey: ["sales-head-ops", "idle"],
         queryFn: () => getData("/api/admin/needs-attention"),
         staleTime: 5 * 60 * 1000,
@@ -238,6 +242,15 @@ export function SalesHeadOpsView() {
         queryKey: ["sales-head-ops", "needs-action", actionQs.toString()],
         queryFn: () => getData(`/api/admin/reports/needs-action?${actionQs}`),
         placeholderData: (prev) => prev,
+        staleTime: 60 * 1000,
+        retry: false,
+    });
+    // ID 189 — targets the CEO posted that are not pushed to the team yet (this
+    // month and later), and open "Ask for correction" requests. A role without
+    // the Targets page gets a 403 and the tile is simply left out.
+    const awaitingTargets = useQuery<{ targets: number; people: number; corrections: number; first_month: string | null }>({
+        queryKey: ["sales-head-ops", "targets-awaiting"],
+        queryFn: () => getData("/api/admin/targets?awaiting=1"),
         staleTime: 60 * 1000,
         retry: false,
     });
@@ -412,7 +425,22 @@ export function SalesHeadOpsView() {
             sub: `${inr(atRisk)} billed to them in the last 90 days`,
             href: "/admin/reports/dealer-health",
         },
+        {
+            key: "targets_awaiting",
+            ready: Boolean(awaitingTargets.data),
+            n: (awaitingTargets.data?.targets ?? 0) + (awaitingTargets.data?.corrections ?? 0),
+            severity: "soon",
+            count: num(awaitingTargets.data?.targets ?? 0),
+            label: "Targets waiting for your approval",
+            sub: awaitingTargets.data
+                ? `Posted by the CEO, not pushed yet · ${num(awaitingTargets.data.people)} ${awaitingTargets.data.people === 1 ? "person" : "people"}` +
+                  (awaitingTargets.data.corrections ? ` · ${num(awaitingTargets.data.corrections)} correction${awaitingTargets.data.corrections === 1 ? "" : "s"} asked` : "")
+                : undefined,
+            href: `/admin/targets${awaitingTargets.data?.first_month ? `?month=${awaitingTargets.data.first_month.slice(0, 7)}` : ""}`,
+        },
         actionTile("quotes_no_answer", "Quotes with no answer", "soon"),
+        // ID 174 — Admin, CEO and partner only (the API returns null for others).
+        actionTile("stock_to_upload", "Stock to upload from new invoices", "soon"),
         actionTile("said_yes", "Dealer approved, but not marked Won", "soon"),
         {
             key: "idle",
@@ -421,7 +449,10 @@ export function SalesHeadOpsView() {
             severity: "soon",
             count: num(idleTotal),
             label: "Idle leads",
-            sub: `No work logged: ISR over 5, ASM over 7 working days · ${num(idleOver14)} over 14`,
+            // Labelled from Admin › Time limits (ID 85 Decision 6), never fixed numbers.
+            sub: idle.data?.limits
+                ? `No work logged: ${idleLimitLabel(idle.data.limits)} · ${num(idleOver14)} at ${Math.floor(idle.data.limits.stale_critical)}+`
+                : `No work logged past the idle limit · ${num(idleOver14)} critical`,
             href: "/admin/reports/needs-attention",
         },
         actionTile("onboarding_stalled", "Onboarding stalled", "soon"),
@@ -1145,14 +1176,17 @@ export function SalesHeadOpsView() {
                     <PeopleTable
                         loading={dash.isLoading}
                         people={shown.filter((p) => inSeg(p.role, "field"))}
-                        heads={["Visits", "Dealers visited", "New dealers", "Verified", "Productive", "Planned today", "KYC submitted"]}
-                        kinds={["visits", "dealers_visited", "new_dealers", "verified", "productive", "planned_today", "kyc_submitted"]}
+                        heads={["Visits", "Fresh", "Repeat", "New to iTarang", "Dealers visited", "Verified", "Productive", "Planned today", "KYC submitted"]}
+                        kinds={["visits", "fresh_visits", "repeat_visits", "new_dealers", "dealers_visited", "verified", "productive", "planned_today", "kyc_submitted"]}
                         counts={(p) => {
                             const v = m?.field?.find((x) => x.user_id === p.spoc_id);
+                            const fresh = p.totals.fresh_visits ?? 0;
                             return [
                                 p.totals.visits,
-                                p.totals.unique_visits,
+                                fresh,
+                                Math.max(p.totals.visits - fresh, 0),
                                 p.totals.new_visits,
+                                p.totals.unique_visits,
                                 v?.verified ?? 0,
                                 v?.productive ?? 0,
                                 p.snapshot.planned_visits_today,
@@ -1165,10 +1199,13 @@ export function SalesHeadOpsView() {
                             // ID 88 — of the visits marked visited in the period.
                             const v = m?.field?.find((x) => x.user_id === p.spoc_id);
                             const fallback = m?.field ? "0" : "—";
+                            const fresh = p.totals.fresh_visits ?? 0;
                             return [
                                 num(p.totals.visits),
-                                num(p.totals.unique_visits),
+                                num(fresh),
+                                num(Math.max(p.totals.visits - fresh, 0)),
                                 num(p.totals.new_visits),
+                                num(p.totals.unique_visits),
                                 v ? countWithShare(v.verified, share(v.verified, v.visited), num) : fallback,
                                 v ? countWithShare(v.productive, share(v.productive, v.visited), num) : fallback,
                                 num(p.snapshot.planned_visits_today),
@@ -1177,6 +1214,9 @@ export function SalesHeadOpsView() {
                         }}
                     />
                     <span className="text-xs leading-relaxed text-ink-muted">
+                        Visits = Fresh + Repeat. A visit is one person at one dealer on one day. Fresh = that person&apos;s first visit to
+                        the dealer ever; Repeat = they had visited the dealer before. New to iTarang = of the dealers visited, those
+                        nobody from iTarang had visited before. Click any number to see the dealers.{" "}
                         Of the visits marked visited: verified = with a shop photo and a location pin; productive = outcome Productive or
                         Commercials progressed. Each with its share.
                         {measures.error ? " These two columns could not be loaded." : ""}

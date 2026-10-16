@@ -38,7 +38,7 @@ import {
   persistCallEndEvidence,
   type CallEndEvidenceRow,
 } from "@/lib/ai/storage/callEndEvidence";
-import { rehostRecording } from "@/lib/ai/storage/recordingStore";
+import { ownRecordingUrl } from "@/lib/ai/storage/recordingStore";
 
 export type BolnaFinalizePayload = {
   callId: string;
@@ -93,7 +93,7 @@ export async function finalizeBolnaCall(
     callId,
     status,
     transcript,
-    recordingUrl,
+    recordingUrl: providerRecordingUrl,
     duration,
     phone,
     leadId: leadIdHint,
@@ -114,6 +114,14 @@ export async function finalizeBolnaCall(
       return;
     }
   }
+
+  // ID 166 (decision 13): copy the recording into iTarang storage BEFORE any
+  // row stores it, so the call log, the touchpoint and the review sheet all
+  // carry our own link (login + owner rule) instead of Bolna's open one. Once
+  // per call (the claim above), bounded (20 s), and never fatal: on a failed
+  // copy the provider link is kept and scripts/backfill-recordings-rehost.ts
+  // copies it later. Used to run only for the review sheet.
+  const recordingUrl = await ownRecordingUrl({ provider: "bolna", callId, recordingUrl: providerRecordingUrl });
 
   // What this attempt ENDED as — decided once, from the whole payload. Bolna's
   // own docs: "status: 'completed' does not mean a conversation happened".
@@ -223,21 +231,14 @@ export async function finalizeBolnaCall(
           campaign = c[0]?.name ?? reviewCampaignId;
         }
         // E-250 — the Campaign_Call_Review sheet is retired by default. The
-        // guard sits ABOVE rehostRecording because that call downloads the
-        // audio and re-uploads it purely so the sheet has a playable link;
-        // with the sheet off, that is a wasted round-trip on every call.
+        // recording was already copied into our storage at the top (ID 166).
         if (!callReviewSheetEnabled()) return;
-        const playableUrl = await rehostRecording({
-          provider: "bolna",
-          callId,
-          recordingUrl,
-        });
         await appendCallReview({
           uuid: reviewUuid,
           campaign,
           companyName: reviewCompany,
           dealerName: reviewDealer,
-          recordingUrl: playableUrl,
+          recordingUrl: recordingUrl ?? "",
           transcript: `No conversation (${reviewStatus})`,
         });
       })().catch((err) =>
@@ -581,17 +582,12 @@ export async function finalizeBolnaCall(
     }
     // E-250 — see the note on the sibling closure above.
     if (!callReviewSheetEnabled()) return;
-    const playableUrl = await rehostRecording({
-      provider: "bolna",
-      callId,
-      recordingUrl,
-    });
     await appendCallReview({
       uuid: reviewUuid,
       campaign,
       companyName: reviewCompany,
       dealerName: reviewDealer,
-      recordingUrl: playableUrl,
+      recordingUrl: recordingUrl ?? "",
       transcript,
     });
   })().catch((err) =>

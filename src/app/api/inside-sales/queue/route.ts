@@ -10,6 +10,7 @@ import { isPoolTabFor } from "@/lib/leads/claimScope";
 import { successResponse, withErrorHandler, errorResponse } from "@/lib/api-utils";
 import { fetchQueueRows, countQueueRows, fetchQueueIds } from "@/lib/inside-sales/queryBuilder";
 import { fetchAssignedByForLeads } from "@/lib/leads/leadAssignedBy";
+import { leadsPastALimit } from "@/lib/leads/clocks";
 import { BULK_CLAIM_CAP, QUEUE_TABS, type QueueResponse } from "@/lib/inside-sales/types";
 import { readQueueFilters } from "@/lib/leads/queueFilters";
 import { readQueueSort } from "@/lib/leads/queueSort";
@@ -127,12 +128,15 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
     // people's leads and is masked accordingly; here it is the recipient being
     // told who sent them the lead, which is the one person who has always had a
     // right to know and was the only one who could not see it.
-    const assignedBy = await fetchAssignedByForLeads(
-        rows.map((r) => r.id).filter(Boolean),
-    );
+    const pageIds = rows.map((r) => r.id).filter(Boolean);
+    const [assignedBy, pastLimit] = await Promise.all([
+        fetchAssignedByForLeads(pageIds),
+        // IDs 85 / 86 — the "Past a limit" chip; same fail-tolerant decoration.
+        leadsPastALimit(pageIds).catch(() => new Set<string>()),
+    ]);
 
     const body: QueueResponse = {
-        rows: rows.map((r) => ({ ...r, assigned_by: assignedBy[r.id] ?? null })),
+        rows: rows.map((r) => ({ ...r, assigned_by: assignedBy[r.id] ?? null, past_limit: pastLimit.has(r.id) })),
         total,
         page: parsed.page,
         limit: parsed.limit,

@@ -276,6 +276,27 @@ export async function closeLeadAfterFailedRepair(input: {
     });
 }
 
+/**
+ * Which leads sit in the Number Repair queue: a contactability flag set, still
+ * active, and not closed by "Repair failed → Lost". Shared by the list and the
+ * menu count (ID 90).
+ */
+const NUMBER_REPAIR_WHERE = sql`dl.contactability IS NOT NULL AND dl.is_active IS NOT FALSE
+               AND dl.lead_status IS DISTINCT FROM 'Lost'`;
+
+/** ID 90 — how many leads wait in the Number Repair queue (0 without E-314). */
+export async function countNumberRepair(): Promise<number> {
+    try {
+        const rows = (await db.execute(sql`
+            SELECT COUNT(*)::int AS n FROM dealer_leads dl WHERE ${NUMBER_REPAIR_WHERE}
+        `)) as unknown as Array<{ n: number }>;
+        return Number(rows[0]?.n ?? 0);
+    } catch (e) {
+        console.warn("[contactability] count failed (E-314 applied?):", e instanceof Error ? e.message : e);
+        return 0;
+    }
+}
+
 /** The Number Repair queue. */
 export async function listNumberRepair(limit = 300) {
     try {
@@ -294,9 +315,8 @@ export async function listNumberRepair(limit = 300) {
                    dl.contactability_at::text AS contactability_at
               FROM dealer_leads dl
               LEFT JOIN users u ON u.id::text = dl.current_owner_id
-             WHERE dl.contactability IS NOT NULL AND dl.is_active IS NOT FALSE
-               -- "Repair failed → Lost" closes the lead; it leaves the queue.
-               AND dl.lead_status IS DISTINCT FROM 'Lost'
+             -- "Repair failed → Lost" closes the lead; it leaves the queue.
+             WHERE ${NUMBER_REPAIR_WHERE}
              ORDER BY dl.contactability_at DESC
              LIMIT ${limit}
         `)) as unknown as Array<{

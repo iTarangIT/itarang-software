@@ -4,14 +4,14 @@ import { eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { kycVerificationMetadata } from "@/lib/db/schema";
 import { executeCibilScore } from "@/lib/kyc/cibil-verification";
-import { requireAdminAppUser } from "@/lib/kyc/admin-workflow";
+import { requireAdminAppUserForLead } from "@/lib/kyc/admin-workflow";
 
 export async function POST(
   _req: NextRequest,
   { params }: { params: Promise<{ leadId: string }> },
 ) {
   try {
-    const appUser = await requireAdminAppUser();
+    const appUser = await requireAdminAppUserForLead((await params).leadId);
     if (!appUser) {
       return NextResponse.json(
         { success: false, error: { message: "Unauthorized" } },

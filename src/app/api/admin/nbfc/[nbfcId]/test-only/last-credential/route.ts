@@ -10,6 +10,7 @@
  * Without all three, returns 404 so production never exposes credentials.
  */
 import { NextRequest, NextResponse } from "next/server";
+import { safeEqual } from "@/lib/cron-auth";
 
 import { __inMemoryNbfcCredentialJobs } from "@/lib/queue/jobs/sendNbfcPortalCredentialsJob";
 
@@ -28,7 +29,8 @@ export async function GET(
   }
   const secret = process.env.NBFC_TEST_BYPASS_SECRET;
   const provided = req.headers.get("x-nbfc-test-bypass");
-  if (!secret || provided !== secret) {
+  // ID 130: timing-safe compare.
+  if (!secret || !provided || !safeEqual(provided, secret)) {
     return NextResponse.json({ ok: false }, { status: 404 });
   }
 

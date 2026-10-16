@@ -12,6 +12,7 @@ import { myQueue } from "./tools/read/myQueue";
 import { searchLead } from "./tools/read/searchLead";
 import { getLeadDetails } from "./tools/read/getLeadDetails";
 import { myNumbers } from "./tools/read/myNumbers";
+import { myLeadsByTemperature } from "./tools/read/myLeadsByTemperature";
 import { logCall } from "./tools/write/logCall";
 import { logVisit } from "./tools/write/logVisit";
 import { markLost } from "./tools/write/markLost";
@@ -38,6 +39,7 @@ const FACTORIES: Readonly<Record<ToolName, ToolFactory>> = Object.freeze({
     search_lead: searchLead,
     get_lead_details: getLeadDetails,
     my_numbers: myNumbers,
+    my_leads_by_temperature: myLeadsByTemperature,
     log_call: logCall,
     log_visit: logVisit,
     mark_lost: markLost,
@@ -69,7 +71,7 @@ const FACTORIES: Readonly<Record<ToolName, ToolFactory>> = Object.freeze({
  */
 export const ROLE_TOOLS: Readonly<Record<AssistantRole, readonly ToolName[]>> = Object.freeze({
     inside_sales_rep: Object.freeze([
-        "my_queue", "search_lead", "get_lead_details", "my_numbers",
+        "my_queue", "search_lead", "get_lead_details", "my_numbers", "my_leads_by_temperature",
         "log_call", "mark_lost", "claim_lead", "set_follow_up",
         "transfer_to_asm", "reassign_lead", "escalate_lead", "mark_converted",
         "invite_dealer_onboarding", "create_lead",
@@ -77,7 +79,7 @@ export const ROLE_TOOLS: Readonly<Record<AssistantRole, readonly ToolName[]>> = 
         "read_document", "attach_document", "update_lead",
     ] as const),
     asm: Object.freeze([
-        "my_queue", "search_lead", "get_lead_details", "my_numbers",
+        "my_queue", "search_lead", "get_lead_details", "my_numbers", "my_leads_by_temperature",
         "log_call", "log_visit", "mark_lost", "claim_lead", "set_follow_up",
         "reassign_lead", "escalate_lead", "mark_converted", "invite_dealer_onboarding", "create_lead",
         "product_catalogue", "quote_status", "create_quote", "send_quote", "withdraw_quote",

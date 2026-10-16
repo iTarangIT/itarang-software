@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { executeBankVerification } from '@/lib/kyc/bank-verification';
 import { requireLeadAccess } from '@/lib/auth/requireLeadAccess';
+import { recordActorStep, requireLeadWriter } from '@/lib/leads/actForDealerGuard';
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
     try {
@@ -13,6 +14,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         // ID 119: signed in AND this lead is the caller's (a dealer's own lead, or back office).
         const leadGate = await requireLeadAccess(leadId);
         if (!leadGate.ok) return leadGate.response;
+        // ID 183: a change to the file — its own dealer, or Admin / Sales Head acting for the dealer.
+        const writer = await requireLeadWriter(leadId, req, leadGate.user);
+        if (!writer.ok) return writer.response;
         const { account_number, ifsc, name, perform_name_match, validation_type } = await req.json();
 
         const result = await executeBankVerification(leadId, {
@@ -30,6 +34,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             );
         }
 
+        await recordActorStep(writer.actor, 'ran the bank account check');
         return NextResponse.json(result);
     } catch (error) {
         console.error('Decentro bank verify error:', error);

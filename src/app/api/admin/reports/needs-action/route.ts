@@ -12,7 +12,8 @@ export const dynamic = "force-dynamic";
 const VIEW_ROLES = ["admin", "sales_head", "ceo", "partner", "business_head"];
 
 export const GET = withErrorHandler(async (req: Request) => {
-    await requireRole(VIEW_ROLES);
-    const summary = await salesHeadActionSummary(actionScopeFrom(new URL(req.url).searchParams));
+    const user = await requireRole(VIEW_ROLES);
+    // ID 174: the viewer's role decides role-limited tiles (Stock to upload).
+    const summary = await salesHeadActionSummary({ ...actionScopeFrom(new URL(req.url).searchParams), viewerRole: user.role });
     return successResponse(summary);
 });

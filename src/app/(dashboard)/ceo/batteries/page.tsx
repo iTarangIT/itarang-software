@@ -14,6 +14,8 @@ import { InvoicesReadUpToLine } from "@/components/sales/InvoicesReadUpToLine";
 import { requireRole } from "@/lib/auth-utils";
 import { matchedLinesUnion, REVENUE_NOT_VOID } from "@/lib/dashboard/revenueSource";
 
+// ID 166: invoice PDFs open through a fresh 15-minute link on each click.
+import FreshFileLink from "@/components/shared/FreshFileLink";
 export const dynamic = "force-dynamic";
 
 const IST = "Asia/Kolkata";
@@ -144,6 +146,20 @@ export default async function CeoBatteriesPage({
     const creditRows = lineRows.filter((r) => r.source === "credit");
     const creditUnits = -creditRows.reduce((a, r) => a + r.quantity, 0);
     const creditCount = new Set(creditRows.map((r) => r.id)).size;
+    // ID 71: credit notes in the period whose item lines were never read (read
+    // before 13 Oct, or the read failed) lower revenue but not this count —
+    // say so instead of letting the total look final.
+    let creditsWithoutLines = 0;
+    if (lines) {
+        const [c] = (await db
+            .execute(sql`
+                SELECT COUNT(*)::int AS n FROM credit_notes cn
+                 WHERE cn.issue_date >= ${from}::date AND cn.issue_date <= ${to}::date
+                   AND NOT EXISTS (SELECT 1 FROM invoice_voids v WHERE v.source = 'credit' AND v.invoice_id = cn.id::text)
+                   AND NOT EXISTS (SELECT 1 FROM invoice_line_items l WHERE l.source = 'credit' AND l.invoice_id = cn.id::text)`)
+            .catch(() => [{ n: 0 }])) as unknown as Array<{ n: number }>;
+        creditsWithoutLines = Number(c?.n ?? 0);
+    }
 
     return (
         <div className="space-y-6 pb-12">
@@ -159,6 +175,13 @@ export default async function CeoBatteriesPage({
                         ? "Battery lines on non-void invoices matched to a dealer, dated in the period, less the battery lines of credit notes issued in the period."
                         : "Batteries allocated to a dealer account in the period. Invoice lines are not set up on this database, so stock allocation is used instead."}
                 </p>
+                {creditsWithoutLines > 0 && (
+                    <p className="mt-1 text-sm text-amber-700">
+                        {num(creditsWithoutLines)} credit note{creditsWithoutLines === 1 ? "" : "s"} in this period
+                        {creditsWithoutLines === 1 ? " has" : " have"} no item lines read yet: they already lower revenue,
+                        but their batteries are not taken off this count (or gross margin) until their lines are read.
+                    </p>
+                )}
                 {/* ID 171 */}
                 <InvoicesReadUpToLine f={await invoiceFreshness()} className="mt-1" />
             </div>
@@ -244,7 +267,7 @@ export default async function CeoBatteriesPage({
                                                 <td className="whitespace-nowrap px-4 py-3 text-gray-700">{fmtDate(r.invoice_date)}</td>
                                                 <td className="whitespace-nowrap px-4 py-3">
                                                     {r.document_url ? (
-                                                        <a
+                                                        <FreshFileLink
                                                             href={r.document_url}
                                                             target="_blank"
                                                             rel="noopener noreferrer"
@@ -252,7 +275,7 @@ export default async function CeoBatteriesPage({
                                                         >
                                                             <FileText className="h-3.5 w-3.5" />
                                                             {r.invoice_number ?? "(no number)"}
-                                                        </a>
+                                                        </FreshFileLink>
                                                     ) : (
                                                         <span className="font-medium text-gray-900">{r.invoice_number ?? "(no number)"}</span>
                                                     )}

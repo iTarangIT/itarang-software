@@ -9,6 +9,8 @@ export interface InvoiceLineCandidate {
   quantity: number | null;
   rate: number | null;
   amount: number | null;
+  /** ID 174 — serial numbers printed for the row (battery rows); empty when none. */
+  serial_numbers?: string[] | null;
 }
 
 export interface InvoiceLine {
@@ -19,6 +21,8 @@ export interface InvoiceLine {
   quantity: number;
   rate: number | null;
   amount: number;
+  /** ID 174 — the row's serial numbers as read (stock-upload check); not used for money. */
+  serials?: string[];
 }
 
 /**
@@ -71,6 +75,7 @@ export function cleanInvoiceLines(candidates: InvoiceLineCandidate[]): InvoiceLi
   const lines: InvoiceLine[] = [];
   for (const c of candidates) {
     const description = (c.description ?? "").trim();
+    const serials = (c.serial_numbers ?? []).map((v) => String(v).trim()).filter(Boolean);
     const quantity = c.quantity ?? 0;
     const amount = c.amount ?? (c.rate != null && quantity > 0 ? c.rate * quantity : null);
     if (!description || !(quantity > 0) || amount == null || !(amount > 0)) continue;
@@ -82,6 +87,7 @@ export function cleanInvoiceLines(candidates: InvoiceLineCandidate[]): InvoiceLi
       quantity,
       rate: c.rate,
       amount: Math.round(amount * 100) / 100,
+      ...(serials.length ? { serials } : {}),
     });
   }
   return lines;

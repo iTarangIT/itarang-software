@@ -4,6 +4,7 @@
 // Fail-tolerant by design — the table is not in schema.ts and a missing table
 // must never block a download, so a failed write logs and returns.
 
+import { markDownloadLogged } from "@/lib/exports/downloadContext";
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 
@@ -24,6 +25,8 @@ export async function logDataDownload(entry: {
     reason?: string | null;
     format?: "xlsx" | "csv";
 }): Promise<void> {
+    // A39: tell withErrorHandler this download is logged (no second row).
+    markDownloadLogged();
     const filters = JSON.stringify(entry.filters);
     try {
         await db.execute(sql`

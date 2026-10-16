@@ -3,6 +3,7 @@ import { db } from '@/lib/db';
 import { facilitationPayments } from '@/lib/db/schema';
 import { eq, desc } from 'drizzle-orm';
 import { requireLeadAccess } from '@/lib/auth/requireLeadAccess';
+import { recordActorStep, requireLeadWriter } from '@/lib/leads/actForDealerGuard';
 
 // POST - Record manual payment (UTR / screenshot)
 export async function POST(req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
@@ -11,6 +12,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         // ID 118: signed in, and this lead is the caller's to touch (a dealer's own lead, or back office).
         const leadGate = await requireLeadAccess(leadId);
         if (!leadGate.ok) return leadGate.response;
+        // ID 183: a change to the file — its own dealer, or Admin / Sales Head acting for the dealer.
+        const writer = await requireLeadWriter(leadId, req, leadGate.user);
+        if (!writer.ok) return writer.response;
 
         const body = await req.json();
         const { utr_number, screenshot_url } = body;
@@ -49,6 +53,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             })
             .where(eq(facilitationPayments.id, payment.id));
 
+        await recordActorStep(writer.actor, 'recorded the facilitation fee payment (UTR / screenshot)');
         return NextResponse.json({
             success: true,
             data: {

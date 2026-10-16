@@ -40,6 +40,7 @@ import type {
 } from "@/components/dealer-portal/lead-wizard/product-cart";
 import FinancingOffersSection from "./FinancingOffersSection";
 import NbfcDocRequestsBlock from "./NbfcDocRequestsBlock";
+import AskItarangHelp from "@/components/dealer-portal/lead-wizard/AskItarangHelp";
 import {
   formatRupees,
   parseRupees,
@@ -717,6 +718,9 @@ export default function ProductSelectionPage() {
             </div>
           </div>
         )}
+
+        {/* ID 183: ask iTarang to help, and what iTarang did on this file ("Done by"). */}
+        <AskItarangHelp leadId={leadId} />
 
         {/* §6.1/§6.2 — firm offers from picked NBFCs + winner selection. Self-hides for cash / un-routed leads. */}
         <FinancingOffersSection leadId={leadId} />

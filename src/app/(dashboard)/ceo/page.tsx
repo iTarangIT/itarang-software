@@ -45,6 +45,7 @@ import {
 import type { FunnelCountsResult } from "@/lib/admin/funnelCountsTypes";
 import type { ReportResult } from "@/lib/admin/types";
 import type { SalesDashboard } from "@/lib/admin/salesDashboardTypes";
+import { batteryReading } from "@/lib/admin/batteryReading";
 import type { CeoOverviewData } from "@/components/dashboard/ceo/CeoOverviewCards";
 import { DashboardSkeleton } from "@/components/dashboard/ceo/DashboardSkeleton";
 import { GreenNewsCard } from "@/components/dashboard/ceo/GreenNewsCard";
@@ -336,8 +337,8 @@ export default function CEODashboard() {
       ),
     staleTime: 5 * 60 * 1000,
   });
-  // Company targets = the sum of everyone's monthly targets (the register on
-  // /admin/targets). A past month counts in full; the current month counts to
+  // Company targets = the sum of everyone's posted monthly targets (the register
+  // on /admin/targets). A past month counts in full; the current month counts to
   // date (pro-rata over working days). A custom range that does not cover whole
   // months has no target.
   const targetMonths = React.useMemo(() => {
@@ -493,7 +494,7 @@ export default function CEODashboard() {
           tone: "bad",
           label: "People below 80% of target",
           count: num(x.spocs_below_80 ?? 0),
-          sub: "Against their target to date",
+          sub: "Against their CEO target to date (built-in metrics)",
           href: "#team",
           cta: "See team",
         },
@@ -541,8 +542,10 @@ export default function CEODashboard() {
   const ordering = bucketCount("active") + bucketCount("cooling");
 
   // "89% of target" pill + "Target to date ₹3.05 Cr" line for a tile.
-  // ID 157 (10 Oct): the target keeps counting every status; under it,
-  // "Accepted ₹A · Not yet accepted ₹B" (Draft + Pending approval + Pushed).
+  // ID 157 (10 Oct): under it, "Accepted ₹A · Not yet accepted ₹B" (Posted +
+  // Pushed). ID 189 (16 Oct): only the version in force counts — the CEO's own
+  // never-posted drafts (in his /api/admin/targets answer) are left out by
+  // summariseCompanyTargets.
   const includesToday = win.to >= todayStr;
   const vsTarget = (
     actual: number | null,
@@ -550,10 +553,18 @@ export default function CEODashboard() {
     fmt: (v: number) => string,
   ): { pill: { text: string; tone: Tone }; line: string | null; split: string | null } => {
     const t = targets.data?.[metric];
+    // ID 189 (Kartik 14 Oct): the tile reads the CEO target; the Sales Head's
+    // stretch on top is its own line, never folded into the %.
+    const stretch = t && t.stretch > 0 ? `Sales Head stretch +${fmt(Math.round(t.stretch))} on top` : null;
     const split =
-      t && t.sum > 0
-        ? `Accepted ${fmt(Math.round(t.accepted))} · Not yet accepted ${fmt(Math.round(t.notAccepted))}`
-        : null;
+      [
+        t && t.sum > 0
+          ? `Accepted ${fmt(Math.round(t.accepted))} · Not yet accepted ${fmt(Math.round(t.notAccepted))}`
+          : null,
+        stretch,
+      ]
+        .filter(Boolean)
+        .join(" · ") || null;
     const v = targetVerdict(t, actual, targetMonths ?? [], ym(now));
     if (v.kind === "none") return { pill: { text: "No target", tone: "neutral" }, line: null, split: null };
     if (v.kind === "partial") {
@@ -566,16 +577,15 @@ export default function CEODashboard() {
         split,
       };
     }
-    const line = `${includesToday ? "Target to date" : "Target"} ${fmt(Math.round(v.goal))}`;
+    const line = `${includesToday ? "CEO target to date" : "CEO target"} ${fmt(Math.round(v.goal))}`;
     if (v.pct == null) return { pill: { text: "Target set", tone: "neutral" }, line, split };
     return { pill: { text: `${v.pct}% of target`, tone: toneForPct(v.pct) }, line, split };
   };
   const revenueTarget = vsTarget(money ? money.revenue.now : null, "revenue", inr);
-  const batteriesTarget = vsTarget(
-    sales.data ? sales.data.outcome.batteries_to_dealers : null,
-    "batteries_sold",
-    num,
-  );
+  // A14: read through batteryReading — invoices with no item lines read make
+  // the count unknown ("—"), never a bare 0; some missing makes it a floor (+).
+  const batteries = sales.data ? batteryReading(sales.data.outcome) : null;
+  const batteriesTarget = vsTarget(batteries ? batteries.value : null, "batteries_sold", num);
 
   // ── Revenue pace ─────────────────────────────────────────────────────────
   const chart = ov?.chart ?? [];
@@ -830,7 +840,11 @@ export default function CEODashboard() {
         <KpiTile
           label="Batteries to dealers"
           href={`/ceo/batteries?from=${win.from}&to=${win.to}&label=${encodeURIComponent(periodLabel)}`}
-          value={sales.data ? num(sales.data.outcome.batteries_to_dealers) : "—"}
+          value={
+            !batteries || batteries.value == null
+              ? "—"
+              : `${num(batteries.value)}${batteries.state === "partial" ? "+" : ""}`
+          }
           pill={batteriesTarget.pill}
           sub={
             sales.isLoading
@@ -838,7 +852,13 @@ export default function CEODashboard() {
               : [
                   batteriesTarget.line,
                   batteriesTarget.split,
-                  sales.data ? "Battery lines on dealer invoices in the period" : "Not available yet",
+                  !batteries
+                    ? "Not available yet"
+                    : batteries.state === "unknown"
+                      ? `No item lines read on the ${num(batteries.invoices ?? 0)} invoices in the period`
+                      : batteries.state === "partial"
+                        ? `At least — ${num(batteries.with_lines ?? 0)} of ${num(batteries.invoices ?? 0)} invoices have item lines`
+                        : "Battery units on dealer invoices in the period (HSN 8507, credit notes netted)",
                 ]
                   .filter(Boolean)
                   .join(" · ")
@@ -1232,10 +1252,15 @@ export default function CEODashboard() {
                   className={`grid grid-cols-[minmax(0,1.3fr)_minmax(0,1.6fr)_100px_84px_84px_84px] gap-3 border-b border-border pb-2 ${TABLE_HEAD}`}
                 >
                   <span>Person</span>
-                  <span>% of target to date</span>
+                  <span>% of CEO target to date</span>
                   <span className="text-right">Revenue</span>
                   <span className="text-right">Converted</span>
-                  <span className="text-right">Idle leads</span>
+                  <span
+                    className="text-right"
+                    title="Open leads past the holder's idle limit: inside sales and ASM limits from Admin › Time limits (ID 192)"
+                  >
+                    Idle leads
+                  </span>
                   <span className="text-right">Engaged</span>
                 </div>
                 {team.map((t) => {

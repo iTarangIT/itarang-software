@@ -13,6 +13,8 @@
  *                   | requested_correction, submitted_at, reviewed_at)
  *   applicant       leads.owner_name / full_name, leads.phone, leads.city,
  *                   leads.kyc_status, leads.kyc_score; dealer via accounts
+ *   assisted by     ID 183: ACTED_FOR_DEALER audit rows on the lead — the
+ *                   iTarang people who did steps for the dealer (names + count)
  *   cards           kyc_verifications (pan, aadhaar, bank, cibil) — the LATEST
  *                   row per type per lead decides the flag
  *   review          admin_kyc_reviews — latest row per lead (outcome,
@@ -34,6 +36,7 @@ import { sql, type SQL } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import { istRangeTz } from "@/lib/digests/window";
+import { assistedByLabel, assistedBySql } from "@/lib/exports/assistedBy";
 
 export interface KycExportFilters {
     /** IST days on the case date: reviewed_at, or submitted_at while unreviewed. */
@@ -51,6 +54,8 @@ export type KycExportRow = {
     applicant_name: string | null;
     phone: string | null;
     dealer_name: string | null;
+    /** ID 183: "Asha Rao, Vikram S (3 steps)" — iTarang people who acted for the dealer; null when none. */
+    assisted_by: string | null;
     city: string | null;
     kyc_status: string | null;
     kyc_score: number | null;
@@ -149,6 +154,7 @@ export async function fetchKycExportRows(
                COALESCE(NULLIF(l.owner_name, ''), l.full_name)   AS applicant_name,
                COALESCE(NULLIF(l.phone, ''), l.mobile)           AS phone,
                a.business_entity_name                            AS dealer_name,
+               ${assistedBySql(sql`l.id`)}                       AS assisted_by,
                l.city,
                l.kyc_status,
                l.kyc_score,
@@ -176,6 +182,7 @@ export async function fetchKycExportRows(
     return (rows as unknown as KycExportRow[]).map((r) => ({
         ...r,
         kyc_score: r.kyc_score == null ? null : Number(r.kyc_score),
+        assisted_by: assistedByLabel(r.assisted_by),
         pan_verified: !!r.pan_verified,
         aadhaar_verified: !!r.aadhaar_verified,
         bank_verified: !!r.bank_verified,

@@ -2,6 +2,7 @@ import { db } from '@/lib/db';
 import { approvals, deals } from '@/lib/db/schema';
 import { eq, and, desc } from 'drizzle-orm';
 import { requireAuth } from '@/lib/auth-utils';
+import { pendingApprovalsWhere } from '@/lib/approvals/queue';
 import { CheckCircle2, Clock, FileText, ArrowRight } from 'lucide-react';
 import Link from 'next/link';
 
@@ -12,11 +13,7 @@ export default async function SalesHeadApprovalsPage() {
 
     const pendingApprovals = await db.select()
         .from(approvals)
-        .where(and(
-            eq(approvals.status, 'pending'),
-            eq(approvals.approver_role, 'sales_head'),
-            eq(approvals.level, 1)
-        ))
+        .where(pendingApprovalsWhere('sales_head'))
         .orderBy(desc(approvals.created_at));
 
     const recentApprovals = await db.select()

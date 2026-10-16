@@ -4,14 +4,10 @@ import React, { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { AnimatePresence, motion } from "framer-motion";
 import { useQuery } from "@tanstack/react-query";
-import {
-  Receipt,
-  ArrowRight,
-  ShoppingBag,
-  SlidersHorizontal,
-} from "lucide-react";
+import { SlidersHorizontal } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatINRCompact } from "@/lib/format";
+import { DashCard, TABLE_HEAD } from "@/components/dashboard/redesign/primitives";
 import { Pagination, usePagination } from "@/components/shared/Pagination";
 import { ManualSalesUpload } from "./ManualSalesUpload";
 import { MonthCalendar } from "./MonthCalendar";
@@ -146,19 +142,20 @@ export function BusinessSnapshotPanel({
         ? data?.label ?? monthLabel
         : "This month";
 
+  // ID 89 — the redesign's card (DashCard) and tile look; same figures and
+  // drill-downs, and the same test ids.
   return (
-    <div className="p-6 rounded-2xl bg-white border border-gray-100 shadow-sm">
-      <div className="flex items-center justify-between gap-3 mb-5 flex-wrap">
+    <DashCard>
+      <div className="flex items-start justify-between gap-3 flex-wrap">
         <div ref={filterRef} className="relative flex items-center gap-2">
-          <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
-            <ShoppingBag className="w-4 h-4 text-brand-600" />
-            Business Snapshot
-            <span className="text-gray-300 font-normal">·</span>
-            <span className="text-brand-700">{label}</span>
+          <h2 className="text-lg font-bold text-brand-navy flex items-center gap-2">
+            Business snapshot
+            <span className="text-ink-muted/50 font-normal">·</span>
+            <span className="text-[15px] font-semibold text-brand-royal">{label}</span>
             {isFetching && !isDefault ? (
-              <span className="text-gray-400 font-normal">…</span>
+              <span className="text-ink-muted font-normal">…</span>
             ) : null}
-          </h3>
+          </h2>
           <button
             type="button"
             data-testid="snapshot-filter-trigger"
@@ -166,10 +163,10 @@ export function BusinessSnapshotPanel({
             aria-expanded={open}
             onClick={() => setOpen((v) => !v)}
             className={cn(
-              "p-1.5 rounded-lg border transition-colors",
+              "inline-flex h-8 w-8 items-center justify-center rounded-[10px] border transition-colors",
               open || !isDefault
-                ? "bg-brand-50 border-brand-200 text-brand-600"
-                : "bg-white border-gray-200 text-gray-400 hover:text-brand-600 hover:border-brand-100",
+                ? "bg-brand-50 border-brand-200 text-brand-navy"
+                : "bg-surface border-border text-ink-muted hover:text-brand-navy",
             )}
           >
             <SlidersHorizontal className="w-3.5 h-3.5" />
@@ -212,19 +209,16 @@ export function BusinessSnapshotPanel({
             )}
           </AnimatePresence>
         </div>
-        <div className="flex items-center gap-2 text-[11px] font-semibold">
+        <div className="flex items-center gap-2 text-[13px] font-semibold">
           <ManualSalesUpload />
-          <span className="text-gray-200">|</span>
-          <Link
-            href="/ceo/expenses"
-            className="text-brand-700 hover:underline flex items-center gap-1"
-          >
-            Review Expenses <ArrowRight className="w-3 h-3" />
+          <span className="text-border">|</span>
+          <Link href="/ceo/expenses" className="text-brand-navy hover:underline">
+            Review expenses
           </Link>
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <Tile
           testid="tile-oem-purchases"
           label="Purchases from OEM"
@@ -253,30 +247,28 @@ export function BusinessSnapshotPanel({
           the figure the CEO acts on; a second, differently-derived net beneath
           the snapshot tiles invited the two being read as the same number. */}
 
-      <div className="mt-5 grid grid-cols-1 gap-4">
+      <div className="mt-2 grid grid-cols-1 gap-4">
         <div>
-          <p className="text-[11px] uppercase tracking-wider font-bold text-gray-500 mb-2">
-            Recent Zoho Invoices
-          </p>
+          <p className={cn(TABLE_HEAD, "mb-2")}>Recent Zoho invoices</p>
           {recentInvoices.length === 0 ? (
-            <p data-testid="recent-invoices-empty" className="text-[11px] text-gray-400 italic">No invoices synced yet.</p>
+            <p data-testid="recent-invoices-empty" className="text-xs text-ink-muted">No invoices synced yet.</p>
           ) : (
             <>
-            <ul data-testid="recent-invoices-list" className="divide-y divide-gray-50">
+            <ul data-testid="recent-invoices-list" className="divide-y divide-border/60">
               {pagedInvoices.pageItems.map((inv) => (
                 <li
                   key={inv.id}
-                  className="py-2 flex items-center justify-between text-[12px]"
+                  className="py-2 flex items-center justify-between text-[13px]"
                 >
                   <div className="min-w-0 flex-1">
-                    <p className="font-semibold text-gray-900 truncate">
+                    <p className="font-semibold text-ink truncate">
                       {inv.customer_name || "—"}
                     </p>
-                    <p className="text-[10px] text-gray-400">
+                    <p className="text-[11px] text-ink-muted">
                       {inv.invoice_number || ""} · {inv.invoice_date || ""}
                     </p>
                   </div>
-                  <span className="font-bold text-gray-800 ml-3">
+                  <span className="font-bold text-brand-navy tabular-nums ml-3">
                     {formatINR(Number(inv.total || 0))}
                   </span>
                 </li>
@@ -297,29 +289,26 @@ export function BusinessSnapshotPanel({
         </div>
 
         <div>
-          <p className="text-[11px] uppercase tracking-wider font-bold text-gray-500 mb-2 flex items-center gap-1">
-            <Receipt className="w-3 h-3" />
-            Recent Approved Expenses
-          </p>
+          <p className={cn(TABLE_HEAD, "mb-2")}>Recent approved expenses</p>
           {recentExpenses.length === 0 ? (
-            <p data-testid="recent-expenses-empty" className="text-[11px] text-gray-400 italic">No approved expenses yet.</p>
+            <p data-testid="recent-expenses-empty" className="text-xs text-ink-muted">No approved expenses yet.</p>
           ) : (
             <>
-            <ul data-testid="recent-expenses-list" className="divide-y divide-gray-50">
+            <ul data-testid="recent-expenses-list" className="divide-y divide-border/60">
               {pagedExpenses.pageItems.map((exp) => (
                 <li
                   key={exp.id}
-                  className="py-2 flex items-center justify-between text-[12px]"
+                  className="py-2 flex items-center justify-between text-[13px]"
                 >
                   <div className="min-w-0 flex-1">
-                    <p className="font-semibold text-gray-900 truncate">
+                    <p className="font-semibold text-ink truncate">
                       {exp.category}
                     </p>
-                    <p className="text-[10px] text-gray-400 truncate">
+                    <p className="text-[11px] text-ink-muted truncate">
                       {exp.submitter_name || "—"}
                     </p>
                   </div>
-                  <span className="font-bold text-gray-800 ml-3">
+                  <span className="font-bold text-brand-navy tabular-nums ml-3">
                     {formatINR(Number(exp.amount || 0))}
                   </span>
                 </li>
@@ -339,7 +328,7 @@ export function BusinessSnapshotPanel({
           )}
         </div>
       </div>
-    </div>
+    </DashCard>
   );
 }
 
@@ -366,14 +355,11 @@ function PeriodButton({
   );
 }
 
+// KpiTile's look (primitives.tsx), with a coloured dot for money out / in.
 const TILE_TONES = {
-  rose: { bg: "bg-rose-50/60 border-rose-100/60", label: "text-rose-700/70", value: "text-rose-900" },
-  emerald: {
-    bg: "bg-emerald-50/60 border-emerald-100/60",
-    label: "text-emerald-700/70",
-    value: "text-emerald-900",
-  },
-  amber: { bg: "bg-amber-50/60 border-amber-100/60", label: "text-amber-700/70", value: "text-amber-900" },
+  rose: { dot: "bg-danger" },
+  emerald: { dot: "bg-success" },
+  amber: { dot: "bg-[#e0a100]" },
 } as const;
 
 function Tile({
@@ -392,8 +378,11 @@ function Tile({
   const t = TILE_TONES[tone];
   const content = (
     <>
-      <p className={`text-[11px] uppercase tracking-wider font-bold ${t.label}`}>{label}</p>
-      <p data-testid={`${testid}-value`} className={`text-lg font-bold ${t.value} mt-1`}>
+      <span className="flex items-center gap-2 text-[13px] font-semibold text-ink-muted">
+        <span className={`h-2 w-2 shrink-0 rounded-full ${t.dot}`} aria-hidden />
+        {label}
+      </span>
+      <p data-testid={`${testid}-value`} className="text-[24px] font-bold leading-tight tracking-tight text-brand-navy tabular-nums">
         {value}
       </p>
     </>
@@ -404,14 +393,14 @@ function Tile({
         type="button"
         data-testid={testid}
         onClick={onClick}
-        className={`text-left p-3 rounded-xl border ${t.bg} transition-all hover:shadow-sm hover:-translate-y-0.5 cursor-pointer`}
+        className="flex flex-col gap-2 text-left rounded-2xl border border-border bg-surface p-[18px] shadow-card transition hover:border-brand-sky hover:shadow-md cursor-pointer"
       >
         {content}
       </button>
     );
   }
   return (
-    <div data-testid={testid} className={`p-3 rounded-xl border ${t.bg}`}>
+    <div data-testid={testid} className="flex flex-col gap-2 rounded-2xl border border-border bg-surface p-[18px] shadow-card">
       {content}
     </div>
   );

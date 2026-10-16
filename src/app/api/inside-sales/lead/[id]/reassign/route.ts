@@ -93,8 +93,15 @@ export const POST = withErrorHandler(
             if (err instanceof ReassignError) return errorResponse(err.message, err.status);
             throw err;
         }
-        // The new owner's bell opens the lead on their page.
-        await notifyLeadsReassigned({ leadIds: [id], targetUserId: body.target_user_id, actorId: user.id, reason: body.reason });
+        // The new owner's bell opens the lead on their page. ID 179: a manager's
+        // move also tells the rep it was taken from.
+        await notifyLeadsReassigned({
+            leadIds: [id],
+            targetUserId: body.target_user_id,
+            actorId: user.id,
+            reason: body.reason,
+            fromOwners: { [id]: lead?.current_owner_id ?? null },
+        });
 
         return successResponse({ ok: true, notify_admin: !!body.notify_admin });
     },

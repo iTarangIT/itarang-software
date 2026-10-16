@@ -109,6 +109,22 @@ export default function BulkUploadWizard() {
     [dealers, dealerId],
   );
 
+  // ID 173: viewing Admin › Inventory is wider than adding stock. Ask the
+  // server whether this login may upload (Admin, Inventory Manager, partner)
+  // and show a plain refusal otherwise (Sales Head, Ops, CEO).
+  const [uploadMode, setUploadMode] = useState<"any" | "own" | "none" | null>(null);
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch("/api/inventory/bulk-upload");
+        const json = await res.json();
+        setUploadMode(json?.data?.mode ?? null);
+      } catch {
+        setUploadMode(null);
+      }
+    })();
+  }, []);
+
   useEffect(() => {
     (async () => {
       try {
@@ -203,6 +219,29 @@ export default function BulkUploadWizard() {
     setStep(1);
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
+
+  if (uploadMode === "none" || uploadMode === "own") {
+    return (
+      <div className="min-h-screen bg-gradient-to-b from-gray-50 via-white to-gray-50">
+        <div className="px-4 sm:px-6 lg:px-8 py-6 sm:py-8 max-w-3xl mx-auto space-y-4">
+          <Link
+            href="/admin/inventory"
+            className="inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-gray-500 hover:text-[#0047AB] transition-colors"
+          >
+            <ArrowLeft className="w-3.5 h-3.5" />
+            Back to inventory
+          </Link>
+          <div className="bg-amber-50 border border-amber-200 text-amber-900 rounded-xl p-4 text-sm flex items-start gap-2.5">
+            <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+            <span>
+              Only Admin, the Inventory Manager and the partner login can add stock for a dealer.
+              You can still view inventory.
+            </span>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-gray-50 via-white to-gray-50">

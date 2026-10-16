@@ -124,6 +124,17 @@ export function wasHotAt(leadId: SQL, at: SQL, currentLevel: SQL): SQL {
     END) = 'hot'`;
 }
 
+/**
+ * ID 179 (Kartik 15 Oct) — who an asm_transfer touchpoint ("Hot to field") is
+ * credited to: the lead's owner AT THE MOMENT of transfer (from_owner_id,
+ * E-295), so a Sales Head / CEO / Admin transferring a rep's lead credits the
+ * rep, not themselves. Old rows without from_owner_id fall back to the person
+ * who pressed (performed_by). `t` = lead_touchpoints alias.
+ */
+export function transferCredit(t: SQL = sql`t`): SQL {
+    return sql`COALESCE(${t}.from_owner_id, ${t}.performed_by)`;
+}
+
 /** The first quote row of its lead (quote_issue / quote_revision, lowest version). `c` = dealer_lead_commercials alias. */
 export function isFirstQuote(c: SQL = sql`c`): SQL {
     return sql`NOT EXISTS (
@@ -145,7 +156,8 @@ export type AnalystTopic =
     | "revenue"
     | "margin"
     | "batteries"
-    | "people";
+    | "people"
+    | "trend";
 
 /**
  * ID 32 — the agreed rules above, in words, for the AI Analyst (a separate
@@ -188,7 +200,16 @@ export const ANALYST_RULES: ReadonlyArray<{ topics: readonly AnalystTopic[]; tex
     },
     {
         topics: ["calls", "people"],
-        text: "Hot handed to field = asm_transfer touchpoints where the lead was Hot when transferred, each dealer once.",
+        text:
+            "Hot handed to field = asm_transfer touchpoints where the lead was Hot when transferred, each dealer once; " +
+            "credited to from_owner_id (the owner at transfer), else performed_by.",
+    },
+    // ID 189 — one row per person / metric / month, the version in force (src/lib/targets/sql.ts).
+    {
+        topics: ["people"],
+        text:
+            "Targets = sales_targets rows with status 'pushed' or 'accepted'; a person's target = ceo_target + admin_addon (the Sales Head stretch; " +
+            "ignore sales_head_target); company % of target uses ceo_target only; custom_* metrics use manual_actual.",
     },
     { topics: ["won", "leads"], text: "A Lost to Lost history row is a reason change, not a loss." },
     { topics: ["visits", "people"], text: "Visits = lead_visits visit_status 'visited'." },
@@ -222,6 +243,11 @@ export const ANALYST_RULES: ReadonlyArray<{ topics: readonly AnalystTopic[]; tex
         text:
             "Gross margin = line amount before GST minus mapped cost (vyapar_item_map product, latest stock or price-book cost); " +
             "lines without a mapped product are 'not costed', never zero cost.",
+    },
+    // A35 — trends and forecasts.
+    {
+        topics: ["trend"],
+        text: "A figure over time (by day, week or month) is a line chart, never bars. To forecast, project the next 2 months.",
     },
 ];
 

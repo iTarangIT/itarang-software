@@ -163,8 +163,27 @@ type ReadOpts = {
     mimeType: string;
     fetchImpl?: typeof fetch;
     timeoutMs?: number;
+    /**
+     * Epoch ms the agent turn ends (ToolContext.deadline). Each attempt then
+     * gets min(25 s, what is left − 8 s) — the model still needs time to reply.
+     */
+    deadline?: number;
+    clock?: () => number;
     env?: NodeJS.ProcessEnv;
 };
+
+const READ_TIMEOUT_MS = 25_000;
+/** Kept back from the turn's deadline for the model's next call and the reply. */
+const REPLY_RESERVE_MS = 8_000;
+/** Below this a read cannot finish; it is not started. */
+const MIN_READ_MS = 3_000;
+
+/** One attempt's timeout: the explicit one, else 25 s cut to the turn's remaining budget. Pure. */
+export function readTimeoutMs(o: Pick<ReadOpts, "timeoutMs" | "deadline" | "clock">): number {
+    const base = o.timeoutMs ?? READ_TIMEOUT_MS;
+    if (o.deadline === undefined) return base;
+    return Math.min(base, o.deadline - (o.clock ?? Date.now)() - REPLY_RESERVE_MS);
+}
 
 async function withTimeout<T>(ms: number, run: (signal: AbortSignal) => Promise<T>): Promise<T> {
     const ctrl = new AbortController();
@@ -182,7 +201,7 @@ async function viaOpenRouter(o: ReadOpts, apiKey: string, model: string): Promis
         o.mimeType === "application/pdf"
             ? { type: "file", file: { filename: "document.pdf", file_data: `data:application/pdf;base64,${data}` } }
             : { type: "image_url", image_url: { url: `data:${o.mimeType};base64,${data}` } };
-    return withTimeout(o.timeoutMs ?? 25_000, async (signal) => {
+    return withTimeout(readTimeoutMs(o), async (signal) => {
         const res = await (o.fetchImpl ?? fetch)(OPENROUTER_URL, {
             method: "POST",
             headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}`, "X-Title": "iTarang WhatsApp Assistant" },
@@ -206,7 +225,7 @@ async function viaOpenRouter(o: ReadOpts, apiKey: string, model: string): Promis
 }
 
 async function viaGemini(o: ReadOpts, apiKey: string, model: string): Promise<ReadOutcome> {
-    return withTimeout(o.timeoutMs ?? 25_000, async (signal) => {
+    return withTimeout(readTimeoutMs(o), async (signal) => {
         const res = await (o.fetchImpl ?? fetch)(`${GEMINI_BASE}/${encodeURIComponent(model)}:generateContent`, {
             method: "POST",
             headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
@@ -243,6 +262,10 @@ export async function readDocument(o: ReadOpts): Promise<ReadOutcome> {
     if (cfg.apiKey) attempts.push(() => viaGemini(o, cfg.apiKey!, cfg.model));
     if (attempts.length === 0) return { kind: "failed", error: "no model key (OPENROUTER_API_KEY / WA_ASSIST_GEMINI_API_KEY)" };
     for (const attempt of attempts) {
+        if (readTimeoutMs(o) < MIN_READ_MS) {
+            errors.push("timeout: no time left in the turn");
+            break;
+        }
         try {
             const r = await attempt();
             if (r.kind === "ok") return r;

@@ -5,6 +5,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Loader2, CheckCircle2, XCircle, Clock, FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
+import { onFreshFileClick } from "@/lib/storage/freshFileLink";
 type Status = "pending" | "approved" | "rejected";
 
 interface ExpenseRow {
@@ -154,6 +155,7 @@ export default function CEOExpenseApprovalsPage() {
                       {row.bill_url ? (
                         <a
                           href={row.bill_url}
+                          onClick={(e) => onFreshFileClick(e, row.bill_url)}
                           target="_blank"
                           rel="noreferrer"
                           className="text-brand-600 hover:underline font-semibold"

@@ -10,6 +10,7 @@ import { hasLeadScope, leadScopeSql } from "@/lib/leads/leadScopeSql";
 import { ONBOARDING_DROPOUT_REASONS, OWNER_DRILL_METRICS } from "./types";
 import { isUndefinedColumn, ownerConversionRate, roleLabel } from "./reportHelpers";
 import { asmTransferRecipientFromVisitSql } from "@/lib/leads/closingOwner";
+import { hasLeadClocks } from "@/lib/leads/clocks";
 import type {
     DashboardFilters,
     OwnerDrillLead,
@@ -460,6 +461,23 @@ async function asmHandoff(f: DashboardFilters): Promise<ReportResult> {
         GROUP BY p.asm_id, u.name
         ORDER BY SUM(p.handoffs) DESC, u.name
     `);
+    // IDs 85 / 86 — the transfer (field-visit) clock per ASM, over transfers in
+    // the period: how many fell due, how many got their first visit in time,
+    // and the limits passed (charged to the owner at the time; inferred left out).
+    const clockBy = new Map<string, { due: number; ok: number; passed: number }>();
+    if (await hasLeadClocks()) {
+        const c = await db.execute<{ asm_id: string; due: string; ok: string; passed: string }>(sql`
+            SELECT c.owner_id AS asm_id,
+                   COUNT(*) FILTER (WHERE c.due_at <= NOW())::text AS due,
+                   COUNT(*) FILTER (WHERE c.due_at <= NOW() AND c.limit_passed_at IS NULL)::text AS ok,
+                   COUNT(*) FILTER (WHERE c.limit_passed_at IS NOT NULL)::text AS passed
+              FROM lead_clocks c
+              JOIN dealer_leads dl ON dl.id = c.dealer_lead_id
+             WHERE c.clock = 'transfer' AND c.owner_id IS NOT NULL AND c.owner_inferred = false
+               ${dateRange("c.started_at", f, "tz")} ${leadScopeSql(f)}
+             GROUP BY c.owner_id`);
+        for (const r of c) clockBy.set(r.asm_id, { due: num(r.due), ok: num(r.ok), passed: num(r.passed) });
+    }
     return {
         type: "asm_handoff",
         columns: [
@@ -469,8 +487,11 @@ async function asmHandoff(f: DashboardFilters): Promise<ReportResult> {
             { key: "conversion_rate", label: "Conversion %", numeric: true },
             { key: "avg_days_to_close", label: "Avg Days to Close", numeric: true },
             { key: "escalations", label: "Escalations", numeric: true },
+            { key: "visit_in_limit_pct", label: "First visit in limit %", numeric: true },
+            { key: "visit_limits_passed", label: "Field-visit limits passed", numeric: true },
         ],
         rows: rows.map((r) => {
+            const clk = r.asm_id ? clockBy.get(r.asm_id) : undefined;
             const conv = num(r.converted);
             const closed = num(r.closed);
             const rate = ratio(conv, closed);
@@ -485,6 +506,8 @@ async function asmHandoff(f: DashboardFilters): Promise<ReportResult> {
                 avg_days_to_close:
                     r.avg_days_to_close != null ? Number(r.avg_days_to_close) : null,
                 escalations: num(r.escalations),
+                visit_in_limit_pct: clk && clk.due > 0 ? Math.round((clk.ok / clk.due) * 100) : null,
+                visit_limits_passed: clk ? clk.passed : null,
             };
         }),
     };

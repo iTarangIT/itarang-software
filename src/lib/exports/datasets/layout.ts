@@ -83,7 +83,7 @@ export const DATASET_LAYOUT: Record<string, DatasetLayout> = {
                 keys: ["visit_date", "scheduled_date", "lead_id", "dealer", "city", "state", "visitor", "meeting_mode", "visit_status", "visit_outcome", "new_visit", "visit_remarks", "next_visit_date"],
             },
             { name: "Proof", keys: ["photos", "location_pin"] },
-            { name: "Handover", keys: ["transferred_on", "transferred_by", "days_transfer_to_visit"] },
+            { name: "Handover", keys: ["transferred_on", "transferred_by", "owner_at_transfer", "days_transfer_to_visit"] },
         ],
     },
     quotes: {
@@ -107,8 +107,9 @@ export const DATASET_LAYOUT: Record<string, DatasetLayout> = {
         grain: "One row per person, metric and month",
         who: "CEO, Admin, Sales Head; each rep sees their own",
         columnGroups: [
-            { name: "Target", keys: ["month", "user_name", "user_role", "metric_label", "ceo_target", "sales_head_target", "admin_addon", "final_target", "status", "pushed_at", "accepted_at"] },
-            { name: "Progress", keys: ["mtd_target", "actual", "pct_of_mtd", "remaining", "required_per_day"] },
+            { name: "Target", keys: ["month", "user_name", "user_role", "metric_label", "unit", "is_custom", "ceo_target", "stretch", "final_target", "stretch_note", "version", "posted_at", "waiting_push"] },
+            { name: "Acceptance", keys: ["status", "pushed_at", "first_pushed_at", "accepted_at", "accept_remark", "correction_requested_at", "correction_remark", "reject_comment"] },
+            { name: "Progress", keys: ["mtd_target", "actual", "not_measured_reason", "pct_of_mtd", "remaining", "required_per_day"] },
         ],
     },
     dealer_accounts: {
@@ -164,6 +165,9 @@ export const DATASET_LAYOUT: Record<string, DatasetLayout> = {
         who: "CEO, Admin, Sales Head",
         columnGroups: [
             { name: "File", keys: ["file_id", "submitted_on", "dealer", "account_owner", "customer", "city", "kyc_status"] },
+            // ID 33 — files iTarang raised under the house dealer and pushed out;
+            // ID 183 — iTarang people who acted for the dealer on the file.
+            { name: "iTarang help", keys: ["pushed_by_itarang_on", "pushed_by", "pushed_to", "assisted_by"] },
             { name: "Decision", keys: ["nbfc", "loan_file_number", "loan_status", "rejection_reason", "decided_on", "loan_amount", "disbursed_at", "disbursement_amount"] },
         ],
     },

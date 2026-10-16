@@ -37,12 +37,7 @@ export function canUsePushToDealer(input: {
   houseDealerCode: string | null | undefined;
 }): boolean {
   if ((PUSH_TO_DEALER_INTERNAL_ROLES as readonly string[]).includes(input.role ?? "")) return true;
-  return (
-    input.role === "dealer" &&
-    !!input.houseDealerCode &&
-    !!input.dealerId &&
-    input.dealerId === input.houseDealerCode
-  );
+  return isHouseLogin(input);
 }
 
 export const NO_ACTIVE_DEALER_MESSAGE = "No active dealer with this number";
@@ -95,11 +90,43 @@ export function needsLoan(paymentMethod: string | null | undefined): boolean {
   return (FINANCE_PAYMENT_METHODS as readonly string[]).includes(paymentMethod ?? "");
 }
 
+/**
+ * ID 182: the four ways a file moves to a dealer. Only the CRM single-file
+ * push ("crm_push") may move a file a second time, and only for an admin.
+ */
+export type PushVia = "crm_push" | "bulk_dealer_mobile" | "step1_dealer_mobile" | "whatsapp_operator";
+
+/** ID 182: the reason Step 1 and WhatsApp record on their own (decided 14 Oct). */
+export const ITARANG_TEAM_PUSH_REASON = "Entered by iTarang team";
+
+/**
+ * ID 182: is this login an iTarang house login? Any dealer login whose dealer
+ * code IS the house code — the shared dealer@itarang.com and every per-person
+ * team login created under the house (Admin › House team logins).
+ */
+export function isHouseLogin(input: {
+  role: string | null | undefined;
+  dealerId: string | null | undefined;
+  houseDealerCode: string | null | undefined;
+}): boolean {
+  return (
+    input.role === "dealer" &&
+    !!input.houseDealerCode &&
+    !!input.dealerId &&
+    input.dealerId === input.houseDealerCode
+  );
+}
+
 export interface PushCheckInput {
   /** Who is pushing (users.role). */
   actorRole: string | null | undefined;
-  /** True for the house-dealer login path (Step 1 / bulk); its role is 'dealer'. */
+  /** True when the pusher is a house login (isHouseLogin); its role is 'dealer'. */
   actorIsHouseLogin?: boolean;
+  /**
+   * ID 182: which way the file is being pushed. A second move is allowed only
+   * through the CRM push (or a caller that does not say — the CRM GET).
+   */
+  via?: PushVia;
   /** leads.dealer_id today. */
   currentDealerId: string | null | undefined;
   /** Display name of the current dealer, for the consent message. */
@@ -109,12 +136,6 @@ export interface PushCheckInput {
   consentSigned: boolean;
   /** The file was pushed before (a LEAD_PUSHED_TO_DEALER row exists). */
   pushedBefore: boolean;
-  /**
-   * 14 Oct: the house dealer pushed this file out at some point (a push row
-   * from the house). The house login keeps full access to such a file and may
-   * push it again — to the same dealer or another — until consent is signed.
-   */
-  houseOriginated?: boolean;
   paymentMethod: string | null | undefined;
   target: { dealerId: string; name: string; financeEnabled: boolean };
 }
@@ -126,17 +147,18 @@ export const PUSHED_BEFORE_MESSAGE =
 export const NOT_HOUSE_MESSAGE = "Only files with the iTarang house dealer can be pushed to a dealer.";
 
 /**
- * ID 33: why this file can't be pushed right now by this actor, whatever the
- * target dealer — or null when it can. Shared by the CRM button (GET: show or
- * hide it), the CRM push, the bulk push and the Step-1 push.
+ * ID 33 / 182: why this file can't be pushed right now by this actor, whatever
+ * the target dealer — or null when it can. Shared by every push path: the CRM
+ * button (GET: show or hide it), the CRM push, the house bulk push, Step 1 and
+ * the WhatsApp operator.
  *  1. never after consent is signed (exact agreed message);
- *  2. one push per file: once a file carries a push, only an admin (never the
- *     house-dealer login) may move it again — even if it is back with the
- *     house dealer;
+ *  2. one push per file: once a file carries a push, only an admin moving it
+ *     through the CRM push may move it again — never a house login, never
+ *     Step 1 / bulk / WhatsApp — even if it is back with the house dealer;
  *  3. a file that is not with the house dealer and was never pushed is a
  *     dealer's own lead and never movable.
- * 14 Oct: the house login may push a file it pushed out before again, to
- * any dealer, wherever it is now — still never after consent.
+ * 16 Oct: the 14 Oct "house login may push a file it pushed out again" rule
+ * is gone (decision: the house pushes a file once; a second move needs Admin).
  */
 export function pushBlockedReason(
   input: Omit<PushCheckInput, "target" | "paymentMethod">,
@@ -144,8 +166,9 @@ export function pushBlockedReason(
   if (input.consentSigned) {
     return { status: 409, message: consentSignedMessage(input.currentDealerName) };
   }
-  if (input.actorIsHouseLogin && input.houseOriginated) return null;
+  const viaCrm = input.via === undefined || input.via === "crm_push";
   const adminAgain =
+    viaCrm &&
     !input.actorIsHouseLogin &&
     (PUSH_AGAIN_ROLES as readonly string[]).includes(input.actorRole ?? "") &&
     input.pushedBefore;

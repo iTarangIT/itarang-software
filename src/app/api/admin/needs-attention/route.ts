@@ -9,6 +9,7 @@
 import { requireRole } from "@/lib/auth-utils";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
 import { listNeedsAttention, summarizeNeedsAttention } from "@/lib/leads/needsAttention";
+import { getTimeLimits } from "@/lib/timeLimits/store";
 import { filterNeedsAttention, needsAttentionFiltersFrom } from "@/lib/leads/needsAttentionFilter";
 import { csvDateTime, csvResponse } from "@/lib/leads/queueCsv";
 import { LEAD_STATUS_LABEL } from "@/lib/leads/queueFilters";
@@ -54,9 +55,13 @@ export const GET = withErrorHandler(async (req: Request) => {
 
     // The list is capped for the screen; the totals are not, so the page can
     // say "showing the oldest 2,000 of 5,234" instead of passing 2,000 off as all.
-    const [rows, holders] = await Promise.all([
+    const [rows, holders, l] = await Promise.all([
         listNeedsAttention({ holderId: holder, limit: MAX_ROWS }),
         summarizeNeedsAttention({ holderId: holder }),
+        getTimeLimits(),
     ]);
-    return successResponse({ rows, holders });
+    // The limits behind the figures, so screens label them from the settings
+    // (ID 85 Decision 6) instead of printing a fixed number.
+    const limits = { idle_cc: l.idle_cc, idle_asm: l.idle_asm, stale_critical: l.stale_critical };
+    return successResponse({ rows, holders, limits });
 });

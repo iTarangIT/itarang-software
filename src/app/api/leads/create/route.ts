@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { safeEqual } from "@/lib/cron-auth";
 import crypto from 'crypto';
 import { db } from '@/lib/db';
 import { leads, personalDetails, auditLogs, accounts, leadProducts, users } from '@/lib/db/schema';
@@ -9,17 +10,26 @@ import { capabilitiesFor } from '@/lib/dealer/dealer-capabilities';
 import { notifyLeadCreated } from '@/lib/notifications/events';
 import { dealerDisplayName } from '@/lib/notifications/emit';
 import { findActiveDealerById, findActiveDealerByMobile, houseDealerCode, type PushTargetDealer } from '@/lib/leads/dealerByMobile';
-import { canUsePushToDealer, consentSignedMessage, NO_ACTIVE_DEALER_MESSAGE, PUSHED_BEFORE_MESSAGE } from '@/lib/leads/pushToDealer';
 import {
+    canUsePushToDealer,
+    checkPush,
+    isHouseLogin,
+    ITARANG_TEAM_PUSH_REASON,
+    NO_ACTIVE_DEALER_MESSAGE,
+} from '@/lib/leads/pushToDealer';
+import {
+    dealerDisplayNames,
     detachAuditChanges,
     detachFromOldDealer,
+    LEAD_PUSHED_TO_DEALER,
     logPushCouponRelease,
     pushedBeforeLeadIds,
     signedConsentLeadIds,
     type DetachResult,
-    houseOriginatedLeadIds,
 } from '@/lib/leads/pushGuards';
-import { dealerMayActOnLead } from '@/lib/auth/requireLeadAccess';
+import { dealerMayActOnLead, resolveDealerCode } from '@/lib/auth/requireLeadAccess';
+import { dealerOwnsLead } from '@/lib/auth/leadAccessRules';
+import { gateLeadActor, recordActorStep, stampDealerAction, type LeadActor } from '@/lib/leads/actForDealerGuard';
 import { z } from 'zod';
 import { eq, and, sql, desc } from 'drizzle-orm';
 import {
@@ -263,8 +273,10 @@ function tryTestBypass(req: Request): { id: string; name: string; email: string;
     const secretHeader = req.headers.get('x-test-admin-secret');
     const dealerCode = req.headers.get('x-test-dealer-code');
     const userId = req.headers.get('x-test-user-id');
-    const expected = process.env.NBFC_TEST_BYPASS_SECRET || 'test-bypass';
-    if (!secretHeader || secretHeader !== expected) return null;
+    // ID 130: no default secret (an unset env used to accept "test-bypass"),
+    // and a timing-safe compare.
+    const expected = process.env.NBFC_TEST_BYPASS_SECRET;
+    if (!expected || !secretHeader || !safeEqual(secretHeader, expected)) return null;
     if (!dealerCode || !userId) return null;
     return {
         id: userId,
@@ -295,8 +307,22 @@ async function step1AccessDenied(
     if (!row) return errorResponse('Lead not found', 404);
     const mine = row.uploaderId === user.id || (await dealerMayActOnLead(user, row.dealerId, leadId));
     if (!mine) return errorResponse('Lead not found', 404);
-    // The house and the dealer can both work a pushed file: refuse a save made
-    // on a stale copy instead of silently overwriting the other side's changes.
+    // ID 183 (16 Oct): the dealer's action wins a clash. The file's own dealer
+    // is never refused as "stale" — their save goes through, stamps their
+    // action and clears any iTarang "being worked by" note. Anyone else (the
+    // house on a file it pushed out) is held to the stale check and the note.
+    if (dealerOwnsLead(row.dealerId, await resolveDealerCode(user))) {
+        await stampDealerAction(leadId, user.id);
+        return null;
+    }
+    // 16 Oct (ID 183): the creator too — the house login that created a file
+    // and pushed it to a dealer only sees it now (the gate refuses).
+    if (row.dealerId) {
+        const gate = await gateLeadActor(user, { id: leadId, dealer_id: row.dealerId }, { write: true });
+        if (!gate.ok) return errorResponse(gate.message, gate.status);
+    }
+    // Refuse a save made on a stale copy instead of silently overwriting the
+    // dealer's changes.
     const expected = expectedUpdatedAt ? Date.parse(expectedUpdatedAt) : NaN;
     const current = row.updatedAt ? new Date(row.updatedAt).getTime() : NaN;
     if (Number.isFinite(expected) && Number.isFinite(current) && current - expected > 1000) {
@@ -321,6 +347,24 @@ async function step1AccessDenied(
         );
     }
     return null;
+}
+
+/** ID 182: the file moved to another dealer between the push check and the write. */
+class Step1PushMovedError extends Error {}
+
+/**
+ * ID 183: the house login saving Step 1 of a file it pushed out (not the
+ * file's dealer) — the actor whose step is recorded "Done by <name> for
+ * <dealer>". Null for the dealer's own save.
+ */
+async function step1HouseActor(
+    user: { id: string; role: string; dealer_id: string | null; name?: string | null },
+    leadId: string,
+): Promise<LeadActor | null> {
+    const [row] = await db.select({ dealerId: leads.dealer_id }).from(leads).where(eq(leads.id, leadId)).limit(1);
+    if (!row?.dealerId || dealerOwnsLead(row.dealerId, await resolveDealerCode(user))) return null;
+    const gate = await gateLeadActor(user, { id: leadId, dealer_id: row.dealerId });
+    return gate.ok && gate.actor.kind !== 'dealer' ? gate.actor : null;
 }
 
 /** The lead's current updated_at (ISO), for the editor's next save. */
@@ -596,6 +640,7 @@ export const POST = withErrorHandler(async (req: Request) => {
         // any file's Step 1 by id. Same rule as every lead route now.
         const denied = await step1AccessDenied(user, data.leadId, data.expected_updated_at);
         if (denied) return denied;
+        const step1Actor = await step1HouseActor(user, data.leadId);
 
         // Server-side strict validation
         if (!data.full_name || data.full_name.trim().length < 2) return errorResponse('Full name required', 400);
@@ -653,6 +698,8 @@ export const POST = withErrorHandler(async (req: Request) => {
         // created under that dealer; uploader_id stays the team member so they
         // can still finish KYC. Blank keeps it with the house dealer.
         let pushTarget: PushTargetDealer | null = null;
+        // ID 182: the dealer the file had when checked (lost-update guard) and its name.
+        let pushFrom: { dealerId: string; name: string } | null = null;
         const pushMobile = data.push_to_dealer_mobile?.trim();
         const pushDealerId = data.push_to_dealer_id?.trim();
         if (pushMobile || pushDealerId) {
@@ -661,25 +708,11 @@ export const POST = withErrorHandler(async (req: Request) => {
                 return errorResponse('Only the iTarang team can submit a lead for another dealer.', 403);
             }
             const [current] = await db
-                .select({ dealerId: leads.dealer_id })
+                .select({ dealerId: leads.dealer_id, paymentMethod: leads.payment_method })
                 .from(leads)
                 .where(eq(leads.id, data.leadId!))
                 .limit(1);
             if (!current) return errorResponse('Lead not found', 404);
-            // 14 Oct: a file the house pushed out may be pushed again from here.
-            const houseFile = !!house && dealer_id === house && (await houseOriginatedLeadIds(house, [data.leadId!])).has(data.leadId!);
-            if (current.dealerId !== dealer_id && !houseFile) {
-                return errorResponse('This lead already belongs to another dealer. Moving it again needs an admin.', 409);
-            }
-            // ID 33: consent gate — a re-submitted Step 1 on a file whose
-            // customer already signed consent must not move it.
-            if ((await signedConsentLeadIds([data.leadId!])).has(data.leadId!)) {
-                return errorResponse(consentSignedMessage(await dealerDisplayName(dealer_id)), 409);
-            }
-            // ID 33: one push per file — a second move needs an admin (CRM).
-            if (!houseFile && (await pushedBeforeLeadIds([data.leadId!])).has(data.leadId!)) {
-                return errorResponse(PUSHED_BEFORE_MESSAGE, 409);
-            }
             let target: PushTargetDealer | null;
             if (pushDealerId) {
                 target = await findActiveDealerById(pushDealerId);
@@ -704,7 +737,31 @@ export const POST = withErrorHandler(async (req: Request) => {
                     422,
                 );
             }
+            // ID 33 / 182: the same push rule as every other path — consent
+            // gate, one push per file (16 Oct: never a second push from here,
+            // a second move is Admin's in the CRM), a dealer's own lead never
+            // moves, not to the dealer it is already with.
+            const [signed, pushed, names] = await Promise.all([
+                signedConsentLeadIds([data.leadId!]),
+                pushedBeforeLeadIds([data.leadId!]),
+                dealerDisplayNames(current.dealerId ? [current.dealerId] : []),
+            ]);
+            const fromName = current.dealerId ? names.get(current.dealerId) ?? current.dealerId : '';
+            const verdict = checkPush({
+                actorRole: user.role,
+                actorIsHouseLogin: isHouseLogin({ role: user.role, dealerId: dealer_id, houseDealerCode: house }),
+                via: 'step1_dealer_mobile',
+                currentDealerId: current.dealerId,
+                currentDealerName: fromName,
+                houseDealerCode: house ?? '',
+                consentSigned: signed.has(data.leadId!),
+                pushedBefore: pushed.has(data.leadId!),
+                paymentMethod: data.payment_method || current.paymentMethod,
+                target,
+            });
+            if (!verdict.ok) return errorResponse(verdict.message, verdict.status);
             pushTarget = target;
+            pushFrom = { dealerId: current.dealerId!, name: fromName };
         }
 
         const normPhone = normalizePhone(data.phone)!;
@@ -770,7 +827,15 @@ export const POST = withErrorHandler(async (req: Request) => {
                         }
                         : {}),
                     updated_at: new Date()
-                }).where(eq(leads.id, data.leadId!));
+                }).where(
+                    // ID 182: lost-update guard — a push only lands while the
+                    // file is still with the dealer it was checked against.
+                    pushFrom
+                        ? and(eq(leads.id, data.leadId!), eq(leads.dealer_id, pushFrom.dealerId))
+                        : eq(leads.id, data.leadId!),
+                ).returning({ id: leads.id }).then((rows) => {
+                    if (pushFrom && !rows.length) throw new Step1PushMovedError();
+                });
 
                 await tx.update(personalDetails).set({
                     dob: new Date(data.dob!),
@@ -806,18 +871,23 @@ export const POST = withErrorHandler(async (req: Request) => {
                     timestamp: new Date()
                 });
 
-                if (pushTarget) {
+                if (pushTarget && pushFrom) {
                     const detached = await detachFromOldDealer(tx, data.leadId!);
                     pushDetached = detached;
                     await tx.insert(auditLogs).values({
                         id: `AUDIT-${Date.now()}-push`,
                         entity_type: 'lead',
                         entity_id: data.leadId!,
-                        action: 'LEAD_PUSHED_TO_DEALER',
+                        action: LEAD_PUSHED_TO_DEALER,
                         changes: {
-                            from_dealer_id: dealer_id,
+                            from_dealer_id: pushFrom.dealerId,
+                            from_dealer_name: pushFrom.name,
                             to_dealer_id: pushTarget.dealerId,
                             to_dealer_name: pushTarget.name,
+                            // ID 182: automatic reason + the person's own login.
+                            reason: ITARANG_TEAM_PUSH_REASON,
+                            by_name: user.name ?? null,
+                            by_role: user.role,
                             via: 'step1_dealer_mobile',
                             ...detachAuditChanges(detached),
                         },
@@ -854,7 +924,10 @@ export const POST = withErrorHandler(async (req: Request) => {
             if (pushTarget) {
                 if (pushDetached) await logPushCouponRelease(pushDetached, data.leadId!, user.id, pushTarget.name);
                 const { notifyDealerOfPushedLead } = await import('@/lib/whatsapp/pushedLeadNotice');
-                await notifyDealerOfPushedLead(data.leadId!);
+                await notifyDealerOfPushedLead(data.leadId!, { reason: ITARANG_TEAM_PUSH_REASON, fromDealerId: pushFrom?.dealerId ?? null });
+            } else if (step1Actor) {
+                // ID 183: the house saved Step 1 of a file it pushed out.
+                await recordActorStep(step1Actor, 'saved the customer details (Step 1)');
             }
 
             return successResponse({
@@ -863,6 +936,9 @@ export const POST = withErrorHandler(async (req: Request) => {
                 ...(pushTarget ? { pushedTo: { dealerId: pushTarget.dealerId, name: pushTarget.name } } : {}),
             });
         } catch (err) {
+            if (err instanceof Step1PushMovedError) {
+                return errorResponse('This file changed while you were pushing it. Reload and try again.', 409);
+            }
             console.error("Lead commit failed:", err);
             return errorResponse("Something went wrong while saving the lead. Please try again.", 500);
         }

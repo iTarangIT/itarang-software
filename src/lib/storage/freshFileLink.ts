@@ -8,9 +8,14 @@
 //
 // No server imports: safe in client components.
 
-/** Is this a stored-file path the files proxy serves (relative or absolute)? */
+/**
+ * Is this a stored file (relative or absolute): a files-proxy path, or (16
+ * Oct) an NBFC store path, /nbfc-uploads/… or /api/nbfc-uploads/…?
+ */
 export function isStoredFileUrl(url: string | null | undefined): url is string {
-    return typeof url === "string" && url.includes("/api/files/") && !url.includes("/api/files/link");
+    if (typeof url !== "string") return false;
+    if (url.includes("/api/files/")) return !url.includes("/api/files/link") && !url.includes("/api/files/open");
+    return url.includes("/nbfc-uploads/");
 }
 
 /**

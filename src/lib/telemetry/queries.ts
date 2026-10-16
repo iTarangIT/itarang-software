@@ -154,7 +154,8 @@ export async function fetchFleetDashboardCEO(filter?: { state?: string; city?: s
 }
 
 export async function fetchFleetDashboardDealer(dealerId: string) {
-    const vehicleNos = await dealerVehicleNumbers(dealerId);
+    // An empty dealer code owns nothing (ID 181) — never match rows whose dealer_id is ''.
+    const vehicleNos = dealerId.trim() ? await dealerVehicleNumbers(dealerId) : [];
     if (vehicleNos.length === 0) {
         return {
             role: "dealer" as const,
@@ -1381,8 +1382,14 @@ export async function fetchDatabaseStats() {
     `;
 }
 
-export async function fetchDeviceStatus() {
+/**
+ * Online / offline status per vehicle. `vehicleNos` limits it to a dealer's
+ * mapped vehicles (ID 181); omitted = the whole fleet (CEO).
+ */
+export async function fetchDeviceStatus(vehicleNos?: string[]) {
+    if (vehicleNos && vehicleNos.length === 0) return [];
     const iot = getIotSql();
+    const scope = vehicleNos ? iot`WHERE vehicleno = ANY(${vehicleNos})` : iot``;
     return iot`
         SELECT
             vehicleno    AS device_id,
@@ -1397,6 +1404,7 @@ export async function fetchDeviceStatus() {
                 ELSE 'offline'
             END AS comm_status
         FROM vehicle_state
+        ${scope}
         ORDER BY last_seen DESC NULLS LAST
     `;
 }
@@ -1407,8 +1415,10 @@ export async function fetchDeviceStatus() {
  * Resolve a dealer's vehicle registration numbers from the RDS-side
  * `device_battery_map`. Returns an empty array if the dealer has no active
  * deployments — caller should short-circuit instead of querying the VPS.
+ * Exported for the per-vehicle access check (ID 181, vehicleAccess.ts).
  */
-async function dealerVehicleNumbers(dealerId: string): Promise<string[]> {
+export async function dealerVehicleNumbers(dealerId: string): Promise<string[]> {
+    if (!dealerId.trim()) return [];
     const rows = await db
         .select({ vehicle_number: deviceBatteryMap.vehicle_number })
         .from(deviceBatteryMap)

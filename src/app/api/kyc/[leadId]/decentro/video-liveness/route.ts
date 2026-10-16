@@ -7,6 +7,7 @@ import { kycVerifications } from '@/lib/db/schema';
 import { and, desc, eq } from 'drizzle-orm';
 import { createWorkflowId } from '@/lib/kyc/admin-workflow';
 import { requireLeadAccess } from '@/lib/auth/requireLeadAccess';
+import { recordActorStep, requireLeadWriter } from '@/lib/leads/actForDealerGuard';
 
 const MAX_VIDEO_BYTES = 25 * 1024 * 1024; // 25 MB — accommodates ~10s @ 720p MediaRecorder webm
 // MediaRecorder hands back MIME types like "video/webm;codecs=vp9,opus" — match
@@ -29,6 +30,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         // ID 119: signed in AND this lead is the caller's (a dealer's own lead, or back office).
         const leadGate = await requireLeadAccess(leadId);
         if (!leadGate.ok) return leadGate.response;
+        // ID 183: a change to the file — its own dealer, or Admin / Sales Head acting for the dealer.
+        const writer = await requireLeadWriter(leadId, req, leadGate.user);
+        if (!writer.ok) return writer.response;
 
         const formData = await req.formData();
         const video = formData.get('video') as File | null;
@@ -172,6 +176,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             });
         }
 
+        await recordActorStep(writer.actor, 'uploaded the video liveness check');
         return NextResponse.json({
             success: passiveOk,
             status: persistedStatus,

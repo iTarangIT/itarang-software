@@ -2147,6 +2147,36 @@ export const consentOtpVerifications = pgTable(
   }),
 );
 
+// E-344 (ID 183): the 30-minute "being worked by <name>" note an iTarang
+// actor holds on a customer file, plus the dealer's last action on it. Read
+// and written with raw SQL (src/lib/leads/actForDealerGuard.ts) so code on a
+// database without E-344 degrades instead of failing.
+export const leadWorkLocks = pgTable("lead_work_locks", {
+  lead_id: varchar("lead_id", { length: 255 }).primaryKey().notNull(),
+  holder_user_id: uuid("holder_user_id"),
+  holder_name: text("holder_name"),
+  holder_role: varchar("holder_role", { length: 50 }),
+  locked_at: timestamp("locked_at", { withTimezone: true }),
+  expires_at: timestamp("expires_at", { withTimezone: true }),
+  dealer_last_action_at: timestamp("dealer_last_action_at", { withTimezone: true }),
+  dealer_last_action_by: uuid("dealer_last_action_by"),
+  updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+// E-345 (ID 183): the dealer's "Ask iTarang to help" on a file. Open while
+// withdrawn_at IS NULL (one open ask per lead). Raw SQL, same reason.
+export const leadAssistRequests = pgTable("lead_assist_requests", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  lead_id: varchar("lead_id", { length: 255 }).notNull(),
+  dealer_code: varchar("dealer_code", { length: 255 }),
+  requested_by: uuid("requested_by"),
+  requested_by_name: text("requested_by_name"),
+  note: text("note"),
+  requested_at: timestamp("requested_at", { withTimezone: true }).defaultNow().notNull(),
+  withdrawn_at: timestamp("withdrawn_at", { withTimezone: true }),
+  withdrawn_by: uuid("withdrawn_by"),
+});
+
 export const couponCodes = pgTable("coupon_codes", {
   id: varchar({ length: 255 }).primaryKey().notNull(),
   code: varchar({ length: 50 }).notNull(),
@@ -2307,6 +2337,11 @@ export const coBorrowers = pgTable(
   },
 );
 
+// E-349 (ID 166) adds uploaded_by uuid + upload_source varchar(16) to this
+// table and to other_document_requests. NOT mirrored here on purpose (INSERT
+// trap: Drizzle lists every schema column in its INSERTs, which would break
+// every upload on a DB without E-349). Written by src/lib/storage/
+// uploaderStamp.ts, read via to_jsonb in src/lib/storage/fileAuthz.ts.
 export const coBorrowerDocuments = pgTable("co_borrower_documents", {
   id: varchar({ length: 255 }).primaryKey().notNull(),
   lead_id: varchar("lead_id", { length: 255 }).notNull(),
@@ -9617,44 +9652,12 @@ export const salesInvoices = pgTable(
   }),
 );
 
-// E-326 — line items of a sales invoice (tracker ID 72). `amount` is the
-// taxable value before GST. `item_key` joins to sales_invoice_item_products.
-export const salesInvoiceLines = pgTable(
-  "sales_invoice_lines",
-  {
-    id: uuid().defaultRandom().primaryKey().notNull(),
-    // 'drive' (read off the PDF); 'vyapar' / 'zoho' reserved for IDs 39 / 70.
-    source: varchar("source", { length: 16 }).default("drive").notNull(),
-    sales_invoice_id: uuid("sales_invoice_id").notNull(),
-    line_no: integer("line_no").notNull(),
-    description: text("description"),
-    item_key: text("item_key"),
-    hsn_code: varchar("hsn_code", { length: 16 }),
-    quantity: numeric("quantity", { precision: 12, scale: 3 }),
-    rate: numeric("rate", { precision: 14, scale: 2 }),
-    amount: numeric("amount", { precision: 14, scale: 2 }),
-    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-  },
-  (table) => ({
-    salesInvoiceLinesInvoiceLineUnique: uniqueIndex("sales_invoice_lines_invoice_line_unique").on(
-      table.sales_invoice_id,
-      table.line_no,
-    ),
-    salesInvoiceLinesItemKeyIdx: index("sales_invoice_lines_item_key_idx").on(table.item_key),
-  }),
-);
-
-// E-326 — invoice item name → CRM product, mapped once per item (ID 72).
-// product_id NULL = seen, not mapped; auto_matched = proposed, not confirmed.
-export const salesInvoiceItemProducts = pgTable("sales_invoice_item_products", {
-  item_key: text("item_key").primaryKey().notNull(),
-  item_name: text("item_name").notNull(),
-  product_id: uuid("product_id"),
-  auto_matched: boolean("auto_matched").default(false).notNull(),
-  mapped_by: uuid("mapped_by"),
-  created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-  updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
-});
+// E-326 (sales_invoice_lines, sales_invoice_item_products) — RETIRED (ID 147,
+// A16, 16 Oct 2026). The tables stay in the databases (migrations are
+// additive) but nothing reads or writes them: invoice lines are
+// invoice_line_items and the ONE item → product mapping is vyapar_item_map
+// (Invoice Ledger › Item mapping, src/lib/sales/itemMap.ts). Their Drizzle
+// definitions were removed so no new code can pick up the second mapping.
 
 export const salesInvoiceFolders = pgTable(
   "sales_invoice_folders",
@@ -13178,8 +13181,25 @@ export const salesTargets = pgTable(
     manual_actual: numeric("manual_actual", { precision: 14, scale: 2 }),
     manual_actual_at: timestamp("manual_actual_at", { withTimezone: true }),
     manual_actual_by: text("manual_actual_by"),
-    // E-342 — the Sales Head's own number; when > 0 it replaces the CEO target.
+    // E-342 — the Sales Head's own number. No longer read since E-343 (ID 189):
+    // the Sales Head adds an add-only stretch (admin_addon) instead.
     sales_head_target: numeric("sales_head_target", { precision: 14, scale: 2 }),
+    // E-343 (ID 189) — admin_addon is the Sales Head stretch; final =
+    // ceo_target + admin_addon. draft_* = the CEO's unposted revision; next_* =
+    // a posted revision waiting for the push; the in-force numbers stay put.
+    stretch_note: text("stretch_note"),
+    stretch_by: text("stretch_by"),
+    stretch_at: timestamp("stretch_at", { withTimezone: true }),
+    draft_ceo_target: numeric("draft_ceo_target", { precision: 14, scale: 2 }),
+    next_ceo_target: numeric("next_ceo_target", { precision: 14, scale: 2 }),
+    next_stretch: numeric("next_stretch", { precision: 14, scale: 2 }),
+    next_stretch_note: text("next_stretch_note"),
+    version: integer("version").default(0).notNull(),
+    first_pushed_at: timestamp("first_pushed_at", { withTimezone: true }),
+    correction_requested_at: timestamp("correction_requested_at", { withTimezone: true }),
+    correction_requested_by: text("correction_requested_by"),
+    correction_remark: text("correction_remark"),
+    accept_remark: text("accept_remark"),
     created_by: text("created_by"),
     updated_by: text("updated_by"),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
@@ -13192,6 +13212,30 @@ export const salesTargets = pgTable(
       t.metric,
     ),
     userMonthIdx: index("sales_targets_user_month_idx").on(t.user_id, t.month),
+  }),
+);
+
+// E-343 (ID 189) — every change to a target: CEO draft, post, stretch, push,
+// accept, ask for correction. Written by src/lib/targets/service.ts (raw SQL).
+export const salesTargetVersions = pgTable(
+  "sales_target_versions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    target_id: uuid("target_id")
+      .notNull()
+      .references(() => salesTargets.id, { onDelete: "cascade" }),
+    version: integer("version").default(0).notNull(),
+    event: varchar("event", { length: 30 }).notNull(),
+    ceo_target: numeric("ceo_target", { precision: 14, scale: 2 }),
+    stretch: numeric("stretch", { precision: 14, scale: 2 }),
+    old_ceo_target: numeric("old_ceo_target", { precision: 14, scale: 2 }),
+    old_stretch: numeric("old_stretch", { precision: 14, scale: 2 }),
+    note: text("note"),
+    changed_by: text("changed_by"),
+    changed_at: timestamp("changed_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    targetIdx: index("sales_target_versions_target_idx").on(t.target_id, t.changed_at),
   }),
 );
 
@@ -13787,5 +13831,82 @@ export const fileAccessLog = pgTable(
     openedIdx: index("file_access_log_opened_idx").on(t.opened_at),
     leadIdx: index("file_access_log_lead_idx").on(t.lead_id, t.opened_at),
     userIdx: index("file_access_log_user_idx").on(t.user_id, t.opened_at),
+  }),
+);
+
+// E-347 (tracker ID 181) — every open of one vehicle's details / GPS / trips /
+// readings feed, allowed or refused. Written by src/lib/telemetry/vehicleAccess.ts
+// (raw SQL insert, so code on a DB without E-347 still answers).
+export const telemetryLocationAccessLog = pgTable(
+  "telemetry_location_access_log",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    opened_at: timestamp("opened_at", { withTimezone: true }).defaultNow().notNull(),
+    user_id: uuid("user_id"),
+    role: varchar("role", { length: 64 }),
+    device_id: varchar("device_id", { length: 100 }).notNull(),
+    vehicle_number: varchar("vehicle_number", { length: 50 }),
+    // 'details' | 'gps' | 'trips' | 'readings'
+    feed: varchar("feed", { length: 16 }).notNull(),
+    hours: integer("hours"),
+    allowed: boolean("allowed").default(true).notNull(),
+  },
+  (t) => ({
+    openedIdx: index("telemetry_location_access_log_opened_idx").on(t.opened_at),
+    userIdx: index("telemetry_location_access_log_user_idx").on(t.user_id, t.opened_at),
+    vehicleIdx: index("telemetry_location_access_log_vehicle_idx").on(t.vehicle_number, t.opened_at),
+  }),
+);
+
+// E-348 (tracker ID 174) — battery serials the invoice reader returned per
+// line, and one "Stock to upload" task per new battery invoice. Readers and
+// writers probe with to_regclass (src/lib/inventory/stockUploadTasks/service.ts).
+export const invoiceLineSerials = pgTable(
+  "invoice_line_serials",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    invoice_source: varchar("invoice_source", { length: 10 }).default("drive").notNull(),
+    invoice_id: text("invoice_id").notNull(),
+    line_no: integer("line_no").notNull(),
+    serial_number: varchar("serial_number", { length: 100 }).notNull(),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    uniq: uniqueIndex("invoice_line_serials_uniq").on(t.invoice_source, t.invoice_id, t.serial_number),
+    serialIdx: index("invoice_line_serials_serial_idx").on(t.serial_number),
+  }),
+);
+
+export const stockUploadTasks = pgTable(
+  "stock_upload_tasks",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    invoice_source: varchar("invoice_source", { length: 10 }).default("drive").notNull(),
+    invoice_id: text("invoice_id").notNull(),
+    invoice_number: text("invoice_number"),
+    invoice_date: date("invoice_date"),
+    customer_name: text("customer_name"),
+    customer_gstin: varchar("customer_gstin", { length: 20 }),
+    // accounts.id of the buyer dealer; NULL = Bill To GSTIN matched no account.
+    account_id: varchar("account_id", { length: 255 }),
+    expected_serials: integer("expected_serials").default(0).notNull(),
+    read_serials: integer("read_serials").default(0).notNull(),
+    in_stock_serials: integer("in_stock_serials").default(0).notNull(),
+    // 'open' | 'escalated' | 'closed'
+    status: varchar("status", { length: 12 }).default("open").notNull(),
+    due_at: timestamp("due_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    last_checked_at: timestamp("last_checked_at", { withTimezone: true }),
+    escalated_at: timestamp("escalated_at", { withTimezone: true }),
+    closed_at: timestamp("closed_at", { withTimezone: true }),
+    // 'auto' | 'by_hand'
+    closed_how: varchar("closed_how", { length: 10 }),
+    closed_by: uuid("closed_by"),
+    close_note: text("close_note"),
+  },
+  (t) => ({
+    invoiceUniq: uniqueIndex("stock_upload_tasks_invoice_uniq").on(t.invoice_source, t.invoice_id),
+    statusIdx: index("stock_upload_tasks_status_idx").on(t.status, t.due_at),
+    accountIdx: index("stock_upload_tasks_account_idx").on(t.account_id),
   }),
 );

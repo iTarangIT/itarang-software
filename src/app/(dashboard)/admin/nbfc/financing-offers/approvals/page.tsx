@@ -7,13 +7,13 @@
  * `dual_approval_requests` row of action_type='financing_offer_deviation',
  * oldest-first so the closest-to-SLA-breach item is at the top.
  */
-import { and, eq, inArray, asc } from "drizzle-orm";
+import { inArray, asc } from "drizzle-orm";
 import { redirect } from "next/navigation";
 
 import { db } from "@/lib/db";
 import { dualApprovalRequests, nbfc } from "@/lib/db/schema";
 import { requireAuth } from "@/lib/auth-utils";
-import { FINANCING_OFFER_DEVIATION_ACTION } from "@/lib/nbfc/dual-approval/service";
+import { pendingFinancingDeviationWhere } from "@/lib/nbfc/dual-approval/financingQueue";
 import { PageShell } from "@/components/layout/PageShell";
 import FinancingOfferDeviationCard, {
   type DeviationRequest,
@@ -63,12 +63,7 @@ export default async function FinancingOfferApprovalsPage() {
   const pending = await db
     .select()
     .from(dualApprovalRequests)
-    .where(
-      and(
-        eq(dualApprovalRequests.action_type, FINANCING_OFFER_DEVIATION_ACTION),
-        eq(dualApprovalRequests.status, "pending_approval"),
-      ),
-    )
+    .where(pendingFinancingDeviationWhere)
     .orderBy(asc(dualApprovalRequests.created_at));
 
   // Resolve NBFC display names from the snapshot's nbfc_id (= nbfc.id PK).

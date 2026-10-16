@@ -109,7 +109,7 @@ export const POST = withErrorHandler(async (req: Request) => {
     const campaignLabel = campaigns[0].label;
     if (!endpointRef) {
         return errorResponse(
-            "This campaign has no push endpoint configured. Set push_endpoint_ref to the name of the env var holding its NeoDove Custom Integration URL.",
+            "This campaign has no push endpoint. An Admin can paste its NeoDove Custom Integration URL on the campaign page (stored encrypted).",
             409,
         );
     }

@@ -3,14 +3,14 @@
  *
  * E-275 — admin resubmits a recalled file to the NBFCs. Ends the pause the
  * recall started; every NBFC on the lead is asked to review again.
- * Auth: requireAdminAppUser().
+ * Auth: requireAdminAppUserForLead() (ID 119: owners only below Admin / CEO / Sales Head).
  */
 import { NextRequest, NextResponse } from "next/server";
 import { and, eq, notInArray } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import { leads, nbfc, nbfcLeadAssignments } from "@/lib/db/schema";
-import { requireAdminAppUser } from "@/lib/kyc/admin-workflow";
+import { requireAdminAppUserForLead } from "@/lib/kyc/admin-workflow";
 import { DECIDED_ASSIGNMENT_STATUSES } from "@/lib/nbfc/offer-negotiation";
 import { isLeadRecalled } from "@/lib/nbfc/recall";
 import { notifyLeadResubmitted } from "@/lib/notifications/events";
@@ -20,7 +20,7 @@ export const dynamic = "force-dynamic";
 
 export async function POST(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const admin = await requireAdminAppUser();
+    const admin = await requireAdminAppUserForLead((await params).id);
     if (!admin) {
       return NextResponse.json({ success: false, error: { message: "Unauthorized" } }, { status: 403 });
     }

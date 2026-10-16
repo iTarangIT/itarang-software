@@ -17,18 +17,18 @@ describe("summariseCompanyTargets", () => {
             ["2026-09", "2026-10"],
             "2026-10",
         );
-        expect(t.revenue).toEqual({ sum: 240, accepted: 0, notAccepted: 240, missing: [] });
-        expect(t.batteries_sold).toEqual({ sum: 9, accepted: 0, notAccepted: 9, missing: ["2026-09"] });
+        expect(t.revenue).toEqual({ sum: 240, accepted: 0, notAccepted: 240, stretch: 0, missing: [] });
+        expect(t.batteries_sold).toEqual({ sum: 9, accepted: 0, notAccepted: 9, stretch: 0, missing: ["2026-09"] });
     });
 
     it("treats a zero monthly target as no target", () => {
         const t = summariseCompanyTargets([{ month: "2026-09", rows: [row("revenue", 0, 0)] }], ["2026-09"], "2026-10");
-        expect(t.revenue).toEqual({ sum: 0, accepted: 0, notAccepted: 0, missing: ["2026-09"] });
+        expect(t.revenue).toEqual({ sum: 0, accepted: 0, notAccepted: 0, stretch: 0, missing: ["2026-09"] });
     });
 
     it("does not call the current month missing on the 1st (to-date target 0)", () => {
         const t = summariseCompanyTargets([{ month: "2026-10", rows: [row("revenue", 300, 0)] }], ["2026-10"], "2026-10");
-        expect(t.revenue).toEqual({ sum: 0, accepted: 0, notAccepted: 0, missing: [] });
+        expect(t.revenue).toEqual({ sum: 0, accepted: 0, notAccepted: 0, stretch: 0, missing: [] });
     });
 
     it("ignores other metrics", () => {
@@ -79,6 +79,68 @@ describe("accepted / not yet accepted split (ID 157)", () => {
             ["2026-10"],
             "2026-10",
         );
-        expect(t.revenue).toEqual({ sum: 170, accepted: 100, notAccepted: 70, missing: [] });
+        // ID 189 (16 Oct): the CEO's never-posted draft is not in force, so it is
+        // in neither the target nor "not yet accepted".
+        expect(t.revenue).toEqual({ sum: 150, accepted: 100, notAccepted: 50, stretch: 0, missing: [] });
+    });
+
+    it("counts only the version in force: posted, pushed, accepted — never a draft or a removed row (ID 189)", () => {
+        const t = summariseCompanyTargets(
+            [
+                {
+                    month: "2026-10",
+                    rows: [
+                        { metric: "revenue", status: "pending_approval", progress: { monthly_target: 300, mtd_target: 100 } },
+                        { metric: "revenue", status: "draft", progress: { monthly_target: 900, mtd_target: 300 } },
+                        { metric: "revenue", status: "removed", progress: { monthly_target: 600, mtd_target: 200 } },
+                        { metric: "batteries_sold", status: "draft", progress: { monthly_target: 30, mtd_target: 10 } },
+                    ],
+                },
+            ],
+            ["2026-10"],
+            "2026-10",
+        );
+        expect(t.revenue).toEqual({ sum: 100, accepted: 0, notAccepted: 100, stretch: 0, missing: [] });
+        // A month with only a CEO draft has no target yet.
+        expect(t.batteries_sold).toEqual({ sum: 0, accepted: 0, notAccepted: 0, stretch: 0, missing: ["2026-10"] });
+    });
+});
+
+describe("CEO target on CEO tiles, stretch apart (ID 189)", () => {
+    it("sums the CEO target and keeps the Sales Head stretch as its own figure", () => {
+        const t = summariseCompanyTargets(
+            [
+                {
+                    month: "2026-10",
+                    rows: [
+                        // CEO 300 + stretch 150 = 450 monthly; to date 100 / 150.
+                        {
+                            metric: "revenue",
+                            status: "accepted",
+                            progress: { monthly_target: 450, mtd_target: 150 },
+                            ceo_progress: { monthly_target: 300, mtd_target: 100 },
+                        },
+                        { metric: "revenue", status: "pushed", progress: { monthly_target: 90, mtd_target: 30 } },
+                    ],
+                },
+            ],
+            ["2026-10"],
+            "2026-10",
+        );
+        expect(t.revenue).toEqual({ sum: 130, accepted: 100, notAccepted: 30, stretch: 50, missing: [] });
+    });
+
+    it("a stretch on a CEO target of 0 counts as stretch, not as a CEO target", () => {
+        const t = summariseCompanyTargets(
+            [
+                {
+                    month: "2026-09",
+                    rows: [{ metric: "revenue", progress: { monthly_target: 80, mtd_target: 80 }, ceo_progress: { monthly_target: 0, mtd_target: 0 } }],
+                },
+            ],
+            ["2026-09"],
+            "2026-10",
+        );
+        expect(t.revenue).toEqual({ sum: 0, accepted: 0, notAccepted: 0, stretch: 80, missing: ["2026-09"] });
     });
 });

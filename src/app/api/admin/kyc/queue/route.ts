@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { and, desc, eq, gte, lte, type SQL } from "drizzle-orm";
 
+import { ownedLeadsWhere } from "@/lib/auth/ownedLeadsWhere";
 import { db } from "@/lib/db";
 import {
   adminVerificationQueue,
@@ -48,6 +49,11 @@ export async function GET(req: NextRequest) {
     const dateTo = parseOptionalDate(searchParams.get("dateTo"), true);
 
     const whereConditions: SQL[] = [];
+
+    // ID 119: below Admin / CEO / Sales Head only the customers you own are
+    // listed (their names and phone numbers included).
+    const owned = ownedLeadsWhere(appUser, adminVerificationQueue.lead_id);
+    if (owned) whereConditions.push(owned);
 
     if (status) {
       whereConditions.push(eq(adminVerificationQueue.status, status));
