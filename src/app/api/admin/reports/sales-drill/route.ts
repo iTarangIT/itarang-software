@@ -12,6 +12,7 @@
 // Ecofy kinds only for the Ecofy managers, like the Ecofy tile.
 
 import { z } from "zod";
+import { businessTypeFilterParam } from "@/lib/leads/businessType";
 
 import { requireRole } from "@/lib/auth-utils";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
@@ -51,7 +52,8 @@ export const GET = withErrorHandler(async (req: Request) => {
     const to = p.get("to") ?? (eco ? today : "");
     if (!ISO.test(from) || !ISO.test(to) || from > to) return errorResponse("Pick a valid date range.", 400);
     const opt = (k: string) => p.get(k)?.trim() || null;
-    const f: DrillFilters = { from, to, state: opt("state"), city: opt("city"), business_type: opt("business_type"), spoc_id: opt("spoc_id") };
+    const f: DrillFilters = { from, to, state: opt("state"), city: opt("city"), // ID 11: an old link's "finance" reads as Battery sale, as on the dashboard.
+        business_type: businessTypeFilterParam(opt("business_type")) ?? opt("business_type"), spoc_id: opt("spoc_id") };
     const persons = [...(p.get("persons") ?? "").split(","), p.get("person") ?? ""]
         .map((s) => s.trim())
         .filter((s) => s.length > 0 && s.length <= 100)
