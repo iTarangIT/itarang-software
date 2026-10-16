@@ -2,14 +2,17 @@
  * The final monthly target as SQL — ONE definition for every reader (the
  * targets service, the daily digests, the export), so none can disagree.
  *
- *   the Sales Head's number when they entered one (> 0), else the CEO's
- *   (plus any legacy admin add-on)
+ *   ID 189 (E-343): the CEO target + the Sales Head's add-only stretch
+ *   (stored in admin_addon), e.g. CEO 100 + 50 = 150
  *
- * sales_head_target (E-342) is read through to_jsonb so a DB without the column
- * falls back to the CEO target instead of failing the statement.
+ * Both columns hold the version IN FORCE: a CEO revision waits in
+ * draft_ceo_target / next_ceo_target and a stretch change on a target the rep
+ * already has waits in next_stretch, until the Sales Head pushes it — so a
+ * reader never sees a number the rep has not been sent. The E-342
+ * sales_head_target (which replaced the CEO's number) is no longer read.
  */
 import { sql, type SQL } from "drizzle-orm";
 
 export function finalTargetSql(t: SQL = sql`t`): SQL {
-    return sql`COALESCE(NULLIF((to_jsonb(${t}) ->> 'sales_head_target')::numeric, 0), ${t}.ceo_target + ${t}.admin_addon)`;
+    return sql`(${t}.ceo_target + GREATEST(COALESCE(${t}.admin_addon, 0), 0))`;
 }

@@ -2,9 +2,11 @@
 // builders, pinned to the caller, never restated:
 //   • buildSalesDashboard({ spoc_id: user.id, … }) — as /api/{inside-sales,asm}/
 //     reports/sales-dashboard call it — for activity and hot/warm/cold;
-//   • listTargets({ month, userId }) — as /api/me/targets does — for each target
-//     with its pro-rated MTD value and RAG; only pushed/accepted rows, which is
-//     what MyTargetsCard shows.
+//   • listTargets({ month, userId, viewer: "member" }) — as /api/me/targets
+//     does — for each target with its pro-rated MTD value and RAG; the rows
+//     MyTargetsCard shows (pushed / accepted, and old-flow rejected ones as
+//     "rejected, waiting for the Sales Head"), in the version in force (ID 189:
+//     CEO target + stretch; a revision not pushed yet is not shown).
 // Period is month-to-date (UC-09), not the dashboard screen's default 30 days.
 // The reply states the definition behind every figure.
 
@@ -34,7 +36,7 @@ export const METRIC_DEFINITIONS: Readonly<Record<string, string>> = Object.freez
     kyc_disbursed: "not measured in the CRM yet",
     scrap_deals: "buyback deals the dealer accepted",
     revenue: "revenue this month (₹)",
-    target: "monthly target pro-rated over working days (Mon–Sat, minus holidays); RAG: green ≥100%, amber 80–99%, red <80%",
+    target: "target = CEO target + the Sales Head's stretch, monthly (or per day for calls), pro-rated over working days (Mon–Sat, minus holidays) from the 1st; RAG: green ≥100%, amber 80–99%, red <80%",
 });
 
 export type NumbersPeriod = "this_month" | "last_month";
@@ -70,7 +72,7 @@ export function shapeNumbers(
     dashboard: SalesDashboard,
     targets: TargetRow[],
 ): Record<string, unknown> {
-    const shown = targets.filter((t) => t.status === "pushed" || t.status === "accepted");
+    const shown = targets.filter((t) => t.status === "pushed" || t.status === "accepted" || t.status === "rejected");
     const interest = Object.fromEntries(dashboard.interest.rows.map((r) => [r.interest_level, r.total]));
     return {
         period,
@@ -97,8 +99,22 @@ export function shapeNumbers(
             metric: t.metric,
             label: t.metric_label,
             monthly_target: t.progress.monthly_target,
+            // ID 189 — "CEO 100 + 50 = 150"; unit for custom metrics.
+            ceo_target: t.ceo_target,
+            stretch: t.stretch,
+            unit: t.unit,
+            per: t.kind === "per_day" ? "per day" : "per month",
+            status:
+                t.status === "rejected"
+                    ? "rejected, waiting for the Sales Head"
+                    : t.correction_open
+                      ? "correction asked, waiting for the Sales Head"
+                      : t.status === "pushed"
+                        ? "sent, not accepted yet"
+                        : "accepted",
             mtd_target: t.progress.mtd_target,
             actual: t.progress.actual,
+            not_measured_reason: t.progress.not_measured_reason ?? null,
             pct_of_mtd: t.progress.pct_of_mtd,
             rag: t.progress.rag,
             definition: METRIC_DEFINITIONS[t.metric] ?? null,
@@ -132,7 +148,7 @@ export const myNumbers: ToolFactory = () =>
             const { from, to, month, dashboardInput } = numbersInputs(ctx.user, period, ctx.now);
             const [dashboard, targets] = await Promise.all([
                 buildSalesDashboard(dashboardInput),
-                listTargets({ month, userId: ctx.user.id }),
+                listTargets({ month, userId: ctx.user.id, viewer: "member" }),
             ]);
             return { kind: "numbers", data: shapeNumbers(ctx.user, period, { from, to }, dashboard, targets) };
         },

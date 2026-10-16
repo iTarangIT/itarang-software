@@ -15,15 +15,15 @@ export default async function TargetsPage() {
             <header>
                 <h1 className="text-2xl font-semibold tracking-tight text-ink">Targets</h1>
                 <p className="mt-1 text-sm text-ink-muted">
-                    The CEO creates each person&apos;s monthly targets and sends them to the Sales Head. The
-                    Sales Head reviews them and sends them to the person: leave the Sales Head target empty
-                    and the CEO target goes; enter a number — higher or lower — and the Sales Head&apos;s goes
-                    instead. Either may add a metric (built-in or custom) or remove one. The person is told
-                    by notification and email and accepts or rejects on their performance page; a reject
-                    comes back here with their comment, to change and send again. Not accepted within 48
-                    hours and the daily Targets Pending mail says so.
-                    Changing a sent or accepted target sends it back to the Sales Head&apos;s review.
-                    Progress is measured pro-rata by working day (Mon–Sat, minus holidays); a custom
+                    The CEO enters each person&apos;s targets — drafts nobody else sees — and presses Post to
+                    Sales Head. The Sales Head (or Admin) may add a stretch on top of the CEO target, with a
+                    note (CEO 100 + 50 = 150; a stretch never reduces it), then presses Approve &amp; push.
+                    The person is told by notification and email and accepts, or asks for a correction, on
+                    their performance page. Not accepted within 48 hours of the first push and the daily
+                    Targets Pending mail says so; asking for a correction does not stop that clock. A change
+                    after posting is a new version: the CEO posts it, the Sales Head pushes it, and until
+                    then the last version stays in force. History lists every version. Progress is measured
+                    pro-rata by working day (Mon–Sat, minus holidays) from the 1st of the month; a custom
                     metric&apos;s progress is entered by hand.
                 </p>
             </header>
