@@ -9,7 +9,7 @@ import {
 } from "@/lib/db/schema";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
-import { requireInventoryAdmin } from "@/lib/auth-utils";
+import { requireStockUploader } from "@/lib/inventory/stockUploadGuard";
 import {
   successResponse,
   errorResponse,
@@ -85,8 +85,6 @@ const bodySchema = z.object({
 });
 
 export const POST = withErrorHandler(async (req: Request) => {
-  const user = await requireInventoryAdmin();
-
   let body: z.infer<typeof bodySchema>;
   try {
     body = bodySchema.parse(await req.json());
@@ -94,8 +92,12 @@ export const POST = withErrorHandler(async (req: Request) => {
     return errorResponse("Invalid request body: " + String(err), 400);
   }
 
-  const { dealerId, assetType, rows: rawBodyRows } = body as {
-    dealerId: string;
+  // ID 173: the stock-upload rule (stockUploadRules.ts), not the Admin ›
+  // Inventory view list — Sales Head and Ops are refused, partner admitted,
+  // a dealer only for its own account.
+  const { user, dealerId } = await requireStockUploader(body.dealerId);
+
+  const { assetType, rows: rawBodyRows } = body as {
     assetType: AssetType;
     rows: Record<string, unknown>[];
   };

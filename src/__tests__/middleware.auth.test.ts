@@ -238,6 +238,9 @@ describe("the shared /admin rows", () => {
     // partner: the lead-management pages it mirrors from sales_head.
     expect(await visit("/admin/upload", as("partner"))).toBe("pass");
     expect(await visit("/admin/targets", as("partner"))).toBe("/partner");
+    // ID 174 decision 5: partner gets Admin › Inventory and Product Master.
+    expect(await visit("/admin/inventory/upload", as("partner"))).toBe("pass");
+    expect(await visit("/admin/product-master", as("partner"))).toBe("pass");
 
     expect(await visit("/admin/users", as("sales_head"))).toBe("pass");
   });
