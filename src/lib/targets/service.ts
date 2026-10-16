@@ -38,7 +38,7 @@
  * hot leads handed to ground, and calls. Where the CRM has nothing to count,
  * the actual is null with a reason in words (NOT_MEASURED), never 0.
  */
-import { humanCall, wasHotAt } from "@/lib/reports/metricDefinitions";
+import { humanCall, transferCredit, wasHotAt } from "@/lib/reports/metricDefinitions";
 import { sql, type SQL } from "drizzle-orm";
 
 import { db } from "@/lib/db";
@@ -200,14 +200,16 @@ export async function measuresFor(monthFirst: string, upTo: string, elapsedWorki
             -- ID 59: Hot AT THE MOMENT of transfer, not Hot now.
             -- ID 169 (Kartik, 10 Oct): a dealer handed back and transferred
             -- again counts once, as in the daily email.
-            SELECT t.performed_by AS u, COUNT(DISTINCT t.dealer_lead_id) AS n
+            -- ID 179: credited to the owner at the moment of transfer
+            -- (transferCredit), not the manager who pressed Transfer.
+            SELECT ${transferCredit()} AS u, COUNT(DISTINCT t.dealer_lead_id) AS n
               FROM lead_touchpoints t
               JOIN dealer_leads dl ON dl.id = t.dealer_lead_id
              WHERE t.touchpoint_type = 'asm_transfer'
                AND ${wasHotAt(sql`t.dealer_lead_id`, sql`t.performed_at`, sql`dl.interest_level`)}
                AND (t.performed_at AT TIME ZONE 'Asia/Kolkata')::date BETWEEN ${monthFirst}::date AND ${upTo}::date
-               AND t.performed_by IS NOT NULL
-             GROUP BY t.performed_by
+               AND ${transferCredit()} IS NOT NULL
+             GROUP BY 1
         ),
         calls AS (
             SELECT t.performed_by AS u, COUNT(*) AS n

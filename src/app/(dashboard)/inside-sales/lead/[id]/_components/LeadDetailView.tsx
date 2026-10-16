@@ -17,6 +17,7 @@ import { TransferAsmModal } from "../../../_components/modals/TransferAsmModal";
 import { MarkLostModal } from "../../../_components/modals/MarkLostModal";
 import { MarkConvertedModal } from "../../../_components/modals/MarkConvertedModal";
 import { ReassignLeadModal, type TeamTarget } from "../../../_components/modals/ReassignLeadModal";
+import { ReassignToIsrModal } from "../../../_components/modals/ReassignToIsrModal";
 import { EscalateModal } from "../../../_components/modals/EscalateModal";
 import { ClaimLeadConfirm } from "../../../_components/modals/ClaimLeadConfirm";
 import { canExportLeadHistory } from "@/lib/leads/access";
@@ -32,6 +33,8 @@ export type ActiveModal =
     | "mark_lost"
     | "mark_converted"
     | "reassign"
+    // ID 179: a manager's "Reassign to ISR" (Leads page rules).
+    | "reassign_isr"
     | "escalate"
     | "claim";
 
@@ -238,6 +241,13 @@ export function LeadDetailView({ leadId, viewerId, viewerRole, backHref = "/insi
                 viewerId={viewerId}
                 onSuccess={onActionSuccess}
                 teamTargets={!isOwner && canTeamReassign ? teamQuery.data?.targets : undefined}
+            />
+            <ReassignToIsrModal
+                open={activeModal === "reassign_isr"}
+                onClose={() => setActiveModal(null)}
+                leadId={leadId}
+                currentOwnerId={lead.current_owner_id ?? null}
+                onSuccess={onActionSuccess}
             />
             <EscalateModal
                 open={activeModal === "escalate"}
