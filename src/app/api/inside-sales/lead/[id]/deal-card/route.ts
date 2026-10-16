@@ -18,7 +18,6 @@ import { dealCardJson, hasDealCardColumns, writeDealCard } from "@/lib/leads/dea
 import { DEAL_CARD_EDIT_ROLES, DealCardSchema, normaliseDealCard, parseDealCard } from "@/lib/leads/dealCardRules";
 import { writeTouchpoint } from "@/lib/touchpoints/write";
 import { notifyLeadPerson } from "@/lib/leads/newOwnerNotice";
-import { isDealerOnboarded } from "@/lib/leads/dealerOnboarded";
 
 const BodySchema = z.object({
     deal_card: DealCardSchema,
@@ -32,12 +31,8 @@ export const POST = withErrorHandler(
         if (!id) return errorResponse("Lead id required", 400);
         const body = BodySchema.parse(await req.json());
         const card = normaliseDealCard(body.deal_card);
-
-        // ID 186: an onboarded dealer's quotes carry no deal card.
-        const onboarded = await isDealerOnboarded(id);
-        if (onboarded.onboarded) {
-            return errorResponse(`${onboarded.reason} Reorder quotes carry no deal card.`, 409);
-        }
+        // ID 186 (16 Oct): onboarded dealers carry a deal card too — the Sales
+        // Head edits it the same way for every dealer.
 
         const result = await db.transaction(async (tx) => {
             if (!(await hasDealCardColumns(tx))) {

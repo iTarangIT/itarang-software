@@ -107,7 +107,8 @@ export const GET = withErrorHandler(async (req: Request) => {
             // ID 189 — the Sales Head's add-only stretch (Admin too).
             set_stretch: TARGET_STRETCH_ROLES.includes(r),
             approve: TARGET_APPROVER_ROLES.includes(r),
-            // ID 189 (16 Oct) — adding a metric is the CEO's (it lands as his draft).
+            // ID 189 (16 Oct) — add a metric: the CEO (lands as his draft) and
+            // the Sales Head for an ISR / ASM (lands in his queue, ready to push).
             edit_metrics: TARGET_METRIC_ROLES.includes(r),
             // Remove: the CEO any target; Sales Head / Admin only a row with
             // `ceo_owned` false (the service re-checks).

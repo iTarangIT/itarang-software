@@ -118,16 +118,41 @@ export async function resolveAssignTarget(
 // Which branch ran — for the caller's aggregate counts and for logging. A
 // blocked status transition falls through to the plain swap rather than
 // aborting, so the lead still changes hands and still gets an audit row. The
-// one refusal is "handback_blocked" (ID 121): a lead Awaiting field visit is
-// not handed to an ISR / partner while the ASM has a visit booked — nothing is
-// written and `blockedReason` says why.
+// refusals are "handback_blocked" (ID 121): a lead Awaiting field visit is
+// not handed to an ISR / partner while the ASM has a visit booked; and
+// "asm_blocked" (ID 179): a Won lead is never given to an ASM — the same rule
+// that hides a manager's Transfer to ASM on Won. Nothing is written and
+// `blockedReason` says why.
 export type AssignPath =
     | "asm_swap"
     | "asm_lift"
     | "rep_lift"
     | "transfer_undo"
     | "owner_swap"
-    | "handback_blocked";
+    | "handback_blocked"
+    | "asm_blocked";
+
+/** ID 179: shown when a reassign tries to give a Won lead to an ASM. */
+export const WON_TO_ASM_REFUSED =
+    "This lead is Won — the deal is closed, so it can't be given to an ASM. Reassign it to an inside sales rep if the owner must change.";
+
+/**
+ * ID 179 — the one rule every reassign path asks (Leads page bulk, lead-page
+ * team reassign, escalation reassign, NeoDove): a Won lead is never handed to
+ * an ASM. Returns the sentence to show, or null when the move is fine. Pure.
+ */
+export function wonToAsmRefusal(leadStatus: string | null | undefined, targetRole: string | null | undefined): string | null {
+    return leadStatus === "Won" && targetRole === "asm" ? WON_TO_ASM_REFUSED : null;
+}
+
+/** Thrown inside a transaction when wonToAsmRefusal says no; withErrorHandler answers 409. */
+export class WonToAsmError extends Error {
+    readonly status = 409;
+    constructor(message: string = WON_TO_ASM_REFUSED) {
+        super(message);
+        this.name = "WonToAsmError";
+    }
+}
 
 /**
  * ID 77.5 — the status a Transferred_to_ASM lead goes back to when it is handed
@@ -152,7 +177,7 @@ export type AssignOutcome = {
     path: AssignPath;
     /** Non-null only when this call changed lead_status. */
     statusLiftedTo: LeadStatus | null;
-    /** path "handback_blocked" only: the sentence to show (ID 121). */
+    /** paths "handback_blocked" (ID 121) and "asm_blocked" (ID 179) only: the sentence to show. */
     blockedReason?: string;
 };
 
@@ -247,11 +272,18 @@ async function assignOwner(input: AssignLeadOwnerInput): Promise<AssignOutcome> 
             });
             return { assigned: true, path: "asm_swap", statusLiftedTo: null };
         }
+        // ID 179: a Won lead is closed business — a manager's Transfer to ASM is
+        // hidden on it, so a reassign (Leads page, lead page, escalation) must
+        // not hand it to an ASM by the back door either. Nothing is written.
+        const wonRefusal = wonToAsmRefusal(fromStatus, target.role);
+        if (wonRefusal) {
+            return { assigned: false, path: "asm_blocked", statusLiftedTo: null, blockedReason: wonRefusal };
+        }
         // Ask the S3 guard BEFORE the owner swap, with the same question
         // writeTouchpoint will ask after it. swapOwner commits on its own, so a
         // move the guard refuses (a Won lead: open, but past transfer) used to
         // leave the new owner in place and then fail with a 409 and no
-        // touchpoint. Won now takes the plain swap below, like Converted / Lost.
+        // touchpoint. (Won never gets here — refused above, ID 179.)
         const canLift = checkStatusMove({
             from: fromStatus,
             to: "Transferred_to_ASM",
@@ -286,7 +318,7 @@ async function assignOwner(input: AssignLeadOwnerInput): Promise<AssignOutcome> 
                 statusLiftedTo: "Transferred_to_ASM",
             };
         }
-        // Won or terminal lead (Converted / Lost) — leave lead_status alone and fall
+        // Terminal lead (Converted / Lost) — leave lead_status alone and fall
         // through to the plain ownership swap below, which still records the
         // audit touchpoint (no silent reactivation).
     }

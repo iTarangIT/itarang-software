@@ -207,7 +207,8 @@ export type LeadActorVerdict =
 /**
  * Who may take a step on a customer file (ID 183, decided 16 Oct):
  *  - the file's own dealer: everything, dispatch included;
- *  - a house login on a file the house pushed to another dealer: read only;
+ *  - a house login on a file the house pushed to another dealer: everything,
+ *    dispatch included (16 Oct evening, user — full access like the dealer);
  *  - Admin / Sales Head: reads, and writes through the act-for-dealer checks
  *    (permission, note, record, notice) — never dispatch;
  *  - anyone else (CEO, other back-office roles, other dealers): refused for
@@ -226,8 +227,9 @@ export function leadActorVerdict(input: {
   if (role === "dealer") {
     if (input.ownsFile) return { ok: true, kind: "dealer" };
     if (!input.houseOnPushedFile) return { ok: false, status: 403, message: "Access denied" };
-    if (input.dispatch) return { ok: false, status: 403, message: DEALER_ONLY_MESSAGE };
-    if (input.write) return { ok: false, status: 403, message: HOUSE_READ_ONLY_MESSAGE };
+    // 16 Oct evening (user): the house keeps FULL access on a file it pushed
+    // out — every step, Step 5 included, like the file's dealer. Its writes
+    // still take the note, the "dealer changed" check and the "Done by" record.
     return { ok: true, kind: "house" };
   }
   if (isActForDealerRole(role)) {

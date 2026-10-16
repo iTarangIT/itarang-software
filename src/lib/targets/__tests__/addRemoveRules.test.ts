@@ -4,6 +4,7 @@ import {
     isCeoTarget,
     mayAddTarget,
     mayRemoveTarget,
+    maySalesHeadAddMetric,
     removalAudience,
     TARGET_REMOVED_STATUS,
     TARGET_STATUSES,
@@ -20,6 +21,31 @@ describe("adding a person or metric is the CEO's alone", () => {
         for (const r of ["sales_head", "admin", "business_head", "asm", "inside_sales_rep", "user", "", null, undefined]) {
             expect(mayAddTarget(r)).toBe(false);
         }
+    });
+});
+
+// ID 189 (user, 16 Oct evening): the Sales Head may add a metric — for an ISR
+// or an ASM only. It is their own number, not the CEO's.
+describe("the Sales Head adds a metric for an ISR or an ASM", () => {
+    it("Sales Head + ISR / ASM: yes", () => {
+        expect(maySalesHeadAddMetric("sales_head", "inside_sales_rep")).toBe(true);
+        expect(maySalesHeadAddMetric("sales_head", "asm")).toBe(true);
+        expect(maySalesHeadAddMetric("SALES_HEAD", "ASM")).toBe(true);
+    });
+    it("Sales Head for any other role: no", () => {
+        for (const m of ["sales_manager", "sales_head", "dealer", "admin", null, undefined, ""]) {
+            expect(maySalesHeadAddMetric("sales_head", m), String(m)).toBe(false);
+        }
+    });
+    it("nobody else gets this path (the CEO has his own; Admin cannot add)", () => {
+        for (const a of ["admin", "ceo", "business_head", "asm", "inside_sales_rep", null]) {
+            expect(maySalesHeadAddMetric(a, "inside_sales_rep"), String(a)).toBe(false);
+        }
+    });
+    it("a metric the Sales Head added (CEO target 0, created by them) is not the CEO's, so they may remove it", () => {
+        const own = { createdByRole: "sales_head", postedByRole: null, ceoTarget: 0, pendingCeoTarget: null };
+        expect(isCeoTarget(own)).toBe(false);
+        expect(mayRemoveTarget("sales_head", isCeoTarget(own))).toBe(true);
     });
 });
 
