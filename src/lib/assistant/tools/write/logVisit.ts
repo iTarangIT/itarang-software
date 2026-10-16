@@ -23,6 +23,7 @@ import { VISIT_NEXT_ACTION, VISIT_OUTCOME } from "@/lib/asm/types";
 import { recordVisit } from "@/lib/asm/recordVisit";
 import { applyVisitStatus } from "@/lib/asm/visitStatus";
 import { markLeadLost } from "@/lib/leads/markLost";
+import { lastTransferredBy, notifyLeadPerson } from "@/lib/leads/newOwnerNotice";
 import { setInterestLevel } from "@/lib/leads/interestLevel";
 import { autoProgressForVisit } from "@/lib/leads/autoProgress";
 import { statusAfterVisit } from "@/lib/leads/outcomeRule";
@@ -317,7 +318,10 @@ export const logVisit: ToolFactory = () =>
             if (nextVisit && lead.asm_id !== ctx.user.id) {
                 warnings.push("This lead's field ASM isn't set to you, so the next visit won't show in your Today's Schedule.");
             }
-            if (plan.next_action === "escalate") warnings.push("Raise the escalation itself on the CRM screen.");
+            // The screen chains "escalate" into the escalation form; here that is its own card.
+            if (plan.next_action === "escalate") {
+                warnings.push("This only logs the visit. To raise the escalation, ask me to escalate this lead after you confirm.");
+            }
             if (gpsWarning) warnings.push(gpsWarning);
 
             const preview: Preview = {
@@ -351,6 +355,7 @@ export const logVisitApplier = defineApplier<LogVisitPlan>({
         // A visit is an ASM's; the plan is bound to the role that proposed it.
         if (user.role !== "asm") throw new Error("visit plan does not match the user's role");
         await consumeMedia(tx, [...p.photos.map((f) => f.media_id), ...(p.gps ? [p.gps.media_id] : [])], actionId);
+        const visitRemarks = p.gps ? `${p.remarks}\n${p.gps.note}` : p.remarks;
         const visit = await recordVisit(
             {
                 leadId: p.lead_id,
@@ -359,7 +364,7 @@ export const logVisitApplier = defineApplier<LogVisitPlan>({
                 visit_outcome: p.visit_outcome,
                 // Passed explicitly: recordVisit's own default is the UTC date.
                 actual_visit_date: p.visit_date,
-                visit_remarks: p.gps ? `${p.remarks}\n${p.gps.note}` : p.remarks,
+                visit_remarks: visitRemarks,
                 next_action: p.next_action,
                 next_visit_date: p.next_visit_date,
                 ...(p.photos.length ? { photos: p.photos.map((f) => mediaUrl(f.storage_bucket, f.storage_key)) } : {}),
@@ -409,6 +414,52 @@ export const logVisitApplier = defineApplier<LogVisitPlan>({
                 { tx },
             );
         }
-        return { visit_id: visit.visitId, scheduled_visit_id: visit.scheduledVisitId, status_history_id: statusHistoryId };
+        return {
+            visit_id: visit.visitId,
+            scheduled_visit_id: visit.scheduledVisitId,
+            status_history_id: statusHistoryId,
+            // The visit route's notice to whoever transferred the lead — a done visit only.
+            ...(p.visit_status === "visited"
+                ? {
+                      afterCommit: () =>
+                          notifyVisitUpdate({
+                              leadId: p.lead_id,
+                              actorId: user.id,
+                              visited: true,
+                              outcome: p.visit_outcome,
+                              remarks: visitRemarks,
+                              scheduledDate: null,
+                          }),
+                  }
+                : {}),
+        };
     },
 });
+
+/**
+ * The notice POST /api/asm/lead/[id]/visit sends (12 Oct): the person who
+ * transferred the lead hears how the visit went, or when one is booked. Same
+ * recipient, type, title and wording; notifyLeadPerson never throws and skips
+ * a recipient who is the ASM themself.
+ */
+export async function notifyVisitUpdate(input: {
+    leadId: string;
+    actorId: string;
+    visited: boolean;
+    outcome: string | null;
+    remarks: string;
+    /** YYYY-MM-DD of a booked visit. */
+    scheduledDate: string | null;
+}): Promise<void> {
+    const outcome = input.outcome ? input.outcome.replace(/_/g, " ") : null;
+    await notifyLeadPerson({
+        userId: await lastTransferredBy(input.leadId),
+        actorId: input.actorId,
+        leadId: input.leadId,
+        type: "lead.visit_update",
+        title: input.visited ? "Field visit done" : "Field visit booked",
+        message: input.visited
+            ? `{by} visited {lead}${outcome ? ` — outcome: ${outcome}` : ""}. ${input.remarks}`
+            : `{by} booked a visit to {lead}${input.scheduledDate ? ` on ${input.scheduledDate}` : ""}.`,
+    });
+}

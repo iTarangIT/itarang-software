@@ -9,7 +9,15 @@ import { buildSystemPrompt } from "./prompt";
 import { loadHistory, saveHistory, toolsetStamp } from "./memory";
 import { withEditContext } from "./edit";
 import { logToolCall } from "./audit";
-import { callTool, createBackupToolCallingModel, createToolCallingModel, runAgentTurn, type ToolCallingModel } from "./agent";
+import {
+    AGENT_LIMITS,
+    callTool,
+    createBackupToolCallingModel,
+    createToolCallingModel,
+    runAgentTurn,
+    type AgentStop,
+    type ToolCallingModel,
+} from "./agent";
 import type { ToolSpec } from "./tools/spec";
 import { pendingMedia, pendingMediaContext, type MediaRow } from "./media";
 
@@ -23,9 +31,33 @@ async function pendingMediaOrNone(userId: string): Promise<MediaRow[]> {
 }
 
 export type AgentTurnResult =
-    | { kind: "ok"; text: string; results: { tool: string; result: ToolResult }[]; modelCalls: number; usedBackup: boolean }
+    | {
+          kind: "ok";
+          /** The model's reply; "" when the turn stopped without one (`stop`). */
+          text: string;
+          stop: AgentStop;
+          /** "Next: …" — a second write the per-turn limit held back. */
+          next: string | null;
+          results: { tool: string; result: ToolResult }[];
+          modelCalls: number;
+          usedBackup: boolean;
+      }
     | { kind: "not_configured" }
     | { kind: "no_tools" };
+
+/**
+ * The model's input: context (attachments, an [EDIT] card) then the user's
+ * words. The agent clips the whole thing from the END, so the context is cut
+ * here first — the user's own words always survive. Pure.
+ */
+export function composeUserText(context: string | null, words: string, max = AGENT_LIMITS.userTextMaxChars): string {
+    if (!context) return words;
+    const room = max - [...words].length - 1;
+    if (room <= 0) return words;
+    const ctx = [...context];
+    const kept = ctx.length <= room ? context : ctx.slice(0, Math.max(room - 1, 0)).join("") + "…";
+    return `${kept}\n${words}`;
+}
 
 export async function agentTurn(
     user: AssistantUser,
@@ -62,7 +94,9 @@ export async function agentTurn(
     const edited = await withEditContext(user, text);
     // E-311 — photos / PDFs / pins sent in the last 15 minutes and not used yet.
     const attachments = pendingMediaContext(await pendingMediaOrNone(user.id));
-    const userText = attachments ? `${attachments}\n${edited.trim() || "(no text — only the attachments above)"}` : edited;
+    const userText = attachments
+        ? composeUserText(attachments, edited.trim() || "(no text — only the attachments above)")
+        : edited;
     const out = await runAgentTurn(
         {
             system: buildSystemPrompt({ user, now, tools: tools.map((t) => t.name), writesEnabled }),
@@ -72,7 +106,15 @@ export async function agentTurn(
         { model, backupModel, tools, ctx: { user, messageId: opts.messageId, now, writesEnabled }, logToolCall },
     );
     await saveHistory(user.id, toolset, [...history, ...out.turnMessages]);
-    return { kind: "ok", text: out.text, results: out.results, modelCalls: out.modelCalls, usedBackup: out.usedBackup };
+    return {
+        kind: "ok",
+        text: out.text,
+        stop: out.stop,
+        next: out.next,
+        results: out.results,
+        modelCalls: out.modelCalls,
+        usedBackup: out.usedBackup,
+    };
 }
 
 /**

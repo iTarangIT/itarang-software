@@ -38,13 +38,16 @@ export async function proposeReinquiry(
     extraHint: string | null,
 ): Promise<ToolResult> {
     const rows = (await db.execute(sql`
-        SELECT COALESCE(NULLIF(dl.shop_name, ''), NULLIF(dl.dealer_name, '')) AS dealer, o.name AS owner_name
+        SELECT COALESCE(NULLIF(dl.shop_name, ''), NULLIF(dl.dealer_name, '')) AS dealer, o.name AS owner_name,
+               dl.current_owner_id AS owner_id
           FROM dealer_leads dl
           LEFT JOIN users o ON o.id::text = dl.current_owner_id
          WHERE dl.id = ${leadId}
          LIMIT 1
-    `)) as unknown as Array<{ dealer: string | null; owner_name: string | null }>;
-    const owner = rows[0]?.owner_name?.trim() || null;
+    `)) as unknown as Array<{ dealer: string | null; owner_name: string | null; owner_id: string | null }>;
+    // The rep's own lead: they are not "alerted", and the card doesn't name them to themselves.
+    const mine = !!rows[0]?.owner_id && rows[0].owner_id === ctx.user.id;
+    const owner = mine ? null : rows[0]?.owner_name?.trim() || (rows[0]?.owner_id ? "its owner" : null);
     // The dealer's name only when this rep may see the lead (Invariant 1).
     const visible = await findLeadInScope(ctx.user, leadId);
 
@@ -55,7 +58,7 @@ export async function proposeReinquiry(
     lines.push({ label: "No", value: "nothing is recorded" });
     if (extraHint) lines.push({ label: "Note", value: extraHint });
     const preview: Preview = {
-        title: `Already in CRM, ${owner ? `with ${owner}` : "with no owner"}. Did the dealer contact us again?`,
+        title: `Already in CRM, ${mine ? "it's your lead" : owner ? `with ${owner}` : "with no owner"}. Did the dealer contact us again?`,
         lines,
         resets_idle_clock: isWorkedTouchpoint("lead_reinquiry", false),
         warning: null,
@@ -96,6 +99,14 @@ export const recordReinquiryApplier = defineApplier<RecordReinquiryPlan>({
     apply: async ({ tx, user }, p) => {
         const input = { leadId: p.lead_id, door: "whatsapp_assistant" as const, actorId: user.id, note: p.note };
         await writeReinquiry(input, { tx });
-        return { lead_id: p.lead_id, afterCommit: () => notifyReinquiry(input) };
+        // For the reply: the rep's own lead is not "told" to its owner.
+        const owner = (await tx.execute(sql`
+            SELECT current_owner_id FROM dealer_leads WHERE id = ${p.lead_id} LIMIT 1
+        `)) as unknown as Array<{ current_owner_id: string | null }>;
+        return {
+            lead_id: p.lead_id,
+            owner_is_actor: owner[0]?.current_owner_id === user.id,
+            afterCommit: () => notifyReinquiry(input),
+        };
     },
 });

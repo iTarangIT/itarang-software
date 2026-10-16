@@ -24,10 +24,19 @@ const applyVisitStatus = vi.fn<(...a: unknown[]) => Promise<unknown>>(async () =
 vi.mock("@/lib/asm/visitStatus", () => ({ applyVisitStatus }));
 const claimLead = vi.fn<(...a: unknown[]) => Promise<unknown>>(async () => ({ ok: true }));
 vi.mock("@/lib/inside-sales/claimLead", () => ({ claimLead }));
+// The visit route's notice (12 Oct) — sent after commit by log_visit too.
+const notifyLeadPerson = vi.fn<(...a: unknown[]) => Promise<void>>(async () => {});
+const lastTransferredBy = vi.fn<(...a: unknown[]) => Promise<string | null>>(async () => "isr-9");
+vi.mock("@/lib/leads/newOwnerNotice", async (orig) => ({
+    ...(await orig<typeof import("@/lib/leads/newOwnerNotice")>()),
+    notifyLeadPerson,
+    lastTransferredBy,
+}));
 
 const { toolsFor } = await import("../registry");
 const { APPLIERS } = await import("../appliers");
 const { ActionRejected } = await import("../applierSpec");
+const { statusLabel } = await import("../format");
 import { WRITE_TOOL_NAMES, type AssistantUser, type Preview, type ToolContext } from "../types";
 
 const ISR: AssistantUser = { id: "isr-1", name: "Priya", role: "inside_sales_rep" };
@@ -118,8 +127,7 @@ describe("log_visit proposals (UC-01)", () => {
 
     it("INV6 + date and next-step sanity: every doubtful case is a question and creates NOTHING", async () => {
         const cases: Record<string, unknown>[] = [
-            { outcome: "scheduling_issue" }, // outcome outside the §9.3 visit rows
-            { outcome: "other" },
+            { outcome: "scheduling_issue", status: "Lost", lost_reason: "other" }, // a scheduling issue can't close the lead
             { outcome: "dealer_uninterested" }, // keep open or Lost?
             { outcome: "dealer_uninterested", status: "Lost" }, // why?
             { outcome: "dealer_uninterested", status: "Lost", lost_reason: "price_high", next_action: "lost", next_visit_date: undefined }, // not a visit reason
@@ -159,7 +167,8 @@ describe("log_visit proposals (UC-01)", () => {
         expect(stored().preview.warning).toMatch(/won't show in your Today's Schedule/);
         findLeadInScope.mockResolvedValue(lead());
         await run(ASM, "log_visit", { ...UC01, next_action: "escalate", next_visit_date: undefined });
-        expect(stored().preview.warning).toMatch(/escalation itself on the CRM screen/);
+        // escalate_lead exists for the ASM: the card says to ask for it, not to go to the screen.
+        expect(stored().preview.warning).toMatch(/ask me to escalate this lead/);
     });
 
     it("not owned / out of scope / pilot off: no pending action", async () => {
@@ -230,7 +239,7 @@ describe("claim_lead proposals (UC-05)", () => {
         expect(stored().plan).toEqual({ lead_id: "DL-7" });
         expect(stored().leadVersion).toEqual(new Date("2026-09-24T09:00:00Z"));
         expect(stored().preview.title).toBe("Claim — Sharma Battery House");
-        expect(stored().preview.lines).toContainEqual({ label: "Status", value: "New Unassigned → Assigned Not Contacted" });
+        expect(stored().preview.lines).toContainEqual({ label: "Status", value: `${statusLabel("New_Unassigned")} → ${statusLabel("Assigned_Not_Contacted")}` });
         expect(stored().preview.lines).toContainEqual({ label: "Owner", value: "you" });
         // The lookup is the claim pool, never the whole scope.
         const q = sqlText(execute.mock.calls[0]![0]);
@@ -246,8 +255,27 @@ describe("claim_lead proposals (UC-05)", () => {
         await run(ASM, "claim_lead", { lead_id: "DL-7" });
         const q = sqlText(execute.mock.calls[0]![0]);
         expect(q).toContain("dl.current_owner_id IS NULL");
-        expect(stored().preview.lines).toContainEqual({ label: "Status", value: "New Unassigned → Assigned Not Contacted" });
+        expect(stored().preview.lines).toContainEqual({ label: "Status", value: `${statusLabel("New_Unassigned")} → ${statusLabel("Assigned_Not_Contacted")}` });
         expect(stored().preview.lines).toContainEqual({ label: "Field ASM", value: "you (visits go to your Today's Schedule)" });
+    });
+
+    it("ID 45: outside the ASM's territory → a warning on the card; a released lead keeps its stage (S3)", async () => {
+        poolRows.push(poolLead({ lead_status: "Under_Discussion" }));
+        const territory = (ok: boolean) =>
+            execute.mockImplementation(async (q: SQL) => (/asm_territories/.test(sqlText(q)) ? [{ ok }] : poolRows));
+        territory(false);
+        await run(ASM, "claim_lead", { lead_id: "DL-7" });
+        expect(stored().preview.warning).toMatch(/outside your territory/);
+        // The writer lifts only a New / unstatused lead (isForward): no move on the card either.
+        expect(stored().preview.lines).toContainEqual({ label: "Status", value: `no change (${statusLabel("Under_Discussion")})` });
+        territory(true);
+        await run(ASM, "claim_lead", { lead_id: "DL-7" });
+        expect(stored().preview.warning).toBeNull();
+        // An ISR's claim is never territory-checked.
+        territory(false);
+        await run(ISR, "claim_lead", { lead_id: "DL-7" });
+        expect(stored().preview.warning).toBeNull();
+        execute.mockImplementation(async () => poolRows);
     });
 
     it("a comma list matching two leads → candidates, never a pick; no match → not_found; a name is not a phone", async () => {
@@ -319,7 +347,18 @@ describe("gate 5 appliers (run inside the executor's transaction)", () => {
         expect(markLeadLost).not.toHaveBeenCalled();
         // ID 77: a done visit always runs the visit-status writer (it ends Awaiting field visit).
         expect(applyVisitStatus).toHaveBeenCalledWith(TX, expect.objectContaining({ leadId: "DL-1042", requested: null }));
-        expect(after).toEqual({ visit_id: "v-1", scheduled_visit_id: "v-2", status_history_id: "h-1" });
+        expect(after).toMatchObject({ visit_id: "v-1", scheduled_visit_id: "v-2", status_history_id: "h-1" });
+        // After commit: the same notice the visit route sends, to whoever transferred the lead.
+        expect(notifyLeadPerson).not.toHaveBeenCalled();
+        await after.afterCommit!();
+        expect(lastTransferredBy).toHaveBeenCalledWith("DL-1042");
+        expect(notifyLeadPerson).toHaveBeenCalledWith({
+            userId: "isr-9", actorId: "asm-1", leadId: "DL-1042", type: "lead.visit_update", title: "Field visit done",
+            message: "{by} visited {lead} — outcome: productive. owner Ramesh",
+        });
+        // A visit that didn't happen sends nothing (the route notifies visited / scheduled only).
+        const missed = await apply("log_visit", ASM, { ...visitPlan, visit_status: "no_show", visit_outcome: null, visit_date: null, interest: null });
+        expect(missed.afterCommit).toBeUndefined();
     });
 
     it("status change and Lost go on the same tx, AFTER the visit; high-impact only at step 2", async () => {

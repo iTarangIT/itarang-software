@@ -300,7 +300,10 @@ describe("B. prompt injection at the tool boundary", () => {
     it("search text is data, not SQL: an injection string is bound as a parameter inside the scope predicate", async () => {
         const evil = "x' OR '1'='1'; DROP TABLE dealer_leads; --";
         await turn(obedient([[{ name: "search_lead", args: { query: evil } }]], "none found"));
-        const q = new PgDialect().sqlToQuery(execute.mock.calls[0]![0]);
+        // The search itself — not the manager-team lookup (ID 155) that runs first.
+        const q = execute.mock.calls
+            .map((c) => new PgDialect().sqlToQuery(c[0]))
+            .find((x) => x.sql.includes("ILIKE"))!;
         expect(q.sql).not.toContain("DROP TABLE");
         expect(q.sql).not.toContain("'1'='1'");
         expect(q.params).toContain(`%${evil}%`);

@@ -52,6 +52,7 @@ const { toolsFor } = await import("../registry");
 const { APPLIERS } = await import("../appliers");
 const { renderTapOutcome } = await import("@/lib/wa-assistant/render");
 const { screenshotHash } = await import("@/lib/leads/whatsappContact");
+const { statusLabel } = await import("../format");
 import type { AssistantUser, Preview, ToolContext } from "../types";
 import type { ExecOutcome } from "../executor";
 
@@ -80,11 +81,13 @@ function file(ref: string, over: Partial<Media> = {}): Media {
     };
 }
 
-// A fake transaction: records inserts and updates.
-function fakeTx() {
+// A fake transaction: records inserts and updates; a select reads the lead's status.
+function fakeTx(leadStatus: string | null = "Under_Discussion") {
     const inserts: unknown[] = [];
     const updates: Record<string, unknown>[] = [];
+    const chain = { from: () => chain, where: () => chain, limit: async () => [{ lead_status: leadStatus }] };
     const tx = {
+        select: () => chain,
         insert: () => ({
             values: (v: unknown) => {
                 inserts.push(v);
@@ -246,6 +249,26 @@ describe("update_lead", () => {
         expect(Object.keys(updates[0]).sort()).toEqual(["gstin", "updated_at"]);
         expect(inserts[0]).toEqual([expect.objectContaining({ doc_type: "gst_certificate", dealer_lead_id: "DL-1042" })]);
     });
+
+    it("ID 124: a GSTIN change on a Won / Converted lead points to Correct GSTIN — at the card and again at Confirm", async () => {
+        Object.assign(leadRow, { gstin: "27ABCDE1234F1Z0", location: "Pune" });
+        for (const status of ["Won", "Converted"]) {
+            findLeadInScope.mockResolvedValue(lead({ current_owner_id: "isr-1", owned: true, lead_status: status }));
+            const r = await run(ISR, "update_lead", { lead_id: "DL-1042", gstin: "27AAACB1234C1ZF" });
+            expect(r, status).toMatchObject({ kind: "declined", reason: expect.stringMatching(/Correct GSTIN/) });
+        }
+        expect(createPending).not.toHaveBeenCalled();
+        // Other fields still go through on a Won lead.
+        expect((await run(ISR, "update_lead", { lead_id: "DL-1042", area: "Kothrud" })).kind).toBe("preview");
+        // Won between the card and the tap: the applier refuses with the writer-style sentence.
+        const plan = APPLIERS.update_lead.schema.parse({ lead_id: "DL-1042", set: { gstin: "27ABCDE1234F1Z0" }, source: null, source_doc_type: null });
+        const { tx, updates } = fakeTx("Won");
+        await expect(APPLIERS.update_lead.apply({ tx, user: ISR, step: 1 }, plan)).rejects.toMatchObject({
+            reason: "refused",
+            detail: expect.stringMatching(/Correct GSTIN/),
+        });
+        expect(updates).toEqual([]);
+    });
 });
 
 describe("log_visit with photos and a location pin", () => {
@@ -356,7 +379,7 @@ describe("log_call on WhatsApp — a chat counts only with a screenshot (ID 79)"
             whatsapp: { dealer_replied: true, screenshot: { ref: "mshot1", sha256: SHA, storage_bucket: "documents" } },
         });
         expect(a.preview.lines).toContainEqual({ label: "WhatsApp", value: "dealer replied · screenshot mshot1 — counts as contact" });
-        expect(a.preview.lines).toContainEqual({ label: "Status", value: "Assigned Not Contacted → Under Discussion (auto)" });
+        expect(a.preview.lines).toContainEqual({ label: "Status", value: `${statusLabel("Assigned_Not_Contacted")} → ${statusLabel("Under_Discussion")} (auto)` });
         expect(a.preview.resets_idle_clock).toBe(true);
         expect(a.preview.warning).toBeNull();
     });
@@ -413,18 +436,20 @@ describe("log_call on WhatsApp — a chat counts only with a screenshot (ID 79)"
         // Whether the dealer replied decides the count: never assumed.
         expect((await run(ISR, "log_call", { lead_id: "DL-1042", channel: "whatsapp", screenshot_attachment_id: "mshot1", remarks: "x" })).kind).toBe("question");
         // A ref that is not theirs / does not exist.
-        expect((await run(ISR, "log_call", { lead_id: "DL-1042", channel: "whatsapp", screenshot_attachment_id: "mnope9", dealer_replied: true })).kind).toBe("question");
+        expect((await run(ISR, "log_call", { lead_id: "DL-1042", channel: "whatsapp", screenshot_attachment_id: "mnope9", dealer_replied: true , remarks: "x" })).kind).toBe("question");
         // A screenshot already filed by an earlier confirmed change.
         media.set("mused1", file("mused1", { used_at: NOW }));
-        expect((await run(ISR, "log_call", { lead_id: "DL-1042", channel: "whatsapp", screenshot_attachment_id: "mused1", dealer_replied: true })).kind).toBe("declined");
+        expect((await run(ISR, "log_call", { lead_id: "DL-1042", channel: "whatsapp", screenshot_attachment_id: "mused1", dealer_replied: true , remarks: "x" })).kind).toBe("declined");
         // A PDF or a location pin is not a screenshot.
         media.set("mpdf01", file("mpdf01", { kind: "document", mime_type: "application/pdf" }));
-        expect((await run(ISR, "log_call", { lead_id: "DL-1042", channel: "whatsapp", screenshot_attachment_id: "mpdf01", dealer_replied: true })).kind).toBe("declined");
+        expect((await run(ISR, "log_call", { lead_id: "DL-1042", channel: "whatsapp", screenshot_attachment_id: "mpdf01", dealer_replied: true , remarks: "x" })).kind).toBe("declined");
         // A screenshot on a plain note.
         expect((await run(ISR, "log_call", { lead_id: "DL-1042", channel: "note", screenshot_attachment_id: "mshot1", remarks: "x" })).kind).toBe("question");
         // The file is gone from storage.
         mediaBytes.mockResolvedValueOnce(null as never);
-        expect((await run(ISR, "log_call", { lead_id: "DL-1042", channel: "whatsapp", screenshot_attachment_id: "mshot1", dealer_replied: true })).kind).toBe("question");
+        expect((await run(ISR, "log_call", { lead_id: "DL-1042", channel: "whatsapp", screenshot_attachment_id: "mshot1", dealer_replied: true, remarks: "x" })).kind).toBe("question");
+        // As the CRM's WhatsApp log: no remarks → asked for, never an empty entry.
+        expect((await run(ISR, "log_call", { lead_id: "DL-1042", channel: "whatsapp", dealer_replied: true })).kind).toBe("question");
         expect(createPending).not.toHaveBeenCalled();
     });
 

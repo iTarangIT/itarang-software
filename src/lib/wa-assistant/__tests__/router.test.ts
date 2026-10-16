@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/db", () => ({ db: {} }));
 
-const { routeMessage, maskPhone } = await import("../router");
+const { routeMessage, maskPhone, tapNote } = await import("../router");
 const { REPLY } = await import("../replies");
 const { classifyBinding } = await import("../identity");
 const { lockedUntil, parseLinkCommand, hashCode, generateCode } = await import("../link");
@@ -554,5 +554,84 @@ describe("routeMessage — attachments", () => {
         await routeMessage(photo(), "r", f.deps);
         expect(f.deps.storeMedia).not.toHaveBeenCalled();
         expect(f.replies.map((r) => r.text)).toEqual([REPLY.unlinked]);
+    });
+});
+
+describe("routeMessage — round 2 (Phase A)", () => {
+
+    it("a typed 'haan' is only intercepted while the waiting card is our latest message; otherwise the agent answers it", async () => {
+        const f = fakeDeps();
+        // hasPendingAction = "a card is waiting AND it is the last thing we sent" (pendingCardIsLatest).
+        (f.deps.hasPendingAction as ReturnType<typeof vi.fn>).mockResolvedValueOnce(false);
+        await routeMessage(msg({ text: "haan" }), "r1", f.deps);
+        expect(f.deps.runTextTurn).toHaveBeenCalledWith(RAHUL.kind === "ok" ? RAHUL.user : null, "haan", "r1");
+        (f.deps.hasPendingAction as ReturnType<typeof vi.fn>).mockResolvedValueOnce(true);
+        await routeMessage(msg({ text: "haan" }), "r2", f.deps);
+        expect(f.handled.at(-1)).toMatchObject({ rowId: "r2", handling: "typed_confirm" });
+        expect(f.replies.at(-1)?.text).toBe(REPLY.tapConfirm);
+    });
+
+    it("a spoken 'haan' is checked BEFORE the 'heard' echo goes out (the echo would become our latest message)", async () => {
+        const f = fakeDeps();
+        const order: string[] = [];
+        (f.deps.transcribeVoice as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ kind: "ok", text: "haan" });
+        (f.deps.hasPendingAction as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+            order.push("check");
+            return true;
+        });
+        (f.deps.replyText as ReturnType<typeof vi.fn>).mockImplementation(async (_to: string, text: string) => {
+            order.push(text === REPLY.tapConfirm ? "tapConfirm" : "heard");
+        });
+        await routeMessage(msg({ type: "audio", text: null, audio: { id: "a1", mimeType: "audio/ogg" } }), "r", f.deps);
+        expect(order).toEqual(["check", "heard", "tapConfirm"]);
+        expect(f.deps.hasPendingAction).toHaveBeenCalledTimes(1);
+        expect(f.deps.runTextTurn).not.toHaveBeenCalled();
+    });
+
+    it("photo then text: the photo's turn ends as media_batched when ANY newer message exists; the text answers for both", async () => {
+        const f = fakeDeps();
+        (f.deps.hasNewerMedia as ReturnType<typeof vi.fn>).mockResolvedValueOnce(true);
+        const photo = msg({ type: "image", text: null, media: { kind: "image", id: "x", mimeType: "image/jpeg", fileName: null, caption: null } });
+        await routeMessage(photo, "r-photo", f.deps);
+        expect(f.handled).toEqual([{ rowId: "r-photo", handling: "media_batched", extra: { userId: "u-rahul" } }]);
+        expect(f.deps.runTextTurn).not.toHaveBeenCalled();
+        expect(f.replies).toEqual([]);
+    });
+
+    it("taps are noted in memory AFTER their reply: lead row, Confirm, Cancel, Edit", async () => {
+        const f = fakeDeps();
+        const noteTap = vi.fn(async () => {});
+        f.deps.noteTap = noteTap;
+        (f.deps.openLead as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ kind: "text", body: "*ABC Traders*\nRamesh · Pune\nPhone: +919812345678" });
+        await routeMessage(msg({ type: "interactive", replyId: "ast:lead:DL-1" }), "r1", f.deps);
+        await routeMessage(msg({ type: "interactive", replyId: "ast:c:11111111-1111-1111-1111-111111111111" }), "r2", f.deps);
+        await routeMessage(msg({ type: "interactive", replyId: "ast:x:22222222-2222-2222-2222-222222222222" }), "r3", f.deps);
+        await routeMessage(msg({ type: "interactive", replyId: "ast:e:33333333-3333-3333-3333-333333333333" }), "r4", f.deps);
+        const user = RAHUL.kind === "ok" ? RAHUL.user : null;
+        expect(noteTap.mock.calls).toEqual([
+            [user, { human: '[tapped lead DL-1 "ABC Traders"]', ai: "ABC Traders · Ramesh · Pune · Phone: +919812345678" }],
+            [user, { human: "[tapped Confirm on card 11111111-1111-1111-1111-111111111111]", ai: "✅ Saved" }],
+            [user, { human: "[tapped Cancel on card 22222222-2222-2222-2222-222222222222]", ai: "Cancelled. Nothing was saved." }],
+            [user, { human: "[tapped Edit on card 33333333-3333-3333-3333-333333333333]", ai: "Kya badalna hai?" }],
+        ]);
+        // The note never runs before the reply is sent.
+        const sentAt = (f.deps.sendPayload as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0];
+        expect(noteTap.mock.invocationCallOrder[0]).toBeGreaterThan(sentAt);
+    });
+
+    it("a failing tap note is logged, never turned into an error reply", async () => {
+        const f = fakeDeps();
+        f.deps.noteTap = vi.fn(async () => {
+            throw new Error("db down");
+        });
+        await routeMessage(msg({ type: "interactive", replyId: "ast:lead:DL-1" }), "r1", f.deps);
+        expect(f.replies.map((r) => r.text)).toEqual(["lead card"]);
+        expect(f.handled.map((h) => h.handling)).toEqual(["tap_lead"]);
+    });
+
+    it("tapNote: one line, capped at 300, bold stripped", () => {
+        const n = tapNote("c", "id", { kind: "text", body: `*Saved*\n${"x".repeat(500)}` });
+        expect(n.ai.startsWith("Saved · x")).toBe(true);
+        expect([...n.ai].length).toBe(300);
     });
 });
