@@ -19,7 +19,7 @@ import { createPending } from "../../actions";
 import type { Preview, ToolResult } from "../../types";
 import { defineTool, LeadId, ownedLeadOr, type ToolFactory } from "../spec";
 import { leadUrl } from "../leads";
-import { defineApplier } from "../../applierSpec";
+import { ActionRejected, defineApplier } from "../../applierSpec";
 import { AttachmentId, DOC_TYPE_LABEL, DOC_TYPES, PlannedFile, plannedFile, resolveAttachments } from "../attachments";
 import { fileDocuments } from "./attachDocument";
 
@@ -114,6 +114,20 @@ export const updateLead: ToolFactory = () =>
                 .limit(1);
             if (!cur) return { kind: "not_found" };
 
+            // ID 124: a Won / Converted lead's GSTIN is on its onboarding / account
+            // too — only Correct GSTIN changes both, never a plain profile edit.
+            if (gstin && !same(gstin, cur.gstin) && (lead.lead_status === "Won" || lead.lead_status === "Converted")) {
+                return {
+                    kind: "declined",
+                    reason:
+                        (lead.lead_status === "Won"
+                            ? "This lead is Won. Change its GSTIN with Correct GSTIN on the lead's CRM page — it updates the onboarding application too."
+                            : "This dealer is Converted. Change its GSTIN with Correct GSTIN on the dealer's account (Accounts) — it keeps the old number for past invoices.") +
+                        " I can still update the other details without the GSTIN.",
+                    crm_url: leadUrl(ctx.user, lead.id),
+                };
+            }
+
             const region = canonicalRegionUpdates({ city: input.city, state: input.state }, cur.location);
             const wanted: Partial<Record<ProfileField, string | null>> = {
                 ...(input.shop_name !== undefined ? { shop_name: input.shop_name } : {}),
@@ -199,6 +213,20 @@ export const updateLeadApplier = defineApplier<UpdateLeadPlan>({
     schema: UpdateLeadPlan,
     apply: async ({ tx, user, actionId }, p) => {
         const set = Object.fromEntries(Object.entries(p.set).filter(([, v]) => v !== undefined));
+        if (p.set.gstin) {
+            // ID 124, again on the locked row: Won / Converted meanwhile → Correct GSTIN only.
+            const [row] = await tx
+                .select({ lead_status: dealerLeads.lead_status })
+                .from(dealerLeads)
+                .where(eq(dealerLeads.id, p.lead_id))
+                .limit(1);
+            if (row?.lead_status === "Won" || row?.lead_status === "Converted") {
+                throw new ActionRejected(
+                    "refused",
+                    `This lead is ${row.lead_status}; its GSTIN is changed only with Correct GSTIN in the CRM`,
+                );
+            }
+        }
         if (Object.keys(set).length > 0) {
             await tx
                 .update(dealerLeads)

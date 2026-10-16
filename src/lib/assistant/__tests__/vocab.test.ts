@@ -5,10 +5,11 @@ import {
     HINGLISH_VISIT_ALIASES,
     NO_CHANGE,
     VISIT_VOCAB,
+    callRowFor,
     checkCallProposal,
     checkVisitProposal,
 } from "../vocab";
-import { CONNECTED_DISPOSITIONS, classifyDisposition } from "@/lib/leads/dispositions";
+import { CONNECTED_DISPOSITIONS, NOT_CONNECTED_REASONS, classifyDisposition } from "@/lib/leads/dispositions";
 import { LEAD_STATUS, LOST_REASON } from "@/lib/lifecycle/transitions";
 import { VISIT_OUTCOME } from "@/lib/asm/types";
 
@@ -56,6 +57,22 @@ describe("INV6_closed_vocabulary: §9.3 map is a subset of the existing enums", 
         }
         for (const outcome of Object.values(HINGLISH_VISIT_ALIASES)) {
             expect(VISIT_OUTCOME).toContain(outcome);
+        }
+    });
+
+    it("COVERAGE: every CONNECTED_DISPOSITIONS label maps to a call row in that bucket; every VISIT_OUTCOME to a visit row", () => {
+        for (const [bucket, labels] of Object.entries(CONNECTED_DISPOSITIONS)) {
+            for (const label of labels) {
+                const row = callRowFor(label, "connected");
+                expect(row, `${bucket}: ${label}`).not.toBeNull();
+                expect(row!.buckets, `${bucket}: ${label}`).toContain(bucket);
+            }
+        }
+        for (const label of NOT_CONNECTED_REASONS) expect(callRowFor(label, "not_connected"), label).not.toBeNull();
+        for (const outcome of VISIT_OUTCOME) {
+            const row = VISIT_VOCAB.find((r) => r.outcomes.includes(outcome));
+            expect(row, outcome).toBeDefined();
+            expect(row!.statusByOutcome[outcome], outcome).toBeDefined();
         }
     });
 
@@ -146,9 +163,43 @@ describe("checkCallProposal", () => {
         ).toBe(false);
     });
 
-    it("labels outside the map (e.g. Deal Closed) → asks", () => {
-        expect(checkCallProposal({ label: "Deal Closed", connect: "connected", bucket: "Converted" }).ok).toBe(false);
+    it("a label outside the sheet → asks", () => {
         expect(checkCallProposal({ label: "made up", connect: "connected" }).ok).toBe(false);
+    });
+
+    it("Converted-bucket outcomes log the call and never set a status (Mark Won is its own action)", () => {
+        for (const label of CONNECTED_DISPOSITIONS.Converted) {
+            expect(checkCallProposal({ label, connect: "connected", bucket: "Converted" }), label).toEqual({
+                ok: true, status: NO_CHANGE, lostReason: null, interest: null,
+            });
+            expect(checkCallProposal({ label, connect: "connected", bucket: "Converted", status: "Converted" }).ok, label).toBe(false);
+        }
+    });
+
+    it("the Cold outcomes and Documents Recieved are mapped", () => {
+        expect(checkCallProposal({ label: "Short Hang up", connect: "connected", bucket: "Cold" })).toMatchObject({ ok: true, status: NO_CHANGE });
+        expect(checkCallProposal({ label: "Service Issue", connect: "connected", bucket: "Cold", status: "Under_Discussion" })).toMatchObject({
+            ok: true, status: "Under_Discussion",
+        });
+        expect(checkCallProposal({ label: "Documents Recieved", connect: "connected", bucket: "Hot" })).toMatchObject({ ok: true, interest: "hot" });
+    });
+
+    it("a Lost outcome may keep the lead open when the rep says so; unstated still asks", () => {
+        expect(checkCallProposal({ label: "Not Interested", connect: "connected", bucket: "Lost", status: NO_CHANGE })).toMatchObject({
+            ok: true, status: NO_CHANGE, lostReason: null,
+        });
+        expect(checkCallProposal({ label: "Not Interested", connect: "connected", bucket: "Lost" }).ok).toBe(false);
+    });
+
+    it("the bucket question names the buckets the sheet files THAT label under", () => {
+        // call_back mixes Cold and Warm labels: Details Shared is Warm only.
+        expect(checkCallProposal({ label: "Details Shared", connect: "connected", bucket: "Cold" })).toEqual({
+            ok: false, question: "Is the dealer warm?",
+        });
+        expect(checkCallProposal({ label: "As to Call Back", connect: "connected", bucket: "Warm" })).toEqual({
+            ok: false, question: "Is the dealer cold?",
+        });
+        expect(checkCallProposal({ label: "Details Shared", connect: "connected", bucket: "Warm" }).ok).toBe(true);
     });
 });
 
@@ -174,8 +225,10 @@ describe("checkVisitProposal", () => {
         ).toBe(false);
     });
 
-    it("outcomes outside the map → asks", () => {
-        expect(checkVisitProposal({ outcome: "scheduling_issue" }).ok).toBe(false);
-        expect(checkVisitProposal({ outcome: "other" }).ok).toBe(false);
+    it("scheduling issue and other are mapped: logged, no status from the rep's words", () => {
+        for (const outcome of ["scheduling_issue", "other"] as const) {
+            expect(checkVisitProposal({ outcome }), outcome).toMatchObject({ ok: true, status: NO_CHANGE });
+            expect(checkVisitProposal({ outcome, status: "Lost", lostReason: "other" }).ok, outcome).toBe(false);
+        }
     });
 });

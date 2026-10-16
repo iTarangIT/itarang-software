@@ -60,6 +60,7 @@ const { DuplicatePhoneError } = await import("@/lib/inside-sales/createLead");
 const { matchPeople } = await import("../tools/write/people");
 const { tenDigitPhone } = await import("../tools/write/createLead");
 const { renderPreview, renderTapOutcome } = await import("@/lib/wa-assistant/render");
+const { statusLabel } = await import("../format");
 import type { AssistantUser, Preview, ToolContext } from "../types";
 
 const ISR: AssistantUser = { id: "isr-1", name: "Priya", role: "inside_sales_rep" };
@@ -152,6 +153,16 @@ describe("transfer_to_asm", () => {
         expect(r.kind).toBe("question");
     });
 
+    it("a Won / Lost / Converted lead → declined with the S3 rule's sentence, nothing proposed", async () => {
+        for (const status of ["Won", "Lost", "Converted"]) {
+            findLeadInScope.mockResolvedValue(lead({ lead_status: status }));
+            const r = await run(ISR, "transfer_to_asm", { ...base, asm: "Rahul Sharma" });
+            expect(r, status).toMatchObject({ kind: "declined", reason: `A ${status} lead cannot be transferred.` });
+        }
+        expect(listAsmOptions).not.toHaveBeenCalled();
+        expect(createPending).not.toHaveBeenCalled();
+    });
+
     it("applier: transferLeadToAsm on the executor's tx, acting as the user", async () => {
         const plan = {
             lead_id: "DL-7", asm_id: "asm-1", asm_name: "Rahul Sharma", reason: "Site_Visit_Needed", visit_type: "Demo",
@@ -191,6 +202,45 @@ describe("reassign_lead", () => {
         const r = await run(ASM, "reassign_lead", { lead_id: "DL-7", to: "Neha Joshi", reason: "back to IS" });
         expect(r.kind).toBe("question");
         expect(createPending).not.toHaveBeenCalled();
+    });
+
+    it("ID 121 hand-back: the card shows the status restore, the ASM unlinked and the visits cancelled", async () => {
+        const { PgDialect } = await import("drizzle-orm/pg-core");
+        execute.mockImplementation(async (q?: unknown) => {
+            const text = new PgDialect().sqlToQuery(q as never).sql;
+            if (/FROM users/.test(text)) return colleagues;
+            if (/SELECT lead_status, pre_transfer_status/.test(text)) {
+                return [{ lead_status: "Transferred_to_ASM", pre_transfer_status: "Commercials_Explained" }] as never;
+            }
+            if (/count\(\*\)/.test(text)) return [{ n: 2 }] as never;
+            return []; // no booked visit, no ASM follow-up
+        });
+        const r = await run(ASM, "reassign_lead", { lead_id: "DL-7", to: "Neha Joshi", reason: "dealer prefers phone follow-up now" });
+        expect(r.kind).toBe("preview");
+        expect(stored().preview.lines).toEqual([
+            { label: "Owner", value: "you → Neha Joshi (ISR)" },
+            { label: "Status", value: `${statusLabel("Transferred_to_ASM")} → ${statusLabel("Commercials_Explained")}` },
+            { label: "Field ASM", value: "unlinked" },
+            { label: "Open visits", value: "2 cancelled" },
+            { label: "Reason", value: "dealer prefers phone follow-up now" },
+        ]);
+        // A system correction, not work: the idle clock does not move.
+        expect(stored().preview.resets_idle_clock).toBe(false);
+        // To an ASM it is no hand-back: owner only.
+        await run(ASM, "reassign_lead", { lead_id: "DL-7", to: "Neha Kulkarni", reason: "dealer prefers phone follow-up now" });
+        expect(stored().preview.lines.map((l) => l.label)).toEqual(["Owner", "Reason"]);
+        execute.mockImplementation(async () => colleagues);
+    });
+
+    it("applier: a visit booked after the card → visit_booked with the writer's sentence", async () => {
+        reassignLead.mockRejectedValueOnce(new ReassignError("visit_booked", "Rahul has a visit booked for 26 Sept. Cancel or complete the visit first, then hand the lead back.", 409));
+        const plan = APPLIERS.reassign_lead.schema.parse({
+            lead_id: "DL-7", target_user_id: "isr-2", target_name: "Neha", target_role: "inside_sales_rep", reason: "x".repeat(20),
+        });
+        await expect(APPLIERS.reassign_lead.apply({ tx: TX, user: ASM, step: 1 }, plan)).rejects.toMatchObject({
+            reason: "visit_booked",
+            detail: expect.stringMatching(/Rahul has a visit booked/),
+        });
     });
 
     it("applier: a target deactivated after the preview → target_unavailable", async () => {
@@ -245,6 +295,27 @@ describe("mark_converted", () => {
         findLeadInScope.mockResolvedValue(lead({ lead_status: "Converted" }));
         expect((await run(ISR, "mark_converted", { lead_id: "DL-7", gstin: "27AAACB1234C1ZF" })).kind).toBe("declined");
         expect(createPending).not.toHaveBeenCalled();
+    });
+
+    it("a Lost lead → declined by the S3 rule before any GSTIN question", async () => {
+        findLeadInScope.mockResolvedValue(lead({ lead_status: "Lost" }));
+        expect(await run(ISR, "mark_converted", { lead_id: "DL-7", gstin: "27AAACB" })).toMatchObject({
+            kind: "declined", reason: "The lead is already Lost.",
+        });
+        expect(createPending).not.toHaveBeenCalled();
+    });
+
+    it("ID 74: without a dealer-approved quote the card warns it will be flagged; with one it does not", async () => {
+        execute.mockResolvedValueOnce([{ ok: false }] as never);
+        await run(ISR, "mark_converted", { lead_id: "DL-7", gstin: "27AAACB1234C1ZF" });
+        expect(stored().preview.warning).toMatch(/^No dealer-approved quote on this lead\. .*Won without an approved quote/);
+        execute.mockResolvedValueOnce([{ ok: true }] as never);
+        await run(ISR, "mark_converted", { lead_id: "DL-7", gstin: "27AAACB1234C1ZF" });
+        expect(stored().preview.warning).toBe("Undoing a conversion can only be done on the CRM screen.");
+        const { PgDialect } = await import("drizzle-orm/pg-core");
+        const q = new PgDialect().sqlToQuery(execute.mock.calls.at(-1)![0] as never).sql;
+        expect(q).toMatch(/c\.dealer_decision = 'approved'/);
+        expect(q).toMatch(/c\.withdrawn_at IS NULL/);
     });
 
     it("applier: markLeadConverted on the tx with the user's role; notify after commit", async () => {
@@ -333,13 +404,21 @@ describe("create_lead", () => {
         await run(ISR, "create_lead", { dealer_name: "Suresh", phone: "9876543210" });
         expect(stored().preview.title).toBe("Already in CRM, with no owner. Did the dealer contact us again?");
         expect(JSON.stringify(stored().preview.lines)).toMatch(/ABC Traders/);
+
+        // The rep's OWN lead: the card does not name them to themselves, nor "alert" them.
+        execute.mockResolvedValueOnce([{ dealer: "ABC Traders", owner_name: "Priya", owner_id: ISR.id }] as never);
+        await run(ISR, "create_lead", { dealer_name: "Suresh", phone: "9876543210" });
+        expect(stored().preview.title).toBe("Already in CRM, it's your lead. Did the dealer contact us again?");
+        expect(stored().preview.lines).toContainEqual({ label: "Yes", value: "records a Re-inquiry and alerts the Sales Head" });
     });
 
     it("ID 137 applier: Yes writes the Re-inquiry on the tx and alerts only after commit", async () => {
         const plan = APPLIERS.record_reinquiry.schema.parse({ lead_id: "DL-99", note: "Suresh" });
-        const out = await APPLIERS.record_reinquiry.apply({ tx: TX, user: ISR, step: 1 }, plan);
+        const tx = { execute: vi.fn(async () => [{ current_owner_id: "isr-2" }]) } as never;
+        const out = await APPLIERS.record_reinquiry.apply({ tx, user: ISR, step: 1 }, plan);
         const input = { leadId: "DL-99", door: "whatsapp_assistant", actorId: ISR.id, note: "Suresh" };
-        expect(writeReinquiry).toHaveBeenCalledWith(input, { tx: TX });
+        expect(writeReinquiry).toHaveBeenCalledWith(input, { tx });
+        expect(out.owner_is_actor).toBe(false);
         expect(notifyReinquiry).not.toHaveBeenCalled();
         await out.afterCommit!();
         expect(notifyReinquiry).toHaveBeenCalledWith(input);
@@ -392,6 +471,9 @@ describe("create_lead", () => {
         });
         createInsideSalesLead.mockRejectedValueOnce(new DuplicatePhoneError());
         await expect(APPLIERS.create_lead.apply({ tx: TX, user: ISR, step: 1 }, plan)).rejects.toEqual(new ActionRejected("duplicate_phone"));
+        // The rollback must be the whole story: no Re-inquiry committed outside the tx (ID 137 asks Yes / No).
+        expect(createInsideSalesLead).toHaveBeenLastCalledWith(expect.anything(), { tx: TX, skipReinquiry: true });
+        expect(recordReinquiry).not.toHaveBeenCalled();
         const afterCommit = vi.fn();
         createInsideSalesLead.mockResolvedValueOnce({ id: "DL-new", businessTypeSaved: undefined, afterCommit });
         const out = await APPLIERS.create_lead.apply({ tx: TX, user: ISR, step: 1 }, plan);
@@ -432,6 +514,15 @@ describe("confirmed replies", () => {
             ],
         });
         expect(confirmed("record_reinquiry").body).toMatch(/Re-inquiry recorded/);
+        // The reply drops the owner when that is the rep (or there is none).
+        const reply = (after: Record<string, unknown>) =>
+            renderTapOutcome({
+                kind: "confirmed", actionId: "a", tool: "record_reinquiry", leadId: "DL-7", title: "x",
+                after, crmUrl: "https://crm/lead/DL-7", extra: null,
+            }).body;
+        expect(reply({ current_owner_id: "isr-2", owner_is_actor: false })).toMatch(/lead's owner and the Sales Head have been told/);
+        expect(reply({ current_owner_id: ISR.id, owner_is_actor: true })).toMatch(/Re-inquiry recorded\. The Sales Head has been told\./);
+        expect(reply({ current_owner_id: null })).not.toMatch(/owner/);
     });
 
     it("the invite reports whether it went out", () => {

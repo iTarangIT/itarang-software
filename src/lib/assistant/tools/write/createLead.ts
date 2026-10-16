@@ -255,7 +255,10 @@ export const createLeadApplier = defineApplier<CreateLeadPlan>({
                     campaignId: p.campaign_id,
                     door: "whatsapp_assistant",
                 },
-                { tx },
+                // A number taken between the card and the tap: the action rolls
+                // back and the reply says nothing was saved — so no Re-inquiry
+                // may be written outside this transaction either (ID 137 asks).
+                { tx, skipReinquiry: true },
             );
             if (p.extra) {
                 const extra = Object.fromEntries(Object.entries(p.extra).filter(([, v]) => v));
