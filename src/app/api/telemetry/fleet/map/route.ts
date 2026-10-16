@@ -1,20 +1,23 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/lib/auth-utils';
+import { resolveTelemetryViewer, telemetryErrorResponse } from '@/lib/telemetry/vehicleAccess';
 import { fetchFleetMapData } from '@/lib/telemetry/queries';
 import { isVpsUnreachable, vpsDegradedReason } from '@/lib/telemetry/vps-status';
 
 export async function GET(req: NextRequest) {
     let user;
     try {
-        user = await requireRole(['ceo', 'dealer']);
+        user = await resolveTelemetryViewer();
     } catch (error) {
-        const message = error instanceof Error ? error.message : 'Server error';
-        return NextResponse.json({ success: false, error: { message } }, { status: 500 });
+        return telemetryErrorResponse(error, 'Fleet Map');
     }
 
     try {
         const { searchParams } = new URL(req.url);
-        const dealerId = user.role === 'dealer' ? user.dealer_id || undefined : undefined;
+        // ID 181: a dealer login with no dealer code sees nothing, not the whole fleet.
+        if (user.role === 'dealer' && !user.dealerCode) {
+            return NextResponse.json({ success: true, data: [] });
+        }
+        const dealerId = user.role === 'dealer' ? user.dealerCode ?? undefined : undefined;
         // Location filters apply to the CEO fleet view; dealers stay scoped to
         // their own vehicles regardless of the params.
         const state = user.role === 'ceo' ? searchParams.get('state')?.trim() || undefined : undefined;

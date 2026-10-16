@@ -1,19 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/lib/auth-utils';
 import { fetchDeviceById } from '@/lib/telemetry/queries';
+import { openVehicleFeed, telemetryErrorResponse, vehicleNotFound } from '@/lib/telemetry/vehicleAccess';
 
+// ID 181: a dealer opens only vehicles mapped to it (else 'not found'); every
+// open is written to telemetry_location_access_log.
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ deviceId: string }> }) {
     try {
-        await requireRole(['ceo', 'dealer']);
         const { deviceId } = await params;
+        const gate = await openVehicleFeed({ deviceId, feed: 'details', hours: () => null });
+        if (!gate.ok) return gate.response;
         const data = await fetchDeviceById(deviceId);
-        if (!data) {
-            return NextResponse.json({ success: false, error: { message: 'Device not found' } }, { status: 404 });
-        }
+        if (!data) return vehicleNotFound();
         return NextResponse.json({ success: true, data });
     } catch (error) {
-        console.error('[Device Detail] Error:', error);
-        const message = error instanceof Error ? error.message : 'Server error';
-        return NextResponse.json({ success: false, error: { message } }, { status: 500 });
+        return telemetryErrorResponse(error, 'Device Detail');
     }
 }

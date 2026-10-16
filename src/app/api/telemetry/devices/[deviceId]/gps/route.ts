@@ -1,18 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/lib/auth-utils';
 import { fetchDeviceGPS } from '@/lib/telemetry/queries';
+import { openVehicleFeed, telemetryErrorResponse } from '@/lib/telemetry/vehicleAccess';
+import { DEFAULT_FEED_HOURS, feedHours } from '@/lib/telemetry/vehicleAccessRules';
 
+// ID 181: a dealer opens only vehicles mapped to it (else 'not found'), at most
+// 7 days of trail; every open is written to telemetry_location_access_log.
 export async function GET(req: NextRequest, { params }: { params: Promise<{ deviceId: string }> }) {
     try {
-        await requireRole(['ceo', 'dealer']);
         const { deviceId } = await params;
-        const { searchParams } = new URL(req.url);
-        const hours = parseInt(searchParams.get('hours') || '24');
-        const data = await fetchDeviceGPS(deviceId, hours);
-        return NextResponse.json({ success: true, data });
+        const raw = new URL(req.url).searchParams.get('hours');
+        const gate = await openVehicleFeed({ deviceId, feed: 'gps', hours: (v) => feedHours(raw, v.role) });
+        if (!gate.ok) return gate.response;
+        const data = await fetchDeviceGPS(deviceId, gate.hours ?? DEFAULT_FEED_HOURS);
+        return NextResponse.json({ success: true, data, hours: gate.hours });
     } catch (error) {
-        console.error('[Device GPS] Error:', error);
-        const message = error instanceof Error ? error.message : 'Server error';
-        return NextResponse.json({ success: false, error: { message } }, { status: 500 });
+        return telemetryErrorResponse(error, 'Device GPS');
     }
 }
