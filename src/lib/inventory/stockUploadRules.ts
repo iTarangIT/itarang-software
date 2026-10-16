@@ -79,3 +79,55 @@ export function decideStockUpload(input: {
         message: "Only Admin, the Inventory Manager, the partner login or the dealer itself can add stock.",
     };
 }
+
+export type StockTransferDecision =
+    | { ok: true; sourceDealerId: string; targetDealerId: string; scope: "any" | "own" }
+    | { ok: false; status: 400 | 403; message: string };
+
+/**
+ * Decide one stock transfer (Admin › Inventory › Transfer). Same rule as an
+ * upload, because a transfer puts serials into the target dealer's stock (the
+ * target's acknowledgement rewrites inventory.dealer_id): Admin, Inventory
+ * Manager and partner from any dealer to any dealer; a dealer only out of its
+ * own stock; everyone else refused — Sales Head and Ops included, although
+ * they keep the transfer list view.
+ */
+export function decideStockTransfer(input: {
+    role: string | null | undefined;
+    sourceDealerId: string | null | undefined;
+    targetDealerId: string | null | undefined;
+    ownDealerCode: string | null | undefined;
+}): StockTransferDecision {
+    const mode = stockUploadMode(input.role);
+    if (mode === "none") {
+        return {
+            ok: false,
+            status: 403,
+            message: "Only Admin, the Inventory Manager, the partner login or the dealer itself can move stock.",
+        };
+    }
+    const source = (input.sourceDealerId ?? "").trim();
+    if (mode === "any" && !source) {
+        return { ok: false, status: 400, message: "Pick the dealer the stock comes from." };
+    }
+    if (mode === "own") {
+        const own = (input.ownDealerCode ?? "").trim();
+        if (!own) {
+            return {
+                ok: false,
+                status: 403,
+                message: "Your login is not linked to a dealer account, so stock cannot be moved. Ask iTarang to link it.",
+            };
+        }
+        if (source && source !== own) {
+            return { ok: false, status: 403, message: "You can move stock only out of your own dealer account." };
+        }
+    }
+    const sourceDealerId = mode === "own" ? (input.ownDealerCode ?? "").trim() : source;
+    const targetDealerId = (input.targetDealerId ?? "").trim();
+    if (!targetDealerId) return { ok: false, status: 400, message: "Pick the dealer the stock goes to." };
+    if (targetDealerId === sourceDealerId) {
+        return { ok: false, status: 400, message: "Source and target dealer must differ." };
+    }
+    return { ok: true, sourceDealerId, targetDealerId, scope: mode };
+}

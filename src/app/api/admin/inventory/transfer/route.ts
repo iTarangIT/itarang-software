@@ -8,9 +8,15 @@ import { requireInventoryAdmin } from "@/lib/auth-utils";
 import { generateId } from "@/lib/api-utils";
 import { notifyInventoryTransferIncoming } from "@/lib/notifications";
 import { logInventoryEvent } from "@/lib/inventory/events";
+import {
+  requireStockDealerAccount,
+  requireStockTransferer,
+  StockUploadRefused,
+} from "@/lib/inventory/stockUploadGuard";
 
 const BodySchema = z.object({
-  sourceDealerId: z.string().min(1),
+  // Optional for a dealer login: the source is always its own account.
+  sourceDealerId: z.string().optional(),
   targetDealerId: z.string().min(1),
   serials: z.array(z.string().min(1)).min(1, "At least one serial required"),
   reason: z.string().min(1).max(500),
@@ -18,22 +24,24 @@ const BodySchema = z.object({
 
 export async function POST(req: NextRequest) {
   try {
-    const admin = await requireInventoryAdmin();
     const body = BodySchema.parse(await req.json());
-
-    if (body.sourceDealerId === body.targetDealerId) {
-      return NextResponse.json(
-        { success: false, error: { message: "Source and target dealer must differ." } },
-        { status: 400 },
-      );
-    }
+    // ID 173: a transfer puts serials into the target dealer's stock (its ack
+    // rewrites inventory.dealer_id), so it follows the add-stock rule — Admin,
+    // Inventory Manager, partner for any dealer; a dealer only out of its own
+    // stock; Sales Head / Ops refused although they keep the list (GET) view.
+    const { user: admin, sourceDealerId, targetDealerId } = await requireStockTransferer(
+      body.sourceDealerId,
+      body.targetDealerId,
+    );
+    // The receiving account must be active with a login, or nobody can ack.
+    await requireStockDealerAccount(targetDealerId);
 
     const dealerRows = await db
       .select({ id: accounts.id, name: accounts.business_entity_name })
       .from(accounts)
-      .where(inArray(accounts.id, [body.sourceDealerId, body.targetDealerId]));
+      .where(inArray(accounts.id, [sourceDealerId, targetDealerId]));
     const dealerById = new Map(dealerRows.map((d) => [d.id, d]));
-    if (!dealerById.has(body.sourceDealerId) || !dealerById.has(body.targetDealerId)) {
+    if (!dealerById.has(sourceDealerId) || !dealerById.has(targetDealerId)) {
       return NextResponse.json(
         { success: false, error: { message: "Dealer not found." } },
         { status: 404 },
@@ -50,7 +58,7 @@ export async function POST(req: NextRequest) {
       .from(inventory)
       .where(
         and(
-          eq(inventory.dealer_id, body.sourceDealerId),
+          eq(inventory.dealer_id, sourceDealerId),
           inArray(inventory.serial_number, body.serials),
         ),
       );
@@ -81,8 +89,8 @@ export async function POST(req: NextRequest) {
     await db.transaction(async (tx) => {
       await tx.insert(inventoryTransfers).values({
         id: transferId,
-        source_dealer_id: body.sourceDealerId,
-        target_dealer_id: body.targetDealerId,
+        source_dealer_id: sourceDealerId,
+        target_dealer_id: targetDealerId,
         serials: body.serials,
         reason: body.reason,
         initiated_by: admin.id,
@@ -114,8 +122,8 @@ export async function POST(req: NextRequest) {
           notes: body.reason,
           metadata: {
             transferId,
-            sourceDealerId: body.sourceDealerId,
-            targetDealerId: body.targetDealerId,
+            sourceDealerId,
+            targetDealerId,
           },
           performedAt: now,
         });
@@ -123,10 +131,10 @@ export async function POST(req: NextRequest) {
     });
 
     notifyInventoryTransferIncoming({
-      targetDealerId: body.targetDealerId,
+      targetDealerId,
       transferId,
       serialCount: body.serials.length,
-      sourceDealerName: dealerById.get(body.sourceDealerId)?.name ?? null,
+      sourceDealerName: dealerById.get(sourceDealerId)?.name ?? null,
     }).catch(() => {});
 
     return NextResponse.json({
@@ -140,7 +148,8 @@ export async function POST(req: NextRequest) {
   } catch (error) {
     console.error("[Inventory Transfer] Error:", error);
     const message = error instanceof Error ? error.message : "Failed to initiate transfer";
-    return NextResponse.json({ success: false, error: { message } }, { status: 400 });
+    const status = error instanceof StockUploadRefused ? error.status : 400;
+    return NextResponse.json({ success: false, error: { message } }, { status });
   }
 }
 
