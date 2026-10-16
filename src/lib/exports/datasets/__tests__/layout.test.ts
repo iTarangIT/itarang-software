@@ -13,9 +13,10 @@ describe("groupColumns", () => {
         expect(groups.flatMap((g) => g.columns)).toHaveLength(4);
     });
     it("customer loan files: the iTarang push columns sit together, not under Other (ID 33)", () => {
-        const groups = groupColumns("customer_loan_files", [col("file_id"), col("dealer"), col("pushed_by_itarang_on"), col("pushed_by"), col("pushed_to"), col("nbfc")]);
+        const groups = groupColumns("customer_loan_files", [col("file_id"), col("dealer"), col("pushed_by_itarang_on"), col("pushed_by"), col("pushed_to"), col("assisted_by"), col("nbfc")]);
         expect(groups.map((g) => g.name)).toEqual(["File", "iTarang help", "Decision"]);
-        expect(groups[1].columns.map((c) => c.key)).toEqual(["pushed_by_itarang_on", "pushed_by", "pushed_to"]);
+        // ID 183: Assisted by (iTarang) sits with them.
+        expect(groups[1].columns.map((c) => c.key)).toEqual(["pushed_by_itarang_on", "pushed_by", "pushed_to", "assisted_by"]);
     });
     it("an unknown dataset shows everything under Other", () => {
         expect(groupColumns("nope", [col("a"), col("b")])).toEqual([{ name: "Other", columns: [col("a"), col("b")] }]);
