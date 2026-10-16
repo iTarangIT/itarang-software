@@ -22,7 +22,7 @@ export type TelemetryViewer = {
 };
 
 /** requireRole(['ceo','dealer']) plus the dealer code (users.dealer_id, else the approved application's code). */
-export async function resolveTelemetryViewer(): Promise<TelemetryViewer> {
+export async function requireTelemetryViewer(): Promise<TelemetryViewer> {
     const user = await requireRole(["ceo", "dealer"]);
     const role = user.role === "ceo" ? "ceo" : "dealer";
     const dealerCode =
@@ -79,13 +79,13 @@ export async function logVehicleOpen(input: {
  * vehicle, write the open log. Returns the viewer, or the response to send
  * (404 'not found' when a dealer asks for a vehicle that is not mapped to it).
  */
-export async function openVehicleFeed(input: {
+export async function requireVehicleFeedAccess(input: {
     deviceId: string;
     feed: VehicleFeed;
     /** Window asked for, after the cap; null for feeds without one. */
     hours: (viewer: TelemetryViewer) => number | null;
 }): Promise<{ ok: true; viewer: TelemetryViewer; hours: number | null } | { ok: false; response: NextResponse }> {
-    const viewer = await resolveTelemetryViewer();
+    const viewer = await requireTelemetryViewer();
     const hours = input.hours(viewer);
     const allowed = await viewerMayOpenVehicle(viewer, input.deviceId);
     await logVehicleOpen({ viewer, deviceId: input.deviceId, feed: input.feed, hours, allowed });

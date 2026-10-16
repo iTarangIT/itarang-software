@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { fetchAlerts } from '@/lib/telemetry/queries';
-import { resolveTelemetryViewer, telemetryErrorResponse } from '@/lib/telemetry/vehicleAccess';
+import { requireTelemetryViewer, telemetryErrorResponse } from '@/lib/telemetry/vehicleAccess';
 
 export async function GET(req: NextRequest) {
     try {
-        const viewer = await resolveTelemetryViewer();
+        const viewer = await requireTelemetryViewer();
         const { searchParams } = new URL(req.url);
         const limit = parseInt(searchParams.get('limit') || '50');
         const ack = searchParams.get('acknowledged');

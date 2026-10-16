@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { resolveTelemetryViewer, telemetryErrorResponse } from '@/lib/telemetry/vehicleAccess';
+import { requireTelemetryViewer, telemetryErrorResponse } from '@/lib/telemetry/vehicleAccess';
 import { fetchFleetLocations } from '@/lib/telemetry/queries';
 
 // Distinct State/City options for the Fleet Overview filter dropdowns. Reads the
@@ -7,7 +7,7 @@ import { fetchFleetLocations } from '@/lib/telemetry/queries';
 export async function GET() {
     let user;
     try {
-        user = await resolveTelemetryViewer();
+        user = await requireTelemetryViewer();
     } catch (error) {
         return telemetryErrorResponse(error, 'Fleet Locations');
     }
