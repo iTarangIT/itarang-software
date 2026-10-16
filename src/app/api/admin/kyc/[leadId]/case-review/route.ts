@@ -20,7 +20,7 @@ import {
 import {
   calculateQueuePriority,
   formatSlaAge,
-  requireAdminAppUser,
+  requireAdminAppUserForLead,
 } from "@/lib/kyc/admin-workflow";
 import {
   formatSlaWindow,
@@ -45,7 +45,7 @@ export async function GET(
   { params }: { params: Promise<{ leadId: string }> },
 ) {
   try {
-    const appUser = await requireAdminAppUser();
+    const appUser = await requireAdminAppUserForLead((await params).leadId);
     if (!appUser) {
       return NextResponse.json(
         { success: false, error: { message: "Unauthorized" } },

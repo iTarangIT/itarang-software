@@ -10,7 +10,7 @@ import {
   productSelections,
   products,
 } from "@/lib/db/schema";
-import { requireAdminAppUser } from "@/lib/kyc/admin-workflow";
+import { requireAdminAppUserForLead } from "@/lib/kyc/admin-workflow";
 
 // Admin read endpoint: returns the current product_selection for a lead plus
 // enriched inventory details (for the read-only Step 4 panel in CaseReview).
@@ -20,7 +20,7 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const admin = await requireAdminAppUser();
+    const admin = await requireAdminAppUserForLead((await params).id);
     if (!admin) {
       return NextResponse.json(
         { success: false, error: { message: "Unauthorized" } },

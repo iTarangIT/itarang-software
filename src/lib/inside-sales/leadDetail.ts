@@ -29,6 +29,9 @@ import { onboardingClockSql } from "@/lib/onboarding/clock";
 import { dealCardJson } from "@/lib/leads/dealCard";
 import { dealCardLockedBy, parseDealCard } from "@/lib/leads/dealCardRules";
 import { dealCardActualsSql } from "@/lib/leads/dealCardActuals";
+import { isDealerOnboarded } from "@/lib/leads/dealerOnboarded";
+import { listLeadQuoteSends } from "@/lib/leads/quoteSendsStore";
+import { failedSendTimelineEntries, mergeNewestFirst } from "@/lib/leads/quoteSends";
 
 // ID 122: the one onboarding clock (src/lib/onboarding/clock.ts).
 const ONBOARDING_CLOCK = sql.raw(onboardingClockSql("oa"));
@@ -201,6 +204,11 @@ export async function fetchLeadDetailBundle(leadId: string): Promise<LeadDetailB
     // product reference price changed since it was issued.
     const history = commercialsHistory as LeadDetailCommercials[];
 
+    // ID 191: each quote's sends (quotation_dispatches) on its card; the
+    // failed ones also join the timeline below, in red with the reason.
+    const sends = await listLeadQuoteSends(leadId);
+    for (const c of history) c.sends = sends.filter((s) => s.commercial_id === c.commercial_id);
+
     // ID 172: each row's deal card, and whether the lead's card is locked —
     // the latest live quote with a card that the CEO approved or the dealer
     // said yes to (same rule as readLockedDealCard).
@@ -328,12 +336,28 @@ export async function fetchLeadDetailBundle(leadId: string): Promise<LeadDetailB
         current_commercials:
             (commercialsHistory as LeadDetailCommercials[]).find((c) => c.is_current) ?? null,
         commercials_history: commercialsHistory as LeadDetailCommercials[],
-        touchpoints: touchpoints as LeadDetailTouchpoint[],
+        // ID 191: failed quote sends merged in at read time (display only,
+        // never touchpoints); a send that reached the dealer has its own entry.
+        touchpoints: mergeNewestFirst<LeadDetailTouchpoint>(
+            touchpoints as LeadDetailTouchpoint[],
+            failedSendTimelineEntries(sends).map((e) => ({
+                ...e,
+                performed_by: null,
+                call_status: null,
+                call_duration_sec: null,
+                is_engaged: null,
+                attachments: [],
+                next_action: null,
+                next_action_at: null,
+            })),
+        ),
         status_history: statusHistory as LeadDetailStatusHistory[],
         onboarding,
         // ID 83: an unowned lead whose first human call was by a NeoDove agent
         // nobody has linked to a CRM user — it is waiting on that link.
         caller_not_linked: (lead as LeadDetailLead).current_owner_id ? null : await callerNotLinkedFor(leadId),
+        // ID 186: an onboarded dealer's lead shows no deal card (never throws).
+        dealer_onboarded: await isDealerOnboarded(leadId),
     };
     return bundle;
 }

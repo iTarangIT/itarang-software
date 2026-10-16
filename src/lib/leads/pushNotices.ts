@@ -55,6 +55,78 @@ export async function notifyDealerOfPush(leadId: string, reason?: string | null)
 }
 
 /**
+ * ID 33 (16 Oct): bell + email + WhatsApp to the dealer a file was just moved
+ * AWAY from (an admin's second move). The house is never told this way — the
+ * house pushing its own file out is the normal first push.
+ */
+export async function notifyDealerOfPushAway(leadId: string, fromDealerId: string): Promise<void> {
+    try {
+        const house = await houseDealerCode();
+        if (!fromDealerId || fromDealerId === house) return;
+        const f = await fileFacts(leadId);
+        if (!f || f.dealerId === fromDealerId) return;
+        await emit({
+            type: "lead.pushed_away",
+            title: "Customer file moved to another dealer",
+            message: `iTarang moved ${f.customer}'s file (${f.ref}) to another dealer. It is no longer on your list; any coupon you reserved on it is back in your pool.`,
+            leadId,
+            from: ADMIN_PARTY,
+            emailSubject: `Customer file moved: ${f.customer}`,
+            to: [{ audience: { kind: "dealer", dealerId: fromDealerId }, as: { party: "dealer", label: "Dealer" }, href: "/dealer-portal/leads" }],
+        });
+        const { pushToLeadDealer } = await import("@/lib/whatsapp/lead-push");
+        const result = await pushToLeadDealer(
+            leadId,
+            (t) => ({
+                prompt: {
+                    kind: "text",
+                    body:
+                        `Hi ${t.greetName}, iTarang has moved *${t.customerName}*'s file (Ref: ${t.referenceId}) to another dealer.\n\n` +
+                        "It is no longer on your list. Any coupon you reserved on it is back in your pool.",
+                },
+                nudge: { template: "lead_action", params: [t.customerName, t.referenceId, "note that iTarang moved this file to another dealer"] },
+            }),
+            { dealerCode: fromDealerId },
+        );
+        console.log(`[pushNotices] push-away notice lead=${leadId} dealer=${fromDealerId}: ${result}`);
+    } catch (err) {
+        console.error(`[pushNotices] push-away notice for ${leadId} failed:`, err);
+    }
+}
+
+/**
+ * ID 183: tell the file's dealer that iTarang worked his file ("Done by
+ * <name> for <dealer>") — bell + WhatsApp (his chat, else the approved
+ * template). Callers throttle (actForDealerGuard.recordActorStep).
+ */
+export async function notifyDealerOfAssist(leadId: string, line: string, step: string): Promise<void> {
+    try {
+        const f = await fileFacts(leadId);
+        if (!f?.dealerId) return;
+        await emit({
+            type: "lead.acted_for_dealer",
+            title: `iTarang worked on ${f.customer}'s file`,
+            message: `${line}: ${step} on ${f.customer}'s file (${f.ref}). The file is still yours — open it to see.`,
+            leadId,
+            from: ADMIN_PARTY,
+            to: [toLeadDealer(leadId, { href: `/dealer-portal/leads/${encodeURIComponent(leadId)}` })],
+        });
+        const { pushToLeadDealer } = await import("@/lib/whatsapp/lead-push");
+        await pushToLeadDealer(leadId, (t) => ({
+            prompt: {
+                kind: "text",
+                body:
+                    `Hi ${t.greetName}, ${line.charAt(0).toLowerCase()}${line.slice(1)}: ${step} on *${t.customerName}*'s file (Ref: ${t.referenceId}).\n\n` +
+                    "The file is still yours. Open it on the dealer portal to see.",
+            },
+            nudge: { template: "lead_action", params: [t.customerName, t.referenceId, `see what iTarang did: ${step}`] },
+        }));
+    } catch (err) {
+        console.error(`[pushNotices] assist notice for ${leadId} failed:`, err);
+    }
+}
+
+/**
  * Bell to the iTarang house dealer when the dealer works a file the house
  * pushed out. `actorDealerCode` = the dealer code of whoever did it; only a
  * step by the file's current dealer notifies (not the house, not an admin).

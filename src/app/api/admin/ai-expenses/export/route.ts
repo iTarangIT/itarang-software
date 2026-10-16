@@ -1,7 +1,7 @@
 /**
  * E-172 — GET /api/admin/ai-expenses/export?from=YYYY-MM&to=YYYY-MM
  *
- * Admin-only. Streams a ZIP for the selected month range containing:
+ * Finance, Admin and CEO only (ID 166 bill rule). Streams a ZIP for the selected month range containing:
  *   - expenses_{range}.xlsx   — one styled row per AI expense
  *   - invoices/               — each expense's stored bill (PDF/image)
  *
@@ -21,7 +21,8 @@ import ExcelJS from "exceljs";
 import JSZip from "jszip";
 import { db } from "@/lib/db";
 import { expenseSubmissions, users } from "@/lib/db/schema";
-import { requireApiAdmin } from "@/lib/auth/requireApiAdmin";
+import { requireAuth } from "@/lib/auth-utils";
+import { mayOpenAllExpenseBills } from "@/lib/expenses/billAccess";
 import { isNextRedirectError, errorMessage } from "@/lib/api-utils";
 import { createClient } from "@/lib/supabase/server";
 import { extOf, safeSlug, fetchAsBuffer } from "@/lib/export/zip-helpers";
@@ -36,8 +37,16 @@ const MAX_ROWS = 500;
 
 export async function GET(req: NextRequest) {
   try {
-    const guard = await requireApiAdmin();
-    if (!guard.ok) return guard.response;
+    // ID 166: the ZIP carries copies of the bills, so it follows the bill rule
+    // — Finance, Admin and CEO — not the tracker's admin list (which includes
+    // the Sales Head).
+    const user = await requireAuth();
+    if (!mayOpenAllExpenseBills(user.role)) {
+      return NextResponse.json(
+        { success: false, error: { message: "Only Finance, Admin and the CEO can download expense bills." } },
+        { status: 403 },
+      );
+    }
 
     const parsed = resolveMonthRange(req.nextUrl.searchParams);
     if (!parsed.ok) {

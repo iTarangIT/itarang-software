@@ -17,6 +17,7 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { nbfcDocumentVerifications, nbfcLeadAssignments } from "@/lib/db/schema";
 import { requireAdminAppUser } from "@/lib/kyc/admin-workflow";
+import { adminMayActOnNbfcLead, nbfcLeadNotYours } from "@/lib/nbfc/adminRequestAccess";
 import {
   createNbfcDocRequest,
   listThreadForLead,
@@ -50,6 +51,7 @@ export async function GET(req: NextRequest) {
         { status: 400 },
       );
     }
+    if (!(await adminMayActOnNbfcLead(appUser, leadId))) return nbfcLeadNotYours();
     const thread = await listThreadForLead(leadId);
     // Only the verdicts that ASK something of iTarang reach the admin: a
     // rejection or a correction request. An NBFC approval ('verified') and an
@@ -136,6 +138,7 @@ export async function POST(req: NextRequest) {
         { status: 404 },
       );
     }
+    if (!(await adminMayActOnNbfcLead(appUser, assignment.lead_id))) return nbfcLeadNotYours();
 
     // E-210 — any documents the admin attached ride along with the message.
     const attachments = form

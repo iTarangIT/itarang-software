@@ -5,11 +5,16 @@ import { eq } from 'drizzle-orm';
 import { createClient } from '@/lib/supabase/server';
 import { isS3Backend, putObject, filesProxyPath } from '@/lib/storage/s3';
 import { requireLeadAccess } from "@/lib/auth/requireLeadAccess";
+import { stampUploader } from '@/lib/storage/uploaderStamp';
+import { recordActorStep, requireLeadWriter } from "@/lib/leads/actForDealerGuard";
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
     // ID 118: signed in, and this lead is the caller's to touch (a dealer's own lead, or back office).
     const leadGate = await requireLeadAccess((await params).leadId);
     if (!leadGate.ok) return leadGate.response;
+    // ID 183: a change to the file — its own dealer, or Admin / Sales Head acting for the dealer.
+    const writer = await requireLeadWriter((await params).leadId, req, leadGate.user);
+    if (!writer.ok) return writer.response;
     try {
         const { leadId } = await params;
         const formData = await req.formData();
@@ -54,8 +59,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         const dateStr = now.toISOString().slice(0, 10).replace(/-/g, '');
         const seq = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
 
+        const docId = `COBDOC-${dateStr}-${seq}`;
         await db.insert(coBorrowerDocuments).values({
-            id: `COBDOC-${dateStr}-${seq}`,
+            id: docId,
             co_borrower_id: coBorrowerId || '',
             lead_id: leadId,
             document_type: docType,
@@ -66,7 +72,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             uploaded_at: now,
             updated_at: now,
         });
+        // ID 166: who uploaded it decides whether the dealer may open it later.
+        await stampUploader('co_borrower_documents', { id: docId }, { userId: leadGate.user.id, source: 'portal', actForDealer: writer.actor.kind === 'itarang' });
 
+        await recordActorStep(writer.actor, 'uploaded a co-borrower document');
         return NextResponse.json({ success: true, file_url: documentUrl });
     } catch (error) {
         return NextResponse.json({ success: false, error: { message: 'Server error' } }, { status: 500 });

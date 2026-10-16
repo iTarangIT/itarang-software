@@ -15,6 +15,7 @@ import {
 import { FINANCE_DOCUMENTS } from '@/components/dealer-portal/lead-wizard/constants';
 import OtherDocumentsSection, { type RequestedDoc } from '@/components/dealer-portal/lead-wizard/OtherDocumentsSection';
 import ConsentOtpCard from '@/components/dealer-portal/lead-wizard/ConsentOtpCard';
+import AskItarangHelp from '@/components/dealer-portal/lead-wizard/AskItarangHelp';
 import { onFreshFileClick } from '@/lib/storage/freshFileLink';
 
 type UploadedDoc = {
@@ -732,6 +733,9 @@ export default function KYCPage() {
                 />
 
                 <ErrorBanner message={apiError} onDismiss={() => setApiError(null)} />
+
+                {/* ID 183: the dealer may ask iTarang to work this file for him. */}
+                <AskItarangHelp leadId={leadId} />
 
                 {draftResumedAt && !draftBannerDismissed && (
                     <div className="mb-4 flex items-center justify-between gap-3 px-4 py-3 rounded-xl bg-blue-50 border border-blue-200">

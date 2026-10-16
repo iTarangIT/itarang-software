@@ -137,16 +137,22 @@ export async function requireRole(roles: string[]) {
   return user;
 }
 
-// Roles allowed to upload, edit, write-off, or assign inventory.
+// Roles allowed into Admin › Inventory and Product Master (view, edit,
+// write-off, transfer).
 // BRD: Ops Manager and Super Admin only — KYC officers cannot.
 // `admin` is included as a transitional role until ops_manager / super_admin
 // are formally seeded.
+// ID 174 decision 5 (Kartik, 10 Oct): partner (Chirag) gets inventory.
+// ADDING STOCK (bulk upload, Add item) is NOT this list — it is the ID 173
+// rule in src/lib/inventory/stockUploadRules.ts, which refuses sales_head and
+// ops_manager although they keep the views here.
 export const INVENTORY_ADMIN_ROLES = new Set([
   "admin",
   "ops_manager",
   "super_admin",
   "inventory_manager",
   "sales_head",
+  "partner",
 ]);
 
 export async function requireInventoryAdmin() {

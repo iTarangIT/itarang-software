@@ -45,6 +45,7 @@ import {
   type AttentionReason,
 } from "@/lib/sales/attentionReasons";
 
+import { onFreshFileClick } from "@/lib/storage/freshFileLink";
 interface AttentionFile {
   id: string;
   drive_file_id: string;
@@ -367,6 +368,7 @@ function FlaggedRow({
             {inv.document_url ? (
               <a
                 href={inv.document_url}
+                onClick={(e) => onFreshFileClick(e, inv.document_url)}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-sm font-medium text-brand-700 hover:underline"

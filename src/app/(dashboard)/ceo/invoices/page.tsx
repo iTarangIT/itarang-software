@@ -28,6 +28,7 @@ import {
   startScanAndWait,
 } from "@/lib/drive/scanClient";
 
+import { onFreshFileClick } from "@/lib/storage/freshFileLink";
 const STATUS_OPTIONS = [
   "draft",
   "sent",
@@ -943,6 +944,7 @@ export default function CEOInvoicesPage() {
                             {r.document_url ? (
                               <a
                                 href={r.document_url}
+                                onClick={(e) => onFreshFileClick(e, r.document_url)}
                                 target="_blank"
                                 rel="noopener noreferrer"
                                 className="text-brand-700 hover:underline inline-flex items-center gap-1"

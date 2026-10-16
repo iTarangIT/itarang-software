@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
-import { requireAdminAppUser } from "@/lib/kyc/admin-workflow";
+import { requireAdminAppUserForLead } from "@/lib/kyc/admin-workflow";
 import { requestCoBorrowerForLead } from "@/lib/kyc/coborrower-request";
 
 // BRD §2.9.3 "Request Co-Borrower KYC" — admin opens this form from the CIBIL
@@ -20,7 +20,7 @@ export async function POST(
   { params }: { params: Promise<{ leadId: string }> },
 ) {
   try {
-    const appUser = await requireAdminAppUser();
+    const appUser = await requireAdminAppUserForLead((await params).leadId);
     if (!appUser) {
       return NextResponse.json(
         { success: false, error: { message: "Unauthorized" } },

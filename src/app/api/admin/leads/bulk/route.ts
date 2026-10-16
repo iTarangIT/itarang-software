@@ -225,9 +225,10 @@ export const POST = withErrorHandler(async (req: Request) => {
     const leads = (await db.execute<{
         id: string;
         lead_status: string | null;
+        current_owner_id: string | null;
     }>(sql`
-        SELECT id, lead_status FROM dealer_leads WHERE id IN ${ids}
-    `)) as unknown as { id: string; lead_status: string | null }[];
+        SELECT id, lead_status, current_owner_id FROM dealer_leads WHERE id IN ${ids}
+    `)) as unknown as { id: string; lead_status: string | null; current_owner_id: string | null }[];
 
     let affected = 0;
     let skipped = 0;
@@ -283,6 +284,8 @@ export const POST = withErrorHandler(async (req: Request) => {
             targetUserId: body.target_user_id,
             actorId: user.id,
             reason: body.reason ?? null,
+            // ID 179: each rep a lead was taken from hears where it went.
+            fromOwners: Object.fromEntries(leads.map((l) => [l.id, l.current_owner_id])),
         });
         // One row for the batch as a whole ("who moved these 400 leads, when,
         // to whom"). The per-lead touchpoints written by assignLeadOwner stay

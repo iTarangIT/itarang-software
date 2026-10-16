@@ -95,7 +95,9 @@ export async function teamTargets(managerId: string, month: string) {
     const { monthEnd, progress } = await import("@/lib/targets/rules");
     const monthFirst = `${month.slice(0, 7)}-01`;
     const [rows, ctx, todayRow] = await Promise.all([
-        listTargets({ month: monthFirst, userId: managerId }),
+        // ID 189: the manager's own targets as their member card shows them —
+        // the version in force (CEO + stretch), never a revision not pushed yet.
+        listTargets({ month: monthFirst, userId: managerId, viewer: "member" }),
         workingDayContext(monthFirst),
         db.execute(sql`SELECT (now() AT TIME ZONE 'Asia/Kolkata')::date::text AS d`) as unknown as Promise<Array<{ d: string }>>,
     ]);
@@ -126,8 +128,10 @@ export async function teamTargets(managerId: string, month: string) {
                 ...r,
                 progress: progress({
                     metric: r.metric,
+                    kind: r.kind,
                     monthly: r.final_target,
                     actual: sum == null ? null : Math.round(sum * 10) / 10,
+                    reason: r.progress.not_measured_reason,
                     workingDaysTotal: ctx.working_days_total,
                     workingDaysElapsed: ctx.working_days_elapsed,
                 }),

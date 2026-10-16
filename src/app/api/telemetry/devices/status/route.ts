@@ -1,15 +1,15 @@
 import { NextResponse } from 'next/server';
-import { requireRole } from '@/lib/auth-utils';
 import { fetchDeviceStatus } from '@/lib/telemetry/queries';
+import { requireTelemetryViewer, telemetryErrorResponse, viewerVehicleScope } from '@/lib/telemetry/vehicleAccess';
 
 export async function GET() {
     try {
-        await requireRole(['ceo', 'dealer']);
-        const data = await fetchDeviceStatus();
+        const viewer = await requireTelemetryViewer();
+        // ID 181: a dealer gets only its mapped vehicles (none without a dealer code).
+        const scope = await viewerVehicleScope(viewer);
+        const data = await fetchDeviceStatus(scope ?? undefined);
         return NextResponse.json({ success: true, data });
     } catch (error) {
-        console.error('[Device Status] Error:', error);
-        const message = error instanceof Error ? error.message : 'Server error';
-        return NextResponse.json({ success: false, error: { message } }, { status: 500 });
+        return telemetryErrorResponse(error, 'Device Status');
     }
 }

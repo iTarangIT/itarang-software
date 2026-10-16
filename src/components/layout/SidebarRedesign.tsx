@@ -99,7 +99,8 @@ const ADMIN_SALES_HEAD_GROUPS: LayoutGroup[] = [
         defaultOpen: true,
         items: [
             { id: "approvals", label: "Approvals", urgent: true },
-            { node: "Reviews", urgent: true, children: ["kyc-review", "dealer-validation", "product-review"] },
+            // ID 182 / 183: Pushed files sits with KYC review (open one to act for its dealer).
+            { node: "Reviews", urgent: true, children: ["kyc-review", "pushed-files", "dealer-validation", "product-review"] },
             ...both("escalations"),
             ...both("ready-to-assign"),
             // ID 90 — five lines for the work queues (spec: "9 lines to 5"):
@@ -265,19 +266,30 @@ const ADMIN_SALES_HEAD_GROUPS: LayoutGroup[] = [
             ...both("nbfc-settings"),
             ...both("whatsapp-settings"),
             ...both("gdrive-mirror"),
+            // ID 182 — admin only (sales_head has no such item, so it is skipped).
+            "house-team-logins",
             // Anything else the Sales Head's Settings section gains later.
             { section: "Settings" },
         ],
     },
 ];
 
-// ID 90 — Admin / Sales Head counts: their own work queues (review arrivals,
-// WhatsApp onboarding, the Ecofy pickup queue, buyback negotiations). The
-// buyback "Notifications" unread total is left off — the header bell has it.
+// ID 90 — Admin / Sales Head counts: how many items wait in each of their own
+// work queues (/api/admin/nav-counts — Approvals, Reviews, Escalations, Ready
+// to assign, every Lead clean-up row, WhatsApp onboarding), plus the Ecofy
+// pickup queue and buyback negotiations. The buyback "Notifications" unread
+// total is left off — the header bell has it.
 const ADMIN_SALES_HEAD_COUNTS = [
+    "approvals",
     "kyc-review",
     "dealer-validation",
     "product-review",
+    ...both("escalations"),
+    ...both("ready-to-assign"),
+    ...both("needs-attention"),
+    ...both("merge-requests"),
+    ...both("number-repair"),
+    ...both("onboarding-dropouts"),
     ...both("whatsapp-onboarding"),
     "sh-ecofy",
     "sh-ecofy-queue",

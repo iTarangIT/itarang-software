@@ -43,7 +43,7 @@ const ALLOWED = [
   // leads & sales pipeline
   "leads", "lead_assignments", "lead_flow_events", "lead_products", "lead_visits", "lead_touchpoints",
   "lead_escalations", "dealer_leads", "dealer_lead_status_history", "deals", "dealers",
-  "dealer_subscriptions", "sales_targets", "manual_dealer_sales", "asm_territories", "region_groups",
+  "dealer_subscriptions", "sales_targets", "sales_target_versions", "manual_dealer_sales", "asm_territories", "region_groups",
   "states", "cities",
   // AI dialer & campaigns
   "campaigns", "campaign_segments", "dialer_campaigns", "dialer_campaign_leads", "ai_call_logs",

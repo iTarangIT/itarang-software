@@ -19,7 +19,7 @@
 
 import { createHmac, timingSafeEqual } from "node:crypto";
 
-import { classifyFile, isKycFile } from "@/lib/storage/fileRules";
+import { classifyFile, isKycFile, isLoggedFile, NBFC_FILE_BUCKET } from "@/lib/storage/fileRules";
 
 /** Decode until it stops changing; a string that is not valid encoding is final. */
 function decodings(segment: string): string[] {
@@ -193,7 +193,64 @@ export function fileLinkTooLong(
  * more than 15 minutes for a customer KYC file (ID 166), whoever signs it.
  */
 export function linkTtl(bucket: string, key: string, ttlSeconds: number): number {
-    return isKycFile(classifyFile(bucket, key)) ? Math.min(ttlSeconds, FRESH_LINK_TTL_SECONDS) : ttlSeconds;
+    return isShortLinkFile(bucket, key) ? Math.min(ttlSeconds, FRESH_LINK_TTL_SECONDS) : ttlSeconds;
+}
+
+/**
+ * Files whose links never live longer than 15 minutes, whoever signs them:
+ * customer KYC, and the NBFC store's identity files (field visit photos,
+ * video KYC, signer ID papers, per-lead files). Onboarding papers are logged
+ * but keep their 7-day form link (ID 119).
+ */
+export function isShortLinkFile(bucket: string, key: string): boolean {
+    const kind = classifyFile(bucket, key);
+    return isKycFile(kind) || (bucket === NBFC_FILE_BUCKET && isLoggedFile(kind));
+}
+
+// ── the NBFC store (/api/nbfc-uploads) ──────────────────────────────────────
+//
+// Stored as `/nbfc-uploads/<key>` (rewritten to /api/nbfc-uploads). Signed the
+// same way as /api/files links, with the logical bucket `nbfc-documents`.
+
+/** bucket + key (and the canonical /api/nbfc-uploads path) of an NBFC store URL; else null. */
+export function nbfcUploadsTarget(url: string | null | undefined): { path: string; bucket: string; key: string } | null {
+    if (!url) return null;
+    const at = url.indexOf("/nbfc-uploads/");
+    if (at === -1) return null;
+    const rest = url.slice(at + "/nbfc-uploads/".length).split(/[?#]/)[0];
+    const key = safeStorageKey(
+        rest.split("/").map((s) => {
+            try {
+                return decodeURIComponent(s);
+            } catch {
+                return s;
+            }
+        }),
+    );
+    if (!key) return null;
+    return { path: `/api/nbfc-uploads/${key.split("/").map(encodeURIComponent).join("/")}`, bucket: NBFC_FILE_BUCKET, key };
+}
+
+/**
+ * The address a spreadsheet or email should carry for a stored file (ID 166):
+ * GET /api/files/open checks whoever clicks it and forwards to a fresh
+ * 15-minute link. Null when `stored` is not one of our files (a provider link
+ * stays as it is — the recordings backfill copies those into our storage).
+ */
+export function fileOpenHref(stored: string | null | undefined, origin: string): string | null {
+    if (!stored) return null;
+    if (!filesProxyTarget(stored) && !nbfcUploadsTarget(stored)) return null;
+    return `${origin.replace(/\/+$/, "")}/api/files/open?u=${encodeURIComponent(stored)}`;
+}
+
+/** An NBFC store link signed for `by`, valid ttlSeconds (15 minutes at most for identity files). */
+export function signedNbfcPath(url: string, ttlSeconds: number, opts: { by?: string | null } = {}): string | null {
+    const t = nbfcUploadsTarget(url);
+    if (!t) return null;
+    const signed = fileLinkSignature(t.bucket, t.key, linkTtl(t.bucket, t.key, ttlSeconds), Date.now(), opts.by);
+    if (!signed) return t.path;
+    const by = opts.by ? `&by=${encodeURIComponent(opts.by)}` : "";
+    return `${t.path}?exp=${signed.exp}&sig=${signed.sig}${by}`;
 }
 
 /** bucket + key (and the bare path) of a files-proxy URL, relative or absolute; else null. */
@@ -252,6 +309,8 @@ export function shareableFileUrl(
     const t = proxyTarget(url);
     if (!t) return url;
     const absolute = /^https?:\/\//i.test(url) ? url.split("?")[0] : `${origin}${t.path}`;
-    const signed = fileLinkSignature(t.bucket, t.key, linkTtl(t.bucket, t.key, opts.ttlSeconds ?? 60 * 60));
+    // ID 166 (15 Oct report rows, WhatsApp agreement / audit trail): made at
+    // send time and valid 15 minutes — Meta fetches the file within seconds.
+    const signed = fileLinkSignature(t.bucket, t.key, linkTtl(t.bucket, t.key, opts.ttlSeconds ?? FRESH_LINK_TTL_SECONDS));
     return signed ? `${absolute}?exp=${signed.exp}&sig=${signed.sig}` : absolute;
 }

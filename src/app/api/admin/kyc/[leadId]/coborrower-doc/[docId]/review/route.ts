@@ -10,7 +10,7 @@ import {
 } from "@/lib/db/schema";
 import {
   createWorkflowId,
-  requireAdminAppUser,
+  requireAdminAppUserForLead,
 } from "@/lib/kyc/admin-workflow";
 
 // BRD §2.9.3 Panel 3 "Co-Borrower Document Cards — Per-Check Action Buttons"
@@ -30,7 +30,7 @@ export async function POST(
   { params }: { params: Promise<{ leadId: string; docId: string }> },
 ) {
   try {
-    const appUser = await requireAdminAppUser();
+    const appUser = await requireAdminAppUserForLead((await params).leadId);
     if (!appUser) {
       return NextResponse.json(
         { success: false, error: { message: "Unauthorized" } },

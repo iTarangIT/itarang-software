@@ -14,6 +14,8 @@ import { InvoicesReadUpToLine } from "@/components/sales/InvoicesReadUpToLine";
 import { requireRole } from "@/lib/auth-utils";
 import { matchedLinesUnion, REVENUE_NOT_VOID } from "@/lib/dashboard/revenueSource";
 
+// ID 166: invoice PDFs open through a fresh 15-minute link on each click.
+import FreshFileLink from "@/components/shared/FreshFileLink";
 export const dynamic = "force-dynamic";
 
 const IST = "Asia/Kolkata";
@@ -244,7 +246,7 @@ export default async function CeoBatteriesPage({
                                                 <td className="whitespace-nowrap px-4 py-3 text-gray-700">{fmtDate(r.invoice_date)}</td>
                                                 <td className="whitespace-nowrap px-4 py-3">
                                                     {r.document_url ? (
-                                                        <a
+                                                        <FreshFileLink
                                                             href={r.document_url}
                                                             target="_blank"
                                                             rel="noopener noreferrer"
@@ -252,7 +254,7 @@ export default async function CeoBatteriesPage({
                                                         >
                                                             <FileText className="h-3.5 w-3.5" />
                                                             {r.invoice_number ?? "(no number)"}
-                                                        </a>
+                                                        </FreshFileLink>
                                                     ) : (
                                                         <span className="font-medium text-gray-900">{r.invoice_number ?? "(no number)"}</span>
                                                     )}

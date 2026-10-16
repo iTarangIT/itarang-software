@@ -19,7 +19,7 @@ import { eq } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import { auditLogs, leads } from "@/lib/db/schema";
-import { requireAdminAppUser } from "@/lib/kyc/admin-workflow";
+import { requireAdminAppUserForLead } from "@/lib/kyc/admin-workflow";
 import { purgeFinanceData } from "@/lib/nbfc/purge-finance-data";
 
 export const runtime = "nodejs";
@@ -35,7 +35,7 @@ const BLOCKED_STATES = new Set(["loan_sanctioned", "sold", "financing_unavailabl
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const admin = await requireAdminAppUser();
+    const admin = await requireAdminAppUserForLead((await params).id);
     if (!admin) {
       return NextResponse.json({ success: false, error: { message: "Unauthorized" } }, { status: 403 });
     }

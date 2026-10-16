@@ -5,6 +5,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Upload, Receipt, CheckCircle2, XCircle, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
+import { onFreshFileClick } from "@/lib/storage/freshFileLink";
 const CATEGORIES = [
   "Travel",
   "Office",
@@ -258,6 +259,7 @@ export default function SubmitExpensePage() {
                         {s.bill_url ? (
                           <a
                             href={s.bill_url}
+                            onClick={(e) => onFreshFileClick(e, s.bill_url)}
                             target="_blank"
                             rel="noreferrer"
                             className="text-brand-600 hover:underline font-semibold"
@@ -299,6 +301,7 @@ export default function SubmitExpensePage() {
                     {s.bill_url ? (
                       <a
                         href={s.bill_url}
+                        onClick={(e) => onFreshFileClick(e, s.bill_url)}
                         target="_blank"
                         rel="noreferrer"
                         className="text-xs text-brand-600 hover:underline font-semibold"

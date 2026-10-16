@@ -41,6 +41,7 @@ import {
 import { toast } from "sonner";
 import { SalespersonSelect } from "@/components/onboarding/SalespersonSelect";
 
+import { onFreshFileClick } from "@/lib/storage/freshFileLink";
 type DuplicateFlag = "none" | "branch" | "duplicate" | "pan-mismatch";
 
 type DuplicateExistingAccount = {
@@ -2795,7 +2796,7 @@ export default function DealerReviewPage() {
                       {doc.rejectionReason && <p className="mt-1 text-xs text-rose-500">Reason: {doc.rejectionReason}</p>}
                     </div>
                     {doc.url ? (
-                      <a href={doc.url} target="_blank" rel="noopener noreferrer"
+                      <a href={doc.url} onClick={(e) => onFreshFileClick(e, doc.url)} target="_blank" rel="noopener noreferrer"
                         className="inline-flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">
                         <ExternalLink className="h-4 w-4" /> View Document
                       </a>

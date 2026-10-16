@@ -4,7 +4,8 @@
  * E-275 — admin recalls a financed file from the NBFCs for revision. Manual,
  * no SLA: the file stays paused until the admin hits Resubmit. Allowed only
  * while the lead is at pending_final_approval / awaiting_enach and no loan has
- * been sanctioned. Auth: requireAdminAppUser().
+ * been sanctioned. Auth: requireAdminAppUserForLead() (ID 119: owners only
+ * below Admin / CEO / Sales Head).
  */
 import { NextRequest, NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
@@ -12,7 +13,7 @@ import { z } from "zod";
 
 import { db } from "@/lib/db";
 import { leads, loanSanctions } from "@/lib/db/schema";
-import { requireAdminAppUser } from "@/lib/kyc/admin-workflow";
+import { requireAdminAppUserForLead } from "@/lib/kyc/admin-workflow";
 import { RECALLABLE_KYC_STATUSES, isLeadRecalled } from "@/lib/nbfc/recall";
 import { notifyLeadRecalled } from "@/lib/notifications/events";
 
@@ -23,7 +24,7 @@ const Body = z.object({ note: z.string().trim().max(2000).optional().nullable() 
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const admin = await requireAdminAppUser();
+    const admin = await requireAdminAppUserForLead((await params).id);
     if (!admin) {
       return NextResponse.json({ success: false, error: { message: "Unauthorized" } }, { status: 403 });
     }

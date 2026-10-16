@@ -20,6 +20,7 @@ import {
   type ExpenseFilters,
 } from "./ExpenseBucketPanel";
 
+import { onFreshFileClick } from "@/lib/storage/freshFileLink";
 export type DrillMetric =
   | "purchases"
   | "sales"
@@ -169,6 +170,7 @@ const COLUMNS: Record<DrillMetric, Col[]> = {
         return (
           <a
             href={String(url)}
+            onClick={(e) => onFreshFileClick(e, String(url))}
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex items-center gap-1 text-brand-700 font-semibold hover:underline"
