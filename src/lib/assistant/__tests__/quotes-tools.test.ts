@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { PgDialect } from "drizzle-orm/pg-core";
+import type { SQL } from "drizzle-orm";
 
 // Gap table C — quotes & commercials: product_catalogue, quote_status,
 // create_quote, send_quote. Every CRM writer and lookup is mocked — these tests
@@ -49,6 +51,7 @@ const { APPLIERS } = await import("../appliers");
 const { QuotationNotSendableError } = await import("@/lib/leads/quoteSendGate");
 const { quoteTotal } = await import("../tools/write/createQuote");
 const { renderTapOutcome, renderTurn } = await import("@/lib/wa-assistant/render");
+const { statusLabel } = await import("../format");
 import type { AssistantUser, Preview, ToolContext } from "../types";
 import type { ExecOutcome } from "../executor";
 
@@ -148,10 +151,12 @@ describe("product_catalogue", () => {
 
 describe("create_quote", () => {
     const LINES = [{ product_id: "b-105", quantity: 2, unit_price: 42000 }];
-    const CASH = { payment_terms: "cash" as const };
+    // ID 172: the deal card every quote states (no locked card on the lead here).
+    const CARD = { onboarding_fee: 25000, batteries_per_month: 20, finance_files_per_month: 5 };
+    const CASH = { payment_terms: "cash" as const, ...CARD };
 
     it("first quote, every line at or above reference → quote_issue, auto-approve forecast, no floor price shown", async () => {
-        const r = await run(ISR, "create_quote", { lead_id: "DL-7", lines: LINES, payment_terms: "cash", customer_finance: true });
+        const r = await run(ISR, "create_quote", { lead_id: "DL-7", lines: LINES, payment_terms: "cash", ...CARD });
         expect(r).toMatchObject({ kind: "preview", action_id: "act-1" });
         const s = stored();
         expect(s.tool).toBe("create_quote");
@@ -159,7 +164,9 @@ describe("create_quote", () => {
             lead_id: "DL-7",
             event_type: "quote_issue",
             final_price: 84000,
+            // Customer finance is the writer's: finance files per month > 0.
             terms: { dealer_payment_terms: "cash", credit_days: null, customer_finance: true },
+            deal_card: { onboarding_fee: 25000, fee_waived_reason: null, batteries_per_month: 20, finance_files_per_month: 5 },
             // Name, model and asset type are the catalogue's, not the model's.
             product_lines: [{ asset_type: "battery", product_id: "b-105", product_name: "LFP 51.2V 105Ah", model_id: "ITB-51105", unit_price: 42000, quantity: 2 }],
         });
@@ -170,20 +177,25 @@ describe("create_quote", () => {
         expect(text).toMatch(/Auto-approved on Confirm/);
         expect(text).toContain("Payment terms: Cash");
         expect(text).toContain("Customer finance (NBFC): Yes");
+        expect(text).toContain("Onboarding fee: ₹25,000");
+        expect(text).toContain("Batteries / month: 20");
+        expect(text).toContain("Finance files / month: 5");
+        // ID 75: saving the quote moves the lead (advanceLeadOnQuoteEvent) — work, so the idle clock resets.
+        expect(s.preview.lines).toContainEqual({ label: "Status", value: `${statusLabel("Under_Discussion")} → ${statusLabel("Commercials_Explained")}` });
         // Warranty / delivery are the admin's standard terms, not the rep's.
         expect(text).toMatch(/Warranty: .+/);
         expect(text).toMatch(/Delivery: .+/);
         expect(s.preview.warning).toBeNull();
-        expect(s.preview.resets_idle_clock).toBe(false);
+        expect(s.preview.resets_idle_clock).toBe(true);
         expect(text).not.toMatch(/41,000|41000/);
         // Judged at the turn's clock, against the resolved lines.
         expect(loadLiveOemPrices).toHaveBeenCalledWith(s.plan.product_lines, undefined, NOW);
     });
 
     it("credit terms → CEO approval even when every price clears (ID 73)", async () => {
-        await run(ISR, "create_quote", { lead_id: "DL-7", lines: LINES, payment_terms: "credit", credit_days: 30 });
+        await run(ISR, "create_quote", { lead_id: "DL-7", lines: LINES, payment_terms: "credit", credit_days: 30, ...CARD });
         const s = stored();
-        expect(s.plan.terms).toEqual({ dealer_payment_terms: "credit", credit_days: 30, customer_finance: null });
+        expect(s.plan.terms).toEqual({ dealer_payment_terms: "credit", credit_days: 30, customer_finance: true });
         expect(previewText(s.preview)).toMatch(/Goes to the CEO for approval/);
         expect(previewText(s.preview)).toContain("Payment terms: Credit — 30 days");
         expect(s.preview.warning).toMatch(/Needs CEO approval: credit terms \(30 days\)/);
@@ -260,24 +272,86 @@ describe("create_quote", () => {
     });
 
     it("the applier writes through createLeadCommercial on the executor's tx and defers the PDF to afterCommit", async () => {
-        await run(ISR, "create_quote", { lead_id: "DL-7", lines: LINES, payment_terms: "credit", credit_days: 45 });
+        await run(ISR, "create_quote", { lead_id: "DL-7", lines: LINES, payment_terms: "credit", credit_days: 45, ...CARD, finance_files_per_month: 0 });
         const plan = APPLIERS.create_quote.schema.parse(stored().plan);
         const out = await APPLIERS.create_quote.apply({ tx: TX, user: ISR, step: 1 }, plan);
         expect(createLeadCommercial).toHaveBeenCalledWith(
             {
                 leadId: "DL-7",
-                actor: { id: "isr-1", name: "Priya" },
+                actor: { id: "isr-1", name: "Priya", role: "inside_sales_rep" },
                 body: expect.objectContaining({
                     event_type: "quote_issue",
                     final_price: 84000,
-                    terms: { dealer_payment_terms: "credit", credit_days: 45, customer_finance: null },
+                    terms: { dealer_payment_terms: "credit", credit_days: 45, customer_finance: false },
+                    deal_card: { onboarding_fee: 25000, fee_waived_reason: null, batteries_per_month: 20, finance_files_per_month: 0 },
                 }),
+                // ID 172: as the commercials route.
+                requireDealCard: true,
             },
             { tx: TX },
         );
         expect(out).toMatchObject({ commercial_id: "com-4", quote_version: 4, approval_status: "approved", auto_approved: true });
         expect(afterCommit).not.toHaveBeenCalled();
         expect(await out.afterCommit!()).toEqual({ quote_number: "ITQ-2026-0007" });
+    });
+});
+
+describe("create_quote — deal card (ID 172) and what the card says the quote does (ID 75)", () => {
+    const LINES = [{ product_id: "b-105", quantity: 2, unit_price: 42000 }];
+
+    it("asks for each deal-card answer in turn; a waived fee needs its reason; nothing proposed", async () => {
+        const base = { lead_id: "DL-7", lines: LINES, payment_terms: "cash" };
+        expect(await run(ISR, "create_quote", base)).toMatchObject({ kind: "question", question: expect.stringMatching(/onboarding fee/i) });
+        expect(await run(ISR, "create_quote", { ...base, onboarding_fee: 0 })).toMatchObject({ question: expect.stringMatching(/why is it waived/i) });
+        expect(await run(ISR, "create_quote", { ...base, onboarding_fee: 25000 })).toMatchObject({ question: expect.stringMatching(/batteries/i) });
+        expect(await run(ISR, "create_quote", { ...base, onboarding_fee: 25000, batteries_per_month: 20 })).toMatchObject({
+            question: expect.stringMatching(/loan/i),
+        });
+        expect(createPending).not.toHaveBeenCalled();
+        await run(ISR, "create_quote", { ...base, onboarding_fee: 0, fee_waived_reason: "launch offer", batteries_per_month: 20, finance_files_per_month: 0 });
+        expect(previewText(stored().preview)).toContain("Onboarding fee: Waived — launch offer");
+        expect(previewText(stored().preview)).toContain("Customer finance (NBFC): No");
+    });
+
+    it("a LOCKED card is the one the quote carries — the rep is not asked, and the card says so", async () => {
+        dbRows.push({
+            commercial_id: "com-2", version_no: 2, approval_status: "approved", approved_by: "ceo-1", dealer_decision: null,
+            card: { onboarding_fee: "15000", fee_waived_reason: null, expected_batteries_per_month: "30", expected_finance_files_per_month: "4" },
+        });
+        const r = await run(ISR, "create_quote", { lead_id: "DL-7", lines: LINES, payment_terms: "cash", onboarding_fee: 1 });
+        expect(r.kind).toBe("preview");
+        expect(stored().plan.deal_card).toEqual({ onboarding_fee: 15000, fee_waived_reason: null, batteries_per_month: 30, finance_files_per_month: 4 });
+        const text = previewText(stored().preview);
+        expect(text).toContain("Onboarding fee: ₹15,000 (locked: the CEO approved v2)");
+        expect(text).toContain("Customer finance (NBFC): Yes");
+    });
+
+    it("a lead Awaiting field visit keeps its status; no status note, so the idle clock does not move", async () => {
+        findLeadInScope.mockResolvedValue(lead({ lead_status: "Transferred_to_ASM" }));
+        dbRows.push({ pre_transfer_status: "Under_Discussion" });
+        await run(ISR, "create_quote", { lead_id: "DL-7", lines: LINES, payment_terms: "cash", onboarding_fee: 1000, batteries_per_month: 5, finance_files_per_month: 1 });
+        const line = stored().preview.lines.find((l) => l.label === "Status")!;
+        expect(line.value).toMatch(/unchanged until the visit; the visit then restores/);
+        expect(stored().preview.resets_idle_clock).toBe(false);
+        // Already past Commercials explained: no move, no reset.
+        findLeadInScope.mockResolvedValue(lead({ lead_status: "Awaiting_Customer_Decision" }));
+        dbRows.length = 0;
+        await run(ISR, "create_quote", { lead_id: "DL-7", lines: LINES, payment_terms: "cash", onboarding_fee: 1000, batteries_per_month: 5, finance_files_per_month: 1 });
+        expect(stored().preview.lines).toContainEqual({ label: "Status", value: "no change" });
+        expect(stored().preview.resets_idle_clock).toBe(false);
+    });
+
+    it("a card saved before the deal card → refused with the writer-style sentence, nothing written", async () => {
+        const plan = APPLIERS.create_quote.schema.parse({
+            lead_id: "DL-7", event_type: "quote_issue", final_price: 1, deal_notes: null,
+            product_lines: [{ asset_type: "battery", product_id: "b-105", product_name: "x", model_id: "m", unit_price: 1, quantity: 1 }],
+            terms: { dealer_payment_terms: "cash", credit_days: null, customer_finance: null },
+        });
+        await expect(APPLIERS.create_quote.apply({ tx: TX, user: ISR, step: 1 }, plan)).rejects.toMatchObject({
+            status: 409,
+            message: expect.stringMatching(/before the deal card/),
+        });
+        expect(createLeadCommercial).not.toHaveBeenCalled();
     });
 });
 
@@ -337,6 +411,31 @@ describe("send_quote", () => {
         expect(previewText(stored().preview)).toMatch(/v2 is waiting for ceo approval, so v1 is still the current quote/);
     });
 
+    it("ID 75: the card says the send moves the lead to Awaiting customer decision, and that resets the idle clock", async () => {
+        loadLatestQuote.mockResolvedValue(quoteView());
+        findLeadInScope.mockResolvedValue(lead({ lead_status: "Commercials_Explained" }));
+        await run(ISR, "send_quote", { lead_id: "DL-7" });
+        expect(stored().preview.lines).toContainEqual({
+            label: "Status once sent",
+            value: `${statusLabel("Commercials_Explained")} → ${statusLabel("Awaiting_Customer_Decision")}`,
+        });
+        expect(stored().preview.resets_idle_clock).toBe(true);
+        findLeadInScope.mockResolvedValue(lead({ lead_status: "Commercials_Finalised" }));
+        await run(ISR, "send_quote", { lead_id: "DL-7" });
+        expect(stored().preview.lines).toContainEqual({ label: "Status once sent", value: "no change" });
+        expect(stored().preview.resets_idle_clock).toBe(false);
+    });
+
+    it("a send where nothing went is a failed send for the executor (a repeat tap must not say Already saved)", () => {
+        const failed = APPLIERS.send_quote.sendFailed!;
+        expect(failed({ sent: [], failed: ["whatsapp"], error: "x" })).toBe(true);
+        expect(failed(null)).toBe(true);
+        expect(failed({ sent: ["whatsapp"], failed: ["email"] })).toBe(false);
+        expect(APPLIERS.invite_dealer_onboarding.sendFailed!({ delivered: false })).toBe(true);
+        expect(APPLIERS.invite_dealer_onboarding.sendFailed!({ delivered: true })).toBe(false);
+        expect(renderTapOutcome({ kind: "send_failed" }).body).toMatch(/didn't go through[\s\S]*Ask me again for a new card/);
+    });
+
     it("the applier writes nothing in the tx; afterCommit sends and reports per channel", async () => {
         const plan = APPLIERS.send_quote.schema.parse({ lead_id: "DL-7", commercial_id: "com-3", quote_number: "ITQ-2026-0003", channels: ["whatsapp", "email"] });
         sendApprovedQuotation.mockResolvedValue({
@@ -372,6 +471,30 @@ describe("withdraw_quote (ID 78)", () => {
         expect(text).toMatch(/ITQ-2026-0003 \(v3\)/);
         expect(text).toMatch(/OEM price went up/);
         expect(text).toMatch(/can no longer answer/);
+    });
+
+    it("the card's Status line and idle clock are the writer's (leadMoveOnWithdraw on the quotes left in play)", async () => {
+        loadLatestQuote.mockResolvedValue(quoteView());
+        // Commercials stage, nothing else in play → back to Under discussion, a real status change.
+        findLeadInScope.mockResolvedValue(lead({ lead_status: "Awaiting_Customer_Decision" }));
+        await run(ISR, "withdraw_quote", { lead_id: "DL-7", reason: "OEM price went up" });
+        expect(stored().preview.lines).toContainEqual({
+            label: "Status",
+            value: `${statusLabel("Awaiting_Customer_Decision")} → ${statusLabel("Under_Discussion")}`,
+        });
+        expect(stored().preview.resets_idle_clock).toBe(true);
+        // Another approved version stays live → nothing moves; a plain note is not work.
+        dbRows.push({ version_no: 3, quote_number: "ITQ-2026-0003", approval_status: "approved" });
+        dbRows.push({ version_no: 2, quote_number: "ITQ-2026-0002", approval_status: "approved" });
+        await run(ISR, "withdraw_quote", { lead_id: "DL-7", reason: "OEM price went up" });
+        expect(stored().preview.lines).toContainEqual({ label: "Status", value: "no change — v2 is still live" });
+        expect(stored().preview.resets_idle_clock).toBe(false);
+        // Under discussion already → no move.
+        dbRows.length = 0;
+        findLeadInScope.mockResolvedValue(lead());
+        await run(ISR, "withdraw_quote", { lead_id: "DL-7", reason: "OEM price went up" });
+        expect(stored().preview.lines).toContainEqual({ label: "Status", value: "no change" });
+        expect(stored().preview.resets_idle_clock).toBe(false);
     });
 
     it("a quote still waiting for the CEO can be withdrawn", async () => {
@@ -458,24 +581,64 @@ describe("quote_status", () => {
 
     it("a lead's latest quote: approval, lines, terms, last send — readable when not owned", async () => {
         findLeadInScope.mockResolvedValue(lead({ owned: false, current_owner_id: "isr-2" }));
-        loadLatestQuote.mockResolvedValue(quoteView({ approval_status: "rejected", approval_mode: "manual", rejection_reason: "too low" }));
+        loadLatestQuote.mockImplementation(async (_id: string, pick?: string) =>
+            pick === "live" ? null : quoteView({ approval_status: "rejected", approval_mode: "manual", rejection_reason: "too low" }),
+        );
         dbRows.push({ channel: "whatsapp", status: "sent", created_at: "2026-09-21T10:00:00Z", sent_by_name: "Priya" });
         const r = await run(ASM, "quote_status", { lead_id: "DL-7" });
         expect(r).toMatchObject({
             kind: "quote",
             quote: {
                 has_quote: true, version: 3, approval: "Rejected by CEO", rejection_reason: "too low", owned_by_you: false,
-                can_send: false, product_lines: [{ product_id: "b-105", quantity: 2, unit_price: 42000 }],
-                last_sent: { channel: "whatsapp", status: "sent", by: "Priya" },
+                can_send: false, live_version: null, product_lines: [{ product_id: "b-105", quantity: 2, unit_price: 42000 }],
+                // Timestamps reach the model in IST.
+                last_sent: { channel: "whatsapp", status: "sent", by: "Priya", at: "2026-09-21T15:30:00+05:30" },
+                created_at: "2026-09-20T15:30:00+05:30",
             },
         });
         expect(JSON.stringify(r)).not.toMatch(/oem/);
     });
 
-    it("no lead → the user's own pending / rejected quotes as a list", async () => {
-        dbRows.push({ id: "DL-7", shop_name: "ABC Traders", current_owner_id: "isr-1", approval_status: "pending", total: "1" });
+    it("ID 60: a revision at the CEO leaves the last approved version live — can_send follows the LIVE version", async () => {
+        loadLatestQuote.mockImplementation(async (_id: string, pick?: string) =>
+            pick === "live"
+                ? quoteView({ commercial_id: "com-2", version_no: 2, quote_number: "ITQ-2026-0002" })
+                : quoteView({ commercial_id: "com-3", version_no: 3, approval_status: "pending", approval_mode: "manual", pdf_ready: false }),
+        );
+        const r = await run(ISR, "quote_status", { lead_id: "DL-7" });
+        expect(r).toMatchObject({
+            kind: "quote",
+            quote: {
+                version: 3, approval: "Waiting for CEO approval", can_send: true,
+                live_version: { version: 2, quote_number: "ITQ-2026-0002", pdf_ready: true, is_latest: false },
+            },
+        });
+        loadLatestQuote.mockImplementation(async (_id: string, pick?: string) =>
+            quoteView(pick === "live" ? { pdf_ready: false } : { pdf_ready: false }),
+        );
+        expect(await run(ISR, "quote_status", { lead_id: "DL-7" })).toMatchObject({
+            quote: { can_send: false, live_version: { version: 3, is_latest: true, pdf_ready: false } },
+        });
+    });
+
+    it("no lead → the user's own pending / rejected quotes as a list, with phone and owner", async () => {
+        dbRows.push({
+            id: "DL-7", shop_name: "ABC Traders", phone: "9876543210", current_owner_id: "isr-1", current_owner_name: "Priya",
+            lead_status: "Under_Discussion", approval_status: "pending", total: "1",
+        });
         const r = await run(ISR, "quote_status", {});
-        expect(r).toMatchObject({ kind: "leads", total: 1, rows: [{ id: "DL-7", status: "Waiting for CEO approval", owned_by_you: true }] });
+        expect(r).toMatchObject({
+            kind: "leads", total: 1,
+            rows: [{
+                id: "DL-7", status: "Waiting for CEO approval", status_label: "Waiting for CEO approval", owned_by_you: true,
+                phone: "9876543210", owner_name: "Priya",
+            }],
+        });
+        // The list is scoped like the reads (own tabs / own open leads), not a bare owner filter.
+        const sqlText = execute.mock.calls
+            .map((c) => new PgDialect().sqlToQuery(c[0] as SQL).sql)
+            .find((x) => x.includes("dealer_lead_commercials"))!;
+        expect(sqlText).toMatch(/is_active IS NOT FALSE/);
     });
 });
 

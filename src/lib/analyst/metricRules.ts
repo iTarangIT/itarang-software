@@ -36,6 +36,7 @@ const TOPIC_WORDS: Record<AnalystTopic, RegExp> = {
     margin: /margin|profit|cost/i,
     batteries: /batter|units?|sku|sold/i,
     people: /perform|salesperson|sales ?person|reps?|isr|asm|owner|team|who|best|top|each|leaderboard|per person|by person|target/i,
+    trend: /\btrend|over time|month[- ]?(wise|on[- ]month|by[- ]month)|\bweek(ly|[- ]wise)\b|\bdaily\b|\bgrowth\b|\bgrow|forecast|\bproject|predict|next (two|2|few) months|last \d+ months/i,
 };
 
 /** Room the rules get beside the longest allowed question (tests hold it). */

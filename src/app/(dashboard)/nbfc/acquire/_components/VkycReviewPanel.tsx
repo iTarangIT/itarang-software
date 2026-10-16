@@ -13,6 +13,7 @@
  */
 import { useState } from "react";
 
+import { onFreshFileClick } from "@/lib/storage/freshFileLink";
 export interface VkycReviewTrack {
   status: string;
   match_score: string | null;
@@ -162,6 +163,7 @@ export default function VkycReviewPanel({
           />
           <a
             href={track.session_video_url}
+            onClick={(e) => onFreshFileClick(e, track.session_video_url)}
             target="_blank"
             rel="noreferrer"
             className="mt-1.5 inline-flex text-[10px] font-semibold text-[color:var(--color-brand-sky)] underline-offset-2 hover:underline"

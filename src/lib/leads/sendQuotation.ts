@@ -25,6 +25,7 @@ import {
   type QuoteDispatchChannel,
 } from "@/lib/leads/quoteDispatch";
 import { resolveQuotationCc } from "@/lib/leads/quotationCc";
+import { quoteSentRemark } from "@/lib/leads/quoteSends";
 import { assertSendable, loadQuote } from "@/lib/leads/quoteSendGate";
 
 export {
@@ -128,12 +129,12 @@ export async function sendApprovedQuotation(
       dealerLeadId: row.dealer_lead_id,
       touchpointType: "quote_dispatched",
       performedBy: actor.id,
+      // ID 191 (Kartik, 14 Oct): "Quote <number> sent on <channel>" — the
+      // number masked, a failed channel with its reason; "by <name>" is the
+      // entry's performed_by. A send where every channel failed shows on the
+      // timeline from quotation_dispatches instead (lib/leads/quoteSends.ts).
       remarks:
-        `Quotation ${row.quote_number} sent to dealer via ` +
-        sent.map((o) => `${o.channel} (${o.recipient})`).join(", ") +
-        (failed.length
-          ? ` — failed on ${failed.map((o) => o.channel).join(", ")}`
-          : "") +
+        quoteSentRemark(row.quote_number, sent, failed) +
         (notice?.ccNotice === "sent"
           ? ` — internal team notified by email (${notice.cc?.length ?? 0})`
           : notice?.ccNotice === "failed"

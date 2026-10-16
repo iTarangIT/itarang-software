@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { consentRecords } from "@/lib/db/schema";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { fetchAndStoreSignedConsent } from "@/lib/digio/fetch-signed-consent";
 import { getDigioBaseUrl, getDigioBasicAuth } from "@/lib/digio/client";
 import { guardApi } from "@/lib/auth/apiGuard";
+import { backOfficeMayReachLead } from "@/lib/auth/requireLeadAccess";
 
 const SIGNED_STATES = new Set(["signed", "completed", "executed", "success"]);
 const PENDING_STATES = new Set([
@@ -41,10 +42,20 @@ export async function POST(
     try {
         const { leadId, consentId } = await params;
 
+        // ID 119: below Admin / CEO / Sales Head, only the lead's owner.
+        if (!(await backOfficeMayReachLead(authGate.user, leadId))) {
+            return NextResponse.json(
+                { success: false, error: { message: "Forbidden: Insufficient permissions" } },
+                { status: 403 }
+            );
+        }
+
+        // The consent must belong to the lead in the URL, or the owner check
+        // above says nothing about it.
         const [record] = await db
             .select()
             .from(consentRecords)
-            .where(eq(consentRecords.id, consentId))
+            .where(and(eq(consentRecords.id, consentId), eq(consentRecords.lead_id, leadId)))
             .limit(1);
 
         if (!record) {

@@ -29,6 +29,9 @@
  *                       Head has not decided yet
  *   won_undone_week     Every Mark Won undone in the last 7 days (ID 134 — the
  *                       Sales Head's weekly view of undos)
+ *   stock_to_upload     ID 174 — a new battery invoice whose serials are not
+ *                       all in the buyer dealer's stock yet (E-348
+ *                       stock_upload_tasks; Admin, CEO and partner only)
  *
  * One function returns a tile's ROWS; the tile's count and sub-line are made
  * from those rows, so the card and the list it opens cannot disagree. Each
@@ -45,12 +48,14 @@ import {
     TRANSFER_AT_EXPR,
     TRANSFER_WORKING_DAYS_SQL,
     awaitingFieldVisitSql,
+    transferLimitSql,
     transferVisitOverdueSql,
 } from "@/lib/asm/transferVisitLimit";
 import { WORKABLE_STATUSES } from "@/lib/lifecycle/transitions";
 import { workingHoursBetween } from "@/lib/leads/workingHours";
 import { loadHolidays, workingDaysSinceSql } from "@/lib/calendar/holidays";
 import { getTimeLimits } from "@/lib/timeLimits/store";
+import { listStockTasks, STOCK_TASK_ROLES, STOCK_TASKS_HREF } from "@/lib/inventory/stockUploadTasks/service";
 
 export const ACTION_KEYS = [
     "sales_ready",
@@ -63,6 +68,7 @@ export const ACTION_KEYS = [
     "hot_aged",
     "won_undo_requests",
     "won_undone_week",
+    "stock_to_upload",
 ] as const;
 export type ActionKey = (typeof ACTION_KEYS)[number];
 
@@ -77,10 +83,31 @@ export const ACTION_TITLES: Record<ActionKey, string> = {
     hot_aged: "Hot leads open more than 7 days",
     won_undo_requests: "Undo Mark Won requests waiting",
     won_undone_week: "Won undone in the last 7 days",
+    stock_to_upload: "Stock to upload from new invoices",
 };
 
+/**
+ * Tiles only some of the screen's viewers get. ID 174: the stock tile is for
+ * the people who can upload or chase stock (Admin, partner) and the CEO —
+ * not the Sales Head, who may not add stock (ID 173).
+ */
+export const ACTION_KEY_ROLES: Partial<Record<ActionKey, readonly string[]>> = {
+    stock_to_upload: STOCK_TASK_ROLES,
+};
+
+export function actionKeyVisibleTo(key: ActionKey, role: string | null | undefined): boolean {
+    const only = ACTION_KEY_ROLES[key];
+    return !only || only.includes(role ?? "");
+}
+
 export type Team = "all" | "field" | "inside";
-export type ActionScope = { state?: string | null; ownerId?: string | null; team?: Team };
+export type ActionScope = {
+    state?: string | null;
+    ownerId?: string | null;
+    team?: Team;
+    /** The viewer's role: tiles in ACTION_KEY_ROLES are skipped for anyone else. */
+    viewerRole?: string | null;
+};
 
 export type ActionRow = {
     lead_id: string;
@@ -94,6 +121,8 @@ export type ActionRow = {
     detail: string;
     /** ₹ where the tile is about money (quotes, said yes). */
     value: number | null;
+    /** Where the row opens when it is not a lead (ID 174 stock tasks); default the lead page. */
+    href?: string | null;
 };
 
 export type ActionTileData = { count: number; sub: string };
@@ -209,7 +238,12 @@ async function hotNotCalled(s: ActionScope): Promise<Built> {
 }
 
 async function visitOverdue(s: ActionScope): Promise<Built> {
-    const limitDays = (await getTimeLimits()).asm_transfer_first_visit;
+    // Each transfer judged by the limit in force on its day (dated limits);
+    // the label shows today's.
+    const [transferLimit, limitDays] = await Promise.all([
+        transferLimitSql(),
+        getTimeLimits().then((l) => l.asm_transfer_first_visit),
+    ]);
     const raw = await run(sql`
             SELECT dl.id AS lead_id, ${NAME} AS dealer, dl.city, dl.state,
                    COALESCE(a.name, u.name) AS owner_name,
@@ -219,7 +253,7 @@ async function visitOverdue(s: ActionScope): Promise<Built> {
               FROM dealer_leads dl
               LEFT JOIN users a ON a.id::text = dl.asm_id
               LEFT JOIN users u ON u.id::text = dl.current_owner_id
-             WHERE ${transferVisitOverdueSql(limitDays)} ${scope(s, "owner_or_asm")}
+             WHERE ${transferVisitOverdueSql(transferLimit)} ${scope(s, "owner_or_asm")}
              ORDER BY days DESC`);
     const rows = raw.map((r) => base(r, `Transferred ${String(r.transferred_on)} · ${plural(Number(r.days), "working day")}, no visit`));
     const byCity = new Map<string, number>();
@@ -414,6 +448,30 @@ async function wonUndoneWeek(s: ActionScope): Promise<Built> {
     return { rows, sub: `${plural(people, "owner")} · not counted as Won, drop-out or Lost` };
 }
 
+/**
+ * ID 174 — open "Stock to upload" tasks, overdue first. Not lead rows: each
+ * opens the task list. The page's state / person / team filters do not apply.
+ */
+async function stockToUpload(): Promise<Built> {
+    const tasks = await listStockTasks("open");
+    if (tasks == null) throw new Error("stock_upload_tasks missing (E-348 not applied)");
+    const rows: ActionRow[] = tasks.map((t) => ({
+        lead_id: `stock-task-${t.id}`,
+        dealer: t.accountName ?? (t.customerName ? `${t.customerName} (buyer not linked)` : "Buyer not linked"),
+        city: null,
+        state: null,
+        owner_name: null,
+        owner_id: null,
+        detail:
+            `Invoice ${t.invoiceNumber ?? "(no number)"} · ${t.progress}` +
+            (t.overdue ? " · overdue" : t.dueAt ? ` · due ${new Date(t.dueAt).toLocaleDateString("en-GB", { day: "2-digit", month: "short", timeZone: "Asia/Kolkata" })}` : ""),
+        value: null,
+        href: `${STOCK_TASKS_HREF}#task-${t.id}`,
+    }));
+    const overdue = tasks.filter((t) => t.overdue).length;
+    return { rows, sub: `${overdue} overdue (open after 2 working days)` };
+}
+
 const BUILDERS: Record<ActionKey, (s: ActionScope) => Promise<Built>> = {
     sales_ready: salesReady,
     hot_not_called: hotNotCalled,
@@ -425,6 +483,7 @@ const BUILDERS: Record<ActionKey, (s: ActionScope) => Promise<Built>> = {
     hot_aged: hotAged,
     won_undo_requests: wonUndoRequests,
     won_undone_week: wonUndoneWeek,
+    stock_to_upload: stockToUpload,
 };
 
 /** Every row behind one tile, most urgent first. */
@@ -436,6 +495,7 @@ export async function listSalesHeadAction(key: ActionKey, s: ActionScope): Promi
 export async function salesHeadActionSummary(s: ActionScope): Promise<ActionSummary> {
     const built = await Promise.all(
         ACTION_KEYS.map(async (k) => {
+            if (!actionKeyVisibleTo(k, s.viewerRole)) return [k, null] as const;
             try {
                 const b = await BUILDERS[k](s);
                 return [k, { count: b.rows.length, sub: b.sub }] as const;

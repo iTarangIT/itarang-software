@@ -35,7 +35,8 @@ import {
 import { notifyDealerRepliedToNbfc } from "@/lib/notifications/events";
 import { dealerDisplayName } from "@/lib/notifications/emit";
 import { sendNbfcEventEmail } from "@/lib/nbfc/event-mailer";
-import { dealerMayActOnLead } from "@/lib/auth/requireLeadAccess";
+import { ACT_FOR_DEALER_ROLES } from "@/lib/leads/actForDealer";
+import { gateLeadActor, recordActorStep, seenFromRequest } from "@/lib/leads/actForDealerGuard";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -47,7 +48,7 @@ export async function POST(
   { params }: { params: Promise<{ id: string; requestId: string }> },
 ) {
   try {
-    const user = await requireRole(["dealer"]);
+    const user = await requireRole(["dealer", ...ACT_FOR_DEALER_ROLES]);
     const { id: leadId, requestId } = await params;
 
     const [lead] = await db
@@ -58,9 +59,9 @@ export async function POST(
     if (!lead) {
       return NextResponse.json({ ok: false, error: "Lead not found" }, { status: 404 });
     }
-    if (!(await dealerMayActOnLead(user, lead.dealer_id, leadId))) {
-      return NextResponse.json({ ok: false, error: "Access denied" }, { status: 403 });
-    }
+    // ID 183: the dealer, the house, or Admin / Sales Head acting for the dealer.
+    const gate = await gateLeadActor(user, lead, { write: true, seenDealerActionAt: seenFromRequest(req) });
+    if (!gate.ok) return NextResponse.json({ ok: false, error: gate.message }, { status: gate.status });
 
     let body: { message?: unknown; items?: unknown };
     try {
@@ -129,6 +130,7 @@ export async function POST(
       attachments: items,
     });
     await markDirectRequestAnswered(requestId);
+    await recordActorStep(gate.actor, "answered the lender's document request");
 
     // Mirror the files into the Step-4 bucket so they also show in the NBFC
     // dossier and admin product review. Best-effort and cap-aware — see header.

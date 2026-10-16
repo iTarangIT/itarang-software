@@ -110,6 +110,33 @@ export async function rehostRecording(opts: {
 }
 
 /**
+ * Is this recording link already in iTarang storage (the /api/files proxy,
+ * relative or absolute, or the call-recordings bucket on Supabase)? Pure.
+ */
+export function isOwnRecordingUrl(url: string | null | undefined): boolean {
+  if (!url) return false;
+  return url.includes("/api/files/call-recordings/") || url.includes(`/storage/v1/object/public/${BUCKET}/`);
+}
+
+/**
+ * ID 166 (decision 13: copy both NeoDove and Bolna recordings into iTarang
+ * storage): the link to store for a call's recording. A provider link is
+ * copied into our bucket and our link comes back; ours is kept as it is; on a
+ * failed copy the provider link comes back so nothing is lost (the backfill
+ * script retries it). null when there is no recording.
+ */
+export async function ownRecordingUrl(opts: {
+  provider: string;
+  callId: string;
+  recordingUrl: string | null | undefined;
+}): Promise<string | null> {
+  const url = (opts.recordingUrl ?? "").trim();
+  if (!url) return null;
+  if (isOwnRecordingUrl(url) || !opts.callId) return url;
+  return (await rehostRecording({ provider: opts.provider, callId: opts.callId, recordingUrl: url })) || url;
+}
+
+/**
  * Re-host an ElevenLabs conversation's audio.
  *
  * Unlike Bolna, ElevenLabs does NOT return a hosted recording URL on the

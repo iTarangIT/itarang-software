@@ -4,6 +4,7 @@
 // By SKU · Invoices · Reconciliation. Every write goes through a preview first.
 // ?tab= opens a tab directly (Revenue & costs links to Item mapping).
 
+import { FolderKindsTab } from "./FolderKindsTab";
 import { useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -15,7 +16,7 @@ import { OrderClaimsList } from "@/components/accounts/OrderClaims";
 import { Button } from "@/components/ui/button";
 import { InvoicesReadUpTo } from "@/components/sales/InvoicesReadUpTo";
 
-const TABS = ["import", "items", "sku", "invoices", "orders", "recon"] as const;
+const TABS = ["import", "items", "sku", "invoices", "orders", "recon", "folders"] as const;
 type Tab = (typeof TABS)[number];
 
 const inr = (n: number | null | undefined) =>
@@ -45,6 +46,8 @@ export function InvoiceLedgerView() {
                     // ID 5 (E-334) — "Order placed" with no invoice raised.
                     { value: "orders", label: "Orders without invoice" },
                     { value: "recon", label: "GSTR-1 reconciliation" },
+                    // ID 71 — Finance marks the credit-note folders.
+                    { value: "folders", label: "Drive folders" },
                 ]}
             />
             <div className="rounded-xl border border-border bg-surface shadow-card p-5">
@@ -54,6 +57,7 @@ export function InvoiceLedgerView() {
                 {tab === "invoices" && <InvoicesTab />}
                 {tab === "orders" && <OrderClaimsList canWithdraw={false} />}
                 {tab === "recon" && <ReconTab />}
+                {tab === "folders" && <FolderKindsTab />}
             </div>
         </div>
     );
@@ -313,6 +317,8 @@ type ItemsPayload = {
 
 function ItemsTab() {
     const qc = useQueryClient();
+    // A16: Admin or Finance maps every unmapped name once — show those first.
+    const [unmappedOnly, setUnmappedOnly] = useState(false);
     const q = useQuery({
         queryKey: ["invoice-ledger-items"],
         queryFn: async () => readData<ItemsPayload>(await fetch("/api/admin/sales-invoices/ledger/items"), "Could not load items"),
@@ -339,14 +345,23 @@ function ItemsTab() {
     if (q.isLoading) return <p className="text-sm text-ink-muted">Loading…</p>;
     if (q.error || !q.data) return <p className="text-sm text-red-600">{(q.error as Error)?.message}</p>;
     const unmapped = q.data.items.filter((i) => !i.product_id).length;
+    const shown = q.data.items
+        .filter((i) => !unmappedOnly || !i.product_id)
+        .sort((a, b) => Number(Boolean(a.product_id)) - Number(Boolean(b.product_id)));
 
     return (
         <div className="space-y-3">
             <p className="text-xs text-ink-muted">
                 Vyapar names items freely; map each to a CRM product so units are counted per SKU. Spellings of one product —
                 same product code, or the same name once serial numbers, colour and warranty text are taken out — are one row,
-                and new invoices for it are mapped on arrival. {unmapped} unmapped.
+                and new invoices for it are mapped on arrival.{" "}
+                <span className={unmapped ? "font-semibold text-amber-700" : ""}>{unmapped} unmapped</span>
+                {unmapped > 0 && " — listed first"}.
             </p>
+            <label className="flex items-center gap-1.5 text-xs text-ink-muted">
+                <input type="checkbox" checked={unmappedOnly} onChange={(e) => setUnmappedOnly(e.target.checked)} />
+                Unmapped only
+            </label>
             <table className="w-full text-xs">
                 <thead className="text-left text-ink-muted">
                     <tr>
@@ -358,7 +373,7 @@ function ItemsTab() {
                     </tr>
                 </thead>
                 <tbody>
-                    {q.data.items.map((i) => (
+                    {shown.map((i) => (
                         <tr key={i.family_key ?? i.item_key} className="border-t border-border">
                             <td className="py-1.5">
                                 {i.item_name.split(FIRST_LINE)[0]}
@@ -416,7 +431,7 @@ function SkuTab() {
     const q = useQuery({
         queryKey: ["invoice-ledger-sku", from, to],
         queryFn: async () =>
-            readData<{ available: boolean; rows: Array<{ month: string; product_class: string; sku: string; mapped: boolean; quantity: number; amount_excl_gst: number; invoices: number }> }>(
+            readData<{ available: boolean; rows: Array<{ month: string; product_class: string; sku: string; mapped: boolean; quantity: number; dealer_quantity?: number; amount_excl_gst: number; invoices: number }> }>(
                 await fetch(`/api/admin/sales-invoices/ledger/sku?from=${from}&to=${to}`),
                 "Could not load the SKU report",
             ),
@@ -425,6 +440,7 @@ function SkuTab() {
         const rows = q.data?.rows ?? [];
         return {
             batteries: rows.filter((r) => r.product_class === "battery").reduce((s, r) => s + r.quantity, 0),
+            dealerBatteries: rows.filter((r) => r.product_class === "battery").reduce((s, r) => s + (r.dealer_quantity ?? r.quantity), 0),
             amount: rows.reduce((s, r) => s + r.amount_excl_gst, 0),
         };
     }, [q.data]);
@@ -440,6 +456,13 @@ function SkuTab() {
                 </label>
                 <span className="text-ink-muted">
                     {totals.batteries} batteries · {inr(totals.amount)} before GST
+                </span>
+                {/* A14: the ledger counts every invoice; the Sales dashboard only dealer-matched ones. */}
+                <span
+                    className="text-ink-muted"
+                    title="Batteries sold on the Sales dashboard, Targets and the daily email count only invoices matched to a dealer (account or lead). Match the rest on Needs attention."
+                >
+                    · {totals.dealerBatteries} on dealer-matched invoices (= Batteries sold)
                 </span>
             </div>
             {q.isLoading ? (
@@ -604,15 +627,23 @@ function InvoicesTab() {
     const queryClient = useQueryClient();
     const [month, setMonth] = useState(() => new Date(Date.now() + 5.5 * 3600_000).toISOString().slice(0, 7));
     const [q, setQ] = useState("");
+    // ID 71: list just the credit notes, to void one.
+    const [creditOnly, setCreditOnly] = useState(false);
     const [editing, setEditing] = useState<string | null>(null);
     const [reason, setReason] = useState("");
 
     const list = useQuery({
-        queryKey: ["ledger-invoices", month, q],
+        queryKey: ["ledger-invoices", month, q, creditOnly],
         queryFn: async () => {
             const p = new URLSearchParams({ month });
             if (q.trim()) p.set("q", q.trim());
-            return readData<{ rows: LedgerInvoice[]; limit: number }>(
+            if (creditOnly) p.set("kind", "credit");
+            return readData<{
+                rows: LedgerInvoice[];
+                limit: number;
+                more?: boolean;
+                credit_fill?: { at: string; summary: { stored?: number; rejected?: number; failed?: number } | null } | null;
+            }>(
                 await fetch(`/api/admin/sales-invoices/ledger/invoices?${p}`),
                 "Could not load invoices",
             );
@@ -651,12 +682,34 @@ function InvoicesTab() {
                     Number or customer
                     <input value={q} onChange={(e) => setQ(e.target.value)} className="mt-1 block w-64 rounded-lg border border-border px-2 py-1.5 text-sm" />
                 </label>
+                <label className="text-xs text-ink-muted">
+                    Show
+                    <select
+                        value={creditOnly ? "credit" : "all"}
+                        onChange={(e) => setCreditOnly(e.target.value === "credit")}
+                        className="mt-1 block rounded-lg border border-border px-2 py-1.5 text-sm"
+                    >
+                        <option value="all">Invoices and credit notes</option>
+                        <option value="credit">Credit notes only</option>
+                    </select>
+                </label>
                 <p className="text-xs text-ink-muted">
                     A void invoice stops counting in revenue, gross margin and By SKU everywhere. A credit note takes its
                     amount off revenue and what the dealer owes, and its items off batteries sold, By SKU and gross
                     margin — but is never an order. Every void and restore is logged.
                 </p>
             </div>
+            {list.data && (
+                <p className="text-xs text-ink-muted">
+                    {list.data.credit_fill
+                        ? `Credit-note item lines last filled in ${new Date(list.data.credit_fill.at).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata" })}` +
+                          (list.data.credit_fill.summary
+                              ? ` (${list.data.credit_fill.summary.stored ?? 0} stored, ${list.data.credit_fill.summary.rejected ?? 0} need a look)`
+                              : "")
+                        : "Credit-note item lines: no fill-in run recorded yet — notes read before 13 Oct take their amount off revenue but not their items."}
+                    {list.data.more ? ` · showing the newest ${list.data.limit} — search to narrow` : ""}
+                </p>
+            )}
             {list.isLoading && <p className="text-sm text-ink-muted">Loading…</p>}
             {list.isError && <p className="text-sm text-danger">{(list.error as Error).message}</p>}
             {list.data && rows.length === 0 && <p className="text-sm text-ink-muted">No invoices or credit notes in this month.</p>}

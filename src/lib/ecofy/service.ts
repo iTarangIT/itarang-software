@@ -33,9 +33,13 @@ import {
 import { notifyEcofySyncFailed } from "./notify";
 import {
     caseNosToSync,
+    clampSyncFrom,
+    IMPORT_SYNC_BATCH,
+    IMPORT_SYNC_TIME_BUDGET_MS,
     isMirroredStage,
     parseImportReport,
     pickCaseByNo,
+    runImportSyncBatch,
     tallyImportSync,
     type ImportSyncOutcome,
     type ImportSyncResult,
@@ -766,8 +770,6 @@ export function readEcofyImport(importId: string): Promise<EcofyImport> {
     return ecofyCall<EcofyImport>("GET", `/imports/${encodeURIComponent(importId)}`);
 }
 
-/** Cases looked up per sync run; the rest still arrive with Ecofy's push. */
-export const IMPORT_SYNC_MAX_CASES = 500;
 const IMPORT_SYNC_CONCURRENCY = 4;
 
 /**
@@ -776,8 +778,15 @@ const IMPORT_SYNC_CONCURRENCY = 4;
  * only (report, case search, case detail) plus the local version-guarded
  * upsert, so running it twice changes nothing the second time. A case Ecofy
  * cannot find or that fails is left to the push.
+ *
+ * ID 51 (15 Oct): ALL cases, not the first 500. One run looks at up to
+ * IMPORT_SYNC_BATCH cases from `from` (and stops early at the time budget);
+ * the result's nextFrom is where the next run continues — the uploader calls
+ * again until it is null. The report of a committed import does not change,
+ * so the cursor (a position in its case list) never repeats or skips a case.
  */
-export async function syncEcofyImportToCrm(importId: string): Promise<ImportSyncResult> {
+export async function syncEcofyImportToCrm(importId: string, opts: { from?: number } = {}): Promise<ImportSyncResult> {
+    const started = Date.now();
     const imp = await readEcofyImport(importId);
     if (imp.status !== "COMMITTED") {
         return tallyImportSync({ importId, status: imp.status, reportRows: 0, cases: 0 }, []);
@@ -785,7 +794,7 @@ export async function syncEcofyImportToCrm(importId: string): Promise<ImportSync
     const report = await (await fetchEcofyImportFile({ kind: "report", importId })).text();
     const rows = parseImportReport(report);
     const caseNos = caseNosToSync(rows);
-    const todo = caseNos.slice(0, IMPORT_SYNC_MAX_CASES);
+    const from = clampSyncFrom(opts.from, caseNos.length);
 
     const one = async (caseNo: string): Promise<ImportSyncOutcome> => {
         try {
@@ -811,11 +820,18 @@ export async function syncEcofyImportToCrm(importId: string): Promise<ImportSync
         }
     };
 
-    const outcomes: ImportSyncOutcome[] = [];
-    for (let i = 0; i < todo.length; i += IMPORT_SYNC_CONCURRENCY) {
-        outcomes.push(...(await Promise.all(todo.slice(i, i + IMPORT_SYNC_CONCURRENCY).map(one))));
-    }
-    return tallyImportSync({ importId, status: imp.status, reportRows: rows.length, cases: caseNos.length }, outcomes);
+    const outcomes = await runImportSyncBatch({
+        caseNos,
+        from,
+        batch: IMPORT_SYNC_BATCH,
+        concurrency: IMPORT_SYNC_CONCURRENCY,
+        deadline: started + IMPORT_SYNC_TIME_BUDGET_MS,
+        one,
+    });
+    return tallyImportSync(
+        { importId, status: imp.status, reportRows: rows.length, cases: caseNos.length, from },
+        outcomes,
+    );
 }
 
 /**

@@ -162,7 +162,8 @@ export const TYPE_LABELS: Record<string, string> = {
   "lead.transferred_to_asm": "Lead transferred to you (ASM)",
   "lead.reassigned_to_you": "Lead reassigned to you",
   "lead.reactivated": "Lead reactivated and back with you",
-  "lead.visit_update": "Field visit booked / done / not needed (to whoever transferred the lead)",
+  "lead.moved_away": "Your lead moved to someone else by a manager",
+  "lead.visit_update": "Field visit booked / done / not needed (to the owner at transfer and whoever transferred it)",
   "lead.deal_card_changed": "Deal card on your lead changed by the Sales Head",
   "lead.discarded": "Lead discarded",
   "lead.closed": "Lead closed",
@@ -170,6 +171,9 @@ export const TYPE_LABELS: Record<string, string> = {
   "lead.reinquiry": "Known dealer came in again (re-inquiry)",
   "lead.pushed_to_dealer": "Customer file pushed to a dealer by iTarang",
   "lead.dealer_progress": "Dealer moved a file iTarang pushed to them",
+  "lead.pushed_away": "Customer file moved from you to another dealer by iTarang",
+  "lead.acted_for_dealer": "iTarang worked on your customer file for you",
+  "lead.assist_requested": "Dealer asked iTarang to help on a customer file",
   "lead.called_on_behalf": "Your lead was called on your behalf (after Call now)",
   "lead.system_correction": "System correction to your leads' stages",
 
@@ -304,6 +308,8 @@ export const TYPE_LABELS: Record<string, string> = {
   inventory_assigned: "Inventory assigned to a dealer",
   inventory_transfer_incoming: "Incoming inventory transfer",
   inventory_transfer_acknowledged: "Inventory transfer acknowledged",
+  "stock_upload.task_created": "Stock to upload from a new battery invoice",
+  "stock_upload.task_overdue": "Stock to upload still open after 2 working days",
 
   // --- Battery auctions (E-234) ---
   "auction.lot_published": "A battery lot went live for bidding",
@@ -394,6 +400,7 @@ export const TYPE_LABELS: Record<string, string> = {
   "nbfc.wallet_low": "NBFC wallet balance is low",
   "security.secret_missing": "Webhook or scheduled job missing its secret",
   "invoices.stale": "No new invoice read for a few working days",
+  "neodove.agent_unmapped": "NeoDove calls by an agent not linked to a CRM user",
   ops_alert: "Operations alert (no current emitter)",
   // E-230's price-register sweep. `oem.price_missing` predates its emitter —
   // 5 rows were already in the bell from something outside this repo when
@@ -415,10 +422,12 @@ export const TYPE_LABELS: Record<string, string> = {
   "quote.rejected": "Quotation rejected by CEO",
 
   // --- Sales targets (item 3) ---
-  "targets.review_requested": "Targets sent to the Sales Head for review",
-  "targets.sent": "Targets sent to a member to accept",
-  "targets.rejected": "Targets rejected by a member",
+  "targets.review_requested": "Targets posted by the CEO to the Sales Head",
+  "targets.sent": "Targets pushed to a member to accept",
+  "targets.rejected": "Targets rejected by a member (old flow, no longer sent)",
   "targets.accepted": "Targets accepted by a member",
+  "targets.correction_requested": "Member asked for a correction on their targets",
+  "targets.removed": "A target was removed after it was posted or pushed",
 
   // --- Buyback: negotiation ---
   "buyback.negotiate": "Buyback price negotiation opened",

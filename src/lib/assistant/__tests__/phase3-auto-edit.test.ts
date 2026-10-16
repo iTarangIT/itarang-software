@@ -23,6 +23,7 @@ vi.mock("@/lib/leads/interestLevel", () => ({ setInterestLevel: vi.fn() }));
 
 const { toolsFor } = await import("../registry");
 const { beginEdit, withEditContext } = await import("../edit");
+const { statusLabel } = await import("../format");
 import type { AssistantUser, Preview, ToolContext } from "../types";
 
 const ISR: AssistantUser = { id: "22222222-2222-4222-8222-222222222222", name: "Priya", role: "inside_sales_rep" };
@@ -51,7 +52,7 @@ describe("auto status + temperature on the cards", () => {
     it("log_call 'Details Shared', rep said neither → Under Discussion + warm, both (auto)", async () => {
         await run(ISR, "log_call", { lead_id: "DL-1", channel: "call", connect_status: "connected", disposition: "Details Shared" });
         expect(stored().plan).toMatchObject({ status_to: "Under_Discussion", interest: "warm", auto: { status: true, interest: true } });
-        expect(stored().preview.lines).toContainEqual({ label: "Status", value: "Assigned Not Contacted → Under Discussion (auto)" });
+        expect(stored().preview.lines).toContainEqual({ label: "Status", value: `${statusLabel("Assigned_Not_Contacted")} → ${statusLabel("Under_Discussion")} (auto)` });
         expect(stored().preview.lines).toContainEqual({ label: "Temperature", value: "none → warm (auto)" });
     });
 
@@ -63,7 +64,7 @@ describe("auto status + temperature on the cards", () => {
             lead_id: "DL-1", channel: "call", connect_status: "connected", disposition: "Details Shared", interest: "hot", status: "no_change",
         });
         expect(stored().plan).toMatchObject({ status_to: "Under_Discussion", interest: "hot", auto: { status: true, interest: false } });
-        expect(stored().preview.lines).toContainEqual({ label: "Status", value: "Assigned Not Contacted → Under Discussion (auto)" });
+        expect(stored().preview.lines).toContainEqual({ label: "Status", value: `${statusLabel("Assigned_Not_Contacted")} → ${statusLabel("Under_Discussion")} (auto)` });
     });
 
     it("not connected → no auto change", async () => {
@@ -147,7 +148,8 @@ describe("Edit", () => {
         rowsFor.push({ match: /messages -> 'editing'/, rows: [{ editing: { action_id: ID, until: new Date(Date.now() + 60_000).toISOString() } }] });
         rowsFor.push({ match: /status = 'pending' AND step = 1/, rows: [live] });
         const text = await withEditContext(ISR, "parso 4 baje");
-        expect(text).toMatch(/^\[EDIT\] .*"set_follow_up".*Follow-up: Fri 25 Sep, 11:00.*The user's change: parso 4 baje$/);
+        // The user's words come first — clipping a long message never cuts them.
+        expect(text).toMatch(/^\[EDIT\] The user's change: parso 4 baje\n.*"set_follow_up".*Follow-up: Fri 25 Sep, 11:00/);
         expect(executed.some((s) => /messages - 'editing'/.test(s))).toBe(true); // consumed
 
         rowsFor.length = 0;

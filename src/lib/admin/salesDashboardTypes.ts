@@ -103,6 +103,13 @@ export interface SalesTotals {
     visits: number;
     unique_visits: number;
     new_visits: number;
+    /**
+     * ID 185 — of `visits`, those that were the person's FIRST visit to that
+     * dealer ever ("fresh", on the rep's basis); the rest are repeat visits
+     * (visits − fresh_visits). `new_visits` is then "of which new to iTarang":
+     * dealers whose first visit by anyone was in the range.
+     */
+    fresh_visits?: number;
     calls: number;
     /**
      * Distinct dealers with at least one call in the range (B8 "count of

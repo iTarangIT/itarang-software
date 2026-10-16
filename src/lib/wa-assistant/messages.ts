@@ -144,18 +144,39 @@ export async function recordOutbound(o: {
 }
 
 /**
- * Album batching (E-311): is a photo / PDF / pin from this sender recorded
- * after this row? Every message of a webhook batch is recorded before any is
- * routed, so this also sees the later photos of the same batch.
+ * Album batching (E-311): is ANY message from this sender recorded after this
+ * row — another photo of the album, or the text typed right after the photo
+ * ("visit done", the lead's name)? That later message answers for this one;
+ * it sees every unused attachment. Every message of a webhook batch is
+ * recorded before any is routed, so this also sees the rest of the batch.
+ * A button / list tap is not counted: it never runs the agent, so the photo
+ * would otherwise go unanswered (e.g. a photo, then Confirm on an older card).
  */
-export async function hasNewerAttachment(waPhone: string, rowId: string): Promise<boolean> {
+export async function hasNewerInbound(waPhone: string, rowId: string): Promise<boolean> {
     const rows = await db.execute<{ one: number }>(sql`
         SELECT 1 AS one FROM assistant_wa_messages m
          WHERE m.direction = 'in' AND m.wa_phone = ${waPhone}
-           AND m.type IN ('image', 'document', 'location')
+           AND m.type <> 'interactive'
            AND m.id <> ${rowId}::uuid
            AND m.created_at > (SELECT created_at FROM assistant_wa_messages WHERE id = ${rowId}::uuid)
          LIMIT 1
+    `);
+    return rows.length > 0;
+}
+
+/**
+ * Is the user's latest outbound message a change card that is still waiting?
+ * Only then is a bare "haan" an attempt to confirm it; after anything else
+ * (a list, an answer) it is an answer to that, for the agent.
+ */
+export async function pendingCardIsLatest(userId: string): Promise<boolean> {
+    const rows = await db.execute<{ one: number }>(sql`
+        SELECT 1 AS one
+          FROM (SELECT action_id FROM assistant_wa_messages
+                 WHERE direction = 'out' AND user_id = ${userId}::uuid
+                 ORDER BY created_at DESC LIMIT 1) last
+          JOIN assistant_actions a ON a.id = last.action_id
+         WHERE a.user_id = ${userId}::uuid AND a.status = 'pending' AND a.expires_at > now()
     `);
     return rows.length > 0;
 }

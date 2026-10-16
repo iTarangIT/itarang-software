@@ -4,6 +4,11 @@ import { sql } from "drizzle-orm";
 import { db } from "@/lib/db/index";
 import { requireSalesHead } from "@/lib/auth/requireSalesHead";
 import { istRangeNaive, parseIsoDay } from "@/lib/digests/window";
+import {
+  DEALER_APP_DERIVED_STATUS,
+  DEALER_APP_LISTED,
+  DEALER_APP_PENDING_STATUSES,
+} from "@/lib/dealer/validationQueue";
 
 // GET /api/admin/dealer-verifications/summary?dateFrom=YYYY-MM-DD&dateTo=YYYY-MM-DD
 //
@@ -41,16 +46,10 @@ export async function GET(req: NextRequest) {
       WITH derived AS (
         SELECT
           a.id, a.submitted_at, a.approved_at, a.rejected_at, a.onboarding_status,
-          CASE
-            WHEN a.onboarding_status IN ('approved', 'rejected', 'correction_requested')
-              THEN a.onboarding_status
-            WHEN a.review_status IS NOT NULL AND a.review_status <> 'draft'
-              THEN a.review_status
-            ELSE a.onboarding_status
-          END AS status
+          ${DEALER_APP_DERIVED_STATUS} AS status
         FROM dealer_onboarding_applications a
         -- ID 169: a form withdrawn by Undo Mark Won was never submitted.
-        WHERE (a.onboarding_status <> 'draft' OR a.submitted_at IS NOT NULL) AND NOT (a.onboarding_status = 'withdrawn' AND a.submitted_at IS NULL)
+        WHERE ${DEALER_APP_LISTED}
       )
       SELECT
         (SELECT COUNT(*) FROM derived d
@@ -67,8 +66,7 @@ export async function GET(req: NextRequest) {
         (SELECT COUNT(*) FROM dealer_correction_rounds r
           WHERE ${istRangeNaive(sql`r.created_at`, from, to)})::int            AS correction_rounds,
         (SELECT COUNT(*) FROM derived d
-          WHERE d.status IN ('submitted', 'pending_admin_review', 'pending_sales_head',
-                             'under_review', 'agreement_in_progress')
+          WHERE d.status IN ${DEALER_APP_PENDING_STATUSES}
             AND (${from}::text IS NULL AND ${to}::text IS NULL
                  OR (d.submitted_at IS NOT NULL
                      AND ${istRangeNaive(sql`d.submitted_at`, from, to)})))::int AS pending_review,

@@ -249,6 +249,12 @@ export async function POST(req: NextRequest) {
       .where(eq(users.id, claimed.user_id))
       .returning({ id: users.id });
 
+    // A39: start the 90-day clock (E-352).
+    if (updated[0]) {
+      const { recordPasswordChange } = await import("@/lib/auth/passwordMeta");
+      await recordPasswordChange(updated[0].id);
+    }
+
     if (updated.length === 0) {
       // Still a 200: the Supabase write succeeded, so the password genuinely
       // did change and telling the user it failed would be false.

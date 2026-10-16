@@ -4,7 +4,8 @@ import { couponCodes, leads } from '@/lib/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { requireRole } from '@/lib/auth-utils';
 import { logCouponAction } from '@/lib/coupon-audit';
-import { requireLeadAccess } from '@/lib/auth/requireLeadAccess';
+import { requireLeadAccess } from '@/lib/auth/requireLeadAccess';
+import { requireLeadWriter } from '@/lib/leads/actForDealerGuard';
 import { isNextRedirectError } from '@/lib/api-utils';
 
 type RouteContext = {
@@ -18,6 +19,10 @@ export async function POST(_req: NextRequest, context: RouteContext) {
         // ID 119: signed in AND this lead is the caller's (a dealer's own lead, or back office).
         const leadGate = await requireLeadAccess(leadId);
         if (!leadGate.ok) return leadGate.response;
+        // ID 183: the file's own dealer (stamps the dealer's action); the
+        // house login only sees a file it pushed to another dealer.
+        const writer = await requireLeadWriter(leadId, _req, leadGate.user);
+        if (!writer.ok) return writer.response;
 
         // Verify lead exists and belongs to dealer
         const leadRows = await db.select({

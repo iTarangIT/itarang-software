@@ -32,6 +32,7 @@ import { and, gte, lt, sql } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import { dealerLeads, dealers, zohoInvoices } from "@/lib/db/schema";
+import { outstandingTotal } from "@/lib/dashboard/revenueSource";
 
 export interface MonthWindow {
   /** Inclusive start, YYYY-MM-DD. */
@@ -135,13 +136,10 @@ export async function getCeoBusinessMetrics(
 
     // Mirrors outstandingAggQ. NOT windowed: a receivable is outstanding today
     // regardless of which month it was invoiced in, which is why the CEO route
-    // has no date filter here either.
-    db
-      .select({ outstanding: sql<string>`COALESCE(SUM(${zohoInvoices.balance}), 0)` })
-      .from(zohoInvoices)
-      .where(
-        sql`${zohoInvoices.status} IS NULL OR ${zohoInvoices.status} NOT IN ('paid', 'void', 'draft')`,
-      ),
+    // has no date filter here either. ID 89 / 71: the CEO route's own helper,
+    // so the mirror also counts manual invoices and nets credit notes per
+    // customer (never below zero) — no longer Zoho balances alone.
+    outstandingTotal(),
 
     // Buyback: submitted is stamped on the request (there is no status column
     // on buyback_requests); completed is a CLOSED deal. Statuses are uppercase
@@ -180,7 +178,7 @@ export async function getCeoBusinessMetrics(
     leads_converted: n(leadsAgg[0]?.conversions),
     dealers_onboarded: n(dealersAgg[0]?.onboarded),
     revenue: n(revenueAgg[0]?.revenue),
-    outstanding: n(outstandingAgg[0]?.outstanding),
+    outstanding: n(outstandingAgg),
     buyback_submitted: n(buyback?.submitted),
     buyback_completed: n(buyback?.completed),
     active_iot_devices: n(iot?.active),

@@ -33,6 +33,7 @@ export const READ_TOOL_NAMES = [
     "search_lead",
     "get_lead_details",
     "my_numbers",
+    "my_leads_by_temperature",
     "product_catalogue",
     "quote_status",
     "read_document",
@@ -71,7 +72,13 @@ export type LeadSummary = {
     dealer_name: string | null;
     city: string | null;
     status: string | null;
+    /** The screens' label for `status` (LEAD_STATUS_LABEL) — what to say to the user. */
+    status_label: string | null;
     interest: string | null;
+    /** The dealer's phone — so a list answers "naam aur number" without a detail call per lead. */
+    phone: string | null;
+    /** dealer_leads.last_touchpoint_at, IST ISO ("…+05:30"). */
+    last_activity_at: string | null;
     owner_name: string | null;
     /** True when the acting user owns it — anything else is read-only. */
     owned_by_you: boolean;
@@ -122,6 +129,19 @@ export type Preview = {
 export type ToolResult =
     | { kind: "leads"; title: string; rows: LeadSummary[]; total: number; crm_url: string | null }
     | { kind: "candidates"; question: string; rows: LeadSummary[] }
+    /**
+     * The leads behind a Hot / Warm / Cold card (my_leads_by_temperature),
+     * rendered as text with phone and ageing. `total` is the card's number;
+     * `definition` says what is counted.
+     */
+    | {
+          kind: "lead_report";
+          title: string;
+          definition: string;
+          rows: (LeadSummary & { age_days: number })[];
+          total: number;
+          crm_url: string | null;
+      }
     | { kind: "lead"; lead: Record<string, unknown> }
     | { kind: "numbers"; data: Record<string, unknown> }
     /** Catalogue products — names and models only, never a price. */
@@ -156,4 +176,6 @@ export type ToolContext = {
     /** Server clock for the turn — relative dates resolve against this, in IST. */
     now: Date;
     writesEnabled: boolean;
+    /** Epoch ms the agent turn must end by — slow tools (read_document) budget against it. */
+    deadline?: number;
 };

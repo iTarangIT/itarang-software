@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { otherDocumentRequests } from "@/lib/db/schema";
 import { requireLeadAccess } from "@/lib/auth/requireLeadAccess";
+import { recordActorStep, requireLeadWriter } from "@/lib/leads/actForDealerGuard";
 
 // Dealer-side creation of an additional-document request row. Mirrors the
 // admin "Request More Docs" flow but with the dealer as the requester so they
@@ -25,6 +26,9 @@ export async function POST(
     // ID 118: signed in, and this lead is the caller's to touch (a dealer's own lead, or back office).
     const leadGate = await requireLeadAccess((await params).leadId);
     if (!leadGate.ok) return leadGate.response;
+    // ID 183: a change to the file — its own dealer, or Admin / Sales Head acting for the dealer.
+    const writer = await requireLeadWriter((await params).leadId, req, leadGate.user);
+    if (!writer.ok) return writer.response;
     try {
         const { leadId } = await params;
         const body = await req.json().catch(() => ({} as { doc_label?: string; doc_for?: string }));
@@ -64,6 +68,7 @@ export async function POST(
             updated_at: now,
         });
 
+        await recordActorStep(writer.actor, `added a document slot "${docLabelRaw}"`);
         return NextResponse.json({
             success: true,
             data: {

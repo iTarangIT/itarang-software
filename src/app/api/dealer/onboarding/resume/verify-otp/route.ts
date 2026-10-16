@@ -19,7 +19,7 @@ import {
  * POST /api/dealer/onboarding/resume/verify-otp — tracker ID 129.
  *   { applicationId?, ownerEmail?, dealerCode?, code }
  *
- * Checks the code send-otp mailed. Right code → a resume token for that one
+ * Checks the code send-otp sent (by SMS to the owner mobile, or email). Right code → a resume token for that one
  * application, valid 30 minutes, which POST /api/dealer/onboarding/submit
  * accepts as proof of ownership. A code works once and dies after five wrong
  * entries.
@@ -31,9 +31,9 @@ export const dynamic = "force-dynamic";
 // Same as the upload's own view link (uploads/dealer-documents).
 const DOCUMENT_LINK_TTL_SECONDS = 7 * 24 * 60 * 60;
 
-const WRONG = "That code is not right, or it has expired. Check the email, or request a new code.";
+const WRONG = "That code is not right, or it has expired. Check the SMS (or email), or request a new code.";
 const UNAVAILABLE =
-  "Continuing an application by email code is not available yet. Please contact your iTarang sales contact.";
+  "Continuing an application by code is not available yet. Please contact your iTarang sales contact.";
 
 export async function POST(req: NextRequest) {
   try {
@@ -50,7 +50,7 @@ export async function POST(req: NextRequest) {
     // Malformed input is refused without burning an attempt.
     if (!RESUME_OTP_FORMAT_RE.test(code)) {
       return NextResponse.json(
-        { success: false, message: "Enter the 6-digit code from the email." },
+        { success: false, message: "Enter the 6-digit code we sent you." },
         { status: 400 },
       );
     }

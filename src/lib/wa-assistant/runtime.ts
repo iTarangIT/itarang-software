@@ -4,16 +4,17 @@
 
 import { log } from "@/lib/log";
 import { assistantConfig } from "@/lib/assistant/config";
-import { hasOpenPendingAction, setActionMessageId } from "@/lib/assistant/actions";
+import { setActionMessageId } from "@/lib/assistant/actions";
 import { cancelAction, executeAction } from "@/lib/assistant/executor";
 import { beginEdit } from "@/lib/assistant/edit";
 import { agentTurn, runToolDirect } from "@/lib/assistant/turn";
+import { appendHistory } from "@/lib/assistant/memory";
 import type { WaAssistEnv } from "./env";
 import { WaAssistClient } from "./client";
 import { resolveSender } from "./identity";
 import { verifyLinkCode } from "./link";
 import { withUserLease } from "./lock";
-import { hasNewerAttachment, markHandled, recordOutbound } from "./messages";
+import { hasNewerInbound, markHandled, pendingCardIsLatest, recordOutbound } from "./messages";
 import { isAcceptedMime, MAX_MEDIA_BYTES, normalizeMediaMime, storeLocation, storeMediaFile } from "@/lib/assistant/media";
 import { renderLeadCard, renderPreview, renderTapOutcome, renderTurn, type WaPayload } from "./render";
 import type { RouterDeps } from "./router";
@@ -184,9 +185,9 @@ export function defaultRouterDeps(env: WaAssistEnv): RouterDeps {
                 return { kind: "failed", error: err instanceof Error ? err.message : String(err) };
             }
         },
-        hasNewerMedia: hasNewerAttachment,
+        hasNewerMedia: hasNewerInbound,
         sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
-        hasPendingAction: hasOpenPendingAction,
+        hasPendingAction: pendingCardIsLatest,
         runTextTurn: async (user, text, messageRowId) => {
             const leased = await withUserLease(user.id, () => agentTurn(user, text, { messageId: messageRowId }));
             if (!leased.ok) return { kind: "busy" };
@@ -202,6 +203,16 @@ export function defaultRouterDeps(env: WaAssistEnv): RouterDeps {
             }
             // no_tools cannot follow a resolved asm/ISR identity; treat as misconfiguration.
             return { kind: "not_configured" };
+        },
+        // Under the lease: a running agent turn saves the history it loaded,
+        // so a note appended mid-turn would be overwritten. Waits for it instead.
+        noteTap: async (user, note) => {
+            try {
+                const leased = await withUserLease(user.id, () => appendHistory(user.id, note));
+                if (!leased.ok) logFn("warn", "[wa-assist] tap note skipped: conversation busy", { userId: user.id });
+            } catch (err) {
+                logFn("warn", "[wa-assist] tap note failed", { userId: user.id, error: err instanceof Error ? err.message : String(err) });
+            }
         },
         log: logFn,
     };

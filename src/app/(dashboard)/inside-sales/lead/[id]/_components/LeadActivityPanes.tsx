@@ -67,6 +67,7 @@ export function LeadActivityPanes({
                         leadId={leadId}
                         touchpoints={bundle.touchpoints}
                         statusHistory={bundle.status_history}
+                        limitEvents={bundle.limit_events ?? []}
                         canExport={canExportHistory}
                     />
                 ) : tab === "calls" ? (

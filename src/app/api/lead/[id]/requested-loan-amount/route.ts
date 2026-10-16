@@ -23,7 +23,8 @@ import {
   MAX_REQUESTED_LOAN,
   MIN_REQUESTED_LOAN,
 } from "@/lib/leads/requested-loan-amount-parse";
-import { dealerMayActOnLead } from "@/lib/auth/requireLeadAccess";
+import { ACT_FOR_DEALER_ROLES } from "@/lib/leads/actForDealer";
+import { gateLeadActor, recordActorStep, seenFromRequest } from "@/lib/leads/actForDealerGuard";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -39,16 +40,18 @@ const Body = z.object({
 const bad = (message: string, status = 400) =>
   NextResponse.json({ success: false, error: { message } }, { status });
 
-async function ownedLead(leadId: string) {
-  const user = await requireRole(["dealer"]);
+async function ownedLead(leadId: string, write?: { req: NextRequest }) {
+  const user = await requireRole(["dealer", ...ACT_FOR_DEALER_ROLES]);
   const [lead] = await db
     .select({ id: leads.id, dealer_id: leads.dealer_id })
     .from(leads)
     .where(eq(leads.id, leadId))
     .limit(1);
   if (!lead) return { error: bad("Lead not found", 404) };
-  if (!(await dealerMayActOnLead(user, lead.dealer_id, leadId))) return { error: bad("Access denied", 403) };
-  return { lead };
+  // ID 183: the dealer, the house, or Admin / Sales Head acting for the dealer.
+  const gate = await gateLeadActor(user, lead, write ? { write: true, seenDealerActionAt: seenFromRequest(write.req) } : {});
+  if (!gate.ok) return { error: bad(gate.message, gate.status) };
+  return { lead, actor: gate.actor };
 }
 
 function errorStatus(error: unknown): number {
@@ -73,7 +76,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id: leadId } = await params;
-    const owned = await ownedLead(leadId);
+    const owned = await ownedLead(leadId, { req });
     if ("error" in owned) return owned.error;
 
     let raw: unknown;
@@ -88,6 +91,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     }
 
     await setRequestedLoanAmount(leadId, parsed.data.amount);
+    await recordActorStep(owned.actor, `set the loan amount asked for (Rs ${parsed.data.amount})`);
     return NextResponse.json({ success: true, data: { amount: parsed.data.amount } });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to save loan amount";

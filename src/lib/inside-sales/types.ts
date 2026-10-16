@@ -4,6 +4,8 @@
 
 import type { LeadStatus, LostReason } from "@/lib/lifecycle/transitions";
 import type { LeadAssignedBy } from "@/lib/leads/leadAssignedBy";
+import type { DealerOnboardedVerdict } from "@/lib/leads/dealerOnboardedRules";
+import type { QuoteSend } from "@/lib/leads/quoteSends";
 import type {
     CallStatus,
     NextAction,
@@ -70,6 +72,8 @@ export type QueueRow = {
      * be claiming a field its own query never selects.
      */
     assigned_by?: LeadAssignedBy | null;
+    /** IDs 85 / 86 — a clock on this lead is running past its limit (the "Past a limit" chip). */
+    past_limit?: boolean;
 };
 
 export type QueueResponse = {
@@ -177,6 +181,10 @@ export type LeadDetailTouchpoint = {
     next_action_at: string | null;
     /** ID 83: a NeoDove call made after the owner's "Call now" request, by someone else. */
     called_on_behalf?: boolean;
+    /** ID 191: a display-only entry merged from a failed quote send — its label. */
+    display_label?: string;
+    /** ID 191: "failed" shows the entry in red. */
+    tone?: "failed";
 };
 
 // One product line-item on a commercials quote (E-128). asset_type maps to
@@ -242,6 +250,8 @@ export type LeadDetailCommercials = {
     deal_card_locked?: "ceo" | "dealer" | null;
     /** ID 172 item 5: onboarding fee invoiced to this dealer (₹, before GST); null = not computable. */
     fee_invoiced?: number | null;
+    /** ID 191: every send of this quote (quotation_dispatches), newest first; phone numbers masked. */
+    sends?: QuoteSend[];
     deal_notes: string | null;
     product_lines: CommercialsProductLine[];
     notes: string | null;
@@ -286,12 +296,26 @@ export type LeadDetailStatusHistory = {
     reason_notes: string | null;
 };
 
+export type LeadDetailLimitEvent = {
+    clock: string;
+    limit_value: number;
+    limit_unit: string;
+    passed_at: string;
+    owner_name: string | null;
+    owner_inferred: boolean;
+};
+
 export type LeadDetailBundle = {
     lead: LeadDetailLead;
     current_commercials: LeadDetailCommercials | null;
     commercials_history: LeadDetailCommercials[];
     touchpoints: LeadDetailTouchpoint[];
     status_history: LeadDetailStatusHistory[];
+    /**
+     * IDs 85 / 86 — missed time limits on this lead (fixed records, E-350),
+     * newest first; [] without E-350. Shown in the Touchpoint History pane.
+     */
+    limit_events?: LeadDetailLimitEvent[];
     /**
      * Newest dialer campaign this lead appeared in, or null if it was never
      * dialled. Used only as a route parameter by the AI Call History tab — the
@@ -309,6 +333,11 @@ export type LeadDetailBundle = {
      * (NeoDove › Agents) assigns the lead, dated at that call.
      */
     caller_not_linked?: { agent_name: string | null; first_call_at: string } | null;
+    /**
+     * ID 186: is the dealer already onboarded (approved onboarding or a
+     * battery invoice)? Then the deal card is neither asked nor shown.
+     */
+    dealer_onboarded?: DealerOnboardedVerdict | null;
 };
 
 export type LeadOnboardingMilestones = {

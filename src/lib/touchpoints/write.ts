@@ -36,6 +36,8 @@ import type { Interest } from "@/lib/leads/autoProgress";
 import { planOutcome, type TouchpointOutcome } from "@/lib/leads/outcomeRule";
 import { setInterestLevel } from "@/lib/leads/interestLevel";
 import { cancelPendingWonUndo } from "@/lib/leads/wonUndoCancel";
+import { scheduleOverallSummaryRefresh } from "@/lib/leads/overallSummary";
+import { isSummaryCallTouchpoint } from "@/lib/leads/overallSummaryRules";
 
 /**
  * A status move the S3 rules refuse (statusRules.ts). Carries an HTTP status so
@@ -128,6 +130,13 @@ export type WriteTouchpointInput = {
   interest?: Interest | null;
   /** Audit reason for the temperature change. */
   interestReason?: string | null;
+  /**
+   * A33 — when the call has no CRM performer (a NeoDove agent nobody linked
+   * yet), still apply the temperature its outcome sets, recorded against the
+   * lead's current owner. The call itself stays unattributed. Only the NeoDove
+   * webhook sets this.
+   */
+  interestFromOwnerWhenNoPerformer?: boolean;
   /**
    * E-295 — the ownership hop this touchpoint records, for Lead Tracking.
    *
@@ -456,11 +465,13 @@ export async function writeTouchpoint(
 
     // 4. Temperature (ID 114) — same transaction, audited like a manual
     //    change (interest_level_overrides + the E-304 history trigger).
-    if (interestTo && input.performedBy) {
+    const interestActor =
+      input.performedBy ?? (input.interestFromOwnerWhenNoPerformer ? (current?.current_owner_id ?? null) : null);
+    if (interestTo && interestActor) {
       await setInterestLevel(
         {
           leadId: input.dealerLeadId,
-          actorId: input.performedBy,
+          actorId: interestActor,
           level: interestTo,
           reason: input.interestReason ?? "Auto: from the logged outcome",
         },
@@ -475,5 +486,14 @@ export async function writeTouchpoint(
     };
   };
 
-  return opts?.tx ? run(opts.tx) : db.transaction(run);
+  const result = await (opts?.tx ? run(opts.tx) : db.transaction(run));
+
+  // ID 118 option B: after a call, the server refreshes the lead's Overall
+  // Summary from the call transcripts — in the background, so this write
+  // never waits on (or fails because of) the model. It no-ops when no
+  // transcript is newer than the last summary (a NeoDove or manual call).
+  if (isSummaryCallTouchpoint(input.touchpointType)) {
+    scheduleOverallSummaryRefresh(input.dealerLeadId);
+  }
+  return result;
 }

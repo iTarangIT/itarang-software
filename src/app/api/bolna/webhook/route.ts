@@ -5,6 +5,8 @@ import {
   WebhookSignatureInvalidError,
 } from "@/lib/ai/bolna_ai/signature";
 import { after, NextRequest, NextResponse } from "next/server";
+import { alertMissingSecret } from "@/lib/security/configAlert";
+import { webhookAuthStrict } from "@/lib/security/webhookAuth";
 
 export const maxDuration = 300;
 
@@ -13,11 +15,17 @@ export async function POST(req: NextRequest) {
     verifyBolnaWebhook(req);
   } catch (err) {
     if (err instanceof WebhookSecretMissingError) {
+      // ID 130: a missing secret always rings the admin bell.
+      alertMissingSecret(
+        "/api/bolna/webhook",
+        "Set BOLNA_WEBHOOK_SECRET and configure Bolna to send Authorization: Bearer <secret>.",
+      );
       // In dev (localhost + ngrok), forcing operators to invent a shared
       // secret just to test the call lifecycle is too much friction.
-      // Accept the request and log a warning. Production still rejects so
-      // a real deployment isn't open to spoofed Bolna callbacks.
-      if (process.env.NODE_ENV !== "production") {
+      // Accept the request and log a warning — unless WEBHOOK_AUTH_STRICT is
+      // on (ID 130: strict refuses unsigned calls everywhere). Production
+      // always rejects so a real deployment isn't open to spoofed callbacks.
+      if (process.env.NODE_ENV !== "production" && !webhookAuthStrict()) {
         console.warn(
           "[bolna:webhook] BOLNA_WEBHOOK_SECRET missing — accepting in dev. " +
             "Set the env var (and configure Bolna to send Authorization: Bearer <secret>) before deploying.",

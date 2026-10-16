@@ -13,7 +13,9 @@
  * logged against them. The stored path itself never changes.
  *
  * Response: { url, expiresAt } — `url` stays relative. A URL that is not a
- * files-proxy path (a provider link, /api/nbfc-uploads) comes back unchanged.
+ * stored file (a provider link) comes back unchanged. Since 16 Oct NBFC store
+ * paths (/nbfc-uploads/…) are signed too, against the same rule, and come
+ * back as /api/nbfc-uploads/…?exp=&sig=&by=.
  */
 import { NextRequest, NextResponse } from "next/server";
 
@@ -22,8 +24,10 @@ import {
     FILE_PROXY_BUCKETS,
     FRESH_LINK_TTL_SECONDS,
     filesProxyTarget,
+    nbfcUploadsTarget,
     safeStorageKey,
     signedFilePath,
+    signedNbfcPath,
 } from "@/lib/storage/fileAccess";
 import { canOpenStoredFile, logFileOpen } from "@/lib/storage/fileAuthz";
 
@@ -44,7 +48,9 @@ export async function GET(req: NextRequest) {
     }
     if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401, headers: NO_STORE });
 
-    const target = filesProxyTarget(raw);
+    // A /api/files path, or (16 Oct) an NBFC store path (/nbfc-uploads/…).
+    const nbfc = filesProxyTarget(raw) ? null : nbfcUploadsTarget(raw);
+    const target = nbfc ?? filesProxyTarget(raw);
     if (!target) {
         // Not one of our stored files: nothing to sign.
         return NextResponse.json({ url: raw, expiresAt: null }, { headers: NO_STORE });
@@ -53,7 +59,7 @@ export async function GET(req: NextRequest) {
     const { bucket } = target;
     // Same path check as the files route: no `..` in any encoding.
     const key = safeStorageKey(target.key.split("/"));
-    if (!key || !(FILE_PROXY_BUCKETS as readonly string[]).includes(bucket)) {
+    if (!key || !(nbfc || (FILE_PROXY_BUCKETS as readonly string[]).includes(bucket))) {
         return NextResponse.json({ error: "Invalid path" }, { status: 400, headers: NO_STORE });
     }
 
@@ -71,7 +77,9 @@ export async function GET(req: NextRequest) {
         );
     }
 
-    const url = signedFilePath(target.path, FRESH_LINK_TTL_SECONDS, { by: user.id });
+    const url = nbfc
+        ? signedNbfcPath(target.path, FRESH_LINK_TTL_SECONDS, { by: user.id })
+        : signedFilePath(target.path, FRESH_LINK_TTL_SECONDS, { by: user.id });
     return NextResponse.json(
         { url, expiresAt: new Date(Date.now() + FRESH_LINK_TTL_SECONDS * 1000).toISOString() },
         { headers: NO_STORE },

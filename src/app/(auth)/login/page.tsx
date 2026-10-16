@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Mail, Lock, Loader2, Eye, EyeOff } from 'lucide-react';
 import Image from 'next/image';
 import Link from 'next/link';
@@ -27,6 +27,13 @@ export default function LoginPage() {
     const [loading, setLoading] = useState(false);
     const [errors, setErrors] = useState<{ email?: string; password?: string }>({});
     const [forgotOpen, setForgotOpen] = useState(false);
+
+    // A39: the dashboard sends a deactivated login back here with ?inactive=1.
+    useEffect(() => {
+        if (new URLSearchParams(window.location.search).get('inactive') === '1') {
+            toast.error('Your account is inactive. Contact your administrator.');
+        }
+    }, []);
 
     const validate = (): boolean => {
         const e: { email?: string; password?: string } = {};

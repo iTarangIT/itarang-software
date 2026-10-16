@@ -18,6 +18,7 @@ import { defineTool, LeadId, NOT_FOUND, ownedLeadOr, type ToolFactory } from "..
 import { leadUrl } from "../leads";
 import { defineApplier } from "../../applierSpec";
 import { APPROVAL_LABEL, inr, loadLatestQuote } from "../quotes";
+import { preTransferStatusFor, quoteMovePreview } from "./quoteMove";
 
 /** quoteDispatch's QUOTE_DISPATCH_CHANNELS — restated so this module stays off the provider stack. */
 const CHANNELS = ["whatsapp", "email"] as const;
@@ -121,10 +122,18 @@ export const sendQuote: ToolFactory = () =>
                         `so v${row.version_no} is still the current quote`,
                 });
             }
+            // ID 75: a delivery moves the lead to Awaiting customer decision —
+            // only when something actually went (sendApprovedQuotation).
+            const move = quoteMovePreview({
+                event: "delivered",
+                leadStatus: lead.lead_status,
+                preTransferStatus: await preTransferStatusFor(lead.id, lead.lead_status),
+            });
+            lines.push({ label: "Status once sent", value: move.status });
             const preview: Preview = {
                 title: `Send quote — ${lead.shop_name || lead.dealer_name || lead.id}`,
                 lines,
-                resets_idle_clock: false,
+                resets_idle_clock: move.resetsIdleClock,
                 warning: "This sends the dealer the quotation PDF.",
                 needs_second_confirm: false,
                 crm_url: crmUrl,
@@ -178,4 +187,6 @@ export const sendQuoteApplier = defineApplier<SendQuotePlan>({
             }
         },
     }),
+    // Every channel failed (or the send threw): a repeat tap must not say "Already saved."
+    sendFailed: (extra) => !Array.isArray(extra?.sent) || extra.sent.length === 0,
 });

@@ -115,7 +115,9 @@ import type {
 //   D Position this morning     open Hot / Warm / Cold per owner, awaiting
 //                               field visit, and sales-ready leads with no owner.
 //   E Today and tomorrow        scheduled visits and follow-ups per owner.
-//   F Oldest overdue            the 10 oldest overdue items, by name and city — no phone numbers.
+//   F Oldest overdue            the 10 oldest overdue items, by name and city — no phone numbers:
+//                               follow-ups, visits and (IDs 85 / 86) limits passed and still
+//                               unanswered, each charged to the owner when it fell due.
 //   G Ecofy                     pickup queue, new Ecofy leads yesterday, leads by stage (ID 51).
 const SECTIONS: DigestSection[] = [
   { key: "summary", label: "Headline", hint: "One line: yesterday's outcome and what is behind target.", group: "activity" },
@@ -125,7 +127,7 @@ const SECTIONS: DigestSection[] = [
   { key: "block_c", label: "C · Inside sales (ISR / CC)", hint: "One row per ISR: calls, dealers called (yesterday and MTD); connected, connect %, engaged, hot to field, quotes created, Won, converted (MTD); % of calls target.", group: "activity" },
   { key: "block_d", label: "D · Position this morning", hint: "Open Hot / Warm / Cold per owner, Hot rated 8+ days ago, awaiting field visit, and sales-ready leads with no owner — as of the send time.", group: "backlog" },
   { key: "block_e", label: "E · Today and tomorrow", hint: "Scheduled visits and follow-ups due, per owner.", group: "backlog" },
-  { key: "block_f", label: "F · Oldest overdue", hint: "The 10 oldest overdue follow-ups and visits, by name.", group: "backlog" },
+  { key: "block_f", label: "F · Oldest overdue", hint: "The 10 oldest overdue follow-ups, visits and time limits passed (still unanswered), by name.", group: "backlog" },
   // ID 51 — Ecofy leads in the daily email.
   { key: "block_g", label: "G · Ecofy", hint: "Ecofy pickup queue (unassigned), new Ecofy leads yesterday, and every Ecofy lead by stage.", group: "backlog" },
 ];
@@ -222,17 +224,56 @@ async function unmatchedRevenuePerPeriod(
   return { y, d7, mtd, lm };
 }
 
-async function rightNow(): Promise<{ waiting: number; oldestDays: number | null }> {
+type RightNow = {
+  waiting: number;
+  oldestDays: number | null;
+  /** The sales_ready_unassigned limit in force (calendar days). */
+  limitDays: number;
+  /** Hot, sales-ready leads with no owner (running hot_assign clocks, E-350); null = not measured. */
+  hotWaiting: number | null;
+  /** …of those, past the hot_ready_to_assigned limit. */
+  hotPast: number | null;
+  /** The hot_ready_to_assigned limit in force (working hours). */
+  hotLimitHours: number;
+};
+
+async function rightNow(): Promise<RightNow> {
+  const { getTimeLimits } = await import("@/lib/timeLimits/store");
+  const limits = await getTimeLimits();
+  const base: RightNow = {
+    waiting: 0,
+    oldestDays: null,
+    limitDays: limits.sales_ready_unassigned,
+    hotWaiting: null,
+    hotPast: null,
+    hotLimitHours: limits.hot_ready_to_assigned,
+  };
   try {
     // ID 82: the one "awaiting assignment" rule — the Ready to assign page
     // and the CEO card count the same leads. Imported here, not at module
     // scope: listing the digest kinds must not need DATABASE_URL.
     const { countAwaitingAssignment } = await import("@/lib/leads/salesReady");
     const c = await countAwaitingAssignment();
-    return { waiting: c.total, oldestDays: c.oldestDays };
+    Object.assign(base, { waiting: c.total, oldestDays: c.oldestDays });
   } catch {
-    return { waiting: 0, oldestDays: null };
+    /* not measured */
   }
+  try {
+    // ID 85 (15 Oct): Hot leads have their own limit to get an owner.
+    const { hasLimitEvents } = await import("@/lib/leads/clocks");
+    if (await hasLimitEvents()) {
+      const { db } = await import("@/lib/db");
+      const [r] = (await db.execute(sql`
+        SELECT COUNT(*)::int AS waiting, COUNT(*) FILTER (WHERE c.limit_passed_at IS NOT NULL)::int AS past
+          FROM lead_clocks c
+         WHERE c.clock = 'hot_assign' AND c.first_attempt_at IS NULL AND c.ended_at IS NULL
+      `)) as unknown as Array<{ waiting: number; past: number }>;
+      Object.assign(base, { hotWaiting: Number(r?.waiting ?? 0), hotPast: Number(r?.past ?? 0) });
+    }
+  } catch (e) {
+    console.warn("[sales-daily] hot waiting not measured:", e instanceof Error ? e.message : e);
+  }
+  return base;
 }
 
 /**
@@ -313,7 +354,22 @@ async function followUpsPerOwner(today: string, tomorrow: string): Promise<Map<s
   return new Map(rows.map((r) => [r.spoc, { today: Number(r.today), tomorrow: Number(r.tomorrow) }]));
 }
 
-/** Block F: the 10 oldest overdue follow-ups and visits, by name and city — never a phone number. */
+const CLOCK_WORDS: Record<string, string> = {
+  lead: "first call or visit",
+  owner: "owner's first call or visit",
+  transfer: "first field visit",
+  hot_assign: "Hot lead getting an owner",
+  hot_owner: "Hot lead first call or visit",
+  retry: "retry after an unanswered call",
+  quote: "CEO quote approval",
+};
+
+/**
+ * Block F: the 10 oldest overdue follow-ups, visits and (IDs 85 / 86) time
+ * limits passed and still unanswered — by name and city, never a phone
+ * number. A limit is listed under the owner it was charged to (the owner when
+ * it fell due). Days are counted to today in IST.
+ */
 async function oldestOverdue(): Promise<DigestTable["rows"]> {
   const { db } = await import("@/lib/db");
   const rows = (await db.execute(sql`
@@ -336,12 +392,39 @@ async function oldestOverdue(): Promise<DigestTable["rows"]> {
     ORDER BY due ASC
     LIMIT 10
   `)) as unknown as Array<{ dealer: string; city: string | null; owner: string | null; what: string; due: string }>;
-  const today = new Date().toISOString().slice(0, 10);
-  return rows.map((r) => {
-    const due = String(r.due).slice(0, 10);
-    const days = Math.max(0, Math.round((Date.parse(`${today}T00:00:00Z`) - Date.parse(`${due}T00:00:00Z`)) / 86400000));
-    return [r.dealer, r.city?.trim() || "—", r.owner ?? "(no owner)", r.what, due, days];
-  });
+  const items = rows.map((r) => ({ ...r, due: String(r.due).slice(0, 10) }));
+  try {
+    const { limitPassedEvents } = await import("@/lib/leads/clocks");
+    const { istDay: istDayOf } = await import("@/lib/calendar/officeCalendar");
+    const passed = await limitPassedEvents({ openOnly: true, limit: 10 });
+    const cities = passed.length
+      ? ((await db.execute(sql`
+          SELECT id, city, shop_name FROM dealer_leads WHERE id IN ${passed.map((p) => p.dealer_lead_id)}
+        `)) as unknown as Array<{ id: string; city: string | null; shop_name: string | null }>)
+      : [];
+    const byId = new Map(cities.map((c) => [c.id, c]));
+    for (const p of passed) {
+      const lead = byId.get(p.dealer_lead_id);
+      items.push({
+        dealer: p.dealer_name ?? lead?.shop_name ?? p.dealer_lead_id,
+        city: lead?.city ?? null,
+        owner: p.owner_name,
+        what: `Limit passed: ${CLOCK_WORDS[p.clock] ?? p.clock}`,
+        due: istDayOf(new Date(p.passed_at)),
+      });
+    }
+  } catch (e) {
+    console.warn("[sales-daily] limits passed not listed:", e instanceof Error ? e.message : e);
+  }
+  // Today in IST — the UTC date reads yesterday until 05:30.
+  const today = new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
+  return items
+    .sort((a, b) => a.due.localeCompare(b.due))
+    .slice(0, 10)
+    .map((r) => {
+      const days = Math.max(0, Math.round((Date.parse(`${today}T00:00:00Z`) - Date.parse(`${r.due}T00:00:00Z`)) / 86400000));
+      return [r.dealer, r.city?.trim() || "—", r.owner ?? "(no owner)", r.what, r.due, days];
+    });
 }
 
 /**
@@ -439,6 +522,8 @@ async function collect(
     // ID 171: how far the invoice data behind Revenue / Batteries goes, and the
     // Admin alert line when no new invoice was read for the limit's working days.
     const invoices = await (await import("@/lib/sales/invoiceFreshness")).invoiceFreshness({ fresh: true }).catch(() => null);
+    // ID 174: "Stock to upload" tasks (E-348) — null on a database without them.
+    const stockTasks = await (await import("@/lib/inventory/stockUploadTasks/service")).stockTaskCounts().catch(() => null);
     // "Right now" / "Position at" name the moment the figures were taken — a
     // test sent at 14:03 used to say "Right now · 09:00".
     const asOf = computedAt.toLocaleTimeString("en-GB", {
@@ -536,10 +621,24 @@ async function collect(
                 {
                   label: "Sales-ready, no owner",
                   value: `${now.waiting} lead${now.waiting === 1 ? "" : "s"}`,
-                  // Calendar days, as the Ready to assign page and the CEO card count it.
-                  hint: now.oldestDays != null ? `Oldest waiting ${now.oldestDays} days` : undefined,
-                  alert: now.oldestDays != null && now.oldestDays >= 2,
+                  // Calendar days, as the Ready to assign page and the CEO card
+                  // count it; red from the Admin limit (ID 85), not a fixed 2.
+                  hint:
+                    now.oldestDays != null
+                      ? `Oldest waiting ${now.oldestDays} days · limit ${now.limitDays} days`
+                      : undefined,
+                  alert: now.oldestDays != null && now.oldestDays >= now.limitDays,
                 },
+                ...(now.hotWaiting != null
+                  ? [
+                      {
+                        label: "Hot, sales-ready, no owner",
+                        value: `${now.hotWaiting} lead${now.hotWaiting === 1 ? "" : "s"}`,
+                        hint: `${now.hotPast ?? 0} past the ${now.hotLimitHours}-working-hour limit`,
+                        alert: (now.hotPast ?? 0) > 0,
+                      },
+                    ]
+                  : []),
                 { label: "Median wait, sales-ready → assigned (MTD)", value: waitValue, hint: waitHint },
                 ...(invoices
                   ? [
@@ -551,6 +650,16 @@ async function collect(
                           staleAlertText(invoices) ??
                           `Revenue and Batteries sold count invoices up to this date · alert after ${invoices.stale_after} working days with no new invoice`,
                         alert: invoices.stale,
+                      },
+                    ]
+                  : []),
+                ...(stockTasks
+                  ? [
+                      {
+                        label: "Stock to upload",
+                        value: stockTasks.line,
+                        hint: "New battery invoices whose serials are not all in the buyer dealer's stock · overdue = open after 2 working days",
+                        alert: stockTasks.overdue > 0,
                       },
                     ]
                   : []),
@@ -573,7 +682,9 @@ async function collect(
             note:
               "One row per ASM. % of target = dealers visited MTD against the ASM's MTD dealer-visit target (“—” = no target set). " +
               "Under a manager: their team (↳) and a team subtotal — % of target against the manager's own target. " +
-              "Total = the ASMs listed; Block A also counts work credited to nobody.",
+              "Total = the ASMs listed; Block A also counts work credited to nobody. " +
+              // A26: the same figures as Admin › Targets, which runs to today.
+              `MTD = ${periods.mtd.from} to ${periods.mtd.to}, the same per-person figures as Admin › Targets (which also counts today).`,
             empty: "No ASMs on the Sales dashboard this month.",
           },
           {

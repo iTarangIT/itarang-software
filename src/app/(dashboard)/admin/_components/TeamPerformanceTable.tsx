@@ -27,7 +27,7 @@ const COLUMNS: { key: SortKey; label: string; numeric: boolean }[] = [
     { key: "touchpoints_today", label: "TP Today", numeric: true },
     { key: "touchpoints_week", label: "TP Week", numeric: true },
     { key: "avg_touchpoints_per_lead", label: "Avg TP/Lead", numeric: true },
-    { key: "avg_time_to_first_touch_hours", label: "Avg 1st Touch", numeric: true },
+    { key: "avg_time_to_first_touch_hours", label: "1st attempt (median working h, 30d)", numeric: true },
     // Converted ÷ (Converted + Lost) they closed — not lead-base conversion (R-08).
     { key: "closed_win_rate_30d", label: "Closed-win % (30d)", numeric: true },
     // Labels carry the live no-touch limits (ID 85) — see columnLabel().

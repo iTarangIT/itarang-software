@@ -17,6 +17,7 @@ import {
 } from "@/lib/api-utils";
 import { NEODOVE_ADMIN_ROLES } from "@/lib/neodove/roles";
 import { isEndpointWired } from "@/lib/neodove/config";
+import { DB_ENDPOINT_REF, campaignsWithStoredEndpoint } from "@/lib/neodove/endpointStore";
 import { mirrorConfigSchema } from "@/lib/neodove/types";
 import { resolveNeodoveAssignee } from "@/lib/neodove/assignAfterPush";
 
@@ -137,9 +138,12 @@ export const GET = withErrorHandler(async () => {
         push_endpoint_ref: string | null;
     }[];
 
+    // A32: campaigns whose endpoint is stored (encrypted) rather than in an env var.
+    const stored = await campaignsWithStoredEndpoint("push");
     const byRef = new Map<string, string[]>();
     for (const c of list) {
-        if (!c.push_endpoint_ref) continue;
+        // "DB" is a marker, not a shared endpoint: each such campaign has its own.
+        if (!c.push_endpoint_ref || c.push_endpoint_ref === DB_ENDPOINT_REF) continue;
         byRef.set(c.push_endpoint_ref, [
             ...(byRef.get(c.push_endpoint_ref) ?? []),
             c.name,
@@ -149,8 +153,8 @@ export const GET = withErrorHandler(async () => {
     return successResponse(
         list.map((c) => ({
             ...c,
-            is_wired: isEndpointWired(c.push_endpoint_ref),
-            endpoint_shared_with: c.push_endpoint_ref
+            is_wired: c.push_endpoint_ref === DB_ENDPOINT_REF ? stored.has(String(c.id)) : isEndpointWired(c.push_endpoint_ref),
+            endpoint_shared_with: c.push_endpoint_ref && c.push_endpoint_ref !== DB_ENDPOINT_REF
                 ? (byRef.get(c.push_endpoint_ref) ?? []).filter((n) => n !== c.name)
                 : [],
         })),

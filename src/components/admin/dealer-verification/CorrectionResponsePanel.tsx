@@ -11,6 +11,7 @@ import {
   Sparkles,
 } from "lucide-react";
 
+import { onFreshFileClick } from "@/lib/storage/freshFileLink";
 export type CorrectionRoundItem = {
   id: string;
   kind: "field" | "document";
@@ -254,6 +255,7 @@ export default function CorrectionResponsePanel({ dealerId, round, onApplied }: 
                     {item.previousDocument?.fileUrl ? (
                       <a
                         href={item.previousDocument.fileUrl}
+                        onClick={(e) => onFreshFileClick(e, item.previousDocument?.fileUrl)}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="mt-1 inline-flex items-center gap-1.5 text-sm font-medium text-slate-600 hover:underline"
@@ -277,6 +279,7 @@ export default function CorrectionResponsePanel({ dealerId, round, onApplied }: 
                     {hasNew ? (
                       <a
                         href={item.newDocument?.fileUrl || "#"}
+                        onClick={(e) => onFreshFileClick(e, item.newDocument?.fileUrl || "#")}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="mt-1 inline-flex items-center gap-1.5 text-sm font-semibold text-[#1F5C8F] hover:underline"

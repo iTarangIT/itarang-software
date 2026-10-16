@@ -24,6 +24,7 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { salesInvoiceFolders } from "@/lib/db/schema";
 import { requireApiAdmin } from "@/lib/auth/requireApiAdmin";
+import { requireAuth } from "@/lib/auth-utils";
 import { isNextRedirectError, errorMessage } from "@/lib/api-utils";
 import {
   describeDriveError,
@@ -61,9 +62,24 @@ const PatchSchema = z
   })
   .refine((o) => Object.keys(o).length > 1, { message: "No fields to update" });
 
+/**
+ * ID 71: Finance marks which folders hold credit notes, so the list (GET) and
+ * the doc-type switch (PATCH doc_kind only) also admit finance_controller.
+ * Adding, removing, filters and scans stay with Admin / Sales Head.
+ */
+const DOC_KIND_ROLES = new Set(["finance_controller"]);
+
+async function guardRead() {
+  const admin = await requireApiAdmin();
+  if (admin.ok) return { ok: true as const, user: admin.user, finance: false };
+  const user = await requireAuth();
+  if (DOC_KIND_ROLES.has((user.role || "").toLowerCase())) return { ok: true as const, user, finance: true };
+  return admin;
+}
+
 export async function GET() {
   try {
-    const guard = await requireApiAdmin();
+    const guard = await guardRead();
     if (!guard.ok) return guard.response;
 
     const rows = await db
@@ -192,7 +208,7 @@ export async function POST(req: NextRequest) {
 
 export async function PATCH(req: NextRequest) {
   try {
-    const guard = await requireApiAdmin();
+    const guard = await guardRead();
     if (!guard.ok) return guard.response;
 
     const parsed = PatchSchema.safeParse(await req.json());
@@ -203,6 +219,12 @@ export async function PATCH(req: NextRequest) {
       );
     }
     const { id, ...fields } = parsed.data;
+    if (guard.finance && Object.keys(fields).some((k) => k !== "doc_kind")) {
+      return NextResponse.json(
+        { success: false, error: { message: "Finance can change only what a folder holds (sales invoices or credit notes)." } },
+        { status: 403 },
+      );
+    }
 
     const update: Record<string, unknown> = { updated_at: new Date() };
     if (fields.is_active !== undefined) update.is_active = fields.is_active;
@@ -210,7 +232,22 @@ export async function PATCH(req: NextRequest) {
     if (fields.label !== undefined) update.label = fields.label || null;
     if (fields.include_names !== undefined) update.include_names = fields.include_names;
     if (fields.exclude_names !== undefined) update.exclude_names = fields.exclude_names;
-    if (fields.doc_kind !== undefined) update.doc_kind = fields.doc_kind;
+    if (fields.doc_kind !== undefined) {
+      update.doc_kind = fields.doc_kind;
+      // ID 71: switching what a folder holds also switches its name filter
+      // when it is still the other kind's default — a folder switched to
+      // credit notes used to keep "sale", so the scan skipped its credit
+      // notes. A filter someone typed by hand is left alone.
+      if (fields.include_names === undefined) {
+        const [cur] = await db
+          .select({ include_names: salesInvoiceFolders.include_names })
+          .from(salesInvoiceFolders)
+          .where(eq(salesInvoiceFolders.id, id));
+        const was = (cur?.include_names ?? "").trim().toLowerCase();
+        if (fields.doc_kind === "credit_note" && (was === "" || was === "sale")) update.include_names = "credit";
+        if (fields.doc_kind === "sale" && was === "credit") update.include_names = "sale";
+      }
+    }
 
     const [row] = await db
       .update(salesInvoiceFolders)

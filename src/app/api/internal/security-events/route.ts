@@ -1,4 +1,5 @@
 import { NextResponse, after } from "next/server";
+import { safeEqual } from "@/lib/cron-auth";
 import { and, eq, gte, isNotNull, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { securityEvents } from "@/lib/db/schema";
@@ -26,7 +27,8 @@ export async function POST(req: Request) {
     // Feature not configured — refuse rather than accept unsigned events.
     return NextResponse.json({ ok: false, error: "detection not configured" }, { status: 503 });
   }
-  if (req.headers.get("x-internal-secret") !== secret) {
+  // ID 130: timing-safe compare.
+  if (!safeEqual(req.headers.get("x-internal-secret") ?? "", secret)) {
     return NextResponse.json({ ok: false, error: "forbidden" }, { status: 403 });
   }
 

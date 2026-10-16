@@ -6,6 +6,7 @@
 //   node --import tsx --env-file=.env.production scripts/refresh-lead-clocks.ts
 //   … --dry-run   compute and print the figures, write nothing
 
+import { ALL_CLOCK_KINDS } from "@/lib/leads/clockRules";
 import { computeLeadClocks, refreshLeadClocks } from "@/lib/leads/clocks";
 
 async function main() {
@@ -15,10 +16,10 @@ async function main() {
     if (dry) {
         const clocks = await computeLeadClocks();
         const by = (k: string) => clocks.filter((c) => c.clock === k);
-        for (const k of ["lead", "owner", "transfer"]) {
+        for (const k of ALL_CLOCK_KINDS) {
             const c = by(k);
             console.log(
-                `${k.padEnd(8)} ${String(c.length).padStart(6)} clocks · attempted ${c.filter((x) => x.first_attempt_at).length}` +
+                `${k.padEnd(10)} ${String(c.length).padStart(6)} clocks · attempted ${c.filter((x) => x.first_attempt_at).length}` +
                     ` · limit passed ${c.filter((x) => x.limit_passed_at).length}` +
                     ` · owner inferred ${c.filter((x) => x.owner_inferred).length} · start inferred ${c.filter((x) => x.start_inferred).length}`,
             );
@@ -29,7 +30,7 @@ async function main() {
             console.log("SKIP  E-337 is not on this database (lead_clocks missing)");
             process.exit(1);
         }
-        console.log(`wrote ${r.clocks} clocks, ${r.passed} limit-passed`);
+        console.log(`wrote ${r.clocks} clocks, ${r.passed} limit-passed, ${r.recorded} new fixed "Limit passed" records`);
     }
     console.log(`${((Date.now() - t0) / 1000).toFixed(1)}s`);
     process.exit(0);

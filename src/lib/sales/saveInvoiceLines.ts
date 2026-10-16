@@ -13,6 +13,7 @@
 import { extractSalesInvoiceLines } from "@/lib/ai/invoices/extractSalesInvoiceLines";
 import { cleanInvoiceLines, linesAddUp, type InvoiceLine } from "@/lib/sales/salesInvoiceLines";
 import { saveDriveLedgerLines } from "@/lib/sales/driveLedgerLines";
+import { recordInvoiceSerials } from "@/lib/inventory/stockUploadTasks/service";
 
 export type StoredLines = { lines: InvoiceLine[]; addUp: boolean };
 
@@ -50,5 +51,8 @@ export async function readAndSaveInvoiceLines(
   } catch (e) {
     console.warn(`[sales-scan] ledger lines failed for ${fileName}: ${e instanceof Error ? e.message : String(e)}`);
   }
+  // ID 174 (E-348): a new battery invoice → its serials and a "Stock to
+  // upload" task for the buyer dealer. Not for credit notes. Never throws.
+  if (source === "drive") await recordInvoiceSerials(invoiceId, read.lines);
   return read;
 }

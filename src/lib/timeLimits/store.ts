@@ -10,7 +10,7 @@
  * Every reader goes through here. Without E-337 every read is the default and
  * a save answers 503, so the code is safe on a database in either state.
  */
-import { sql } from "drizzle-orm";
+import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { istDay } from "@/lib/calendar/officeCalendar";
 import {
@@ -83,6 +83,26 @@ export function limitsOn(day: string, rows: readonly Row[] | null): TimeLimits {
 /** The limits in force on an IST day (default: today). Never throws. */
 export async function getTimeLimits(day: string = istDay(new Date())): Promise<TimeLimits> {
     return limitsOn(day, await changes());
+}
+
+/**
+ * SQL for the value of `key` in force on the IST day `day` (a date expression),
+ * for queries that judge many rows each by its own day — e.g. a past period's
+ * transfers by the limit in force when each transfer happened (ID 85: dated
+ * limits). Without E-337 it is the default as a literal.
+ */
+export function limitOnDaySql(key: TimeLimitKey, day: SQL, withTable: boolean): SQL {
+    const fallback = sql.raw(String(Number(timeLimitDef(key)?.default ?? 0)));
+    if (!withTable) return fallback;
+    return sql`COALESCE((SELECT t.value FROM time_limit_settings t
+                          WHERE t.limit_key = ${key} AND t.effective_from <= (${day})
+                          ORDER BY t.effective_from DESC, t.changed_at DESC, t.id DESC LIMIT 1), ${fallback})`;
+}
+
+/** limitOnDaySql with the table probe done: `(day) => SQL`. */
+export async function limitOnDay(key: TimeLimitKey): Promise<(day: SQL) => SQL> {
+    const withTable = await hasTimeLimitTable();
+    return (day) => limitOnDaySql(key, day, withTable);
 }
 
 /**

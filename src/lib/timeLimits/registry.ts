@@ -11,16 +11,17 @@
  *   working_hours  Mon–Sat 10:00–19:00 IST, holidays off
  *   working_days   Mon–Sat, holidays off
  *   days           calendar days
+ *   count          a number of things, not a time (retry attempts)
  *
  * TO ADD A LIMIT: a row here, then read it with getTimeLimits() where the old
  * constant was. The settings screen and the log pick it up.
  */
 
-export type LimitUnit = "working_hours" | "working_days" | "days";
+export type LimitUnit = "working_hours" | "working_days" | "days" | "count";
 
 export type TimeLimitDef = {
     key: string;
-    group: "Lead clocks" | "Follow-up" | "Onboarding" | "Invoices";
+    group: "Lead clocks" | "Follow-up" | "Quotes" | "Onboarding" | "Invoices";
     label: string;
     unit: LimitUnit;
     default: number;
@@ -62,6 +63,48 @@ export const TIME_LIMITS = [
         max: 30,
         help: "Awaiting field visit overdue (admin alert panel, needs attention, Sales Head actions).",
     },
+    // ── Hot leads (15 Oct rework) ─────────────────────────────────────────────
+    {
+        key: "hot_ready_to_assigned",
+        group: "Lead clocks",
+        label: "Hot lead: sales-ready to having an owner",
+        unit: "working_hours",
+        default: 9,
+        min: 1,
+        max: 72,
+        help: "Hot clock 'Ready → assigned'. A Hot lead with no owner after this is a 'Limit passed'; other leads keep 'Sales-ready lead waiting for an owner'.",
+    },
+    {
+        key: "hot_owner_first_attempt",
+        group: "Lead clocks",
+        label: "Hot lead: owner's first call or visit after it turns Hot (or reaches them Hot)",
+        unit: "working_hours",
+        default: 4,
+        min: 1,
+        max: 72,
+        help: "A fresh clock every time a lead turns Hot, and on every assignment of a Hot lead.",
+    },
+    // ── Retries ───────────────────────────────────────────────────────────────
+    {
+        key: "retry_gap",
+        group: "Lead clocks",
+        label: "Unanswered call: next attempt within",
+        unit: "working_hours",
+        default: 9,
+        min: 1,
+        max: 72,
+        help: "Retry clock: from a call that did not connect to the next call or visit by anyone.",
+    },
+    {
+        key: "retry_max_attempts",
+        group: "Lead clocks",
+        label: "Unanswered calls in a row that are retried on the clock",
+        unit: "count",
+        default: 3,
+        min: 1,
+        max: 10,
+        help: "After this many unanswered calls in a row, the next retry is no longer timed.",
+    },
     // ── Follow-up ─────────────────────────────────────────────────────────────
     {
         key: "quote_no_answer",
@@ -72,6 +115,16 @@ export const TIME_LIMITS = [
         min: 1,
         max: 30,
         help: "Sales Head actions: Quotes with no answer.",
+    },
+    {
+        key: "ceo_quote_approval",
+        group: "Quotes",
+        label: "CEO: approve or reject a quote sent for approval",
+        unit: "working_hours",
+        default: 4,
+        min: 1,
+        max: 72,
+        help: "Quote approval clock, from the quote reaching the CEO queue to the decision. Auto-approved quotes are not timed.",
     },
     {
         key: "said_yes_not_won",
@@ -226,10 +279,12 @@ const UNIT_WORDS: Record<LimitUnit, [string, string]> = {
     working_hours: ["working hour", "working hours"],
     working_days: ["working day", "working days"],
     days: ["day", "days"],
+    count: ["", ""],
 };
 
 /** "4 working hours", "1 working day", "21 days". */
 export function formatLimit(value: number, unit: LimitUnit): string {
+    if (unit === "count") return String(value);
     const [one, many] = UNIT_WORDS[unit];
     return `${value} ${value === 1 ? one : many}`;
 }

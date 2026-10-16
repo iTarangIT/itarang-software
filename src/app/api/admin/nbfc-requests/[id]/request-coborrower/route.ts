@@ -15,6 +15,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { requireAdminAppUser } from "@/lib/kyc/admin-workflow";
+import { nbfcObjectGate } from "@/lib/nbfc/adminRequestAccess";
 import { actionNbfcCoBorrowerRequest } from "@/lib/nbfc/doc-request-actions";
 
 export const runtime = "nodejs";
@@ -39,6 +40,8 @@ export async function POST(
       );
     }
     const { id } = await params;
+    const notYours = await nbfcObjectGate(appUser, "doc_request", id);
+    if (notYours) return notYours;
 
     const data = await actionNbfcCoBorrowerRequest({
       requestId: id,
