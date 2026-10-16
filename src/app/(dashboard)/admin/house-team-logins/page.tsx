@@ -5,9 +5,9 @@ export const dynamic = "force-dynamic";
 
 // ID 182: one login per iTarang team member under the house dealer, so every
 // push and every step on a customer file is recorded under the person — not
-// the shared dealer@itarang.com. Admin only.
+// the shared dealer@itarang.com. Admin and Sales Head.
 export default async function HouseTeamLoginsPage() {
-  await requireRole(["admin"]);
+  await requireRole(["admin", "sales_head"]);
   return (
     <div className="px-6 md:px-8 py-6 space-y-5 max-w-[1100px]">
       <header>

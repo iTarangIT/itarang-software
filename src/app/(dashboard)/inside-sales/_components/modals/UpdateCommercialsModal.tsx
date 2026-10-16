@@ -72,10 +72,14 @@ export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercia
     const [batteriesPerMonth, setBatteriesPerMonth] = useState(prevCard ? String(prevCard.batteries_per_month) : "");
     const [financeFiles, setFinanceFiles] = useState(prevCard ? String(prevCard.finance_files_per_month) : "");
     const cardLocked = currentCommercials?.deal_card_locked ?? null;
-    // ID 186 (Kartik, 14 Oct): the card is asked only for a dealer who is not
-    // onboarded yet. null = still checking (or the check failed: then asked).
+    // ID 186 (16 Oct): the card is shown for every dealer, new or onboarded.
+    // The server says whether THIS user must fill it (optional for ISR, ASM,
+    // Sales Head); until it answers, treat it as required. A card that is
+    // started must be complete either way. The onboarded verdict is shown as
+    // information only.
     const [onboarded, setOnboarded] = useState<DealerOnboardedVerdict | null>(null);
-    const askCard = !onboarded?.onboarded;
+    const [cardRequired, setCardRequired] = useState(true);
+    const cardStarted = [fee, batteriesPerMonth, financeFiles].some((v) => v.trim() !== "");
     const [standardTerms, setStandardTerms] = useState<{ warranty: string; delivery: string } | null>(null);
     const [quoteUrl, setQuoteUrl] = useState(currentCommercials?.quote_document_url ?? "");
     const [quoteFileName, setQuoteFileName] = useState("");
@@ -118,8 +122,8 @@ export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercia
         })();
     }, [open, standardTerms]);
 
-    // ID 186: is the dealer already onboarded? The server decides again on
-    // save; this only hides the card.
+    // ID 186: must this user fill the card, and is the dealer already
+    // onboarded (information)? The server decides again on save.
     useEffect(() => {
         if (!open) return;
         let cancelled = false;
@@ -127,9 +131,12 @@ export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercia
             try {
                 const res = await fetch(`/api/inside-sales/lead/${encodeURIComponent(leadId)}/commercials`);
                 const json = await res.json();
-                if (!cancelled && res.ok && json?.success) setOnboarded(json.data.dealer_onboarded ?? null);
+                if (!cancelled && res.ok && json?.success) {
+                    setOnboarded(json.data.dealer_onboarded ?? null);
+                    setCardRequired(json.data.deal_card_required !== false);
+                }
             } catch {
-                // The card stays asked.
+                // The card stays required; the server decides on save.
             }
         })();
         return () => {
@@ -239,12 +246,14 @@ export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercia
             toast.error("Enter the credit period in days (1–180).");
             return;
         }
-        // ID 172: a quote states the deal card — ID 186: only for a dealer
-        // who is not onboarded yet.
+        // ID 172: a quote states the deal card — ID 186 (16 Oct): optional for
+        // ISR / ASM / Sales Head (left empty = no card), but a started card is
+        // checked in full.
         const feeN = Number(fee);
         const batN = Number(batteriesPerMonth);
         const finN = Number(financeFiles);
-        if (isQuote && askCard) {
+        const sendCard = isQuote && (cardRequired || cardStarted);
+        if (sendCard) {
             if (fee.trim() === "" || !Number.isFinite(feeN) || feeN < 0) {
                 toast.error("Enter the onboarding fee (₹, 0 if waived).");
                 return;
@@ -276,13 +285,13 @@ export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercia
                     dealer_payment_terms: payTerms || "cash",
                     credit_days: payTerms === "credit" ? days : null,
                     // ID 172: derived on the server from finance files / month.
-                    // ID 186: no card for an onboarded dealer — keep the quote's.
+                    // ID 186: with no card on this quote, keep the quote's.
                     customer_finance: prevCard
                         ? prevCard.finance_files_per_month > 0
                         : (currentCommercials?.customer_finance ?? null),
                 };
             }
-            if (isQuote && askCard) {
+            if (sendCard) {
                 body.deal_card = {
                     onboarding_fee: feeN,
                     fee_waived_reason: feeN === 0 ? feeWaivedReason.trim() : null,
@@ -537,19 +546,22 @@ export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercia
                 </div>
                 )}
 
-                {/* ── ID 186: an onboarded dealer gets no deal card ──────── */}
-                {(eventType === "quote_issue" || eventType === "quote_revision") && !askCard && onboarded && (
-                    <p className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 text-xs text-gray-600">
-                        No deal card on this quote. {onboarded.reason} The quotation prints no onboarding fee.
-                    </p>
-                )}
-                {/* ── ID 172: Deal card — required for a dealer not onboarded yet ─ */}
-                {(eventType === "quote_issue" || eventType === "quote_revision") && askCard && (
+                {/* ── ID 172 / 186: Deal card — every dealer; optional for ISR, ASM, Sales Head ─ */}
+                {(eventType === "quote_issue" || eventType === "quote_revision") && (
                     <div className="rounded-lg border border-indigo-100 bg-indigo-50/40 p-3 space-y-3">
                         <div className="flex items-center justify-between">
                             <Label className="!mb-0">Deal card</Label>
-                            <span className="text-[11px] text-gray-500">Required · the CEO sees it on the approval</span>
+                            <span className="text-[11px] text-gray-500">
+                                {cardRequired
+                                    ? "Required · the CEO sees it on the approval"
+                                    : "Optional · leave all three empty to skip, or fill all three"}
+                            </span>
                         </div>
+                        {onboarded?.onboarded && (
+                            <p className="rounded-md border border-gray-100 bg-white px-2 py-1.5 text-[11px] text-gray-600">
+                                Dealer already onboarded: {onboarded.reason}
+                            </p>
+                        )}
                         {cardLocked && (
                             <p className="rounded-md border border-amber-100 bg-amber-50 px-2 py-1.5 text-[11px] text-amber-800">
                                 Locked — {cardLocked === "ceo" ? "the CEO approved" : "the dealer said yes to"} an earlier version.
