@@ -317,6 +317,8 @@ type ItemsPayload = {
 
 function ItemsTab() {
     const qc = useQueryClient();
+    // A16: Admin or Finance maps every unmapped name once — show those first.
+    const [unmappedOnly, setUnmappedOnly] = useState(false);
     const q = useQuery({
         queryKey: ["invoice-ledger-items"],
         queryFn: async () => readData<ItemsPayload>(await fetch("/api/admin/sales-invoices/ledger/items"), "Could not load items"),
@@ -343,14 +345,23 @@ function ItemsTab() {
     if (q.isLoading) return <p className="text-sm text-ink-muted">Loading…</p>;
     if (q.error || !q.data) return <p className="text-sm text-red-600">{(q.error as Error)?.message}</p>;
     const unmapped = q.data.items.filter((i) => !i.product_id).length;
+    const shown = q.data.items
+        .filter((i) => !unmappedOnly || !i.product_id)
+        .sort((a, b) => Number(Boolean(a.product_id)) - Number(Boolean(b.product_id)));
 
     return (
         <div className="space-y-3">
             <p className="text-xs text-ink-muted">
                 Vyapar names items freely; map each to a CRM product so units are counted per SKU. Spellings of one product —
                 same product code, or the same name once serial numbers, colour and warranty text are taken out — are one row,
-                and new invoices for it are mapped on arrival. {unmapped} unmapped.
+                and new invoices for it are mapped on arrival.{" "}
+                <span className={unmapped ? "font-semibold text-amber-700" : ""}>{unmapped} unmapped</span>
+                {unmapped > 0 && " — listed first"}.
             </p>
+            <label className="flex items-center gap-1.5 text-xs text-ink-muted">
+                <input type="checkbox" checked={unmappedOnly} onChange={(e) => setUnmappedOnly(e.target.checked)} />
+                Unmapped only
+            </label>
             <table className="w-full text-xs">
                 <thead className="text-left text-ink-muted">
                     <tr>
@@ -362,7 +373,7 @@ function ItemsTab() {
                     </tr>
                 </thead>
                 <tbody>
-                    {q.data.items.map((i) => (
+                    {shown.map((i) => (
                         <tr key={i.family_key ?? i.item_key} className="border-t border-border">
                             <td className="py-1.5">
                                 {i.item_name.split(FIRST_LINE)[0]}
