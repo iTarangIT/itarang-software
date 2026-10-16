@@ -14,7 +14,7 @@
 // push and the house lead list all compare the dealer code, and every push /
 // act-for-dealer record keeps the person's own users.id and name.
 //
-// Admin only. NOTE: Supabase Auth is ONE pool shared by sandbox and
+// Admin and Sales Head (Sales Head added 16 Oct at the user's request). NOTE: Supabase Auth is ONE pool shared by sandbox and
 // production, so a login created here exists in both; the users row is only
 // written to the database this server talks to (create it on the other DB too
 // when the person needs both).
@@ -47,13 +47,16 @@ const createSchema = z.object({
 
 const patchSchema = z.object({ userId: z.string().uuid(), active: z.boolean() });
 
+/** Who manages the house team logins: Admin and Sales Head (ID 182, 16 Oct). */
+const HOUSE_TEAM_LOGIN_ROLES = ["admin", "sales_head"];
+
 async function house() {
   const h = await resolveHouseDealer();
   return h ? { code: h.dealerCode, sharedUserId: h.uploaderId } : null;
 }
 
 export const GET = withErrorHandler(async () => {
-  await requireRole(["admin"]);
+  await requireRole(HOUSE_TEAM_LOGIN_ROLES);
   const h = await house();
   if (!h) return errorResponse("The iTarang house dealer is not set up on this environment.", 500);
   const rows = await db
@@ -76,7 +79,7 @@ export const GET = withErrorHandler(async () => {
 });
 
 export const POST = withErrorHandler(async (req: Request) => {
-  const admin = await requireRole(["admin"]);
+  const admin = await requireRole(HOUSE_TEAM_LOGIN_ROLES);
   const parsed = createSchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return errorResponse(parsed.error.issues[0]?.message ?? "Check the details", 400);
   const { name, email, phone } = parsed.data;
@@ -134,7 +137,7 @@ export const POST = withErrorHandler(async (req: Request) => {
 });
 
 export const PATCH = withErrorHandler(async (req: Request) => {
-  await requireRole(["admin"]);
+  await requireRole(HOUSE_TEAM_LOGIN_ROLES);
   const parsed = patchSchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return errorResponse("Pick a login.", 400);
   const h = await house();

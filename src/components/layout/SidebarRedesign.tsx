@@ -266,7 +266,7 @@ const ADMIN_SALES_HEAD_GROUPS: LayoutGroup[] = [
             ...both("nbfc-settings"),
             ...both("whatsapp-settings"),
             ...both("gdrive-mirror"),
-            // ID 182 — admin only (sales_head has no such item, so it is skipped).
+            // ID 182 — Admin and Sales Head (16 Oct): one id in both menus.
             "house-team-logins",
             // Anything else the Sales Head's Settings section gains later.
             { section: "Settings" },
