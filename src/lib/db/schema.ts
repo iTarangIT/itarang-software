@@ -7228,6 +7228,40 @@ export const digestRuns = pgTable(
 );
 
 // =============================================================================
+// E-353 — one claim per person for personal digests (ID 194, "My day").
+// Same rules as digest_runs ('sent' terminal, 'failed' retried < 3, stuck
+// 'sending' re-claimable after 15 min); one row per (kind, day, slot, user).
+// =============================================================================
+
+export const digestPersonRuns = pgTable(
+  "digest_person_runs",
+  {
+    id: bigserial({ mode: "number" }).primaryKey().notNull(),
+    kind: varchar("kind", { length: 32 }).notNull(),
+    digest_date: date("digest_date").notNull(),
+    slot: varchar("slot", { length: 16 }).notNull(),
+    user_id: text("user_id").notNull(),
+    email: text("email"),
+    /** 'sending' | 'sent' | 'failed'. 'sent' is terminal. */
+    status: varchar("status", { length: 16 }).notNull(),
+    attempts: integer("attempts").default(0).notNull(),
+    message_id: text("message_id"),
+    error: text("error"),
+    claimed_at: timestamp("claimed_at", { withTimezone: true }).defaultNow().notNull(),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    claimUniq: uniqueIndex("digest_person_runs_claim_uniq").on(
+      table.kind,
+      table.digest_date,
+      table.slot,
+      table.user_id,
+    ),
+    createdIdx: index("digest_person_runs_created_idx").on(table.created_at),
+  }),
+);
+
+// =============================================================================
 // E-082 — Dual Approval Gate primitive
 // Two-person rule for high-impact NBFC actions (battery immobilisation, loan
 // restructuring, risk-rule threshold change, bulk immobilisation, auction lot

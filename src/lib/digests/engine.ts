@@ -42,7 +42,7 @@ import { sendDigestEmail } from "@/lib/email/sendDigestEmail";
 import { getDigestSettings } from "./settings";
 import { digestDateForSlot, slotsDueAt } from "./schedule";
 import type { DigestSettings, DigestSlot } from "./schedule";
-import type { DigestFigures, DigestKindDescriptor } from "./types";
+import type { DigestFigures, DigestKindDescriptor, DigestPerson } from "./types";
 
 /** How long a claim may sit in `sending` before another process may take it. */
 const STUCK_CLAIM_MINUTES = 15;
@@ -179,13 +179,15 @@ async function countAndSend(
   digestDate: string,
   recipients: string[],
   settings: DigestSettings,
+  /** ID 194 — a personal digest passes the person's own collect. */
+  collect: DigestKindDescriptor["collect"] = kind.collect,
 ): Promise<{
   ok: boolean;
   figures: DigestFigures | null;
   messageId: string | null;
   error?: string;
 }> {
-  const counted = await kind.collect(digestDate);
+  const counted = await collect(digestDate);
   if (!counted.ok) {
     return {
       ok: false,
@@ -254,6 +256,167 @@ async function countAndSend(
   };
 }
 
+// ─────────────── ID 194: personal digests (one mail per person) ───────────────
+
+/** E-353 present? Probed per run — a personal kind is inert without it. */
+async function hasPersonRuns(): Promise<boolean> {
+  try {
+    const rows = (await db.execute(
+      sql`SELECT to_regclass('public.digest_person_runs') IS NOT NULL AS ok`,
+    )) as unknown as Array<{ ok: boolean }>;
+    return rows?.[0]?.ok === true;
+  } catch {
+    return false;
+  }
+}
+
+/** The per-person twin of claimSlot: same retry and stuck-claim rules. */
+async function claimPerson(
+  kind: string,
+  slot: DigestSlot,
+  digestDate: string,
+  person: DigestPerson,
+): Promise<number | null> {
+  try {
+    const rows = (await db.execute(sql`
+      INSERT INTO digest_person_runs
+        (kind, digest_date, slot, user_id, email, status, attempts, claimed_at)
+      VALUES
+        (${kind}, ${digestDate}::date, ${slot}, ${person.id}, ${person.email}, 'sending', 1, now())
+      ON CONFLICT (kind, digest_date, slot, user_id)
+      DO UPDATE SET
+        status     = 'sending',
+        attempts   = digest_person_runs.attempts + 1,
+        claimed_at = now(),
+        email      = EXCLUDED.email
+      WHERE
+        (digest_person_runs.status = 'failed' AND digest_person_runs.attempts < ${MAX_ATTEMPTS})
+        OR (digest_person_runs.status = 'sending'
+            AND digest_person_runs.claimed_at < now() - make_interval(mins => ${STUCK_CLAIM_MINUTES}))
+      RETURNING id
+    `)) as unknown as Array<{ id: number }>;
+    return rows?.[0]?.id ?? null;
+  } catch (err) {
+    console.error(`[digest:${kind}] person claim failed for ${person.id}:`, err);
+    return null;
+  }
+}
+
+async function finishPerson(
+  id: number,
+  status: "sent" | "failed",
+  messageId: string | null,
+  error: string | null,
+): Promise<void> {
+  try {
+    await db.execute(sql`
+      UPDATE digest_person_runs
+         SET status = ${status}, message_id = ${messageId}, error = ${error}
+       WHERE id = ${id}
+    `);
+  } catch (err) {
+    console.error("[digest] failed to close person run row:", err);
+  }
+}
+
+/**
+ * One summary row per slot in digest_runs, so the settings screen's history
+ * and "last sent" read a personal kind like any other. Written after the
+ * fan-out; a re-run of the slot (retrying the failed people) overwrites it.
+ */
+async function recordFanOut(
+  kind: string,
+  slot: DigestSlot,
+  digestDate: string,
+  triggeredBy: DigestTrigger,
+  tally: { sent: number; failed: number; already: number },
+  errors: string[],
+): Promise<void> {
+  const status = tally.failed > 0 ? "failed" : "sent";
+  const counts = { "People mailed": tally.sent, Failed: tally.failed, "Already sent": tally.already };
+  try {
+    await db.execute(sql`
+      INSERT INTO digest_runs
+        (kind, digest_date, slot, status, attempts, triggered_by, recipients, counts, error, claimed_at)
+      VALUES
+        (${kind}, ${digestDate}::date, ${slot}, ${status}, 1, ${triggeredBy},
+         ${`${tally.sent + tally.already} people`}, ${JSON.stringify(counts)}::jsonb,
+         ${errors.length ? errors.slice(0, 5).join(" | ") : null}, now())
+      ON CONFLICT (kind, digest_date, slot) WHERE slot IN ('morning', 'evening')
+      DO UPDATE SET
+        status       = EXCLUDED.status,
+        attempts     = digest_runs.attempts + 1,
+        triggered_by = EXCLUDED.triggered_by,
+        recipients   = EXCLUDED.recipients,
+        counts       = EXCLUDED.counts,
+        error        = EXCLUDED.error,
+        claimed_at   = now()
+    `);
+  } catch (err) {
+    console.error(`[digest:${kind}] failed to record the fan-out summary:`, err);
+  }
+}
+
+/** The people a personal kind mails, with the settings' role switches applied. */
+export async function digestPeople(
+  kind: DigestKindDescriptor,
+  settings: DigestSettings,
+): Promise<DigestPerson[]> {
+  if (!kind.perRecipient) return [];
+  try {
+    return await kind.perRecipient.resolve({ roles: settings.roles });
+  } catch (err) {
+    console.error(`[digest:${kind.id}] could not list the people to mail:`, err);
+    return [];
+  }
+}
+
+/** Mail every person their own copy for one slot; each person claimed alone. */
+async function fanOut(
+  kind: DigestKindDescriptor,
+  people: DigestPerson[],
+  target: { slot: DigestSlot; digestDate: string },
+  settings: DigestSettings,
+  triggeredBy: DigestTrigger,
+): Promise<DigestRunOutcome> {
+  const per = kind.perRecipient!;
+  const tally = { sent: 0, failed: 0, already: 0 };
+  const errors: string[] = [];
+  const mailed: string[] = [];
+  // One at a time: the collects share a per-run cache, and a mailbox that
+  // throttles copes better with a queue than with 40 parallel sends.
+  for (const person of people) {
+    const id = await claimPerson(kind.id, target.slot, target.digestDate, person);
+    if (id == null) {
+      tally.already += 1;
+      continue;
+    }
+    const r = await countAndSend(kind, target.slot, target.digestDate, [person.email], settings, (d) =>
+      per.collect(d, person),
+    );
+    await finishPerson(id, r.ok ? "sent" : "failed", r.messageId, r.error ?? null);
+    if (r.ok) {
+      tally.sent += 1;
+      mailed.push(person.email);
+    } else {
+      tally.failed += 1;
+      errors.push(`${person.name}: ${r.error ?? "unknown"}`);
+    }
+  }
+  if (tally.sent + tally.failed > 0) {
+    await recordFanOut(kind.id, target.slot, target.digestDate, triggeredBy, tally, errors);
+  }
+  return {
+    kind: kind.id,
+    slot: target.slot,
+    digestDate: target.digestDate,
+    sent: tally.failed === 0 && tally.sent > 0,
+    ...(tally.sent + tally.failed === 0 ? { skipped: `all ${tally.already} people already mailed (or in flight)` } : {}),
+    recipients: mailed,
+    error: errors.length ? `${tally.failed} of ${people.length} failed: ${errors.slice(0, 3).join(" | ")}` : undefined,
+  };
+}
+
 /**
  * Who a send goes to: the stored recipients plus the kind's `audience`,
  * de-duplicated without regard to case. An audience that fails to resolve is
@@ -299,6 +462,8 @@ export async function runDigest(opts: {
   toOverride?: string[];
   /** Test sends only — count this IST day instead of the slot's own. */
   istDayOverride?: string;
+  /** Test sends of a personal kind only — whose mail to build (default: the first person). */
+  personId?: string;
 }): Promise<DigestRunResult> {
   const { kind } = opts;
   const now = opts.now ?? new Date();
@@ -350,7 +515,31 @@ export async function runDigest(opts: {
       opts.istDayOverride ??
       digestDateForSlot(allowedSlots.has("evening") ? "evening" : "morning", now);
 
-    const r = await countAndSend(kind, "test", digestDate, recipients, settings);
+    // ID 194 — a personal kind's test is ONE person's mail (chosen, else the
+    // first), sent to the test addresses, never to that person.
+    let collect: DigestKindDescriptor["collect"] = kind.collect;
+    if (kind.perRecipient) {
+      const allRoles = Object.fromEntries(Object.keys(settings.roles).map((k) => [k, true]));
+      const everyone = await kind.perRecipient.resolve({ roles: allRoles }).catch(() => [] as DigestPerson[]);
+      const person = opts.personId ? everyone.find((p) => p.id === opts.personId) : everyone[0];
+      if (!person) {
+        return {
+          ok: false,
+          outcomes: [
+            {
+              kind: kind.id,
+              slot: "test",
+              digestDate,
+              sent: false,
+              error: opts.personId ? "that person is not on this digest's list" : "nobody to write a test mail for",
+            },
+          ],
+        };
+      }
+      collect = (d) => kind.perRecipient!.collect(d, person);
+    }
+
+    const r = await countAndSend(kind, "test", digestDate, recipients, settings, collect);
     await recordTestRun(
       kind.id,
       digestDate,
@@ -394,9 +583,27 @@ export async function runDigest(opts: {
     };
   }
 
+  // ID 194 — a personal kind mails people, not the stored list, and needs
+  // its per-person claim table.
+  if (kind.perRecipient && !(await hasPersonRuns())) {
+    return {
+      ok: true,
+      outcomes: [
+        {
+          kind: kind.id,
+          slot: opts.slot ?? "morning",
+          digestDate: "",
+          sent: false,
+          skipped: "E-353 (digest_person_runs) is not applied on this database",
+        },
+      ],
+    };
+  }
+  const people = kind.perRecipient ? await digestPeople(kind, settings) : [];
+
   // No recipients = inert, and the ledger must say so rather than record a
   // "sent" that went to nobody (see normalizeRecipients / defaultSettings).
-  const recipients = await digestRecipients(kind, settings);
+  const recipients = kind.perRecipient ? people.map((p) => p.email) : await digestRecipients(kind, settings);
   if (recipients.length === 0) {
     return {
       ok: true,
@@ -447,6 +654,10 @@ export async function runDigest(opts: {
   const outcomes: DigestRunOutcome[] = [];
 
   for (const target of targets) {
+    if (kind.perRecipient) {
+      outcomes.push(await fanOut(kind, people, target, settings, opts.triggeredBy));
+      continue;
+    }
     const id = await claimSlot(
       kind.id,
       target.slot,

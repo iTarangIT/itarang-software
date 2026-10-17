@@ -63,7 +63,6 @@ import { sql } from "drizzle-orm";
 
 import type { SalesDashboard, SalesSpocBlock } from "@/lib/admin/salesDashboardTypes";
 import { connectedCall, engagedCall, transferCredit, wasHotAt } from "@/lib/reports/metricDefinitions";
-import { awaitingFieldVisitSql } from "@/lib/asm/transferVisitLimit";
 import { fmtValue, pctOfTarget, type Period } from "./salesDailyBlockA";
 import { istRangeTz } from "./window";
 
@@ -612,6 +611,9 @@ async function tables(db: Exec): Promise<{ clocks: boolean; events: boolean }> {
  */
 export async function loadAwaitingFieldVisit(db: Exec): Promise<Map<string, number> | null> {
     try {
+        // Imported here, not at module scope: transferVisitLimit pulls in the db
+        // client, and listing the digest kinds must not need DATABASE_URL.
+        const { awaitingFieldVisitSql } = await import("@/lib/asm/transferVisitLimit");
         const rows = (await db.execute(sql`
             SELECT COALESCE(dl.asm_id, dl.current_owner_id) AS u, COUNT(*)::int AS n
               FROM dealer_leads dl
