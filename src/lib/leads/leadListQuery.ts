@@ -23,6 +23,7 @@ import type { ScrapeRunFacet } from "@/lib/leads/acquisitionCampaigns";
 import { CAMPAIGN_NONE } from "@/lib/leads/campaign";
 import { BUSINESS_TYPE_UNSET } from "@/lib/leads/businessType";
 import { FOLLOW_UP_AGEING_BASIS } from "@/lib/leads/followUpAgeing";
+import { awaitingAssignment, readySplitSql, type ReadySplit } from "@/lib/leads/salesReady";
 import { SOURCE_DOOR_NONE } from "@/lib/leads/leadSourceVocab";
 import { ownerScopeIds } from "@/lib/users/teamRules";
 
@@ -117,6 +118,16 @@ export type LeadListFilters = {
      * false shows both. `contactability: "only"` still narrows to flagged.
      */
     hideDead?: boolean | null;
+    /**
+     * ID 184 — "Ready, no owner": exactly awaitingAssignment() (salesReady.ts),
+     * the rule behind the Sales dashboard card, the CEO card and Ready to
+     * Assign, so this list and its export give the card's count. Overrides
+     * hide-dead (the rule has its own contactability clause) and matches the
+     * state exactly, as the card does.
+     */
+    readyNoOwner?: boolean;
+    /** With readyNoOwner: one of the card's buckets (Hot wins, then AI qualified). */
+    readySplit?: ReadySplit | null;
     /**
      * Rep-set temperature — lower(interest_level) — the same field the ASM /
      * Inside Sales queues filter on. NOT final_intent_score (see intentPredicate).
@@ -425,7 +436,12 @@ function buildWhere(f: LeadListFilters, opts?: { ignoreIntent?: boolean }) {
     } else if (f.businessType) {
         conds.push(sql`dl.business_type = ${f.businessType}`);
     }
-    if (f.state) conds.push(sql`dl.state ILIKE ${`%${f.state}%`}`);
+    if (f.readyNoOwner) {
+        conds.push(awaitingAssignment(sql`dl`));
+        if (f.readySplit) conds.push(sql`${readySplitSql(sql`dl`)} = ${f.readySplit}`);
+    }
+    if (f.state && f.readyNoOwner) conds.push(sql`lower(trim(dl.state)) = lower(trim(${f.state}))`);
+    else if (f.state) conds.push(sql`dl.state ILIKE ${`%${f.state}%`}`);
     if (f.city) conds.push(sql`dl.city ILIKE ${`%${f.city}%`}`);
     // E-236. Emitted ONLY when the filter is set, which is what lets a database
     // without the migration keep serving this list for everyone who does not use
@@ -531,7 +547,7 @@ function buildWhere(f: LeadListFilters, opts?: { ignoreIntent?: boolean }) {
     // ID 36 — read via to_jsonb so a DB without E-314 shows everything.
     // "Hide dead & disqualified" (default on): flagged numbers AND AI-
     // disqualified leads (current_status) are out unless the user unticks it.
-    const hideDead = f.hideDead !== false && f.contactability !== "include";
+    const hideDead = f.hideDead !== false && f.contactability !== "include" && !f.readyNoOwner;
     if (f.contactability === "only") {
         conds.push(sql`(to_jsonb(dl) ->> 'contactability') IS NOT NULL`);
     } else if (hideDead) {

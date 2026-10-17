@@ -2,7 +2,11 @@ import Link from "next/link";
 import { requireRole } from "@/lib/auth-utils";
 import {
     countAwaitingAssignment,
+    isReadySplit,
     listReadyToAssign,
+    READY_NO_OWNER_TITLE,
+    READY_SPLIT_LABEL,
+    READY_SPLITS,
     salesReadyReasonLabel,
 } from "@/lib/leads/salesReady";
 import { LEAD_STATUS_LABEL } from "@/lib/leads/queueFilters";
@@ -29,20 +33,23 @@ const ASSIGN_ROLES: readonly string[] = LEADS_BULK_ROLES;
 export default async function ReadyToAssignPage({
     searchParams,
 }: {
-    searchParams: Promise<{ min_days?: string }>;
+    searchParams: Promise<{ min_days?: string; split?: string }>;
 }) {
     const user = await requireRole(["admin", "sales_head", "ceo", "business_head", "sales_manager", "partner"]);
     const canAssign = ASSIGN_ROLES.includes(user.role);
 
-    const requested = Number.parseInt((await searchParams).min_days ?? "", 10);
+    const sp = await searchParams;
+    const requested = Number.parseInt(sp.min_days ?? "", 10);
     const minDays = Number.isFinite(requested) && requested > 0 ? Math.min(requested, 3650) : 0;
+    // ID 184: Hot / AI qualified / other, the card's split (one bucket per lead).
+    const split = isReadySplit(sp.split) ? sp.split : undefined;
     const [counts, rows] = await Promise.all([
         countAwaitingAssignment(),
-        listReadyToAssign({ minDays, limit: LIST_CAP }),
+        listReadyToAssign({ minDays, limit: LIST_CAP, split }),
     ]);
     const overdueDays = counts.overdueDays;
-    const overdueOnly = minDays === overdueDays;
-    const showing = minDays === 0 ? counts.total : overdueOnly ? counts.overdue : rows.length;
+    const overdueOnly = minDays === overdueDays && !split;
+    const showing = split ? (minDays === 0 ? counts.split[split] : rows.length) : minDays === 0 ? counts.total : overdueOnly ? counts.overdue : rows.length;
 
     const tab = (href: string, label: string, n: number, active: boolean) => (
         <Link
@@ -60,7 +67,7 @@ export default async function ReadyToAssignPage({
             <header>
                 <h1 className="text-2xl font-semibold tracking-tight text-ink">Ready to assign</h1>
                 <p className="mt-1 text-sm text-ink-muted">
-                    Leads that became sales-ready and have no owner.{" "}
+                    {READY_NO_OWNER_TITLE}: leads that became sales-ready and have no owner.{" "}
                     {canAssign ? "Tick leads and assign them from here. " : ""}
                     The wait is counted from the Sales-ready event (or from when a reactivated lead came back to the
                     pool). Leads with a dead or non-responsive number are not listed.
@@ -68,7 +75,10 @@ export default async function ReadyToAssignPage({
             </header>
 
             <div className="flex flex-wrap items-center gap-2">
-                {tab("/admin/ready-to-assign", "All awaiting", counts.total, minDays === 0)}
+                {tab("/admin/ready-to-assign", "All awaiting", counts.total, minDays === 0 && !split)}
+                {READY_SPLITS.map((k) =>
+                    tab(`/admin/ready-to-assign?split=${k}`, READY_SPLIT_LABEL[k], counts.split[k], split === k && minDays === 0),
+                )}
                 {tab(
                     `/admin/ready-to-assign?min_days=${overdueDays}`,
                     `Waiting ${overdueDays}+ days`,
@@ -78,6 +88,12 @@ export default async function ReadyToAssignPage({
                 {counts.oldestDays != null && (
                     <span className="text-xs text-gray-500">Longest wait: {counts.oldestDays} days</span>
                 )}
+                <Link
+                    href={`/leads?ready_no_owner=1${split ? `&ready_split=${split}` : ""}`}
+                    className="text-xs font-medium text-brand-600 hover:underline"
+                >
+                    Same list in Leads (download)
+                </Link>
             </div>
 
             {rows.length === 0 ? (

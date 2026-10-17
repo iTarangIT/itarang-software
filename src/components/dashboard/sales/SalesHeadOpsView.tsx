@@ -400,7 +400,7 @@ export function SalesHeadOpsView() {
         href,
     });
     const tiles: Tile[] = [
-        actionTile("sales_ready", "Sales-ready leads with no owner", "now", "/admin/ready-to-assign"),
+        actionTile("sales_ready", "Ready leads with no owner", "now", "/admin/ready-to-assign"),
         actionTile("hot_not_called", "Hot leads not called in time", "now"),
         actionTile("visit_overdue", "Waiting for a field visit", "now"),
         actionTile("won_undo_requests", "Undo Mark Won requests waiting", "now"),
