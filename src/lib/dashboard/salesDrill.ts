@@ -20,6 +20,8 @@
  *                            lostStage()
  *   Ecofy leads              ecofy_all / ecofy_open / ecofy_queue / ecofy_stage —
  *                            api/ecofy/stage-summary
+ *   Waiting for a field      fv_* (ID 190) — fieldVisitTrend.ts
+ *   visit (comparison)       fieldVisitSegmentsSql, the query that counts them
  *
  * Accounts by owner reads rows the page already holds (listDealerHealth), so it
  * has no kind here. scripts/verify-sales-drill.ts checks every count.
@@ -34,6 +36,7 @@ import { accountOwnerOn, dealerLeadByGstin, GSTIN_KEY } from "@/lib/leads/gstinM
 import { hasAccountOwnershipTables } from "@/lib/accounts/tables";
 import { ENGAGED_OUTCOMES } from "@/lib/asm/types";
 import { LOST_REASON } from "@/lib/lifecycle/transitions";
+import { FV_COLUMN, fieldVisitSegmentsSql, type FvMeasure } from "@/lib/dashboard/fieldVisitTrend";
 
 export const DRILL_KINDS = [
     // Calling (inside sales) — per person
@@ -72,6 +75,16 @@ export const DRILL_KINDS = [
     "ecofy_open",
     "ecofy_queue",
     "ecofy_stage",
+    // ID 190 — Waiting for a field visit, per period (per ASM / team / total)
+    "fv_pending",
+    "fv_new",
+    "fv_visited",
+    "fv_visited_backlog",
+    "fv_visited_new",
+    "fv_left",
+    "fv_moved",
+    "fv_waiting",
+    "fv_past_limit",
 ] as const;
 export type DrillKind = (typeof DRILL_KINDS)[number];
 
@@ -107,6 +120,28 @@ export const DRILL_TITLES: Record<DrillKind, string> = {
     ecofy_open: "Ecofy leads — open",
     ecofy_queue: "Ecofy leads — pickup queue",
     ecofy_stage: "Ecofy leads — stage",
+    fv_pending: "Waiting for a field visit at the start",
+    fv_new: "Moved to an ASM in the period",
+    fv_visited: "First visits done",
+    fv_visited_backlog: "First visits done, of the leads waiting at the start",
+    fv_visited_new: "First visits done, of the leads new in the period",
+    fv_left: "Left the queue without a visit (not needed, handed back, Lost)",
+    fv_moved: "Moved on without a visit (another ASM, quote approved, …)",
+    fv_waiting: "Still waiting at the end",
+    fv_past_limit: "Still waiting at the end, past the limit",
+};
+
+/** The fv_* kinds and the measure each one lists. */
+export const FV_DRILL_MEASURE: Partial<Record<DrillKind, FvMeasure>> = {
+    fv_pending: "pending",
+    fv_new: "new",
+    fv_visited: "visited",
+    fv_visited_backlog: "visited_backlog",
+    fv_visited_new: "visited_new",
+    fv_left: "left",
+    fv_moved: "moved",
+    fv_waiting: "waiting",
+    fv_past_limit: "past_limit",
 };
 
 export type DrillFilters = {
@@ -118,6 +153,8 @@ export type DrillFilters = {
     business_type?: string | null;
     /** The screen's Person filter. */
     spoc_id?: string | null;
+    /** fv_* kinds only: the Needs-action page's Team filter (field / inside / all). */
+    team?: string | null;
 };
 
 export type DrillRow = {
@@ -338,8 +375,28 @@ async function leadEvents(kind: DrillKind, f: DrillFilters, persons: string[] | 
                           AND dl.lost_reason IN (${list(LOST_REASON.filter((r) => r !== "onboarding_dropout"))})
                           AND dl.closed_at IS NOT NULL AND ${onIstDays(sql`dl.closed_at`, f)}
                           AND COALESCE(h.from_status, 'Unknown') = ${key ?? ""} ${scope}`;
-        default:
-            return null;
+        default: {
+            const measure = FV_DRILL_MEASURE[kind];
+            if (!measure) return null;
+            // fieldVisitTrend.ts counts exactly these segments: the period, the
+            // state and the person / team filters are applied inside the query.
+            const team = f.team === "field" || f.team === "inside" ? f.team : "all";
+            const segs = await fieldVisitSegmentsSql({ state: f.state, ownerId: f.spoc_id, team }, f.from, f.to);
+            const day = (ts: SQL) => sql`to_char((${ts}) AT TIME ZONE ${IST}, 'DD Mon')`;
+            return sql`SELECT g.lead_id, g.asm_id AS person,
+                              CASE WHEN g.waiting THEN g.seg_start ELSE g.seg_end END AS at,
+                              concat_ws(' · ',
+                                  'In the queue since ' || ${day(sql`g.wait_start`)},
+                                  CASE WHEN g.seg_start > g.wait_start THEN 'with this ASM since ' || ${day(sql`g.seg_start`)} END,
+                                  CASE WHEN g.visited THEN 'visited ' || ${day(sql`g.seg_end`)} || ' after ' || g.days_to_visit || ' working days'
+                                            || CASE WHEN g.visited_in_limit THEN ' (within the limit)' ELSE ' (past the limit)' END
+                                       WHEN g.left_q THEN 'left without a visit ' || ${day(sql`g.seg_end`)}
+                                       WHEN g.moved THEN 'moved on ' || ${day(sql`g.seg_end`)}
+                                       ELSE g.age_end || ' working days waiting'
+                                            || CASE WHEN g.past_limit THEN ' · past the limit (' || g.lim || ')' ELSE '' END END) AS detail
+                         FROM (${segs}) g
+                        WHERE g.${sql.raw(FV_COLUMN[measure])} ${who(sql`g.asm_id`, { ...f, spoc_id: null }, persons)}`;
+        }
     }
 }
 
