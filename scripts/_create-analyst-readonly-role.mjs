@@ -33,8 +33,11 @@
 // numbers and pincodes (address = city only). Ecofy's customer table is no longer granted at
 // all: the analyst reads `analyst_ecofy_leads`, a view that shows each customer as
 // "Customer #<code>" (the same code every time, from the row id), city and state only, and no
-// phone, email, address, pincode, case number, link or snapshot. Customer loan files
-// (loan_files, loan_applications, loan_sanctions, nbfc_loans, …) are not on ALLOWED and stay off.
+// phone, email, address, pincode, case number, link or snapshot. Customer loan files are read
+// the same way (Apoorv via Kartik, 10 Oct): `analyst_loan_files` and `analyst_loan_applications`
+// show "Customer #<code>", the customer's city and state only, the amounts, dates and statuses —
+// no name, co-borrower, NBFC reference / loan account number, disbursal reference, EMI schedule
+// or rejection text. The base tables (and loan_sanctions, nbfc_loans, …) stay off ALLOWED.
 import postgres from "postgres";
 
 const ROLE = "analyst_ro";
@@ -124,6 +127,34 @@ const MASKED_VIEWS = [
              assigned_to_user_id, assigned_role, assigned_at, next_follow_up_at,
              next_appointment_at, created_at, updated_at
         FROM public.ecofy_leads`,
+  },
+  {
+    name: "analyst_loan_files",
+    base: "loan_files",
+    sql: `CREATE OR REPLACE VIEW public.analyst_loan_files AS
+      SELECT f.id,
+             'Customer #' || left(replace(coalesce(f.lead_id, f.id)::text, '-', ''), 8) AS customer,
+             f.lead_id, f.loan_application_id, f.dealer_id, l.city, l.state,
+             f.loan_amount, f.interest_rate, f.tenure_months, f.emi_amount, f.down_payment,
+             f.processing_fee, f.disbursal_status, f.disbursed_amount, f.disbursed_at, f.total_paid,
+             f.total_outstanding, f.next_emi_date, f.overdue_amount, f.overdue_days, f.loan_status,
+             f.closure_date, f.closure_type, f.created_at, f.updated_at
+        FROM public.loan_files f
+        LEFT JOIN public.leads l ON l.id::text = f.lead_id::text`,
+  },
+  {
+    name: "analyst_loan_applications",
+    base: "loan_applications",
+    sql: `CREATE OR REPLACE VIEW public.analyst_loan_applications AS
+      SELECT a.id,
+             'Customer #' || left(replace(coalesce(a.lead_id, a.id)::text, '-', ''), 8) AS customer,
+             a.lead_id, a.dealer_id, l.city, l.state,
+             a.loan_amount, a.interest_rate, a.tenure_months, a.emi_amount, a.down_payment,
+             a.facilitation_fee, a.facilitation_fee_status, a.facilitation_fee_amount, a.documents_uploaded,
+             a.status, a.application_status, a.company_validation_status, a.nbfc_name,
+             a.submitted_at, a.approved_at, a.disbursed_at, a.created_at, a.updated_at
+        FROM public.loan_applications a
+        LEFT JOIN public.leads l ON l.id::text = a.lead_id::text`,
   },
 ];
 

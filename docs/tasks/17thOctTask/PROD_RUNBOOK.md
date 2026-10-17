@@ -112,3 +112,20 @@ Then deactivate the people who have left in Admin › Settings › Logins.
   their source lead.
 - **WhatsApp assistant (A34):** counts match the CRM on prod. Voice notes
   and reply language still need one live test call with Sonu or Nidhi.
+
+## 9. 17 Oct second sheet (Aditya_Task_List.xlsx): prod steps
+
+Code is on `Aditya` (commits 50272828..52adcdcd). Nothing below has been run on prod.
+
+1. **E-353 (ID 194 My day)**: DONE 2026-10-17 on db-1 and db-2 (`node scripts/_apply-e353.mjs database-2`). Without it,
+   My day sends nothing (logged as skipped); nothing else changes.
+2. **My day switch-on**: Admin › Settings › My Day Emails. Send one test with "Test as"
+   an ISR and one with a manager. It goes to your own address. Then tick the roles and
+   enable it. Check first: `node --import tsx --env-file=.env.production scripts/verify-sales-daily.ts <day> --my-day <email>`.
+3. **ID 167 Analyst**: §6 (create `analyst_ro` on db-2) now also creates the masked views
+   `analyst_loan_files` / `analyst_loan_applications`. Then delete the saved outside sources:
+   `node --import tsx --env-file=.env.production scripts/_delete-analyst-outside-connections.ts`
+   (dry run), then add `--apply`. The CRM already hides and refuses them, so this is cleanup.
+4. **Checks after deploy (read-only)**: `verify-id190-field-visit.ts`, `verify-id184-ready-no-owner.ts`,
+   `verify-id192-idle.ts`.
+5. Rows 70 / 130 / 5: §4 and §3 above, unchanged. Row 188 waits on Anirudh's format.

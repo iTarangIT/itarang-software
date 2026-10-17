@@ -91,6 +91,13 @@ export type LeadFilters = {
      * dead-number / non-responsive / AI-disqualified leads shown. URL: hide_dead=0.
      */
     showDead: "" | "1";
+    /**
+     * ID 184: "1" = only the Sales dashboard card's "Ready leads with no owner"
+     * (awaitingAssignment). URL: ready_no_owner=1. Oversight roles only.
+     */
+    readyNoOwner: "" | "1";
+    /** With readyNoOwner: "" | hot | ai | other (the card's split). URL: ready_split. */
+    readySplit: string;
 };
 
 export const EMPTY_FILTERS: LeadFilters = {
@@ -122,6 +129,8 @@ export const EMPTY_FILTERS: LeadFilters = {
     callback: "",
     businessType: "",
     showDead: "",
+    readyNoOwner: "",
+    readySplit: "",
 };
 
 // Filters tucked behind the "More filters" disclosure. Counted for the badge so
@@ -202,6 +211,10 @@ export function toSearchParams(
     if (f.callback) p.set("callback", f.callback);
     if (f.businessType) p.set("business_type", f.businessType);
     if (f.showDead) p.set("hide_dead", "0");
+    if (f.readyNoOwner) {
+        p.set("ready_no_owner", "1");
+        if (f.readySplit) p.set("ready_split", f.readySplit);
+    }
     return p;
 }
 
@@ -266,5 +279,7 @@ export function fromSearchParams(sp: URLSearchParams): LeadFilters {
         // reason as the fields above.
         businessType: businessTypeFilterParam(sp.get("business_type")) ?? "",
         showDead: sp.get("hide_dead") === "0" ? "1" : "",
+        readyNoOwner: sp.get("ready_no_owner") === "1" ? "1" : "",
+        readySplit: ["hot", "ai", "other"].includes(sp.get("ready_split") ?? "") ? (sp.get("ready_split") as string) : "",
     };
 }

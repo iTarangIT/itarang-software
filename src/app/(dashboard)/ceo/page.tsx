@@ -452,9 +452,10 @@ export default function CEODashboard() {
           n: x.awaiting_assignment_total,
           icon: UserPlus,
           tone: "warn",
-          label: "Sales-ready leads with no owner",
+          label: "Ready leads with no owner",
           count: num(x.awaiting_assignment_total),
-          sub: `${num(x.unassigned_over_7d)} waiting ${x.unassigned_overdue_days}+ days`,
+          // ID 184: the same Hot / AI / other split as the Sales dashboard card.
+          sub: `${x.awaiting_assignment_split ? `${num(x.awaiting_assignment_split.hot)} Hot · ${num(x.awaiting_assignment_split.ai)} AI qualified · ${num(x.awaiting_assignment_split.other)} other · ` : ""}${num(x.unassigned_over_7d)} waiting ${x.unassigned_overdue_days}+ days`,
           href: "/admin/ready-to-assign",
           cta: "Open list",
         },

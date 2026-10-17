@@ -17,6 +17,7 @@ import { dealerValidationDigest } from "./kinds/dealer-validation";
 import { idleWeeklyDigest } from "./kinds/idle-weekly";
 import { targetsPendingDigest } from "./kinds/targets-pending";
 import { kycReviewDigest } from "./kinds/kyc-review";
+import { myDayDigest } from "./kinds/my-day";
 import { salesDailyDigest } from "./kinds/sales-daily";
 import { scrapBuybackDigest } from "./kinds/scrap-buyback";
 import type { DigestKindDescriptor, DigestKindId } from "./types";
@@ -29,6 +30,7 @@ export const DIGEST_KINDS: DigestKindDescriptor[] = [
   buybackDailyDigest,
   idleWeeklyDigest,
   targetsPendingDigest,
+  myDayDigest,
 ];
 
 export function digestKind(id: string): DigestKindDescriptor | null {

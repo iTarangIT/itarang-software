@@ -21,10 +21,10 @@
  *             is listed with visit_overdue = true even below its idle
  *             threshold. Only on the page (no `minDays`); the weekly mail keeps
  *             its plain idle rule.
- *   Parked    (ID 192 point 2): a lead whose follow-up is more than
- *             FOLLOW_UP_HORIZON_DAYS ahead is not idle and not on the list; it
- *             is counted per holder as `parked`, so a far-off date is visible
- *             without hiding the lead from the manager.
+ *   Far follow-up (ID 192, Kartik 15 Oct): a follow-up more than
+ *             FOLLOW_UP_HORIZON_DAYS ahead is ignored — the lead ages on its
+ *             other dates and IS listed, with the date on the row. Counted per
+ *             holder as `parked` ("of which follow-up over 30 days ahead").
  *   Critical  the second band (the weekly mail's second column) is the
  *             stale_critical time limit (default 14 working days), not a
  *             fixed 14 (ID 192 point 3 / Decision 6).
@@ -58,6 +58,8 @@ export type NeedsAttentionRow = {
     interest_level: string | null;
     days_idle: number;
     last_worked_at: string | null;
+    /** ID 192 check #3 — shown on the row; one more than 30 days ahead does not hold the clock. */
+    next_follow_up_at: string | null;
     last_disposition: string | null;
     last_disposition_bucket: string | null;
     non_responsive: boolean;
@@ -70,7 +72,12 @@ const OPEN_LIST = sql.raw(WORKABLE_STATUSES.map((s) => `'${s}'`).join(", "));
 const IDLE_BASIS = FOLLOW_UP_AGEING_BASIS;
 /** Working days elapsed since the basis (Mon–Sat, holidays off) — as the admin dashboard counts. */
 const DAYS_IDLE = workingDaysSinceSql(IDLE_BASIS);
-/** ID 192 point 2 — a follow-up beyond the horizon parks the lead: not idle, counted apart. */
+/**
+ * A follow-up beyond the horizon. Kartik, 15 Oct: such a date is IGNORED — the
+ * lead ages on its other dates and shows on the list with that date on the row
+ * (ID 192 check #3). It is counted apart only as "of which follow-up over 30
+ * days ahead".
+ */
 export const PARKED_SQL = sql.raw(`(dl.next_follow_up_at > NOW() + INTERVAL '${FOLLOW_UP_HORIZON_DAYS} days')`);
 
 type Opts = {
@@ -96,6 +103,8 @@ function baseQuery(opts: Opts, limits: TimeLimits, transferLimit: SQL): SQL {
                    dl.interest_level,
                    ${DAYS_IDLE}::int                             AS days_idle,
                    dl.last_worked_at,
+                   dl.next_follow_up_at,
+                   ${PARKED_SQL}                                 AS far_follow_up,
                    dl.last_disposition,
                    dl.last_disposition_bucket,
                    -- ID 36: a contactability flag (dead number / non-responsive,
@@ -109,7 +118,6 @@ function baseQuery(opts: Opts, limits: TimeLimits, transferLimit: SQL): SQL {
              WHERE dl.current_owner_id IS NOT NULL
                AND dl.is_active IS NOT FALSE
                AND dl.lead_status IN (${OPEN_LIST})
-               AND NOT ${PARKED_SQL}
                ${opts.holderId ? sql`AND dl.current_owner_id = ${opts.holderId}` : sql``}
         ) y
          WHERE y.days_idle >= y.threshold
@@ -137,6 +145,7 @@ export async function listNeedsAttention(
         interest_level: (r.interest_level as string | null) ?? null,
         days_idle: Number(r.days_idle ?? 0),
         last_worked_at: r.last_worked_at ? new Date(r.last_worked_at as string).toISOString() : null,
+        next_follow_up_at: r.next_follow_up_at ? new Date(r.next_follow_up_at as string).toISOString() : null,
         last_disposition: (r.last_disposition as string | null) ?? null,
         last_disposition_bucket: (r.last_disposition_bucket as string | null) ?? null,
         non_responsive: Boolean(r.non_responsive),
@@ -153,7 +162,7 @@ export type NeedsAttentionHolderSummary = {
     idle_over_14: number;
     oldest_days: number;
     non_responsive: number;
-    /** Open leads whose follow-up is beyond the horizon (ID 192 point 2). */
+    /** Of the idle leads, those whose follow-up is beyond the horizon (ignored, ID 192). */
     parked: number;
     /** The stale_critical limit the second band used. */
     critical_days: number;
@@ -167,27 +176,17 @@ export type NeedsAttentionHolderSummary = {
 export async function summarizeNeedsAttention(opts: Opts = {}): Promise<NeedsAttentionHolderSummary[]> {
     const [limits, transferLimit] = await Promise.all([getTimeLimits(), transferLimitSql()]);
     const critical = Math.floor(limits.stale_critical);
-    const [rows, parkedRows] = await Promise.all([
-        db.execute(sql`
+    const rows = await db.execute(sql`
         SELECT x.holder_id, MAX(x.holder_name) AS holder_name, MAX(x.holder_role) AS holder_role,
                COUNT(*) FILTER (WHERE NOT x.non_responsive)::int                     AS idle,
                COUNT(*) FILTER (WHERE NOT x.non_responsive AND x.days_idle >= ${critical}::int)::int AS idle_over_14,
                COALESCE(MAX(x.days_idle) FILTER (WHERE NOT x.non_responsive), 0)::int AS oldest_days,
-               COUNT(*) FILTER (WHERE x.non_responsive)::int                         AS non_responsive
+               COUNT(*) FILTER (WHERE x.non_responsive)::int                         AS non_responsive,
+               COUNT(*) FILTER (WHERE NOT x.non_responsive AND x.far_follow_up)::int  AS parked
           FROM ${baseQuery(opts, limits, transferLimit)} x
          GROUP BY x.holder_id
          ORDER BY idle DESC
-    `),
-        db.execute(sql`
-        SELECT dl.current_owner_id AS holder_id, MAX(u.name) AS holder_name, MAX(u.role) AS holder_role, COUNT(*)::int AS n
-          FROM dealer_leads dl
-          LEFT JOIN users u ON u.id::text = dl.current_owner_id
-         WHERE dl.current_owner_id IS NOT NULL AND dl.is_active IS NOT FALSE
-           AND dl.lead_status IN (${OPEN_LIST}) AND ${PARKED_SQL}
-           ${opts.holderId ? sql`AND dl.current_owner_id = ${opts.holderId}` : sql``}
-         GROUP BY dl.current_owner_id`),
-    ]);
-    const parked = new Map((parkedRows as unknown as Array<Record<string, unknown>>).map((r) => [String(r.holder_id), r]));
+    `);
     const out: NeedsAttentionHolderSummary[] = (rows as unknown as Array<Record<string, unknown>>).map((r) => ({
         holder_id: String(r.holder_id),
         holder_name: (r.holder_name as string | null) ?? null,
@@ -196,24 +195,8 @@ export async function summarizeNeedsAttention(opts: Opts = {}): Promise<NeedsAtt
         idle_over_14: Number(r.idle_over_14 ?? 0),
         oldest_days: Number(r.oldest_days ?? 0),
         non_responsive: Number(r.non_responsive ?? 0),
-        parked: Number(parked.get(String(r.holder_id))?.n ?? 0),
+        parked: Number(r.parked ?? 0),
         critical_days: critical,
     }));
-    // Holders whose only open leads are parked still show, with zero idle.
-    const seen = new Set(out.map((h) => h.holder_id));
-    for (const [id, r] of parked) {
-        if (seen.has(id)) continue;
-        out.push({
-            holder_id: id,
-            holder_name: (r.holder_name as string | null) ?? null,
-            holder_role: (r.holder_role as string | null) ?? null,
-            idle: 0,
-            idle_over_14: 0,
-            oldest_days: 0,
-            non_responsive: 0,
-            parked: Number(r.n ?? 0),
-            critical_days: critical,
-        });
-    }
     return out;
 }
