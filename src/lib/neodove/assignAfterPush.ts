@@ -146,8 +146,9 @@ export async function assignAfterPush(input: {
         });
         // ID 121: an Awaiting-field-visit lead stays with the ASM while a visit
         // is booked — the push stands, the CRM assignment does not.
-        if (outcome.path === "handback_blocked") {
-            console.warn(`[NeoDove/assign] ${input.leadId} kept with the ASM: ${outcome.blockedReason}`);
+        // ID 179: a Won lead is never given to an ASM — same outcome, nothing written.
+        if (outcome.path === "handback_blocked" || outcome.path === "asm_blocked") {
+            console.warn(`[NeoDove/assign] ${input.leadId} not reassigned: ${outcome.blockedReason}`);
             return false;
         }
 
