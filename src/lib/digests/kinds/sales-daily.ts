@@ -122,7 +122,7 @@ import type {
 const SECTIONS: DigestSection[] = [
   { key: "summary", label: "Headline", hint: "One line: yesterday's outcome and what is behind target.", group: "activity" },
   { key: "block_a", label: "A · Company", hint: "22 metrics: yesterday, last 7 days, MTD, MTD target, % of target, same period last month, Δ.", group: "activity" },
-  { key: "right_now", label: "Right now", hint: "Sales-ready leads with no owner, and the oldest wait.", group: "backlog" },
+  { key: "right_now", label: "Right now", hint: "Ready leads with no owner (Hot / AI qualified / other), and the oldest wait.", group: "backlog" },
   { key: "block_b", label: "B · Field team (ASM)", hint: "One row per ASM: dealers visited, new dealers visited, hot received, quotes created (yesterday and MTD); quotes delivered, dealer approved, Won, converted, revenue (MTD); % of dealer-visit target.", group: "activity" },
   { key: "block_c", label: "C · Inside sales (ISR / CC)", hint: "One row per ISR: calls, dealers called (yesterday and MTD); connected, connect %, engaged, hot to field, quotes created, Won, converted (MTD); % of calls target.", group: "activity" },
   { key: "block_d", label: "D · Position this morning", hint: "Open Hot / Warm / Cold per owner, Hot rated 8+ days ago, awaiting field visit, and sales-ready leads with no owner — as of the send time.", group: "backlog" },
@@ -226,6 +226,8 @@ async function unmatchedRevenuePerPeriod(
 
 type RightNow = {
   waiting: number;
+  /** ID 184 — Hot / AI qualified / other, as on the Sales dashboard card. */
+  split: { hot: number; ai: number; other: number } | null;
   oldestDays: number | null;
   /** The sales_ready_unassigned limit in force (calendar days). */
   limitDays: number;
@@ -242,6 +244,7 @@ async function rightNow(): Promise<RightNow> {
   const limits = await getTimeLimits();
   const base: RightNow = {
     waiting: 0,
+    split: null,
     oldestDays: null,
     limitDays: limits.sales_ready_unassigned,
     hotWaiting: null,
@@ -254,7 +257,7 @@ async function rightNow(): Promise<RightNow> {
     // scope: listing the digest kinds must not need DATABASE_URL.
     const { countAwaitingAssignment } = await import("@/lib/leads/salesReady");
     const c = await countAwaitingAssignment();
-    Object.assign(base, { waiting: c.total, oldestDays: c.oldestDays });
+    Object.assign(base, { waiting: c.total, oldestDays: c.oldestDays, split: c.split });
   } catch {
     /* not measured */
   }
@@ -619,21 +622,26 @@ async function collect(
               label: `Right now · ${asOf}`,
               items: [
                 {
-                  label: "Sales-ready, no owner",
+                  label: "Ready leads with no owner",
                   value: `${now.waiting} lead${now.waiting === 1 ? "" : "s"}`,
                   // Calendar days, as the Ready to assign page and the CEO card
                   // count it; red from the Admin limit (ID 85), not a fixed 2.
+                  // ID 184: the card's Hot / AI / other split rides in front.
                   hint:
-                    now.oldestDays != null
-                      ? `Oldest waiting ${now.oldestDays} days · limit ${now.limitDays} days`
-                      : undefined,
+                    [
+                      now.split ? `${now.split.hot} Hot · ${now.split.ai} AI qualified · ${now.split.other} other` : null,
+                      now.oldestDays != null ? `oldest waiting ${now.oldestDays} days · limit ${now.limitDays} days` : null,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ") || undefined,
                   alert: now.oldestDays != null && now.oldestDays >= now.limitDays,
                 },
                 ...(now.hotWaiting != null
                   ? [
                       {
-                        label: "Hot, sales-ready, no owner",
-                        value: `${now.hotWaiting} lead${now.hotWaiting === 1 ? "" : "s"}`,
+                        label: "Hot, ready, no owner",
+                        // The card's Hot count (ID 184); the past-limit figure is the hot_assign clock.
+                        value: `${now.split?.hot ?? now.hotWaiting} lead${(now.split?.hot ?? now.hotWaiting) === 1 ? "" : "s"}`,
                         hint: `${now.hotPast ?? 0} past the ${now.hotLimitHours}-working-hour limit`,
                         alert: (now.hotPast ?? 0) > 0,
                       },

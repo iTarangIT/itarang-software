@@ -496,6 +496,40 @@ export function LeadsFilterBar({
                     Callback{aiFacets ? ` (${aiFacets.leadsCallback})` : ""}
                 </button>
 
+                {/* ID 184: the Sales dashboard card "Ready leads with no owner",
+                    same rule (awaitingAssignment), so this list and its export
+                    give the card's number. The split matches the card. */}
+                {caps.canSeeOwnerAsm && (
+                    <span className="inline-flex items-center gap-1">
+                        <button
+                            type="button"
+                            onClick={() => onPatch({ readyNoOwner: draft.readyNoOwner ? "" : "1", readySplit: "" })}
+                            aria-pressed={draft.readyNoOwner === "1"}
+                            title="Sales-ready leads nobody owns: the same leads as the dashboard card and Ready to Assign"
+                            className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${
+                                draft.readyNoOwner
+                                    ? "border-rose-300 bg-rose-50 text-rose-700"
+                                    : "border-gray-200 bg-white text-gray-600 hover:border-gray-400"
+                            }`}
+                        >
+                            Ready, no owner
+                        </button>
+                        {draft.readyNoOwner && (
+                            <select
+                                aria-label="Ready, no owner: split"
+                                value={draft.readySplit}
+                                onChange={(e) => onChange("readySplit", e.target.value)}
+                                className="rounded-lg border border-gray-200 bg-white px-2 py-2 text-sm text-gray-700"
+                            >
+                                <option value="">All</option>
+                                <option value="hot">Hot</option>
+                                <option value="ai">AI qualified</option>
+                                <option value="other">Other</option>
+                            </select>
+                        )}
+                    </span>
+                )}
+
                 {/* ID 36: dead-number / non-responsive (Number Repair) and
                     AI-disqualified leads are hidden by default. Unticking shows
                     them (hide_dead=0); source reports always count them. */}
