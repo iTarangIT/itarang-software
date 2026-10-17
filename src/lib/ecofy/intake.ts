@@ -159,8 +159,11 @@ export const importCommitSchema = z.object({
 });
 
 /** The attestation shown next to the tick and sent verbatim (BRD FR-03.5: "text and time logged"). */
+// ID 51: Ecofy refuses a commit whose text differs from its setting
+// intake.consent_attestation_text, so this is Ecofy's own default. The wizard
+// shows the live setting when Ecofy returns it (readImportAttestation).
 export const DEFAULT_ATTESTATION_TEXT =
-    "I confirm that consent to be contacted is held for every lead in this file, as recorded in the consent columns.";
+    "I confirm Ecofy holds consent from every customer in this file to be contacted about solar and storage products by Ecofy and iTarang on its behalf.";
 
 export function checkImportFile(name: string, size: number): string | null {
     if (!IMPORT_FILE_RE.test(name)) return "Upload the lead file as .xlsx or .csv";
@@ -276,6 +279,11 @@ export interface EcofyUploadTicket {
     id: string;
     uploadUrl: string;
     expiresAt: string;
+    /**
+     * Headers the PUT must carry. On S3 these include the signed
+     * x-amz-server-side-encryption header; without it S3 answers 403.
+     */
+    headers?: Record<string, string>;
 }
 
 export const IMPORT_TERMINAL: readonly EcofyImportStatus[] = ["COMMITTED", "FAILED"];
