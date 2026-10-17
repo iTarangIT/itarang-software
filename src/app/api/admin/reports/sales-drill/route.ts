@@ -6,6 +6,7 @@
 //   &persons=<id>,<id>,…       a whole column, as on screen
 //   &key=<reason|stage>        Why we lost / Ecofy stage
 //   &from=&to=&state=&city=&business_type=&spoc_id=   the screen's filters
+//   &team=field|inside       fv_* kinds (ID 190): the Needs-action Team filter
 //   &format=csv                every row (up to 20,000) as a CSV file
 //
 // JSON returns the first 500 rows. Same roles as the Sales dashboard; the
@@ -53,7 +54,9 @@ export const GET = withErrorHandler(async (req: Request) => {
     if (!ISO.test(from) || !ISO.test(to) || from > to) return errorResponse("Pick a valid date range.", 400);
     const opt = (k: string) => p.get(k)?.trim() || null;
     const f: DrillFilters = { from, to, state: opt("state"), city: opt("city"), // ID 11: an old link's "finance" reads as Battery sale, as on the dashboard.
-        business_type: businessTypeFilterParam(opt("business_type")) ?? opt("business_type"), spoc_id: opt("spoc_id") };
+        business_type: businessTypeFilterParam(opt("business_type")) ?? opt("business_type"), spoc_id: opt("spoc_id"),
+        // ID 190: the fv_* kinds also take the Needs-action page's Team filter.
+        team: opt("team") };
     const persons = [...(p.get("persons") ?? "").split(","), p.get("person") ?? ""]
         .map((s) => s.trim())
         .filter((s) => s.length > 0 && s.length <= 100)

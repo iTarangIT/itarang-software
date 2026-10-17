@@ -38,7 +38,7 @@ const rules = (l: TimeLimits): Record<ActionKey, string> => ({
     sales_ready: "Leads marked sales-ready that nobody owns yet. Assign them from Ready to Assign.",
     hot_not_called:
         `Hot leads with an owner and no call or visit since the owner got the lead, more than ${formatLimit(l.owner_first_attempt, "working_hours")} ago (Mon–Sat, 10:00–19:00 IST, holidays off). Leads with an ASM for a visit, and dead / non-responsive numbers, are left out.`,
-    visit_overdue: `Leads transferred to an ASM whose first visit is past the limit (${formatLimit(l.asm_transfer_first_visit, "working_days")}), with no visit marked since the transfer.`,
+    visit_overdue: `Every lead transferred to an ASM with no visit marked since the transfer, past the limit first. Each is judged by the limit in force on the day it was transferred (today ${formatLimit(l.asm_transfer_first_visit, "working_days")}).`,
     quotes_no_answer:
         `The lead's latest quote was delivered to the dealer more than ${formatLimit(l.quote_no_answer, "working_days")} ago and the dealer has neither approved nor declined it. Withdrawn quotes and closed leads are left out.`,
     said_yes: "The dealer approved the quote, but the lead has not been marked Won.",
@@ -87,7 +87,7 @@ export default async function NeedsActionListPage({
         a[1].localeCompare(b[1]),
     );
     if (sp.spoc_id && !owners.some(([id]) => id === sp.spoc_id)) owners.unshift([sp.spoc_id, "Selected person"]);
-    // Waiting for a field visit: ageing now and two periods side by side.
+    // Waiting for a field visit (ID 190): two periods side by side, per ASM.
     // Default: the last 7 days (B) against the 7 before them (A).
     const PERIOD_KEYS = ["a_from", "a_to", "b_from", "b_to"] as const;
     let trend: ReactNode = null;
@@ -98,11 +98,7 @@ export default async function NeedsActionListPage({
         const aTo = dayOr(sp.a_to, shiftDay(bFrom, -1));
         const aFrom = dayOr(sp.a_from, shiftDay(aTo, -6));
         const scope = actionScopeFrom(qs);
-        const [now, pa, pb] = await Promise.all([
-            fieldVisitPeriod(scope, today, today),
-            fieldVisitPeriod(scope, aFrom, aTo),
-            fieldVisitPeriod(scope, bFrom, bTo),
-        ]);
+        const [pa, pb] = await Promise.all([fieldVisitPeriod(scope, aFrom, aTo), fieldVisitPeriod(scope, bFrom, bTo)]);
         const listFilters = Object.fromEntries(
             [...qs.entries()].filter(([key]) => !(PERIOD_KEYS as readonly string[]).includes(key)),
         );
@@ -117,10 +113,8 @@ export default async function NeedsActionListPage({
         const lastMonthSameDay = shiftDay(lastMonthStart, Math.min(dom, Number(lastMonthEnd.slice(8, 10))) - 1);
         trend = (
             <FieldVisitTrend
-                now={now}
                 a={pa}
                 b={pb}
-                limitDays={limits.asm_transfer_first_visit}
                 hidden={listFilters}
                 presets={[
                     preset("Last 7 days vs the 7 before", [shiftDay(today, -13), shiftDay(today, -7)], [shiftDay(today, -6), today]),
