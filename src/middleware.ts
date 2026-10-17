@@ -651,11 +651,11 @@ export async function middleware(request: NextRequest) {
   // roles than the prefix rows below ("/admin/kyc-review" admits business_head
   // and the CEO; the CEO passes every dashboard). Same lists as the pages'
   // requireRole and their APIs: Pushed files (/api/leads/pushed-files) for
-  // Admin and Sales Head; House team logins for Admin only.
+  // Admin and Sales Head; House team logins for Admin and Sales Head (16 Oct).
   const teamPageRoles = path.startsWith("/admin/kyc-review/pushed-files")
     ? ["admin", "sales_head"]
     : path.startsWith("/admin/house-team-logins")
-      ? ["admin"]
+      ? ["admin", "sales_head"]
       : null;
   if (teamPageRoles && !teamPageRoles.includes(role)) {
     return finalize(NextResponse.redirect(new URL(myDashboard, request.url)));

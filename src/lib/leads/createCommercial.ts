@@ -46,7 +46,6 @@ import {
     writeDealCard,
 } from "@/lib/leads/dealCard";
 import { DEAL_CARD_EDIT_ROLES, sameDealCard, type DealCard } from "@/lib/leads/dealCardRules";
-import { isDealerOnboarded } from "@/lib/leads/dealerOnboarded";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -107,16 +106,11 @@ export type CreateCommercialArgs = {
     actor: { id: string; name: string | null; role?: string | null };
     body: CommercialInput;
     /**
-     * ID 172: refuse a quote issue / revision without a deal card (the web
-     * form) — ID 186: only for a dealer who is not onboarded yet.
+     * ID 172: refuse a quote issue / revision without a deal card. ID 186
+     * (16 Oct): the caller sets it from the actor's role (dealCardRequiredFor)
+     * — new and onboarded dealers alike.
      */
     requireDealCard?: boolean;
-    /**
-     * ID 186: the caller's isDealerOnboarded() answer. Read here when omitted.
-     * An onboarded dealer's quotes carry no deal card: a sent card is ignored
-     * and a locked one is not carried over.
-     */
-    dealerOnboarded?: boolean;
     /** Defaults to now — the instant the quote is stamped and judged. */
     performedAt?: Date;
 };
@@ -139,12 +133,6 @@ export async function createLeadCommercial(
 ): Promise<CreateCommercialResult> {
     const { leadId: id, actor, body } = args;
     const performedAt = args.performedAt ?? new Date();
-    // ID 186: read before the transaction (the reader never throws and must
-    // not abort the write's transaction). Brochures carry no card.
-    const onboarded =
-        body.event_type === "brochure_share"
-            ? false
-            : (args.dealerOnboarded ?? (await isDealerOnboarded(id)).onboarded);
 
     const write = async (tx: Tx) => {
         const maxRows = await tx.execute<{ max_v: number | null }>(sql`
@@ -178,14 +166,11 @@ export async function createLeadCommercial(
         // CEO approved a quote, or the dealer said yes): then it carries the
         // locked one, and a different card is refused — only the Sales Head
         // changes it (POST …/deal-card). Terms events copy the quote's card.
-        // ID 186: an onboarded dealer's quote (a reorder) carries no card at
-        // all — nothing asked, nothing carried, no fee line on the PDF.
-        const cardColumns =
-            body.event_type === "brochure_share" || onboarded ? false : await hasDealCardColumns(tx);
+        // ID 186 (16 Oct): the same for an already onboarded dealer; the card
+        // is optional for ISR / ASM / Sales Head (requireDealCard false).
+        const cardColumns = body.event_type === "brochure_share" ? false : await hasDealCardColumns(tx);
         let dealCard: DealCard | null = null;
-        if (onboarded) {
-            dealCard = null;
-        } else if (isGatedQuoteEvent(body.event_type)) {
+        if (isGatedQuoteEvent(body.event_type)) {
             if (args.requireDealCard && !body.deal_card) {
                 throw new CommercialInputError(
                     "Fill the deal card: onboarding fee, batteries per month and finance files per month.",

@@ -24,7 +24,14 @@ import { History, Loader2, Plus, Send, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { TargetProgressCells, fmtTarget, fmtTargetPer, fmtTargetSum, progressHeaders } from "@/components/targets/TargetProgressCells";
-import { TARGET_METRIC_KEYS, TARGET_METRICS, TARGET_STATUS_LABEL, metricsForRole, type TargetStatus } from "@/lib/targets/rules";
+import {
+    SALES_HEAD_METRIC_FOR_ROLES,
+    TARGET_METRIC_KEYS,
+    TARGET_METRICS,
+    TARGET_STATUS_LABEL,
+    metricsForRole,
+    type TargetStatus,
+} from "@/lib/targets/rules";
 import type { TargetRow, TargetVersionRow } from "@/lib/targets/service";
 
 type Data = {
@@ -280,6 +287,12 @@ function PersonCard({
     const present = new Set(rows.map((r) => r.metric));
     const own = metricsForRole(first.user_role).filter((m) => !present.has(m));
     const other = TARGET_METRIC_KEYS.filter((m) => !present.has(m) && !own.includes(m));
+    // ID 189 (16 Oct): the CEO adds a metric for anyone (his draft); the Sales
+    // Head only for an ISR or an ASM (his own number, ready to push).
+    const isCeoAdder = !!can?.set_ceo_target;
+    const mayAddHere =
+        !!can?.edit_metrics &&
+        (isCeoAdder || (SALES_HEAD_METRIC_FOR_ROLES as readonly string[]).includes((first.user_role ?? "").toLowerCase()));
 
     const addMetric = () =>
         run(async () => {
@@ -294,7 +307,7 @@ function PersonCard({
             setLabel("");
             setUnit("");
             setTarget("");
-        }, "Metric added as a draft — post it to send it on");
+        }, isCeoAdder ? "Metric added as a draft — post it to send it on" : "Metric added — push it to send it to the member");
 
     const saveActual = (r: TargetRow, raw: string) => {
         const v = raw.trim() === "" ? null : Number(raw);
@@ -532,7 +545,7 @@ function PersonCard({
                 </table>
             </div>
 
-            {can?.edit_metrics && (
+            {mayAddHere && (
                 <div className="flex flex-wrap items-center gap-2 border-t border-border px-4 py-3 text-sm">
                     <select
                         value={pick}
@@ -585,7 +598,7 @@ function PersonCard({
                             min={0}
                             value={target}
                             onChange={(e) => setTarget(e.target.value)}
-                            placeholder={can?.set_ceo_target ? "CEO target" : "Stretch"}
+                            placeholder={isCeoAdder ? "CEO target" : "Target"}
                             className="w-24 rounded-lg border border-border px-2 py-1 text-right"
                         />
                     )}

@@ -11,7 +11,7 @@ import {
   productSelections,
 } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
-// ID 183 (16 Oct): dispatch is the dealer's alone — never iTarang, not even the house login.
+// ID 183 (16 Oct): dispatch is the file's dealer's — and, since 16 Oct evening, the iTarang house login on a file it pushed out; never Admin / Sales Head acting for the dealer.
 import { dealerMayDispatch } from "@/lib/auth/requireLeadAccess";
 
 // Consolidated Step 5 state for the dealer page: loan details + product
@@ -32,7 +32,7 @@ export async function GET(
         { status: 404 },
       );
     }
-    if (!(await dealerMayDispatch(user, lead.dealer_id))) {
+    if (!(await dealerMayDispatch(user, lead.dealer_id, leadId))) {
       return NextResponse.json(
         { success: false, error: { message: "Access denied" } },
         { status: 403 },

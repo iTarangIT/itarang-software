@@ -210,6 +210,23 @@ export function mayAddTarget(role: string | null | undefined): boolean {
     return (role ?? "").toLowerCase() === "ceo";
 }
 
+/** The roles a Sales Head may add a metric for (ID 189, 16 Oct): ISR and ASM. */
+export const SALES_HEAD_METRIC_FOR_ROLES = ["inside_sales_rep", "asm"] as const;
+
+/**
+ * ID 189 (user, 16 Oct evening): the Sales Head may also add a metric — but
+ * only for an ISR or an ASM. Their metric has no CEO number (CEO target 0);
+ * the number is the Sales Head's own (stored as the stretch), so it lands
+ * straight in the Sales Head's queue, ready to push, and the Sales Head may
+ * remove it again (isCeoTarget is false for it). Admin still cannot add.
+ */
+export function maySalesHeadAddMetric(actorRole: string | null | undefined, memberRole: string | null | undefined): boolean {
+    return (
+        (actorRole ?? "").toLowerCase() === "sales_head" &&
+        (SALES_HEAD_METRIC_FOR_ROLES as readonly string[]).includes((memberRole ?? "").toLowerCase())
+    );
+}
+
 /**
  * Is a target the CEO's? Yes when the CEO created or posted it, or it carries
  * a CEO number (in force, waiting or in draft). Only rows the old flow let a

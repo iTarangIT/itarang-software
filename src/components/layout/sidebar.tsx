@@ -540,6 +540,15 @@ const ROLE_TRAILING_SECTIONS: Record<string, any[]> = {
           icon: CloudUpload,
           href: "/admin/settings/gdrive-mirror",
         },
+        {
+          // ID 182 (16 Oct, user): the Sales Head manages the iTarang house
+          // team logins too. Same id as Admin's, so the redesigned menu puts
+          // it in the same Settings slot.
+          id: "house-team-logins",
+          label: "House Team Logins",
+          icon: UserPlus,
+          href: "/admin/house-team-logins",
+        },
       ],
     },
   ],
