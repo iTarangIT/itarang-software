@@ -239,6 +239,35 @@ export function readQueue(kind: EcofyQueueKind): Promise<unknown> {
     return ecofyCall("GET", QUEUE_PATHS[kind], kind === "assets" ? {} : { query: { limit: 100 } });
 }
 
+let integrationUserId: string | null = null;
+
+/**
+ * ID 51: assign a case to the integration user through REST
+ * (POST /cases/{id}/assign; at S1 Ecofy moves it to S2). Used when Ecofy
+ * refuses the `lead.assigned` event because it never pushed the case: cases
+ * created or imported from the CRM start at S1 and Ecofy sends `lead.pushed`
+ * only for leads it qualified itself (S0 → S1).
+ */
+export async function assignCaseToIntegrationUser(
+    lead: { id: string; ecofy_case_id: string },
+    reason: string | null | undefined,
+    actorName: string,
+): Promise<void> {
+    if (!integrationUserId) {
+        const me = await ecofyCall<{ id?: string }>("GET", "/me");
+        if (!me?.id) throw new EcofyCallError("Ecofy did not return the integration user's id.", 502);
+        integrationUserId = me.id;
+    }
+    const kase = (await readLeadData(lead.ecofy_case_id, "case")) as { version?: number };
+    await ecofyCall("POST", `/cases/${encodeURIComponent(lead.ecofy_case_id)}/assign`, {
+        body: { userId: integrationUserId, ...(reason?.trim() ? { reason: reason.trim().slice(0, 500) } : {}) },
+        ifMatch: kase.version ?? 0,
+        actorName,
+        ecofyCaseId: lead.ecofy_case_id,
+        ecofyLeadId: lead.id,
+    });
+}
+
 /** GET /assets/{assetId} — asset detail (ECOFY_ADMIN / ITARANG_ADMIN read; writes are Ecofy Admin only). */
 export function readAsset(assetId: string): Promise<Record<string, unknown> | null> {
     return ecofyCall<Record<string, unknown> | null>("GET", `/assets/${encodeURIComponent(assetId)}`);
@@ -732,11 +761,27 @@ export async function startEcofyImport(
     const put = await fetch(ticket.uploadUrl, {
         method: "PUT",
         body: new Uint8Array(file.bytes),
-        headers: { "Content-Type": file.mimeType },
+        // Send the ticket's signed headers, as uploadToEcofy does.
+        headers: ticket.headers ?? { "Content-Type": file.mimeType },
         signal: AbortSignal.timeout(60_000),
     });
     if (!put.ok) throw new EcofyCallError(`Upload to Ecofy storage failed (${put.status})`, 502);
     return ticket;
+}
+
+/**
+ * ID 51: the consent attestation Ecofy expects on commit (setting
+ * intake.consent_attestation_text, GET /settings). null when Ecofy does not
+ * return it; the wizard then keeps DEFAULT_ATTESTATION_TEXT.
+ */
+export async function readImportAttestation(): Promise<string | null> {
+    try {
+        const settings = await ecofyCall<Record<string, unknown>>("GET", "/settings");
+        const text = settings?.["intake.consent_attestation_text"];
+        return typeof text === "string" && text.trim() ? text.trim() : null;
+    } catch {
+        return null;
+    }
 }
 
 export function saveEcofyImportMapping(
