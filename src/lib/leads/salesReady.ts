@@ -130,6 +130,34 @@ export function awaitingAssignment(dl: SQL = sql`dl`): SQL {
         AND (to_jsonb(${dl}) ->> 'contactability') IS NULL`;
 }
 
+/** ID 184 — the one name every surface uses for awaitingAssignment(). */
+export const READY_NO_OWNER_TITLE = "Ready leads with no owner";
+
+/**
+ * ID 184 — the card's split, one bucket per lead (no overlap): Hot wins, then
+ * AI-qualified, then everything else (rep-created, NeoDove, inbound, …).
+ */
+export const READY_SPLITS = ["hot", "ai", "other"] as const;
+export type ReadySplit = (typeof READY_SPLITS)[number];
+export const READY_SPLIT_LABEL: Record<ReadySplit, string> = { hot: "Hot", ai: "AI qualified", other: "other" };
+
+export function isReadySplit(v: unknown): v is ReadySplit {
+    return typeof v === "string" && (READY_SPLITS as readonly string[]).includes(v);
+}
+
+/** JS twin of readySplitSql(). */
+export function readySplitOf(interestLevel: string | null | undefined, reason: string | null | undefined): ReadySplit {
+    if (String(interestLevel ?? "").toLowerCase() === "hot") return "hot";
+    return reason === "ai_qualified" ? "ai" : "other";
+}
+
+/** The split bucket of a lead, as SQL text 'hot' | 'ai' | 'other'. */
+export function readySplitSql(dl: SQL = sql`dl`): SQL {
+    return sql`CASE WHEN lower(COALESCE(${dl}.interest_level, '')) = 'hot' THEN 'hot'
+                    WHEN (to_jsonb(${dl}) ->> 'sales_ready_reason') = 'ai_qualified' THEN 'ai'
+                    ELSE 'other' END`;
+}
+
 /**
  * When the current wait began: the Sales-ready event, or the last time the
  * lead went back to "New / Unassigned" (status history) if that is later.
@@ -156,6 +184,8 @@ export type AwaitingAssignmentCounts = {
     overdueDays: number;
     /** The longest wait, in days; null when nothing is waiting. */
     oldestDays: number | null;
+    /** ID 184 — Hot / AI qualified / other; sums to `total`. */
+    split: Record<ReadySplit, number>;
 };
 
 /** The numbers every surface shows. Never throws — a failure reads as zero. */
@@ -165,19 +195,25 @@ export async function countAwaitingAssignment(): Promise<AwaitingAssignmentCount
         const [r] = (await db.execute(sql`
             SELECT COUNT(*)::int AS total,
                    COUNT(*) FILTER (WHERE ${daysAwaitingAssignment()} >= ${overdueDays})::int AS overdue,
-                   MAX(${daysAwaitingAssignment()}) AS oldest
+                   MAX(${daysAwaitingAssignment()}) AS oldest,
+                   COUNT(*) FILTER (WHERE ${readySplitSql()} = 'hot')::int AS hot,
+                   COUNT(*) FILTER (WHERE ${readySplitSql()} = 'ai')::int AS ai
               FROM dealer_leads dl
              WHERE ${awaitingAssignment()}
-        `)) as unknown as Array<{ total: number; overdue: number; oldest: number | null }>;
+        `)) as unknown as Array<{ total: number; overdue: number; oldest: number | null; hot: number; ai: number }>;
+        const total = Number(r?.total ?? 0);
+        const hot = Number(r?.hot ?? 0);
+        const ai = Number(r?.ai ?? 0);
         return {
-            total: Number(r?.total ?? 0),
+            total,
             overdue: Number(r?.overdue ?? 0),
             overdueDays,
             oldestDays: r?.oldest == null ? null : Number(r.oldest),
+            split: { hot, ai, other: total - hot - ai },
         };
     } catch (e) {
         console.warn("[salesReady] count failed:", e instanceof Error ? e.message : e);
-        return { total: 0, overdue: 0, overdueDays, oldestDays: null };
+        return { total: 0, overdue: 0, overdueDays, oldestDays: null, split: { hot: 0, ai: 0, other: 0 } };
     }
 }
 
@@ -199,7 +235,9 @@ export type ReadyToAssignRow = {
  * links here with ?min_days=<sales_ready_unassigned>, so the list it opens is
  * the number it showed.
  */
-export async function listReadyToAssign(opts: { minDays?: number; limit?: number } = {}): Promise<ReadyToAssignRow[]> {
+export async function listReadyToAssign(
+    opts: { minDays?: number; limit?: number; split?: ReadySplit } = {},
+): Promise<ReadyToAssignRow[]> {
     const limit = opts.limit ?? 500;
     const minDays = Math.max(0, Math.floor(opts.minDays ?? 0));
     try {
@@ -212,6 +250,7 @@ export async function listReadyToAssign(opts: { minDays?: number; limit?: number
               FROM dealer_leads dl
              WHERE ${awaitingAssignment()}
                ${minDays > 0 ? sql`AND ${daysAwaitingAssignment()} >= ${minDays}` : sql``}
+               ${opts.split ? sql`AND ${readySplitSql()} = ${opts.split}` : sql``}
              ORDER BY ${awaitingSince()} ASC
              LIMIT ${limit}
         `)) as unknown as ReadyToAssignRow[];

@@ -11,6 +11,8 @@
 // needs a working-day count; asking "how long has this been rotting" does not,
 // and a months figure computed from working days is actively misleading.
 
+import { followUpAgeingBasis } from "./followUpAgeing";
+
 export type IdleSeverity = "fresh" | "watch" | "stale" | "cold";
 
 const DAY_MS = 86_400_000;
@@ -18,27 +20,27 @@ const DAY_MS = 86_400_000;
 const DAYS_PER_MONTH = 30.44;
 
 /**
- * Calendar days since the lead was last WORKED, falling back to creation.
+ * Calendar days the CURRENT HOLDER has let the lead sit — the same basis as
+ * Needs Attention (followUpAgeing.ts, ID 192): the later of the last work
+ * (E-300 last_worked_at: a call, visit or status change), the date the holder
+ * got the lead (assigned_at) and a follow-up within 30 days; created_at when
+ * none of those exist. A follow-up still ahead reads 0 — the lead is planned,
+ * not idle.
  *
- * "Worked" is dealer_leads.last_worked_at (E-300, review R-04): a call, visit
- * or status change only. Assignment, claims, dial requests and comments do not
- * count — otherwise handing a lead around would make it look fresh.
- *
- * The fallback is the point: a lead nobody has EVER worked is not idle for
- * zero days, it is idle for its entire life. Reading a null last_worked_at as
- * "no idle time" is what lets a three-month-old untouched lead look fresher
- * than one called yesterday.
+ * Comments, dial requests and claims still do not count as work.
  */
 export function idleDays(
-    lastWorkedAt: string | null,
-    createdAt: string | null,
+    lead: {
+        last_worked_at: string | null;
+        assigned_at?: string | null;
+        next_follow_up_at?: string | null;
+        created_at: string | null;
+    },
     now: number = Date.now(),
 ): number | null {
-    const basis = lastWorkedAt ?? createdAt;
+    const basis = followUpAgeingBasis(lead, now);
     if (!basis) return null;
-    const t = new Date(basis).getTime();
-    if (Number.isNaN(t)) return null;
-    return Math.max(0, Math.floor((now - t) / DAY_MS));
+    return Math.max(0, Math.floor((now - basis.getTime()) / DAY_MS));
 }
 
 // ── Filter vocabulary ────────────────────────────────────────────────────

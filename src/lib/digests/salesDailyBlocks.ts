@@ -604,16 +604,20 @@ async function tables(db: Exec): Promise<{ clocks: boolean; events: boolean }> {
 }
 
 /**
- * Leads transferred to the field and not yet visited (lead_status
- * Transferred_to_ASM), per ASM; a lead with no ASM and no owner counts under
- * NO_OWNER_KEY. Null when the query fails.
+ * Leads waiting for a field visit, per ASM — the Sales dashboard card's own
+ * predicate (ID 190: transferVisitLimit.ts awaitingFieldVisitSql — still
+ * Transferred_to_ASM and no visit marked since the transfer); a lead with no
+ * ASM and no owner counts under NO_OWNER_KEY. Null when the query fails.
  */
 export async function loadAwaitingFieldVisit(db: Exec): Promise<Map<string, number> | null> {
     try {
+        // Imported here, not at module scope: transferVisitLimit pulls in the db
+        // client, and listing the digest kinds must not need DATABASE_URL.
+        const { awaitingFieldVisitSql } = await import("@/lib/asm/transferVisitLimit");
         const rows = (await db.execute(sql`
             SELECT COALESCE(dl.asm_id, dl.current_owner_id) AS u, COUNT(*)::int AS n
               FROM dealer_leads dl
-             WHERE dl.lead_status = 'Transferred_to_ASM' AND dl.is_active IS NOT FALSE
+             WHERE ${awaitingFieldVisitSql()}
              GROUP BY 1
         `)) as Array<{ u: string | null; n: number }>;
         const m = new Map<string, number>();

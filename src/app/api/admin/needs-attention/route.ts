@@ -46,6 +46,7 @@ export const GET = withErrorHandler(async (req: Request) => {
                 { header: "Interest", value: (r) => r.interest_level ?? "" },
                 { header: "Working days idle", value: (r) => String(r.days_idle) },
                 { header: "Last worked", value: (r) => csvDateTime(r.last_worked_at) || "never" },
+                { header: "Next follow-up", value: (r) => csvDateTime(r.next_follow_up_at) },
                 { header: "Last disposition", value: (r) => r.last_disposition ?? "" },
                 { header: "Non-responsive", value: (r) => (r.non_responsive ? "Yes" : "") },
                 { header: "Field visit overdue", value: (r) => (r.visit_overdue ? "Yes" : "") },

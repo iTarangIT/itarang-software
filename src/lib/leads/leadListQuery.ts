@@ -22,6 +22,8 @@ import type { ScrapeRunFacet } from "@/lib/leads/acquisitionCampaigns";
 // pulls in `db` and can never be reachable from a client component.
 import { CAMPAIGN_NONE } from "@/lib/leads/campaign";
 import { BUSINESS_TYPE_UNSET } from "@/lib/leads/businessType";
+import { FOLLOW_UP_AGEING_BASIS } from "@/lib/leads/followUpAgeing";
+import { awaitingAssignment, readySplitSql, type ReadySplit } from "@/lib/leads/salesReady";
 import { SOURCE_DOOR_NONE } from "@/lib/leads/leadSourceVocab";
 import { ownerScopeIds } from "@/lib/users/teamRules";
 
@@ -57,6 +59,8 @@ export type LeadListRow = {
     /** E-300 — last call / visit / status change; the Idle column's basis. */
     last_worked_at: string | null;
     assigned_at: string | null;
+    /** The Idle column's follow-up leg (ID 192, followUpAgeing.ts). */
+    next_follow_up_at: string | null;
     created_at: string | null;
     visit_status: string | null;
     visit_outcome: string | null;
@@ -115,6 +119,16 @@ export type LeadListFilters = {
      */
     hideDead?: boolean | null;
     /**
+     * ID 184 — "Ready, no owner": exactly awaitingAssignment() (salesReady.ts),
+     * the rule behind the Sales dashboard card, the CEO card and Ready to
+     * Assign, so this list and its export give the card's count. Overrides
+     * hide-dead (the rule has its own contactability clause) and matches the
+     * state exactly, as the card does.
+     */
+    readyNoOwner?: boolean;
+    /** With readyNoOwner: one of the card's buckets (Hot wins, then AI qualified). */
+    readySplit?: ReadySplit | null;
+    /**
      * Rep-set temperature — lower(interest_level) — the same field the ASM /
      * Inside Sales queues filter on. NOT final_intent_score (see intentPredicate).
      */
@@ -149,8 +163,8 @@ export type LeadListFilters = {
     disposition?: string | null;
     // ── Idle age ─────────────────────────────────────────────────────────
     // Inclusive day bounds over the SAME basis the Idle column displays —
-    // COALESCE(last_worked_at, created_at) (E-300, review R-04: only a call,
-    // visit or status change counts as work). Matching that basis is not
+    // FOLLOW_UP_AGEING_BASIS (ID 192: last work, the holder's assigned_at, a
+    // follow-up within 30 days; created_at otherwise). Matching that basis is not
     // cosmetic: filtering on last_worked_at alone would exclude the
     // never-worked leads that the column shows as their full age, and a filter
     // that disagrees with the number on screen is indistinguishable from a bug.
@@ -254,8 +268,11 @@ const NEODOVE_LINKED_LIST = sql.raw(
     NEODOVE_LINKED_SYNC_STATUSES.map((s) => `'${s}'`).join(", "),
 );
 
-// The age basis, identical to the Idle column's (see idleDays()).
-const IDLE_BASIS = sql`COALESCE(dl.last_worked_at, dl.created_at)`;
+// The age basis, identical to the Idle column's (see idleDays()) and to Needs
+// Attention's (ID 192): last work, the holder's assigned_at, or a follow-up
+// within 30 days. A pending follow-up puts the basis in the future, so the
+// lead falls in no idle band.
+const IDLE_BASIS = FOLLOW_UP_AGEING_BASIS;
 
 /**
  * Membership predicates for the campaign filter.
@@ -419,7 +436,12 @@ function buildWhere(f: LeadListFilters, opts?: { ignoreIntent?: boolean }) {
     } else if (f.businessType) {
         conds.push(sql`dl.business_type = ${f.businessType}`);
     }
-    if (f.state) conds.push(sql`dl.state ILIKE ${`%${f.state}%`}`);
+    if (f.readyNoOwner) {
+        conds.push(awaitingAssignment(sql`dl`));
+        if (f.readySplit) conds.push(sql`${readySplitSql(sql`dl`)} = ${f.readySplit}`);
+    }
+    if (f.state && f.readyNoOwner) conds.push(sql`lower(trim(dl.state)) = lower(trim(${f.state}))`);
+    else if (f.state) conds.push(sql`dl.state ILIKE ${`%${f.state}%`}`);
     if (f.city) conds.push(sql`dl.city ILIKE ${`%${f.city}%`}`);
     // E-236. Emitted ONLY when the filter is set, which is what lets a database
     // without the migration keep serving this list for everyone who does not use
@@ -525,7 +547,7 @@ function buildWhere(f: LeadListFilters, opts?: { ignoreIntent?: boolean }) {
     // ID 36 — read via to_jsonb so a DB without E-314 shows everything.
     // "Hide dead & disqualified" (default on): flagged numbers AND AI-
     // disqualified leads (current_status) are out unless the user unticks it.
-    const hideDead = f.hideDead !== false && f.contactability !== "include";
+    const hideDead = f.hideDead !== false && f.contactability !== "include" && !f.readyNoOwner;
     if (f.contactability === "only") {
         conds.push(sql`(to_jsonb(dl) ->> 'contactability') IS NOT NULL`);
     } else if (hideDead) {
@@ -599,6 +621,7 @@ export async function fetchLeadListRows(
             dl.last_touchpoint_at,
             dl.last_worked_at,
             dl.assigned_at,
+            dl.next_follow_up_at,
             dl.created_at,
             lv.visit_status,
             lv.visit_outcome,

@@ -187,7 +187,7 @@ export function buildDigestEmail(
         return v === "Not measured yet" ? "#94a3b8" : SLATE;
       };
       const body = t.rows
-        .map((r) =>
+        .map((r, ri) =>
           isGroup(r)
             ? `<tr><td colspan="${t.columns.length}" style="padding:10px 6px 4px;color:${NAVY};
                 font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;
@@ -198,7 +198,11 @@ export function buildDigestEmail(
                   font-size:13px;${i === 0 && t.groupHeaders ? "font-weight:600;" : ""}
                   text-align:${i < textCols ? "left" : "right"};border-bottom:1px solid #f1f5f9;
                   white-space:${i < textCols ? "normal" : "nowrap"};
-                  ${typeof v === "number" ? "font-variant-numeric:tabular-nums;" : ""}">${esc(v)}</td>`,
+                  ${typeof v === "number" ? "font-variant-numeric:tabular-nums;" : ""}">${
+                    i === 0 && t.rowLinks?.[ri]
+                      ? `<a href="${esc(t.rowLinks[ri])}" style="color:${NAVY}">${esc(v)}</a>`
+                      : esc(v)
+                  }</td>`,
                 )
                 .join("")}</tr>`,
         )
@@ -369,7 +373,10 @@ export function buildDigestEmail(
       continue;
     }
     textParts.push(`  ${t.columns.join(" | ")}`);
-    for (const r of t.rows) textParts.push(`  ${r.map(String).join(" | ")}`);
+    t.rows.forEach((r, i) => {
+      const link = t.rowLinks?.[i];
+      textParts.push(`  ${r.map(String).join(" | ")}${link ? ` — ${link}` : ""}`);
+    });
   }
   if (detailed) {
     for (const l of activity) {

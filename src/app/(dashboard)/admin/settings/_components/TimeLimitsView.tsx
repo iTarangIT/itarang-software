@@ -3,8 +3,7 @@
 // ID 85 — Admin › Settings › Time limits. One row per limit (registry.ts):
 // the value in force today, a change already scheduled for later, and an Edit
 // that records a dated change. Below: the change log (what the CEO reads) and
-// the office calendar's holidays (read-only here; edited in Settings ›
-// Holidays — Decision 4).
+// the office calendar's holidays, edited here (Decision 4: no separate tab).
 
 import { Fragment, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -249,9 +248,9 @@ export function TimeLimitsView() {
                 </div>
             </section>
 
-            <section className="space-y-2">
+            <section id="holidays" className="space-y-2">
                 <h2 className="text-base font-semibold text-ink">Office calendar — holidays</h2>
-                <HolidaysPanel readOnly editLink />
+                <HolidaysPanel />
             </section>
         </div>
     );
