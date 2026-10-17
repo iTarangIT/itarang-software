@@ -195,7 +195,7 @@ describe("the routes use these rules", () => {
         const route = read("app", "api", "files", "[bucket]", "[...path]", "route.ts");
         const keyAt = route.indexOf("safeStorageKey(segments)");
         const signAt = route.indexOf("fileLinkValid(");
-        const authAt = route.indexOf("getAuthenticatedAppUser()");
+        const authAt = route.indexOf("user = await sessionUser()");
         // ID 166: a login alone is not enough — the role / owner rule runs too.
         const ruleAt = route.indexOf("canOpenStoredFile(user, bucket, key)");
         const readAt = route.indexOf("readBucketObject(bucket, key)");
@@ -207,6 +207,31 @@ describe("the routes use these rules", () => {
         expect(route).not.toMatch(/segments\.join\(/);
         // ID 119: no bucket is exempt from the login check any more.
         expect(route).not.toMatch(/AUTH_REQUIRED_BUCKETS/);
+    });
+
+    it("no file opens without a login; a signed link only for the login it names (17 Oct)", () => {
+        for (const route of [
+            read("app", "api", "files", "[bucket]", "[...path]", "route.ts"),
+            read("app", "api", "nbfc-uploads", "[...path]", "route.ts"),
+        ]) {
+            const loginAt = route.indexOf("const user = await sessionUser();");
+            const refuseAt = route.search(/if \(!user\) return (unauthorized\(req\)|NextResponse\.json\(\{ error: "Unauthorized" \})/);
+            const readAt = Math.max(route.indexOf("readBucketObject("), route.indexOf("getNbfcObject("));
+            expect(loginAt).toBeGreaterThan(-1);
+            expect(refuseAt).toBeGreaterThan(loginAt);
+            expect(readAt).toBeGreaterThan(refuseAt);
+            expect(route).toMatch(/const signedLink = signatureOk && !!by && user\.id === by;/);
+            expect(route).toMatch(/async function sessionUser\(\)[\s\S]*getAuthenticatedAppUser\(\)/);
+        }
+    });
+
+    it("WhatsApp documents go as bytes, never as a link to our files (17 Oct)", () => {
+        const notify = read("lib", "whatsapp", "notifications.ts");
+        expect(notify).not.toMatch(/shareableFileUrl\(|adapter\.sendDocument\(/);
+        expect(notify).toMatch(/sendPdf\(/);
+        const sendPdf = read("lib", "whatsapp", "sendPdf.ts");
+        expect(sendPdf).toMatch(/sendDocumentBytes\(/);
+        expect(sendPdf).toMatch(/filesProxyTarget\(url\) \|\| nbfcUploadsTarget\(url\)/);
     });
 
     it("the public upload only writes to an allowed folder", () => {

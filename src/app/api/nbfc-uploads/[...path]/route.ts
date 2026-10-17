@@ -90,20 +90,18 @@ export async function GET(
   const by = req.nextUrl.searchParams.get("by") || null;
   // A signed link for exactly this file, never honoured for more than 15
   // minutes on an identity file whatever minted it.
-  const signedLink =
+  const signatureOk =
     fileLinkValid(bucket, key, exp, req.nextUrl.searchParams.get("sig"), Date.now(), by) &&
     !(isLoggedFile(file) && fileLinkTooLong(exp));
+  // 17 Oct (user): every open needs a login; a signed link opens only for the
+  // login it was minted for (`by`). Same rule as /api/files.
+  const user = await sessionUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const signedLink = signatureOk && !!by && user.id === by;
 
   if (signedLink) {
     await logFileOpen({ file, bucket, key, userId: by, role: null, via: "signed_link", allowed: true, ip });
   } else {
-    let user: Awaited<ReturnType<typeof getAuthenticatedAppUser>> = null;
-    try {
-      user = await getAuthenticatedAppUser();
-    } catch {
-      user = null;
-    }
-    if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const { allowed } = await canOpenStoredFile(user, bucket, key);
     await logFileOpen({ file, bucket, key, userId: user.id, role: user.role, via: "session", allowed, ip });
@@ -113,6 +111,14 @@ export async function GET(
   const buf = await getNbfcObject(key);
   if (!buf) return NextResponse.json({ error: "Not found" }, { status: 404 });
   return fileResponse(buf, extOf(key));
+}
+
+async function sessionUser(): Promise<Awaited<ReturnType<typeof getAuthenticatedAppUser>>> {
+  try {
+    return await getAuthenticatedAppUser();
+  } catch {
+    return null;
+  }
 }
 
 /** 403 for a signed-in user this file is not for (ID 166). */

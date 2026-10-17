@@ -8,7 +8,6 @@ import {
   dealerOnboardingDocuments,
 } from "@/lib/db/schema";
 import { hashCorrectionToken } from "@/lib/onboarding/correction-token";
-import { signedFilePath } from "@/lib/storage/fileAccess";
 import {
   documentLabel,
   fieldLabel,
@@ -129,9 +128,9 @@ export async function GET(_req: NextRequest, context: RouteContext) {
         previousDocument: previousDoc
           ? {
               fileName: previousDoc.fileName,
-              // The dealer has no login here; /api/files needs one or a
-              // signature (ID 119). Display only — never written back.
-              fileUrl: signedFilePath(previousDoc.fileUrl, 24 * 60 * 60),
+              // The dealer has no login here, and no document opens without
+              // one (17 Oct, user): the name is shown, the file is not linked.
+              fileUrl: null,
               uploadedAt: previousDoc.uploadedAt,
             }
           : null,

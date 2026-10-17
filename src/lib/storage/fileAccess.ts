@@ -295,10 +295,11 @@ export function signedFilePath(
 }
 
 /**
- * A link an outside service can fetch (WhatsApp/Meta has no login): a
- * files-proxy path becomes an absolute URL with an expiring signature —
- * every stored file needs a login or a signature (ID 119). Anything else is
- * returned made absolute, otherwise unchanged.
+ * A files-proxy path made absolute with an expiring signature. NOTE (17 Oct,
+ * user): the file routes no longer open a signed link without a login — a
+ * signature only counts for the login named in `by`. So this link opens
+ * NOTHING for an outside service; send WhatsApp documents as bytes
+ * (lib/whatsapp/sendPdf.ts). Kept for its tests; has no callers.
  */
 export function shareableFileUrl(
     url: string | null | undefined,

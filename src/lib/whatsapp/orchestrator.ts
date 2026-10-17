@@ -44,6 +44,7 @@ import { normalizeAccountType } from "@/lib/onboarding/account-type";
 import { usablePhone } from "@/lib/onboarding/owner-phone";
 import { catalogDocToWhatsapp } from "./correction-map";
 import { getAdapter } from "./index";
+import { sendPdf } from "./sendPdf";
 import {
   ASK_FIELDS,
   blankKeyFields,
@@ -4373,19 +4374,15 @@ async function getLeadCtx(
   return ((fresh.context as Ctx)?.lead ?? {}) as NonNullable<Ctx["lead"]>;
 }
 
-/** Send a document (PDF) to the dealer by public URL and log it. */
+/** Send a document (PDF) to the dealer and log it. Our stored files go up as
+ *  bytes (sendPdf) — no link to them opens without a login (17 Oct). */
 async function replyDocument(
   session: SessionRow,
   link: string,
   filename: string,
   caption?: string,
 ): Promise<void> {
-  const res = await getAdapter().sendDocument(
-    session.wa_phone,
-    link,
-    filename,
-    caption,
-  );
+  const res = await sendPdf(getAdapter(), session.wa_phone, link, filename, caption);
   await logDocumentSend(session, res, caption);
 }
 

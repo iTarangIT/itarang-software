@@ -291,6 +291,8 @@ type Started = {
     suggestedMapping: Record<string, string>;
     templateColumns: string[];
     requiredColumns: string[];
+    /** ID 51: Ecofy's configured attestation; null = keep the default. */
+    attestationText: string | null;
 };
 
 function PreviewCounts({ p }: { p: EcofyImportPreview }) {
@@ -452,6 +454,7 @@ function BulkImportWizard() {
         if (r) {
             setStarted(r);
             setMapping(r.suggestedMapping);
+            if (r.attestationText) setAttestation(r.attestationText);
         }
     }
 
