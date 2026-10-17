@@ -7,7 +7,13 @@ tables. On those tables it withholds person names, phone numbers, emails,
 addresses (city only), KYC, bank / loan / account numbers, vehicle numbers,
 notes / remarks / summaries / transcripts and raw payloads. Ecofy customers
 are read only through the masked view `analyst_ecofy_leads` ("Customer #<code>").
-Customer loan files are not on the allowlist.
+Customer loan files are read only through `analyst_loan_files` and
+`analyst_loan_applications` (17 Oct): "Customer #<code>", city and state, amounts,
+dates and statuses; no name, NBFC reference, disbursal reference, EMI schedule or
+rejection text. The base loan tables are not granted.
+
+The run also refuses outside databases in the CRM itself (17 Oct): an outside
+Postgres source is hidden from the source list and a question sent to one gets 403.
 
 Re-run the script after any migration that adds a column to an allowed table:
 a new column stays unreadable until it is granted.
@@ -17,6 +23,7 @@ a new column stays unreadable until it is granted.
 | 2026-10-16 | db-1 (sandbox) | `DRY_RUN=1` | Role exists. 40 tables readable in full before the run. |
 | 2026-10-16 | db-1 (sandbox) | real run, password unchanged | SELECT on 68 tables (38 in full, 69 with some readable column). `users` blocked, withheld columns blocked, `ecofy_leads` base table blocked, `leads.owner_name` blocked. `analyst_ecofy_leads` granted, sample "Customer #0560baad". |
 | 2026-10-16 | db-2 (prod) | `DRY_RUN=1` | **Role does NOT exist on prod.** 0 tables readable. The Analyst's "iTarang database" on prod therefore cannot be using a prod read-only login. See below. |
+| 2026-10-17 | db-1 (sandbox) | real run, password unchanged | SELECT on 69 tables (40 in full, 72 with some readable column). New masked views `analyst_loan_files` (no rows yet) and `analyst_loan_applications` (sample "Customer #LEAD1773") granted; base loan tables not granted. `users`, `ecofy_leads`, `leads.owner_name` still blocked. |
 
 ## Prod: to do (needs a password, so not run by Claude)
 

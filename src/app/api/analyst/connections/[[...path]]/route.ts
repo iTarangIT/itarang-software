@@ -17,6 +17,7 @@ import {
   CreateConnectionBody,
   CRM_SOURCE_NAME,
   forwardQuery,
+  isOutsideConnection,
   matchSourceRoute,
   MAX_UPLOAD_REQUEST_BYTES,
   type SourceRoute,
@@ -102,7 +103,12 @@ async function handle(request: Request, ctx: Ctx): Promise<Response> {
 
     if (!upstream.ok) throw await normalizeAgentError(upstream);
     if (upstream.status === 204) return new Response(null, { status: 204 });
-    return Response.json(await upstream.json(), { status: upstream.status });
+    const json = await upstream.json();
+    // ID 167: the source list hides any outside database still saved on the agent.
+    if (request.method === "GET" && path.length === 0 && Array.isArray(json)) {
+      return Response.json(json.filter((c: { kind: string; name: string }) => !isOutsideConnection(c)), { status: upstream.status });
+    }
+    return Response.json(json, { status: upstream.status });
   } catch (error) {
     if (request.signal.aborted) return new Response(null, { status: 499 });
     if (!(error instanceof AnalystError)) console.error("[analyst] source call failed:", request.method, path, error);

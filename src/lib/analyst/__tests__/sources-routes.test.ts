@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { CreateConnectionBody, forwardQuery, matchSourceRoute, uploadAllowed } from "../sources-routes";
+import { CRM_SOURCE_NAME, CreateConnectionBody, forwardQuery, isOutsideConnection, matchSourceRoute, uploadAllowed } from "../sources-routes";
 
 const ID = "3f6c2a1e-0b7d-4f7e-9a51-2c4b1d9e8f00";
 
@@ -80,5 +80,15 @@ describe("uploadAllowed", () => {
     expect(uploadAllowed("c.pdf")).toBe(true);
     expect(uploadAllowed("d.xls")).toBe(false);
     expect(uploadAllowed("e.docx")).toBe(false);
+  });
+});
+
+describe("isOutsideConnection (ID 167)", () => {
+  it("refuses a database source other than the iTarang preset", () => {
+    expect(isOutsideConnection({ kind: "postgres", name: "Someone's Postgres" })).toBe(true);
+    expect(isOutsideConnection({ kind: "postgres", name: CRM_SOURCE_NAME })).toBe(false);
+  });
+  it("keeps uploads and sheets", () => {
+    expect(isOutsideConnection({ kind: "file", name: "Sales.xlsx" })).toBe(false);
   });
 });
