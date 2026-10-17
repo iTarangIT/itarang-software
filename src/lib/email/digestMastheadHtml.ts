@@ -102,7 +102,11 @@ function renderTable(t: DigestTable, on: (k: string) => boolean, hint?: string):
           const base = `padding:8px ${i === 0 ? "12px" : pad};border-top:1px solid ${HAIR};` +
             `text-align:${i < textCols ? "left" : "right"};vertical-align:middle;font-size:${size};`;
           if (i === 0) {
-            return `<td style="${base}${firstCol}"><div style="font-weight:600;color:${TEXT}">${esc(v)}</div>` +
+            const href = t.rowLinks?.[ri];
+            const name = href
+              ? `<a href="${esc(href)}" style="color:${ACCENT};text-decoration:underline">${esc(v)}</a>`
+              : esc(v);
+            return `<td style="${base}${firstCol}"><div style="font-weight:600;color:${TEXT}">${name}</div>` +
               (note ? `<div class="sd-desk" style="font-size:11.5px;color:${MUTE};margin-top:2px">${esc(note)}</div>` : "") +
               `</td>`;
           }

@@ -63,6 +63,11 @@ export type DigestSettings = {
   sections: DigestSections;
   /** Attach the day's rows as an .xlsx. */
   attachExcel: boolean;
+  /**
+   * ID 194 — which roles a personal digest mails (role → on). The key set is
+   * the kind's own defaults; empty for every other kind.
+   */
+  roles: Record<string, boolean>;
 };
 
 /**
@@ -72,8 +77,9 @@ export type DigestSettings = {
  * the full shape would force every caller to send a complete section map, which
  * is the exact read-modify-write race the merge exists to avoid.
  */
-export type DigestSettingsPatch = Partial<Omit<DigestSettings, "sections">> & {
+export type DigestSettingsPatch = Partial<Omit<DigestSettings, "sections" | "roles">> & {
   sections?: Partial<DigestSections>;
+  roles?: Record<string, boolean>;
 };
 
 /** Every section on, which is what a kind's defaults are. */
@@ -94,7 +100,7 @@ export function allSectionsOn(sections: DigestSection[]): DigestSections {
  * screen. Format defaults reproduce the plainest possible mail: summary, every
  * section, no attachment.
  */
-export type DigestDefaults = { enabled?: boolean; recipients?: string[] };
+export type DigestDefaults = { enabled?: boolean; recipients?: string[]; roles?: Record<string, boolean> };
 
 export function defaultSettings(
   sections: DigestSection[],
@@ -114,7 +120,20 @@ export function defaultSettings(
     detail: "summary",
     sections: allSectionsOn(sections),
     attachExcel: false,
+    roles: { ...(overrides.roles ?? {}) },
   };
+}
+
+/**
+ * ID 194 — merge a role patch over the current switches. Only keys the kind
+ * declares (those in `base`) are kept, so a stray key is a no-op rather than
+ * a switch nobody can see.
+ */
+export function normalizeRoles(raw: unknown, base: Record<string, boolean>): Record<string, boolean> {
+  const patch = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  const out: Record<string, boolean> = {};
+  for (const key of Object.keys(base)) out[key] = toBool(patch[key], base[key]);
+  return out;
 }
 
 function toBool(raw: unknown, fallback: boolean): boolean {
@@ -224,6 +243,7 @@ export function normalizeSettings(
     detail: normalizeDetailLevel(patch.detail, base.detail),
     sections: normalizeSections(patch.sections, base.sections, sections),
     attachExcel: toBool(patch.attachExcel, base.attachExcel),
+    roles: normalizeRoles(patch.roles, base.roles ?? {}),
   };
 }
 
