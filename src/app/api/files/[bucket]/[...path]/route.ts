@@ -60,38 +60,32 @@ export async function GET(
     return NextResponse.json({ error: "Invalid path" }, { status: 400 });
   }
 
-  // A session, or a signed link for exactly this file. `dealer-documents` used
-  // to be readable by anyone holding the link (it backed the pre-login
-  // onboarding form); ID 119 closed it — that form now gets a signed link.
-  // `by` is the user a fresh in-app link was minted for (GET /api/files/link);
-  // it is inside the signature, so it cannot be swapped.
+  // 17 Oct (user): "without login no one should see anyone's document".
+  // EVERY open needs a login. A signed link (?exp=&sig=&by=) is only the fresh
+  // in-app link minted for one user (GET /api/files/link); it opens for that
+  // same login and nobody else. `by` is inside the signature, so it cannot be
+  // swapped. A signature with no `by` (the old pre-login links) opens nothing
+  // on its own; WhatsApp gets the bytes instead (lib/whatsapp/sendPdf.ts).
   const exp = req.nextUrl.searchParams.get("exp");
   const by = req.nextUrl.searchParams.get("by") || null;
   const file = classifyFile(bucket, key);
   // ID 166: a link to a customer KYC file lives 15 minutes at most. A KYC link
   // expiring further out was minted with a longer life, so it is not honoured
   // (the viewer can still open the file with a session if allowed).
-  const signedLink =
+  const signatureOk =
     fileLinkValid(bucket, key, exp, req.nextUrl.searchParams.get("sig"), Date.now(), by) &&
     !(isKycFile(file) && fileLinkTooLong(exp));
+  const user = await sessionUser();
+  if (!user) return unauthorized(req);
+  const signedLink = signatureOk && !!by && user.id === by;
   const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || null;
   if (signedLink) {
-    // The signature was minted for exactly this file by someone allowed to
-    // open or share it (a fresh in-app link, WhatsApp delivery, the pre-login
-    // onboarding form).
+    // A fresh in-app link, opened by the login it was minted for — that login
+    // was checked against the file rule when the link was made.
     await logFileOpen({ file, bucket, key, userId: by, role: null, via: "signed_link", allowed: true, ip });
   } else {
-    // No valid signature (none, expired, or forged): the session decides. ID
-    // 119: a dealer whose 7-day onboarding link ran out opens the file here if
-    // signed in as the dealer that owns it; signed out, they get a way back to
-    // the application instead of a dead end.
-    let user: Awaited<ReturnType<typeof getAuthenticatedAppUser>> = null;
-    try {
-      user = await getAuthenticatedAppUser();
-    } catch {
-      user = null;
-    }
-    if (!user) return file.kind === "dealer_onboarding" ? onboardingLinkExpired(req) : unauthorized(req);
+    // No link for this login (none, expired, forged, or someone else's): the
+    // file rule decides for the signed-in user.
 
     const { allowed } = await canOpenStoredFile(user, bucket, key);
     await logFileOpen({ file, bucket, key, userId: user.id, role: user.role, via: "session", allowed, ip });
@@ -124,6 +118,14 @@ export async function GET(
   });
 }
 
+async function sessionUser(): Promise<Awaited<ReturnType<typeof getAuthenticatedAppUser>>> {
+  try {
+    return await getAuthenticatedAppUser();
+  } catch {
+    return null;
+  }
+}
+
 /** 401, as a readable page when a person opened the link in a browser. */
 function unauthorized(req: NextRequest) {
   if (!(req.headers.get("accept") || "").includes("text/html")) {
@@ -134,31 +136,6 @@ function unauthorized(req: NextRequest) {
       `<div style="font:15px/1.6 system-ui,sans-serif;max-width:34rem;margin:15vh auto;padding:0 1.5rem;color:#0f172a">` +
       `<h1 style="font-size:1.25rem;margin:0 0 .75rem">Unauthorized</h1>` +
       `<p style="margin:0;color:#475569">Please log in to the iTarang CRM to view this document.</p></div>`,
-    { status: 401, headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } },
-  );
-}
-
-/**
- * ID 119: an onboarding upload's link (7 days, made at upload) ran out and
- * nobody is signed in. Not "please log in" — before approval the dealer has no
- * login — but the way back: continue the application (a code to the
- * registered mobile proves it is theirs and gives fresh links), or log in once
- * approved. JSON callers keep the plain 401.
- */
-function onboardingLinkExpired(req: NextRequest) {
-  if (!(req.headers.get("accept") || "").includes("text/html")) {
-    return NextResponse.json({ error: "Unauthorized", code: "link_expired" }, { status: 401 });
-  }
-  const btn =
-    "display:inline-block;padding:.6rem 1.1rem;border-radius:.75rem;font-weight:600;text-decoration:none;margin:0 .5rem .5rem 0";
-  return new NextResponse(
-    `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Link expired</title>` +
-      `<div style="font:15px/1.6 system-ui,sans-serif;max-width:34rem;margin:15vh auto;padding:0 1.5rem;color:#0f172a">` +
-      `<h1 style="font-size:1.25rem;margin:0 0 .75rem">This document link has expired</h1>` +
-      `<p style="margin:0 0 1rem;color:#475569">Links to your onboarding documents work for 7 days. To see your documents again, continue your application: we send a code to your registered mobile number, and once you enter it your documents open again.</p>` +
-      `<p style="margin:0 0 1.25rem"><a href="/dealer-onboarding" style="${btn};background:#1F5C8F;color:#fff">Continue my application</a>` +
-      `<a href="/login" style="${btn};border:1px solid #cbd5e1;color:#334155">Log in (approved dealers)</a></p>` +
-      `<p style="margin:0;color:#64748b;font-size:13px">If you did not apply, you can close this page.</p></div>`,
     { status: 401, headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } },
   );
 }

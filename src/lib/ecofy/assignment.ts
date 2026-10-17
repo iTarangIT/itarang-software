@@ -15,9 +15,9 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { ecofyLeadAssignments, ecofyLeads, users } from "@/lib/db/schema";
 import { errorMessage } from "@/lib/api-utils";
-import { ECOFY_OUTBOUND_ASSIGNEE, ECOFY_WORKER_ROLES } from "./access";
+import { ECOFY_OUTBOUND_ACTOR, ECOFY_OUTBOUND_ASSIGNEE, ECOFY_WORKER_ROLES } from "./access";
 import { sendEcofyEvent } from "./outbound";
-import { refreshLeadFromEcofy } from "./service";
+import { assignCaseToIntegrationUser, refreshLeadFromEcofy } from "./service";
 import { notifyEcofyAssigned, type EcofyNotifyActor } from "./notify";
 
 export interface EcofyAssignee {
@@ -169,8 +169,16 @@ export async function pushAssignmentToEcofy(
             await refreshLeadFromEcofy(lead);
             return { ok: true, reason: "", unavailable: false };
         }
+        const refusal = (sent.body as { error?: { message?: string; gate?: string } } | null)?.error;
+        // ID 51: a case created or imported from the CRM was never pushed by
+        // Ecofy, so the event is refused (gate crm_lead). Assign it over REST.
+        if (refusal?.gate === "crm_lead") {
+            await assignCaseToIntegrationUser(lead, reason, ECOFY_OUTBOUND_ACTOR);
+            await refreshLeadFromEcofy(lead);
+            return { ok: true, reason: "", unavailable: false };
+        }
         const message =
-            (sent.body as { error?: { message?: string } } | null)?.error?.message ??
+            refusal?.message ??
             (sent.status ? `Ecofy answered ${sent.status}` : "Ecofy unreachable");
         // 401/403 = act-as user not accepted (config), 5xx/timeout = down: both
         // are worth retrying later. 409/422 are final for this lead.

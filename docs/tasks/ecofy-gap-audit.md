@@ -110,7 +110,11 @@ Audit of `main` @ `5d6010a5` (1 Oct 2026), updated the same day after gaps 1–3
 - `scripts/verify-ecofy-workspace.ts` makes read-only checks.
 - `scripts/verify-ecofy-e2e.ts` drives S1→S6 on one sandbox lead. Nothing scripts S6→S8, intake or imports.
 - Unit tests cover access, signature, stepBrief, the client, intake schemas/mapping and AssessmentCreate. There are no route or page tests.
-- Not yet run against the Ecofy sandbox: `POST /cases`, the import wizard, CALCULATOR assessment save, `GET /assets/{id}`. UAT-01/02/03 (import), UAT-10/14/15 (assessment) and UAT-27/29 (asset) are the acceptance cases to run.
+- ~~Not yet run against the Ecofy sandbox: `POST /cases`, the import wizard, CALCULATOR assessment save, `GET /assets/{id}`.~~ Run against sandbox-ecofy on 17 Oct 2026 (ECF-1292 single create, import eaa432a3 → ECF-1293/1294, CALCULATOR assessment on ECF-1292; `GET /assets/{id}` and `GET /cases/{id}/withdrawals` both answer). Three defects found and fixed:
+  1. The import upload ignored the ticket's signed headers, so S3 answered 403 on every bulk import. `startEcofyImport` now sends `ticket.headers` (with `x-amz-server-side-encryption`), as `uploadToEcofy` does.
+  2. The CRM's attestation text did not match Ecofy's setting `intake.consent_attestation_text`, so every commit was refused. The wizard now shows the live setting (`GET /settings`, `readImportAttestation`), and the default is Ecofy's own text.
+  3. A case created or imported from the CRM starts at S1 and Ecofy never sends `lead.pushed` for it, so `lead.assigned` is refused (gate `crm_lead`) and the lead could never leave the pickup queue. `pushAssignmentToEcofy` now falls back to `POST /cases/{id}/assign` for the integration user (`assignCaseToIntegrationUser`).
+- Still not scripted: UAT-27/29 asset writes (Ecofy Admin only by contract).
 
 ## Open items from `docs/ECOFY_INTEGRATION.md`
 
