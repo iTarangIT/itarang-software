@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Loader2 } from "lucide-react";
@@ -12,7 +12,6 @@ import { QuotationCcForm } from "./QuotationCcForm";
 import { QuotationTermsForm } from "./QuotationTermsForm";
 import { TerritoryManager } from "./TerritoryManager";
 import { ReportingLinesManager } from "./ReportingLinesManager";
-import { HolidaysPanel } from "./HolidaysPanel";
 import { LoginsManager } from "./LoginsManager";
 import type { SettingsBundle } from "@/lib/admin/types";
 
@@ -47,8 +46,6 @@ const TAB_VALUES = [
     "territories",
     // ID 155 — who reports to whom (E-335).
     "reporting-lines",
-    // ID 85 Decision 4 — the office calendar, with its change log (E-350).
-    "holidays",
     // A39 — who can sign in: deactivate leavers, force a new password.
     "logins",
 ] as const;
@@ -59,6 +56,11 @@ export function SettingsView() {
     const searchParams = useSearchParams();
 
     const param = searchParams.get("tab");
+    // ID 85 Decision 4: holidays live on Settings › Time limits; an old
+    // ?tab=holidays link lands there instead of on an unknown tab.
+    useEffect(() => {
+        if (param === "holidays") router.replace("/admin/settings/time-limits#holidays");
+    }, [param, router]);
     const active: TabValue = TAB_VALUES.includes(param as TabValue)
         ? (param as TabValue)
         : "access";
@@ -97,7 +99,6 @@ export function SettingsView() {
                     { value: "quotation-terms", label: "Quotation terms" },
                     { value: "territories", label: "ASM Territories" },
                     { value: "reporting-lines", label: "Reporting lines" },
-                    { value: "holidays", label: "Holidays" },
                     { value: "logins", label: "Logins" },
                 ]}
             />
@@ -109,7 +110,6 @@ export function SettingsView() {
                     {active === "quotation-cc" && <QuotationCcForm />}
                     {active === "quotation-terms" && <QuotationTermsForm />}
                     {active === "reporting-lines" && <ReportingLinesManager />}
-                    {active === "holidays" && <HolidaysPanel />}
                     {active === "logins" && <LoginsManager />}
                     {active === "territories" &&
                         (bundleQuery.isLoading ? (

@@ -1,10 +1,9 @@
 "use client";
 
-// ID 85 Decision 4 — Admin › Settings › Holidays: the office calendar every
-// time limit and clock counts working days and hours on, with the log of every
-// change (E-350). Also shown read-only on Settings › Time limits.
+// ID 85 Decision 4 — the office calendar every time limit and clock counts
+// working days and hours on, with the log of every change (E-350). It lives on
+// Admin › Settings › Time limits; there is no separate Holidays tab.
 
-import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 
@@ -22,7 +21,7 @@ function istDate(iso: string): string {
 
 const ACTION_WORD: Record<HolidayLogEntry["action"], string> = { add: "Added", remove: "Removed", rename: "Renamed" };
 
-export function HolidaysPanel({ readOnly = false, editLink = false }: { readOnly?: boolean; editLink?: boolean }) {
+export function HolidaysPanel({ readOnly = false }: { readOnly?: boolean }) {
     const { data, isLoading, error } = useQuery({
         queryKey: QUERY_KEY,
         queryFn: async () => {
@@ -50,14 +49,6 @@ export function HolidaysPanel({ readOnly = false, editLink = false }: { readOnly
                 Entered each December for the coming year. A holiday is not a working day for any limit or clock. It
                 counts only for clocks still running when it is added, so adding a past date never changes a result
                 already reached.
-                {editLink && data.can_edit && (
-                    <>
-                        {" "}
-                        <Link href="/admin/settings?tab=holidays" className="font-medium text-brand-600 hover:underline">
-                            Edit in Settings › Holidays
-                        </Link>
-                    </>
-                )}
             </p>
             <HolidayCalendarManager holidays={data.holidays} queryKey={QUERY_KEY} readOnly={!canEdit} />
             <div className="space-y-2">
