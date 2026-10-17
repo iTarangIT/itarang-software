@@ -24,6 +24,7 @@ import { requireSalesHead } from "@/lib/auth/requireSalesHead";
 import { usesManualAgreement } from "@/lib/dealer/dealer-capabilities";
 import { dealerTypeLabel } from "@/lib/dealer/dealer-type";
 import { getAdapter } from "@/lib/whatsapp";
+import { sendPdf } from "@/lib/whatsapp/sendPdf";
 import { POST as createDigioAgreement } from "@/app/api/integrations/digio/create-agreement/route";
 import { extractStampCertificateIds } from "@/lib/digio/parse-status";
 import { notifyDealerAgreementInitiated } from "@/lib/notifications/events";
@@ -961,7 +962,8 @@ export async function POST(
         if (unsignedAgreementUrl) {
           // Send the actual agreement PDF as a document, then the sign link as a
           // follow-up message so it renders as a tappable link.
-          const docRes = await adapter.sendDocument(
+          const docRes = await sendPdf(
+            adapter,
             application.wa_phone,
             unsignedAgreementUrl,
             "iTarang-Dealer-Agreement.pdf",

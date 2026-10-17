@@ -369,9 +369,11 @@ export default function FileUploadCard({
                     </a>
                   ) : null} */}
 
-                  {currentValue.uploadedUrl ? (
+                  {/* 17 Oct: no stored file opens without a login — preview the
+                      browser's own copy, or the signed-in uploader's link. */}
+                  {currentValue.uploadedUrl && (currentValue.previewUrl || currentValue.viewUrl) ? (
                     <a
-                      href={currentValue.viewUrl || currentValue.uploadedUrl}
+                      href={currentValue.previewUrl || currentValue.viewUrl || undefined}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="inline-flex items-center gap-1 text-xs font-medium text-[#1F5C8F] hover:underline"

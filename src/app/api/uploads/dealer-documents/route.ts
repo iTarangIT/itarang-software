@@ -3,7 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import { randomUUID } from "crypto";
 import { isS3Backend, putObject, filesProxyPath } from "@/lib/storage/s3";
 import { FRESH_LINK_TTL_SECONDS, publicUploadFolder, safeUploadFileName, signedFilePath } from "@/lib/storage/fileAccess";
-import { classifyFile } from "@/lib/storage/fileRules";
+import { getAuthenticatedAppUser } from "@/lib/kyc/admin-workflow";
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -11,10 +11,6 @@ const supabase = createClient(
 );
 
 const BUCKET_NAME = "dealer-documents";
-// A draft can be resumed days later in the same browser. ID 119: when this
-// runs out, the file route offers "Continue my application" (a code to the
-// registered mobile gives fresh links) instead of a dead end.
-const VIEW_LINK_TTL_SECONDS = 7 * 24 * 60 * 60;
 
 export async function POST(req: NextRequest) {
   try {
@@ -114,16 +110,12 @@ export async function POST(req: NextRequest) {
         name: file.name,
         path: filePath,
         url: publicUrl,
-        // ID 119: /api/files needs a login or a signature, and this form has no
-        // login. `viewUrl` is a signed link for the uploader to preview the
-        // file; store `url`, never `viewUrl`.
-        // ID 166: only the pre-login onboarding papers get the 7-day link. Staff
-        // uploads through this form (commercials, visit photos) preview with a
-        // 15-minute one; afterwards they open under the file rule.
-        viewUrl: signedFilePath(
-          publicUrl,
-          classifyFile(BUCKET_NAME, filePath).kind === "dealer_onboarding" ? VIEW_LINK_TTL_SECONDS : FRESH_LINK_TTL_SECONDS,
-        ),
+        // 17 Oct (user): no document opens without a login. A signed-in
+        // uploader (staff: commercials, visit photos) gets a 15-minute link
+        // that works only for their own login; the pre-login onboarding form
+        // gets none and previews the file from the browser's own copy.
+        // Store `url`, never `viewUrl`.
+        viewUrl: await viewLinkFor(publicUrl),
         type: file.type,
         size: file.size,
         bucketName: BUCKET_NAME,
@@ -140,4 +132,15 @@ export async function POST(req: NextRequest) {
       { status: 500 }
     );
   }
+}
+
+/** A preview link for the signed-in uploader only; null with no login. */
+async function viewLinkFor(url: string): Promise<string | null> {
+  let user: Awaited<ReturnType<typeof getAuthenticatedAppUser>> = null;
+  try {
+    user = await getAuthenticatedAppUser();
+  } catch {
+    user = null;
+  }
+  return user ? signedFilePath(url, FRESH_LINK_TTL_SECONDS, { by: user.id }) : null;
 }

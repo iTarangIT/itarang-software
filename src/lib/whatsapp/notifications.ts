@@ -17,9 +17,9 @@ import { whatsappMessages } from "@/lib/db/schema";
 
 import { getAdapter } from "./index";
 import type { SendResult } from "./types";
-// ID 128: agreements are private files; Meta fetches the link with no login, so
-// it gets an absolute, signed, expiring one.
-import { shareableFileUrl } from "@/lib/storage/fileAccess";
+// ID 128 / 17 Oct: agreements are private files and no link opens without a
+// login, so they go to Meta as uploaded bytes (sendPdf), never as a link.
+import { sendPdf } from "./sendPdf";
 
 /** Append an outbound send to whatsapp_messages (best-effort; never throws). */
 export async function logOutbound(
@@ -108,9 +108,10 @@ export async function sendDealerWelcomeWhatsApp(
     // Finance dealers also get the two PDFs as document messages.
     if (p.financeEnabled) {
       if (p.signedAgreementUrl) {
-        const res = await adapter.sendDocument(
+        const res = await sendPdf(
+          adapter,
           p.waPhone,
-          shareableFileUrl(p.signedAgreementUrl) ?? p.signedAgreementUrl,
+          p.signedAgreementUrl,
           `signed-agreement-${p.dealerCode}.pdf`,
           "Signed Dealer Agreement",
         );
@@ -121,9 +122,10 @@ export async function sendDealerWelcomeWhatsApp(
         if (!res.ok) delivery.error = delivery.error || res.error || null;
       }
       if (p.auditTrailUrl) {
-        const res = await adapter.sendDocument(
+        const res = await sendPdf(
+          adapter,
           p.waPhone,
-          shareableFileUrl(p.auditTrailUrl) ?? p.auditTrailUrl,
+          p.auditTrailUrl,
           `audit-trail-${p.dealerCode}.pdf`,
           "Agreement Audit Trail",
         );
@@ -276,9 +278,10 @@ export async function sendFinanceActivatedWhatsApp(
     delivery.error = textRes.error ?? null;
 
     if (p.signedAgreementUrl) {
-      const res = await adapter.sendDocument(
+      const res = await sendPdf(
+        adapter,
         p.waPhone,
-        shareableFileUrl(p.signedAgreementUrl) ?? p.signedAgreementUrl,
+        p.signedAgreementUrl,
         `signed-agreement-${p.dealerCode}.pdf`,
         "Signed Dealer Agreement",
       );
@@ -289,9 +292,10 @@ export async function sendFinanceActivatedWhatsApp(
       if (!res.ok) delivery.error = delivery.error || res.error || null;
     }
     if (p.auditTrailUrl) {
-      const res = await adapter.sendDocument(
+      const res = await sendPdf(
+        adapter,
         p.waPhone,
-        shareableFileUrl(p.auditTrailUrl) ?? p.auditTrailUrl,
+        p.auditTrailUrl,
         `audit-trail-${p.dealerCode}.pdf`,
         "Agreement Audit Trail",
       );
