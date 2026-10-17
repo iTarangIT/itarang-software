@@ -22,6 +22,7 @@ import type { ScrapeRunFacet } from "@/lib/leads/acquisitionCampaigns";
 // pulls in `db` and can never be reachable from a client component.
 import { CAMPAIGN_NONE } from "@/lib/leads/campaign";
 import { BUSINESS_TYPE_UNSET } from "@/lib/leads/businessType";
+import { FOLLOW_UP_AGEING_BASIS } from "@/lib/leads/followUpAgeing";
 import { SOURCE_DOOR_NONE } from "@/lib/leads/leadSourceVocab";
 import { ownerScopeIds } from "@/lib/users/teamRules";
 
@@ -57,6 +58,8 @@ export type LeadListRow = {
     /** E-300 — last call / visit / status change; the Idle column's basis. */
     last_worked_at: string | null;
     assigned_at: string | null;
+    /** The Idle column's follow-up leg (ID 192, followUpAgeing.ts). */
+    next_follow_up_at: string | null;
     created_at: string | null;
     visit_status: string | null;
     visit_outcome: string | null;
@@ -149,8 +152,8 @@ export type LeadListFilters = {
     disposition?: string | null;
     // ── Idle age ─────────────────────────────────────────────────────────
     // Inclusive day bounds over the SAME basis the Idle column displays —
-    // COALESCE(last_worked_at, created_at) (E-300, review R-04: only a call,
-    // visit or status change counts as work). Matching that basis is not
+    // FOLLOW_UP_AGEING_BASIS (ID 192: last work, the holder's assigned_at, a
+    // follow-up within 30 days; created_at otherwise). Matching that basis is not
     // cosmetic: filtering on last_worked_at alone would exclude the
     // never-worked leads that the column shows as their full age, and a filter
     // that disagrees with the number on screen is indistinguishable from a bug.
@@ -254,8 +257,11 @@ const NEODOVE_LINKED_LIST = sql.raw(
     NEODOVE_LINKED_SYNC_STATUSES.map((s) => `'${s}'`).join(", "),
 );
 
-// The age basis, identical to the Idle column's (see idleDays()).
-const IDLE_BASIS = sql`COALESCE(dl.last_worked_at, dl.created_at)`;
+// The age basis, identical to the Idle column's (see idleDays()) and to Needs
+// Attention's (ID 192): last work, the holder's assigned_at, or a follow-up
+// within 30 days. A pending follow-up puts the basis in the future, so the
+// lead falls in no idle band.
+const IDLE_BASIS = FOLLOW_UP_AGEING_BASIS;
 
 /**
  * Membership predicates for the campaign filter.
@@ -599,6 +605,7 @@ export async function fetchLeadListRows(
             dl.last_touchpoint_at,
             dl.last_worked_at,
             dl.assigned_at,
+            dl.next_follow_up_at,
             dl.created_at,
             lv.visit_status,
             lv.visit_outcome,

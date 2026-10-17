@@ -14,6 +14,7 @@ const row = (o: Partial<NeedsAttentionRow>): NeedsAttentionRow => ({
     interest_level: null,
     days_idle: 6,
     last_worked_at: null,
+    next_follow_up_at: null,
     last_disposition: null,
     last_disposition_bucket: null,
     non_responsive: false,
