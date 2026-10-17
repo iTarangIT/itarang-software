@@ -28,6 +28,10 @@ node --import tsx --env-file=.env.production scripts/<script>.ts
 | A32 | `verify-a32-endpoint-store.ts` **writes (sandbox only)** | Endpoint stored encrypted, resolves for its own campaign only, last 4 shown. | db-1 PASS |
 | A32 | `replay-neodove-events.ts --since=2026-10-06 --to=…` (dry run) | Lists the calls one CRM received and the other missed. | 860 events on db-1 since 6 Oct |
 | A34 | `verify-assistant-parity.ts` | WhatsApp assistant hot / warm / cold and queues = the CRM screens. | db-2 PASS (7 users, 222 rows) |
+| 190 | `verify-id190-field-visit.ts [from] [to]` | Waiting at start + new = visited + left + moved on + still waiting, per ASM and in total. Every drill list = its cell. Email Block D = tile. | db-1 PASS, db-2 PASS (17 Oct, 214 waiting) |
+| 184 | `verify-id184-ready-no-owner.ts` | Hot + AI + other = total. Sales card = CEO card = Leads `ready_no_owner=1` (and its export) = email Right now, per split too. | db-1 PASS (19: 0 / 0 / 19) |
+| 192 (17 Oct) | `verify-id192-idle.ts` | As above, plus: the Leads list Idle filter puts no lead with a follow-up within 30 days, and none handed over today, in an idle band. Far follow-ups are listed with the date. | db-1 PASS (663 idle) |
+| 194 | `verify-sales-daily.ts <day> --my-day <email> [--render f.html]` | The person's My day row = their row in the management email. | db-1 PASS (Nidhi ISR, Sonu ASM); team table: unit test only (db-1 has no reporting lines) |
 
 Not covered: a weekly masked copy of prod into sandbox (T2.1's second half).
 That is infrastructure work, not code, and is left for a decision.
