@@ -13,7 +13,7 @@ import { ECOFY_MANAGER_ROLES } from "@/lib/ecofy/access";
 import { readImportHeaders } from "@/lib/ecofy/importHeaders";
 import { checkImportFile, defaultImportMapping, LEAD_TEMPLATE_COLUMNS, LEAD_TEMPLATE_REQUIRED } from "@/lib/ecofy/intake";
 import { ecofyActorName } from "@/lib/ecofy/queries";
-import { EcofyCallError, startEcofyImport } from "@/lib/ecofy/service";
+import { EcofyCallError, readImportAttestation, startEcofyImport } from "@/lib/ecofy/service";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -46,13 +46,17 @@ export const POST = withErrorHandler(async (req: Request) => {
 
     const ext = file.name.toLowerCase().split(".").pop() ?? "";
     try {
-        const ticket = await startEcofyImport(
-            { bytes, fileName: file.name, mimeType: file.type || MIME_BY_EXT[ext] || "application/octet-stream" },
-            ecofyActorName(user),
-        );
+        const [ticket, attestationText] = await Promise.all([
+            startEcofyImport(
+                { bytes, fileName: file.name, mimeType: file.type || MIME_BY_EXT[ext] || "application/octet-stream" },
+                ecofyActorName(user),
+            ),
+            readImportAttestation(),
+        ]);
         return successResponse(
             {
                 importId: ticket.id,
+                attestationText,
                 fileName: file.name,
                 headers,
                 suggestedMapping: defaultImportMapping(headers),

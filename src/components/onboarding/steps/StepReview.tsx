@@ -63,8 +63,9 @@ const FreshLinksContext = createContext<Record<string, string>>({});
 function resolveDocUrl(item: UploadItemLike, fresh: Record<string, string> = {}) {
   if (!item) return null;
   const stored = item.uploadedUrl ? fresh[item.uploadedUrl] : undefined;
-  // viewUrl is signed — it opens without a login (ID 119).
-  return stored || (item as any).viewUrl || item.uploadedUrl || (item as any).previewUrl || null;
+  // 17 Oct: no stored file opens without a login. The browser's own copy
+  // (previewUrl) first; viewUrl / uploadedUrl open only for a signed-in user.
+  return stored || (item as any).previewUrl || (item as any).viewUrl || item.uploadedUrl || null;
 }
 
 function inferKindFromUrl(url: string, fileName?: string) {
