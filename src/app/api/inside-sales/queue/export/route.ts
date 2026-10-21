@@ -1,4 +1,4 @@
-// GET /api/inside-sales/queue/export?tab=...&q=...&neodove=1&callback=1&<filters>[&format=xlsx]
+// GET /api/inside-sales/queue/export?tab=...&q=...&neodove=1&callback=1&past_limit=1&<filters>[&format=xlsx]
 // The Inside Sales queue, as a CSV (default) or an Excel workbook (format=xlsx),
 // for the CURRENT TAB AND FILTERS — including business_type (E-296).
 //
@@ -34,6 +34,7 @@ import { fetchBusinessTypeForLeads } from "@/lib/leads/leadListQuery";
 import { businessTypeLabel } from "@/lib/leads/businessType";
 import { exportsOwnLeadsOnly, logDataDownload } from "@/lib/exports/downloadLog";
 import { teamForOwnScopedViewer } from "@/lib/users/team";
+import { pastLimitFilter, pastLimitLabelsByLead } from "@/lib/leads/queuePastLimit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -55,6 +56,7 @@ const QuerySchema = z.object({
     neodove: z.literal("1").optional(),
     callback: z.literal("1").optional(),
     finalised: z.literal("1").optional(),
+    past_limit: z.literal("1").optional(),
     format: z.enum(["csv", "xlsx"]).default("csv"),
 });
 
@@ -85,6 +87,8 @@ const COLUMNS: CsvColumn<ExportRow>[] = [
     { header: "Next Follow-up", value: (r) => csvDateTime(r.next_follow_up_at) },
     { header: "Assigned At", value: (r) => csvDateTime(r.assigned_at) },
     { header: "Created At", value: (r) => csvDateTime(r.created_at) },
+    // IDs 85 / 86: which time limits the lead is past — the chip on screen.
+    { header: "Past a limit", value: (r) => (r.past_limits ?? []).join("; ") },
 ];
 
 export const GET = withErrorHandler(async (req: NextRequest) => {
@@ -96,6 +100,7 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
         neodove: url.searchParams.get("neodove") ?? undefined,
         callback: url.searchParams.get("callback") ?? undefined,
         finalised: url.searchParams.get("finalised") ?? undefined,
+        past_limit: url.searchParams.get("past_limit") ?? undefined,
         format: url.searchParams.get("format") ?? undefined,
     });
 
@@ -116,6 +121,8 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
         neodoveOnly: parsed.neodove === "1",
         callbackOnly: parsed.callback === "1",
         finalisedOnly: parsed.finalised === "1",
+        // The "Past a limit" chip — same predicate as the list (18 Oct row 34).
+        pastLimit: await pastLimitFilter(url.searchParams),
         filters: readQueueFilters(url.searchParams),
         ownedBy: ownOnly ? user.id : null,
         // ID 155: a manager's export covers what their table shows — their
@@ -140,17 +147,21 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
         dataset: `inside_sales_queue:${parsed.tab}`,
         rowCount: rows.length,
         ownOnly,
-        filters: { q: parsed.q ?? null, neodove: parsed.neodove ?? null, callback: parsed.callback ?? null, finalised: parsed.finalised ?? null, format: parsed.format },
+        filters: { q: parsed.q ?? null, neodove: parsed.neodove ?? null, callback: parsed.callback ?? null, finalised: parsed.finalised ?? null, past_limit: parsed.past_limit ?? null, format: parsed.format },
     });
 
     // Who handed each lead over. Decorated in a SEPARATE, fail-tolerant
     // statement exactly as the list route does it, so a failure here drops one
     // column rather than the whole export.
     const ids = rows.map((r) => r.id).filter(Boolean);
-    const assignedBy = await fetchAssignedByForLeads(ids);
-    // E-296 business_type — same separate, fail-tolerant decoration: on a
-    // database without the migration the column reads "Not set".
-    const businessTypes = await fetchBusinessTypeForLeads(ids);
+    // E-296 business_type and the past-limit labels — same separate,
+    // fail-tolerant decoration: on a database without the migration the
+    // column reads "Not set" / blank.
+    const [assignedBy, businessTypes, pastLabels] = await Promise.all([
+        fetchAssignedByForLeads(ids),
+        fetchBusinessTypeForLeads(ids),
+        pastLimitLabelsByLead(ids),
+    ]);
 
     const args = {
         rows: rows.map(
@@ -158,6 +169,7 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
                 ...r,
                 assigned_by: assignedBy[r.id] ?? null,
                 business_type: businessTypes[r.id] ?? null,
+                past_limits: pastLabels.get(r.id) ?? [],
             }),
         ),
         columns: COLUMNS,

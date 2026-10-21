@@ -442,7 +442,11 @@ export default function CEODashboard() {
           tone: "bad",
           label: "Quotes waiting for your approval",
           count: num(x.quotes_pending),
-          sub: "A rep cannot send a quote until you act on it",
+          // 18 Oct row 22: the oldest wait and how many are past the CEO approval limit.
+          sub:
+            x.quotes_pending && x.quotes_pending_oldest_hours != null
+              ? `Oldest waiting ${x.quotes_pending_oldest_hours} working hours · ${num(x.quotes_pending_past ?? 0)} past the ${x.quote_approval_limit_hours ?? 4}-working-hour limit · a rep cannot send a quote until you act on it`
+              : "A rep cannot send a quote until you act on it",
           href: "/ceo/quotations",
           cta: x.quotes_pending === 1 ? "Review quote" : "Review quotes",
           primary: true,
@@ -454,8 +458,9 @@ export default function CEODashboard() {
           tone: "warn",
           label: "Ready leads with no owner",
           count: num(x.awaiting_assignment_total),
-          // ID 184: the same Hot / AI / other split as the Sales dashboard card.
-          sub: `${x.awaiting_assignment_split ? `${num(x.awaiting_assignment_split.hot)} Hot · ${num(x.awaiting_assignment_split.ai)} AI qualified · ${num(x.awaiting_assignment_split.other)} other · ` : ""}${num(x.unassigned_over_7d)} waiting ${x.unassigned_overdue_days}+ days`,
+          // ID 184: the same AI / Hot / other split (AI first) as the Sales dashboard card.
+          // 18 Oct rows 10 #6 / 29: past each limit, read from Admin › Time limits.
+          sub: `${x.awaiting_assignment_split ? `${num(x.awaiting_assignment_split.ai)} AI qualified · ${num(x.awaiting_assignment_split.hot)} Hot · ${num(x.awaiting_assignment_split.other)} other · ` : ""}${num(x.unassigned_hot_past ?? 0)} Hot past ${x.unassigned_hot_limit_hours ?? 9} working hours · ${num(x.unassigned_other_past ?? 0)} others past ${x.unassigned_overdue_days} working day${x.unassigned_overdue_days === 1 ? "" : "s"}`,
           href: "/admin/ready-to-assign",
           cta: "Open list",
         },
@@ -810,7 +815,7 @@ export default function CEODashboard() {
             revenueTarget.split,
             money && money.unlinked_revenue > 0
               ? `${inr(money.unlinked_revenue)} not linked to a dealer`
-              : "Non-void invoices dated in the period",
+              : "Non-void invoices dated in the period, less credit notes",
           ]
             .filter(Boolean)
             .join(" · ")}
@@ -949,8 +954,8 @@ export default function CEODashboard() {
           )}
           <span className="text-xs text-ink-muted">
             {revenueTarget.line
-              ? `${revenueTarget.line} (sum of everyone's targets${revenueTarget.split ? `: ${revenueTarget.split}` : ""}). Pace is a straight line over calendar days.`
-              : "No company revenue target is set, so there is no target-pace line. Pace is a straight line over calendar days."}
+              ? `Non-void invoices dated in the period, less credit notes. ${revenueTarget.line} (sum of everyone's targets${revenueTarget.split ? `: ${revenueTarget.split}` : ""}). Pace is a straight line over calendar days.`
+              : "Non-void invoices dated in the period, less credit notes. No company revenue target is set, so there is no target-pace line. Pace is a straight line over calendar days."}
           </span>
         </DashCard>
 

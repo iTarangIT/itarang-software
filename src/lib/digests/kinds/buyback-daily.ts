@@ -419,13 +419,11 @@ async function scrapDealTargets(monthFirst: string, upTo: string): Promise<Targe
   const none = (note: string): Targets => ({ byUser: new Map(), company: null, note });
   try {
     const { db } = await import("@/lib/db");
-    const hol = (await db.execute(sql`
-      SELECT holiday_date::text AS d FROM holiday_calendar
-       WHERE is_active IS NOT FALSE AND holiday_date BETWEEN ${monthFirst}::date AND ${monthEnd(monthFirst)}::date
-    `)) as unknown as Array<{ d: string }>;
-    const holidays = new Set(hol.map((h) => h.d));
-    const total = workingDaysBetween(monthFirst, monthEnd(monthFirst), holidays);
-    const elapsed = workingDaysBetween(monthFirst, upTo, holidays);
+    // The one office calendar (holidays + office hours), as the Sales Daily mail.
+    const { loadOfficeCalendar } = await import("@/lib/calendar/holidays");
+    const { holidays, hours } = await loadOfficeCalendar();
+    const total = workingDaysBetween(monthFirst, monthEnd(monthFirst), holidays, hours);
+    const elapsed = workingDaysBetween(monthFirst, upTo, holidays, hours);
     const rows = (await db.execute(sql`
       SELECT user_id, SUM(${finalTargetSql(sql`sales_targets`)})::float8 AS monthly
         FROM sales_targets

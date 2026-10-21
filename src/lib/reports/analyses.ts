@@ -22,6 +22,7 @@ import { parseLeadListFilters } from "@/lib/leads/leadListParams";
 import { doorLabel, originLabel } from "@/lib/leads/leadSourceVocab";
 import { TEAM_ROLES } from "@/lib/exports/datasets/types";
 import { humanCall } from "@/lib/reports/metricDefinitions";
+import { freshRepeatCtes, freshRepeatJoins, isFreshSql, isNewToItarangSql, visitedRowSql } from "@/lib/visits/freshRepeat";
 import {
     AI_BANDS,
     AI_NOT_SCORED,
@@ -428,11 +429,14 @@ export async function aiScoreAccuracyByBand(f: AnalysisFilters): Promise<AiScore
  * (src/lib/admin/salesDashboard.ts — VISIT_KEY and OPEN_VISIT are imported
  * from there, not restated):
  *
- *   A visit   lead_visits row with actual_visit_date in the period, on a lead
- *             that exists; one person + one dealer + one day is ONE visit
- *             however many rows were logged.
- *   Fresh     a visit on the dealer's first-ever actual visit day (over the
- *             whole table, not only this period). Repeat = the other visits.
+ *   A visit   lead_visits row marked visited, with actual_visit_date in the
+ *             period, on a lead that exists; one person + one dealer + one
+ *             day is ONE visit however many rows were logged.
+ *   Fresh     ID 185 (src/lib/visits/freshRepeat.ts — the one rule): the
+ *             person's FIRST visit to that dealer (over the whole table, not
+ *             only this period). Repeat = the other visits. Before 21 Oct
+ *             "Fresh" here meant the dealer's first visit by anyone — that is
+ *             now its own column, New to iTarang (a part of Fresh).
  *   Planned   rows still open (not visited / cancelled / no-show) whose
  *             planned date falls in the period.
  *
@@ -454,40 +458,39 @@ export async function meetingsByManagerCity(f: AnalysisFilters): Promise<Meeting
         visits: string;
         dealers: string;
         fresh: string;
+        new_to_itarang: string;
         ground: string;
         calling: string;
         whatsapp: string;
         other_mode: string;
     };
     const visitsQuery = (modeCol: SQL) => sql`
-        WITH fv AS (
-            SELECT dealer_lead_id, MIN(actual_visit_date) AS first_d
-              FROM lead_visits
-             WHERE actual_visit_date IS NOT NULL
-             GROUP BY dealer_lead_id
-        ),
+        WITH ${freshRepeatCtes()},
         vis AS (
             SELECT v.asm_id, v.dealer_lead_id, v.actual_visit_date,
                    ${CITY} AS city,
-                   (v.actual_visit_date = fv.first_d) AS is_new,
+                   ${isNewToItarangSql()} AS is_new,
+                   ${isFreshSql()} AS is_fresh,
                    ${modeCol} AS mode
               FROM lead_visits v
               JOIN dealer_leads dl ON dl.id = v.dealer_lead_id
-              LEFT JOIN fv ON fv.dealer_lead_id = v.dealer_lead_id
-             WHERE v.actual_visit_date BETWEEN ${period.from}::date AND ${period.to}::date
+              ${freshRepeatJoins()}
+             WHERE ${visitedRowSql()}
+               AND v.actual_visit_date BETWEEN ${period.from}::date AND ${period.to}::date
         ),
         -- One row per visit (person, dealer, day). Several rows logged for the
         -- same visit keep the first mode alphabetically, so the split is stable.
         visit AS (
             SELECT asm_id, dealer_lead_id, actual_visit_date,
-                   MIN(city) AS city, BOOL_OR(is_new) AS is_new, MIN(mode) AS mode
+                   MIN(city) AS city, BOOL_OR(is_new) AS is_new, BOOL_OR(is_fresh) AS is_fresh, MIN(mode) AS mode
               FROM vis
              GROUP BY ${VISIT_KEY}
         )
         SELECT asm_id, city,
                COUNT(*)::text                                  AS visits,
                COUNT(DISTINCT dealer_lead_id)::text            AS dealers,
-               COUNT(*) FILTER (WHERE is_new)::text            AS fresh,
+               COUNT(*) FILTER (WHERE is_fresh)::text          AS fresh,
+               COUNT(*) FILTER (WHERE is_new)::text            AS new_to_itarang,
                COUNT(*) FILTER (WHERE mode = 'ground')::text   AS ground,
                COUNT(*) FILTER (WHERE mode = 'calling')::text  AS calling,
                COUNT(*) FILTER (WHERE mode = 'whatsapp')::text AS whatsapp,
@@ -535,6 +538,7 @@ export async function meetingsByManagerCity(f: AnalysisFilters): Promise<Meeting
             dealers: 0,
             fresh: 0,
             repeat: 0,
+            new_to_itarang: 0,
             planned: 0,
             ground: 0,
             calling: 0,
@@ -558,6 +562,7 @@ export async function meetingsByManagerCity(f: AnalysisFilters): Promise<Meeting
         r.dealers = n(v.dealers);
         r.fresh = n(v.fresh);
         r.repeat = r.visits - r.fresh;
+        r.new_to_itarang = n(v.new_to_itarang);
         r.ground = n(v.ground);
         r.calling = n(v.calling);
         r.whatsapp = n(v.whatsapp);
@@ -585,7 +590,7 @@ export async function meetingsByManagerCity(f: AnalysisFilters): Promise<Meeting
                 a.city.localeCompare(b.city),
         );
 
-    const sumOf = (k: "visits" | "fresh" | "repeat" | "planned" | "ground" | "calling" | "whatsapp") =>
+    const sumOf = (k: "visits" | "fresh" | "repeat" | "new_to_itarang" | "planned" | "ground" | "calling" | "whatsapp") =>
         rows.reduce((s, r) => s + r[k], 0);
     const total: MeetingRow = {
         ...empty(null, f.city || "All cities"),
@@ -593,6 +598,7 @@ export async function meetingsByManagerCity(f: AnalysisFilters): Promise<Meeting
         visits: sumOf("visits"),
         fresh: sumOf("fresh"),
         repeat: sumOf("repeat"),
+        new_to_itarang: sumOf("new_to_itarang"),
         planned: sumOf("planned"),
         ground: sumOf("ground"),
         calling: sumOf("calling"),
@@ -604,6 +610,7 @@ export async function meetingsByManagerCity(f: AnalysisFilters): Promise<Meeting
     const label = (r: MeetingRow) => `${r.manager} · ${r.city}`;
     const checks = [
         checkRows("Fresh + Repeat = Visits, on every row", [total, ...rows], (r) => r.fresh + r.repeat === r.visits, label),
+        checkRows("New to iTarang is part of Fresh, on every row", [total, ...rows], (r) => r.new_to_itarang <= r.fresh, label),
         checkRows(
             "Ground + Calling + WhatsApp = Visits, on every row",
             [total, ...rows],
@@ -650,7 +657,8 @@ async function countDealers(period: AnalysisPeriod, f: AnalysisFilters): Promise
         SELECT COUNT(DISTINCT v.dealer_lead_id)::text AS n
           FROM lead_visits v
           JOIN dealer_leads dl ON dl.id = v.dealer_lead_id
-         WHERE v.actual_visit_date BETWEEN ${period.from}::date AND ${period.to}::date
+         WHERE ${visitedRowSql()}
+           AND v.actual_visit_date BETWEEN ${period.from}::date AND ${period.to}::date
            ${f.manager ? sql` AND v.asm_id = ${f.manager}` : sql``}
            ${f.city ? sql` AND ${CITY} = ${f.city}` : sql``}
     `);

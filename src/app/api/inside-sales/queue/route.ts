@@ -10,7 +10,7 @@ import { isPoolTabFor } from "@/lib/leads/claimScope";
 import { successResponse, withErrorHandler, errorResponse } from "@/lib/api-utils";
 import { fetchQueueRows, countQueueRows, fetchQueueIds } from "@/lib/inside-sales/queryBuilder";
 import { fetchAssignedByForLeads } from "@/lib/leads/leadAssignedBy";
-import { leadsPastALimit } from "@/lib/leads/clocks";
+import { pastLimitFilter, pastLimitLabelsByLead } from "@/lib/leads/queuePastLimit";
 import { BULK_CLAIM_CAP, QUEUE_TABS, type QueueResponse } from "@/lib/inside-sales/types";
 import { readQueueFilters } from "@/lib/leads/queueFilters";
 import { readQueueSort } from "@/lib/leads/queueSort";
@@ -41,6 +41,8 @@ const QuerySchema = z.object({
     callback: z.literal("1").optional(),
     // ID 75.4: "Finalised, not Won" — approved by the dealer, not marked Won.
     finalised: z.literal("1").optional(),
+    // 18 Oct row 34: only leads past a time limit (the chip, as a filter).
+    past_limit: z.literal("1").optional(),
     ids_only: z.literal("1").optional(),
 });
 
@@ -55,6 +57,7 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
         neodove: url.searchParams.get("neodove") ?? undefined,
         callback: url.searchParams.get("callback") ?? undefined,
         finalised: url.searchParams.get("finalised") ?? undefined,
+        past_limit: url.searchParams.get("past_limit") ?? undefined,
         ids_only: url.searchParams.get("ids_only") ?? undefined,
     });
 
@@ -65,6 +68,8 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
     const neodoveOnly = parsed.neodove === "1";
     const callbackOnly = parsed.callback === "1";
     const finalisedOnly = parsed.finalised === "1";
+    // Only where lead_clocks exists — else the filter matches nothing rather than failing.
+    const pastLimit = await pastLimitFilter(url.searchParams);
     // Stage / interest / region / created-date. Validated against their closed
     // vocabularies inside readQueueFilters, so an unknown value is dropped
     // rather than reaching the SQL builder.
@@ -102,6 +107,7 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
             neodoveOnly,
             callbackOnly,
             finalisedOnly,
+            pastLimit,
             filters,
             sort,
             teamMemberIds,
@@ -113,6 +119,7 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
             neodoveOnly,
             callbackOnly,
             finalisedOnly,
+            pastLimit,
             filters,
             teamMemberIds,
         }),
@@ -129,14 +136,19 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
     // told who sent them the lead, which is the one person who has always had a
     // right to know and was the only one who could not see it.
     const pageIds = rows.map((r) => r.id).filter(Boolean);
-    const [assignedBy, pastLimit] = await Promise.all([
+    const [assignedBy, pastLimit_] = await Promise.all([
         fetchAssignedByForLeads(pageIds),
         // IDs 85 / 86 — the "Past a limit" chip; same fail-tolerant decoration.
-        leadsPastALimit(pageIds).catch(() => new Set<string>()),
+        pastLimitLabelsByLead(pageIds),
     ]);
 
     const body: QueueResponse = {
-        rows: rows.map((r) => ({ ...r, assigned_by: assignedBy[r.id] ?? null, past_limit: pastLimit.has(r.id) })),
+        rows: rows.map((r) => ({
+            ...r,
+            assigned_by: assignedBy[r.id] ?? null,
+            past_limit: pastLimit_.has(r.id),
+            past_limits: pastLimit_.get(r.id) ?? [],
+        })),
         total,
         page: parsed.page,
         limit: parsed.limit,

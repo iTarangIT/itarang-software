@@ -25,6 +25,7 @@ import { LEADS_PAGE_ROLES, capabilitiesFor } from "@/lib/leads/access";
 import { buildExportWhere } from "@/lib/leads/leadListQuery";
 import { parseLeadListFilters } from "@/lib/leads/leadListParams";
 import { businessTypeLabel } from "@/lib/leads/businessType";
+import { leadSourceLabel } from "@/lib/leads/leadSourceVocab";
 import { styleHeader, zebra } from "@/lib/excel/sheetStyle";
 import ExcelJS from "exceljs";
 
@@ -85,6 +86,10 @@ const COLUMNS: { header: string; key: string; date?: boolean }[] = [
     // E-296. Rendered through businessTypeLabel so NULL reads "Not set",
     // exactly as the chip on screen does.
     { header: "Business Type", key: "business_type" },
+    // HANDOVER-A31: the list's "Lead source" column (stamped door, else the one
+    // the legacy source implies — leadSourceLabel) and the acquisition campaign.
+    { header: "Lead Source", key: "lead_source" },
+    { header: "Campaign", key: "campaign" },
     { header: "Follow-up Owner", key: "owner_name" },
     { header: "ASM", key: "asm_name" },
     { header: "Last Call At", key: "last_call_at", date: true },
@@ -170,6 +175,10 @@ export const GET = withErrorHandler(async (req: Request) => {
             to_jsonb(dl) ->> 'last_disposition_source' AS disposition_source,
             -- E-296, same to_jsonb guard.
             to_jsonb(dl) ->> 'business_type'           AS business_type,
+            -- E-314 / E-319, same guard. The campaign NAME is looked up below.
+            to_jsonb(dl) ->> 'source_door'             AS source_door,
+            dl.source                                  AS legacy_source,
+            to_jsonb(dl) ->> 'acquisition_campaign_id' AS acquisition_campaign_id,
             ai.called_at        AS ai_last_called_at,
             ai.band             AS ai_band,
             -- BLANK, not 0, when nothing was extracted. "0/5" means the dealer
@@ -233,6 +242,27 @@ export const GET = withErrorHandler(async (req: Request) => {
         ORDER BY dl.last_touchpoint_at DESC NULLS LAST, dl.created_at DESC
         LIMIT ${EXPORT_ROW_CAP}
     `)) as unknown as Row[];
+
+    // HANDOVER-A31: campaign names in their own statement, allowed to fail —
+    // a database without acquisition_campaigns (E-319) gets a blank column,
+    // not a broken export.
+    const campaignIds = [...new Set(rows.map((r) => r.acquisition_campaign_id).filter((v): v is string => typeof v === "string" && v !== ""))];
+    const campaignNames = new Map<string, string>();
+    if (campaignIds.length) {
+        try {
+            const names = (await db.execute<{ id: string; name: string }>(sql`
+                SELECT ac.id::text AS id, ac.name FROM acquisition_campaigns ac
+                 WHERE ac.id::text IN (SELECT jsonb_array_elements_text(${JSON.stringify(campaignIds)}::jsonb))
+            `)) as unknown as { id: string; name: string }[];
+            for (const n of names) campaignNames.set(n.id, n.name);
+        } catch (e) {
+            console.warn("[dealer-leads/export] campaign names unavailable:", e instanceof Error ? e.message : e);
+        }
+    }
+    for (const r of rows) {
+        r.lead_source = leadSourceLabel(r.source_door as string | null, r.legacy_source as string | null);
+        r.campaign = r.acquisition_campaign_id ? (campaignNames.get(String(r.acquisition_campaign_id)) ?? null) : null;
+    }
 
     // Owner and ASM are oversight-only. Blanked rather than omitted so the
     // column layout is identical for every role — a sheet whose columns shift

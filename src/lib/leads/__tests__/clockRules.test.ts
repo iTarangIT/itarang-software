@@ -32,8 +32,9 @@ describe("lead clocks (ID 86)", () => {
         expect(owner.clock).toBe("owner");
         expect(owner.owner_inferred).toBe(true);
         expect(owner.first_attempt_at).toBeNull();
-        // Due 14:00 IST, never attempted → passed at the due moment.
-        expect(owner.limit_passed_at?.toISOString()).toBe(ist("2026-10-12", "14:00").toISOString());
+        // 18 Oct rework 2: not Hot → 1 working day: due end of Tue 13 Oct, never attempted → passed then.
+        expect(owner.limit_key).toBe("nonhot_owner_first_attempt");
+        expect(owner.limit_passed_at?.toISOString()).toBe(new Date("2026-10-13T18:29:59.999Z").toISOString());
     });
 
     it("a stint handed on before its limit fell due never passes", () => {
@@ -79,9 +80,9 @@ describe("lead clocks (ID 86)", () => {
     });
 
     it("the limit is the one in force on the day the clock started", () => {
-        const dated = (day: string) => ({ ...TIME_LIMIT_DEFAULTS, owner_first_attempt: day >= "2026-10-13" ? 8 : 4 });
+        const dated = (day: string) => ({ ...TIME_LIMIT_DEFAULTS, nonhot_owner_first_attempt: day >= "2026-10-13" ? 3 : 2 });
         const [owner] = clocksForLead(lead(), [], [], [], dated, NONE, NOW);
-        expect(owner.limit_value).toBe(4);
+        expect(owner.limit_value).toBe(2);
     });
 
     it("median and slowest 1 in 10", () => {

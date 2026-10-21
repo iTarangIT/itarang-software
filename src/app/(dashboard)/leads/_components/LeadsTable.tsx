@@ -288,8 +288,13 @@ export function LeadsTable({
                                 // Idle = the holder's clock (ID 192): last
                                 // work, the date they got the lead, or a
                                 // follow-up within 30 days. Comments do not
-                                // count as work.
-                                const idle = idleDays(row, nowMs);
+                                // count as work. The list API counts it in SQL
+                                // with holidays and office hours (the filter's
+                                // own expression); the JS twin is the fallback.
+                                const idle =
+                                    typeof row.idle_working_days === "number"
+                                        ? Math.max(0, row.idle_working_days)
+                                        : idleDays(row, nowMs);
                                 const idleText = formatIdle(idle);
                                 const sourceLabel = leadSourceLabel(
                                     row.source_door,
@@ -553,7 +558,7 @@ export function LeadsTable({
                                                 title={
                                                     idle === null
                                                         ? "No touchpoint and no creation date"
-                                                        : `${idle} days since the later of the last call, visit or status change, the date the holder got the lead, and a follow-up within 30 days`
+                                                        : `${idle} working days (office calendar, holidays off) since the later of the last call, visit or status change, the date the holder got the lead, and a follow-up within 30 days`
                                                 }
                                             >
                                                 {idleText.primary}

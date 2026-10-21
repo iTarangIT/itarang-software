@@ -16,6 +16,7 @@
 
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
+import { ownerScopeIds } from "@/lib/users/teamRules";
 import {
     CAMPAIGN_REQUIRED_MESSAGE,
     campaignRequired,
@@ -258,8 +259,19 @@ export type ScrapeRunFacet = {
  * One GROUP BY over the partial dealer_leads_acquisition_campaign_idx (E-319),
  * so it costs one index scan however many runs there are. Fail-soft: a
  * database without E-314/E-319 gets no dropdown, not a broken list.
+ *
+ * HANDOVER-A31: counted within the viewer's access scope — the same
+ * ownerScopeId / ownerScopeTeamIds the Leads list applies (ID 45 / ID 155) —
+ * so a scoped rep or manager sees counts for the leads they can open, and a run
+ * with none of theirs drops out. Unscoped (oversight) viewers see every lead.
  */
-export async function fetchScrapeRunFacets(): Promise<ScrapeRunFacet[]> {
+export async function fetchScrapeRunFacets(
+    scope: { ownerScopeId?: string | null; ownerScopeTeamIds?: string[] | null } = {},
+): Promise<ScrapeRunFacet[]> {
+    const ids = scope.ownerScopeId ? ownerScopeIds(scope.ownerScopeId, scope.ownerScopeTeamIds) : null;
+    const scoped = ids
+        ? sql`AND dl.current_owner_id IN (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})`
+        : sql``;
     try {
         const rows = await db.execute<ScrapeRunFacet>(sql`
             SELECT ac.id::text AS id,
@@ -274,6 +286,7 @@ export async function fetchScrapeRunFacets(): Promise<ScrapeRunFacet[]> {
                       FROM dealer_leads dl
                      WHERE dl.acquisition_campaign_id IS NOT NULL
                        AND dl.is_active IS NOT FALSE
+                       ${scoped}
                      GROUP BY dl.acquisition_campaign_id
                    ) x
               JOIN acquisition_campaigns ac ON ac.id = x.cid

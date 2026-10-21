@@ -29,7 +29,7 @@ export const DATASET_LAYOUT: Record<string, DatasetLayout> = {
             { name: "Source", keys: ["created_on", "source_door", "source_origin", "campaign", "created_by"] },
             {
                 name: "Owner and speed",
-                keys: ["owner_name", "owner_role", "sales_ready_on", "sales_ready_reason", "assigned_on", "first_attempt_on", "first_contact_on", "last_worked_on", "idle_working_days", "next_follow_up", "last_visit_date", "next_visit_date", "last_call_at", "next_call_at"],
+                keys: ["owner_name", "owner_role", "sales_ready_on", "sales_ready_reason", "assigned_on", "first_attempt_on", "first_contact_on", "last_worked_on", "idle_working_days", "idle_past_limit", "next_follow_up", "last_visit_date", "next_visit_date", "last_call_at", "next_call_at"],
             },
             {
                 name: "Pipeline",
@@ -49,7 +49,7 @@ export const DATASET_LAYOUT: Record<string, DatasetLayout> = {
             { name: "Event", keys: ["event_at", "event_type", "from_value", "to_value", "channel", "outcome", "duration_sec", "remarks", "performed_by", "role"] },
             { name: "Lead", keys: ["lead_id", "dealer", "city", "state", "business_type"] },
             // ID 35 — lead / owner clocks (E-337) as of each event.
-            { name: "Clocks", keys: ["hours_since_sales_ready", "lead_clock_started_at", "lead_limit_passed", "owner_clock_started_at", "owner_limit_passed", "owner_inferred"] },
+            { name: "Clocks", keys: ["hours_since_sales_ready", "lead_clock_started_at", "lead_limit_passed", "owner_clock_started_at", "owner_limit_passed", "owner_inferred", "lead_first_attempt", "lead_first_contact", "owner_first_attempt", "owner_first_contact"] },
         ],
     },
     // ID 51 — Ecofy leads (E-305 / E-307).
@@ -83,7 +83,7 @@ export const DATASET_LAYOUT: Record<string, DatasetLayout> = {
                 keys: ["visit_date", "scheduled_date", "lead_id", "dealer", "city", "state", "visitor", "meeting_mode", "visit_status", "visit_outcome", "new_visit", "visit_remarks", "next_visit_date"],
             },
             { name: "Proof", keys: ["photos", "location_pin"] },
-            { name: "Handover", keys: ["transferred_on", "transferred_by", "owner_at_transfer", "days_transfer_to_visit"] },
+            { name: "Handover", keys: ["transferred_on", "transferred_by", "owner_at_transfer", "days_transfer_to_visit", "transfer_visit_within_limit"] },
         ],
     },
     quotes: {
@@ -99,6 +99,10 @@ export const DATASET_LAYOUT: Record<string, DatasetLayout> = {
             {
                 name: "Approval and answer",
                 keys: ["approval_status", "approval_mode", "approved_by", "approved_at", "approval_wait_hours", "rejection_reason", "delivered_at", "channels", "dealer_decision", "dealer_decision_at", "dealer_decision_via", "withdrawn_at", "withdraw_reason"],
+            },
+            {
+                name: "Waits against the limits",
+                keys: ["approval_working_hours", "approval_limit_passed", "approved_to_delivered_wh", "delivery_limit_passed", "delivered_to_answer_wd", "answer_limit_passed", "dealer_yes_to_won_wd", "won_limit_passed", "declined_to_revised_wd", "revise_limit_passed"],
             },
         ],
     },

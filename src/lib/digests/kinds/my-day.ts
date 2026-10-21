@@ -6,8 +6,10 @@
  *   My numbers   the person's own row of the management email's Block B (ASM)
  *                or C (ISR) — yesterday and MTD — and their targets to date
  *                against the actual (the Targets page's measures).
- *   My work list follow-ups and visits due today or overdue, time limits passed
- *                and still unanswered, and idle leads — each a link to the lead.
+ *   My work list follow-ups due today / tomorrow / overdue, visits due or
+ *                overdue, time limits passed and still unanswered, every lead
+ *                waiting for a field visit, quotes with no dealer answer, and
+ *                idle leads — each a link to the lead.
  *   My team      only for someone with people reporting to them: each member's
  *                row and the team subtotal, as printed under them in the
  *                management email.
@@ -18,8 +20,8 @@
  * the Sales Daily mail uses (buildSalesDashboard per period → buildRepBlocks →
  * repBlockTableRows, myDayShape.ts), over the same covered day, so a person's
  * row here equals their row there. scripts/verify-sales-daily.ts --my-day
- * checks it. Note "yesterday" is the previous calendar day, as in the
- * management email — on a Monday that is Sunday.
+ * checks it. "Yesterday" is the last working day on the office calendar, as
+ * in the management email (salesDailyPeriodsFor) — on a Monday, Saturday.
  *
  * The expensive part (two dashboard builds, the per-rep extras, the targets)
  * is the same for everyone, so it is built once per covered day and reused by
@@ -39,7 +41,17 @@ import {
   buildRepBlocks,
   type RepBlock,
 } from "../salesDailyBlocks";
-import { personRows, targetRows, teamRows, workListRows, type TargetLine, type WorkItem } from "../myDayShape";
+import {
+  membersOf,
+  personRows,
+  targetRows,
+  teamOverdueRows,
+  teamRows,
+  workListRows,
+  type MemberOverdue,
+  type TargetLine,
+  type WorkItem,
+} from "../myDayShape";
 import type {
   DigestDetail,
   DigestFigures,
@@ -48,14 +60,14 @@ import type {
   DigestSection,
   DigestTable,
 } from "../types";
-import { addDays, salesDailyPeriods } from "./sales-daily";
+import { addDays, salesDailyPeriodsFor } from "./sales-daily";
 
 const ROLES = ["inside_sales_rep", "asm"] as const;
 type Role = (typeof ROLES)[number];
 
 const SECTIONS: DigestSection[] = [
   { key: "my_numbers", label: "My numbers", hint: "The person's own row of the management email (yesterday and MTD), and each target to date against the actual.", group: "activity" },
-  { key: "work_list", label: "My work list", hint: "Follow-ups and visits due today or overdue, time limits passed and still unanswered, and idle leads — each opens the lead.", group: "backlog" },
+  { key: "work_list", label: "My work list", hint: "Follow-ups due today, tomorrow or overdue; visits due or overdue; time limits passed and still unanswered; every lead waiting for a field visit; quotes with no answer from the dealer; and idle leads — each opens the lead.", group: "backlog" },
   { key: "my_team", label: "My team (managers only)", hint: "Each person reporting to them and the team subtotal, as in the management email.", group: "activity" },
 ];
 
@@ -98,7 +110,7 @@ async function buildShared(istDay: string): Promise<Shared> {
   const { companyTargets } = await import("../salesDailyBlockA");
   const { currentTeamOf } = await import("@/lib/users/team");
   const { measuresFor } = await import("@/lib/targets/service");
-  const periods = salesDailyPeriods(istDay);
+  const periods = await salesDailyPeriodsFor(istDay);
   // The same calls, with the same arguments, as the management email's collect.
   const [yesterday, mtd, extrasY, extrasMtd, t, teamOf] = await Promise.all([
     buildSalesDashboard({ ...periods.yesterday, granularity: "day" }),
@@ -163,16 +175,24 @@ async function targetLines(person: DigestPerson, s: Shared, monthFirst: string):
   return lines.sort((a, b) => a.label.localeCompare(b.label));
 }
 
-/** Follow-ups and visits due by the send day, open limits passed, idle leads. */
+/**
+ * The work list (ID 194, 18 Oct sheet): follow-ups due today, tomorrow or
+ * overdue; visits due or overdue; time limits passed and still unanswered;
+ * every lead waiting for a field visit (the card's rule, awaitingFieldVisitSql
+ * — not only those past the limit); quotes delivered with no answer from the
+ * dealer (the "Quotes with no answer" card's rule); and leads idle past the
+ * holder's limit (the Needs Attention rule).
+ */
 async function workItems(person: DigestPerson, sendDay: string): Promise<WorkItem[]> {
   const { db } = await import("@/lib/db");
+  const tomorrow = addDays(sendDay, 1);
   const dated = (await db.execute(sql`
     SELECT dl.id AS lead_id, COALESCE(dl.dealer_name, dl.shop_name, dl.id) AS dealer, dl.city,
            'Follow-up' AS what, ((dl.next_follow_up_at AT TIME ZONE 'Asia/Kolkata')::date)::text AS due
       FROM dealer_leads dl
      WHERE dl.current_owner_id = ${person.id} AND dl.is_active IS NOT FALSE
        AND COALESCE(dl.lead_status, '') NOT IN ('Won', 'Converted', 'Lost')
-       AND (dl.next_follow_up_at AT TIME ZONE 'Asia/Kolkata')::date <= ${sendDay}::date
+       AND (dl.next_follow_up_at AT TIME ZONE 'Asia/Kolkata')::date <= ${tomorrow}::date
     UNION ALL
     SELECT dl.id, COALESCE(dl.dealer_name, dl.shop_name, dl.id), dl.city, 'Visit', v.scheduled_date::text
       FROM lead_visits v
@@ -191,11 +211,48 @@ async function workItems(person: DigestPerson, sendDay: string): Promise<WorkIte
       lead_id: r.lead_id,
       dealer: r.dealer,
       city: r.city,
-      what: late > 0 ? `${r.what} overdue` : `${r.what} today`,
+      what: late > 0 ? `${r.what} overdue` : due > sendDay ? `${r.what} tomorrow` : `${r.what} today`,
       due,
       days: late,
     };
   });
+
+  // Every lead waiting for a field visit, quotes with no dealer answer and Hot
+  // leads not called in time — the Sales dashboard cards' own rows, narrowed
+  // to this person.
+  try {
+    const { listSalesHeadAction } = await import("@/lib/dashboard/salesHeadActions");
+    const [waiting, quotes, hot] = await Promise.all([
+      listSalesHeadAction("visit_overdue", { ownerId: person.id }),
+      listSalesHeadAction("quotes_no_answer", { ownerId: person.id }),
+      listSalesHeadAction("hot_not_called", { ownerId: person.id }),
+    ]);
+    for (const r of hot) {
+      items.push({ lead_id: r.lead_id, dealer: r.dealer, city: r.city, what: "Hot lead not called in time", due: null, days: 0 });
+    }
+    for (const r of waiting) {
+      items.push({
+        lead_id: r.lead_id,
+        dealer: r.dealer,
+        city: r.city,
+        what: r.past_limit ? "Waiting for a field visit · past the limit" : "Waiting for a field visit",
+        due: null,
+        days: Number(r.days ?? 0),
+      });
+    }
+    for (const r of quotes) {
+      items.push({
+        lead_id: r.lead_id,
+        dealer: r.dealer,
+        city: r.city,
+        what: "Quote with no answer from the dealer",
+        due: null,
+        days: Number(r.days ?? 0),
+      });
+    }
+  } catch (e) {
+    console.warn("[digest:my_day] field visits / quotes not listed:", e instanceof Error ? e.message : e);
+  }
 
   // Time limits passed and still unanswered, charged to this person (E-350).
   try {
@@ -230,12 +287,13 @@ async function workItems(person: DigestPerson, sendDay: string): Promise<WorkIte
   try {
     const { listNeedsAttention } = await import("@/lib/leads/needsAttention");
     for (const r of await listNeedsAttention({ holderId: person.id, limit: 50 })) {
-      if (r.non_responsive) continue;
+      // A row listed only for its overdue visit is already on the list above.
+      if (r.non_responsive || !r.past_idle) continue;
       items.push({
         lead_id: r.lead_id,
         dealer: r.dealer,
         city: r.city,
-        what: r.visit_overdue ? "Waiting for a field visit past the limit" : `Idle ${r.days_idle} working days`,
+        what: `Idle ${r.days_idle} working days`,
         due: null,
         days: r.days_idle,
       });
@@ -244,6 +302,32 @@ async function workItems(person: DigestPerson, sendDay: string): Promise<WorkIte
     console.warn("[digest:my_day] idle leads not listed:", e instanceof Error ? e.message : e);
   }
   return items;
+}
+
+/**
+ * ID 194 — each person's overdue follow-ups and overdue visits, by the work
+ * list's own rules (a follow-up dated before the send day on an open lead they
+ * hold; a scheduled visit of theirs dated before it). One query for the team.
+ */
+async function overdueByPerson(ids: string[], sendDay: string): Promise<MemberOverdue[]> {
+  if (ids.length === 0) return [];
+  const { db } = await import("@/lib/db");
+  const list = sql.join(ids.map((i) => sql`${i}`), sql`, `);
+  const rows = (await db.execute(sql`
+    SELECT u.id::text AS id, COALESCE(u.name, u.email) AS name,
+           (SELECT COUNT(*)::int FROM dealer_leads dl
+             WHERE dl.current_owner_id = u.id::text AND dl.is_active IS NOT FALSE
+               AND COALESCE(dl.lead_status, '') NOT IN ('Won', 'Converted', 'Lost')
+               AND (dl.next_follow_up_at AT TIME ZONE 'Asia/Kolkata')::date < ${sendDay}::date) AS follow_ups,
+           (SELECT COUNT(*)::int FROM lead_visits v JOIN dealer_leads dl ON dl.id = v.dealer_lead_id
+             WHERE v.asm_id::text = u.id::text
+               AND v.scheduled_date < ${sendDay}::date
+               AND v.visit_status IN ('scheduled', 'pending_scheduling')
+               AND COALESCE(dl.lead_status, '') NOT IN ('Won', 'Converted', 'Lost')) AS visits
+      FROM users u
+     WHERE u.id::text IN (${list})
+  `)) as unknown as Array<{ id: string; name: string; follow_ups: number; visits: number }>;
+  return rows.map((r) => ({ id: r.id, name: r.name, followUps: Number(r.follow_ups ?? 0), visits: Number(r.visits ?? 0) }));
 }
 
 const CLOCK_WORDS: Record<string, string> = {
@@ -284,9 +368,9 @@ export async function collectMyDay(
     const role: Role = person.role === "asm" ? "asm" : "inside_sales_rep";
     const sendDay = addDays(istDay, 1);
     const s = await sharedFor(istDay);
-    const { leadHrefFor } = await import("@/lib/leads/newOwnerNotice");
+    const { leadHrefFor, queueHrefFor } = await import("@/lib/leads/newOwnerNotice");
     const { appUrl } = await import("@/lib/email/sendDigestEmail");
-    const periods = salesDailyPeriods(istDay);
+    const periods = await salesDailyPeriodsFor(istDay);
 
     const [lines, work] = await Promise.all([targetLines(person, s, periods.mtd.from), workItems(person, sendDay)]);
     const mine = personRows(role, s.blocks[role], person.id);
@@ -323,7 +407,7 @@ export async function collectMyDay(
       {
         key: "work_list",
         title: `My work list · ${dayLong(sendDay)}`,
-        columns: ["Dealer", "City", "What", "Due", "Days late"],
+        columns: ["Dealer", "City", "What", "Due", "Days (late / waiting / idle)"],
         rows: list.rows,
         rowLinks: list.leadIds.map((id) => `${base}${leadHrefFor(role, id)}`),
         textColumns: 4,
@@ -347,6 +431,26 @@ export async function collectMyDay(
       });
     }
 
+    // ID 194: each member's overdue follow-ups and visits (the work-list rules).
+    const members = membersOf(s.teamOf, person.id);
+    if (members.length > 0) {
+      try {
+        const rows = teamOverdueRows(person.id, await overdueByPerson([person.id, ...members], sendDay));
+        if (rows.length) {
+          tables.push({
+            key: "my_team",
+            title: "My team · overdue work",
+            columns: ["Person", "Overdue follow-ups", "Overdue visits"],
+            rows,
+            textColumns: 1,
+            note: "Follow-ups dated before today on open leads each person holds, and their scheduled visits dated before today.",
+          });
+        }
+      } catch (e) {
+        console.warn("[digest:my_day] team overdue not listed:", e instanceof Error ? e.message : e);
+      }
+    }
+
     const first = person.name.split(/\s+/)[0] || person.name;
     return {
       ok: true,
@@ -354,6 +458,9 @@ export async function collectMyDay(
         activity: [],
         backlog: [],
         wide: true,
+        // ID 194: "Open my queue" opens the reader's own queue — /asm for an
+        // ASM (who may not open the inside-sales queue), /inside-sales otherwise.
+        ctaHref: queueHrefFor(role),
         headline: [
           `Work list: ${list.rows.length + list.more} item${list.rows.length + list.more === 1 ? "" : "s"} for today.`,
         ],

@@ -9,9 +9,14 @@
  * inside sales from idle_cc working days (default 5), ASMs from idle_asm
  * (default 7); the second band is stale_critical (default 14). All three are
  * Admin › Time limits settings, read when the mail is built. Idle means no
- * call, visit or status change (E-300). Non-responsive leads (R-16) and parked
- * leads (follow-up over 30 days ahead) are counted in their own columns and
- * kept out of the idle figures.
+ * work (call, visit or status change, E-300), no follow-up passed and no
+ * handover in that many working days (FOLLOW_UP_AGEING_BASIS,
+ * followUpAgeing.ts); a follow-up still ahead keeps a lead off the list.
+ * Non-responsive leads (R-16) have their own column and are not idle. A
+ * follow-up more than 30 days ahead is IGNORED (Kartik, 15 Oct), so those
+ * leads are already inside "Idle past their limit": they are shown only as
+ * "of which N with a follow-up over 30 days ahead" — never as a separate
+ * count a reader could add on top (ID 192, 18 Oct rework 1).
  *
  * It is an as-of-now snapshot, not a period count, so `istDay` only labels the
  * mail. Ships OFF with no recipients, like the other sales mails.
@@ -38,7 +43,7 @@ const SECTIONS: DigestSection[] = [
   {
     key: "by_holder",
     label: "By person",
-    hint: "Per person holding leads: idle past their limit, past the critical limit, the oldest, non-responsive and parked.",
+    hint: "Per person holding leads: idle past their limit (of which with a follow-up over 30 days ahead), past the critical limit, the oldest, and non-responsive.",
     group: "backlog",
   },
 ];
@@ -79,12 +84,12 @@ async function collect(): Promise<{ ok: boolean; figures: DigestFigures; error?:
         "Held by",
         "Role",
         "Idle past their limit",
+        "of which with a follow-up over 30 days ahead",
         `Idle ${critical}+ working days`,
-        "Oldest (days)",
+        "Oldest (working days)",
         "Non-responsive",
-        "Parked (follow-up 30+ days ahead)",
       ],
-      rows: list.map((a) => [a.name, a.role, a.idle, a.critical, a.oldest, a.dead, a.parked]),
+      rows: list.map((a) => [a.name, a.role, a.idle, a.parked, a.critical, a.oldest, a.dead]),
       empty: `No lead is past its idle limit (${limitLabel}).`,
     };
 
@@ -95,7 +100,8 @@ async function collect(): Promise<{ ok: boolean; figures: DigestFigures; error?:
         backlog: [
           { key: "summary", label: `Leads idle past the limit (${limitLabel})`, value: idle },
           { key: "summary", label: `Leads idle ${critical} or more working days`, value: crit },
-          { key: "summary", label: "Parked: follow-up more than 30 days ahead", value: parked },
+          // Already inside the idle figure above — worded so nobody adds it on top.
+          { key: "summary", label: "of which with a follow-up over 30 days ahead", value: parked },
         ],
         tables: [table],
       },
@@ -117,9 +123,9 @@ export const idleWeeklyDigest: DigestKindDescriptor = {
   label: "Weekly Idle Leads",
   description:
     "One mail every Monday morning: how many leads each person has held past their idle " +
-    "limit (inside sales and ASM limits from Admin › Time limits) with no call, visit or " +
-    "status change, how many past the critical limit, who has non-responsive numbers and " +
-    "which leads are parked. Nothing is sent until recipients are added here.",
+    "limit (inside sales and ASM limits from Admin › Time limits) with no work, follow-up or " +
+    "handover, of which how many carry a follow-up over 30 days ahead, how many are past the " +
+    "critical limit and who has non-responsive numbers. Nothing is sent until recipients are added here.",
   settingsKey: "idle_weekly_digest",
   settingsHref: "/admin/settings/idle-weekly",
   ctaHref: "/admin/reports/needs-attention",

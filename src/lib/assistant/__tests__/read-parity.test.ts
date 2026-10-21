@@ -98,7 +98,7 @@ describe("product_catalogue — trailing zeros", () => {
 describe("my_numbers shape", () => {
     const dash = {
         as_of_date: "2026-10-15",
-        totals: { visits: 12, unique_visits: 9, new_visits: 3, calls: 40, dealers_called: 30, converted: 1, new_hot: 0, hot_converted: 0 },
+        totals: { visits: 12, fresh_visits: 7, unique_visits: 9, new_visits: 3, calls: 40, dealers_called: 30, converted: 1, new_hot: 0, hot_converted: 0 },
         snapshot: { visits_yesterday: 0, calls_yesterday: 0, planned_visits_today: 1, planned_visits_next_7_days: 4 },
         interest: { rows: [{ interest_level: "hot", total: 2 }], ageing_basis: "" },
     } as never;
@@ -114,6 +114,12 @@ describe("my_numbers shape", () => {
         expect(perDay).toMatchObject({ metric: "calls_per_day", daily_target: 30, actual_per_day: 32, pct_of_target: 107 });
         expect(perDay).not.toHaveProperty("monthly_target");
         expect(monthly).toMatchObject({ metric: "hot_to_ground", monthly_target: 20, mtd_target: 10 });
+    });
+
+    it("ID 185: visits split into fresh + repeat, new to iTarang alongside", () => {
+        const act = shapeNumbers(ASM, "this_month", { from: "2026-10-01", to: "2026-10-15" }, dash, []).activity as Record<string, number>;
+        expect(act).toMatchObject({ visits: 12, fresh_visits: 7, repeat_visits: 5, new_visits: 3 });
+        expect(act.fresh_visits + act.repeat_visits).toBe(act.visits);
     });
 
     it("the CRM link opens the performance page on the same range", () => {

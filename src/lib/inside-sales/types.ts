@@ -74,6 +74,8 @@ export type QueueRow = {
     assigned_by?: LeadAssignedBy | null;
     /** IDs 85 / 86 — a clock on this lead is running past its limit (the "Past a limit" chip). */
     past_limit?: boolean;
+    /** 18 Oct row 34 — which limits are past, e.g. "Field visit (3 working days)" (limitChipLabel). */
+    past_limits?: string[];
 };
 
 export type QueueResponse = {
@@ -87,6 +89,8 @@ export type QueueResponse = {
 export type QueueCounts = Record<QueueTab, number> & {
     /** ID 75.4: the rep's own "Finalised, not Won" leads on My open (chip badge). */
     finalised_not_won?: number;
+    /** 18 Oct row 34 — the rep's own My open leads past a time limit (chip badge). */
+    past_limit?: number;
 };
 
 // Lead Detail bundle returned by GET /api/inside-sales/lead/[id].

@@ -1,4 +1,4 @@
-// GET /api/asm/queue/export?tab=...&q=...&<filters> — the ASM queue, as a CSV.
+// GET /api/asm/queue/export?tab=...&q=...&past_limit=1&<filters> — the ASM queue, as a CSV.
 //
 // TAKES THE SAME PARAMS AS THE LIST and runs the SAME builder, so the sheet and
 // the screen can never disagree about which leads matched. That is the whole
@@ -22,6 +22,7 @@ import { fetchBusinessTypeForLeads } from "@/lib/leads/leadListQuery";
 import { businessTypeLabel } from "@/lib/leads/businessType";
 import { exportsOwnLeadsOnly, logDataDownload } from "@/lib/exports/downloadLog";
 import { teamForOwnScopedViewer } from "@/lib/users/team";
+import { pastLimitFilter, pastLimitLabelsByLead } from "@/lib/leads/queuePastLimit";
 import {
     ASM_QUEUE_TABS,
     ASM_TAB_LABELS,
@@ -93,6 +94,8 @@ const COLUMNS: CsvColumn<AsmQueueRow>[] = [
     { header: "Assigned At", value: (r) => csvDateTime(r.assigned_at) },
     { header: "Last Touchpoint", value: (r) => csvDateTime(r.last_touchpoint_at) },
     { header: "Closed At", value: (r) => csvDateTime(r.closed_at) },
+    // IDs 85 / 86: which time limits the lead is past — the chip on screen.
+    { header: "Past a limit", value: (r) => (r.past_limits ?? []).join("; ") },
 ];
 
 export const GET = withErrorHandler(async (req: NextRequest) => {
@@ -108,6 +111,8 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
         return errorResponse("Search by mobile number to find and claim a lead.", 403);
     }
     const filters = readAsmQueueFilters(url.searchParams);
+    // The "Past a limit" chip — same predicate as the list (18 Oct row 34).
+    const pastLimit = await pastLimitFilter(url.searchParams);
 
     // ID 58: a rep's sheet holds only the leads they own — never the unowned
     // pool or a colleague's leads, whatever tab it came from. The owner filter
@@ -134,6 +139,7 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
             limit: QUEUE_EXPORT_ROW_CAP,
             q: parsed.q ?? null,
             ...filters,
+            pastLimit,
             ownedBy,
             teamMemberIds,
         }),
@@ -142,6 +148,7 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
             asmId: user.id,
             q: parsed.q ?? null,
             ...filters,
+            pastLimit,
             ownedBy,
             teamMemberIds,
         }),
@@ -156,6 +163,7 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
         filters: {
             q: parsed.q ?? null,
             ...filters,
+            past_limit: pastLimit ? "1" : null,
             ...(ownOnly ? { scope: ownedBy ? "owned" : "assigned_visits_today" } : {}),
         },
     });
@@ -165,9 +173,10 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
     // it, and a column that always printed blank would read as data loss rather
     // than as a stamp this sheet chose not to carry.
     const ids = rows.map((r) => r.id).filter(Boolean);
-    const [assignedBy, businessTypes] = await Promise.all([
+    const [assignedBy, businessTypes, pastLabels] = await Promise.all([
         fetchAssignedByForLeads(ids),
         fetchBusinessTypeForLeads(ids),
+        pastLimitLabelsByLead(ids),
     ]);
 
     return csvResponse({
@@ -175,6 +184,7 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
             ...r,
             assigned_by: assignedBy[r.id] ?? null,
             business_type: businessTypes[r.id] ?? null,
+            past_limits: pastLabels.get(r.id) ?? [],
         })),
         columns: COLUMNS,
         filename: `asm-${ASM_TAB_LABELS[parsed.tab].toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,

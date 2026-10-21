@@ -16,6 +16,8 @@ import { engagedState } from "@/lib/reports/metricDefinitions";
 import { fetchAssignedByForLeads } from "@/lib/leads/leadAssignedBy";
 import { onboardingStall, STALL_LABEL } from "@/lib/onboarding/stall";
 import { getTimeLimits } from "@/lib/timeLimits/store";
+import { loadOfficeCalendar } from "@/lib/calendar/holidays";
+import type { OfficeHoursResolver } from "@/lib/calendar/officeHours";
 import { limitPassedEvents } from "@/lib/leads/clocks";
 import { agreementOutcomeLabel } from "@/lib/onboarding/leadMilestones";
 import type {
@@ -296,18 +298,15 @@ export async function fetchLeadDetailBundle(leadId: string): Promise<LeadDetailB
     if (onboardingRaw[0]) {
         const { linked, ...o } = onboardingRaw[0];
         let holidays = new Set<string>();
+        let hours: OfficeHoursResolver | undefined;
         // An application the lead was unlinked from (re-engaged after a
         // drop-out, ID 84.4) is history: shown, never "stalled".
         const live = Boolean(linked);
         if (live && ["draft", "submitted", "correction_requested"].includes(o.onboarding_status)) {
-            try {
-                const h = (await db.execute(sql`
-                    SELECT holiday_date::text AS d FROM holiday_calendar WHERE is_active IS NOT FALSE
-                `)) as unknown as Array<{ d: string }>;
-                holidays = new Set(h.map((r) => r.d));
-            } catch {
-                // No calendar: Sundays alone are skipped.
-            }
+            // The one office calendar (a failed holiday read is "no holidays").
+            const cal = await loadOfficeCalendar();
+            holidays = new Set(cal.holidays);
+            hours = cal.hours;
         }
         const limits = live ? await getTimeLimits() : null;
         const waitingOn = live && limits
@@ -320,6 +319,7 @@ export async function fetchLeadDetailBundle(leadId: string): Promise<LeadDetailB
                   holidays,
                   new Date(),
                   { dealerDays: limits.onboarding_stall_dealer, usWorkingDays: limits.onboarding_stall_us },
+                  hours,
               )
             : null;
         onboarding = {

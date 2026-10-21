@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { QueueTabs } from "./QueueTabs";
 import { LeadQueueTable } from "./LeadQueueTable";
 import type { StaleThresholds } from "@/lib/inside-sales/staleness";
+import type { OfficeHours } from "@/lib/calendar/officeHours";
 import { BulkClaimBar } from "./BulkClaimBar";
 import { ClaimByNumberPanel } from "@/components/leads/ClaimByNumberPanel";
 import { claimsByNumberOnly, ISR_POOL_TABS } from "@/lib/leads/claimScope";
@@ -94,6 +95,8 @@ export function QueueView({
     // ID 75.4: the rep's own "Finalised, not Won" list — the dealer approved the
     // quote and nobody pressed Mark Won. A chip, not a sixth tab.
     const [finalisedOnly, setFinalisedOnly] = useState(params.get("finalised") === "1");
+    // 18 Oct row 34: only leads past a time limit.
+    const [pastLimitOnly, setPastLimitOnly] = useState(params.get("past_limit") === "1");
     const [createOpen, setCreateOpen] = useState(false);
     // Seeded from the URL so a filtered view survives a reload and can be pasted
     // to a colleague — the same contract the tab and page already had.
@@ -128,11 +131,12 @@ export function QueueView({
         if (neodoveOnly) p.set("neodove", "1");
         if (callbackOnly) p.set("callback", "1");
         if (finalisedOnly) p.set("finalised", "1");
+        if (pastLimitOnly) p.set("past_limit", "1");
         // The sort rides along: the rows and the CSV honour it, the counts and
         // facets simply never read it.
         writeQueueSort(p, sort);
         return writeQueueFilters(p, filters);
-    }, [searchDebounced, neodoveOnly, callbackOnly, finalisedOnly, filters, sort]);
+    }, [searchDebounced, neodoveOnly, callbackOnly, finalisedOnly, pastLimitOnly, filters, sort]);
 
     const filterKey = filterParams.toString();
 
@@ -304,7 +308,7 @@ export function QueueView({
     // ── Holiday cache for stale-row visual cues (BRD §0.5) ───────────────
     const holidaysQuery = useQuery<{
         success: true;
-        data: { dates: string[]; stale_thresholds?: StaleThresholds };
+        data: { dates: string[]; stale_thresholds?: StaleThresholds; office_hours?: OfficeHours; idle_limit_days?: number };
     }>({
         queryKey: ["inside-sales-holidays"],
         queryFn: async () => {
@@ -320,6 +324,10 @@ export function QueueView({
     );
     // ID 85 — the no-touch cue limits in force today (defaults until loaded).
     const staleThresholds = holidaysQuery.data?.data?.stale_thresholds;
+    // ID 85 #8 — the working weekdays in force today (Mon–Sat until loaded).
+    const officeHours = holidaysQuery.data?.data?.office_hours;
+    // 18 Oct row 33 — the inside-sales idle limit (idle_cc) colours the rows.
+    const idleLimitDays = holidaysQuery.data?.data?.idle_limit_days;
 
     return (
         <div className="space-y-4">
@@ -441,6 +449,37 @@ export function QueueView({
                             </span>
                         ) : null}
                     </button>
+                    {/* 18 Oct row 34 — "Past a limit" as a filter: leads with a time
+                        limit still running past due (the chip on the row names which). */}
+                    <button
+                        type="button"
+                        onClick={() => {
+                            setPastLimitOnly((v) => !v);
+                            setPage(1);
+                        }}
+                        aria-pressed={pastLimitOnly}
+                        title={
+                            pastLimitOnly
+                                ? "Showing only leads past a time limit — click to show all"
+                                : "Show only leads past a time limit (Admin › Time limits)"
+                        }
+                        className={`inline-flex h-10 shrink-0 items-center gap-1.5 rounded-lg border px-3 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-rose-500 ${
+                            pastLimitOnly
+                                ? "border-rose-300 bg-rose-50 text-rose-700"
+                                : "border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
+                        }`}
+                    >
+                        <span
+                            aria-hidden
+                            className={`h-1.5 w-1.5 rounded-full ${pastLimitOnly ? "bg-rose-500" : "bg-gray-300"}`}
+                        />
+                        Past a limit
+                        {counts?.past_limit ? (
+                            <span className="ml-0.5 rounded-full bg-rose-600 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white">
+                                {counts.past_limit}
+                            </span>
+                        ) : null}
+                    </button>
                     <QueueFilterBar
                         values={filters}
                         onChange={patchFilter}
@@ -493,6 +532,8 @@ export function QueueView({
                     viewerId={viewerId}
                     holidaySet={holidaySet}
                     staleThresholds={staleThresholds}
+                    idleLimitDays={idleLimitDays}
+                    officeHours={officeHours}
                     selection={
                         selectable
                             ? {

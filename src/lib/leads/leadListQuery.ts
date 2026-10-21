@@ -22,9 +22,10 @@ import type { ScrapeRunFacet } from "@/lib/leads/acquisitionCampaigns";
 // pulls in `db` and can never be reachable from a client component.
 import { CAMPAIGN_NONE } from "@/lib/leads/campaign";
 import { BUSINESS_TYPE_UNSET } from "@/lib/leads/businessType";
-import { FOLLOW_UP_AGEING_BASIS } from "@/lib/leads/followUpAgeing";
+import { IDLE_WORKING_DAYS_SQL, idlePastLimitSql } from "@/lib/leads/idleLimit";
 import { awaitingAssignment, readySplitSql, type ReadySplit } from "@/lib/leads/salesReady";
 import { SOURCE_DOOR_NONE } from "@/lib/leads/leadSourceVocab";
+import { effectiveDoorSql } from "@/lib/leads/leadSourceDoorSql";
 import { ownerScopeIds } from "@/lib/users/teamRules";
 
 // Shared with the API route. Both ends of a created-at range must look like a
@@ -61,6 +62,12 @@ export type LeadListRow = {
     assigned_at: string | null;
     /** The Idle column's follow-up leg (ID 192, followUpAgeing.ts). */
     next_follow_up_at: string | null;
+    /**
+     * ID 192 — the Idle number itself, counted in SQL by the SAME expression the
+     * idle filters use (IDLE_WORKING_DAYS_SQL: working days on the office
+     * calendar, holidays off), so the column always equals the filter.
+     */
+    idle_working_days?: number | null;
     created_at: string | null;
     visit_status: string | null;
     visit_outcome: string | null;
@@ -95,7 +102,7 @@ export type LeadListFilters = {
     ownerScopeTeamIds?: string[] | null;
     asmId?: string | null;
     source?: string | null;
-    /** E-314 source_door, or SOURCE_DOOR_NONE for leads with no door stamped. */
+    /** E-314 source_door (effective: stamped, else implied by the legacy source), or SOURCE_DOOR_NONE for neither. */
     sourceDoor?: string | null;
     /** One scrape run's acquisition campaign id (uuid, validated by the parser). */
     scrapeRun?: string | null;
@@ -126,7 +133,7 @@ export type LeadListFilters = {
      * state exactly, as the card does.
      */
     readyNoOwner?: boolean;
-    /** With readyNoOwner: one of the card's buckets (Hot wins, then AI qualified). */
+    /** With readyNoOwner: one of the card's buckets (AI qualified first, then Hot, then other — ID 184). */
     readySplit?: ReadySplit | null;
     /**
      * Rep-set temperature — lower(interest_level) — the same field the ASM /
@@ -170,6 +177,13 @@ export type LeadListFilters = {
     // that disagrees with the number on screen is indistinguishable from a bug.
     idleMinDays?: number | null;
     idleMaxDays?: number | null;
+    /**
+     * ID 192 — only leads at or past their holder's idle limit (idle_cc /
+     * idle_asm, idlePastLimitSql). `idleLimitsTable` = hasTimeLimitTable(),
+     * probed by the (async) parser because buildWhere is synchronous.
+     */
+    idlePastLimit?: boolean;
+    idleLimitsTable?: boolean;
     /** Only leads never worked (no call, visit or status change). */
     idleNeverTouched?: boolean;
     // ── Campaign ─────────────────────────────────────────────────────────
@@ -268,11 +282,12 @@ const NEODOVE_LINKED_LIST = sql.raw(
     NEODOVE_LINKED_SYNC_STATUSES.map((s) => `'${s}'`).join(", "),
 );
 
-// The age basis, identical to the Idle column's (see idleDays()) and to Needs
-// Attention's (ID 192): last work, the holder's assigned_at, or a follow-up
-// within 30 days. A pending follow-up puts the basis in the future, so the
-// lead falls in no idle band.
-const IDLE_BASIS = FOLLOW_UP_AGEING_BASIS;
+// The idle age, identical to the Idle column's (see idleDays()) and to Needs
+// Attention's (ID 192): WORKING days since the follow-up ageing basis (last
+// work, the holder's assigned_at, or a follow-up within 30 days). A pending
+// follow-up puts the basis in the future, which counts 0 working days — so
+// that lead is "Under 30", not in no band at all.
+const IDLE_DAYS = IDLE_WORKING_DAYS_SQL;
 
 /**
  * Membership predicates for the campaign filter.
@@ -419,10 +434,12 @@ function buildWhere(f: LeadListFilters, opts?: { ignoreIntent?: boolean }) {
     if (f.scrapeRun) {
         conds.push(sql`dl.acquisition_campaign_id = ${f.scrapeRun}::uuid`);
     }
+    // HANDOVER-A31: the EFFECTIVE door — stamped, else the one the legacy
+    // source implies — the same fallback the "Lead source" column shows.
     if (f.sourceDoor === SOURCE_DOOR_NONE) {
-        conds.push(sql`(to_jsonb(dl) ->> 'source_door') IS NULL`);
+        conds.push(sql`${effectiveDoorSql(sql`dl`)} IS NULL`);
     } else if (f.sourceDoor) {
-        conds.push(sql`(to_jsonb(dl) ->> 'source_door') = ${f.sourceDoor}`);
+        conds.push(sql`${effectiveDoorSql(sql`dl`)} = ${f.sourceDoor}`);
     }
     if (f.neodoveOnly) {
         conds.push(sql`${NEODOVE_STATUS} IN (${NEODOVE_LINKED_LIST})`);
@@ -457,21 +474,21 @@ function buildWhere(f: LeadListFilters, opts?: { ignoreIntent?: boolean }) {
         conds.push(sql`dl.last_disposition = ${f.disposition}`);
     }
     // ── Idle age ─────────────────────────────────────────────────────────
-    // "at least N days idle" = the basis is at or before N days ago. The max
-    // bound uses max+1 with a strict > so the band is inclusive at both ends:
-    // 30–59 must admit exactly 59 days and exclude exactly 60.
+    // Inclusive working-day bands on the office calendar: 30–59 admits exactly
+    // 59 working days and excludes exactly 60. A min of 0 needs no condition
+    // (every lead has at least 0), which is what puts a follow-up-ahead lead
+    // in "Under 30".
     if (f.idleNeverTouched) {
         conds.push(sql`dl.last_worked_at IS NULL`);
     }
-    if (typeof f.idleMinDays === "number") {
-        conds.push(
-            sql`${IDLE_BASIS} <= NOW() - make_interval(days => ${f.idleMinDays})`,
-        );
+    if (typeof f.idleMinDays === "number" && f.idleMinDays > 0) {
+        conds.push(sql`${IDLE_DAYS} >= ${f.idleMinDays}::int`);
     }
     if (typeof f.idleMaxDays === "number") {
-        conds.push(
-            sql`${IDLE_BASIS} > NOW() - make_interval(days => ${f.idleMaxDays + 1})`,
-        );
+        conds.push(sql`${IDLE_DAYS} <= ${f.idleMaxDays}::int`);
+    }
+    if (f.idlePastLimit) {
+        conds.push(idlePastLimitSql({ withTable: Boolean(f.idleLimitsTable) }));
     }
 
     // ── Campaign ─────────────────────────────────────────────────────────
@@ -622,6 +639,7 @@ export async function fetchLeadListRows(
             dl.last_worked_at,
             dl.assigned_at,
             dl.next_follow_up_at,
+            ${IDLE_DAYS}::int AS idle_working_days,
             dl.created_at,
             lv.visit_status,
             lv.visit_outcome,

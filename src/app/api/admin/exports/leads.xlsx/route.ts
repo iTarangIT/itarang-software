@@ -143,8 +143,9 @@ export const GET = withErrorHandler(async (req: Request) => {
         ["Last / next visit", "From logged field visits: latest actual visit; earliest open scheduled visit on or after today (IST)."],
         ["Last / next calling date", "From inside-sales and AI-dialer call touchpoints: latest call; earliest planned next action on or after now (IST)."],
         ["Latest remarks", "Remarks on the most recent touchpoint of any type."],
-        ["Business till date", "Assumption A12: invoiced value — the sum of invoice totals across sales and Zoho invoices, deduplicated by invoice number."],
-        ["Billing match", "'name' = invoices were matched to this lead by customer name (best effort, no dealer id exists on invoices yet); 'none' = no invoice matched, so billing cells are blank, not zero."],
+        ["Business till date", "Assumption A12: invoiced value — the sum of the dealer's non-void invoices (Drive / Vyapar and Zoho), less its credit notes. The same invoice list as the Revenue card, Dealer Health and Accounts."],
+        ["Last billing date", "Date of the latest matched invoice. Credit notes are not billing, so they never set this date."],
+        ["Billing match", "How the invoices were matched to this lead: 'hand link' = linked by hand in the Invoice Ledger; 'account' = the GSTIN of the dealer account that came from this lead; 'gstin' = the lead's own / onboarding GSTIN; 'none' = no invoice matched, so billing cells are blank, not zero."],
         ["Visits before first billing", "Logged visits dated before the first matched invoice. Blank when no invoice matched."],
         ["Phone", fullPhone ? "Full number (admin / CEO / sales head)." : "Masked to the last four digits for this role."],
     ].forEach((r, i) => zebra(notes.addRow(r), i));

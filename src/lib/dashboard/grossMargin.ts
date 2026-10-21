@@ -30,7 +30,8 @@
  * (vyapar_item_map → the line's asset_type + product_id, product_master_*).
  * Stock cost is joined to that product by its model id (inventory.model_type).
  * Every writer stamps the mapped product as it inserts a line (itemMap.ts), and
- * "not linked" counts item names by the same key the mapping uses. The older
+ * "not linked" counts PRODUCT FAMILIES (itemFamilyKeySql — the key Item mapping
+ * groups its rows by, HANDOVER-A16), not raw spellings. The older
  * E-326 store (sales_invoice_lines + sales_invoice_item_products) is neither
  * read nor written any more.
  */
@@ -39,7 +40,7 @@ import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { matchedLinesUnion, matchedUnion, REVENUE_NOT_VOID } from "@/lib/dashboard/revenueSource";
 import { hasInvoiceLedgerTables } from "@/lib/sales/ledgerTables";
-import { itemKeySql } from "@/lib/sales/itemMap";
+import { itemFamilyKeySql, itemKeySql } from "@/lib/sales/itemMap";
 import { LINE_TYPES, type LineType } from "@/lib/sales/salesInvoiceLines";
 
 export const RECENT_COST_DAYS = 180;
@@ -81,7 +82,12 @@ export type GrossMarginReport = {
   available: boolean; // false when the invoice ledger (E-322) is not on this database
   months: MarginMonth[];
   cost_sources: Record<CostSource, number>; // costed line value by where the cost came from
-  /** Item names on lines in the range with no product — map them in Invoice Ledger › Item mapping. */
+  /**
+   * Product families (Item mapping rows) with lines in the range that carry no
+   * product — map them in Invoice Ledger › Item mapping. A16: by family, not
+   * spelling; scripts/backfill-item-families.ts stamps families mapped before
+   * 14 Oct onto their other spellings' lines.
+   */
   unmapped_items: number;
 };
 
@@ -224,7 +230,7 @@ export async function grossMarginByMonth(
   `)) as unknown as LineRow[];
 
   const [unmapped] = (await run.execute<{ n: number }>(sql`
-    SELECT COUNT(DISTINCT ${itemKeySql(sql`r.item_name`)})::int AS n
+    SELECT COUNT(DISTINCT COALESCE(${itemFamilyKeySql(sql`r.item_name`)}, ${itemKeySql(sql`r.item_name`)}))::int AS n
       FROM ${lines} AS r
      WHERE ${range} AND r.product_id IS NULL AND r.item_name IS NOT NULL
   `)) as unknown as Array<{ n: number }>;
