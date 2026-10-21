@@ -940,7 +940,7 @@ export async function runCustomerTurn(
       case "DC_LEAD_DOCS_MODE":
         return await onLeadDocsMode(session, event, houseDealer);
       case "DC_LEAD_DOCS":
-        return await onLeadDocs(session, event, houseDealer);
+        return await onLeadDocs(session, event, houseDealer, false);
       case "DC_LEAD_CONSENT_CHANNEL":
         return await onConsentChannel(session, event, houseDealer);
       case "DC_LEAD_CONSENT_WAIT":
@@ -5155,6 +5155,8 @@ async function onLeadDocs(
   session: SessionRow,
   event: InboundEvent,
   dealer: ActiveDealer,
+  /** False in runCustomerTurn: the customer (or an operator) sends, not the dealer. */
+  consoleUpload = true,
 ): Promise<void> {
   if (event.type === "text" || event.type === "interactive") {
     const t = (event.text ?? "").trim();
@@ -5200,14 +5202,18 @@ async function onLeadDocs(
     const isZip =
       /zip/i.test(media.mimeType) ||
       /\.zip$/i.test(media.fileName ?? event.fileName ?? "");
+    // ID 166: on the dealer's console the dealer uploads; in the customer's
+    // own (house) flow it is the customer's upload, not the dealer's.
+    const uploaderId = consoleUpload ? dealer.uploaderId : null;
     if (isZip) {
-      await ingestCustomerZip(session, media.buffer);
+      await ingestCustomerZip(session, media.buffer, uploaderId);
     } else {
       await ingestCustomerDoc(
         session,
         media.buffer,
         media.mimeType,
         media.fileName ?? event.fileName,
+        uploaderId,
       );
     }
 
@@ -5241,6 +5247,12 @@ async function persistCustomerDoc(
   mimeType: string,
   fileName: string | undefined,
   fields: Record<string, unknown>,
+  /**
+   * ID 166: the dealer login that sent it on its WhatsApp console — the dealer
+   * opens only files it uploaded. Null for a customer self-onboarding (the
+   * house flow): not the dealer's upload.
+   */
+  uploaderId: string | null = null,
 ): Promise<void> {
   const saved = await saveMedia({
     buffer,
@@ -5285,6 +5297,7 @@ async function persistCustomerDoc(
     verification_status: "pending",
     doc_status: "uploaded",
     ocr_data: fields as any,
+    uploaded_by: uploaderId,
   });
 
   await fillCustomerLeadFromDoc(leadId, docType, fields);
@@ -5314,6 +5327,7 @@ const MAX_CUSTOMER_ZIP_ENTRIES = 25;
 async function ingestCustomerZip(
   session: SessionRow,
   buffer: Buffer,
+  uploaderId: string | null = null,
 ): Promise<void> {
   const lead = await getLeadCtx(session);
   if (!lead.leadId) {
@@ -5419,6 +5433,7 @@ async function ingestCustomerZip(
       r.file.mime,
       r.file.name,
       r.fields,
+      uploaderId,
     );
     savedTypes.push(r.docType);
     acceptedLabels.add(customerDocLabel(r.docType));
@@ -5482,6 +5497,7 @@ async function ingestCustomerDoc(
   buffer: Buffer,
   mimeType: string,
   fileName?: string,
+  uploaderId: string | null = null,
 ): Promise<void> {
   const lead = await getLeadCtx(session);
   if (!lead.leadId) {
@@ -5527,7 +5543,7 @@ async function ingestCustomerDoc(
     return;
   }
 
-  await persistCustomerDoc(lead.leadId, docType, buffer, mimeType, fileName, cls.fields);
+  await persistCustomerDoc(lead.leadId, docType, buffer, mimeType, fileName, cls.fields, uploaderId);
 
   await mergeContext(session, (ctx) => {
     if (!ctx.lead) ctx.lead = {};

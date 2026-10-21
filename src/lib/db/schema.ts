@@ -13959,7 +13959,7 @@ export const stockUploadTasks = pgTable(
     last_checked_at: timestamp("last_checked_at", { withTimezone: true }),
     escalated_at: timestamp("escalated_at", { withTimezone: true }),
     closed_at: timestamp("closed_at", { withTimezone: true }),
-    // 'auto' | 'by_hand'
+    // 'auto' | 'by_hand' | 'voided' | 'not_dealer' (ID 174: marked "not a dealer sale")
     closed_how: varchar("closed_how", { length: 10 }),
     closed_by: uuid("closed_by"),
     close_note: text("close_note"),

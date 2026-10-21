@@ -66,7 +66,7 @@
 import { sql } from "drizzle-orm";
 
 import type { SalesDashboard, SalesSpocBlock } from "@/lib/admin/salesDashboardTypes";
-import { connectedCall, engagedCall, transferCredit, wasHotAt } from "@/lib/reports/metricDefinitions";
+import { connectedCall, engagedCall, firstMoveToField, transferCredit, wasHotAt } from "@/lib/reports/metricDefinitions";
 import { freshRepeatSplit } from "@/lib/visits/freshRepeat";
 import { fmtValue, pctOfTarget, type Period } from "./salesDailyBlockA";
 import { istRangeTz } from "./window";
@@ -580,9 +580,10 @@ export async function loadRepExtras(db: Exec, p: Period): Promise<RepExtras> {
         ),
         perRep(
             db,
+            // ID 179 (18 Oct): the lead's first move to the field only.
             sql`SELECT ${transferCredit()} AS u, COUNT(DISTINCT t.dealer_lead_id) AS n
                   FROM lead_touchpoints t JOIN dealer_leads dl ON dl.id = t.dealer_lead_id
-                 WHERE t.touchpoint_type = 'asm_transfer' AND ${win(sql`t.performed_at`)}
+                 WHERE ${firstMoveToField()} AND ${win(sql`t.performed_at`)}
                    AND ${wasHotAt(sql`t.dealer_lead_id`, sql`t.performed_at`, sql`dl.interest_level`)}
                  GROUP BY 1`,
         ),

@@ -44,6 +44,8 @@ import {
 } from "@/lib/whatsapp/stage";
 import type { Ctx } from "@/lib/whatsapp/session-store";
 import { whatsappOnboardingSummary } from "@/lib/whatsapp/onboardingSummary";
+import { seesFullDealerIds } from "@/lib/kyc/dealerIdMask";
+import { maskPan } from "@/lib/kyc/panMask";
 
 const READ_ROLES = ["admin", "sales_head", "ceo", "partner"];
 
@@ -74,7 +76,9 @@ const lastActivity = sql<Date>`GREATEST(
 )`;
 
 export const GET = withErrorHandler(async (req: Request) => {
-  await requireRole(READ_ROLES);
+  const user = await requireRole(READ_ROLES);
+  // ID 119: full PAN only for the full-ID roles (masked for the partner login).
+  const fullIds = seesFullDealerIds(user.role);
 
   const url = new URL(req.url);
   const { page, limit, q, stage, type, approvedOnly } = QuerySchema.parse(
@@ -339,7 +343,7 @@ export const GET = withErrorHandler(async (req: Request) => {
       companyType: r.companyType,
       dealerType: r.dealerType,
       gstNumber: r.gstNumber,
-      panNumber: r.panNumber,
+      panNumber: fullIds ? r.panNumber : maskPan(r.panNumber),
       city: r.city,
       state: r.state,
 

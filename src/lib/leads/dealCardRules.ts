@@ -38,16 +38,35 @@ export const ONBOARDING_FEE_ITEM = "onboarding_fee";
 export const DEAL_CARD_EDIT_ROLES = ["sales_head"] as const;
 
 /**
- * ID 186 (changed 16 Oct): the card is shown on every quote — new dealer or
- * already onboarded — and is OPTIONAL for these roles: they may leave it
- * empty and still save. A card that is started must be complete (all three
- * answers). Any other role that saves a quote (admin, partner) must fill it.
+ * ID 186: the card is shown on every quote. For an ALREADY ONBOARDED dealer it
+ * is OPTIONAL for these roles: they may leave it empty and still save (18 Oct:
+ * a brand-new dealer's quote always needs it — see dealCardRequired). A card
+ * that is started must be complete (all three answers). Any other role that
+ * saves a quote (admin, partner) must fill it.
  */
 export const DEAL_CARD_OPTIONAL_ROLES = ["inside_sales_rep", "asm", "sales_head"] as const;
 
-/** Must this role fill the deal card on a quote? Pure. */
+/**
+ * Role half of the rule only — callers deciding a quote use dealCardRequired
+ * below, which also asks whether the dealer is onboarded.
+ */
 export function dealCardRequiredFor(role: string | null | undefined): boolean {
     return !(DEAL_CARD_OPTIONAL_ROLES as readonly string[]).includes(role ?? "");
+}
+
+/**
+ * ID 186 (decided 18 Oct): THE rule for "must this quote carry the deal card /
+ * onboarding fee?" — one helper for the Update commercials route (GET + POST)
+ * and the WhatsApp Assistant's create_quote. Pure.
+ *
+ *   * brand-new dealer (not onboarded, or the onboarded check failed):
+ *     required, for every role;
+ *   * already onboarded dealer: ISR / ASM / Sales Head may skip it; any other
+ *     role (admin, partner) still fills it.
+ */
+export function dealCardRequired(args: { role: string | null | undefined; dealerOnboarded: boolean }): boolean {
+    if (!args.dealerOnboarded) return true;
+    return dealCardRequiredFor(args.role);
 }
 
 export const DealCardSchema = z

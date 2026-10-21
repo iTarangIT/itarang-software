@@ -139,8 +139,12 @@ export const FRESH_LINK_TTL_SECONDS = 15 * 60;
 /** Clock skew allowed between the server that signed and the one checking. */
 const LINK_SKEW_SECONDS = 60;
 
-/** The logical buckets the /api/files proxy serves. */
-export const FILE_PROXY_BUCKETS = ["documents", "dealer-documents", "call-recordings"] as const;
+/**
+ * The logical buckets the /api/files proxy serves. private-documents since 18
+ * Oct (ID 166): dealer Aadhaar autofill scans and public upload-link files,
+ * once handed out as signed storage links.
+ */
+export const FILE_PROXY_BUCKETS = ["documents", "dealer-documents", "call-recordings", "private-documents"] as const;
 
 /** `exp` and `sig` query values for a link to bucket/key, valid for ttlSeconds. */
 export function fileLinkSignature(

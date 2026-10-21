@@ -25,6 +25,8 @@ import {
 import type { PriorSelection } from "@/components/dealer-portal/lead-wizard/product-cart";
 import { externalLenderName } from "@/lib/leads/bajaj-fallback-text";
 import DealerPaymentConfirmationCard from "@/components/dealer-portal/DealerPaymentConfirmationCard";
+// ID 183 (21 Oct): "being worked by" — and the house login's dealer-wins check.
+import LeadWorkNote from "@/components/dealer-portal/lead-wizard/LeadWorkNote";
 
 // BRD V2 Part F — Step 5 OTP + Dispatch Confirmation (finance only).
 // Scenario A: kyc_status = loan_sanctioned → product cart + OTP send/entry + dispatch.
@@ -651,6 +653,7 @@ export default function Step5Page() {
       <div className="min-h-screen bg-gradient-to-b from-emerald-50/50 to-gray-50 -mx-6 sm:mx-0">
         <div className="max-w-3xl mx-auto px-0 py-6 sm:p-8 space-y-5">
           <ProgressHeader leadId={leadId} active={5} />
+          <LeadWorkNote leadId={leadId} />
           <header className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <div>
               <h1 className="text-2xl font-black text-gray-900">
@@ -750,6 +753,7 @@ export default function Step5Page() {
       <div className="min-h-screen bg-gray-50 -mx-6 sm:mx-0">
         <div className="max-w-3xl mx-auto px-0 py-6 sm:p-8 space-y-5">
           <ProgressHeader leadId={leadId} active={5} />
+          <LeadWorkNote leadId={leadId} />
           <header className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <div>
               <h1 className="text-2xl font-black text-gray-900">
@@ -855,6 +859,7 @@ export default function Step5Page() {
           sticky pricing rail. The dispatched / rejected branches stay narrow. */}
       <div className="max-w-[1200px] mx-auto px-0 py-6 sm:p-8 space-y-5">
         <ProgressHeader leadId={leadId} active={5} />
+        <LeadWorkNote leadId={leadId} />
 
         <header className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
           <div>

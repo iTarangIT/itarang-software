@@ -11,7 +11,8 @@ import {
     type ConsentFor,
 } from '@/lib/kyc/consent-service';
 import { requireLeadAccess } from '@/lib/auth/requireLeadAccess';
-import { requireLeadWriter } from '@/lib/leads/actForDealerGuard';
+import { fileDealerNames, recordActorStep, requireLeadWriter } from '@/lib/leads/actForDealerGuard';
+import { isItarangActor } from '@/lib/leads/actForDealer';
 
 type RouteContext = { params: Promise<{ leadId: string }> };
 
@@ -30,8 +31,14 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
         if (!writer.ok) return writer.response;
         const body = await req.json().catch(() => ({}));
 
+        // ID 183 (21 Oct): the form names the FILE's dealer. When the house
+        // login (or Admin / Sales Head) makes it on a file pushed to a dealer,
+        // it names that dealer — as send-consent does — not the person acting.
         let dealerName = '';
-        if (user.id) {
+        if (isItarangActor(writer.actor.kind)) {
+            const names = await fileDealerNames(writer.lead.dealer_id);
+            dealerName = names.loginName || names.display || '';
+        } else if (user.id) {
             const userRows = await db.select().from(users).where(eq(users.id, user.id)).limit(1);
             if (userRows.length) dealerName = userRows[0].name || '';
         }
@@ -46,6 +53,7 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
             return NextResponse.json({ success: false, error: { message: result.error } }, { status: result.status });
         }
 
+        await recordActorStep(writer.actor, `made the printable consent form${body?.consent_for === 'borrower' ? ' (co-borrower)' : ''}`);
         return NextResponse.json({
             success: true,
             consentId: result.consentId,

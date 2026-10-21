@@ -8,7 +8,7 @@ import { leads, otpConfirmations } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 // ID 183 (16 Oct): dispatch is the file's dealer's — and, since 16 Oct evening, the iTarang house login on a file it pushed out; never Admin / Sales Head acting for the dealer.
 import { dealerMayDispatch } from "@/lib/auth/requireLeadAccess";
-import { stampDealerAction } from "@/lib/leads/actForDealerGuard";
+import { gateLeadActor, recordActorStep, seenFromRequest } from "@/lib/leads/actForDealerGuard";
 
 // BRD V2 §3.3 — Step 5 OTP verification (non-consuming pre-check).
 // Confirms the 6-digit OTP the customer read out matches, so the UI can enable
@@ -50,8 +50,15 @@ export async function POST(
         { status: 403 },
       );
     }
-    // ID 183: the dealer acted — the 1-working-day idle rule reads this; clears any iTarang note.
-    await stampDealerAction(leadId, user.id);
+    // ID 183 (21 Oct): the file's dealer — stamps his action and clears any
+    // iTarang note (dealer wins). The house login on a file it pushed out —
+    // takes / refreshes its own 30-minute note (never clears someone else's),
+    // is refused when the dealer acted after its page loaded, and the step is
+    // recorded "Done by" with a notice to the dealer (below).
+    const gate = await gateLeadActor(user, lead, { write: true, dispatch: true, seenDealerActionAt: seenFromRequest(req) });
+    if (!gate.ok) {
+      return NextResponse.json({ success: false, error: { message: gate.message } }, { status: gate.status });
+    }
     if (lead.kyc_status !== "loan_sanctioned") {
       return NextResponse.json(
         { success: false, error: { message: `Lead not awaiting dispatch (kyc_status=${lead.kyc_status})` } },
@@ -125,6 +132,7 @@ export async function POST(
         .where(eq(otpConfirmations.id, otpRecord.id));
     }
 
+    await recordActorStep(gate.actor, "checked the customer's dispatch code (Step 5)");
     return NextResponse.json({
       success: true,
       data: { verified: true, expiresInSeconds: Math.max(0, Math.floor((otpRecord.expires_at.getTime() - now.getTime()) / 1000)) },

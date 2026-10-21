@@ -38,7 +38,8 @@ export const METRIC_DEFINITIONS: Readonly<Record<string, string>> = Object.freez
     interest: "open leads you own today, by current temperature — a snapshot as of now, the same for any period",
     calls_per_day: "your logged inside-sales calls (AI-dialer calls NOT counted) per working day so far — a DAILY target",
     // ID 179: credited to the owner at the moment of transfer, whoever pressed Transfer.
-    hot_to_ground: "your Hot leads handed to an ASM (by you or your manager), Hot at the moment of transfer, each dealer once",
+    // ID 179 (18 Oct): the lead's first move to the field only; ASM-to-ASM moves do not count.
+    hot_to_ground: "your Hot leads handed to an ASM for the first time (by you or your manager), Hot at the moment of transfer, each dealer once",
     dealer_visits: "distinct dealers you visited in the month, new and existing (two visits to one dealer count once)",
     new_dealer_visits: "dealers visited for the first time ever, in the month",
     batteries_sold: "batteries to dealers in the month",

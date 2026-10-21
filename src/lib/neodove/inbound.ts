@@ -36,6 +36,8 @@ import { alertUnmappedAgent } from "./agentAlert";
 import { applyNeodoveCallOwnership } from "./ownerFromCall";
 import { reviewLeadContactability } from "@/lib/leads/contactability";
 import { classifyDisposition } from "@/lib/leads/dispositions";
+import { scheduleOverallSummaryRefresh } from "@/lib/leads/overallSummary";
+import { isSummaryCallTouchpoint } from "@/lib/leads/overallSummaryRules";
 import {
     LIST_DEFAULT_ORIGIN,
     recordLeadCreated,
@@ -258,7 +260,7 @@ async function handleDisposition(
     const { touchpointId, statusRefused } = await writeTouchpoint(callTouchpoint);
     if (statusRefused) await recordStatusRefused(event, statusRefused);
 
-    await attachCallEvidence(touchpointId, event);
+    await attachCallEvidence(touchpointId, event, dealerLeadId);
     await recordLeadDisposition(dealerLeadId, event);
 
     // ID 83: the first human call by a linked agent makes them the owner of an
@@ -554,11 +556,28 @@ async function handleLeadDeleted(
  * `external_stage` / `external_tag` keep NeoDove's own words verbatim beside the
  * classified values, so a vocabulary change on their side is diagnosable without
  * re-reading raw payloads out of neodove_sync_events.
+ *
+ * ID 118 item 2 (18 Oct): with the lead id, a CALL's evidence then schedules
+ * the lead's Overall Summary refresh (the same queue the AI-call path uses;
+ * writeTouchpoint leaves NeoDove calls to this, so the disposition is in
+ * before the summary is written). Scheduled even when there is no evidence:
+ * the call's remarks alone may be new.
  */
 export async function attachCallEvidence(
     touchpointId: string,
     event: NeodoveInboundEvent,
+    dealerLeadId?: string | null,
 ): Promise<void> {
+    try {
+        await storeCallEvidence(touchpointId, event);
+    } finally {
+        if (dealerLeadId && isSummaryCallTouchpoint(touchpointTypeFor(event.eventType))) {
+            scheduleOverallSummaryRefresh(dealerLeadId);
+        }
+    }
+}
+
+async function storeCallEvidence(touchpointId: string, event: NeodoveInboundEvent): Promise<void> {
     const disposition = dispositionFor(event);
     if (
         !event.recordingUrl &&

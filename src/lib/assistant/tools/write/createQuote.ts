@@ -17,10 +17,23 @@
 // dealer said yes, the lead's card is LOCKED: the card carries the locked one
 // (only the Sales Head changes it) and the rep is not asked again. Customer
 // finance is not asked either: the writer sets it from finance files > 0.
+//
+// ID 186 (18 Oct): the card is required for a brand-new dealer and may be
+// skipped for an already onboarded one — the SAME rule as Update commercials
+// (dealCardRequired + isDealerOnboarded). Skipped = the rep said none of the
+// answers; a card that is started must still be complete. The applier
+// decides again at Confirm.
 
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { DEAL_CARD_QUESTIONS, DealCardSchema, normaliseDealCard, type DealCard } from "@/lib/leads/dealCardRules";
+import {
+    DEAL_CARD_QUESTIONS,
+    DealCardSchema,
+    dealCardRequired,
+    normaliseDealCard,
+    type DealCard,
+} from "@/lib/leads/dealCardRules";
+import { isDealerOnboarded } from "@/lib/leads/dealerOnboarded";
 import { readLockedDealCard, type LockedDealCard } from "@/lib/leads/dealCard";
 import { loadLiveOemPrices } from "@/lib/leads/oemPrices";
 import { evaluateAgainstOemPrices, linesNeedingAttention } from "@/lib/leads/oemPricing";
@@ -68,12 +81,30 @@ export const CreateQuotePlan = z.object({
     deal_notes: z.string().nullable(),
     // ID 172. Optional only so a preview saved before the deal card still
     // parses — the applier refuses it rather than send the writer a quote it
-    // would refuse with a form's wording.
+    // would refuse with a form's wording. null = skipped (ID 186: allowed only
+    // for an already onboarded dealer; the applier decides again).
     deal_card: DealCardSchema.nullable().optional(),
 });
 export type CreateQuotePlan = z.infer<typeof CreateQuotePlan>;
 
 const ask = (question: string): ToolResult => ({ kind: "question", question });
+
+type SaidCard = {
+    onboarding_fee?: number;
+    fee_waived_reason?: string;
+    batteries_per_month?: number;
+    finance_files_per_month?: number;
+};
+
+/** Did the rep say any deal-card answer? A started card must be complete. Pure. */
+export function dealCardStarted(said: SaidCard): boolean {
+    return (
+        said.onboarding_fee != null ||
+        said.batteries_per_month != null ||
+        said.finance_files_per_month != null ||
+        (said.fee_waived_reason?.trim().length ?? 0) > 0
+    );
+}
 
 /** "Ask: “…”" (the form's hint) → the question itself. */
 const cardQuestion = (k: keyof typeof DEAL_CARD_QUESTIONS) =>
@@ -95,9 +126,12 @@ async function lockedCard(leadId: string): Promise<LockedDealCard | null> {
  */
 function settleDealCard(
     locked: LockedDealCard | null,
-    said: { onboarding_fee?: number; fee_waived_reason?: string; batteries_per_month?: number; finance_files_per_month?: number },
-): { ok: true; card: DealCard } | { ok: false; question: string } {
+    said: SaidCard,
+    required = true,
+): { ok: true; card: DealCard | null } | { ok: false; question: string } {
     if (locked) return { ok: true, card: normaliseDealCard(locked.card) };
+    // ID 186: an onboarded dealer's card may be skipped (role permitting).
+    if (!required && !dealCardStarted(said)) return { ok: true, card: null };
     if (said.onboarding_fee == null) {
         return { ok: false, question: `Deal card — onboarding fee: ${cardQuestion("onboarding_fee")} (0 if it is waived)` };
     }
@@ -135,8 +169,9 @@ export const createQuote: ToolFactory = () =>
             "from product_catalogue with the quantity and unit price (₹, before GST) the user gave, the dealer payment " +
             "terms (cash, or credit with a number of days) and the deal card: the onboarding fee the dealer agreed " +
             "(0 = waived, with the reason), batteries a month they will buy from us, and how many of their customers a " +
-            "month buy on a loan (finance files). Ask for any the user did not say — unless the lead's card is locked, " +
-            "then it is used as it is. Warranty and delivery are standard and cannot be changed. Any credit needs CEO " +
+            "month buy on a loan (finance files). Pass only the deal-card answers the user gave: the tool asks for the card " +
+            "when it is needed (a dealer not yet onboarded), lets it be skipped for an already onboarded dealer, and uses " +
+            "a locked card as it is.Warranty and delivery are standard and cannot be changed. Any credit needs CEO " +
             "approval. Shows whether it will be auto-approved or needs CEO approval. Nothing is saved until Confirm.",
         schema: z.object({
             lead_id: LeadId,
@@ -233,9 +268,19 @@ export const createQuote: ToolFactory = () =>
             }
 
             // ID 172: the deal card — locked, or the rep's three answers.
+            // ID 186: required for a brand-new dealer; may be skipped for an
+            // onboarded one — the same rule as Update commercials.
             const locked = await lockedCard(lead.id);
-            const settled = settleDealCard(locked, input);
-            if (!settled.ok) return ask(settled.question);
+            const onboarded = locked ? null : await isDealerOnboarded(lead.id);
+            const required = dealCardRequired({ role: ctx.user.role, dealerOnboarded: onboarded?.onboarded ?? false });
+            const settled = settleDealCard(locked, input, required);
+            if (!settled.ok) {
+                return ask(
+                    onboarded && !onboarded.onboarded && !dealCardStarted(input)
+                        ? `This dealer is not onboarded yet, so the quote needs the deal card. ${settled.question}`
+                        : settled.question,
+                );
+            }
             const card = settled.card;
 
             const previous = await loadLatestQuote(lead.id);
@@ -248,7 +293,8 @@ export const createQuote: ToolFactory = () =>
                     dealer_payment_terms: input.payment_terms,
                     credit_days: input.payment_terms === "credit" ? (input.credit_days ?? null) : null,
                     // What the writer stores whenever a card is present (finance files > 0).
-                    customer_finance: card.finance_files_per_month > 0,
+                    // No card (ID 186 skip): customer finance is not stated.
+                    customer_finance: card ? card.finance_files_per_month > 0 : null,
                 },
                 deal_notes: input.deal_notes ?? null,
                 deal_card: card,
@@ -293,16 +339,20 @@ export const createQuote: ToolFactory = () =>
             const lockNote = locked
                 ? ` (locked: ${locked.by === "ceo" ? "the CEO approved" : "the dealer said yes to"} v${locked.versionNo})`
                 : "";
-            out.push({
-                label: "Onboarding fee",
-                value:
-                    (card.onboarding_fee > 0
-                        ? inr(card.onboarding_fee)
-                        : `Waived${card.fee_waived_reason ? ` — ${card.fee_waived_reason}` : ""}`) + lockNote,
-            });
-            out.push({ label: "Batteries / month", value: String(card.batteries_per_month) });
-            out.push({ label: "Finance files / month", value: String(card.finance_files_per_month) });
-            out.push({ label: "Customer finance (NBFC)", value: plan.terms?.customer_finance ? "Yes" : "No" });
+            if (card) {
+                out.push({
+                    label: "Onboarding fee",
+                    value:
+                        (card.onboarding_fee > 0
+                            ? inr(card.onboarding_fee)
+                            : `Waived${card.fee_waived_reason ? ` — ${card.fee_waived_reason}` : ""}`) + lockNote,
+                });
+                out.push({ label: "Batteries / month", value: String(card.batteries_per_month) });
+                out.push({ label: "Finance files / month", value: String(card.finance_files_per_month) });
+                out.push({ label: "Customer finance (NBFC)", value: plan.terms?.customer_finance ? "Yes" : "No" });
+            } else {
+                out.push({ label: "Deal card", value: "Skipped — dealer already onboarded" });
+            }
             out.push({ label: "Warranty", value: standard.warranty });
             out.push({ label: "Delivery", value: standard.delivery });
             if (plan.deal_notes) out.push({ label: "Notes", value: plan.deal_notes });
@@ -368,7 +418,7 @@ export const createQuoteApplier = defineApplier<CreateQuotePlan>({
                 409,
             );
         }
-        if (!p.deal_card) {
+        if (p.deal_card === undefined) {
             // ID 172: a preview saved before the deal card — ask for it again.
             throw new CommercialInputError(
                 "This quote was prepared before the deal card was added. Please ask for the quote again.",
@@ -387,8 +437,13 @@ export const createQuoteApplier = defineApplier<CreateQuotePlan>({
                     deal_notes: p.deal_notes,
                     deal_card: p.deal_card,
                 },
-                // ID 172: as the commercials route — a quote states its deal card.
-                requireDealCard: true,
+                // ID 172 / 186: as the commercials route, decided again at
+                // Confirm. A skipped card on a dealer that is not onboarded is
+                // refused by the writer. The check reads on db, not tx: it
+                // swallows its own errors, which would abort the transaction.
+                requireDealCard: p.deal_card
+                    ? true
+                    : dealCardRequired({ role: user.role, dealerOnboarded: (await isDealerOnboarded(p.lead_id)).onboarded }),
             },
             { tx },
         );

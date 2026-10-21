@@ -41,6 +41,7 @@ import type {
 import FinancingOffersSection from "./FinancingOffersSection";
 import NbfcDocRequestsBlock from "./NbfcDocRequestsBlock";
 import AskItarangHelp from "@/components/dealer-portal/lead-wizard/AskItarangHelp";
+import LeadWorkNote from "@/components/dealer-portal/lead-wizard/LeadWorkNote";
 import {
   formatRupees,
   parseRupees,
@@ -720,6 +721,8 @@ export default function ProductSelectionPage() {
         )}
 
         {/* ID 183: ask iTarang to help, and what iTarang did on this file ("Done by"). */}
+        {/* ID 183 (21 Oct): "being worked by" — and the house login's dealer-wins check. */}
+        <LeadWorkNote leadId={leadId} />
         <AskItarangHelp leadId={leadId} />
 
         {/* §6.1/§6.2 — firm offers from picked NBFCs + winner selection. Self-hides for cash / un-routed leads. */}

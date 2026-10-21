@@ -28,16 +28,18 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { getAuthenticatedAppUser } from "@/lib/kyc/admin-workflow";
 import { readBucketObject, contentTypeForName } from "@/lib/storage/readStoredDocument";
-import { fileLinkTooLong, fileLinkValid, safeStorageKey } from "@/lib/storage/fileAccess";
+import { FILE_PROXY_BUCKETS, fileLinkTooLong, fileLinkValid, safeStorageKey } from "@/lib/storage/fileAccess";
 import { canOpenStoredFile, logFileOpen } from "@/lib/storage/fileAuthz";
-import { classifyFile, isKycFile, isLoggedFile } from "@/lib/storage/fileRules";
+import { classifyFile, isKycFile } from "@/lib/storage/fileRules";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 // Only these logical buckets may be proxied here (nbfc-documents has its own
-// route at /api/nbfc-uploads).
-const ALLOWED_BUCKETS = new Set(["documents", "dealer-documents", "call-recordings"]);
+// route at /api/nbfc-uploads). ID 166 (18 Oct): private-documents too — the
+// dealer's Aadhaar autofill scans and the customer's upload-link files are
+// served here, checked, instead of through a signed storage link.
+const ALLOWED_BUCKETS = new Set<string>(FILE_PROXY_BUCKETS);
 
 export async function GET(
   req: NextRequest,
@@ -104,16 +106,12 @@ export async function GET(
       "Content-Type": contentType,
       "Content-Disposition": "inline",
       "Content-Length": String(buf.byteLength),
-      // Upload keys are timestamp-unique (see upload-document/route.ts:
-      // `${docType}_${Date.now()}.${ext}`) and their bytes never change — a
-      // re-upload mints a NEW key/URL. So the object at any given URL is
-      // effectively immutable and safe to cache hard. `private` keeps PII out
-      // of shared/CDN caches while still letting the browser reuse the bytes,
-      // so preview thumbnails stop re-downloading the full file (and re-hitting
-      // the Supabase auth check) on every page load and re-render.
-      // ID 166: a logged file (customer KYC, onboarding papers) is fetched
-      // (and so logged) on every open; other files keep the browser cache.
-      "Cache-Control": isLoggedFile(file) ? "private, no-store" : "private, max-age=3600, immutable",
+      // ID 166 (18 Oct, report row 123): no stored file is kept in any cache —
+      // not a shared/CDN cache and not the browser's. Every open comes back
+      // here and is checked against the file rule (and logged when it is a
+      // logged file), so a login that loses access cannot keep reading a
+      // cached copy. Thumbnails re-download on each render; that is the price.
+      "Cache-Control": "private, no-store",
     },
   });
 }

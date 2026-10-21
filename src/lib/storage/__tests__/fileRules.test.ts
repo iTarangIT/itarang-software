@@ -7,6 +7,7 @@ import {
     NBFC_FILE_BUCKET,
     classifyFile,
     dealerUploadedFile,
+    isBuybackFileRole,
     isLoggedFile,
     loggedLeadId,
     mayOpenFile,
@@ -93,10 +94,12 @@ describe("mayOpenFile (ID 166)", () => {
     });
 
     it("gives a dealer only its own customers, and the uploader its upload", () => {
-        expect(mayOpenFile(viewer("dealer", { dealerCode: "D1" }), kyc, { leadDealerId: "D1" })).toBe(true);
-        expect(mayOpenFile(viewer("dealer", { dealerCode: "D1" }), kyc, { leadDealerId: "D2" })).toBe(false);
-        expect(mayOpenFile(viewer("dealer"), kyc, { leadDealerId: "" })).toBe(false);
-        expect(mayOpenFile(viewer("dealer"), kyc, { leadDealerId: "D2", leadUploaderId: "u-1" })).toBe(true);
+        // (its own upload — see the next test for the upload rule)
+        const mine = [{ uploaderId: "u-1", uploaderDealerCode: "D1", source: "portal" }];
+        expect(mayOpenFile(viewer("dealer", { dealerCode: "D1" }), kyc, { leadDealerId: "D1", fileUploads: mine })).toBe(true);
+        expect(mayOpenFile(viewer("dealer", { dealerCode: "D1" }), kyc, { leadDealerId: "D2", fileUploads: mine })).toBe(false);
+        expect(mayOpenFile(viewer("dealer"), kyc, { leadDealerId: "", fileUploads: mine })).toBe(false);
+        expect(mayOpenFile(viewer("dealer"), kyc, { leadDealerId: "D2", leadUploaderId: "u-1", fileUploads: mine })).toBe(true);
     });
 
     it("on its own customer, gives a dealer only the files it uploaded itself (ID 166, E-349)", () => {
@@ -114,9 +117,13 @@ describe("mayOpenFile (ID 166)", () => {
         expect(mayOpenFile(dealer, kyc, { ...own, fileUploads: [up("admin-1", null, "portal")] })).toBe(false);
         expect(mayOpenFile(dealer, kyc, { ...own, fileUploads: [up("u-9", "D2", "portal")] })).toBe(false);
         expect(mayOpenFile(dealer, kyc, { ...own, fileUploads: [up(null, null, "public_link")] })).toBe(false);
-        // rows from before E-349, or no row for the file: the old rule
-        expect(mayOpenFile(dealer, kyc, { ...own, fileUploads: [up(null, null, null)] })).toBe(true);
-        expect(mayOpenFile(dealer, kyc, { ...own, fileUploads: [] })).toBe(true);
+        // 18 Oct rework: a row naming no uploader (before uploaders were
+        // recorded) or no row at all (consent PDFs, photos) is not the dealer's
+        expect(mayOpenFile(dealer, kyc, { ...own, fileUploads: [up(null, null, null)] })).toBe(false);
+        expect(mayOpenFile(dealer, kyc, { ...own, fileUploads: [] })).toBe(false);
+        expect(mayOpenFile(dealer, kyc, own)).toBe(false);
+        // …while one of several rows being its own still opens it
+        expect(mayOpenFile(dealer, kyc, { ...own, fileUploads: [up(null, null, null), up("u-1", "D1", null)] })).toBe(true);
         // never on another dealer's customer, whoever uploaded
         expect(mayOpenFile(dealer, kyc, { leadDealerId: "D2", fileUploads: [up("u-1", "D1", "portal")] })).toBe(false);
         // the upload rule is for dealers only
@@ -136,7 +143,9 @@ describe("mayOpenFile (ID 166)", () => {
     it("dealerUploadedFile: a lookup failure refuses", () => {
         const dealer = viewer("dealer", { dealerCode: "D1" });
         expect(dealerUploadedFile(dealer, [{ uploaderId: null, uploaderDealerCode: null, source: "unknown" }])).toBe(false);
-        expect(dealerUploadedFile(dealer, undefined)).toBe(true);
+        // 18 Oct: no upload record is not the dealer's
+        expect(dealerUploadedFile(dealer, undefined)).toBe(false);
+        expect(dealerUploadedFile(dealer, [])).toBe(false);
     });
 
     it("gives an NBFC only applications shared with it", () => {
@@ -284,8 +293,60 @@ describe("mayOpenFile — folders that were open to any login (16 Oct)", () => {
         expect(mayOpenFile(viewer("dealer", { dealerCode: "ACC-1" }), statement)).toBe(false);
     });
 
-    it("the buyback staff list matches the one in the buyback module", () => {
-        expect([...BUYBACK_FILE_ROLES]).toEqual([...BUYBACK_ADMIN_ROLES]);
+    it("buyback files: the buyback staff minus the Business Head; the partner keeps them (Kartik 18 Oct)", () => {
+        expect([...BUYBACK_FILE_ROLES]).toEqual(BUYBACK_ADMIN_ROLES.filter((r) => r !== "business_head"));
+        expect(isBuybackFileRole("partner")).toBe(true);
+        expect(isBuybackFileRole("Sales_Head")).toBe(true);
+        expect(isBuybackFileRole("business_head")).toBe(false);
+        const f = classifyFile("dealer-documents", `buyback/${APP}/photos/a.jpg`);
+        expect(mayOpenFile(viewer("business_head"), f, { buybackDealerId: "ACC-1" })).toBe(false);
+        expect(mayOpenFile(viewer("partner"), f)).toBe(true);
+    });
+
+    it("private-documents: autofill scans and the customer's upload-link files (18 Oct)", () => {
+        expect(classifyFile("private-documents", "dealer_D1/LEAD-1/1-a.jpg")).toEqual({
+            kind: "autofill_scan",
+            dealerCode: "D1",
+            leadId: "LEAD-1",
+        });
+        expect(classifyFile("private-documents", "dealer_D1/temp/1-a.jpg")).toEqual({
+            kind: "autofill_scan",
+            dealerCode: "D1",
+            leadId: null,
+        });
+        expect(classifyFile("private-documents", "dealer_null/temp/1-a.jpg")).toMatchObject({ dealerCode: null });
+        expect(classifyFile("private-documents", "public-uploads/LEAD-1/r-1.pdf")).toEqual({
+            kind: "customer_lead",
+            leadId: "LEAD-1",
+            kyc: true,
+        });
+        expect(classifyFile("private-documents", "other/x.pdf").kind).toBe("unknown");
+        expect(classifyFile("documents", "autofill/x.png")).toEqual({ kind: "autofill_scan", dealerCode: null, leadId: null });
+
+        const scan = classifyFile("private-documents", "dealer_D1/LEAD-1/1-a.jpg");
+        expect(isLoggedFile(scan)).toBe(true);
+        expect(loggedLeadId(scan)).toBe("LEAD-1");
+        for (const role of ["admin", "ceo", "sales_head"]) expect(mayOpenFile(viewer(role), scan)).toBe(true);
+        // the dealer that scanned it, nobody else's dealer
+        expect(mayOpenFile(viewer("dealer", { dealerCode: "D1" }), scan)).toBe(true);
+        expect(mayOpenFile(viewer("dealer", { dealerCode: "D2" }), scan)).toBe(false);
+        expect(mayOpenFile(viewer("dealer"), classifyFile("private-documents", "dealer_null/temp/a.jpg"))).toBe(false);
+        // the lead's owner; another back-office login is refused
+        expect(mayOpenFile(viewer("sales_manager"), scan, { leadSmAssignedTo: "u-1" })).toBe(true);
+        expect(mayOpenFile(viewer("sales_manager"), scan, { leadSmAssignedTo: "u-2" })).toBe(false);
+        expect(mayOpenFile(viewer("business_head"), scan)).toBe(false);
+        // the old documents/autofill folder stays top roles only
+        const old = classifyFile("documents", "autofill/x.png");
+        expect(mayOpenFile(viewer("dealer", { dealerCode: "D1" }), old)).toBe(false);
+        expect(mayOpenFile(viewer("admin"), old)).toBe(true);
+    });
+
+    it("dealer papers: the application's salesperson / carried-in owner open them (18 Oct)", () => {
+        const doc = classifyFile("dealer-documents", "gst-certificate/1-x-gst.pdf");
+        expect(mayOpenFile(viewer("asm"), doc, { applicationOwnerIds: [null, "u-1"] })).toBe(true);
+        expect(mayOpenFile(viewer("asm"), doc, { applicationOwnerIds: ["u-2", null] })).toBe(false);
+        // a dealer is never an "owner" by these ids
+        expect(mayOpenFile(viewer("dealer"), doc, { applicationOwnerIds: ["u-1"] })).toBe(false);
     });
 
     it("feature requests: seat holders", () => {

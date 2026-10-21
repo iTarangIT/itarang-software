@@ -54,23 +54,70 @@ export async function viewerMayOpenVehicle(viewer: TelemetryViewer, vehicleNumbe
  * decided.
  */
 export async function logVehicleOpen(input: {
-    viewer: TelemetryViewer;
+    /** Who opened it; id null when there is no user uuid (NBFC test bypass). */
+    viewer: { id: string | null; role: string };
     deviceId: string;
     feed: VehicleFeed;
     hours: number | null;
     allowed: boolean;
 }): Promise<void> {
+    await logVehicleOpens({
+        viewer: input.viewer,
+        feed: input.feed,
+        hours: input.hours,
+        allowed: input.allowed,
+        entries: [{ deviceId: input.deviceId, vehicleNumber: input.deviceId.trim() || null }],
+    });
+}
+
+/**
+ * Several opens in one INSERT (the fleet map: one row per vehicle shown, see
+ * vehicleAccessRules.fleetMapLogEntries). Never throws, like logVehicleOpen.
+ */
+export async function logVehicleOpens(input: {
+    viewer: { id: string | null; role: string };
+    feed: VehicleFeed;
+    hours: number | null;
+    allowed: boolean;
+    entries: ReadonlyArray<{ deviceId: string; vehicleNumber: string | null }>;
+}): Promise<void> {
+    if (input.entries.length === 0) return;
     try {
+        const values = input.entries.map(
+            (e) => sql`(${input.viewer.id}, ${input.viewer.role}, ${e.deviceId}, ${e.vehicleNumber},
+                    ${input.feed}, ${input.hours}, ${input.allowed})`,
+        );
         await db.execute(sql`
             INSERT INTO telemetry_location_access_log (user_id, role, device_id, vehicle_number, feed, hours, allowed)
-            VALUES (${input.viewer.id}, ${input.viewer.role}, ${input.deviceId}, ${input.deviceId.trim() || null},
-                    ${input.feed}, ${input.hours}, ${input.allowed})
+            VALUES ${sql.join(values, sql`, `)}
         `);
     } catch (err) {
         console.error(
             "[telemetry] vehicle open log failed (is E-347 applied?):",
             err instanceof Error ? err.message : err,
         );
+    }
+}
+
+/**
+ * Has this login written a row for `feed` in the last `minutes`? The fleet map
+ * refreshes every 30 s; one set of rows per 15 minutes is enough to answer
+ * "who looked at these vehicles, and when" without ~120 rows/hour/vehicle.
+ * A login with no user id (test bypass) is never throttled.
+ */
+export async function loggedRecently(viewer: { id: string | null }, feed: VehicleFeed, minutes: number): Promise<boolean> {
+    if (!viewer.id) return false;
+    try {
+        const rows = (await db.execute(sql`
+            SELECT 1 FROM telemetry_location_access_log
+             WHERE user_id = ${viewer.id} AND feed = ${feed}
+               AND opened_at > now() - make_interval(mins => ${minutes})
+             LIMIT 1
+        `)) as unknown as { rows?: unknown[] } | unknown[];
+        const list = Array.isArray(rows) ? rows : (rows.rows ?? []);
+        return list.length > 0;
+    } catch {
+        return false;
     }
 }
 

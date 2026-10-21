@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireTelemetryViewer, telemetryErrorResponse } from '@/lib/telemetry/vehicleAccess';
+import { loggedRecently, logVehicleOpens, requireTelemetryViewer, telemetryErrorResponse } from '@/lib/telemetry/vehicleAccess';
+import { fleetMapLogEntries } from '@/lib/telemetry/vehicleAccessRules';
 import { fetchFleetMapData } from '@/lib/telemetry/queries';
 import { isVpsUnreachable, vpsDegradedReason } from '@/lib/telemetry/vps-status';
 
@@ -23,6 +24,20 @@ export async function GET(req: NextRequest) {
         const state = user.role === 'ceo' ? searchParams.get('state')?.trim() || undefined : undefined;
         const city = user.role === 'ceo' ? searchParams.get('city')?.trim() || undefined : undefined;
         const data = await fetchFleetMapData({ dealerId, state, city });
+        // ID 181 (18 Oct follow-up): the map shows live positions, so each load
+        // goes to the vehicle open log — a dealer gets one row per vehicle shown,
+        // the CEO one '*' row per load (fleetMapLogEntries). The map refreshes
+        // every 30 s, so at most one set of rows per login per 15 minutes.
+        if (!(await loggedRecently(user, 'fleet_map', 15))) await logVehicleOpens({
+            viewer: user,
+            feed: 'fleet_map',
+            hours: null,
+            allowed: true,
+            entries: fleetMapLogEntries(
+                user.role,
+                (data as Array<{ vehicle_number?: unknown }>).map((r) => r.vehicle_number),
+            ),
+        });
         return NextResponse.json({ success: true, data });
     } catch (error) {
         if (isVpsUnreachable(error)) {
