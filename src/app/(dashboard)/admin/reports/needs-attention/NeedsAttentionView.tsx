@@ -15,7 +15,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Download, Loader2, PhoneOff, Search } from "lucide-react";
 
 import { BulkActionBar } from "@/app/(dashboard)/admin/_components/BulkActionBar";
-import { COUNTED_FROM_LABEL, type NeedsAttentionHolderSummary, type NeedsAttentionRow } from "@/lib/leads/needsAttention";
+import type { NeedsAttentionHolderSummary, NeedsAttentionRow } from "@/lib/leads/needsAttention";
+import { COUNTED_FROM_LABEL } from "@/lib/leads/needsAttentionLabels";
 import { IDLE_MIN_OPTIONS, filterNeedsAttention, type NeedsAttentionFilters } from "@/lib/leads/needsAttentionFilter";
 import { LEAD_STATUS_LABEL } from "@/lib/leads/queueFilters";
 
