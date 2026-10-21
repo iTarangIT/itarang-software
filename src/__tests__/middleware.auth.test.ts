@@ -483,9 +483,10 @@ describe("the matcher", () => {
     expect(runs("/admin/inventory/abc.PNG")).toBe(true);
   });
 
-  it("KNOWN GAP: uploaded NBFC images and PDFs under /nbfc-uploads are never seen by middleware", () => {
-    // Files committed under public/nbfc-uploads are served statically, before
-    // the session-checked /api/nbfc-uploads rewrite can fire.
+  it("uploaded NBFC images and PDFs under /nbfc-uploads are never seen by middleware", () => {
+    // Fine since ID 195: public/nbfc-uploads is gone, so these addresses fall
+    // through to the /api/nbfc-uploads rewrite, which checks the login itself.
+    // The deploy fails if files are committed under public/ again.
     expect(runs("/nbfc-uploads/100/pan_card.jpeg")).toBe(false);
     expect(runs("/nbfc-uploads/100/agreement.pdf")).toBe(false);
   });
