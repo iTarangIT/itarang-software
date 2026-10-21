@@ -77,14 +77,8 @@ export type NeedsAttentionRow = {
     counted_from_at: string | null;
 };
 
-export type CountedFrom = "follow_up" | "handed_over" | "last_worked" | "created";
-
-export const COUNTED_FROM_LABEL: Record<CountedFrom, string> = {
-    follow_up: "Follow-up",
-    handed_over: "Handed over",
-    last_worked: "Last worked",
-    created: "Created",
-};
+import type { CountedFrom } from "@/lib/leads/needsAttentionLabels";
+export { COUNTED_FROM_LABEL, type CountedFrom } from "@/lib/leads/needsAttentionLabels";
 
 /** Which candidate FOLLOW_UP_AGEING_BASIS picked — the "Counted from" column. Over the alias `dl`. */
 const COUNTED_FROM_SQL = sql`(CASE
