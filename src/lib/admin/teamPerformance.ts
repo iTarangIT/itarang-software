@@ -20,6 +20,9 @@ import { hasReportingHistoryTable } from "@/lib/users/reportingLines";
 import { getTeamMemberIds } from "@/lib/users/team";
 import { pickPerformanceScope } from "@/lib/users/teamRules";
 import { daysInclusive, isSingleWindow, mergeWindowParts, teamWindows, type TeamStint } from "@/lib/users/teamWindows";
+import { CUSTOM_METRIC_PREFIX } from "@/lib/targets/rules";
+import { targetVisibleSql } from "@/lib/targets/sql";
+import { customTeamTotal, type CustomEntry } from "@/lib/targets/teamCustom";
 
 /** Every reporting line to `managerId` overlapping [from, to] (inclusive days); null without E-338. */
 export async function teamStints(managerId: string, from: string, to: string): Promise<TeamStint[] | null> {
@@ -84,6 +87,27 @@ async function userNames(ids: string[]): Promise<Map<string, string | null>> {
 }
 
 /**
+ * ID 189 — everyone's custom-metric rows for the month, with what they typed
+ * in: only rows the person has been sent (the member view), never a draft or a
+ * removed row.
+ */
+async function customEntries(monthFirst: string, ids: string[]): Promise<CustomEntry[]> {
+    if (!ids.length) return [];
+    const rows = (await db.execute(sql`
+        SELECT t.user_id::text AS user_id, COALESCE(u.name, u.email) AS user_name,
+               to_jsonb(t) ->> 'custom_label' AS label, to_jsonb(t) ->> 'custom_unit' AS unit,
+               (to_jsonb(t) ->> 'manual_actual')::float8 AS manual_actual
+          FROM sales_targets t
+          LEFT JOIN users u ON u.id::text = t.user_id
+         WHERE t.month = ${monthFirst}::date
+           AND left(t.metric, ${CUSTOM_METRIC_PREFIX.length}) = ${CUSTOM_METRIC_PREFIX}
+           AND t.user_id IN (${sql.join(ids.map((i) => sql`${i}`), sql`, `)})
+           AND ${targetVisibleSql("member")}
+    `)) as unknown as Array<{ user_id: string; user_name: string | null; label: string | null; unit: string | null; manual_actual: number | null }>;
+    return rows.map((r) => ({ ...r, manual_actual: r.manual_actual == null ? null : Number(r.manual_actual) }));
+}
+
+/**
  * ID 156 — the manager's team against the manager's OWN target (Kartik,
  * 10 Oct: everyone has their own target; the team lead's is not the sum of the
  * members'). Each row is one of the manager's pushed / accepted targets for
@@ -114,14 +138,25 @@ export async function teamTargets(managerId: string, month: string) {
         windows.map(async (w) => ({ w, actual: await actualsFor(w.from, w.to, ctx.working_days_elapsed) })),
     );
     const names = await userNames(windows.flatMap((w) => w.ids));
+    const teamIds = [...new Set(windows.flatMap((w) => w.ids))];
+    // ID 189 — a custom metric is measured per person by hand (manual_actual);
+    // the team total adds those entries on the matching metric (./targets/teamCustom.ts).
+    const customs = mine.some((r) => r.is_custom) ? await customEntries(monthFirst, teamIds) : [];
     return {
         rows: mine.map((r) => {
             let sum: number | null = 0;
-            for (const { w, actual } of lookups) {
-                for (const id of w.ids) {
-                    const v = actual(id, r.metric);
-                    if (v == null) sum = null;
-                    else if (sum != null) sum += v;
+            let reason = r.progress.not_measured_reason;
+            if (r.is_custom) {
+                const t = customTeamTotal({ managerId, label: r.metric_label, unit: r.unit, entries: customs, teamIds });
+                sum = t.value;
+                reason = t.reason;
+            } else {
+                for (const { w, actual } of lookups) {
+                    for (const id of w.ids) {
+                        const v = actual(id, r.metric);
+                        if (v == null) sum = null;
+                        else if (sum != null) sum += v;
+                    }
                 }
             }
             return {
@@ -131,7 +166,7 @@ export async function teamTargets(managerId: string, month: string) {
                     kind: r.kind,
                     monthly: r.final_target,
                     actual: sum == null ? null : Math.round(sum * 10) / 10,
-                    reason: r.progress.not_measured_reason,
+                    reason,
                     workingDaysTotal: ctx.working_days_total,
                     workingDaysElapsed: ctx.working_days_elapsed,
                 }),

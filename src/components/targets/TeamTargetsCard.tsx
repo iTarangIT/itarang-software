@@ -45,7 +45,8 @@ export function TeamTargetsCard() {
                 <h3 className="text-sm font-semibold text-ink">Team against your target</h3>
                 <p className="text-[11px] text-ink-muted">
                     Your own monthly target (the team lead&apos;s target is yours, not the sum of the members&apos;). Actual =
-                    you + each member for the days they were in your team, this month to date
+                    you + each member for the days they were in your team, this month to date (a custom metric adds
+                    each person&apos;s hand-entered progress on the same metric)
                     {data.context ? ` · ${data.context.working_days_elapsed} of ${data.context.working_days_total} working days gone` : ""}.
                 </p>
             </div>
