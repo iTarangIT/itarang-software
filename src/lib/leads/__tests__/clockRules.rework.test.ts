@@ -37,9 +37,12 @@ describe("Hot clocks", () => {
             LATER,
             { interest: [hot(ist("2026-10-17", "09:00"))] },
         );
-        const hotOwner = clocks.find((c) => c.clock === "hot_owner")!;
-        expect(hotOwner.started_at.toISOString()).toBe(sat.toISOString());
-        expect(hotOwner.due_at?.toISOString()).toBe(ist("2026-10-19", "13:00").toISOString());
+        // 18 Oct rework 2: assigned while Hot → the owner clock carries the Hot limit (no second hot_owner clock).
+        expect(clocks.some((c) => c.clock === "hot_owner")).toBe(false);
+        const owner = clocks.find((c) => c.clock === "owner")!;
+        expect(owner.limit_key).toBe("hot_owner_first_attempt");
+        expect(owner.started_at.toISOString()).toBe(sat.toISOString());
+        expect(owner.due_at?.toISOString()).toBe(ist("2026-10-19", "13:00").toISOString());
     });
 
     it("ready → assigned: 9 office hours, until the first assignment", () => {

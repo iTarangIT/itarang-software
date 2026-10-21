@@ -51,6 +51,23 @@ export function workingDaysSince(
     return workingDaysBetween(lastDate, now, holidayDates, hours);
 }
 
+/**
+ * 18 Oct row 33 — the ISR queue's row cue against the inside-sales idle limit
+ * (idle_cc, working days, counted from the follow-up ageing basis): "red" =
+ * at or past the limit (the "past limit" state, the same rule as Needs
+ * Attention and idlePastLimitSql), "critical" = twice the limit or more,
+ * "yellow" = the last working day before it. Same severity names as
+ * staleSeverity so the row colours are shared.
+ */
+export function idleSeverity(workingDays: number | null, idleLimit: number): StaleSeverity {
+    if (workingDays === null || !(idleLimit > 0)) return "normal";
+    const limit = Math.floor(idleLimit);
+    if (workingDays >= limit * 2) return "critical";
+    if (workingDays >= limit) return "red";
+    if (limit > 1 && workingDays >= limit - 1) return "yellow";
+    return "normal";
+}
+
 // BRD §0.5 visual cue thresholds. The live values come from the server
 // (getTimeLimits(), sent with /api/inside-sales/holidays); the default is the
 // registry's, for a caller that has not loaded them.

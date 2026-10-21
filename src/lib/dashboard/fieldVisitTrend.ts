@@ -7,15 +7,17 @@
  *   new       moved to an ASM in the period
  *   visited   first visit marked visited in the period, split into the old
  *             backlog (pending) and the new
- *   left      left the queue without a visit: "Visit not needed", handed back
- *             to the ISR, or Lost
- *   moved     moved on without a visit for any other reason: to another ASM
- *             (it is then new for that ASM), quote approved, re-transferred, …
+ *   left      closed without a visit: "Visit not needed", handed back to the
+ *             ISR, Lost — and (ID 190, 21 Oct: the decided columns only) every
+ *             other way a wait ends with no visit: moved to another ASM (it is
+ *             then new for that ASM), quote approved, re-transferred, …
+ *   moved     retired (always 0) — folded into `left`; kept so old links to
+ *             the fv_moved list still open (empty)
  *   waiting   still waiting at the end of the last day
  *
- * so that, for every ASM and in total,
+ * so that, for every ASM and in total, the decided balance holds:
  *
- *   pending + new = visited + left + moved + waiting.
+ *   pending + new = visited + left + waiting.
  *
  * % visited = visited ÷ (pending + new).
  *
@@ -25,11 +27,13 @@
  *     assigned_at / created_at, like TRANSFER_AT_EXPR.
  *   - The wait closes at the first visit marked visited since the move (the
  *     same "since" test as transferVisitLimit.ts) or at the next status change,
- *     whichever is first.
+ *     whichever is first. A visit logged by date only counts as made at the
+ *     office opening hour on that day (DEFAULT_OFFICE_HOURS.startHour, 10:00
+ *     IST) — the same instant the lead clocks use (clocks.ts).
  *   - Inside a wait, every ownership move to a field person (an ASM swap:
  *     asm_transfer from assignOwner, or the ASM's own reassign) closes the old
- *     ASM's part as "moved" and opens a new part for the new ASM. One part per
- *     (lead, ASM) = one "segment" below.
+ *     ASM's part (closed without a visit, for that ASM) and opens a new part
+ *     for the new ASM. One part per (lead, ASM) = one "segment" below.
  *
  * "Past the limit" uses the lead's clock: working days (Mon–Sat, active
  * holidays off, IST) since the move into Transferred_to_ASM. Each wait is judged
@@ -38,7 +42,8 @@
  * ending today therefore matches the card (transferVisitOverdueSql) exactly.
  *
  * The state filter reads the lead as it is today. The person / team filters
- * read the segment's ASM. Deactivated leads are left out, as on the card.
+ * read the segment's ASM or the lead's owner today (as the card does).
+ * Deactivated leads are left out, as on the card.
  *
  * fieldVisitSegmentsSql() is the ONE query: the per-ASM counts below and the
  * drill lists (salesDrill.ts fv_* kinds) both read it, so a list behind a
@@ -49,7 +54,9 @@ import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { workingDaysBetweenSql } from "@/lib/calendar/holidays";
 import { limitOnDay } from "@/lib/timeLimits/store";
+import { DEFAULT_OFFICE_HOURS } from "@/lib/calendar/officeHours";
 import { currentTeamOf } from "@/lib/users/team";
+import { asmTransferRecipientFromVisitSql } from "@/lib/leads/closingOwner";
 import type { ActionScope } from "@/lib/dashboard/salesHeadActions";
 
 export const FV_MEASURES = [
@@ -101,6 +108,8 @@ export type FieldVisitPeriod = {
 };
 
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
+/** A visit logged by date only is taken as made at office opening (same as clocks.ts). */
+const VISIT_DAY_TIME = sql.raw(`INTERVAL '${DEFAULT_OFFICE_HOURS.startHour} hours'`);
 const FIELD_ROLES = ["asm", "sales_manager"];
 
 /** Today's date in IST, YYYY-MM-DD. */
@@ -126,14 +135,25 @@ export function pctVisited(c: Pick<FieldVisitCounts, "visited" | "pending" | "ne
     return of > 0 ? Math.round((c.visited / of) * 100) : null;
 }
 
-/** The person / team filter on the segment's ASM (`seg.asm_id`). */
+/**
+ * The person / team filter: the segment's ASM (`seg.asm_id`) OR the lead's
+ * owner today — the card's "owner_or_asm" scope (salesHeadActions.ts), so an
+ * inside-sales rep picked in the Person filter counts the leads they own
+ * (ID 190: the table used to be empty for an ISR while the list was not).
+ */
 function segScope(s: ActionScope): SQL {
     const parts: SQL[] = [];
-    if (s.ownerId) parts.push(sql`seg.asm_id = ${s.ownerId}`);
+    const owner = sql`(SELECT d.current_owner_id FROM dealer_leads d WHERE d.id = seg.lead_id)`;
+    if (s.ownerId) parts.push(sql`(seg.asm_id = ${s.ownerId} OR ${owner} = ${s.ownerId})`);
+    if (s.teamIds) {
+        // A manager's own view (ID 190): only their team's segments / leads.
+        const ids = s.teamIds.length ? sql.join(s.teamIds.map((i) => sql`${i}`), sql`, `) : sql`NULL`;
+        parts.push(sql`(seg.asm_id IN (${ids}) OR ${owner} IN (${ids}))`);
+    }
     const roles = s.team === "field" ? FIELD_ROLES : s.team === "inside" ? ["inside_sales_rep"] : null;
     if (roles) {
         const list = sql.raw(roles.map((r) => `'${r}'`).join(", "));
-        parts.push(sql`EXISTS (SELECT 1 FROM users ur WHERE ur.id::text = seg.asm_id AND ur.role IN (${list}))`);
+        parts.push(sql`EXISTS (SELECT 1 FROM users ur WHERE ur.role IN (${list}) AND (ur.id::text = seg.asm_id OR ur.id::text = ${owner}))`);
     }
     return parts.length ? sql` AND ${sql.join(parts, sql` AND `)}` : sql``;
 }
@@ -174,7 +194,7 @@ export async function fieldVisitSegmentsSql(s: ActionScope, fromDay: string, toD
         iv AS (
             SELECT st.lead_id, st.start_at, nx.changed_at AS left_at, nx.to_status AS left_to, nx.reason_notes AS left_note,
                    (SELECT MIN(GREATEST(st.start_at, COALESCE(
-                               (v.actual_visit_date::timestamp + INTERVAL '12 hours') AT TIME ZONE 'Asia/Kolkata',
+                               (v.actual_visit_date::timestamp + ${VISIT_DAY_TIME}) AT TIME ZONE 'Asia/Kolkata',
                                v.created_at)))
                       FROM lead_visits v
                      WHERE v.dealer_lead_id = st.lead_id
@@ -238,7 +258,10 @@ export async function fieldVisitSegmentsSql(s: ActionScope, fromDay: string, toD
               JOIN wp ON wp.lead_id = b2.lead_id AND wp.start_at = b2.wait_start
               JOIN dealer_leads dl ON dl.id = b2.lead_id
               LEFT JOIN LATERAL (
-                    SELECT t.to_owner_id AS asm FROM lead_touchpoints t
+                    -- ID 190: the ASM Handoff recipient rule (admin/reports.ts asmHandoff):
+                    -- the transfer's to_owner_id, else the visit row the transfer
+                    -- wrote alongside it, and only then the lead's ASM today.
+                    SELECT COALESCE(t.to_owner_id, ${sql.raw(asmTransferRecipientFromVisitSql("t"))}) AS asm FROM lead_touchpoints t
                      WHERE b2.to_asm IS NULL
                        AND t.dealer_lead_id = b2.lead_id AND t.touchpoint_type = 'asm_transfer'
                        AND t.performed_at BETWEEN b2.at - INTERVAL '1 minute' AND b2.at + INTERVAL '5 seconds'
@@ -256,8 +279,9 @@ export async function fieldVisitSegmentsSql(s: ActionScope, fromDay: string, toD
         x AS (
             SELECT m.*, ${lim} AS lim,
                    (ended AND end_kind = 'visit') AS visited,
-                   (ended AND end_kind = 'left') AS left_q,
-                   (ended AND end_kind = 'moved') AS moved,
+                   -- ID 190 (21 Oct): "moved on" is folded into closed without a visit.
+                   (ended AND end_kind IN ('left', 'moved')) AS left_q,
+                   FALSE AS moved,
                    (NOT ended) AS waiting,
                    CASE WHEN ended AND end_kind = 'visit'
                         THEN ${workingDaysBetweenSql(sql`wait_start`, sql`seg_end`)} END AS days_to_visit,
@@ -395,7 +419,37 @@ export async function fieldVisitPeriod(s: ActionScope, fromDay: string, toDay: s
     return { from: fromDay, to: toDay, total: sum(asms), asms, teams };
 }
 
-/** pending + new = visited + left + moved + waiting — true on every row by construction. */
+/**
+ * ID 190 — the Sales dashboard's "Waiting for a field visit" card for the
+ * dashboard's date filter: the main number is the leads still waiting at the
+ * end of [from, to] (for a period ending today: the live queue, the list the
+ * card opens), the sub-line "x past the limit · down / up from y last period"
+ * against the previous period of the same length.
+ */
+export async function fieldVisitCard(
+    s: ActionScope,
+    fromDay: string,
+    toDay: string,
+): Promise<{ count: number; sub: string; prevFrom: string; prevTo: string }> {
+    if (fromDay > toDay) [fromDay, toDay] = [toDay, fromDay];
+    const today = istToday();
+    if (toDay > today) toDay = today;
+    if (fromDay > toDay) fromDay = toDay;
+    const days = Math.round((Date.parse(`${toDay}T00:00:00Z`) - Date.parse(`${fromDay}T00:00:00Z`)) / 86_400_000) + 1;
+    const prevTo = shiftDay(fromDay, -1);
+    const prevFrom = shiftDay(prevTo, -(days - 1));
+    const [now, prev] = await Promise.all([fieldVisitPeriod(s, fromDay, toDay), fieldVisitPeriod(s, prevFrom, prevTo)]);
+    return { count: now.total.waiting, sub: fieldVisitCardSub(now.total, prev.total), prevFrom, prevTo };
+}
+
+/** "x past the limit · down 3 from 12 last period" — pure, for the card. */
+export function fieldVisitCardSub(now: Pick<FieldVisitCounts, "waiting" | "pastLimit">, prev: Pick<FieldVisitCounts, "waiting">): string {
+    const d = now.waiting - prev.waiting;
+    const change = d === 0 ? `same as last period (${prev.waiting})` : `${d < 0 ? "down" : "up"} from ${prev.waiting} last period`;
+    return `${now.pastLimit} past the limit · ${change}`;
+}
+
+/** pending + new = visited + left + waiting (moved is always 0 now) — true on every row by construction. */
 export function fieldVisitBalances(c: FieldVisitCounts): boolean {
     return c.pending + c.new === c.visited + c.left + c.moved + c.waiting && c.visited === c.visitedBacklog + c.visitedNew;
 }

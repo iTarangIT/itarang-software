@@ -16,10 +16,17 @@ export default async function NeedsAttentionPage() {
             <header>
                 <h1 className="text-2xl font-semibold tracking-tight text-ink">Needs Attention</h1>
                 <p className="mt-1 text-sm text-ink-muted">
-                    Every open lead someone is holding but not working, oldest first. Only a
-                    call, visit or status change counts as work — assigning, claiming or
-                    commenting does not. Listed from {limits.idle_cc} idle working days for inside
-                    sales, {limits.idle_asm} for ASMs. Reassign straight from the row.
+                    Every open lead someone is holding but not working, oldest first. The idle
+                    count is in working days from the latest of: the last work (a call, visit or
+                    status change — claiming or commenting is not work), the day the holder got
+                    the lead (a handover starts the count again for the new holder) and a
+                    follow-up date once it has passed. A follow-up still ahead keeps a lead off
+                    this list; one more than 30 days ahead is ignored. Listed from{" "}
+                    {limits.idle_cc} idle working days for inside sales, {limits.idle_asm} for
+                    ASMs; rows turn amber at {limits.stale_yellow}, red at {limits.stale_red} and dark red at{" "}
+                    {limits.stale_critical} working days (Admin › Time limits).
+                    The &ldquo;Counted from&rdquo; column says which date the count runs from.
+                    Reassign straight from the row.
                 </p>
             </header>
             <NeedsAttentionView />

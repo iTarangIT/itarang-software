@@ -104,6 +104,8 @@ export function AsmQueueView({ viewerId, viewerRole }: Props) {
     // ID 75.4: the ASM's own "Finalised, not Won" list — the dealer approved
     // the quote and nobody pressed Mark Won. A chip, not a sixth tab.
     const [finalisedOnly, setFinalisedOnly] = useState(params.get("finalised") === "1");
+    // 18 Oct row 34: only leads past a time limit.
+    const [pastLimitOnly, setPastLimitOnly] = useState(params.get("past_limit") === "1");
     // Open on load when ANY filter arrived in the URL, so a filter inherited
     // from a pasted link is never doing invisible work. Derived from the parsed
     // values rather than from param names, so it cannot fall out of step with
@@ -131,11 +133,12 @@ export function AsmQueueView({ viewerId, viewerRole }: Props) {
         if (visitStatus) p.set("visit_status", visitStatus);
         if (visitOutcome) p.set("visit_outcome", visitOutcome);
         if (finalisedOnly) p.set("finalised", "1");
+        if (pastLimitOnly) p.set("past_limit", "1");
         // The sort rides along: the rows and the CSV honour it, the counts and
         // facets simply never read it.
         writeQueueSort(p, sort);
         return writeQueueFilters(p, filters);
-    }, [searchDebounced, visitStatus, visitOutcome, finalisedOnly, filters, sort]);
+    }, [searchDebounced, visitStatus, visitOutcome, finalisedOnly, pastLimitOnly, filters, sort]);
 
     const filterKey = filterParams.toString();
 
@@ -356,6 +359,37 @@ export function AsmQueueView({ viewerId, viewerRole }: Props) {
                     {counts?.finalised_not_won ? (
                         <span className="ml-0.5 rounded-full bg-emerald-600 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white">
                             {counts.finalised_not_won}
+                        </span>
+                    ) : null}
+                </button>
+                {/* 18 Oct row 34 — "Past a limit" as a filter: leads with a time
+                    limit still running past due (the chip on the row names which). */}
+                <button
+                    type="button"
+                    onClick={() => {
+                        setPastLimitOnly((v) => !v);
+                        setPage(1);
+                    }}
+                    aria-pressed={pastLimitOnly}
+                    title={
+                        pastLimitOnly
+                            ? "Showing only leads past a time limit — click to show all"
+                            : "Show only leads past a time limit (Admin › Time limits)"
+                    }
+                    className={`inline-flex h-10 shrink-0 items-center gap-1.5 rounded-lg border px-3 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-rose-500 ${
+                        pastLimitOnly
+                            ? "border-rose-300 bg-rose-50 text-rose-700"
+                            : "border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
+                    }`}
+                >
+                    <span
+                        aria-hidden
+                        className={`h-1.5 w-1.5 rounded-full ${pastLimitOnly ? "bg-rose-500" : "bg-gray-300"}`}
+                    />
+                    Past a limit
+                    {counts?.past_limit ? (
+                        <span className="ml-0.5 rounded-full bg-rose-600 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white">
+                            {counts.past_limit}
                         </span>
                     ) : null}
                 </button>

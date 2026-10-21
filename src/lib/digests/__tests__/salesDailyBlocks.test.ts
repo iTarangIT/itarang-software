@@ -89,7 +89,13 @@ describe("Block B (ASM) — one row per rep", () => {
             "ASM",
             "Dealers visited · Yesterday",
             "MTD",
-            "New dealers visited · Yesterday",
+            "Visits · Yesterday",
+            "MTD",
+            "Fresh · Yesterday",
+            "MTD",
+            "Repeat · Yesterday",
+            "MTD",
+            "Of which new to iTarang · Yesterday",
             "MTD",
             "Hot received · Yesterday",
             "MTD",
@@ -103,6 +109,8 @@ describe("Block B (ASM) — one row per rep", () => {
             "Limits passed · Yesterday",
             "MTD",
             "First attempt, median working hrs MTD",
+            "First attempt within limit % MTD",
+            "First visit within limit % MTD",
             "% of target",
         ]);
         expect(BLOCK_B_COLUMNS.some((c) => /last 7/i.test(c))).toBe(false);
@@ -115,11 +123,11 @@ describe("Block B (ASM) — one row per rep", () => {
         expect(rows).toHaveLength(3);
         for (const r of rows) expect(r).toHaveLength(BLOCK_B_COLUMNS.length);
         // Amy: no target → "—"; a failed direct query (Marked Won MTD) is not 0.
-        expect(rows[0]).toEqual(["Amy", 0, 10, 0, 0, 0, 0, 0, 0, 0, 0, REP_NOT_MEASURED, 0, "₹0", 0, 0, REP_NOT_MEASURED, REP_NOT_MEASURED]);
+        expect(rows[0]).toEqual(["Amy", 0, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, REP_NOT_MEASURED, 0, "₹0", 0, 0, REP_NOT_MEASURED, REP_NOT_MEASURED, REP_NOT_MEASURED, REP_NOT_MEASURED]);
         // Zed: 40 dealers visited MTD against a target of 50 = 80%.
-        expect(rows[1]).toEqual(["Zed", 3, 40, 0, 7, 2, 11, 1, 6, 4, 3, REP_NOT_MEASURED, 2, "₹25.0 L", 0, 0, REP_NOT_MEASURED, "80%"]);
+        expect(rows[1]).toEqual(["Zed", 3, 40, 0, 0, 0, 0, 0, 0, 0, 7, 2, 11, 1, 6, 4, 3, REP_NOT_MEASURED, 2, "₹25.0 L", 0, 0, REP_NOT_MEASURED, REP_NOT_MEASURED, REP_NOT_MEASURED, "80%"]);
         // Total: sums of the reps; % of target only over reps that have one.
-        expect(rows[2]).toEqual(["Total", 3, 50, 0, 7, 2, 11, 1, 6, 4, 3, REP_NOT_MEASURED, 2, "₹25.0 L", 0, 0, REP_NOT_MEASURED, "80%"]);
+        expect(rows[2]).toEqual(["Total", 3, 50, 0, 0, 0, 0, 0, 0, 0, 7, 2, 11, 1, 6, 4, 3, REP_NOT_MEASURED, 2, "₹25.0 L", 0, 0, REP_NOT_MEASURED, REP_NOT_MEASURED, REP_NOT_MEASURED, "80%"]);
     });
 
     it("ID 156: a manager's team under them, with a subtotal against the MANAGER's own target", () => {
@@ -159,6 +167,7 @@ describe("Block C (ISR / CC) — one row per rep", () => {
             "Limits passed · Yesterday",
             "MTD",
             "First attempt, median working hrs MTD",
+            "First attempt within limit % MTD",
             "% of target",
         ]);
     });
@@ -187,9 +196,9 @@ describe("Block C (ISR / CC) — one row per rep", () => {
         const rows = repBlockTableRows("inside_sales_rep", buildRepBlocks("inside_sales_rep", y, mtd, extras, targets));
         expect(rows).toEqual([
             // Bo: 0 calls → Connect % "—"; engaged not measured → "—"; no target → "—".
-            ["Bo", 0, 0, 0, 0, 0, REP_NOT_MEASURED, REP_NOT_MEASURED, 0, 0, 0, 0, 0, 0, REP_NOT_MEASURED, REP_NOT_MEASURED],
-            ["Ira", 9, 200, 7, 120, 50, "25%", 20, 4, 5, 2, 1, 0, 0, REP_NOT_MEASURED, "80%"],
-            ["Total", 9, 200, 7, 120, 50, "25%", 20, 4, 5, 2, 1, 0, 0, REP_NOT_MEASURED, "80%"],
+            ["Bo", 0, 0, 0, 0, 0, REP_NOT_MEASURED, REP_NOT_MEASURED, 0, 0, 0, 0, 0, 0, REP_NOT_MEASURED, REP_NOT_MEASURED, REP_NOT_MEASURED],
+            ["Ira", 9, 200, 7, 120, 50, "25%", 20, 4, 5, 2, 1, 0, 0, REP_NOT_MEASURED, REP_NOT_MEASURED, "80%"],
+            ["Total", 9, 200, 7, 120, 50, "25%", 20, 4, 5, 2, 1, 0, 0, REP_NOT_MEASURED, REP_NOT_MEASURED, "80%"],
         ]);
     });
 
@@ -244,23 +253,38 @@ describe("Block C (ISR / CC) — one row per rep", () => {
 });
 
 describe("Block D (position)", () => {
-    it("adds Awaiting field visit per owner and a (no owner) row for sales-ready leads", () => {
+    it("adds Awaiting field visit per owner, a (no owner) row for ready leads with no owner, and a Total row", () => {
         const d = { per_spoc: [spoc("a1", "Zed", "asm", { hot: 4, hot_old: 1, warm: 2 }), spoc("i1", "Ira", "inside_sales_rep")] };
         const awaiting = new Map([["a1", 3], ["a9", 1], [NO_OWNER_KEY, 2]]);
         const names = new Map([["a9", "Bea"]]);
         const rows = blockDRows(d, awaiting, names, 5);
         expect(BLOCK_D_COLUMNS).toContain("Awaiting field visit");
-        expect(BLOCK_D_COLUMNS).toContain("Sales-ready, no owner");
+        // ID 184: the Ready-to-assign name, not "Sales-ready, no owner".
+        expect(BLOCK_D_COLUMNS).toContain("Ready leads with no owner");
+        expect(BLOCK_D_COLUMNS).not.toContain("Sales-ready, no owner");
         expect(rows).toEqual([
-            ["Bea", 0, 0, 0, 0, 1, "—"],
-            ["Zed", 4, 2, 0, 1, 3, "—"],
-            [NO_OWNER, "—", "—", "—", "—", 2, 5],
+            ["Bea", 0, 0, 0, 0, 1, "—", "—"],
+            ["Zed", 4, 2, 0, 1, 3, "—", "—"],
+            [NO_OWNER, "—", "—", "—", "—", 2, "—", 5],
+            // ID 190: the Total row adds every number down the column.
+            ["Total", 4, 2, 0, 1, 6, "—", 5],
+        ]);
+    });
+
+    it("18 Oct row 25: splits Awaiting field visit at the limit when the past counts are measured", () => {
+        const d = { per_spoc: [spoc("a1", "Zed", "asm", { hot: 1 })] };
+        const rows = blockDRows(d, new Map([["a1", 3], [NO_OWNER_KEY, 1]]), new Map(), 0, new Map([["a1", 2]]));
+        expect(BLOCK_D_COLUMNS).toContain("Awaiting field visit, past the limit");
+        expect(rows).toEqual([
+            ["Zed", 1, 0, 0, 0, 3, 2, "—"],
+            [NO_OWNER, "—", "—", "—", "—", 1, 0, 0],
+            ["Total", 1, 0, 0, 0, 4, 2, 0],
         ]);
     });
 
     it("no (no owner) row when nothing is unowned", () => {
         const rows = blockDRows({ per_spoc: [spoc("a1", "Zed", "asm", { cold: 1 })] }, new Map(), new Map(), 0);
-        expect(rows).toEqual([["Zed", 0, 0, 1, 0, 0, "—"]]);
+        expect(rows).toEqual([["Zed", 0, 0, 1, 0, 0, "—", "—"]]);
     });
 });
 

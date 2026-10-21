@@ -88,4 +88,31 @@ describe("Block A (ID 9)", () => {
         const h = blockAHeadline([row({ label: "New dealers visited", values: { y: 12, d7: 71, mtd: 238, lm: 262 }, target: 305 })]);
         expect(h).toMatch(/new dealers visited at 78%/);
     });
+
+    // IDs 70 / 147: "Batteries sold" reads like the CEO tile (batteryReading).
+    it("Batteries sold: '—' when no invoice has item lines, 'N+' and an 'at least' note when only some do", async () => {
+        const { blockARowNotes, readingNote } = await import("../salesDailyBlockA");
+        const rd = (state: "unknown" | "partial" | "complete", value: number | null, invoices: number, with_lines: number) => ({
+            state,
+            value,
+            invoices,
+            with_lines,
+        });
+        const readings = { y: rd("unknown", null, 3, 0), d7: rd("partial", 12, 9, 4), mtd: rd("partial", 40, 20, 15), lm: rd("complete", 30, 18, 18) };
+        const bat = { ...row({ group: "OUTCOME", label: "Batteries sold", values: { y: 0, d7: 12, mtd: 40, lm: 30 }, target: 50 }), readings };
+        const [, cells] = blockATableRows([bat]);
+        expect(cells[1]).toBe("—");
+        expect(cells[2]).toBe("12+");
+        expect(cells[3]).toBe("40+");
+        expect(cells[6]).toBe("30");
+        expect(blockARowNotes([bat])[1]).toBe("Invoices matched to a dealer · At least — 15 of 20 invoices have item lines (month to date)");
+
+        const unknownMtd = { ...bat, readings: { ...readings, mtd: rd("unknown", null, 20, 0) } };
+        const [, u] = blockATableRows([unknownMtd]);
+        expect(u[3]).toBe("—");
+        expect(u[5]).toBe("—"); // no % of target from a false 0
+        expect(u[7]).toBe("—");
+        expect(readingNote(null, unknownMtd.readings)).toBe("No item lines read on the 20 invoices month to date");
+        expect(readingNote("x", undefined)).toBe("x");
+    });
 });

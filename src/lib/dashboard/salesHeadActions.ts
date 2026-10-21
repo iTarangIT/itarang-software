@@ -3,10 +3,11 @@
  *
  *   sales_ready         Sales-ready leads with no owner (salesReady.ts — the
  *                       Ready to Assign list's own predicate)
- *   hot_not_called      Hot lead with an owner, no call or visit since it
- *                       reached that owner, more than owner_first_attempt
- *                       working hours ago (ID 85 time limit, default 4;
- *                       workingHours.ts: Mon–Sat 10–19 IST, holidays off)
+ *   hot_not_called      Hot lead with an owner whose Hot owner clock (lead
+ *                       clocks: assigned while Hot, or turned Hot under an
+ *                       owner who had not called yet) has run past
+ *                       hot_owner_first_attempt working hours (ID 85, default
+ *                       4; office hours, holidays off) with no call or visit
  *   visit_overdue       Waiting for a field visit (ID 190): every lead
  *                       transferred to an ASM and not visited since
  *                       (transferVisitLimit.ts awaitingFieldVisitSql), past
@@ -45,7 +46,7 @@ import { sql, type SQL } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import { ONB_LAST, ONB_WAITING_ON, onboardingStalledSql, WON_WITHOUT_QUOTE } from "@/lib/admin/dashboard";
-import { awaitingAssignment, daysAwaitingAssignment, READY_NO_OWNER_TITLE, readySplitOf, salesReadyReasonLabel } from "@/lib/leads/salesReady";
+import { awaitingAssignment, daysAwaitingAssignment, READY_NO_OWNER_TITLE, readyPastLimit, readySplitOf, salesReadyReasonLabel } from "@/lib/leads/salesReady";
 import { listSaidYesNotWon } from "@/lib/leads/saidYesNotWon";
 import {
     TRANSFER_AT_EXPR,
@@ -109,6 +110,12 @@ export type ActionScope = {
     team?: Team;
     /** The viewer's role: tiles in ACTION_KEY_ROLES are skipped for anyone else. */
     viewerRole?: string | null;
+    /**
+     * ID 190 — a manager with reporting lines (e.g. an ASM with a team): only
+     * leads held by these people (the manager and their direct reports). null /
+     * absent = no restriction.
+     */
+    teamIds?: string[] | null;
 };
 
 export type ActionRow = {
@@ -127,6 +134,8 @@ export type ActionRow = {
     href?: string | null;
     /** ID 190, Waiting for a field visit: past the limit in force on the transfer's day. */
     past_limit?: boolean;
+    /** Working days the row has waited (field visit: since transfer; quote: since delivery) — My day's sort. */
+    days?: number | null;
 };
 
 export type ActionTileData = { count: number; sub: string };
@@ -153,6 +162,10 @@ function scope(s: ActionScope, holder: "owner" | "owner_or_asm" | "none"): SQL {
     if (holder !== "none") {
         const cols = holder === "owner_or_asm" ? [sql`dl.current_owner_id`, sql`dl.asm_id`] : [sql`dl.current_owner_id`];
         if (s.ownerId) parts.push(sql`(${sql.join(cols.map((c) => sql`${c} = ${s.ownerId}`), sql` OR `)})`);
+        if (s.teamIds) {
+            const ids = s.teamIds.length ? sql.join(s.teamIds.map((i) => sql`${i}`), sql`, `) : sql`NULL`;
+            parts.push(sql`(${sql.join(cols.map((c) => sql`${c} IN (${ids})`), sql` OR `)})`);
+        }
         const roles = rolesOf(s.team);
         if (roles) {
             const list = sql.raw(roles.map((r) => `'${r}'`).join(", "));
@@ -189,52 +202,83 @@ const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? o
 type Built = { rows: ActionRow[]; sub: string };
 
 async function salesReady(s: ActionScope): Promise<Built> {
+    // 18 Oct rework 1: working days (office calendar), and past the limit by
+    // the Ready to assign rule (Hot: hot_ready_to_assigned; others: ready_to_assigned).
+    const [past, limits] = await Promise.all([readyPastLimit(), getTimeLimits()]);
     const raw = await run(sql`
         SELECT dl.id AS lead_id, ${NAME} AS dealer, dl.city, dl.state, NULL AS owner_name, NULL AS owner_id,
                ${daysAwaitingAssignment()} AS days, dl.interest_level,
-               to_jsonb(dl) ->> 'sales_ready_reason' AS reason
+               to_jsonb(dl) ->> 'sales_ready_reason' AS reason,
+               ${past} AS past_limit
           FROM dealer_leads dl
          WHERE ${awaitingAssignment()} ${scope(s, "none")}
-         ORDER BY days DESC NULLS LAST`);
+         ORDER BY past_limit DESC, days DESC NULLS LAST`);
     const rows = raw.map((r) =>
         base(
             r,
-            `Waiting ${plural(Number(r.days ?? 0), "day")}${r.interest_level ? ` · ${String(r.interest_level)}` : ""}${r.reason ? ` · ${salesReadyReasonLabel(String(r.reason))}` : ""}`,
+            `Waiting ${plural(Number(r.days ?? 0), "working day")}${r.past_limit ? " · past the limit" : ""}${r.interest_level ? ` · ${String(r.interest_level)}` : ""}${r.reason ? ` · ${salesReadyReasonLabel(String(r.reason))}` : ""}`,
         ),
     );
     const oldest = raw.length ? Math.max(...raw.map((r) => Number(r.days ?? 0))) : 0;
-    // ID 184: one bucket per lead — Hot, then AI qualified, then other — so the parts add up.
-    const n = { hot: 0, ai: 0, other: 0 };
+    const isHot = (r: Raw) => String(r.interest_level ?? "").toLowerCase() === "hot";
+    const hotPast = raw.filter((r) => r.past_limit && isHot(r)).length;
+    const otherPast = raw.filter((r) => r.past_limit && !isHot(r)).length;
+    const pastText = `${hotPast} Hot past ${limits.hot_ready_to_assigned} working hours · ${otherPast} others past ${plural(limits.ready_to_assigned, "working day")}`;
+    // ID 184: one bucket per lead — AI qualified first, then Hot (only when not
+    // AI qualified), then other — so the parts add up to the number.
+    const n = { ai: 0, hot: 0, other: 0 };
     for (const r of raw) n[readySplitOf(r.interest_level as string | null, r.reason as string | null)]++;
-    return { rows, sub: `${n.hot} Hot · ${n.ai} AI qualified · ${n.other} other · oldest waiting ${plural(oldest, "day")}` };
+    return { rows, sub: `AI-qualified ${n.ai} · Hot ${n.hot} · Other ${n.other} · ${pastText} · oldest waiting ${plural(oldest, "working day")}` };
 }
 
 async function hotNotCalled(s: ActionScope): Promise<Built> {
+    // 18 Oct rework 2: the Hot owner clock — the owner clock of a lead assigned
+    // while Hot, or the clock a lead turning Hot under its owner started
+    // (lead_clocks) — against the Hot limit it was timed by
+    // (hot_owner_first_attempt), not owner_first_attempt from assigned_at.
+    // Without lead_clocks: from the assignment, against the Hot limit.
+    const { hasLeadClocks } = await import("@/lib/leads/clocks");
+    const clocks = await hasLeadClocks();
+    const hotClock = clocks
+        ? sql`JOIN LATERAL (
+              SELECT c.started_at, c.limit_value FROM lead_clocks c
+               WHERE c.dealer_lead_id = dl.id AND c.owner_id = dl.current_owner_id
+                 AND (c.clock = 'hot_owner' OR (c.clock = 'owner' AND c.limit_key = 'hot_owner_first_attempt'))
+                 AND c.first_attempt_at IS NULL AND (c.ended_at IS NULL OR c.ended_at > NOW())
+               ORDER BY c.started_at DESC LIMIT 1) hc ON TRUE`
+        : sql``;
+    const since = clocks ? sql`hc.started_at` : sql`COALESCE(dl.assigned_at, dl.created_at)`;
     const raw = await run(sql`
         SELECT dl.id AS lead_id, ${NAME} AS dealer, dl.city, dl.state, u.name AS owner_name, u.id::text AS owner_id,
-               COALESCE(dl.assigned_at, dl.created_at) AS since
+               ${since} AS since, ${clocks ? sql`hc.limit_value::float` : sql`NULL::float`} AS lim
           FROM dealer_leads dl
+          ${hotClock}
           LEFT JOIN users u ON u.id::text = dl.current_owner_id
          WHERE lower(dl.interest_level) = 'hot'
            AND dl.is_active IS NOT FALSE
            AND dl.lead_status IN (${WORKABLE}) AND dl.lead_status <> 'Transferred_to_ASM'
            AND dl.current_owner_id IS NOT NULL
            AND (to_jsonb(dl) ->> 'contactability') IS NULL
+           -- The clocks are rebuilt hourly: a call since then still counts.
            AND NOT EXISTS (SELECT 1 FROM lead_touchpoints t
                 WHERE t.dealer_lead_id = dl.id AND t.touchpoint_type IN ('inside_sales_call', 'visit')
-                  AND t.performed_at >= COALESCE(dl.assigned_at, dl.created_at))
+                  AND t.performed_at >= ${since})
            ${scope(s, "owner")}`);
     const [limits, { holidays, hours: officeHours }] = await Promise.all([getTimeLimits(), loadOfficeCalendar()]);
-    const limitHours = limits.owner_first_attempt;
+    const limitHours = limits.hot_owner_first_attempt;
     const now = new Date();
     const late = raw
-        .map((r) => ({ r, hours: workingHoursBetween(new Date(String(r.since)), now, holidays, officeHours) }))
-        .filter((x) => x.hours > limitHours)
+        .map((r) => ({
+            r,
+            hours: workingHoursBetween(new Date(String(r.since)), now, holidays, officeHours),
+            lim: r.lim == null ? limitHours : Number(r.lim),
+        }))
+        .filter((x) => x.hours > x.lim)
         .sort((a, b) => b.hours - a.hours);
     const rows = late.map(({ r, hours }) =>
-        base(r, `With owner since ${new Date(String(r.since)).toLocaleDateString("en-IN", { day: "2-digit", month: "short", timeZone: "Asia/Kolkata" })} · ${Math.floor(hours)} working hours, no call or visit`),
+        base(r, `Hot with this owner since ${new Date(String(r.since)).toLocaleDateString("en-IN", { day: "2-digit", month: "short", timeZone: "Asia/Kolkata" })} · ${Math.floor(hours)} working hours, no call or visit`),
     );
-    return { rows, sub: `Past the ${limitHours}-working-hour first-attempt limit` };
+    return { rows, sub: `Past the ${limitHours}-working-hour Hot first-attempt limit` };
 }
 
 async function visitOverdue(s: ActionScope): Promise<Built> {
@@ -263,6 +307,7 @@ async function visitOverdue(s: ActionScope): Promise<Built> {
                 `Transferred ${String(r.transferred_on)} · ${plural(days, "working day")}, no visit · ${past ? "past" : "within"} the limit (${plural(lim, "working day")})`,
             ),
             past_limit: past,
+            days,
         };
     });
     const pastRows = rows.filter((r) => r.past_limit);
@@ -310,13 +355,14 @@ async function quotesNoAnswer(s: ActionScope): Promise<Built> {
            AND ${WORKING_DAYS_SINCE(sql`d.sent_at`)} > ${sql.raw(String(Math.floor(limitDays)))}
            ${scope(s, "owner")}
          ORDER BY days DESC`);
-    const rows = raw.map((r) =>
-        base(
+    const rows = raw.map((r) => ({
+        ...base(
             r,
             `${r.quote_number ? `${String(r.quote_number)} · ` : ""}sent ${String(r.sent_on)} · ${plural(Number(r.days), "working day")}, no answer`,
             Number(r.value ?? 0),
         ),
-    );
+        days: Number(r.days),
+    }));
     const total = rows.reduce((a, r) => a + (r.value ?? 0), 0);
     return { rows, sub: `Delivered over ${plural(limitDays, "working day")} ago · ${inr(total)} quoted` };
 }

@@ -28,6 +28,24 @@
  *   quote     a quote sent to the CEO for approval: from submission to the
  *             CEO's decision (approved or rejected); ends if withdrawn.
  *             Charged to whoever decided, never to the rep.
+ *   ready_assign  (18 Oct, rework 1) a sales-ready lead that is NOT Hot and
+ *             has no owner: timed like hot_assign over the lead's non-Hot
+ *             spans, against ready_to_assigned (2 working days). Charged to
+ *             nobody (the team).
+ *   quote_deliver (18 Oct, #5) an approved quote: from the approval to the
+ *             first successful send of the quotation; ends when the quote is
+ *             withdrawn or a newer version is raised. Charged to the owner
+ *             when it fell due.
+ *   quote_revise  (18 Oct, #5) a quote the dealer declined: from the decline
+ *             to a newer quote version or the lead marked Lost. Charged to the
+ *             owner when it fell due.
+ *
+ * Owner clock limit (18 Oct, rework 2): a stint that starts while the lead is
+ * Hot is timed against hot_owner_first_attempt (4 working hours), every other
+ * stint against nonhot_owner_first_attempt (1 working day). Such a stint gets
+ * no separate hot_owner clock (it would count the same miss twice); hot_owner
+ * clocks are the ones a lead turning Hot under its owner starts, and only when
+ * that owner had not yet called or visited it (rework 3).
  *
  * Attempt = a human call (any outcome) or a visit that happened (visited /
  * no_show). Contact = a connected call or a visit marked visited.
@@ -50,6 +68,7 @@
 import {
     addWorkingMinutes,
     calendarDaysDueAt,
+    isWorkingDay,
     istDay,
     workingDaysDueAt,
     workingMinutesBetween,
@@ -57,11 +76,24 @@ import {
 } from "@/lib/calendar/officeCalendar";
 import { timeLimitDef, type TimeLimitKey, type TimeLimits } from "@/lib/timeLimits/registry";
 
-export type ClockKind = "lead" | "owner" | "transfer" | "hot_assign" | "hot_owner" | "retry" | "quote";
+export type ClockKind =
+    | "lead"
+    | "owner"
+    | "transfer"
+    | "hot_assign"
+    | "hot_owner"
+    | "retry"
+    | "quote"
+    | "ready_assign"
+    | "quote_deliver"
+    | "quote_revise";
 
 /** The kinds before E-350; the newer ones need its wider CHECK on lead_clocks.clock. */
 export const BASE_CLOCK_KINDS: readonly ClockKind[] = ["lead", "owner", "transfer"];
-export const ALL_CLOCK_KINDS: readonly ClockKind[] = ["lead", "owner", "transfer", "hot_assign", "hot_owner", "retry", "quote"];
+/** The kinds E-350 allows. */
+export const E350_CLOCK_KINDS: readonly ClockKind[] = ["lead", "owner", "transfer", "hot_assign", "hot_owner", "retry", "quote"];
+/** Every kind (E-355 widens lead_clocks' CHECK and both clock columns to these). */
+export const ALL_CLOCK_KINDS: readonly ClockKind[] = [...E350_CLOCK_KINDS, "ready_assign", "quote_deliver", "quote_revise"];
 
 /** Owner changes are recorded from this IST day (E-295); earlier owners are inferred. */
 export const OWNER_HISTORY_FROM = "2026-09-10";
@@ -107,11 +139,27 @@ export type QuoteGate = {
  */
 export type HolidaysFor = ReadonlySet<string> | ((at: Date) => ReadonlySet<string>);
 
+/** A quote version on the lead, for the delivery and decline clocks (18 Oct, #5). */
+export type QuoteVersion = {
+    lead_id: string;
+    created_at: Date;
+    /** When it was approved (by the CEO or the price check); null = not approved. */
+    approved_at: Date | null;
+    /** First successful send of the quotation. */
+    delivered_at: Date | null;
+    /** The dealer's answer and when. */
+    dealer_decision: string | null;
+    dealer_decision_at: Date | null;
+    withdrawn_at: Date | null;
+};
+
 export type ClockExtras = {
     /** This lead's interest-level changes, by time. */
     interest?: readonly InterestChange[];
     /** This lead's quotes that went to the CEO. */
     quotes?: readonly QuoteGate[];
+    /** This lead's quote versions, by created_at (delivery / decline clocks). */
+    quoteVersions?: readonly QuoteVersion[];
     /** Kinds to compute; default all. Without E-350 the refresh asks for BASE_CLOCK_KINDS. */
     kinds?: ReadonlySet<ClockKind>;
     /** Office hours (ID 85 #8, officeHoursResolver()); default Mon–Sat 10–19. */
@@ -148,11 +196,37 @@ const LIMIT_OF: Record<ClockKind, TimeLimitKey> = {
     hot_owner: "hot_owner_first_attempt",
     retry: "retry_gap",
     quote: "ceo_quote_approval",
+    ready_assign: "ready_to_assigned",
+    quote_deliver: "quote_approved_not_delivered",
+    quote_revise: "quote_declined_not_revised",
 };
 
-/** The limit that times a clock kind. */
-export function clockLimitKey(kind: ClockKind): TimeLimitKey {
+/**
+ * The limit that times a clock kind. The owner clock's depends on the lead
+ * being Hot when the stint started (rework 2); `hotAtStart` picks it.
+ */
+export function clockLimitKey(kind: ClockKind, hotAtStart = false): TimeLimitKey {
+    if (kind === "owner") return hotAtStart ? "hot_owner_first_attempt" : "nonhot_owner_first_attempt";
     return LIMIT_OF[kind];
+}
+
+const IST_MS = 330 * 60 * 1000;
+const DAY = 24 * 60 * 60 * 1000;
+
+/**
+ * When a working_day_close limit of `n` falls due: the end (23:59:59.999 IST)
+ * of the n-th working day, counting the start's own IST day when it is a
+ * working day. 1 = the same working day; a start on a holiday or a day off
+ * counts from the next working day.
+ */
+export function workingDayCloseDueAt(start: Date, n: number, holidays: ReadonlySet<string>, hours?: OfficeHoursArg): Date | null {
+    const k = Math.max(1, Math.round(n));
+    const day = istDay(start);
+    if (isWorkingDay(day, holidays, hours)) {
+        if (k === 1) return new Date(Date.parse(`${day}T00:00:00Z`) + DAY - 1 - IST_MS);
+        return workingDaysDueAt(start, k - 1, holidays, hours);
+    }
+    return workingDaysDueAt(start, k, holidays, hours);
 }
 
 /** When a limit of `value` (in `key`'s unit) that started at `start` falls due. */
@@ -160,6 +234,7 @@ export function dueAt(start: Date, key: TimeLimitKey, value: number, holidays: R
     const unit = timeLimitDef(key)?.unit;
     if (unit === "working_hours") return addWorkingMinutes(start, value * 60, holidays, hours);
     if (unit === "working_days") return workingDaysDueAt(start, value, holidays, hours);
+    if (unit === "working_day_close") return workingDayCloseDueAt(start, value, holidays, hours);
     if (unit === "days") return calendarDaysDueAt(start, value);
     return null;
 }
@@ -177,8 +252,9 @@ function finishWith(
     now: Date,
     noLimit: boolean,
     hours: OfficeHoursArg | undefined,
+    limitKey?: TimeLimitKey,
 ): LeadClock {
-    const key = noLimit ? null : LIMIT_OF[base.clock];
+    const key = noLimit ? null : (limitKey ?? LIMIT_OF[base.clock]);
     const value = key ? limitsOn(istDay(base.started_at))[key] : null;
     // The clock stops at the first attempt, the end of the stint, or now; the
     // holidays are the ones that were on the calendar at that moment.
@@ -259,8 +335,10 @@ export function clocksForLead(
     const out: LeadClock[] = [];
     const want = (k: ClockKind) => !extras.kinds || extras.kinds.has(k);
     // Every clock below is timed on the same office hours.
-    const finish = (base: ClockBase, l: typeof limitsOn, h: HolidaysFor, n: Date, noLimit = false) =>
-        finishWith(base, l, h, n, noLimit, extras.hours);
+    const finish = (base: ClockBase, l: typeof limitsOn, h: HolidaysFor, n: Date, noLimit = false, limitKey?: TimeLimitKey) =>
+        finishWith(base, l, h, n, noLimit, extras.hours, limitKey);
+    const spans = hotSpans(extras.interest ?? []);
+    const hotAt = (at: Date) => spans.some((sp) => sp.from <= at && (!sp.to || at < sp.to));
 
     // Owner stints: every recorded assignment, plus an inferred one when the
     // current owner never got an assignment row (or got the lead after it).
@@ -297,6 +375,8 @@ export function clocksForLead(
                     holidays,
                     now,
                     viaTransfer(s.at),
+                    // Rework 2: Hot when the stint started → the Hot limit, else the non-Hot one.
+                    clockLimitKey("owner", hotAt(s.at)),
                 ),
             );
         });
@@ -355,8 +435,40 @@ export function clocksForLead(
         });
     }
 
+    // Ready → assigned for leads that are not Hot (18 Oct, rework 1): over each
+    // non-Hot span from sales-ready, while nobody holds the lead.
+    if (want("ready_assign") && lead.sales_ready_at) {
+        for (const span of nonHotSpans(spans, lead.sales_ready_at)) {
+            const start = span.from;
+            if (stintAt(stints, start)) break;
+            const assigned = stints.find((s) => s.at >= start) ?? null;
+            const assignedInSpan = assigned && (!span.to || assigned.at < span.to) ? assigned : null;
+            out.push(
+                finish(
+                    {
+                        dealer_lead_id: lead.id,
+                        clock: "ready_assign",
+                        owner_id: null,
+                        owner_inferred: false,
+                        start_inferred: false,
+                        started_at: start,
+                        ended_at: assignedInSpan ? null : span.to,
+                        first_attempt_at: assignedInSpan?.at ?? null,
+                        first_attempt_kind: null,
+                        first_contact_at: null,
+                    },
+                    limitsOn,
+                    holidays,
+                    now,
+                ),
+            );
+            // Once assigned, later non-Hot spans are not waiting for an owner.
+            if (assignedInSpan) break;
+        }
+    }
+
     // Hot clocks (15 Oct).
-    for (const span of hotSpans(extras.interest ?? [])) {
+    for (const span of spans) {
         // Ready → assigned: only while the lead is sales-ready and has no owner.
         if (want("hot_assign") && lead.sales_ready_at) {
             const start = later(span.from, lead.sales_ready_at);
@@ -390,8 +502,12 @@ export function clocksForLead(
                 const stintEnd = stints[i + 1]?.at ?? null;
                 const start = later(span.from, s.at);
                 if ((stintEnd && start >= stintEnd) || (span.to && start >= span.to)) return;
+                // Rework 2: a stint that started Hot is timed by its owner clock (Hot limit).
+                if (start.getTime() === s.at.getTime()) return;
                 const end = earlier(stintEnd, span.to);
                 const mine = (t: ClockTouch) => t.by === s.owner;
+                // Rework 3: the owner already called or visited before the lead turned Hot.
+                if (firstTouch(touches, s.at, start, (t) => t.attempt && mine(t))) return;
                 const attempt = firstTouch(touches, start, end, (t) => t.attempt && mine(t));
                 const contact = firstTouch(touches, start, end, (t) => t.contact && mine(t));
                 out.push(
@@ -411,8 +527,6 @@ export function clocksForLead(
                         limitsOn,
                         holidays,
                         now,
-                        // A Hot lead handed to an ASM by a transfer: the transfer clock governs.
-                        start.getTime() === s.at.getTime() && viaTransfer(s.at),
                     ),
                 );
             });
@@ -486,6 +600,76 @@ export function clocksForLead(
         }
     }
 
+    // Quote delivery and decline clocks (18 Oct, #5), charged to the owner when due.
+    const versions = extras.quoteVersions ?? [];
+    if (want("quote_deliver") || want("quote_revise")) {
+        const statusAfter = (after: Date, ok: (s: string) => boolean) => statuses.find((st) => st.at > after && ok(st.to_status))?.at ?? null;
+        versions.forEach((q, i) => {
+            const next = versions.slice(i + 1).find((v) => v.created_at > q.created_at)?.created_at ?? null;
+            if (want("quote_deliver") && q.approved_at) {
+                const delivered = q.delivered_at && q.delivered_at >= q.approved_at && (!next || q.delivered_at < next) ? q.delivered_at : null;
+                const c = finish(
+                    {
+                        dealer_lead_id: lead.id,
+                        clock: "quote_deliver",
+                        owner_id: null,
+                        owner_inferred: false,
+                        start_inferred: false,
+                        started_at: q.approved_at,
+                        ended_at: delivered ? null : earlier(earlier(q.withdrawn_at, next), statusAfter(q.approved_at, (s) => CLOSED_STATUSES.has(s))),
+                        first_attempt_at: delivered,
+                        first_attempt_kind: null,
+                        first_contact_at: delivered,
+                    },
+                    limitsOn,
+                    holidays,
+                    now,
+                );
+                out.push({ ...c, ...chargeTo(stints, c, now) });
+            }
+            if (want("quote_revise") && q.dealer_decision === "declined" && q.dealer_decision_at) {
+                const at = q.dealer_decision_at;
+                const revised = versions.find((v) => v.created_at > at)?.created_at ?? null;
+                const answered = earlier(revised, statusAfter(at, (s) => s === "Lost"));
+                const c = finish(
+                    {
+                        dealer_lead_id: lead.id,
+                        clock: "quote_revise",
+                        owner_id: null,
+                        owner_inferred: false,
+                        start_inferred: false,
+                        started_at: at,
+                        ended_at: answered ? null : statusAfter(at, (s) => CLOSED_STATUSES.has(s)),
+                        first_attempt_at: answered,
+                        first_attempt_kind: null,
+                        first_contact_at: answered,
+                    },
+                    limitsOn,
+                    holidays,
+                    now,
+                );
+                out.push({ ...c, ...chargeTo(stints, c, now) });
+            }
+        });
+    }
+
+    return out;
+}
+
+/**
+ * The non-Hot spans [from, to) at or after `from` — the gaps between the Hot
+ * spans (sorted by time); `to` null = open.
+ */
+export function nonHotSpans(hot: ReadonlyArray<{ from: Date; to: Date | null }>, from: Date): Array<{ from: Date; to: Date | null }> {
+    const out: Array<{ from: Date; to: Date | null }> = [];
+    let cur: Date | null = from;
+    for (const h of hot) {
+        if (!cur) break;
+        if (h.to && h.to <= cur) continue;
+        if (h.from > cur) out.push({ from: cur, to: h.from });
+        cur = h.to;
+    }
+    if (cur) out.push({ from: cur, to: null });
     return out;
 }
 

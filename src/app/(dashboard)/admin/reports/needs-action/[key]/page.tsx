@@ -10,7 +10,9 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft, Download } from "lucide-react";
 
-import { requireRole } from "@/lib/auth-utils";
+import { requireAuth } from "@/lib/auth-utils";
+import { needsActionAccess } from "@/lib/dashboard/needsActionAccess";
+import { queueHrefFor } from "@/lib/leads/newOwnerNotice";
 import {
     ACTION_KEYS,
     actionKeyVisibleTo,
@@ -19,11 +21,14 @@ import {
     listSalesHeadAction,
     listSalesHeadActionFiltered,
     phonesForActionRows,
+    searchActionRows,
     type ActionKey,
 } from "@/lib/dashboard/salesHeadActions";
 import { LEADS_BULK_ROLES } from "@/lib/leads/access";
 import { formatLimit, type TimeLimits } from "@/lib/timeLimits/registry";
 import { getTimeLimits } from "@/lib/timeLimits/store";
+import { getOfficeHours } from "@/lib/calendar/officeHoursStore";
+import { shortOfficeHours } from "@/lib/calendar/officeHours";
 import { NeedsActionTable } from "./NeedsActionTable";
 import { FieldVisitTrend } from "./FieldVisitTrend";
 import { dayOr, fieldVisitPeriod, istToday, shiftDay } from "@/lib/dashboard/fieldVisitTrend";
@@ -34,10 +39,10 @@ const inr = (n: number) =>
     n >= 1e7 ? `₹${(n / 1e7).toFixed(2)} Cr` : n >= 1e5 ? `₹${(n / 1e5).toFixed(2)} L` : `₹${Math.round(n).toLocaleString("en-IN")}`;
 
 // The rule each list follows, with the time limits in force today (ID 85).
-const rules = (l: TimeLimits): Record<ActionKey, string> => ({
-    sales_ready: "Leads marked sales-ready that nobody owns yet. Assign them from Ready to Assign.",
+const rules = (l: TimeLimits, officeHours: string): Record<ActionKey, string> => ({
+    sales_ready: `Leads marked sales-ready that nobody owns yet, past the limit first (Hot: ${formatLimit(l.hot_ready_to_assigned, "working_hours")}; others: ${formatLimit(l.ready_to_assigned, "working_days")}). Assign them from Ready to Assign.`,
     hot_not_called:
-        `Hot leads with an owner and no call or visit since the owner got the lead, more than ${formatLimit(l.owner_first_attempt, "working_hours")} ago (Mon–Sat, 10:00–19:00 IST, holidays off). Leads with an ASM for a visit, and dead / non-responsive numbers, are left out.`,
+        `Hot leads whose owner has not called or visited within ${formatLimit(l.hot_owner_first_attempt, "working_hours")} of the Hot clock starting — the lead reaching them Hot, or turning Hot before they had called (${officeHours} IST, holidays off). Leads with an ASM for a visit, and dead / non-responsive numbers, are left out.`,
     visit_overdue: `Every lead transferred to an ASM with no visit marked since the transfer, past the limit first. Each is judged by the limit in force on the day it was transferred (today ${formatLimit(l.asm_transfer_first_visit, "working_days")}).`,
     quotes_no_answer:
         `The lead's latest quote was delivered to the dealer more than ${formatLimit(l.quote_no_answer, "working_days")} ago and the dealer has neither approved nor declined it. Withdrawn quotes and closed leads are left out.`,
@@ -62,11 +67,17 @@ export default async function NeedsActionListPage({
     params: Promise<{ key: string }>;
     searchParams: Promise<Record<string, string | undefined>>;
 }) {
-    const user = await requireRole(["admin", "sales_head", "ceo", "partner", "business_head"]);
+    const user = await requireAuth();
     const { key } = await params;
     if (!(ACTION_KEYS as readonly string[]).includes(key)) notFound();
     const k = key as ActionKey;
     if (!actionKeyVisibleTo(k, user.role)) notFound();
+    // ID 190: Admin / Sales Head / CEO / partner / Business Head see the whole
+    // company; a manager with reporting lines sees "Waiting for a field visit"
+    // for their own team (themselves + direct reports) only.
+    const access = await needsActionAccess(user, k);
+    if (access.kind === "none") notFound();
+    const teamIds = access.kind === "team" ? access.teamIds : null;
 
     const sp = await searchParams;
     const qs = new URLSearchParams(Object.entries(sp).filter((e): e is [string, string] => typeof e[1] === "string"));
@@ -74,10 +85,14 @@ export default async function NeedsActionListPage({
     // Filtered rows for the table; the unfiltered list feeds the dropdowns, so
     // picking a state never hides the other states from the menu.
     const [rows, all, limits] = await Promise.all([
-        listSalesHeadActionFiltered(k, qs),
-        listSalesHeadAction(k, {}),
+        teamIds
+            ? listSalesHeadAction(k, { ...actionScopeFrom(qs), teamIds }).then((r) => searchActionRows(r, qs.get("q")))
+            : listSalesHeadActionFiltered(k, qs),
+        listSalesHeadAction(k, { teamIds }),
         getTimeLimits(),
     ]);
+    // 18 Oct row 40 — the office hours in force, not a fixed "Mon–Sat 10–19".
+    const officeHoursText = shortOfficeHours(await getOfficeHours());
     // ID 88 #3 — the dealer's number for the row's Call button. Onboarding
     // stalled has no Call button (asked for on 13 Oct): no number, no button.
     const phones = k === "onboarding_stalled" || k === "stock_to_upload" ? {} : await phonesForActionRows(rows);
@@ -87,38 +102,40 @@ export default async function NeedsActionListPage({
         a[1].localeCompare(b[1]),
     );
     if (sp.spoc_id && !owners.some(([id]) => id === sp.spoc_id)) owners.unshift([sp.spoc_id, "Selected person"]);
-    // Waiting for a field visit (ID 190): two periods side by side, per ASM.
-    // Default: the last 7 days (B) against the 7 before them (A).
-    const PERIOD_KEYS = ["a_from", "a_to", "b_from", "b_to"] as const;
+    // Waiting for a field visit (ID 190): this period and the previous one of
+    // the same length side by side, per ASM. The period is the Sales
+    // dashboard's date filter when the card opened the page (from / to; the
+    // older b_from / b_to still read), else the last 7 days; the previous
+    // period is set automatically — the same number of days right before.
+    const PERIOD_KEYS = ["from", "to", "a_from", "a_to", "b_from", "b_to"] as const;
     let trend: ReactNode = null;
     if (k === "visit_overdue") {
         const today = istToday();
-        const bTo = dayOr(sp.b_to, today);
-        const bFrom = dayOr(sp.b_from, shiftDay(bTo, -6));
-        const aTo = dayOr(sp.a_to, shiftDay(bFrom, -1));
-        const aFrom = dayOr(sp.a_from, shiftDay(aTo, -6));
-        const scope = actionScopeFrom(qs);
+        let bTo = dayOr(sp.to ?? sp.b_to, today);
+        let bFrom = dayOr(sp.from ?? sp.b_from, shiftDay(bTo, -6));
+        if (bFrom > bTo) [bFrom, bTo] = [bTo, bFrom];
+        const days = Math.round((Date.parse(`${bTo}T00:00:00Z`) - Date.parse(`${bFrom}T00:00:00Z`)) / 86_400_000) + 1;
+        const aTo = shiftDay(bFrom, -1);
+        const aFrom = shiftDay(aTo, -(days - 1));
+        const scope = { ...actionScopeFrom(qs), teamIds };
         const [pa, pb] = await Promise.all([fieldVisitPeriod(scope, aFrom, aTo), fieldVisitPeriod(scope, bFrom, bTo)]);
         const listFilters = Object.fromEntries(
             [...qs.entries()].filter(([key]) => !(PERIOD_KEYS as readonly string[]).includes(key)),
         );
-        const preset = (label: string, a: [string, string], b: [string, string]) => ({
+        const preset = (label: string, from: string, to: string) => ({
             label,
-            href: `/admin/reports/needs-action/${k}?${new URLSearchParams({ ...listFilters, a_from: a[0], a_to: a[1], b_from: b[0], b_to: b[1] })}`,
+            href: `/admin/reports/needs-action/${k}?${new URLSearchParams({ ...listFilters, from, to })}`,
         });
         const monthStart = `${today.slice(0, 8)}01`;
-        const lastMonthEnd = shiftDay(monthStart, -1);
-        const lastMonthStart = `${lastMonthEnd.slice(0, 8)}01`;
-        const dom = Number(today.slice(8, 10));
-        const lastMonthSameDay = shiftDay(lastMonthStart, Math.min(dom, Number(lastMonthEnd.slice(8, 10))) - 1);
         trend = (
             <FieldVisitTrend
                 a={pa}
                 b={pb}
                 hidden={listFilters}
                 presets={[
-                    preset("Last 7 days vs the 7 before", [shiftDay(today, -13), shiftDay(today, -7)], [shiftDay(today, -6), today]),
-                    preset("This month vs same days last month", [lastMonthStart, lastMonthSameDay], [monthStart, today]),
+                    preset("Last 7 days", shiftDay(today, -6), today),
+                    preset("Last 30 days", shiftDay(today, -29), today),
+                    preset("This month", monthStart, today),
                 ]}
             />
         );
@@ -130,17 +147,19 @@ export default async function NeedsActionListPage({
     const anyFilter = Boolean(sp.q || sp.state || sp.spoc_id || (sp.team && sp.team !== "all"));
     const hasValue = rows.some((r) => r.value != null);
     const total = rows.reduce((a, r) => a + (r.value ?? 0), 0);
-    const back = user.role === "sales_head" ? "/sales-head" : user.role === "admin" ? "/admin" : "/admin/reports/sales-dashboard";
+    const back = teamIds
+        ? queueHrefFor(user.role)
+        : user.role === "sales_head" ? "/sales-head" : user.role === "admin" ? "/admin" : "/admin/reports/sales-dashboard";
     const field = "min-h-10 rounded-[10px] border border-border bg-surface px-2.5 text-[13px] text-ink outline-none focus:border-brand-teal";
 
     return (
         <div className="space-y-6 px-4 py-6 pb-12 sm:px-6 md:px-8">
             <div>
                 <Link href={back} className="inline-flex items-center gap-1 text-xs font-semibold text-brand-sky hover:underline">
-                    <ArrowLeft className="h-3.5 w-3.5" /> Sales dashboard
+                    <ArrowLeft className="h-3.5 w-3.5" /> {teamIds ? "My queue" : "Sales dashboard"}
                 </Link>
                 <h1 className="mt-2 text-2xl font-bold tracking-tight text-brand-navy">{ACTION_TITLES[k]}</h1>
-                <p className="mt-1 max-w-3xl text-sm text-ink-muted">{rules(limits)[k]}</p>
+                <p className="mt-1 max-w-3xl text-sm text-ink-muted">{rules(limits, officeHoursText)[k]}</p>
             </div>
 
             {trend}

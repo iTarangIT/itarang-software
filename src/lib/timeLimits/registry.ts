@@ -10,6 +10,9 @@
  * Units, all on the office calendar (src/lib/calendar/officeCalendar.ts):
  *   working_hours  Mon–Sat 10:00–19:00 IST, holidays off
  *   working_days   Mon–Sat, holidays off
+ *   working_day_close  by the close of the Nth working day, counting the
+ *                  start's own day when it is a working day: 1 = "the same
+ *                  working day" (18 Oct, #5)
  *   days           calendar days
  *   count          a number of things, not a time (retry attempts)
  *
@@ -17,7 +20,7 @@
  * constant was. The settings screen and the log pick it up.
  */
 
-export type LimitUnit = "working_hours" | "working_days" | "days" | "count";
+export type LimitUnit = "working_hours" | "working_days" | "working_day_close" | "days" | "count";
 
 export type TimeLimitDef = {
     key: string;
@@ -46,12 +49,22 @@ export const TIME_LIMITS = [
     {
         key: "owner_first_attempt",
         group: "Lead clocks",
-        label: "New owner: first call or visit after the lead is assigned",
+        label: "New owner: first call or visit after the lead is assigned (until 21 Oct 2026)",
         unit: "working_hours",
         default: 4,
         min: 1,
         max: 72,
-        help: "Owner clock, every assignment. The daily email's First attempt within limit; Sales Head's Hot leads not called in time.",
+        help: "Kept for the owner clocks timed before 21 Oct 2026. Since the 18 Oct rework a Hot lead's owner has the Hot limit below and every other owner has 'Non-Hot lead: owner's first call or visit'.",
+    },
+    {
+        key: "nonhot_owner_first_attempt",
+        group: "Lead clocks",
+        label: "Non-Hot lead: owner's first call or visit after the lead is assigned",
+        unit: "working_days",
+        default: 1,
+        min: 1,
+        max: 30,
+        help: "Owner clock, every assignment of a lead that is not Hot at that moment (Hot leads: the Hot limit). The daily email's First attempt within limit.",
     },
     {
         key: "asm_transfer_first_visit",
@@ -72,7 +85,17 @@ export const TIME_LIMITS = [
         default: 9,
         min: 1,
         max: 72,
-        help: "Hot clock 'Ready → assigned'. A Hot lead with no owner after this is a 'Limit passed'; other leads keep 'Sales-ready lead waiting for an owner'.",
+        help: "Hot clock 'Ready → assigned'. A Hot lead with no owner after this is a 'Limit passed'; other leads have 'Non-Hot lead: sales-ready to having an owner'.",
+    },
+    {
+        key: "ready_to_assigned",
+        group: "Lead clocks",
+        label: "Non-Hot lead: sales-ready to having an owner",
+        unit: "working_days",
+        default: 2,
+        min: 1,
+        max: 30,
+        help: "Clock 'Ready → assigned' for leads that are not Hot (18 Oct rework). Passed = a 'Limit passed' record; the CEO card, Ready to assign and the daily email's Right now box count against it.",
     },
     {
         key: "hot_owner_first_attempt",
@@ -82,7 +105,7 @@ export const TIME_LIMITS = [
         default: 4,
         min: 1,
         max: 72,
-        help: "A fresh clock every time a lead turns Hot, and on every assignment of a Hot lead.",
+        help: "The owner clock of a lead assigned while Hot, and a fresh clock when a lead turns Hot under an owner who has not called or visited it yet.",
     },
     // ── Retries ───────────────────────────────────────────────────────────────
     {
@@ -127,6 +150,26 @@ export const TIME_LIMITS = [
         help: "Quote approval clock, from the quote reaching the CEO queue to the decision. Auto-approved quotes are not timed.",
     },
     {
+        key: "quote_approved_not_delivered",
+        group: "Quotes",
+        label: "Approved quote: sent to the dealer",
+        unit: "working_day_close",
+        default: 1,
+        min: 1,
+        max: 10,
+        help: "Clock 'Approved quote not delivered': from the approval to the first successful send of the quotation. 1 = the same working day.",
+    },
+    {
+        key: "quote_declined_not_revised",
+        group: "Quotes",
+        label: "Dealer declined a quote: revised or marked Lost",
+        unit: "working_days",
+        default: 2,
+        min: 1,
+        max: 30,
+        help: "Clock 'Dealer declined, not revised or marked Lost': from the dealer's decline to a new quote version or the lead marked Lost.",
+    },
+    {
         key: "said_yes_not_won",
         group: "Follow-up",
         label: "Dealer said yes, lead not marked Won",
@@ -139,12 +182,12 @@ export const TIME_LIMITS = [
     {
         key: "sales_ready_unassigned",
         group: "Follow-up",
-        label: "Sales-ready lead waiting for an owner",
+        label: "Sales-ready lead waiting for an owner (until 21 Oct 2026)",
         unit: "days",
         default: 7,
         min: 1,
         max: 60,
-        help: "Ready to assign: overdue count on the CEO card.",
+        help: "Kept for the record of what was in force before the 18 Oct rework. Nothing counts against it now: non-Hot leads use 'Non-Hot lead: sales-ready to having an owner', Hot leads the Hot limit.",
     },
     {
         key: "idle_cc",
@@ -278,13 +321,15 @@ export const TIME_LIMIT_DEFAULTS = Object.fromEntries(TIME_LIMITS.map((d) => [d.
 const UNIT_WORDS: Record<LimitUnit, [string, string]> = {
     working_hours: ["working hour", "working hours"],
     working_days: ["working day", "working days"],
+    working_day_close: ["working day", "working days"],
     days: ["day", "days"],
     count: ["", ""],
 };
 
-/** "4 working hours", "1 working day", "21 days". */
+/** "4 working hours", "1 working day", "21 days", "the same working day". */
 export function formatLimit(value: number, unit: LimitUnit): string {
     if (unit === "count") return String(value);
+    if (unit === "working_day_close") return value <= 1 ? "the same working day" : `${value - 1} working day${value === 2 ? "" : "s"} after`;
     const [one, many] = UNIT_WORDS[unit];
     return `${value} ${value === 1 ? one : many}`;
 }

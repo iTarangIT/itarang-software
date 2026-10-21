@@ -76,9 +76,27 @@ describe("teamRows", () => {
         expect(teamRows("inside_sales_rep", blocks, "c", teamOf)).toEqual([]);
         expect(membersOf(teamOf, "c")).toEqual([]);
     });
-    it("gives a Team total when the manager is not in this block", () => {
+    it("lists only the members when the manager is not in this block — no cross-role Team total (ID 194)", () => {
         const rows = teamRows("inside_sales_rep", blocks, "asm-lead", new Map([["a", "asm-lead"], ["b", "asm-lead"]]));
-        expect(rows.map((r) => r[0])).toEqual(["Asha", "Bala", "Team total"]);
+        expect(rows.map((r) => r[0])).toEqual(["Asha", "Bala"]);
+    });
+});
+
+describe("teamOverdueRows (ID 194)", () => {
+    it("lists the manager, each member (↳) and a team subtotal of overdue follow-ups and visits", async () => {
+        const { teamOverdueRows } = await import("../myDayShape");
+        const rows = teamOverdueRows("m", [
+            { id: "b", name: "Bala", followUps: 2, visits: 1 },
+            { id: "m", name: "Mona", followUps: 0, visits: 3 },
+            { id: "a", name: "Asha", followUps: 4, visits: 0 },
+        ]);
+        expect(rows).toEqual([
+            ["Mona", 0, 3],
+            ["↳ Asha", 4, 0],
+            ["↳ Bala", 2, 1],
+            ["Team subtotal · Mona", 6, 4],
+        ]);
+        expect(teamOverdueRows("m", [])).toEqual([]);
     });
 });
 

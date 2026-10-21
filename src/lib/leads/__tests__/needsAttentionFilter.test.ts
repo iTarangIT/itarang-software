@@ -20,6 +20,8 @@ const row = (o: Partial<NeedsAttentionRow>): NeedsAttentionRow => ({
     non_responsive: false,
     visit_overdue: false,
     past_idle: true,
+    counted_from: "last_worked",
+    counted_from_at: null,
     ...o,
 });
 

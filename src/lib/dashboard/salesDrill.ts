@@ -126,8 +126,8 @@ export const DRILL_TITLES: Record<DrillKind, string> = {
     fv_visited: "First visits done",
     fv_visited_backlog: "First visits done, of the leads waiting at the start",
     fv_visited_new: "First visits done, of the leads new in the period",
-    fv_left: "Left the queue without a visit (not needed, handed back, Lost)",
-    fv_moved: "Moved on without a visit (another ASM, quote approved, …)",
+    fv_left: "Closed without a visit (not needed, handed back, Lost, moved on)",
+    fv_moved: "Moved on without a visit (retired: now part of closed without a visit)",
     fv_waiting: "Still waiting at the end",
     fv_past_limit: "Still waiting at the end, past the limit",
 };
@@ -156,6 +156,8 @@ export type DrillFilters = {
     spoc_id?: string | null;
     /** fv_* kinds only: the Needs-action page's Team filter (field / inside / all). */
     team?: string | null;
+    /** fv_* kinds only (ID 190): a manager's own view — their team's ids (self + direct reports). */
+    team_ids?: string[] | null;
 };
 
 export type DrillRow = {
@@ -379,7 +381,7 @@ async function leadEvents(kind: DrillKind, f: DrillFilters, persons: string[] | 
             // fieldVisitTrend.ts counts exactly these segments: the period, the
             // state and the person / team filters are applied inside the query.
             const team = f.team === "field" || f.team === "inside" ? f.team : "all";
-            const segs = await fieldVisitSegmentsSql({ state: f.state, ownerId: f.spoc_id, team }, f.from, f.to);
+            const segs = await fieldVisitSegmentsSql({ state: f.state, ownerId: f.spoc_id, team, teamIds: f.team_ids ?? null }, f.from, f.to);
             const day = (ts: SQL) => sql`to_char((${ts}) AT TIME ZONE ${IST}, 'DD Mon')`;
             return sql`SELECT g.lead_id, g.asm_id AS person,
                               CASE WHEN g.waiting THEN g.seg_start ELSE g.seg_end END AS at,
@@ -388,7 +390,7 @@ async function leadEvents(kind: DrillKind, f: DrillFilters, persons: string[] | 
                                   CASE WHEN g.seg_start > g.wait_start THEN 'with this ASM since ' || ${day(sql`g.seg_start`)} END,
                                   CASE WHEN g.visited THEN 'visited ' || ${day(sql`g.seg_end`)} || ' after ' || g.days_to_visit || ' working days'
                                             || CASE WHEN g.visited_in_limit THEN ' (within the limit)' ELSE ' (past the limit)' END
-                                       WHEN g.left_q THEN 'left without a visit ' || ${day(sql`g.seg_end`)}
+                                       WHEN g.left_q THEN 'closed without a visit ' || ${day(sql`g.seg_end`)}
                                        WHEN g.moved THEN 'moved on ' || ${day(sql`g.seg_end`)}
                                        ELSE g.age_end || ' working days waiting'
                                             || CASE WHEN g.past_limit THEN ' · past the limit (' || g.lim || ')' ELSE '' END END) AS detail

@@ -62,6 +62,13 @@ type BuildArgs = {
      * panel's predicate). A chip, not a sixth tab.
      */
     finalisedOnly?: boolean;
+    /**
+     * 18 Oct row 34: only leads with a running clock past its limit — the
+     * "Past a limit" chip as a filter. The caller passes the predicate
+     * (pastALimitSql over dl.id, from @/lib/leads/clocks) only where
+     * lead_clocks exists; absent = no filter.
+     */
+    pastLimit?: SQL | null;
     /** Stage / interest / region / date range — see @/lib/leads/queueFilters. */
     filters?: QueueFilterInput;
     /** User-chosen column + direction; the tab order stays as the tiebreak. */
@@ -138,10 +145,11 @@ function extraFilters({
     neodoveOnly,
     callbackOnly,
     finalisedOnly,
+    pastLimit,
     filters,
     ownedBy,
     teamMemberIds,
-}: Pick<BuildArgs, "q" | "neodoveOnly" | "callbackOnly" | "finalisedOnly" | "filters" | "ownedBy" | "teamMemberIds">) {
+}: Pick<BuildArgs, "q" | "neodoveOnly" | "callbackOnly" | "finalisedOnly" | "pastLimit" | "filters" | "ownedBy" | "teamMemberIds">) {
     const parts: SQL[] = [];
     if (ownedBy) parts.push(sql` AND ${ownerScopeSql(sql`dl.current_owner_id`, ownedBy, teamMemberIds)}`);
     if (q) parts.push(leadSearchClause(q));
@@ -164,6 +172,7 @@ function extraFilters({
         )`);
     }
     if (finalisedOnly) parts.push(sql` AND ${finalisedNotWonSql()}`);
+    if (pastLimit) parts.push(sql` AND ${pastLimit}`);
     if (filters) parts.push(...queueFilterClauses(filters, ISR_DATE_COLUMN));
     return parts.length ? sql.join(parts, sql``) : sql``;
 }
@@ -205,6 +214,7 @@ export async function fetchQueueRows({
     neodoveOnly,
     callbackOnly,
     finalisedOnly,
+    pastLimit,
     filters,
     sort,
     ownedBy,
@@ -213,7 +223,7 @@ export async function fetchQueueRows({
     const offset = (page - 1) * limit;
     const where = tabFilter(tab, userId, teamMemberIds);
     const order = queueSortOrder(sort, tabOrder(tab));
-    const search = extraFilters({ q, neodoveOnly, callbackOnly, finalisedOnly, filters, ownedBy, teamMemberIds });
+    const search = extraFilters({ q, neodoveOnly, callbackOnly, finalisedOnly, pastLimit, filters, ownedBy, teamMemberIds });
 
     const rows = await db.execute<QueueRow>(sql`
         SELECT
@@ -285,15 +295,16 @@ export async function countQueueRows({
     neodoveOnly,
     callbackOnly,
     finalisedOnly,
+    pastLimit,
     filters,
     ownedBy,
     teamMemberIds,
 }: Pick<
     BuildArgs,
-    "tab" | "userId" | "q" | "neodoveOnly" | "callbackOnly" | "finalisedOnly" | "filters" | "ownedBy" | "teamMemberIds"
+    "tab" | "userId" | "q" | "neodoveOnly" | "callbackOnly" | "finalisedOnly" | "pastLimit" | "filters" | "ownedBy" | "teamMemberIds"
 >): Promise<number> {
     const where = tabFilter(tab, userId, teamMemberIds);
-    const search = extraFilters({ q, neodoveOnly, callbackOnly, finalisedOnly, filters, ownedBy, teamMemberIds });
+    const search = extraFilters({ q, neodoveOnly, callbackOnly, finalisedOnly, pastLimit, filters, ownedBy, teamMemberIds });
     const rows = await db.execute<{ c: string }>(sql`
         SELECT COUNT(*)::text AS c FROM dealer_leads dl WHERE ${where} ${search}
     `);
@@ -311,7 +322,7 @@ export async function countQueueRows({
  */
 export async function fetchAllTabCounts(
     userId: string,
-    opts?: Pick<BuildArgs, "neodoveOnly" | "callbackOnly" | "finalisedOnly" | "filters" | "teamMemberIds">,
+    opts?: Pick<BuildArgs, "neodoveOnly" | "callbackOnly" | "finalisedOnly" | "pastLimit" | "filters" | "teamMemberIds">,
 ): Promise<Record<QueueTab, number>> {
     // ID 155: a manager's own-tab badges count the team too, like the tables.
     const team = opts?.teamMemberIds;
@@ -319,6 +330,7 @@ export async function fetchAllTabCounts(
         neodoveOnly: opts?.neodoveOnly,
         callbackOnly: opts?.callbackOnly,
         finalisedOnly: opts?.finalisedOnly,
+        pastLimit: opts?.pastLimit,
         filters: opts?.filters,
     });
     const rows = await db.execute<{

@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/db", () => ({ db: {} }));
-const { salesDailyPeriods, sameSpanLastMonth, addDays, firstOfMonth } = await import(
+const { salesDailyPeriods, sameSpanLastMonth, addDays, firstOfMonth, lastWorkingDayOnOrBefore } = await import(
     "../kinds/sales-daily"
 );
+const { isWorkingDay } = await import("@/lib/calendar/officeCalendar");
 
 describe("salesDailyPeriods — the windows a Sales Daily is counted over", () => {
     it("Sun 4 Oct 2026: yesterday = that day, last 7 = 28 Sep–4 Oct, MTD = 1–4 Oct, last month = 1–4 Sep", () => {
@@ -37,6 +38,20 @@ describe("salesDailyPeriods — the windows a Sales Daily is counted over", () =
         expect(sameSpanLastMonth("2026-03-31")).toEqual({ from: "2026-02-01", to: "2026-02-28" });
         expect(sameSpanLastMonth("2028-03-30")).toEqual({ from: "2028-02-01", to: "2028-02-29" });
         expect(sameSpanLastMonth("2026-01-15")).toEqual({ from: "2025-12-01", to: "2025-12-15" });
+    });
+
+    it("ID 194: on a Monday the covered day is Sunday, so Yesterday is Saturday (office calendar)", () => {
+        const working = (d: string) => isWorkingDay(d, new Set());
+        // Sun 4 Oct 2026 → Sat 3 Oct; MTD and Last 7 still run to the covered day.
+        const p = salesDailyPeriods("2026-10-04", working);
+        expect(p.yesterday).toEqual({ from: "2026-10-03", to: "2026-10-03" });
+        expect(p.mtd).toEqual({ from: "2026-10-01", to: "2026-10-04" });
+        expect(p.last7).toEqual({ from: "2026-09-28", to: "2026-10-04" });
+        // A working day stays itself; a holiday Saturday steps back to Friday.
+        expect(lastWorkingDayOnOrBefore("2026-10-06", working)).toBe("2026-10-06");
+        expect(lastWorkingDayOnOrBefore("2026-10-04", (d) => isWorkingDay(d, new Set(["2026-10-03"])))).toBe("2026-10-02");
+        // No calendar: the covered day as before.
+        expect(lastWorkingDayOnOrBefore("2026-10-04")).toBe("2026-10-04");
     });
 
     it("addDays / firstOfMonth cross month and year ends", () => {

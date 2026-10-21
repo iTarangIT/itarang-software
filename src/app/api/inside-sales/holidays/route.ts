@@ -39,5 +39,7 @@ export const GET = withErrorHandler(async () => {
             critical: limits.stale_critical,
         },
         office_hours: officeHours,
+        // 18 Oct row 33: the ISR queue's row colours and "past limit" state.
+        idle_limit_days: limits.idle_cc,
     });
 });
