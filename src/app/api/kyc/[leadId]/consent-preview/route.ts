@@ -5,10 +5,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 
 import { db } from "@/lib/db";
-import { users } from "@/lib/db/schema";
+import { leads, users } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 import { renderConsentPreviewPdf, type ConsentFor } from "@/lib/kyc/consent-service";
-import { requireLeadAccess } from "@/lib/auth/requireLeadAccess";
+import { requireLeadAccess, resolveDealerCode } from "@/lib/auth/requireLeadAccess";
+import { dealerOwnsLead } from "@/lib/auth/leadAccessRules";
+import { fileDealerNames } from "@/lib/leads/actForDealerGuard";
 import { isNextRedirectError } from "@/lib/api-utils";
 
 type RouteContext = {
@@ -27,8 +29,17 @@ export async function GET(req: NextRequest, { params }: RouteContext) {
     if (!leadGate.ok) return leadGate.response;
     const consentFor = (req.nextUrl.searchParams.get("consent_for") as ConsentFor) ?? "customer";
 
+    // ID 183 (21 Oct): the form names the FILE's dealer. Anyone else looking —
+    // the house login on a file it pushed out, Admin / Sales Head — sees the
+    // dealer's name, as the generated form and the consent code do.
     let dealerName = "";
-    if (user.id) {
+    const [lead] = await db.select({ dealerId: leads.dealer_id }).from(leads).where(eq(leads.id, leadId)).limit(1);
+    const ownDealer =
+      (user.role ?? "").toLowerCase() === "dealer" && dealerOwnsLead(lead?.dealerId ?? null, await resolveDealerCode(user));
+    if (!ownDealer && lead?.dealerId) {
+      const names = await fileDealerNames(lead.dealerId);
+      dealerName = names.loginName || names.display || "";
+    } else if (user.id) {
       const rows = await db.select().from(users).where(eq(users.id, user.id)).limit(1);
       if (rows.length) dealerName = rows[0].name || "";
     }

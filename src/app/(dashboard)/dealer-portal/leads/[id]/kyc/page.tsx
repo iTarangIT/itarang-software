@@ -16,12 +16,15 @@ import { FINANCE_DOCUMENTS } from '@/components/dealer-portal/lead-wizard/consta
 import OtherDocumentsSection, { type RequestedDoc } from '@/components/dealer-portal/lead-wizard/OtherDocumentsSection';
 import ConsentOtpCard from '@/components/dealer-portal/lead-wizard/ConsentOtpCard';
 import AskItarangHelp from '@/components/dealer-portal/lead-wizard/AskItarangHelp';
+import LeadWorkNote from '@/components/dealer-portal/lead-wizard/LeadWorkNote';
 import { onFreshFileClick } from '@/lib/storage/freshFileLink';
 
 type UploadedDoc = {
     id?: string;
     doc_type: string;
     file_url: string | null;
+    /** ID 166 item 12: false when this dealer may not open the file (not its own upload). */
+    file_viewable?: boolean;
     file_name?: string | null;
     file_size?: number | null;
     uploaded_at?: string | null;
@@ -343,6 +346,8 @@ export default function KYCPage() {
                     doc_status: serverDoc?.doc_status || 'uploaded',
                     verification_status: serverDoc?.verification_status || 'uploaded',
                     file_url: serverDoc?.file_url || data?.fileUrl || prev[documentType]?.file_url || null,
+                    // The dealer's own upload: it may open it (ID 166).
+                    file_viewable: true,
                     file_name: serverDoc?.file_name || file.name,
                     file_size: serverDoc?.file_size || file.size,
                     uploaded_at: serverDoc?.uploaded_at || new Date().toISOString(),
@@ -735,6 +740,8 @@ export default function KYCPage() {
                 <ErrorBanner message={apiError} onDismiss={() => setApiError(null)} />
 
                 {/* ID 183: the dealer may ask iTarang to work this file for him. */}
+                {/* ID 183 (21 Oct): "being worked by" — and the house login's dealer-wins check. */}
+                <LeadWorkNote leadId={leadId} />
                 <AskItarangHelp leadId={leadId} />
 
                 {draftResumedAt && !draftBannerDismissed && (
@@ -1066,7 +1073,7 @@ export default function KYCPage() {
                                     status={uploadedDocs[doc.key]?.doc_status || uploadedDocs[doc.key]?.verification_status}
                                     failedReason={uploadedDocs[doc.key]?.rejection_reason || uploadedDocs[doc.key]?.failed_reason}
                                     onUpload={file => handleDocUpload(doc.key, file)}
-                                    fileUrl={uploadedDocs[doc.key]?.file_url}
+                                    fileUrl={uploadedDocs[doc.key]?.file_viewable === false ? null : uploadedDocs[doc.key]?.file_url}
                                 />
                             ))}
                         </div>
@@ -1084,7 +1091,7 @@ export default function KYCPage() {
                                         status={uploadedDocs[doc.key]?.doc_status || uploadedDocs[doc.key]?.verification_status}
                                         failedReason={uploadedDocs[doc.key]?.rejection_reason || uploadedDocs[doc.key]?.failed_reason}
                                         onUpload={file => handleDocUpload(doc.key, file)}
-                                        fileUrl={uploadedDocs[doc.key]?.file_url}
+                                        fileUrl={uploadedDocs[doc.key]?.file_viewable === false ? null : uploadedDocs[doc.key]?.file_url}
                                     />
                                 ))}
                             </div>

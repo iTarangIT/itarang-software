@@ -2,8 +2,8 @@
 // pure (./actForDealer); this file gathers the facts and does the writes:
 //
 //   requireLeadWriter() the one write check for the KYC routes (wraps the gate).
-//   gateLeadActor()     who is acting (dealer / house login, read only /
-//                       Admin-Sales Head),
+//   gateLeadActor()     who is acting (dealer / house login on a file it
+//                       pushed out / Admin-Sales Head),
 //                       may they, is the file being worked by someone else,
 //                       did the dealer change it since — and takes the
 //                       30-minute note (iTarang) or stamps the dealer's action
@@ -41,8 +41,10 @@ import {
   leadActorVerdict,
   lockVerdict,
   parseSeenHeader,
+  recordPlan,
   SEEN_DEALER_ACTION_HEADER,
   WORK_LOCK_MINUTES,
+  workNoteText,
   type ActPermission,
   type LeadActorKind,
   type WorkLock,
@@ -225,8 +227,11 @@ async function takeLock(leadId: string, user: ActorUser, name: string): Promise<
  * Who is acting on this file, and may they take this step now?
  * (leadActorVerdict holds the rule.)
  *  - the file's own dealer: always (writes stamp + clear the iTarang note);
- *  - an iTarang house login on a file the house pushed out: reads only
- *    (16 Oct, ID 183: the dealer is the only owner);
+ *  - an iTarang house login on a file the house pushed out: every step,
+ *    like the dealer (16 Oct evening) — but its writes take / refresh its own
+ *    note (never clear someone else's), are refused when the dealer acted
+ *    after its page loaded (the dealer portal sends the header, LeadWorkNote),
+ *    and are recorded "Done by" (21 Oct);
  *  - Admin / Sales Head: reads always; writes need the permission (house
  *    pushed, dealer asked, or 1 working day idle), no newer dealer action
  *    than the panel saw, and the note; never the dispatch steps;
@@ -299,31 +304,53 @@ export async function fileDealerNames(dealerId: string | null): Promise<{ displa
   return { display: names.get(dealerId) ?? dealerId, loginName: login[0]?.name ?? null };
 }
 
+export interface RecordOptions {
+  /**
+   * A save that fires over and over (the KYC / co-borrower draft autosave):
+   * one "Done by" line per person per file per 30-minute hold, not one per
+   * save (recordPlan).
+   */
+  coalesce?: boolean;
+}
+
 /**
- * After an iTarang step succeeded: "Done by <name> for <dealer>" on the file's
- * history and the dealer told (bell + WhatsApp, at most once per person per
- * file per 30 minutes). Nothing for the dealer's own steps. Never throws.
+ * After an iTarang step succeeded (Admin / Sales Head from the CRM panel, or
+ * the house login in the dealer portal on a file it pushed out): "Done by
+ * <name> for <dealer>" on the file's history and the dealer told (bell +
+ * WhatsApp, at most once per person per file per 30 minutes). Nothing for the
+ * dealer's own steps. Never throws.
  */
-export async function recordActorStep(actor: LeadActor, step: string, extra: Record<string, unknown> = {}): Promise<void> {
+export async function recordActorStep(
+  actor: LeadActor,
+  step: string,
+  extra: Record<string, unknown> = {},
+  opts: RecordOptions = {},
+): Promise<void> {
   if (actor.kind === "dealer") return;
   try {
-    const { display } = await fileDealerNames(actor.leadDealerId);
-    const line = doneByLine(actor.userName, display);
-    let notify = true;
+    let anyRecent = false;
+    let sameStepRecent = false;
     try {
       const [r] = rowsOf(
         await db.execute(sql`
-          SELECT 1 AS recent FROM audit_logs
+          SELECT COUNT(*)::int AS n,
+                 COALESCE(bool_or(changes->>'step' = ${step}), false) AS same
+            FROM audit_logs
            WHERE entity_type = 'lead' AND entity_id = ${actor.leadId}
              AND action = ${ACTED_FOR_DEALER} AND performed_by = ${actor.userId}::uuid
              AND timestamp > now() - make_interval(mins => ${WORK_LOCK_MINUTES})
-           LIMIT 1
         `),
       );
-      notify = !r;
+      anyRecent = Number(r?.n ?? 0) > 0;
+      sameStepRecent = r?.same === true || r?.same === "t";
     } catch {
-      notify = true;
+      /* write the line and tell the dealer */
     }
+    const plan = recordPlan({ coalesce: !!opts.coalesce, sameStepRecent, anyRecent });
+    if (!plan.write) return;
+    const notify = plan.notify;
+    const { display } = await fileDealerNames(actor.leadDealerId);
+    const line = doneByLine(actor.userName, display);
     await db.insert(auditLogs).values({
       id: `AUDIT-${Date.now()}-${Math.random().toString(36).slice(2, 8)}-afd`,
       entity_type: "lead",
@@ -415,6 +442,42 @@ export async function readActState(leadId: string, user: ActorUser): Promise<Act
   };
 }
 
+export interface WorkNote {
+  /** Who is looking: the file's dealer, or the house login on a file it pushed out. */
+  kind: LeadActorKind;
+  /** "Being worked by <name> (iTarang) until …", or null. */
+  text: string | null;
+  mine: boolean;
+  /** The dealer's last action as of this read — the house login's pages send it back (dealer wins). */
+  dealerLastActionAt: string | null;
+  seenHeader: string;
+}
+
+/**
+ * 21 Oct (ID 183, items 5 + 6) — what the dealer portal's lead / KYC screens
+ * show: the "being worked by" note (before, only the CRM panel showed it),
+ * and, for the house login, the dealer's last action its saves send back.
+ */
+export async function readWorkNote(
+  user: ActorUser,
+  lead: { id: string; dealer_id: string | null },
+): Promise<{ ok: true; note: WorkNote } | { ok: false; status: number; message: string }> {
+  const gate = await gateLeadActor(user, lead);
+  if (!gate.ok) return gate;
+  const state = await readWorkState(lead.id);
+  const live = isLockLive(state.lock, state.now);
+  return {
+    ok: true,
+    note: {
+      kind: gate.actor.kind,
+      text: workNoteText(state.lock, { userId: user.id, kind: gate.actor.kind }, state.now),
+      mine: live && state.lock!.holderUserId === user.id,
+      dealerLastActionAt: state.dealerLastActionAt?.toISOString() ?? null,
+      seenHeader: SEEN_DEALER_ACTION_HEADER,
+    },
+  };
+}
+
 /** The lead row the gate needs. */
 export async function leadForGate(leadId: string): Promise<{ id: string; dealer_id: string | null } | null> {
   const [l] = await db.select({ id: leads.id, dealer_id: leads.dealer_id }).from(leads).where(eq(leads.id, leadId)).limit(1);
@@ -436,8 +499,10 @@ export type LeadWriterResult =
  *  - Admin / Sales Head → the act-for-dealer checks (permission, the
  *    30-minute note, dealer-changed-since) — the route then calls
  *    recordActorStep() for the "Done by" record and the dealer notice;
- *  - everyone else (CEO, other back-office roles, the house login on a file
- *    it pushed to a dealer) → refused. Reads are not affected.
+ *  - the house login on a file it pushed out → the same note / dealer-
+ *    changed checks; the route records "Done by" (recordActorStep);
+ *  - everyone else (CEO, other back-office roles) → refused. Reads are not
+ *    affected.
  * `response` is the standard { success: false, error: { message } } shape.
  */
 export async function requireLeadWriter(

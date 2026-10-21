@@ -10,7 +10,7 @@ import { leads } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { requireRole } from "@/lib/auth-utils";
 import { uploadFileToStorage } from "@/lib/storage";
-import { gateLeadActor, seenFromRequest } from "@/lib/leads/actForDealerGuard";
+import { gateLeadActor, recordActorStep, seenFromRequest } from "@/lib/leads/actForDealerGuard";
 
 const ALLOWED_TYPES = new Set(["image/png", "image/jpeg", "image/jpg"]);
 const MAX_BYTES = 5 * 1024 * 1024;
@@ -85,6 +85,7 @@ export async function POST(
       upsert: true,
     });
 
+    await recordActorStep(gate.actor, `uploaded a product photo (${kind})`);
     return NextResponse.json({ success: true, data: { url } });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Upload failed";
