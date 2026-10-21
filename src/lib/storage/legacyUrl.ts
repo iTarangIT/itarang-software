@@ -25,7 +25,9 @@ const SUPABASE_OBJECT_RE =
   /^https?:\/\/[^/]+\/storage\/v1\/object\/(?:public|sign|authenticated)\/([^/]+)\/(.+)$/i;
 
 // Buckets served by /api/files/<bucket>/<key>.
-const FILES_PROXY_BUCKETS = new Set(["documents", "dealer-documents", "call-recordings"]);
+// private-documents since ID 166 (18 Oct). Restated, not imported from
+// fileAccess.ts (server-only crypto); fileAccess's FILE_PROXY_BUCKETS is the same list.
+const FILES_PROXY_BUCKETS = new Set(["documents", "dealer-documents", "call-recordings", "private-documents"]);
 // nbfc-documents has its own route, keyed without the bucket segment.
 const NBFC_BUCKET = "nbfc-documents";
 

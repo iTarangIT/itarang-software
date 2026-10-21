@@ -5,7 +5,7 @@ import { eq, and } from 'drizzle-orm';
 import { requireRole } from '@/lib/auth-utils';
 import { logCouponAction } from '@/lib/coupon-audit';
 import { requireLeadAccess } from '@/lib/auth/requireLeadAccess';
-import { requireLeadWriter } from '@/lib/leads/actForDealerGuard';
+import { recordActorStep, requireLeadWriter } from '@/lib/leads/actForDealerGuard';
 import { isNextRedirectError } from '@/lib/api-utils';
 
 type RouteContext = {
@@ -84,6 +84,7 @@ export async function POST(_req: NextRequest, context: RouteContext) {
             })
             .where(eq(leads.id, leadId));
 
+        await recordActorStep(writer.actor, 'released the coupon on the file');
         return NextResponse.json({
             success: true,
             message: 'Coupon released. You can now enter a new code.',

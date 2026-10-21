@@ -20,6 +20,7 @@
 import { and, eq } from "drizzle-orm";
 
 import { db } from "@/lib/db/index";
+import { doneByHistoryText, mergeTimeline } from "@/lib/leads/actForDealer";
 import { dealerSalespersons, leads } from "@/lib/db/schema";
 
 import {
@@ -285,25 +286,44 @@ export async function leadHistoryCard(
   ].join("\n");
 
   const events = await listFlowEvents(leadId, 30);
+  // ID 183 (21 Oct): the "Done by <name> for <dealer>" lines — iTarang (Admin /
+  // Sales Head from the CRM, or the house login in the portal) working this
+  // file — belong on the file's general history too, merged in by time.
+  const doneBy = await (async () => {
+    try {
+      const { actHistory } = await import("@/lib/leads/actForDealerGuard");
+      return await actHistory(leadId, 30);
+    } catch (err) {
+      console.error("[WhatsApp/history] done-by read failed:", err);
+      return [];
+    }
+  })();
+  type Line = { who: string; what: string; at: Date | null };
+  const timeline = mergeTimeline<Line>([
+    ...events
+      // The synthesized header already covers creation.
+      .filter((e) => e.action !== "created")
+      .map((e) => ({ at: e.createdAt, item: { who: actorName(e), what: eventLabel(e), at: e.createdAt } })),
+    ...doneBy.map((r) => {
+      const at = new Date(r.at);
+      return { at, item: { who: "iTarang", what: doneByHistoryText(r), at } };
+    }),
+  ]);
   const lines: string[] = [];
   let prevKey = "";
-  for (const e of events) {
-    // The synthesized header already covers creation.
-    if (e.action === "created") continue;
-    const who = actorName(e);
-    const what = eventLabel(e);
+  for (const l of timeline) {
     // Collapse runs of the same actor doing the same thing (e.g. several taps
     // inside one phase) — the timeline reads as steps, not keystrokes.
-    const key = `${who}|${what}`;
+    const key = `${l.who}|${l.what}`;
     if (key === prevKey) continue;
     prevKey = key;
-    lines.push(`• ${fmtWhen(e.createdAt)} — ${who}: ${what}`);
+    lines.push(`• ${fmtWhen(l.at)} — ${l.who}: ${l.what}`);
   }
 
   let body: string;
   if (lines.length === 0) {
     body =
-      "_No step history recorded yet — detailed steps are recorded from now on. Portal and admin actions don't appear here._";
+      "_No step history recorded yet — detailed steps are recorded from now on. Portal steps don't appear here, except what iTarang did for you._";
   } else {
     // Trim OLDEST lines first if the card would run long.
     let joined = lines.join("\n");

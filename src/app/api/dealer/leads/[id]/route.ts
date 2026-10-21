@@ -8,7 +8,7 @@ import { markLeadDeleted } from '@/lib/leads/multi-party-delete';
 import { dealerMayActOnLead, dealerMayViewLead, resolveDealerCode } from '@/lib/auth/requireLeadAccess';
 import { dealerOwnsLead } from '@/lib/auth/leadAccessRules';
 import { HOUSE_READ_ONLY_MESSAGE } from '@/lib/leads/actForDealer';
-import { isHousePushedFile, stampDealerAction } from '@/lib/leads/actForDealerGuard';
+import { gateLeadActor, isHousePushedFile, recordActorStep, seenFromRequest, type LeadActor } from '@/lib/leads/actForDealerGuard';
 
 const updateSchema = z.object({
     full_name: z.string().optional().nullable(),
@@ -191,8 +191,17 @@ export const PATCH = withErrorHandler(async (req: Request, { params }: { params:
         if (isOwner) return errorResponse(HOUSE_READ_ONLY_MESSAGE, 403);
         return errorResponse('Forbidden: You do not have permission to edit this lead', 403);
     }
-    // The dealer acted: the 1-working-day idle rule reads this; clears any iTarang note.
-    if (isSameDealer) await stampDealerAction(id, user.id);
+    // ID 183 (21 Oct): the file's dealer — stamps his action and clears any
+    // iTarang note (dealer wins). The house login on a file it pushed out —
+    // takes / refreshes its own 30-minute note (never clears someone else's),
+    // is refused when the dealer acted after its page loaded, and the edit is
+    // recorded "Done by" with a notice to the dealer (below).
+    let actor: LeadActor | null = null;
+    if (isSameDealer) {
+        const gate = await gateLeadActor(user, { id, dealer_id: lead.dealer_id }, { write: true, seenDealerActionAt: seenFromRequest(req) });
+        if (!gate.ok) return errorResponse(gate.message, gate.status);
+        actor = gate.actor;
+    }
 
     if (data.commitStep) {
         if (!data.full_name || data.full_name.trim().length < 2) return errorResponse('Full name required', 400);
@@ -259,6 +268,7 @@ export const PATCH = withErrorHandler(async (req: Request, { params }: { params:
             });
         });
 
+        if (actor) await recordActorStep(actor, 'edited the customer details (Step 1)', { fields: Object.keys(data).filter((k) => k !== 'commitStep') });
         return successResponse({ success: true, message: 'Step 1 updated' });
     } catch (err) {
         console.error("Lead update failed:", err);

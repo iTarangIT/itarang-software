@@ -11,6 +11,8 @@ import {
 } from "@/lib/inventory/stockUploadGuard";
 import { stockUploadMode } from "@/lib/inventory/stockUploadRules";
 import { recheckAfterStockUpload } from "@/lib/inventory/stockUploadTasks/service";
+import { loadProductMasterBatch } from "@/lib/inventory/product-master";
+import { legacyMasterKeyOf, resolveLegacyUploadModel } from "@/lib/inventory/legacyUploadModel";
 
 // ID 173: dealerId is optional — a dealer login always uploads to its own
 // account (taken from the login); Admin, Inventory Manager and partner pick it.
@@ -91,6 +93,18 @@ export const POST = withErrorHandler(async (req: Request) => {
     insertedIds: [] as string[],
   };
 
+  // ID 173: the model comes from the Product Master by the template's model id
+  // column (model_id / item_type_code), same as Admin › Inventory › Bulk Upload.
+  const masterKeys = rows
+    .map((r) => legacyMasterKeyOf(assetType, r))
+    .filter((k): k is string => !!k);
+  const masters =
+    assetType === "battery"
+      ? await loadProductMasterBatch("battery", masterKeys)
+      : assetType === "charger"
+        ? await loadProductMasterBatch("charger", masterKeys)
+        : await loadProductMasterBatch("paraphernalia", masterKeys);
+
   for (let i = 0; i < rows.length; i++) {
     const rowNumber = i + 2;
     const r = rows[i];
@@ -131,26 +145,25 @@ export const POST = withErrorHandler(async (req: Request) => {
           ? Number(r.quantity || 1)
           : 1;
 
-      const modelType =
-        assetType === "battery"
-          ? clean(r.model_number) || "Battery"
-          : assetType === "charger"
-            ? clean(r.charger_model) || "Charger"
-            : clean(r.item_type) || "Paraphernalia";
-
-      const assetCategory =
-        assetType === "battery"
-          ? clean(r.category) || "Battery"
-          : assetType === "charger"
-            ? clean(r.compatible_battery_models) || "Charger"
-            : clean(r.compatible_category) || "Accessory";
-
-      const subCategory =
-        assetType === "battery"
-          ? clean(r.sub_category)
-          : assetType === "charger"
-            ? clean(r.charger_model)
-            : clean(r.item_type);
+      const masterKey = legacyMasterKeyOf(assetType, r);
+      const model = resolveLegacyUploadModel(
+        assetType,
+        r,
+        masterKey ? masters.get(masterKey.toLowerCase()) : null,
+      );
+      if (!model.ok) {
+        results.skipped++;
+        results.errors.push({
+          row: rowNumber,
+          field: model.field,
+          code: model.code,
+          message: model.message,
+        });
+        continue;
+      }
+      const modelType = model.modelType;
+      const assetCategory = model.assetCategory;
+      const subCategory = model.subCategory;
 
       const warrantyDate = toDate(r.oem_warranty_date);
       const warrantyMonths = Number(r.oem_warranty_months || r.warranty_months || 0);
@@ -186,9 +199,11 @@ export const POST = withErrorHandler(async (req: Request) => {
             String(r.iot_enabled ?? "") === "1",
           iot_imei_no: clean(r.imei_id ?? r.iot_imei_no),
 
-          voltage_v: toNumberString(r.voltage_v),
-          capacity_ah: toNumberString(r.capacity_ah),
-          output_current_a: toNumberString(r.output_current_a),
+          voltage_v: model.voltageV,
+          capacity_ah: model.capacityAh,
+          output_current_a: model.outputCurrentA,
+          // NOT NULL DEFAULT 0 — undefined keeps the default when the master did not decide.
+          warranty_months: model.warrantyMonths ?? undefined,
           star_rating: r.star_rating ? Number(r.star_rating) : null,
 
           oem_name: clean(r.supplier_name ?? r.supplier ?? r.oem_name),

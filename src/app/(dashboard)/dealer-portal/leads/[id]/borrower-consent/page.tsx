@@ -25,6 +25,8 @@ type UploadedDoc = {
     id?: string;
     doc_type: string;
     file_url: string | null;
+    /** ID 166 item 12: false when this dealer may not open the file (not its own upload). */
+    file_viewable?: boolean;
     file_name?: string | null;
     file_size?: number | null;
     uploaded_at?: string | null;
@@ -41,6 +43,8 @@ type RequestedDoc = {
     doc_for?: string;
     is_required: boolean;
     file_url: string | null;
+    /** ID 166 item 12: false when this dealer may not open the file. */
+    file_viewable?: boolean;
     upload_status: 'not_uploaded' | 'uploaded' | 'rejected' | 'verified' | string;
     rejection_reason: string | null;
     uploaded_at: string | null;
@@ -230,7 +234,7 @@ function RequestedDocCard({
             )}
 
             <div className="flex items-center gap-2 mt-3">
-                {doc.file_url && (
+                {doc.file_url && doc.file_viewable !== false && (
                     <a
                         href={doc.file_url}
                         onClick={(e) => onFreshFileClick(e, doc.file_url)}
@@ -1571,7 +1575,7 @@ export default function BorrowerConsentPage() {
                                     status={uploadedDocs[doc.key]?.doc_status || uploadedDocs[doc.key]?.verification_status}
                                     failedReason={uploadedDocs[doc.key]?.rejection_reason || uploadedDocs[doc.key]?.failed_reason}
                                     onUpload={file => handleDocUpload(doc.key, file)}
-                                    fileUrl={uploadedDocs[doc.key]?.file_url}
+                                    fileUrl={uploadedDocs[doc.key]?.file_viewable === false ? null : uploadedDocs[doc.key]?.file_url}
                                 />
                             ))}
                         </div>

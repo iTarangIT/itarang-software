@@ -153,14 +153,26 @@ function OverallSummary({ calls, lead }: { calls: CallItem[]; lead: any }) {
         const vendors = [
           ...new Set(external.map((c) => c.provider).filter(Boolean)),
         ];
-        setSummary(
+        const noTranscript =
           `${external.length} call${external.length === 1 ? "" : "s"} logged in ` +
-            `${vendors.join(" / ") || "an external system"}` +
-            `${agents.length ? ` by ${agents.join(", ")}` : ""}. ` +
-            `No transcript is available — ${vendors.join(" / ") || "that system"} ` +
-            `sends a disposition, not a recording or a transcript, so there is ` +
-            `nothing to summarise. See Call History below for each outcome.`,
-        );
+          `${vendors.join(" / ") || "an external system"}` +
+          `${agents.length ? ` by ${agents.join(", ")}` : ""}. ` +
+          `No transcript is available, and the calls carry no notes to summarise yet. ` +
+          `See Call History below for each outcome.`;
+        // ID 118 item 2 (18 Oct): NeoDove and logged calls feed the server's
+        // summary through their notes and outcome — ask it first (it refuses a
+        // lead this user may not edit; then the plain sentence stays).
+        setSummary(noTranscript);
+        setLoading(true);
+        fetch(`/api/leads/${lead.id}/summary`, { method: "POST" })
+          .then(async (r) => (r.ok ? await r.json().catch(() => null) : null))
+          .then((data) => {
+            if (!data?.summary) return;
+            setSummary(data.summary);
+            setSource("generated");
+          })
+          .catch(() => {})
+          .finally(() => setLoading(false));
         return;
       }
       setSummary(

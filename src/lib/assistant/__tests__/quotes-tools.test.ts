@@ -45,6 +45,11 @@ class CommercialInputError extends Error {
     }
 }
 vi.mock("@/lib/leads/createCommercial", () => ({ createLeadCommercial, CommercialInputError }));
+// ID 186: is the dealer already onboarded? Default: a brand-new dealer.
+const isDealerOnboarded = vi.fn();
+vi.mock("@/lib/leads/dealerOnboarded", () => ({ isDealerOnboarded }));
+const NEW_DEALER = { onboarded: false, reason: "New dealer", approvedOnboarding: null, batteryInvoice: null };
+const ONBOARDED = { onboarded: true, reason: "Already onboarded: battery invoice X", approvedOnboarding: null, batteryInvoice: null };
 
 const { toolsFor, toolNamesFor } = await import("../registry");
 const { APPLIERS } = await import("../appliers");
@@ -103,6 +108,7 @@ beforeEach(() => {
     loadLiveOemPrices.mockResolvedValue(refsFor({ "battery:b-105": 41000, "charger:c-10": 4500 }));
     loadLatestQuote.mockResolvedValue(null);
     loadQuote.mockResolvedValue(sendRow());
+    isDealerOnboarded.mockResolvedValue(NEW_DEALER);
     createLeadCommercial.mockResolvedValue({
         commercialId: "com-4", versionNo: 4, approvalStatus: "approved", autoApproved: true, evaluation: null, afterCommit,
     });
@@ -339,6 +345,49 @@ describe("create_quote — deal card (ID 172) and what the card says the quote d
         await run(ISR, "create_quote", { lead_id: "DL-7", lines: LINES, payment_terms: "cash", onboarding_fee: 1000, batteries_per_month: 5, finance_files_per_month: 1 });
         expect(stored().preview.lines).toContainEqual({ label: "Status", value: "no change" });
         expect(stored().preview.resets_idle_clock).toBe(false);
+    });
+
+    // ID 186 (18 Oct): the same rule as Update commercials (dealCardRequired).
+    it("a brand-new dealer: the card is asked, and the question says why", async () => {
+        const r = await run(ISR, "create_quote", { lead_id: "DL-7", lines: LINES, payment_terms: "cash" });
+        expect(r).toMatchObject({ kind: "question", question: expect.stringMatching(/^This dealer is not onboarded yet.*onboarding fee/i) });
+        expect(isDealerOnboarded).toHaveBeenCalledWith("DL-7");
+        expect(createPending).not.toHaveBeenCalled();
+    });
+
+    it("an onboarded dealer: ISR / ASM may skip the card; the preview says so and the applier does not require it", async () => {
+        isDealerOnboarded.mockResolvedValue(ONBOARDED);
+        for (const u of [ISR, ASM]) {
+            const r = await run(u, "create_quote", { lead_id: "DL-7", lines: LINES, payment_terms: "cash" });
+            expect(r.kind, u.role).toBe("preview");
+            const s = stored();
+            expect(s.plan.deal_card).toBeNull();
+            expect(s.plan.terms).toMatchObject({ customer_finance: null });
+            const text = previewText(s.preview);
+            expect(text).toContain("Deal card: Skipped — dealer already onboarded");
+            expect(text).not.toMatch(/Onboarding fee:/);
+        }
+        const plan = APPLIERS.create_quote.schema.parse(stored().plan);
+        await APPLIERS.create_quote.apply({ tx: TX, user: ASM, step: 1 }, plan);
+        expect(createLeadCommercial).toHaveBeenCalledWith(
+            expect.objectContaining({ requireDealCard: false, body: expect.objectContaining({ deal_card: null }) }),
+            { tx: TX },
+        );
+    });
+
+    it("an onboarded dealer: a STARTED card must still be complete", async () => {
+        isDealerOnboarded.mockResolvedValue(ONBOARDED);
+        const r = await run(ISR, "create_quote", { lead_id: "DL-7", lines: LINES, payment_terms: "cash", onboarding_fee: 5000 });
+        expect(r).toMatchObject({ kind: "question", question: expect.stringMatching(/batteries/i) });
+    });
+
+    it("a skipped card whose dealer is no longer onboarded at Confirm → the writer is told the card is required", async () => {
+        isDealerOnboarded.mockResolvedValue(ONBOARDED);
+        await run(ISR, "create_quote", { lead_id: "DL-7", lines: LINES, payment_terms: "cash" });
+        const plan = APPLIERS.create_quote.schema.parse(stored().plan);
+        isDealerOnboarded.mockResolvedValue(NEW_DEALER);
+        await APPLIERS.create_quote.apply({ tx: TX, user: ISR, step: 1 }, plan);
+        expect(createLeadCommercial).toHaveBeenCalledWith(expect.objectContaining({ requireDealCard: true }), { tx: TX });
     });
 
     it("a card saved before the deal card → refused with the writer-style sentence, nothing written", async () => {

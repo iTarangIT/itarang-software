@@ -16,6 +16,8 @@ import { eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { dealers } from "@/lib/db/schema";
 import { requireAdmin } from "@/lib/auth/requireAdmin";
+import { seesFullDealerIds } from "@/lib/kyc/dealerIdMask";
+import { maskPan } from "@/lib/kyc/panMask";
 
 type RouteContext = {
   params: Promise<{ dealerId: string }>;
@@ -73,7 +75,9 @@ export async function GET(_req: NextRequest, context: RouteContext) {
         companyName: row.company_name,
         companyType: row.company_type,
         gstNumber: row.gst_number,
-        panNumber: row.pan_number,
+        // ID 119: full PAN only for Admin / CEO / Sales Head (Business Head
+        // also reaches this route and gets it masked).
+        panNumber: seesFullDealerIds(auth.user.role) ? row.pan_number : maskPan(row.pan_number),
         registeredAddress: row.registered_address,
         bankName: row.bank_name,
         // Per BRD non-functional requirement: bank_account_number is stored

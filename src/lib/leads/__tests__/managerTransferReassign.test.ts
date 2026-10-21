@@ -19,8 +19,9 @@ describe("ID 179 — manager Transfer to ASM and Reassign to ISR", () => {
         expect(may(null)).toBe(true);
     });
 
-    it("Reassign to ISR follows the Leads page bulk-reassign roles", () => {
-        for (const r of LEADS_BULK_ROLES) expect(canReassignToIsr(r)).toBe(true);
+    it("Reassign to ISR: Admin, Sales Head and CEO only — not the partner login (Kartik, 18 Oct)", () => {
+        for (const r of LEADS_BULK_ROLES) expect(canReassignToIsr(r), r).toBe(r !== "partner");
+        expect(canReassignToIsr("partner")).toBe(false);
         expect(canReassignToIsr("admin")).toBe(true);
         expect(canReassignToIsr("sales_head")).toBe(true);
         expect(canReassignToIsr("ceo")).toBe(true);

@@ -43,7 +43,7 @@
  * hot leads handed to ground, and calls. Where the CRM has nothing to count,
  * the actual is null with a reason in words (NOT_MEASURED), never 0.
  */
-import { humanCall, transferCredit, wasHotAt } from "@/lib/reports/metricDefinitions";
+import { firstMoveToField, humanCall, transferCredit, wasHotAt } from "@/lib/reports/metricDefinitions";
 import { sql, type SQL } from "drizzle-orm";
 
 import { db } from "@/lib/db";
@@ -221,10 +221,12 @@ export async function measuresFor(monthFirst: string, upTo: string, elapsedWorki
             -- again counts once, as in the daily email.
             -- ID 179: credited to the owner at the moment of transfer
             -- (transferCredit), not the manager who pressed Transfer.
+            -- ID 179 (18 Oct): the lead's first move to the field only —
+            -- an ASM-to-ASM move does not count (firstMoveToField).
             SELECT ${transferCredit()} AS u, COUNT(DISTINCT t.dealer_lead_id) AS n
               FROM lead_touchpoints t
               JOIN dealer_leads dl ON dl.id = t.dealer_lead_id
-             WHERE t.touchpoint_type = 'asm_transfer'
+             WHERE ${firstMoveToField()}
                AND ${wasHotAt(sql`t.dealer_lead_id`, sql`t.performed_at`, sql`dl.interest_level`)}
                AND (t.performed_at AT TIME ZONE 'Asia/Kolkata')::date BETWEEN ${monthFirst}::date AND ${upTo}::date
                AND ${transferCredit()} IS NOT NULL
@@ -890,8 +892,13 @@ export const sendForReview = postTargets;
  * in force from now. The 48-hour clock starts at the FIRST push and is not
  * restarted (clockAfterPush) unless the member had accepted the old version.
  * The member gets a bell and an email.
+ *
+ * `opts` (ID 189 one-time repush of old-flow rejects,
+ * scripts/backfill-targets-repush-rejected.ts): `restartClock` starts the
+ * 48-hour clock at this push; `why` is added to the member's notice and to
+ * the 'pushed' history row.
  */
-export async function sendToMember(ids: string[], actor: Actor) {
+export async function sendToMember(ids: string[], actor: Actor, opts: { restartClock?: boolean; why?: string } = {}) {
     if (!has(TARGET_APPROVER_ROLES, actor)) throw new TargetError("Only the Sales Head or an admin pushes targets to the member.");
     if (!ids.length) return { changed: 0 };
     const rows = (await db.execute(sql`
@@ -911,7 +918,7 @@ export async function sendToMember(ids: string[], actor: Actor) {
                version = t.version + CASE WHEN old.has_next THEN 1 ELSE 0 END,
                next_ceo_target = NULL, next_stretch = NULL, next_stretch_note = NULL,
                status = 'pushed', approved_by = ${actor.id}, approved_at = now(), pushed_at = now(),
-               first_pushed_at = CASE WHEN t.first_pushed_at IS NULL OR old.old_status = 'accepted'
+               first_pushed_at = CASE WHEN ${opts.restartClock === true}::boolean OR t.first_pushed_at IS NULL OR old.old_status = 'accepted'
                                       THEN now() ELSE t.first_pushed_at END,
                accepted_at = NULL, reminded_at = NULL,
                updated_by = ${actor.id}, updated_at = now()
@@ -934,7 +941,7 @@ export async function sendToMember(ids: string[], actor: Actor) {
                 stretch: r.stretch,
                 old_ceo_target: r.old_status === "pending_approval" ? null : r.old_ceo,
                 old_stretch: r.old_status === "pending_approval" ? null : r.old_stretch,
-                note: r.stretch_note,
+                note: [opts.why, r.stretch_note].filter(Boolean).join(" · ") || null,
             })),
             actor,
         );
@@ -946,7 +953,10 @@ export async function sendToMember(ids: string[], actor: Actor) {
         await emit({
             type: "targets.sent",
             title: `Your ${monthName(g.month)} targets`,
-            message: `${names.get(actor.id)?.name ?? "The Sales Head"} sent you ${plural(g.count, "target")} for ${monthName(g.month)}. Open My Performance to accept them, or ask for a correction.`,
+            message:
+                `${names.get(actor.id)?.name ?? "The Sales Head"} sent you ${plural(g.count, "target")} for ${monthName(g.month)}. ` +
+                (opts.why ? `${opts.why} ` : "") +
+                `Open My Performance to accept them, or ask for a correction.`,
             from: ADMIN_PARTY,
             emailSubject: `Please review your ${monthName(g.month)} targets`,
             data: { month: g.month },

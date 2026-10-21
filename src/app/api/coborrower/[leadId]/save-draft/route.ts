@@ -3,7 +3,7 @@ import { db } from '@/lib/db';
 import { leads } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
 import { requireLeadAccess } from "@/lib/auth/requireLeadAccess";
-import { requireLeadWriter } from "@/lib/leads/actForDealerGuard";
+import { recordActorStep, requireLeadWriter } from "@/lib/leads/actForDealerGuard";
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
     // ID 118: signed in, and this lead is the caller's to touch (a dealer's own lead, or back office).
@@ -25,6 +25,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ le
             })
             .where(eq(leads.id, leadId));
 
+        // ID 183 (21 Oct): an autosave — one "Done by" line per person per 30 minutes.
+        await recordActorStep(writer.actor, 'saved the co-borrower details (draft)', {}, { coalesce: true });
         return NextResponse.json({ success: true, savedAt: new Date().toISOString() });
     } catch (error) {
         return NextResponse.json({ success: false, error: { message: 'Server error' } }, { status: 500 });

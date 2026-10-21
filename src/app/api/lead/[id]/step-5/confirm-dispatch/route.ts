@@ -9,7 +9,7 @@ import { InventoryLifecycleError } from "@/lib/inventory/lifecycle";
 import { DispatchError, confirmDispatch } from "@/lib/leads/confirm-dispatch";
 // ID 183 (16 Oct): dispatch is the file's dealer's — and, since 16 Oct evening, the iTarang house login on a file it pushed out; never Admin / Sales Head acting for the dealer.
 import { dealerMayDispatch } from "@/lib/auth/requireLeadAccess";
-import { stampDealerAction } from "@/lib/leads/actForDealerGuard";
+import { gateLeadActor, recordActorStep, seenFromRequest } from "@/lib/leads/actForDealerGuard";
 import { notifyHouseOfDealerStep } from "@/lib/leads/pushNotices";
 
 // BRD V2 §3.3 — Step 5 OTP validation + dispatch confirmation.
@@ -49,8 +49,15 @@ export async function POST(
         { status: 403 },
       );
     }
-    // ID 183: the dealer acted — the 1-working-day idle rule reads this; clears any iTarang note.
-    await stampDealerAction(leadId, user.id);
+    // ID 183 (21 Oct): the file's dealer — stamps his action and clears any
+    // iTarang note (dealer wins). The house login on a file it pushed out —
+    // takes / refreshes its own 30-minute note (never clears someone else's),
+    // is refused when the dealer acted after its page loaded, and the step is
+    // recorded "Done by" with a notice to the dealer (below).
+    const gate = await gateLeadActor(user, lead, { write: true, dispatch: true, seenDealerActionAt: seenFromRequest(req) });
+    if (!gate.ok) {
+      return NextResponse.json({ success: false, error: { message: gate.message } }, { status: gate.status });
+    }
 
     const result = await confirmDispatch({
       leadId,
@@ -61,6 +68,7 @@ export async function POST(
 
     // 14 Oct: tell the iTarang house dealer when the dealer moves a file it pushed.
     await notifyHouseOfDealerStep(leadId, "confirmed dispatch (Step 5)", user.dealer_id);
+    await recordActorStep(gate.actor, "confirmed dispatch (Step 5)");
     return NextResponse.json({
       success: true,
       data: {

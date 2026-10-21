@@ -3,20 +3,25 @@
 // shared by the routes, the CRM "Act for dealer" panel and the house login.
 //
 //   Who:    Admin and Sales Head, from the CRM file screen (ACT_FOR_DEALER_ROLES).
-//           The iTarang house logins only SEE files the house pushed out
-//           (16 Oct: the dealer is the only owner) — leadActorVerdict.
+//           The iTarang house logins work files the house pushed out in the
+//           dealer portal like the dealer (16 Oct evening) — leadActorVerdict.
 //   When:   a file iTarang pushed from the house — any time; the dealer's own
 //           file — only after the dealer has done nothing for 1 working day,
 //           or while the dealer has asked iTarang to help.
-//   Never:  dispatch. Step 5 (stock, the customer's OTP, dispatch), the cash
-//           sale and "delivered" stay with the dealer alone.
+//   Never:  dispatch from the CRM panel. Step 5 (stock, the customer's OTP,
+//           dispatch), the cash sale and "delivered" stay with the dealer — and
+//           the house login on a file it pushed out (recorded, 21 Oct).
 //   Clash:  the file shows "being worked by <name>" for 30 minutes; a second
 //           iTarang person is refused while that is live; the dealer's own
 //           action always wins (it clears the note, and an iTarang save made on
 //           a copy older than the dealer's last action is refused); one live
 //           consent OTP at a time.
 //   Record: every step is written as "Done by <name> for <dealer>" and the
-//           dealer is told (bell + WhatsApp).
+//           dealer is told (bell + WhatsApp) — from the CRM panel and, since
+//           21 Oct, from the house login in the dealer portal too (Step 5,
+//           cash sale, delivered, customer edits, drafts, consent form,
+//           coupon, product photo). The dealer sees "being worked by" on his
+//           own screens, and the lines are on the file's general history.
 
 import { workingDaysDueAt, type OfficeHoursArg } from "@/lib/calendar/officeCalendar";
 
@@ -176,9 +181,87 @@ export function doneByLine(byName: string | null | undefined, dealerName: string
 }
 
 /**
+ * 21 Oct (ID 183): what recordActorStep writes for one iTarang step.
+ *  - every step writes its "Done by" line, except a step marked `coalesce`
+ *    (the KYC / co-borrower draft autosaves fire every few seconds) that the
+ *    same person already recorded on this file within the 30-minute hold —
+ *    one line per autosaving session, not one per keystroke;
+ *  - the dealer is told at most once per person per file per 30 minutes
+ *    (`anyRecent` = this person already recorded a step on this file then).
+ */
+export function recordPlan(input: { coalesce: boolean; sameStepRecent: boolean; anyRecent: boolean }): {
+  write: boolean;
+  notify: boolean;
+} {
+  if (input.coalesce && input.sameStepRecent) return { write: false, notify: false };
+  return { write: true, notify: !input.anyRecent };
+}
+
+/**
+ * 21 Oct (ID 183): the "being worked by <name>" line the DEALER's own screens
+ * show (before, only the CRM panel did). Null when nobody from iTarang holds
+ * the file. The holder sees "You are working this file until …".
+ */
+export function workNoteText(
+  lock: WorkLock | null | undefined,
+  viewer: { userId: string | null; kind: LeadActorKind },
+  now: Date,
+): string | null {
+  if (!isLockLive(lock, now)) return null;
+  if (viewer.userId && lock!.holderUserId === viewer.userId) return `You are working this file until ${hhmm(lock!.expiresAt!)}.`;
+  // Another iTarang person (e.g. the house login while Admin holds the file): their saves are refused.
+  if (viewer.kind !== "dealer") return beingWorkedMessage(lock!.holderName, lock!.expiresAt!);
+  const who = (lock!.holderName ?? "").trim() || "someone from iTarang";
+  return `Being worked by ${who} (iTarang) until ${hhmm(lock!.expiresAt!)}. The file is still yours — anything you do wins.`;
+}
+
+/**
+ * 21 Oct (ID 183): one "Done by" line as the lead's general history shows it
+ * ("Done by Ravi for ABC Motors: sent the consent code to the customer").
+ */
+export function doneByHistoryText(row: { line: string; step: string | null }): string {
+  return row.step ? `${row.line}: ${row.step}` : row.line;
+}
+
+/**
+ * Merge "Done by" rows into a timeline, oldest first. Each side carries its
+ * instant; rows with no valid time sort first. Pure, so the history card's
+ * order is testable.
+ */
+export function mergeTimeline<T>(entries: Array<{ at: Date | null; item: T }>): T[] {
+  const t = (d: Date | null) => (d && Number.isFinite(d.getTime()) ? d.getTime() : -Infinity);
+  return entries
+    .map((e, i) => ({ ...e, i }))
+    .sort((a, b) => t(a.at) - t(b.at) || a.i - b.i)
+    .map((e) => e.item);
+}
+
+/**
+ * 21 Oct (ID 183, item 5): the house login works a pushed file in the dealer
+ * portal, not the CRM panel — so the dealer portal sends the same
+ * "x-seen-dealer-action-at" header on the house login's saves. Which requests
+ * carry it: a non-GET call to one of this file's step routes.
+ */
+export function carriesSeenHeader(url: string, method: string | null | undefined, leadId: string): boolean {
+  if (!leadId || (method ?? "GET").toUpperCase() === "GET") return false;
+  let path = url;
+  try {
+    path = new URL(url, "http://x").pathname;
+  } catch {
+    /* keep the raw string */
+  }
+  const id = encodeURIComponent(leadId);
+  return [`/api/kyc/${id}`, `/api/lead/${id}`, `/api/coborrower/${id}`, `/api/dealer/leads/${id}`].some(
+    (p) => path === p || path.startsWith(`${p}/`),
+  );
+}
+
+/**
  * The steps iTarang never takes for a dealer (decided 14 Oct, "never
  * dispatch"): they move the dealer's stock or need the customer's dispatch OTP.
- * Kept here so the routes and the panel name the same list.
+ * Kept here so the routes and the panel name the same list. Applies to Admin /
+ * Sales Head (the CRM panel). The house login on a file it pushed out may take
+ * them (16 Oct evening, user) — recorded "Done by" and the dealer told (21 Oct).
  */
 export const DEALER_ONLY_STEPS = [
   "step-5/product-selection",

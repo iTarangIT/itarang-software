@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { decideDealerOnboarded, shortDay } from "@/lib/leads/dealerOnboardedRules";
-import { dealCardRequiredFor } from "@/lib/leads/dealCardRules";
+import { dealCardRequired, dealCardRequiredFor } from "@/lib/leads/dealCardRules";
 
 const invoice = { invoiceNumber: "ITG/202627/034", invoiceDate: "2026-08-08", via: "gstin" as const };
 const approved = { applicationId: "app-1", company: "SHARDA ENTERPRISES", approvedAt: "2026-08-03T10:00:00Z", via: "phone" as const };
@@ -49,6 +49,23 @@ describe("dealCardRequiredFor", () => {
     });
     it("required for any other role that saves a quote", () => {
         for (const role of ["admin", "partner", "ceo", null, undefined, ""]) expect(dealCardRequiredFor(role), String(role)).toBe(true);
+    });
+});
+
+// ID 186 (decided 18 Oct): required for a brand-new dealer whatever the role;
+// for an already onboarded dealer ISR / ASM / Sales Head may skip it.
+describe("dealCardRequired", () => {
+    it("brand-new dealer (or the check failed): required for every role", () => {
+        for (const role of ["inside_sales_rep", "asm", "sales_head", "admin", "partner", null]) {
+            expect(dealCardRequired({ role, dealerOnboarded: false }), String(role)).toBe(true);
+        }
+        // A failed check reads as not onboarded, so the card is asked.
+        const failed = decideDealerOnboarded({ approvedOnboarding: null, batteryInvoice: null, checkFailed: true });
+        expect(dealCardRequired({ role: "inside_sales_rep", dealerOnboarded: failed.onboarded })).toBe(true);
+    });
+    it("onboarded dealer: ISR, ASM and Sales Head may skip; admin and partner still fill it", () => {
+        for (const role of ["inside_sales_rep", "asm", "sales_head"]) expect(dealCardRequired({ role, dealerOnboarded: true }), role).toBe(false);
+        for (const role of ["admin", "partner", null]) expect(dealCardRequired({ role, dealerOnboarded: true }), String(role)).toBe(true);
     });
 });
 

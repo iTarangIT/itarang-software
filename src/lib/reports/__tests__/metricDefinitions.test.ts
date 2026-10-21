@@ -6,6 +6,7 @@ import {
     connectedCall,
     engagedCall,
     engagedState,
+    firstMoveToField,
     humanCall,
     isFirstQuote,
     wasHotAt,
@@ -106,6 +107,29 @@ describe("wasHotAt (ID 59)", () => {
         expect(text).toContain("h.changed_at > t.performed_at");
         expect(text).toContain("ELSE dl.interest_level");
         expect(text.trim().endsWith("= 'hot'")).toBe(true);
+    });
+});
+
+describe("firstMoveToField (ID 179, Kartik 18 Oct)", () => {
+    const { text } = render(firstMoveToField());
+
+    it("is an asm_transfer touchpoint", () => {
+        expect(text).toContain("t.touchpoint_type = 'asm_transfer'");
+    });
+
+    it("only the lead's earliest transfer counts — a re-transfer after a hand-back does not", () => {
+        expect(text).toContain("SELECT 1 FROM lead_touchpoints prev_tr WHERE prev_tr.dealer_lead_id = t.dealer_lead_id AND prev_tr.touchpoint_type = 'asm_transfer'");
+        expect(text).toContain("prev_tr.performed_at < t.performed_at");
+        // Two transfers at the same instant: exactly one of them is first.
+        expect(text).toContain("prev_tr.touchpoint_id < t.touchpoint_id");
+    });
+
+    it("an ASM-to-ASM move never counts", () => {
+        expect(text).toContain("SELECT 1 FROM users prev_owner WHERE prev_owner.id::text = t.from_owner_id AND prev_owner.role = 'asm'");
+    });
+
+    it("takes the touchpoint alias", () => {
+        expect(render(firstMoveToField(sql`tt`)).text).toContain("tt.touchpoint_type = 'asm_transfer'");
     });
 });
 

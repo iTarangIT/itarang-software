@@ -149,7 +149,8 @@ export const POST = withErrorHandler(async (req: Request) => {
             // recording link. Backfilled rows get the same evidence a live
             // webhook would have left, so a recovered call is not a poorer
             // record than one that arrived on time (E-226).
-            await attachCallEvidence(touchpointId, event);
+            // ID 118 item 2: with the lead id, the call also refreshes the summary.
+            await attachCallEvidence(touchpointId, event, dealerLeadId);
             // Same for the lead's denormalised latest disposition (E-236). The
             // update is guarded on last_disposition_at, so replaying an old CSV
             // export cannot roll a lead's disposition backwards to whatever it

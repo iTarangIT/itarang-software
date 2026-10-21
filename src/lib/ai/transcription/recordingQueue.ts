@@ -31,6 +31,18 @@ import { analyzeTranscript } from "@/lib/ai/analysis";
 import { getObject } from "@/lib/storage/s3";
 import { RECORDINGS_BUCKET } from "./audioUpload";
 import { transcribeAudio } from "./transcribeAudio";
+import { scheduleOverallSummaryRefresh } from "@/lib/leads/overallSummary";
+
+/**
+ * ID 118 item 2 (18 Oct): a human call's transcript feeds the lead's Overall
+ * Summary (overallSummary.ts reads it) — so a finished one schedules the same
+ * background refresh an AI call does. Only purpose 'human_call': an AI call's
+ * re-transcription is not a new call. The summary is text, not routing: the
+ * lead's status, owner and band are still never touched here.
+ */
+function refreshSummaryAfter(rec: ClaimedRecording): void {
+  if (rec.purpose === "human_call" && rec.lead_id) scheduleOverallSummaryRefresh(rec.lead_id);
+}
 
 /** How many recordings one tick will process. */
 const BATCH = 2;
@@ -183,6 +195,7 @@ async function processOne(rec: ClaimedRecording): Promise<void> {
              transcribed_at   = now()
        WHERE id = ${rec.id}::uuid
     `);
+    refreshSummaryAfter(rec);
     return;
   }
 
@@ -213,6 +226,7 @@ async function processOne(rec: ClaimedRecording): Promise<void> {
            transcribed_at      = now()
      WHERE id = ${rec.id}::uuid
   `);
+  refreshSummaryAfter(rec);
 }
 
 /**

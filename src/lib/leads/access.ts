@@ -161,13 +161,17 @@ export function managerMayTransferStatus(status: string | null | undefined, open
 }
 
 /**
- * ID 179 — "Reassign to ISR" on the lead page: the roles of the Leads page's
- * bulk Reassign (LEADS_BULK_ROLES — the bulk route's MUTATE_ROLES), which the
- * button posts to, so the same rules apply (reason, a lead with a field visit
- * booked stays with the ASM).
+ * ID 179 — "Reassign to ISR": Admin, Sales Head and CEO only (Kartik, 18 Oct —
+ * the partner login lost it). The lead-page button posts to the Leads page's
+ * bulk Reassign (/api/admin/leads/bulk), so the same rules apply (reason, a
+ * lead with a field visit booked stays with the ASM); that route refuses a
+ * reassign whose new owner is an inside-sales rep for any other role. Partner
+ * keeps Reassign to other roles, Mark Lost and Export (LEADS_BULK_ROLES).
  */
+export const REASSIGN_TO_ISR_ROLES = ["admin", "sales_head", "ceo"] as const;
+
 export function canReassignToIsr(role: string | null | undefined): boolean {
-  return (LEADS_BULK_ROLES as readonly string[]).includes(role ?? "");
+  return (REASSIGN_TO_ISR_ROLES as readonly string[]).includes(role ?? "");
 }
 
 /**

@@ -1268,6 +1268,9 @@ async function persistCoBorrowerDoc(opts: {
     verification_status: "pending",
     doc_status: "uploaded",
     ocr_data: fields as never,
+    // ID 166: the dealer login behind this WhatsApp console uploaded it, so the
+    // dealer opens it (a row with no uploader is not the dealer's).
+    uploaded_by: await whatsappUploaderId(opts.applicationId),
     created_at: now,
     updated_at: now,
   });

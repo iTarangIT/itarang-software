@@ -142,6 +142,10 @@ describe("ID 183: dispatch is the file's dealer's (or the house's), never iTaran
     ])("%s is the dealer's or the house's (no iTarang staff)", (route) => {
         const src = code(route);
         expect(src).toMatch(/dealerMayDispatch\(user, lead\.dealer_id, leadId\)/);
-        expect(src).not.toMatch(/dealerMayActOnLead|gateLeadActor/);
+        expect(src).not.toMatch(/dealerMayActOnLead/);
+        // 21 Oct: the house login's dispatch steps are recorded "Done by"
+        // through gateLeadActor — always with dispatch: true, which refuses
+        // Admin / Sales Head (leadActorVerdict).
+        for (const g of src.match(/gateLeadActor\([^;]*\)/g) ?? []) expect(g).toMatch(/dispatch:\s*true/);
     });
 });
