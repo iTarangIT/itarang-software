@@ -2553,7 +2553,7 @@ export default function DealerReviewPage() {
                   <EditableField label="Primary Contact Name"   value={editForm.ownerName}      onChange={handleEditField("ownerName")} />
                   <EditableField label="Primary Contact Phone"  value={editForm.ownerPhone}     onChange={handleEditField("ownerPhone")} />
                   <EditableField label="Primary Contact Email"  value={editForm.ownerEmail}     onChange={handleEditField("ownerEmail")} />
-                  <EditableField label="Owner Aadhaar (12 digits)" value={editForm.ownerAadhaarNo} onChange={handleEditField("ownerAadhaarNo")} />
+                  <EditableField label="Owner Aadhaar (type all 12 digits to replace)" value={editForm.ownerAadhaarNo} onChange={handleEditField("ownerAadhaarNo")} />
                 </>
               ) : (
                 <>

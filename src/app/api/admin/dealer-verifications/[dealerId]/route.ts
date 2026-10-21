@@ -18,6 +18,8 @@ import {
 } from "@/lib/onboarding/correction-catalog";
 import { type CompanyType, requiredDocuments } from "@/lib/whatsapp/checklist";
 import { normalizeAccountType } from "@/lib/onboarding/account-type";
+import { isMaskedAadhaar, maskAadhaar } from "@/lib/kyc/aadhaarMask";
+import { maskDealerIdsDeep } from "@/lib/kyc/dealerIdMask";
 import { viewableFileUrl } from "@/lib/storage/legacyUrl";
 import { extractAddress, gstPrincipalAddress } from "@/lib/onboarding/dealer-address";
 import { checkCustomerGstin, GSTIN_CHECK_MESSAGE } from "@/lib/leads/gstin";
@@ -379,7 +381,9 @@ export async function GET(_req: NextRequest, context: RouteContext) {
         ownerName: row.owner_name,
         ownerPhone: row.owner_phone,
         ownerEmail: row.owner_email,
-        ownerAadhaarNo: row.owner_aadhaar_no || "",
+        // ID 119: never the full Aadhaar. PAN and account stay full — this
+        // route is Sales Head / CEO only (full-ID roles).
+        ownerAadhaarNo: maskAadhaar(row.owner_aadhaar_no) ?? "",
 
         bankName: row.bank_name,
         accountNumber: row.account_number,
@@ -407,8 +411,8 @@ export async function GET(_req: NextRequest, context: RouteContext) {
         }),
 
         // Partner / director lists — read-only reference for admins
-        partners: partnersSnapshot,
-        directors: directorsSnapshot,
+        partners: maskDealerIdsDeep(partnersSnapshot, true),
+        directors: maskDealerIdsDeep(directorsSnapshot, true),
 
         // Sales manager — prefer structured columns; fall back to snapshot
         salesManagerName: row.sales_manager_name || salesManagerSnapshot?.name || "",
@@ -650,7 +654,9 @@ export async function PATCH(req: NextRequest, context: RouteContext) {
     if (ownerName       !== undefined) updatePayload.owner_name        = ownerName;
     if (ownerPhone      !== undefined) updatePayload.owner_phone       = ownerPhone;
     if (ownerEmail      !== undefined) updatePayload.owner_email       = ownerEmail;
-    if (ownerAadhaarNo  !== undefined) {
+    // The page only ever receives the masked Aadhaar (ID 119) and saves the
+    // whole form back, so the mask coming back means "unchanged": keep it.
+    if (ownerAadhaarNo  !== undefined && !isMaskedAadhaar(ownerAadhaarNo)) {
       // Store only a valid 12-digit Aadhaar; blank/invalid clears it so the
       // E-175 guard keeps blocking until a real number is on file.
       const digits = String(ownerAadhaarNo).replace(/\D/g, "");
