@@ -7,7 +7,7 @@ import { eq } from "drizzle-orm";
 import { createClient } from "@supabase/supabase-js";
 import { downloadDigioAuditTrail } from "@/lib/digio";
 import { renderDealerAuditTrailPdf as renderAuditTrailPdf } from "@/lib/agreement/render-dealer-audit-trail";
-import { requireSalesHead } from "@/lib/auth/requireSalesHead";
+import { requireDealerValidationReader } from "@/lib/auth/requireSalesHead";
 import { isS3Backend, putObject, getObject, filesProxyPath } from "@/lib/storage/s3";
 
 type RouteContext = {
@@ -26,7 +26,8 @@ function isValidPdfBuffer(buffer: ArrayBuffer | null | undefined): boolean {
 }
 
 export async function GET(_req: NextRequest, context: RouteContext) {
-  const auth = await requireSalesHead();
+  // ID 166 item 11: Admin and the dealer account's owner read too.
+  const auth = await requireDealerValidationReader((await context.params).dealerId);
   if (!auth.ok) return auth.response;
   try {
     const { dealerId } = await context.params;

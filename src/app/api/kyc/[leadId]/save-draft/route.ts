@@ -8,7 +8,7 @@ import {
 } from '@/lib/kyc/admin-workflow';
 import { requireRole } from '@/lib/auth-utils';
 import { requireLeadAccess } from '@/lib/auth/requireLeadAccess';
-import { requireLeadWriter } from '@/lib/leads/actForDealerGuard';
+import { recordActorStep, requireLeadWriter } from '@/lib/leads/actForDealerGuard';
 import { restoreMaskedAadhaarDeep } from '@/lib/kyc/aadhaarMask';
 import { restoreMaskedPanDeep } from '@/lib/kyc/panMask';
 
@@ -69,6 +69,9 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ le
             console.error('[KYC Save Draft] Audit insert failed:', auditErr);
         }
 
+        // ID 183 (21 Oct): the house login's autosave — one "Done by" line and
+        // one notice per person per 30 minutes, not one per save.
+        await recordActorStep(writer.actor, 'saved the KYC details (draft)', { workflow_step: step || 2 }, { coalesce: true });
         return NextResponse.json({
             success: true,
             savedAt: savedAt.toISOString(),

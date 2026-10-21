@@ -8,7 +8,7 @@ import {
   dealerCorrectionRounds,
 } from "@/lib/db/schema";
 import { and, desc, inArray, isNotNull, ne, notInArray, or, sql } from "drizzle-orm";
-import { requireSalesHead } from "@/lib/auth/requireSalesHead";
+import { requireDealerValidationReader } from "@/lib/auth/requireSalesHead";
 import { buildLocationHaystack } from "@/lib/dealer/location-haystack";
 import { dealerTypeLabel, normalizeDealerType } from "@/lib/dealer/dealer-type";
 
@@ -94,7 +94,8 @@ function signerCell(
 }
 
 export async function GET(req: NextRequest) {
-  const auth = await requireSalesHead();
+  // ID 166 item 11: Admin reads too (whole-queue figures: not for owners).
+  const auth = await requireDealerValidationReader(undefined, { allOnly: true });
   if (!auth.ok) return auth.response;
 
   try {

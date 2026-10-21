@@ -21,20 +21,19 @@
  *
  * WHY THIS EXISTS RATHER THAN /api/files/dealer-documents/<key>:
  *
- * That proxy DELIBERATELY does not authenticate the `dealer-documents` bucket —
- * see the comment in its source: dealer onboarding is a pre-login flow, so an
- * anonymous user has to be able to read back what they just uploaded. That is a
- * reasonable decision for an onboarding document the uploader already possesses.
+ * The photo / provenance forms take a row id, not a key, so the browser never
+ * holds an S3 key; and every read here is checked against the request. (Since
+ * ID 166 the /api/files proxy is login-gated too and applies the same buyback
+ * rule — fileRules.ts BUYBACK_FILE_ROLES.)
  *
- * It is NOT a reasonable decision for buyback evidence. These objects include
- * scans of a previous owner's PAN, Aadhaar or driving licence — a third party's
- * identity documents, held by us, belonging to someone who is not even our
- * customer. Serving those from an unauthenticated URL would mean anyone holding a
- * link could read them, forever, with no session. So buyback never uses that path.
+ * These objects include scans of a previous owner's PAN, Aadhaar or driving
+ * licence — a third party's identity documents, held by us, belonging to
+ * someone who is not even our customer.
  *
- * WHO MAY SEE WHAT:
+ * WHO MAY SEE WHAT (ID 166, Kartik 18 Oct):
  *   · the DEALER who owns the request  — their own evidence
- *   · iTarang staff (BUYBACK_ADMIN_ROLES) — they must review it; that is the job
+ *   · Admin, CEO, Sales Head and the partner (BUYBACK_FILE_ROLES) — they review
+ *     it. The Business Head keeps the buyback screens but not the files.
  *   · everybody else — 404, not 403. A 403 would confirm the object exists.
  *
  * The ownership check is a JOIN back to buyback_requests.dealer_entity_id, so it
@@ -47,7 +46,7 @@ import { withErrorHandler } from "@/lib/api-utils";
 import { requireAuth } from "@/lib/auth-utils";
 import { db } from "@/lib/db";
 import { buybackRequests } from "@/lib/db/schema";
-import { isBuybackAdminRole } from "@/lib/buyback/auth";
+import { isBuybackFileRole } from "@/lib/storage/fileRules";
 import { NotFoundError, ValidationError } from "@/lib/buyback/errors";
 import { BUYBACK_BUCKET } from "@/lib/buyback/storage";
 import { getObject } from "@/lib/storage/s3";
@@ -77,7 +76,8 @@ export const GET = withErrorHandler(async (req: Request) => {
   const user = await requireAuth();
   const url = new URL(req.url);
 
-  const isAdmin = isBuybackAdminRole(String(user.role).toLowerCase());
+  // ID 166: buyback papers and photos — not the Business Head.
+  const isAdmin = isBuybackFileRole(String(user.role).toLowerCase());
   const dealerEntityId = user.dealer_id ?? null;
 
   // A non-admin with no dealer entity owns nothing and may see nothing. Bailing
@@ -178,9 +178,9 @@ export const GET = withErrorHandler(async (req: Request) => {
       "Content-Type": contentTypeFor(key),
       "Content-Length": String(bytes.length),
       // PRIVATE. These are identity documents; they must not sit in a shared CDN
-      // or a proxy cache. `private` allows the user's own browser to cache them
-      // (so a lightbox does not re-download on every open) and nothing else to.
-      "Cache-Control": "private, max-age=3600",
+      // or a proxy cache, nor in the browser's cache once the tab is closed
+      // (ID 166 item 9: no stored file is cached).
+      "Cache-Control": "private, no-store",
       "Content-Disposition": "inline",
       // The bytes are user-supplied. Without this a crafted "image" could be
       // sniffed as HTML and run as script on our origin.

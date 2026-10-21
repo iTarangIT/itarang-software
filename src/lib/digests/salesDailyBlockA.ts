@@ -20,7 +20,7 @@
 import { sql } from "drizzle-orm";
 import type { SalesDashboard } from "@/lib/admin/salesDashboardTypes";
 import { batteryReading, type BatteryReading } from "@/lib/admin/batteryReading";
-import { engagedCall, transferCredit, wasHotAt } from "@/lib/reports/metricDefinitions";
+import { engagedCall, firstMoveToField, transferCredit, wasHotAt } from "@/lib/reports/metricDefinitions";
 import { monthEnd, workingDaysBetween } from "@/lib/targets/rules";
 import { finalTargetSql } from "@/lib/targets/sql";
 import { scrapKgSourced } from "@/lib/buyback/scrapKgSourced";
@@ -462,7 +462,7 @@ export async function buildBlockA(
                 db,
                 periods,
                 (p) => sql`SELECT COUNT(DISTINCT t.dealer_lead_id) AS n FROM lead_touchpoints t JOIN dealer_leads dl ON dl.id = t.dealer_lead_id
-                            WHERE t.touchpoint_type = 'asm_transfer' AND ${inRange(sql`t.performed_at`, p)}
+                            WHERE ${firstMoveToField()} AND ${inRange(sql`t.performed_at`, p)}
                               AND ${transferCredit()} IS NOT NULL
                               AND ${wasHotAt(sql`t.dealer_lead_id`, sql`t.performed_at`, sql`dl.interest_level`)}`,
             ),

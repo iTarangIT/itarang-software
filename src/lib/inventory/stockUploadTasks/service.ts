@@ -21,7 +21,12 @@
  *                           stock upload and by the hourly sweep.
  *   sweepStockTasks()       the hourly sweep (instrumentation-node.ts):
  *                           recheck, then escalate tasks past 2 working days
- *                           (bell to Admin and the CEO, once).
+ *                           (bell to Admin and the CEO, once). An invoice
+ *                           marked "not a dealer sale" never escalates.
+ *   closeTasksForNotDealerSale()
+ *                           Invoice Ledger's "Not a dealer sale" closes the
+ *                           invoice's task at once (closed_how 'not_dealer');
+ *                           recheckStockTasks() also closes any it finds.
  *
  * Everything probes for E-348 first; on a database without it the invoice
  * scan and the uploads behave exactly as before. Times are compared with
@@ -47,6 +52,8 @@ import {
     invoiceReversal,
     invoiceSerialTotals,
     normalizeSerial,
+    notDealerSaleCloseNote,
+    taskSourceOfLedger,
     stockTaskLine,
     stockTaskProgress,
     taskComplete,
@@ -452,6 +459,67 @@ export async function reversedTasks(
 }
 
 /**
+ * Tasks whose invoice is marked "not a dealer sale" in Invoice Ledger
+ * (invoice_account_links kind 'not_dealer'): task id → who marked it and the
+ * close note. Empty without E-321.
+ */
+async function notDealerTasks(
+    tasks: ReadonlyArray<Pick<StockTask, "id" | "invoiceSource" | "invoiceId">>,
+): Promise<Map<number, { by: string | null; note: string }>> {
+    const out = new Map<number, { by: string | null; note: string }>();
+    if (!tasks.length || !(await hasAccountOwnershipTables())) return out;
+    for (const source of ["drive", "zoho"] as const) {
+        const mine = tasks.filter((t) => t.invoiceSource === source);
+        if (!mine.length) continue;
+        const rows = await run(sql`
+            SELECT invoice_id, linked_by::text AS linked_by, note
+              FROM invoice_account_links
+             WHERE source = ${source} AND kind = 'not_dealer'
+               AND invoice_id IN (${inList([...new Set(mine.map((t) => t.invoiceId))])})`);
+        const byInvoice = new Map(rows.map((r) => [String(r.invoice_id), r]));
+        for (const t of mine) {
+            const r = byInvoice.get(t.invoiceId);
+            if (!r) continue;
+            out.set(t.id, {
+                by: r.linked_by == null ? null : String(r.linked_by),
+                note: notDealerSaleCloseNote(r.note == null ? null : String(r.note)),
+            });
+        }
+    }
+    return out;
+}
+
+/**
+ * Invoice Ledger marked this invoice "not a dealer sale": close its open task
+ * now, with the reason (ID 174 item 2). Ledger source 'credit' has no task.
+ * Returns how many closed (0 or 1). Never throws — the mark itself is saved
+ * already, and the hourly recheck closes the task anyway.
+ */
+export async function closeTasksForNotDealerSale(input: {
+    source: string;
+    invoiceId: string;
+    userId: string | null;
+    note: string | null;
+}): Promise<number> {
+    try {
+        const source = taskSourceOfLedger(input.source);
+        if (!source || !(await hasStockTaskTables())) return 0;
+        const rows = await run(sql`
+            UPDATE stock_upload_tasks
+               SET status = 'closed', closed_at = now(), closed_how = 'not_dealer',
+                   closed_by = ${input.userId}, close_note = ${notDealerSaleCloseNote(input.note)},
+                   last_checked_at = now()
+             WHERE invoice_source = ${source} AND invoice_id = ${input.invoiceId}
+               AND status IN ('open', 'escalated')
+             RETURNING id`);
+        return rows.length;
+    } catch (e) {
+        console.warn("[stock-tasks] not-a-dealer-sale close failed:", e instanceof Error ? e.message : e);
+        return 0;
+    }
+}
+
+/**
  * Re-resolve the buyer of each task (an Invoice Ledger hand link or a GSTIN
  * added to an account after the invoice was read). Returns whether any changed.
  */
@@ -501,6 +569,20 @@ export async function recheckStockTasks(scope: { taskIds?: number[]; accountId?:
         }
         tasks = tasks.filter((t) => !gone.has(t.id));
 
+        // ID 174 item 2: an invoice marked "not a dealer sale" will never be
+        // stocked by a dealer — close its task with the reason.
+        const notDealer = await notDealerTasks(tasks);
+        for (const [id, mark] of notDealer) {
+            const done = await run(sql`
+                UPDATE stock_upload_tasks
+                   SET status = 'closed', closed_at = now(), closed_how = 'not_dealer',
+                       closed_by = ${mark.by}::uuid, close_note = ${mark.note}, last_checked_at = now()
+                 WHERE id = ${id} AND status IN ('open', 'escalated')
+                 RETURNING id`);
+            closed += done.length;
+        }
+        tasks = tasks.filter((t) => !notDealer.has(t.id));
+
         if (await refreshBuyers(tasks)) {
             const ids = tasks.map((t) => t.id);
             tasks = ids.length ? await loadTasks(sql`t.id IN (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})`) : [];
@@ -544,10 +626,19 @@ export async function recheckAfterStockUpload(dealerId: string): Promise<void> {
 export async function sweepStockTasks(): Promise<{ closed: number; escalated: number }> {
     if (!(await hasStockTaskTables())) return { closed: 0, escalated: 0 };
     const closed = await recheckStockTasks();
+    // ID 174 item 2: never escalate (as "buyer not linked" or otherwise) an
+    // invoice marked "not a dealer sale" — even if the recheck above failed.
+    const notDealer = (await hasAccountOwnershipTables())
+        ? sql`AND NOT EXISTS (SELECT 1 FROM invoice_account_links lk
+                               WHERE lk.source = stock_upload_tasks.invoice_source
+                                 AND lk.invoice_id = stock_upload_tasks.invoice_id
+                                 AND lk.kind = 'not_dealer')`
+        : sql``;
     const rows = await run(sql`
         UPDATE stock_upload_tasks
            SET status = 'escalated', escalated_at = now()
          WHERE status = 'open' AND due_at IS NOT NULL AND due_at < now()
+           ${notDealer}
          RETURNING id, invoice_number, customer_name, expected_serials, in_stock_serials, account_id`);
     for (const r of rows) {
         const id = Number(r.id);

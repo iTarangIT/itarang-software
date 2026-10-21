@@ -10,7 +10,7 @@ import {
 import { eq, desc } from "drizzle-orm";
 import { canReInitiateAgreement } from "@/lib/agreement/status";
 import { refreshDealerAgreementFromDigio } from "@/lib/agreement/refresh-dealer-agreement";
-import { requireSalesHead } from "@/lib/auth/requireSalesHead";
+import { requireDealerValidationReader } from "@/lib/auth/requireSalesHead";
 
 type Context = {
   params: Promise<{ dealerId: string }>;
@@ -21,7 +21,8 @@ type Context = {
 const TERMINAL_AGREEMENT_STATUSES = new Set(["completed", "failed", "expired", "not_generated"]);
 
 export async function GET(_req: NextRequest, context: Context) {
-  const auth = await requireSalesHead();
+  // ID 166 item 11: Admin and the dealer account's owner read too.
+  const auth = await requireDealerValidationReader((await context.params).dealerId);
   if (!auth.ok) return auth.response;
   try {
     const { dealerId } = await context.params;

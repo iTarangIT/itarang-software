@@ -4,7 +4,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { desc, eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { dealerAgreementDocuments, dealerAgreementOverrideRequests, users } from "@/lib/db/schema";
-import { requireSalesHead } from "@/lib/auth/requireSalesHead";
+import { requireDealerValidationReader } from "@/lib/auth/requireSalesHead";
 import { isMissingSchemaError } from "@/lib/agreement/executedAgreementStore";
 
 type RouteContext = {
@@ -19,8 +19,10 @@ type RouteContext = {
  * agreement-documents/[docId].
  */
 export async function GET(_req: NextRequest, context: RouteContext) {
-  const auth = await requireSalesHead();
+  // ID 166 item 11: Admin and the dealer account's owner read too.
+  const auth = await requireDealerValidationReader((await context.params).dealerId);
   if (!auth.ok) return auth.response;
+  const actor = auth.user.role === "sales_head" || auth.user.role === "ceo";
   try {
     const { dealerId } = await context.params;
 
@@ -90,8 +92,9 @@ export async function GET(_req: NextRequest, context: RouteContext) {
           decidedAt: r.decided_at,
           decisionNote: r.decision_note,
           // The two-person rule, as the page needs it for THIS viewer.
-          canDecide: r.status === "pending" && r.requested_by !== auth.user.id,
-          canWithdraw: r.status === "pending" && r.requested_by === auth.user.id,
+          // Only the Sales Head / CEO act (requireSalesHead); readers see no buttons.
+          canDecide: actor && r.status === "pending" && r.requested_by !== auth.user.id,
+          canWithdraw: actor && r.status === "pending" && r.requested_by === auth.user.id,
         })),
       },
     });

@@ -17,6 +17,9 @@ import {
     stockTaskLine,
     stockTaskProgress,
     taskComplete,
+    closedHowLabel,
+    notDealerSaleCloseNote,
+    taskSourceOfLedger,
 } from "@/lib/inventory/stockUploadTasks/rules";
 
 describe("serial parsing (ID 174)", () => {
@@ -170,5 +173,25 @@ describe("escalation (ID 174)", () => {
         expect(escalationMessage({ invoiceNumber: "ITG/1", customerName: null, inStock: 1, expected: 2, buyerKnown: true })).toBe(
             "Invoice ITG/1 · buyer unknown: 1 of 2 batteries in the dealer's stock after 2 working days.",
         );
+    });
+});
+
+describe("not a dealer sale (ID 174 item 2)", () => {
+    it("closes with a reason that names the Invoice Ledger mark and its note", () => {
+        expect(notDealerSaleCloseNote(null)).toBe("Marked not a dealer sale in Invoice Ledger");
+        expect(notDealerSaleCloseNote("  retail walk-in ")).toBe("Marked not a dealer sale in Invoice Ledger: retail walk-in");
+    });
+    it("maps only Drive and Zoho ledger decisions to tasks; credit notes have none", () => {
+        expect(taskSourceOfLedger("drive")).toBe("drive");
+        expect(taskSourceOfLedger("zoho")).toBe("zoho");
+        expect(taskSourceOfLedger("credit")).toBeNull();
+        expect(taskSourceOfLedger(undefined)).toBeNull();
+    });
+    it("labels every way a task closes; closed_how fits varchar(10)", () => {
+        expect(closedHowLabel("not_dealer")).toBe("not a dealer sale");
+        expect(closedHowLabel("by_hand")).toBe("by hand");
+        expect(closedHowLabel("voided")).toBe("invoice voided / credit-noted");
+        expect(closedHowLabel("auto")).toBe("all serials in stock");
+        for (const how of ["auto", "by_hand", "voided", "not_dealer"]) expect(how.length).toBeLessThanOrEqual(10);
     });
 });

@@ -64,7 +64,8 @@ export const GET = withErrorHandler(
         // ATTACHMENT, not inline — this is the dealer's copy of a document they
         // will want to keep and forward, not a preview.
         "Content-Disposition": `attachment; filename="${po.number}.pdf"`,
-        "Cache-Control": "private, max-age=3600",
+        // ID 166 item 9: no stored file is cached by the browser.
+        "Cache-Control": "private, no-store",
         "X-Content-Type-Options": "nosniff",
       },
     });

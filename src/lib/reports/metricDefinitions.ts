@@ -143,6 +143,35 @@ export function transferCredit(t: SQL = sql`t`): SQL {
     return sql`COALESCE(${t}.from_owner_id, CASE WHEN ${t}.to_owner_id IS NULL THEN ${t}.performed_by END)`;
 }
 
+/**
+ * ID 179 (Kartik 18 Oct) — "Hot to field" counts only the FIRST move of a lead
+ * from inside sales to the field: the lead's earliest asm_transfer touchpoint,
+ * and not one whose previous owner is an ASM. An ASM-to-ASM swap (Reassign of
+ * a lead already Transferred_to_ASM, assignOwner "asm_swap") and a later
+ * re-transfer after a hand-back never count. `t` = lead_touchpoints alias.
+ *
+ * Every "Hot to field" count uses this, together with wasHotAt and
+ * transferCredit: the ISR scorecard (admin/isrScorecard.ts → Sales Head
+ * dashboard), the hot_to_ground target actual (targets/service.ts → targets
+ * pages, my_numbers), the daily sales email's Block A "Hot handed to field"
+ * and Block C "Hot to field MTD" (digests/salesDailyBlockA.ts,
+ * salesDailyBlocks.ts), and the AI Analyst rule below.
+ */
+export function firstMoveToField(t: SQL = sql`t`): SQL {
+    return sql`(${t}.touchpoint_type = 'asm_transfer'
+        AND NOT EXISTS (
+            SELECT 1 FROM lead_touchpoints prev_tr
+             WHERE prev_tr.dealer_lead_id = ${t}.dealer_lead_id
+               AND prev_tr.touchpoint_type = 'asm_transfer'
+               AND (prev_tr.performed_at < ${t}.performed_at
+                    OR (prev_tr.performed_at = ${t}.performed_at AND prev_tr.touchpoint_id < ${t}.touchpoint_id))
+        )
+        AND NOT EXISTS (
+            SELECT 1 FROM users prev_owner
+             WHERE prev_owner.id::text = ${t}.from_owner_id AND prev_owner.role = 'asm'
+        ))`;
+}
+
 /** The first quote row of its lead (quote_issue / quote_revision, lowest version). `c` = dealer_lead_commercials alias. */
 export function isFirstQuote(c: SQL = sql`c`): SQL {
     return sql`NOT EXISTS (
@@ -211,7 +240,8 @@ export const ANALYST_RULES: ReadonlyArray<{ topics: readonly AnalystTopic[]; tex
     {
         topics: ["calls", "people"],
         text:
-            "Hot handed to field = asm_transfer touchpoints where the lead was Hot when transferred, each dealer once; " +
+            "Hot handed to field = the lead's FIRST asm_transfer touchpoint (not ASM-to-ASM: from_owner_id not an asm; " +
+            "a later re-transfer does not count) where the lead was Hot when transferred, each dealer once; " +
             "credited to from_owner_id (the owner at transfer), else performed_by.",
     },
     // ID 189 — one row per person / metric / month, the version in force (src/lib/targets/sql.ts).

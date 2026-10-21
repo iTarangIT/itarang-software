@@ -3,9 +3,13 @@ import { describe, expect, it } from "vitest";
 import {
     SUMMARY_MAX_CHARS,
     SUMMARY_MAX_TRANSCRIPTS,
+    humanCallLabel,
+    humanCallNote,
     isSummaryCallTouchpoint,
     joinTranscripts,
+    latestSummaryInput,
     overallSummaryPrompt,
+    refreshOnTouchpointWrite,
     summaryRefreshDue,
 } from "../overallSummaryRules";
 
@@ -62,5 +66,55 @@ describe("Overall Summary, option B (ID 118)", () => {
             "a dealer named Ravi from Ravi EV in Pune",
         );
         expect(overallSummaryPrompt({ transcripts: "x" })).toContain("a dealer named the dealer from their shop in an unknown location");
+    });
+});
+
+describe("ID 118 item 2 (18 Oct): NeoDove and manually logged calls feed the summary", () => {
+    it("a human call adds its status, outcome and notes", () => {
+        const note = humanCallNote({
+            source: "neodove",
+            callStatus: "connected",
+            disposition: "Interested - call back",
+            remarks: "Wants 10 batteries next month",
+            durationSec: 182.4,
+        });
+        expect(note).toBe("Call status: connected\nDuration: 182s\nOutcome: Interested - call back\nNotes: Wants 10 batteries next month");
+    });
+
+    it("a call with no remarks and no outcome adds nothing", () => {
+        expect(humanCallNote({ source: "manual", callStatus: "not_connected", disposition: null, remarks: "  ", durationSec: 0 })).toBeNull();
+        expect(humanCallNote({ source: "manual", callStatus: null, disposition: "", remarks: null, durationSec: null })).toBeNull();
+    });
+
+    it("labels each kind of human call; AI transcripts keep the old block heading", () => {
+        expect(humanCallLabel("neodove")).toMatch(/NeoDove/);
+        expect(humanCallLabel("manual")).toMatch(/logged by the rep/);
+        expect(humanCallLabel("recording")).toMatch(/transcript/);
+        const text = joinTranscripts([
+            { at: d("2026-10-01T05:00:00Z"), transcript: "ai words" },
+            { at: d("2026-10-02T05:00:00Z"), transcript: "Notes: x", label: humanCallLabel("neodove") },
+        ]);
+        expect(text).toMatch(/--- Call 1 \([^)]+\) ---\nai words/);
+        expect(text).toMatch(/--- Call 2 \([^)]+\) · NeoDove call \(notes\) ---\nNotes: x/);
+        expect(overallSummaryPrompt({ transcripts: text })).toMatch(/marked "\(notes\)" are the rep's notes/);
+    });
+
+    it("due-ness uses when the CRM got the text (a replayed old NeoDove call is new)", () => {
+        const latest = latestSummaryInput([
+            { at: d("2026-10-01T05:00:00Z"), transcript: "ai" },
+            { at: d("2026-09-01T05:00:00Z"), seenAt: d("2026-10-18T05:00:00Z"), transcript: "replayed" },
+            { at: d("2026-10-19T05:00:00Z"), seenAt: d("2026-10-19T05:00:00Z"), transcript: "  " },
+        ]);
+        expect(latest).toEqual(d("2026-10-18T05:00:00Z"));
+        expect(summaryRefreshDue(latest, d("2026-10-17T00:00:00Z"))).toBe(true);
+        expect(latestSummaryInput([])).toBeNull();
+    });
+
+    it("writeTouchpoint schedules AI and manual calls; a NeoDove call waits for attachCallEvidence", () => {
+        expect(refreshOnTouchpointWrite("ai_call", null)).toBe(true);
+        expect(refreshOnTouchpointWrite("inside_sales_call", null)).toBe(true);
+        expect(refreshOnTouchpointWrite("inside_sales_call", "manual")).toBe(true);
+        expect(refreshOnTouchpointWrite("inside_sales_call", "neodove")).toBe(false);
+        expect(refreshOnTouchpointWrite("visit", null)).toBe(false);
     });
 });

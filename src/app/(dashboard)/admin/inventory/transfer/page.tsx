@@ -47,6 +47,9 @@ export default function AdminInventoryTransferPage() {
 
   const [recent, setRecent] = useState<TransferRow[]>([]);
   const [loadingRecent, setLoadingRecent] = useState(false);
+  // ID 173: whether this login may submit a transfer (server rule, from GET).
+  // null while loading; Sales Head and Ops get false and see only the list.
+  const [canTransfer, setCanTransfer] = useState<boolean | null>(null);
 
   // Load dealers + recent transfers on mount.
   useEffect(() => {
@@ -57,7 +60,12 @@ export default function AdminInventoryTransferPage() {
           fetch("/api/admin/inventory/transfer").then((r) => r.json()),
         ]);
         if (dr.success) setDealers(dr.data || []);
-        if (tr.success) setRecent(tr.data?.rows || []);
+        if (tr.success) {
+          setRecent(tr.data?.rows || []);
+          setCanTransfer(tr.data?.canTransfer === true);
+        } else {
+          setCanTransfer(false);
+        }
       } catch (e) {
         console.error(e);
       }
@@ -67,7 +75,7 @@ export default function AdminInventoryTransferPage() {
   // Load available items whenever source dealer changes.
   useEffect(() => {
     setSelected(new Set());
-    if (!sourceDealerId) {
+    if (!sourceDealerId || canTransfer !== true) {
       setAvailable([]);
       return;
     }
@@ -92,7 +100,7 @@ export default function AdminInventoryTransferPage() {
     return () => {
       cancelled = true;
     };
-  }, [sourceDealerId]);
+  }, [sourceDealerId, canTransfer]);
 
   const reloadRecent = async () => {
     setLoadingRecent(true);
@@ -197,6 +205,17 @@ export default function AdminInventoryTransferPage() {
           </div>
         )}
 
+        {canTransfer === false && (
+          <div className="flex items-start gap-2 p-3 rounded-lg bg-gray-50 border border-gray-200 text-sm text-gray-600">
+            <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+            <span>
+              Only Admin, the Inventory Manager, the partner login or the dealer itself can move
+              stock. You can see the transfers below.
+            </span>
+          </div>
+        )}
+
+        {canTransfer === true && (
         <section className="bg-white border border-gray-100 rounded-2xl p-5 shadow-sm space-y-5">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
@@ -341,6 +360,7 @@ export default function AdminInventoryTransferPage() {
             </button>
           </div>
         </section>
+        )}
 
         {/* Recent transfers */}
         <section className="bg-white border border-gray-100 rounded-2xl shadow-sm overflow-hidden">

@@ -14,6 +14,8 @@ export type RequestedDoc = {
     doc_for?: string;
     is_required: boolean;
     file_url: string | null;
+    /** ID 166 item 12: false when this dealer may not open the file. */
+    file_viewable?: boolean;
     upload_status: 'not_uploaded' | 'uploaded' | 'rejected' | 'verified' | string;
     rejection_reason: string | null;
     uploaded_at: string | null;
@@ -115,7 +117,7 @@ function DocCard({
             )}
 
             <div className="flex items-center gap-2 mt-3">
-                {doc.file_url && (
+                {doc.file_url && doc.file_viewable !== false && (
                     <a
                         href={doc.file_url}
                         onClick={(e) => onFreshFileClick(e, doc.file_url)}

@@ -6,7 +6,7 @@ import { consentRecords, leads } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { requireRole } from "@/lib/auth-utils";
 import { requireLeadAccess } from "@/lib/auth/requireLeadAccess";
-import { requireLeadWriter } from "@/lib/leads/actForDealerGuard";
+import { recordActorStep, requireLeadWriter } from "@/lib/leads/actForDealerGuard";
 
 type RouteContext = {
     params: Promise<{ leadId: string }>;
@@ -110,6 +110,7 @@ export async function POST(_req: NextRequest, { params }: RouteContext) {
             })
             .where(eq(leads.id, leadId));
 
+        await recordActorStep(writer.actor, 'finished KYC step 3');
         return NextResponse.json({
             success: true,
             data: {

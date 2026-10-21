@@ -13,6 +13,7 @@ import {
   requireStockTransferer,
   StockUploadRefused,
 } from "@/lib/inventory/stockUploadGuard";
+import { canSubmitStockTransfer } from "@/lib/inventory/stockUploadRules";
 
 const BodySchema = z.object({
   // Optional for a dealer login: the source is always its own account.
@@ -155,7 +156,10 @@ export async function POST(req: NextRequest) {
 
 export async function GET(req: NextRequest) {
   try {
-    await requireInventoryAdmin();
+    const viewer = await requireInventoryAdmin();
+    // ID 173: the page shows the Transfer form only when POST would accept
+    // this role (same rule — stockUploadRules.canSubmitStockTransfer).
+    const canTransfer = canSubmitStockTransfer(viewer.role);
     const { searchParams } = new URL(req.url);
     const status = searchParams.get("status");
     const source = searchParams.get("source");
@@ -173,14 +177,14 @@ export async function GET(req: NextRequest) {
         .where(conditions.length ? and(...conditions) : undefined)
         .orderBy(asc(inventoryTransfers.initiated_at));
 
-      return NextResponse.json({ success: true, data: { rows } });
+      return NextResponse.json({ success: true, data: { rows, canTransfer } });
     } catch (queryError) {
       // Defensive degrade: a missing column / un-applied migration must not blank
       // the admin transfer page. Mirror the dealer ack handler's pattern.
       console.error("[Inventory Transfer List] Query failed:", queryError);
       return NextResponse.json({
         success: true,
-        data: { rows: [], warning: "Recent transfers temporarily unavailable" },
+        data: { rows: [], canTransfer, warning: "Recent transfers temporarily unavailable" },
       });
     }
   } catch (error) {
