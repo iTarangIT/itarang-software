@@ -227,6 +227,9 @@ async function customerFileUploads(leadId: string, bucket: string, key: string):
     return all.map(({ uploaderId, uploaderDealerCode, source }) => ({ uploaderId, uploaderDealerCode, source }));
 }
 
+/** E-349 (16 Oct): uploaders are recorded from here on; older rows have none. */
+const LEGACY_UPLOAD_CUTOFF = "2026-10-16T00:00:00+05:30";
+
 /**
  * Every upload record on one lead (or only those whose stored link matches
  * `like`), with the stored link. One query, shared by the file opener and by
@@ -242,9 +245,26 @@ async function leadFileUploads(leadId: string, like: string): Promise<(FileUploa
             uploader_dealer: string | null;
         }>(
             await db.execute(sql`
-                SELECT x.url, x.uploaded_by, x.upload_source, u.dealer_id AS uploader_dealer
+                -- 21 Oct (live check: every KYC row on production predates E-349
+                -- and has no uploader): a row written BEFORE 16 Oct with no
+                -- uploader and no source counts as uploaded by whoever created
+                -- the lead (leads.uploader_id), marked 'lead_creator'. On the
+                -- dealer's own leads that keeps its older files; on a pushed or
+                -- house lead the creator is not the dealer, so they stay hidden.
+                -- Rows from 16 Oct on record their uploader, so no fallback (a
+                -- customer's public-link upload stays the customer's).
+                SELECT x.url,
+                       COALESCE(x.uploaded_by, CASE WHEN x.legacy THEN l.uploader_id::text END) AS uploaded_by,
+                       CASE WHEN x.uploaded_by IS NULL AND x.legacy AND l.uploader_id IS NOT NULL
+                            THEN 'lead_creator' ELSE x.upload_source END AS upload_source,
+                       u.dealer_id AS uploader_dealer
                   FROM (
+                    SELECT y.url, y.uploaded_by, y.upload_source,
+                           (y.uploaded_by IS NULL AND y.upload_source IS NULL
+                            AND COALESCE(y.made_at, 'epoch'::timestamptz) < ${LEGACY_UPLOAD_CUTOFF}::timestamptz) AS legacy
+                      FROM (
                     SELECT k.file_url AS url,
+                           COALESCE(to_jsonb(k) ->> 'uploaded_at', to_jsonb(k) ->> 'created_at')::timestamptz AS made_at,
                            k.uploaded_by::text AS uploaded_by,
                            -- ID 183: kyc_documents has no upload_source; an upload
                            -- Admin / Sales Head made acting for the dealer is
@@ -259,19 +279,24 @@ async function leadFileUploads(leadId: string, like: string): Promise<(FileUploa
                            ) THEN 'act_for_dealer' END AS upload_source
                       FROM kyc_documents k WHERE k.lead_id = ${leadId} AND k.file_url LIKE ${like}
                     UNION ALL
-                    SELECT c.document_url, to_jsonb(c) ->> 'uploaded_by', to_jsonb(c) ->> 'upload_source'
+                    SELECT c.document_url, COALESCE(to_jsonb(c) ->> 'uploaded_at', to_jsonb(c) ->> 'created_at')::timestamptz,
+                           to_jsonb(c) ->> 'uploaded_by', to_jsonb(c) ->> 'upload_source'
                       FROM co_borrower_documents c WHERE c.lead_id = ${leadId} AND c.document_url LIKE ${like}
                     UNION ALL
-                    SELECT o.file_url, to_jsonb(o) ->> 'uploaded_by', to_jsonb(o) ->> 'upload_source'
+                    SELECT o.file_url, COALESCE(to_jsonb(o) ->> 'uploaded_at', to_jsonb(o) ->> 'created_at')::timestamptz,
+                           to_jsonb(o) ->> 'uploaded_by', to_jsonb(o) ->> 'upload_source'
                       FROM other_document_requests o
                      WHERE o.lead_id = ${leadId} AND o.file_url LIKE ${like}
                     UNION ALL
-                    SELECT o.document_url, to_jsonb(o) ->> 'uploaded_by', to_jsonb(o) ->> 'upload_source'
+                    SELECT o.document_url, COALESCE(to_jsonb(o) ->> 'uploaded_at', to_jsonb(o) ->> 'created_at')::timestamptz,
+                           to_jsonb(o) ->> 'uploaded_by', to_jsonb(o) ->> 'upload_source'
                       FROM other_document_requests o
                      WHERE o.lead_id = ${leadId} AND o.document_url LIKE ${like}
                        AND o.document_url IS DISTINCT FROM o.file_url
+                      ) y
                   ) x
-                  LEFT JOIN users u ON u.id::text = x.uploaded_by
+                  JOIN leads l ON l.id::text = ${leadId}
+                  LEFT JOIN users u ON u.id::text = COALESCE(x.uploaded_by, CASE WHEN x.legacy THEN l.uploader_id::text END)
                  LIMIT 500
             `),
         );
