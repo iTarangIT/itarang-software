@@ -44,6 +44,7 @@
  *                    carry no performer and appear on nobody's row.
  *   engaged /        Block C, per caller: engagedCall() and Hot AT THE MOMENT
  *   hot to field     of transfer (wasHotAt) — ID 59, metricDefinitions.ts;
+ *                    the lead's first move to the field only (firstMoveToField, ID 179);
  *                    counted in salesDailyBlocks.ts (loadRepExtras).
  *   new visits       dealers whose first-ever visit fell in the period
  *   converted        leads that reached Converted in the period, keyed on
@@ -704,7 +705,7 @@ async function collect(
             toneColumns: [BLOCK_C_PCT_COLUMN],
             note:
               "One row per ISR / CC, and anyone else who made calls (named with their role). Connected = calls that connected, each counted once. " +
-              "Engaged = connected, of any length (since 3 Oct). Hot to field = leads handed to an ASM that were Hot at that moment. " +
+              "Engaged = connected, of any length (since 3 Oct). Hot to field = leads handed to an ASM for the first time (an ASM-to-ASM move does not count) that were Hot at that moment. " +
               "% of target = calls MTD against the rep's MTD calls target (“—” = no target set). " +
               "Under a manager: their team (↳) and a team subtotal against the manager's own target.",
             empty: "No inside-sales reps on the Sales dashboard this month.",

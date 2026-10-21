@@ -5,8 +5,9 @@
  *   calls / engaged   human calls (humanCall: a NeoDove re-disposition is one
  *                     call) and how many connected (engagedCall — the CRM's
  *                     "engaged" is a connected call, metricDefinitions.ts)
- *   hot_to_field      transfers to an ASM of a lead that was Hot AT THE MOMENT
- *                     of transfer (wasHotAt) — counted per transfer, exactly as
+ *   hot_to_field      a lead's FIRST move to the field (firstMoveToField — ID
+ *                     179, 18 Oct: never an ASM-to-ASM move) while it was Hot
+ *                     AT THE MOMENT of transfer (wasHotAt) — exactly as
  *                     the hot_to_ground target's actual (targets/service.ts).
  *                     ID 179: credited to the lead's owner AT THE MOMENT of
  *                     transfer (from_owner_id), so a manager's transfer of a
@@ -28,7 +29,7 @@
 import { sql, type SQL } from "drizzle-orm";
 
 import { db } from "@/lib/db";
-import { engagedCall, humanCall, transferCredit, wasHotAt } from "@/lib/reports/metricDefinitions";
+import { engagedCall, firstMoveToField, humanCall, transferCredit, wasHotAt } from "@/lib/reports/metricDefinitions";
 import { dealCardActualsSql, VOLUME_CHECK_DAYS } from "@/lib/leads/dealCardActuals";
 
 export type IsrScore = {
@@ -68,7 +69,7 @@ export async function buildIsrScorecard(f: { from: string; to: string; state?: s
             SELECT ${transferCredit()} AS u, t.dealer_lead_id, t.performed_at AS at
               FROM lead_touchpoints t
               JOIN dealer_leads dl ON dl.id = t.dealer_lead_id
-             WHERE t.touchpoint_type = 'asm_transfer' AND ${transferCredit()} IS NOT NULL
+             WHERE ${firstMoveToField()} AND ${transferCredit()} IS NOT NULL
                AND ${wasHotAt(sql`t.dealer_lead_id`, sql`t.performed_at`, sql`dl.interest_level`)}
                AND ${inRange(sql`t.performed_at`, f.from, f.to)} ${st}
         ),
