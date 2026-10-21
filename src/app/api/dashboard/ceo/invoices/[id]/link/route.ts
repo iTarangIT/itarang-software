@@ -10,7 +10,8 @@
  *     'invoice_link') so that dealer's FUTURE invoices match on their own,
  *     without anyone coming back to this page.
  *   { source, action: 'not_dealer', note? }
- *     Marks the invoice as not a dealer sale; it leaves the work list.
+ *     Marks the invoice as not a dealer sale; it leaves the work list, and
+ *     its "Stock to upload" task (ID 174) closes with that reason.
  *   { source, action: 'clear' }
  *     Removes the decision. The GSTIN alias a 'link' added is deliberately
  *     left in place — other invoices may already be matching through it.
@@ -38,6 +39,7 @@ import { errorMessage, generateId, isNextRedirectError } from "@/lib/api-utils";
 import { hasAccountOwnershipTables } from "@/lib/accounts/tables";
 import { checkCustomerGstin, normalizeGstin } from "@/lib/leads/gstin";
 import { GSTIN_KEY } from "@/lib/leads/gstinMatch";
+import { closeTasksForNotDealerSale } from "@/lib/inventory/stockUploadTasks/service";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -225,7 +227,10 @@ export async function POST(
           new_data: { kind: "not_dealer", note, invoice_number: invoice.invoice_number },
         });
       });
-      return NextResponse.json({ success: true, data: { kind: "not_dealer" } });
+      // ID 174 item 2: no dealer will stock this invoice — close its task
+      // now rather than leave it to escalate as "buyer not linked".
+      const tasksClosed = await closeTasksForNotDealerSale({ source, invoiceId: id, userId: user.id, note });
+      return NextResponse.json({ success: true, data: { kind: "not_dealer", stockTasksClosed: tasksClosed } });
     }
 
     // ── link to an account ───────────────────────────────────────────────────

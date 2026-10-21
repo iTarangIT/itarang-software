@@ -80,6 +80,16 @@ export function decideStockUpload(input: {
     };
 }
 
+/**
+ * Whether this role may submit a stock transfer at all — what the Transfer
+ * page uses to show or hide its form. Same rule decideStockTransfer() applies
+ * on the server (any role it does not refuse outright), so the page and the
+ * API cannot drift: Sales Head and Ops keep the transfer list but no form.
+ */
+export function canSubmitStockTransfer(role: string | null | undefined): boolean {
+    return stockUploadMode(role) !== "none";
+}
+
 export type StockTransferDecision =
     | { ok: true; sourceDealerId: string; targetDealerId: string; scope: "any" | "own" }
     | { ok: false; status: 400 | 403; message: string };

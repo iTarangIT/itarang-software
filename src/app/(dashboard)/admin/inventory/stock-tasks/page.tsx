@@ -11,6 +11,7 @@ import { ArrowLeft } from "lucide-react";
 
 import { requireAuth } from "@/lib/auth-utils";
 import { listStockTasks, STOCK_TASK_ROLES, type StockTask } from "@/lib/inventory/stockUploadTasks/service";
+import { closedHowLabel } from "@/lib/inventory/stockUploadTasks/rules";
 import { CloseStockTaskButton } from "./CloseStockTaskButton";
 
 export const dynamic = "force-dynamic";
@@ -47,7 +48,7 @@ function TaskCard({ t, canClose }: { t: StockTask; canClose: boolean }) {
                 <div className="text-right text-xs">
                     {t.status === "closed" ? (
                         <span className="rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 font-semibold text-gray-700">
-                            Closed {day(t.closedAt)} · {t.closedHow === "by_hand" ? "by hand" : t.closedHow === "voided" ? "invoice voided / credit-noted" : "all serials in stock"}
+                            Closed {day(t.closedAt)} · {closedHowLabel(t.closedHow)}
                         </span>
                     ) : (
                         <span

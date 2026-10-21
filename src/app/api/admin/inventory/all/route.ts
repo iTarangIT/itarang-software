@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { inventory, accounts } from "@/lib/db/schema";
+import { inventory, accounts, users } from "@/lib/db/schema";
 import { and, asc, count, desc, eq, ilike, lte, or, sql, SQL } from "drizzle-orm";
 import { requireInventoryAdmin } from "@/lib/auth-utils";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
@@ -132,6 +132,9 @@ export const GET = withErrorHandler(async (req: Request) => {
     createdAt: Date;
     updatedAt: Date;
     inventoryAgeDays: number | null;
+    // ID 173: who added the row and the upload batch it came in (UPL-…).
+    uploadedBy: string | null;
+    uploadBatch: string | null;
   }>;
 
   try {
@@ -167,9 +170,12 @@ export const GET = withErrorHandler(async (req: Request) => {
         createdAt: inventory.created_at,
         updatedAt: inventory.updated_at,
         inventoryAgeDays: sql<number>`EXTRACT(DAY FROM (NOW() - ${inventory.created_at}))::int`,
+        uploadedBy: sql<string | null>`COALESCE(${users.name}, ${users.email})`,
+        uploadBatch: inventory.upload_event_id,
       })
       .from(inventory)
       .leftJoin(accounts, eq(accounts.id, inventory.dealer_id))
+      .leftJoin(users, eq(users.id, inventory.created_by))
       .where(whereExpr)
       .orderBy(orderBy)
       .limit(queryLimit)
@@ -210,6 +216,8 @@ export const GET = withErrorHandler(async (req: Request) => {
         createdAt: inventory.created_at,
         updatedAt: inventory.updated_at,
         inventoryAgeDays: sql<number>`EXTRACT(DAY FROM (NOW() - ${inventory.created_at}))::int`,
+        uploadedBy: sql<string | null>`NULL::text`,
+        uploadBatch: sql<string | null>`NULL::text`,
       })
       .from(inventory)
       .leftJoin(accounts, eq(accounts.id, inventory.dealer_id))
@@ -234,6 +242,8 @@ export const GET = withErrorHandler(async (req: Request) => {
       "baseValue",
       "priceInclusiveGst",
       "inventoryAgeDays",
+      "uploadedBy",
+      "uploadBatch",
     ];
     const csvEscape = (v: unknown) => {
       if (v === null || v === undefined) return "";
@@ -257,6 +267,8 @@ export const GET = withErrorHandler(async (req: Request) => {
           row.baseValue,
           row.priceInclusiveGst,
           row.inventoryAgeDays,
+          row.uploadedBy,
+          row.uploadBatch,
         ]
           .map(csvEscape)
           .join(","),

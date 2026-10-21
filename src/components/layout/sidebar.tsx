@@ -1776,6 +1776,13 @@ const roleNavigation: Record<string, any[]> = {
           href: "/admin/inventory/upload",
         },
         {
+          // ID 174 — new battery invoices whose serials are not in stock yet.
+          id: "admin-stock-tasks",
+          label: "Stock to upload",
+          icon: Package,
+          href: "/admin/inventory/stock-tasks",
+        },
+        {
           id: "admin-inventory-add",
           label: "Add Item",
           icon: Package,
@@ -2380,6 +2387,14 @@ const roleNavigation: Record<string, any[]> = {
           label: "Inventory",
           icon: Package,
           href: "/dealer-portal/inventory",
+        },
+        {
+          // ID 173 — a dealer may add stock to its own account only (the
+          // page and API take the account from the login; stockUploadRules.ts).
+          id: "inventory-upload-stock",
+          label: "Upload stock",
+          icon: Upload,
+          href: "/inventory/bulk-upload",
         },
         {
           id: "service",
