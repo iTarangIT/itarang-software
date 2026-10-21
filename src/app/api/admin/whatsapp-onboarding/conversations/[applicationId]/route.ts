@@ -15,6 +15,7 @@ import {
   whatsappOperators,
 } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
+import { maskCapturedIds, maskDealerIdsDeep, seesFullDealerIds } from "@/lib/kyc/dealerIdMask";
 import {
   errorResponse,
   successResponse,
@@ -43,7 +44,10 @@ export const GET = withErrorHandler(
     _req: Request,
     ctx: { params: Promise<{ applicationId: string }> },
   ) => {
-    await requireRole(READ_ROLES);
+    const user = await requireRole(READ_ROLES);
+    // ID 119: Aadhaar masked for everyone; PAN and account full only for the
+    // full-ID roles (so masked for the partner login).
+    const fullIds = seesFullDealerIds(user.role);
     const { applicationId } = await ctx.params;
     if (!applicationId) return errorResponse("Application id required", 400);
 
@@ -177,9 +181,9 @@ export const GET = withErrorHandler(
         currentState,
         operator: operatorRow[0] ?? null,
         warnings: Array.isArray(application.verification_warnings)
-          ? application.verification_warnings
+          ? maskDealerIdsDeep(application.verification_warnings, fullIds)
           : [],
-        extractionSummary: application.extraction_summary ?? null,
+        extractionSummary: maskDealerIdsDeep(application.extraction_summary ?? null, fullIds),
       },
       sessions: sessions.map((s) => ({
         id: s.id,
@@ -197,9 +201,9 @@ export const GET = withErrorHandler(
         // Labels the transcript button so an admin knows whose chat they open.
         role: s.id === application.wa_operator_session_id ? "operator" : "dealer",
       })),
-      captured: buildCapturedDetails(
-        application as unknown as Record<string, unknown>,
-        sessionCtx,
+      captured: maskCapturedIds(
+        buildCapturedDetails(application as unknown as Record<string, unknown>, sessionCtx),
+        fullIds,
       ),
       documents: Array.from(latestPerType.values()).map((doc) => ({
         id: doc.id,
@@ -212,7 +216,7 @@ export const GET = withErrorHandler(
         docStatus: doc.doc_status,
         verificationStatus: doc.verification_status,
         uploadedAt: doc.uploaded_at,
-        extractedFields: (doc.extracted_data ?? {}) as Record<string, unknown>,
+        extractedFields: maskDealerIdsDeep((doc.extracted_data ?? {}) as Record<string, unknown>, fullIds),
         extractionConfidence: doc.extraction_confidence,
         verificationProvider: doc.verification_provider,
         source: doc.source,
