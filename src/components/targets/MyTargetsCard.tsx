@@ -24,7 +24,7 @@ import { TargetProgressCells, fmtTargetPer, fmtTargetSum, progressHeaders } from
 import { CORRECTION_REMARK_MIN } from "@/lib/targets/rules";
 import type { TargetRow } from "@/lib/targets/service";
 
-type Ctx = { working_days_total: number; working_days_elapsed: number };
+type Ctx = { working_days_total: number; working_days_elapsed: number; actuals_up_to?: string | null };
 type MyTargets = {
     rows: TargetRow[];
     context: Ctx;
@@ -108,6 +108,7 @@ export function MyTargetsCard() {
                     <p className="text-[11px] text-ink-muted">
                         {ctx?.working_days_elapsed} of {ctx?.working_days_total} working days of this month gone (the month
                         counts from the 1st). Target to date is your target spread over the working days so far.
+                        {ctx?.actuals_up_to ? ` Actuals up to ${ctx.actuals_up_to}.` : ""}
                     </p>
                 </div>
                 {waiting.length > 0 && mode === "none" && (

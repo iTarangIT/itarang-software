@@ -69,7 +69,7 @@ export async function saveDriveLedgerLines(
             await tx.execute(sql`
                 INSERT INTO invoice_line_items (source, invoice_id, line_no, item_name, hsn, product_class,
                                                 asset_type, product_id, quantity, rate, amount_excl_gst)
-                VALUES (${source}, ${invoiceId}, ${r.line_no}, ${r.item_name}, ${r.hsn}, ${classFor(m, r.product_class)},
+                VALUES (${source}, ${invoiceId}, ${r.line_no}, ${r.item_name}, ${r.hsn}, ${classFor(m, r.product_class, r.hsn)},
                         ${m.asset_type}, ${m.product_id}, ${r.quantity}, ${r.rate}, ${r.amount_excl_gst})`);
         }
         const batteries = rows.filter((r) => r.product_class === "battery").reduce((s, r) => s + r.quantity, 0);

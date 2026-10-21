@@ -232,7 +232,7 @@ export async function commitImport(
                 for (const l of d.lines) {
                     n++;
                     const m = l.item_name ? productFor(mapped, l.item_name) : undefined;
-                    const productClass = m ? classFor(m, l.product_class) : l.product_class;
+                    const productClass = m ? classFor(m, l.product_class, l.hsn) : l.product_class;
                     // Serials, when printed, sit in the item name ("… Serial No: X, Y").
                     taskLines.push({
                         line_no: n,
@@ -323,7 +323,13 @@ export async function mapVyaparItem(input: {
                 WITH u AS (
                     UPDATE invoice_line_items SET asset_type = ${input.assetType}, product_id = ${input.productId},
                            -- ID 172: an onboarding-fee line is revenue, never a battery.
-                           product_class = CASE WHEN ${input.assetType} = 'onboarding_fee' THEN 'other' ELSE product_class END
+                           -- A14: a line with no HSN takes its class from the mapping
+                           -- (classFor in itemMap.ts — same rule on insert).
+                           product_class = CASE
+                               WHEN ${input.assetType} = 'onboarding_fee' THEN 'other'
+                               WHEN COALESCE(btrim(hsn), '') = '' AND ${input.assetType} IN ('battery', 'charger') THEN ${input.assetType}
+                               WHEN COALESCE(btrim(hsn), '') = '' AND ${input.assetType} IS NOT NULL THEN 'other'
+                               ELSE product_class END
                      WHERE item_name IN (${sql.join(names.map((n) => sql`${n}`), sql`, `)})
                     RETURNING 1)
                 SELECT count(*)::int AS n FROM u`),

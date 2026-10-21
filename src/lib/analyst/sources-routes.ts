@@ -43,6 +43,14 @@ export const CreateConnectionBody = z.object({ preset: z.literal("crm") }).stric
  */
 export const CRM_SOURCE_NAME = "iTarang CRM";
 
+/**
+ * ID 167 — a database source other than the iTarang preset: made through the retired "Other
+ * database" tab. Never listed and never asked. Files and Google Sheets / Drive stay (on hold).
+ */
+export function isOutsideConnection(c: { kind: string; name: string }): boolean {
+  return c.kind === "postgres" && c.name !== CRM_SOURCE_NAME;
+}
+
 const DatasetBody = z.object({ name: z.string().trim().min(1).max(200) });
 
 const ResolveBody = z.object({

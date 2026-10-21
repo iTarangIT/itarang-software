@@ -27,7 +27,8 @@ export type DigestKindId =
   | "sales_daily"
   | "buyback_daily"
   | "idle_weekly"
-  | "targets_pending";
+  | "targets_pending"
+  | "my_day";
 
 /** One figure about the covered day. */
 export type ActivityLine = {
@@ -140,6 +141,12 @@ export type DigestTable = {
    * ragToneOfCell (src/lib/digests/rag.ts) — the "% of target" columns.
    */
   toneColumns?: number[];
+  /**
+   * One absolute URL per row, aligned with `rows` (null = none): the row's
+   * first cell becomes a link (ID 194 — My day's work list opens each lead).
+   * The plain-text part prints the URL after the row.
+   */
+  rowLinks?: Array<string | null>;
 };
 
 /** What a kind reports for one IST day. */
@@ -231,7 +238,26 @@ export type DigestKindDescriptor = {
    * defaults in schedule.ts (enabled, the default recipient). A kind that must
    * not mail anyone until an admin says so sets `{ enabled: false, recipients: [] }`.
    */
-  defaults?: { enabled?: boolean; recipients?: string[] };
+  defaults?: { enabled?: boolean; recipients?: string[]; roles?: Record<string, boolean> };
+  /**
+   * ID 194 — role switches shown on the settings screen ("ISRs", "ASMs"). Keys
+   * are user roles; the stored `roles` setting turns each on or off. Only a
+   * personal kind (`perRecipient`) reads them.
+   */
+  roleSwitches?: Array<{ key: string; label: string }>;
+  /**
+   * ID 194 — a PERSONAL digest: one mail per person, each with their own
+   * figures. Each person is claimed on their own (digest_person_runs, E-353),
+   * so a failure for one is retried for that one only and nobody is mailed
+   * twice. `collect` above is then only used for the settings screen's preview
+   * and is never sent. The stored recipients are not mailed by a real send.
+   */
+  perRecipient?: {
+    /** Who is owed a mail, with the settings' role switches applied. */
+    resolve(settings: { roles: Record<string, boolean> }): Promise<DigestPerson[]>;
+    /** That person's figures. Must never throw — ok:false skips (and retries) them. */
+    collect(istDay: string, person: DigestPerson): Promise<{ ok: boolean; figures: DigestFigures; error?: string }>;
+  };
   /**
    * Recipients worked out at send time and added to the stored list — people
    * picked by role or activity ("the buyback team and the CEO"), so a new joiner
@@ -250,6 +276,9 @@ export type DigestKindDescriptor = {
     istDay: string,
   ): Promise<{ ok: boolean; detail: DigestDetail; error?: string }>;
 };
+
+/** One person a personal digest (`perRecipient`) is written for and sent to. */
+export type DigestPerson = { id: string; name: string; email: string; role: string };
 
 /** Empty figures, for a failed collect. */
 export const EMPTY_FIGURES: DigestFigures = { activity: [], backlog: [] };

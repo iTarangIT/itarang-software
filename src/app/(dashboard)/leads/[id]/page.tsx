@@ -26,7 +26,9 @@ import {
 import {
   TouchpointTimeline,
   type LeadTouchpoint,
+  type TimelineLimitEvent,
 } from "@/components/leads/touchpoint-timeline";
+import { limitPassedEvents } from "@/lib/leads/clocks";
 import { failedSendTimelineEntries, mergeNewestFirst } from "@/lib/leads/quoteSends";
 import { listLeadQuoteSends } from "@/lib/leads/quoteSendsStore";
 
@@ -136,6 +138,23 @@ export default async function LeadDetailPage({ params }: any) {
     console.error("[leads/[id]] touchpoint history unavailable:", err);
   }
 
+  // IDs 85 / 86 — missed time limits on this lead (fixed records, E-350),
+  // merged into the timeline. [] on a database without E-350.
+  let limitEvents: TimelineLimitEvent[] = [];
+  try {
+    limitEvents = (await limitPassedEvents({ leadId: id })).map((e) => ({
+      id: `${e.clock}-${e.passed_at}`,
+      clock: e.clock,
+      limit_value: e.limit_value,
+      limit_unit: e.limit_unit,
+      owner_name: e.owner_name,
+      owner_inferred: e.owner_inferred,
+      passed_at: new Date(e.passed_at).toISOString(),
+    }));
+  } catch (err) {
+    console.error("[leads/[id]] limit events unavailable:", err);
+  }
+
   // A call made in NeoDove is a call. It lands in lead_touchpoints (never in
   // ai_call_logs — that table is what OUR dialer did, and the dialer cron sweeps
   // it), so Call History / Total Calls / Latest Status could not see it: the page
@@ -240,6 +259,7 @@ export default async function LeadDetailPage({ params }: any) {
         <div className="mt-6">
           <TouchpointTimeline
             touchpoints={timeline}
+            limitEvents={limitEvents}
             leadId={id}
             canExport={canExportLeadHistory({
               role: user.role,

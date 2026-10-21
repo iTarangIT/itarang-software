@@ -48,6 +48,15 @@ export function isMapped(mapped: Map<string, ItemProduct>, itemName: string | nu
 }
 
 /** A line's product class once its mapping is known: an onboarding-fee item is revenue, never a battery (ID 172). */
-export function classFor(m: ItemProduct, productClass: string | null): string | null {
-    return m.asset_type === "onboarding_fee" ? "other" : productClass;
+export function classFor(m: ItemProduct, productClass: string | null, hsn?: string | null): string | null {
+    if (m.asset_type === "onboarding_fee") return "other";
+    // A14: a line read with no HSN cannot be classed from it, so its Item
+    // mapping decides — the same fallback gross margin uses — instead of
+    // leaving a mapped battery out of Batteries sold. An HSN, when present,
+    // still wins (850790, an LCD box, stays "other" whatever it is mapped to).
+    if (!hsn || !String(hsn).trim()) {
+        if (m.asset_type === "battery" || m.asset_type === "charger") return m.asset_type;
+        if (m.asset_type) return "other";
+    }
+    return productClass;
 }

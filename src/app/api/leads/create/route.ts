@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { safeEqual } from "@/lib/cron-auth";
 import crypto from 'crypto';
 import { db } from '@/lib/db';
 import { leads, personalDetails, auditLogs, accounts, leadProducts, users } from '@/lib/db/schema';
@@ -272,8 +273,10 @@ function tryTestBypass(req: Request): { id: string; name: string; email: string;
     const secretHeader = req.headers.get('x-test-admin-secret');
     const dealerCode = req.headers.get('x-test-dealer-code');
     const userId = req.headers.get('x-test-user-id');
-    const expected = process.env.NBFC_TEST_BYPASS_SECRET || 'test-bypass';
-    if (!secretHeader || secretHeader !== expected) return null;
+    // ID 130: no default secret (an unset env used to accept "test-bypass"),
+    // and a timing-safe compare.
+    const expected = process.env.NBFC_TEST_BYPASS_SECRET;
+    if (!expected || !secretHeader || !safeEqual(secretHeader, expected)) return null;
     if (!dealerCode || !userId) return null;
     return {
         id: userId,

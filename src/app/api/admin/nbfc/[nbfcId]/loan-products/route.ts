@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { safeEqual } from "@/lib/cron-auth";
 import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
@@ -18,7 +19,8 @@ function isTestBypass(req: NextRequest): boolean {
   if (process.env.NBFC_E009_TEST_BYPASS_AUTH !== "1") return false;
   const expected = process.env.NBFC_E009_TEST_BYPASS_TOKEN;
   if (!expected) return false;
-  return req.headers.get("x-nbfc-e009-test-bypass") === expected;
+  // ID 130: timing-safe compare.
+  return safeEqual(req.headers.get("x-nbfc-e009-test-bypass") ?? "", expected);
 }
 
 const BATTERY_CATEGORIES = ["3W", "2W", "4W", "INVERTER", "SOLAR"] as const;

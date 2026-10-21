@@ -30,7 +30,13 @@ type KindMeta = {
     sections: Section[];
     /** Which daily slots this kind sends in. Older API responses omit it = both. */
     slots?: Array<"morning" | "evening">;
+    /** ID 194 — a personal kind: one mail per person, switched on per role. */
+    personal?: boolean;
+    roleSwitches?: Array<{ key: string; label: string }>;
 };
+
+/** ID 194 — the people a personal kind writes for (test send picker). */
+type Person = { id: string; name: string; role: string };
 
 type Settings = {
     enabled: boolean;
@@ -42,6 +48,8 @@ type Settings = {
     detail: "summary" | "detailed";
     sections: Record<string, boolean>;
     attachExcel: boolean;
+    /** ID 194 — role switches of a personal kind; {} for every other kind. */
+    roles?: Record<string, boolean>;
 };
 
 /** ID 10 — recipients the digest adds at send time (role / activity based). */
@@ -102,6 +110,7 @@ export function DigestSettingsForm({ kind }: { kind: string }) {
     const [saving, setSaving] = useState(false);
     const [testing, setTesting] = useState(false);
     const [newRecipient, setNewRecipient] = useState("");
+    const [testPerson, setTestPerson] = useState("");
 
     const { data, isLoading } = useQuery({
         queryKey: ["digest-settings", kind],
@@ -111,7 +120,13 @@ export function DigestSettingsForm({ kind }: { kind: string }) {
             if (!res.ok || !json.success) {
                 throw new Error(json?.error?.message ?? "Failed to load digest settings");
             }
-            return json.data as { settings: Settings; runs: RunRow[]; kind: KindMeta; audience?: Audience };
+            return json.data as {
+                settings: Settings;
+                runs: RunRow[];
+                kind: KindMeta;
+                audience?: Audience;
+                people?: Person[] | null;
+            };
         },
     });
 
@@ -120,6 +135,8 @@ export function DigestSettingsForm({ kind }: { kind: string }) {
     const meta = data?.kind ?? null;
     const audience = data?.audience ?? null;
     const sections = meta?.sections ?? [];
+    const personal = !!meta?.personal;
+    const people = data?.people ?? [];
 
     function patch(next: Partial<Settings>) {
         if (!settings) return;
@@ -152,7 +169,7 @@ export function DigestSettingsForm({ kind }: { kind: string }) {
         // its slot and counts everything, then mails nobody — which reads on the
         // history below exactly like a successful send. Switching it off is how
         // "send to nobody" is spelled.
-        if (settings.recipients.length <= 1) {
+        if (settings.recipients.length <= 1 && !personal) {
             toast.error("Keep at least one recipient, or switch the digest off.");
             return;
         }
@@ -174,7 +191,7 @@ export function DigestSettingsForm({ kind }: { kind: string }) {
 
     async function save() {
         if (!settings) return;
-        if (settings.recipients.length === 0) {
+        if (settings.recipients.length === 0 && !personal) {
             toast.error("Add at least one recipient.");
             return;
         }
@@ -219,7 +236,7 @@ export function DigestSettingsForm({ kind }: { kind: string }) {
             const res = await fetch(`/api/admin/settings/digests/${kind}/test`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({}),
+                body: JSON.stringify(personal && testPerson ? { personId: testPerson } : {}),
             });
             const json = await res.json();
             if (!res.ok || !json.success) {
@@ -273,8 +290,38 @@ export function DigestSettingsForm({ kind }: { kind: string }) {
                 </label>
             </div>
 
+            {/* ID 194 — a personal kind: who gets their own mail */}
+            {personal && (
+                <div className="space-y-2">
+                    <label className="block text-sm font-medium text-ink">Who gets it</label>
+                    <p className="text-xs text-ink-muted">
+                        Each person gets their own email, with only their numbers, their work list and — if
+                        people report to them — their team. Only active users with an email are mailed.
+                    </p>
+                    <div className="flex flex-wrap gap-4">
+                        {(meta.roleSwitches ?? []).map((r) => (
+                            <label key={r.key} className="flex cursor-pointer items-center gap-2 text-sm text-ink">
+                                <input
+                                    type="checkbox"
+                                    className="h-4 w-4"
+                                    checked={!!settings.roles?.[r.key]}
+                                    onChange={(e) => patch({ roles: { ...(settings.roles ?? {}), [r.key]: e.target.checked } })}
+                                />
+                                {r.label}
+                            </label>
+                        ))}
+                    </div>
+                    {audience && (
+                        <p className="rounded-lg border border-border bg-surface-subtle px-3 py-2 text-xs text-ink-muted">
+                            <span className="font-medium text-ink">Mailed at the next send (saved settings):</span>{" "}
+                            {audience.emails.length > 0 ? `${audience.emails.length} people — ${audience.emails.join(", ")}` : "nobody — switch a role on and save."}
+                        </p>
+                    )}
+                </div>
+            )}
+
             {/* Recipients */}
-            <div className="space-y-2">
+            <div className={personal ? "hidden" : "space-y-2"}>
                 <label className="block text-sm font-medium text-ink">Recipients</label>
                 <p className="text-xs text-ink-muted">
                     Everyone here gets every email this digest sends. At most {MAX_RECIPIENTS} addresses.
@@ -493,12 +540,27 @@ export function DigestSettingsForm({ kind }: { kind: string }) {
                         Discard
                     </Button>
                 )}
+                {personal && people.length > 0 && (
+                    <select
+                        aria-label="Whose email to test"
+                        className="ml-auto h-9 rounded-md border border-border bg-surface px-2 text-sm text-ink"
+                        value={testPerson}
+                        onChange={(e) => setTestPerson(e.target.value)}
+                    >
+                        <option value="">Test as: {people[0].name}</option>
+                        {people.map((p) => (
+                            <option key={p.id} value={p.id}>
+                                Test as: {p.name} ({p.role === "asm" ? "ASM" : "ISR"})
+                            </option>
+                        ))}
+                    </select>
+                )}
                 <Button
                     type="button"
                     variant="outline"
                     onClick={sendTest}
                     disabled={testing}
-                    className="ml-auto"
+                    className={personal && people.length > 0 ? "" : "ml-auto"}
                 >
                     {testing ? (
                         <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -508,6 +570,11 @@ export function DigestSettingsForm({ kind }: { kind: string }) {
                     Send test now
                 </Button>
             </div>
+            {personal && (
+                <p className="-mt-3 text-xs text-ink-muted">
+                    A test builds the chosen person&apos;s email and sends it to you, not to them.
+                </p>
+            )}
             {dirty && (
                 <p className="-mt-3 text-xs text-amber-700">
                     The test sends the <em>saved</em> settings, not the unsaved changes above.

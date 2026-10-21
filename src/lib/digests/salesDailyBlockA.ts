@@ -316,7 +316,7 @@ async function perPeriod(db: Exec, periods: Periods, make: (p: Period) => Return
 }
 
 /** Company MTD targets per metric, pro-rated, and how many people have one. */
-async function companyTargets(db: Exec, monthFirst: string, upTo: string) {
+export async function companyTargets(db: Exec, monthFirst: string, upTo: string) {
     try {
         const hol = (await db.execute(sql`
             SELECT holiday_date::text AS d FROM holiday_calendar

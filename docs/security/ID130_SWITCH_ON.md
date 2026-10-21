@@ -3,6 +3,19 @@
 The code for this is on `Aditya` ("ID 130" commit). Everything below is a
 **server step** for whoever owns the box. Sandbox first, then prod.
 
+**Update 16 Oct.** The 15 Oct check still lists one gap: NBFC systems with
+their own code can send unsigned agreement / e-NACH / V-KYC results until
+`WEBHOOK_AUTH_STRICT=1` is on. That is by design (`allowUnsigned` on the NBFC
+rails); step 3 below closes it. The 16 Oct commit also made the last six
+hand-written secret compares constant-time (internal security-events, the
+NBFC test-only gates, the Meta WhatsApp verify token), removed the
+`"test-bypass"` default secret from three NBFC test gates, and made the
+legacy `/api/bolna/webhook` refuse under strict mode in every environment and
+ring the admin bell when `BOLNA_WEBHOOK_SECRET` is missing. A contract test
+(`src/lib/security/__tests__/secret-compare.contract.test.ts`) keeps it that way.
+If an NBFC Playwright run used the old default, set
+`NBFC_TEST_BYPASS_SECRET=test-bypass` in that server's env.
+
 What the code now does:
 
 - **Every scheduled-job route** (`/api/cron/**`, `/api/scraper/cron`, the two

@@ -426,6 +426,16 @@ function targetsPendingDigestItem(idPrefix: string) {
   };
 }
 
+// ID 194 — each ISR / ASM's own morning mail (switched on per role).
+function myDayDigestItem(idPrefix: string) {
+  return {
+    id: `${idPrefix}-my-day-digest`,
+    label: "My Day Emails (ISR / ASM)",
+    icon: MailCheck,
+    href: "/admin/settings/my-day",
+  };
+}
+
 // R-15 — Monday's count of leads idle over 7 working days, per holder.
 function idleWeeklyDigestItem(idPrefix: string) {
   return {
@@ -528,6 +538,7 @@ const ROLE_TRAILING_SECTIONS: Record<string, any[]> = {
         salesDailyDigestItem("sh"),
         idleWeeklyDigestItem("sh"),
         targetsPendingDigestItem("sh"),
+        myDayDigestItem("sh"),
         buybackDailyDigestItem("sh"),
         loanProductSettingsItem("sh"),
         nbfcSettingsSubnav("sh"),
@@ -1676,6 +1687,7 @@ const roleNavigation: Record<string, any[]> = {
         salesDailyDigestItem("admin"),
         idleWeeklyDigestItem("admin"),
         targetsPendingDigestItem("admin"),
+        myDayDigestItem("admin"),
         buybackDailyDigestItem("admin"),
         timeLimitsItem("admin"),
         kycFileOpensItem("admin"),

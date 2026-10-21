@@ -1,12 +1,13 @@
 import { requireRole } from "@/lib/auth-utils";
 import { UploadWizard } from "./_components/UploadWizard";
 import { UploadBatchList } from "./_components/UploadBatchList";
+import { InterestUploadCard } from "./_components/InterestUploadCard";
 
 export const dynamic = "force-dynamic";
 
 // BRD §0.4 — admin bulk CSV upload. Admin-only.
 export default async function AdminUploadPage() {
-    await requireRole(["admin", "sales_head", "ceo", "partner"]);
+    const user = await requireRole(["admin", "sales_head", "ceo", "partner"]);
 
     return (
         <div className="px-6 md:px-8 py-6 space-y-6 max-w-[1200px]">
@@ -22,6 +23,8 @@ export default async function AdminUploadPage() {
                 </p>
             </header>
             <UploadWizard />
+            {/* A33 — Hot / Warm / Cold for many leads at once (route: admin, sales_head, ceo). */}
+            {user.role !== "partner" && <InterestUploadCard />}
             <UploadBatchList />
         </div>
     );

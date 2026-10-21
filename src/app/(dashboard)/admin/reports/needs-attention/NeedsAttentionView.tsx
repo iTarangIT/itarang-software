@@ -29,6 +29,14 @@ function fmtDate(iso: string | null): string {
     return new Date(iso).toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
 }
 
+/** A follow-up date with its year when it is not this year (a 60-day-ahead date can cross into next year). */
+function fmtFollowUp(iso: string | null): string {
+    if (!iso) return "—";
+    const d = new Date(iso);
+    const sameYear = d.getFullYear() === new Date().getFullYear();
+    return d.toLocaleDateString("en-IN", { day: "2-digit", month: "short", ...(sameYear ? {} : { year: "numeric" }) });
+}
+
 function idleTone(days: number): string {
     if (days >= 14) return "text-rose-700 font-semibold";
     if (days >= 7) return "text-amber-700 font-semibold";
@@ -84,6 +92,8 @@ export function NeedsAttentionView() {
     const anyFilter = Boolean(q || role || status || interest || minDays);
     const totalIdle = (data?.holders ?? []).reduce((s, h) => s + h.idle, 0);
     const totalDead = (data?.holders ?? []).reduce((s, h) => s + h.non_responsive, 0);
+    // ID 192: a follow-up more than 30 days ahead is ignored; those leads are listed and counted apart.
+    const totalParked = (data?.holders ?? []).reduce((s, h) => s + (h.parked ?? 0), 0);
     const capped = rows.length < totalIdle + totalDead;
     const idle = shown.filter((r) => !r.non_responsive);
     const deadNumbers = shown.filter((r) => r.non_responsive);
@@ -157,6 +167,7 @@ export function NeedsAttentionView() {
                             <th className="px-3 py-2 text-left font-semibold">Status</th>
                             <th className="px-3 py-2 text-right font-semibold">Working days idle</th>
                             <th className="px-3 py-2 text-left font-semibold">Last worked</th>
+                            <th className="px-3 py-2 text-left font-semibold">Follow-up</th>
                             <th className="px-3 py-2 text-left font-semibold">Last disposition</th>
                             <th className="px-3 py-2" />
                         </tr>
@@ -198,6 +209,12 @@ export function NeedsAttentionView() {
                                 </td>
                                 <td className={`px-3 py-2 text-right tabular-nums ${idleTone(r.days_idle)}`}>{r.days_idle}</td>
                                 <td className="px-3 py-2 text-ink-muted">{fmtDate(r.last_worked_at)}</td>
+                                <td
+                                    className="px-3 py-2 text-ink-muted"
+                                    title={r.next_follow_up_at ? "A follow-up more than 30 days ahead does not hold the idle clock" : undefined}
+                                >
+                                    {fmtFollowUp(r.next_follow_up_at)}
+                                </td>
                                 <td className="px-3 py-2 text-ink-muted">
                                     {r.last_disposition ?? "—"}
                                     {r.last_disposition_bucket && (
@@ -231,6 +248,11 @@ export function NeedsAttentionView() {
                 <span className="font-semibold text-ink">{totalIdle.toLocaleString("en-IN")}</span>
                 <span className="text-ink-muted">idle leads</span>
                 {totalDead > 0 && <span className="text-ink-muted">· {totalDead.toLocaleString("en-IN")} non-responsive</span>}
+                {totalParked > 0 && (
+                    <span className="text-ink-muted" title="A follow-up more than 30 days ahead is ignored: the lead ages on its other dates and is listed with that date.">
+                        · of which {totalParked.toLocaleString("en-IN")} with a follow-up over 30 days ahead
+                    </span>
+                )}
                 {anyFilter && (
                     <span className="text-ink-muted">
                         · <span className="font-semibold text-ink">{shown.length.toLocaleString("en-IN")}</span> match the filters

@@ -45,6 +45,7 @@ import {
 import type { FunnelCountsResult } from "@/lib/admin/funnelCountsTypes";
 import type { ReportResult } from "@/lib/admin/types";
 import type { SalesDashboard } from "@/lib/admin/salesDashboardTypes";
+import { batteryReading } from "@/lib/admin/batteryReading";
 import type { CeoOverviewData } from "@/components/dashboard/ceo/CeoOverviewCards";
 import { DashboardSkeleton } from "@/components/dashboard/ceo/DashboardSkeleton";
 import { GreenNewsCard } from "@/components/dashboard/ceo/GreenNewsCard";
@@ -451,9 +452,10 @@ export default function CEODashboard() {
           n: x.awaiting_assignment_total,
           icon: UserPlus,
           tone: "warn",
-          label: "Sales-ready leads with no owner",
+          label: "Ready leads with no owner",
           count: num(x.awaiting_assignment_total),
-          sub: `${num(x.unassigned_over_7d)} waiting ${x.unassigned_overdue_days}+ days`,
+          // ID 184: the same Hot / AI / other split as the Sales dashboard card.
+          sub: `${x.awaiting_assignment_split ? `${num(x.awaiting_assignment_split.hot)} Hot · ${num(x.awaiting_assignment_split.ai)} AI qualified · ${num(x.awaiting_assignment_split.other)} other · ` : ""}${num(x.unassigned_over_7d)} waiting ${x.unassigned_overdue_days}+ days`,
           href: "/admin/ready-to-assign",
           cta: "Open list",
         },
@@ -581,11 +583,10 @@ export default function CEODashboard() {
     return { pill: { text: `${v.pct}% of target`, tone: toneForPct(v.pct) }, line, split };
   };
   const revenueTarget = vsTarget(money ? money.revenue.now : null, "revenue", inr);
-  const batteriesTarget = vsTarget(
-    sales.data ? sales.data.outcome.batteries_to_dealers : null,
-    "batteries_sold",
-    num,
-  );
+  // A14: read through batteryReading — invoices with no item lines read make
+  // the count unknown ("—"), never a bare 0; some missing makes it a floor (+).
+  const batteries = sales.data ? batteryReading(sales.data.outcome) : null;
+  const batteriesTarget = vsTarget(batteries ? batteries.value : null, "batteries_sold", num);
 
   // ── Revenue pace ─────────────────────────────────────────────────────────
   const chart = ov?.chart ?? [];
@@ -840,7 +841,11 @@ export default function CEODashboard() {
         <KpiTile
           label="Batteries to dealers"
           href={`/ceo/batteries?from=${win.from}&to=${win.to}&label=${encodeURIComponent(periodLabel)}`}
-          value={sales.data ? num(sales.data.outcome.batteries_to_dealers) : "—"}
+          value={
+            !batteries || batteries.value == null
+              ? "—"
+              : `${num(batteries.value)}${batteries.state === "partial" ? "+" : ""}`
+          }
           pill={batteriesTarget.pill}
           sub={
             sales.isLoading
@@ -848,7 +853,13 @@ export default function CEODashboard() {
               : [
                   batteriesTarget.line,
                   batteriesTarget.split,
-                  sales.data ? "Battery lines on dealer invoices in the period" : "Not available yet",
+                  !batteries
+                    ? "Not available yet"
+                    : batteries.state === "unknown"
+                      ? `No item lines read on the ${num(batteries.invoices ?? 0)} invoices in the period`
+                      : batteries.state === "partial"
+                        ? `At least — ${num(batteries.with_lines ?? 0)} of ${num(batteries.invoices ?? 0)} invoices have item lines`
+                        : "Battery units on dealer invoices in the period (HSN 8507, credit notes netted)",
                 ]
                   .filter(Boolean)
                   .join(" · ")
@@ -1245,7 +1256,12 @@ export default function CEODashboard() {
                   <span>% of CEO target to date</span>
                   <span className="text-right">Revenue</span>
                   <span className="text-right">Converted</span>
-                  <span className="text-right">Idle leads</span>
+                  <span
+                    className="text-right"
+                    title="Open leads past the holder's idle limit: inside sales and ASM limits from Admin › Time limits (ID 192)"
+                  >
+                    Idle leads
+                  </span>
                   <span className="text-right">Engaged</span>
                 </div>
                 {team.map((t) => {
