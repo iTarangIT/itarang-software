@@ -26,17 +26,19 @@ const MARK = " [CRM metric rules - answer with these definitions] ";
 
 /** Words that put a question on a topic. Broad on purpose: a spare rule costs little, a missing one a wrong number. */
 const TOPIC_WORDS: Record<AnalystTopic, RegExp> = {
-    leads: /lead|funnel|came in|enquir|inquir|source/i,
-    calls: /call|dial|engag|talk|spoke|neodove|hot|handed|transfer/i,
+    leads: /\blead|funnel|came in|enquir|inquir|source|\bready|unassigned|no owner|unowned|ownerless/i,
+    calls: /\bcall|dial|engag|talk|spoke|neodove|\bhot\b|handed|transfer/i,
     quotes: /quot/i,
-    won: /won|win|convert|closed|closing|lost|loss/i,
+    won: /\bwon\b|\bwin|convert|closed|closing|\blost\b|\bloss/i,
     visits: /visit|field/i,
     business: /financ|battery sale|business type|segment|buyback|scrap/i,
-    revenue: /revenue|sales value|billing|billed|invoice|turnover|₹|rupee|lakh|crore|cr|owed|outstanding|receivable|credit note|void|cancel|order/i,
-    margin: /margin|profit|cost/i,
-    batteries: /batter|units?|sku|sold/i,
-    people: /perform|salesperson|sales ?person|reps?|isr|asm|owner|team|who|best|top|each|leaderboard|per person|by person|target/i,
+    revenue: /revenue|sales value|billing|billed|invoice|turnover|₹|rupee|lakh|crore|\bcr\b|owed|outstanding|receivable|credit note|void|cancel|order/i,
+    margin: /margin|profit|\bcost/i,
+    batteries: /batter|\bunits?\b|\bsku|\bsold\b/i,
+    people: /perform|salesperson|sales ?person|\breps?\b|\bisr|\basm|owner|\bteam|\bwho\b|best|\btop\b|each|leaderboard|per person|by person|target/i,
     trend: /\btrend|over time|month[- ]?(wise|on[- ]month|by[- ]month)|\bweek(ly|[- ]wise)\b|\bdaily\b|\bgrowth\b|\bgrow|forecast|\bproject|predict|next (two|2|few) months|last \d+ months/i,
+    accounts: /account|gstin|\bgst\b|live dealer|active dealer|closed dealer|how many dealers|dealer (count|base)|churn/i,
+    idle: /idle|stale|untouched|not worked|no work|sitting|needs attention|neglect|follow[- ]?up/i,
 };
 
 /** Room the rules get beside the longest allowed question (tests hold it). */

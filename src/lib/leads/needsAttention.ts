@@ -65,6 +65,8 @@ export type NeedsAttentionRow = {
     non_responsive: boolean;
     /** ID 77.1 — awaiting field visit past the transfer → visit limit. */
     visit_overdue: boolean;
+    /** ID 192 — at or past the holder's idle limit. False for a row listed only because its visit is overdue. */
+    past_idle: boolean;
 };
 
 // ID 74 — Won is open but waits on onboarding, not on the rep: not "idle".
@@ -112,7 +114,8 @@ function baseQuery(opts: Opts, limits: TimeLimits, transferLimit: SQL): SQL {
                    (${nonResponsiveSql(sql`dl.id`)}
                     OR (to_jsonb(dl)->>'contactability') IS NOT NULL) AS non_responsive,
                    ${transferVisitOverdueSql(transferLimit)} AS visit_overdue,
-                   ${threshold}                                  AS threshold
+                   ${threshold}                                  AS threshold,
+                   (${DAYS_IDLE} >= ${threshold})                AS past_idle
               FROM dealer_leads dl
               LEFT JOIN users u ON u.id::text = dl.current_owner_id
              WHERE dl.current_owner_id IS NOT NULL
@@ -150,6 +153,7 @@ export async function listNeedsAttention(
         last_disposition_bucket: (r.last_disposition_bucket as string | null) ?? null,
         non_responsive: Boolean(r.non_responsive),
         visit_overdue: Boolean(r.visit_overdue),
+        past_idle: Boolean(r.past_idle),
     }));
 }
 
@@ -166,6 +170,8 @@ export type NeedsAttentionHolderSummary = {
     parked: number;
     /** The stale_critical limit the second band used. */
     critical_days: number;
+    /** Listed only because the field visit is overdue (not past the idle limit) — NOT in `idle`. */
+    visit_overdue_only: number;
 };
 
 /**
@@ -177,12 +183,16 @@ export async function summarizeNeedsAttention(opts: Opts = {}): Promise<NeedsAtt
     const [limits, transferLimit] = await Promise.all([getTimeLimits(), transferLimitSql()]);
     const critical = Math.floor(limits.stale_critical);
     const rows = await db.execute(sql`
+        -- ID 192: "idle" counts only leads past their idle limit. A lead the page
+        -- lists only because its field visit is overdue (baseQuery's
+        -- OR visit_overdue) is counted apart, never as idle.
         SELECT x.holder_id, MAX(x.holder_name) AS holder_name, MAX(x.holder_role) AS holder_role,
-               COUNT(*) FILTER (WHERE NOT x.non_responsive)::int                     AS idle,
-               COUNT(*) FILTER (WHERE NOT x.non_responsive AND x.days_idle >= ${critical}::int)::int AS idle_over_14,
-               COALESCE(MAX(x.days_idle) FILTER (WHERE NOT x.non_responsive), 0)::int AS oldest_days,
+               COUNT(*) FILTER (WHERE NOT x.non_responsive AND x.past_idle)::int    AS idle,
+               COUNT(*) FILTER (WHERE NOT x.non_responsive AND x.past_idle AND x.days_idle >= ${critical}::int)::int AS idle_over_14,
+               COALESCE(MAX(x.days_idle) FILTER (WHERE NOT x.non_responsive AND x.past_idle), 0)::int AS oldest_days,
                COUNT(*) FILTER (WHERE x.non_responsive)::int                         AS non_responsive,
-               COUNT(*) FILTER (WHERE NOT x.non_responsive AND x.far_follow_up)::int  AS parked
+               COUNT(*) FILTER (WHERE NOT x.non_responsive AND x.past_idle AND x.far_follow_up)::int AS parked,
+               COUNT(*) FILTER (WHERE NOT x.non_responsive AND NOT x.past_idle AND x.visit_overdue)::int AS visit_overdue_only
           FROM ${baseQuery(opts, limits, transferLimit)} x
          GROUP BY x.holder_id
          ORDER BY idle DESC
@@ -197,6 +207,7 @@ export async function summarizeNeedsAttention(opts: Opts = {}): Promise<NeedsAtt
         non_responsive: Number(r.non_responsive ?? 0),
         parked: Number(r.parked ?? 0),
         critical_days: critical,
+        visit_overdue_only: Number(r.visit_overdue_only ?? 0),
     }));
     return out;
 }

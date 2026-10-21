@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { QueueTabs } from "./QueueTabs";
 import { LeadQueueTable } from "./LeadQueueTable";
 import type { StaleThresholds } from "@/lib/inside-sales/staleness";
+import type { OfficeHours } from "@/lib/calendar/officeHours";
 import { BulkClaimBar } from "./BulkClaimBar";
 import { ClaimByNumberPanel } from "@/components/leads/ClaimByNumberPanel";
 import { claimsByNumberOnly, ISR_POOL_TABS } from "@/lib/leads/claimScope";
@@ -304,7 +305,7 @@ export function QueueView({
     // ── Holiday cache for stale-row visual cues (BRD §0.5) ───────────────
     const holidaysQuery = useQuery<{
         success: true;
-        data: { dates: string[]; stale_thresholds?: StaleThresholds };
+        data: { dates: string[]; stale_thresholds?: StaleThresholds; office_hours?: OfficeHours };
     }>({
         queryKey: ["inside-sales-holidays"],
         queryFn: async () => {
@@ -320,6 +321,8 @@ export function QueueView({
     );
     // ID 85 — the no-touch cue limits in force today (defaults until loaded).
     const staleThresholds = holidaysQuery.data?.data?.stale_thresholds;
+    // ID 85 #8 — the working weekdays in force today (Mon–Sat until loaded).
+    const officeHours = holidaysQuery.data?.data?.office_hours;
 
     return (
         <div className="space-y-4">
@@ -493,6 +496,7 @@ export function QueueView({
                     viewerId={viewerId}
                     holidaySet={holidaySet}
                     staleThresholds={staleThresholds}
+                    officeHours={officeHours}
                     selection={
                         selectable
                             ? {

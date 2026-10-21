@@ -23,9 +23,14 @@ import { LEAD_EVENT_TYPES, parseEventTypes } from "@/lib/leads/eventTypes";
 import { parseLeadListFilters } from "@/lib/leads/leadListParams";
 import { hasLeadClocks } from "@/lib/leads/clocks";
 import { workingDaysSince as officeWorkingDaysSince } from "@/lib/calendar/officeCalendar";
-import { loadHolidays } from "@/lib/calendar/holidays";
+import { loadOfficeCalendar } from "@/lib/calendar/holidays";
+import type { OfficeHoursArg } from "@/lib/calendar/officeHours";
 import { getTimeLimits } from "@/lib/timeLimits/store";
-import { doorLabel, originLabel } from "@/lib/leads/leadSourceVocab";
+import { doorLabel, LEAD_DOOR_LABEL, LEAD_DOORS, originLabel, scrapeRunLabels, SOURCE_DOOR_NONE } from "@/lib/leads/leadSourceVocab";
+import { fetchScrapeRunFacets } from "@/lib/leads/acquisitionCampaigns";
+import { CAMPAIGN_NONE, CAMPAIGN_SYSTEM_LABEL } from "@/lib/leads/campaign";
+import { fetchCampaignFacets } from "@/lib/leads/leadCampaign";
+import { displayCampaignName } from "@/lib/leads/regionSummary";
 import { onboardingStall, STALL_LABEL } from "@/lib/onboarding/stall";
 import { connectedCall, engagedCall, engagedState, humanCall } from "@/lib/reports/metricDefinitions";
 import { TARGET_METRIC_KEYS, TARGET_STATUS_LABEL, TARGET_STATUSES } from "@/lib/targets/rules";
@@ -57,6 +62,12 @@ export interface RunContext {
 export interface Dataset extends DatasetInfo {
     count(ctx: RunContext): Promise<number>;
     build(ctx: RunContext): Promise<DatasetSheet[]>;
+    /**
+     * Options for select filters whose values live in the database (filter key →
+     * options), merged in by the catalogue route. Fail-soft: the route keeps the
+     * static options when this throws.
+     */
+    loadFilterOptions?(): Promise<Record<string, { value: string; label: string }[]>>;
 }
 
 const MANAGERS = ["admin", "ceo", "sales_head"] as const;
@@ -124,11 +135,11 @@ function dateRange(params: URLSearchParams, expr: SQL): SQL {
 // ───────────────────────────────── Leads ────────────────────────────────────
 
 /** Working days on the office calendar (Mon–Sat, holidays off) from the day after `since` to today. */
-function workingDaysSince(since: unknown, holidays: ReadonlySet<string>): number | null {
+function workingDaysSince(since: unknown, holidays: ReadonlySet<string>, hours?: OfficeHoursArg): number | null {
     if (!since) return null;
     const d = new Date(String(since));
     if (Number.isNaN(d.getTime())) return null;
-    return officeWorkingDaysSince(d, new Date(), holidays);
+    return officeWorkingDaysSince(d, new Date(), holidays, hours);
 }
 
 /**
@@ -143,7 +154,7 @@ async function leadExtras(ids: string[]): Promise<Map<string, Record<string, unk
         // ID 86 — first attempt / contact and the time-limit flags come from the
         // lead clocks (calls AND visits, E-337); without them, the old
         // calls-only rule.
-        const [clocks, holidays] = await Promise.all([hasLeadClocks(), loadHolidays()]);
+        const [clocks, { holidays, hours }] = await Promise.all([hasLeadClocks(), loadOfficeCalendar()]);
         const firstTouch = clocks
             ? sql`
               LEFT JOIN LATERAL (
@@ -234,7 +245,7 @@ async function leadExtras(ids: string[]): Promise<Map<string, Record<string, unk
                 owner_role: ((r.owner_role as string | null) ?? "").replace(/_/g, " ") || null,
                 // The score column defaults to 0; a lead the AI never scored shows blank, not 0.
                 ai_score: r.ai_band || Number(r.ai_score) > 0 ? r.ai_score : null,
-                idle_working_days: closed ? null : workingDaysSince(r.last_worked_on ?? r.assigned_on ?? created, holidays),
+                idle_working_days: closed ? null : workingDaysSince(r.last_worked_on ?? r.assigned_on ?? created, holidays, hours),
             });
         }
     } catch (e) {
@@ -271,7 +282,36 @@ const leads: Dataset = {
             type: "select",
             options: [...BUSINESS_TYPE_OPTIONS, { value: BUSINESS_TYPE_UNSET, label: BUSINESS_TYPE_UNSET_LABEL }],
         },
+        // HANDOVER-A31 — the Leads list's Lead source / Campaign / Scrape run
+        // filters, same params (parseLeadListFilters reads them via leadParams).
+        // Lead source is the effective door: stamped, else implied by the legacy source.
+        {
+            key: "source_door",
+            label: "Lead source",
+            type: "select",
+            options: [...LEAD_DOORS.map((d) => ({ value: d, label: LEAD_DOOR_LABEL[d] })), { value: SOURCE_DOOR_NONE, label: "Unknown" }],
+        },
+        { key: "campaign", label: "Campaign", type: "select", options: [{ value: CAMPAIGN_NONE, label: "Not in a campaign" }] },
+        { key: "scrape_run", label: "Scrape run", type: "select", options: [] },
     ],
+    async loadFilterOptions() {
+        const [campaigns, runs] = await Promise.all([fetchCampaignFacets(), fetchScrapeRunFacets()]);
+        return {
+            campaign: [
+                { value: CAMPAIGN_NONE, label: "Not in a campaign" },
+                // The Leads filter bar's label rule: NeoDove's stored name, else the derived AI-dialer title.
+                ...campaigns.map((c) => ({
+                    value: c.id,
+                    label: `${CAMPAIGN_SYSTEM_LABEL[c.system]} · ${
+                        c.system === "neodove"
+                            ? c.name
+                            : displayCampaignName({ category: c.category, regionFilter: c.region_filter, startedAt: c.started_at })
+                    }`,
+                })),
+            ],
+            scrape_run: scrapeRunLabels(runs).map((r) => ({ value: r.id, label: r.label })),
+        };
+    },
     sheets: [
         {
             name: "Leads",
@@ -569,7 +609,7 @@ const dealerOnboarding: Dataset = {
              LIMIT ${rowLimit(ctx)}
         `);
         // ID 85 — the office calendar and the stall limits in force today.
-        const [holidays, limits] = await Promise.all([loadHolidays(), getTimeLimits()]);
+        const [{ holidays, hours }, limits] = await Promise.all([loadOfficeCalendar(), getTimeLimits()]);
         const stallLimits = { dealerDays: limits.onboarding_stall_dealer, usWorkingDays: limits.onboarding_stall_us };
         return [
             {
@@ -584,6 +624,7 @@ const dealerOnboarding: Dataset = {
                         new Set(holidays),
                         new Date(),
                         stallLimits,
+                        hours,
                     );
                     return { ...r, stalled: on ? STALL_LABEL[on] : null };
                 }),
@@ -751,7 +792,7 @@ async function accountRows(ctx: RunContext) {
 const dealerAccounts: Dataset = {
     id: "dealer_accounts",
     label: "Dealer accounts",
-    description: "Every activated dealer with its owner, how it came in, last invoice and health. Not date-ranged: it is the dealer base as it stands today.",
+    description: "Every activated dealer with its owner, how it came in, last invoice and health. Not date-ranged: it is the dealer base as it stands today. A dealer closed by hand shows Health \"Closed\" with the reason, date and who closed it; the \"No owner\" and \"GSTIN missing\" filters leave closed dealers out (as the Accounts tabs count them) unless Health = Closed is picked.",
     roles: MANAGERS,
     ownRowsRoles: ["asm", "inside_sales_rep"],
     dateFields: [],
@@ -786,6 +827,9 @@ const dealerAccounts: Dataset = {
                 { key: "last_order", header: "Last invoice", meaning: "Date of the latest matched invoice.", kind: "date" },
                 { key: "days_since_last_order", header: "Days since last invoice", meaning: "Calendar days (IST) since the last invoice. Blank = never invoiced.", kind: "number" },
                 { key: "bucket_label", header: "Health", meaning: "Active 0–20 days, Cooling 21–30, Orange 31–45, Red 46–60, Dormant 60+; never invoiced: Not ordered yet (≤30 days since activation) or Never ordered; an open \"Order placed\" pauses the ageing (same as Dealer Health). Closed = closed by hand — not counted as a live dealer anywhere.", width: 30 },
+                { key: "closed_reason", header: "Closed reason", meaning: "Why the dealer was closed by hand (\"Lost / closed dealer\"). Blank = not closed.", width: 30 },
+                { key: "closed_on", header: "Closed on", meaning: "The day (IST) the dealer was closed. Blank = not closed.", kind: "date" },
+                { key: "closed_by_name", header: "Closed by", meaning: "Who closed the dealer. Blank = not closed.", width: 22 },
                 { key: "revenue_90d", header: "Billed, last 90 days (₹)", meaning: "Invoice totals in the last 90 days. Void excluded, drafts counted.", kind: "money" },
                 { key: "revenue_fy", header: "Billed, this FY (₹)", meaning: "Invoice totals since 1 April.", kind: "money" },
                 { key: "revenue_lifetime", header: "Billed, lifetime (₹)", meaning: "Invoice totals, all time. Void excluded, drafts counted.", kind: "money" },
@@ -1054,7 +1098,7 @@ const visits: Dataset = {
                 { key: "location_pin", header: "Location pin", meaning: "Latitude, longitude captured at check-in. Blank = none captured.", width: 24 },
                 { key: "transferred_on", header: "Transferred on", meaning: "When the lead was last handed to an ASM.", kind: "datetime" },
                 { key: "transferred_by", header: "Transferred by", meaning: "Who handed it over.", width: 22 },
-                { key: "owner_at_transfer", header: "Lead owner at transfer", meaning: "ID 179: who owned the lead when it was handed over — the person 'Hot to field' is credited to (Transferred by, on old rows that did not record it).", width: 22 },
+                { key: "owner_at_transfer", header: "Lead owner at transfer", meaning: "ID 179: who owned the lead when it was handed over — the person 'Hot to field' is credited to (Transferred by, on old rows that did not record it). Blank = nobody owned it (a bulk assign of an unowned lead), so no one is credited.", width: 22 },
                 { key: "days_transfer_to_visit", header: "Days from transfer to visit", meaning: "Calendar days from that transfer to this visit. Blank when the visit is not done or came before the transfer.", kind: "number" },
                 // IDs 85 / 86 — the field-visit (transfer) clock covering this visit.
                 { key: "visit_limit_days", header: "Field-visit limit (working days)", meaning: "Transfer clock (ID 86): the first-visit limit in force on the day of the transfer this visit answers. Blank = no transfer clock.", kind: "number" },
@@ -1113,7 +1157,8 @@ const visits: Dataset = {
               LEFT JOIN users ou ON ou.id::text = dl.current_owner_id
               ${clockJoin}
               LEFT JOIN LATERAL (
-                  SELECT tt.performed_at, tu.name, COALESCE(fo.name, tu.name) AS owner_name FROM lead_touchpoints tt
+                  -- HANDOVER-A31: the transferCredit() rule — no previous owner on a recorded move = nobody.
+                  SELECT tt.performed_at, tu.name, COALESCE(fo.name, CASE WHEN tt.to_owner_id IS NULL THEN tu.name END) AS owner_name FROM lead_touchpoints tt
                     LEFT JOIN users tu ON tu.id::text = tt.performed_by
                     LEFT JOIN users fo ON fo.id::text = tt.from_owner_id
                    WHERE tt.dealer_lead_id = v.dealer_lead_id AND tt.touchpoint_type = 'asm_transfer'

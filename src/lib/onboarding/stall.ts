@@ -19,6 +19,7 @@
  * Both fire well before the drop-out review.
  */
 import { workingDaysSince } from "@/lib/inside-sales/staleness";
+import type { OfficeHoursArg } from "@/lib/calendar/officeHours";
 import { TIME_LIMIT_DEFAULTS } from "@/lib/timeLimits/registry";
 
 export type OnboardingWaitingOn = "dealer" | "us";
@@ -75,6 +76,8 @@ export function onboardingStall(
     holidayDates: Set<string> = new Set(),
     now: Date = new Date(),
     limits: StallLimits = { dealerDays: STALL_DEALER_DAYS, usWorkingDays: STALL_US_WORKING_DAYS },
+    /** Office hours (ID 85 #8): their working weekdays; default Mon–Sat. */
+    hours?: OfficeHoursArg,
 ): OnboardingWaitingOn | null {
     const on = onboardingWaitingOn(input);
     if (!on || !input.last_activity_at) return null;
@@ -84,6 +87,6 @@ export function onboardingStall(
         const days = (now.getTime() - last.getTime()) / 86_400_000;
         return days >= limits.dealerDays ? "dealer" : null;
     }
-    const wd = workingDaysSince(last, holidayDates, now) ?? 0;
+    const wd = workingDaysSince(last, holidayDates, now, hours) ?? 0;
     return wd >= limits.usWorkingDays ? "us" : null;
 }

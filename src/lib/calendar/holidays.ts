@@ -1,15 +1,22 @@
 /**
  * Server side of the office calendar (ID 85, Part 1): the active holidays, and
- * the SQL twin of officeCalendar.workingDaysSince().
+ * the SQL twin of officeCalendar.workingDaysSince(). The working weekdays come
+ * from the office-hours setting (ID 85 #8, E-354, officeHoursStore.ts) with
+ * the Mon–Sat fallback.
  */
 import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
+import type { OfficeHoursResolver } from "@/lib/calendar/officeHours";
+import { officeHoursResolver, primeOfficeHours, workingWeekdaySql } from "@/lib/calendar/officeHoursStore";
 
 const TTL_MS = 5 * 60 * 1000;
 let cache: { at: number; days: ReadonlySet<string> } | null = null;
 
 /** Active holiday dates (IST YYYY-MM-DD). Cached 5 minutes; a failed read is "no holidays". */
 export async function loadHolidays(): Promise<ReadonlySet<string>> {
+    // Whoever loads the holidays is about to count working time: make sure the
+    // office hours (and so the weekday SQL below) are loaded too.
+    await primeOfficeHours();
     if (cache && Date.now() - cache.at < TTL_MS) return cache.days;
     try {
         const rows = (await db.execute(sql`
@@ -24,6 +31,19 @@ export async function loadHolidays(): Promise<ReadonlySet<string>> {
     return cache.days;
 }
 
+/**
+ * The whole office calendar for server code that counts working time in JS:
+ * the active holidays and a per-day office-hours resolver, to pass straight to
+ * the officeCalendar / workingHours functions:
+ *
+ *     const { holidays, hours } = await loadOfficeCalendar();
+ *     workingMinutesBetween(a, b, holidays, hours);
+ */
+export async function loadOfficeCalendar(): Promise<{ holidays: ReadonlySet<string>; hours: OfficeHoursResolver }> {
+    const [holidays, hours] = await Promise.all([loadHolidays(), officeHoursResolver()]);
+    return { holidays, hours };
+}
+
 /** Drop the cache after the holiday list changes. */
 export function forgetHolidays(): void {
     cache = null;
@@ -31,8 +51,9 @@ export function forgetHolidays(): void {
 
 /**
  * Working days after the IST day of `ts` up to and including today (IST):
- * Mon–Sat, active holidays skipped. An int scalar — the SQL twin of
- * workingDaysSince(). `ts` is a timestamptz expression.
+ * the working weekdays in force each day (default Mon–Sat), active holidays
+ * skipped. An int scalar — the SQL twin of workingDaysSince(). `ts` is a
+ * timestamptz expression.
  */
 export function workingDaysSinceSql(ts: SQL): SQL {
     return workingDaysBetweenSql(ts, sql`NOW()`);
@@ -40,8 +61,9 @@ export function workingDaysSinceSql(ts: SQL): SQL {
 
 /**
  * Working days after the IST day of `from` up to and including the IST day of
- * `to` (Mon–Sat, active holidays skipped); 0 when `to` is not after `from`.
- * Both are timestamptz expressions.
+ * `to` (working weekdays from the office-hours setting, default Mon–Sat;
+ * active holidays skipped); 0 when `to` is not after `from`. Both are
+ * timestamptz expressions.
  */
 export function workingDaysBetweenSql(from: SQL, to: SQL): SQL {
     return sql`(
@@ -49,7 +71,7 @@ export function workingDaysBetweenSql(from: SQL, to: SQL): SQL {
             ((${from}) AT TIME ZONE 'Asia/Kolkata')::date + 1,
             ((${to}) AT TIME ZONE 'Asia/Kolkata')::date, INTERVAL '1 day'
         ) gs
-         WHERE EXTRACT(DOW FROM gs) <> 0
+         WHERE ${workingWeekdaySql(sql`gs::date`)}
            AND gs::date NOT IN (SELECT hc.holiday_date FROM holiday_calendar hc
                                  WHERE hc.is_active IS NOT FALSE AND hc.holiday_date IS NOT NULL)
     )::int`;

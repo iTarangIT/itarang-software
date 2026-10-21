@@ -30,7 +30,7 @@
 import { sql, type SQL } from "drizzle-orm";
 
 import { db } from "@/lib/db";
-import { loadHolidays } from "@/lib/calendar/holidays";
+import { loadOfficeCalendar } from "@/lib/calendar/holidays";
 import { workingDaysDueAt } from "@/lib/calendar/officeCalendar";
 import { hasAccountOwnershipTables } from "@/lib/accounts/tables";
 import { GSTIN_KEY, accountsByGstinKey } from "@/lib/leads/gstinMatch";
@@ -246,7 +246,8 @@ export async function recordInvoiceSerials(
 
         const accountId = (await buyerAccountsFor(source, [invoiceId])).get(invoiceId) ?? null;
         const dbNow = new Date(String(inv.db_now));
-        const dueAt = workingDaysDueAt(dbNow, STOCK_TASK_WORKING_DAYS, await loadHolidays());
+        const { holidays, hours } = await loadOfficeCalendar();
+        const dueAt = workingDaysDueAt(dbNow, STOCK_TASK_WORKING_DAYS, holidays, hours);
 
         const [created] = await run(sql`
             INSERT INTO stock_upload_tasks

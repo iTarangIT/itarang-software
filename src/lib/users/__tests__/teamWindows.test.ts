@@ -35,9 +35,9 @@ describe("teamWindows (ID 156: each member for the dates they were in the team)"
 
 const part = (days: number, visits: number, bucket: string, avg: number): WindowPart => ({
     days,
-    series: [{ bucket, visits, unique_visits: visits, new_visits: 0, calls: 0 }],
-    averages: { days_in_range: days, avg_visits_per_day: avg, avg_unique_per_day: avg, avg_new_per_day: 0, avg_calls_per_day: 0 },
-    totals: { visits, unique_visits: visits, new_visits: 0, calls: 0, dealers_called: 0, converted: 1, new_hot: 0, hot_converted: 0 },
+    series: [{ bucket, visits, unique_visits: visits, new_visits: 0, fresh_visits: 0, calls: 0 }],
+    averages: { days_in_range: days, avg_visits_per_day: avg, avg_unique_per_day: avg, avg_new_per_day: 0, avg_fresh_per_day: 0, avg_calls_per_day: 0 },
+    totals: { visits, fresh_visits: 0, unique_visits: visits, new_visits: 0, calls: 0, dealers_called: 0, converted: 1, new_hot: 0, hot_converted: 0 },
     outcome: { quotes_issued: 0, quote_revisions: 0, revenue: 100, batteries_to_dealers: 2, battery_lines: { invoices: 1, with_lines: 1 }, kyc_submitted: 0 },
 });
 
@@ -48,7 +48,7 @@ describe("mergeWindowParts", () => {
         expect(m.totals.converted).toBe(2);
         expect(m.outcome.revenue).toBe(200);
         expect(m.outcome.battery_lines).toEqual({ invoices: 2, with_lines: 2 });
-        expect(m.series).toEqual([{ bucket: "2026-10-01", visits: 25, unique_visits: 25, new_visits: 0, calls: 0 }]);
+        expect(m.series).toEqual([{ bucket: "2026-10-01", visits: 25, unique_visits: 25, new_visits: 0, fresh_visits: 0, calls: 0 }]);
         // (2 × 10 + 1 × 5) / 10
         expect(m.averages.avg_visits_per_day).toBe(2.5);
         expect(m.averages.days_in_range).toBe(10);

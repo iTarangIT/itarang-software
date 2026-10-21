@@ -19,6 +19,7 @@ const row = (o: Partial<NeedsAttentionRow>): NeedsAttentionRow => ({
     last_disposition_bucket: null,
     non_responsive: false,
     visit_overdue: false,
+    past_idle: true,
     ...o,
 });
 

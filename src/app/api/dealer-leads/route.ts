@@ -341,7 +341,8 @@ export const GET = withErrorHandler(async (req: Request) => {
       fetchLeadListStats(filters),
       fetchLeadListFacets(),
       fetchCampaignFacets(),
-      fetchScrapeRunFacets(),
+      // HANDOVER-A31: run counts within the same access scope as the list.
+      fetchScrapeRunFacets(filters),
       // Per-type chips (E-296). null when the column does not exist here.
       fetchBusinessTypeCounts(filters),
       // ID 46: numbers typed in the search that were unreadable or matched nothing.

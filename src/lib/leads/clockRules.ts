@@ -53,6 +53,7 @@ import {
     istDay,
     workingDaysDueAt,
     workingMinutesBetween,
+    type OfficeHoursArg,
 } from "@/lib/calendar/officeCalendar";
 import { timeLimitDef, type TimeLimitKey, type TimeLimits } from "@/lib/timeLimits/registry";
 
@@ -113,6 +114,8 @@ export type ClockExtras = {
     quotes?: readonly QuoteGate[];
     /** Kinds to compute; default all. Without E-350 the refresh asks for BASE_CLOCK_KINDS. */
     kinds?: ReadonlySet<ClockKind>;
+    /** Office hours (ID 85 #8, officeHoursResolver()); default Mon–Sat 10–19. */
+    hours?: OfficeHoursArg;
 };
 
 /** Retry clocks end when the lead closes. */
@@ -153,10 +156,10 @@ export function clockLimitKey(kind: ClockKind): TimeLimitKey {
 }
 
 /** When a limit of `value` (in `key`'s unit) that started at `start` falls due. */
-export function dueAt(start: Date, key: TimeLimitKey, value: number, holidays: ReadonlySet<string>): Date | null {
+export function dueAt(start: Date, key: TimeLimitKey, value: number, holidays: ReadonlySet<string>, hours?: OfficeHoursArg): Date | null {
     const unit = timeLimitDef(key)?.unit;
-    if (unit === "working_hours") return addWorkingMinutes(start, value * 60, holidays);
-    if (unit === "working_days") return workingDaysDueAt(start, value, holidays);
+    if (unit === "working_hours") return addWorkingMinutes(start, value * 60, holidays, hours);
+    if (unit === "working_days") return workingDaysDueAt(start, value, holidays, hours);
     if (unit === "days") return calendarDaysDueAt(start, value);
     return null;
 }
@@ -167,19 +170,26 @@ const TRANSFER_WINDOW_MS = 10 * 60 * 1000;
 
 type ClockBase = Omit<LeadClock, "attempt_working_minutes" | "contact_working_minutes" | "limit_key" | "limit_value" | "due_at" | "limit_passed_at">;
 
-function finish(base: ClockBase, limitsOn: (day: string) => TimeLimits, holidaysFor: HolidaysFor, now: Date, noLimit = false): LeadClock {
+function finishWith(
+    base: ClockBase,
+    limitsOn: (day: string) => TimeLimits,
+    holidaysFor: HolidaysFor,
+    now: Date,
+    noLimit: boolean,
+    hours: OfficeHoursArg | undefined,
+): LeadClock {
     const key = noLimit ? null : LIMIT_OF[base.clock];
     const value = key ? limitsOn(istDay(base.started_at))[key] : null;
     // The clock stops at the first attempt, the end of the stint, or now; the
     // holidays are the ones that were on the calendar at that moment.
     const stop = base.first_attempt_at ?? (base.ended_at && base.ended_at < now ? base.ended_at : now);
     const holidays = holidaySet(holidaysFor, stop);
-    const due = key && value != null ? dueAt(base.started_at, key, value, holidays) : null;
+    const due = key && value != null ? dueAt(base.started_at, key, value, holidays, hours) : null;
     const passed = due != null && stop > due ? due : null;
     return {
         ...base,
-        attempt_working_minutes: base.first_attempt_at ? workingMinutesBetween(base.started_at, base.first_attempt_at, holidays) : null,
-        contact_working_minutes: base.first_contact_at ? workingMinutesBetween(base.started_at, base.first_contact_at, holidays) : null,
+        attempt_working_minutes: base.first_attempt_at ? workingMinutesBetween(base.started_at, base.first_attempt_at, holidays, hours) : null,
+        contact_working_minutes: base.first_contact_at ? workingMinutesBetween(base.started_at, base.first_contact_at, holidays, hours) : null,
         limit_key: key,
         limit_value: value,
         due_at: due,
@@ -248,6 +258,9 @@ export function clocksForLead(
 ): LeadClock[] {
     const out: LeadClock[] = [];
     const want = (k: ClockKind) => !extras.kinds || extras.kinds.has(k);
+    // Every clock below is timed on the same office hours.
+    const finish = (base: ClockBase, l: typeof limitsOn, h: HolidaysFor, n: Date, noLimit = false) =>
+        finishWith(base, l, h, n, noLimit, extras.hours);
 
     // Owner stints: every recorded assignment, plus an inferred one when the
     // current owner never got an assignment row (or got the lead after it).

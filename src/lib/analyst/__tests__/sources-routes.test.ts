@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { CRM_SOURCE_NAME, CreateConnectionBody, forwardQuery, isOutsideConnection, matchSourceRoute, uploadAllowed } from "../sources-routes";
+import { CRM_SOURCE_NAME, CreateConnectionBody, canAskSource, forwardQuery, isOutsideConnection, matchSourceRoute, uploadAllowed } from "../sources-routes";
 
 const ID = "3f6c2a1e-0b7d-4f7e-9a51-2c4b1d9e8f00";
 
@@ -90,5 +90,22 @@ describe("isOutsideConnection (ID 167)", () => {
   });
   it("keeps uploads and sheets", () => {
     expect(isOutsideConnection({ kind: "file", name: "Sales.xlsx" })).toBe(false);
+  });
+});
+
+describe("canAskSource (ID 167, fails closed)", () => {
+  it("asks only the iTarang database or an upload", () => {
+    expect(canAskSource({ kind: "postgres", name: CRM_SOURCE_NAME })).toBe(true);
+    expect(canAskSource({ kind: "file", name: "Sales.xlsx" })).toBe(true);
+  });
+  it("refuses an outside database", () => {
+    expect(canAskSource({ kind: "postgres", name: "Someone's Postgres" })).toBe(false);
+  });
+  it("refuses a source the agent did not list", () => {
+    expect(canAskSource(undefined)).toBe(false);
+    expect(canAskSource(null)).toBe(false);
+  });
+  it("refuses a kind it does not know", () => {
+    expect(canAskSource({ kind: "mysql", name: CRM_SOURCE_NAME })).toBe(false);
   });
 });

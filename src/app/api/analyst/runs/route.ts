@@ -6,7 +6,7 @@ import { ownsThread, requireAnalystUser } from "@/lib/analyst/access";
 import { agentFetch, agentJson } from "@/lib/analyst/client";
 import { errorResponse, normalizeAgentError } from "@/lib/analyst/errors";
 import { ANALYST_QUESTION_MAX, stripMetricRules, withMetricRules } from "@/lib/analyst/metricRules";
-import { isOutsideConnection } from "@/lib/analyst/sources-routes";
+import { canAskSource } from "@/lib/analyst/sources-routes";
 import type { Connection, RunPage } from "@/lib/analyst/types";
 
 export const dynamic = "force-dynamic";
@@ -82,11 +82,17 @@ export async function POST(request: Request) {
   }
 
   // ID 167: an outside database bypasses the read-only role's withheld columns — never asked.
+  // Fail closed (18 Oct): a source the agent does not list is refused too, not let through.
   try {
     const source = await sourceById(parsed.data.connection_id);
-    if (source && isOutsideConnection(source)) {
+    if (!canAskSource(source)) {
       return Response.json(
-        { error: "outside databases are switched off — ask the iTarang database or an uploaded file", code: "forbidden" },
+        {
+          error: source
+            ? "outside databases are switched off — ask the iTarang database or an uploaded file"
+            : "that data source was not found — pick the iTarang database or an uploaded file",
+          code: "forbidden",
+        },
         { status: 403 },
       );
     }

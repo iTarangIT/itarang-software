@@ -18,6 +18,7 @@ import { OwnerIndicator } from "./OwnerIndicator";
 import { NeodoveTag } from "@/components/leads/neodove-tag";
 import { SentByStamp } from "@/components/leads/sent-by-stamp";
 import { staleSeverity, workingDaysSince, type StaleThresholds } from "@/lib/inside-sales/staleness";
+import type { OfficeHours } from "@/lib/calendar/officeHours";
 import { followUpAgeingBasis } from "@/lib/leads/followUpAgeing";
 import { wonWithoutQuote, type QueueRow, type QueueTab } from "@/lib/inside-sales/types";
 import { WonWithoutQuoteChip } from "@/components/leads/won-without-quote-chip";
@@ -36,6 +37,8 @@ type Props = {
     holidaySet: Set<string>;
     /** ID 85 — the no-touch cue limits in force today; registry defaults when absent. */
     staleThresholds?: StaleThresholds;
+    /** ID 85 #8 — office hours in force (working weekdays); Mon–Sat when absent. */
+    officeHours?: OfficeHours;
     /** Lead-detail route prefix. Twins of the ISR queue (/partner) pass their own. */
     leadHrefBase?: string;
     /**
@@ -89,6 +92,7 @@ export function LeadQueueTable({
     viewerId,
     holidaySet,
     staleThresholds,
+    officeHours,
     leadHrefBase = "/inside-sales/lead",
     selection,
 }: Props) {
@@ -168,7 +172,7 @@ export function LeadQueueTable({
                             // (followUpAgeing.ts): a follow-up still ahead reads
                             // 0, a passed one counts from its date, otherwise the
                             // later of the last work and the assignment.
-                            const days = workingDaysSince(followUpAgeingBasis(row, nowMs), holidaySet);
+                            const days = workingDaysSince(followUpAgeingBasis(row, nowMs), holidaySet, new Date(nowMs), officeHours);
                             const sev = staleSeverity(days, staleThresholds);
                             const followUpOverdue =
                                 row.next_follow_up_at && new Date(row.next_follow_up_at).getTime() < nowMs;

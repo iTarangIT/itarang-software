@@ -2,6 +2,12 @@
 // Server-side queue route returns last_touchpoint_at + a /api/inside-sales/holidays
 // snapshot; the client computes severity from this so the queue route stays cheap.
 
+import {
+    isWorkingDay as isOfficeWorkingDay,
+    istDay,
+    workingDaysSince as officeWorkingDaysSince,
+    type OfficeHoursArg,
+} from "@/lib/calendar/officeCalendar";
 import { TIME_LIMIT_DEFAULTS } from "@/lib/timeLimits/registry";
 
 export type StaleSeverity = "normal" | "yellow" | "red" | "critical";
@@ -15,45 +21,34 @@ export const DEFAULT_STALE_THRESHOLDS: StaleThresholds = {
     critical: TIME_LIMIT_DEFAULTS.stale_critical,
 };
 
-const SUNDAY = 0;
+// BRD §0.1: working day = a working weekday (office hours setting, default
+// Mon–Sat) that is not a holiday. Since 18 Oct (row 40) these are thin
+// wrappers over the ONE office calendar (src/lib/calendar/officeCalendar.ts),
+// which counts IST days. The old loop read the BROWSER's weekday (getDay) and
+// the UTC date (toISOString), so a lead touched before 05:30 IST aged a day
+// early and a viewer outside IST saw other days skipped. Client-safe.
 
-// BRD §0.1: working day = Mon–Sat excluding holidays. Sundays always excluded.
-export function isWorkingDay(d: Date, holidayDates: Set<string>): boolean {
-    const dow = d.getDay();
-    if (dow === SUNDAY) return false;
-    const isoDate = d.toISOString().slice(0, 10);
-    if (holidayDates.has(isoDate)) return false;
-    return true;
+/** True for a working day; `d` is any instant inside the IST day asked about. */
+export function isWorkingDay(d: Date, holidayDates: ReadonlySet<string>, hours?: OfficeHoursArg): boolean {
+    return isOfficeWorkingDay(istDay(d), holidayDates, hours);
 }
 
-// Counts working days between two dates (exclusive of `from`, inclusive of `to`).
-export function workingDaysBetween(
-    from: Date,
-    to: Date,
-    holidayDates: Set<string>,
-): number {
+/** Working days after the IST day of `from` up to and including the IST day of `to`; 0 when `to` is not later. */
+export function workingDaysBetween(from: Date, to: Date, holidayDates: ReadonlySet<string>, hours?: OfficeHoursArg): number {
     if (to.getTime() <= from.getTime()) return 0;
-    const cursor = new Date(from);
-    cursor.setUTCHours(0, 0, 0, 0);
-    const end = new Date(to);
-    end.setUTCHours(0, 0, 0, 0);
-    let days = 0;
-    while (cursor.getTime() < end.getTime()) {
-        cursor.setUTCDate(cursor.getUTCDate() + 1);
-        if (isWorkingDay(cursor, holidayDates)) days++;
-    }
-    return days;
+    return officeWorkingDaysSince(from, to, holidayDates, hours);
 }
 
 export function workingDaysSince(
     last: Date | string | null,
-    holidayDates: Set<string>,
+    holidayDates: ReadonlySet<string>,
     now: Date = new Date(),
+    hours?: OfficeHoursArg,
 ): number | null {
     if (!last) return null;
     const lastDate = typeof last === "string" ? new Date(last) : last;
     if (Number.isNaN(lastDate.getTime())) return null;
-    return workingDaysBetween(lastDate, now, holidayDates);
+    return workingDaysBetween(lastDate, now, holidayDates, hours);
 }
 
 // BRD §0.5 visual cue thresholds. The live values come from the server

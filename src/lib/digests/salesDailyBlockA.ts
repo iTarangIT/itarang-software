@@ -19,7 +19,7 @@
 
 import { sql } from "drizzle-orm";
 import type { SalesDashboard } from "@/lib/admin/salesDashboardTypes";
-import { engagedCall, wasHotAt } from "@/lib/reports/metricDefinitions";
+import { engagedCall, transferCredit, wasHotAt } from "@/lib/reports/metricDefinitions";
 import { monthEnd, workingDaysBetween } from "@/lib/targets/rules";
 import { finalTargetSql } from "@/lib/targets/sql";
 import { scrapKgSourced } from "@/lib/buyback/scrapKgSourced";
@@ -318,13 +318,12 @@ async function perPeriod(db: Exec, periods: Periods, make: (p: Period) => Return
 /** Company MTD targets per metric, pro-rated, and how many people have one. */
 export async function companyTargets(db: Exec, monthFirst: string, upTo: string) {
     try {
-        const hol = (await db.execute(sql`
-            SELECT holiday_date::text AS d FROM holiday_calendar
-             WHERE is_active IS NOT FALSE AND holiday_date BETWEEN ${monthFirst}::date AND ${monthEnd(monthFirst)}::date
-        `)) as Array<{ d: string }>;
-        const set = new Set(hol.map((h) => h.d));
-        const total = workingDaysBetween(monthFirst, monthEnd(monthFirst), set);
-        const elapsed = workingDaysBetween(monthFirst, upTo, set);
+        // The one office calendar (holidays + office hours) — loadOfficeCalendar,
+        // not a private holiday_calendar read.
+        const { loadOfficeCalendar } = await import("@/lib/calendar/holidays");
+        const { holidays: set, hours } = await loadOfficeCalendar();
+        const total = workingDaysBetween(monthFirst, monthEnd(monthFirst), set, hours);
+        const elapsed = workingDaysBetween(monthFirst, upTo, set, hours);
         const rows = (await db.execute(sql`
             SELECT user_id::text AS user_id, metric, SUM(${finalTargetSql(sql`sales_targets`)})::float8 AS monthly
               FROM sales_targets
@@ -423,11 +422,15 @@ export async function buildBlockA(
             // groups per caller (salesDailyBlocks.loadRepExtras), so the two
             // blocks of one email show the same count.
             perPeriod(db, periods, (p) => sql`SELECT COUNT(*) AS n FROM lead_touchpoints t WHERE ${engagedCall()} AND ${inRange(sql`t.performed_at`, p)}`),
+            // HANDOVER-A31: only transfers someone is credited with (transferCredit) —
+            // a bulk assign of an unowned lead is nobody's "Hot to field", so it is
+            // in no Block C row and not in this total either (as Targets / scorecard).
             perPeriod(
                 db,
                 periods,
                 (p) => sql`SELECT COUNT(DISTINCT t.dealer_lead_id) AS n FROM lead_touchpoints t JOIN dealer_leads dl ON dl.id = t.dealer_lead_id
                             WHERE t.touchpoint_type = 'asm_transfer' AND ${inRange(sql`t.performed_at`, p)}
+                              AND ${transferCredit()} IS NOT NULL
                               AND ${wasHotAt(sql`t.dealer_lead_id`, sql`t.performed_at`, sql`dl.interest_level`)}`,
             ),
             perPeriod(

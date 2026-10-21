@@ -79,6 +79,7 @@ export const PUBLIC_API_RULES: readonly PublicApiRule[] = [
   { pattern: /^\/api\/dealer-onboarding\/save$/, why: "autosave of the pre-login onboarding form — a prospective dealer has no account yet (ID 118 log review, 13 Oct)" },
   { pattern: /^\/api\/uploads\/dealer-documents$/, why: "uploads from the pre-login onboarding form and the correction link" },
   { pattern: /^\/api\/files\/dealer-documents\//, why: "the route itself requires a session OR a signed, expiring link (?exp=&sig=) — the pre-login onboarding form previews its uploads that way (ID 119)" },
+  { pattern: /^\/api\/files\/open$/, why: "the 'open file' link in downloads and e-mails (ID 166) — the route checks the session itself and sends a logged-out click to /login; refusing it here would show a 401 instead (ID 130)" },
 
   // ── monitoring
   { pattern: /^\/api\/health$/, why: "uptime probe" },
@@ -138,8 +139,11 @@ export function apiGate(input: {
  * fileLinkValid), so the gate only has to let a link that CARRIES one reach
  * it; a forged or expired signature is refused there. A /api/files request
  * with no session and no signature stays refused here.
+ *
+ * ID 130: the NBFC store (/api/nbfc-uploads/…, signedNbfcPath) is signed the
+ * same way and its route checks the signature and the session the same way.
  */
-const FILES_PROXY_PATH = /^\/api\/files\/(documents|dealer-documents|call-recordings)\/./;
+const FILES_PROXY_PATH = /^\/api\/(files\/(documents|dealer-documents|call-recordings)|nbfc-uploads)\/./;
 
 export function isSignedFileLink(pathname: string, search: string | undefined): boolean {
   if (!FILES_PROXY_PATH.test(pathname)) return false;
