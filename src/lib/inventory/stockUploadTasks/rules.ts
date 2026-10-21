@@ -222,6 +222,45 @@ export function invoiceReversal(input: {
     return null;
 }
 
+/**
+ * How a task was closed (stock_upload_tasks.closed_how, varchar(10)):
+ *   auto       every serial is in the buyer's stock
+ *   by_hand    closed by a person on the Stock to upload page
+ *   voided     the invoice was voided or fully credit-noted
+ *   not_dealer the invoice was marked "not a dealer sale" in Invoice Ledger
+ *              (no dealer will ever stock it; ID 174 item 2)
+ */
+export type StockTaskClosedHow = "auto" | "by_hand" | "voided" | "not_dealer";
+
+/** The words the task list shows for each closed_how. */
+export function closedHowLabel(how: string | null | undefined): string {
+    switch (how) {
+        case "by_hand":
+            return "by hand";
+        case "voided":
+            return "invoice voided / credit-noted";
+        case "not_dealer":
+            return "not a dealer sale";
+        default:
+            return "all serials in stock";
+    }
+}
+
+/**
+ * Which task table an Invoice Ledger decision points at. The ledger's
+ * sources are 'zoho' | 'drive' | 'credit'; tasks exist only for 'drive'
+ * (sales_invoices) and 'zoho' invoices — a credit note never has a task.
+ */
+export function taskSourceOfLedger(source: string | null | undefined): "drive" | "zoho" | null {
+    return source === "drive" || source === "zoho" ? source : null;
+}
+
+/** The close note on a task closed because its invoice is not a dealer sale. */
+export function notDealerSaleCloseNote(note: string | null | undefined): string {
+    const n = String(note ?? "").trim();
+    return `Marked not a dealer sale in Invoice Ledger${n ? `: ${n}` : ""}`;
+}
+
 /** The escalation bell's text for one overdue task. */
 export function escalationMessage(t: {
     invoiceNumber: string | null;
