@@ -29,7 +29,7 @@ import { buildTouchpointWorkbook } from "@/lib/leads/touchpointWorkbook";
 import { buildLeadTracking } from "@/lib/leads/tracking";
 import { trackingCsvResponse } from "@/lib/leads/trackingCsv";
 import { reactivateLead } from "@/lib/leads/reactivation";
-import { canReactivateLead } from "@/lib/leads/access";
+import { canReactivateLead, canReassignToIsr } from "@/lib/leads/access";
 import { assignLeadOwner, resolveAssignTarget } from "@/lib/leads/assignOwner";
 import { notifyLeadsReassigned, notifyLeadsReturned } from "@/lib/leads/newOwnerNotice";
 import {
@@ -249,6 +249,11 @@ export const POST = withErrorHandler(async (req: Request) => {
             return errorResponse(resolved.message, resolved.status);
         }
         const target = resolved.target;
+        // ID 179 (Kartik, 18 Oct): Reassign to ISR is Admin, Sales Head and
+        // CEO only — the partner login keeps Reassign to other roles.
+        if (target.role === "inside_sales_rep" && !canReassignToIsr(user.role)) {
+            return errorResponse("Only Admin, Sales Head or CEO can reassign a lead to an inside sales rep.", 403);
+        }
         const remarks = body.reason ?? "Bulk reassign (admin).";
         // 12 Oct: the new owner is told (bell → opens the lead on their page).
         const reassignedIds: string[] = [];

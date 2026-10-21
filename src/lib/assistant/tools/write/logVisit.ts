@@ -23,7 +23,7 @@ import { VISIT_NEXT_ACTION, VISIT_OUTCOME } from "@/lib/asm/types";
 import { recordVisit } from "@/lib/asm/recordVisit";
 import { applyVisitStatus } from "@/lib/asm/visitStatus";
 import { markLeadLost } from "@/lib/leads/markLost";
-import { lastTransferredBy, notifyLeadPerson } from "@/lib/leads/newOwnerNotice";
+import { notifyLeadPerson, transferWatchers } from "@/lib/leads/newOwnerNotice";
 import { setInterestLevel } from "@/lib/leads/interestLevel";
 import { autoProgressForVisit } from "@/lib/leads/autoProgress";
 import { statusAfterVisit } from "@/lib/leads/outcomeRule";
@@ -439,8 +439,12 @@ export const logVisitApplier = defineApplier<LogVisitPlan>({
 /**
  * The notice POST /api/asm/lead/[id]/visit sends (12 Oct): the person who
  * transferred the lead hears how the visit went, or when one is booked. Same
- * recipient, type, title and wording; notifyLeadPerson never throws and skips
+ * recipients, type, title and wording; notifyLeadPerson never throws and skips
  * a recipient who is the ASM themself.
+ *
+ * ID 179 (18 Oct): the recipients are transferWatchers() — as the visit route —
+ * so the rep who OWNED the lead at the transfer is told too, not only the
+ * manager who pressed Transfer (was lastTransferredBy).
  */
 export async function notifyVisitUpdate(input: {
     leadId: string;
@@ -452,8 +456,8 @@ export async function notifyVisitUpdate(input: {
     scheduledDate: string | null;
 }): Promise<void> {
     const outcome = input.outcome ? input.outcome.replace(/_/g, " ") : null;
-    await notifyLeadPerson({
-        userId: await lastTransferredBy(input.leadId),
+    for (const watcher of await transferWatchers(input.leadId)) await notifyLeadPerson({
+        userId: watcher,
         actorId: input.actorId,
         leadId: input.leadId,
         type: "lead.visit_update",

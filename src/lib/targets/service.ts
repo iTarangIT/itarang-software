@@ -43,7 +43,7 @@
  * hot leads handed to ground, and calls. Where the CRM has nothing to count,
  * the actual is null with a reason in words (NOT_MEASURED), never 0.
  */
-import { humanCall, transferCredit, wasHotAt } from "@/lib/reports/metricDefinitions";
+import { firstMoveToField, humanCall, transferCredit, wasHotAt } from "@/lib/reports/metricDefinitions";
 import { sql, type SQL } from "drizzle-orm";
 
 import { db } from "@/lib/db";
@@ -223,10 +223,12 @@ export async function measuresFor(monthFirst: string, upTo: string, elapsedWorki
             -- again counts once, as in the daily email.
             -- ID 179: credited to the owner at the moment of transfer
             -- (transferCredit), not the manager who pressed Transfer.
+            -- ID 179 (18 Oct): the lead's first move to the field only —
+            -- an ASM-to-ASM move does not count (firstMoveToField).
             SELECT ${transferCredit()} AS u, COUNT(DISTINCT t.dealer_lead_id) AS n
               FROM lead_touchpoints t
               JOIN dealer_leads dl ON dl.id = t.dealer_lead_id
-             WHERE t.touchpoint_type = 'asm_transfer'
+             WHERE ${firstMoveToField()}
                AND ${wasHotAt(sql`t.dealer_lead_id`, sql`t.performed_at`, sql`dl.interest_level`)}
                AND (t.performed_at AT TIME ZONE 'Asia/Kolkata')::date BETWEEN ${monthFirst}::date AND ${upTo}::date
                AND ${transferCredit()} IS NOT NULL
