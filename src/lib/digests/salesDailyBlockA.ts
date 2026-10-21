@@ -19,13 +19,15 @@
 
 import { sql } from "drizzle-orm";
 import type { SalesDashboard } from "@/lib/admin/salesDashboardTypes";
-import { engagedCall, wasHotAt } from "@/lib/reports/metricDefinitions";
+import { batteryReading, type BatteryReading } from "@/lib/admin/batteryReading";
+import { engagedCall, transferCredit, wasHotAt } from "@/lib/reports/metricDefinitions";
 import { monthEnd, workingDaysBetween } from "@/lib/targets/rules";
 import { finalTargetSql } from "@/lib/targets/sql";
 import { scrapKgSourced } from "@/lib/buyback/scrapKgSourced";
 import { clockStats, limitsPassed } from "@/lib/leads/clocks";
 import { istRangeNaive, istRangeTz } from "./window";
 import { RAG_AMBER_MIN } from "./rag";
+import { repeatVisits } from "@/lib/visits/freshRepeat";
 
 export const NOT_MEASURED = "Not measured yet";
 
@@ -50,6 +52,13 @@ export type BlockARow = {
      * toward each of their targets. % of target uses this; the cell does not.
      */
     targetBasisMtd?: number | null;
+    /**
+     * IDs 70 / 147 — "Batteries sold" only: how much of each period's figure is
+     * known (batteryReading, the CEO tile's rule). An invoice with no item
+     * lines read adds 0 whatever it sold, so the cell reads "—" when no
+     * invoice in the period has lines and "N+" when only some do.
+     */
+    readings?: Record<keyof RowValues, BatteryReading>;
 };
 
 /** % of target for a row, on the target's own basis. */
@@ -109,16 +118,21 @@ export function blockATableRows(rows: BlockARow[]): Array<Array<string | number>
             out.push([r.label, NOT_MEASURED, "", "", "", "", "", ""]);
             continue;
         }
-        const p = rowPctOfTarget(r);
-        const d = deltaPct(r.values.mtd, r.values.lm);
+        // "—" when a period's figure is unknown (no item lines read), so its
+        // % of target and Δ are not worked out from a false 0 either.
+        const unknown = (k: keyof RowValues) => r.readings?.[k].state === "unknown";
+        const cell = (k: keyof RowValues) =>
+            unknown(k) ? "—" : `${fmtValue(r.values[k], r.kind)}${r.readings?.[k].state === "partial" ? "+" : ""}`;
+        const p = unknown("mtd") ? null : rowPctOfTarget(r);
+        const d = unknown("mtd") || unknown("lm") ? null : deltaPct(r.values.mtd, r.values.lm);
         out.push([
             r.label,
-            fmtValue(r.values.y, r.kind),
-            fmtValue(r.values.d7, r.kind),
-            fmtValue(r.values.mtd, r.kind),
+            cell("y"),
+            cell("d7"),
+            cell("mtd"),
             r.target == null ? "—" : fmtValue(r.target, r.kind),
             p == null ? "—" : `${p}%`,
-            r.values.lm == null ? "n/t" : fmtValue(r.values.lm, r.kind),
+            r.values.lm == null ? "n/t" : cell("lm"),
             d == null ? "—" : `${d > 0 ? "+" : d < 0 ? "−" : ""}${Math.abs(d)}%`,
         ]);
     }
@@ -194,7 +208,10 @@ export const BLOCK_A_ROW_NOTES: Record<string, string> = {
     "Engaged calls": "Connected calls, each counted once",
     "Hot handed to field": "Hot when transferred to an ASM",
     "Dealers visited": "Unique dealers",
-    "New dealers visited": "First-ever visit",
+    Visits: "Completed visits; Fresh + Repeat",
+    "Fresh visits": "The person's first visit to that dealer",
+    "Repeat visits": "The person had visited that dealer before",
+    "New dealers visited": "Of which new to iTarang: the dealer's first-ever visit",
     "Quotes created": "First quote per lead",
     "Quotes delivered": "Reached the dealer on WhatsApp or email",
     "Dealer approved": "Dealer said yes to the quote",
@@ -218,9 +235,25 @@ export function blockARowNotes(rows: BlockARow[]): Array<string | null> {
             group = r.group;
             out.push(null);
         }
-        out.push(BLOCK_A_ROW_NOTES[r.label] ?? null);
+        out.push(readingNote(BLOCK_A_ROW_NOTES[r.label] ?? null, r.readings));
     }
     return out;
+}
+
+/**
+ * The CEO "Batteries to dealers" tile's wording, for the month-to-date figure,
+ * after the row's own note: "At least — x of y invoices have item lines", or
+ * "No item lines read on the y invoices" when none has. Pure.
+ */
+export function readingNote(base: string | null, readings: BlockARow["readings"]): string | null {
+    const m = readings?.mtd;
+    if (!m || m.state === "complete") return base;
+    const n = (v: number | null) => (v ?? 0).toLocaleString("en-IN");
+    const line =
+        m.state === "unknown"
+            ? `No item lines read on the ${n(m.invoices)} invoices month to date`
+            : `At least — ${n(m.with_lines)} of ${n(m.invoices)} invoices have item lines (month to date)`;
+    return base ? `${base} · ${line}` : line;
 }
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -318,13 +351,12 @@ async function perPeriod(db: Exec, periods: Periods, make: (p: Period) => Return
 /** Company MTD targets per metric, pro-rated, and how many people have one. */
 export async function companyTargets(db: Exec, monthFirst: string, upTo: string) {
     try {
-        const hol = (await db.execute(sql`
-            SELECT holiday_date::text AS d FROM holiday_calendar
-             WHERE is_active IS NOT FALSE AND holiday_date BETWEEN ${monthFirst}::date AND ${monthEnd(monthFirst)}::date
-        `)) as Array<{ d: string }>;
-        const set = new Set(hol.map((h) => h.d));
-        const total = workingDaysBetween(monthFirst, monthEnd(monthFirst), set);
-        const elapsed = workingDaysBetween(monthFirst, upTo, set);
+        // The one office calendar (holidays + office hours) — loadOfficeCalendar,
+        // not a private holiday_calendar read.
+        const { loadOfficeCalendar } = await import("@/lib/calendar/holidays");
+        const { holidays: set, hours } = await loadOfficeCalendar();
+        const total = workingDaysBetween(monthFirst, monthEnd(monthFirst), set, hours);
+        const elapsed = workingDaysBetween(monthFirst, upTo, set, hours);
         const rows = (await db.execute(sql`
             SELECT user_id::text AS user_id, metric, SUM(${finalTargetSql(sql`sales_targets`)})::float8 AS monthly
               FROM sales_targets
@@ -423,11 +455,15 @@ export async function buildBlockA(
             // groups per caller (salesDailyBlocks.loadRepExtras), so the two
             // blocks of one email show the same count.
             perPeriod(db, periods, (p) => sql`SELECT COUNT(*) AS n FROM lead_touchpoints t WHERE ${engagedCall()} AND ${inRange(sql`t.performed_at`, p)}`),
+            // HANDOVER-A31: only transfers someone is credited with (transferCredit) —
+            // a bulk assign of an unowned lead is nobody's "Hot to field", so it is
+            // in no Block C row and not in this total either (as Targets / scorecard).
             perPeriod(
                 db,
                 periods,
                 (p) => sql`SELECT COUNT(DISTINCT t.dealer_lead_id) AS n FROM lead_touchpoints t JOIN dealer_leads dl ON dl.id = t.dealer_lead_id
                             WHERE t.touchpoint_type = 'asm_transfer' AND ${inRange(sql`t.performed_at`, p)}
+                              AND ${transferCredit()} IS NOT NULL
                               AND ${wasHotAt(sql`t.dealer_lead_id`, sql`t.performed_at`, sql`dl.interest_level`)}`,
             ),
             perPeriod(
@@ -477,6 +513,10 @@ export async function buildBlockA(
         { group: "EFFORT", label: "Dealers called", kind: "count", values: fromDash((d) => d.totals.dealers_called), target: null },
         { group: "EFFORT", label: "Engaged calls", kind: "count", values: engaged, target: null },
         { group: "EFFORT", label: "Hot handed to field", kind: "count", values: hotToField, target: tgt("hot_to_ground") },
+        // ID 185: Visits = Fresh + Repeat on the rep's basis, visited rows only.
+        { group: "EFFORT", label: "Visits", kind: "count", values: fromDash((d) => d.totals.visits), target: null },
+        { group: "EFFORT", label: "Fresh visits", kind: "count", values: fromDash((d) => d.totals.fresh_visits), target: null },
+        { group: "EFFORT", label: "Repeat visits", kind: "count", values: fromDash((d) => repeatVisits(d.totals.visits, d.totals.fresh_visits)), target: null },
         {
             group: "EFFORT",
             label: "Dealers visited",
@@ -491,7 +531,21 @@ export async function buildBlockA(
         { group: "COMMERCIALS", label: "Dealer approved", kind: "count", values: dealerApproved, target: null },
         { group: "COMMERCIALS", label: "Marked Won", kind: "count", values: won, target: null },
         { group: "OUTCOME", label: "Converted", kind: "count", values: fromDash((d) => d.totals.converted), target: null },
-        { group: "OUTCOME", label: "Batteries sold", kind: "count", values: fromDash((d) => d.outcome.batteries_to_dealers), target: tgt("batteries_sold") },
+        {
+            group: "OUTCOME",
+            label: "Batteries sold",
+            kind: "count",
+            values: fromDash((d) => d.outcome.batteries_to_dealers),
+            target: tgt("batteries_sold"),
+            // IDs 70 / 147: same "at least" reading as the CEO tile, from the
+            // dashboards' own battery_lines coverage.
+            readings: {
+                y: batteryReading(dash.yesterday.outcome),
+                d7: batteryReading(dash.last7.outcome),
+                mtd: batteryReading(dash.mtd.outcome),
+                lm: batteryReading(dash.lastMonth.outcome),
+            },
+        },
         { group: "OUTCOME", label: "Revenue", kind: "money", values: fromDash((d) => d.outcome.revenue), target: tgt("revenue") },
         { group: "OUTCOME", label: "KYC submitted", kind: "count", values: fromDash((d) => d.outcome.kyc_submitted), target: tgt("kyc_submitted") },
         { group: "OUTCOME", label: "KYC disbursed", kind: "count", values: kycDisbursed, target: tgt("kyc_disbursed") },

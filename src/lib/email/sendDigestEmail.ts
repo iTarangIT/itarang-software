@@ -124,7 +124,8 @@ export function buildDigestEmail(
 ): { subject: string; html: string; text: string } {
   const copy = COPY[p.slot] ?? COPY.morning;
   const dayLabel = istDayLabel(p.istDay);
-  const href = `${appUrl()}${p.kind.ctaHref}`;
+  // ID 194: a personal mail can send its reader to their own queue.
+  const href = `${appUrl()}${p.figures.ctaHref ?? p.kind.ctaHref}`;
   const detailed = p.detail === "detailed";
 
   // A section absent from the map defaults to ON, so a descriptor that gains a

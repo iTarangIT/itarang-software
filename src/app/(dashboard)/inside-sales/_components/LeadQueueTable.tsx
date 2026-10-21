@@ -17,7 +17,8 @@ import { InterestChip } from "./InterestChip";
 import { OwnerIndicator } from "./OwnerIndicator";
 import { NeodoveTag } from "@/components/leads/neodove-tag";
 import { SentByStamp } from "@/components/leads/sent-by-stamp";
-import { staleSeverity, workingDaysSince, type StaleThresholds } from "@/lib/inside-sales/staleness";
+import { idleSeverity, staleSeverity, workingDaysSince, type StaleThresholds } from "@/lib/inside-sales/staleness";
+import type { OfficeHours } from "@/lib/calendar/officeHours";
 import { followUpAgeingBasis } from "@/lib/leads/followUpAgeing";
 import { wonWithoutQuote, type QueueRow, type QueueTab } from "@/lib/inside-sales/types";
 import { WonWithoutQuoteChip } from "@/components/leads/won-without-quote-chip";
@@ -36,6 +37,14 @@ type Props = {
     holidaySet: Set<string>;
     /** ID 85 — the no-touch cue limits in force today; registry defaults when absent. */
     staleThresholds?: StaleThresholds;
+    /**
+     * 18 Oct row 33 — the inside-sales idle limit (idle_cc, working days). When
+     * set, row colours and the "past limit" state follow it instead of the
+     * no-touch cues.
+     */
+    idleLimitDays?: number;
+    /** ID 85 #8 — office hours in force (working weekdays); Mon–Sat when absent. */
+    officeHours?: OfficeHours;
     /** Lead-detail route prefix. Twins of the ISR queue (/partner) pass their own. */
     leadHrefBase?: string;
     /**
@@ -89,6 +98,8 @@ export function LeadQueueTable({
     viewerId,
     holidaySet,
     staleThresholds,
+    idleLimitDays,
+    officeHours,
     leadHrefBase = "/inside-sales/lead",
     selection,
 }: Props) {
@@ -168,8 +179,10 @@ export function LeadQueueTable({
                             // (followUpAgeing.ts): a follow-up still ahead reads
                             // 0, a passed one counts from its date, otherwise the
                             // later of the last work and the assignment.
-                            const days = workingDaysSince(followUpAgeingBasis(row, nowMs), holidaySet);
-                            const sev = staleSeverity(days, staleThresholds);
+                            const days = workingDaysSince(followUpAgeingBasis(row, nowMs), holidaySet, new Date(nowMs), officeHours);
+                            // 18 Oct row 33: the ISR idle limit when loaded (past it = "past limit").
+                            const sev = idleLimitDays ? idleSeverity(days, idleLimitDays) : staleSeverity(days, staleThresholds);
+                            const idlePast = !!idleLimitDays && days != null && days >= Math.floor(idleLimitDays);
                             const followUpOverdue =
                                 row.next_follow_up_at && new Date(row.next_follow_up_at).getTime() < nowMs;
                             const href = `${leadHrefBase}/${encodeURIComponent(row.id)}`;
@@ -209,7 +222,7 @@ export function LeadQueueTable({
                                                 calling team — see NeodoveTag. */}
                                             <NeodoveTag syncStatus={row.neodove_sync_status} />
                                             {wonWithoutQuote(row) && <WonWithoutQuoteChip />}
-                                            {row.past_limit && <PastLimitChip />}
+                                            {row.past_limit && <PastLimitChip limits={row.past_limits} />}
                                         </div>
                                         {row.shop_name && row.dealer_name && (
                                             <div className="text-[11px] text-gray-500 mt-0.5">{row.shop_name}</div>
@@ -259,6 +272,11 @@ export function LeadQueueTable({
                                     </td>
                                     <td className={`px-4 py-3 align-top text-right text-xs tabular-nums ${STALE_DAY_CHIP[sev]}`}>
                                         {days === null ? "—" : days}
+                                        {idlePast && (
+                                            <div className="text-[10px] font-semibold" title={`Idle ${idleLimitDays}+ working days — the inside-sales idle limit (Admin › Time limits)`}>
+                                                past limit
+                                            </div>
+                                        )}
                                     </td>
                                 </tr>
                             );

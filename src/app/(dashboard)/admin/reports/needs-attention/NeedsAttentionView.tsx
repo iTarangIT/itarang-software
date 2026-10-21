@@ -15,7 +15,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Download, Loader2, PhoneOff, Search } from "lucide-react";
 
 import { BulkActionBar } from "@/app/(dashboard)/admin/_components/BulkActionBar";
-import type { NeedsAttentionHolderSummary, NeedsAttentionRow } from "@/lib/leads/needsAttention";
+import { COUNTED_FROM_LABEL, type NeedsAttentionHolderSummary, type NeedsAttentionRow } from "@/lib/leads/needsAttention";
 import { IDLE_MIN_OPTIONS, filterNeedsAttention, type NeedsAttentionFilters } from "@/lib/leads/needsAttentionFilter";
 import { LEAD_STATUS_LABEL } from "@/lib/leads/queueFilters";
 
@@ -37,9 +37,14 @@ function fmtFollowUp(iso: string | null): string {
     return d.toLocaleDateString("en-IN", { day: "2-digit", month: "short", ...(sameYear ? {} : { year: "numeric" }) });
 }
 
-function idleTone(days: number): string {
-    if (days >= 14) return "text-rose-700 font-semibold";
-    if (days >= 7) return "text-amber-700 font-semibold";
+/** The row colour bands — Admin › Time limits stale_yellow / stale_red / stale_critical (ID 192), not fixed 7 / 14. */
+type Bands = { stale_yellow: number; stale_red: number; stale_critical: number };
+const DEFAULT_BANDS: Bands = { stale_yellow: 5, stale_red: 10, stale_critical: 14 };
+
+function idleTone(days: number, b: Bands): string {
+    if (days >= b.stale_critical) return "text-rose-800 font-bold";
+    if (days >= b.stale_red) return "text-rose-700 font-semibold";
+    if (days >= b.stale_yellow) return "text-amber-700 font-semibold";
     return "text-ink";
 }
 
@@ -60,6 +65,7 @@ export function NeedsAttentionView() {
     const { data, isLoading, error } = useQuery<{
         rows: NeedsAttentionRow[];
         holders: NeedsAttentionHolderSummary[];
+        limits?: { idle_cc: number; idle_asm: number; stale_critical: number; stale_yellow?: number; stale_red?: number };
     }>({
         queryKey: [...QUERY_KEY, holder],
         queryFn: async () => {
@@ -87,6 +93,11 @@ export function NeedsAttentionView() {
     );
 
     const filters: NeedsAttentionFilters = { q, role, status, interest, minDays: minDays ? Number(minDays) : null };
+    const bands: Bands = {
+        stale_yellow: Math.floor(data?.limits?.stale_yellow ?? DEFAULT_BANDS.stale_yellow),
+        stale_red: Math.floor(data?.limits?.stale_red ?? DEFAULT_BANDS.stale_red),
+        stale_critical: Math.floor(data?.limits?.stale_critical ?? DEFAULT_BANDS.stale_critical),
+    };
     const rows = data?.rows ?? [];
     const shown = filterNeedsAttention(rows, filters);
     const anyFilter = Boolean(q || role || status || interest || minDays);
@@ -166,6 +177,12 @@ export function NeedsAttentionView() {
                             <th className="px-3 py-2 text-left font-semibold">Held by</th>
                             <th className="px-3 py-2 text-left font-semibold">Status</th>
                             <th className="px-3 py-2 text-right font-semibold">Working days idle</th>
+                            <th
+                                className="px-3 py-2 text-left font-semibold"
+                                title="The date the idle count runs from: a passed follow-up, the day the holder got the lead, the last work, or (none of those) the day it was created"
+                            >
+                                Counted from
+                            </th>
                             <th className="px-3 py-2 text-left font-semibold">Last worked</th>
                             <th className="px-3 py-2 text-left font-semibold">Follow-up</th>
                             <th className="px-3 py-2 text-left font-semibold">Last disposition</th>
@@ -207,7 +224,11 @@ export function NeedsAttentionView() {
                                         </div>
                                     )}
                                 </td>
-                                <td className={`px-3 py-2 text-right tabular-nums ${idleTone(r.days_idle)}`}>{r.days_idle}</td>
+                                <td className={`px-3 py-2 text-right tabular-nums ${idleTone(r.days_idle, bands)}`}>{r.days_idle}</td>
+                                <td className="px-3 py-2 text-ink-muted">
+                                    {COUNTED_FROM_LABEL[r.counted_from] ?? "—"}
+                                    {r.counted_from_at && <span className="ml-1 text-[11px]">· {fmtDate(r.counted_from_at)}</span>}
+                                </td>
                                 <td className="px-3 py-2 text-ink-muted">{fmtDate(r.last_worked_at)}</td>
                                 <td
                                     className="px-3 py-2 text-ink-muted"

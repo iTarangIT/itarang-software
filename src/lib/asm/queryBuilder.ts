@@ -37,6 +37,12 @@ type BuildArgs = {
     visitOutcome?: string | null;
     /** ID 75.4: only "Finalised, not Won" leads (finalisedNotWonSql). */
     finalisedOnly?: boolean;
+    /**
+     * 18 Oct row 34: only leads with a running clock past its limit. The
+     * caller passes the predicate (pastALimitSql over dl.id) only where
+     * lead_clocks exists; absent = no filter.
+     */
+    pastLimit?: SQL | null;
     /** User-chosen column + direction; the tab order stays as the tiebreak. */
     sort?: QueueSort;
     /**
@@ -172,9 +178,10 @@ function extraFilters({
     visitStatus,
     visitOutcome,
     finalisedOnly,
+    pastLimit,
     ownedBy,
     teamMemberIds,
-}: Pick<BuildArgs, "q" | "filters" | "visitStatus" | "visitOutcome" | "finalisedOnly" | "ownedBy" | "teamMemberIds">): SQL {
+}: Pick<BuildArgs, "q" | "filters" | "visitStatus" | "visitOutcome" | "finalisedOnly" | "pastLimit" | "ownedBy" | "teamMemberIds">): SQL {
     const parts: SQL[] = [];
     if (ownedBy) parts.push(sql` AND ${ownerScopeSql(sql`dl.current_owner_id`, ownedBy, teamMemberIds)}`);
     if (q) parts.push(leadSearchClause(q));
@@ -186,6 +193,7 @@ function extraFilters({
     if (visitStatus) parts.push(sql` AND lv.visit_status = ${visitStatus}`);
     if (visitOutcome) parts.push(sql` AND lv.visit_outcome = ${visitOutcome}`);
     if (finalisedOnly) parts.push(sql` AND ${finalisedNotWonSql()}`);
+    if (pastLimit) parts.push(sql` AND ${pastLimit}`);
     return parts.length ? sql.join(parts, sql``) : sql``;
 }
 
@@ -199,6 +207,7 @@ export async function fetchAsmQueueRows({
     visitStatus,
     visitOutcome,
     finalisedOnly,
+    pastLimit,
     sort,
     ownedBy,
     teamMemberIds,
@@ -206,7 +215,7 @@ export async function fetchAsmQueueRows({
     const offset = (page - 1) * limit;
     const where = tabFilter(tab, asmId, teamMemberIds);
     const order = queueSortOrder(sort, tabOrder(tab));
-    const search = extraFilters({ q, filters, visitStatus, visitOutcome, finalisedOnly, ownedBy, teamMemberIds });
+    const search = extraFilters({ q, filters, visitStatus, visitOutcome, finalisedOnly, pastLimit, ownedBy, teamMemberIds });
 
     const rows = await db.execute<AsmQueueRow>(sql`
         SELECT
@@ -249,14 +258,15 @@ export async function countAsmQueueRows({
     visitStatus,
     visitOutcome,
     finalisedOnly,
+    pastLimit,
     ownedBy,
     teamMemberIds,
 }: Pick<
     BuildArgs,
-    "tab" | "asmId" | "q" | "filters" | "visitStatus" | "visitOutcome" | "finalisedOnly" | "ownedBy" | "teamMemberIds"
+    "tab" | "asmId" | "q" | "filters" | "visitStatus" | "visitOutcome" | "finalisedOnly" | "pastLimit" | "ownedBy" | "teamMemberIds"
 >): Promise<number> {
     const where = tabFilter(tab, asmId, teamMemberIds);
-    const search = extraFilters({ q, filters, visitStatus, visitOutcome, finalisedOnly, ownedBy, teamMemberIds });
+    const search = extraFilters({ q, filters, visitStatus, visitOutcome, finalisedOnly, pastLimit, ownedBy, teamMemberIds });
     const rows = await db.execute<{ c: string }>(sql`
         SELECT COUNT(*)::text AS c FROM dealer_leads dl ${LATEST_VISIT_JOIN} WHERE ${where} ${search}
     `);
@@ -321,7 +331,7 @@ export async function countAsmFinalisedNotWon(asmId: string): Promise<number> {
  */
 export async function fetchAllAsmTabCounts(
     asmId: string,
-    opts?: Pick<BuildArgs, "filters" | "visitStatus" | "visitOutcome" | "finalisedOnly" | "teamMemberIds">,
+    opts?: Pick<BuildArgs, "filters" | "visitStatus" | "visitOutcome" | "finalisedOnly" | "pastLimit" | "teamMemberIds">,
 ): Promise<Record<AsmQueueTab, number>> {
     // ID 155: a manager's own-tab badges count the team too, like the tables.
     const team = opts?.teamMemberIds;
@@ -330,6 +340,7 @@ export async function fetchAllAsmTabCounts(
         visitStatus: opts?.visitStatus,
         visitOutcome: opts?.visitOutcome,
         finalisedOnly: opts?.finalisedOnly,
+        pastLimit: opts?.pastLimit,
     });
     const rows = await db.execute<{
         my_visits: string;

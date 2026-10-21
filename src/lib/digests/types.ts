@@ -168,6 +168,11 @@ export type DigestFigures = {
    * and coloured Δ. Present = that layout; absent = the plain digest layout.
    */
   masthead?: DigestMasthead;
+  /**
+   * ID 194 — a personal kind's per-recipient button target (an app path, e.g.
+   * "/asm" for an ASM's My day). Absent = the kind's own ctaHref.
+   */
+  ctaHref?: string;
 };
 
 export type DigestMasthead = {
@@ -216,7 +221,7 @@ export type DigestKindDescriptor = {
   settingsKey: string;
   /** Route the settings screen lives at, for the sidebar and the contract test. */
   settingsHref: string;
-  /** Where the email's button goes. */
+  /** Where the email's button goes (a per-recipient DigestFigures.ctaHref overrides it). */
   ctaHref: string;
   ctaLabel: string;
   /** The tick-boxes, in render order. */

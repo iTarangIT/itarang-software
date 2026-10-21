@@ -120,7 +120,9 @@ export const GET = withErrorHandler(async (req: Request) => {
         { header: "Status changes", width: 15 },
         { header: "Log detail changes", width: 18 },
         { header: "Visits logged", width: 14 },
-        { header: "New visits", width: 12 },
+        // ID 185: the dealer's first visit by anyone, and the person's own first (visited only).
+        { header: "New to iTarang", width: 15 },
+        { header: "Fresh visits", width: 13 },
         { header: "Quotations requested", width: 20 },
         { header: "Quotations approved", width: 20 },
         { header: "Quotations rejected", width: 20 },
@@ -134,7 +136,7 @@ export const GET = withErrorHandler(async (req: Request) => {
         zebra(
             sum.addRow([
                 period, x.person, x.status_changes, x.log_detail_changes, x.visits_logged,
-                x.new_visits, x.quotes_requested, x.quotes_approved, x.quotes_rejected,
+                x.new_visits, x.fresh_visits, x.quotes_requested, x.quotes_approved, x.quotes_rejected,
                 x.owner_changes, x.interest_changes, x.calls,
             ]),
             i,

@@ -18,7 +18,7 @@
 //   Record: every step is written as "Done by <name> for <dealer>" and the
 //           dealer is told (bell + WhatsApp).
 
-import { workingDaysDueAt } from "@/lib/calendar/officeCalendar";
+import { workingDaysDueAt, type OfficeHoursArg } from "@/lib/calendar/officeCalendar";
 
 export const ACT_FOR_DEALER_ROLES = ["admin", "sales_head"] as const;
 
@@ -69,11 +69,13 @@ export function actForDealerPermission(input: {
   lastDealerActionAt: Date | null;
   now: Date;
   holidays: ReadonlySet<string>;
+  /** Office hours (ID 85 #8); default Mon–Sat. */
+  hours?: OfficeHoursArg;
 }): ActPermission {
   if (input.housePushed) return { ok: true, ground: "house_pushed" };
   if (input.dealerAsked) return { ok: true, ground: "dealer_asked" };
   if (!input.lastDealerActionAt) return { ok: true, ground: "dealer_idle" };
-  const due = workingDaysDueAt(input.lastDealerActionAt, DEALER_IDLE_WORKING_DAYS, input.holidays);
+  const due = workingDaysDueAt(input.lastDealerActionAt, DEALER_IDLE_WORKING_DAYS, input.holidays, input.hours);
   if (due && input.now.getTime() > due.getTime()) return { ok: true, ground: "dealer_idle" };
   return { ok: false, message: DEALER_ACTIVE_MESSAGE };
 }

@@ -66,6 +66,8 @@ export interface SalesSeriesRow {
     unique_visits: number;
     /** Dealers whose FIRST-EVER visit fell in the bucket. */
     new_visits: number;
+    /** ID 185 — of `visits`, each person's first visit to that dealer (repeat = visits − fresh). */
+    fresh_visits: number;
     calls: number;
 }
 
@@ -76,6 +78,8 @@ export interface SalesAverages {
     /** Mean of the per-day distinct-dealer counts. */
     avg_unique_per_day: number;
     avg_new_per_day: number;
+    /** ID 185 — mean of the per-day fresh visits. */
+    avg_fresh_per_day: number;
     avg_calls_per_day: number;
 }
 
@@ -107,9 +111,11 @@ export interface SalesTotals {
      * ID 185 — of `visits`, those that were the person's FIRST visit to that
      * dealer ever ("fresh", on the rep's basis); the rest are repeat visits
      * (visits − fresh_visits). `new_visits` is then "of which new to iTarang":
-     * dealers whose first visit by anyone was in the range.
+     * dealers whose first visit by anyone was in the range. Visited rows only
+     * (src/lib/visits/freshRepeat.ts), as `visits` is, so fresh + repeat =
+     * visits.
      */
-    fresh_visits?: number;
+    fresh_visits: number;
     calls: number;
     /**
      * Distinct dealers with at least one call in the range (B8 "count of

@@ -11,6 +11,7 @@
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { countLeadsForExport, fetchLeadsForExport } from "@/lib/admin/leadsExport";
+import { matchedUnion, REVENUE_IS_CREDIT, REVENUE_NOT_VOID } from "@/lib/dashboard/revenueSource";
 import { NO_CAPABILITIES } from "@/lib/leads/access";
 import { parseLeadListFilters } from "@/lib/leads/leadListParams";
 
@@ -29,7 +30,8 @@ async function main() {
     line(`all leads: ${total} matched, ${rows.length} rows in ${ms} ms ${ms < 15000 ? "(under 15 s)" : "(OVER 15 s)"}`);
     if (ms >= 15000) failed = true;
 
-    const withBilling = rows.filter((r) => r.billing_match === "name");
+    // IDs 70 / 71: matched on account / GSTIN (matchedUnion), credit notes netted.
+    const withBilling = rows.filter((r) => r.billing_match !== "none");
     const withVisits = rows.filter((r) => r.last_visit_date);
     const withCalls = rows.filter((r) => r.last_call_at);
     line(`rows with billing match: ${withBilling.length} | with a visit: ${withVisits.length} | with a call: ${withCalls.length}`);
@@ -37,17 +39,13 @@ async function main() {
     // 2. billing cross-check on one lead
     const pick = withBilling[0];
     if (!pick) {
-        line("no lead matched an invoice by name — billing cross-check skipped");
+        line("no lead matched an invoice on account / GSTIN — billing cross-check skipped");
     } else {
         const hand = (await db.execute<{ total: string; last: string; first: string; visits: number }>(sql`
-            WITH inv AS (
-                SELECT lower(trim(customer_name)) k, invoice_number, invoice_date::date d, total::numeric t FROM sales_invoices WHERE invoice_date IS NOT NULL
-                UNION ALL
-                SELECT lower(trim(z.customer_name)), z.invoice_number, z.invoice_date::date, z.total::numeric FROM zoho_invoices z
-                 WHERE z.invoice_date IS NOT NULL AND NOT EXISTS (SELECT 1 FROM sales_invoices s WHERE s.invoice_number = z.invoice_number)
-            ), m AS (
-                SELECT i.* FROM inv i, dealer_leads dl
-                 WHERE dl.id = ${pick.lead_id} AND i.k IN (lower(trim(dl.dealer_name)), lower(trim(dl.shop_name)))
+            WITH m AS (
+                SELECT r.total AS t, CASE WHEN NOT ${REVENUE_IS_CREDIT} THEN r.invoice_date END AS d
+                  FROM ${await matchedUnion()} AS r
+                 WHERE r.dealer_lead_id::text = ${pick.lead_id} AND ${REVENUE_NOT_VOID}
             )
             SELECT SUM(t)::text AS total, MAX(d)::text AS last, MIN(d)::text AS first,
                    (SELECT COUNT(*)::int FROM lead_visits v WHERE v.dealer_lead_id = ${pick.lead_id}

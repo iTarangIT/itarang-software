@@ -1,10 +1,12 @@
 "use client";
 
-// "Waiting for a field visit" — two periods side by side, per ASM with team
-// subtotals and a company total (ID 190, decision 14-15 Oct). Every number opens
-// the leads behind it, with a CSV (sales-drill fv_* kinds — the same query that
-// counts them, src/lib/dashboard/fieldVisitTrend.ts). The period pickers are a
-// plain GET form that keeps the list's own filters.
+// "Waiting for a field visit" — this period and the previous period of the
+// same length side by side, per ASM with team subtotals and a company total
+// (ID 190, decision 14-15 Oct; 18 Oct sheet: both periods on every ASM's row,
+// the previous one set automatically — no A / B switch). Every number opens
+// the leads behind it, with a CSV (sales-drill fv_* kinds — the same query
+// that counts them, src/lib/dashboard/fieldVisitTrend.ts). The period picker
+// is a plain GET form that keeps the list's own filters.
 
 import { useState } from "react";
 import Link from "next/link";
@@ -21,7 +23,6 @@ type Kind =
     | "fv_visited_backlog"
     | "fv_visited_new"
     | "fv_left"
-    | "fv_moved"
     | "fv_waiting"
     | "fv_past_limit";
 
@@ -31,6 +32,19 @@ const range = (p: FieldVisitPeriod) => (p.from === p.to ? fmtDay(p.from) : `${fm
 const pct = (n: number, of: number) => (of > 0 ? Math.round((n / of) * 100) : null);
 const pctVisited = (c: FieldVisitCounts) => pct(c.visited, c.pending + c.new);
 const NO_PERSON = "__none__";
+const ZERO: FieldVisitCounts = {
+    pending: 0,
+    new: 0,
+    visited: 0,
+    visitedBacklog: 0,
+    visitedNew: 0,
+    visitedInLimit: 0,
+    left: 0,
+    moved: 0,
+    waiting: 0,
+    pastLimit: 0,
+    avgDaysToVisit: null,
+};
 
 function Change({ a, b, better, unit = "" }: { a: number | null; b: number | null; better: Better; unit?: string }) {
     if (a == null || b == null) return <span className="text-ink-muted">—</span>;
@@ -45,20 +59,37 @@ function Change({ a, b, better, unit = "" }: { a: number | null; b: number | nul
     );
 }
 
+/** One person (or team / company) with both periods. */
+type Pair = { id: string | null; name: string; now: FieldVisitCounts | null; prev: FieldVisitCounts | null; persons: string[] | null };
+
+/** Rows of this period and the previous one matched by person; one present in only one period reads 0 in the other. */
+function pairUp(cur: FieldVisitRow[], old: FieldVisitRow[], persons: (r: FieldVisitRow) => string[] | null): Pair[] {
+    const key = (r: FieldVisitRow) => r.id ?? NO_PERSON;
+    const out = new Map<string, Pair>();
+    for (const r of cur) out.set(key(r), { id: r.id, name: r.name, now: r, prev: null, persons: persons(r) });
+    for (const r of old) {
+        const p = out.get(key(r));
+        if (p) p.prev = r;
+        else out.set(key(r), { id: r.id, name: r.name, now: null, prev: r, persons: persons(r) });
+    }
+    return [...out.values()];
+}
+
 export function FieldVisitTrend({
     a,
     b,
     hidden,
     presets,
 }: {
+    /** The previous period: the same number of days right before `b`. */
     a: FieldVisitPeriod;
+    /** This period. */
     b: FieldVisitPeriod;
     /** The list's own filters (state, spoc_id, team, q), carried through the period form and into the drill lists. */
     hidden: Record<string, string>;
     presets: { label: string; href: string }[];
 }) {
     const [drill, setDrill] = useState<SalesDrillTarget | null>(null);
-    const [which, setWhich] = useState<"a" | "b">("b");
 
     /** Open the leads behind one number: `persons` = an ASM, a team, or null for everyone. */
     const open = (kind: Kind, p: FieldVisitPeriod, count: number, title: string, persons: string[] | null) => {
@@ -76,6 +107,7 @@ export function FieldVisitTrend({
         title,
         persons = null,
         danger = false,
+        muted = false,
     }: {
         kind: Kind;
         p: FieldVisitPeriod;
@@ -83,12 +115,17 @@ export function FieldVisitTrend({
         title: string;
         persons?: string[] | null;
         danger?: boolean;
+        muted?: boolean;
     }) =>
         n > 0 ? (
             <button
                 type="button"
                 onClick={() => open(kind, p, n, title, persons)}
-                className={cn("font-semibold tabular-nums underline-offset-2 hover:underline", danger ? "text-danger" : "text-brand-sky")}
+                className={cn(
+                    "tabular-nums underline-offset-2 hover:underline",
+                    muted ? "text-ink-muted" : "font-semibold",
+                    !muted && (danger ? "text-danger" : "text-brand-sky"),
+                )}
             >
                 {n}
             </button>
@@ -132,15 +169,18 @@ export function FieldVisitTrend({
             better: "lower",
             show: (v) => (v == null ? "—" : String(v)),
         },
-        { label: "Left without a visit (not needed, handed back, Lost)", kind: "fv_left", get: (c) => c.left, better: "none" },
-        { label: "Moved on without a visit (another ASM, quote approved, …)", kind: "fv_moved", get: (c) => c.moved, better: "none" },
+        {
+            label: "Closed without a visit (not needed, handed back, Lost, moved on)",
+            kind: "fv_left",
+            get: (c) => c.left,
+            better: "none",
+        },
         { label: "Still waiting at the end", kind: "fv_waiting", get: (c) => c.waiting, better: "lower" },
         { label: "of them past the limit", kind: "fv_past_limit", get: (c) => c.pastLimit, better: "lower", indent: true, danger: true },
     ];
     const queueDelta = b.total.waiting - a.total.waiting;
     const visitDelta = b.total.visited - a.total.visited;
     const field = "min-h-10 rounded-[10px] border border-border bg-surface px-2.5 text-[13px] text-ink outline-none focus:border-brand-teal";
-    const per = which === "a" ? a : b;
 
     const cell = (r: Row, p: FieldVisitPeriod) => {
         const v = r.get(p.total);
@@ -154,59 +194,66 @@ export function FieldVisitTrend({
         { label: "Visited", kind: "fv_visited", get: (c) => c.visited },
         { label: "· of backlog", kind: "fv_visited_backlog", get: (c) => c.visitedBacklog },
         { label: "· of new", kind: "fv_visited_new", get: (c) => c.visitedNew },
-        { label: "Left, no visit", kind: "fv_left", get: (c) => c.left },
-        { label: "Moved on", kind: "fv_moved", get: (c) => c.moved },
+        { label: "Closed, no visit", kind: "fv_left", get: (c) => c.left },
         { label: "Still waiting", kind: "fv_waiting", get: (c) => c.waiting },
         { label: "Past the limit", kind: "fv_past_limit", get: (c) => c.pastLimit, danger: true },
     ];
-    const personRow = (r: FieldVisitRow, persons: string[] | null, tone: "asm" | "team" | "total") => (
+    const asmPairs = pairUp(b.asms, a.asms, (r) => [r.id ?? NO_PERSON]);
+    const teamPairs = pairUp(b.teams, a.teams, (r) => r.members ?? []).sort((x, y) => x.name.localeCompare(y.name));
+    const pctText = (c: FieldVisitCounts | null) => {
+        const v = c ? pctVisited(c) : null;
+        return v == null ? "—" : `${v}%`;
+    };
+    const personRow = (pr: Pair, tone: "asm" | "team" | "total") => (
         <tr
-            key={`${tone}-${r.id ?? "none"}`}
+            key={`${tone}-${pr.id ?? "none"}`}
             className={cn("border-b border-border/60", tone === "team" && "bg-bg/60", tone === "total" && "bg-bg font-semibold")}
         >
-            <td className={cn("py-2 pr-3", tone !== "asm" && "font-semibold")}>{r.name}</td>
+            <td className={cn("py-2 pr-3", tone !== "asm" && "font-semibold")}>{pr.name}</td>
             {COLS.map((c) => (
-                <td key={c.kind} className="py-2 pr-3 text-right">
-                    {num({ kind: c.kind, p: per, n: c.get(r), title: `${c.label} · ${r.name}`, persons, danger: c.danger })}
+                <td key={c.kind} className="whitespace-nowrap py-2 pr-3 text-right">
+                    {num({ kind: c.kind, p: b, n: c.get(pr.now ?? ZERO), title: `${c.label} · ${pr.name}`, persons: pr.persons, danger: c.danger })}
+                    <span className="mx-1 text-ink-muted" aria-hidden>
+                        |
+                    </span>
+                    {num({ kind: c.kind, p: a, n: c.get(pr.prev ?? ZERO), title: `${c.label} · ${pr.name}`, persons: pr.persons, muted: true })}
                 </td>
             ))}
-            <td className="py-2 text-right tabular-nums">{pctVisited(r) == null ? "—" : `${pctVisited(r)}%`}</td>
+            <td className="whitespace-nowrap py-2 text-right tabular-nums">
+                {pctText(pr.now)} <span className="text-ink-muted">| {pctText(pr.prev)}</span>
+            </td>
         </tr>
     );
 
     return (
         <section className="space-y-4 rounded-[14px] border border-border bg-surface p-4 shadow-card sm:p-5">
             <div>
-                <h2 className="text-base font-bold text-brand-navy">Compare two periods</h2>
+                <h2 className="text-base font-bold text-brand-navy">This period against the previous one</h2>
                 <p className="mt-0.5 text-xs text-ink-muted">
-                    For each period: leads waiting at the start, plus leads moved to an ASM in it (a move from one ASM to another is new
-                    for the new ASM), equals the leads visited, those that left without a visit (visit not needed, handed back to the
-                    ISR, or Lost), those that moved on otherwise, and those still waiting at the end. % visited = visited ÷ (waiting at
-                    the start + new). &ldquo;Past the limit&rdquo; uses working days since the transfer (Mon–Sat, holidays off) and the
-                    limit in force on the transfer&apos;s day. Click any number for the leads.
+                    The previous period is the same number of days right before this one, set automatically. For each period: leads
+                    waiting at the start, plus leads moved to an ASM in it, equals the leads visited, those closed without a visit
+                    (visit not needed, handed back to the ISR, Lost, or moved on — to another ASM, where it is new for that ASM, a quote
+                    approved, …), and those still waiting at the end. % visited = visited ÷ (waiting at the start + new). &ldquo;Past
+                    the limit&rdquo; uses working days since the transfer (office calendar, holidays off) and the limit in force on the
+                    transfer&apos;s day. Click any number for the leads.
                 </p>
             </div>
 
-            {/* Period pickers */}
+            {/* Period picker: the previous period follows it */}
             <form method="get" className="flex flex-wrap items-end gap-2.5">
                 {Object.entries(hidden).map(([k, v]) => (
                     <input key={k} type="hidden" name={k} value={v} />
                 ))}
                 <fieldset className="flex flex-wrap items-center gap-1.5">
-                    <legend className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-ink-muted">Period A</legend>
-                    <input type="date" name="a_from" defaultValue={a.from} aria-label="Period A from" className={field} />
+                    <legend className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-ink-muted">Period</legend>
+                    <input type="date" name="from" defaultValue={b.from} aria-label="Period from" className={field} />
                     <span className="text-xs text-ink-muted">to</span>
-                    <input type="date" name="a_to" defaultValue={a.to} aria-label="Period A to" className={field} />
-                </fieldset>
-                <fieldset className="flex flex-wrap items-center gap-1.5">
-                    <legend className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-ink-muted">Period B</legend>
-                    <input type="date" name="b_from" defaultValue={b.from} aria-label="Period B from" className={field} />
-                    <span className="text-xs text-ink-muted">to</span>
-                    <input type="date" name="b_to" defaultValue={b.to} aria-label="Period B to" className={field} />
+                    <input type="date" name="to" defaultValue={b.to} aria-label="Period to" className={field} />
                 </fieldset>
                 <button type="submit" className="min-h-10 rounded-[10px] bg-brand-navy px-4 text-[13px] font-semibold text-white hover:bg-brand-800">
-                    Compare
+                    Show
                 </button>
+                <span className="pb-2.5 text-xs text-ink-muted">Previous period: {range(a)}</span>
                 <div className="flex flex-wrap gap-x-3 gap-y-1 text-[12.5px]">
                     {presets.map((p) => (
                         <Link key={p.label} href={p.href} className="font-semibold text-brand-sky hover:underline">
@@ -235,17 +282,17 @@ export function FieldVisitTrend({
                     <thead>
                         <tr className="border-b border-border text-left text-[11.5px] uppercase tracking-wide text-ink-muted">
                             <th className="py-2 pr-3 font-semibold">Measure (company)</th>
-                            <th className="py-2 pr-3 text-right font-semibold">A · {range(a)}</th>
-                            <th className="py-2 pr-3 text-right font-semibold">B · {range(b)}</th>
-                            <th className="py-2 text-right font-semibold">B vs A</th>
+                            <th className="py-2 pr-3 text-right font-semibold">This period · {range(b)}</th>
+                            <th className="py-2 pr-3 text-right font-semibold">Previous · {range(a)}</th>
+                            <th className="py-2 text-right font-semibold">Change</th>
                         </tr>
                     </thead>
                     <tbody>
                         {rows.map((r) => (
                             <tr key={r.label} className="border-b border-border/60">
                                 <td className={cn("py-2 pr-3", r.indent && "pl-4 text-ink-muted")}>{r.indent ? `· ${r.label}` : r.label}</td>
-                                <td className="py-2 pr-3 text-right">{cell(r, a)}</td>
                                 <td className="py-2 pr-3 text-right">{cell(r, b)}</td>
+                                <td className="py-2 pr-3 text-right">{cell(r, a)}</td>
                                 <td className="py-2 text-right tabular-nums">
                                     <Change a={r.get(a.total)} b={r.get(b.total)} better={r.better} unit={r.unit} />
                                 </td>
@@ -255,28 +302,16 @@ export function FieldVisitTrend({
                 </table>
             </div>
 
-            {/* Per ASM, team subtotals and the company total, for one period */}
+            {/* Per ASM, team subtotals and the company total — both periods on every row */}
             <div className="space-y-2 border-t border-border pt-4">
-                <div className="flex flex-wrap items-center gap-2">
+                <div className="flex flex-wrap items-baseline gap-2">
                     <h3 className="text-[13px] font-bold text-brand-navy">By ASM</h3>
-                    <div className="inline-flex rounded-[10px] border border-border p-0.5 text-[12.5px]">
-                        {(["a", "b"] as const).map((k) => (
-                            <button
-                                key={k}
-                                type="button"
-                                onClick={() => setWhich(k)}
-                                className={cn(
-                                    "rounded-[8px] px-2.5 py-1 font-semibold",
-                                    which === k ? "bg-brand-navy text-white" : "text-ink-muted hover:text-ink",
-                                )}
-                            >
-                                {k.toUpperCase()} · {range(k === "a" ? a : b)}
-                            </button>
-                        ))}
-                    </div>
+                    <span className="text-xs text-ink-muted">
+                        Each cell: this period ({range(b)}) | previous period ({range(a)}).
+                    </span>
                 </div>
                 <div className="overflow-x-auto">
-                    <table className="w-full min-w-[860px] text-[13px]">
+                    <table className="w-full min-w-[960px] text-[13px]">
                         <thead>
                             <tr className="border-b border-border text-left text-[11.5px] uppercase tracking-wide text-ink-muted">
                                 <th className="py-2 pr-3 font-semibold">ASM</th>
@@ -289,17 +324,18 @@ export function FieldVisitTrend({
                             </tr>
                         </thead>
                         <tbody>
-                            {per.asms.length === 0 ? (
+                            {asmPairs.length === 0 ? (
                                 <tr>
                                     <td colSpan={COLS.length + 2} className="py-3 text-ink-muted">
-                                        No lead was waiting for a field visit in this period.
+                                        No lead was waiting for a field visit in either period.
                                     </td>
                                 </tr>
                             ) : (
-                                per.asms.map((r) => personRow(r, [r.id ?? NO_PERSON], "asm"))
+                                asmPairs.map((pr) => personRow(pr, "asm"))
                             )}
-                            {per.teams.map((t) => personRow(t, t.members ?? [], "team"))}
-                            {per.asms.length > 0 && personRow({ ...per.total, id: null, name: "Company total" }, null, "total")}
+                            {teamPairs.map((pr) => personRow(pr, "team"))}
+                            {asmPairs.length > 0 &&
+                                personRow({ id: null, name: "Company total", now: b.total, prev: a.total, persons: null }, "total")}
                         </tbody>
                     </table>
                 </div>

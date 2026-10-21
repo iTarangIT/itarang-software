@@ -728,6 +728,19 @@ export async function middleware(request: NextRequest) {
     "/admin/reports/sales-dashboard": ["admin", "sales_head", "ceo", "partner", "business_head"],
     "/admin/reports/dealer-health": ["admin", "sales_head", "ceo", "partner", "business_head"],
     "/admin/reports/needs-attention": ["admin", "sales_head", "ceo", "partner"],
+    // ID 190 — "Waiting for a field visit" is also open to a manager with
+    // reporting lines (e.g. an ASM with a team); the page itself checks the
+    // team and scopes the list to it (src/lib/dashboard/needsActionAccess.ts).
+    "/admin/reports/needs-action/visit_overdue": [
+      "admin",
+      "sales_head",
+      "ceo",
+      "partner",
+      "business_head",
+      "asm",
+      "inside_sales_rep",
+      "sales_manager",
+    ],
     // Sales Head "Needs action now" tile lists — the Sales Head screen's readers.
     "/admin/reports/needs-action": ["admin", "sales_head", "ceo", "partner", "business_head"],
     // E-322 (IDs 39, 71) — the invoice ledger: finance, CEO, Admin only.

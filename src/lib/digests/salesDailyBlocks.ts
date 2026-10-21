@@ -3,7 +3,8 @@
 // not exist, only Block A's).
 //
 //   B · Field team (ASM)     ONE ROW PER ASM: Dealers visited (Yesterday, MTD),
-//                            New dealers visited (Y, MTD), Hot received (Y,
+//                            Visits = Fresh + Repeat, of which new to iTarang
+//                            (Y, MTD each; ID 185), Hot received (Y,
 //                            MTD), Quotes created (Y, MTD), Quotes delivered,
 //                            Dealer approved, Marked Won, Converted, Revenue
 //                            (MTD), % of target.
@@ -31,7 +32,8 @@
 //   D · Position             open Hot / Warm / Cold per owner, Hot rated 8+
 //                            days ago, Awaiting field visit (lead_status
 //                            Transferred_to_ASM, keyed on the ASM) and one
-//                            "(no owner)" row carrying Sales-ready, no owner.
+//                            "(no owner)" row carrying Ready leads with no
+//                            owner (ID 184 name), then a Total row (ID 190).
 //
 // SAME DEFINITIONS AS BLOCK A. Whatever Block A reads from the Sales dashboard
 // builder is read here from that builder's per_spoc blocks; whatever Block A
@@ -47,7 +49,9 @@
 //   Hot handed to field  the lead's owner AT THE MOMENT of the asm_transfer
 //                        (from_owner_id — ID 179: a manager's transfer of an
 //                        ISR's lead counts for the ISR; old rows without it,
-//                        whoever performed it). Distinct leads: a lead handed
+//                        whoever performed it; HANDOVER-A31: a bulk assign of
+//                        a lead nobody owned is credited to no one, and Block
+//                        A leaves it out too). Distinct leads: a lead handed
 //                        over twice in a window counts once
 //   Connected / Engaged  the caller (performed_by); connectedCall() and
 //                        engagedCall() — since ID 59 an engaged call is a
@@ -63,6 +67,7 @@ import { sql } from "drizzle-orm";
 
 import type { SalesDashboard, SalesSpocBlock } from "@/lib/admin/salesDashboardTypes";
 import { connectedCall, engagedCall, transferCredit, wasHotAt } from "@/lib/reports/metricDefinitions";
+import { freshRepeatSplit } from "@/lib/visits/freshRepeat";
 import { fmtValue, pctOfTarget, type Period } from "./salesDailyBlockA";
 import { istRangeTz } from "./window";
 
@@ -90,10 +95,23 @@ export type RepExtras = {
     limits_passed: PerRep;
     /** Median working hours from assignment to first attempt (owner clocks). */
     owner_median_h: PerRep;
+    /**
+     * 18 Oct row 32 — owner clocks started in the period whose limit has
+     * fallen due, and of those the ones attempted within it (a ratio, so the
+     * Total row is the company's % — counts add up, a % does not).
+     */
+    attempt_due?: PerRep;
+    attempt_in_limit?: PerRep;
+    /** The same for the field-visit (transfer) clocks charged to the ASM. */
+    visit_due?: PerRep;
+    visit_in_limit?: PerRep;
 };
 
 export type RepMetricKey =
     | "visited"
+    | "visits"
+    | "fresh_visits"
+    | "repeat_visits"
     | "new_visited"
     | "hot_received"
     | "quotes"
@@ -108,7 +126,11 @@ export type RepMetricKey =
     | "engaged"
     | "hot_handed"
     | "limits_passed"
-    | "owner_median_h";
+    | "owner_median_h"
+    | "attempt_due"
+    | "attempt_in_limit"
+    | "visit_due"
+    | "visit_in_limit";
 
 /** One metric for one rep; null = not measured. */
 export type RepValue = { y: number | null; mtd: number | null };
@@ -140,6 +162,10 @@ type MetricDef = {
 
 const METRICS: Record<RepMetricKey, MetricDef> = {
     visited: { kind: "count", dash: (b) => b.totals.unique_visits },
+    // ID 185 (visit_status = 'visited' only): Visits = Fresh + Repeat.
+    visits: { kind: "count", dash: (b) => b.totals.visits ?? 0 },
+    fresh_visits: { kind: "count", dash: (b) => freshRepeatSplit(b.totals).fresh },
+    repeat_visits: { kind: "count", dash: (b) => freshRepeatSplit(b.totals).repeat },
     new_visited: { kind: "count", dash: (b) => b.totals.new_visits },
     hot_received: { kind: "count", extra: "hot_received" },
     quotes: { kind: "count", dash: (b) => b.outcome.quotes_issued },
@@ -155,6 +181,10 @@ const METRICS: Record<RepMetricKey, MetricDef> = {
     hot_handed: { kind: "count", extra: "hot_handed" },
     limits_passed: { kind: "count", extra: "limits_passed" },
     owner_median_h: { kind: "hours", extra: "owner_median_h" },
+    attempt_due: { kind: "count", extra: "attempt_due" },
+    attempt_in_limit: { kind: "count", extra: "attempt_in_limit" },
+    visit_due: { kind: "count", extra: "visit_due" },
+    visit_in_limit: { kind: "count", extra: "visit_in_limit" },
 };
 
 /** The one target "% of target" is read against: metric shown vs sales_targets key. */
@@ -174,7 +204,13 @@ const ASM_COLS: ColSpec[] = [
     { header: "ASM", name: true },
     { header: "Dealers visited · Yesterday", metric: "visited", period: "y" },
     { header: "MTD", metric: "visited", period: "mtd" },
-    { header: "New dealers visited · Yesterday", metric: "new_visited", period: "y" },
+    { header: "Visits · Yesterday", metric: "visits", period: "y" },
+    { header: "MTD", metric: "visits", period: "mtd" },
+    { header: "Fresh · Yesterday", metric: "fresh_visits", period: "y" },
+    { header: "MTD", metric: "fresh_visits", period: "mtd" },
+    { header: "Repeat · Yesterday", metric: "repeat_visits", period: "y" },
+    { header: "MTD", metric: "repeat_visits", period: "mtd" },
+    { header: "Of which new to iTarang · Yesterday", metric: "new_visited", period: "y" },
     { header: "MTD", metric: "new_visited", period: "mtd" },
     { header: "Hot received · Yesterday", metric: "hot_received", period: "y" },
     { header: "MTD", metric: "hot_received", period: "mtd" },
@@ -188,6 +224,9 @@ const ASM_COLS: ColSpec[] = [
     { header: "Limits passed · Yesterday", metric: "limits_passed", period: "y" },
     { header: "MTD", metric: "limits_passed", period: "mtd" },
     { header: "First attempt, median working hrs MTD", metric: "owner_median_h", period: "mtd" },
+    // 18 Oct row 32: share of the clocks due MTD that were met.
+    { header: "First attempt within limit % MTD", ratio: ["attempt_in_limit", "attempt_due"] },
+    { header: "First visit within limit % MTD", ratio: ["visit_in_limit", "visit_due"] },
     { header: "% of target", pctTarget: true },
 ];
 
@@ -207,6 +246,7 @@ const ISR_COLS: ColSpec[] = [
     { header: "Limits passed · Yesterday", metric: "limits_passed", period: "y" },
     { header: "MTD", metric: "limits_passed", period: "mtd" },
     { header: "First attempt, median working hrs MTD", metric: "owner_median_h", period: "mtd" },
+    { header: "First attempt within limit % MTD", ratio: ["attempt_in_limit", "attempt_due"] },
     { header: "% of target", pctTarget: true },
 ];
 
@@ -260,10 +300,13 @@ export function buildRepBlocks(
     const mBy = new Map((mtd.per_spoc ?? []).map((b) => [b.spoc_id, b]));
     const ids = new Set<string>();
     const info = new Map<string, SalesSpocBlock>();
+    // HANDOVER-A31: a non-ISR credited with "Hot to field" (they owned the lead
+    // they transferred) is listed even with no calls, so Block C adds up to Block A.
+    const handedHot = (id: string) => (extras.y.hot_handed?.get(id) ?? 0) > 0 || (extras.mtd.hot_handed?.get(id) ?? 0) > 0;
     for (const b of [...(mtd.per_spoc ?? []), ...(y.per_spoc ?? [])]) {
         if (!info.has(b.spoc_id)) info.set(b.spoc_id, b);
         if (b.role === role) ids.add(b.spoc_id);
-        else if (role === "inside_sales_rep" && b.role !== "asm" && b.totals.calls > 0) ids.add(b.spoc_id);
+        else if (role === "inside_sales_rep" && b.role !== "asm" && (b.totals.calls > 0 || handedHot(b.spoc_id))) ids.add(b.spoc_id);
     }
 
     const pick = (def: MetricDef, b: SalesSpocBlock | undefined, ex: RepExtras, id: string): number | null => {
@@ -432,8 +475,34 @@ export const BLOCK_D_COLUMNS = [
     "Cold",
     "Hot, rated 8+ days ago",
     "Awaiting field visit",
-    "Sales-ready, no owner",
+    // 18 Oct row 25: of those, past the transfer → visit limit (transferVisitOverdueSql).
+    "Awaiting field visit, past the limit",
+    // ID 184: the one name every surface uses (READY_NO_OWNER_TITLE).
+    "Ready leads with no owner",
 ];
+
+/**
+ * ID 190 — the Total row closing Block D: every numeric column summed down
+ * the rows (the "(no owner)" row included); a column with no number at all
+ * ("—" everywhere) stays "—". Generic over the columns, so a column added
+ * later is totalled too.
+ */
+export function blockDTotalRow(rows: Rows): Array<string | number> {
+    const width = rows.reduce((w, r) => Math.max(w, r.length), 0);
+    const total: Array<string | number> = ["Total"];
+    for (let i = 1; i < width; i++) {
+        let sum = 0;
+        let any = false;
+        for (const r of rows) {
+            if (typeof r[i] === "number") {
+                sum += r[i] as number;
+                any = true;
+            }
+        }
+        total.push(any ? sum : "—");
+    }
+    return total;
+}
 
 /**
  * The as-of-now position, one row per owner holding any open rated lead or a
@@ -446,7 +515,10 @@ export function blockDRows(
     awaiting: Map<string, number>,
     names: Map<string, string>,
     salesReadyNoOwner: number,
+    /** 18 Oct row 25 — of `awaiting`, past the limit; null / absent = not measured ("—"). */
+    awaitingPast?: Map<string, number> | null,
 ): Rows {
+    const past = (id: string): string | number => (awaitingPast ? (awaitingPast.get(id) ?? 0) : "—");
     const spocs = new Map((d.per_spoc ?? []).map((b) => [b.spoc_id, b]));
     const ids = new Set<string>();
     for (const b of spocs.values()) if (level(b, "hot") + level(b, "warm") + level(b, "cold") > 0) ids.add(b.spoc_id);
@@ -464,6 +536,7 @@ export function blockDRows(
                 b ? level(b, "cold") : 0,
                 b ? hotOverAWeek(b) : 0,
                 awaiting.get(id) ?? 0,
+                past(id),
                 "—",
             ] as Array<string | number>;
         })
@@ -471,8 +544,10 @@ export function blockDRows(
 
     const unownedAwaiting = awaiting.get(NO_OWNER_KEY) ?? 0;
     if (salesReadyNoOwner > 0 || unownedAwaiting > 0) {
-        rows.push([NO_OWNER, "—", "—", "—", "—", unownedAwaiting, salesReadyNoOwner]);
+        rows.push([NO_OWNER, "—", "—", "—", "—", unownedAwaiting, past(NO_OWNER_KEY), salesReadyNoOwner]);
     }
+    // ID 190: a Total row once there is more than one row to add up.
+    if (rows.length > 1) rows.push(blockDTotalRow(rows));
     return rows;
 }
 
@@ -547,8 +622,44 @@ export async function loadRepExtras(db: Exec, p: Period): Promise<RepExtras> {
                  GROUP BY 1`,
         ),
     ]);
-    const [limits_passed, owner_median_h] = await Promise.all([loadLimitsPassed(db, p), loadOwnerMedian(db, p)]);
-    return { hot_received, hot_handed, connected, engaged, quotes_delivered, dealer_approved, won, limits_passed, owner_median_h };
+    const [limits_passed, owner_median_h, attempt, visit] = await Promise.all([
+        loadLimitsPassed(db, p),
+        loadOwnerMedian(db, p),
+        loadInLimit(db, p, "owner"),
+        loadInLimit(db, p, "transfer"),
+    ]);
+    return {
+        hot_received,
+        hot_handed,
+        connected,
+        engaged,
+        quotes_delivered,
+        dealer_approved,
+        won,
+        limits_passed,
+        owner_median_h,
+        attempt_due: attempt.due,
+        attempt_in_limit: attempt.ok,
+        visit_due: visit.due,
+        visit_in_limit: visit.ok,
+    };
+}
+
+/**
+ * 18 Oct row 32 — per person, clocks of `clock` started in the period whose
+ * limit has fallen due, and of those the ones met (no "Limit passed") — the
+ * same rule as clockStats().pct_in_limit. Owners not on record left out.
+ */
+async function loadInLimit(db: Exec, p: Period, clock: "owner" | "transfer"): Promise<{ due: PerRep; ok: PerRep }> {
+    if (!(await tables(db)).clocks) return { due: null, ok: null };
+    const win = (col: ReturnType<typeof sql>) => istRangeTz(col, p.from, p.to);
+    const where = sql`c.clock = ${clock} AND c.owner_id IS NOT NULL AND c.owner_inferred = false
+               AND c.due_at IS NOT NULL AND c.due_at <= NOW() AND ${win(sql`c.started_at`)}`;
+    const [due, ok] = await Promise.all([
+        perRep(db, sql`SELECT c.owner_id AS u, COUNT(*) AS n FROM lead_clocks c WHERE ${where} GROUP BY 1`),
+        perRep(db, sql`SELECT c.owner_id AS u, COUNT(*) AS n FROM lead_clocks c WHERE ${where} AND c.limit_passed_at IS NULL GROUP BY 1`),
+    ]);
+    return { due, ok };
 }
 
 /**
@@ -609,6 +720,32 @@ async function tables(db: Exec): Promise<{ clocks: boolean; events: boolean }> {
  * Transferred_to_ASM and no visit marked since the transfer); a lead with no
  * ASM and no owner counts under NO_OWNER_KEY. Null when the query fails.
  */
+/**
+ * 18 Oct row 25 — of loadAwaitingFieldVisit(), the leads past the transfer →
+ * visit limit in force on each transfer's day (transferVisitOverdueSql), per
+ * ASM. Null when the query fails.
+ */
+export async function loadAwaitingFieldVisitPast(db: Exec): Promise<Map<string, number> | null> {
+    try {
+        const { transferLimitSql, transferVisitOverdueSql } = await import("@/lib/asm/transferVisitLimit");
+        const rows = (await db.execute(sql`
+            SELECT COALESCE(dl.asm_id, dl.current_owner_id) AS u, COUNT(*)::int AS n
+              FROM dealer_leads dl
+             WHERE ${transferVisitOverdueSql(await transferLimitSql())}
+             GROUP BY 1
+        `)) as Array<{ u: string | null; n: number }>;
+        const m = new Map<string, number>();
+        for (const r of rows) {
+            const k = r.u == null ? NO_OWNER_KEY : String(r.u);
+            m.set(k, (m.get(k) ?? 0) + Number(r.n));
+        }
+        return m;
+    } catch (e) {
+        console.warn("[salesDailyBlocks] awaiting field visit past the limit not measured:", e instanceof Error ? e.message : e);
+        return null;
+    }
+}
+
 export async function loadAwaitingFieldVisit(db: Exec): Promise<Map<string, number> | null> {
     try {
         // Imported here, not at module scope: transferVisitLimit pulls in the db

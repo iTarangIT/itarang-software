@@ -90,7 +90,9 @@ export interface AiScoreResult {
  * dashboard's (src/lib/admin/salesDashboard.ts), so the two always agree:
  *   visits   one person, one dealer, one day with a visit that happened
  *   dealers  different dealers visited
- *   fresh    visits on the dealer's first-ever visit day; repeat = the rest
+ *   fresh    the person's first visit to that dealer (ID 185 — the rep's
+ *            basis, src/lib/visits/freshRepeat.ts); repeat = the rest
+ *   new_to_itarang  of the visits, the dealer's first visit by anyone
  *   planned  visits planned for a day in the period and still open
  */
 export interface MeetingRow {
@@ -102,6 +104,8 @@ export interface MeetingRow {
     dealers: number;
     fresh: number;
     repeat: number;
+    /** ID 185 — of the visits, the dealer's first visit by anyone. */
+    new_to_itarang: number;
     planned: number;
     ground: number;
     calling: number;

@@ -8,7 +8,7 @@
 
 import { requireRole } from "@/lib/auth-utils";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
-import { listNeedsAttention, summarizeNeedsAttention } from "@/lib/leads/needsAttention";
+import { COUNTED_FROM_LABEL, listNeedsAttention, summarizeNeedsAttention } from "@/lib/leads/needsAttention";
 import { getTimeLimits } from "@/lib/timeLimits/store";
 import { filterNeedsAttention, needsAttentionFiltersFrom } from "@/lib/leads/needsAttentionFilter";
 import { csvDateTime, csvResponse } from "@/lib/leads/queueCsv";
@@ -45,6 +45,9 @@ export const GET = withErrorHandler(async (req: Request) => {
                 { header: "Status", value: (r) => statusLabel(r.lead_status) },
                 { header: "Interest", value: (r) => r.interest_level ?? "" },
                 { header: "Working days idle", value: (r) => String(r.days_idle) },
+                // ID 192: the date the idle count runs from, and which one it is.
+                { header: "Counted from", value: (r) => COUNTED_FROM_LABEL[r.counted_from] ?? "" },
+                { header: "Counted from date", value: (r) => csvDateTime(r.counted_from_at) },
                 { header: "Last worked", value: (r) => csvDateTime(r.last_worked_at) || "never" },
                 { header: "Next follow-up", value: (r) => csvDateTime(r.next_follow_up_at) },
                 { header: "Last disposition", value: (r) => r.last_disposition ?? "" },
@@ -63,6 +66,13 @@ export const GET = withErrorHandler(async (req: Request) => {
     ]);
     // The limits behind the figures, so screens label them from the settings
     // (ID 85 Decision 6) instead of printing a fixed number.
-    const limits = { idle_cc: l.idle_cc, idle_asm: l.idle_asm, stale_critical: l.stale_critical };
+    // stale_yellow / stale_red / stale_critical colour the rows (ID 192: not fixed 7 / 14).
+    const limits = {
+        idle_cc: l.idle_cc,
+        idle_asm: l.idle_asm,
+        stale_critical: l.stale_critical,
+        stale_yellow: l.stale_yellow,
+        stale_red: l.stale_red,
+    };
     return successResponse({ rows, holders, limits });
 });

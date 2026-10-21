@@ -51,6 +51,17 @@ export function isOutsideConnection(c: { kind: string; name: string }): boolean 
   return c.kind === "postgres" && c.name !== CRM_SOURCE_NAME;
 }
 
+/**
+ * ID 167 (18 Oct) — may a question be asked on this source? Fails closed: only a source the
+ * agent listed (so `undefined` — not found — is refused) that is the iTarang database or an
+ * upload. Any other kind, including one the agent adds later, is refused until it is reviewed.
+ */
+export function canAskSource(c: { kind: string; name: string } | undefined | null): boolean {
+  if (!c) return false;
+  if (c.kind === "file") return true;
+  return c.kind === "postgres" && c.name === CRM_SOURCE_NAME;
+}
+
 const DatasetBody = z.object({ name: z.string().trim().min(1).max(200) });
 
 const ResolveBody = z.object({

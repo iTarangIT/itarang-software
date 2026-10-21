@@ -25,7 +25,7 @@ import { db } from "@/lib/db";
 import { normalizeInvoiceNumber } from "@/lib/sales/normalizeInvoiceNumber";
 import { resolveSalesOrg } from "@/lib/sales/resolveSalesOrg";
 import { itemFamilyKey, itemKey } from "@/lib/sales/invoiceLines";
-import { classFor, isMapped, mappedItems, productFor } from "@/lib/sales/itemMap";
+import { classFor, isMapped, mappedClassSql, mappedItems, productFor, type ItemProduct } from "@/lib/sales/itemMap";
 import { voidInvoice } from "@/lib/sales/invoiceVoids";
 import { recheckStockTasks, recordInvoiceSerials } from "@/lib/inventory/stockUploadTasks/service";
 import type { LineForSerials } from "@/lib/inventory/stockUploadTasks/rules";
@@ -325,15 +325,127 @@ export async function mapVyaparItem(input: {
                            -- ID 172: an onboarding-fee line is revenue, never a battery.
                            -- A14: a line with no HSN takes its class from the mapping
                            -- (classFor in itemMap.ts — same rule on insert).
-                           product_class = CASE
-                               WHEN ${input.assetType} = 'onboarding_fee' THEN 'other'
-                               WHEN COALESCE(btrim(hsn), '') = '' AND ${input.assetType} IN ('battery', 'charger') THEN ${input.assetType}
-                               WHEN COALESCE(btrim(hsn), '') = '' AND ${input.assetType} IS NOT NULL THEN 'other'
-                               ELSE product_class END
+                           product_class = ${mappedClassSql(input.assetType)}
                      WHERE item_name IN (${sql.join(names.map((n) => sql`${n}`), sql`, `)})
                     RETURNING 1)
                 SELECT count(*)::int AS n FROM u`),
         );
         return { lines_updated: res[0]?.n ?? 0, spellings: new Set(names.map(itemKey)).size };
     });
+}
+
+export type FamilyBackfillReport = {
+    /** Family keys written from a mapping saved for one spelling only (before 14 Oct). */
+    families_written: Array<{ family_key: string; from_item: string; asset_type: string | null; product_id: string }>;
+    /** Families whose spellings were mapped to different products — the latest mapping wins, as on Item mapping. */
+    conflicts: Array<{ family_key: string; kept: string; also: string[] }>;
+    /** Lines with no product that a saved mapping (exact, else family) now reaches. */
+    lines_stamped: number;
+    spellings_stamped: number;
+    by_product: Array<{ asset_type: string | null; product_id: string; lines: number; spellings: number }>;
+    applied: boolean;
+};
+
+/**
+ * HANDOVER-A16 — one-off back-fill of product families onto invoice lines.
+ *
+ * Mappings saved before 14 Oct (when Item mapping started saving the family
+ * key, mapVyaparItem) cover only their own spelling, so Item mapping shows the
+ * family as mapped while its other spellings' lines stay "not linked" in gross
+ * margin and By SKU. This runs every saved mapping through mapVyaparItem's
+ * rules:
+ *   1. for each exact mapping whose family has no row yet, write the family
+ *      key (latest-saved spelling wins; a family row that exists — mapped or
+ *      deliberately unmapped — is never touched);
+ *   2. stamp asset_type / product_id / product_class (mappedClassSql — the
+ *      classFor rule) on every line STILL WITHOUT a product whose item maps,
+ *      exact spelling first, else its family (productFor). A line that already
+ *      has a product is never changed.
+ *
+ * Dry run unless `apply`; idempotent — a second run finds nothing to do.
+ */
+export async function reapplyFamilyMappings(opts: { apply?: boolean; actorId?: string | null } = {}): Promise<FamilyBackfillReport> {
+    const apply = opts.apply === true;
+    type MapRow = { item_key: string; item_name: string; asset_type: string | null; product_id: string | null };
+    const rows = rowsOf<MapRow>(
+        await db.execute(sql`SELECT item_key, item_name, asset_type, product_id FROM vyapar_item_map ORDER BY updated_at DESC, item_key`),
+    );
+    const isFamilyKey = (k: string) => k.startsWith("code:") || k.startsWith("name:");
+    const familyRows = new Set(rows.filter((r) => isFamilyKey(r.item_key)).map((r) => r.item_key));
+
+    const written = new Map<string, FamilyBackfillReport["families_written"][number]>();
+    const others = new Map<string, Set<string>>();
+    for (const r of rows) {
+        if (isFamilyKey(r.item_key) || !r.product_id) continue;
+        const family = itemFamilyKey(r.item_name);
+        if (!family || family === r.item_key || familyRows.has(family)) continue;
+        const kept = written.get(family);
+        if (!kept) {
+            written.set(family, { family_key: family, from_item: r.item_name, asset_type: r.asset_type, product_id: r.product_id });
+        } else if (kept.product_id !== r.product_id || kept.asset_type !== r.asset_type) {
+            others.set(family, (others.get(family) ?? new Set()).add(r.item_name));
+        }
+    }
+
+    // What productFor() reads once the family keys above exist (mappedItems() + them).
+    const mapped = new Map<string, ItemProduct>(
+        rows.filter((r) => r.product_id).map((r) => [r.item_key, { asset_type: r.asset_type, product_id: r.product_id }]),
+    );
+    for (const w of written.values()) mapped.set(w.family_key, { asset_type: w.asset_type, product_id: w.product_id });
+
+    const unlinked = rowsOf<{ item_name: string; n: number }>(
+        await db.execute(sql`
+            SELECT item_name, count(*)::int AS n FROM invoice_line_items
+             WHERE product_id IS NULL AND item_name IS NOT NULL
+             GROUP BY 1`),
+    );
+    const groups = new Map<string, { asset_type: string | null; product_id: string; names: string[]; lines: number }>();
+    for (const u of unlinked) {
+        const p = productFor(mapped, u.item_name);
+        if (!p.product_id) continue;
+        const k = `${p.asset_type ?? ""}|${p.product_id}`;
+        const g = groups.get(k) ?? { asset_type: p.asset_type, product_id: p.product_id, names: [], lines: 0 };
+        g.names.push(u.item_name);
+        g.lines += Number(u.n);
+        groups.set(k, g);
+    }
+
+    let linesStamped = [...groups.values()].reduce((a, g) => a + g.lines, 0);
+    if (apply) {
+        linesStamped = await db.transaction(async (tx) => {
+            for (const w of written.values()) {
+                await tx.execute(sql`
+                    INSERT INTO vyapar_item_map (item_key, item_name, asset_type, product_id, mapped_by)
+                    VALUES (${w.family_key}, ${w.from_item}, ${w.asset_type}, ${w.product_id}, ${opts.actorId ?? null}::uuid)
+                    ON CONFLICT (item_key) DO NOTHING`);
+            }
+            let n = 0;
+            for (const g of groups.values()) {
+                const res = rowsOf<{ n: number }>(
+                    await tx.execute(sql`
+                        WITH u AS (
+                            UPDATE invoice_line_items SET asset_type = ${g.asset_type}, product_id = ${g.product_id},
+                                   product_class = ${mappedClassSql(g.asset_type)}
+                             WHERE product_id IS NULL
+                               AND item_name IN (${sql.join(g.names.map((x) => sql`${x}`), sql`, `)})
+                            RETURNING 1)
+                        SELECT count(*)::int AS n FROM u`),
+                );
+                n += Number(res[0]?.n ?? 0);
+            }
+            return n;
+        });
+    }
+
+    const byProduct = [...groups.values()]
+        .map((g) => ({ asset_type: g.asset_type, product_id: g.product_id, lines: g.lines, spellings: new Set(g.names.map(itemKey)).size }))
+        .sort((a, b) => b.lines - a.lines);
+    return {
+        families_written: [...written.values()],
+        conflicts: [...others.entries()].map(([family_key, also]) => ({ family_key, kept: written.get(family_key)!.from_item, also: [...also] })),
+        lines_stamped: linesStamped,
+        spellings_stamped: byProduct.reduce((a, g) => a + g.spellings, 0),
+        by_product: byProduct,
+        applied: apply,
+    };
 }

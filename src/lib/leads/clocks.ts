@@ -17,6 +17,10 @@
  * changes, whatever later happens to the lead, the holidays or the limits.
  * Per-person figures leave out owner_inferred clocks (no owner on record).
  *
+ * E-355 (18 Oct rework): the ready_assign / quote_deliver / quote_revise
+ * clocks are computed only where lead_clocks' CHECK accepts them
+ * (hasWideClockKinds); without it the refresh keeps the E-350 kinds.
+ *
  * `db` (and the modules that hold it) is imported inside each function, never
  * at module scope: the digest registry imports the daily email, which imports
  * this, and listing the digests must not need a database.
@@ -28,6 +32,7 @@ import { engagedCall, humanCall } from "@/lib/reports/metricDefinitions";
 import {
     ALL_CLOCK_KINDS,
     BASE_CLOCK_KINDS,
+    E350_CLOCK_KINDS,
     clocksForLead,
     medianAndP90,
     type ClockKind,
@@ -37,6 +42,7 @@ import {
     type LeadClock,
     type OwnerHop,
     type QuoteGate,
+    type QuoteVersion,
     type StatusChange,
 } from "@/lib/leads/clockRules";
 import { timeLimitDef } from "@/lib/timeLimits/registry";
@@ -64,6 +70,28 @@ export async function hasLimitEvents(): Promise<boolean> {
     return tableExists("lead_limit_events");
 }
 
+/** Is E-355 on this database (lead_clocks accepts ready_assign and the two quote clocks)? */
+export async function hasWideClockKinds(): Promise<boolean> {
+    try {
+        const db = await database();
+        const r = rowsOf<{ ok: boolean }>(
+            await db.execute(sql`
+                SELECT EXISTS (SELECT 1 FROM pg_constraint
+                                WHERE conname = 'lead_clocks_clock_check'
+                                  AND pg_get_constraintdef(oid) LIKE '%quote_revise%') AS ok`),
+        );
+        return Boolean(r[0]?.ok);
+    } catch {
+        return false;
+    }
+}
+
+/** The clock kinds this database can store. */
+export async function storableClockKinds(): Promise<readonly ClockKind[]> {
+    if (!(await hasLimitEvents())) return BASE_CLOCK_KINDS;
+    return (await hasWideClockKinds()) ? ALL_CLOCK_KINDS : E350_CLOCK_KINDS;
+}
+
 function group<T extends { lead_id: string }>(rows: T[]): Map<string, T[]> {
     const m = new Map<string, T[]>();
     for (const r of rows) {
@@ -78,8 +106,9 @@ function group<T extends { lead_id: string }>(rows: T[]): Map<string, T[]> {
 export async function computeLeadClocks(now = new Date(), opts: { kinds?: readonly ClockKind[] } = {}): Promise<LeadClock[]> {
     const db = await database();
     const { holidaysAsOf } = await import("@/lib/calendar/holidays");
+    const { officeHoursResolver } = await import("@/lib/calendar/officeHoursStore");
     const { timeLimitsResolver } = await import("@/lib/timeLimits/store");
-    const kinds = new Set<ClockKind>(opts.kinds ?? ((await hasLimitEvents()) ? ALL_CLOCK_KINDS : BASE_CLOCK_KINDS));
+    const kinds = new Set<ClockKind>(opts.kinds ?? (await storableClockKinds()));
     const wantsHot = kinds.has("hot_assign") || kinds.has("hot_owner");
     // E-304's full interest history, where present (manual overrides alone miss automatic moves).
     const interestHistory =
@@ -90,7 +119,8 @@ export async function computeLeadClocks(now = new Date(), opts: { kinds?: readon
                   FROM dealer_lead_interest_history ih
                  WHERE ih.changed_at IS NOT NULL AND ih.to_level IS NOT NULL`
             : sql``;
-    const [leadRows, touchRows, hopRows, statusRows, interestRows, quoteRows, limitsOn, holidays] = await Promise.all([
+    const wantsVersions = kinds.has("quote_deliver") || kinds.has("quote_revise");
+    const [leadRows, touchRows, hopRows, statusRows, interestRows, quoteRows, versionRows, limitsOn, holidays, hours] = await Promise.all([
         db.execute(sql`
             SELECT dl.id,
                    dl.created_at AT TIME ZONE 'UTC' AS created_at,
@@ -151,8 +181,28 @@ export async function computeLeadClocks(now = new Date(), opts: { kinds?: readon
                    AND (c.approval_status = 'pending' OR c.approved_by IS NOT NULL)
                  ORDER BY c.created_at`)
             : Promise.resolve([]),
+        // Quote versions (18 Oct, #5): approval, first send, the dealer's answer.
+        // Approvals from before quotation sending was recorded are not timed for
+        // delivery (they could never show a send).
+        wantsVersions
+            ? db.execute(sql`
+                SELECT c.dealer_lead_id AS lead_id, c.created_at,
+                       CASE WHEN c.approval_status = 'approved'
+                             AND COALESCE(c.approved_at, c.created_at) >= (SELECT MIN(x.created_at) FROM quotation_dispatches x)
+                            THEN COALESCE(c.approved_at, c.created_at) END AS approved_at,
+                       (SELECT MIN(x.created_at) FROM quotation_dispatches x
+                         WHERE x.commercial_id = c.commercial_id AND x.status = 'sent') AS delivered_at,
+                       c.dealer_decision, c.dealer_decision_at, c.withdrawn_at
+                  FROM dealer_lead_commercials c
+                 WHERE c.event_type IN ('quote_issue', 'quote_revision') AND c.created_at IS NOT NULL
+                 ORDER BY c.created_at`).catch((e: unknown) => {
+                  console.warn("[clocks] quote versions not read:", e instanceof Error ? e.message : e);
+                  return [];
+              })
+            : Promise.resolve([]),
         timeLimitsResolver(),
         holidaysAsOf(),
+        officeHoursResolver(),
     ]);
 
     const touches = group(
@@ -177,6 +227,28 @@ export async function computeLeadClocks(now = new Date(), opts: { kinds?: readon
         ),
     );
 
+    const versions = group(
+        rowsOf<{
+            lead_id: string;
+            created_at: string;
+            approved_at: string | null;
+            delivered_at: string | null;
+            dealer_decision: string | null;
+            dealer_decision_at: string | null;
+            withdrawn_at: string | null;
+        }>(versionRows).map(
+            (r): QuoteVersion => ({
+                lead_id: r.lead_id,
+                created_at: new Date(r.created_at),
+                approved_at: d(r.approved_at),
+                delivered_at: d(r.delivered_at),
+                dealer_decision: r.dealer_decision,
+                dealer_decision_at: d(r.dealer_decision_at),
+                withdrawn_at: d(r.withdrawn_at),
+            }),
+        ),
+    );
+
     const out: LeadClock[] = [];
     for (const r of rowsOf<{ id: string; created_at: string; sales_ready_at: string | null; assigned_at: string | null; current_owner_id: string | null }>(leadRows)) {
         const lead: ClockLead = {
@@ -191,6 +263,8 @@ export async function computeLeadClocks(now = new Date(), opts: { kinds?: readon
                 kinds,
                 interest: interest.get(r.id) ?? [],
                 quotes: quotes.get(r.id) ?? [],
+                quoteVersions: versions.get(r.id) ?? [],
+                hours,
             }),
         );
     }
@@ -203,7 +277,7 @@ const BATCH = 2000;
 export async function refreshLeadClocks(now = new Date()): Promise<{ clocks: number; passed: number; recorded: number } | null> {
     if (!(await hasLeadClocks())) return null;
     const withEvents = await hasLimitEvents();
-    const clocks = await computeLeadClocks(now, { kinds: withEvents ? ALL_CLOCK_KINDS : BASE_CLOCK_KINDS });
+    const clocks = await computeLeadClocks(now, { kinds: await storableClockKinds() });
     const db = await database();
     const iso = (x: Date | null) => (x ? x.toISOString() : null);
     await db.transaction(async (tx) => {
@@ -290,9 +364,16 @@ export async function recordLimitEvents(clocks: readonly LeadClock[]): Promise<n
 const onIstDays = (ts: SQL, from: string, to: string) =>
     sql`(${ts} AT TIME ZONE 'Asia/Kolkata')::date BETWEEN ${from}::date AND ${to}::date`;
 
-/** Per-person filter: those owners, and only clocks whose owner is on record (ID 86). */
-const ownedBy = (ownerIds: string[] | undefined) =>
-    ownerIds?.length ? sql` AND c.owner_id IN ${ownerIds} AND c.owner_inferred = false` : sql``;
+/**
+ * Per-person filter: those owners, and only clocks whose owner is on record
+ * (ID 86). `includeGuessed` (a manager's switch, ID 85 rule 6 / 18 Oct #7)
+ * also counts the misses charged to a guessed owner (before 10 Sep 2026).
+ */
+const ownedBy = (ownerIds: string[] | undefined, includeGuessed = false) =>
+    ownerIds?.length ? sql` AND c.owner_id IN ${ownerIds}${includeGuessed ? sql`` : sql` AND c.owner_inferred = false`}` : sql``;
+
+/** Options shared by the per-person readers. */
+export type PersonOpts = { ownerIds?: string[]; includeGuessed?: boolean };
 
 export type ClockStats = {
     /** Clocks that started in the window. */
@@ -326,7 +407,7 @@ export async function clockStats(
     clock: ClockKind,
     from: string,
     to: string,
-    opts: { ownerIds?: string[] } = {},
+    opts: PersonOpts = {},
 ): Promise<ClockStats | null> {
     if (!(await hasLeadClocks())) return null;
     const db = await database();
@@ -336,8 +417,14 @@ export async function clockStats(
                    (c.due_at IS NOT NULL AND c.due_at <= NOW()) AS due,
                    (c.due_at IS NOT NULL AND c.due_at <= NOW() AND c.limit_passed_at IS NULL) AS ok
               FROM lead_clocks c
-             WHERE c.clock = ${clock} AND ${onIstDays(sql`c.started_at`, from, to)} ${ownedBy(opts.ownerIds)}`),
+             WHERE c.clock = ${clock} AND ${onIstDays(sql`c.started_at`, from, to)} ${ownedBy(opts.ownerIds, opts.includeGuessed)}`),
     );
+    return statsOf(rows);
+}
+
+type StatRow = { a: number | null; c: number | null; due: boolean; ok: boolean };
+
+function statsOf(rows: readonly StatRow[]): ClockStats {
     if (!rows.length) return { ...EMPTY };
     const a = medianAndP90(rows.filter((r) => r.a != null).map((r) => Number(r.a)));
     const c = medianAndP90(rows.filter((r) => r.c != null).map((r) => Number(r.c)));
@@ -355,44 +442,84 @@ export async function clockStats(
     };
 }
 
+export type OwnerClockRow = ClockStats & { owner_id: string; owner_name: string | null; limits_passed: number };
+
+/**
+ * One row per owner (18 Oct row 28): a clock's figures for the clocks started
+ * on IST days [from, to] charged to each owner, with that owner's "Limit
+ * passed" count. Guessed owners left out unless `includeGuessed`. [] without E-337.
+ */
+export async function clockStatsByOwner(
+    clock: ClockKind,
+    from: string,
+    to: string,
+    opts: { includeGuessed?: boolean } = {},
+): Promise<OwnerClockRow[]> {
+    if (!(await hasLeadClocks())) return [];
+    const db = await database();
+    const guessed = opts.includeGuessed ? sql`` : sql` AND c.owner_inferred = false`;
+    const rows = rowsOf<StatRow & { owner_id: string; owner_name: string | null }>(
+        await db.execute(sql`
+            SELECT c.owner_id, u.name AS owner_name,
+                   c.attempt_working_minutes AS a, c.contact_working_minutes AS c,
+                   (c.due_at IS NOT NULL AND c.due_at <= NOW()) AS due,
+                   (c.due_at IS NOT NULL AND c.due_at <= NOW() AND c.limit_passed_at IS NULL) AS ok
+              FROM lead_clocks c
+              LEFT JOIN users u ON u.id::text = c.owner_id
+             WHERE c.clock = ${clock} AND c.owner_id IS NOT NULL ${guessed}
+               AND ${onIstDays(sql`c.started_at`, from, to)}`),
+    );
+    const by = new Map<string, { name: string | null; rows: StatRow[] }>();
+    for (const r of rows) {
+        const g = by.get(r.owner_id) ?? { name: r.owner_name, rows: [] };
+        g.rows.push(r);
+        by.set(r.owner_id, g);
+    }
+    const passed = await limitsPassedByOwner(from, to, { includeGuessed: opts.includeGuessed });
+    return [...by.entries()]
+        .map(([owner_id, g]) => ({ owner_id, owner_name: g.name, ...statsOf(g.rows), limits_passed: passed.get(owner_id) ?? 0 }))
+        .sort((a, b) => (a.owner_name ?? "").localeCompare(b.owner_name ?? ""));
+}
+
 /**
  * "Limit passed" events dated on IST days [from, to], any clock. Reads the
  * fixed records (E-350) when present, else the derived clocks. Per person
  * (ownerIds) leaves out misses whose owner is inferred. Null without E-337.
  */
-export async function limitsPassed(from: string, to: string, opts: { ownerIds?: string[] } = {}): Promise<number | null> {
+export async function limitsPassed(from: string, to: string, opts: PersonOpts = {}): Promise<number | null> {
     if (!(await hasLeadClocks())) return null;
     const db = await database();
     const [r] = (await hasLimitEvents())
         ? rowsOf<{ n: number }>(
               await db.execute(sql`
                 SELECT COUNT(*)::int AS n FROM lead_limit_events c
-                 WHERE ${onIstDays(sql`c.passed_at`, from, to)} ${ownedBy(opts.ownerIds)}`),
+                 WHERE ${onIstDays(sql`c.passed_at`, from, to)} ${ownedBy(opts.ownerIds, opts.includeGuessed)}`),
           )
         : rowsOf<{ n: number }>(
               await db.execute(sql`
                 SELECT COUNT(*)::int AS n FROM lead_clocks c
-                 WHERE c.limit_passed_at IS NOT NULL AND ${onIstDays(sql`c.limit_passed_at`, from, to)} ${ownedBy(opts.ownerIds)}`),
+                 WHERE c.limit_passed_at IS NOT NULL AND ${onIstDays(sql`c.limit_passed_at`, from, to)} ${ownedBy(opts.ownerIds, opts.includeGuessed)}`),
           );
     return Number(r?.n ?? 0);
 }
 
-/** Per owner, limits passed on IST days [from, to] (inferred owners left out). */
-export async function limitsPassedByOwner(from: string, to: string): Promise<Map<string, number>> {
+/** Per owner, limits passed on IST days [from, to] (inferred owners left out unless `includeGuessed`). */
+export async function limitsPassedByOwner(from: string, to: string, opts: { includeGuessed?: boolean } = {}): Promise<Map<string, number>> {
     const out = new Map<string, number>();
     if (!(await hasLeadClocks())) return out;
     const db = await database();
+    const guessed = opts.includeGuessed ? sql`` : sql` AND c.owner_inferred = false`;
     const rows = (await hasLimitEvents())
         ? rowsOf<{ owner_id: string; n: number }>(
               await db.execute(sql`
                 SELECT c.owner_id, COUNT(*)::int AS n FROM lead_limit_events c
-                 WHERE c.owner_id IS NOT NULL AND c.owner_inferred = false AND ${onIstDays(sql`c.passed_at`, from, to)}
+                 WHERE c.owner_id IS NOT NULL ${guessed} AND ${onIstDays(sql`c.passed_at`, from, to)}
                  GROUP BY c.owner_id`),
           )
         : rowsOf<{ owner_id: string; n: number }>(
               await db.execute(sql`
                 SELECT c.owner_id, COUNT(*)::int AS n FROM lead_clocks c
-                 WHERE c.limit_passed_at IS NOT NULL AND c.owner_id IS NOT NULL AND c.owner_inferred = false
+                 WHERE c.limit_passed_at IS NOT NULL AND c.owner_id IS NOT NULL ${guessed}
                    AND ${onIstDays(sql`c.limit_passed_at`, from, to)}
                  GROUP BY c.owner_id`),
           );
@@ -434,10 +561,20 @@ export type LimitPassedEvent = {
  * Fixed "Limit passed" records: for one lead (its timeline), or the oldest
  * still-unanswered ones (the daily email's Oldest overdue). [] without E-350.
  */
-export async function limitPassedEvents(opts: { leadId?: string; openOnly?: boolean; limit?: number }): Promise<LimitPassedEvent[]> {
+export async function limitPassedEvents(opts: {
+    leadId?: string;
+    openOnly?: boolean;
+    limit?: number;
+    /** One person's misses (guessed owners left out unless includeGuessed, 18 Oct #7). */
+    ownerId?: string;
+    includeGuessed?: boolean;
+}): Promise<LimitPassedEvent[]> {
     if (!(await hasLimitEvents())) return [];
     const db = await database();
-    const lead = opts.leadId ? sql` AND e.dealer_lead_id = ${opts.leadId}` : sql``;
+    const owner = opts.ownerId
+        ? sql` AND e.owner_id = ${opts.ownerId}${opts.includeGuessed ? sql`` : sql` AND e.owner_inferred = false`}`
+        : sql``;
+    const lead = sql`${opts.leadId ? sql` AND e.dealer_lead_id = ${opts.leadId}` : sql``}${owner}`;
     // Still open = its clock is still running unattempted (lead_clocks agrees today).
     const open = opts.openOnly
         ? sql` AND EXISTS (SELECT 1 FROM lead_clocks c
@@ -457,20 +594,47 @@ export async function limitPassedEvents(opts: { leadId?: string; openOnly?: bool
     );
 }
 
+/**
+ * SQL: a running clock past its limit right now on lead `leadId` (an SQL
+ * expression for the lead id). The CEO's quote approval is not the rep's,
+ * so it is left out. The queues' "Past a limit" chip and tab (18 Oct row 34).
+ */
+export function pastALimitSql(leadId: SQL): SQL {
+    return sql`EXISTS (SELECT 1 FROM lead_clocks plc
+                        WHERE plc.dealer_lead_id = ${leadId}
+                          AND plc.limit_passed_at IS NOT NULL AND plc.first_attempt_at IS NULL
+                          AND (plc.ended_at IS NULL OR plc.ended_at > NOW())
+                          AND plc.clock <> 'quote')`;
+}
+
 /** Of these leads, the ones with a running clock past its limit right now (the "Past a limit" chip). */
 export async function leadsPastALimit(leadIds: readonly string[]): Promise<Set<string>> {
-    const out = new Set<string>();
+    return new Set((await limitsPastByLead(leadIds)).keys());
+}
+
+/**
+ * Of these leads, the running clocks past their limit right now, per lead:
+ * which limit (the chip names it, 18 Oct row 34). Oldest miss first.
+ */
+export async function limitsPastByLead(leadIds: readonly string[]): Promise<Map<string, Array<{ clock: ClockKind; limit_key: string; limit_value: number; passed_at: string }>>> {
+    const out = new Map<string, Array<{ clock: ClockKind; limit_key: string; limit_value: number; passed_at: string }>>();
     if (!leadIds.length || !(await hasLeadClocks())) return out;
     const db = await database();
-    const rows = rowsOf<{ id: string }>(
+    const rows = rowsOf<{ id: string; clock: ClockKind; limit_key: string; limit_value: number; passed_at: string }>(
         await db.execute(sql`
-            SELECT DISTINCT c.dealer_lead_id AS id FROM lead_clocks c
+            SELECT c.dealer_lead_id AS id, c.clock, c.limit_key, c.limit_value::float AS limit_value, c.limit_passed_at::text AS passed_at
+              FROM lead_clocks c
              WHERE c.dealer_lead_id IN ${[...leadIds]}
                AND c.limit_passed_at IS NOT NULL AND c.first_attempt_at IS NULL
                AND (c.ended_at IS NULL OR c.ended_at > NOW())
-               AND c.clock <> 'quote'`),
+               AND c.clock <> 'quote'
+             ORDER BY c.limit_passed_at`),
     );
-    for (const r of rows) out.add(r.id);
+    for (const r of rows) {
+        const list = out.get(r.id) ?? [];
+        list.push({ clock: r.clock, limit_key: r.limit_key, limit_value: Number(r.limit_value), passed_at: r.passed_at });
+        out.set(r.id, list);
+    }
     return out;
 }
 
