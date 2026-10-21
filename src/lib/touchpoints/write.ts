@@ -131,6 +131,13 @@ export type WriteTouchpointInput = {
   /** Audit reason for the temperature change. */
   interestReason?: string | null;
   /**
+   * A33 — when the call has no CRM performer (a NeoDove agent nobody linked
+   * yet), still apply the temperature its outcome sets, recorded against the
+   * lead's current owner. The call itself stays unattributed. Only the NeoDove
+   * webhook sets this.
+   */
+  interestFromOwnerWhenNoPerformer?: boolean;
+  /**
    * E-295 — the ownership hop this touchpoint records, for Lead Tracking.
    *
    * `fromOwnerId` is the dealer_leads.current_owner_id BEFORE the write (null =
@@ -458,11 +465,13 @@ export async function writeTouchpoint(
 
     // 4. Temperature (ID 114) — same transaction, audited like a manual
     //    change (interest_level_overrides + the E-304 history trigger).
-    if (interestTo && input.performedBy) {
+    const interestActor =
+      input.performedBy ?? (input.interestFromOwnerWhenNoPerformer ? (current?.current_owner_id ?? null) : null);
+    if (interestTo && interestActor) {
       await setInterestLevel(
         {
           leadId: input.dealerLeadId,
-          actorId: input.performedBy,
+          actorId: interestActor,
           level: interestTo,
           reason: input.interestReason ?? "Auto: from the logged outcome",
         },

@@ -2,6 +2,7 @@
 //   lead_sources  ?from&to&group=door|origin|campaign&team&state
 //   ai_score      ?from&to&source&team
 //   meetings      ?from&to&manager&city
+//   cohorts       ?from&to   (A22)  turnaround ?from&to (A23)  ai_outcomes ?from&to (A24)
 // Dates are inclusive IST days (yyyy-mm-dd). Each result carries its own checks.
 
 import { NextRequest } from "next/server";
@@ -10,6 +11,7 @@ import { requireRole } from "@/lib/auth-utils";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
 import { aiScoreAccuracyByBand, leadSources, meetingsByManagerCity } from "@/lib/reports/analyses";
 import { isAnalysisId, LEAD_SOURCE_GROUPS } from "@/lib/reports/analysesShared";
+import { aiOutcomes, cohorts, turnaround } from "@/lib/reports/analysesGrid";
 
 export const dynamic = "force-dynamic";
 
@@ -41,5 +43,8 @@ export const GET = withErrorHandler(async (req: NextRequest, ctx: { params: Prom
 
     if (id === "lead_sources") return successResponse(await leadSources(f, user));
     if (id === "ai_score") return successResponse(await aiScoreAccuracyByBand(f));
+    if (id === "cohorts") return successResponse(await cohorts(f));
+    if (id === "turnaround") return successResponse(await turnaround(f));
+    if (id === "ai_outcomes") return successResponse(await aiOutcomes(f));
     return successResponse(await meetingsByManagerCity(f));
 });

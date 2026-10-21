@@ -33,10 +33,11 @@ import { matchedUnion, REVENUE_IS_ORDER, REVENUE_NOT_VOID } from "@/lib/dashboar
 import { summarizeNeedsAttention } from "@/lib/leads/needsAttention";
 import { listSaidYesNotWon, summarizeSaidYes } from "@/lib/leads/saidYesNotWon";
 import { getTimeLimits } from "@/lib/timeLimits/store";
+import { idleLimitLabel } from "@/lib/timeLimits/labels";
 import { listDealerHealth } from "@/lib/dealers/accountHealth";
 import type { AccountBucket } from "@/lib/dealers/accountHealthRules";
 import { hasInvoiceLedgerTables } from "@/lib/sales/ledgerTables";
-import { awaitingAssignment, daysAwaitingAssignment } from "@/lib/leads/salesReady";
+import { awaitingAssignment, daysAwaitingAssignment, readySplitSql } from "@/lib/leads/salesReady";
 import { engagedCall, humanCall } from "@/lib/reports/metricDefinitions";
 import { scrapKgSourced } from "@/lib/buyback/scrapKgSourced";
 
@@ -52,7 +53,16 @@ export type ControlTower = {
         unassigned_overdue_days: number;
         /** Every sales-ready lead with no owner, whatever its wait (ID 82). */
         awaiting_assignment_total: number;
+        /** ID 184 — Hot / AI qualified / other; sums to awaiting_assignment_total. */
+        awaiting_assignment_split?: { hot: number; ai: number; other: number };
+        /**
+         * Leads past their holder's idle limit — idle_cc for inside sales,
+         * idle_asm for ASMs (ID 192 / ID 85 Decision 6), not a fixed 7.
+         * The key name is kept for the screens that read it.
+         */
         idle_over_7d: number;
+        /** "ISR 5+, ASM 7+ working days" — the limits behind idle_over_7d. */
+        idle_limit_label: string;
         /** ID 75.4 — the dealer approved a quote, the lead is not marked Won. */
         said_yes_not_won: number;
         /** Value of the dealer-approved quote on each of those leads. */
@@ -176,13 +186,17 @@ async function exceptionsTile(): Promise<NonNullable<ControlTower["exceptions"]>
           (SELECT COUNT(*) FROM dealer_leads dl
             WHERE ${awaitingAssignment()}
               AND ${daysAwaitingAssignment()} >= ${overdueDays}) AS unassigned,
-          (SELECT COUNT(*) FROM dealer_leads dl WHERE ${awaitingAssignment()}) AS awaiting_total
+          (SELECT COUNT(*) FROM dealer_leads dl WHERE ${awaitingAssignment()}) AS awaiting_total,
+          -- ID 184: Hot / AI qualified / other, one bucket per lead.
+          (SELECT COUNT(*) FROM dealer_leads dl WHERE ${awaitingAssignment()} AND ${readySplitSql()} = 'hot') AS awaiting_hot,
+          (SELECT COUNT(*) FROM dealer_leads dl WHERE ${awaitingAssignment()} AND ${readySplitSql()} = 'ai') AS awaiting_ai
     `);
     // ID 75.4 — "Dealer said yes, not marked Won": the sum of the rows the
     // /ceo/said-yes list shows (saidYesNotWon.ts), so card and list agree.
     const yes = summarizeSaidYes(await listSaidYesNotWon());
     const [idle, dealers, below] = await Promise.all([
-        summarizeNeedsAttention({ minDays: 7 }),
+        // Each holder judged by their role's limit (ID 192), as on Needs Attention.
+        summarizeNeedsAttention(),
         listDealerHealth(),
         safe("targets", async () => {
             if (!(await hasTargetsTable())) return null;
@@ -206,7 +220,13 @@ async function exceptionsTile(): Promise<NonNullable<ControlTower["exceptions"]>
         unassigned_over_7d: n(q.unassigned),
         unassigned_overdue_days: overdueDays,
         awaiting_assignment_total: n(q.awaiting_total),
+        awaiting_assignment_split: {
+            hot: n(q.awaiting_hot),
+            ai: n(q.awaiting_ai),
+            other: n(q.awaiting_total) - n(q.awaiting_hot) - n(q.awaiting_ai),
+        },
         idle_over_7d: idle.reduce((a, h) => a + h.idle, 0),
+        idle_limit_label: idleLimitLabel(limits),
         said_yes_not_won: yes.count,
         said_yes_value: yes.value,
         said_yes_oldest_days: yes.oldestDays,
@@ -420,7 +440,8 @@ async function peopleTile(from: string, toIncl: string) {
     const { buildSalesDashboard } = await import("@/lib/admin/salesDashboard");
     const [dash, idle, engaged, pct] = await Promise.all([
         buildSalesDashboard({ from, to: toIncl, granularity: "month" }),
-        summarizeNeedsAttention({ minDays: 7 }),
+        // Per role limit (ID 192): idle_cc for inside sales, idle_asm for ASMs.
+        summarizeNeedsAttention(),
         rows(sql`
             -- ID 59 (3 Oct 2026): human calls counted once; engaged = the call
             -- connected, whatever its duration (metricDefinitions.ts) — the

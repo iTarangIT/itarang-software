@@ -18,7 +18,8 @@
 "use client";
 
 import { useState } from "react";
-import { Download } from "lucide-react";
+import { AlarmClock, Download } from "lucide-react";
+import { limitEventOwnerLine, limitEventTitle, type LimitEventLike } from "@/lib/leads/limitEventLabels";
 import {
     TOUCHPOINT_ICONS,
     TOUCHPOINT_TYPE_LABEL,
@@ -60,6 +61,13 @@ export type LeadTouchpoint = {
     tone?: "failed";
 };
 
+/** IDs 85 / 86 — a fixed "Limit passed" record (E-350), shown in the timeline. */
+export type TimelineLimitEvent = LimitEventLike & { id: string; passed_at: string };
+
+type Entry =
+    | { kind: "touch"; at: number; t: LeadTouchpoint }
+    | { kind: "limit"; at: number; e: TimelineLimitEvent };
+
 const PAGE = 8;
 
 function formatTime(value: string): string {
@@ -84,15 +92,22 @@ export function TouchpointTimeline({
     touchpoints,
     leadId,
     canExport = false,
+    limitEvents = [],
 }: {
     touchpoints: LeadTouchpoint[];
+    /** IDs 85 / 86 — missed time limits on this lead, merged in by time. */
+    limitEvents?: TimelineLimitEvent[];
     /** Needed to build the export URL; omit and the button is not offered. */
     leadId?: string;
     /** Decided by the server page with canExportLeadHistory() — role, and own lead for a rep (ID 58). */
     canExport?: boolean;
 }) {
     const [shown, setShown] = useState(PAGE);
-    const visible = touchpoints.slice(0, shown);
+    const entries: Entry[] = [
+        ...touchpoints.map((t): Entry => ({ kind: "touch", at: Date.parse(t.performed_at), t })),
+        ...limitEvents.map((e): Entry => ({ kind: "limit", at: Date.parse(e.passed_at), e })),
+    ].sort((a, b) => (b.at || 0) - (a.at || 0));
+    const visible = entries.slice(0, shown);
 
     // Backfilled rows mean webhooks were lost and had to be recovered from a
     // CSV. Surfacing the count here, not just on the campaign page, is what
@@ -112,9 +127,16 @@ export function TouchpointTimeline({
                 </h2>
                 <div className="flex items-center gap-3">
                     <p className="text-xs text-gray-500">
-                        {touchpoints.length}{" "}
-                        {touchpoints.length === 1 ? "entry" : "entries"} · newest
+                        {entries.length}{" "}
+                        {entries.length === 1 ? "entry" : "entries"} · newest
                         first
+                        {limitEvents.length > 0 && (
+                            <span className="text-rose-700">
+                                {" "}
+                                · {limitEvents.length} limit
+                                {limitEvents.length === 1 ? "" : "s"} passed
+                            </span>
+                        )}
                         {backfilled > 0 && (
                             <span className="text-amber-700">
                                 {" "}
@@ -142,7 +164,7 @@ export function TouchpointTimeline({
                 </div>
             </div>
 
-            {touchpoints.length === 0 ? (
+            {entries.length === 0 ? (
                 <p className="text-sm text-gray-500 py-8 text-center">
                     No touchpoints logged for this lead yet. Calls handled by NeoDove
                     or Inside Sales will appear here.
@@ -150,7 +172,29 @@ export function TouchpointTimeline({
             ) : (
                 <>
                     <ol className="mt-4 space-y-3">
-                        {visible.map((t) => {
+                        {visible.map((entry) => {
+                            if (entry.kind === "limit") {
+                                const e = entry.e;
+                                return (
+                                    <li key={`limit-${e.id}`} className="flex gap-3">
+                                        <div className="shrink-0 mt-0.5">
+                                            <div className="h-8 w-8 rounded-lg flex items-center justify-center bg-rose-50 text-rose-600">
+                                                <AlarmClock className="h-4 w-4" />
+                                            </div>
+                                        </div>
+                                        <div className="flex-1 min-w-0 rounded-lg border border-rose-100 bg-rose-50/40 px-3 py-2">
+                                            <div className="flex items-baseline justify-between gap-2 flex-wrap">
+                                                <div className="text-sm font-medium text-rose-800">{limitEventTitle(e)}</div>
+                                                <div className="text-[11px] text-gray-500 tabular-nums">
+                                                    {formatTime(e.passed_at)}
+                                                </div>
+                                            </div>
+                                            <div className="text-[11px] text-gray-600 mt-0.5">{limitEventOwnerLine(e)}</div>
+                                        </div>
+                                    </li>
+                                );
+                            }
+                            const t = entry.t;
                             const Icon =
                                 TOUCHPOINT_ICONS[t.touchpoint_type] ??
                                 TOUCHPOINT_ICONS.default;
@@ -306,12 +350,12 @@ export function TouchpointTimeline({
                         })}
                     </ol>
 
-                    {shown < touchpoints.length && (
+                    {shown < entries.length && (
                         <button
                             onClick={() => setShown((n) => n + PAGE)}
                             className="mt-4 w-full rounded-lg border border-gray-200 py-2 text-xs font-medium text-gray-600 hover:bg-gray-50"
                         >
-                            Show {Math.min(PAGE, touchpoints.length - shown)} more
+                            Show {Math.min(PAGE, entries.length - shown)} more
                         </button>
                     )}
                 </>

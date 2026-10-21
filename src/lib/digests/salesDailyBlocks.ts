@@ -19,6 +19,15 @@
 //   only where the rep has a pushed / accepted sales_targets row (the same
 //   pro-rating as Block A), else "—". A Total row closes each table.
 //
+//   Clocks (IDs 85 / 86, 15 Oct): both blocks end with Limits passed
+//                            (Yesterday, MTD) — misses charged to the owner at
+//                            the moment the limit fell due, from the fixed
+//                            records (E-350), inferred owners left out — and
+//                            the median working hours from assignment to the
+//                            owner's first call or visit (owner clocks
+//                            started MTD). A median is not summed: Total and
+//                            team rows show "—" there.
+//
 //   D · Position             open Hot / Warm / Cold per owner, Hot rated 8+
 //                            days ago, Awaiting field visit (lead_status
 //                            Transferred_to_ASM, keyed on the ASM) and one
@@ -77,6 +86,10 @@ export type RepExtras = {
     quotes_delivered: PerRep;
     dealer_approved: PerRep;
     won: PerRep;
+    /** "Limit passed" records charged to the person (E-350; else lead_clocks). */
+    limits_passed: PerRep;
+    /** Median working hours from assignment to first attempt (owner clocks). */
+    owner_median_h: PerRep;
 };
 
 export type RepMetricKey =
@@ -93,7 +106,9 @@ export type RepMetricKey =
     | "dealers_called"
     | "connected"
     | "engaged"
-    | "hot_handed";
+    | "hot_handed"
+    | "limits_passed"
+    | "owner_median_h";
 
 /** One metric for one rep; null = not measured. */
 export type RepValue = { y: number | null; mtd: number | null };
@@ -115,7 +130,8 @@ export const REP_NOT_MEASURED = "—";
 // ─────────────────────────────── pure shaping ───────────────────────────────
 
 type MetricDef = {
-    kind: "count" | "money";
+    /** "hours" is a median: shown to one decimal and never summed. */
+    kind: "count" | "money" | "hours";
     /** From the builder's per-rep block … */
     dash?: (b: SalesSpocBlock) => number;
     /** … or from a direct per-rep query. */
@@ -137,6 +153,8 @@ const METRICS: Record<RepMetricKey, MetricDef> = {
     connected: { kind: "count", extra: "connected" },
     engaged: { kind: "count", extra: "engaged" },
     hot_handed: { kind: "count", extra: "hot_handed" },
+    limits_passed: { kind: "count", extra: "limits_passed" },
+    owner_median_h: { kind: "hours", extra: "owner_median_h" },
 };
 
 /** The one target "% of target" is read against: metric shown vs sales_targets key. */
@@ -167,6 +185,9 @@ const ASM_COLS: ColSpec[] = [
     { header: "Marked Won MTD", metric: "won", period: "mtd" },
     { header: "Converted MTD", metric: "converted", period: "mtd" },
     { header: "Revenue ₹ MTD", metric: "revenue", period: "mtd" },
+    { header: "Limits passed · Yesterday", metric: "limits_passed", period: "y" },
+    { header: "MTD", metric: "limits_passed", period: "mtd" },
+    { header: "First attempt, median working hrs MTD", metric: "owner_median_h", period: "mtd" },
     { header: "% of target", pctTarget: true },
 ];
 
@@ -183,6 +204,9 @@ const ISR_COLS: ColSpec[] = [
     { header: "Quotes created MTD", metric: "quotes", period: "mtd" },
     { header: "Marked Won MTD", metric: "won", period: "mtd" },
     { header: "Converted MTD", metric: "converted", period: "mtd" },
+    { header: "Limits passed · Yesterday", metric: "limits_passed", period: "y" },
+    { header: "MTD", metric: "limits_passed", period: "mtd" },
+    { header: "First attempt, median working hrs MTD", metric: "owner_median_h", period: "mtd" },
     { header: "% of target", pctTarget: true },
 ];
 
@@ -246,7 +270,8 @@ export function buildRepBlocks(
         if (def.dash) return b ? def.dash(b) : 0;
         const m = ex[def.extra!];
         if (m == null) return null;
-        return m.has(id) ? m.get(id)! : 0;
+        // No row = none of theirs: 0 for a count, nothing to take the median of for hours.
+        return m.has(id) ? m.get(id)! : def.kind === "hours" ? null : 0;
     };
 
     return [...ids]
@@ -308,7 +333,9 @@ export function repBlockTableRows(role: "asm" | "inside_sales_rep", blocks: RepB
         if ("metric" in c) {
             const v = r.values[c.metric]?.[c.period] ?? null;
             if (v == null) return REP_NOT_MEASURED;
-            return METRICS[c.metric].kind === "money" ? fmtValue(v, "money") : v;
+            const kind = METRICS[c.metric].kind;
+            if (kind === "hours") return Math.round(v * 10) / 10;
+            return kind === "money" ? fmtValue(v, "money") : v;
         }
         if ("ratio" in c) {
             const n = r.values[c.ratio[0]]?.mtd ?? null;
@@ -322,6 +349,11 @@ export function repBlockTableRows(role: "asm" | "inside_sales_rep", blocks: RepB
     const summed = (label: string, group: RepBlock[], pct: () => number | null) => {
         const values: Partial<Record<RepMetricKey, RepValue>> = {};
         for (const k of Object.keys(group[0].values) as RepMetricKey[]) {
+            // A median does not add up: the summed rows leave it blank.
+            if (METRICS[k].kind === "hours") {
+                values[k] = { y: null, mtd: null };
+                continue;
+            }
             values[k] = {
                 y: sumOf(group.map((b) => b.values[k]?.y ?? null)),
                 mtd: sumOf(group.map((b) => b.values[k]?.mtd ?? null)),
@@ -515,20 +547,77 @@ export async function loadRepExtras(db: Exec, p: Period): Promise<RepExtras> {
                  GROUP BY 1`,
         ),
     ]);
-    return { hot_received, hot_handed, connected, engaged, quotes_delivered, dealer_approved, won };
+    const [limits_passed, owner_median_h] = await Promise.all([loadLimitsPassed(db, p), loadOwnerMedian(db, p)]);
+    return { hot_received, hot_handed, connected, engaged, quotes_delivered, dealer_approved, won, limits_passed, owner_median_h };
 }
 
 /**
- * Leads transferred to the field and not yet visited (lead_status
- * Transferred_to_ASM), per ASM; a lead with no ASM and no owner counts under
- * NO_OWNER_KEY. Null when the query fails.
+ * Limits passed per person in the period — the fixed records (E-350), else the
+ * derived clocks (E-337). Owners not on record (before 10 Sep, inferred) are
+ * left out, as in every per-person figure. Null without either table.
+ */
+async function loadLimitsPassed(db: Exec, p: Period): Promise<PerRep> {
+    const win = (col: ReturnType<typeof sql>) => istRangeTz(col, p.from, p.to);
+    const has = await tables(db);
+    if (has.events) {
+        return perRep(
+            db,
+            sql`SELECT e.owner_id AS u, COUNT(*) AS n FROM lead_limit_events e
+                 WHERE e.owner_id IS NOT NULL AND e.owner_inferred = false AND ${win(sql`e.passed_at`)}
+                 GROUP BY 1`,
+        );
+    }
+    if (!has.clocks) return null;
+    return perRep(
+        db,
+        sql`SELECT c.owner_id AS u, COUNT(*) AS n FROM lead_clocks c
+             WHERE c.limit_passed_at IS NOT NULL AND c.owner_id IS NOT NULL AND c.owner_inferred = false
+               AND ${win(sql`c.limit_passed_at`)}
+             GROUP BY 1`,
+    );
+}
+
+/** Median working hours from assignment to the owner's first attempt, owner clocks started in the period. */
+async function loadOwnerMedian(db: Exec, p: Period): Promise<PerRep> {
+    if (!(await tables(db)).clocks) return null;
+    const win = (col: ReturnType<typeof sql>) => istRangeTz(col, p.from, p.to);
+    return perRep(
+        db,
+        sql`SELECT c.owner_id AS u,
+                   percentile_cont(0.5) WITHIN GROUP (ORDER BY c.attempt_working_minutes) / 60.0 AS n
+              FROM lead_clocks c
+             WHERE c.clock = 'owner' AND c.owner_id IS NOT NULL AND c.owner_inferred = false
+               AND c.attempt_working_minutes IS NOT NULL AND ${win(sql`c.started_at`)}
+             GROUP BY 1`,
+    );
+}
+
+async function tables(db: Exec): Promise<{ clocks: boolean; events: boolean }> {
+    try {
+        const r = (await db.execute(sql`
+            SELECT to_regclass('public.lead_clocks') IS NOT NULL AS c, to_regclass('public.lead_limit_events') IS NOT NULL AS e
+        `)) as Array<{ c: boolean; e: boolean }>;
+        return { clocks: Boolean(r[0]?.c), events: Boolean(r[0]?.e) };
+    } catch {
+        return { clocks: false, events: false };
+    }
+}
+
+/**
+ * Leads waiting for a field visit, per ASM — the Sales dashboard card's own
+ * predicate (ID 190: transferVisitLimit.ts awaitingFieldVisitSql — still
+ * Transferred_to_ASM and no visit marked since the transfer); a lead with no
+ * ASM and no owner counts under NO_OWNER_KEY. Null when the query fails.
  */
 export async function loadAwaitingFieldVisit(db: Exec): Promise<Map<string, number> | null> {
     try {
+        // Imported here, not at module scope: transferVisitLimit pulls in the db
+        // client, and listing the digest kinds must not need DATABASE_URL.
+        const { awaitingFieldVisitSql } = await import("@/lib/asm/transferVisitLimit");
         const rows = (await db.execute(sql`
             SELECT COALESCE(dl.asm_id, dl.current_owner_id) AS u, COUNT(*)::int AS n
               FROM dealer_leads dl
-             WHERE dl.lead_status = 'Transferred_to_ASM' AND dl.is_active IS NOT FALSE
+             WHERE ${awaitingFieldVisitSql()}
              GROUP BY 1
         `)) as Array<{ u: string | null; n: number }>;
         const m = new Map<string, number>();

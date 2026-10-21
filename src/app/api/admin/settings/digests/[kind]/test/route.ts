@@ -35,12 +35,14 @@ const BodySchema = z
             .string()
             .regex(/^\d{4}-\d{2}-\d{2}$/, "istDay must be YYYY-MM-DD")
             .optional(),
+        // ID 194 — a personal kind (My day): whose mail to build.
+        personId: z.string().min(1).max(64).optional(),
     })
     .optional();
 
 export const POST = withErrorHandler(
     async (req: Request, ctx: { params: Promise<{ kind: string }> }) => {
-        await requireRole(EDITOR_ROLES);
+        const user = await requireRole(EDITOR_ROLES);
 
         const kindId = (await ctx.params).kind;
         const kind = digestKind(kindId);
@@ -59,8 +61,11 @@ export const POST = withErrorHandler(
             kind,
             slot: "test",
             triggeredBy: "manual",
-            toOverride: body.to,
+            // A personal kind's test goes to whoever pressed the button, never
+            // to the person it was written for.
+            toOverride: body.to ?? (kind.perRecipient && user.email ? [user.email] : undefined),
             istDayOverride: body.istDay,
+            personId: body.personId,
         });
 
         const outcome = result.outcomes[0];

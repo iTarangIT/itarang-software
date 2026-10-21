@@ -25,6 +25,7 @@ import { IDLE_RANGES, isIdleRangeKey } from "@/lib/leads/idle";
 import { neodoveTablesPresent } from "@/lib/leads/leadCampaign";
 import { businessTypeFilterParam } from "@/lib/leads/businessType";
 import { exportsOwnLeadsOnly } from "@/lib/exports/downloadLog";
+import { isReadySplit, type ReadySplit } from "@/lib/leads/salesReady";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -77,6 +78,9 @@ export async function parseLeadListFilters(
         contactability: (["include", "only"] as const).find((v) => v === searchParams.get("contactability")) ?? null,
         // ID 36: "Hide dead & disqualified" — on unless the URL says hide_dead=0.
         hideDead: searchParams.get("hide_dead") !== "0",
+        // ID 184 — the card's "Ready leads with no owner", optionally one split.
+        readyNoOwner: searchParams.get("ready_no_owner") === "1",
+        readySplit: isReadySplit(searchParams.get("ready_split")) ? (searchParams.get("ready_split") as ReadySplit) : null,
         ownerScopeId: viewer && exportsOwnLeadsOnly(viewer.role) ? viewer.id : null,
         ownerScopeTeamIds: viewer && exportsOwnLeadsOnly(viewer.role) ? (viewer.teamMemberIds ?? null) : null,
         from: searchParams.get("from")?.trim() || null,

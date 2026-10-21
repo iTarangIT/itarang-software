@@ -32,6 +32,7 @@ import {
 } from "./mapper";
 import type { NeodoveInboundEvent } from "./types";
 import { resolveAgentUserId } from "./agentMap";
+import { alertUnmappedAgent } from "./agentAlert";
 import { applyNeodoveCallOwnership } from "./ownerFromCall";
 import { reviewLeadContactability } from "@/lib/leads/contactability";
 import { classifyDisposition } from "@/lib/leads/dispositions";
@@ -220,6 +221,8 @@ async function handleDisposition(
 
     const callStatus = callStatusFor(event);
     const agentUserId = await resolveAgentUserId(event.agentName);
+    // A32: an agent with no CRM user — tell Admin (once a day per agent).
+    if (!agentUserId) alertUnmappedAgent(event.agentName, event.campaignName);
     const callAt = event.occurredAt ?? new Date();
 
     const callTouchpoint: Parameters<typeof writeTouchpoint>[0] = {
@@ -231,6 +234,10 @@ async function handleDisposition(
         // and is re-pointed when the mapping is saved. The agent's name goes to
         // external_agent_name either way (E-226).
         performedBy: agentUserId,
+        // A33: Hot / Warm / Cold from the call outcome still lands when the
+        // agent is unmapped — recorded against the lead's owner, not guessed
+        // onto the call.
+        interestFromOwnerWhenNoPerformer: true,
         performedAt: callAt,
         callStatus,
         callDurationSec: event.callDurationSec,

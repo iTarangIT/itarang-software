@@ -32,6 +32,15 @@
  *                                  current owner and Hot / Warm / Cold — the
  *                                  /leads Intent filter's rule
  *   Right now                    = the Ready to assign page's own list
+ *
+ * ID 194 — "My day" (one email per ISR / ASM):
+ *
+ *   node --import tsx --env-file=.env.local scripts/verify-sales-daily.ts [istDay] --my-day <email|name> [--render <file.html>]
+ *
+ *   builds the management email and that person's My day email for the same
+ *   covered day and checks: their row in "My numbers" is their row in Block B
+ *   / C, and every line of "My team" (members and the team subtotal) is a line
+ *   of the management email. --render writes their email's HTML to a file.
  */
 export {};
 
@@ -46,7 +55,79 @@ function istYesterday(): string {
     return now.toISOString().slice(0, 10);
 }
 
+/** ID 194 — a person's My day rows must be rows of the management email. */
+async function verifyMyDay(istDay: string, who: string, renderTo: string | null) {
+    const { salesDailyDigest } = await import("@/lib/digests/kinds/sales-daily");
+    const { myDayDigest, collectMyDay } = await import("@/lib/digests/kinds/my-day");
+    const people = await myDayDigest.perRecipient!.resolve({ roles: { inside_sales_rep: true, asm: true } });
+    const q = who.toLowerCase();
+    const person =
+        people.find((p) => p.email.toLowerCase() === q || p.id === who) ??
+        people.find((p) => p.name.toLowerCase().includes(q));
+    if (!person) throw new Error(`no active ISR / ASM with an email matches "${who}"`);
+    console.log(`My day for ${person.name} (${person.role}, ${person.email}) covering ${istDay}`);
+
+    const [mgmt, mine] = await Promise.all([salesDailyDigest.collect(istDay), collectMyDay(istDay, person)]);
+    if (!mgmt.ok) throw new Error(`management email failed: ${mgmt.error}`);
+    if (!mine.ok) throw new Error(`My day failed: ${mine.error}`);
+    const table = (f: typeof mine.figures, key: string) => (f.tables ?? []).filter((t) => t.key === key);
+    const block = table(mgmt.figures, person.role === "asm" ? "block_b" : "block_c")[0];
+    const mgmtRows = [...table(mgmt.figures, "block_b"), ...table(mgmt.figures, "block_c")].flatMap((t) => t.rows);
+    const same = (a: Array<string | number>, b: Array<string | number>) => JSON.stringify(a) === JSON.stringify(b);
+    let bad = 0;
+
+    const [numbers, targets, work] = table(mine.figures, "my_numbers").concat(table(mine.figures, "work_list"));
+    const own = numbers.rows[0];
+    const theirs = block?.rows.find((r) => String(r[0]).replace(/^↳ /, "") === own?.[0]);
+    if (!own) {
+        console.log("  My numbers: no row (nothing recorded) — the management email must not list them either");
+        if (block?.rows.some((r) => String(r[0]).replace(/^↳ /, "") === person.name)) bad++;
+    } else {
+        const ok = !!theirs && same(own.slice(1), theirs.slice(1));
+        console.log(`  My numbers  ${ok ? "ok      " : "MISMATCH"}  ${own.join(" | ")}`);
+        if (!ok) {
+            console.log(`  management             ${theirs ? theirs.join(" | ") : "(not in the block)"}`);
+            bad++;
+        }
+    }
+    console.log(`  Targets to date: ${targets?.rows.length ?? 0} line(s)`);
+    for (const r of targets?.rows ?? []) console.log(`    ${r.join(" | ")}`);
+    console.log(`  Work list: ${work?.rows.length ?? 0} item(s), ${work?.rowLinks?.filter(Boolean).length ?? 0} linked`);
+
+    for (const t of table(mine.figures, "my_team")) {
+        console.log(`  ${t.title}`);
+        for (const r of t.rows) {
+            // A "Team total" exists only here (manager outside the block); every
+            // other line must be printed in the management email.
+            const ok = r[0] === "Team total" || mgmtRows.some((m) => same(m, r));
+            if (!ok) bad++;
+            console.log(`    ${ok ? "ok      " : "MISMATCH"}  ${r.join(" | ")}`);
+        }
+    }
+
+    if (renderTo) {
+        const { writeFileSync } = await import("node:fs");
+        const { buildDigestEmail } = await import("@/lib/email/sendDigestEmail");
+        const { html } = buildDigestEmail({ kind: myDayDigest, to: [person.email], slot: "morning", istDay, figures: mine.figures });
+        writeFileSync(renderTo, html);
+        console.log(`  rendered → ${renderTo}`);
+    }
+    console.log(bad === 0 ? "\nMy day reconciles with the management email." : `\n${bad} line(s) do not reconcile.`);
+    process.exit(bad === 0 ? 0 : 1);
+}
+
 async function main() {
+    const args = process.argv.slice(2);
+    const flag = (name: string) => {
+        const i = args.indexOf(name);
+        return i >= 0 ? (args[i + 1] ?? "") : null;
+    };
+    const myDay = flag("--my-day");
+    if (myDay != null) {
+        if (!myDay) throw new Error("--my-day needs an email or a name");
+        const day = args.find((a) => /^\d{4}-\d{2}-\d{2}$/.test(a)) ?? istYesterday();
+        return verifyMyDay(day, myDay, flag("--render"));
+    }
     const { sql } = await import("drizzle-orm");
     const { db } = await import("@/lib/db");
     const { buildSalesDashboard } = await import("@/lib/admin/salesDashboard");

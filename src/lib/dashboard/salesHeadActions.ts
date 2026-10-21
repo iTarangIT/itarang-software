@@ -7,9 +7,12 @@
  *                       reached that owner, more than owner_first_attempt
  *                       working hours ago (ID 85 time limit, default 4;
  *                       workingHours.ts: Mon–Sat 10–19 IST, holidays off)
- *   visit_overdue       Transferred to an ASM, first visit past the
- *                       asm_transfer_first_visit limit (transferVisitLimit.ts
- *                       — the admin panel's rule)
+ *   visit_overdue       Waiting for a field visit (ID 190): every lead
+ *                       transferred to an ASM and not visited since
+ *                       (transferVisitLimit.ts awaitingFieldVisitSql), past
+ *                       the asm_transfer_first_visit limit first — the count
+ *                       is everyone waiting, the sub-line says how many are
+ *                       past the limit
  *   quotes_no_answer    Latest quote delivered to the dealer more than
  *                       quote_no_answer working days ago (ID 85 time limit,
  *                       default 3), no answer, not withdrawn, lead still open
@@ -42,13 +45,13 @@ import { sql, type SQL } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import { ONB_LAST, ONB_WAITING_ON, onboardingStalledSql, WON_WITHOUT_QUOTE } from "@/lib/admin/dashboard";
-import { awaitingAssignment, daysAwaitingAssignment, salesReadyReasonLabel } from "@/lib/leads/salesReady";
+import { awaitingAssignment, daysAwaitingAssignment, READY_NO_OWNER_TITLE, readySplitOf, salesReadyReasonLabel } from "@/lib/leads/salesReady";
 import { listSaidYesNotWon } from "@/lib/leads/saidYesNotWon";
 import {
     TRANSFER_AT_EXPR,
     TRANSFER_WORKING_DAYS_SQL,
     awaitingFieldVisitSql,
-    transferVisitOverdueSql,
+    transferLimitSql,
 } from "@/lib/asm/transferVisitLimit";
 import { WORKABLE_STATUSES } from "@/lib/lifecycle/transitions";
 import { workingHoursBetween } from "@/lib/leads/workingHours";
@@ -72,7 +75,7 @@ export const ACTION_KEYS = [
 export type ActionKey = (typeof ACTION_KEYS)[number];
 
 export const ACTION_TITLES: Record<ActionKey, string> = {
-    sales_ready: "Sales-ready leads with no owner",
+    sales_ready: READY_NO_OWNER_TITLE,
     hot_not_called: "Hot leads not called in time",
     visit_overdue: "Waiting for a field visit",
     quotes_no_answer: "Quotes with no answer",
@@ -122,6 +125,8 @@ export type ActionRow = {
     value: number | null;
     /** Where the row opens when it is not a lead (ID 174 stock tasks); default the lead page. */
     href?: string | null;
+    /** ID 190, Waiting for a field visit: past the limit in force on the transfer's day. */
+    past_limit?: boolean;
 };
 
 export type ActionTileData = { count: number; sub: string };
@@ -198,14 +203,10 @@ async function salesReady(s: ActionScope): Promise<Built> {
         ),
     );
     const oldest = raw.length ? Math.max(...raw.map((r) => Number(r.days ?? 0))) : 0;
-    const hot = raw.filter((r) => String(r.interest_level ?? "").toLowerCase() === "hot").length;
-    // Where they came from: AI-qualified and rep-created named, the rest summed.
-    const byReason = (k: string) => raw.filter((r) => r.reason === k).length;
-    const ai = byReason("ai_qualified");
-    const rep = byReason("rep_created");
-    const other = raw.length - ai - rep;
-    const from = [`${ai} AI qualified`, `${rep} created by a rep`, ...(other > 0 ? [`${other} other`] : [])].join(" · ");
-    return { rows, sub: `${from} · oldest waiting ${plural(oldest, "day")} · ${hot} Hot` };
+    // ID 184: one bucket per lead — Hot, then AI qualified, then other — so the parts add up.
+    const n = { hot: 0, ai: 0, other: 0 };
+    for (const r of raw) n[readySplitOf(r.interest_level as string | null, r.reason as string | null)]++;
+    return { rows, sub: `${n.hot} Hot · ${n.ai} AI qualified · ${n.other} other · oldest waiting ${plural(oldest, "day")}` };
 }
 
 async function hotNotCalled(s: ActionScope): Promise<Built> {
@@ -237,33 +238,46 @@ async function hotNotCalled(s: ActionScope): Promise<Built> {
 }
 
 async function visitOverdue(s: ActionScope): Promise<Built> {
-    const limitDays = (await getTimeLimits()).asm_transfer_first_visit;
+    // ID 190: the tile counts everyone still waiting; each transfer is judged
+    // by the limit in force on its day (dated limits), past the limit first.
+    const transferLimit = await transferLimitSql();
     const raw = await run(sql`
             SELECT dl.id AS lead_id, ${NAME} AS dealer, dl.city, dl.state,
                    COALESCE(a.name, u.name) AS owner_name,
                    COALESCE(a.id::text, u.id::text) AS owner_id,
                    ${IST_DAY(sql.raw(TRANSFER_AT_EXPR))} AS transferred_on,
-                   ${TRANSFER_WORKING_DAYS_SQL} AS days
+                   ${TRANSFER_WORKING_DAYS_SQL} AS days,
+                   FLOOR(${transferLimit})::int AS lim
               FROM dealer_leads dl
               LEFT JOIN users a ON a.id::text = dl.asm_id
               LEFT JOIN users u ON u.id::text = dl.current_owner_id
-             WHERE ${transferVisitOverdueSql(limitDays)} ${scope(s, "owner_or_asm")}
-             ORDER BY days DESC`);
-    const rows = raw.map((r) => base(r, `Transferred ${String(r.transferred_on)} · ${plural(Number(r.days), "working day")}, no visit`));
+             WHERE ${awaitingFieldVisitSql()} ${scope(s, "owner_or_asm")}
+             ORDER BY (${TRANSFER_WORKING_DAYS_SQL} > FLOOR(${transferLimit})) DESC, days DESC`);
+    const rows = raw.map((r) => {
+        const days = Number(r.days);
+        const lim = Number(r.lim);
+        const past = days > lim;
+        return {
+            ...base(
+                r,
+                `Transferred ${String(r.transferred_on)} · ${plural(days, "working day")}, no visit · ${past ? "past" : "within"} the limit (${plural(lim, "working day")})`,
+            ),
+            past_limit: past,
+        };
+    });
+    const pastRows = rows.filter((r) => r.past_limit);
     const byCity = new Map<string, number>();
-    for (const r of rows) {
+    for (const r of pastRows) {
         const c = r.city?.trim() || "Unknown city";
         byCity.set(c, (byCity.get(c) ?? 0) + 1);
     }
     const top = [...byCity.entries()].sort((a, b) => b[1] - a[1]).slice(0, 2).map(([c, n]) => `${c} ${n}`).join(", ");
-    // Everyone waiting for a first visit, inside the limit or past it.
-    const waiting = await run(sql`
-            SELECT COUNT(*)::int AS n FROM dealer_leads dl
-             WHERE ${awaitingFieldVisitSql()} ${scope(s, "owner_or_asm")}`);
-    const all = Number(waiting[0]?.n ?? 0);
+    // The limit each lead is judged by: one number, or a range when it changed.
+    const lims = [...new Set(raw.map((r) => Number(r.lim)))].sort((a, b) => a - b);
+    const limText = lims.length > 1 ? `${lims[0]}–${lims[lims.length - 1]} working days` : lims.length ? plural(lims[0], "working day") : null;
     return {
         rows,
-        sub: `Over ${plural(limitDays, "working day")} since transfer · ${all} waiting in all${top ? ` · ${top}` : ""}`,
+        sub: `${pastRows.length} past the limit${limText ? ` (${limText} since transfer)` : ""}${top ? ` · ${top}` : ""}`,
     };
 }
 
@@ -548,5 +562,11 @@ export const ACTION_CSV_COLUMNS: Array<{ header: string; value: (r: ActionRow) =
     { header: "State", value: (r) => r.state ?? "" },
     { header: "Owner", value: (r) => r.owner_name ?? "" },
     { header: "Why it is here", value: (r) => r.detail },
+    { header: "Past the limit", value: (r) => (r.past_limit == null ? "" : r.past_limit ? "Yes" : "No") },
     { header: "Value (Rs)", value: (r) => (r.value == null ? "" : String(Math.round(r.value))) },
 ];
+
+/** One tile's CSV columns: "Past the limit" only where the tile sets it (ID 190, field visits). */
+export function actionCsvColumns(key: ActionKey): typeof ACTION_CSV_COLUMNS {
+    return key === "visit_overdue" ? ACTION_CSV_COLUMNS : ACTION_CSV_COLUMNS.filter((c) => c.header !== "Past the limit");
+}

@@ -8,11 +8,17 @@
  *                        the 60 days from the lead's Won day (won_at, IST)
  *
  * Same invoice → lead match and void rule as revenue (revenueSource.ts).
- * Returns null when the invoice-line tables are missing (E-322 not applied).
+ * A14: an invoice matched to a dealer ACCOUNT carries a lead only when the
+ * account records its source lead; otherwise the lead with the invoice's
+ * GSTIN is used (the same GSTIN rule as revenue's lead matcher), so an
+ * account-matched order is not dropped from "Batteries ordered in the 60
+ * days after Won". Returns null when the invoice-line tables are missing
+ * (E-322 not applied).
  */
 import { sql, type SQL } from "drizzle-orm";
 import { matchedLinesUnion, REVENUE_NOT_VOID } from "@/lib/dashboard/revenueSource";
 import { ONBOARDING_FEE_ITEM } from "@/lib/leads/dealCardRules";
+import { leadKeyValidOn, leadsByGstinKey } from "@/lib/leads/gstinMatch";
 
 /** Days after Won the volume check looks at (Kartik, 10 Oct). */
 export const VOLUME_CHECK_DAYS = 60;
@@ -25,7 +31,7 @@ export async function dealCardActualsSql(): Promise<SQL | null> {
     const lines = await matchedLinesUnion();
     if (!lines) return null;
     return sql`
-        SELECT r.dealer_lead_id AS lead_id,
+        SELECT COALESCE(r.dealer_lead_id, gk.dealer_lead_id) AS lead_id,
                COALESCE(SUM(r.amount_excl_gst) FILTER (WHERE r.asset_type = ${ONBOARDING_FEE_ITEM}), 0)::float8 AS fee_invoiced,
                COALESCE(SUM(r.quantity) FILTER (
                    WHERE r.product_class = 'battery'
@@ -35,7 +41,10 @@ export async function dealCardActualsSql(): Promise<SQL | null> {
                                           + ${sql.raw(String(VOLUME_CHECK_DAYS))}
                ), 0)::float8 AS batteries_60d
           FROM ${lines} AS r
-          JOIN dealer_leads dl ON dl.id = r.dealer_lead_id
+          LEFT JOIN (${leadsByGstinKey()}) gk
+                 ON r.dealer_lead_id IS NULL AND r.account_id IS NOT NULL AND gk.k = r.gstin_key
+                AND ${leadKeyValidOn("gk", sql`r.invoice_date`)}
+          JOIN dealer_leads dl ON dl.id = COALESCE(r.dealer_lead_id, gk.dealer_lead_id)
          WHERE ${REVENUE_NOT_VOID}
-         GROUP BY r.dealer_lead_id`;
+         GROUP BY 1`;
 }

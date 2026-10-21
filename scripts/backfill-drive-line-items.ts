@@ -28,6 +28,12 @@
  *
  * Resumable: an invoice that already has lines (any source) is skipped. A read
  * is a paid model call, so the dry run costs the same as --commit.
+ *
+ * Recorded (ID 71): every --commit run writes one invoice_imports row
+ * (kind 'credit_lines_fill' / 'invoice_lines_fill') with what it stored,
+ * rejected and failed, so "has the fill-in run happened?" has an answer
+ * (Invoice Ledger › Invoices shows the last one; verify-id71-credit-notes.ts
+ * checks it).
  */
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
@@ -91,6 +97,8 @@ async function main() {
     console.log(`${todo.length} ${CREDIT ? "credit note" : "invoice"}(s) without lines${Number.isFinite(MAX) ? ` (max ${MAX})` : ""}\n`);
 
     let stored = 0, rejected = 0, failed = 0, batteries = 0;
+    const storedNumbers: string[] = [];
+    const rejectedNumbers: string[] = [];
     for (const inv of todo.slice(0, MAX)) {
         const sub = inv.sub_total == null ? null : Number(inv.sub_total);
         try {
@@ -105,6 +113,7 @@ async function main() {
             const desc = lines.map((l) => `${l.quantity}× ${l.description.slice(0, 40)} [${l.hsn_code ?? "-"}]`).join(" | ");
             if (!check.ok) {
                 rejected++;
+                rejectedNumbers.push(inv.invoice_number);
                 console.log(`✘ ${inv.invoice_number} ${inv.invoice_date} taxable ${sub} — ${check.reason}\n    read: ${desc || "(nothing)"}`);
                 continue;
             }
@@ -112,11 +121,13 @@ async function main() {
                 const r = await saveDriveLedgerLines(inv.id, lines, sub, CREDIT ? "credit" : "drive");
                 if (!r.saved) {
                     rejected++;
+                    rejectedNumbers.push(inv.invoice_number);
                     console.log(`✘ ${inv.invoice_number} not stored — ${r.reason}`);
                     continue;
                 }
             }
             stored++;
+            storedNumbers.push(inv.invoice_number);
             if (check.basis === "qty_x_rate") console.log(`    (amounts were GST-inclusive; taxable rebuilt from quantity × price)`);
             batteries += bat;
             console.log(`✔ ${inv.invoice_number} ${inv.invoice_date} ${lines.length} line(s), ${bat} batteries — ${desc}`);
@@ -128,6 +139,22 @@ async function main() {
     console.log(
         `\n${COMMIT ? "stored" : "would store"} ${stored} · rejected ${rejected} · failed ${failed} · batteries ${batteries}`,
     );
+    if (COMMIT && todo.length) {
+        // ID 71: the run is recorded, not just printed.
+        const summary = JSON.stringify({
+            stored,
+            rejected,
+            failed,
+            batteries,
+            only: ONLY,
+            stored_numbers: storedNumbers.slice(0, 500),
+            rejected_numbers: rejectedNumbers.slice(0, 500),
+        });
+        await db.execute(sql`
+            INSERT INTO invoice_imports (kind, file_name, summary)
+            VALUES (${CREDIT ? "credit_lines_fill" : "invoice_lines_fill"}, 'scripts/backfill-drive-line-items.ts', ${summary}::jsonb)`);
+        console.log(`recorded in invoice_imports (${CREDIT ? "credit_lines_fill" : "invoice_lines_fill"})`);
+    }
     process.exit(failed ? 1 : 0);
 }
 

@@ -12,6 +12,8 @@ const {
     daysAwaitingAssignment,
     salesReadyReasonLabel,
     SALES_READY_REASONS,
+    readySplitOf,
+    readySplitSql,
 } = await import("../salesReady");
 
 const render = (q: ReturnType<typeof sql>) => new PgDialect().sqlToQuery(q).sql.replace(/\s+/g, " ");
@@ -75,5 +77,23 @@ describe("Sales-ready reasons", () => {
         expect(createdByHandReason("field_walk_in")).toBe("rep_created");
         expect(createdByHandReason(null)).toBe("rep_created");
         expect(createdByHandReason(undefined)).toBe("rep_created");
+    });
+});
+
+// ID 184: one bucket per lead so the card's parts add up — Hot wins.
+describe("readySplitOf / readySplitSql (ID 184)", () => {
+    it("puts a Hot lead in Hot even when the AI qualified it", () => {
+        expect(readySplitOf("Hot", "ai_qualified")).toBe("hot");
+        expect(readySplitOf("hot", "rep_created")).toBe("hot");
+    });
+    it("then AI qualified, then other", () => {
+        expect(readySplitOf("warm", "ai_qualified")).toBe("ai");
+        expect(readySplitOf(null, "ai_qualified")).toBe("ai");
+        expect(readySplitOf("cold", "rep_created")).toBe("other");
+        expect(readySplitOf(null, null)).toBe("other");
+    });
+    it("SQL checks Hot before the reason", () => {
+        const text = render(readySplitSql());
+        expect(text.indexOf("'hot'")).toBeLessThan(text.indexOf("'ai_qualified'"));
     });
 });

@@ -105,6 +105,12 @@ export async function requireAuthWithSupabaseUser() {
       };
     }
 
+    // A39: a deactivated login (an ex-employee) is refused on every page and
+    // API that authenticates through here, not only at the login screen.
+    if (dbUser.is_active === false) {
+      redirect("/login?inactive=1");
+    }
+
     return { synthesized: false as const, dbUser, authUser: user };
   } catch (dbErr) {
     console.error("[Auth] Database error in requireAuth:", dbErr);

@@ -6,7 +6,7 @@
 // add up. A check is evaluated on every row and is never hidden: a failing one
 // shows as "Breaks" with the row that broke it.
 
-export const ANALYSIS_IDS = ["lead_sources", "ai_score", "meetings"] as const;
+export const ANALYSIS_IDS = ["lead_sources", "ai_score", "meetings", "cohorts", "turnaround", "ai_outcomes"] as const;
 export type AnalysisId = (typeof ANALYSIS_IDS)[number];
 
 export function isAnalysisId(v: string | null | undefined): v is AnalysisId {
@@ -120,7 +120,47 @@ export interface MeetingsResult {
     mode_not_captured: boolean;
 }
 
-export type AnalysisResult = LeadSourcesResult | AiScoreResult | MeetingsResult;
+// ── Grid analyses (A22 cohorts, A23 turnaround, A24 AI outcomes) ─────────────
+
+/** The analyses drawn as one plain table: columns, rows, an optional total. */
+export const GRID_ANALYSES = ["cohorts", "turnaround", "ai_outcomes"] as const;
+export type GridAnalysisId = (typeof GRID_ANALYSES)[number];
+
+export function isGridAnalysis(id: string): id is GridAnalysisId {
+    return (GRID_ANALYSES as readonly string[]).includes(id);
+}
+
+export interface GridColumn {
+    key: string;
+    label: string;
+    /** text = the row label; count; days (one decimal); pct (0–100, one decimal). */
+    kind: "text" | "count" | "days" | "pct";
+    hint?: string;
+}
+
+export type GridRow = Record<string, string | number | null>;
+
+export interface GridResult {
+    kind: "grid";
+    period: AnalysisPeriod;
+    columns: GridColumn[];
+    rows: GridRow[];
+    total: GridRow | null;
+    checks: AnalysisCheck[];
+}
+
+/** One cell as the table prints it. */
+export function gridCell(v: string | number | null | undefined, kind: GridColumn["kind"]): string {
+    if (v == null || v === "") return "—";
+    if (kind === "text") return String(v);
+    const x = Number(v);
+    if (!Number.isFinite(x)) return "—";
+    if (kind === "count") return fmtNum(x);
+    if (kind === "pct") return `${x.toFixed(1)}%`;
+    return x.toFixed(1);
+}
+
+export type AnalysisResult = LeadSourcesResult | AiScoreResult | MeetingsResult | GridResult;
 
 // ── Catalogue (the cards) ───────────────────────────────────────────────────
 
@@ -200,6 +240,63 @@ export const ANALYSES: AnalysisMeta[] = [
         links: [
             { from: "Sales Head dashboard · Field tab", to: "Meetings by city" },
             { from: "Old \"Meetings (MTD)\" report", to: "Replaced by this" },
+        ],
+    },
+    {
+        id: "cohorts",
+        name: "Cohorts",
+        tag: "NEW",
+        decides: "How fast each month's new leads turn into dealers, and whether those dealers order again.",
+        basis: "the month the lead was created",
+        cadence: "monthly",
+        who: "CEO, Admin, Sales Head",
+        dlLabel: "Download these leads",
+        dataset: "leads",
+        periodLabel: "Leads created",
+        note:
+            "One row per month the leads were created (IST). Converted in month 1 = the same calendar month, month 2 = the next, and so on. " +
+            "Reordered = a converted dealer with a second invoice on a later day (credit notes are not orders); its month counts from the lead's creation month too. " +
+            "Recent months are still moving: their later columns fill in over time.",
+        links: [{ from: "13 Oct call (A22)", to: "Cohort by lead creation month" }],
+    },
+    {
+        id: "turnaround",
+        name: "Turnaround",
+        tag: "NEW",
+        decides: "Which stage of the sale is slow: getting to the dealer, quoting, billing, or the repeat order.",
+        basis: "the date the lead was created",
+        cadence: "monthly",
+        who: "CEO, Admin, Sales Head",
+        dlLabel: "Download these leads",
+        dataset: "leads",
+        periodLabel: "Leads created",
+        note:
+            "For leads created in the period: working days (Mon–Sat, holidays off) from the lead to its first visit, from that visit to the first quote, " +
+            "and from the quote to the first invoice (dispatch; payment is not tracked); then calendar days from the 1st to the 2nd invoice and the 2nd to the 3rd. " +
+            "A step is counted only for leads that reached it, in order. Median and the slowest 1 in 10.",
+        links: [
+            { from: "13 Oct call (A23)", to: "Time between stages" },
+            { from: "Sales Head dashboard · Speed", to: "The longer stages, here" },
+        ],
+    },
+    {
+        id: "ai_outcomes",
+        name: "AI score outcomes",
+        tag: "NEW",
+        decides: "Whether the AI score picks dealers who onboard and buy — judged apart from leads the team handled late.",
+        basis: "the date the lead was created",
+        cadence: "monthly",
+        who: "CEO, Admin, Sales Head",
+        dlLabel: "Download these leads",
+        dataset: "leads",
+        periodLabel: "Leads created",
+        note:
+            "Accuracy = of the leads the AI scored, the share that submitted onboarding and that got a first invoice within 30 and 60 days of coming in. " +
+            "Handled late = the first call missed its time limit (owner or Hot clock) or the field visit missed its limit; those leads are shown on their own rows " +
+            "so a slow follow-up is not read as a wrong score. Leads younger than 60 days are still inside the window.",
+        links: [
+            { from: "13 Oct call (A24)", to: "How AI score accuracy is measured" },
+            { from: "AI score accuracy", to: "Converted vs lost by band" },
         ],
     },
 ];

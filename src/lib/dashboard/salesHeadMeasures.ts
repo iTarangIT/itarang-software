@@ -40,6 +40,7 @@
  * this database, so one failure never blanks the others.
  */
 import { sql, type SQL } from "drizzle-orm";
+import { businessTypeFilterParam } from "@/lib/leads/businessType";
 
 import { db } from "@/lib/db";
 import { OPEN_STATUSES, LOST_REASON } from "@/lib/lifecycle/transitions";
@@ -359,5 +360,7 @@ export function measureFiltersFrom(p: URLSearchParams): MeasureFilters | null {
     const to = p.get("to") ?? "";
     if (!ISO.test(from) || !ISO.test(to) || from > to) return null;
     const opt = (k: string) => p.get(k)?.trim() || null;
-    return { from, to, state: opt("state"), city: opt("city"), business_type: opt("business_type"), spoc_id: opt("spoc_id") };
+    // ID 11: an old link's "finance" reads as Battery sale, as on the dashboard.
+    const bt = opt("business_type");
+    return { from, to, state: opt("state"), city: opt("city"), business_type: businessTypeFilterParam(bt) ?? bt, spoc_id: opt("spoc_id") };
 }

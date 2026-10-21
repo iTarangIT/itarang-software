@@ -440,6 +440,9 @@ export async function workingDayContext(month: string) {
     const upTo = today > last ? last : today;
     return {
         month: monthFirst,
+        // A26: the last day the actuals count (today while the month runs). The
+        // daily email reads the same figures to the day it covers (yesterday).
+        actuals_up_to: today < monthFirst ? null : upTo,
         working_days_total: workingDaysBetween(monthFirst, last, hol),
         working_days_elapsed: today < monthFirst ? 0 : workingDaysBetween(monthFirst, upTo, hol),
     };

@@ -2,7 +2,8 @@
  * Follow-up ageing — how long the lead's CURRENT HOLDER has let it sit, for
  * every "needs attention" / idle / stale check (needs-attention page, the
  * Sales Head's Idle tile, the weekly idle mail, the admin dashboard's stale
- * counts, the inside-sales queue's days column):
+ * counts, the inside-sales queue's days column, the CEO People table and the
+ * admin Leads list's Idle column and filters):
  *
  *   1. Follow-up scheduled and still ahead  → not idle. The rep planned the
  *      next touch; the clock sits in the future until that day, so "working
@@ -18,9 +19,9 @@
  * A follow-up more than FOLLOW_UP_HORIZON_DAYS ahead is ignored, so a far-off
  * date cannot park a lead out of sight for months.
  *
- * NOT for the admin Leads list's Idle column (src/lib/leads/idle.ts): that one
- * measures how long the LEAD has rotted whoever holds it, so a hand-off must
- * not reset it.
+ * ID 192 (15 Oct decision): the Leads list's Idle column and filters read this
+ * same basis too (src/lib/leads/idle.ts), so a lead reassigned today shows 0
+ * for its new holder and a lead with a follow-up next week is on no idle list.
  */
 import { sql, type SQL } from "drizzle-orm";
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Loader2 } from "lucide-react";
@@ -12,6 +12,7 @@ import { QuotationCcForm } from "./QuotationCcForm";
 import { QuotationTermsForm } from "./QuotationTermsForm";
 import { TerritoryManager } from "./TerritoryManager";
 import { ReportingLinesManager } from "./ReportingLinesManager";
+import { LoginsManager } from "./LoginsManager";
 import type { SettingsBundle } from "@/lib/admin/types";
 
 // Two sections, two channels: Notification Access (E-231) governs the in-app
@@ -45,6 +46,8 @@ const TAB_VALUES = [
     "territories",
     // ID 155 — who reports to whom (E-335).
     "reporting-lines",
+    // A39 — who can sign in: deactivate leavers, force a new password.
+    "logins",
 ] as const;
 type TabValue = (typeof TAB_VALUES)[number];
 
@@ -53,6 +56,11 @@ export function SettingsView() {
     const searchParams = useSearchParams();
 
     const param = searchParams.get("tab");
+    // ID 85 Decision 4: holidays live on Settings › Time limits; an old
+    // ?tab=holidays link lands there instead of on an unknown tab.
+    useEffect(() => {
+        if (param === "holidays") router.replace("/admin/settings/time-limits#holidays");
+    }, [param, router]);
     const active: TabValue = TAB_VALUES.includes(param as TabValue)
         ? (param as TabValue)
         : "access";
@@ -91,6 +99,7 @@ export function SettingsView() {
                     { value: "quotation-terms", label: "Quotation terms" },
                     { value: "territories", label: "ASM Territories" },
                     { value: "reporting-lines", label: "Reporting lines" },
+                    { value: "logins", label: "Logins" },
                 ]}
             />
 
@@ -101,6 +110,7 @@ export function SettingsView() {
                     {active === "quotation-cc" && <QuotationCcForm />}
                     {active === "quotation-terms" && <QuotationTermsForm />}
                     {active === "reporting-lines" && <ReportingLinesManager />}
+                    {active === "logins" && <LoginsManager />}
                     {active === "territories" &&
                         (bundleQuery.isLoading ? (
                             <div className="flex items-center gap-2 py-8 text-sm text-ink-muted">

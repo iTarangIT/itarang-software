@@ -6,7 +6,8 @@ import { ownsThread, requireAnalystUser } from "@/lib/analyst/access";
 import { agentFetch, agentJson } from "@/lib/analyst/client";
 import { errorResponse, normalizeAgentError } from "@/lib/analyst/errors";
 import { ANALYST_QUESTION_MAX, stripMetricRules, withMetricRules } from "@/lib/analyst/metricRules";
-import type { RunPage } from "@/lib/analyst/types";
+import { isOutsideConnection } from "@/lib/analyst/sources-routes";
+import type { Connection, RunPage } from "@/lib/analyst/types";
 
 export const dynamic = "force-dynamic";
 // A run takes up to ~40s on the agent and it allows 180s (RUN_TIMEOUT_S). The handler must
@@ -26,6 +27,19 @@ const RunBody = z.object({
 });
 
 const encoder = new TextEncoder();
+
+// ID 167 — the source list, cached briefly: the agent sleeps on its free tier and a run should
+// not wait on a second round-trip each time. A source only ever moves from allowed to deleted.
+const SOURCES_TTL_MS = 5 * 60_000;
+let sourcesCache: { at: number; byId: Map<string, Connection> } | null = null;
+
+async function sourceById(id: string): Promise<Connection | undefined> {
+  if (!sourcesCache || Date.now() - sourcesCache.at > SOURCES_TTL_MS || !sourcesCache.byId.has(id)) {
+    const list = await agentJson<Connection[]>("/connections");
+    sourcesCache = { at: Date.now(), byId: new Map(list.map((c) => [c.id, c])) };
+  }
+  return sourcesCache.byId.get(id);
+}
 
 function streamHeaders(): HeadersInit {
   // Built fresh rather than copied from upstream: its hop-by-hop headers must not be forwarded.
@@ -65,6 +79,19 @@ export async function POST(request: Request) {
   }
   if (!ownsThread(user, parsed.data.thread_id)) {
     return Response.json({ error: "that conversation is not yours", code: "forbidden" }, { status: 403 });
+  }
+
+  // ID 167: an outside database bypasses the read-only role's withheld columns — never asked.
+  try {
+    const source = await sourceById(parsed.data.connection_id);
+    if (source && isOutsideConnection(source)) {
+      return Response.json(
+        { error: "outside databases are switched off — ask the iTarang database or an uploaded file", code: "forbidden" },
+        { status: 403 },
+      );
+    }
+  } catch (error) {
+    return errorResponse(error, "could not check that data source");
   }
 
   let upstream: Response;

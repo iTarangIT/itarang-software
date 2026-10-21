@@ -285,14 +285,11 @@ export function LeadsTable({
                                 const isUpNext =
                                     dialerPhase === "countdown" && dialerLeadId === row.id;
                                 const nextCall = formatNextCall(row.next_call_at);
-                                // Idle reads the work clock (E-300), not
-                                // Last Touch: assigning or commenting on a
-                                // lead must not make it look worked.
-                                const idle = idleDays(
-                                    row.last_worked_at,
-                                    row.created_at,
-                                    nowMs,
-                                );
+                                // Idle = the holder's clock (ID 192): last
+                                // work, the date they got the lead, or a
+                                // follow-up within 30 days. Comments do not
+                                // count as work.
+                                const idle = idleDays(row, nowMs);
                                 const idleText = formatIdle(idle);
                                 const sourceLabel = leadSourceLabel(
                                     row.source_door,
@@ -556,9 +553,7 @@ export function LeadsTable({
                                                 title={
                                                     idle === null
                                                         ? "No touchpoint and no creation date"
-                                                        : row.last_worked_at
-                                                          ? `${idle} days since the last call, visit or status change`
-                                                          : `Never worked — no call, visit or status change in ${idle} days since the lead was created`
+                                                        : `${idle} days since the later of the last call, visit or status change, the date the holder got the lead, and a follow-up within 30 days`
                                                 }
                                             >
                                                 {idleText.primary}

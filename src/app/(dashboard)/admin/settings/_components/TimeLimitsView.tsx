@@ -3,7 +3,7 @@
 // ID 85 — Admin › Settings › Time limits. One row per limit (registry.ts):
 // the value in force today, a change already scheduled for later, and an Edit
 // that records a dated change. Below: the change log (what the CEO reads) and
-// the office calendar's holidays.
+// the office calendar's holidays, edited here (Decision 4: no separate tab).
 
 import { Fragment, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -13,8 +13,7 @@ import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { formatLimit, type LimitUnit, type TimeLimitDef } from "@/lib/timeLimits/registry";
 import type { TimeLimitChange } from "@/lib/timeLimits/store";
-import type { HolidayRow } from "@/lib/admin/types";
-import { HolidayCalendarManager } from "./HolidayCalendarManager";
+import { HolidaysPanel } from "./HolidaysPanel";
 
 type LimitRow = TimeLimitDef & { value: number; scheduled: { value: number; effective_from: string } | null };
 
@@ -24,11 +23,10 @@ type Payload = {
     can_edit: boolean;
     limits: LimitRow[];
     log: TimeLimitChange[];
-    holidays: HolidayRow[];
 };
 
 const QUERY_KEY = ["time-limits"];
-const GROUPS = ["Lead clocks", "Follow-up", "Onboarding", "Invoices"] as const;
+const GROUPS = ["Lead clocks", "Follow-up", "Quotes", "Onboarding", "Invoices"] as const;
 
 function istDate(iso: string): string {
     return new Date(iso).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", year: "numeric" });
@@ -40,7 +38,8 @@ function EditRow({ row, today, onSaved }: { row: LimitRow; today: string; onSave
     const [note, setNote] = useState("");
     const [saving, setSaving] = useState(false);
     const n = Number(value);
-    const valid = Number.isInteger(n) && n >= row.min && n <= row.max && from >= today;
+    // A reason is required: the CEO reads it in the change log (ID 85).
+    const valid = Number.isInteger(n) && n >= row.min && n <= row.max && from >= today && note.trim().length >= 3;
 
     async function save() {
         setSaving(true);
@@ -48,7 +47,7 @@ function EditRow({ row, today, onSaved }: { row: LimitRow; today: string; onSave
             const res = await fetch("/api/admin/settings/time-limits", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ key: row.key, value: n, effective_from: from, note: note.trim() || null }),
+                body: JSON.stringify({ key: row.key, value: n, effective_from: from, note: note.trim() }),
             });
             const json = await res.json();
             if (!res.ok || !json.success) throw new Error(json?.error?.message ?? "Save failed");
@@ -85,7 +84,7 @@ function EditRow({ row, today, onSaved }: { row: LimitRow; today: string; onSave
                 />
             </label>
             <label className="min-w-[200px] flex-1 text-xs font-medium text-ink-muted">
-                Why (shown in the log)
+                Why (required — shown in the log the CEO reads)
                 <input
                     value={note}
                     maxLength={500}
@@ -101,7 +100,7 @@ function EditRow({ row, today, onSaved }: { row: LimitRow; today: string; onSave
     );
 }
 
-export function TimeLimitsView({ canEditHolidays }: { canEditHolidays: boolean }) {
+export function TimeLimitsView() {
     const qc = useQueryClient();
     const [editing, setEditing] = useState<string | null>(null);
 
@@ -249,12 +248,9 @@ export function TimeLimitsView({ canEditHolidays }: { canEditHolidays: boolean }
                 </div>
             </section>
 
-            <section className="space-y-2">
+            <section id="holidays" className="space-y-2">
                 <h2 className="text-base font-semibold text-ink">Office calendar — holidays</h2>
-                <p className="text-sm text-ink-muted">
-                    Entered each December for the coming year. A holiday is not a working day for any limit or clock.
-                </p>
-                <HolidayCalendarManager holidays={data.holidays} queryKey={QUERY_KEY} readOnly={!canEditHolidays} />
+                <HolidaysPanel />
             </section>
         </div>
     );
