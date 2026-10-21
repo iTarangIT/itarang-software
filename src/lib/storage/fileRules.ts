@@ -280,7 +280,9 @@ export type FileUpload = {
     uploaderDealerCode: string | null;
     /**
      * 'portal' | 'public_link' | 'whatsapp' | 'act_for_dealer' (ID 183);
-     * null on rows from before E-349.
+     * 'lead_creator' when a row from before E-349 had no uploader and the
+     * lead's creator stands in (fileAuthz leadFileUploads, 21 Oct); null on
+     * other rows from before E-349.
      */
     source: string | null;
 };
