@@ -14,7 +14,7 @@ import { requireRole } from "@/lib/auth-utils";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
 import { assertOwner } from "@/lib/leads/ownership";
 import { COMMERCIAL_EVENT_TYPES, createLeadCommercial } from "@/lib/leads/createCommercial";
-import { DealCardSchema, dealCardRequiredFor } from "@/lib/leads/dealCardRules";
+import { DealCardSchema, dealCardRequired } from "@/lib/leads/dealCardRules";
 import { isDealerOnboarded } from "@/lib/leads/dealerOnboarded";
 
 const MUTATE_ROLES = ["inside_sales_rep", "asm", "admin", "partner"];
@@ -50,14 +50,15 @@ const BodySchema = z.object({
         .max(100)
         .optional(),
     notes: z.string().max(5000).nullable().optional(),
-    // ID 172 / ID 186 (16 Oct): on every quote; optional for ISR, ASM and
-    // Sales Head, required for any other role (createLeadCommercial).
+    // ID 172 / ID 186 (18 Oct): on every quote; required for a brand-new
+    // dealer; for an onboarded dealer optional for ISR, ASM and Sales Head
+    // (dealCardRequired; createLeadCommercial enforces).
     deal_card: DealCardSchema.nullable().optional(),
 });
 
 // GET /api/inside-sales/lead/[id]/commercials — for the Update commercials
-// form: must THIS user fill the deal card (ID 186, 16 Oct), and is the dealer
-// already onboarded (shown as information only — the card is asked either way).
+// form: is the dealer already onboarded, and must THIS user fill the deal card
+// for it (ID 186, 18 Oct: always for a new dealer — dealCardRequired).
 export const GET = withErrorHandler(
     async (_req: Request, ctx: { params: Promise<{ id: string }> }) => {
         const user = await requireRole(MUTATE_ROLES);
@@ -65,7 +66,10 @@ export const GET = withErrorHandler(
         if (!id) return errorResponse("Lead id required", 400);
         await assertOwner(id, user.id);
         const verdict = await isDealerOnboarded(id);
-        return successResponse({ dealer_onboarded: verdict, deal_card_required: dealCardRequiredFor(user.role) });
+        return successResponse({
+            dealer_onboarded: verdict,
+            deal_card_required: dealCardRequired({ role: user.role, dealerOnboarded: verdict.onboarded }),
+        });
     },
 );
 
@@ -78,15 +82,22 @@ export const POST = withErrorHandler(
 
         await assertOwner(id, user.id);
 
+        // ID 186 (18 Oct): decided again on the server — a client that skips
+        // the card for a brand-new dealer is refused. Only quote events need
+        // the onboarded check.
+        const isQuote = body.event_type === "quote_issue" || body.event_type === "quote_revision";
+        const requireDealCard = isQuote
+            ? dealCardRequired({ role: user.role, dealerOnboarded: (await isDealerOnboarded(id)).onboarded })
+            : false;
+
         const outcome = await createLeadCommercial({
             leadId: id,
             actor: { id: user.id, name: user.name ?? user.email ?? null, role: user.role ?? null },
             body,
-            // ID 172: a quote from Update commercials carries the deal card —
-            // ID 186 (16 Oct): for new and onboarded dealers alike; ISR, ASM
-            // and Sales Head may leave it empty, any other role must fill it.
-            // The WhatsApp Assistant does not ask yet.
-            requireDealCard: dealCardRequiredFor(user.role),
+            // ID 172 / 186: a brand-new dealer's quote carries the deal card;
+            // for an onboarded dealer ISR, ASM and Sales Head may leave it
+            // empty. The WhatsApp Assistant applies the same rule.
+            requireDealCard,
         });
         // Draft PDF, paired touchpoint and notifications — after the commit.
         await outcome.afterCommit();

@@ -107,8 +107,8 @@ export type CreateCommercialArgs = {
     body: CommercialInput;
     /**
      * ID 172: refuse a quote issue / revision without a deal card. ID 186
-     * (16 Oct): the caller sets it from the actor's role (dealCardRequiredFor)
-     * — new and onboarded dealers alike.
+     * (18 Oct): the caller sets it with dealCardRequired({ role,
+     * dealerOnboarded }) — always for a brand-new dealer.
      */
     requireDealCard?: boolean;
     /** Defaults to now — the instant the quote is stamped and judged. */
@@ -166,18 +166,20 @@ export async function createLeadCommercial(
         // CEO approved a quote, or the dealer said yes): then it carries the
         // locked one, and a different card is refused — only the Sales Head
         // changes it (POST …/deal-card). Terms events copy the quote's card.
-        // ID 186 (16 Oct): the same for an already onboarded dealer; the card
-        // is optional for ISR / ASM / Sales Head (requireDealCard false).
+        // ID 186 (18 Oct): required for a brand-new dealer; for an already
+        // onboarded dealer ISR / ASM / Sales Head may skip it — the caller
+        // decides with dealCardRequired (requireDealCard). A locked card
+        // satisfies the requirement: the quote carries it anyway.
         const cardColumns = body.event_type === "brochure_share" ? false : await hasDealCardColumns(tx);
         let dealCard: DealCard | null = null;
         if (isGatedQuoteEvent(body.event_type)) {
-            if (args.requireDealCard && !body.deal_card) {
+            const locked = cardColumns ? await readLockedDealCard(tx, id) : null;
+            if (args.requireDealCard && !body.deal_card && !locked) {
                 throw new CommercialInputError(
-                    "Fill the deal card: onboarding fee, batteries per month and finance files per month.",
+                    "This dealer is not onboarded yet: fill the deal card — onboarding fee, batteries per month and finance files per month.",
                     400,
                 );
             }
-            const locked = cardColumns ? await readLockedDealCard(tx, id) : null;
             const canEdit = (DEAL_CARD_EDIT_ROLES as readonly string[]).includes(actor.role ?? "");
             if (locked && body.deal_card && !canEdit && !sameDealCard(locked.card, body.deal_card)) {
                 throw new CommercialInputError(

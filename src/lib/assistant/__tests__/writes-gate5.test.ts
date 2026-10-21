@@ -26,11 +26,12 @@ const claimLead = vi.fn<(...a: unknown[]) => Promise<unknown>>(async () => ({ ok
 vi.mock("@/lib/inside-sales/claimLead", () => ({ claimLead }));
 // The visit route's notice (12 Oct) — sent after commit by log_visit too.
 const notifyLeadPerson = vi.fn<(...a: unknown[]) => Promise<void>>(async () => {});
-const lastTransferredBy = vi.fn<(...a: unknown[]) => Promise<string | null>>(async () => "isr-9");
+// ID 179: the visit route's recipients — the owner at the transfer and the presser.
+const transferWatchers = vi.fn<(...a: unknown[]) => Promise<string[]>>(async () => ["isr-9"]);
 vi.mock("@/lib/leads/newOwnerNotice", async (orig) => ({
     ...(await orig<typeof import("@/lib/leads/newOwnerNotice")>()),
     notifyLeadPerson,
-    lastTransferredBy,
+    transferWatchers,
 }));
 
 const { toolsFor } = await import("../registry");
@@ -351,11 +352,16 @@ describe("gate 5 appliers (run inside the executor's transaction)", () => {
         // After commit: the same notice the visit route sends, to whoever transferred the lead.
         expect(notifyLeadPerson).not.toHaveBeenCalled();
         await after.afterCommit!();
-        expect(lastTransferredBy).toHaveBeenCalledWith("DL-1042");
+        expect(transferWatchers).toHaveBeenCalledWith("DL-1042");
         expect(notifyLeadPerson).toHaveBeenCalledWith({
             userId: "isr-9", actorId: "asm-1", leadId: "DL-1042", type: "lead.visit_update", title: "Field visit done",
             message: "{by} visited {lead} — outcome: productive. owner Ramesh",
         });
+        // ID 179: a manager pressed Transfer — the rep who owned the lead is told too.
+        transferWatchers.mockResolvedValueOnce(["isr-9", "sh-1"]);
+        notifyLeadPerson.mockClear();
+        await after.afterCommit!();
+        expect(notifyLeadPerson.mock.calls.map((c) => (c[0] as { userId: string }).userId)).toEqual(["isr-9", "sh-1"]);
         // A visit that didn't happen sends nothing (the route notifies visited / scheduled only).
         const missed = await apply("log_visit", ASM, { ...visitPlan, visit_status: "no_show", visit_outcome: null, visit_date: null, interest: null });
         expect(missed.afterCommit).toBeUndefined();
