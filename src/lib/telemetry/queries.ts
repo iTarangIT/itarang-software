@@ -384,8 +384,14 @@ export async function fetchDeviceGPS(deviceId: string, hours = 24) {
     `;
 }
 
-export async function fetchDeviceTrips(deviceId: string, limit = 20) {
+/**
+ * `sinceHours` (ID 181): only trips that started within that many hours —
+ * the dealer's 7-day cap (vehicleAccessRules.tripWindowHours). null = no cap.
+ */
+export async function fetchDeviceTrips(deviceId: string, limit = 20, sinceHours: number | null = null) {
     const iot = getIotSql();
+    const since =
+        sinceHours != null ? iot`AND time > now() - (interval '1 hour' * ${sinceHours})` : iot``;
     return iot`
         SELECT
             vehicleno AS device_id,
@@ -402,6 +408,7 @@ export async function fetchDeviceTrips(deviceId: string, limit = 20) {
             avg_speed_kph
         FROM trips
         WHERE vehicleno = ${deviceId}
+          ${since}
         ORDER BY time DESC
         LIMIT ${limit}
     `;
