@@ -8,6 +8,7 @@ import { useMemo } from "react";
 import { SortableTh, sortRows, useTableSort, type SortSpec } from "@/components/shared/TableSort";
 import type { InterestLevel, SalesDashboardSections, SalesSpocBlock } from "@/lib/admin/salesDashboardTypes";
 import { batteryReading, type BatteryReading } from "@/lib/admin/batteryReading";
+import { freshRepeatSplit } from "@/lib/visits/freshRepeat";
 
 const fmt = (n: number) => n.toLocaleString("en-IN");
 const inr = (n: number) => `₹${n.toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
@@ -17,6 +18,9 @@ type Row = {
     name: string;
     role: string;
     visits: number;
+    /** ID 185: the person's first visit to the dealer / a later one. Fresh + Repeat = Visits. */
+    fresh_visits: number;
+    repeat_visits: number;
     unique_visits: number;
     new_visits: number;
     calls: number;
@@ -34,6 +38,8 @@ type Row = {
 const SPECS: SortSpec<Row>[] = [
     { key: "name", type: "text" },
     { key: "visits", type: "number" },
+    { key: "fresh_visits", type: "number" },
+    { key: "repeat_visits", type: "number" },
     { key: "unique_visits", type: "number" },
     { key: "new_visits", type: "number" },
     { key: "calls", type: "number" },
@@ -54,6 +60,8 @@ function toRow(b: SalesDashboardSections & { spoc_id: string; name: string | nul
         name: b.name ?? "(unknown user)",
         role: b.role ?? "",
         visits: b.totals.visits,
+        fresh_visits: freshRepeatSplit(b.totals).fresh,
+        repeat_visits: freshRepeatSplit(b.totals).repeat,
         unique_visits: b.totals.unique_visits,
         new_visits: b.totals.new_visits,
         calls: b.totals.calls,
@@ -107,7 +115,8 @@ export function SalesPerRepTable({
                     row to see that person alone. Unassigned is everything that belongs to no one —
                     leads with no owner, calls with no linked caller, invoices of dealer accounts
                     with no owner — so the rows add up to the figures above. AI dialer calls are
-                    not counted as calls.
+                    not counted as calls. Visits = Fresh (the person&apos;s first visit to that dealer) +
+                    Repeat; New = the dealer&apos;s first visit by anyone (new to iTarang).
                 </p>
             </div>
             <div className="overflow-x-auto border-t border-border">
@@ -116,8 +125,10 @@ export function SalesPerRepTable({
                         <tr>
                             <SortableTh label="Name" sortKey="name" sort={sort} onToggle={toggle} className="px-4 text-left" />
                             {num("visits", "Visits")}
+                            {num("fresh_visits", "Fresh")}
+                            {num("repeat_visits", "Repeat")}
                             {num("unique_visits", "Unique")}
-                            {num("new_visits", "New")}
+                            {num("new_visits", "New to iTarang")}
                             {num("calls", "Calls")}
                             {num("hot", "Hot")}
                             {num("warm", "Warm")}
@@ -132,7 +143,7 @@ export function SalesPerRepTable({
                     <tbody className="divide-y divide-border">
                         {rows.length === 0 && (
                             <tr>
-                                <td colSpan={13} className="px-4 py-8 text-center text-ink-muted">
+                                <td colSpan={15} className="px-4 py-8 text-center text-ink-muted">
                                     No rep activity in this range.
                                 </td>
                             </tr>
@@ -156,6 +167,8 @@ export function SalesPerRepTable({
                                     <div className="text-[11px] text-ink-muted">{r.role || "—"}</div>
                                 </td>
                                 <td className="px-4 py-2 text-right tabular-nums">{fmt(r.visits)}</td>
+                                <td className="px-4 py-2 text-right tabular-nums">{fmt(r.fresh_visits)}</td>
+                                <td className="px-4 py-2 text-right tabular-nums">{fmt(r.repeat_visits)}</td>
                                 <td className="px-4 py-2 text-right tabular-nums">{fmt(r.unique_visits)}</td>
                                 <td className="px-4 py-2 text-right tabular-nums">{fmt(r.new_visits)}</td>
                                 <td className="px-4 py-2 text-right tabular-nums">{fmt(r.calls)}</td>
@@ -178,6 +191,8 @@ export function SalesPerRepTable({
                                     <div className="text-[11px]">{rest.role}</div>
                                 </td>
                                 <td className="px-4 py-2 text-right tabular-nums">{fmt(rest.visits)}</td>
+                                <td className="px-4 py-2 text-right tabular-nums">{fmt(rest.fresh_visits)}</td>
+                                <td className="px-4 py-2 text-right tabular-nums">{fmt(rest.repeat_visits)}</td>
                                 <td className="px-4 py-2 text-right tabular-nums">{fmt(rest.unique_visits)}</td>
                                 <td className="px-4 py-2 text-right tabular-nums">{fmt(rest.new_visits)}</td>
                                 <td className="px-4 py-2 text-right tabular-nums">{fmt(rest.calls)}</td>

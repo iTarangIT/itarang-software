@@ -128,6 +128,12 @@ interface Quotation {
   dealer_decision_at: string | null;
   /** ID 78 — withdrawn by the sales team after release. Optional: a cached page may predate it. */
   withdrawn_at?: string | null;
+  /**
+   * 18 Oct row 23 — working hours waited for the CEO (to the decision, or to
+   * now), the ceo_quote_approval limit of the day it was sent, and whether
+   * the wait is past it. null for auto-approved quotes.
+   */
+  approval_wait?: { hours: number; limit: number; past: boolean } | null;
   /** ID 78 — an open quote whose product reference price changed since issue. */
   price_changed_since_issue?: boolean;
 }
@@ -672,6 +678,14 @@ export function QuotationApprovalsPanel() {
                     <p className="text-[11px] font-medium text-gray-400">
                       {history && rejected ? "rejected" : "released"}{" "}
                       {waitedFor(q.approved_at ?? q.created_at)} ago
+                    </p>
+                  ) : q.approval_wait ? (
+                    <p
+                      className={`text-[11px] font-medium ${q.approval_wait.past ? "text-rose-600" : "text-amber-600"}`}
+                      title={`Waiting ${waitedFor(q.created_at)} in clock time. Limit: ${q.approval_wait.limit} working hours (Admin › Time limits).`}
+                    >
+                      waiting {q.approval_wait.hours} working h
+                      {q.approval_wait.past ? ` · past the ${q.approval_wait.limit} h limit` : ` of ${q.approval_wait.limit} h`}
                     </p>
                   ) : (
                     <p className="text-[11px] font-medium text-amber-600">

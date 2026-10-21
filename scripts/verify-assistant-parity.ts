@@ -129,6 +129,9 @@ async function main() {
         for (const k of ["visits", "unique_visits", "new_visits", "calls", "converted"] as const) {
             if (act[k] !== dash.totals[k]) fail(u, `my_numbers ${k} ${act[k]} ≠ dashboard ${dash.totals[k]}`);
         }
+        // ID 185: Fresh = the dashboard's, and Fresh + Repeat = Visits.
+        if (act.fresh_visits !== Math.min(dash.totals.fresh_visits ?? 0, dash.totals.visits)) fail(u, `my_numbers fresh_visits ${act.fresh_visits} ≠ dashboard ${dash.totals.fresh_visits}`);
+        if (act.fresh_visits + act.repeat_visits !== act.visits) fail(u, `my_numbers fresh + repeat ≠ visits`);
 
         // 6. search_lead by phone, typed with a country code.
         if (firstPhone) {

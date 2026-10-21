@@ -33,7 +33,8 @@ import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { writeTouchpoint } from "@/lib/touchpoints/write";
 import { TIME_LIMIT_DEFAULTS } from "@/lib/timeLimits/registry";
-import { getTimeLimits } from "@/lib/timeLimits/store";
+import { getTimeLimits, hasTimeLimitTable, limitOnDaySql } from "@/lib/timeLimits/store";
+import { workingDaysSinceSql } from "@/lib/calendar/holidays";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -106,9 +107,9 @@ export function createdByHandReason(origin: string | null | undefined): SalesRea
 }
 
 /**
- * A sales-ready lead waiting this many days or more is overdue — the CEO
- * card's number. DEFAULT only: the live value is the ID 85 time limit
- * sales_ready_unassigned (getTimeLimits()).
+ * The old single limit (sales_ready_unassigned, calendar days) — kept only as
+ * the record of what was in force before the 18 Oct rework. Nothing counts
+ * against it now: see readyPastLimitSql().
  */
 export const AWAITING_ASSIGNMENT_OVERDUE_DAYS = TIME_LIMIT_DEFAULTS.sales_ready_unassigned;
 
@@ -134,12 +135,13 @@ export function awaitingAssignment(dl: SQL = sql`dl`): SQL {
 export const READY_NO_OWNER_TITLE = "Ready leads with no owner";
 
 /**
- * ID 184 — the card's split, one bucket per lead (no overlap): Hot wins, then
- * AI-qualified, then everything else (rep-created, NeoDove, inbound, …).
+ * ID 184 — the card's split, one bucket per lead (no overlap). Decided 21 Oct:
+ * AI-qualified first, then Hot (only when not AI-qualified), then everything
+ * else (rep-created, NeoDove, inbound, …). The order here is the order shown.
  */
-export const READY_SPLITS = ["hot", "ai", "other"] as const;
+export const READY_SPLITS = ["ai", "hot", "other"] as const;
 export type ReadySplit = (typeof READY_SPLITS)[number];
-export const READY_SPLIT_LABEL: Record<ReadySplit, string> = { hot: "Hot", ai: "AI qualified", other: "other" };
+export const READY_SPLIT_LABEL: Record<ReadySplit, string> = { ai: "AI qualified", hot: "Hot", other: "other" };
 
 export function isReadySplit(v: unknown): v is ReadySplit {
     return typeof v === "string" && (READY_SPLITS as readonly string[]).includes(v);
@@ -147,14 +149,14 @@ export function isReadySplit(v: unknown): v is ReadySplit {
 
 /** JS twin of readySplitSql(). */
 export function readySplitOf(interestLevel: string | null | undefined, reason: string | null | undefined): ReadySplit {
-    if (String(interestLevel ?? "").toLowerCase() === "hot") return "hot";
-    return reason === "ai_qualified" ? "ai" : "other";
+    if (reason === "ai_qualified") return "ai";
+    return String(interestLevel ?? "").toLowerCase() === "hot" ? "hot" : "other";
 }
 
 /** The split bucket of a lead, as SQL text 'hot' | 'ai' | 'other'. */
 export function readySplitSql(dl: SQL = sql`dl`): SQL {
-    return sql`CASE WHEN lower(COALESCE(${dl}.interest_level, '')) = 'hot' THEN 'hot'
-                    WHEN (to_jsonb(${dl}) ->> 'sales_ready_reason') = 'ai_qualified' THEN 'ai'
+    return sql`CASE WHEN (to_jsonb(${dl}) ->> 'sales_ready_reason') = 'ai_qualified' THEN 'ai'
+                    WHEN lower(COALESCE(${dl}.interest_level, '')) = 'hot' THEN 'hot'
                     ELSE 'other' END`;
 }
 
@@ -170,50 +172,128 @@ export function awaitingSince(dl: SQL = sql`dl`): SQL {
                  '-infinity'::timestamptz))`;
 }
 
-/** Whole days the lead has been waiting — since awaitingSince(). */
+/**
+ * Working days the lead has been waiting — since awaitingSince(), on the
+ * office calendar (working weekdays, holidays off; 18 Oct rework 1). Same
+ * count as the ready_assign clock's limit.
+ */
 export function daysAwaitingAssignment(dl: SQL = sql`dl`): SQL {
-    return sql`FLOOR(EXTRACT(EPOCH FROM (now() - ${awaitingSince(dl)})) / 86400)::int`;
+    return workingDaysSinceSql(awaitingSince(dl));
+}
+
+/** Is the lead Hot (the split's rule)? */
+const isHot = (dl: SQL) => sql`lower(COALESCE(${dl}.interest_level, '')) = 'hot'`;
+
+/**
+ * THE "past its limit" rule for a lead awaiting assignment (18 Oct rework 1):
+ *   Hot      a running hot_assign clock past hot_ready_to_assigned (working
+ *            hours — read from lead_clocks; without E-350 nothing is past)
+ *   others   more working days waiting than ready_to_assigned in force on
+ *            the day the wait began (default 2) — what the ready_assign
+ *            clock records as "Limit passed"
+ * `clocks` = lead_limit_events exists (E-350); `withTable` = hasTimeLimitTable().
+ */
+export function readyPastLimitSql(opts: { clocks: boolean; withTable: boolean }, dl: SQL = sql`dl`): SQL {
+    const hotPast = opts.clocks
+        ? sql`EXISTS (SELECT 1 FROM lead_clocks hc
+                       WHERE hc.dealer_lead_id = ${dl}.id AND hc.clock = 'hot_assign'
+                         AND hc.first_attempt_at IS NULL AND hc.ended_at IS NULL AND hc.limit_passed_at IS NOT NULL)`
+        : sql`FALSE`;
+    const limit = limitOnDaySql("ready_to_assigned", sql`((${awaitingSince(dl)}) AT TIME ZONE 'Asia/Kolkata')::date`, opts.withTable);
+    return sql`(CASE WHEN ${isHot(dl)} THEN ${hotPast} ELSE ${daysAwaitingAssignment(dl)} > FLOOR(${limit}) END)`;
+}
+
+/** readyPastLimitSql with the probes done. */
+export async function readyPastLimit(dl: SQL = sql`dl`): Promise<SQL> {
+    const { hasLimitEvents } = await import("@/lib/leads/clocks");
+    const [clocks, withTable] = await Promise.all([hasLimitEvents(), hasTimeLimitTable()]);
+    return readyPastLimitSql({ clocks, withTable }, dl);
 }
 
 export type AwaitingAssignmentCounts = {
     /** Every lead awaiting assignment. */
     total: number;
-    /** Of those, waiting `overdueDays` or more. */
+    /** Of those, past their limit (Hot: hot_ready_to_assigned; others: ready_to_assigned). */
     overdue: number;
-    /** The sales_ready_unassigned limit the count used (ID 85), in days. */
+    /** …Hot leads past hot_ready_to_assigned. */
+    hotPast: number;
+    /** …other leads past ready_to_assigned. */
+    otherPast: number;
+    /** The ready_to_assigned limit in force today (working days). */
     overdueDays: number;
-    /** The longest wait, in days; null when nothing is waiting. */
+    /** The hot_ready_to_assigned limit in force today (working hours). */
+    hotLimitHours: number;
+    /** The longest wait, in working days; null when nothing is waiting. */
     oldestDays: number | null;
-    /** ID 184 — Hot / AI qualified / other; sums to `total`. */
+    /** The longest wait of a lead that is not Hot, in working days. */
+    oldestOtherDays: number | null;
+    /** ID 184 — AI qualified / Hot / other (AI first); sums to `total`. */
     split: Record<ReadySplit, number>;
 };
 
-/** The numbers every surface shows. Never throws — a failure reads as zero. */
-export async function countAwaitingAssignment(): Promise<AwaitingAssignmentCounts> {
-    const overdueDays = (await getTimeLimits()).sales_ready_unassigned;
+/**
+ * ID 184 — the Sales dashboard's state filter on a ready lead (`dl`). Ready
+ * leads have no owner, so the person / team filters do not narrow them — the
+ * card counts by state only, and so does the page it opens.
+ */
+function readyStateSql(state: string | null | undefined): SQL {
+    const s = state?.trim();
+    return s ? sql`AND lower(trim(dl.state)) = lower(trim(${s}))` : sql``;
+}
+
+/** The numbers every surface shows. Never throws — a failure reads as zero. `state` = the dashboard's state filter. */
+export async function countAwaitingAssignment(opts: { state?: string | null } = {}): Promise<AwaitingAssignmentCounts> {
+    const limits = await getTimeLimits();
+    const empty: AwaitingAssignmentCounts = {
+        total: 0,
+        overdue: 0,
+        hotPast: 0,
+        otherPast: 0,
+        overdueDays: limits.ready_to_assigned,
+        hotLimitHours: limits.hot_ready_to_assigned,
+        oldestDays: null,
+        oldestOtherDays: null,
+        split: { hot: 0, ai: 0, other: 0 },
+    };
     try {
+        const past = await readyPastLimit();
         const [r] = (await db.execute(sql`
             SELECT COUNT(*)::int AS total,
-                   COUNT(*) FILTER (WHERE ${daysAwaitingAssignment()} >= ${overdueDays})::int AS overdue,
+                   COUNT(*) FILTER (WHERE ${past} AND ${isHot(sql`dl`)})::int AS hot_past,
+                   COUNT(*) FILTER (WHERE ${past} AND NOT ${isHot(sql`dl`)})::int AS other_past,
                    MAX(${daysAwaitingAssignment()}) AS oldest,
+                   MAX(${daysAwaitingAssignment()}) FILTER (WHERE NOT ${isHot(sql`dl`)}) AS oldest_other,
                    COUNT(*) FILTER (WHERE ${readySplitSql()} = 'hot')::int AS hot,
                    COUNT(*) FILTER (WHERE ${readySplitSql()} = 'ai')::int AS ai
               FROM dealer_leads dl
-             WHERE ${awaitingAssignment()}
-        `)) as unknown as Array<{ total: number; overdue: number; oldest: number | null; hot: number; ai: number }>;
+             WHERE ${awaitingAssignment()} ${readyStateSql(opts.state)}
+        `)) as unknown as Array<{
+            total: number;
+            hot_past: number;
+            other_past: number;
+            oldest: number | null;
+            oldest_other: number | null;
+            hot: number;
+            ai: number;
+        }>;
         const total = Number(r?.total ?? 0);
         const hot = Number(r?.hot ?? 0);
         const ai = Number(r?.ai ?? 0);
+        const hotPast = Number(r?.hot_past ?? 0);
+        const otherPast = Number(r?.other_past ?? 0);
         return {
+            ...empty,
             total,
-            overdue: Number(r?.overdue ?? 0),
-            overdueDays,
+            overdue: hotPast + otherPast,
+            hotPast,
+            otherPast,
             oldestDays: r?.oldest == null ? null : Number(r.oldest),
+            oldestOtherDays: r?.oldest_other == null ? null : Number(r.oldest_other),
             split: { hot, ai, other: total - hot - ai },
         };
     } catch (e) {
         console.warn("[salesReady] count failed:", e instanceof Error ? e.message : e);
-        return { total: 0, overdue: 0, overdueDays, oldestDays: null, split: { hot: 0, ai: 0, other: 0 } };
+        return empty;
     }
 }
 
@@ -226,7 +306,10 @@ export type ReadyToAssignRow = {
     interest_level: string | null;
     sales_ready_at: string;
     sales_ready_reason: string | null;
+    /** Working days waiting. */
     days_waiting: number;
+    /** Past its limit (readyPastLimitSql). */
+    past_limit: boolean;
 };
 
 /**
@@ -236,21 +319,33 @@ export type ReadyToAssignRow = {
  * the number it showed.
  */
 export async function listReadyToAssign(
-    opts: { minDays?: number; limit?: number; split?: ReadySplit } = {},
+    opts: { minDays?: number; limit?: number; split?: ReadySplit; pastLimit?: "hot" | "other" | "any"; state?: string | null } = {},
 ): Promise<ReadyToAssignRow[]> {
     const limit = opts.limit ?? 500;
     const minDays = Math.max(0, Math.floor(opts.minDays ?? 0));
     try {
+        const past = await readyPastLimit();
+        const pastCond =
+            opts.pastLimit === "hot"
+                ? sql`AND ${past} AND ${isHot(sql`dl`)}`
+                : opts.pastLimit === "other"
+                  ? sql`AND ${past} AND NOT ${isHot(sql`dl`)}`
+                  : opts.pastLimit === "any"
+                    ? sql`AND ${past}`
+                    : sql``;
         return (await db.execute<ReadyToAssignRow>(sql`
             SELECT dl.id, COALESCE(dl.dealer_name, dl.shop_name) AS dealer_name, dl.city, dl.state,
                    dl.lead_status, dl.interest_level,
                    (to_jsonb(dl) ->> 'sales_ready_at') AS sales_ready_at,
                    (to_jsonb(dl) ->> 'sales_ready_reason') AS sales_ready_reason,
-                   ${daysAwaitingAssignment()} AS days_waiting
+                   ${daysAwaitingAssignment()} AS days_waiting,
+                   ${past} AS past_limit
               FROM dealer_leads dl
              WHERE ${awaitingAssignment()}
                ${minDays > 0 ? sql`AND ${daysAwaitingAssignment()} >= ${minDays}` : sql``}
                ${opts.split ? sql`AND ${readySplitSql()} = ${opts.split}` : sql``}
+               ${pastCond}
+               ${readyStateSql(opts.state)}
              ORDER BY ${awaitingSince()} ASC
              LIMIT ${limit}
         `)) as unknown as ReadyToAssignRow[];

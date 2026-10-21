@@ -67,7 +67,32 @@ export type NeedsAttentionRow = {
     visit_overdue: boolean;
     /** ID 192 — at or past the holder's idle limit. False for a row listed only because its visit is overdue. */
     past_idle: boolean;
+    /**
+     * ID 192 — which date the idle count runs from (FOLLOW_UP_AGEING_BASIS):
+     * a passed follow-up, the holder getting the lead (handover), the last
+     * work, or — with none of those — the lead's creation.
+     */
+    counted_from: CountedFrom;
+    /** That date. */
+    counted_from_at: string | null;
 };
+
+export type CountedFrom = "follow_up" | "handed_over" | "last_worked" | "created";
+
+export const COUNTED_FROM_LABEL: Record<CountedFrom, string> = {
+    follow_up: "Follow-up",
+    handed_over: "Handed over",
+    last_worked: "Last worked",
+    created: "Created",
+};
+
+/** Which candidate FOLLOW_UP_AGEING_BASIS picked — the "Counted from" column. Over the alias `dl`. */
+const COUNTED_FROM_SQL = sql`(CASE
+        WHEN dl.next_follow_up_at IS NOT NULL AND dl.next_follow_up_at <= NOW() + ${sql.raw(`INTERVAL '${FOLLOW_UP_HORIZON_DAYS} days'`)}
+             AND dl.next_follow_up_at = ${FOLLOW_UP_AGEING_BASIS} THEN 'follow_up'
+        WHEN dl.last_worked_at IS NOT NULL AND dl.last_worked_at = ${FOLLOW_UP_AGEING_BASIS} THEN 'last_worked'
+        WHEN dl.assigned_at IS NOT NULL AND dl.assigned_at = ${FOLLOW_UP_AGEING_BASIS} THEN 'handed_over'
+        ELSE 'created' END)`;
 
 // ID 74 — Won is open but waits on onboarding, not on the rep: not "idle".
 const OPEN_LIST = sql.raw(WORKABLE_STATUSES.map((s) => `'${s}'`).join(", "));
@@ -104,6 +129,8 @@ function baseQuery(opts: Opts, limits: TimeLimits, transferLimit: SQL): SQL {
                    dl.lead_status,
                    dl.interest_level,
                    ${DAYS_IDLE}::int                             AS days_idle,
+                   ${COUNTED_FROM_SQL}                           AS counted_from,
+                   ${IDLE_BASIS}                                 AS counted_from_at,
                    dl.last_worked_at,
                    dl.next_follow_up_at,
                    ${PARKED_SQL}                                 AS far_follow_up,
@@ -154,6 +181,10 @@ export async function listNeedsAttention(
         non_responsive: Boolean(r.non_responsive),
         visit_overdue: Boolean(r.visit_overdue),
         past_idle: Boolean(r.past_idle),
+        counted_from: (["follow_up", "handed_over", "last_worked", "created"].includes(String(r.counted_from))
+            ? String(r.counted_from)
+            : "created") as CountedFrom,
+        counted_from_at: r.counted_from_at ? new Date(r.counted_from_at as string).toISOString() : null,
     }));
 }
 

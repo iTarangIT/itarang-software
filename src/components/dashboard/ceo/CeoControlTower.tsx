@@ -103,14 +103,23 @@ export function CeoControlTower({ windowQs }: { windowQs: string }) {
             <Row n={1} title="Needs your attention">
                 {x ? (
                     <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6">
-                        <Exception label="Quotes waiting for your approval" count={x.quotes_pending} />
                         <Exception
-                            label={`Ready leads with no owner (${x.unassigned_overdue_days}+ days)`}
+                            label="Quotes waiting for your approval"
+                            count={x.quotes_pending}
+                            href="/ceo/quotations"
+                            extra={
+                                x.quotes_pending && x.quotes_pending_oldest_hours != null
+                                    ? `oldest ${x.quotes_pending_oldest_hours} working h · ${num(x.quotes_pending_past ?? 0)} past ${x.quote_approval_limit_hours ?? 4} h`
+                                    : undefined
+                            }
+                        />
+                        <Exception
+                            label={`Ready leads with no owner, past the limit (Hot ${x.unassigned_hot_limit_hours ?? 9} working h, others ${x.unassigned_overdue_days} working days)`}
                             count={x.unassigned_over_7d}
-                            href={`/admin/ready-to-assign?min_days=${x.unassigned_overdue_days}`}
+                            href="/admin/ready-to-assign?past=any"
                             extra={
                                 x.awaiting_assignment_total != null
-                                    ? `${num(x.awaiting_assignment_total)} in all${x.awaiting_assignment_split ? ` · ${num(x.awaiting_assignment_split.hot)} Hot · ${num(x.awaiting_assignment_split.ai)} AI · ${num(x.awaiting_assignment_split.other)} other` : ""}`
+                                    ? `${num(x.unassigned_hot_past ?? 0)} Hot · ${num(x.unassigned_other_past ?? 0)} others past · ${num(x.awaiting_assignment_total)} in all${x.awaiting_assignment_split ? ` · ${num(x.awaiting_assignment_split.ai)} AI · ${num(x.awaiting_assignment_split.hot)} Hot · ${num(x.awaiting_assignment_split.other)} other` : ""}`
                                     : undefined
                             }
                         />

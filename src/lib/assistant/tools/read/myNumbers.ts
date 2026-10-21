@@ -14,6 +14,7 @@ import { z } from "zod";
 import { buildSalesDashboard, type SalesDashboard } from "@/lib/admin/salesDashboard";
 import { listTargets, type TargetRow } from "@/lib/targets/service";
 import { monthEnd, TARGET_METRICS, type TargetMetric } from "@/lib/targets/rules";
+import { freshRepeatSplit } from "@/lib/visits/freshRepeat";
 import type { AssistantUser, ToolResult } from "../../types";
 import { istNow } from "../../prompt";
 import { defineTool, type ToolFactory } from "../spec";
@@ -25,9 +26,12 @@ import { performanceUrl } from "../leads";
  * what buildSalesDashboard / the targets service actually count.
  */
 export const METRIC_DEFINITIONS: Readonly<Record<string, string>> = Object.freeze({
-    visits: "visits you completed (an actual visit date logged), counted on the actual visit date — one per dealer per day",
+    visits: "visits you completed (marked visited), counted on the actual visit date — one per dealer per day; visits = fresh + repeat",
+    // ID 185 — the one Fresh / Repeat rule (src/lib/visits/freshRepeat.ts), as the Sales dashboard and daily email.
+    fresh_visits: "your FIRST visit to that dealer (a dealer new to iTarang is fresh too) — part of visits",
+    repeat_visits: "a later visit by you to a dealer you had visited before — visits minus fresh",
     unique_visits: "distinct dealers you visited in the period (a dealer visited twice counts once)",
-    new_visits: "dealers whose first-ever visit was in the period",
+    new_visits: "new to iTarang: dealers whose first visit by ANYONE was in the period (part of fresh)",
     planned_visits: "your open visits (not visited, cancelled or no-show) scheduled for today / the next 7 days — as of now",
     calls: "calls you made yourself in the period (AI-dialer calls NOT counted); a NeoDove call re-dispositioned within 3 minutes counts once",
     converted: "leads closed as Converted in the period while you held them",
@@ -88,6 +92,8 @@ export function shapeNumbers(
         as_of: dashboard.as_of_date,
         activity: {
             visits: dashboard.totals.visits,
+            fresh_visits: freshRepeatSplit(dashboard.totals).fresh,
+            repeat_visits: freshRepeatSplit(dashboard.totals).repeat,
             unique_visits: dashboard.totals.unique_visits,
             new_visits: dashboard.totals.new_visits,
             calls: dashboard.totals.calls,
@@ -158,6 +164,8 @@ export function shapeNumbers(
         // One definition for every figure returned above.
         definitions: {
             visits: METRIC_DEFINITIONS.visits,
+            fresh_visits: METRIC_DEFINITIONS.fresh_visits,
+            repeat_visits: METRIC_DEFINITIONS.repeat_visits,
             unique_visits: METRIC_DEFINITIONS.unique_visits,
             new_visits: METRIC_DEFINITIONS.new_visits,
             calls: METRIC_DEFINITIONS.calls,
@@ -176,7 +184,7 @@ export const myNumbers: ToolFactory = () =>
         name: "my_numbers",
         kind: "read",
         description:
-            "The user's own numbers for a month: activity (visits, calls, conversions), hot/warm/cold leads, and each " +
+            "The user's own numbers for a month: activity (visits split into fresh / repeat, of which new to iTarang; calls, conversions), hot/warm/cold leads, and each " +
             "target with its pro-rated month-to-date value and RAG. Always say which definition a figure uses.",
         schema: z.object({
             period: z.enum(["this_month", "last_month"]).default("this_month"),

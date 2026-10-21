@@ -11,6 +11,7 @@ import { hasAccountOwnershipTables } from "@/lib/accounts/tables";
 import { countLeadsForExport, fetchLeadsForExport } from "@/lib/admin/leadsExport";
 import { BUYBACK_ADMIN_ROLES } from "@/lib/buyback/roles";
 import { matchedUnion, REVENUE_NOT_VOID, REVENUE_OUTSTANDING } from "@/lib/dashboard/revenueSource";
+import { hasInvoiceLedgerTables } from "@/lib/sales/ledgerTables";
 import { ACCOUNT_BUCKET_LABELS, ACCOUNT_BUCKETS, type AccountBucket } from "@/lib/dealers/accountHealthRules";
 import { INVENTORY_STATUSES } from "@/lib/inventory/status";
 import { capabilitiesFor } from "@/lib/leads/access";
@@ -22,10 +23,14 @@ import { countEvents, fetchEvents, type EventLogFilters } from "@/lib/leads/even
 import { LEAD_EVENT_TYPES, parseEventTypes } from "@/lib/leads/eventTypes";
 import { parseLeadListFilters } from "@/lib/leads/leadListParams";
 import { hasLeadClocks } from "@/lib/leads/clocks";
-import { workingDaysSince as officeWorkingDaysSince } from "@/lib/calendar/officeCalendar";
-import { loadOfficeCalendar } from "@/lib/calendar/holidays";
-import type { OfficeHoursArg } from "@/lib/calendar/officeHours";
-import { getTimeLimits } from "@/lib/timeLimits/store";
+import { loadOfficeCalendar, workingDaysBetweenSql } from "@/lib/calendar/holidays";
+import { workingHoursBetween } from "@/lib/leads/workingHours";
+import { idleDays } from "@/lib/leads/idle";
+import { idlePastLimitSql } from "@/lib/leads/idleLimit";
+import { effectiveDoorSql } from "@/lib/leads/leadSourceDoorSql";
+import { READY_NO_OWNER_TITLE, READY_SPLIT_LABEL, READY_SPLITS } from "@/lib/leads/salesReady";
+import { freshRepeatJoins, isFreshSql, isNewToItarangSql, visitedRowSql } from "@/lib/visits/freshRepeat";
+import { getTimeLimits, hasTimeLimitTable, limitOnDay, limitOnDaySql } from "@/lib/timeLimits/store";
 import { doorLabel, LEAD_DOOR_LABEL, LEAD_DOORS, originLabel, scrapeRunLabels, SOURCE_DOOR_NONE } from "@/lib/leads/leadSourceVocab";
 import { fetchScrapeRunFacets } from "@/lib/leads/acquisitionCampaigns";
 import { CAMPAIGN_NONE, CAMPAIGN_SYSTEM_LABEL } from "@/lib/leads/campaign";
@@ -134,14 +139,6 @@ function dateRange(params: URLSearchParams, expr: SQL): SQL {
 
 // ───────────────────────────────── Leads ────────────────────────────────────
 
-/** Working days on the office calendar (Mon–Sat, holidays off) from the day after `since` to today. */
-function workingDaysSince(since: unknown, holidays: ReadonlySet<string>, hours?: OfficeHoursArg): number | null {
-    if (!since) return null;
-    const d = new Date(String(since));
-    if (Number.isNaN(d.getTime())) return null;
-    return officeWorkingDaysSince(d, new Date(), holidays, hours);
-}
-
 /**
  * The Leads columns the lead list itself does not carry, by lead id. Columns
  * added by E-314 and later are read through to_jsonb, so a database without
@@ -154,7 +151,9 @@ async function leadExtras(ids: string[]): Promise<Map<string, Record<string, unk
         // ID 86 — first attempt / contact and the time-limit flags come from the
         // lead clocks (calls AND visits, E-337); without them, the old
         // calls-only rule.
-        const [clocks, { holidays, hours }] = await Promise.all([hasLeadClocks(), loadOfficeCalendar()]);
+        const [clocks, { holidays, hours }, tl] = await Promise.all([hasLeadClocks(), loadOfficeCalendar(), hasTimeLimitTable()]);
+        // 18 Oct row 35 — the ONE idle rule (idleLimit.ts): idle_cc / idle_asm by the holder's role.
+        const idlePast = idlePastLimitSql({ withTable: tl });
         const firstTouch = clocks
             ? sql`
               LEFT JOIN LATERAL (
@@ -183,7 +182,7 @@ async function leadExtras(ids: string[]): Promise<Map<string, Record<string, unk
             SELECT dl.id AS lead_id,
                    x.j ->> 'gstin' AS gstin,
                    x.j ->> 'created_at' AS created_on,
-                   x.j ->> 'source_door' AS source_door,
+                   ${effectiveDoorSql(sql`dl`)} AS source_door,
                    x.j ->> 'source_origin' AS source_origin,
                    (SELECT ac.name FROM acquisition_campaigns ac
                      WHERE ac.id::text = x.j ->> 'acquisition_campaign_id') AS campaign,
@@ -210,7 +209,8 @@ async function leadExtras(ids: string[]): Promise<Map<string, Record<string, unk
                    acct.activated_at AS account_activated_on,
                    CASE WHEN dl.lead_status = 'Lost' THEN x.j ->> 'closed_at' END AS lost_on,
                    x.j ->> 'lost_reason' AS lost_reason,
-                   x.j ->> 'competitor_name' AS competitor
+                   x.j ->> 'competitor_name' AS competitor,
+                   CASE WHEN ${idlePast} THEN 'Yes' WHEN dl.current_owner_id IS NOT NULL THEN 'No' END AS idle_past_limit
               FROM dealer_leads dl
              CROSS JOIN LATERAL (SELECT to_jsonb(dl) AS j) x
               LEFT JOIN users ou ON ou.id::text = x.j ->> 'current_owner_id'
@@ -245,7 +245,23 @@ async function leadExtras(ids: string[]): Promise<Map<string, Record<string, unk
                 owner_role: ((r.owner_role as string | null) ?? "").replace(/_/g, " ") || null,
                 // The score column defaults to 0; a lead the AI never scored shows blank, not 0.
                 ai_score: r.ai_band || Number(r.ai_score) > 0 ? r.ai_score : null,
-                idle_working_days: closed ? null : workingDaysSince(r.last_worked_on ?? r.assigned_on ?? created, holidays, hours),
+                idle_past_limit: closed ? null : (r.idle_past_limit ?? null),
+                // ID 192: the Leads list / Needs Attention rule (FOLLOW_UP_AGEING_BASIS) —
+                // the later of last worked, the holder's assignment and a follow-up
+                // within 30 days, else created; a follow-up still ahead reads 0.
+                idle_working_days: closed
+                    ? null
+                    : idleDays(
+                          {
+                              last_worked_at: (r.last_worked_on as string | null) ?? null,
+                              assigned_at: (r.assigned_on as string | null) ?? null,
+                              next_follow_up_at: (r.next_follow_up as string | null) ?? null,
+                              created_at: created,
+                          },
+                          Date.now(),
+                          new Set(holidays),
+                          hours,
+                      ),
             });
         }
     } catch (e) {
@@ -293,6 +309,16 @@ const leads: Dataset = {
         },
         { key: "campaign", label: "Campaign", type: "select", options: [{ value: CAMPAIGN_NONE, label: "Not in a campaign" }] },
         { key: "scrape_run", label: "Scrape run", type: "select", options: [] },
+        // ID 184 — the Ready to assign list (awaitingAssignment(): sales-ready, no
+        // owner, open, number not dead) and its card split, same params as the
+        // Leads list (parseLeadListFilters reads ready_no_owner / ready_split).
+        { key: "ready_no_owner", label: `${READY_NO_OWNER_TITLE} only`, type: "select", options: yesNo },
+        {
+            key: "ready_split",
+            label: "Ready leads: AI qualified / Hot / other (with the filter above)",
+            type: "select",
+            options: READY_SPLITS.map((k) => ({ value: k, label: k === "other" ? "Other" : READY_SPLIT_LABEL[k] })),
+        },
     ],
     async loadFilterOptions() {
         const [campaigns, runs] = await Promise.all([fetchCampaignFacets(), fetchScrapeRunFacets()]);
@@ -337,7 +363,7 @@ const leads: Dataset = {
                 { key: "last_invoice", header: "Last invoice", meaning: "Date of the latest matched invoice.", kind: "date" },
                 { key: "gstin", header: "GSTIN", meaning: "GSTIN on the lead, when one was recorded." },
                 { key: "created_on", header: "Created on", meaning: "When the lead was created.", kind: "datetime" },
-                { key: "source_door", header: "Door", meaning: "How the lead came in (the lead-source door)." },
+                { key: "source_door", header: "Door", meaning: "How the lead came in (the lead-source door): the door stamped on the lead, else the one its older source field implies — the same as the Leads list." },
                 { key: "source_origin", header: "Origin", meaning: "Where behind that door it came from." },
                 { key: "campaign", header: "Campaign", meaning: "The acquisition campaign, when the lead belongs to one.", width: 24 },
                 { key: "created_by", header: "Created by", meaning: "Who created the lead. Blank on leads created before this was recorded.", width: 22 },
@@ -347,7 +373,7 @@ const leads: Dataset = {
                 { key: "assigned_on", header: "Assigned on", meaning: "When the lead was assigned to its owner.", kind: "datetime" },
                 { key: "first_attempt_on", header: "First attempt on", meaning: "Lead clock (ID 86): the first call or visit by anyone after the lead became sales-ready, connected or not.", kind: "datetime" },
                 { key: "first_contact_on", header: "First contact on", meaning: "Lead clock: the first call that connected or visit marked visited.", kind: "datetime" },
-                { key: "hours_to_first_attempt", header: "Working hours to first attempt", meaning: "Lead clock: working hours (Mon–Sat 10:00–19:00, holidays off) from sales-ready to the first attempt.", kind: "number" },
+                { key: "hours_to_first_attempt", header: "Working hours to first attempt", meaning: "Lead clock: working hours (office hours in Admin › Time limits, holidays off) from sales-ready to the first attempt.", kind: "number" },
                 { key: "hours_to_first_contact", header: "Working hours to first contact", meaning: "Lead clock: working hours from sales-ready to the first contact.", kind: "number" },
                 { key: "lead_limit_passed", header: "Lead first-attempt limit passed", meaning: "Yes when no call or visit came within the lead first-attempt limit in force that day (Admin › Time limits)." },
                 { key: "owner_clock_from", header: "Current owner since", meaning: "Owner clock: when the current owner got the lead.", kind: "datetime" },
@@ -356,7 +382,8 @@ const leads: Dataset = {
                 { key: "owner_limit_passed", header: "Owner first-attempt limit passed", meaning: "Yes when the current owner did not call or visit within the owner first-attempt limit." },
                 { key: "owner_inferred", header: "Owner start inferred", meaning: "Yes when no assignment record exists and the owner clock starts from the lead's assigned date instead." },
                 { key: "last_worked_on", header: "Last worked on", meaning: "The last time someone worked the lead.", kind: "datetime" },
-                { key: "idle_working_days", header: "Idle working days", meaning: "Working days (Mon–Sat, holidays off) since it was last worked, else since it was assigned or created.", kind: "number" },
+                { key: "idle_working_days", header: "Idle working days", meaning: "Working days on the office calendar (holidays off) the current holder has let it sit: counted from the latest of when it was last worked, when the holder got it and a follow-up date up to 30 days ahead, else from when it was created. A follow-up still ahead reads 0. The same count as the Leads list and Needs Attention.", kind: "number" },
+                { key: "idle_past_limit", header: "Idle past limit", meaning: "Yes when the idle working days are at or past the holder's idle limit in Admin › Time limits (inside sales: 'No work on a lead held by inside sales'; ASM: '… held by an ASM') — the Needs Attention rule. Blank for closed leads and leads with no owner." },
                 { key: "next_follow_up", header: "Next follow-up", meaning: "The follow-up date set on the lead.", kind: "datetime" },
                 { key: "ai_band", header: "AI band", meaning: "Qualified, Warm, Cold or Disqualified, from the AI call." },
                 { key: "ai_score", header: "AI score", meaning: "The AI intent score.", kind: "number" },
@@ -390,7 +417,9 @@ const leads: Dataset = {
                 { key: "visitor", header: "Visited by", meaning: "The ASM on the visit.", width: 22 },
                 { key: "visit_status", header: "Status", meaning: "Scheduled, completed, cancelled." },
                 { key: "visit_outcome", header: "Outcome", meaning: "The visit outcome logged.", width: 24 },
-                { key: "new_visit", header: "First visit", meaning: "Yes when this is the dealer's first completed visit; No for a repeat." },
+                // ID 185 — the shared Fresh / Repeat rule (src/lib/visits/freshRepeat.ts), visited rows only.
+                { key: "new_visit", header: "First visit", meaning: "New to iTarang: Yes when this is the dealer's first visit by anyone (status visited); No for a later one. Blank when the row is not a visit (scheduled, cancelled, no-show)." },
+                { key: "fresh_for_rep", header: "Fresh for this rep", meaning: "Yes when this is this person's first visit to the dealer (a dealer new to iTarang is also fresh); No = a repeat visit by the same person. Blank when the row is not a visit." },
                 { key: "visit_remarks", header: "Remarks", meaning: "What the ASM wrote.", width: 50 },
             ],
         },
@@ -431,11 +460,11 @@ const leads: Dataset = {
                 SELECT v.dealer_lead_id AS lead_id,
                        COALESCE(v.actual_visit_date, v.scheduled_date) AS visit_date,
                        u.name AS visitor, v.visit_status, v.visit_outcome, v.visit_remarks,
-                       (v.actual_visit_date IS NOT NULL AND v.actual_visit_date = (
-                            SELECT MIN(f.actual_visit_date) FROM lead_visits f
-                             WHERE f.dealer_lead_id = v.dealer_lead_id AND f.actual_visit_date IS NOT NULL)) AS new_visit
+                       CASE WHEN ${visitedRowSql("v")} THEN ${isNewToItarangSql("v")} END AS new_visit,
+                       CASE WHEN ${visitedRowSql("v")} THEN ${isFreshSql("v")} END AS fresh_for_rep
                   FROM lead_visits v
                   LEFT JOIN users u ON u.id::text = v.asm_id
+                  ${freshRepeatJoins("v", true)}
                  WHERE v.dealer_lead_id IN ${jsonIds(ids)}
                  ORDER BY v.dealer_lead_id, visit_date
             `),
@@ -908,13 +937,18 @@ const leadEvents: Dataset = {
                 { key: "outcome", header: "Outcome", meaning: "Call or visit outcome, or the lost reason on a status change.", width: 24 },
                 { key: "duration_sec", header: "Seconds", meaning: "Call duration, when recorded.", kind: "number" },
                 { key: "remarks", header: "Remarks", meaning: "What was written on the event.", width: 50 },
-                { key: "hours_since_sales_ready", header: "Hours since sales-ready", meaning: "Hours from the lead becoming sales-ready to this event. Blank when the lead was never marked sales-ready, or the event came first.", kind: "number" },
+                { key: "hours_since_sales_ready", header: "Working hours since sales-ready", meaning: "Working hours (office hours in Admin › Time limits, holidays off) from the lead becoming sales-ready to this event — the lead clock's time. Blank when the lead was never marked sales-ready, or the event came first.", kind: "number" },
                 // ID 35 — the clocks running when the event happened (E-337 lead_clocks).
                 { key: "lead_clock_started_at", header: "Lead clock started", meaning: "When the lead's clock (sales-ready → first call or visit by anyone) started, if it had started by this event. Blank = no lead clock yet.", kind: "datetime" },
                 { key: "lead_limit_passed", header: "Lead limit passed", meaning: "Had the lead clock passed its limit by this event: No, or Yes with when (IST). Blank = no lead clock.", width: 22 },
                 { key: "owner_clock_started_at", header: "Owner clock started", meaning: "When the clock of the owner holding the lead at this event started (their assignment → their first call or visit). Blank = no owner clock covers the event.", kind: "datetime" },
                 { key: "owner_limit_passed", header: "Owner limit passed", meaning: "Had that owner clock passed its limit by this event: No, or Yes with when (IST). Blank = no owner clock.", width: 22 },
                 { key: "owner_inferred", header: "Owner inferred", meaning: "Yes = that owner was inferred from the lead's assigned date because no assignment record exists (back-filled). Blank = no owner clock." },
+                // 18 Oct row 36 — which event stopped each clock.
+                { key: "lead_first_attempt", header: "Lead's first attempt", meaning: "Yes = this call or visit is the lead's first attempt by anyone after it became sales-ready (it stopped the lead clock)." },
+                { key: "lead_first_contact", header: "Lead's first contact", meaning: "Yes = this is the lead's first connected call or visit marked visited after it became sales-ready." },
+                { key: "owner_first_attempt", header: "Owner's first attempt", meaning: "Yes = this call or visit is the first by the owner holding the lead (it stopped the owner clock)." },
+                { key: "owner_first_contact", header: "Owner's first contact", meaning: "Yes = this is that owner's first connected call or visit marked visited." },
             ],
         },
     ],
@@ -922,7 +956,7 @@ const leadEvents: Dataset = {
         return countEvents(await eventFilters(ctx));
     },
     async build(ctx) {
-        const events = await fetchEvents(await eventFilters(ctx));
+        const [events, cal] = await Promise.all([fetchEvents(await eventFilters(ctx)), loadOfficeCalendar()]);
         return [
             {
                 ...this.sheets[0],
@@ -930,7 +964,9 @@ const leadEvents: Dataset = {
                   // IST wall-clock text from SQL → an instant the file can show as IST.
                   const ist = (t: string | null | undefined) => (t ? `${t.replace(" ", "T").slice(0, 19)}+05:30` : null);
                   const at = ist(e.event_at);
-                  const gap = at && e.sales_ready_at ? (new Date(at).getTime() - new Date(e.sales_ready_at).getTime()) / 3_600_000 : null;
+                  // 18 Oct row 36: working hours on the office calendar, like the lead clock.
+                  const ready = e.sales_ready_at ? new Date(e.sales_ready_at) : null;
+                  const gap = at && ready && new Date(at) >= ready ? workingHoursBetween(ready, new Date(at), cal.holidays, cal.hours) : null;
                   return {
                     ...e,
                     event_at: at,
@@ -1091,7 +1127,9 @@ const visits: Dataset = {
                 { key: "meeting_mode", header: "Mode", meaning: "Ground, calling or WhatsApp." },
                 { key: "visit_status", header: "Status", meaning: "Scheduled, visited, and so on." },
                 { key: "visit_outcome", header: "Outcome", meaning: "The visit outcome logged.", width: 24 },
-                { key: "new_visit", header: "First visit", meaning: "Yes when this is the dealer's first completed visit; No for a repeat." },
+                // ID 185 — the shared Fresh / Repeat rule (src/lib/visits/freshRepeat.ts), visited rows only.
+                { key: "new_visit", header: "First visit", meaning: "New to iTarang: Yes when this is the dealer's first visit by anyone (status visited); No for a later one. Blank when the row is not a visit (scheduled, cancelled, no-show)." },
+                { key: "fresh_for_rep", header: "Fresh for this rep", meaning: "Yes when this is this person's first visit to the dealer (a dealer new to iTarang is also fresh); No = a repeat visit by the same person. Blank when the row is not a visit." },
                 { key: "visit_remarks", header: "Remarks", meaning: "What the ASM wrote.", width: 50 },
                 { key: "next_visit_date", header: "Next visit", meaning: "The next visit date set on this visit.", kind: "date" },
                 { key: "photos", header: "Photos", meaning: "Number of photos attached.", kind: "number" },
@@ -1099,7 +1137,8 @@ const visits: Dataset = {
                 { key: "transferred_on", header: "Transferred on", meaning: "When the lead was last handed to an ASM.", kind: "datetime" },
                 { key: "transferred_by", header: "Transferred by", meaning: "Who handed it over.", width: 22 },
                 { key: "owner_at_transfer", header: "Lead owner at transfer", meaning: "ID 179: who owned the lead when it was handed over — the person 'Hot to field' is credited to (Transferred by, on old rows that did not record it). Blank = nobody owned it (a bulk assign of an unowned lead), so no one is credited.", width: 22 },
-                { key: "days_transfer_to_visit", header: "Days from transfer to visit", meaning: "Calendar days from that transfer to this visit. Blank when the visit is not done or came before the transfer.", kind: "number" },
+                { key: "days_transfer_to_visit", header: "Working days from transfer to visit", meaning: "Working days (office calendar, holidays off) after the day of that transfer up to the visit day. Blank when the visit is not done or came before the transfer.", kind: "number" },
+                { key: "transfer_visit_within_limit", header: "Visit within the field-visit limit", meaning: "Yes when those working days are within the first-visit limit in force on the transfer day (Admin › Time limits); No when past it. Blank when the visit is not done or came before the transfer." },
                 // IDs 85 / 86 — the field-visit (transfer) clock covering this visit.
                 { key: "visit_limit_days", header: "Field-visit limit (working days)", meaning: "Transfer clock (ID 86): the first-visit limit in force on the day of the transfer this visit answers. Blank = no transfer clock.", kind: "number" },
                 { key: "visit_limit_passed", header: "Field-visit limit passed", meaning: "No, or Yes with when (IST): the first visit after that transfer came after the limit, or has not come. Blank = no transfer clock." , width: 22 },
@@ -1133,21 +1172,26 @@ const visits: Dataset = {
                         WHEN tc.limit_passed_at IS NULL THEN 'No'
                         ELSE 'Yes · ' || to_char(tc.limit_passed_at AT TIME ZONE 'Asia/Kolkata', 'DD Mon YYYY HH24:MI') END AS visit_limit_passed`
             : sql`NULL::int AS visit_limit_days, NULL::text AS visit_limit_passed`;
+        // 18 Oct row 37 — working days on the office calendar, judged by the
+        // limit in force on the transfer's day.
+        const transferToVisitDays = workingDaysBetweenSql(sql`tr.performed_at`, sql`((v.actual_visit_date + TIME '10:00') AT TIME ZONE 'Asia/Kolkata')`);
+        const visitLimitOnTransferDay = (await limitOnDay("asm_transfer_first_visit"))(sql`(tr.performed_at AT TIME ZONE 'Asia/Kolkata')::date`);
         const data = await rows(sql`
             SELECT COALESCE(v.actual_visit_date, v.scheduled_date) AS visit_date, v.scheduled_date,
                    v.dealer_lead_id AS lead_id,
                    COALESCE(dl.dealer_name, dl.shop_name) AS dealer, dl.city, dl.state,
                    u.name AS visitor, v.meeting_mode, v.visit_status, v.visit_outcome,
-                   (v.actual_visit_date IS NOT NULL AND v.actual_visit_date = (
-                        SELECT MIN(f.actual_visit_date) FROM lead_visits f
-                         WHERE f.dealer_lead_id = v.dealer_lead_id AND f.actual_visit_date IS NOT NULL)) AS new_visit,
+                   CASE WHEN ${visitedRowSql("v")} THEN ${isNewToItarangSql("v")} END AS new_visit,
+                   CASE WHEN ${visitedRowSql("v")} THEN ${isFreshSql("v")} END AS fresh_for_rep,
                    v.visit_remarks, v.next_visit_date,
                    CASE WHEN jsonb_typeof(v.photos) = 'array' THEN jsonb_array_length(v.photos) ELSE 0 END AS photos,
                    CASE WHEN v.gps_check_in_lat IS NOT NULL AND v.gps_check_in_lng IS NOT NULL
                         THEN v.gps_check_in_lat::text || ', ' || v.gps_check_in_lng::text END AS location_pin,
                    tr.performed_at AS transferred_on, tr.name AS transferred_by, tr.owner_name AS owner_at_transfer,
                    CASE WHEN v.actual_visit_date >= (tr.performed_at AT TIME ZONE 'Asia/Kolkata')::date
-                        THEN v.actual_visit_date - (tr.performed_at AT TIME ZONE 'Asia/Kolkata')::date END AS days_transfer_to_visit,
+                        THEN ${transferToVisitDays} END AS days_transfer_to_visit,
+                   CASE WHEN v.actual_visit_date >= (tr.performed_at AT TIME ZONE 'Asia/Kolkata')::date
+                        THEN CASE WHEN ${transferToVisitDays} <= ${visitLimitOnTransferDay} THEN 'Yes' ELSE 'No' END END AS transfer_visit_within_limit,
                    ${clockCols},
                    replace(dl.lead_status, '_', ' ') AS lead_status_now, dl.interest_level AS interest_now,
                    dl.next_follow_up_at AS next_follow_up, dl.last_disposition, ou.name AS owner_now
@@ -1155,6 +1199,7 @@ const visits: Dataset = {
               LEFT JOIN dealer_leads dl ON dl.id = v.dealer_lead_id
               LEFT JOIN users u ON u.id::text = v.asm_id
               LEFT JOIN users ou ON ou.id::text = dl.current_owner_id
+              ${freshRepeatJoins("v", true)}
               ${clockJoin}
               LEFT JOIN LATERAL (
                   -- HANDOVER-A31: the transferCredit() rule — no previous owner on a recorded move = nobody.
@@ -1282,7 +1327,7 @@ const quotes: Dataset = {
                 { key: "approved_at", header: "Decided on", meaning: "When it was approved or rejected.", kind: "datetime" },
                 { key: "approval_wait_hours", header: "Approval wait (hours)", meaning: "Hours from raising the quote to the decision.", kind: "number" },
                 // IDs 85 / 86 — the CEO quote-approval clock (E-350).
-                { key: "approval_working_hours", header: "Approval wait (working hours)", meaning: "CEO quote-approval clock: working hours (Mon–Sat 10:00–19:00, holidays off) from the quote reaching the CEO to the decision. Blank for auto-approved quotes and before E-350.", kind: "number" },
+                { key: "approval_working_hours", header: "Approval wait (working hours)", meaning: "CEO quote-approval clock: working hours (office hours in Admin › Time limits, holidays off) from the quote reaching the CEO to the decision. Blank for auto-approved quotes and before E-350.", kind: "number" },
                 { key: "approval_limit_passed", header: "Approval limit passed", meaning: "No, or Yes with when (IST): the CEO decided after the limit (Admin › Time limits), or has not decided. Blank for auto-approved quotes.", width: 22 },
                 { key: "rejection_reason", header: "Rejection reason", meaning: "Why it was rejected, when it was.", width: 36 },
                 { key: "delivered_at", header: "Delivered on", meaning: "First successful send of the quotation to the dealer.", kind: "datetime" },
@@ -1292,6 +1337,15 @@ const quotes: Dataset = {
                 { key: "dealer_decision_via", header: "Answered through", meaning: "How the answer reached us." },
                 { key: "withdrawn_at", header: "Withdrawn on", meaning: "When the quote was withdrawn, if it was.", kind: "datetime" },
                 { key: "withdraw_reason", header: "Withdrawal reason", meaning: "Why it was withdrawn.", width: 30 },
+                // 18 Oct row 38 — the waits after approval, each against its limit (Admin › Time limits).
+                { key: "approved_to_delivered_wh", header: "Approved → delivered (working hours)", meaning: "Clock 'Approved quote not delivered': working hours from the approval to the first successful send. Blank when not approved, not yet sent, or approved before sends were recorded.", kind: "number" },
+                { key: "delivery_limit_passed", header: "Delivery limit passed", meaning: "No, or Yes with when (IST): the quotation was not sent by the 'Approved quote: sent to the dealer' limit (default the same working day). Blank = not timed.", width: 22 },
+                { key: "delivered_to_answer_wd", header: "Delivered → dealer answer (working days)", meaning: "Working days after the day of the first send up to the dealer's answer — or up to today when there is no answer yet. Blank when not delivered.", kind: "number" },
+                { key: "answer_limit_passed", header: "Answer limit passed", meaning: "Yes when those working days are past 'Quote sent, no answer from the dealer' in force on the delivery day; else No. Blank when not delivered.", width: 18 },
+                { key: "dealer_yes_to_won_wd", header: "Dealer approved → Won (working days)", meaning: "Working days after the day the dealer approved up to the lead marked Won — or up to today when it is not Won yet. Blank unless the dealer approved.", kind: "number" },
+                { key: "won_limit_passed", header: "Won limit passed", meaning: "Yes when those working days are past 'Dealer said yes, lead not marked Won' in force on the day the dealer approved; else No.", width: 18 },
+                { key: "declined_to_revised_wd", header: "Declined → revised or Lost (working days)", meaning: "Clock 'Dealer declined, not revised or marked Lost': working days after the day of the decline up to a newer quote version or the lead marked Lost — or up to today when neither came. Blank unless the dealer declined.", kind: "number" },
+                { key: "revise_limit_passed", header: "Revise limit passed", meaning: "No, or Yes with when (IST): no newer version and not Lost within 'Dealer declined a quote: revised or marked Lost'. Blank unless declined (or before the clock exists on this server).", width: 22 },
             ],
         },
         {
@@ -1331,6 +1385,36 @@ const quotes: Dataset = {
                         WHEN qc.limit_passed_at IS NULL THEN 'No'
                         ELSE 'Yes · ' || to_char(qc.limit_passed_at AT TIME ZONE 'Asia/Kolkata', 'DD Mon YYYY HH24:MI') END AS approval_limit_passed`
             : sql`NULL::numeric AS approval_working_hours, NULL::text AS approval_limit_passed`;
+        // 18 Oct row 38 — the delivery and decline clocks (E-355), and the two
+        // waits judged in SQL on the office calendar by the limit of their day.
+        const tl = await hasTimeLimitTable();
+        const passedText = (alias: string) =>
+            sql.raw(`CASE WHEN ${alias}.limit_value IS NULL THEN NULL WHEN ${alias}.limit_passed_at IS NULL THEN 'No'
+                     ELSE 'Yes · ' || to_char(${alias}.limit_passed_at AT TIME ZONE 'Asia/Kolkata', 'DD Mon YYYY HH24:MI') END`);
+        const waitJoin = clocks
+            ? sql`LEFT JOIN lead_clocks qdc ON qdc.dealer_lead_id = c.dealer_lead_id AND qdc.clock = 'quote_deliver'
+                       AND qdc.started_at = date_trunc('milliseconds', COALESCE(c.approved_at, c.created_at))
+                  LEFT JOIN lead_clocks qrc ON qrc.dealer_lead_id = c.dealer_lead_id AND qrc.clock = 'quote_revise'
+                       AND qrc.started_at = date_trunc('milliseconds', c.dealer_decision_at)`
+            : sql``;
+        const wonAt = sql`(to_jsonb(dl) ->> 'won_at')::timestamptz`;
+        const answerDays = workingDaysBetweenSql(sql`qd.delivered_at`, sql`COALESCE(c.dealer_decision_at, NOW())`);
+        const wonDays = workingDaysBetweenSql(sql`c.dealer_decision_at`, sql`COALESCE(${wonAt}, NOW())`);
+        const waitCols = sql`
+                   CASE WHEN qd.delivered_at IS NOT NULL THEN ${answerDays} END AS delivered_to_answer_wd,
+                   CASE WHEN qd.delivered_at IS NOT NULL THEN
+                        CASE WHEN ${answerDays} > ${limitOnDaySql("quote_no_answer", sql`(qd.delivered_at AT TIME ZONE 'Asia/Kolkata')::date`, tl)} THEN 'Yes' ELSE 'No' END END AS answer_limit_passed,
+                   CASE WHEN c.dealer_decision = 'approved' AND c.dealer_decision_at IS NOT NULL THEN ${wonDays} END AS dealer_yes_to_won_wd,
+                   CASE WHEN c.dealer_decision = 'approved' AND c.dealer_decision_at IS NOT NULL THEN
+                        CASE WHEN ${wonDays} > ${limitOnDaySql("said_yes_not_won", sql`(c.dealer_decision_at AT TIME ZONE 'Asia/Kolkata')::date`, tl)} THEN 'Yes' ELSE 'No' END END AS won_limit_passed,
+                   ${clocks
+                       ? sql`ROUND((qdc.attempt_working_minutes / 60.0)::numeric, 1) AS approved_to_delivered_wh,
+                   ${passedText("qdc")} AS delivery_limit_passed,
+                   CASE WHEN c.dealer_decision = 'declined' AND c.dealer_decision_at IS NOT NULL
+                        THEN ${workingDaysBetweenSql(sql`c.dealer_decision_at`, sql`COALESCE(qrc.first_attempt_at, NOW())`)} END AS declined_to_revised_wd,
+                   ${passedText("qrc")} AS revise_limit_passed`
+                       : sql`NULL::numeric AS approved_to_delivered_wh, NULL::text AS delivery_limit_passed,
+                   NULL::int AS declined_to_revised_wd, NULL::text AS revise_limit_passed`}`;
         const [quoteRows, lineRows] = await Promise.all([
             rows(sql`
                 SELECT c.quote_number, c.version_no, c.is_current, c.dealer_lead_id AS lead_id,
@@ -1354,10 +1438,12 @@ const quotes: Dataset = {
                        (to_jsonb(c) ->> 'expected_batteries_per_month')::int AS expected_batteries_per_month,
                        (to_jsonb(c) ->> 'expected_finance_files_per_month')::int AS expected_finance_files_per_month,
                        ${actualCols},
-                       ${qcCols}
+                       ${qcCols},
+                       ${waitCols}
                   ${quoteFrom}
                   ${actualsJoin}
                   ${qcJoin}
+                  ${waitJoin}
                  WHERE ${quotesWhere(ctx)}
                  ORDER BY c.created_at DESC
                  LIMIT ${rowLimit(ctx)}
@@ -1490,7 +1576,9 @@ const targets: Dataset = {
 
 // ───────────────────────────────── Invoices ─────────────────────────────────
 
-const INVOICE_STATUSES = ["draft", "sent", "overdue", "paid", "partially_paid", "void"];
+// ID 71: 'credit_note' = a non-void credit note (revenueSource.ts, source 'credit').
+const INVOICE_STATUSES = ["draft", "sent", "overdue", "paid", "partially_paid", "void", "credit_note"];
+const INVOICE_SOURCES = ["drive", "zoho", "credit"];
 
 /**
  * The unioned invoices with their own table's extra columns, the dealer account
@@ -1507,12 +1595,14 @@ const INVOICE_STATUSES = ["draft", "sent", "overdue", "paid", "partially_paid", 
  *
  * `ownership` = the E-321 tables exist (hasAccountOwnershipTables). Without
  * them matchedUnion gives no account, and r.dealer_owner_id is the lead's
- * current owner.
+ * current owner. `ledger` = E-322 (hasInvoiceLedgerTables): credit_notes
+ * exists, and the union carries credit notes (source 'credit', ID 71).
  */
-const invoicesFrom = (src: SQL, ownership: boolean): SQL => sql`
+const invoicesFrom = (src: SQL, ownership: boolean, ledger: boolean): SQL => sql`
       FROM ${src} AS r
       LEFT JOIN sales_invoices si ON r.source = 'drive' AND si.id::text = r.id
       LEFT JOIN zoho_invoices zi ON r.source = 'zoho' AND zi.id::text = r.id
+      ${ledger ? sql`LEFT JOIN credit_notes cn ON r.source = 'credit' AND cn.id::text = r.id` : sql``}
       LEFT JOIN dealer_leads idl ON idl.id = r.dealer_lead_id
       LEFT JOIN accounts acct ON acct.id = r.account_id
       ${ownership ? sql`LEFT JOIN account_ownership iao ON iao.account_id = r.account_id` : sql``}
@@ -1534,7 +1624,7 @@ function invoicesWhere(ctx: RunContext): SQL {
     const status = ctx.params.get("status");
     conds.push(status && INVOICE_STATUSES.includes(status) ? sql`r.status = ${status}` : REVENUE_NOT_VOID);
     const source = ctx.params.get("source");
-    if (source === "zoho" || source === "drive") conds.push(sql`r.source = ${source}`);
+    if (source && INVOICE_SOURCES.includes(source)) conds.push(sql`r.source = ${source}`);
     const link = ctx.params.get("link");
     // "Linked" = a lead OR a dealer account matched the GSTIN (gstinMatch.ts),
     // the same rule the Sales invoices page and the data-health check count by.
@@ -1547,7 +1637,7 @@ function invoicesWhere(ctx: RunContext): SQL {
 const invoicesDataset: Dataset = {
     id: "invoices",
     label: "Invoices",
-    description: "One row per sales invoice, from the old Zoho books and the Vyapar PDFs in Google Drive, linked to its dealer on GSTIN. Void invoices are left out unless you pick that status.",
+    description: "One row per sales invoice, from the old Zoho books and the Vyapar PDFs in Google Drive, and one per credit note (a negative row), linked to its dealer on GSTIN. Void invoices are left out unless you pick that status.",
     roles: ["admin", "ceo"],
     dateFields: [
         { value: "invoice", label: "Invoice date" },
@@ -1557,7 +1647,12 @@ const invoicesDataset: Dataset = {
     background: true,
     filters: [
         { key: "status", label: "Status", type: "select", options: INVOICE_STATUSES.map((s) => ({ value: s, label: s.replace(/_/g, " ") })) },
-        { key: "source", label: "Source", type: "select", options: [{ value: "drive", label: "Drive (Vyapar)" }, { value: "zoho", label: "Zoho" }] },
+        {
+            key: "source",
+            label: "Source",
+            type: "select",
+            options: [{ value: "drive", label: "Drive (Vyapar)" }, { value: "zoho", label: "Zoho" }, { value: "credit", label: "Credit notes" }],
+        },
         { key: "link", label: "Linked to a dealer", type: "select", options: [{ value: "linked", label: "Linked" }, { value: "unlinked", label: "Not linked" }] },
     ],
     sheets: [
@@ -1567,7 +1662,7 @@ const invoicesDataset: Dataset = {
                 { key: "invoice_number", header: "Invoice no.", meaning: "Invoice number as printed." },
                 { key: "invoice_date", header: "Invoice date", meaning: "Date on the invoice.", kind: "date" },
                 { key: "due_date", header: "Due date", meaning: "Payment due date.", kind: "date" },
-                { key: "source", header: "Source", meaning: "'drive' = Vyapar PDF in Google Drive; 'zoho' = the old Zoho books." },
+                { key: "source", header: "Source", meaning: "'drive' = Vyapar PDF in Google Drive; 'zoho' = the old Zoho books; 'credit' = a credit note (money given back to the dealer), shown as a negative row." },
                 { key: "entity", header: "Entity", meaning: "The iTarang entity that raised it: Delhi or Haryana." },
                 { key: "customer_name", header: "Customer on invoice", meaning: "The name typed on the invoice.", width: 30 },
                 { key: "gstin", header: "Customer GSTIN", meaning: "GSTIN on the invoice. Zoho invoices mostly carry none." },
@@ -1578,12 +1673,18 @@ const invoicesDataset: Dataset = {
                 { key: "account", header: "Linked account", meaning: "The dealer account with this GSTIN, or the one that came from the linked lead.", width: 28 },
                 { key: "dealer_owner", header: "Dealer's owner today", meaning: "The linked dealer's current owner.", width: 22 },
                 { key: "owner_on_invoice_date", header: "Account owner on invoice date", meaning: "Who owned the linked account on the invoice date. Blank when the account had no recorded owner by then.", width: 24 },
-                { key: "sub_total", header: "Before GST (₹)", meaning: "Amount before GST. Drive (Vyapar) invoices only; Zoho rows carry the total alone.", kind: "money" },
-                { key: "tax_total", header: "GST (₹)", meaning: "GST on the invoice. Drive (Vyapar) invoices only.", kind: "money" },
-                { key: "total", header: "Total (₹)", meaning: "Invoice total including GST.", kind: "money" },
-                { key: "paid", header: "Paid (₹)", meaning: "Total minus balance.", kind: "money" },
-                { key: "balance", header: "Balance (₹)", meaning: "Still owed.", kind: "money" },
-                { key: "status", header: "Status", meaning: "Draft, sent, overdue, paid, partially paid or void." },
+                { key: "sub_total", header: "Before GST (₹)", meaning: "Amount before GST. Drive (Vyapar) invoices and credit notes (negative) only; Zoho rows carry the total alone.", kind: "money" },
+                { key: "tax_total", header: "GST (₹)", meaning: "GST on the invoice. Drive (Vyapar) invoices and credit notes (negative) only.", kind: "money" },
+                { key: "total", header: "Total (₹)", meaning: "Invoice total including GST. A credit note is negative, so summing the column gives revenue less credit notes, as the Revenue card does.", kind: "money" },
+                { key: "paid", header: "Paid (₹)", meaning: "Total minus balance. Always 0 on a credit note.", kind: "money" },
+                {
+                    key: "balance",
+                    header: "Balance (₹)",
+                    meaning:
+                        "Still owed on this invoice; a credit note's balance is its (negative) amount. The column does NOT add up to Money owed on the dashboards: Money owed nets each customer's credit notes against their unpaid invoices only (paid, void and draft invoices left out) and never goes below zero for a customer.",
+                    kind: "money",
+                },
+                { key: "status", header: "Status", meaning: "Draft, sent, overdue, paid, partially paid or void; 'credit_note' on a credit note that is not void." },
                 { key: "days_overdue", header: "Days overdue", meaning: "Days past the due date while a balance is still owed. Blank = not overdue.", kind: "number" },
                 { key: "paid_on", header: "Paid on", meaning: "Date of the latest payment recorded.", kind: "date" },
                 { key: "payment_reference", header: "Payment reference", meaning: "UTR or bank reference of the latest payment.", width: 24 },
@@ -1592,12 +1693,12 @@ const invoicesDataset: Dataset = {
         },
     ],
     async count(ctx) {
-        const [src, ownership] = await Promise.all([matchedUnion(), hasAccountOwnershipTables()]);
-        const [r] = await rows<{ n: number }>(sql`SELECT COUNT(*)::int AS n ${invoicesFrom(src, ownership)} WHERE ${invoicesWhere(ctx)}`);
+        const [src, ownership, ledger] = await Promise.all([matchedUnion(), hasAccountOwnershipTables(), hasInvoiceLedgerTables()]);
+        const [r] = await rows<{ n: number }>(sql`SELECT COUNT(*)::int AS n ${invoicesFrom(src, ownership, ledger)} WHERE ${invoicesWhere(ctx)}`);
         return Number(r?.n ?? 0);
     },
     async build(ctx) {
-        const [src, ownership] = await Promise.all([matchedUnion(), hasAccountOwnershipTables()]);
+        const [src, ownership, ledger] = await Promise.all([matchedUnion(), hasAccountOwnershipTables(), hasInvoiceLedgerTables()]);
         const data = await rows(sql`
             SELECT r.invoice_number, r.invoice_date, r.due_date, r.source,
                    CASE r.organization_id WHEN '60064046518' THEN 'Delhi' WHEN '60060919257' THEN 'Haryana'
@@ -1607,11 +1708,12 @@ const invoicesDataset: Dataset = {
                    to_jsonb(idl) ->> 'business_type' AS business_type,
                    acct.business_entity_name AS account,
                    ow.name AS dealer_owner, oh.name AS owner_on_invoice_date,
-                   si.sub_total, si.tax_total,
+                   ${ledger ? sql`COALESCE(si.sub_total, -cn.sub_total)` : sql`si.sub_total`} AS sub_total,
+                   ${ledger ? sql`COALESCE(si.tax_total, -cn.tax_total)` : sql`si.tax_total`} AS tax_total,
                    r.total, (COALESCE(r.total, 0) - COALESCE(r.balance, 0)) AS paid, r.balance, r.status,
                    CASE WHEN ${REVENUE_OUTSTANDING} AND r.due_date < ${IST_TODAY} THEN ${IST_TODAY} - r.due_date END AS days_overdue,
                    ${INVOICE_PAID_ON} AS paid_on, r.payment_reference, r.attention_reason
-              ${invoicesFrom(src, ownership)}
+              ${invoicesFrom(src, ownership, ledger)}
              WHERE ${invoicesWhere(ctx)}
              ORDER BY r.invoice_date DESC NULLS LAST
              LIMIT ${rowLimit(ctx)}

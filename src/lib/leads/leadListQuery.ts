@@ -62,6 +62,12 @@ export type LeadListRow = {
     assigned_at: string | null;
     /** The Idle column's follow-up leg (ID 192, followUpAgeing.ts). */
     next_follow_up_at: string | null;
+    /**
+     * ID 192 — the Idle number itself, counted in SQL by the SAME expression the
+     * idle filters use (IDLE_WORKING_DAYS_SQL: working days on the office
+     * calendar, holidays off), so the column always equals the filter.
+     */
+    idle_working_days?: number | null;
     created_at: string | null;
     visit_status: string | null;
     visit_outcome: string | null;
@@ -127,7 +133,7 @@ export type LeadListFilters = {
      * state exactly, as the card does.
      */
     readyNoOwner?: boolean;
-    /** With readyNoOwner: one of the card's buckets (Hot wins, then AI qualified). */
+    /** With readyNoOwner: one of the card's buckets (AI qualified first, then Hot, then other — ID 184). */
     readySplit?: ReadySplit | null;
     /**
      * Rep-set temperature — lower(interest_level) — the same field the ASM /
@@ -633,6 +639,7 @@ export async function fetchLeadListRows(
             dl.last_worked_at,
             dl.assigned_at,
             dl.next_follow_up_at,
+            ${IDLE_DAYS}::int AS idle_working_days,
             dl.created_at,
             lv.visit_status,
             lv.visit_outcome,

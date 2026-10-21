@@ -16,6 +16,8 @@
 // survives a refresh and can be shared.
 
 import { idleLimitLabel } from "@/lib/timeLimits/labels";
+import { shortOfficeHours, type OfficeHours } from "@/lib/calendar/officeHours";
+import { freshRepeatSplit } from "@/lib/visits/freshRepeat";
 import React from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
@@ -238,6 +240,22 @@ export function SalesHeadOpsView() {
     if (filters.state) actionQs.set("state", filters.state);
     if (filters.spoc_id) actionQs.set("spoc_id", filters.spoc_id);
     if (team !== "all") actionQs.set("team", team);
+    // ID 190: "Waiting for a field visit" follows the date filter (still waiting
+    // at the end of it, against the previous period of the same length).
+    actionQs.set("from", from);
+    actionQs.set("to", to);
+    // 18 Oct row 40 — the office hours in force, never a fixed "Mon–Sat 10–19".
+    const officeHoursQ = useQuery<{ data: { office_hours?: OfficeHours } }>({
+        queryKey: ["inside-sales-holidays-office-hours"],
+        queryFn: async () => {
+            const res = await fetch("/api/inside-sales/holidays", { cache: "no-store" });
+            if (!res.ok) throw new Error("Failed to load office hours");
+            return res.json();
+        },
+        staleTime: 60 * 60 * 1000,
+        retry: false,
+    });
+    const officeHoursText = shortOfficeHours(officeHoursQ.data?.data?.office_hours ?? undefined);
     const actions = useQuery<ActionSummary>({
         queryKey: ["sales-head-ops", "needs-action", actionQs.toString()],
         queryFn: () => getData(`/api/admin/reports/needs-action?${actionQs}`),
@@ -376,11 +394,10 @@ export function SalesHeadOpsView() {
     const atRisk = groups.reduce((a, g) => a + g.at_risk_90d, 0);
     // ID 148: live dealers only — a closed dealer needs no owner (summary groups are live already).
     const unowned = (health.data?.rows ?? []).filter((r) => !r.owner_id && r.bucket !== "closed").length;
-    const hot = d?.interest.rows.find((r) => r.interest_level === "hot");
-    const hotAged = hot ? hot.age_8_14 + hot.age_15_30 + hot.age_30_plus : 0;
     const hotQs = new URLSearchParams();
     if (filters.state) hotQs.set("state", filters.state);
     if (filters.spoc_id) hotQs.set("spoc_id", filters.spoc_id);
+    const readyQs = new URLSearchParams(hotQs);
 
     type Tile = React.ComponentProps<typeof ActionTile> & { key: string; n: number; ready: boolean };
     const a = actions.data;
@@ -400,21 +417,13 @@ export function SalesHeadOpsView() {
         href,
     });
     const tiles: Tile[] = [
-        actionTile("sales_ready", "Ready leads with no owner", "now", "/admin/ready-to-assign"),
+        // ID 184: the link carries the dashboard's state / person filters, so the page counts what the card counted.
+        actionTile("sales_ready", "Ready leads with no owner", "now", `/admin/ready-to-assign${readyQs.toString() ? `?${readyQs}` : ""}`),
         actionTile("hot_not_called", "Hot leads not called in time", "now"),
         actionTile("visit_overdue", "Waiting for a field visit", "now"),
         actionTile("won_undo_requests", "Undo Mark Won requests waiting", "now"),
-        {
-            key: "hot",
-            ready: Boolean(d),
-            n: hotAged,
-            severity: "now",
-            count: num(hotAged),
-            label: "Hot leads open more than 7 days",
-            sub: hot ? `${num(hot.total)} Hot leads open in all · ${num(hot.age_30_plus)} older than 30 days` : undefined,
-            // The count comes from the sales dashboard, which takes state and person but not team.
-            href: `/admin/reports/needs-action/hot_aged${hotQs.toString() ? `?${hotQs}` : ""}`,
-        },
+        // 18 Oct row 30: the tile counts the rows of the list it opens (salesHeadActions hotAged — one query).
+        actionTile("hot_aged", "Hot leads open more than 7 days", "now"),
         {
             key: "red",
             ready: Boolean(health.data),
@@ -450,9 +459,10 @@ export function SalesHeadOpsView() {
             count: num(idleTotal),
             label: "Idle leads",
             // Labelled from Admin › Time limits (ID 85 Decision 6), never fixed numbers.
+            // ID 192: the idle rule — no work, follow-up or handover (followUpAgeing.ts).
             sub: idle.data?.limits
-                ? `No work logged: ${idleLimitLabel(idle.data.limits)} · ${num(idleOver14)} at ${Math.floor(idle.data.limits.stale_critical)}+`
-                : `No work logged past the idle limit · ${num(idleOver14)} critical`,
+                ? `No work, follow-up or handover in ${idleLimitLabel(idle.data.limits)} · ${num(idleOver14)} at ${Math.floor(idle.data.limits.stale_critical)}+`
+                : `No work, follow-up or handover past the idle limit · ${num(idleOver14)} critical`,
             href: "/admin/reports/needs-attention",
         },
         actionTile("onboarding_stalled", "Onboarding stalled", "soon"),
@@ -745,8 +755,8 @@ export function SalesHeadOpsView() {
                     </div>
                 )}
                 <p className="text-xs text-ink-muted">
-                    Working hours for the hot-lead limit: Mon–Sat, 10:00–19:00 IST. Sales-ready leads with no owner are assigned on{" "}
-                    <Link href="/admin/ready-to-assign" className="font-semibold text-brand-sky hover:underline">
+                    Working hours for the hot-lead limit: {officeHoursText} IST, holidays off (Admin › Time limits). Sales-ready leads with no owner are assigned on{" "}
+                    <Link href={`/admin/ready-to-assign${readyQs.toString() ? `?${readyQs}` : ""}`} className="font-semibold text-brand-sky hover:underline">
                         Ready to Assign
                     </Link>
                     .
@@ -785,7 +795,7 @@ export function SalesHeadOpsView() {
                         const list = orderByTeam(score === "field" ? fieldPeople : insidePeople, managerOf);
                         const heads =
                             score === "field"
-                                ? ["Dealer visits", "New dealer visits", "Batteries sold", "KYC submitted", "Revenue"]
+                                ? ["Dealer visits", "Fresh / Repeat", "New dealer visits", "Batteries sold", "KYC submitted", "Revenue"]
                                 : ["Calls per day", "Engaged calls", "Hot leads to field", "Of which visited", "Quotes delivered"];
                         if (list.length === 0) return <NotAvailable empty reason="No one in this team has activity for these filters." />;
                         const isrOf = (id: string): IsrScore =>
@@ -795,7 +805,7 @@ export function SalesHeadOpsView() {
                         return (
                             <div className="overflow-x-auto">
                                 <div className="min-w-[900px]">
-                                    <div className={`grid grid-cols-[180px_repeat(5,minmax(0,1fr))_150px] gap-3 border-b border-border pb-2 ${TABLE_HEAD}`}>
+                                    <div className={`grid ${score === "field" ? "grid-cols-[180px_repeat(6,minmax(0,1fr))_150px]" : "grid-cols-[180px_repeat(5,minmax(0,1fr))_150px]"} gap-3 border-b border-border pb-2 ${TABLE_HEAD}`}>
                                         <span>Person</span>
                                         {heads.map((h) => (
                                             <span key={h}>{h}</span>
@@ -807,6 +817,12 @@ export function SalesHeadOpsView() {
                                             score === "field"
                                                 ? [
                                                       cell(p.spoc_id, "dealer_visits", p.totals.unique_visits),
+                                                      // ID 185: Fresh = this person's first visit to the dealer,
+                                                      // Repeat = a later one; Fresh + Repeat = visits (visited only).
+                                                      (() => {
+                                                          const fr = freshRepeatSplit(p.totals);
+                                                          return { actual: num(fr.fresh), target: null, pct: null, note: `${num(fr.repeat)} repeat` };
+                                                      })(),
                                                       cell(p.spoc_id, "new_dealer_visits", p.totals.new_visits),
                                                       batteryCell(p),
                                                       cell(p.spoc_id, "kyc_submitted", p.outcome.kyc_submitted),
@@ -839,7 +855,7 @@ export function SalesHeadOpsView() {
                                         return (
                                             <div
                                                 key={p.spoc_id}
-                                                className="grid min-h-[50px] grid-cols-[180px_repeat(5,minmax(0,1fr))_150px] items-center gap-3 border-b border-[#f1f4f7]"
+                                                className={`grid min-h-[50px] ${score === "field" ? "grid-cols-[180px_repeat(6,minmax(0,1fr))_150px]" : "grid-cols-[180px_repeat(5,minmax(0,1fr))_150px]"} items-center gap-3 border-b border-[#f1f4f7]`}
                                             >
                                                 <button
                                                     type="button"

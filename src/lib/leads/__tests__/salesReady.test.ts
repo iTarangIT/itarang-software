@@ -12,6 +12,7 @@ const {
     daysAwaitingAssignment,
     salesReadyReasonLabel,
     SALES_READY_REASONS,
+    READY_SPLITS,
     readySplitOf,
     readySplitSql,
 } = await import("../salesReady");
@@ -80,20 +81,24 @@ describe("Sales-ready reasons", () => {
     });
 });
 
-// ID 184: one bucket per lead so the card's parts add up — Hot wins.
+// ID 184: one bucket per lead so the card's parts add up — AI-qualified wins
+// (decided 21 Oct), Hot only when not AI-qualified.
 describe("readySplitOf / readySplitSql (ID 184)", () => {
-    it("puts a Hot lead in Hot even when the AI qualified it", () => {
-        expect(readySplitOf("Hot", "ai_qualified")).toBe("hot");
-        expect(readySplitOf("hot", "rep_created")).toBe("hot");
-    });
-    it("then AI qualified, then other", () => {
+    it("puts an AI-qualified lead in AI qualified even when it is Hot", () => {
+        expect(readySplitOf("Hot", "ai_qualified")).toBe("ai");
         expect(readySplitOf("warm", "ai_qualified")).toBe("ai");
         expect(readySplitOf(null, "ai_qualified")).toBe("ai");
+    });
+    it("then Hot, then other", () => {
+        expect(readySplitOf("hot", "rep_created")).toBe("hot");
         expect(readySplitOf("cold", "rep_created")).toBe("other");
         expect(readySplitOf(null, null)).toBe("other");
     });
-    it("SQL checks Hot before the reason", () => {
+    it("lists the buckets AI first", () => {
+        expect([...READY_SPLITS]).toEqual(["ai", "hot", "other"]);
+    });
+    it("SQL checks the reason before Hot", () => {
         const text = render(readySplitSql());
-        expect(text.indexOf("'hot'")).toBeLessThan(text.indexOf("'ai_qualified'"));
+        expect(text.indexOf("'ai_qualified'")).toBeLessThan(text.indexOf("'hot'"));
     });
 });

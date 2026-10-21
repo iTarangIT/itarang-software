@@ -15,7 +15,8 @@
 import { z } from "zod";
 import { businessTypeFilterParam } from "@/lib/leads/businessType";
 
-import { requireRole } from "@/lib/auth-utils";
+import { requireAuth } from "@/lib/auth-utils";
+import { needsActionAccess } from "@/lib/dashboard/needsActionAccess";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
 import { ECOFY_MANAGER_ROLES } from "@/lib/ecofy/access";
 import { csvDateTime, csvResponse } from "@/lib/leads/queueCsv";
@@ -39,10 +40,19 @@ const pretty = (v: string | null | undefined) => (v ? v.replace(/_/g, " ") : "")
 const statusText = (v: string | null) => (v && (LEAD_STATUS_LABEL as Record<string, string>)[v]) || pretty(v);
 
 export const GET = withErrorHandler(async (req: Request) => {
-    const user = await requireRole(READ_ROLES);
+    const user = await requireAuth();
     const p = new URL(req.url).searchParams;
     const kind = z.enum(DRILL_KINDS).safeParse(p.get("kind"));
     if (!kind.success) return errorResponse("Unknown number.", 400);
+    // ID 190: a manager with reporting lines opens the field-visit (fv_*)
+    // numbers of their own team's page; every other number stays with the
+    // Sales dashboard's readers.
+    let teamIds: string[] | null = null;
+    if (!READ_ROLES.includes(String(user.role ?? ""))) {
+        const access = kind.data.startsWith("fv_") ? await needsActionAccess(user, "fv") : { kind: "none" as const };
+        if (access.kind !== "team") return errorResponse("Forbidden: Insufficient permissions", 403);
+        teamIds = access.teamIds;
+    }
     if (ECOFY_DRILL_KINDS.includes(kind.data) && !(ECOFY_MANAGER_ROLES as readonly string[]).includes(String(user.role ?? "").toLowerCase())) {
         return errorResponse("Ecofy leads are for the Sales Head and CEO.", 403);
     }
@@ -56,7 +66,7 @@ export const GET = withErrorHandler(async (req: Request) => {
     const f: DrillFilters = { from, to, state: opt("state"), city: opt("city"), // ID 11: an old link's "finance" reads as Battery sale, as on the dashboard.
         business_type: businessTypeFilterParam(opt("business_type")) ?? opt("business_type"), spoc_id: opt("spoc_id"),
         // ID 190: the fv_* kinds also take the Needs-action page's Team filter.
-        team: opt("team") };
+        team: opt("team"), team_ids: teamIds };
     const persons = [...(p.get("persons") ?? "").split(","), p.get("person") ?? ""]
         .map((s) => s.trim())
         .filter((s) => s.length > 0 && s.length <= 100)

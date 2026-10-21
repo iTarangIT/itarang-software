@@ -3,7 +3,7 @@
  * not the browser's weekday or the UTC date.
  */
 import { describe, expect, it } from "vitest";
-import { isWorkingDay, staleSeverity, workingDaysBetween, workingDaysSince } from "../staleness";
+import { idleSeverity, isWorkingDay, staleSeverity, workingDaysBetween, workingDaysSince } from "../staleness";
 
 const none = new Set<string>();
 
@@ -40,5 +40,17 @@ describe("staleness on the office calendar (IST)", () => {
         expect(staleSeverity(null)).toBe("normal");
         expect(staleSeverity(14, { yellow: 5, red: 10, critical: 14 })).toBe("critical");
         expect(staleSeverity(5, { yellow: 5, red: 10, critical: 14 })).toBe("yellow");
+    });
+});
+
+describe("ISR idle limit row cue (18 Oct row 33)", () => {
+    it("red at the idle limit (past limit), critical at twice it, yellow the day before", () => {
+        expect(idleSeverity(null, 5)).toBe("normal");
+        expect(idleSeverity(3, 5)).toBe("normal");
+        expect(idleSeverity(4, 5)).toBe("yellow");
+        expect(idleSeverity(5, 5)).toBe("red");
+        expect(idleSeverity(10, 5)).toBe("critical");
+        expect(idleSeverity(0, 1)).toBe("normal");
+        expect(idleSeverity(1, 1)).toBe("red");
     });
 });

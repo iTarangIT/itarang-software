@@ -96,6 +96,8 @@ export type AsmQueueRow = {
     assigned_by?: LeadAssignedBy | null;
     /** IDs 85 / 86 — a clock on this lead is running past its limit (the "Past a limit" chip). */
     past_limit?: boolean;
+    /** 18 Oct row 34 — which limits are past, e.g. "Field visit (3 working days)" (limitChipLabel). */
+    past_limits?: string[];
     /**
      * E-296 "Type of business". Decorated in the route via
      * fetchBusinessTypeForLeads (fail-tolerant, column is not in schema.ts),
@@ -115,6 +117,8 @@ export type AsmQueueResponse = {
 export type AsmQueueCounts = Record<AsmQueueTab, number> & {
     /** ID 75.4: the ASM's own "Finalised, not Won" leads on My visits (chip badge). */
     finalised_not_won?: number;
+    /** 18 Oct row 34 — the ASM's own My visits leads past a time limit (chip badge). */
+    past_limit?: number;
 };
 
 export type VisitInput = {
