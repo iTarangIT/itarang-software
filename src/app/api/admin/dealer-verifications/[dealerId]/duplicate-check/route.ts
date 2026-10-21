@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { dealerOnboardingApplications } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
-import { requireSalesHead } from "@/lib/auth/requireSalesHead";
+import { requireDealerValidationReader } from "@/lib/auth/requireSalesHead";
 import { classifyGstinConflict } from "@/lib/dealer/duplicate-check";
 
 type RouteContext = {
@@ -10,7 +10,8 @@ type RouteContext = {
 };
 
 export async function GET(_req: NextRequest, context: RouteContext) {
-  const auth = await requireSalesHead();
+  // ID 166 item 11: Admin and the dealer account's owner read too.
+  const auth = await requireDealerValidationReader((await context.params).dealerId);
   if (!auth.ok) return auth.response;
 
   try {

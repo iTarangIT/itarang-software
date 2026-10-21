@@ -7,6 +7,7 @@ import { recomputeWrapperStatus } from "@/lib/nbfc/doc-requests";
 import { notifyAdminsOfUpload } from "@/lib/nbfc/doc-request-notify";
 import { requireLeadAccess } from "@/lib/auth/requireLeadAccess";
 import { stampUploader } from "@/lib/storage/uploaderStamp";
+import { dealerViewableFiles } from "@/lib/storage/fileAuthz";
 import { recordActorStep, requireLeadWriter } from "@/lib/leads/actForDealerGuard";
 
 /**
@@ -34,6 +35,9 @@ export async function GET(
                 )
             );
 
+        // ID 166 item 12: mark the files a dealer may not open (the customer's
+        // public-link upload, Admin's, or one with no upload record).
+        const viewable = await dealerViewableFiles(leadGate.user, leadId, requests.map((r) => r.file_url));
         return NextResponse.json({
             success: true,
             data: requests.map(r => ({
@@ -43,6 +47,7 @@ export async function GET(
                 doc_for: r.doc_for,
                 is_required: r.is_required,
                 file_url: r.file_url,
+                file_viewable: viewable(r.file_url),
                 upload_status: r.upload_status,
                 rejection_reason: r.rejection_reason,
                 created_at: r.created_at,

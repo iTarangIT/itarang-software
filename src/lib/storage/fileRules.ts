@@ -4,7 +4,11 @@
 // account. On top of that:
 //   - a dealer opens only the files of its own customers / its own onboarding,
 //     and on a customer's application only the files it uploaded itself
-//     (16 Oct, E-349 — dealerUploadedFile);
+//     (16 Oct, E-349 — dealerUploadedFile). 18 Oct rework: a file with no
+//     upload record (consent PDFs, photos, rows from before uploaders were
+//     recorded) is NOT the dealer's. The customer's loan agreement + audit
+//     trail in the NBFC store still open for the customer's dealer
+//     (classifyNbfcFile "agreements" -> dealerMay: true) — awaiting Kartik;
 //   - an NBFC opens only the files of applications shared with it;
 //   - expense bills and scanned invoices: Finance, Admin, CEO and the person
 //     who submitted the expense (the Sales Head does NOT see them);
@@ -39,8 +43,13 @@ export type FileKind =
     | { kind: "dealer_agreement"; applicationId: string | null }
     /** The agreement template: internal staff only. */
     | { kind: "agreement_template" }
-    /** Dealer Aadhaar autofill scans (shown through a 15-minute signed link). */
-    | { kind: "autofill_scan" }
+    /**
+     * Aadhaar autofill scans: documents/autofill/… (top roles only) and the
+     * private-documents store's dealer_<dealer code>/<lead id | temp>/… that
+     * /api/documents/upload writes. ID 166 (18 Oct): served through the
+     * checked /api/files proxy, never a signed storage link.
+     */
+    | { kind: "autofill_scan"; dealerCode: string | null; leadId: string | null }
     | { kind: "assistant_media"; userId: string }
     /**
      * A dealer lead's quotation PDF, commercials attachment (quote document,
@@ -75,14 +84,23 @@ export const FILE_TOP_ROLES = ["admin", "ceo", "sales_head"] as const;
 /** Bills and scanned invoices (ID 166 Q3; there is no Finance login yet). */
 export const FINANCE_FILE_ROLES = ["admin", "ceo", "finance_controller"] as const;
 /**
- * Buyback staff. Same list as src/lib/buyback/roles.ts BUYBACK_ADMIN_ROLES —
- * restated (not imported) so this module stays free of other modules; a test
- * pins the two together.
+ * Buyback papers and photos (ID 166, Kartik 18 Oct): Admin, CEO, Sales Head
+ * and the partner (Chirag works on buyback). The Business Head keeps the
+ * buyback screens (src/lib/buyback/roles.ts BUYBACK_ADMIN_ROLES) but no longer
+ * opens the files. Restated (not imported) so this module stays free of other
+ * modules; a test pins it to BUYBACK_ADMIN_ROLES minus business_head.
  */
-export const BUYBACK_FILE_ROLES = ["admin", "ceo", "business_head", "sales_head", "partner"] as const;
+export const BUYBACK_FILE_ROLES = ["admin", "ceo", "sales_head", "partner"] as const;
+
+/** May this role open buyback files without being the requesting dealer? */
+export function isBuybackFileRole(role: string | null | undefined): boolean {
+    return (BUYBACK_FILE_ROLES as readonly string[]).includes((role ?? "").toLowerCase());
+}
 
 /** The logical bucket behind /api/nbfc-uploads (src/lib/nbfc/nbfc-storage.ts). */
 export const NBFC_FILE_BUCKET = "nbfc-documents";
+/** Private lead documents: dealer autofill scans and the customer's public-link uploads. */
+export const PRIVATE_FILE_BUCKET = "private-documents";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -135,6 +153,24 @@ export function classifyFile(bucket: string, key: string): FileKind {
 
     if (bucket === NBFC_FILE_BUCKET) return classifyNbfcFile(parts);
 
+    if (bucket === PRIVATE_FILE_BUCKET) {
+        // dealer_<dealer code>/<lead id | temp>/<file> — /api/documents/upload
+        // (the dealer's Aadhaar autofill scans; the prefix is the uploader's
+        // own dealer code).
+        const dealer = /^dealer_(.+)$/i.exec(first);
+        if (dealer && second && parts.length >= 3) {
+            const code = dealer[1].trim();
+            return {
+                kind: "autofill_scan",
+                dealerCode: code && code !== "null" && code !== "undefined" ? code : null,
+                leadId: second.toLowerCase() === "temp" ? null : second,
+            };
+        }
+        // public-uploads/<lead id>/… — the customer's upload-link documents.
+        if (top === "public-uploads" && second) return { kind: "customer_lead", leadId: second, kyc: true };
+        return { kind: "unknown" };
+    }
+
     if (bucket === "call-recordings") {
         // attached/<dealer lead id>/<recording id>.<ext> (recordingKeyFor);
         // <prefix?>/<provider>/<call id>.<ext> (recordingStore).
@@ -177,7 +213,7 @@ export function classifyFile(bucket: string, key: string): FileKind {
         // shapes are resolved by the file row.
         return { kind: "dealer_onboarding", applicationId: UUID.test(second) ? second : null };
     }
-    if (top === "autofill") return { kind: "autofill_scan" };
+    if (top === "autofill") return { kind: "autofill_scan", dealerCode: null, leadId: null };
     if (top === "wa-assistant" && second) return { kind: "assistant_media", userId: second };
     if (top === "quotations") return { kind: "dealer_lead_attachment", source: "quotation" };
     if (top === "feature-requests") return { kind: "feature_request" };
@@ -207,6 +243,7 @@ export function isLoggedFile(kind: FileKind): boolean {
         case "customer_lead":
         case "dealer_onboarding":
         case "nbfc_lead":
+        case "autofill_scan":
             return true;
         case "nbfc_case":
             return kind.table !== "emi";
@@ -220,6 +257,7 @@ export function isLoggedFile(kind: FileKind): boolean {
 /** The lead a logged open is filed under (file_access_log.lead_id), when the key names one. */
 export function loggedLeadId(kind: FileKind): string | null {
     if (kind.kind === "customer_lead" || kind.kind === "nbfc_lead") return kind.leadId;
+    if (kind.kind === "autofill_scan") return kind.leadId;
     return null;
 }
 
@@ -248,16 +286,16 @@ export type FileUpload = {
 };
 
 /**
- * ID 166 (decided 10 Oct, 15 Oct check): a dealer opens only the files it
- * uploaded itself on its customer's application — not what the customer sent
- * through the public link, nor what Admin or the NBFC added. A file no row
- * records, or a row from before uploaders were recorded (no uploader, no
- * source), keeps the old rule: the lead's dealer opens it.
+ * ID 166 (decided 10 Oct, 15 Oct check, reworked 18 Oct): a dealer opens only
+ * the files it uploaded itself on its customer's application — not what the
+ * customer sent through the public link, nor what Admin or the NBFC added.
+ * A file no row records (consent PDFs, photos) or a row that names no
+ * uploader and no source (before uploaders were recorded) is NOT the
+ * dealer's: nothing shows the dealer uploaded it.
  */
 export function dealerUploadedFile(viewer: FileViewer, uploads: readonly FileUpload[] | undefined): boolean {
-    if (!uploads || uploads.length === 0) return true;
+    if (!uploads || uploads.length === 0) return false;
     return uploads.some((u) => {
-        if (!u.uploaderId && !u.source) return true;
         // ID 183: Admin / Sales Head uploaded it ACTING FOR this dealer — the
         // dealer's own upload. (Called only on the dealer's own customer.)
         if (u.source === "act_for_dealer") return true;
@@ -288,6 +326,12 @@ export type FileFacts = {
     accountOwnerId?: string | null;
     /** The dealer login that owns the onboarding application. */
     applicationDealerUserId?: string | null;
+    /**
+     * ID 166 (18 Oct): the iTarang people who own a dealer application besides
+     * its account_ownership row — the salesperson on the form
+     * (salesperson_user_id) and the owner the dealer lead carried in (owner_id).
+     */
+    applicationOwnerIds?: readonly (string | null)[];
     /** Buyback: buyback_requests.dealer_entity_id (the dealer's account id). */
     buybackDealerId?: string | null;
     /** Feature requests: the viewer holds an active seat. */
@@ -334,7 +378,7 @@ export function mayOpenFile(viewer: FileViewer, file: FileKind, facts: FileFacts
             if (top) return true;
             return (facts.dealerLeadOwnerIds ?? []).some((o) => !!o && o === viewer.id);
         case "buyback":
-            if (has(BUYBACK_FILE_ROLES, role)) return true;
+            if (isBuybackFileRole(role)) return true;
             return role === "dealer" && sameDealer(viewer, facts.buybackDealerId);
         case "feature_request":
             return top || facts.hasFeatureSeat === true;
@@ -361,8 +405,16 @@ export function mayOpenFile(viewer: FileViewer, file: FileKind, facts: FileFacts
             return has(FINANCE_FILE_ROLES, role);
         case "agreement_template":
             return !INTERNAL_EXCLUDED.has(role);
-        case "autofill_scan":
-            return top;
+        case "autofill_scan": {
+            if (top || ownsAccount) return true;
+            // The dealer that scanned it (the key carries the uploader's code).
+            if (role === "dealer") return sameDealer(viewer, file.dealerCode);
+            // The lead's iTarang owner (ID 119 owners), when the scan names a lead.
+            return (
+                !!file.leadId &&
+                [facts.leadUploaderId, facts.leadAssignedTo, facts.leadSmAssignedTo].some((o) => !!o && o === viewer.id)
+            );
+        }
         case "assistant_media":
             return top || file.userId === viewer.id;
         case "customer_lead": {
@@ -392,6 +444,7 @@ export function mayOpenFile(viewer: FileViewer, file: FileKind, facts: FileFacts
         case "dealer_onboarding":
         case "dealer_agreement":
             if (top || ownsAccount) return true;
+            if (role !== "dealer" && (facts.applicationOwnerIds ?? []).some((o) => !!o && o === viewer.id)) return true;
             return !!facts.applicationDealerUserId && facts.applicationDealerUserId === viewer.id;
         case "unknown":
             return top;

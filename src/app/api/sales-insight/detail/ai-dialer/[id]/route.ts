@@ -9,6 +9,7 @@ import { dealerLeads, aiCallLogs } from "@/lib/db/schema";
 import { withErrorHandler, errorResponse, successResponse } from "@/lib/api-utils";
 import { requireRole } from "@/lib/auth-utils";
 import { desc, eq } from "drizzle-orm";
+import { isOwnerAmong, mayReadCallReview, withoutCallReview } from "@/lib/leads/callReviewRules";
 
 const ALLOWED_ROLES = [
     "sales_insight",
@@ -22,7 +23,7 @@ export const GET = withErrorHandler(async (
     _req: Request,
     context: { params: Promise<{ id: string }> } | { params: { id: string } },
 ) => {
-    await requireRole(ALLOWED_ROLES);
+    const user = await requireRole(ALLOWED_ROLES);
 
     const params = await Promise.resolve(
         (context as { params: { id: string } | Promise<{ id: string }> }).params,
@@ -51,6 +52,14 @@ export const GET = withErrorHandler(async (
         latestCall = callRows[0] ?? null;
     }
 
+    // ID 166 item 6: the call review (transcript, summary, recording) is for
+    // Sales Head, CEO and the lead's owner (current owner / ASM).
+    const mayReview = mayReadCallReview({
+        role: user.role,
+        ownsLead: isOwnerAmong(user.id, [dealerRow.current_owner_id, dealerRow.asm_id]),
+    });
+    const review = <T extends Parameters<typeof withoutCallReview>[0]>(c: T) => (mayReview ? c : withoutCallReview(c));
+
     return successResponse({
         source: "ai_dialer" as const,
         lead: {
@@ -70,7 +79,7 @@ export const GET = withErrorHandler(async (
         },
         latest_follow_up: latest,
         follow_up_history: history,
-        latest_call: latestCall && {
+        latest_call: review(latestCall && {
             id: latestCall.id,
             call_id: latestCall.call_id,
             status: latestCall.status,
@@ -82,6 +91,6 @@ export const GET = withErrorHandler(async (
             call_duration: latestCall.call_duration,
             started_at: latestCall.started_at,
             ended_at: latestCall.ended_at,
-        },
+        }),
     });
 });

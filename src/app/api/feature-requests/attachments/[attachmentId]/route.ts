@@ -49,7 +49,8 @@ export const GET = withErrorHandler(
         "Content-Disposition": `${inline ? "inline" : "attachment"}; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(att.file_name)}`,
         "Content-Length": String(buf.byteLength),
         "X-Content-Type-Options": "nosniff",
-        "Cache-Control": "private, max-age=3600",
+        // ID 166 item 9: no stored file is cached by the browser.
+        "Cache-Control": "private, no-store",
       },
     });
   },

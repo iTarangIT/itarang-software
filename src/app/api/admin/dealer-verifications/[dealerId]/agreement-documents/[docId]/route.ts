@@ -4,7 +4,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { and, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { dealerAgreementDocuments } from "@/lib/db/schema";
-import { requireSalesHead } from "@/lib/auth/requireSalesHead";
+import { requireDealerValidationReader } from "@/lib/auth/requireSalesHead";
 import { readAgreementPdf } from "@/lib/agreement/executedAgreementStore";
 
 type RouteContext = {
@@ -17,7 +17,8 @@ type RouteContext = {
  * (the canonical download routes only ever serve the first of each kind).
  */
 export async function GET(_req: NextRequest, context: RouteContext) {
-  const auth = await requireSalesHead();
+  // ID 166 item 11: Admin and the dealer account's owner read too.
+  const auth = await requireDealerValidationReader((await context.params).dealerId);
   if (!auth.ok) return auth.response;
   try {
     const { dealerId, docId } = await context.params;

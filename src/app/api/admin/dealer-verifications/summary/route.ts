@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { sql } from "drizzle-orm";
 
 import { db } from "@/lib/db/index";
-import { requireSalesHead } from "@/lib/auth/requireSalesHead";
+import { requireDealerValidationReader } from "@/lib/auth/requireSalesHead";
 import { istRangeNaive, parseIsoDay } from "@/lib/digests/window";
 import {
   DEALER_APP_DERIVED_STATUS,
@@ -35,7 +35,8 @@ import {
 export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
-  const auth = await requireSalesHead();
+  // ID 166 item 11: Admin reads too (whole-queue figures: not for owners).
+  const auth = await requireDealerValidationReader(undefined, { allOnly: true });
   if (!auth.ok) return auth.response;
 
   const from = parseIsoDay(req.nextUrl.searchParams.get("dateFrom"));

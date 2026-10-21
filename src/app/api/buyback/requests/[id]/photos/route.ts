@@ -30,7 +30,8 @@ import {
   buybackPhotos,
   buybackUnits,
 } from "@/lib/db/schema";
-import { isBuybackAdminRole, loadOwnRequest, requireDealer } from "@/lib/buyback/auth";
+import { loadOwnRequest, requireDealer } from "@/lib/buyback/auth";
+import { isBuybackFileRole } from "@/lib/storage/fileRules";
 import { NotFoundError, ValidationError } from "@/lib/buyback/errors";
 import { BUYBACK_BUCKET } from "@/lib/buyback/storage";
 import { loadDealForUpdate } from "@/lib/buyback/transition";
@@ -215,7 +216,9 @@ export const GET = withErrorHandler(
     const { id: requestId } = await ctx.params;
 
     const user = await requireAuth();
-    const isAdmin = isBuybackAdminRole(String(user.role).toLowerCase());
+    // ID 166: the photo list is for the people who may open the photos — not
+    // the Business Head (BUYBACK_FILE_ROLES).
+    const isAdmin = isBuybackFileRole(String(user.role).toLowerCase());
 
     if (!isAdmin && !user.dealer_id) throw new NotFoundError("Request not found.");
 

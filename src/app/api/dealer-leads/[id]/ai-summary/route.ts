@@ -25,6 +25,7 @@ import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-util
 import { LEADS_PAGE_ROLES, readsOwnLeadsOnly } from "@/lib/leads/access";
 // ID 155: read access = own leads, or a direct report's (manager).
 import { leadVisibleTo } from "@/lib/users/team";
+import { seesEveryCallReview } from "@/lib/leads/callReviewRules";
 import { readIntentProvenance } from "@/lib/leads/intentOverride";
 
 type LatestCallRow = {
@@ -70,10 +71,14 @@ export const GET = withErrorHandler(
       return errorResponse("Lead not found", 404);
     }
     const url = new URL(req.url);
+    // ID 166 item 6 (18 Oct): the call review (transcript, recording) is for
+    // Admin, Sales Head, CEO and the lead's owner. Everyone else on the leads
+    // page keeps the band and summary the list needs, without the review.
+    const mayReview = seesEveryCallReview(user.role) || (await leadVisibleTo(id, user.id));
     // The transcript is a large text column and neither the notice nor the
     // panel renders it inline — they link to the drawer. Opt in explicitly so
     // the common payload stays small.
-    const includeTranscript = url.searchParams.get("include") === "transcript";
+    const includeTranscript = mayReview && url.searchParams.get("include") === "transcript";
 
     const result = await db.execute(sql`
       SELECT acl.call_id,
@@ -143,9 +148,11 @@ export const GET = withErrorHandler(
         callDuration: row.call_duration,
         // Same self-healing proxy fallback the transcript route uses, so a call
         // whose recording landed late is still playable.
-        recordingUrl:
-          row.recording_url ??
-          (row.call_id ? `/api/ai-dialer/recording/${row.call_id}` : null),
+        recordingUrl: !mayReview
+          ? null
+          : row.recording_url ??
+            (row.call_id ? `/api/ai-dialer/recording/${row.call_id}` : null),
+        reviewHidden: !mayReview,
         band: row.band,
         callStatus: row.call_status,
         intentScore: row.intent_score,

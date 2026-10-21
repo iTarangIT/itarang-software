@@ -6,15 +6,30 @@ import {
   dealerOnboardingDocuments,
 } from "@/lib/db/schema";
 import { and, desc, inArray, isNotNull, ne, notInArray, or, sql } from "drizzle-orm";
-import { requireSalesHead } from "@/lib/auth/requireSalesHead";
+import { requireDealerValidationReader } from "@/lib/auth/requireSalesHead";
 import { classifyApplicationsBatch } from "@/lib/dealer/duplicate-check";
 import { type CompanyType, requiredDocuments } from "@/lib/whatsapp/checklist";
 import { buildLocationHaystack } from "@/lib/dealer/location-haystack";
 import { approvalTagsFor } from "@/lib/dealer/approval-tag";
 
 export async function GET() {
-  const auth = await requireSalesHead();
+  // ID 166 item 11: Sales Head, CEO and Admin see the whole queue; the owner
+  // of a dealer account sees only the applications it owns.
+  const auth = await requireDealerValidationReader();
   if (!auth.ok) return auth.response;
+  const me = auth.user.id;
+  const ownOnly =
+    auth.scope === "own"
+      ? sql`(
+          ${dealerOnboardingApplications.salesperson_user_id}::text = ${me}
+          OR ${dealerOnboardingApplications.owner_id} = ${me}
+          OR EXISTS (
+            SELECT 1 FROM account_ownership ao
+             WHERE ao.source_application_id = ${dealerOnboardingApplications.id}::text
+               AND ao.owner_user_id::text = ${me}
+          )
+        )`
+      : undefined;
   try {
     const applications = await db
       .select({
@@ -73,6 +88,7 @@ export async function GET() {
           // ID 169: a form withdrawn by Undo Mark Won was never submitted —
           // it leaves the queue, the cards and the export.
           sql`NOT (${dealerOnboardingApplications.onboarding_status} = 'withdrawn' AND ${dealerOnboardingApplications.submitted_at} IS NULL)`,
+          ownOnly,
         ),
       )
       .orderBy(

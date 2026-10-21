@@ -1,17 +1,23 @@
-import { supabaseAdmin } from '@/lib/supabase/admin';
 import { db } from '@/lib/db';
 import { leadDocuments } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
 import { successResponse, errorResponse, withErrorHandler } from '@/lib/api-utils';
 import { requireRole } from '@/lib/auth-utils';
-import { isS3Backend, signObject } from '@/lib/storage/s3';
+import { filesProxyPath } from '@/lib/storage/s3';
+import { FRESH_LINK_TTL_SECONDS, signedFilePath } from '@/lib/storage/fileAccess';
+import { classifyFile, FILE_TOP_ROLES, PRIVATE_FILE_BUCKET } from '@/lib/storage/fileRules';
 import { logFileOpen } from '@/lib/storage/fileAuthz';
-import { FILE_TOP_ROLES } from '@/lib/storage/fileRules';
 
-// ID 166 (report row "the one existing 15-minute link"): the model for every
-// file link — 15 minutes — now with the file rule's people: Admin, Sales Head
-// and CEO; a dealer for its own documents; anyone else only for a document
-// they uploaded. Every open is logged (file_access_log).
+// ID 166 (report row "the one existing 15-minute link"): Admin, Sales Head and
+// CEO; a dealer for its own documents; anyone else only for a document they
+// uploaded. Every request is logged (file_access_log).
+//
+// ID 166 (18 Oct): this used to hand back a signed S3 / Supabase link that
+// anyone holding it could open for 15 minutes with no login. It now hands back
+// the checked /api/files proxy path, signed for THIS login only (`by`, 15
+// minutes) — the files route opens it for that login and nobody else, and the
+// file rule (fileRules.ts autofill_scan / customer_lead) still applies to any
+// plain open. `signedUrl` keeps its name for existing callers.
 
 export const GET = withErrorHandler(async (req: Request) => {
     const user = await requireRole([...FILE_TOP_ROLES, 'dealer', 'sales_manager']);
@@ -30,10 +36,13 @@ export const GET = withErrorHandler(async (req: Request) => {
         (role === 'dealer' && !!user.dealer_id && doc.dealer_id === user.dealer_id) ||
         (!!doc.user_id && doc.user_id === user.id);
     const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || null;
+    const key = doc.storage_path ?? doc.id;
+    const kind = doc.storage_path ? classifyFile(PRIVATE_FILE_BUCKET, doc.storage_path) : null;
     await logFileOpen({
-        file: { kind: 'customer_lead', leadId: doc.lead_id, kyc: true },
-        bucket: 'private-documents',
-        key: doc.storage_path ?? doc.id,
+        // Always a logged identity file: an unrecognised path logs as the lead's KYC.
+        file: kind && kind.kind !== 'unknown' ? kind : { kind: 'customer_lead', leadId: doc.lead_id, kyc: true },
+        bucket: PRIVATE_FILE_BUCKET,
+        key,
         userId: user.id,
         role: user.role ?? null,
         via: 'session',
@@ -44,18 +53,7 @@ export const GET = withErrorHandler(async (req: Request) => {
 
     if (!doc.storage_path) return errorResponse('Document has no storage_path', 404);
 
-    if (isS3Backend) {
-        const signedUrl = await signObject('private-documents', doc.storage_path, 900); // 15 mins
-        if (!signedUrl) return errorResponse('Failed to sign document', 500);
-        return successResponse({ signedUrl });
-    }
-
-    const adminSupabase = supabaseAdmin;
-    const { data, error } = await adminSupabase.storage
-        .from('private-documents')
-        .createSignedUrl(doc.storage_path, 900); // 15 mins
-
-    if (error) return errorResponse(error.message, 500);
-
-    return successResponse({ signedUrl: data.signedUrl });
+    const path = filesProxyPath(PRIVATE_FILE_BUCKET, doc.storage_path);
+    const signedUrl = signedFilePath(path, FRESH_LINK_TTL_SECONDS, { by: user.id }) ?? path;
+    return successResponse({ signedUrl, url: signedUrl });
 });

@@ -3,6 +3,7 @@ import { db } from '@/lib/db';
 import { kycDocuments } from '@/lib/db/schema';
 import { and, eq } from 'drizzle-orm';
 import { requireLeadAccess } from '@/lib/auth/requireLeadAccess';
+import { dealerViewableFiles } from '@/lib/storage/fileAuthz';
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
     try {
@@ -23,7 +24,13 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ lead
             .select()
             .from(kycDocuments)
             .where(and(eq(kycDocuments.lead_id, leadId), eq(kycDocuments.doc_for, docFor)));
-        return NextResponse.json({ success: true, data: docs });
+        // ID 166 item 12: a dealer's list marks the files it may not open
+        // (not its own upload) — the row stays so "uploaded" still counts.
+        const viewable = await dealerViewableFiles(access.user, leadId, docs.map((d) => d.file_url));
+        return NextResponse.json({
+            success: true,
+            data: docs.map((d) => ({ ...d, file_viewable: viewable(d.file_url) })),
+        });
     } catch (error) {
         console.error('[KYC Documents] Error:', error);
         const message = error instanceof Error ? error.message : 'Failed to fetch documents';

@@ -16,8 +16,11 @@ import {
     nbfcLeadAssignments,
     nbfcUsers,
 } from "@/lib/db/schema";
+import { filesProxyTarget } from "@/lib/storage/fileAccess";
+import { supabaseUrlToProxyPath } from "@/lib/storage/legacyUrl";
 import {
     classifyFile,
+    dealerUploadedFile,
     isLoggedFile,
     loggedLeadId,
     mayOpenFile,
@@ -167,7 +170,11 @@ async function applicationFacts(applicationId: string | null, bucket: string, ke
     }
     if (!appId) return {};
     const [app] = await db
-        .select({ dealer_user_id: dealerOnboardingApplications.dealer_user_id })
+        .select({
+            dealer_user_id: dealerOnboardingApplications.dealer_user_id,
+            salesperson_user_id: dealerOnboardingApplications.salesperson_user_id,
+            owner_id: dealerOnboardingApplications.owner_id,
+        })
         .from(dealerOnboardingApplications)
         .where(eq(dealerOnboardingApplications.id, appId))
         .limit(1);
@@ -176,7 +183,13 @@ async function applicationFacts(applicationId: string | null, bucket: string, ke
         .from(accountOwnership)
         .where(eq(accountOwnership.source_application_id, appId))
         .limit(1);
-    return { applicationDealerUserId: app?.dealer_user_id ?? null, accountOwnerId: own?.owner ?? null };
+    return {
+        applicationDealerUserId: app?.dealer_user_id ?? null,
+        accountOwnerId: own?.owner ?? null,
+        // ID 166 (18 Oct): the application's owners — same people the Dealer
+        // Validation page now lets in (dealerVerificationAccess.ts).
+        applicationOwnerIds: [app?.salesperson_user_id ?? null, app?.owner_id ?? null],
+    };
 }
 
 async function dealerLeadOwners(ids: string[]): Promise<(string | null)[]> {
@@ -205,17 +218,34 @@ async function leadsForRecording(key: string): Promise<string[]> {
  * ID 166 (E-349): the rows on this lead that hold exactly this file, with who
  * uploaded each — KYC documents, co-borrower documents and requested
  * documents. The E-349 columns are read through to_jsonb so a DB without the
- * migration reads them as NULL (an old row: the old rule). A failed lookup
- * refuses (one row with a source and no uploader), never opens.
+ * migration reads them as NULL (no uploader: since 18 Oct not the dealer's).
+ * A failed lookup refuses (one row with a source and no uploader), never opens.
  */
 async function customerFileUploads(leadId: string, bucket: string, key: string): Promise<FileUpload[]> {
     const like = `%/${bucket}/${key}`;
+    const all = await leadFileUploads(leadId, like);
+    return all.map(({ uploaderId, uploaderDealerCode, source }) => ({ uploaderId, uploaderDealerCode, source }));
+}
+
+/**
+ * Every upload record on one lead (or only those whose stored link matches
+ * `like`), with the stored link. One query, shared by the file opener and by
+ * the dealer-facing lists (dealerViewableFiles) so a list never shows a dealer
+ * a link the opener refuses.
+ */
+async function leadFileUploads(leadId: string, like: string): Promise<(FileUpload & { url: string | null })[]> {
     try {
-        const rows = rowsOf<{ uploaded_by: string | null; upload_source: string | null; uploader_dealer: string | null }>(
+        const rows = rowsOf<{
+            url: string | null;
+            uploaded_by: string | null;
+            upload_source: string | null;
+            uploader_dealer: string | null;
+        }>(
             await db.execute(sql`
-                SELECT x.uploaded_by, x.upload_source, u.dealer_id AS uploader_dealer
+                SELECT x.url, x.uploaded_by, x.upload_source, u.dealer_id AS uploader_dealer
                   FROM (
-                    SELECT k.uploaded_by::text AS uploaded_by,
+                    SELECT k.file_url AS url,
+                           k.uploaded_by::text AS uploaded_by,
                            -- ID 183: kyc_documents has no upload_source; an upload
                            -- Admin / Sales Head made acting for the dealer is
                            -- known by its "Done by" record (ACTED_FOR_DEALER,
@@ -229,26 +259,69 @@ async function customerFileUploads(leadId: string, bucket: string, key: string):
                            ) THEN 'act_for_dealer' END AS upload_source
                       FROM kyc_documents k WHERE k.lead_id = ${leadId} AND k.file_url LIKE ${like}
                     UNION ALL
-                    SELECT to_jsonb(c) ->> 'uploaded_by', to_jsonb(c) ->> 'upload_source'
+                    SELECT c.document_url, to_jsonb(c) ->> 'uploaded_by', to_jsonb(c) ->> 'upload_source'
                       FROM co_borrower_documents c WHERE c.lead_id = ${leadId} AND c.document_url LIKE ${like}
                     UNION ALL
-                    SELECT to_jsonb(o) ->> 'uploaded_by', to_jsonb(o) ->> 'upload_source'
+                    SELECT o.file_url, to_jsonb(o) ->> 'uploaded_by', to_jsonb(o) ->> 'upload_source'
                       FROM other_document_requests o
-                     WHERE o.lead_id = ${leadId} AND (o.file_url LIKE ${like} OR o.document_url LIKE ${like})
+                     WHERE o.lead_id = ${leadId} AND o.file_url LIKE ${like}
+                    UNION ALL
+                    SELECT o.document_url, to_jsonb(o) ->> 'uploaded_by', to_jsonb(o) ->> 'upload_source'
+                      FROM other_document_requests o
+                     WHERE o.lead_id = ${leadId} AND o.document_url LIKE ${like}
+                       AND o.document_url IS DISTINCT FROM o.file_url
                   ) x
                   LEFT JOIN users u ON u.id::text = x.uploaded_by
-                 LIMIT 20
+                 LIMIT 500
             `),
         );
         return rows.map((r) => ({
+            url: r.url,
             uploaderId: r.uploaded_by,
             uploaderDealerCode: r.uploader_dealer,
             source: r.upload_source,
         }));
     } catch (err) {
         console.error("[files] uploader lookup failed:", err instanceof Error ? err.message : err);
-        return [{ uploaderId: null, uploaderDealerCode: null, source: "unknown" }];
+        return [{ url: null, uploaderId: null, uploaderDealerCode: null, source: "unknown" }];
     }
+}
+
+/**
+ * ID 166 item 12 (18 Oct): which of these stored links on one customer lead a
+ * DEALER may open — the files it uploaded itself (dealerUploadedFile). For
+ * every other viewer the answer is "all": their lists already follow the lead
+ * rule. A link that is not a stored file (a provider URL) counts as openable.
+ * One query for the whole list. The caller has already checked the dealer
+ * owns the lead (requireLeadAccess).
+ */
+export async function dealerViewableFiles(
+    user: FileUser,
+    leadId: string,
+    urls: readonly (string | null | undefined)[],
+): Promise<(url: string | null | undefined) => boolean> {
+    if ((user.role ?? "").toLowerCase() !== "dealer") return () => true;
+    const viewer = await viewerFor(user);
+    const uploads = await leadFileUploads(leadId, "%");
+    const failed = uploads.some((u) => u.source === "unknown" && !u.url);
+    const decided = new Map<string, boolean>();
+    for (const url of urls) {
+        if (!url || decided.has(url)) continue;
+        const suffix = storedSuffix(url);
+        if (!suffix) {
+            decided.set(url, true);
+            continue;
+        }
+        const mine = uploads.filter((u) => !!u.url && storedSuffix(u.url) === suffix);
+        decided.set(url, !failed && dealerUploadedFile(viewer, mine));
+    }
+    return (url) => !url || decided.get(url) !== false;
+}
+
+/** `/<bucket>/<key>` of a stored link (relative or absolute), decoded the way the proxy decodes it. */
+function storedSuffix(url: string): string | null {
+    const t = filesProxyTarget(supabaseUrlToProxyPath(url) ?? url);
+    return t ? `/${t.bucket}/${t.key}` : null;
 }
 
 async function factsFor(file: FileKind, bucket: string, key: string, viewer: FileViewer): Promise<FileFacts> {
@@ -261,6 +334,10 @@ async function factsFor(file: FileKind, bucket: string, key: string, viewer: Fil
         }
         case "nbfc_lead":
             return customerLeadFacts(file.leadId);
+        case "autofill_scan":
+            // The dealer is decided on the key alone; the lead's owners only
+            // when the scan names a lead.
+            return file.leadId && viewer.role !== "dealer" ? customerLeadFacts(file.leadId) : {};
         case "nbfc_case":
             return nbfcCaseFacts(file.table, file.id);
         case "nbfc_partner_doc": {

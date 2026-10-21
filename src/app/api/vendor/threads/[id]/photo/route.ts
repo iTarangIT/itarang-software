@@ -78,7 +78,8 @@ export const GET = withErrorHandler(
     return new Response(new Uint8Array(bytes), {
       headers: {
         "Content-Type": mimeForKey(key),
-        "Cache-Control": "private, max-age=3600",
+        // ID 166 item 9: no stored file is cached by the browser.
+        "Cache-Control": "private, no-store",
         "X-Content-Type-Options": "nosniff",
       },
     });
