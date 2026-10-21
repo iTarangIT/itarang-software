@@ -7262,6 +7262,32 @@ export const digestPersonRuns = pgTable(
 );
 
 // =============================================================================
+// E-354 — Office hours as a dated Admin setting (tracker ID 85 #8)
+// Append-only: the hours in force on IST day D are the latest row with
+// effective_from <= D; no row = Mon–Sat 10:00–19:00. Read through
+// src/lib/calendar/officeHoursStore.ts (raw SQL behind a to_regclass probe),
+// so an unapplied migration only means the default hours.
+// =============================================================================
+
+export const officeHoursSettings = pgTable(
+  "office_hours_settings",
+  {
+    id: bigserial({ mode: "number" }).primaryKey().notNull(),
+    effective_from: date("effective_from").notNull(),
+    start_hour: integer("start_hour").notNull(),
+    end_hour: integer("end_hour").notNull(),
+    /** 0 = Sunday … 6 = Saturday. */
+    working_weekdays: integer("working_weekdays").array().notNull(),
+    note: text("note").notNull(),
+    set_by: uuid("set_by"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    effectiveIdx: index("office_hours_settings_effective_idx").on(table.effective_from, table.created_at),
+  }),
+);
+
+// =============================================================================
 // E-082 — Dual Approval Gate primitive
 // Two-person rule for high-impact NBFC actions (battery immobilisation, loan
 // restructuring, risk-rule threshold change, bulk immobilisation, auction lot

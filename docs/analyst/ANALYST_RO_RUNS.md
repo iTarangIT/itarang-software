@@ -18,6 +18,29 @@ Postgres source is hidden from the source list and a question sent to one gets 4
 Re-run the script after any migration that adds a column to an allowed table:
 a new column stays unreadable until it is granted.
 
+**18 Oct rework (ID 167 rows 14 / 51–66, IDs 148 / 192) — NOT yet run anywhere.** The
+script now also withholds dealer / shop names, location and area, family, every reason
+column, AI signals / score breakdown / intent details, memory and call-note history,
+attachments, file links and stored-file keys / names, payment references and transaction
+ids, e-sign ids and errors, call outcomes and attempt history, NeoDove agent / tag / stage,
+suggested actions and CEO recommendations, deployment location, telemetry blobs and expense
+vendors. The raw `leads` table is no longer granted: it is read through `analyst_leads`
+("Customer #<code>" from an md5 of the lead id, city and state, no ids or free text), and the
+loan views carry that code instead of `lead_id`. New grants: `accounts`, `account_closures`,
+`account_ownership`, `time_limit_settings`, `holiday_calendar`, plus views
+`analyst_account_flags` (gstin_missing, is_dealer) and `analyst_staff` (user id + role). The
+run ends with a check (`all_rules_hold`) and exits 1 if a sampled withheld column is still
+readable, a sampled kept column is not, raw `leads` is granted or a view carries a lead id.
+
+To apply it:
+1. Re-run on **db-1 (sandbox)**, password unchanged:
+   `node --env-file=.env.local scripts/_create-analyst-readonly-role.mjs` (a `DRY_RUN=1` first shows
+   what it would withhold). Check `all_rules_hold: true` and add a row below.
+2. **db-2 (prod) only after the go-ahead**: the prod steps below (the role still has to be created
+   there), then the same check and a row below.
+3. After each run: in the Analyst, Data sources › iTarang database › **Refresh tables**, so the
+   withheld columns and the raw `leads` table drop out of the table list. Record that too.
+
 | Date | Database | Run | Result |
 |---|---|---|---|
 | 2026-10-16 | db-1 (sandbox) | `DRY_RUN=1` | Role exists. 40 tables readable in full before the run. |

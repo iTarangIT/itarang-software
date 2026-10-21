@@ -108,6 +108,7 @@ export function mergeWindowParts(parts: readonly WindowPart[], rangeDays: number
             avg_visits_per_day: weigh("avg_visits_per_day"),
             avg_unique_per_day: weigh("avg_unique_per_day"),
             avg_new_per_day: weigh("avg_new_per_day"),
+            avg_fresh_per_day: weigh("avg_fresh_per_day"),
             avg_calls_per_day: weigh("avg_calls_per_day"),
         } satisfies SalesAverages,
         totals: sumKeys(parts.map((p) => p.totals)),

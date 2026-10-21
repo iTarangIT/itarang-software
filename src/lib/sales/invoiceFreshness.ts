@@ -15,7 +15,8 @@
 import { sql } from "drizzle-orm";
 
 import { db } from "@/lib/db";
-import { loadHolidays } from "@/lib/calendar/holidays";
+import { loadHolidays, loadOfficeCalendar } from "@/lib/calendar/holidays";
+import { officeHoursResolver } from "@/lib/calendar/officeHoursStore";
 import { workingDaysSince } from "@/lib/calendar/officeCalendar";
 import { hasInvoiceLedgerTables } from "@/lib/sales/ledgerTables";
 import { getTimeLimits } from "@/lib/timeLimits/store";
@@ -42,9 +43,9 @@ export async function invoiceFreshness(opts: { fresh?: boolean } = {}): Promise<
                )::text AS read_up_to,
                (SELECT MAX(si.created_at) FROM sales_invoices si) AS last_read_at
     `)) as unknown as Array<{ read_up_to: string | null; last_read_at: string | Date | null }>;
-    const [holidays, limits] = await Promise.all([loadHolidays(), getTimeLimits()]);
+    const [{ holidays, hours }, limits] = await Promise.all([loadOfficeCalendar(), getTimeLimits()]);
     const lastReadAt = row?.last_read_at ? new Date(row.last_read_at) : null;
-    const since = lastReadAt ? workingDaysSince(lastReadAt, new Date(), holidays) : null;
+    const since = lastReadAt ? workingDaysSince(lastReadAt, new Date(), holidays, hours) : null;
     const staleAfter = limits.invoice_stale_days;
     const value: InvoiceFreshness = {
         read_up_to: row?.read_up_to ? row.read_up_to.slice(0, 10) : null,
@@ -65,7 +66,7 @@ export async function invoiceFreshness(opts: { fresh?: boolean } = {}): Promise<
 export async function alertIfInvoicesStale(now = new Date()): Promise<"sent" | "fresh" | "not_working_day" | "already_sent"> {
     const { isWorkingDay, istDay } = await import("@/lib/calendar/officeCalendar");
     const day = istDay(now);
-    if (!isWorkingDay(day, await loadHolidays())) return "not_working_day";
+    if (!isWorkingDay(day, await loadHolidays(), await officeHoursResolver())) return "not_working_day";
     const f = await invoiceFreshness({ fresh: true });
     if (!f.stale) return "fresh";
     const claimed = (await db.execute(sql`

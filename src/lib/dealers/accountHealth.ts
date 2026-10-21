@@ -38,6 +38,7 @@ import { matchedUnion, REVENUE_IS_ORDER, REVENUE_NOT_VOID } from "@/lib/dashboar
 import { hasAccountOwnershipTables } from "@/lib/accounts/tables";
 import { dealerAccountSql, gstinMissingSql, invoiceAccountSql } from "@/lib/accounts/accountList";
 import { closedColumns } from "@/lib/accounts/accountClosures";
+import { businessTypeLabel, normalizeBusinessType } from "@/lib/leads/businessType";
 import { hasOrderClaimTables } from "@/lib/accounts/tables";
 import { claimStateCte, claimStatusSql, invoicesByAccountCte } from "@/lib/accounts/orderClaims";
 
@@ -294,7 +295,9 @@ export async function summarizeDealerHealth(
             ? (r.owner_name ?? "(unassigned)")
             : by === "city"
               ? (r.city?.trim() || "Unknown city")
-              : (r.business_type ?? "Not set");
+              : // ID 11: group by the label, not the stored code; a stray retired
+                // "finance" folds into Battery Sale (normalizeBusinessType) — there is no Finance group.
+                businessTypeLabel(normalizeBusinessType(r.business_type));
 
     const groups = new Map<string, DealerHealthGroup & { _before: number; _both: number }>();
     // ID 148: groups count live dealers only — a closed dealer is in no total or reorder rate.

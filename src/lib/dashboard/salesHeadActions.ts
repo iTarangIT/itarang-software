@@ -55,7 +55,7 @@ import {
 } from "@/lib/asm/transferVisitLimit";
 import { WORKABLE_STATUSES } from "@/lib/lifecycle/transitions";
 import { workingHoursBetween } from "@/lib/leads/workingHours";
-import { loadHolidays, workingDaysSinceSql } from "@/lib/calendar/holidays";
+import { loadOfficeCalendar, workingDaysSinceSql } from "@/lib/calendar/holidays";
 import { getTimeLimits } from "@/lib/timeLimits/store";
 import { listStockTasks, STOCK_TASK_ROLES, STOCK_TASKS_HREF } from "@/lib/inventory/stockUploadTasks/service";
 
@@ -224,11 +224,11 @@ async function hotNotCalled(s: ActionScope): Promise<Built> {
                 WHERE t.dealer_lead_id = dl.id AND t.touchpoint_type IN ('inside_sales_call', 'visit')
                   AND t.performed_at >= COALESCE(dl.assigned_at, dl.created_at))
            ${scope(s, "owner")}`);
-    const [limits, holidays] = await Promise.all([getTimeLimits(), loadHolidays()]);
+    const [limits, { holidays, hours: officeHours }] = await Promise.all([getTimeLimits(), loadOfficeCalendar()]);
     const limitHours = limits.owner_first_attempt;
     const now = new Date();
     const late = raw
-        .map((r) => ({ r, hours: workingHoursBetween(new Date(String(r.since)), now, holidays) }))
+        .map((r) => ({ r, hours: workingHoursBetween(new Date(String(r.since)), now, holidays, officeHours) }))
         .filter((x) => x.hours > limitHours)
         .sort((a, b) => b.hours - a.hours);
     const rows = late.map(({ r, hours }) =>

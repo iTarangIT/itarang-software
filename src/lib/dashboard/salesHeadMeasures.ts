@@ -49,7 +49,7 @@ import { leadScopeSql, type LeadScopeFilters } from "@/lib/leads/leadScopeSql";
 import { clockStats, hasLeadClocks, type ClockStats } from "@/lib/leads/clocks";
 import { medianAndP90 } from "@/lib/leads/clockRules";
 import { workingMinutesBetween } from "@/lib/leads/workingHours";
-import { loadHolidays } from "@/lib/calendar/holidays";
+import { loadOfficeCalendar } from "@/lib/calendar/holidays";
 import { matchedLinesUnion, matchedUnion, REVENUE_NOT_VOID } from "@/lib/dashboard/revenueSource";
 import { ENGAGED_OUTCOMES } from "@/lib/asm/types";
 import { dealerLeadByGstin, GSTIN_KEY } from "@/lib/leads/gstinMatch";
@@ -128,10 +128,10 @@ async function speed(f: MeasureFilters): Promise<SpeedMeasures | null> {
          WHERE l.clock = 'lead' AND l.start_inferred IS NOT TRUE
            AND ${onIstDays(sql`l.started_at`, f)} ${leadScopeSql(f)}
            ${f.spoc_id ? sql` AND (o.owner_id IS NULL OR o.owner_id = ${f.spoc_id})` : sql``}`);
-    const holidays = await loadHolidays();
+    const { holidays, hours: officeHours } = await loadOfficeCalendar();
     const assignedRows = pairs.filter((p) => p.assigned_at != null);
     const minutes = assignedRows.map((p) =>
-        workingMinutesBetween(new Date(String(p.ready_at)), new Date(String(p.assigned_at)), holidays),
+        workingMinutesBetween(new Date(String(p.ready_at)), new Date(String(p.assigned_at)), holidays, officeHours),
     );
     const ready = medianAndP90(minutes);
     const owners = f.spoc_id ? { ownerIds: [f.spoc_id] } : {};

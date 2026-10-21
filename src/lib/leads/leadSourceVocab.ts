@@ -119,12 +119,18 @@ export function originLabel(v: string | null | undefined): string | null {
     return LEAD_ORIGIN_LABEL[v as LeadOrigin] ?? v.replace(/_/g, " ");
 }
 
-/** /leads "Lead source" filter sentinel: leads with no door stamped. */
+/**
+ * /leads "Lead source" filter sentinel: leads with no door — none stamped and
+ * none implied by the legacy source (effectiveDoor() is null). The column shows
+ * those as the raw legacy value, or blank.
+ */
 export const SOURCE_DOOR_NONE = "__none";
 
 // Legacy dealer_leads.source values that pre-date the door, mapped to the door
-// they imply. Only used for display when no door is stamped.
-const LEGACY_SOURCE_DOOR: Record<string, LeadDoor> = {
+// they imply when no door is stamped. HANDOVER-A31: read by the column
+// (leadSourceLabel) AND the filter (effectiveDoorSql in leadSourceDoorSql.ts),
+// so the two can never disagree.
+export const LEGACY_SOURCE_DOOR: Readonly<Record<string, LeadDoor>> = {
     google_places: "scraper",
     manual_upload_lead: "bulk_upload",
     ai_dialer_lead: "ai_dialer",
@@ -133,17 +139,32 @@ const LEGACY_SOURCE_DOOR: Record<string, LeadDoor> = {
 };
 
 /**
- * What the /leads row shows as the lead's source: the stamped door, else the
- * door the legacy `source` implies, else the raw legacy value prettified.
+ * The lead's door for the "Lead source" filter and column: the stamped door,
+ * else the door the legacy `source` implies, else null. effectiveDoorSql() is
+ * the same rule in SQL.
+ */
+export function effectiveDoor(
+    door: string | null | undefined,
+    legacySource: string | null | undefined,
+): string | null {
+    if (door) return door;
+    if (!legacySource) return null;
+    return Object.prototype.hasOwnProperty.call(LEGACY_SOURCE_DOOR, legacySource)
+        ? LEGACY_SOURCE_DOOR[legacySource]
+        : null;
+}
+
+/**
+ * What the /leads row shows as the lead's source: the effective door (stamped,
+ * else implied by the legacy `source`), else the raw legacy value prettified.
  */
 export function leadSourceLabel(
     door: string | null | undefined,
     legacySource: string | null | undefined,
 ): string | null {
-    if (door) return doorLabel(door);
-    if (!legacySource) return null;
-    const implied = LEGACY_SOURCE_DOOR[legacySource];
-    return implied ? LEAD_DOOR_LABEL[implied] : legacySource.replace(/_/g, " ");
+    const d = effectiveDoor(door, legacySource);
+    if (d) return doorLabel(d);
+    return legacySource ? legacySource.replace(/_/g, " ") : null;
 }
 
 /**

@@ -189,12 +189,10 @@ async function istToday(): Promise<string> {
     return r[0].d;
 }
 
-async function holidays(from: string, to: string): Promise<Set<string>> {
-    const r = (await db.execute(sql`
-        SELECT holiday_date::text AS d FROM holiday_calendar
-         WHERE is_active IS NOT FALSE AND holiday_date BETWEEN ${from}::date AND ${to}::date
-    `)) as unknown as Array<{ d: string }>;
-    return new Set(r.map((x) => x.d));
+/** The office calendar (holidays + office hours) — one source for every working-day count. */
+async function officeCalendar() {
+    const { loadOfficeCalendar } = await import("@/lib/calendar/holidays");
+    return loadOfficeCalendar();
 }
 
 export type Measure = { value: number | null; reason: string | null };
@@ -311,9 +309,9 @@ export async function listTargets(opts: { month: string; userId?: string; viewer
     const last = monthEnd(monthFirst);
     const today = await istToday();
     const upTo = today < monthFirst ? monthFirst : today > last ? last : today;
-    const hol = await holidays(monthFirst, last);
-    const total = workingDaysBetween(monthFirst, last, hol);
-    const elapsed = today < monthFirst ? 0 : workingDaysBetween(monthFirst, upTo, hol);
+    const { holidays: hol, hours } = await officeCalendar();
+    const total = workingDaysBetween(monthFirst, last, hol, hours);
+    const elapsed = today < monthFirst ? 0 : workingDaysBetween(monthFirst, upTo, hol, hours);
 
     const rows = (await db.execute(sql`
         SELECT t.id, t.month::text AS month, t.user_id, u.name AS user_name, u.role AS user_role,
@@ -436,15 +434,15 @@ export async function workingDayContext(month: string) {
     const monthFirst = `${month.slice(0, 7)}-01`;
     const last = monthEnd(monthFirst);
     const today = await istToday();
-    const hol = await holidays(monthFirst, last);
+    const { holidays: hol, hours } = await officeCalendar();
     const upTo = today > last ? last : today;
     return {
         month: monthFirst,
         // A26: the last day the actuals count (today while the month runs). The
         // daily email reads the same figures to the day it covers (yesterday).
         actuals_up_to: today < monthFirst ? null : upTo,
-        working_days_total: workingDaysBetween(monthFirst, last, hol),
-        working_days_elapsed: today < monthFirst ? 0 : workingDaysBetween(monthFirst, upTo, hol),
+        working_days_total: workingDaysBetween(monthFirst, last, hol, hours),
+        working_days_elapsed: today < monthFirst ? 0 : workingDaysBetween(monthFirst, upTo, hol, hours),
     };
 }
 

@@ -2,8 +2,9 @@
 
 // ID 85 — Admin › Settings › Time limits. One row per limit (registry.ts):
 // the value in force today, a change already scheduled for later, and an Edit
-// that records a dated change. Below: the change log (what the CEO reads) and
-// the office calendar's holidays, edited here (Decision 4: no separate tab).
+// that records a dated change. Below: the change log (what the CEO reads), the
+// office hours (ID 85 #8, dated like the limits) and the office calendar's
+// holidays, edited here (Decision 4: no separate tab).
 
 import { Fragment, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -14,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import { formatLimit, type LimitUnit, type TimeLimitDef } from "@/lib/timeLimits/registry";
 import type { TimeLimitChange } from "@/lib/timeLimits/store";
 import { HolidaysPanel } from "./HolidaysPanel";
+import { OfficeHoursPanel } from "./OfficeHoursPanel";
 
 type LimitRow = TimeLimitDef & { value: number; scheduled: { value: number; effective_from: string } | null };
 
@@ -246,6 +248,14 @@ export function TimeLimitsView() {
                         </tbody>
                     </table>
                 </div>
+            </section>
+
+            <section id="office-hours" className="space-y-2">
+                <h2 className="text-base font-semibold text-ink">Office hours</h2>
+                <p className="text-sm text-ink-muted">
+                    The working days and hours every limit in working hours or working days is counted on.
+                </p>
+                <OfficeHoursPanel />
             </section>
 
             <section id="holidays" className="space-y-2">

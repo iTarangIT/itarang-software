@@ -73,7 +73,8 @@ import {
   buildBlockA,
   lastMonthColumnLabel,
 } from "../salesDailyBlockA";
-import { median, workingDaysElapsed } from "../workingTime";
+import { workingDaysElapsed } from "@/lib/calendar/officeCalendar";
+import { medianAndP90 } from "@/lib/leads/clockRules";
 import {
   BLOCK_B_COLUMNS,
   BLOCK_B_PCT_COLUMN,
@@ -282,7 +283,9 @@ async function rightNow(): Promise<RightNow> {
 /**
  * "Median wait, sales-ready → assigned (MTD)" (business template, Right now).
  * Leads whose FIRST owner arrived this month after they had become
- * sales-ready; the wait is in working days (workingTime.ts). A lead that was
+ * sales-ready; the wait is in working days on the office calendar
+ * (officeCalendar.workingDaysElapsed: each working day counts as its office
+ * hours, so a wait of 3 office hours under 10–19 is 0.3 days). A lead that was
  * sales-ready BECAUSE it got an owner (picked up in NeoDove, rep-created,
  * claimed — on db-2 every October assignment so far) never waited and is not
  * in the median. null = nothing measurable.
@@ -304,13 +307,10 @@ async function medianWaitToAssign(mtd: { from: string; to: string }): Promise<{ 
          AND (f.performed_at AT TIME ZONE 'Asia/Kolkata')::date BETWEEN ${mtd.from}::date AND ${mtd.to}::date
          AND f.performed_at > (to_jsonb(dl) ->> 'sales_ready_at')::timestamptz
     `)) as unknown as Array<{ ready_at: string; assigned_at: string }>;
-    const hol = (await db.execute(sql`
-      SELECT holiday_date::text AS d FROM holiday_calendar
-       WHERE is_active IS NOT FALSE AND holiday_date >= (${mtd.from}::date - 60)
-    `).catch(() => [])) as unknown as Array<{ d: string }>;
-    const set = new Set(hol.map((h) => h.d));
-    const waits = rows.map((r) => workingDaysElapsed(new Date(r.ready_at), new Date(r.assigned_at), set));
-    return { median: median(waits), n: waits.length };
+    const { loadOfficeCalendar } = await import("@/lib/calendar/holidays");
+    const { holidays, hours } = await loadOfficeCalendar();
+    const waits = rows.map((r) => workingDaysElapsed(new Date(r.ready_at), new Date(r.assigned_at), holidays, hours));
+    return { median: medianAndP90(waits).median, n: waits.length };
   } catch (e) {
     console.warn("[sales-daily] median wait not measured:", e instanceof Error ? e.message : e);
     return null;

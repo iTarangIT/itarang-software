@@ -130,9 +130,17 @@ export function wasHotAt(leadId: SQL, at: SQL, currentLevel: SQL): SQL {
  * E-295), so a Sales Head / CEO / Admin transferring a rep's lead credits the
  * rep, not themselves. Old rows without from_owner_id fall back to the person
  * who pressed (performed_by). `t` = lead_touchpoints alias.
+ *
+ * HANDOVER-A31: a row that recorded the move (to_owner_id set, E-295) but has
+ * no from_owner_id is an assign of a lead NOBODY owned — the bulk reassign /
+ * NeoDove push (assignOwner.ts). Nobody handed it over, so it is credited to
+ * no one (NULL), never to the manager who pressed. The rep's own Transfer
+ * always records a from_owner_id (transferToAsm.ts), so it is unaffected.
+ * Every reader counts only rows with a credit, so per-person rows still add up
+ * to the company total.
  */
 export function transferCredit(t: SQL = sql`t`): SQL {
-    return sql`COALESCE(${t}.from_owner_id, ${t}.performed_by)`;
+    return sql`COALESCE(${t}.from_owner_id, CASE WHEN ${t}.to_owner_id IS NULL THEN ${t}.performed_by END)`;
 }
 
 /** The first quote row of its lead (quote_issue / quote_revision, lowest version). `c` = dealer_lead_commercials alias. */
@@ -157,7 +165,9 @@ export type AnalystTopic =
     | "margin"
     | "batteries"
     | "people"
-    | "trend";
+    | "trend"
+    | "accounts"
+    | "idle";
 
 /**
  * ID 32 — the agreed rules above, in words, for the AI Analyst (a separate
@@ -212,7 +222,39 @@ export const ANALYST_RULES: ReadonlyArray<{ topics: readonly AnalystTopic[]; tex
             "ignore sales_head_target); company % of target uses ceo_target only; custom_* metrics use manual_actual.",
     },
     { topics: ["won", "leads"], text: "A Lost to Lost history row is a reason change, not a loss." },
-    { topics: ["visits", "people"], text: "Visits = lead_visits visit_status 'visited'." },
+    // ID 185 — Fresh / Repeat / New to iTarang, as salesDashboard.ts queryTotals (fv / rv) counts them.
+    // Topic "visits" only: a people question not about visits should not spend its room here.
+    {
+        topics: ["visits"],
+        text:
+            "Visits = lead_visits with visit_status 'visited', one per (asm_id, dealer_lead_id, actual_visit_date); only 'visited' rows count anywhere below. " +
+            "Fresh = the rep's first visited visit to that dealer (actual_visit_date = MIN for that asm_id + dealer_lead_id); Repeat = Visits - Fresh; " +
+            "New to iTarang = the dealer's first visited visit by anyone (MIN per dealer_lead_id).",
+    },
+    // ID 192 — the idle basis (src/lib/leads/followUpAgeing.ts) and the per-holder limits (needsAttention.ts).
+    {
+        topics: ["idle"],
+        text:
+            "Idle = working days (Sundays and active holiday_calendar dates skipped) since COALESCE(GREATEST(last_worked_at, assigned_at, " +
+            "next_follow_up_at if within 30 days ahead), created_at) on dealer_leads; a follow-up still ahead = not idle. " +
+            "Only open active leads with a current_owner_id; past the limit when idle >= idle_asm (default 7) for an ASM holder " +
+            "(analyst_staff.role 'asm'), else idle_cc (default 5) — the latest time_limit_settings row by effective_from.",
+    },
+    // ID 184 — salesReady.ts awaitingAssignment() and its split.
+    {
+        topics: ["leads"],
+        text:
+            "Ready leads with no owner = dealer_leads with sales_ready_at set, current_owner_id NULL, is_active not false, " +
+            "lead_status not Won/Converted/Lost and contactability NULL (number not dead). " +
+            "Split, one bucket each: sales_ready_reason 'ai_qualified' first, then interest_level 'hot', then other.",
+    },
+    // ID 148 — accountList.ts countAccounts(): live = not closed; gstinMissingSql().
+    {
+        topics: ["accounts"],
+        text:
+            "Live dealers = accounts with analyst_account_flags.is_dealer and no account_closures row (a row = closed). " +
+            "GSTIN missing = analyst_account_flags.gstin_missing (blank, 'PENDING' or failing the GSTIN check); the GSTIN itself is not readable.",
+    },
     // ID 11 — Finance was folded into Battery sale (E-331).
     { topics: ["business", "leads"], text: "business_type 'finance' means battery_sale." },
     // ID 32 / 71 / 147 — money, read the way the CEO dashboard reads it (revenueSource.ts).
@@ -240,9 +282,12 @@ export const ANALYST_RULES: ReadonlyArray<{ topics: readonly AnalystTopic[]; tex
     },
     {
         topics: ["margin"],
+        // ID 147 / HANDOVER-A16 — the product is stamped on each line from Item mapping (itemMap.ts);
+        // vyapar_item_map's family rows are keyed by product code, so a join on item name misses them.
         text:
-            "Gross margin = line amount before GST minus mapped cost (vyapar_item_map product, latest stock or price-book cost); " +
-            "lines without a mapped product are 'not costed', never zero cost.",
+            "Gross margin = invoice_line_items.amount_excl_gst minus quantity x unit cost of the line's own product_id / asset_type " +
+            "(stamped from Item mapping; never join vyapar_item_map by item name): average inventory.inventory_amount of that product, " +
+            "else the price book. Lines without product_id or cost are 'not costed', never zero cost.",
     },
     // A35 — trends and forecasts.
     {

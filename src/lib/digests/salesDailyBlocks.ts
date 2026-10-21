@@ -47,7 +47,9 @@
 //   Hot handed to field  the lead's owner AT THE MOMENT of the asm_transfer
 //                        (from_owner_id — ID 179: a manager's transfer of an
 //                        ISR's lead counts for the ISR; old rows without it,
-//                        whoever performed it). Distinct leads: a lead handed
+//                        whoever performed it; HANDOVER-A31: a bulk assign of
+//                        a lead nobody owned is credited to no one, and Block
+//                        A leaves it out too). Distinct leads: a lead handed
 //                        over twice in a window counts once
 //   Connected / Engaged  the caller (performed_by); connectedCall() and
 //                        engagedCall() — since ID 59 an engaged call is a
@@ -260,10 +262,13 @@ export function buildRepBlocks(
     const mBy = new Map((mtd.per_spoc ?? []).map((b) => [b.spoc_id, b]));
     const ids = new Set<string>();
     const info = new Map<string, SalesSpocBlock>();
+    // HANDOVER-A31: a non-ISR credited with "Hot to field" (they owned the lead
+    // they transferred) is listed even with no calls, so Block C adds up to Block A.
+    const handedHot = (id: string) => (extras.y.hot_handed?.get(id) ?? 0) > 0 || (extras.mtd.hot_handed?.get(id) ?? 0) > 0;
     for (const b of [...(mtd.per_spoc ?? []), ...(y.per_spoc ?? [])]) {
         if (!info.has(b.spoc_id)) info.set(b.spoc_id, b);
         if (b.role === role) ids.add(b.spoc_id);
-        else if (role === "inside_sales_rep" && b.role !== "asm" && b.totals.calls > 0) ids.add(b.spoc_id);
+        else if (role === "inside_sales_rep" && b.role !== "asm" && (b.totals.calls > 0 || handedHot(b.spoc_id))) ids.add(b.spoc_id);
     }
 
     const pick = (def: MetricDef, b: SalesSpocBlock | undefined, ex: RepExtras, id: string): number | null => {

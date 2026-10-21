@@ -31,6 +31,7 @@ import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { leadScopeSql } from "@/lib/leads/leadScopeSql";
 import { engagedCall, humanCall, isFirstQuote } from "@/lib/reports/metricDefinitions";
+import { freshRepeatJoins, isFreshSql, isNewToItarangSql, isRepeatSql, visitedRowSql } from "@/lib/visits/freshRepeat";
 import { asmTransferRecipientFromVisitSql } from "@/lib/leads/closingOwner";
 import { accountOwnerOn, dealerLeadByGstin, GSTIN_KEY } from "@/lib/leads/gstinMatch";
 import { hasAccountOwnershipTables } from "@/lib/accounts/tables";
@@ -250,32 +251,29 @@ async function leadEvents(kind: DrillKind, f: DrillFilters, persons: string[] | 
         case "repeat_visits":
         case "dealers_visited":
         case "new_dealers": {
-            // queryTotals' vis: a visit = one person, one dealer, one IST day.
+            // queryTotals' vis: a visit = one person, one dealer, one IST day,
+            // visited rows only (ID 185, src/lib/visits/freshRepeat.ts).
             const perVisit = kind === "visits" || kind === "fresh_visits" || kind === "repeat_visits";
             const distinct = perVisit ? sql`v.asm_id, v.dealer_lead_id, v.actual_visit_date` : sql`v.asm_id, v.dealer_lead_id`;
             // ID 185: fresh = this person's first visit to the dealer; repeat = any later one.
-            const rvJoin = sql`LEFT JOIN (SELECT asm_id, dealer_lead_id, MIN(actual_visit_date) AS first_d FROM lead_visits
-                                           WHERE actual_visit_date IS NOT NULL GROUP BY asm_id, dealer_lead_id) rv
-                                     ON rv.dealer_lead_id = v.dealer_lead_id AND rv.asm_id IS NOT DISTINCT FROM v.asm_id`;
             const freshCond =
                 kind === "fresh_visits"
-                    ? sql`AND v.actual_visit_date = rv.first_d`
+                    ? sql`AND ${isFreshSql()}`
                     : kind === "repeat_visits"
-                      ? sql`AND v.actual_visit_date > rv.first_d`
+                      ? sql`AND ${isRepeatSql()}`
                       : sql``;
             return sql`SELECT DISTINCT ON (${distinct})
                               v.dealer_lead_id AS lead_id, v.asm_id::text AS person, v.actual_visit_date::timestamp AS at,
                               concat_ws(' · ', replace(v.visit_status, '_', ' '), replace(v.visit_outcome, '_', ' '),
-                                        CASE WHEN v.actual_visit_date = fv.first_d THEN 'new to iTarang'
-                                             WHEN v.actual_visit_date = rv.first_d THEN 'fresh (first visit by this person)'
+                                        CASE WHEN ${isNewToItarangSql()} THEN 'new to iTarang'
+                                             WHEN ${isFreshSql()} THEN 'fresh (first visit by this person)'
                                              ELSE 'repeat' END, left(v.visit_remarks, 120)) AS detail
                          FROM lead_visits v
                          JOIN dealer_leads dl ON dl.id = v.dealer_lead_id
-                         LEFT JOIN (SELECT dealer_lead_id, MIN(actual_visit_date) AS first_d FROM lead_visits
-                                     WHERE actual_visit_date IS NOT NULL GROUP BY dealer_lead_id) fv ON fv.dealer_lead_id = v.dealer_lead_id
-                         ${rvJoin}
-                        WHERE v.actual_visit_date >= ${f.from}::date AND v.actual_visit_date <= ${f.to}::date
-                          ${kind === "new_dealers" ? sql`AND v.actual_visit_date = fv.first_d` : sql``}
+                         ${freshRepeatJoins("v", true)}
+                        WHERE ${visitedRowSql()}
+                          AND v.actual_visit_date >= ${f.from}::date AND v.actual_visit_date <= ${f.to}::date
+                          ${kind === "new_dealers" ? sql`AND ${isNewToItarangSql()}` : sql``}
                           ${freshCond}
                           ${scope} ${who(sql`v.asm_id`, f, persons)}
                         ORDER BY ${distinct}, v.actual_visit_date DESC`;

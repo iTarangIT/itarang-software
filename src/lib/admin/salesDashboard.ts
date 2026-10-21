@@ -19,7 +19,8 @@
  * WHAT A VISIT IS. One person at one dealer on one day: VISIT_KEY. A rep who
  * logs the same dealer twice in a day (it happens — a second entry minutes
  * later with a follow-up note) made one visit, not two. Every visit count
- * here (yesterday, series, totals) counts DISTINCT VISIT_KEY.
+ * here (yesterday, series, totals) counts DISTINCT VISIT_KEY, over rows with
+ * visit_status = 'visited' only (ID 185, 21 Oct) — so fresh + repeat = visits.
  *
  * "Unique" and "new" are DIFFERENT columns and must stay so: unique = how many
  * distinct dealers were visited in the bucket; new = how many of those had never
@@ -70,6 +71,14 @@ import { leadScopeSql } from "@/lib/leads/leadScopeSql";
 import { hasAccountOwnershipTables } from "@/lib/accounts/tables";
 import { matchedLinesUnion, matchedUnion, REVENUE_NOT_VOID } from "@/lib/dashboard/revenueSource";
 import { humanCall, isFirstQuote } from "@/lib/reports/metricDefinitions";
+import {
+    VISIT_KEY,
+    freshRepeatCtes,
+    freshRepeatJoins,
+    isFreshSql,
+    isNewToItarangSql,
+    visitedRowSql,
+} from "@/lib/visits/freshRepeat";
 import {
     INTEREST_LEVELS,
     SALES_DASHBOARD_GRANULARITIES,
@@ -138,12 +147,14 @@ export function parseSalesDashboardParams(url: URL): SalesDashboardParams {
 // ─────────────────────────────── Fragments ──────────────────────────────────
 
 /**
- * One visit = one person, one dealer, one IST day (see the header). Counted as
+ * One visit = one person, one dealer, one IST day (see the header), and only a
+ * row with visit_status = 'visited' (ID 185, src/lib/visits/freshRepeat.ts —
+ * the one definition of a visit, fresh, repeat and new to iTarang). Counted as
  * COUNT(DISTINCT VISIT_KEY) over a CTE exposing asm_id / dealer_lead_id /
  * actual_visit_date. Keyed on the person too, so per-rep visits still add up
  * to the whole-team figure when two reps see the same dealer the same day.
  */
-export const VISIT_KEY = sql`(asm_id, dealer_lead_id, actual_visit_date)`;
+export { VISIT_KEY };
 
 /** A scheduled visit that has not happened yet and was not called off. */
 export const OPEN_VISIT = sql`v.visit_status NOT IN ('visited', 'cancelled', 'no_show')`;
@@ -227,7 +238,8 @@ async function querySnapshot(
         ),
         parts AS (
             SELECT spoc,
-                   COUNT(DISTINCT ${VISIT_KEY}) FILTER (WHERE actual_visit_date = ${today}::date - 1) AS visits_yesterday,
+                   COUNT(DISTINCT ${VISIT_KEY}) FILTER (WHERE actual_visit_date = ${today}::date - 1
+                                                         AND visit_status = 'visited') AS visits_yesterday,
                    0::bigint AS calls_yesterday,
                    COUNT(*) FILTER (WHERE scheduled_date = ${today}::date AND ${OPEN_VISIT}) AS planned_today,
                    COUNT(*) FILTER (WHERE scheduled_date >= ${today}::date
@@ -263,6 +275,7 @@ type SeriesRow = {
     visits: string;
     unique_visits: string;
     new_visits: string;
+    fresh_visits: string;
     calls: string;
 };
 
@@ -290,23 +303,21 @@ async function querySeries(
                        ${step}::interval
                    ) gs
         ),
-        -- First-ever visit per dealer, over the WHOLE table on purpose.
-        fv AS (
-            SELECT dealer_lead_id, MIN(actual_visit_date) AS first_d
-              FROM lead_visits
-             WHERE actual_visit_date IS NOT NULL
-             GROUP BY dealer_lead_id
-        ),
+        -- ID 185: first visit per dealer (fv) and per person + dealer (rv),
+        -- visited rows only, over the WHOLE table on purpose.
+        ${freshRepeatCtes()},
         vis AS (
             SELECT ${spocKey(sql`v.asm_id`, bySpoc)} AS spoc,
                    date_trunc(${granularity}, v.actual_visit_date::timestamp)::date AS bucket,
                    v.asm_id, v.actual_visit_date,
                    v.dealer_lead_id,
-                   (v.actual_visit_date = fv.first_d) AS is_new
+                   ${isNewToItarangSql()} AS is_new,
+                   ${isFreshSql()} AS is_fresh
               FROM lead_visits v
               JOIN dealer_leads dl ON dl.id = v.dealer_lead_id
-              LEFT JOIN fv ON fv.dealer_lead_id = v.dealer_lead_id
-             WHERE v.actual_visit_date >= ${f.from}::date
+              ${freshRepeatJoins()}
+             WHERE ${visitedRowSql()}
+               AND v.actual_visit_date >= ${f.from}::date
                AND v.actual_visit_date <= ${f.to}::date
                ${leadScope(f)} ${spocClause(sql`v.asm_id`, f)}
         ),
@@ -328,10 +339,11 @@ async function querySeries(
                    COUNT(DISTINCT ${VISIT_KEY})                        AS visits,
                    COUNT(DISTINCT dealer_lead_id)                      AS unique_visits,
                    COUNT(DISTINCT dealer_lead_id) FILTER (WHERE is_new) AS new_visits,
+                   COUNT(DISTINCT ${VISIT_KEY}) FILTER (WHERE is_fresh) AS fresh_visits,
                    0::bigint                                           AS calls
               FROM vis GROUP BY spoc, bucket
             UNION ALL
-            SELECT spoc, bucket, 0, 0, 0, COUNT(*) FROM calls GROUP BY spoc, bucket
+            SELECT spoc, bucket, 0, 0, 0, 0, COUNT(*) FROM calls GROUP BY spoc, bucket
         ),
         spocs AS (${spocs})
         SELECT s.spoc,
@@ -339,6 +351,7 @@ async function querySeries(
                COALESCE(SUM(a.visits), 0)::text        AS visits,
                COALESCE(SUM(a.unique_visits), 0)::text AS unique_visits,
                COALESCE(SUM(a.new_visits), 0)::text    AS new_visits,
+               COALESCE(SUM(a.fresh_visits), 0)::text  AS fresh_visits,
                COALESCE(SUM(a.calls), 0)::text         AS calls
           FROM spocs s
          CROSS JOIN buckets b
@@ -354,6 +367,7 @@ async function querySeries(
             visits: num(r.visits),
             unique_visits: num(r.unique_visits),
             new_visits: num(r.new_visits),
+            fresh_visits: num(r.fresh_visits),
             calls: num(r.calls),
         });
         out.set(r.spoc, list);
@@ -375,6 +389,7 @@ function averagesFromDaily(daily: SalesSeriesRow[], daysInRange: number): SalesA
         avg_visits_per_day: round2(sum("visits") / d),
         avg_unique_per_day: round2(sum("unique_visits") / d),
         avg_new_per_day: round2(sum("new_visits") / d),
+        avg_fresh_per_day: round2(sum("fresh_visits") / d),
         avg_calls_per_day: round2(sum("calls") / d),
     };
 }
@@ -488,30 +503,20 @@ async function queryTotals(
     bySpoc: boolean,
 ): Promise<Map<string | null, SalesTotals>> {
     const rows = await db.execute<TotalsRow>(sql`
-        WITH fv AS (
-            SELECT dealer_lead_id, MIN(actual_visit_date) AS first_d
-              FROM lead_visits
-             WHERE actual_visit_date IS NOT NULL
-             GROUP BY dealer_lead_id
-        ),
-        -- ID 185: each person's first visit to each dealer, over the whole table.
-        rv AS (
-            SELECT asm_id, dealer_lead_id, MIN(actual_visit_date) AS first_d
-              FROM lead_visits
-             WHERE actual_visit_date IS NOT NULL
-             GROUP BY asm_id, dealer_lead_id
-        ),
+        -- ID 185: first visit per dealer (fv) and per person + dealer (rv),
+        -- visited rows only, over the whole table (src/lib/visits/freshRepeat.ts).
+        WITH ${freshRepeatCtes()},
         vis AS (
             SELECT ${spocKey(sql`v.asm_id`, bySpoc)} AS spoc,
                    v.asm_id, v.actual_visit_date,
                    v.dealer_lead_id,
-                   (v.actual_visit_date = fv.first_d) AS is_new,
-                   (v.actual_visit_date = rv.first_d) AS is_fresh
+                   ${isNewToItarangSql()} AS is_new,
+                   ${isFreshSql()} AS is_fresh
               FROM lead_visits v
               JOIN dealer_leads dl ON dl.id = v.dealer_lead_id
-              LEFT JOIN fv ON fv.dealer_lead_id = v.dealer_lead_id
-              LEFT JOIN rv ON rv.dealer_lead_id = v.dealer_lead_id AND rv.asm_id IS NOT DISTINCT FROM v.asm_id
-             WHERE v.actual_visit_date >= ${f.from}::date
+              ${freshRepeatJoins()}
+             WHERE ${visitedRowSql()}
+               AND v.actual_visit_date >= ${f.from}::date
                AND v.actual_visit_date <= ${f.to}::date
                ${leadScope(f)} ${spocClause(sql`v.asm_id`, f)}
         ),

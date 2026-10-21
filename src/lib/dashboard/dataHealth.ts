@@ -8,8 +8,9 @@
  *                        (R-03 — link the NeoDove agent)
  *   leads_no_city        active leads with a blank city (R-20)
  *   leads_no_type        active leads with no business type (R-19)
- *   converted_no_gstin   converted leads with no GSTIN — their invoices
- *                        cannot be linked (R-11)
+ *   converted_no_gstin   live dealer accounts whose GSTIN is missing — their
+ *                        invoices cannot be linked (R-11). ID 148: the same
+ *                        count as Accounts "GSTIN missing" (countAccounts)
  *   lines_no_weight      buyback lines on submitted requests with no weight —
  *                        kg is under-counted (R-13)
  *   invoices_unmatched   invoices not linked to a CRM dealer (R-11)
@@ -21,6 +22,7 @@ import { sql, type SQL } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import { revenueSummary } from "@/lib/dashboard/revenueSource";
+import { countAccounts } from "@/lib/accounts/accountList";
 
 export type DataHealthCheck = {
     key: string;
@@ -58,10 +60,14 @@ export async function dataHealth(): Promise<DataHealthCheck[]> {
             SELECT COUNT(*) FILTER (WHERE business_type IS NULL) AS bad, COUNT(*) AS total
               FROM dealer_leads WHERE is_active IS NOT FALSE
         `),
-        ratio(sql`
-            SELECT COUNT(*) FILTER (WHERE NULLIF(btrim(gstin), '') IS NULL) AS bad, COUNT(*) AS total
-              FROM dealer_leads WHERE lead_status = 'Converted' AND is_active IS NOT FALSE
-        `),
+        // ID 148: live dealer accounts with gstinMissingSql() — the Accounts
+        // "GSTIN missing" tab and the Dealer Health page it links to, not converted leads.
+        countAccounts()
+            .then((c) => ({ bad: c.gstin_missing, total: c.total }))
+            .catch((e) => {
+                console.warn("[dataHealth] check failed", e instanceof Error ? e.message : e);
+                return null;
+            }),
         ratio(sql`
             SELECT COUNT(*) FILTER (WHERE COALESCE(l.unit_weight_kg, 0) <= 0) AS bad, COUNT(*) AS total
               FROM buyback_lines l

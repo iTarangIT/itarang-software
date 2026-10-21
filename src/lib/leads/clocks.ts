@@ -78,6 +78,7 @@ function group<T extends { lead_id: string }>(rows: T[]): Map<string, T[]> {
 export async function computeLeadClocks(now = new Date(), opts: { kinds?: readonly ClockKind[] } = {}): Promise<LeadClock[]> {
     const db = await database();
     const { holidaysAsOf } = await import("@/lib/calendar/holidays");
+    const { officeHoursResolver } = await import("@/lib/calendar/officeHoursStore");
     const { timeLimitsResolver } = await import("@/lib/timeLimits/store");
     const kinds = new Set<ClockKind>(opts.kinds ?? ((await hasLimitEvents()) ? ALL_CLOCK_KINDS : BASE_CLOCK_KINDS));
     const wantsHot = kinds.has("hot_assign") || kinds.has("hot_owner");
@@ -90,7 +91,7 @@ export async function computeLeadClocks(now = new Date(), opts: { kinds?: readon
                   FROM dealer_lead_interest_history ih
                  WHERE ih.changed_at IS NOT NULL AND ih.to_level IS NOT NULL`
             : sql``;
-    const [leadRows, touchRows, hopRows, statusRows, interestRows, quoteRows, limitsOn, holidays] = await Promise.all([
+    const [leadRows, touchRows, hopRows, statusRows, interestRows, quoteRows, limitsOn, holidays, hours] = await Promise.all([
         db.execute(sql`
             SELECT dl.id,
                    dl.created_at AT TIME ZONE 'UTC' AS created_at,
@@ -153,6 +154,7 @@ export async function computeLeadClocks(now = new Date(), opts: { kinds?: readon
             : Promise.resolve([]),
         timeLimitsResolver(),
         holidaysAsOf(),
+        officeHoursResolver(),
     ]);
 
     const touches = group(
@@ -191,6 +193,7 @@ export async function computeLeadClocks(now = new Date(), opts: { kinds?: readon
                 kinds,
                 interest: interest.get(r.id) ?? [],
                 quotes: quotes.get(r.id) ?? [],
+                hours,
             }),
         );
     }
