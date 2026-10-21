@@ -133,11 +133,12 @@ async function main() {
     const { buildSalesDashboard } = await import("@/lib/admin/salesDashboard");
     const { buildBlockA } = await import("@/lib/digests/salesDailyBlockA");
     const { loadRepExtras } = await import("@/lib/digests/salesDailyBlocks");
-    const { salesDailyPeriods } = await import("@/lib/digests/kinds/sales-daily");
+    const { salesDailyPeriodsFor } = await import("@/lib/digests/kinds/sales-daily");
 
     const istDay = process.argv[2] ?? istYesterday();
     if (!/^\d{4}-\d{2}-\d{2}$/.test(istDay)) throw new Error("istDay must be YYYY-MM-DD");
-    const periods = salesDailyPeriods(istDay);
+    // ID 194: Yesterday = the last working day, exactly as the email counts it.
+    const periods = await salesDailyPeriodsFor(istDay);
     console.log(`Sales Daily covering ${istDay}`);
     for (const [k, p] of Object.entries(periods)) console.log(`  ${k.padEnd(10)} ${p.from} → ${p.to}`);
 

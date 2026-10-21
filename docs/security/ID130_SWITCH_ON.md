@@ -98,6 +98,19 @@ For each path:
   `PUBLIC_API_RULES` in `src/lib/security/publicApi.ts`, with the reason, and
   deploy before Wednesday.
 
+Already on the allowed list (18 Oct, no action needed — do not count these as
+gaps in the log):
+
+- `/api/files/open` — the "open file" link in downloads and e-mails (ID 166).
+  The route checks the login itself and sends a logged-out click to `/login`,
+  so it is let through the gate; with the gate refusing it, the person would
+  see `Unauthorized` instead of the login page.
+- Signed file links (`?exp=&sig=`) to `/api/files/documents|dealer-documents|call-recordings/…`
+  **and** `/api/nbfc-uploads/…` (signed NBFC-file links). The gate only lets a
+  link that carries a signature reach the route; the route checks the
+  signature, its expiry and the login (since 17 Oct every open needs a login,
+  so a logged-out signed link still gets `401` from the route).
+
 ## 3. Wed 14 Oct: enforce
 
 Add to the env (box, plus the GitHub secret for prod), then reload:
@@ -116,6 +129,8 @@ pm2 logs <app> | grep -E 'api-gate|webhook-auth|cron-auth'
 Business check:
 
 1. Logged out, `curl -i https://crm.itarang.com/api/leads` → `401 Unauthorized`.
+   Logged out, `curl -i "https://crm.itarang.com/api/files/open?u=/api/files/documents/x.pdf"`
+   → `302` to `/login` (not 401).
 2. A forged Digio "signed" call without the checksum →
    `curl -i -X POST https://crm.itarang.com/api/webhooks/digio -d '{}'` → 401.
    A real Digio and Bolna event still arrives.

@@ -90,10 +90,19 @@ async function collect(
 ): Promise<{ ok: boolean; figures: DigestFigures; error?: string }> {
   try {
     const { db } = await import("@/lib/db");
+    // 18 Oct row 26: "Waiting for admin action" past onboarding_stall_us —
+    // working days (office calendar) since the application's last action
+    // (the onboarding clock, naive UTC), against the limit in force today.
+    const { workingDaysSinceSql } = await import("@/lib/calendar/holidays");
+    const { getTimeLimits } = await import("@/lib/timeLimits/store");
+    const { onboardingClockSql } = await import("@/lib/onboarding/clock");
+    const usLimit = Math.max(1, Math.floor((await getTimeLimits()).onboarding_stall_us));
+    const usDays = workingDaysSinceSql(sql`((${sql.raw(onboardingClockSql("d"))}) AT TIME ZONE 'UTC')`);
     const rows = (await db.execute(sql`
       WITH derived AS (
         SELECT
           a.id, a.approved_at, a.rejected_at, a.submitted_at, a.onboarding_status,
+          a.last_action_at, a.updated_at,
           CASE
             WHEN a.onboarding_status IN ('approved', 'rejected', 'correction_requested')
               THEN a.onboarding_status
@@ -125,6 +134,10 @@ async function collect(
         (SELECT COUNT(*) FROM derived d WHERE d.status IN
           ('submitted','pending_admin_review','pending_sales_head',
            'under_review','agreement_in_progress'))::int                  AS open_pending_review,
+        (SELECT COUNT(*) FROM derived d WHERE d.status IN
+          ('submitted','pending_admin_review','pending_sales_head',
+           'under_review','agreement_in_progress')
+           AND ${usDays} >= ${usLimit})::int                              AS open_pending_review_past,
         (SELECT COUNT(*) FROM derived d WHERE d.status IN
           ('under_correction','correction_requested'))::int               AS open_under_correction,
         (SELECT COUNT(*) FROM derived d WHERE d.status IN
@@ -160,6 +173,11 @@ async function collect(
         ],
         backlog: [
           { key: "backlog", label: "Waiting for admin action", value: num(r.open_pending_review) },
+          {
+            key: "backlog",
+            label: `…of which past ${usLimit} working day${usLimit === 1 ? "" : "s"} (onboarding limit, our side)`,
+            value: num(r.open_pending_review_past),
+          },
           { key: "backlog", label: "Need dealer clarification", value: num(r.open_under_correction) },
           { key: "backlog", label: "Dealer accounts activated", value: num(r.open_approved) },
           { key: "backlog", label: "All onboarding submissions", value: num(r.open_total) },

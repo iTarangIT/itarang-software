@@ -22,6 +22,7 @@ import { isIntentBucket, normalizeScoreRange, parseScoreBound } from "@/lib/lead
 import { isConnectStatus, isDispositionBucket } from "@/lib/leads/dispositions";
 import type { LeadListFilters } from "@/lib/leads/leadListQuery";
 import { IDLE_RANGES, isIdleRangeKey } from "@/lib/leads/idle";
+import { hasTimeLimitTable } from "@/lib/timeLimits/store";
 import { neodoveTablesPresent } from "@/lib/leads/leadCampaign";
 import { businessTypeFilterParam } from "@/lib/leads/businessType";
 import { exportsOwnLeadsOnly } from "@/lib/exports/downloadLog";
@@ -57,6 +58,8 @@ export async function parseLeadListFilters(
         parseScoreBound(searchParams.get("score_max")),
     );
     const hasNeodoveTables = campaignParam ? await neodoveTablesPresent() : false;
+    const idlePastLimit = idleParam === "past_limit";
+    const idleLimitsTable = idlePastLimit ? await hasTimeLimitTable() : false;
 
     return {
         status: searchParams.get("status") || null,
@@ -70,6 +73,8 @@ export async function parseLeadListFilters(
         idleMinDays: idleRange?.min ?? null,
         idleMaxDays: idleRange?.max ?? null,
         idleNeverTouched: searchParams.get("idle") === "never",
+        idlePastLimit,
+        idleLimitsTable,
         campaign: campaignParam,
         hasNeodoveTables,
         state: searchParams.get("state")?.trim() || null,

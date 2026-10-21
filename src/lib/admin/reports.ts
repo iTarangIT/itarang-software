@@ -11,6 +11,8 @@ import { ONBOARDING_DROPOUT_REASONS, OWNER_DRILL_METRICS } from "./types";
 import { isUndefinedColumn, ownerConversionRate, roleLabel } from "./reportHelpers";
 import { asmTransferRecipientFromVisitSql } from "@/lib/leads/closingOwner";
 import { hasLeadClocks } from "@/lib/leads/clocks";
+import { workingDaysBetweenSql } from "@/lib/calendar/holidays";
+import { FOLLOW_UP_HORIZON_DAYS } from "@/lib/leads/followUpAgeing";
 import type {
     DashboardFilters,
     OwnerDrillLead,
@@ -411,6 +413,10 @@ async function sourcePerformance(f: DashboardFilters): Promise<ReportResult> {
 // else is a handoff for the first and a conversion for the second, never both.
 // Each lead is counted once however many times it was handed to the same ASM.
 async function asmHandoff(f: DashboardFilters): Promise<ReportResult> {
+    // 18 Oct row 39 — "Speed": both waits in working days on the office
+    // calendar (holidays off), not calendar days.
+    const closeDays = workingDaysBetweenSql(sql`p.first_handoff_at`, sql`p.closed_at`);
+    const visitDays = workingDaysBetweenSql(sql`p.first_handoff_at`, sql`p.first_visit_at`);
     const rows = await db.execute<{
         asm_id: string | null;
         asm_name: string | null;
@@ -418,6 +424,7 @@ async function asmHandoff(f: DashboardFilters): Promise<ReportResult> {
         converted: string;
         closed: string;
         avg_days_to_close: string | null;
+        median_days_to_visit: string | null;
         escalations: string;
     }>(sql`
         WITH handoff AS (
@@ -444,6 +451,16 @@ async function asmHandoff(f: DashboardFilters): Promise<ReportResult> {
                    MAX(h.closed_at) AS closed_at
             FROM handoff h
             GROUP BY h.asm_id, h.dealer_lead_id
+        ),
+        per_lead_v AS (
+            -- The first visit marked visited on or after the first handoff
+            -- (a visit has a date only: read as 10:00 IST, as the clocks do).
+            SELECT p.*,
+                   (SELECT MIN((v.actual_visit_date + TIME '10:00') AT TIME ZONE 'Asia/Kolkata')
+                      FROM lead_visits v
+                     WHERE v.dealer_lead_id = p.dealer_lead_id AND v.visit_status = 'visited'
+                       AND v.actual_visit_date >= (p.first_handoff_at AT TIME ZONE 'Asia/Kolkata')::date) AS first_visit_at
+              FROM per_lead p
         )
         SELECT
             p.asm_id::text AS asm_id,
@@ -451,12 +468,14 @@ async function asmHandoff(f: DashboardFilters): Promise<ReportResult> {
             SUM(p.handoffs)::text AS handoffs,
             COUNT(*) FILTER (WHERE p.closed_by_asm AND p.lead_status = 'Converted')::text AS converted,
             COUNT(*) FILTER (WHERE p.closed_by_asm AND p.lead_status IN ('Converted','Lost'))::text AS closed,
-            ROUND(AVG(EXTRACT(EPOCH FROM (p.closed_at - p.first_handoff_at)) / 86400)
+            ROUND(AVG(${closeDays})
                   FILTER (WHERE p.closed_by_asm AND p.closed_at IS NOT NULL
                             AND p.lead_status IN ('Converted','Lost'))::numeric, 1)::text AS avg_days_to_close,
+            ROUND((percentile_cont(0.5) WITHIN GROUP (ORDER BY ${visitDays})
+                  FILTER (WHERE p.first_visit_at IS NOT NULL))::numeric, 1)::text AS median_days_to_visit,
             SUM((SELECT COUNT(*) FROM lead_escalations e
                  WHERE e.dealer_lead_id = p.dealer_lead_id))::text AS escalations
-        FROM per_lead p
+        FROM per_lead_v p
         LEFT JOIN users u ON u.id::text = p.asm_id
         GROUP BY p.asm_id, u.name
         ORDER BY SUM(p.handoffs) DESC, u.name
@@ -485,7 +504,8 @@ async function asmHandoff(f: DashboardFilters): Promise<ReportResult> {
             { key: "handoffs", label: "Handoffs Received", numeric: true },
             { key: "converted", label: "Converted", numeric: true },
             { key: "conversion_rate", label: "Conversion %", numeric: true },
-            { key: "avg_days_to_close", label: "Avg Days to Close", numeric: true },
+            { key: "avg_days_to_close", label: "Avg Working Days to Close", numeric: true },
+            { key: "median_days_to_visit", label: "Transfer → first visit, median working days", numeric: true },
             { key: "escalations", label: "Escalations", numeric: true },
             { key: "visit_in_limit_pct", label: "First visit in limit %", numeric: true },
             { key: "visit_limits_passed", label: "Field-visit limits passed", numeric: true },
@@ -505,6 +525,7 @@ async function asmHandoff(f: DashboardFilters): Promise<ReportResult> {
                 conversion_rate: rate != null ? Math.round(rate * 100) : null,
                 avg_days_to_close:
                     r.avg_days_to_close != null ? Number(r.avg_days_to_close) : null,
+                median_days_to_visit: r.median_days_to_visit != null ? Number(r.median_days_to_visit) : null,
                 escalations: num(r.escalations),
                 visit_in_limit_pct: clk && clk.due > 0 ? Math.round((clk.ok / clk.due) * 100) : null,
                 visit_limits_passed: clk ? clk.passed : null,
@@ -692,7 +713,13 @@ async function meetingsMtd(f: DashboardFilters): Promise<ReportResult> {
  *                         inside-sales/queryBuilder.ts (owner + OPEN_STATUSES +
  *                         active). Not date-ranged: it is a snapshot.
  *   Not Worked (Period) — of those, the ones this person logged nothing on in
- *                         the period — the neglected part of the queue.
+ *                         the period since they got the lead (work before
+ *                         their assignment is not theirs) — the neglected part
+ *                         of the queue. ID 192 (the idle rule, followUpAgeing.ts):
+ *                         a lead whose follow-up is still ahead (within 30
+ *                         days) is planned, not neglected, and a lead handed to
+ *                         them on the period's last day or later has not been
+ *                         theirs long enough to judge — both are left out.
  * A person who owns open leads but did no work in the period still gets a row
  * (all activity columns 0) — that row is the one a manager most needs to see.
  */
@@ -759,6 +786,25 @@ function ownerCtes(f: DashboardFilters): SQL {
               AND dl.lead_status IN (${OPEN_LIST})
               AND dl.is_active IS NOT FALSE ${leadScopeSql(f)}
         ),
+        not_worked AS (
+            -- ID 192: owned, nothing logged by the holder in the period since
+            -- they got it, no follow-up still ahead, not handed over on the
+            -- period's last day (the counts and the drill list read this set).
+            SELECT o.person_id, o.dealer_lead_id
+            FROM owned o
+            JOIN dealer_leads dl ON dl.id = o.dealer_lead_id
+            WHERE NOT EXISTS (
+                    SELECT 1 FROM lead_touchpoints t
+                    WHERE t.dealer_lead_id = o.dealer_lead_id
+                      AND t.performed_by::text = o.person_id
+                      AND t.touchpoint_type <> 'record_correction'
+                      AND (dl.assigned_at IS NULL OR t.performed_at >= dl.assigned_at)
+                      ${dateRange("t.performed_at", f, "tz")})
+              AND NOT (dl.next_follow_up_at IS NOT NULL AND dl.next_follow_up_at > NOW()
+                       AND dl.next_follow_up_at <= NOW() + ${sql.raw(`INTERVAL '${FOLLOW_UP_HORIZON_DAYS} days'`)})
+              AND (dl.assigned_at IS NULL
+                   OR (dl.assigned_at AT TIME ZONE ${IST})::date < ${f.date_to ? sql`${f.date_to}::date` : sql`(now() AT TIME ZONE ${IST})::date`})
+        ),
         closed_by AS (
             -- ID 117: a conversion belongs to its closing owner, in the period
             -- it closed — not to whoever touched the lead.
@@ -794,9 +840,9 @@ async function funnelByOwner(f: DashboardFilters): Promise<ReportResult> {
             SELECT o.person_id,
                    COUNT(*) AS owned_open,
                    COUNT(*) FILTER (
-                       WHERE NOT EXISTS (SELECT 1 FROM worked w
-                                          WHERE w.performed_by::text = o.person_id
-                                            AND w.dealer_lead_id = o.dealer_lead_id)
+                       WHERE EXISTS (SELECT 1 FROM not_worked nw
+                                      WHERE nw.person_id = o.person_id
+                                        AND nw.dealer_lead_id = o.dealer_lead_id)
                    ) AS not_worked
             FROM owned o
             GROUP BY o.person_id
@@ -921,8 +967,8 @@ export async function ownerMetricLeads(
             from = sql`(SELECT person_id AS person, dealer_lead_id FROM owned) x`;
             break;
         case "not_worked":
-            from = sql`(SELECT person_id AS person, dealer_lead_id FROM owned) x`;
-            extra = sql`NOT EXISTS (SELECT 1 FROM worked w WHERE w.performed_by::text = x.person AND w.dealer_lead_id = x.dealer_lead_id)`;
+            // ID 192: the same set the count reads (ownerCtes not_worked).
+            from = sql`(SELECT person_id AS person, dealer_lead_id FROM not_worked) x`;
             break;
         case "touched":
             from = sql`(SELECT performed_by::text AS person, dealer_lead_id FROM worked) x`;

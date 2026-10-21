@@ -40,6 +40,10 @@ import { loadLiveOemPrices } from "@/lib/leads/oemPrices";
 import type { CommercialsProductLine } from "@/lib/inside-sales/types";
 import { dealCardJson } from "@/lib/leads/dealCard";
 import { parseDealCard } from "@/lib/leads/dealCardRules";
+import { loadOfficeCalendar } from "@/lib/calendar/holidays";
+import { istDay } from "@/lib/calendar/officeCalendar";
+import { workingHoursBetween } from "@/lib/leads/workingHours";
+import { timeLimitsResolver } from "@/lib/timeLimits/store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -278,6 +282,20 @@ export async function GET(req: NextRequest) {
       console.warn("[ceo/quotations] price-changed flag skipped:", errorMessage(e));
     }
 
+    // 18 Oct row 23 — the wait in working hours (office calendar) against the
+    // CEO approval limit in force on the day the quote was sent: up to the
+    // decision, or up to now while it waits.
+    const [cal, limitsOn] = await Promise.all([loadOfficeCalendar(), timeLimitsResolver()]);
+    const now = new Date();
+    const approvalWait = (r: { created_at: unknown; approved_at: unknown; approval_status: unknown; approval_mode: unknown }) => {
+      if (!r.created_at || r.approval_mode === "auto") return null;
+      const start = new Date(String(r.created_at));
+      const end = r.approval_status === "pending" || !r.approved_at ? now : new Date(String(r.approved_at));
+      const hours = Math.round(workingHoursBetween(start, end, cal.holidays, cal.hours) * 10) / 10;
+      const limit = limitsOn(istDay(start)).ceo_quote_approval;
+      return { hours, limit, past: hours > limit };
+    };
+
     return NextResponse.json({
       success: true,
       data: {
@@ -332,6 +350,7 @@ export async function GET(req: NextRequest) {
           dealer_decision_at: r.dealer_decision_at ?? null,
           withdrawn_at: r.withdrawn_at ?? null,
           price_changed_since_issue: priceChanged.has(r.commercial_id),
+          approval_wait: approvalWait(r),
         })),
       },
     });

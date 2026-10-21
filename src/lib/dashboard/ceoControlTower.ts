@@ -32,12 +32,15 @@ import { db } from "@/lib/db";
 import { matchedUnion, REVENUE_IS_ORDER, REVENUE_NOT_VOID } from "@/lib/dashboard/revenueSource";
 import { summarizeNeedsAttention } from "@/lib/leads/needsAttention";
 import { listSaidYesNotWon, summarizeSaidYes } from "@/lib/leads/saidYesNotWon";
-import { getTimeLimits } from "@/lib/timeLimits/store";
+import { getTimeLimits, timeLimitsResolver } from "@/lib/timeLimits/store";
 import { idleLimitLabel } from "@/lib/timeLimits/labels";
 import { listDealerHealth } from "@/lib/dealers/accountHealth";
 import type { AccountBucket } from "@/lib/dealers/accountHealthRules";
 import { hasInvoiceLedgerTables } from "@/lib/sales/ledgerTables";
-import { awaitingAssignment, daysAwaitingAssignment, readySplitSql } from "@/lib/leads/salesReady";
+import { awaitingAssignment, countAwaitingAssignment, readySplitSql } from "@/lib/leads/salesReady";
+import { loadOfficeCalendar } from "@/lib/calendar/holidays";
+import { workingHoursBetween } from "@/lib/leads/workingHours";
+import { istDay } from "@/lib/calendar/officeCalendar";
 import { engagedCall, humanCall } from "@/lib/reports/metricDefinitions";
 import { scrapKgSourced } from "@/lib/buyback/scrapKgSourced";
 
@@ -47,10 +50,26 @@ export type ControlTower = {
     window: { from: string; to: string; prev_from: string | null; prev_to: string | null };
     exceptions: null | {
         quotes_pending: number;
-        /** Waiting sales_ready_unassigned days or more (the name predates ID 85). */
+        /** 18 Oct row 22 — the oldest pending wait, in working hours; null when none. */
+        quotes_pending_oldest_hours?: number | null;
+        /** …how many are past ceo_quote_approval (judged by the limit of the day each was sent). */
+        quotes_pending_past?: number;
+        /** The ceo_quote_approval limit in force today (working hours). */
+        quote_approval_limit_hours?: number;
+        /**
+         * Ready leads past their limit (18 Oct rework 1): Hot past
+         * hot_ready_to_assigned + others past ready_to_assigned. The key name
+         * predates ID 85.
+         */
         unassigned_over_7d: number;
-        /** ID 85 — the sales_ready_unassigned limit in force, in days. */
+        /** The ready_to_assigned limit in force (working days). */
         unassigned_overdue_days: number;
+        /** …Hot leads past hot_ready_to_assigned. */
+        unassigned_hot_past?: number;
+        /** …other leads past ready_to_assigned. */
+        unassigned_other_past?: number;
+        /** The hot_ready_to_assigned limit in force (working hours). */
+        unassigned_hot_limit_hours?: number;
         /** Every sales-ready lead with no owner, whatever its wait (ID 82). */
         awaiting_assignment_total: number;
         /** ID 184 — Hot / AI qualified / other; sums to awaiting_assignment_total. */
@@ -173,19 +192,14 @@ export async function buildControlTower(w: { startStr: string | null; endStr: st
 // ── 1 Exceptions ─────────────────────────────────────────────────────────────
 async function exceptionsTile(): Promise<NonNullable<ControlTower["exceptions"]>> {
     const limits = await getTimeLimits();
-    const overdueDays = limits.sales_ready_unassigned;
+    // ID 82 / 18 Oct rework 1: "Ready leads with no owner" past their limit —
+    // the one rule the Ready to assign page lists by (countAwaitingAssignment:
+    // Hot against hot_ready_to_assigned, others against ready_to_assigned).
+    const [ready, pendingQuotes] = await Promise.all([countAwaitingAssignment(), pendingQuoteWaits()]);
+    const overdueDays = ready.overdueDays;
     const [q] = await rows(sql`
         SELECT
           (SELECT COUNT(*) FROM dealer_lead_commercials WHERE approval_status = 'pending' AND withdrawn_at IS NULL) AS quotes_pending,
-          -- ID 82: "Sales-ready leads awaiting assignment" — the clock runs
-          -- from the Sales-ready event, not from creation, and WHO is awaiting
-          -- is the one rule the Ready to assign page lists by
-          -- (awaitingAssignment: dead numbers are not awaiting anyone). The
-          -- card opens that page filtered to the same limit (ID 85
-          -- sales_ready_unassigned, default 7 days).
-          (SELECT COUNT(*) FROM dealer_leads dl
-            WHERE ${awaitingAssignment()}
-              AND ${daysAwaitingAssignment()} >= ${overdueDays}) AS unassigned,
           (SELECT COUNT(*) FROM dealer_leads dl WHERE ${awaitingAssignment()}) AS awaiting_total,
           -- ID 184: Hot / AI qualified / other, one bucket per lead.
           (SELECT COUNT(*) FROM dealer_leads dl WHERE ${awaitingAssignment()} AND ${readySplitSql()} = 'hot') AS awaiting_hot,
@@ -217,8 +231,14 @@ async function exceptionsTile(): Promise<NonNullable<ControlTower["exceptions"]>
     const risky = dealers.filter((d) => d.bucket === "red" || d.bucket === "dormant");
     return {
         quotes_pending: n(q.quotes_pending),
-        unassigned_over_7d: n(q.unassigned),
+        quotes_pending_oldest_hours: pendingQuotes.oldestHours,
+        quotes_pending_past: pendingQuotes.past,
+        quote_approval_limit_hours: limits.ceo_quote_approval,
+        unassigned_over_7d: ready.overdue,
         unassigned_overdue_days: overdueDays,
+        unassigned_hot_past: ready.hotPast,
+        unassigned_other_past: ready.otherPast,
+        unassigned_hot_limit_hours: ready.hotLimitHours,
         awaiting_assignment_total: n(q.awaiting_total),
         awaiting_assignment_split: {
             hot: n(q.awaiting_hot),
@@ -236,6 +256,30 @@ async function exceptionsTile(): Promise<NonNullable<ControlTower["exceptions"]>
         spocs_below_80: below,
         orders_claimed_no_invoice: null,
     };
+}
+
+/**
+ * 18 Oct row 22 — quotes waiting for the CEO: the oldest wait in working hours
+ * (office calendar) and how many are past ceo_quote_approval, each judged by
+ * the limit in force on the IST day it was sent (the quote clock's rule).
+ */
+async function pendingQuoteWaits(): Promise<{ oldestHours: number | null; past: number }> {
+    const [list, cal, limitsOn] = await Promise.all([
+        rows(sql`SELECT created_at FROM dealer_lead_commercials
+                  WHERE approval_status = 'pending' AND withdrawn_at IS NULL AND created_at IS NOT NULL`),
+        loadOfficeCalendar(),
+        timeLimitsResolver(),
+    ]);
+    const now = new Date();
+    let oldest: number | null = null;
+    let past = 0;
+    for (const r of list) {
+        const at = new Date(String(r.created_at));
+        const h = workingHoursBetween(at, now, cal.holidays, cal.hours);
+        if (oldest == null || h > oldest) oldest = h;
+        if (h > limitsOn(istDay(at)).ceo_quote_approval) past++;
+    }
+    return { oldestHours: oldest == null ? null : Math.round(oldest * 10) / 10, past };
 }
 
 // ── 2 Money ──────────────────────────────────────────────────────────────────
@@ -266,8 +310,12 @@ async function moneyTile(from: string, toExcl: string, prevFrom: string | null, 
         // which is blank on nearly every lead. Each invoice's total (with GST)
         // is spread over its lines by their share of amount_excl_gst, so the
         // rows add up to the Revenue card exactly. An invoice with no lines
-        // (or lines summing to 0) is "not classified"; a credit note's lines are
-        // negative (ID 71), so it takes its share off the types it returned.
+        // (or lines summing to 0) is "not classified". A credit note (ID 71) is
+        // spread the same way over its OWN lines: its total and lines are both
+        // negative, so each share is positive and the note comes off the types
+        // it reverses (Battery sales to dealers, Scrap …), not off "Not
+        // classified yet" — which holds only documents with no usable lines.
+        // (HAVING <> 0, not > 0: "> 0" dropped every credit note into the grey row.)
         rows(sql`
             WITH inv AS (
                 SELECT r.source, r.id, COALESCE(r.total, 0) AS total
@@ -284,7 +332,7 @@ async function moneyTile(from: string, toExcl: string, prevFrom: string | null, 
                  GROUP BY 1, 2, 3`
                 : sql`SELECT NULL::text AS source, NULL::text AS id, NULL::text AS t, 0::numeric AS amt WHERE FALSE`}
             ),
-            tot AS (SELECT source, id, SUM(amt) AS amt FROM cls GROUP BY 1, 2 HAVING SUM(amt) > 0)
+            tot AS (SELECT source, id, SUM(amt) AS amt FROM cls GROUP BY 1, 2 HAVING SUM(amt) <> 0)
             SELECT COALESCE(c.t, '__unclassified') AS t,
                    COALESCE(SUM(CASE WHEN c.t IS NULL THEN i.total ELSE i.total * c.amt / tt.amt END), 0) AS v
               FROM inv i

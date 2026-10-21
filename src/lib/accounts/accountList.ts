@@ -29,7 +29,7 @@ import { db } from "@/lib/db";
 import { matchedUnion, REVENUE_NOT_VOID } from "@/lib/dashboard/revenueSource";
 import { accountBucket, type AccountBucket } from "@/lib/dealers/accountHealthRules";
 import { GSTIN_KEY, gstinKeyIsMatchable } from "@/lib/leads/gstinMatch";
-import { closedColumns, notClosedSql } from "./accountClosures";
+import { closedColumns, closedDetailColumns, notClosedSql } from "./accountClosures";
 import { suggestedOwners } from "./ownership";
 
 /** What the approve route writes when the onboarding carried no GSTIN. */
@@ -107,6 +107,11 @@ export type AccountRow = {
     ordered_last_30d: boolean;
     ordered_before_30d: boolean;
     bucket: AccountBucket;
+    /** ID 148 — the manual "Lost / closed dealer" (E-332), for the download. */
+    closed: boolean;
+    closed_reason: string | null;
+    closed_on: string | null;
+    closed_by_name: string | null;
 };
 
 export type AccountFilters = {
@@ -126,7 +131,11 @@ const num = (v: unknown): number | null => (v == null ? null : Number(v));
 export async function listAccounts(f: AccountFilters = {}): Promise<AccountRow[]> {
     const invoices = await matchedUnion();
     const closed = await closedColumns(sql`a.id`);
+    const closedDetail = await closedDetailColumns(sql`a.id`);
     const conds: SQL[] = [sql`TRUE`];
+    // ID 148 — the "No owner" and "GSTIN missing" lists are live dealers, as the
+    // Accounts tab counts them (countAccounts); a closed one only shows under bucket=closed.
+    if ((f.noOwnerOnly || f.gstinMissingOnly) && f.bucket !== "closed") conds.push(await notClosedSql(sql`a.id`));
     if (f.ownerId) conds.push(sql`ao.owner_user_id::text = ${f.ownerId}`);
     if (f.onboardedById) conds.push(sql`ao.onboarded_by_user_id::text = ${f.onboardedById}`);
     if (f.cameThrough) conds.push(sql`ao.came_through = ${f.cameThrough}`);
@@ -168,6 +177,7 @@ export async function listAccounts(f: AccountFilters = {}): Promise<AccountRow[]
                a.gstin,
                ${gstinMissingSql(sql`a.gstin`)}                  AS gstin_missing,
                ${closed},
+               ${closedDetail},
                a.city, a.state,
                d.dealer_type,
                COALESCE(d.finance_enabled, false)                AS finance_enabled,
@@ -254,6 +264,10 @@ export async function listAccounts(f: AccountFilters = {}): Promise<AccountRow[]
             ordered_last_30d: r.ordered_last_30d === true,
             ordered_before_30d: r.ordered_before_30d === true,
             bucket: accountBucket(sinceOrder, sinceActivation, r.closed === true),
+            closed: r.closed === true,
+            closed_reason: (r.closed_reason as string | null) ?? null,
+            closed_on: day(r.closed_on),
+            closed_by_name: (r.closed_by_name as string | null) ?? null,
         };
     });
     // ID 148 — one bucket rule: Dealer Health's, which also applies an open

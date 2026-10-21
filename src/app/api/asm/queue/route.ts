@@ -15,7 +15,7 @@ import { successResponse, withErrorHandler, errorResponse } from "@/lib/api-util
 import { fetchAsmQueueRows, countAsmQueueRows, fetchAsmQueueIds } from "@/lib/asm/queryBuilder";
 import { BULK_CLAIM_CAP } from "@/lib/inside-sales/types";
 import { fetchAssignedByForLeads } from "@/lib/leads/leadAssignedBy";
-import { leadsPastALimit } from "@/lib/leads/clocks";
+import { pastLimitFilter, pastLimitLabelsByLead } from "@/lib/leads/queuePastLimit";
 import { fetchBusinessTypeForLeads } from "@/lib/leads/leadListQuery";
 import { ASM_QUEUE_TABS, type AsmQueueResponse } from "@/lib/asm/types";
 import { readAsmQueueFilters } from "@/lib/asm/queueFilterParams";
@@ -57,6 +57,9 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
     }
 
     const filters = readAsmQueueFilters(url.searchParams);
+    // 18 Oct row 34: ?past_limit=1 — only leads past a time limit (the chip as
+    // a filter); where lead_clocks is missing it matches nothing rather than failing.
+    const pastLimit = await pastLimitFilter(url.searchParams);
     // ID 155: a manager (own-scoped role with direct reports) also sees the
     // team's leads in their own tabs, read-only. ids_only (bulk claim) is not
     // widened: it feeds actions, and those stay with the owner.
@@ -81,6 +84,7 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
             limit: parsed.limit,
             q: parsed.q ?? null,
             ...filters,
+            pastLimit,
             teamMemberIds,
         }),
         countAsmQueueRows({
@@ -88,6 +92,7 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
             asmId: user.id,
             q: parsed.q ?? null,
             ...filters,
+            pastLimit,
             teamMemberIds,
         }),
     ]);
@@ -97,13 +102,13 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
     // one of the three touchpoint types this reads, so a lead pushed down by the
     // CEO or a rep is stamped with whoever pushed it.
     const ids = rows.map((r) => r.id).filter(Boolean);
-    const [assignedBy, businessTypes, pastLimit] = await Promise.all([
+    const [assignedBy, businessTypes, pastByLead] = await Promise.all([
         fetchAssignedByForLeads(ids),
         // E-296 business_type — same separate, fail-tolerant decoration as the
         // inside-sales queue: a database without the column shows "Not set".
         fetchBusinessTypeForLeads(ids),
         // IDs 85 / 86 — the "Past a limit" chip.
-        leadsPastALimit(ids).catch(() => new Set<string>()),
+        pastLimitLabelsByLead(ids),
     ]);
 
     const body: AsmQueueResponse = {
@@ -111,7 +116,8 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
             ...r,
             assigned_by: assignedBy[r.id] ?? null,
             business_type: businessTypes[r.id] ?? null,
-            past_limit: pastLimit.has(r.id),
+            past_limit: pastByLead.has(r.id),
+            past_limits: pastByLead.get(r.id) ?? [],
         })),
         total,
         page: parsed.page,

@@ -26,10 +26,13 @@
  * unit typed in, stored as metric = 'custom_<id>', progress entered by hand.
  *
  * PRO-RATA (sheet 8 §B): the monthly target is spread equally over the month's
- * working days (Mon–Sat minus holiday_calendar). MTD target = monthly ×
+ * working days (the office calendar: working weekdays from the office-hours
+ * setting, default Mon–Sat, minus holiday_calendar). MTD target = monthly ×
  * elapsed ÷ total. A "per day" metric (calls per day) is a rate already, so it
  * is compared to the running daily average instead.
  */
+
+import { workingDaysInRange, type OfficeHoursArg } from "@/lib/calendar/officeCalendar";
 
 export const TARGET_METRICS = {
     dealer_visits: { label: "Dealer visits (new + existing)", roles: ["asm"], kind: "count" },
@@ -288,18 +291,14 @@ export function monthStart(iso: string): string {
     return `${iso.slice(0, 7)}-01`;
 }
 
-/** Working days (Mon–Sat, not a holiday) in [from, to] inclusive, IST dates as YYYY-MM-DD. */
-export function workingDaysBetween(from: string, to: string, holidays: ReadonlySet<string>): number {
-    if (to < from) return 0;
-    let n = 0;
-    const d = new Date(`${from}T00:00:00Z`);
-    const end = new Date(`${to}T00:00:00Z`);
-    while (d.getTime() <= end.getTime()) {
-        const iso = d.toISOString().slice(0, 10);
-        if (d.getUTCDay() !== 0 && !holidays.has(iso)) n++;
-        d.setUTCDate(d.getUTCDate() + 1);
-    }
-    return n;
+/**
+ * Working days in [from, to] inclusive, IST dates as YYYY-MM-DD — the office
+ * calendar's count (officeCalendar.workingDaysInRange): a working weekday
+ * (default Mon–Sat; pass `hours` for the setting in force) that is not a
+ * holiday.
+ */
+export function workingDaysBetween(from: string, to: string, holidays: ReadonlySet<string>, hours?: OfficeHoursArg): number {
+    return workingDaysInRange(from, to, holidays, hours);
 }
 
 export function monthEnd(monthFirst: string): string {

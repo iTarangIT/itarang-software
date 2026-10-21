@@ -19,6 +19,8 @@ export type ReadyToAssignTableRow = {
     interest_level: string | null;
     reason: string;
     days_waiting: number;
+    /** Past its limit (Hot: the Hot limit; others: Ready → assigned) — 18 Oct rework 1. */
+    past_limit?: boolean;
 };
 
 export function ReadyToAssignTable({
@@ -79,7 +81,7 @@ export function ReadyToAssignTable({
                             <th className="px-4 py-2">Status</th>
                             <th className="px-4 py-2">Temperature</th>
                             <th className="px-4 py-2">Sales-ready because</th>
-                            <th className="px-4 py-2 text-right">Waiting (days)</th>
+                            <th className="px-4 py-2 text-right">Waiting (working days)</th>
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
@@ -104,8 +106,9 @@ export function ReadyToAssignTable({
                                 <td className="px-4 py-2 text-gray-600">{r.status}</td>
                                 <td className="px-4 py-2 text-gray-600">{r.interest_level ?? "—"}</td>
                                 <td className="px-4 py-2 text-gray-600">{r.reason}</td>
-                                <td className={`px-4 py-2 text-right tabular-nums ${r.days_waiting >= overdueDays ? "font-semibold text-rose-700" : ""}`}>
+                                <td className={`px-4 py-2 text-right tabular-nums ${(r.past_limit ?? r.days_waiting > overdueDays) ? "font-semibold text-rose-700" : ""}`}>
                                     {r.days_waiting}
+                                    {r.past_limit ? " · past limit" : ""}
                                 </td>
                             </tr>
                         ))}

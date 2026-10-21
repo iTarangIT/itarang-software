@@ -7,7 +7,9 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("@/lib/db", () => ({ db: {} }));
 const { blockAHeadlineParts, blockARowNotes, blockATableRows, lastMonthColumnLabel } = await import("../salesDailyBlockA");
 const { istStamp } = await import("../kinds/sales-daily");
-const { workingDaysElapsed, median } = await import("../workingTime");
+const { workingDaysElapsed } = await import("@/lib/calendar/officeCalendar");
+const { medianAndP90 } = await import("@/lib/leads/clockRules");
+const median = (v: number[]) => medianAndP90(v).median;
 const { buildDigestEmail } = await import("@/lib/email/sendDigestEmail");
 
 const row = (label: string, group: "INTAKE" | "EFFORT", over: Record<string, unknown> = {}) => ({
@@ -51,18 +53,18 @@ describe("Data updated till", () => {
     });
 });
 
-describe("workingDaysElapsed — the median-wait unit", () => {
+describe("workingDaysElapsed — the median-wait unit (office calendar, 18 Oct row 40)", () => {
     const none = new Set<string>();
-    it("counts elapsed hours on working days only", () => {
-        // Mon 09:00 → Tue 09:00 IST = one working day.
+    it("counts office hours on working days only, a full office day = 1", () => {
+        // Mon 09:00 → Tue 09:00 IST = Monday's whole 10–19 = one working day.
         expect(workingDaysElapsed(new Date("2026-10-05T03:30:00Z"), new Date("2026-10-06T03:30:00Z"), none)).toBeCloseTo(1, 5);
-        // Sat 18:00 IST → Mon 06:00 IST skips Sunday: 6 h Sat + 6 h Mon = 0.5.
-        expect(workingDaysElapsed(new Date("2026-10-03T12:30:00Z"), new Date("2026-10-05T00:30:00Z"), none)).toBeCloseTo(0.5, 5);
+        // Sat 18:00 IST → Mon 06:00 IST: Saturday 18–19 only; Sunday and Monday before opening are off.
+        expect(workingDaysElapsed(new Date("2026-10-03T12:30:00Z"), new Date("2026-10-05T00:30:00Z"), none)).toBeCloseTo(1 / 9, 5);
     });
     it("skips a holiday, and is 0 for a wait that never happened", () => {
         const hol = new Set(["2026-10-02"]);
-        // Thu 12:00 → Fri 12:00 IST, Friday a holiday: 12 h = 0.5.
-        expect(workingDaysElapsed(new Date("2026-10-01T06:30:00Z"), new Date("2026-10-02T06:30:00Z"), hol)).toBeCloseTo(0.5, 5);
+        // Thu 12:00 → Fri 12:00 IST, Friday a holiday: Thursday 12–19 = 7 of 9 office hours.
+        expect(workingDaysElapsed(new Date("2026-10-01T06:30:00Z"), new Date("2026-10-02T06:30:00Z"), hol)).toBeCloseTo(7 / 9, 5);
         expect(workingDaysElapsed(new Date("2026-10-02T06:30:00Z"), new Date("2026-10-01T06:30:00Z"), none)).toBe(0);
     });
     it("median", () => {

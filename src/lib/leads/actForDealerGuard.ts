@@ -27,6 +27,7 @@ import { auditLogs, leads, users } from "@/lib/db/schema";
 import { dealerOwnsLead } from "@/lib/auth/leadAccessRules";
 import { houseMayActOnLead, resolveDealerCode } from "@/lib/auth/requireLeadAccess";
 import { loadHolidays } from "@/lib/calendar/holidays";
+import { officeHoursResolver } from "@/lib/calendar/officeHoursStore";
 import { houseDealerCode } from "@/lib/leads/dealerByMobile";
 import { dealerDisplayNames, houseOriginatedLeadIds } from "@/lib/leads/pushGuards";
 
@@ -271,6 +272,7 @@ export async function gateLeadActor(
       lastDealerActionAt: state.dealerLastActionAt,
       now: state.now,
       holidays: await loadHolidays(),
+      hours: await officeHoursResolver(),
     });
     if (!perm.ok) return { ok: false, status: 403, message: perm.message };
   }
@@ -428,6 +430,7 @@ export async function readActState(leadId: string, user: ActorUser): Promise<Act
     lastDealerActionAt: state.dealerLastActionAt,
     now: state.now,
     holidays: await loadHolidays(),
+    hours: await officeHoursResolver(),
   });
   const live = isLockLive(state.lock, state.now);
   return {

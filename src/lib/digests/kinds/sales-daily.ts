@@ -74,7 +74,8 @@ import {
   buildBlockA,
   lastMonthColumnLabel,
 } from "../salesDailyBlockA";
-import { median, workingDaysElapsed } from "../workingTime";
+import { workingDaysElapsed } from "@/lib/calendar/officeCalendar";
+import { medianAndP90 } from "@/lib/leads/clockRules";
 import {
   BLOCK_B_COLUMNS,
   BLOCK_B_PCT_COLUMN,
@@ -86,6 +87,7 @@ import {
   buildRepBlocks,
   loadAwaitingFieldVisit,
   loadRepExtras,
+  loadAwaitingFieldVisitPast,
   repBlockTableRows,
 } from "../salesDailyBlocks";
 import { formatSlotTime } from "../schedule";
@@ -123,10 +125,10 @@ import type {
 const SECTIONS: DigestSection[] = [
   { key: "summary", label: "Headline", hint: "One line: yesterday's outcome and what is behind target.", group: "activity" },
   { key: "block_a", label: "A · Company", hint: "22 metrics: yesterday, last 7 days, MTD, MTD target, % of target, same period last month, Δ.", group: "activity" },
-  { key: "right_now", label: "Right now", hint: "Ready leads with no owner (Hot / AI qualified / other), and the oldest wait.", group: "backlog" },
-  { key: "block_b", label: "B · Field team (ASM)", hint: "One row per ASM: dealers visited, new dealers visited, hot received, quotes created (yesterday and MTD); quotes delivered, dealer approved, Won, converted, revenue (MTD); % of dealer-visit target.", group: "activity" },
+  { key: "right_now", label: "Right now", hint: "Ready leads with no owner (AI qualified / Hot / other), and the oldest wait.", group: "backlog" },
+  { key: "block_b", label: "B · Field team (ASM)", hint: "One row per ASM: dealers visited; visits = Fresh (the person's first visit to that dealer) + Repeat, of which new to iTarang (the dealer's first visit by anyone); hot received, quotes created (yesterday and MTD); quotes delivered, dealer approved, Won, converted, revenue (MTD); % of dealer-visit target.", group: "activity" },
   { key: "block_c", label: "C · Inside sales (ISR / CC)", hint: "One row per ISR: calls, dealers called (yesterday and MTD); connected, connect %, engaged, hot to field, quotes created, Won, converted (MTD); % of calls target.", group: "activity" },
-  { key: "block_d", label: "D · Position this morning", hint: "Open Hot / Warm / Cold per owner, Hot rated 8+ days ago, awaiting field visit, and sales-ready leads with no owner — as of the send time.", group: "backlog" },
+  { key: "block_d", label: "D · Position this morning", hint: "Open Hot / Warm / Cold per owner, Hot rated 8+ days ago, awaiting field visit, and ready leads with no owner, with a Total row — as of the send time.", group: "backlog" },
   { key: "block_e", label: "E · Today and tomorrow", hint: "Scheduled visits and follow-ups due, per owner.", group: "backlog" },
   { key: "block_f", label: "F · Oldest overdue", hint: "The 10 oldest overdue follow-ups, visits and time limits passed (still unanswered), by name.", group: "backlog" },
   // ID 51 — Ecofy leads in the daily email.
@@ -155,17 +157,54 @@ export function sameSpanLastMonth(iso: string): { from: string; to: string } {
 }
 
 /**
+ * ID 194 — "Yesterday" is the last WORKING day on or before the covered day:
+ * on a Monday morning the covered day is Sunday (an office day off), so
+ * Yesterday is Saturday — not an empty Sunday. `isWorking` is the office
+ * calendar (working weekdays, holidays off); without it every day counts.
+ * Looks back at most 14 days.
+ */
+export function lastWorkingDayOnOrBefore(istDay: string, isWorking?: (day: string) => boolean): string {
+  if (!isWorking) return istDay;
+  for (let i = 0; i < 14; i++) {
+    const d = addDays(istDay, -i);
+    if (isWorking(d)) return d;
+  }
+  return istDay;
+}
+
+/**
  * The four windows every Block A row is counted over, for the covered IST day.
  * Inclusive IST days. On the 1st–7th of a month MTD sits inside Last 7 days,
- * so a count can never show MTD above Last 7 there.
+ * so a count can never show MTD above Last 7 there. Yesterday is the last
+ * working day on or before the covered day when `isWorking` is given (ID 194:
+ * Monday's Yesterday = Saturday); MTD / Last 7 still run to the covered day.
  */
-export function salesDailyPeriods(istDay: string) {
+export function salesDailyPeriods(istDay: string, isWorking?: (day: string) => boolean) {
+  const y = lastWorkingDayOnOrBefore(istDay, isWorking);
   return {
-    yesterday: { from: istDay, to: istDay },
+    yesterday: { from: y, to: y },
     last7: { from: addDays(istDay, -6), to: istDay },
     mtd: { from: firstOfMonth(istDay), to: istDay },
     lastMonth: sameSpanLastMonth(istDay),
   };
+}
+
+/**
+ * salesDailyPeriods with the office calendar loaded (holidays and the working
+ * weekdays in force) — what the management email AND the My day email both
+ * use, so their "Yesterday" is the same day. A calendar that cannot be read
+ * falls back to the default working week with no holidays.
+ */
+export async function salesDailyPeriodsFor(istDay: string): Promise<ReturnType<typeof salesDailyPeriods>> {
+  const { isWorkingDay } = await import("@/lib/calendar/officeCalendar");
+  try {
+    const { loadOfficeCalendar } = await import("@/lib/calendar/holidays");
+    const { holidays, hours } = await loadOfficeCalendar();
+    return salesDailyPeriods(istDay, (d) => isWorkingDay(d, holidays, hours));
+  } catch (e) {
+    console.warn("[digest:sales_daily] office calendar not read; default working week:", e instanceof Error ? e.message : e);
+    return salesDailyPeriods(istDay, (d) => isWorkingDay(d, new Set()));
+  }
 }
 
 // ─────────────────────────────── helpers ────────────────────────────────────
@@ -229,9 +268,12 @@ type RightNow = {
   waiting: number;
   /** ID 184 — Hot / AI qualified / other, as on the Sales dashboard card. */
   split: { hot: number; ai: number; other: number } | null;
+  /** 18 Oct row 31 — the oldest wait of a lead that is NOT Hot, in working days (office calendar). */
   oldestDays: number | null;
-  /** The sales_ready_unassigned limit in force (calendar days). */
+  /** The ready_to_assigned limit in force (working days) — non-Hot leads. */
   limitDays: number;
+  /** Non-Hot ready leads with no owner past ready_to_assigned. */
+  otherPast: number | null;
   /** Hot, sales-ready leads with no owner (running hot_assign clocks, E-350); null = not measured. */
   hotWaiting: number | null;
   /** …of those, past the hot_ready_to_assigned limit. */
@@ -247,7 +289,8 @@ async function rightNow(): Promise<RightNow> {
     waiting: 0,
     split: null,
     oldestDays: null,
-    limitDays: limits.sales_ready_unassigned,
+    limitDays: limits.ready_to_assigned,
+    otherPast: null,
     hotWaiting: null,
     hotPast: null,
     hotLimitHours: limits.hot_ready_to_assigned,
@@ -258,7 +301,8 @@ async function rightNow(): Promise<RightNow> {
     // scope: listing the digest kinds must not need DATABASE_URL.
     const { countAwaitingAssignment } = await import("@/lib/leads/salesReady");
     const c = await countAwaitingAssignment();
-    Object.assign(base, { waiting: c.total, oldestDays: c.oldestDays, split: c.split });
+    // 18 Oct rework 1: non-Hot waits in working days against ready_to_assigned.
+    Object.assign(base, { waiting: c.total, oldestDays: c.oldestOtherDays, split: c.split, otherPast: c.otherPast, limitDays: c.overdueDays });
   } catch {
     /* not measured */
   }
@@ -283,7 +327,9 @@ async function rightNow(): Promise<RightNow> {
 /**
  * "Median wait, sales-ready → assigned (MTD)" (business template, Right now).
  * Leads whose FIRST owner arrived this month after they had become
- * sales-ready; the wait is in working days (workingTime.ts). A lead that was
+ * sales-ready; the wait is in working days on the office calendar
+ * (officeCalendar.workingDaysElapsed: each working day counts as its office
+ * hours, so a wait of 3 office hours under 10–19 is 0.3 days). A lead that was
  * sales-ready BECAUSE it got an owner (picked up in NeoDove, rep-created,
  * claimed — on db-2 every October assignment so far) never waited and is not
  * in the median. null = nothing measurable.
@@ -305,13 +351,10 @@ async function medianWaitToAssign(mtd: { from: string; to: string }): Promise<{ 
          AND (f.performed_at AT TIME ZONE 'Asia/Kolkata')::date BETWEEN ${mtd.from}::date AND ${mtd.to}::date
          AND f.performed_at > (to_jsonb(dl) ->> 'sales_ready_at')::timestamptz
     `)) as unknown as Array<{ ready_at: string; assigned_at: string }>;
-    const hol = (await db.execute(sql`
-      SELECT holiday_date::text AS d FROM holiday_calendar
-       WHERE is_active IS NOT FALSE AND holiday_date >= (${mtd.from}::date - 60)
-    `).catch(() => [])) as unknown as Array<{ d: string }>;
-    const set = new Set(hol.map((h) => h.d));
-    const waits = rows.map((r) => workingDaysElapsed(new Date(r.ready_at), new Date(r.assigned_at), set));
-    return { median: median(waits), n: waits.length };
+    const { loadOfficeCalendar } = await import("@/lib/calendar/holidays");
+    const { holidays, hours } = await loadOfficeCalendar();
+    const waits = rows.map((r) => workingDaysElapsed(new Date(r.ready_at), new Date(r.assigned_at), holidays, hours));
+    return { median: medianAndP90(waits).median, n: waits.length };
   } catch (e) {
     console.warn("[sales-daily] median wait not measured:", e instanceof Error ? e.message : e);
     return null;
@@ -499,7 +542,8 @@ async function collect(
     const computedAt = new Date();
     const sendDay = addDays(istDay, 1);
     const dayAfter = addDays(istDay, 2);
-    const periods = salesDailyPeriods(istDay);
+    // ID 194: Yesterday = the last working day (Monday's = Saturday), as in My day.
+    const periods = await salesDailyPeriodsFor(istDay);
 
     const { getDigestSettings } = await import("../settings");
     const [yesterday, last7, mtd, lastMonth, scheduled, followUps, now, overdue, settings, extrasY, extrasMtd, awaiting, unmatched, wait, ecofy] = await Promise.all([
@@ -520,6 +564,8 @@ async function collect(
       ecofySnapshot(istDay),
     ]);
     const blockA = await buildBlockA(db as never, periods, { yesterday, last7, mtd, lastMonth }, unmatched);
+    // 18 Oct row 25: Block D splits Awaiting field visit at the transfer → visit limit.
+    const awaitingPast = await loadAwaitingFieldVisitPast(db as never);
     // ID 156: each rep's manager today, so Blocks B / C show a team subtotal
     // under each manager. Imported here, not at module scope (needs the db).
     const teamOf = await (await import("@/lib/users/team")).currentTeamOf();
@@ -537,7 +583,9 @@ async function collect(
       hour12: false,
     });
     const sendTime = formatSlotTime(settings.morningHour, settings.morningMinute);
-    const days = dayNames(istDay);
+    // ID 194: the Yesterday columns cover the last working day (Monday: Saturday).
+    const days = dayNames(periods.yesterday.from);
+    const yesterdayNote = periods.yesterday.from !== istDay ? " (the last working day)" : "";
     const mtdRange = lastMonthColumnLabel(periods.mtd);
     const lmLabel = lastMonthColumnLabel(periods.lastMonth);
     const blockAColumns = BLOCK_A_COLUMNS.map((c) => (c === "Same period last month" ? lmLabel : c));
@@ -548,10 +596,12 @@ async function collect(
         : wait.median == null
           ? "—"
           : `${wait.median.toFixed(1)} working day${wait.median.toFixed(1) === "1.0" ? "" : "s"}`;
+    // 18 Oct row 24: the limits from Admin › Time limits, not fixed text.
+    const limitText = `Limit: Hot ${now.hotLimitHours} working hour${now.hotLimitHours === 1 ? "" : "s"}, others ${now.limitDays} working day${now.limitDays === 1 ? "" : "s"}`;
     const waitHint =
       wait && wait.median == null
-        ? "No lead waited for an owner this month: each got one as it became sales-ready. Limit: Hot 24 hours, others 2 working days"
-        : `Limit: Hot 24 hours, others 2 working days${wait ? ` · ${wait.n} lead${wait.n === 1 ? "" : "s"}` : ""}`;
+        ? `No lead waited for an owner this month: each got one as it became sales-ready. ${limitText}`
+        : `${limitText}${wait ? ` · ${wait.n} lead${wait.n === 1 ? "" : "s"}` : ""}`;
     const extras = { y: extrasY, mtd: extrasMtd };
 
     // Names for Block E: the builder's per-rep blocks, then users for the rest.
@@ -592,7 +642,7 @@ async function collect(
           eyebrow: "ITARANG · DAILY SALES",
           dayHeading: days.long,
           intro:
-            `Covers ${days.long}, midnight to midnight IST. ` +
+            `Covers ${days.long}${yesterdayNote}, midnight to midnight IST. ` +
             (blockA.workingDays.total > 0
               ? `Month to date is ${mtdRange}: ${blockA.workingDays.elapsed} of ${blockA.workingDays.total} working days, ` +
                 `so targets below are ${blockA.workingDays.elapsed}/${blockA.workingDays.total} of the monthly target.`
@@ -625,17 +675,20 @@ async function collect(
                 {
                   label: "Ready leads with no owner",
                   value: `${now.waiting} lead${now.waiting === 1 ? "" : "s"}`,
-                  // Calendar days, as the Ready to assign page and the CEO card
-                  // count it; red from the Admin limit (ID 85), not a fixed 2.
-                  // ID 184: the card's Hot / AI / other split rides in front.
+                  // 18 Oct row 31: the oldest NON-Hot wait in working days, as
+                  // the Ready to assign page counts it, against ready_to_assigned;
+                  // Hot leads have their own line below.
+                  // ID 184: the card's AI / Hot / other split (AI first) rides in front.
                   hint:
                     [
-                      now.split ? `${now.split.hot} Hot · ${now.split.ai} AI qualified · ${now.split.other} other` : null,
-                      now.oldestDays != null ? `oldest waiting ${now.oldestDays} days · limit ${now.limitDays} days` : null,
+                      now.split ? `${now.split.ai} AI qualified · ${now.split.hot} Hot · ${now.split.other} other` : null,
+                      now.oldestDays != null
+                        ? `others: oldest waiting ${now.oldestDays} working day${now.oldestDays === 1 ? "" : "s"} · ${now.otherPast ?? 0} past the ${now.limitDays}-working-day limit`
+                        : null,
                     ]
                       .filter(Boolean)
                       .join(" · ") || undefined,
-                  alert: now.oldestDays != null && now.oldestDays >= now.limitDays,
+                  alert: (now.otherPast ?? 0) > 0,
                 },
                 ...(now.hotWaiting != null
                   ? [
@@ -714,10 +767,10 @@ async function collect(
             key: "block_d",
             title: `D · Position at ${asOf}`,
             columns: BLOCK_D_COLUMNS,
-            rows: blockDRows(yesterday, awaiting ?? new Map(), names, now.waiting),
+            rows: blockDRows(yesterday, awaiting ?? new Map(), names, now.waiting, awaitingPast),
             textColumns: 1,
             note: awaiting
-              ? "Awaiting field visit: transferred to an ASM and not yet visited. Sales-ready, no owner: on the (no owner) row."
+              ? "Awaiting field visit: transferred to an ASM and not yet visited; past the limit = more working days since the transfer than the field-visit limit (Admin › Time limits) in force that day. Ready leads with no owner: sales-ready, nobody owns them yet, on the (no owner) row. Total adds up every row."
               : "Awaiting field visit could not be measured on this database.",
             empty: "No open hot, warm or cold leads, and nothing awaiting a field visit.",
           },

@@ -44,6 +44,7 @@ import { db } from "@/lib/db";
 import { humanCall } from "@/lib/reports/metricDefinitions";
 import { eventTypeMatchers, type LeadEventTypeValue } from "@/lib/leads/eventTypes";
 import { limitPassedLabel, ownerInferredLabel } from "@/lib/leads/eventClockFlags";
+import { FIRST_VISIT_BY_ANYONE_SQL, FIRST_VISIT_BY_REP_SQL } from "@/lib/visits/freshRepeat";
 
 export const EVENT_LOG_ROW_CAP = 50_000;
 
@@ -98,6 +99,15 @@ export type EventLogRow = {
     owner_limit_passed?: string | null;
     /** "Yes" when that owner was inferred from assigned_at (ID 86 back-fill). */
     owner_inferred?: string | null;
+    /**
+     * 18 Oct row 36 — "Yes" when this event is the lead clock's first attempt
+     * (first call or visit by anyone) / first contact; the same for the owner
+     * clock holding the event. NULL otherwise.
+     */
+    lead_first_attempt?: string | null;
+    lead_first_contact?: string | null;
+    owner_first_attempt?: string | null;
+    owner_first_contact?: string | null;
 };
 
 type Sources = { interestHistory: boolean; fieldChanges: boolean; clocks: boolean; limitEvents: boolean };
@@ -167,10 +177,14 @@ function eventsUnion(f: EventLogFilters, s: Sources): SQL {
     const clockName = (c: SQL) => sql`CASE ${c} WHEN 'lead' THEN 'Lead clock' WHEN 'owner' THEN 'Owner clock'
                    WHEN 'transfer' THEN 'Transfer clock' WHEN 'hot_assign' THEN 'Hot: ready to assigned'
                    WHEN 'hot_owner' THEN 'Hot: owner clock' WHEN 'retry' THEN 'Retry clock'
-                   WHEN 'quote' THEN 'CEO quote approval' ELSE ${c} END`;
+                   WHEN 'quote' THEN 'CEO quote approval' WHEN 'ready_assign' THEN 'Ready to assigned'
+                   WHEN 'quote_deliver' THEN 'Approved quote not delivered'
+                   WHEN 'quote_revise' THEN 'Declined quote not revised or Lost' ELSE ${c} END`;
     const clockGoal = (c: SQL) => sql`CASE ${c} WHEN 'transfer' THEN 'First visit' WHEN 'hot_assign' THEN 'An owner'
+                   WHEN 'ready_assign' THEN 'An owner' WHEN 'quote_deliver' THEN 'Quotation sent'
+                   WHEN 'quote_revise' THEN 'Revised quote or Lost'
                    WHEN 'quote' THEN 'A decision' WHEN 'retry' THEN 'Next attempt' ELSE 'First call or visit' END`;
-    const unitWords = (u: SQL) => sql`CASE ${u} WHEN 'working_days' THEN ' working days' WHEN 'days' THEN ' days' ELSE ' working hours' END`;
+    const unitWords = (u: SQL) => sql`CASE ${u} WHEN 'working_days' THEN ' working days' WHEN 'working_day_close' THEN ' working day(s), by close' WHEN 'days' THEN ' days' ELSE ' working hours' END`;
     const limitPassed = s.limitEvents
         ? sql`
         SELECT e.passed_at, e.dealer_lead_id, 'Limit passed',
@@ -432,6 +446,16 @@ export async function countEvents(f: EventLogFilters): Promise<number> {
     return Number(r[0]?.n ?? 0);
 }
 
+/**
+ * SQL: the event `ev` is the clock's call or visit at `at`. A call matches its
+ * exact time; a visit has only a date (the clock reads it as 10:00 IST), so a
+ * visit event matches on its IST day.
+ */
+const isAt = (at: SQL, kind: SQL) => sql`(${at} IS NOT NULL AND ev.event_type IN ('Call', 'Visit') AND (
+        ev.event_at = ${at}
+        OR (${kind} = 'visit' AND ev.event_type = 'Visit'
+            AND (ev.event_at AT TIME ZONE 'Asia/Kolkata')::date = (${at} AT TIME ZONE 'Asia/Kolkata')::date)))`;
+
 export async function fetchEvents(f: EventLogFilters): Promise<EventLogRow[]> {
     const s = await sources();
     // ID 35 — lead clock and owner clock per event, only where E-337's
@@ -445,16 +469,20 @@ export async function fetchEvents(f: EventLogFilters): Promise<EventLogRow[]> {
                (oc.started_at AT TIME ZONE 'Asia/Kolkata')::text  AS owner_clock_started_at,
                CASE WHEN oc.limit_passed_at <= ev.event_at
                     THEN (oc.limit_passed_at AT TIME ZONE 'Asia/Kolkata')::text END AS owner_limit_passed_at,
-               oc.owner_inferred                                   AS owner_inferred_raw`
+               oc.owner_inferred                                   AS owner_inferred_raw,
+               CASE WHEN ${isAt(sql`lc.first_attempt_at`, sql`lc.first_attempt_kind`)} THEN 'Yes' END AS lead_first_attempt,
+               CASE WHEN ${isAt(sql`lc.first_contact_at`, sql`lc.first_attempt_kind`)} THEN 'Yes' END AS lead_first_contact,
+               CASE WHEN ${isAt(sql`oc.first_attempt_at`, sql`oc.first_attempt_kind`)} THEN 'Yes' END AS owner_first_attempt,
+               CASE WHEN ${isAt(sql`oc.first_contact_at`, sql`oc.first_attempt_kind`)} THEN 'Yes' END AS owner_first_contact`
         : sql``;
     const clockJoins = s.clocks
         ? sql`
           LEFT JOIN LATERAL (
-              SELECT c.started_at, c.limit_passed_at FROM lead_clocks c
+              SELECT c.started_at, c.limit_passed_at, c.first_attempt_at, c.first_contact_at, c.first_attempt_kind FROM lead_clocks c
                WHERE c.dealer_lead_id = ev.lead_id AND c.clock = 'lead' AND c.started_at <= ev.event_at
                ORDER BY c.started_at DESC LIMIT 1) lc ON TRUE
           LEFT JOIN LATERAL (
-              SELECT c.started_at, c.limit_passed_at, c.owner_inferred FROM lead_clocks c
+              SELECT c.started_at, c.limit_passed_at, c.owner_inferred, c.first_attempt_at, c.first_contact_at, c.first_attempt_kind FROM lead_clocks c
                WHERE c.dealer_lead_id = ev.lead_id AND c.clock = 'owner' AND c.started_at <= ev.event_at
                  AND (c.ended_at IS NULL OR c.ended_at > ev.event_at)
                ORDER BY c.started_at DESC LIMIT 1) oc ON TRUE`
@@ -502,7 +530,10 @@ export type EventSummaryRow = {
     interest_changes: number;
     calls: number;
     visits_logged: number;
+    /** ID 185 — of the visits marked visited, the dealer's first visit by anyone ("New to iTarang"). */
     new_visits: number;
+    /** ID 185 — of the visits marked visited, this person's first visit to the dealer ("Fresh"). */
+    fresh_visits: number;
     quotes_requested: number;
     quotes_approved: number;
     quotes_rejected: number;
@@ -517,10 +548,9 @@ export async function summarizeEvents(f: EventLogFilters): Promise<EventSummaryR
     const s = await sources();
     const rows = (await db.execute(sql`
         WITH ev AS (SELECT * FROM (${eventsUnion(f, s)}) ev ${scope(f)}),
-        first_visit AS (
-            SELECT dealer_lead_id, MIN(COALESCE(actual_visit_date::timestamp AT TIME ZONE 'Asia/Kolkata', created_at)) AS at
-              FROM lead_visits GROUP BY dealer_lead_id
-        ),
+        -- ID 185: the shared rule (src/lib/visits/freshRepeat.ts) — visited rows only, by IST day.
+        first_visit AS (${FIRST_VISIT_BY_ANYONE_SQL}),
+        first_rep_visit AS (${FIRST_VISIT_BY_REP_SQL}),
         decisions AS (
             SELECT COALESCE(c.created_by, '') AS k,
                    COUNT(*) FILTER (WHERE c.approval_status = 'approved') AS approved,
@@ -540,10 +570,15 @@ export async function summarizeEvents(f: EventLogFilters): Promise<EventSummaryR
                    COUNT(*) FILTER (WHERE ev.event_type = 'Interest change')      AS interest_changes,
                    COUNT(*) FILTER (WHERE ev.event_type LIKE 'Call%')             AS calls,
                    COUNT(*) FILTER (WHERE ev.event_type = 'Visit')                AS visits_logged,
-                   COUNT(*) FILTER (WHERE ev.event_type = 'Visit' AND fv.at = ev.event_at) AS new_visits,
+                   COUNT(*) FILTER (WHERE ev.event_type = 'Visit' AND ev.to_value = 'visited'
+                                      AND fv.first_d = (ev.event_at AT TIME ZONE 'Asia/Kolkata')::date) AS new_visits,
+                   COUNT(*) FILTER (WHERE ev.event_type = 'Visit' AND ev.to_value = 'visited'
+                                      AND rv.first_d = (ev.event_at AT TIME ZONE 'Asia/Kolkata')::date) AS fresh_visits,
                    COUNT(*) FILTER (WHERE ev.event_type = 'Quote requested')      AS quotes_requested
               FROM ev
               LEFT JOIN first_visit fv ON fv.dealer_lead_id = ev.lead_id AND ev.event_type = 'Visit'
+              LEFT JOIN first_rep_visit rv ON rv.dealer_lead_id = ev.lead_id AND rv.asm_id IS NOT DISTINCT FROM ev.actor
+                                          AND ev.event_type = 'Visit'
              GROUP BY 1
         )
         -- '' stands for "no actor recorded", so a plain equality join works
@@ -556,6 +591,7 @@ export async function summarizeEvents(f: EventLogFilters): Promise<EventSummaryR
                COALESCE(p.calls, 0)::int              AS calls,
                COALESCE(p.visits_logged, 0)::int      AS visits_logged,
                COALESCE(p.new_visits, 0)::int         AS new_visits,
+               COALESCE(p.fresh_visits, 0)::int       AS fresh_visits,
                COALESCE(p.quotes_requested, 0)::int   AS quotes_requested,
                COALESCE(d.approved, 0)::int           AS quotes_approved,
                COALESCE(d.rejected, 0)::int           AS quotes_rejected

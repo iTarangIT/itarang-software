@@ -27,12 +27,11 @@
  * made here too.
  */
 
-import { hasInvoiceLedgerTables } from "@/lib/sales/ledgerTables";
 import { and, gte, lt, sql } from "drizzle-orm";
 
 import { db } from "@/lib/db";
-import { dealerLeads, dealers, zohoInvoices } from "@/lib/db/schema";
-import { outstandingTotal } from "@/lib/dashboard/revenueSource";
+import { dealerLeads, dealers } from "@/lib/db/schema";
+import { outstandingTotal, revenueTotal } from "@/lib/dashboard/revenueSource";
 
 export interface MonthWindow {
   /** Inclusive start, YYYY-MM-DD. */
@@ -93,7 +92,6 @@ export async function getCeoBusinessMetrics(
   window: MonthWindow = currentMonthWindow(),
 ): Promise<CeoBusinessMetrics> {
   const { start, end, startStr, endStr } = window;
-  const ledger = await hasInvoiceLedgerTables();
 
   const [
     leadsAgg,
@@ -118,21 +116,10 @@ export async function getCeoBusinessMetrics(
       .from(dealers)
       .where(and(gte(dealers.created_at, start), lt(dealers.created_at, end))),
 
-    // Mirrors zohoRevenueQ — void-only exclusion, drafts counted.
-    db
-      .select({ revenue: sql<string>`COALESCE(SUM(${zohoInvoices.total}), 0)` })
-      .from(zohoInvoices)
-      .where(
-        and(
-          gte(zohoInvoices.invoice_date, startStr),
-          lt(zohoInvoices.invoice_date, endStr),
-          sql`(${zohoInvoices.status} IS NULL OR ${zohoInvoices.status} NOT IN ('void'))`,
-          // E-322 (ID 71): a void recorded in the CRM.
-          ledger
-            ? sql`NOT EXISTS (SELECT 1 FROM invoice_voids v WHERE v.source = 'zoho' AND v.invoice_id = ${zohoInvoices.id}::text)`
-            : sql`TRUE`,
-        ),
-      ),
+    // IDs 70 / 71 (18 Oct): the CEO Revenue card's own figure — the one
+    // revenue list (Drive / Vyapar + Zoho invoices, voids out, credit notes
+    // netted), not Zoho invoices alone.
+    revenueTotal(startStr, endStr),
 
     // Mirrors outstandingAggQ. NOT windowed: a receivable is outstanding today
     // regardless of which month it was invoiced in, which is why the CEO route
@@ -177,7 +164,7 @@ export async function getCeoBusinessMetrics(
     leads_created: n(leadsAgg[0]?.total_leads),
     leads_converted: n(leadsAgg[0]?.conversions),
     dealers_onboarded: n(dealersAgg[0]?.onboarded),
-    revenue: n(revenueAgg[0]?.revenue),
+    revenue: n(revenueAgg),
     outstanding: n(outstandingAgg),
     buyback_submitted: n(buyback?.submitted),
     buyback_completed: n(buyback?.completed),

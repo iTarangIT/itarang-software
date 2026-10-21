@@ -6,7 +6,9 @@ import type { NextRequest } from "next/server";
 import { requireRole } from "@/lib/auth-utils";
 import { ISR_POOL_TABS, claimsByNumberOnly } from "@/lib/leads/claimScope";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
-import { countFinalisedNotWon, fetchAllTabCounts } from "@/lib/inside-sales/queryBuilder";
+import { countFinalisedNotWon, countQueueRows, fetchAllTabCounts } from "@/lib/inside-sales/queryBuilder";
+import { hasLeadClocks, pastALimitSql } from "@/lib/leads/clocks";
+import { sql } from "drizzle-orm";
 import { readQueueFilters } from "@/lib/leads/queueFilters";
 import { teamForOwnScopedViewer } from "@/lib/users/team";
 
@@ -27,20 +29,24 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
     // Mirrors the list's own filters, so the badge above a tab and the rows
     // inside it can never disagree about how many leads there are.
     const sp = new URL(req.url).searchParams;
-    const [counts, finalisedNotWon] = await Promise.all([
+    // 18 Oct row 34 — the "Past a limit" predicate, only where lead_clocks exists.
+    const past = (await hasLeadClocks()) ? pastALimitSql(sql`dl.id`) : null;
+    const [counts, finalisedNotWon, pastLimitCount] = await Promise.all([
         fetchAllTabCounts(user.id, {
             neodoveOnly: sp.get("neodove") === "1",
             callbackOnly: sp.get("callback") === "1",
             finalisedOnly: sp.get("finalised") === "1",
+            pastLimit: sp.get("past_limit") === "1" ? (past ?? sql`FALSE`) : null,
             filters: readQueueFilters(sp),
             // ID 155: a manager's own-tab badges include the team, like the table.
             teamMemberIds: await teamForOwnScopedViewer(user),
         }),
         countFinalisedNotWon(user.id),
+        past ? countQueueRows({ tab: "my_open", userId: user.id, pastLimit: past }).catch(() => 0) : Promise.resolve(0),
     ]);
     // ID 45: no pool counts for reps — they claim by number search only.
     if (claimsByNumberOnly(user.role)) {
         for (const t of ISR_POOL_TABS) (counts as Record<string, number>)[t] = 0;
     }
-    return successResponse({ ...counts, finalised_not_won: finalisedNotWon });
+    return successResponse({ ...counts, finalised_not_won: finalisedNotWon, past_limit: pastLimitCount });
 });

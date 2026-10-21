@@ -25,6 +25,19 @@ export async function closedColumns(accountId: SQL): Promise<SQL> {
 }
 
 /**
+ * ID 148 — `closed_on` (IST date) and `closed_by_name` for the account
+ * `accountId`, for the Dealer accounts download. NULLs on a database without E-332.
+ */
+export async function closedDetailColumns(accountId: SQL): Promise<SQL> {
+    if (!(await hasAccountClosuresTable())) {
+        return sql`NULL::date AS closed_on, NULL::text AS closed_by_name`;
+    }
+    return sql`(SELECT (ac_d.closed_at AT TIME ZONE 'Asia/Kolkata')::date FROM account_closures ac_d WHERE ac_d.account_id = ${accountId}) AS closed_on,
+               (SELECT u_d.name FROM account_closures ac_d JOIN users u_d ON u_d.id = ac_d.closed_by
+                 WHERE ac_d.account_id = ${accountId}) AS closed_by_name`;
+}
+
+/**
  * ID 148 — `TRUE` when the account `accountId` is live (not closed); `TRUE`
  * for everyone on a database without E-332. The SQL half of isLiveBucket().
  */

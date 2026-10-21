@@ -72,6 +72,57 @@ describe("withMetricRules", () => {
     it("tells the analyst Finance is retired (ID 11)", () => {
         expect(ANALYST_METRIC_RULES).toMatch(/'finance' means battery_sale/);
     });
+
+    it("topic words match whole words (the \\b escapes are real word boundaries, not backspaces)", () => {
+        expect(questionTopics("How many leads came in last week?")).toContain("leads");
+        expect(questionTopics("Calls made yesterday")).toContain("calls");
+        expect(questionTopics("Which dealers did we lose? Lost count please")).toContain("won");
+        expect(questionTopics("Units sold by SKU")).toContain("batteries");
+        expect(questionTopics("What did the batteries cost us?")).toContain("margin");
+        expect(questionTopics("Which reps did best?")).toContain("people");
+        expect(questionTopics("Have you already counted it?")).not.toContain("leads");
+    });
+
+    it("Visits carry Fresh, Repeat and New to iTarang, on visited rows only (ID 185)", () => {
+        const visits = rule(/^Visits = /);
+        expect(visits).toMatch(/visit_status 'visited'/);
+        expect(visits).toMatch(/Fresh = the rep's first visited visit/);
+        expect(visits).toMatch(/Repeat = Visits - Fresh/);
+        expect(visits).toMatch(/New to iTarang = the dealer's first visited visit by anyone/);
+        expect(withMetricRules("Fresh vs repeat visits by ASM last month")).toContain(visits);
+    });
+
+    it("an idle question gets the idle rule and its per-holder limits (ID 192)", () => {
+        const idle = rule(/^Idle = /);
+        expect(idle).toMatch(/GREATEST\(last_worked_at, assigned_at, next_follow_up_at if within 30 days ahead\), created_at\)/);
+        expect(idle).toMatch(/idle_asm \(default 7\)/);
+        expect(idle).toMatch(/idle_cc \(default 5\)/);
+        expect(idle).toMatch(/holiday_calendar/);
+        expect(withMetricRules("Which leads are idle past the limit?")).toContain(idle);
+    });
+
+    it("ready leads with no owner: the awaitingAssignment rule, split AI-qualified first (ID 184)", () => {
+        const ready = rule(/^Ready leads with no owner/);
+        expect(ready).toMatch(/sales_ready_at set, current_owner_id NULL/);
+        expect(ready).toMatch(/contactability NULL/);
+        expect(ready.indexOf("ai_qualified")).toBeLessThan(ready.indexOf("'hot'"));
+        expect(withMetricRules("How many ready leads have no owner?")).toContain(ready);
+    });
+
+    it("live dealers leave out closed accounts; GSTIN missing from the flags view (ID 148)", () => {
+        const live = rule(/^Live dealers/);
+        expect(live).toMatch(/account_closures/);
+        expect(live).toMatch(/gstin_missing/);
+        expect(questionTopics("How many live dealers have no GSTIN?")).toContain("accounts");
+        expect(withMetricRules("How many live dealers have no GSTIN?")).toContain(live);
+    });
+
+    it("gross margin reads the product stamped on the line, not a join on item name (ID 147)", () => {
+        const margin = rule(/^Gross margin/);
+        expect(margin).toMatch(/invoice_line_items\.amount_excl_gst/);
+        expect(margin).toMatch(/product_id \/ asset_type/);
+        expect(margin).toMatch(/never join vyapar_item_map by item name/);
+    });
 });
 
 describe("stripMetricRules", () => {

@@ -26,14 +26,16 @@ const ASSIGN_ROLES: readonly string[] = LEADS_BULK_ROLES;
 // Tracker ID 82 (handover P2-10): sales-ready leads nobody owns, oldest wait
 // first. The wait is counted from the Sales-ready event, not from creation.
 //
-// The CEO card "Sales-ready leads awaiting assignment (N+ days)" opens this
-// page with ?min_days=N, N = the ID 85 time limit sales_ready_unassigned. Card, page and the daily email's "Right now" box all
+// The CEO card opens this page with ?past=hot|other|any — the leads past their
+// limit (18 Oct rework 1: Hot = hot_ready_to_assigned working hours, others =
+// ready_to_assigned working days; readyPastLimitSql). ?min_days=N still works
+// (working days). Card, page and the daily email's "Right now" box all
 // count by ONE rule (awaitingAssignment in lib/leads/salesReady.ts), and the
 // page says the number it is showing, so what the card said is what is listed.
 export default async function ReadyToAssignPage({
     searchParams,
 }: {
-    searchParams: Promise<{ min_days?: string; split?: string }>;
+    searchParams: Promise<{ min_days?: string; split?: string; past?: string; state?: string; spoc_id?: string }>;
 }) {
     const user = await requireRole(["admin", "sales_head", "ceo", "business_head", "sales_manager", "partner"]);
     const canAssign = ASSIGN_ROLES.includes(user.role);
@@ -41,15 +43,41 @@ export default async function ReadyToAssignPage({
     const sp = await searchParams;
     const requested = Number.parseInt(sp.min_days ?? "", 10);
     const minDays = Number.isFinite(requested) && requested > 0 ? Math.min(requested, 3650) : 0;
-    // ID 184: Hot / AI qualified / other, the card's split (one bucket per lead).
+    // ID 184: AI qualified / Hot / other, the card's split (one bucket per lead, AI first).
     const split = isReadySplit(sp.split) ? sp.split : undefined;
+    // ID 184: the Sales dashboard's filters ride in on the card link. State
+    // narrows the list as it narrows the card; ready leads have no owner, so
+    // the person filter does not (the card ignores it too) — said on screen.
+    const state = sp.state?.trim() || null;
+    const personPicked = Boolean(sp.spoc_id?.trim());
+    const withFilters = (href: string) => {
+        if (!state) return href;
+        return `${href}${href.includes("?") ? "&" : "?"}state=${encodeURIComponent(state)}`;
+    };
+    // 18 Oct rework 1: past the limit — Hot, others, or either.
+    const past = sp.past === "hot" || sp.past === "other" || sp.past === "any" ? sp.past : undefined;
     const [counts, rows] = await Promise.all([
-        countAwaitingAssignment(),
-        listReadyToAssign({ minDays, limit: LIST_CAP, split }),
+        countAwaitingAssignment({ state }),
+        listReadyToAssign({ minDays, limit: LIST_CAP, split, pastLimit: past, state }),
     ]);
     const overdueDays = counts.overdueDays;
-    const overdueOnly = minDays === overdueDays && !split;
-    const showing = split ? (minDays === 0 ? counts.split[split] : rows.length) : minDays === 0 ? counts.total : overdueOnly ? counts.overdue : rows.length;
+    const plain = minDays === 0 && !past;
+    const showing = past
+        ? past === "hot" && !split
+            ? counts.hotPast
+            : past === "other" && !split
+              ? counts.otherPast
+              : past === "any" && !split
+                ? counts.overdue
+                : rows.length
+        : split
+          ? minDays === 0
+              ? counts.split[split]
+              : rows.length
+          : minDays === 0
+            ? counts.total
+            : rows.length;
+    const wd = (n: number) => `${n} working day${n === 1 ? "" : "s"}`;
 
     const tab = (href: string, label: string, n: number, active: boolean) => (
         <Link
@@ -72,24 +100,43 @@ export default async function ReadyToAssignPage({
                     The wait is counted from the Sales-ready event (or from when a reactivated lead came back to the
                     pool). Leads with a dead or non-responsive number are not listed.
                 </p>
+                {(state || personPicked) && (
+                    <p className="mt-1 text-xs text-ink-muted">
+                        {state ? (
+                            <>
+                                State: <b>{state}</b> (from the Sales dashboard) ·{" "}
+                                <Link href="/admin/ready-to-assign" className="font-medium text-brand-600 hover:underline">
+                                    All states
+                                </Link>
+                            </>
+                        ) : null}
+                        {personPicked ? `${state ? " · " : ""}These leads have no owner yet, so the Person filter does not narrow them.` : ""}
+                    </p>
+                )}
             </header>
 
             <div className="flex flex-wrap items-center gap-2">
-                {tab("/admin/ready-to-assign", "All awaiting", counts.total, minDays === 0 && !split)}
+                {tab(withFilters("/admin/ready-to-assign"), "All awaiting", counts.total, plain && !split)}
                 {READY_SPLITS.map((k) =>
-                    tab(`/admin/ready-to-assign?split=${k}`, READY_SPLIT_LABEL[k], counts.split[k], split === k && minDays === 0),
+                    tab(withFilters(`/admin/ready-to-assign?split=${k}`), READY_SPLIT_LABEL[k], counts.split[k], split === k && plain),
                 )}
                 {tab(
-                    `/admin/ready-to-assign?min_days=${overdueDays}`,
-                    `Waiting ${overdueDays}+ days`,
-                    counts.overdue,
-                    overdueOnly,
+                    withFilters("/admin/ready-to-assign?past=hot"),
+                    `Hot past ${counts.hotLimitHours} working hours`,
+                    counts.hotPast,
+                    past === "hot" && !split,
+                )}
+                {tab(
+                    withFilters("/admin/ready-to-assign?past=other"),
+                    `Others past ${wd(overdueDays)}`,
+                    counts.otherPast,
+                    past === "other" && !split,
                 )}
                 {counts.oldestDays != null && (
-                    <span className="text-xs text-gray-500">Longest wait: {counts.oldestDays} days</span>
+                    <span className="text-xs text-gray-500">Longest wait: {wd(counts.oldestDays)}</span>
                 )}
                 <Link
-                    href={`/leads?ready_no_owner=1${split ? `&ready_split=${split}` : ""}`}
+                    href={withFilters(`/leads?ready_no_owner=1${split ? `&ready_split=${split}` : ""}`)}
                     className="text-xs font-medium text-brand-600 hover:underline"
                 >
                     Same list in Leads (download)
@@ -98,9 +145,11 @@ export default async function ReadyToAssignPage({
 
             {rows.length === 0 ? (
                 <p className="rounded-lg border border-gray-200 bg-white p-6 text-sm text-gray-500">
-                    {minDays > 0 && counts.total > 0
-                        ? `No lead has been waiting ${minDays} days or more. ${counts.total.toLocaleString("en-IN")} are waiting in all.`
-                        : "Nothing is waiting — every sales-ready lead has an owner."}
+                    {past && counts.total > 0
+                        ? `No lead here is past its limit. ${counts.total.toLocaleString("en-IN")} are waiting in all.`
+                        : minDays > 0 && counts.total > 0
+                          ? `No lead has been waiting ${wd(minDays)} or more. ${counts.total.toLocaleString("en-IN")} are waiting in all.`
+                          : "Nothing is waiting — every sales-ready lead has an owner."}
                 </p>
             ) : (
                 <>
@@ -120,6 +169,7 @@ export default async function ReadyToAssignPage({
                             interest_level: r.interest_level,
                             reason: salesReadyReasonLabel(r.sales_ready_reason),
                             days_waiting: r.days_waiting,
+                            past_limit: Boolean(r.past_limit),
                         }))}
                     />
                 </>

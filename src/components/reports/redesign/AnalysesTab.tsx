@@ -522,12 +522,14 @@ function AiTable({ data }: { data: AiScoreResult }) {
     );
 }
 
-const MEET_GRID = "grid grid-cols-[minmax(150px,1.4fr)_minmax(110px,1.1fr)_repeat(8,minmax(60px,0.7fr))] gap-3";
+const MEET_GRID = "grid grid-cols-[minmax(150px,1.4fr)_minmax(110px,1.1fr)_repeat(9,minmax(60px,0.7fr))] gap-3";
 const MEET_COLS = [
-    { key: "visits", head: "Visits", hint: "One person at one dealer on one day, visit happened" },
+    { key: "visits", head: "Visits", hint: "One person at one dealer on one day, marked visited. Visits = Fresh + Repeat" },
     { key: "dealers", head: "Dealers", hint: "Different dealers visited" },
-    { key: "fresh", head: "Fresh", hint: "Visit on the dealer's first-ever visit day" },
-    { key: "repeat", head: "Repeat", hint: "Every other visit" },
+    // ID 185: the same Fresh as the Sales dashboard and the daily email — the person's first visit.
+    { key: "fresh", head: "Fresh", hint: "This person's first visit to the dealer (a dealer new to iTarang is fresh too)" },
+    { key: "repeat", head: "Repeat", hint: "A later visit by the same person to the same dealer" },
+    { key: "new_to_itarang", head: "New to iTarang", hint: "Of the visits, the dealer's first visit by anyone (part of Fresh)" },
     { key: "planned", head: "Planned", hint: "Booked for a day in this period, not logged as visited yet" },
     { key: "ground", head: "Ground", hint: "In person" },
     { key: "calling", head: "Calling", hint: "Meeting held over a call" },

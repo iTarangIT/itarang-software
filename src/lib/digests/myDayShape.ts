@@ -11,7 +11,7 @@
 // Pure (no db) — unit tested in __tests__/myDayShape.test.ts.
 
 import { pctOfTarget } from "./salesDailyBlockA";
-import { repBlockTableRows, type RepBlock, type TeamOf } from "./salesDailyBlocks";
+import { repBlockTableRows, TEAM_MEMBER_PREFIX, TEAM_SUBTOTAL_PREFIX, type RepBlock, type TeamOf } from "./salesDailyBlocks";
 
 type Rows = Array<Array<string | number>>;
 type Role = "asm" | "inside_sales_rep";
@@ -33,9 +33,9 @@ export function membersOf(teamOf: TeamOf, managerId: string): string[] {
  * The manager's team table for one role: the manager's own row (when they are
  * in this block), each member (↳) and the "Team subtotal" — exactly the lines
  * under that manager in the management email. When the manager is not in this
- * block (an ASM lead managing ISRs), the members are listed with a "Team
- * total" instead, as the management email lists them ungrouped. [] when no
- * member is in this block.
+ * block (an ASM lead managing ISRs), only the members' rows are listed — the
+ * management email lists them ungrouped with no total of their own, so (ID
+ * 194, 18 Oct rework 1) neither does My day. [] when no member is in this block.
  */
 export function teamRows(role: Role, blocks: RepBlock[], managerId: string, teamOf: TeamOf): Rows {
     const members = new Set(membersOf(teamOf, managerId));
@@ -44,10 +44,34 @@ export function teamRows(role: Role, blocks: RepBlock[], managerId: string, team
     const manager = blocks.find((b) => b.id === managerId);
     const group = manager ? [manager, ...inBlock] : inBlock;
     const rows = repBlockTableRows(role, group, teamOf);
-    // With the manager present the block's "Total" repeats the subtotal.
-    if (group.length > 1 && rows.length && rows[rows.length - 1][0] === "Total") {
-        if (manager) rows.pop();
-        else rows[rows.length - 1] = ["Team total", ...rows[rows.length - 1].slice(1)];
+    // With the manager present the block's "Total" repeats the subtotal; without
+    // them it is a cross-role total the management email does not print. Drop it.
+    if (group.length > 1 && rows.length && rows[rows.length - 1][0] === "Total") rows.pop();
+    return rows;
+}
+
+/** One team member's overdue work, for the manager's "My team · overdue" table. */
+export type MemberOverdue = { id: string; name: string; followUps: number; visits: number };
+
+/**
+ * ID 194 — the manager's team: each member's overdue follow-ups and overdue
+ * visits (the same rules as each member's own work list: a follow-up dated
+ * before today, a scheduled visit dated before today), the manager first when
+ * they are in it, then a team subtotal. [] for no members.
+ */
+export function teamOverdueRows(managerId: string, people: MemberOverdue[]): Rows {
+    if (people.length === 0) return [];
+    const ordered = [...people].sort((a, b) =>
+        a.id === managerId ? -1 : b.id === managerId ? 1 : a.name.localeCompare(b.name),
+    );
+    const rows: Rows = ordered.map((p) => [p.id === managerId ? p.name : `${TEAM_MEMBER_PREFIX}${p.name}`, p.followUps, p.visits]);
+    if (ordered.length > 1) {
+        const manager = ordered.find((p) => p.id === managerId);
+        rows.push([
+            manager ? `${TEAM_SUBTOTAL_PREFIX}${manager.name}` : "Team subtotal",
+            ordered.reduce((s, p) => s + p.followUps, 0),
+            ordered.reduce((s, p) => s + p.visits, 0),
+        ]);
     }
     return rows;
 }
