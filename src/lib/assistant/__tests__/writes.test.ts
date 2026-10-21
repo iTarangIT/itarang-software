@@ -21,11 +21,12 @@ const recordVisit = vi.fn<(...a: unknown[]) => Promise<unknown>>(async () => ({ 
 vi.mock("@/lib/asm/recordVisit", () => ({ scheduleVisit, recordVisit }));
 // The visit route's "Field visit booked" notice.
 const notifyLeadPerson = vi.fn<(...a: unknown[]) => Promise<void>>(async () => {});
-const lastTransferredBy = vi.fn<(...a: unknown[]) => Promise<string | null>>(async () => "isr-1");
+// ID 179: the visit route's recipients — the owner at the transfer and the presser.
+const transferWatchers = vi.fn<(...a: unknown[]) => Promise<string[]>>(async () => ["isr-1"]);
 vi.mock("@/lib/leads/newOwnerNotice", async (orig) => ({
     ...(await orig<typeof import("@/lib/leads/newOwnerNotice")>()),
     notifyLeadPerson,
-    lastTransferredBy,
+    transferWatchers,
 }));
 
 const { toolsFor } = await import("../registry");
@@ -258,6 +259,7 @@ describe("appliers (run inside the executor's transaction)", () => {
         expect(after).toMatchObject({ scheduled_visit_id: "v-1" });
         expect(notifyLeadPerson).not.toHaveBeenCalled();
         await after.afterCommit!();
+        expect(transferWatchers).toHaveBeenCalledWith("DL-1");
         expect(notifyLeadPerson).toHaveBeenCalledWith({
             userId: "isr-1", actorId: "asm-1", leadId: "DL-1", type: "lead.visit_update", title: "Field visit booked",
             message: "{by} booked a visit to {lead} on 2026-09-28.",

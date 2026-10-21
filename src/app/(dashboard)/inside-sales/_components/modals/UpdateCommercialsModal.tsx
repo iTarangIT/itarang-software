@@ -72,11 +72,11 @@ export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercia
     const [batteriesPerMonth, setBatteriesPerMonth] = useState(prevCard ? String(prevCard.batteries_per_month) : "");
     const [financeFiles, setFinanceFiles] = useState(prevCard ? String(prevCard.finance_files_per_month) : "");
     const cardLocked = currentCommercials?.deal_card_locked ?? null;
-    // ID 186 (16 Oct): the card is shown for every dealer, new or onboarded.
-    // The server says whether THIS user must fill it (optional for ISR, ASM,
-    // Sales Head); until it answers, treat it as required. A card that is
-    // started must be complete either way. The onboarded verdict is shown as
-    // information only.
+    // ID 186 (18 Oct): the card is shown for every dealer. The server says
+    // whether THIS user must fill it (dealCardRequired): always for a brand-new
+    // dealer; for an onboarded dealer optional for ISR, ASM, Sales Head. Until
+    // it answers, treat it as required. A card that is started must be complete
+    // either way. The server decides again on save.
     const [onboarded, setOnboarded] = useState<DealerOnboardedVerdict | null>(null);
     const [cardRequired, setCardRequired] = useState(true);
     const cardStarted = [fee, batteriesPerMonth, financeFiles].some((v) => v.trim() !== "");
@@ -553,7 +553,9 @@ export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercia
                             <Label className="!mb-0">Deal card</Label>
                             <span className="text-[11px] text-gray-500">
                                 {cardRequired
-                                    ? "Required · the CEO sees it on the approval"
+                                    ? onboarded && !onboarded.onboarded
+                                        ? "Required for a new dealer · the CEO sees it on the approval"
+                                        : "Required · the CEO sees it on the approval"
                                     : "Optional · leave all three empty to skip, or fill all three"}
                             </span>
                         </div>
