@@ -34,6 +34,7 @@ import { INTENT_REVIEW_ROLES, readsOwnLeadsOnly } from "@/lib/leads/access";
 import { leadOwnedBy } from "@/lib/ai-dialer/campaignAccess";
 // ID 155: read access = own leads, or a direct report's (manager).
 import { leadVisibleTo } from "@/lib/users/team";
+import { seesEveryCallReview } from "@/lib/leads/callReviewRules";
 import { filesProxyPath, putObjectStream } from "@/lib/storage/s3";
 import {
   MAX_RECORDING_BYTES,
@@ -194,6 +195,13 @@ export const GET = withErrorHandler(
     // ID 45: a rep reads only leads they own; anything else is "no such lead".
     if (readsOwnLeadsOnly(user.role) && !(await leadVisibleTo(leadId, user.id))) {
       return errorResponse("Lead not found", 404);
+    }
+    // ID 166 item 6 (18 Oct): call reviews are for Admin, Sales Head, CEO and
+    // the lead's owner. The partner (and anyone else in INTENT_REVIEW_ROLES
+    // reading a lead it does not own) gets an empty list — not the
+    // transcripts, not links it would be refused on.
+    if (!seesEveryCallReview(user.role) && !(await leadVisibleTo(leadId, user.id))) {
+      return successResponse({ recordings: [], hidden: true });
     }
 
     // The transcript is large and the panel only renders it for the recording

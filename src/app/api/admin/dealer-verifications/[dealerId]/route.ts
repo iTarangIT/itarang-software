@@ -10,7 +10,7 @@ import {
 import { and, desc, eq, inArray, ne } from "drizzle-orm";
 import { approvalTagsFor } from "@/lib/dealer/approval-tag";
 import { z } from "zod";
-import { requireSalesHead } from "@/lib/auth/requireSalesHead";
+import { requireDealerValidationReader, requireSalesHead } from "@/lib/auth/requireSalesHead";
 import { resolveSalesperson, salespersonMobile } from "@/lib/onboarding/salesperson";
 import {
   documentLabel,
@@ -169,7 +169,8 @@ function buildGstAddressesResponse(
 // ─── GET ────────────────────────────────────────────────────────────────────
 
 export async function GET(_req: NextRequest, context: RouteContext) {
-  const auth = await requireSalesHead();
+  // ID 166 item 11: Admin and the dealer account's owner read too.
+  const auth = await requireDealerValidationReader((await context.params).dealerId);
   if (!auth.ok) return auth.response;
   try {
     const { dealerId } = await context.params;

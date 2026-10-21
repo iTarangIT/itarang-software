@@ -3,6 +3,7 @@ import { type NextRequest, NextResponse } from "next/server";
 
 import { BUYBACK_ADMIN_ROLES } from "@/lib/buyback/roles";
 import { staffPageRolesFor } from "@/lib/auth/staffPageRoles";
+import { DEALER_VALIDATION_PAGE_ROLES } from "@/lib/auth/dealerValidationRules";
 import { detectThreat, detectBodyThreat, type ThreatSignal } from "@/lib/security/detect";
 import { trackRequest, type RateSignal } from "@/lib/security/rate-watch";
 import { postSecurityEvent, SECURITY_INGEST_PATH } from "@/lib/security/report-event";
@@ -677,7 +678,10 @@ export async function middleware(request: NextRequest) {
     // this row only decides who can open the pages. CEO removed: the module is
     // parked (tracker ID 140, 10 Oct) and its seats are switched off.
     "/feature-requests": ["product_head", "tech_head", "developer"],
-    "/admin/dealer-verification": ["sales_head", "ceo"],
+    // ID 166 item 11: Admin and the dealer account's owner read the page too;
+    // the API narrows an owner to its own applications and keeps the actions
+    // with the Sales Head and the CEO.
+    "/admin/dealer-verification": [...DEALER_VALIDATION_PAGE_ROLES],
     "/admin/kyc-review": ["admin", "sales_head", "business_head", "ceo"],
     // NBFC onboarding (BRD §6.0): sales_head submits, CEO approves. Admin and
     // business_head also need read access for support and oversight. The

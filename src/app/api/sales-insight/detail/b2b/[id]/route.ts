@@ -16,6 +16,8 @@ import {
 import { withErrorHandler, errorResponse, successResponse } from "@/lib/api-utils";
 import { requireRole } from "@/lib/auth-utils";
 import { desc, eq } from "drizzle-orm";
+import { accountOwnership } from "@/lib/db/schema";
+import { isOwnerAmong, mayReadCallReview, withoutCallReview } from "@/lib/leads/callReviewRules";
 
 const ALLOWED_ROLES = [
     "sales_insight",
@@ -29,7 +31,7 @@ export const GET = withErrorHandler(async (
     _req: Request,
     context: { params: Promise<{ id: string }> } | { params: { id: string } },
 ) => {
-    await requireRole(ALLOWED_ROLES);
+    const user = await requireRole(ALLOWED_ROLES);
 
     const params = await Promise.resolve(
         (context as { params: { id: string } | Promise<{ id: string }> }).params,
@@ -51,6 +53,27 @@ export const GET = withErrorHandler(async (
         db.select().from(kycVerifications).where(eq(kycVerifications.lead_id, id)),
         db.select().from(aiCallLogs).where(eq(aiCallLogs.lead_id, id)).orderBy(desc(aiCallLogs.created_at)).limit(1).then(r => r[0] ?? null),
     ]);
+
+    // ID 166 item 6: the call review (transcript, summary, recording) is for
+    // Sales Head, CEO and the lead's owner (ID 119 owners: uploader, assignee,
+    // sales manager, the dealer account's owner).
+    const [own] = leadRow.dealer_id
+        ? await db
+              .select({ owner: accountOwnership.owner_user_id })
+              .from(accountOwnership)
+              .where(eq(accountOwnership.account_id, leadRow.dealer_id))
+              .limit(1)
+        : [];
+    const mayReview = mayReadCallReview({
+        role: user.role,
+        ownsLead: isOwnerAmong(user.id, [
+            leadRow.uploader_id,
+            leadRow.assigned_to,
+            leadRow.sm_assigned_to,
+            own?.owner ?? null,
+        ]),
+    });
+    const review = <T extends Parameters<typeof withoutCallReview>[0]>(c: T) => (mayReview ? c : withoutCallReview(c));
 
     return successResponse({
         source: "b2b" as const,
@@ -107,7 +130,7 @@ export const GET = withErrorHandler(async (
             match_score: k.match_score,
             completed_at: k.completed_at,
         })),
-        latest_call: latestCall && {
+        latest_call: review(latestCall && {
             id: latestCall.id,
             call_id: latestCall.call_id,
             status: latestCall.status,
@@ -119,6 +142,6 @@ export const GET = withErrorHandler(async (
             call_duration: latestCall.call_duration,
             started_at: latestCall.started_at,
             ended_at: latestCall.ended_at,
-        },
+        }),
     });
 });
