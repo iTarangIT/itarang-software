@@ -3,10 +3,9 @@
  * after Digio reports COMPLETED, and persist the public URLs onto
  * `nbfc_lsp_agreements`.
  *
- * NBFC files go to the VPS local `public/nbfc-uploads/{nbfcId}/lsp-agreement/`
- * folder (matching the agreement-template / signer-identity upload routes).
- * This is NOT Supabase Storage — see CLAUDE.md and
- * `src/app/api/admin/nbfc/[nbfcId]/lsp-agreement/agreement-template/upload/route.ts`.
+ * NBFC files go to the private NBFC store (`putNbfcObject`, key
+ * `{nbfcId}/lsp-agreement/...`) and are served by the authenticated
+ * `/api/nbfc-uploads` route — never the public folder (ID 195).
  *
  * Test mode: when NBFC_DIGIO_STUB=1 (and NBFC_TEST_BYPASS_SECRET is set,
  * NODE_ENV != production), we return deterministic synthetic URLs. This keeps
