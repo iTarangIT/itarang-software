@@ -104,6 +104,11 @@ docs/nbfc/_simple/
 /*.png
 !/public/*.png
 
+# Uploaded files must never sit in public/ — it is served with no login (ID 195).
+# They live in the private store behind /api/nbfc-uploads and /api/files.
+/public/nbfc-uploads/
+/public/uploads/
+
 # DB migration scratch files (sandbox → prod sync). Contain real data /
 # connection strings — never commit. Root-anchored so drizzle/*.sql is unaffected.
 /sandbox-*.sql

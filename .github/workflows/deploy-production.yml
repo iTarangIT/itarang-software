@@ -60,6 +60,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # ID 195: everything under public/ is served with no login. Uploaded files
+      # (NBFC papers, signer IDs, field-visit photos) belong in the private store
+      # behind /api/nbfc-uploads and /api/files — fail the deploy if any are committed.
+      - name: Block uploaded files in public/
+        run: |
+          LEAKED=$(git ls-files public | grep -E '^public/(nbfc-uploads|uploads)/' || true)
+          if [ -n "$LEAKED" ]; then
+            echo "::error::Uploaded files are committed under public/ and would open without login:"
+            echo "$LEAKED" | head -50
+            exit 1
+          fi
+
       - name: Set up Node 24
         uses: actions/setup-node@v4
         with:
