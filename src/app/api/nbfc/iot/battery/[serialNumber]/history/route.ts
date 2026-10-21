@@ -19,11 +19,21 @@
  * Response shape:
  *   { serial, metric, points: [{ date: ISO|YYYY-MM-DD, value: number | { lat, lng } }] }
  * Points are ordered ASCENDING by date — this is the contract AC4 asserts.
+ *
+ * Dealer logins (tracker ID 181, 18 Oct follow-up): the battery must be mapped
+ * to the dealer (device_battery_map, same as the telemetry fleet — see
+ * battery-scope dealerMayOpenSerial); a GPS trail is trimmed to the last
+ * 7 days (`capped: true` in the response when trimmed); and every dealer open,
+ * allowed or refused, is written to telemetry_location_access_log
+ * (feed 'battery_gps' for metric=gps, else 'battery_history'). NBFC, admin and
+ * CEO behaviour is unchanged.
  */
 import { NextResponse } from "next/server";
 import { clientError } from "@/lib/nbfc/http-error";
 import { z } from "zod";
 import { getIotSql } from "@/lib/db/iot";
+import { logVehicleOpen } from "@/lib/telemetry/vehicleAccess";
+import { DEALER_MAX_FEED_HOURS, capDealerRange } from "@/lib/telemetry/vehicleAccessRules";
 import {
   resolveBatteryActor,
   authoriseSerial,
@@ -74,6 +84,26 @@ export async function GET(
     // Existence + authorisation against the loan plane (the registry plane,
     // iot_devices, is empty in NBFC-seeded environments).
     const auth = await authoriseSerial(serialNumber, actor);
+
+    // Range bounds — inclusive of `from` 00:00 UTC and `to` end-of-day. A
+    // dealer's GPS trail is trimmed to the last 7 days.
+    const range = capDealerRange({
+      role: metric === "gps" ? actor.role : "uncapped",
+      from: new Date(`${from}T00:00:00.000Z`),
+      to: new Date(`${to}T23:59:59.999Z`),
+      now: new Date(),
+    });
+
+    if (actor.role === "dealer") {
+      await logVehicleOpen({
+        viewer: { id: actor.user_id ?? null, role: "dealer" },
+        deviceId: serialNumber,
+        feed: metric === "gps" ? "battery_gps" : "battery_history",
+        hours: metric === "gps" ? DEALER_MAX_FEED_HOURS : null,
+        allowed: auth === "ok",
+      });
+    }
+
     if (auth === "not_found") {
       return NextResponse.json({ ok: false, error: "NOT_FOUND" }, { status: 404 });
     }
@@ -81,9 +111,11 @@ export async function GET(
       return NextResponse.json({ ok: false, error: "FORBIDDEN" }, { status: 403 });
     }
 
-    // Range bounds — inclusive of `from` 00:00 UTC and `to` end-of-day.
-    const fromDate = new Date(`${from}T00:00:00.000Z`);
-    const toDate = new Date(`${to}T23:59:59.999Z`);
+    const fromDate = range.from;
+    const toDate = range.to;
+    if (range.empty) {
+      return NextResponse.json({ serial: serialNumber, metric, points: [], ...(range.capped ? { capped: true } : {}) });
+    }
 
     const iotSql = getIotSql();
     let points: Point[] = [];
@@ -151,7 +183,7 @@ export async function GET(
       points = [];
     }
 
-    return NextResponse.json({ serial: serialNumber, metric, points });
+    return NextResponse.json({ serial: serialNumber, metric, points, ...(range.capped ? { capped: true } : {}) });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     return NextResponse.json({ ok: false, error: clientError(msg) }, { status: errorToStatus(msg) });

@@ -20,10 +20,11 @@
  *             tenant_id, since BRD non_functional only requires that the
  *             serial be "in the tenant portfolio" without prescribing the
  *             linkage table — see E-050 audit notes)
- *        - dealer: only serials whose iot_devices.dealer_id matches the
- *            session dealer_id (delivered via the test bypass header
- *            x-nbfc-test-user-id for the loop tests, since dealer auth in
- *            this codebase isn't unified with NBFC tenant auth).
+ *        - dealer: only serials (vehicle numbers) mapped to the session
+ *            dealer code in device_battery_map — the telemetry fleet's
+ *            mapping (ID 181, 18 Oct; was iot_devices.dealer_id). The dealer
+ *            code comes from the test bypass header x-nbfc-test-dealer-id /
+ *            x-nbfc-test-user-id for the loop tests.
  *
  *   3. Computing data_freshness for an iot_devices row. The dedicated
  *      classifier unit (E-048) has not landed yet at this baseline — the
@@ -56,6 +57,9 @@ import {
   users,
 } from "@/lib/db/schema";
 import { createClient } from "@/lib/supabase/server";
+import { resolveDealerCode } from "@/lib/auth/requireLeadAccess";
+import { dealerVehicleNumbers } from "@/lib/telemetry/queries";
+import { mayOpenVehicle } from "@/lib/telemetry/vehicleAccessRules";
 
 export type CallerRole = "admin" | "ceo" | "nbfc" | "dealer";
 
@@ -65,6 +69,8 @@ export interface BatteryScopeActor {
   tenant_id: string | null;
   /** dealer_id (varchar) when role==="dealer"; null otherwise. */
   dealer_id: string | null;
+  /** users.id of a session caller (for the ID 181 vehicle open log); null/absent on the test bypass. */
+  user_id?: string | null;
   /** "session" | "test_bypass" — diagnostics only. */
   via: "session" | "test_bypass";
 }
@@ -179,7 +185,7 @@ export async function resolveBatteryActor(headers: Headers): Promise<BatteryScop
   }
 
   if (role === "admin" || role === "ceo") {
-    return { role: role as CallerRole, tenant_id: null, dealer_id: null, via: "session" };
+    return { role: role as CallerRole, tenant_id: null, dealer_id: null, user_id: user.id, via: "session" };
   }
   if (role === "nbfc_partner") {
     const rows = await db
@@ -188,16 +194,16 @@ export async function resolveBatteryActor(headers: Headers): Promise<BatteryScop
       .where(eq(nbfcUsers.user_id, user.id))
       .limit(1);
     if (!rows[0]) throw new Error("FORBIDDEN: nbfc_partner without tenant membership");
-    return { role: "nbfc", tenant_id: rows[0].tenant_id, dealer_id: null, via: "session" };
+    return { role: "nbfc", tenant_id: rows[0].tenant_id, dealer_id: null, user_id: user.id, via: "session" };
   }
   if (role === "dealer") {
-    // users.dealer_id is the canonical link for dealer sessions in the rest
-    // of the codebase. Best-effort lookup.
+    // users.dealer_id, else the approved application's dealer code — the same
+    // resolution the telemetry fleet uses (ID 181, vehicleAccess.ts).
     const rows = (await db.execute(
       drizzleSql`select dealer_id::text as dealer_id from users where id = ${user.id} limit 1`,
     )) as unknown as Array<{ dealer_id: string | null }>;
-    dealer_id = rows[0]?.dealer_id ?? null;
-    return { role: "dealer", tenant_id: null, dealer_id, via: "session" };
+    dealer_id = await resolveDealerCode({ id: user.id, role: "dealer", dealer_id: rows[0]?.dealer_id ?? null });
+    return { role: "dealer", tenant_id: null, dealer_id, user_id: user.id, via: "session" };
   }
   throw new Error(`FORBIDDEN: role=${role} cannot access /api/nbfc/iot/battery`);
 }
@@ -233,8 +239,7 @@ export async function isSerialAuthorised(
   if (actor.role === "admin" || actor.role === "ceo") return true;
 
   if (actor.role === "dealer") {
-    if (!actor.dealer_id) return false;
-    return device.dealer_id === actor.dealer_id;
+    return dealerMayOpenSerial(device.serial_number, actor);
   }
 
   if (actor.role === "nbfc") {
@@ -284,6 +289,21 @@ export async function isSerialAuthorised(
 }
 
 /**
+ * Tracker ID 181 (18 Oct follow-up): a dealer sees a battery's telemetry only
+ * when its vehicle number is mapped to the dealer in device_battery_map
+ * (active) — the mapping the telemetry fleet uses (dealerVehicleNumbers +
+ * mayOpenVehicle) — no longer the older iot_devices.dealer_id list.
+ */
+export async function dealerMayOpenSerial(
+  serialNumber: string,
+  actor: BatteryScopeActor,
+): Promise<boolean> {
+  if (actor.role !== "dealer" || !actor.dealer_id) return false;
+  const mapped = await dealerVehicleNumbers(actor.dealer_id);
+  return mayOpenVehicle({ role: "dealer", vehicleNumber: serialNumber, mappedVehicleNumbers: mapped });
+}
+
+/**
  * Existence + authorisation for a battery serial — resilient to an empty
  * `iot_devices` registry.
  *
@@ -302,6 +322,10 @@ export async function authoriseSerial(
   serialNumber: string,
   actor: BatteryScopeActor,
 ): Promise<"ok" | "not_found" | "forbidden"> {
+  // ID 181: a dealer's own mapped vehicle is in scope even when neither the
+  // loan plane nor the iot_devices registry knows it.
+  if (actor.role === "dealer" && (await dealerMayOpenSerial(serialNumber, actor))) return "ok";
+
   // Loan-plane linkage — which tenants finance this serial.
   const loanRows = await db
     .select({ tenant_id: nbfcLoans.tenant_id })
@@ -326,7 +350,7 @@ export async function authoriseSerial(
   }
 
   if (actor.role === "dealer") {
-    if (device && (await isSerialAuthorised(device, actor))) return "ok";
+    // Mapping already checked at the top.
     return "forbidden";
   }
 
