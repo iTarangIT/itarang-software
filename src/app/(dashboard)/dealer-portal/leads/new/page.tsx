@@ -21,6 +21,7 @@ import ProductSelector, {
     EMPTY_PRODUCT_SELECTION,
     type ProductSelectorValue,
 } from '@/components/dealer-portal/lead-wizard/ProductSelector';
+import LeadWorkNote from '@/components/dealer-portal/lead-wizard/LeadWorkNote';
 
 const emptyFormData = {
     full_name: '',
@@ -740,6 +741,8 @@ function NewLeadWizardContent() {
 
                 {/* Error & Duplicate Banners */}
                 <ErrorBanner message={apiError} onDismiss={() => setApiError(null)} />
+                {/* ID 183 (21 Oct): "being worked by" on an existing file. */}
+                {editLeadId && <LeadWorkNote leadId={editLeadId} />}
 
                 {duplicateMatch && (
                     <div className="mb-6 bg-amber-50 border border-amber-200 p-4 rounded-xl flex items-start justify-between gap-4">
