@@ -19,6 +19,7 @@ import { and, asc, eq, inArray, notInArray, or, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { aiCallLogs, dealerLeads, dialerCampaignLeads, dialerCampaigns } from "@/lib/db/schema";
 import { INTENT_THRESHOLDS } from "@/lib/ai/scoring";
+import { callRecordingLink } from "@/lib/ai/storage/recordingLinks";
 
 // Intent score at/above which the dialer considers a lead "qualified" — the
 // first attempt to reach it is treated as the converting attempt.
@@ -106,12 +107,12 @@ function toIso(v: Date | string | null | undefined): string | null {
     return v instanceof Date ? v.toISOString() : String(v);
 }
 
-// Stored URL when present; else the self-healing proxy (re-hosts + backfills
-// ElevenLabs audio on first hit, 302s to Bolna's URL); else null — an attempt
-// with no call id simply has no recording.
+// Our own stored copy when there is one; else the checked self-healing proxy
+// (copies a Bolna link / re-hosts ElevenLabs audio on first hit, then a fresh
+// 15-minute link after the file rule); else null — an attempt with no call id
+// simply has no recording. ID 166: never the provider's open link.
 function recordingFor(callId: string | null, stored: string | null): string | null {
-    if (stored) return stored;
-    return callId ? `/api/ai-dialer/recording/${encodeURIComponent(callId)}` : null;
+    return callRecordingLink(callId, stored);
 }
 
 export async function loadLeadCallAttempts(opts: {

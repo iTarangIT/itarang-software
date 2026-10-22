@@ -14,6 +14,7 @@
 import { db } from "@/lib/db";
 import { sql } from "drizzle-orm";
 import { AI_CONNECTED_CALL_SQL } from "./exclusionFilter";
+import { callRecordingLink } from "@/lib/ai/storage/recordingLinks";
 
 /** Everything the "already contacted by AI" notice renders. */
 export type AiConnectionPayload = {
@@ -216,12 +217,10 @@ export async function fetchAiConnection(
         connected: true,
         callId: row.call_id,
         provider: row.provider,
-        // The recording is served through the existing self-healing proxy when
-        // the stored URL is null — same fallback the transcript route uses, so a
-        // call whose recording arrived late is still playable.
-        recordingUrl:
-            row.recording_url ??
-            (row.call_id ? `/api/ai-dialer/recording/${row.call_id}` : null),
+        // Our stored copy, else the checked self-healing proxy — same as the
+        // transcript route, so a call whose recording arrived late is still
+        // playable. ID 166: a provider link is never handed out.
+        recordingUrl: callRecordingLink(row.call_id, row.recording_url),
         calledAt:
             row.called_at instanceof Date
                 ? row.called_at.toISOString()

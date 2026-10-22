@@ -2041,6 +2041,13 @@ const roleNavigation: Record<string, any[]> = {
           icon: Receipt,
           href: "/admin/reports/invoice-ledger",
         },
+        {
+          // ID 166 (18 Oct): Finance opens every expense bill, so it gets the tracker.
+          id: "fc-ai-expense-tracker",
+          label: "AI Expense Tracker",
+          icon: Receipt,
+          href: "/admin/expense-tracker",
+        },
       ],
     },
     {

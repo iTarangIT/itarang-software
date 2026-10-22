@@ -1,6 +1,7 @@
 import { db } from "@/lib/db";
 import { engagedState } from "@/lib/reports/metricDefinitions";
 import { aiCallLogs } from "@/lib/db/schema";
+import { touchpointRecordingLink } from "@/lib/ai/storage/recordingLinks";
 import { or, eq, sql, desc } from "drizzle-orm";
 import { requireRole } from "@/lib/auth-utils";
 import {
@@ -137,6 +138,12 @@ export default async function LeadDetailPage({ params }: any) {
   } catch (err) {
     console.error("[leads/[id]] touchpoint history unavailable:", err);
   }
+  // ID 166: a recording still on NeoDove's (or another provider's) open link
+  // plays through the checked touchpoint route, never the provider link.
+  touchpoints = touchpoints.map((t) => ({
+    ...t,
+    recording_url: touchpointRecordingLink(t.touchpoint_id, t.recording_url),
+  }));
 
   // IDs 85 / 86 — missed time limits on this lead (fixed records, E-350),
   // merged into the timeline. [] on a database without E-350.
