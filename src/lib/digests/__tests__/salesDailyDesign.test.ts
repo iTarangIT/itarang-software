@@ -16,20 +16,20 @@ const row = (label: string, group: "INTAKE" | "EFFORT", over: Record<string, unk
     group,
     label,
     kind: "count" as const,
-    values: { y: 4, d7: 12, mtd: 9, lm: 10 },
+    values: { y: 4, prev: 3, wk: 2, mtd: 9 },
     target: null,
     ...over,
 });
 
 describe("Block A pieces", () => {
-    it("names the last-month column by its dates, as the template does", () => {
+    it("names a span by its dates, as the template does (the intro's MTD range)", () => {
         expect(lastMonthColumnLabel({ from: "2026-09-01", to: "2026-09-04" })).toBe("1–4 Sep");
         expect(lastMonthColumnLabel({ from: "2026-09-01", to: "2026-09-01" })).toBe("1 Sep");
     });
 
     it("splits the headline into a Yesterday part and a Month to date part", () => {
         const parts = blockAHeadlineParts([
-            row("New dealers visited", "EFFORT", { values: { y: 12, d7: 71, mtd: 238, lm: 262 }, target: 305 }),
+            row("New dealers visited", "EFFORT", { values: { y: 12, prev: 9, wk: 10, mtd: 238 }, target: 305 }),
         ]);
         expect(parts).toHaveLength(2);
         expect(parts[0]).toMatch(/^Yesterday: /);

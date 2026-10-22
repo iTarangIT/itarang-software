@@ -352,3 +352,58 @@ describe("rep blocks — who gets a row (reconciled on db-2, 7 Oct 2026)", () =>
         expect(rows[0][0]).toBe("Abhishek (inactive)");
     });
 });
+
+describe("A2 · By person (ID 188) — the Sales Head's columns per person", async () => {
+    const { BY_PERSON_COLUMNS, BY_PERSON_PCT_COLUMN, byPersonRows } = await import("../salesDailyBlocks");
+    const extras = { y: noExtras, mtd: noExtras };
+    const y = { per_spoc: [spoc("a1", "Zed", "asm", { unique_visits: 3 }), spoc("i1", "Ira", "inside_sales_rep", { calls: 9 })] };
+    const mtd = {
+        per_spoc: [
+            spoc("a1", "Zed", "asm", { unique_visits: 40 }),
+            spoc("a2", "Amy", "asm", { unique_visits: 20 }),
+            spoc("i1", "Ira", "inside_sales_rep", { calls: 120 }),
+        ],
+    };
+    const prev = { per_spoc: [spoc("a1", "Zed", "asm", { unique_visits: 2 }), spoc("i1", "Ira", "inside_sales_rep", { calls: 11 })] };
+    const wk = { per_spoc: [spoc("a2", "Amy", "asm", { unique_visits: 4 }), spoc("i1", "Ira", "inside_sales_rep", { calls: 7 })] };
+    const targets = new Map([
+        ["a1", new Map([["dealer_visits", 50]])],
+        ["i1", new Map([["calls_per_day", 100]])],
+    ]);
+
+    it("has Block A's period columns", () => {
+        expect(BY_PERSON_COLUMNS).toEqual(["Person", "Yesterday", "Day before", "Same day last week", "MTD", "MTD target", "% of target"]);
+        expect(BY_PERSON_PCT_COLUMN).toBe(6);
+    });
+
+    it("lists ASMs on dealers visited, then ISRs on calls, each with a Total when more than one", () => {
+        const rows = byPersonRows(
+            [
+                { role: "asm", blocks: buildRepBlocks("asm", y, mtd, extras, targets) },
+                { role: "inside_sales_rep", blocks: buildRepBlocks("inside_sales_rep", y, mtd, extras, targets) },
+            ],
+            { prev, wk },
+        );
+        expect(rows).toEqual([
+            ["FIELD TEAM (ASM) · DEALERS VISITED", "", "", "", "", "", ""],
+            ["Amy", 0, 0, 4, 20, REP_NOT_MEASURED, REP_NOT_MEASURED],
+            ["Zed", 3, 2, 0, 40, 50, "80%"],
+            // % of target on the people who have a target: Zed 40 / 50.
+            ["Total", 3, 2, 4, 60, 50, "80%"],
+            ["INSIDE SALES (ISR / CC) · CALLS", "", "", "", "", "", ""],
+            ["Ira", 9, 11, 7, 120, 100, "120%"],
+        ]);
+    });
+
+    it("skips an empty group and leaves out an inactive person with nothing", () => {
+        const gone = { ...spoc("a3", "Old", "asm"), is_active: false } as typeof y.per_spoc[number];
+        const rows = byPersonRows(
+            [
+                { role: "asm", blocks: buildRepBlocks("asm", { per_spoc: [gone] }, { per_spoc: [gone] }, extras, new Map()) },
+                { role: "inside_sales_rep", blocks: [] },
+            ],
+            { prev: { per_spoc: [] }, wk: { per_spoc: [] } },
+        );
+        expect(rows).toEqual([]);
+    });
+});

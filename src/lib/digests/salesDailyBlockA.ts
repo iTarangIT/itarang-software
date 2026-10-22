@@ -1,10 +1,13 @@
 // Daily Sales email v1.1 — Block A "Company" (tracker ID 9, handover P4-6,
 // decided 26 / 29 Sep 2026; layout: canvas "Daily Sales email", EmailBlockA).
 //
-// 22 rows in five groups (Intake, Effort, Commercials, Outcome, Discipline),
-// seven columns: Yesterday · Last 7 days · MTD · MTD target · % of target ·
-// same period last month · Δ MTD. A row the CRM cannot measure yet is shown
-// greyed as "Not measured yet" rather than dropped.
+// Rows in five groups (Intake, Effort, Commercials, Outcome, Discipline),
+// six columns: Yesterday · Day before · Same day last week · MTD · MTD target ·
+// % of target (ID 188, the Sales Head's format: the last working day against
+// the working day before it and the same weekday a week earlier, then the
+// month; it replaced Last 7 days · same period last month · Δ MTD). A row the
+// CRM cannot measure yet is shown greyed as "Not measured yet" rather than
+// dropped.
 //
 // Every figure the Sales dashboard also shows comes from the SAME builder
 // (buildSalesDashboard) with the metric definitions of ID 59
@@ -32,10 +35,11 @@ import { repeatVisits } from "@/lib/visits/freshRepeat";
 export const NOT_MEASURED = "Not measured yet";
 
 export type Period = { from: string; to: string };
-export type Periods = { yesterday: Period; last7: Period; mtd: Period; lastMonth: Period };
+/** ID 188 — the four windows Block A is counted over (salesDailyPeriods). */
+export type Periods = { yesterday: Period; dayBefore: Period; sameDayLastWeek: Period; mtd: Period };
 
-/** Value per period; null = not measurable. */
-export type RowValues = { y: number | null; d7: number | null; mtd: number | null; lm: number | null };
+/** Value per period (y = Yesterday, prev = Day before, wk = Same day last week); null = not measurable. */
+export type RowValues = { y: number | null; prev: number | null; wk: number | null; mtd: number | null };
 
 export type BlockARow = {
     group: "INTAKE" | "EFFORT" | "COMMERCIALS" | "OUTCOME" | "DISCIPLINE";
@@ -85,20 +89,14 @@ export function pctOfTarget(mtd: number | null, target: number | null): number |
     return Math.round((mtd / target) * 100);
 }
 
-export function deltaPct(mtd: number | null, lm: number | null): number | null {
-    if (mtd == null || lm == null || lm === 0) return null;
-    return Math.round(((mtd - lm) / lm) * 100);
-}
-
 export const BLOCK_A_COLUMNS = [
     "Metric",
     "Yesterday",
-    "Last 7 days",
+    "Day before",
+    "Same day last week",
     "MTD",
     "MTD target",
     "% of target",
-    "Same period last month",
-    "Δ MTD",
 ];
 
 /** Index of "% of target" in BLOCK_A_COLUMNS — coloured red / amber / green (rag.ts). */
@@ -111,29 +109,29 @@ export function blockATableRows(rows: BlockARow[]): Array<Array<string | number>
     for (const r of rows) {
         if (r.group !== group) {
             group = r.group;
-            out.push([group, "", "", "", "", "", "", ""]);
+            out.push([group, "", "", "", "", "", ""]);
         }
         const measured = r.values.mtd != null || r.values.y != null;
         if (!measured) {
-            out.push([r.label, NOT_MEASURED, "", "", "", "", "", ""]);
+            out.push([r.label, NOT_MEASURED, "", "", "", "", ""]);
             continue;
         }
         // "—" when a period's figure is unknown (no item lines read), so its
-        // % of target and Δ are not worked out from a false 0 either.
+        // % of target is not worked out from a false 0 either.
         const unknown = (k: keyof RowValues) => r.readings?.[k].state === "unknown";
         const cell = (k: keyof RowValues) =>
             unknown(k) ? "—" : `${fmtValue(r.values[k], r.kind)}${r.readings?.[k].state === "partial" ? "+" : ""}`;
         const p = unknown("mtd") ? null : rowPctOfTarget(r);
-        const d = unknown("mtd") || unknown("lm") ? null : deltaPct(r.values.mtd, r.values.lm);
+        // A comparison day the CRM did not track yet reads "n/t", not a false 0.
+        const past = (k: "prev" | "wk") => (r.values[k] == null ? "n/t" : cell(k));
         out.push([
             r.label,
             cell("y"),
-            cell("d7"),
+            past("prev"),
+            past("wk"),
             cell("mtd"),
             r.target == null ? "—" : fmtValue(r.target, r.kind),
             p == null ? "—" : `${p}%`,
-            r.values.lm == null ? "n/t" : cell("lm"),
-            d == null ? "—" : `${d > 0 ? "+" : d < 0 ? "−" : ""}${Math.abs(d)}%`,
         ]);
     }
     return out;
@@ -151,7 +149,7 @@ export const UNMATCHED_REVENUE_LABEL = "Revenue not matched to a dealer";
  */
 export function withUnmatchedRevenue(rows: BlockARow[], values: RowValues | null | undefined): BlockARow[] {
     if (!values) return rows;
-    const any = [values.y, values.d7, values.mtd, values.lm].some((v) => v != null && v > 0);
+    const any = [values.y, values.prev, values.wk, values.mtd].some((v) => v != null && v > 0);
     if (!any) return rows;
     const at = rows.findIndex((r) => r.label === "Revenue");
     const line: BlockARow = { group: "OUTCOME", label: UNMATCHED_REVENUE_LABEL, kind: "money", values, target: null };
@@ -259,8 +257,8 @@ export function readingNote(base: string | null, readings: BlockARow["readings"]
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 /**
- * Header of the "same period last month" column, as the template names it:
- * "1–4 Sep" (or "1 Sep" for a one-day span).
+ * A span as the template names it: "1–4 Sep" (or "1 Sep" for one day). Once
+ * the "same period last month" header; since ID 188 the intro's MTD range.
  */
 export function lastMonthColumnLabel(p: Period): string {
     const [, m, d1] = p.from.split("-").map(Number);
@@ -305,13 +303,13 @@ async function scrapKgPerPeriod(db: Exec, periods: Periods): Promise<RowValues> 
             return null;
         }
     };
-    const [y, d7, mtd, lm] = await Promise.all([
+    const [y, prev, wk, mtd] = await Promise.all([
         one(periods.yesterday),
-        one(periods.last7),
+        one(periods.dayBefore),
+        one(periods.sameDayLastWeek),
         one(periods.mtd),
-        one(periods.lastMonth),
     ]);
-    return { y, d7, mtd, lm };
+    return { y, prev, wk, mtd };
 }
 
 /**
@@ -320,7 +318,7 @@ async function scrapKgPerPeriod(db: Exec, periods: Periods): Promise<RowValues> 
  * so the rows keep reading "Not measured yet".
  */
 async function clockRows(periods: Periods): Promise<{ inLimit: RowValues; missed: RowValues; median: RowValues; p90: RowValues }> {
-    const ps = [periods.yesterday, periods.last7, periods.mtd, periods.lastMonth];
+    const ps = [periods.yesterday, periods.dayBefore, periods.sameDayLastWeek, periods.mtd];
     // Never throws: a clock read failing must not cost the rest of the email.
     const [stats, missed] = await Promise.all([
         Promise.all(ps.map((p) => clockStats("owner", p.from, p.to))),
@@ -329,7 +327,7 @@ async function clockRows(periods: Periods): Promise<{ inLimit: RowValues; missed
         console.warn("[sales-daily] lead clocks unavailable:", e instanceof Error ? e.message : e);
         return [ps.map(() => null), ps.map(() => null)] as const;
     });
-    const row = (pick: (i: number) => number | null): RowValues => ({ y: pick(0), d7: pick(1), mtd: pick(2), lm: pick(3) });
+    const row = (pick: (i: number) => number | null): RowValues => ({ y: pick(0), prev: pick(1), wk: pick(2), mtd: pick(3) });
     return {
         inLimit: row((i) => stats[i]?.pct_in_limit ?? null),
         missed: row((i) => missed[i]),
@@ -339,13 +337,13 @@ async function clockRows(periods: Periods): Promise<{ inLimit: RowValues; missed
 }
 
 async function perPeriod(db: Exec, periods: Periods, make: (p: Period) => ReturnType<typeof sql>): Promise<RowValues> {
-    const [y, d7, mtd, lm] = await Promise.all([
+    const [y, prev, wk, mtd] = await Promise.all([
         count(db, make(periods.yesterday)),
-        count(db, make(periods.last7)),
+        count(db, make(periods.dayBefore)),
+        count(db, make(periods.sameDayLastWeek)),
         count(db, make(periods.mtd)),
-        count(db, make(periods.lastMonth)),
     ]);
-    return { y, d7, mtd, lm };
+    return { y, prev, wk, mtd };
 }
 
 /** Company MTD targets per metric, pro-rated, and how many people have one. */
@@ -406,7 +404,7 @@ export type BlockA = {
 export async function buildBlockA(
     db: Exec,
     periods: Periods,
-    dash: { yesterday: SalesDashboard; last7: SalesDashboard; mtd: SalesDashboard; lastMonth: SalesDashboard },
+    dash: Record<keyof Periods, SalesDashboard>,
     /** Invoiced but matched to no dealer, per period (ID 69); null = not measured. */
     unmatchedRevenue?: RowValues | null,
 ): Promise<BlockA> {
@@ -419,11 +417,11 @@ export async function buildBlockA(
     );
     const fromDash = (pick: (d: SalesDashboard) => number): RowValues => ({
         y: pick(dash.yesterday),
-        d7: pick(dash.last7),
+        prev: pick(dash.dayBefore),
+        wk: pick(dash.sameDayLastWeek),
         mtd: pick(dash.mtd),
-        lm: pick(dash.lastMonth),
     });
-    const NONE: RowValues = { y: null, d7: null, mtd: null, lm: null };
+    const NONE: RowValues = { y: null, prev: null, wk: null, mtd: null };
     const clocksPending = clockRows(periods);
 
     const [leadsIn, salesReady, assigned, engaged, hotToField, delivered, dealerApproved, won, kycDisbursed, scrapDeals, scrapKg] =
@@ -541,9 +539,9 @@ export async function buildBlockA(
             // dashboards' own battery_lines coverage.
             readings: {
                 y: batteryReading(dash.yesterday.outcome),
-                d7: batteryReading(dash.last7.outcome),
+                prev: batteryReading(dash.dayBefore.outcome),
+                wk: batteryReading(dash.sameDayLastWeek.outcome),
                 mtd: batteryReading(dash.mtd.outcome),
-                lm: batteryReading(dash.lastMonth.outcome),
             },
         },
         { group: "OUTCOME", label: "Revenue", kind: "money", values: fromDash((d) => d.outcome.revenue), target: tgt("revenue") },
