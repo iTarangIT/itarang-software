@@ -8,6 +8,11 @@
 // invisible. This merges both into one CallItem[] the UI renders, preferring the
 // canonical ai_call_logs row and folding in any legacy history entry that has no
 // matching log (matched on call timestamp within a 2-minute window).
+//
+// ID 166: recording links come out as our own stored copy or a checked CRM play
+// route (recordingLinks.ts), never the provider's open link.
+
+import { callRecordingLink, touchpointRecordingLink } from "@/lib/ai/storage/recordingLinks";
 
 export interface CallItem {
   key: string;
@@ -36,6 +41,8 @@ export interface CallItem {
 // Minimal shapes — we only read the fields we map (full rows are passed in).
 type AiCallLogRow = {
   id: string;
+  /** Provider call id — routes a provider-held recording through the play proxy. */
+  call_id?: string | null;
   provider: string | null;
   status: string | null;
   intent_score: number | null;
@@ -85,7 +92,8 @@ function fromLog(r: AiCallLogRow): Omit<CallItem, "index"> {
     info_signals_count: r.info_signals_count,
     intent_score: r.intent_score,
     duration: r.call_duration,
-    recording_url: r.recording_url,
+    // A call with no stored recording keeps none (no player for a no-answer).
+    recording_url: r.recording_url ? callRecordingLink(r.call_id, r.recording_url) : null,
     transcript: r.transcript && r.transcript.trim() ? r.transcript : null,
     summary: r.summary && r.summary.trim() ? r.summary : null,
     next_call_at: null,
@@ -173,7 +181,7 @@ function fromTouchpoint(t: ExternalCallTouchpoint): Omit<CallItem, "index"> {
     info_signals_count: null,
     intent_score: null,
     duration: null,
-    recording_url: t.recording_url ?? null,
+    recording_url: touchpointRecordingLink(t.id, t.recording_url),
     transcript: null,
     summary: null,
     next_call_at: null,

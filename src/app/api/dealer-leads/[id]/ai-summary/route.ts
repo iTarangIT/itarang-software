@@ -26,6 +26,7 @@ import { LEADS_PAGE_ROLES, readsOwnLeadsOnly } from "@/lib/leads/access";
 // ID 155: read access = own leads, or a direct report's (manager).
 import { leadVisibleTo } from "@/lib/users/team";
 import { seesEveryCallReview } from "@/lib/leads/callReviewRules";
+import { callRecordingLink } from "@/lib/ai/storage/recordingLinks";
 import { readIntentProvenance } from "@/lib/leads/intentOverride";
 
 type LatestCallRow = {
@@ -146,12 +147,10 @@ export const GET = withErrorHandler(
         status: row.status,
         calledAt: iso(row.called_at),
         callDuration: row.call_duration,
-        // Same self-healing proxy fallback the transcript route uses, so a call
-        // whose recording landed late is still playable.
-        recordingUrl: !mayReview
-          ? null
-          : row.recording_url ??
-            (row.call_id ? `/api/ai-dialer/recording/${row.call_id}` : null),
+        // Same checked self-healing proxy the transcript route uses, so a call
+        // whose recording landed late is still playable, and a provider link is
+        // never handed out (ID 166).
+        recordingUrl: !mayReview ? null : callRecordingLink(row.call_id, row.recording_url),
         reviewHidden: !mayReview,
         band: row.band,
         callStatus: row.call_status,

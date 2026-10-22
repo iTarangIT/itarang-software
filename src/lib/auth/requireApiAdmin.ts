@@ -3,7 +3,11 @@ import { requireAuth } from "@/lib/auth-utils";
 
 // Roles treated as admin for the AI expense tracker. `sales_head` acts as the
 // admin/ops role in this deployment, so it is included alongside `admin`.
-const EXPENSE_ADMIN_ROLES = new Set(["admin", "sales_head"]);
+// ID 166 (18 Oct check): Finance and the CEO — who may open every bill — now
+// reach the tracker too. Who sees which bill link is still the bill rule
+// (src/lib/expenses/billAccess.ts): the Sales Head only on their own expenses.
+export const EXPENSE_ADMIN_ROLES = ["admin", "sales_head", "ceo", "finance_controller"] as const;
+const EXPENSE_ADMIN_ROLE_SET = new Set<string>(EXPENSE_ADMIN_ROLES);
 
 /**
  * Admin gate for the AI expense tracker API routes.
@@ -15,7 +19,7 @@ export async function requireApiAdmin(): Promise<
   | { ok: false; response: NextResponse }
 > {
   const user = await requireAuth();
-  if (!EXPENSE_ADMIN_ROLES.has((user.role || "").toLowerCase())) {
+  if (!EXPENSE_ADMIN_ROLE_SET.has((user.role || "").toLowerCase())) {
     return {
       ok: false,
       response: NextResponse.json(
