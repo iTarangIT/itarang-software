@@ -144,13 +144,13 @@ async function main() {
 
     const dash = (p: Win) =>
         buildSalesDashboard({ ...p, city: null, state: null, spoc_id: null, business_type: null, granularity: "day" });
-    const [dy, d7, dm, dl] = await Promise.all([
+    const [dy, dp, dw, dm] = await Promise.all([
         dash(periods.yesterday),
-        dash(periods.last7),
+        dash(periods.dayBefore),
+        dash(periods.sameDayLastWeek),
         dash(periods.mtd),
-        dash(periods.lastMonth),
     ]);
-    const blockA = await buildBlockA(db, periods, { yesterday: dy, last7: d7, mtd: dm, lastMonth: dl });
+    const blockA = await buildBlockA(db, periods, { yesterday: dy, dayBefore: dp, sameDayLastWeek: dw, mtd: dm });
     const row = (label: string) => blockA.rows.find((r) => r.label === label)?.values;
 
     const one = async (q: ReturnType<typeof sql>): Promise<number> => {
@@ -180,7 +180,7 @@ async function main() {
                      WHERE t.touchpoint_type = 'quote_dispatched'
                        AND ${istDate(sql`t.performed_at`)} BETWEEN ${p.from}::date AND ${p.to}::date`),
     };
-    const emailValue: Record<string, (k: "y" | "d7" | "mtd" | "lm") => number | null> = {
+    const emailValue: Record<string, (k: "y" | "prev" | "wk" | "mtd") => number | null> = {
         "Leads in": (k) => row("Leads in")?.[k] ?? null,
         "Calls made": (k) => row("Calls made")?.[k] ?? null,
         "Dealers visited": (k) => row("Dealers visited")?.[k] ?? null,
@@ -193,9 +193,9 @@ async function main() {
 
     const keys = [
         ["y", periods.yesterday],
-        ["d7", periods.last7],
+        ["prev", periods.dayBefore],
+        ["wk", periods.sameDayLastWeek],
         ["mtd", periods.mtd],
-        ["lm", periods.lastMonth],
     ] as const;
     let bad = 0;
     console.log("\nBlock A — email vs independent recount");
@@ -211,7 +211,7 @@ async function main() {
         }
     }
     const li = row("Leads in");
-    console.log(`\n  Leads in (every source) y/7d/MTD/LM: ${li?.y}/${li?.d7}/${li?.mtd}/${li?.lm}`);
+    console.log(`\n  Leads in (every source) y/day before/same day last week/MTD: ${li?.y}/${li?.prev}/${li?.wk}/${li?.mtd}`);
 
     // Per rep, MTD: the dashboard's per_spoc (Blocks B / C) vs plain counts.
     console.log("\nPer rep (MTD) — email vs independent recount");
@@ -248,6 +248,35 @@ async function main() {
     const extras = await loadRepExtras(db, periods.mtd);
     console.log(`\n  Block C extras loaded for ${Object.keys(extras).length} metrics.`);
 
+    // ID 188 — A2 · By person: each person's Yesterday / Day before / Same day
+    // last week / MTD is the builder's per_spoc figure for that window, the
+    // same people as Blocks B / C. Every cell must equal that day's per_spoc.
+    {
+        const { buildRepBlocks, byPersonRows } = await import("@/lib/digests/salesDailyBlocks");
+        const extrasY = await loadRepExtras(db, periods.yesterday);
+        const both = { y: extrasY, mtd: extras };
+        const groups = (["asm", "inside_sales_rep"] as const).map((role) => ({
+            role,
+            blocks: buildRepBlocks(role, dy, dm, both, blockA.userTargets),
+        }));
+        const a2 = byPersonRows(groups, { prev: dp, wk: dw });
+        console.log("\nA2 · By person — cells vs each window's per_spoc");
+        const per = (d: typeof dm, id: string, role: string) => {
+            const b = (d.per_spoc ?? []).find((x) => x.spoc_id === id);
+            return b ? (role === "asm" ? b.totals.unique_visits : b.totals.calls) : 0;
+        };
+        for (const g of groups) {
+            for (const b of g.blocks) {
+                const line = a2.find((r) => r[0] === b.name);
+                const want = [per(dy, b.id, g.role), per(dp, b.id, g.role), per(dw, b.id, g.role), per(dm, b.id, g.role)];
+                const got = line?.slice(1, 5) ?? [];
+                const ok = want.every((w, i) => got[i] === w);
+                if (!ok) bad++;
+                console.log(`  ${b.name.padEnd(26)} ${got.join(" / ")}${ok ? "" : `  MISMATCH per_spoc ${want.join(" / ")}`}`);
+            }
+        }
+    }
+
     // Sales Dashboard page: the email's dashboard-sourced rows vs the page's own
     // numbers for the same window (the page calls buildSalesDashboard too —
     // this proves the email reads them and drops nothing on the way).
@@ -263,9 +292,9 @@ async function main() {
         ["Revenue", (d) => d.outcome.revenue],
         ["KYC submitted", (d) => d.outcome.kyc_submitted],
     ];
-    const dashBy = { y: dy, d7: d7, mtd: dm, lm: dl } as const;
+    const dashBy = { y: dy, prev: dp, wk: dw, mtd: dm } as const;
     for (const [label, get] of fromDash) {
-        const cells = (["y", "d7", "mtd", "lm"] as const).map((k) => {
+        const cells = (["y", "prev", "wk", "mtd"] as const).map((k) => {
             const e = row(label)?.[k] ?? null;
             const d = get(dashBy[k]);
             const ok = e === d;

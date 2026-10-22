@@ -82,9 +82,12 @@ import {
   BLOCK_C_COLUMNS,
   BLOCK_C_PCT_COLUMN,
   BLOCK_D_COLUMNS,
+  BY_PERSON_COLUMNS,
+  BY_PERSON_PCT_COLUMN,
   NO_OWNER_KEY,
   blockDRows,
   buildRepBlocks,
+  byPersonRows,
   loadAwaitingFieldVisit,
   loadRepExtras,
   loadAwaitingFieldVisitPast,
@@ -107,8 +110,11 @@ import type {
 // set on /admin/settings/sales-daily (default 09:00 IST); the "as of" labels
 // below read that time, never a fixed one.
 //   Headline   one line: yesterday's outcome and what is behind target.
-//   A Company  22 rows × Yesterday · Last 7 days · MTD · MTD target · % of
-//              target · same period last month · Δ (salesDailyBlockA.ts).
+//   A Company  rows × Yesterday · Day before · Same day last week · MTD · MTD
+//              target · % of target (ID 188, the Sales Head's format;
+//              salesDailyBlockA.ts).
+//   A2 By person  each ASM / ISR on their primary target metric, same columns
+//                 (byPersonRows, salesDailyBlocks.ts).
 //   Right now  sales-ready leads with no owner and the oldest wait.
 //   B Field team (ASM)          one row per ASM, Block A's field metrics as
 //                               columns, Yesterday + MTD (29 Sep: no Last 7 days
@@ -124,7 +130,9 @@ import type {
 //   G Ecofy                     pickup queue, new Ecofy leads yesterday, leads by stage (ID 51).
 const SECTIONS: DigestSection[] = [
   { key: "summary", label: "Headline", hint: "One line: yesterday's outcome and what is behind target.", group: "activity" },
-  { key: "block_a", label: "A · Company", hint: "22 metrics: yesterday, last 7 days, MTD, MTD target, % of target, same period last month, Δ.", group: "activity" },
+  { key: "block_a", label: "A · Company", hint: "Company metrics: yesterday, the day before, the same day last week, MTD, MTD target, % of target.", group: "activity" },
+  // ID 188 — overall first, then per person, on the same columns.
+  { key: "block_a_people", label: "A2 · By person", hint: "Each ASM on dealers visited and each ISR / CC on calls: yesterday, the day before, the same day last week, MTD, MTD target, % of target.", group: "activity" },
   { key: "right_now", label: "Right now", hint: "Ready leads with no owner (AI qualified / Hot / other), and the oldest wait.", group: "backlog" },
   { key: "block_b", label: "B · Field team (ASM)", hint: "One row per ASM: dealers visited; visits = Fresh (the person's first visit to that dealer) + Repeat, of which new to iTarang (the dealer's first visit by anyone); hot received, quotes created (yesterday and MTD); quotes delivered, dealer approved, Won, converted, revenue (MTD); % of dealer-visit target.", group: "activity" },
   { key: "block_c", label: "C · Inside sales (ISR / CC)", hint: "One row per ISR: calls, dealers called (yesterday and MTD); connected, connect %, engaged, hot to field, quotes created, Won, converted (MTD); % of calls target.", group: "activity" },
@@ -173,19 +181,23 @@ export function lastWorkingDayOnOrBefore(istDay: string, isWorking?: (day: strin
 }
 
 /**
- * The four windows every Block A row is counted over, for the covered IST day.
- * Inclusive IST days. On the 1st–7th of a month MTD sits inside Last 7 days,
- * so a count can never show MTD above Last 7 there. Yesterday is the last
- * working day on or before the covered day when `isWorking` is given (ID 194:
- * Monday's Yesterday = Saturday); MTD / Last 7 still run to the covered day.
+ * The four windows every Block A row is counted over, for the covered IST day
+ * (ID 188, the Sales Head's format). Inclusive IST days.
+ *   yesterday        the last working day on or before the covered day when
+ *                    `isWorking` is given (ID 194: Monday's = Saturday)
+ *   dayBefore        the working day before Yesterday (Saturday's = Friday)
+ *   sameDayLastWeek  Yesterday − 7: the same weekday a week earlier
+ *   mtd              1st of the month to the covered day
  */
 export function salesDailyPeriods(istDay: string, isWorking?: (day: string) => boolean) {
   const y = lastWorkingDayOnOrBefore(istDay, isWorking);
+  const prev = lastWorkingDayOnOrBefore(addDays(y, -1), isWorking);
+  const wk = addDays(y, -7);
   return {
     yesterday: { from: y, to: y },
-    last7: { from: addDays(istDay, -6), to: istDay },
+    dayBefore: { from: prev, to: prev },
+    sameDayLastWeek: { from: wk, to: wk },
     mtd: { from: firstOfMonth(istDay), to: istDay },
-    lastMonth: sameSpanLastMonth(istDay),
   };
 }
 
@@ -244,8 +256,8 @@ async function scheduledPerSpoc(
  * period that fails is left unmeasured rather than failing the email.
  */
 async function unmatchedRevenuePerPeriod(
-  periods: Record<"yesterday" | "last7" | "mtd" | "lastMonth", { from: string; to: string }>,
-): Promise<{ y: number | null; d7: number | null; mtd: number | null; lm: number | null }> {
+  periods: Record<"yesterday" | "dayBefore" | "sameDayLastWeek" | "mtd", { from: string; to: string }>,
+): Promise<{ y: number | null; prev: number | null; wk: number | null; mtd: number | null }> {
   const { revenueSummary } = await import("@/lib/dashboard/revenueSource");
   const one = async (p: { from: string; to: string }): Promise<number | null> => {
     try {
@@ -255,13 +267,13 @@ async function unmatchedRevenuePerPeriod(
       return null;
     }
   };
-  const [y, d7, mtd, lm] = await Promise.all([
+  const [y, prev, wk, mtd] = await Promise.all([
     one(periods.yesterday),
-    one(periods.last7),
+    one(periods.dayBefore),
+    one(periods.sameDayLastWeek),
     one(periods.mtd),
-    one(periods.lastMonth),
   ]);
-  return { y, d7, mtd, lm };
+  return { y, prev, wk, mtd };
 }
 
 type RightNow = {
@@ -546,11 +558,11 @@ async function collect(
     const periods = await salesDailyPeriodsFor(istDay);
 
     const { getDigestSettings } = await import("../settings");
-    const [yesterday, last7, mtd, lastMonth, scheduled, followUps, now, overdue, settings, extrasY, extrasMtd, awaiting, unmatched, wait, ecofy] = await Promise.all([
+    const [yesterday, dayBefore, sameDayLastWeek, mtd, scheduled, followUps, now, overdue, settings, extrasY, extrasMtd, awaiting, unmatched, wait, ecofy] = await Promise.all([
       buildSalesDashboard({ ...periods.yesterday, granularity: "day" }),
-      buildSalesDashboard({ ...periods.last7, granularity: "day" }),
+      buildSalesDashboard({ ...periods.dayBefore, granularity: "day" }),
+      buildSalesDashboard({ ...periods.sameDayLastWeek, granularity: "day" }),
       buildSalesDashboard({ ...periods.mtd, granularity: "day" }),
-      buildSalesDashboard({ ...periods.lastMonth, granularity: "day" }),
       scheduledPerSpoc(sendDay, dayAfter),
       followUpsPerOwner(sendDay, dayAfter),
       rightNow(),
@@ -563,7 +575,7 @@ async function collect(
       medianWaitToAssign(periods.mtd),
       ecofySnapshot(istDay),
     ]);
-    const blockA = await buildBlockA(db as never, periods, { yesterday, last7, mtd, lastMonth }, unmatched);
+    const blockA = await buildBlockA(db as never, periods, { yesterday, dayBefore, sameDayLastWeek, mtd }, unmatched);
     // 18 Oct row 25: Block D splits Awaiting field visit at the transfer → visit limit.
     const awaitingPast = await loadAwaitingFieldVisitPast(db as never);
     // ID 156: each rep's manager today, so Blocks B / C show a team subtotal
@@ -587,8 +599,13 @@ async function collect(
     const days = dayNames(periods.yesterday.from);
     const yesterdayNote = periods.yesterday.from !== istDay ? " (the last working day)" : "";
     const mtdRange = lastMonthColumnLabel(periods.mtd);
-    const lmLabel = lastMonthColumnLabel(periods.lastMonth);
-    const blockAColumns = BLOCK_A_COLUMNS.map((c) => (c === "Same period last month" ? lmLabel : c));
+    // ID 188: the two comparison days named in the headers, e.g. "Day before · Fri 16 Oct".
+    const shortDay = (iso: string) => dayNames(iso).short.replace(/ \d{4}$/, "");
+    const comparisonLabel: Record<string, string> = {
+      "Day before": `Day before · ${shortDay(periods.dayBefore.from)}`,
+      "Same day last week": `Same day last week · ${shortDay(periods.sameDayLastWeek.from)}`,
+    };
+    const blockAColumns = BLOCK_A_COLUMNS.map((c) => comparisonLabel[c] ?? c);
     const col = (name: string) => BLOCK_A_COLUMNS.indexOf(name);
     const waitValue =
       wait == null
@@ -603,6 +620,9 @@ async function collect(
         ? `No lead waited for an owner this month: each got one as it became sales-ready. ${limitText}`
         : `${limitText}${wait ? ` · ${wait.n} lead${wait.n === 1 ? "" : "s"}` : ""}`;
     const extras = { y: extrasY, mtd: extrasMtd };
+    // Blocks B / C's people — A2 lists the same ones (ID 188).
+    const asmBlocks = buildRepBlocks("asm", yesterday, mtd, extras, blockA.userTargets);
+    const isrBlocks = buildRepBlocks("inside_sales_rep", yesterday, mtd, extras, blockA.userTargets);
 
     // Names for Block E: the builder's per-rep blocks, then users for the rest.
     const names = new Map<string, string>();
@@ -642,7 +662,8 @@ async function collect(
           eyebrow: "ITARANG · DAILY SALES",
           dayHeading: days.long,
           intro:
-            `Covers ${days.long}${yesterdayNote}, midnight to midnight IST. ` +
+            `Covers ${days.long}${yesterdayNote}, midnight to midnight IST, ` +
+            `against the day before (${dayNames(periods.dayBefore.from).long}) and the same day last week (${dayNames(periods.sameDayLastWeek.from).long}). ` +
             (blockA.workingDays.total > 0
               ? `Month to date is ${mtdRange}: ${blockA.workingDays.elapsed} of ${blockA.workingDays.total} working days, ` +
                 `so targets below are ${blockA.workingDays.elapsed}/${blockA.workingDays.total} of the monthly target.`
@@ -660,11 +681,9 @@ async function collect(
             textColumns: 1,
             groupHeaders: true,
             toneColumns: [BLOCK_A_PCT_COLUMN],
-            deltaColumns: [col("Δ MTD")],
             strongColumn: col("MTD"),
-            // Phone frame: METRIC · YDAY · MTD (Δ under it) · TARGET.
+            // Phone frame: METRIC · YDAY · MTD · TARGET.
             phoneColumns: [0, col("Yesterday"), col("MTD"), BLOCK_A_PCT_COLUMN],
-            phoneDeltaUnder: [col("Δ MTD"), col("MTD")],
             // The working-days sentence is already the intro; keep the rest.
             note: blockA.targetsNote.replace(/^Month to date is [^.]*\.\s*/, "") || undefined,
             // "Right now" sits right after the table, as in the mockup.
@@ -730,15 +749,38 @@ async function collect(
             legend: [
               "% of target: green 100% or more · amber 80–99% · red below 80%.",
               "—: no target is set for this metric, or no figure to compare.",
-              "n/t: not tracked in that period.",
+              "n/t: not tracked on that day.",
               "Not measured yet: the CRM does not record this yet.",
             ],
+          },
+          {
+            // ID 188 (Sales Head's format): overall first (A), then each person
+            // on the same columns, on their primary target metric.
+            key: "block_a_people",
+            title: "A2 · By person",
+            columns: BY_PERSON_COLUMNS.map((c) => comparisonLabel[c] ?? c),
+            rows: byPersonRows(
+              [
+                { role: "asm", blocks: asmBlocks },
+                { role: "inside_sales_rep", blocks: isrBlocks },
+              ],
+              { prev: dayBefore, wk: sameDayLastWeek },
+            ),
+            textColumns: 1,
+            groupHeaders: true,
+            toneColumns: [BY_PERSON_PCT_COLUMN],
+            strongColumn: BY_PERSON_COLUMNS.indexOf("MTD"),
+            phoneColumns: [0, 1, BY_PERSON_COLUMNS.indexOf("MTD"), BY_PERSON_PCT_COLUMN],
+            note:
+              "ASMs on dealers visited, ISRs / CCs on calls — the metric their % of target is read on, as in Blocks B and C, with the same people. " +
+              "Total = the people listed; Block A also counts work credited to nobody.",
+            empty: "No ASMs or inside-sales reps on the Sales dashboard this month.",
           },
           {
             key: "block_b",
             title: "B · Field team (ASM)",
             columns: BLOCK_B_COLUMNS,
-            rows: repBlockTableRows("asm", buildRepBlocks("asm", yesterday, mtd, extras, blockA.userTargets), teamOf),
+            rows: repBlockTableRows("asm", asmBlocks, teamOf),
             textColumns: 1,
             toneColumns: [BLOCK_B_PCT_COLUMN],
             note:
@@ -753,7 +795,7 @@ async function collect(
             key: "block_c",
             title: "C · Inside sales (ISR / CC)",
             columns: BLOCK_C_COLUMNS,
-            rows: repBlockTableRows("inside_sales_rep", buildRepBlocks("inside_sales_rep", yesterday, mtd, extras, blockA.userTargets), teamOf),
+            rows: repBlockTableRows("inside_sales_rep", isrBlocks, teamOf),
             textColumns: 1,
             toneColumns: [BLOCK_C_PCT_COLUMN],
             note:
@@ -824,7 +866,8 @@ export const salesDailyDigest: DigestKindDescriptor = {
   description:
     "Daily Sales email v1.1 — one management email every morning at the time set below " +
     "(default 09:00 IST): a one-line headline, " +
-    "A · Company (22 metrics with MTD target, % of target and the same period last month), " +
+    "A · Company (yesterday, the day before, the same day last week and MTD, with MTD target and % of target), " +
+    "A2 · By person (each ASM / ISR on the same columns), " +
     "sales-ready leads waiting for an owner, B · Field team, C · Inside sales, D · Position " +
     "as of the send time, E · Today and tomorrow, F · the 10 oldest overdue items, and G · Ecofy " +
     "(pickup queue, new leads yesterday, leads by stage). No personal " +
