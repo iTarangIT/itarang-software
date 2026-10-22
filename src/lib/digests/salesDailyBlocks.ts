@@ -29,6 +29,11 @@
 //                            started MTD). A median is not summed: Total and
 //                            team rows show "—" there.
 //
+//   A2 · By person (ID 188)  each person on their primary target metric (ASM:
+//                            dealers visited, ISR: calls) for Block A's periods
+//                            - Yesterday · Day before · Same day last week · MTD -
+//                            with MTD target and % of target (byPersonRows).
+//
 //   D · Position             open Hot / Warm / Cold per owner, Hot rated 8+
 //                            days ago, Awaiting field visit (lead_status
 //                            Transferred_to_ASM, keyed on the ASM) and one
@@ -454,6 +459,76 @@ export function repBlockTableRows(role: "asm" | "inside_sales_rep", blocks: RepB
                 ),
             ),
         );
+    }
+    return rows;
+}
+
+// ─────────────────────────── A2 · By person (ID 188) ────────────────────────
+
+/** The A2 columns — Block A's period columns, one row per person. */
+export const BY_PERSON_COLUMNS = ["Person", "Yesterday", "Day before", "Same day last week", "MTD", "MTD target", "% of target"];
+export const BY_PERSON_PCT_COLUMN = BY_PERSON_COLUMNS.indexOf("% of target");
+
+const BY_PERSON_GROUP: Record<"asm" | "inside_sales_rep", string> = {
+    asm: "FIELD TEAM (ASM) · DEALERS VISITED",
+    inside_sales_rep: "INSIDE SALES (ISR / CC) · CALLS",
+};
+
+/**
+ * ID 188 (Sales Head's format, 22 Oct) — "A2 · By person", right under Block
+ * A: each person on their PRIMARY target metric (ASM: dealers visited, ISR /
+ * CC: calls) for Yesterday · Day before · Same day last week · MTD, then the
+ * MTD target and % of target exactly as Blocks B / C read them.
+ *
+ * The people are Blocks B / C's own (buildRepBlocks: same role rule, same
+ * inactive rule, same names and pro-rated targets), so A2, B and C never list
+ * different people; the two earlier days are read from those days' per_spoc
+ * blocks with the same metric. A group header names the metric, and a Total
+ * row closes each group of more than one person. Pure.
+ */
+export function byPersonRows(
+    groups: Array<{ role: "asm" | "inside_sales_rep"; blocks: RepBlock[] }>,
+    earlier: { prev: Pick<SalesDashboard, "per_spoc">; wk: Pick<SalesDashboard, "per_spoc"> },
+): Rows {
+    const prevBy = new Map((earlier.prev.per_spoc ?? []).map((b) => [b.spoc_id, b]));
+    const wkBy = new Map((earlier.wk.per_spoc ?? []).map((b) => [b.spoc_id, b]));
+    const show = (v: number | null) => (v == null ? REP_NOT_MEASURED : v);
+    const rows: Rows = [];
+    for (const { role, blocks } of groups) {
+        if (!blocks.length) continue;
+        const primary = PRIMARY_TARGET[role].metric;
+        const read = METRICS[primary].dash!;
+        rows.push([BY_PERSON_GROUP[role], "", "", "", "", "", ""]);
+        const line = (name: string, y: number | null, prev: number | null, wk: number | null, mtd: number | null, target: number | null, pct: number | null) =>
+            [name, show(y), show(prev), show(wk), show(mtd), target == null ? REP_NOT_MEASURED : target, pct == null ? REP_NOT_MEASURED : `${pct}%`];
+        const people = blocks.map((b) => {
+            const prevB = prevBy.get(b.id);
+            const wkB = wkBy.get(b.id);
+            return {
+                b,
+                y: b.values[primary]?.y ?? null,
+                prev: prevB ? read(prevB) : 0,
+                wk: wkB ? read(wkB) : 0,
+                mtd: b.values[primary]?.mtd ?? null,
+            };
+        });
+        for (const p of people) rows.push(line(p.b.name, p.y, p.prev, p.wk, p.mtd, p.b.target, pctOfTarget(p.mtd, p.b.target)));
+        if (people.length > 1) {
+            // % of target on the people who HAVE a target, as Blocks B / C's Total.
+            const withTarget = people.filter((p) => p.b.target != null);
+            const targetSum = withTarget.length ? withTarget.reduce((a, p) => a + p.b.target!, 0) : null;
+            rows.push(
+                line(
+                    TOTAL,
+                    sumOf(people.map((p) => p.y)),
+                    sumOf(people.map((p) => p.prev)),
+                    sumOf(people.map((p) => p.wk)),
+                    sumOf(people.map((p) => p.mtd)),
+                    targetSum,
+                    pctOfTarget(sumOf(withTarget.map((p) => p.mtd)), targetSum),
+                ),
+            );
+        }
     }
     return rows;
 }

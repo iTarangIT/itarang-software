@@ -7,31 +7,20 @@ const { salesDailyPeriods, sameSpanLastMonth, addDays, firstOfMonth, lastWorking
 const { isWorkingDay } = await import("@/lib/calendar/officeCalendar");
 
 describe("salesDailyPeriods — the windows a Sales Daily is counted over", () => {
-    it("Sun 4 Oct 2026: yesterday = that day, last 7 = 28 Sep–4 Oct, MTD = 1–4 Oct, last month = 1–4 Sep", () => {
-        // The sample mail that was questioned: every Block A count reconciled
-        // to these exact windows on db-2.
+    it("ID 188: Sun 4 Oct 2026 with no calendar — yesterday, the day before, the same day last week, MTD", () => {
         expect(salesDailyPeriods("2026-10-04")).toEqual({
             yesterday: { from: "2026-10-04", to: "2026-10-04" },
-            last7: { from: "2026-09-28", to: "2026-10-04" },
+            dayBefore: { from: "2026-10-03", to: "2026-10-03" },
+            sameDayLastWeek: { from: "2026-09-27", to: "2026-09-27" },
             mtd: { from: "2026-10-01", to: "2026-10-04" },
-            lastMonth: { from: "2026-09-01", to: "2026-09-04" },
         });
     });
 
-    it("the 1st of a month: MTD is that single day, last month is the 1st of the previous", () => {
-        const p = salesDailyPeriods("2026-11-01");
-        expect(p.mtd).toEqual({ from: "2026-11-01", to: "2026-11-01" });
-        expect(p.last7).toEqual({ from: "2026-10-26", to: "2026-11-01" });
-        expect(p.lastMonth).toEqual({ from: "2026-10-01", to: "2026-10-01" });
-    });
-
-    it("on the 1st–7th, MTD sits inside last 7 days (so MTD ≤ last 7 for any count)", () => {
-        for (let d = 1; d <= 7; d++) {
-            const day = `2026-10-0${d}`;
-            const p = salesDailyPeriods(day);
-            expect(p.last7.from <= p.mtd.from).toBe(true);
-            expect(p.last7.to).toBe(p.mtd.to);
-        }
+    it("early in a month: the same day last week falls in the previous month", () => {
+        const p = salesDailyPeriods("2026-11-02");
+        expect(p.mtd).toEqual({ from: "2026-11-01", to: "2026-11-02" });
+        expect(p.dayBefore).toEqual({ from: "2026-11-01", to: "2026-11-01" });
+        expect(p.sameDayLastWeek).toEqual({ from: "2026-10-26", to: "2026-10-26" });
     });
 
     it("same span last month is capped at the shorter month's last day", () => {
@@ -46,7 +35,14 @@ describe("salesDailyPeriods — the windows a Sales Daily is counted over", () =
         const p = salesDailyPeriods("2026-10-04", working);
         expect(p.yesterday).toEqual({ from: "2026-10-03", to: "2026-10-03" });
         expect(p.mtd).toEqual({ from: "2026-10-01", to: "2026-10-04" });
-        expect(p.last7).toEqual({ from: "2026-09-28", to: "2026-10-04" });
+        // ID 188: the day before Saturday is Friday; the same day last week is the Saturday before.
+        expect(p.dayBefore).toEqual({ from: "2026-10-02", to: "2026-10-02" });
+        expect(p.sameDayLastWeek).toEqual({ from: "2026-09-26", to: "2026-09-26" });
+        // Tuesday's email (covers Mon 5 Oct): the day before skips Sunday to Saturday.
+        expect(salesDailyPeriods("2026-10-05", working).dayBefore).toEqual({ from: "2026-10-03", to: "2026-10-03" });
+        // A holiday Friday is stepped over too.
+        const withHoliday = (d: string) => isWorkingDay(d, new Set(["2026-10-02"]));
+        expect(salesDailyPeriods("2026-10-03", withHoliday).dayBefore).toEqual({ from: "2026-10-01", to: "2026-10-01" });
         // A working day stays itself; a holiday Saturday steps back to Friday.
         expect(lastWorkingDayOnOrBefore("2026-10-06", working)).toBe("2026-10-06");
         expect(lastWorkingDayOnOrBefore("2026-10-04", (d) => isWorkingDay(d, new Set(["2026-10-03"])))).toBe("2026-10-02");
