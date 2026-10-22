@@ -9,6 +9,7 @@ import { and, desc, eq, inArray, notInArray } from "drizzle-orm";
 
 import { db } from "@/lib/db/index";
 import {
+  accountOwnership,
   dealerOnboardingApplications,
   dealerOnboardingDocuments,
   whatsappOnboardingSessions,
@@ -16,6 +17,7 @@ import {
 } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 import { maskCapturedIds, maskDealerIdsDeep, seesFullDealerIds } from "@/lib/kyc/dealerIdMask";
+import { mayReadDealerApplication, ownsDealerApplication } from "@/lib/auth/dealerValidationRules";
 import {
   errorResponse,
   successResponse,
@@ -62,6 +64,24 @@ export const GET = withErrorHandler(
     // way to read web onboarding applications.
     if ((application.source ?? "").toLowerCase() !== "whatsapp") {
       return errorResponse("Not a WhatsApp onboarding conversation", 404);
+    }
+
+    // ID 166 (18 Oct): the documents received are dealer papers, so they
+    // follow the file rule — Admin, Sales Head, CEO and the application's
+    // owner. The partner keeps the drawer (stage, checklist, masked details)
+    // but sees the documents only on an application they own.
+    let seesDocuments = mayReadDealerApplication({ role: user.role, userId: user.id });
+    if (!seesDocuments) {
+      const [own] = await db
+        .select({ owner: accountOwnership.owner_user_id })
+        .from(accountOwnership)
+        .where(eq(accountOwnership.source_application_id, applicationId))
+        .limit(1);
+      seesDocuments = ownsDealerApplication(user.id, {
+        accountOwnerId: own?.owner ?? null,
+        salespersonUserId: application.salesperson_user_id,
+        ownerId: application.owner_id,
+      });
     }
 
     const sessionIds = [
@@ -205,7 +225,8 @@ export const GET = withErrorHandler(
         buildCapturedDetails(application as unknown as Record<string, unknown>, sessionCtx),
         fullIds,
       ),
-      documents: Array.from(latestPerType.values()).map((doc) => ({
+      documentsHidden: !seesDocuments,
+      documents: (seesDocuments ? Array.from(latestPerType.values()) : []).map((doc) => ({
         id: doc.id,
         documentType: doc.document_type,
         label: docTypeLabel(doc.document_type),

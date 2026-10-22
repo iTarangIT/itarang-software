@@ -179,6 +179,8 @@ export type ConversationDetail = {
     };
     sessions: ConversationSession[];
     captured: CapturedField[];
+    /** ID 166: true when this login may not see the documents (partner, not the owner). */
+    documentsHidden?: boolean;
     documents: ConversationDocument[];
     checklist: Array<{ type: string; label: string; uploaded: boolean }>;
     progress: {
