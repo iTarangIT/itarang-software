@@ -168,9 +168,13 @@ export function ProspectDetailDrawer({
 
                             <section>
                                 <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-muted">
-                                    Documents received ({detail.documents.length})
+                                    Documents received{detail.documentsHidden ? "" : ` (${detail.documents.length})`}
                                 </h4>
-                                {detail.documents.length === 0 ? (
+                                {detail.documentsHidden ? (
+                                    <p className="rounded-lg border border-border bg-surface-muted px-3 py-3 text-sm text-ink-muted">
+                                        Documents are visible to Admin, the Sales Head, the CEO and this dealer&apos;s owner.
+                                    </p>
+                                ) : detail.documents.length === 0 ? (
                                     <p className="rounded-lg border border-border bg-surface-muted px-3 py-3 text-sm text-ink-muted">
                                         No documents uploaded yet.
                                     </p>

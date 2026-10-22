@@ -328,6 +328,19 @@ export default function DealerCorrectionPage() {
                         {item.previousDocument.fileName || "View previous"}
                       </a>
                     </div>
+                  ) : item.previousDocument?.fileName ? (
+                    // 17 Oct (no document without a login): the dealer has no
+                    // login here, so the earlier file is named, not linked.
+                    <div className="mb-3 flex items-center gap-2 rounded-xl border border-[#E3E8EF] bg-white px-3 py-2 text-xs text-slate-500">
+                      <FileText className="h-3.5 w-3.5 text-slate-400" />
+                      <span className="font-medium text-slate-600">
+                        Previous file:
+                      </span>
+                      <span className="truncate text-slate-600">
+                        {item.previousDocument.fileName}
+                      </span>
+                      <span className="shrink-0 text-emerald-700">Uploaded ✓</span>
+                    </div>
                   ) : null}
                   <FileUploadCard
                     label={item.label}

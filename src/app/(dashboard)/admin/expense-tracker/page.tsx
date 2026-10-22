@@ -1,4 +1,5 @@
 import { requireRole } from "@/lib/auth-utils";
+import { EXPENSE_ADMIN_ROLES } from "@/lib/auth/requireApiAdmin";
 import { ExpenseTrackerView } from "./_components/ExpenseTrackerView";
 
 export const dynamic = "force-dynamic";
@@ -7,7 +8,8 @@ export const dynamic = "force-dynamic";
 // and classifies it, admin reviews + submits, and the amount flows to the CEO
 // dashboard expenses total + department/project breakdown.
 export default async function AdminExpenseTrackerPage() {
-  await requireRole(["admin", "sales_head"]);
+  // ID 166 (18 Oct): Finance and the CEO too — the same list as the API.
+  await requireRole([...EXPENSE_ADMIN_ROLES]);
 
   return (
     <div className="px-6 md:px-8 py-6 space-y-6 max-w-[1200px]">

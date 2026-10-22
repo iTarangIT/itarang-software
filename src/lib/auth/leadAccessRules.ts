@@ -36,6 +36,27 @@ export const ALL_LEADS_KYC_ROLES = FULL_ID_ROLES;
 export const OWN_LEADS_KYC_ROLES = ["business_head", "sales_manager", "sales_executive", "finance_controller"] as const;
 
 /**
+ * ID 166 (18 Oct check, place "customer lead KYC tabs"): the iTarang owner of
+ * the dealer's account — an ISR or ASM — READS that dealer's customer files
+ * (KYC documents, co-borrower documents, requested documents). Read only: the
+ * upload / submit / payment routes still refuse them (requireLeadAccess
+ * without `read`).
+ */
+export const ACCOUNT_OWNER_READ_ROLES = ["inside_sales_rep", "asm"] as const;
+
+/** May this ISR / ASM read the lead's files as the dealer account's owner? A missing fact is a refusal. */
+export function mayReadAsAccountOwner(input: {
+  role: string | null | undefined;
+  userId: string | null | undefined;
+  accountOwnerId?: string | null;
+}): boolean {
+  const role = (input.role ?? "").toLowerCase();
+  if (!(ACCOUNT_OWNER_READ_ROLES as readonly string[]).includes(role)) return false;
+  const me = (input.userId ?? "").trim();
+  return !!me && input.accountOwnerId === me;
+}
+
+/**
  * ID 119: does this back-office user own the lead? They uploaded it, it is
  * assigned to them (leads.assigned_to), they are its sales manager
  * (leads.sm_assigned_to), or they own the account of the lead's dealer

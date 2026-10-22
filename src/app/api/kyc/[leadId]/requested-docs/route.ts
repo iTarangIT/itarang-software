@@ -18,7 +18,8 @@ export async function GET(
     { params }: { params: Promise<{ leadId: string }> }
 ) {
     // ID 118: signed in, and this lead is the caller's to touch (a dealer's own lead, or back office).
-    const leadGate = await requireLeadAccess((await params).leadId);
+    // ID 166: read-only list, so the dealer account's owner (ISR / ASM) reads it too.
+    const leadGate = await requireLeadAccess((await params).leadId, { read: true });
     if (!leadGate.ok) return leadGate.response;
     try {
         const { leadId } = await params;
