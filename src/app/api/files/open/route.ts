@@ -30,6 +30,17 @@ export const dynamic = "force-dynamic";
 
 const NO_STORE = { "Cache-Control": "private, no-store" };
 
+/**
+ * A redirect to a path on this site, sent as a RELATIVE Location. Behind the
+ * VPS proxy req.nextUrl.origin is the app's own https://localhost:3003, so an
+ * absolute redirect built from it sent every click out of a spreadsheet to
+ * localhost (sandbox check, 22 Oct). The browser resolves a relative Location
+ * against the address the person actually opened.
+ */
+function redirectHere(pathAndQuery: string) {
+    return new NextResponse(null, { status: 302, headers: { Location: pathAndQuery, ...NO_STORE } });
+}
+
 function page(status: number, title: string, body: string) {
     return new NextResponse(
         `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title>` +
@@ -57,7 +68,7 @@ export async function GET(req: NextRequest) {
     if (!user) {
         // The login page has no "come back to" parameter; after logging in,
         // clicking the link again opens the file.
-        return NextResponse.redirect(new URL("/login", req.nextUrl.origin), { status: 302, headers: NO_STORE });
+        return redirectHere("/login");
     }
 
     const { allowed, file } = await canOpenStoredFile(user, target.bucket, target.key);
@@ -74,5 +85,5 @@ export async function GET(req: NextRequest) {
     const fresh = nbfc
         ? signedNbfcPath(target.path, FRESH_LINK_TTL_SECONDS, { by: user.id })
         : signedFilePath(target.path, FRESH_LINK_TTL_SECONDS, { by: user.id });
-    return NextResponse.redirect(new URL(fresh ?? target.path, req.nextUrl.origin), { status: 302, headers: NO_STORE });
+    return redirectHere(fresh ?? target.path);
 }
