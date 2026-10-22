@@ -804,6 +804,9 @@ export async function middleware(request: NextRequest) {
       "business_head",
       "partner",
     ],
+    // ID 166 (18 Oct): the AI expense tracker for Finance too (requireApiAdmin
+    // EXPENSE_ADMIN_ROLES); bill links still follow the bill rule.
+    "/admin/expense-tracker": ["admin", "sales_head", "ceo", "finance_controller"],
     // Part 0 Module 3 — the admin / ops workspace. The Ops-Manager persona is
     // held by the sales_head account, so sales_head gets full access (admin +
     // CEO too). This bare "/admin" prefix is LAST so the specific entries

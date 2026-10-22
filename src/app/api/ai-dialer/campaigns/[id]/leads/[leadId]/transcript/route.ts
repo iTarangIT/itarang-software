@@ -24,6 +24,7 @@ import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-util
 import { and, desc, eq } from "drizzle-orm";
 import { deriveDurationSeconds } from "@/lib/ai-dialer/call-duration/derive";
 import { loadLeadCallAttempts } from "@/lib/ai-dialer/leadCallAttempts";
+import { callRecordingLink } from "@/lib/ai/storage/recordingLinks";
 import { requireCampaignReader } from "@/lib/ai-dialer/campaignAccess";
 // ID 155: read access = own leads, or a direct report's (manager).
 import { leadVisibleTo } from "@/lib/users/team";
@@ -340,16 +341,11 @@ export const GET = withErrorHandler(
       intentScore,
       intentReason: latest?.intentReason ?? null,
       callDuration,
-      // Prefer the stored URL (Bolna, or an already re-hosted ElevenLabs call).
-      // When it's still empty but we have a call id, hand back the self-healing
-      // proxy route — it re-hosts the ElevenLabs audio on first hit and backfills
-      // recording_url, so the drawer player lights up even for older calls that
-      // never had a URL stored.
-      recordingUrl:
-        latest?.recordingUrl ??
-        (latest?.callId
-          ? `/api/ai-dialer/recording/${encodeURIComponent(latest.callId)}`
-          : null),
+      // Our stored copy when there is one. Otherwise (empty, or still Bolna's
+      // open link) the checked self-healing proxy route — it copies / re-hosts
+      // the audio on first hit and backfills recording_url, so the drawer player
+      // lights up even for older calls. ID 166: never the provider's link.
+      recordingUrl: callRecordingLink(latest?.callId, latest?.recordingUrl),
       summary,
       transcript,
       conversation: lastHistory.conversation,

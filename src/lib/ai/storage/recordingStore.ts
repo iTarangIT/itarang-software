@@ -13,6 +13,7 @@
 
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { isS3Backend, putObject, filesProxyUrl } from "@/lib/storage/s3";
+import { isOwnRecordingUrl } from "./recordingLinks";
 
 // Public bucket — create once in the Supabase project (Storage → New bucket →
 // Public). Service-role uploads bypass RLS; public objects are served at
@@ -109,14 +110,9 @@ export async function rehostRecording(opts: {
   }
 }
 
-/**
- * Is this recording link already in iTarang storage (the /api/files proxy,
- * relative or absolute, or the call-recordings bucket on Supabase)? Pure.
- */
-export function isOwnRecordingUrl(url: string | null | undefined): boolean {
-  if (!url) return false;
-  return url.includes("/api/files/call-recordings/") || url.includes(`/storage/v1/object/public/${BUCKET}/`);
-}
+// Pure, in recordingLinks.ts so screens and tests can use it without this
+// module's storage imports.
+export { isOwnRecordingUrl } from "./recordingLinks";
 
 /**
  * ID 166 (decision 13: copy both NeoDove and Bolna recordings into iTarang

@@ -28,6 +28,7 @@ import { createClient } from "@/lib/supabase/server";
 import { extOf, safeSlug, fetchAsBuffer } from "@/lib/export/zip-helpers";
 import { expenseBucketLabel, expenseDepartmentLabel } from "@/lib/expenses";
 import { resolveMonthRange } from "@/lib/expenses/monthRange";
+import { billCell, exportOrigin } from "@/lib/exports/fileLinks";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -129,6 +130,9 @@ export async function GET(req: NextRequest) {
     };
     header.alignment = { vertical: "middle" };
 
+    // ID 166: the Bill URL cell is a CRM link that checks whoever clicks it
+    // (/api/files/open), never the stored file link — a forwarded sheet opens nothing.
+    const origin = exportOrigin();
     for (const r of data) {
       const currency =
         r.ai_raw && typeof r.ai_raw === "object" && "currency" in r.ai_raw
@@ -152,7 +156,7 @@ export async function GET(req: NextRequest) {
         file_name: r.file_name ?? "",
         submitter: r.submitter_name ?? "",
         recorded_at: r.created_at ? new Date(r.created_at).toLocaleString("en-IN") : "",
-        bill_url: r.bill_url ?? "",
+        bill_url: billCell(r.bill_url, origin) ?? "",
       });
     }
     ws.getColumn("amount").numFmt = "#,##0.00";

@@ -16,7 +16,8 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ lead
         // requireLeadAccess also enforces OWNERSHIP: a dealer sees only leads
         // whose leads.dealer_id matches their own, while back-office roles
         // (admin/ceo/sales/finance) may review any lead.
-        const access = await requireLeadAccess(leadId);
+        // ID 166: read-only list, so the dealer account's owner (ISR / ASM) reads it too.
+        const access = await requireLeadAccess(leadId, { read: true });
         if (!access.ok) return access.response;
 
         const docFor = req.nextUrl.searchParams.get('doc_for') || 'customer';

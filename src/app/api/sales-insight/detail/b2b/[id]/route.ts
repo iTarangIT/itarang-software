@@ -18,6 +18,7 @@ import { requireRole } from "@/lib/auth-utils";
 import { desc, eq } from "drizzle-orm";
 import { accountOwnership } from "@/lib/db/schema";
 import { isOwnerAmong, mayReadCallReview, withoutCallReview } from "@/lib/leads/callReviewRules";
+import { callRecordingLink } from "@/lib/ai/storage/recordingLinks";
 
 const ALLOWED_ROLES = [
     "sales_insight",
@@ -138,7 +139,8 @@ export const GET = withErrorHandler(async (
             intent_reason: latestCall.intent_reason,
             transcript: latestCall.transcript,
             summary: latestCall.summary,
-            recording_url: latestCall.recording_url,
+            // ID 166: our copy or the checked play route, never the provider link.
+            recording_url: callRecordingLink(latestCall.call_id, latestCall.recording_url),
             call_duration: latestCall.call_duration,
             started_at: latestCall.started_at,
             ended_at: latestCall.ended_at,

@@ -139,7 +139,8 @@ const WITHHELD = [
   /attachment/,
   // file links and stored files
   /(^|_)(url|uri|link)$|qr_code/,
-  /(^|_)s3(_|$)|storage_(key|path)|drive_(file|row)|file_name|folder_path/,
+  // ID 166 (18 Oct): also `original_filename` and any other *filename column.
+  /(^|_)s3(_|$)|storage_(key|path)|drive_(file|row)|file_?name|folder_path/,
   // payment / e-sign / provider references and errors
   /reference|(^|_)ref$|transaction_id|esign_(certificate|error)|ocr_error/,
   // provider blobs and expense payees

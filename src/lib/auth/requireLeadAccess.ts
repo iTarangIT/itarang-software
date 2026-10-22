@@ -4,9 +4,11 @@ import { db } from "@/lib/db";
 import { accountOwnership, dealerOnboardingApplications, leads } from "@/lib/db/schema";
 import { getAuthenticatedAppUser } from "@/lib/kyc/admin-workflow";
 import {
+  ACCOUNT_OWNER_READ_ROLES,
   ALL_LEADS_KYC_ROLES,
   backOfficeOwnsLead,
   dealerOwnsLead,
+  mayReadAsAccountOwner,
   mayReadFullIds,
   FULL_ID_ROLES,
   OWN_LEADS_KYC_ROLES,
@@ -100,7 +102,15 @@ export type LeadAccessResult =
  * The 403 is intentionally identical for "lead not found" and "not yours" so
  * the endpoint can't be used to probe which ids exist.
  */
-export async function requireLeadAccess(leadId: string): Promise<LeadAccessResult> {
+export async function requireLeadAccess(
+  leadId: string,
+  /**
+   * ID 166: `read: true` on a READ-only route (the KYC, co-borrower and
+   * requested-document lists) also lets in the ISR / ASM who owns the
+   * dealer's account. Never pass it on a route that changes the file.
+   */
+  opts?: { read?: boolean },
+): Promise<LeadAccessResult> {
   const user = await getAuthenticatedAppUser();
   if (!user) {
     return {
@@ -132,6 +142,14 @@ export async function requireLeadAccess(leadId: string): Promise<LeadAccessResul
         fullIds: await fullIdsForLead(user, leadId),
       },
     };
+  }
+
+  // ID 166: the dealer account's owner (ISR / ASM) reads its customers' files.
+  if (opts?.read && (ACCOUNT_OWNER_READ_ROLES as readonly string[]).includes(user.role)) {
+    if (await accountOwnerReadsLead(user.id, user.role, leadId)) {
+      // The account owner reads the full PAN (mayReadFullIds).
+      return { ok: true, user: { id: user.id, role: user.role, dealer_id: user.dealer_id, fullIds: true } };
+    }
   }
 
   // Dealer (or any other non-back-office role): must own the lead.
@@ -173,6 +191,24 @@ export async function requireLeadAccess(leadId: string): Promise<LeadAccessResul
 
   // Past the gate, a dealer (or uploader) is the lead's owner: full PAN.
   return { ok: true, user: { id: user.id, role: user.role, dealer_id: dealerCode, fullIds: true } };
+}
+
+/** ID 166: is this ISR / ASM the iTarang owner of the account of lead `leadId`'s dealer? */
+async function accountOwnerReadsLead(userId: string, role: string, leadId: string): Promise<boolean> {
+  try {
+    const [lead] = await db.select({ dealer_id: leads.dealer_id }).from(leads).where(eq(leads.id, leadId)).limit(1);
+    if (!lead?.dealer_id) return false;
+    // leads.dealer_id is the dealer's account id (users.dealer_id = accounts.id).
+    const [own] = await db
+      .select({ owner: accountOwnership.owner_user_id })
+      .from(accountOwnership)
+      .where(eq(accountOwnership.account_id, lead.dealer_id))
+      .limit(1);
+    return mayReadAsAccountOwner({ role, userId, accountOwnerId: own?.owner ?? null });
+  } catch (err) {
+    console.error("[accountOwnerReadsLead] lookup failed:", err);
+    return false;
+  }
 }
 
 /**
