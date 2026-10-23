@@ -18,6 +18,9 @@
  *   4. status_label == LEAD_STATUS_LABEL[status] on every row.
  *   5. my_numbers' activity == buildSalesDashboard's totals.
  *   6. search_lead by the first queue row's phone (as "+91 …") finds that lead.
+ *   7. Paging ("Next 10"): pages 1–3 of every own tab and temperature report
+ *      have min(10, total − offset) rows, no lead twice across pages (an
+ *      unstable sort would repeat or skip one), and page 2+ rows open too.
  *
  * Read-only by construction: the connection runs with
  * default_transaction_read_only=on. Any mismatch exits 1.
@@ -111,6 +114,25 @@ async function main() {
             );
             cells.push(`${level} ${total}`);
         }
+
+        // 7. Paging — pages 1–3 line up: right lengths, no lead twice.
+        const pagesOk = async (label: string, page: (p: number) => Promise<{ rows: { id: string }[]; total: number }>) => {
+            const seen = new Set<string>();
+            for (let p = 1; p <= 3; p++) {
+                const { rows, total } = await page(p);
+                const want = Math.max(0, Math.min(MAX_TOOL_ROWS, total - (p - 1) * MAX_TOOL_ROWS));
+                // Past the end the temperature query has no row to carry its total.
+                if (rows.length !== want && !(rows.length === 0 && total === 0)) fail(u, `${label} page ${p}: ${rows.length} rows, want ${want}`);
+                for (const r of rows) {
+                    if (seen.has(r.id)) fail(u, `${label} page ${p}: ${r.id} already on an earlier page`);
+                    seen.add(r.id);
+                    if (p > 1 && !(await findLeadInScope(u, r.id))) fail(u, `${label} page ${p}: ${r.id} not found in scope`);
+                }
+                if (rows.length < MAX_TOOL_ROWS) break;
+            }
+        };
+        for (const tab of tabs) await pagesOk(`my_queue ${tab}`, (p) => queueRowsForTool(u, tab, null, null, p));
+        for (const level of TEMPERATURES) await pagesOk(level, (p) => temperatureRowsForTool(u, level, today, p));
 
         // quote_status's own list (no lead).
         const quotes = await quoteStatus(u.role).run(ctx, {});

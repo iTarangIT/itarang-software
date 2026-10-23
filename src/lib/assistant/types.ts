@@ -65,6 +65,32 @@ export type ToolName = ReadToolName | WriteToolName;
 /** Hard cap on rows any tool hands the model or a list message (Invariant 5, BRD §9.4). */
 export const MAX_TOOL_ROWS = 10;
 
+/** Optional 1-based page of a list tool ("next 10" / "aur dikhao"); pages are MAX_TOOL_ROWS long. */
+export const PAGE_MAX = 50;
+
+/**
+ * Which page of a longer list a result is, and the tool input that produced
+ * it (minus `page`) — so a channel can offer "Next 10" and re-run the same
+ * tool for the next page without the model. `args` are the tool's own
+ * validated inputs; a replay goes through the tool's schema and scope again.
+ */
+export type Paging = { page: number; page_size: number; args: Record<string, string> };
+
+/** Row offset of a 1-based page. */
+export function pageOffset(page: number | undefined | null): number {
+    return (Math.max(1, Math.min(PAGE_MAX, Math.trunc(page ?? 1))) - 1) * MAX_TOOL_ROWS;
+}
+
+/** `input` without `page` / empty values, as strings — Paging.args. Pure. */
+export function pagingArgs(input: Record<string, unknown>): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(input)) {
+        if (k === "page" || v == null || v === "") continue;
+        out[k] = String(v);
+    }
+    return out;
+}
+
 /** One lead as a tool hands it back: an allowlisted projection, never a raw row. */
 export type LeadSummary = {
     id: string;
@@ -127,8 +153,8 @@ export type Preview = {
  * indistinguishable from one that does not exist (Invariant 1).
  */
 export type ToolResult =
-    | { kind: "leads"; title: string; rows: LeadSummary[]; total: number; crm_url: string | null }
-    | { kind: "candidates"; question: string; rows: LeadSummary[] }
+    | { kind: "leads"; title: string; rows: LeadSummary[]; total: number; crm_url: string | null; paging?: Paging }
+    | { kind: "candidates"; question: string; rows: LeadSummary[]; total?: number; crm_url?: string | null; paging?: Paging }
     /**
      * The leads behind a Hot / Warm / Cold card (my_leads_by_temperature),
      * rendered as text with phone and ageing. `total` is the card's number;
@@ -141,11 +167,12 @@ export type ToolResult =
           rows: (LeadSummary & { age_days: number })[];
           total: number;
           crm_url: string | null;
+          paging?: Paging;
       }
     | { kind: "lead"; lead: Record<string, unknown> }
     | { kind: "numbers"; data: Record<string, unknown> }
     /** Catalogue products — names and models only, never a price. */
-    | { kind: "products"; rows: ProductSummary[]; total: number }
+    | { kind: "products"; rows: ProductSummary[]; total: number; paging?: Paging }
     /** One lead's latest quote (quote_status). */
     | { kind: "quote"; quote: Record<string, unknown> }
     /**
