@@ -770,9 +770,11 @@ export function SalesHeadOpsView() {
             <DashCard
                 title="Team scorecard against target"
                 caption={
-                    monthToDate
+                    (monthToDate
                         ? `Actual / target to date${daysLeft == null ? "" : `, and what each person needs per working day for the rest of the month. ${daysLeft} working days left.`}`
-                        : `Actual / target for the selected days — the monthly target pro-rata to ${periodDays} working ${periodDays === 1 ? "day" : "days"}${daysLeft == null ? "" : `. Revenue needed per day is for the rest of the month: ${daysLeft} working days left`}.`
+                        : `Actual / target for the selected days — the monthly target pro-rata to ${periodDays} working ${periodDays === 1 ? "day" : "days"}${daysLeft == null ? "" : `. Revenue needed per day is for the rest of the month: ${daysLeft} working days left`}.`) +
+                    // ID 155 (22 Oct): no team subtotal here — say how teams are grouped and where the dated total is.
+                    " Each row is that person's own numbers, grouped under today's manager (↳); a team's total for the days each member was in it is on Performance › Team total."
                 }
                 action={
                     <SegmentedControl

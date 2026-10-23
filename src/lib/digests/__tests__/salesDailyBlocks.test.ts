@@ -13,6 +13,7 @@ const {
     REP_NOT_MEASURED,
     blockDRows,
     buildRepBlocks,
+    datedTeamGroup,
     repBlockTableRows,
 } = await import("../salesDailyBlocks");
 const { NOT_MEASURED } = await import("../salesDailyBlockA");
@@ -140,6 +141,43 @@ describe("Block B (ASM) — one row per rep", () => {
         expect(rows[2][rows[2].length - 1]).toBe("100%");
         // The block Total is unchanged: % over reps that have a target (Zed alone).
         expect(rows[3][rows[3].length - 1]).toBe("80%");
+    });
+
+    it("ID 155: the subtotal counts a mid-month joiner only for his days in the team", () => {
+        const blocks = buildRepBlocks("asm", y, mtd, extras, targets);
+        const full = new Map(blocks.map((b) => [b.id, b]));
+        const zed = full.get("a1")!;
+        // Amy (a2) joined Zed on the 10th: her MTD for 10th-20th is 4 dealers visited, not her month's 10.
+        const amyLate = { ...full.get("a2")!, values: { ...full.get("a2")!.values, visited: { y: null, mtd: 4 } } };
+        const group = datedTeamGroup({
+            manager: zed,
+            windows: [{ from: "2026-10-01", to: "2026-10-20", ids: ["a1"] }, { from: "2026-10-10", to: "2026-10-20", ids: ["a2"] }],
+            mtd: { from: "2026-10-01", to: "2026-10-20" },
+            yesterday: "2026-10-20",
+            full,
+            partial: new Map([["2026-10-10|2026-10-20", new Map([["a2", amyLate]])]]),
+        });
+        expect(group.map((b) => b.id)).toEqual(["a1", "a2"]);
+        const rows = repBlockTableRows("asm", blocks, new Map([["a2", "a1"]]), new Map([["a1", group]]));
+        // The listed rows keep each person's own month; the subtotal is 40 + 4 = 44 (44 / 50 = 88%).
+        expect(rows[1][2]).toBe(10);
+        expect(rows[2][0]).toBe("Team subtotal · Zed");
+        expect(rows[2][2]).toBe(44);
+        expect(rows[2][rows[2].length - 1]).toBe("88%");
+    });
+
+    it("ID 155: a member who left before yesterday adds nothing to yesterday", () => {
+        const blocks = buildRepBlocks("asm", y, mtd, extras, targets);
+        const full = new Map(blocks.map((b) => [b.id, b]));
+        const group = datedTeamGroup({
+            manager: full.get("a1")!,
+            windows: [{ from: "2026-10-01", to: "2026-10-20", ids: ["a1"] }, { from: "2026-10-01", to: "2026-10-05", ids: ["a2"] }],
+            mtd: { from: "2026-10-01", to: "2026-10-20" },
+            yesterday: "2026-10-20",
+            full,
+            partial: new Map([["2026-10-01|2026-10-05", new Map([["a2", full.get("a2")!]])]]),
+        });
+        for (const v of Object.values(group[1].values)) expect(v?.y).toBeNull();
     });
 
     it("no Total row for a single rep, and none for no reps", () => {

@@ -358,6 +358,52 @@ function sumOf(vals: Array<number | null>): number | null {
 /** ID 156: each rep's manager on the email day (member id → manager id). */
 export type TeamOf = ReadonlyMap<string, string>;
 
+/**
+ * ID 155 (22 Oct): what a manager's "Team subtotal" adds up — the manager plus
+ * each member FOR THE DAYS THEY WERE IN THE TEAM this month (dated reporting
+ * lines), leavers included; built by the email from teamStints / teamWindows.
+ * Without it the subtotal adds the listed members' whole month.
+ */
+export type TeamGroups = ReadonlyMap<string, RepBlock[]>;
+
+/**
+ * ID 155: one manager's dated group. `windows` come from teamWindows over the
+ * month to date; `full` holds each rep's block for the whole month (yesterday
+ * and MTD), `partial` (window "from|to" → rep → block) the MTD read over a
+ * shorter window. A member counts yesterday only when his window covers it.
+ * The manager is first (repBlockTableRows reads the metric keys off it). Pure.
+ */
+export function datedTeamGroup(input: {
+    manager: RepBlock;
+    windows: ReadonlyArray<{ from: string; to: string; ids: readonly string[] }>;
+    mtd: { from: string; to: string };
+    yesterday: string;
+    full: ReadonlyMap<string, RepBlock>;
+    partial: ReadonlyMap<string, ReadonlyMap<string, RepBlock>>;
+}): RepBlock[] {
+    const { manager, mtd } = input;
+    const group: RepBlock[] = [manager];
+    for (const w of input.windows) {
+        const whole = w.from === mtd.from && w.to === mtd.to;
+        const coversYesterday = w.from <= input.yesterday && input.yesterday <= w.to;
+        for (const id of w.ids) {
+            if (id === manager.id) continue;
+            const src = whole ? input.full.get(id) : input.partial.get(`${w.from}|${w.to}`)?.get(id);
+            if (!src) continue; // no numbers in this block's role for that window
+            const own = input.full.get(id);
+            const values: Partial<Record<RepMetricKey, RepValue>> = {};
+            for (const k of Object.keys(manager.values) as RepMetricKey[]) {
+                values[k] = {
+                    y: coversYesterday ? (own?.values[k]?.y ?? null) : null,
+                    mtd: src.values[k]?.mtd ?? null,
+                };
+            }
+            group.push({ id, name: src.name, values, target: null });
+        }
+    }
+    return group;
+}
+
 /** Prefix of a team member's name under their manager, and of a team subtotal row. */
 export const TEAM_MEMBER_PREFIX = "↳ ";
 export const TEAM_SUBTOTAL_PREFIX = "Team subtotal · ";
@@ -372,8 +418,16 @@ export const TEAM_SUBTOTAL_PREFIX = "Team subtotal · ";
  * numbers plus the members' — whose "% of target" is against the MANAGER'S
  * own target (Kartik, 10 Oct: the team lead's target is theirs, not the sum).
  * Reps in no team follow, then the block Total as before.
+ *
+ * ID 155: with `teamGroups`, the subtotal sums the manager's dated group
+ * instead of [manager, ...today's members] (the rows listed stay as they are).
  */
-export function repBlockTableRows(role: "asm" | "inside_sales_rep", blocks: RepBlock[], teamOf?: TeamOf): Rows {
+export function repBlockTableRows(
+    role: "asm" | "inside_sales_rep",
+    blocks: RepBlock[],
+    teamOf?: TeamOf,
+    teamGroups?: TeamGroups,
+): Rows {
     const cols = COLS[role];
     const primary = PRIMARY_TARGET[role].metric;
     const cell = (r: RepBlock, c: ColSpec): string | number => {
@@ -439,7 +493,7 @@ export function repBlockTableRows(role: "asm" | "inside_sales_rep", blocks: RepB
             rows.push(cols.map((c) => cell({ ...m, name: TEAM_MEMBER_PREFIX + m.name }, c)));
             placed.add(m.id);
         }
-        const group = [b, ...members];
+        const group = teamGroups?.get(b.id) ?? [b, ...members];
         rows.push(
             summed(TEAM_SUBTOTAL_PREFIX + b.name, group, () =>
                 pctOfTarget(sumOf(group.map((x) => x.values[primary]?.mtd ?? null)), b.target),
