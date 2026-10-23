@@ -48,6 +48,16 @@ function fakeDeps(sender: SenderResolution = RAHUL) {
             replies.push({ to, text: payload.body, userId, kind: payload.kind });
         }),
         openLead: vi.fn(async () => ({ kind: "text" as const, body: "lead card" })),
+        pageList: vi.fn(async (_u, token: string) =>
+            token === "good" ? { payload: { kind: "text" as const, body: "Hot leads page 2" }, title: "Hot leads page 2" } : null,
+        ),
+        listProductType: vi.fn(async () => ({ kind: "text" as const, body: "Battery products: 16" })),
+        noteTap: vi.fn(async () => {}),
+        pickProduct: vi.fn(async (_u, assetType: string, productId: string) =>
+            productId === "gone"
+                ? null
+                : { product_id: productId, asset_type: assetType as "battery", product_name: "LFP 51.2V 105Ah", model_id: "LFP-105", detail: null },
+        ),
         proposeInvite: vi.fn(async () => ({ kind: "text" as const, body: "invite preview" })),
         editAction: vi.fn(async () => ({ kind: "text" as const, body: "Kya badalna hai?" })),
         confirmAction: vi.fn(async () => ({ kind: "text" as const, body: "✅ Saved" })),
@@ -337,6 +347,57 @@ describe("routeMessage — Gate 3: list-row taps", () => {
         expect(f.deps.confirmAction).not.toHaveBeenCalled();
         expect(f.deps.runTextTurn).not.toHaveBeenCalled();
         expect(f.handled[0]).toMatchObject({ handling: "tap_edit", extra: { userId: "u-rahul", actionId: ID } });
+    });
+
+    it("Next 10 (ast:more:) pages the list with no model and notes the page in memory", async () => {
+        const f = fakeDeps();
+        await routeMessage(msg({ type: "interactive", replyId: "ast:more:good", text: "Next 10 ▶" }), "r", f.deps);
+        expect(f.deps.pageList).toHaveBeenCalledWith(RAHUL.kind === "ok" ? RAHUL.user : null, "good", "r");
+        expect(f.deps.runTextTurn).not.toHaveBeenCalled();
+        expect(f.handled[0]).toMatchObject({ handling: "tap_more" });
+        expect(f.replies.at(-1)?.text).toBe("Hot leads page 2");
+        expect(f.deps.noteTap).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ human: '[tapped Next on "Hot leads page 2"]' }));
+    });
+
+    it("a forged Next token is ignored", async () => {
+        const f = fakeDeps();
+        await routeMessage(msg({ type: "interactive", replyId: "ast:more:forged" }), "r", f.deps);
+        expect(f.handled[0].handling).toBe("tap_ignored");
+        expect(f.deps.runTextTurn).not.toHaveBeenCalled();
+    });
+
+    it("a product type button lists that type; a bad type is ignored", async () => {
+        const f = fakeDeps();
+        await routeMessage(msg({ type: "interactive", replyId: "ast:ptype:battery" }), "r", f.deps);
+        expect(f.deps.listProductType).toHaveBeenCalledWith(expect.anything(), "battery", "r");
+        expect(f.handled[0].handling).toBe("tap_product_type");
+        const g = fakeDeps();
+        await routeMessage(msg({ type: "interactive", replyId: "ast:ptype:scooter" }), "r", g.deps);
+        expect(g.deps.listProductType).not.toHaveBeenCalled();
+        expect(g.handled[0].handling).toBe("tap_ignored");
+    });
+
+    it("a tapped product is re-read, asks for qty + price, and its product_id goes into memory — nothing written, no model", async () => {
+        const f = fakeDeps();
+        await routeMessage(msg({ type: "interactive", replyId: "ast:prod:battery:42" }), "r", f.deps);
+        expect(f.deps.pickProduct).toHaveBeenCalledWith(expect.anything(), "battery", "42");
+        expect(f.deps.runTextTurn).not.toHaveBeenCalled();
+        expect(f.deps.confirmAction).not.toHaveBeenCalled();
+        expect(f.handled[0].handling).toBe("tap_product");
+        expect(f.replies.at(-1)?.text).toContain("LFP 51.2V 105Ah (LFP-105) chosen");
+        expect(f.deps.noteTap).toHaveBeenCalledWith(
+            expect.anything(),
+            expect.objectContaining({ human: expect.stringContaining("product_id=42 asset_type=battery") }),
+        );
+        const gone = fakeDeps();
+        await routeMessage(msg({ type: "interactive", replyId: "ast:prod:battery:gone" }), "r", gone.deps);
+        expect(gone.replies.at(-1)?.text).toContain("no longer");
+        for (const replyId of ["ast:prod:battery:", "ast:prod:scooter:1", "ast:prod:battery:a:b"]) {
+            const g = fakeDeps();
+            await routeMessage(msg({ type: "interactive", replyId }), "r", g.deps);
+            expect(g.deps.pickProduct, replyId).not.toHaveBeenCalled();
+            expect(g.handled[0].handling).toBe("tap_ignored");
+        }
     });
 
     it("a malformed or foreign tap id is ignored, never opened", async () => {

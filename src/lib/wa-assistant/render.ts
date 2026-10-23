@@ -6,13 +6,17 @@
 //            a lead report ≤ 2,000 so all 10 of its rows fit
 //   list     ≤ 10 rows; row title ≤ 24 (shop, truncated); description ≤ 72
 //            (status · interest · next date · phone); row id ast:lead:<id>; body ≤ 1,024
+//            products: row id ast:prod:<asset_type>:<product_id>
+//   paging   a longer list is followed by a second message with a "Next 10"
+//            button (ast:more:<token>) — a list can't carry buttons, and a
+//            "Next" row would take a lead's place and misalign the pages
 //   format   *bold* for a heading only; no markdown tables or links
 //
 // Truncation never splits a grapheme (emoji, Devanagari conjuncts) and keeps
 // BOTH the UTF-16 length and the code-point count within the limit, so the
 // result is valid however WhatsApp counts.
 
-import type { LeadSummary, Preview, ToolResult } from "@/lib/assistant/types";
+import { PAGE_MAX, type LeadSummary, type Paging, type ProductSummary, type Preview, type ToolResult } from "@/lib/assistant/types";
 import type { CancelOutcome, ExecOutcome } from "@/lib/assistant/executor";
 import { PENDING_TTL_MINUTES } from "@/lib/assistant/actions";
 import type { ListRow } from "./client";
@@ -32,14 +36,100 @@ export const RENDER_LIMITS = {
 } as const;
 
 export type WaPayload =
-    | { kind: "text"; body: string }
-    | { kind: "list"; body: string; button: string; header?: string; rows: ListRow[] }
+    /** `followUp` — sent right after (the "Next 10" button under a longer list or report). */
+    | { kind: "text"; body: string; followUp?: WaPayload }
+    | { kind: "list"; body: string; button: string; header?: string; rows: ListRow[]; followUp?: WaPayload }
     /**
      * Reply buttons. A write preview: exactly Confirm / Cancel, ids ast:c:<id> /
      * ast:x:<id>, with its actionId. After a conversion: "Send invite"
-     * (ast:inv:<leadId>), no actionId.
+     * (ast:inv:<leadId>), no actionId. Under a longer list: "Next 10"
+     * (ast:more:<token>). For a big catalogue: the product types (ast:ptype:<type>).
      */
     | { kind: "buttons"; body: string; buttons: { id: string; title: string }[]; actionId?: string };
+
+// ── Paging ──────────────────────────────────────────────────────────────────
+
+/** The list tools a "Next 10" tap may re-run — short codes keep the button id small. */
+const PAGED_TOOLS = {
+    q: "my_queue",
+    s: "search_lead",
+    h: "my_leads_by_temperature",
+    p: "product_catalogue",
+} as const;
+export type PagedTool = (typeof PAGED_TOOLS)[keyof typeof PAGED_TOOLS];
+const CODE_OF = Object.fromEntries(Object.entries(PAGED_TOOLS).map(([c, t]) => [t, c])) as Record<PagedTool, string>;
+
+/** Meta caps a reply button id at 256 (parse.ts reads ≤ 256). */
+const BUTTON_ID_MAX = 256;
+
+export const MORE_PREFIX = "ast:more:";
+
+/**
+ * "ast:more:<base64url JSON>" for page `page` of `tool` with `args`, or null
+ * when the tool isn't paged or the id would not fit. Carries no authority: a
+ * tap replays the tool through its own schema and the user's scope.
+ */
+export function encodeMore(tool: string, args: Record<string, string>, page: number): string | null {
+    const code = CODE_OF[tool as PagedTool];
+    if (!code || page < 2 || page > PAGE_MAX) return null;
+    const id = MORE_PREFIX + Buffer.from(JSON.stringify({ t: code, a: args, p: page }), "utf8").toString("base64url");
+    return id.length <= BUTTON_ID_MAX ? id : null;
+}
+
+/** The token after "ast:more:" → what to run, or null for anything malformed. Pure. */
+export function decodeMore(token: string): { tool: PagedTool; args: Record<string, string>; page: number } | null {
+    try {
+        const v = JSON.parse(Buffer.from(token, "base64url").toString("utf8")) as unknown;
+        if (!v || typeof v !== "object") return null;
+        const { t, a, p } = v as { t?: unknown; a?: unknown; p?: unknown };
+        const tool = typeof t === "string" && Object.hasOwn(PAGED_TOOLS, t) ? PAGED_TOOLS[t as keyof typeof PAGED_TOOLS] : null;
+        if (!tool || !Number.isInteger(p) || (p as number) < 2 || (p as number) > PAGE_MAX) return null;
+        if (!a || typeof a !== "object" || Array.isArray(a)) return null;
+        const args: Record<string, string> = {};
+        for (const [k, val] of Object.entries(a as Record<string, unknown>)) {
+            if (typeof val !== "string" || k === "page") return null;
+            args[k] = val;
+        }
+        return { tool, args, page: p as number };
+    } catch {
+        return null;
+    }
+}
+
+/** First and last row number shown ("11–20"), 1-based. */
+function range(paging: Paging | undefined, shown: number): { from: number; to: number } {
+    const from = paging ? (paging.page - 1) * paging.page_size + 1 : 1;
+    return { from, to: from + shown - 1 };
+}
+
+/**
+ * The "Next 10" message under a page that isn't the last one: where we are,
+ * the CRM link, and the button. Null on the last page, for a result without
+ * paging, or when `shown` isn't the whole page (rows were cut to fit — the
+ * next page would skip them).
+ */
+export function nextPageFollowUp(
+    tool: string,
+    r: { total: number; paging?: Paging; crm_url?: string | null },
+    shown: number,
+): WaPayload | null {
+    const p = r.paging;
+    if (!p || shown < p.page_size) return null;
+    const { from, to } = range(p, shown);
+    if (r.total <= to) return null;
+    const id = encodeMore(tool, p.args, p.page + 1);
+    if (!id) return null;
+    const left = Math.min(p.page_size, r.total - to);
+    const link = r.crm_url ? `\nAll ${r.total} in the CRM: ${r.crm_url}` : "";
+    return {
+        kind: "buttons",
+        body: fit(`Showing ${from}–${to} of ${r.total}.${link}`, RENDER_LIMITS.listBody),
+        buttons: [{ id, title: `Next ${left} ▶` }],
+    };
+}
+
+/** Rows asked for past the end ("next" after the last page). */
+const pastTheEnd = (paging: Paging | undefined, rows: number) => !!paging && paging.page > 1 && rows === 0;
 
 const segmenter = new Intl.Segmenter("en", { granularity: "grapheme" });
 
@@ -126,17 +216,29 @@ function reportLine(n: number, lead: LeadReport["rows"][number], level: string):
  * the count stays true even when the list is cut.
  */
 export function renderLeadReport(report: LeadReport, lead: string, max: number = RENDER_LIMITS.report): string {
+    return layoutLeadReport(report, lead, max).text;
+}
+
+/** renderLeadReport, plus how many rows made it in (a page cut short gets no "Next"). */
+function layoutLeadReport(report: LeadReport, lead: string, max: number): { text: string; shown: number } {
     const level = report.title.split(" ")[0] ?? "";
     const head = `*${report.title} — ${report.total}*\n(${report.definition})`;
     const intro = lead ? `${lead}\n\n` : "";
-    if (report.total === 0) return fit(`${intro}${head}\n\nNone right now.`, max);
-    const lines = report.rows.map((r, i) => reportLine(i + 1, r, level));
-    const tail = (shown: number) =>
-        report.total > shown ? `\n\n+${report.total - shown} more${report.crm_url ? `: ${report.crm_url}` : ""}` : "";
+    if (pastTheEnd(report.paging, report.rows.length)) {
+        return { text: fit(`${intro}No more ${report.title.toLowerCase()} — that was the whole list.`, max), shown: 0 };
+    }
+    if (report.total === 0) return { text: fit(`${intro}${head}\n\nNone right now.`, max), shown: 0 };
+    // Page 2 numbers its lines 11, 12, … so they match the CRM's order.
+    const { from } = range(report.paging, 0);
+    const lines = report.rows.map((r, i) => reportLine(from + i, r, level));
+    const tail = (shown: number) => {
+        const left = report.total - (from - 1) - shown;
+        return left > 0 ? `\n\n+${left} more${report.crm_url ? `: ${report.crm_url}` : ""}` : "";
+    };
     let shown = lines.length;
     const body = () => `${intro}${head}\n\n${lines.slice(0, shown).join("\n")}${tail(shown)}`;
     while (shown > 0 && body().length > max) shown--;
-    return fit(body(), max);
+    return { text: fit(body(), max), shown };
 }
 
 /** Every number in a line ("5 hot leads", "2 of 7"). */
@@ -170,7 +272,7 @@ function repeatsRow(line: string, rows: LeadSummary[]): boolean {
  * model's lines stay above them unless they repeat a row or state a count the
  * reports don't.
  */
-function renderLeadReports(reports: LeadReport[], text: string): string {
+function renderLeadReports(reports: LeadReport[], text: string): WaPayload {
     const totals = reports.map((r) => r.total);
     const rows = reports.flatMap((r) => r.rows);
     const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
@@ -179,8 +281,13 @@ function renderLeadReports(reports: LeadReport[], text: string): string {
     const gap = 2; // "\n\n" between reports
     const room = RENDER_LIMITS.report - (intro ? intro.length + gap : 0) - gap * (reports.length - 1);
     const each = Math.floor(room / reports.length);
-    const parts = reports.map((r) => renderLeadReport(r, "", each));
-    return fit([intro, ...parts].filter(Boolean).join("\n\n"), RENDER_LIMITS.report);
+    const parts = reports.map((r) => layoutLeadReport(r, "", each));
+    const body = fit([intro, ...parts.map((p) => p.text)].filter(Boolean).join("\n\n"), RENDER_LIMITS.report);
+    // "Next 10" only under a single report: two reports share the room and are
+    // usually cut short, so their "+N more" CRM link is the way to the rest.
+    const followUp =
+        reports.length === 1 ? nextPageFollowUp("my_leads_by_temperature", reports[0], parts[0].shown) : null;
+    return followUp ? { kind: "text", body, followUp } : { kind: "text", body };
 }
 
 const PREVIEW_VALUE_MAX = 200;
@@ -388,11 +495,27 @@ function listBody(first: string, text: string, totals: number[]): string {
     return line && line !== first && countsAgree(line, totals) ? `${first}\n${line}` : first;
 }
 
-function renderList(r: ListResult, text: string): WaPayload {
-    let body =
-        r.kind === "leads" ? listBody(`${r.title}: ${r.total}`, text, [r.total]) : listBody(r.question, text, [r.rows.length]);
-    if (r.kind === "leads" && r.total > r.rows.length && r.crm_url) {
-        const more = `\n\nAll ${r.total}: ${r.crm_url}`;
+/** "Hot leads: 23" — plus " · showing 11–20" when the list is longer than this page. */
+function countLine(label: string, total: number, paging: Paging | undefined, shown: number): string {
+    if (total <= shown) return `${label}: ${total}`;
+    const { from, to } = range(paging, shown);
+    return `${label}: ${total} · showing ${from}–${to}`;
+}
+
+function renderList(r: ListResult, text: string, tool: string): WaPayload {
+    const rows = r.rows.slice(0, RENDER_LIMITS.rows);
+    const total = r.kind === "leads" ? r.total : (r.total ?? r.rows.length);
+    let first: string;
+    if (r.kind === "leads") first = countLine(r.title, r.total, r.paging, rows.length);
+    else if (total > rows.length) {
+        const { from, to } = range(r.paging, rows.length);
+        first = `${r.question} (showing ${from}–${to})`;
+    } else first = r.question;
+    let body = listBody(first, text, r.kind === "leads" ? [r.total] : [total, r.rows.length]);
+    const followUp = nextPageFollowUp(tool, { total, paging: r.paging, crm_url: r.crm_url }, rows.length);
+    // The CRM link rides on the "Next" message when there is one.
+    if (!followUp && total > rows.length && r.crm_url) {
+        const more = `\n\nAll ${total}: ${r.crm_url}`;
         if (body.length + more.length <= RENDER_LIMITS.listBody) body += more;
     }
     return {
@@ -400,7 +523,74 @@ function renderList(r: ListResult, text: string): WaPayload {
         header: fit(r.kind === "leads" ? r.title : "Which one?", RENDER_LIMITS.header),
         body: fit(body, RENDER_LIMITS.listBody),
         button: LIST_BUTTON,
-        rows: r.rows.slice(0, RENDER_LIMITS.rows).map(leadRow),
+        rows: rows.map(leadRow),
+        ...(followUp ? { followUp } : {}),
+    };
+}
+
+// ── Products ────────────────────────────────────────────────────────────────
+
+type ProductsResult = Extract<ToolResult, { kind: "products" }>;
+
+export const PRODUCT_TYPES = ["battery", "charger", "paraphernalia"] as const;
+const PRODUCT_TYPE_LABEL: Record<ProductSummary["asset_type"], string> = {
+    battery: "Battery",
+    charger: "Charger",
+    paraphernalia: "Paraphernalia",
+};
+
+/** One product row: name, then model · spec. No price (the OEM floor stays with the CEO). */
+export function productRow(p: ProductSummary): ListRow {
+    const description = fit([p.model_id, p.detail].filter((x) => x && x.trim()).join(" · "), RENDER_LIMITS.rowDescription);
+    return {
+        id: `ast:prod:${p.asset_type}:${p.product_id}`,
+        title: fit(p.product_name?.trim() || p.model_id || p.product_id, RENDER_LIMITS.rowTitle),
+        ...(description ? { description } : {}),
+    };
+}
+
+/**
+ * The catalogue as something to TAP, never as model text: a list of up to 10
+ * (with "Next" under it), or — when the whole catalogue is asked for and is
+ * bigger than one list — the product types first.
+ */
+export function renderProducts(r: ProductsResult): WaPayload {
+    if (pastTheEnd(r.paging, r.rows.length)) return { kind: "text", body: "No more products — that was the whole list." };
+    if (r.total === 0) {
+        return { kind: "text", body: "No product in the CRM catalogue matches that. Try other words, or ask for the product list." };
+    }
+    const args = r.paging?.args ?? {};
+    if (r.total > RENDER_LIMITS.rows && !args.asset_type && !args.query && (r.paging?.page ?? 1) === 1) {
+        return {
+            kind: "buttons",
+            body: `There are ${r.total} products in the CRM catalogue. Which type?`,
+            buttons: PRODUCT_TYPES.map((t) => ({ id: `ast:ptype:${t}`, title: PRODUCT_TYPE_LABEL[t] })),
+        };
+    }
+    const rows = r.rows.slice(0, RENDER_LIMITS.rows);
+    const type = PRODUCT_TYPE_LABEL[args.asset_type as ProductSummary["asset_type"]];
+    const label = type ? `${type} products` : "Products";
+    const followUp = nextPageFollowUp("product_catalogue", r, rows.length);
+    return {
+        kind: "list",
+        header: fit(label, RENDER_LIMITS.header),
+        body: fit(`${countLine(label, r.total, r.paging, rows.length)}\nTap one to choose it.`, RENDER_LIMITS.listBody),
+        button: "Choose product",
+        rows: rows.map(productRow),
+        ...(followUp ? { followUp } : {}),
+    };
+}
+
+/** The reply to a tapped product: what was chosen, and what the quote still needs. */
+export function renderProductPicked(p: ProductSummary | null): WaPayload {
+    if (!p) return { kind: "text", body: "That product is no longer in the CRM catalogue. Ask for the product list again." };
+    const model = p.model_id && p.model_id !== p.product_name ? ` (${p.model_id})` : "";
+    return {
+        kind: "text",
+        body: fit(
+            `✔ ${p.product_name}${model} chosen.\nKitni quantity, aur price per unit (₹, GST se pehle)? Lead ka naam bhi batayein agar abhi tak nahi bataya.`,
+            RENDER_LIMITS.text,
+        ),
     };
 }
 
@@ -413,6 +603,9 @@ function renderList(r: ListResult, text: string): WaPayload {
  *   leads (2+ rows) / candidates → a tappable list whose first body line is
  *     the true total (or the question)
  *   lead → the model's answer about it, or the lead card when it gave none
+ *   products → a list to tap (or the product types first, for the whole
+ *     catalogue) — never product names typed out by the model
+ * A page that isn't the last carries a "Next 10" follow-up message.
  * With no such result the model's text is the reply; with no text either, a
  * question / refusal / not-found result speaks for itself, and only when
  * nothing answered is it a per-cause SORRY.
@@ -436,19 +629,33 @@ export function renderTurn(turn: {
     const text = whatsappText(turn.text);
     const results = turn.results.map((r) => r.result);
     // The newest answering result wins: a lead opened after a search, a report after a list, and vice versa.
-    const answer = [...results]
+    const answerAt = [...turn.results]
         .reverse()
-        .find((r) => r.kind === "lead_report" || r.kind === "leads" || r.kind === "candidates" || r.kind === "lead");
+        .find(
+            ({ result: r }) =>
+                r.kind === "lead_report" || r.kind === "leads" || r.kind === "candidates" || r.kind === "lead" || r.kind === "products",
+        );
+    const answer = answerAt?.result;
+    const tool = answerAt?.tool ?? "";
     if (answer?.kind === "lead_report") {
-        return { kind: "text", body: renderLeadReports(results.filter((r): r is LeadReport => r.kind === "lead_report"), text) };
+        return renderLeadReports(results.filter((r): r is LeadReport => r.kind === "lead_report"), text);
+    }
+    if (answer?.kind === "products") {
+        // One clear match reads better as the model's answer about it (it asks
+        // for quantity and price); otherwise the rep picks from the list.
+        if (answer.rows.length === 1 && text && (answer.paging?.page ?? 1) === 1) {
+            return { kind: "text", body: fit(text, RENDER_LIMITS.text) };
+        }
+        return renderProducts(answer);
     }
     if (answer?.kind === "lead") {
         return { kind: "text", body: text ? fit(text, RENDER_LIMITS.text) : renderLeadCard(answer.lead as Detail) };
     }
-    if (answer?.kind === "candidates" && answer.rows.length > 0) return renderList(answer, text);
+    if (answer?.kind === "candidates" && answer.rows.length > 0) return renderList(answer, text, tool);
     if (answer?.kind === "leads") {
+        if (pastTheEnd(answer.paging, answer.rows.length)) return { kind: "text", body: "No more leads — that was the whole list." };
         // One row reads better as the model's answer about it; without one, it is still a list.
-        if (answer.rows.length >= 2 || (!text && answer.rows.length === 1)) return renderList(answer, text);
+        if (answer.rows.length >= 2 || (!text && answer.rows.length === 1)) return renderList(answer, text, tool);
         if (!text) {
             const more = answer.total > 0 && answer.crm_url ? `\n${answer.crm_url}` : "";
             return { kind: "text", body: fit(`${answer.title}: ${answer.total}${more}`, RENDER_LIMITS.text) };

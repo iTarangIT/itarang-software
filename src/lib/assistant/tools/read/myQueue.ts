@@ -12,7 +12,7 @@ import { readQueueFilters } from "@/lib/leads/queueFilters";
 import { readQueueSort } from "@/lib/leads/queueSort";
 import { readAsmQueueFilters } from "@/lib/asm/queueFilterParams";
 import { teamForOwnScopedViewer } from "@/lib/users/team";
-import { MAX_TOOL_ROWS, type AssistantUser, type ToolResult } from "../../types";
+import { MAX_TOOL_ROWS, PAGE_MAX, pageOffset, pagingArgs, type AssistantUser, type ToolResult } from "../../types";
 import { defineTool, type ToolFactory } from "../spec";
 import { queueUrl, toLeadSummary } from "../leads";
 import { ASM_OWN_TABS, ISR_OWN_TABS } from "../../scope";
@@ -34,13 +34,29 @@ const screenParams = (interest?: string | null) =>
  */
 export const SCREEN_PAGE_SIZE = 25;
 
+/**
+ * Rows offset … offset+MAX_TOOL_ROWS-1 read off the screen's own pages of 25
+ * (one or two of them) — page 3 of the Assistant is rows 21–30, which spans
+ * screen pages 1 and 2. Never a query at another size (see above). Pure
+ * over `fetchPage`.
+ */
+export async function sliceScreenPages<T>(offset: number, fetchPage: (page: number) => Promise<T[]>): Promise<T[]> {
+    const first = Math.floor(offset / SCREEN_PAGE_SIZE) + 1;
+    const last = Math.floor((offset + MAX_TOOL_ROWS - 1) / SCREEN_PAGE_SIZE) + 1;
+    const pages = await Promise.all(Array.from({ length: last - first + 1 }, (_, i) => fetchPage(first + i)));
+    const start = offset - (first - 1) * SCREEN_PAGE_SIZE;
+    return pages.flat().slice(start, start + MAX_TOOL_ROWS);
+}
+
 /** Exported so the Gate 3 equality check calls the builders the same way. */
 export async function queueRowsForTool(
     user: AssistantUser,
     tab: string,
     search?: string | null,
     interest?: string | null,
+    page?: number | null,
 ) {
+    const offset = pageOffset(page);
     const q = search?.trim() || null;
     const params = screenParams(interest);
     // ID 155: a manager's own tabs cover the team, exactly as the queue routes
@@ -50,19 +66,19 @@ export async function queueRowsForTool(
         const { filters, sort, visitStatus, visitOutcome } = readAsmQueueFilters(params);
         const args = { tab: tab as AsmQueueTab, asmId: user.id, q, filters, visitStatus, visitOutcome, teamMemberIds };
         const [rows, total] = await Promise.all([
-            fetchAsmQueueRows({ ...args, page: 1, limit: SCREEN_PAGE_SIZE, sort }),
+            sliceScreenPages(offset, (p) => fetchAsmQueueRows({ ...args, page: p, limit: SCREEN_PAGE_SIZE, sort })),
             countAsmQueueRows(args),
         ]);
-        return { rows: rows.slice(0, MAX_TOOL_ROWS), total };
+        return { rows, total };
     }
     const filters = readQueueFilters(params);
     const sort = readQueueSort(params);
     const args = { tab: tab as QueueTab, userId: user.id, q, filters, neodoveOnly: false, callbackOnly: false, teamMemberIds };
     const [rows, total] = await Promise.all([
-        fetchQueueRows({ ...args, page: 1, limit: SCREEN_PAGE_SIZE, sort }),
+        sliceScreenPages(offset, (p) => fetchQueueRows({ ...args, page: p, limit: SCREEN_PAGE_SIZE, sort })),
         countQueueRows(args),
     ]);
-    return { rows: rows.slice(0, MAX_TOOL_ROWS), total };
+    return { rows, total };
 }
 
 export const myQueue: ToolFactory = (role) => {
@@ -74,7 +90,8 @@ export const myQueue: ToolFactory = (role) => {
         name: "my_queue",
         kind: "read",
         description:
-            "List leads in one of the user's own CRM queue tabs, exactly as the screen shows them (first 10, plus the total). " +
+            "List leads in one of the user's own CRM queue tabs, exactly as the screen shows them (10 per page, plus the total; " +
+            "page 2 = rows 11–20, for \"next / more / aur dikhao\"). " +
             `Tabs: ${tabs.map((t) => `${t} = "${labels[t]}"`).join("; ")}.`,
         schema: z.object({
             tab: z.enum(tabs as unknown as [string, ...string[]]),
@@ -83,9 +100,10 @@ export const myQueue: ToolFactory = (role) => {
                 .enum(["hot", "warm", "cold"])
                 .optional()
                 .describe("Optional: only this temperature within the tab (the screen's Interest filter)"),
+            page: z.number().int().min(1).max(PAGE_MAX).optional().describe("Page of 10, default 1"),
         }),
         run: async (ctx, input): Promise<ToolResult> => {
-            const { rows, total } = await queueRowsForTool(ctx.user, input.tab, input.search, input.interest);
+            const { rows, total } = await queueRowsForTool(ctx.user, input.tab, input.search, input.interest, input.page);
             return {
                 kind: "leads",
                 title:
@@ -95,6 +113,7 @@ export const myQueue: ToolFactory = (role) => {
                 rows: rows.map((r) => toLeadSummary(r, ctx.user)),
                 total,
                 crm_url: queueUrl(ctx.user),
+                paging: { page: input.page ?? 1, page_size: MAX_TOOL_ROWS, args: pagingArgs(input) },
             };
         },
     });

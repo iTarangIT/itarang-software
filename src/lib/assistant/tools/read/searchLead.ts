@@ -8,7 +8,7 @@ import { z } from "zod";
 import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { leadSearchClause } from "@/lib/leads/queueFilterSql";
-import { MAX_TOOL_ROWS, type ToolResult } from "../../types";
+import { MAX_TOOL_ROWS, PAGE_MAX, pageOffset, pagingArgs, type ToolResult } from "../../types";
 import { ownScopePredicate, scopeJoin, scopeTeam } from "../../scope";
 import { defineTool, type ToolFactory } from "../spec";
 import { queueUrl, toLeadSummary } from "../leads";
@@ -52,10 +52,11 @@ export const searchLead: ToolFactory = () =>
         name: "search_lead",
         kind: "read",
         description:
-            "Find the user's OWN leads (their own queue tabs, not the unowned pool) by dealer name, shop name or phone number (max 10). " +
+            "Find the user's OWN leads (their own queue tabs, not the unowned pool) by dealer name, shop name or phone number (10 per page; page 2 = the next 10). " +
             "If more than one lead matches, show the candidates and ask which one — never pick one yourself.",
         schema: z.object({
             query: z.string().trim().min(2).max(60).describe("Name, shop or phone digits, as the user wrote them"),
+            page: z.number().int().min(1).max(PAGE_MAX).optional().describe("Page of 10, default 1"),
         }),
         run: async (ctx, input): Promise<ToolResult> => {
             const q = normalizeSearch(input.query);
@@ -92,7 +93,7 @@ export const searchLead: ToolFactory = () =>
                   LEFT JOIN users owner ON owner.id::text = dl.current_owner_id
                  WHERE ${ownScopePredicate(ctx.user, team)} ${assistantSearchClause(q)}
                  ORDER BY COALESCE(dl.last_touchpoint_at, dl.assigned_at, dl.created_at) DESC NULLS LAST
-                 LIMIT ${MAX_TOOL_ROWS}
+                 LIMIT ${MAX_TOOL_ROWS} OFFSET ${pageOffset(input.page)}
             `);
             const summaries = rows.map((r) =>
                 toLeadSummary(
@@ -103,13 +104,17 @@ export const searchLead: ToolFactory = () =>
                 ),
             );
             const total = rows[0]?.total ?? 0;
+            const paging = { page: input.page ?? 1, page_size: MAX_TOOL_ROWS, args: pagingArgs(input) };
             if (summaries.length > 1) {
                 return {
                     kind: "candidates",
                     question: `${total} leads match "${input.query}". Which one do you mean?`,
                     rows: summaries,
+                    total,
+                    crm_url: queueUrl(ctx.user),
+                    paging,
                 };
             }
-            return { kind: "leads", title: `Search: "${input.query}"`, rows: summaries, total, crm_url: queueUrl(ctx.user) };
+            return { kind: "leads", title: `Search: "${input.query}"`, rows: summaries, total, crm_url: queueUrl(ctx.user), paging };
         },
     });

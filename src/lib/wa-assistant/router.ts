@@ -14,6 +14,11 @@
 //                        ast:c:<id>    → the action executor (the only write path)
 //                        ast:x:<id>    → cancel
 //                        ast:lead:<id> → that lead's card via get_lead_details
+//                        ast:more:<token> → the next page of a list (the same
+//                                      tool re-run, its schema + scope again)
+//                        ast:ptype:<type> → the catalogue's products of that type
+//                        ast:prod:<type>:<id> → that product chosen: noted in
+//                                      memory for the quote; writes nothing
 //                        anything else → logged and ignored.
 //   5. Voice note      → downloaded and transcribed (no lease, no agent yet),
 //                        the rep is shown what was heard, and the transcript
@@ -45,10 +50,12 @@ import type { InboundMessage } from "./parse";
 import type { Handling } from "./messages";
 import type { LinkOutcome } from "./link";
 import type { SenderResolution } from "./identity";
-import type { AssistantUser } from "@/lib/assistant/types";
+import type { AssistantUser, ProductSummary } from "@/lib/assistant/types";
 import { parseLinkCommand } from "./link";
 import { REPLY, heardReply, linkedReply, linkLockedReply } from "./replies";
-import type { WaPayload } from "./render";
+import { renderProductPicked, type WaPayload } from "./render";
+
+type ProductType = ProductSummary["asset_type"];
 import type { TranscribeOutcome } from "./voice/transcribe";
 
 /** What running one text turn produced — the channel only needs the reply. */
@@ -71,6 +78,12 @@ export type RouterDeps = {
     sendPayload: (waPhone: string, payload: WaPayload, userId: string | null) => Promise<void>;
     /** A tapped list row (ast:lead:<id>): the lead card, scope-checked, no model. */
     openLead: (user: AssistantUser, leadId: string, messageRowId: string) => Promise<WaPayload>;
+    /** "Next 10" (ast:more:<token>): the next page, or null when the token is not one of ours. */
+    pageList: (user: AssistantUser, token: string, messageRowId: string) => Promise<{ payload: WaPayload; title: string } | null>;
+    /** A product type button (ast:ptype:<type>): that type's catalogue list. */
+    listProductType: (user: AssistantUser, assetType: ProductType, messageRowId: string) => Promise<WaPayload>;
+    /** A tapped product (ast:prod:<type>:<id>): re-read from the catalogue; null when no longer active. */
+    pickProduct: (user: AssistantUser, assetType: ProductType, productId: string) => Promise<ProductSummary | null>;
     /** Confirm tap (ast:c:<id>) → the executor. The ONLY way anything is written. */
     confirmAction: (user: AssistantUser, actionId: string, messageRowId: string) => Promise<WaPayload>;
     /**
@@ -123,7 +136,9 @@ export const ALBUM_QUIET_MS = 4000;
 
 const ATTACHMENT_TYPES = new Set(["image", "document", "location"]);
 
-const TAP_RE = /^ast:(c|x|e|lead|inv):(.+)$/;
+const TAP_RE = /^ast:(c|x|e|lead|inv|more|ptype|prod):(.+)$/;
+const PRODUCT_TYPE_RE = /^(battery|charger|paraphernalia)$/;
+const PRODUCT_TAP_RE = /^(battery|charger|paraphernalia):([^:]{1,64})$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
@@ -161,6 +176,22 @@ export function tapNote(tap: "c" | "x" | "e" | "lead", rawId: string, payload: W
     }
     const what = tap === "c" ? "Confirm" : tap === "x" ? "Cancel" : "Edit";
     return { human: `[tapped ${what} on card ${id}]`, ai: shown };
+}
+
+/** The memory note for a "Next" tap — the model learns which page the rep is on. Pure. */
+export function pageNote(title: string, payload: WaPayload): { human: string; ai: string } {
+    return { human: `[tapped Next on "${title.slice(0, 60)}"]`, ai: oneLine(payload.body) };
+}
+
+/**
+ * The memory note for a tapped product: its exact product_id, so the model's
+ * next turn passes THAT to create_quote instead of searching by name. Pure.
+ */
+export function productNote(p: ProductSummary | null, payload: WaPayload): { human: string; ai: string } {
+    const human = p
+        ? `[picked product "${p.product_name}" product_id=${p.product_id} asset_type=${p.asset_type} model=${p.model_id}]`
+        : "[picked a product that is no longer in the catalogue]";
+    return { human: human.slice(0, NOTE_MAX), ai: oneLine(payload.body) };
 }
 
 /** Mask a phone for logs: +9198•••••210. */
@@ -218,13 +249,14 @@ export async function routeMessage(msg: InboundMessage, rowId: string, deps: Rou
         if (msg.type === "interactive") {
             const tap = TAP_RE.exec(msg.replyId ?? "");
             // After the reply is out: the tap goes into memory (best effort).
-            const note = async (kind: "c" | "x" | "e" | "lead", id: string, payload: WaPayload) => {
+            const remember = async (n: { human: string; ai: string }) => {
                 try {
-                    await deps.noteTap?.(user, tapNote(kind, id, payload));
+                    await deps.noteTap?.(user, n);
                 } catch (err) {
                     deps.log("warn", "[wa-assist] tap note failed", { ...meta, userId, error: err instanceof Error ? err.message : String(err) });
                 }
             };
+            const note = (kind: "c" | "x" | "e" | "lead", id: string, payload: WaPayload) => remember(tapNote(kind, id, payload));
             if (tap?.[1] === "c" || tap?.[1] === "x") {
                 const actionId = UUID_RE.test(tap[2]) ? tap[2] : null;
                 const payload =
@@ -255,6 +287,31 @@ export async function routeMessage(msg: InboundMessage, rowId: string, deps: Rou
                 await deps.markHandled(rowId, "tap_lead", { userId });
                 await deps.sendPayload(msg.waPhone, payload, userId);
                 await note("lead", tap[2], payload);
+                return;
+            }
+            if (tap?.[1] === "more") {
+                const page = await deps.pageList(user, tap[2], rowId);
+                if (page) {
+                    await deps.markHandled(rowId, "tap_more", { userId });
+                    await deps.sendPayload(msg.waPhone, page.payload, userId);
+                    await remember(pageNote(page.title, page.payload));
+                    return;
+                }
+            }
+            if (tap?.[1] === "ptype" && PRODUCT_TYPE_RE.test(tap[2])) {
+                const payload = await deps.listProductType(user, tap[2] as ProductType, rowId);
+                await deps.markHandled(rowId, "tap_product_type", { userId });
+                await deps.sendPayload(msg.waPhone, payload, userId);
+                await remember({ human: `[tapped product type ${tap[2]}]`, ai: payload.body.split("\n")[0] ?? "" });
+                return;
+            }
+            const prod = tap?.[1] === "prod" ? PRODUCT_TAP_RE.exec(tap[2]) : null;
+            if (prod) {
+                const product = await deps.pickProduct(user, prod[1] as ProductType, prod[2]);
+                const payload = renderProductPicked(product);
+                await deps.markHandled(rowId, "tap_product", { userId });
+                await deps.sendPayload(msg.waPhone, payload, userId);
+                await remember(productNote(product, payload));
                 return;
             }
             await deps.markHandled(rowId, "tap_ignored", { userId });
