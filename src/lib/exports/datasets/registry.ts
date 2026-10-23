@@ -22,6 +22,7 @@ import { businessTypeLabel } from "@/lib/leads/businessType";
 import { countEvents, fetchEvents, type EventLogFilters } from "@/lib/leads/eventLog";
 import { LEAD_EVENT_TYPES, parseEventTypes } from "@/lib/leads/eventTypes";
 import { parseLeadListFilters } from "@/lib/leads/leadListParams";
+import { ownerScopeSql } from "@/lib/users/teamSql";
 import { hasLeadClocks } from "@/lib/leads/clocks";
 import { loadOfficeCalendar, workingDaysBetweenSql } from "@/lib/calendar/holidays";
 import { workingHoursBetween } from "@/lib/leads/workingHours";
@@ -60,6 +61,12 @@ export interface RunContext {
     user: SessionUser;
     /** True when this role only ever gets the rows it owns. */
     ownOnly: boolean;
+    /**
+     * ID 155 (22 Oct): with ownOnly, the caller's direct reports today (empty
+     * = not a manager) — a manager's own-rows download also carries his team,
+     * as the Leads list and the Performance page do. Set by the route.
+     */
+    teamIds?: string[];
     /** Row ceiling for this run; absent = DOWNLOAD_ROW_CAP. A background file raises it. */
     maxRows?: number;
 }
@@ -90,6 +97,9 @@ const jarr = (e: SQL): SQL => sql`(CASE WHEN jsonb_typeof(${e}) = 'array' THEN $
 
 /** One row past the ceiling, so the route can tell "exactly the cap" from "more". */
 const rowLimit = (ctx: RunContext): SQL => sql`${(ctx.maxRows ?? DOWNLOAD_ROW_CAP) + 1}`;
+
+/** ID 155: the own-rows clause — `col = me`, or `col IN (me, …team)` for a manager. */
+const ownRows = (ctx: RunContext, col: SQL): SQL => ownerScopeSql(col, ctx.user.id, ctx.teamIds);
 
 /** The person the shared `person` filter asks for; a rep role is never given someone else's rows. */
 const personParam = (ctx: RunContext): string | null => (ctx.ownOnly ? null : ctx.params.get("person") || null);
@@ -437,10 +447,10 @@ const leads: Dataset = {
         },
     ],
     async count(ctx) {
-        return countLeadsForExport(await parseLeadListFilters(leadParams(ctx), capabilitiesFor(ctx.user.role), ctx.user));
+        return countLeadsForExport(await parseLeadListFilters(leadParams(ctx), capabilitiesFor(ctx.user.role), { ...ctx.user, teamMemberIds: ctx.teamIds }));
     },
     async build(ctx) {
-        const filters = await parseLeadListFilters(leadParams(ctx), capabilitiesFor(ctx.user.role), ctx.user);
+        const filters = await parseLeadListFilters(leadParams(ctx), capabilitiesFor(ctx.user.role), { ...ctx.user, teamMemberIds: ctx.teamIds });
         const leadRows = await fetchLeadsForExport(filters, ctx.maxRows);
         const ids = leadRows.map((r) => r.lead_id);
         if (ids.length === 0) return this.sheets.map((s) => ({ ...s, rows: [] }));
@@ -992,7 +1002,7 @@ const CALL_CONNECTED = sql`(CASE WHEN t.touchpoint_type = 'ai_call' THEN t.conne
 function callsWhere(ctx: RunContext): SQL {
     const t = sql`t`;
     const conds: SQL[] = [sql`((${humanCall(t)}) OR ${AI_CALL})`, dateRange(ctx.params, sql`t.performed_at`)];
-    if (ctx.ownOnly) conds.push(sql`t.performed_by = ${ctx.user.id}`);
+    if (ctx.ownOnly) conds.push(ownRows(ctx, sql`t.performed_by`));
     const channel = ctx.params.get("channel");
     if (channel === "neodove") conds.push(sql`NOT ${AI_CALL} AND t.external_system = 'neodove'`);
     if (channel === "rep") conds.push(sql`NOT ${AI_CALL} AND t.external_system IS DISTINCT FROM 'neodove'`);
@@ -1088,7 +1098,7 @@ const calls: Dataset = {
 function visitsWhere(ctx: RunContext): SQL {
     const day = ctx.params.get("date_field") === "planned" ? sql`v.scheduled_date` : sql`COALESCE(v.actual_visit_date, v.scheduled_date)`;
     const conds: SQL[] = [dayRange(ctx.params, day)];
-    if (ctx.ownOnly) conds.push(sql`v.asm_id = ${ctx.user.id}`);
+    if (ctx.ownOnly) conds.push(ownRows(ctx, sql`v.asm_id`));
     const status = ctx.params.get("status");
     if (status) conds.push(sql`lower(v.visit_status) = ${status.toLowerCase()}`);
     const outcome = ctx.params.get("outcome");
@@ -1265,7 +1275,7 @@ const QUOTE_DATES: Record<string, SQL> = {
 function quotesWhere(ctx: RunContext): SQL {
     const expr = QUOTE_DATES[ctx.params.get("date_field") ?? "created"] ?? QUOTE_DATES.created;
     const conds: SQL[] = [sql`c.event_type IN ('quote_issue', 'quote_revision')`, dateRange(ctx.params, expr)];
-    if (ctx.ownOnly) conds.push(sql`c.created_by = ${ctx.user.id}`);
+    if (ctx.ownOnly) conds.push(ownRows(ctx, sql`c.created_by`));
     const approval = ctx.params.get("approval");
     if (approval) conds.push(sql`c.approval_status = ${approval}`);
     const answer = ctx.params.get("dealer_answer");
@@ -1534,7 +1544,7 @@ const targets: Dataset = {
                -- The rows listTargets() returns: built-in metrics and named custom ones.
                AND (t.metric IN (${sql.join(TARGET_METRIC_KEYS.map((m) => sql`${m}`), sql`, `)})
                     OR (left(t.metric, 7) = 'custom_' AND (to_jsonb(t) ->> 'custom_label') IS NOT NULL))
-               ${ctx.ownOnly ? sql`AND t.user_id = ${ctx.user.id}` : sql``}
+               ${ctx.ownOnly ? sql`AND ${ownRows(ctx, sql`t.user_id`)}` : sql``}
                -- ID 189: the CEO's unposted drafts are his alone; the rep's own
                -- download only what was pushed to them; never a removed row.
                AND ${targetVisibleSql(ctx.ownOnly ? "member" : targetViewerFor(ctx.user.role))}
@@ -1547,14 +1557,16 @@ const targets: Dataset = {
         const month = await targetMonth(ctx.params);
         const status = ctx.params.get("status");
         const role = teamRole(ctx);
+        // ID 155: a manager's own-rows download lists his team's targets too.
+        const team = ctx.ownOnly && ctx.teamIds?.length ? new Set([ctx.user.id, ...ctx.teamIds]) : null;
         const list = (
             await listTargets({
                 month,
-                userId: ctx.ownOnly ? ctx.user.id : (personParam(ctx) ?? undefined),
+                userId: ctx.ownOnly ? (team ? undefined : ctx.user.id) : (personParam(ctx) ?? undefined),
                 viewer: ctx.ownOnly ? "member" : targetViewerFor(ctx.user.role),
             })
         ).filter(
-            (t) => !role || t.user_role === role,
+            (t) => (!role || t.user_role === role) && (!team || team.has(t.user_id)),
         );
         return [
             {
