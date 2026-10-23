@@ -1,6 +1,6 @@
 import { db } from '@/lib/db';
 import { inventory, products } from '@/lib/db/schema';
-import { eq, and, desc } from 'drizzle-orm';
+import { eq, and, desc, type SQL } from 'drizzle-orm';
 import { requireAuth } from '@/lib/auth-utils';
 import { errorResponse, successResponse, withErrorHandler } from '@/lib/api-utils';
 import { inventoryListScope } from '@/lib/inventory/stockUploadRules';
@@ -15,7 +15,7 @@ export const GET = withErrorHandler(async (req: Request) => {
     if (scope === 'none') return errorResponse('Forbidden: you cannot view the stock list', 403);
 
     const { searchParams } = new URL(req.url);
-    const filters: any[] = [];
+    const filters: SQL[] = [];
 
     if (scope === 'own') {
         const own = await ownDealerCodeOf(user);

@@ -25,7 +25,8 @@ export const dynamic = "force-dynamic";
 
 const READ_ROLES = ["admin", "ceo", "sales_head", "sales_manager", "business_head", "partner"];
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
-const MAX_ROWS = 200;
+// HANDOVER-A6: the card's "See all" list (and its CSV) is built from these rows.
+const MAX_ROWS = 2000;
 
 export type OutsideClaimRow = {
     lead_id: string;
