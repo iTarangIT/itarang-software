@@ -2,13 +2,26 @@ import { db } from '@/lib/db';
 import { inventory, products } from '@/lib/db/schema';
 import { eq, and, desc } from 'drizzle-orm';
 import { requireAuth } from '@/lib/auth-utils';
-import { successResponse, withErrorHandler } from '@/lib/api-utils';
+import { errorResponse, successResponse, withErrorHandler } from '@/lib/api-utils';
+import { inventoryListScope } from '@/lib/inventory/stockUploadRules';
+import { ownDealerCodeOf } from '@/lib/inventory/stockUploadGuard';
 
 export const GET = withErrorHandler(async (req: Request) => {
-    await requireAuth();
+    const user = await requireAuth();
+
+    // ID 173: every dealer's stock and cost price — back office (and CEO) see
+    // all, a dealer only its own account, anyone else is refused.
+    const scope = inventoryListScope(user.role);
+    if (scope === 'none') return errorResponse('Forbidden: you cannot view the stock list', 403);
 
     const { searchParams } = new URL(req.url);
     const filters: any[] = [];
+
+    if (scope === 'own') {
+        const own = await ownDealerCodeOf(user);
+        if (!own) return errorResponse('Forbidden: no dealer account on this login', 403);
+        filters.push(eq(inventory.dealer_id, own));
+    }
 
     const assetCategory = searchParams.get('asset_category');
     if (assetCategory) {

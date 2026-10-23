@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { decideStockTransfer, decideStockUpload, stockUploadMode } from "@/lib/inventory/stockUploadRules";
+import { decideStockTransfer, decideStockUpload, inventoryListScope, stockUploadMode } from "@/lib/inventory/stockUploadRules";
 
 describe("decideStockUpload (ID 173)", () => {
     it("lets Admin, Inventory Manager and partner upload to any dealer", () => {
@@ -100,5 +100,15 @@ describe("decideStockTransfer (ID 173)", () => {
             expect(d.ok).toBe(false);
             if (!d.ok) expect(d.status).toBe(403);
         }
+    });
+});
+
+describe("inventoryListScope (ID 173, the plain stock list)", () => {
+    it("back office and the CEO see every dealer", () => {
+        for (const r of ["admin", "ceo", "ops_manager", "inventory_manager", "sales_head", "partner"]) expect(inventoryListScope(r), r).toBe("any");
+    });
+    it("a dealer sees its own stock only", () => expect(inventoryListScope("dealer")).toBe("own"));
+    it("everyone else is refused", () => {
+        for (const r of ["inside_sales_rep", "asm", "sales_manager", "nbfc_partner", "", null]) expect(inventoryListScope(r), String(r)).toBe("none");
     });
 });

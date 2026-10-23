@@ -1989,6 +1989,9 @@ const inventoryDataset: Dataset = {
                 { key: "received_date", header: "Received on", meaning: "When it reached iTarang.", kind: "datetime" },
                 { key: "sold_at", header: "Sold on", meaning: "When it was sold.", kind: "datetime" },
                 { key: "days_in_stock", header: "Days in stock", meaning: "Days from receipt (else OEM invoice, else upload) to the sale, or to today when unsold.", kind: "number" },
+                // ID 173: same as the Admin › Inventory download.
+                { key: "uploaded_by", header: "Uploaded by", meaning: "The login that added the item (name, else email).", width: 24 },
+                { key: "upload_batch", header: "Upload batch", meaning: "The stock upload the item came in; blank for items added one by one or before batches were recorded.", width: 26 },
             ],
         },
     ],
@@ -2003,9 +2006,11 @@ const inventoryDataset: Dataset = {
                    COALESCE(i.price_inclusive_gst, i.final_amount) AS with_gst,
                    i.status, i.warehouse_location, a.business_entity_name AS dealer, i.received_date, i.sold_at,
                    ((COALESCE(i.sold_at, now()) AT TIME ZONE 'Asia/Kolkata')::date
-                    - (COALESCE(i.received_date, i.oem_invoice_date, i.created_at) AT TIME ZONE 'Asia/Kolkata')::date) AS days_in_stock
+                    - (COALESCE(i.received_date, i.oem_invoice_date, i.created_at) AT TIME ZONE 'Asia/Kolkata')::date) AS days_in_stock,
+                   COALESCE(u.name, u.email) AS uploaded_by, i.upload_event_id AS upload_batch
               FROM inventory i
               LEFT JOIN accounts a ON a.id = i.dealer_id
+              LEFT JOIN users u ON u.id = i.created_by
              WHERE ${inventoryWhere(ctx)}
              ORDER BY i.oem_invoice_date DESC NULLS LAST, i.id
              LIMIT ${rowLimit(ctx)}
