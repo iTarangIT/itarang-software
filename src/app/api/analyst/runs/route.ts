@@ -6,7 +6,7 @@ import { ownsThread, requireAnalystUser } from "@/lib/analyst/access";
 import { agentFetch, agentJson } from "@/lib/analyst/client";
 import { errorResponse, normalizeAgentError } from "@/lib/analyst/errors";
 import { ANALYST_QUESTION_MAX, stripMetricRules, withMetricRules } from "@/lib/analyst/metricRules";
-import { canAskSource } from "@/lib/analyst/sources-routes";
+import { canAskSource, CRM_SOURCE_NAME, crmDsnIsMasked } from "@/lib/analyst/sources-routes";
 import type { Connection, RunPage } from "@/lib/analyst/types";
 
 export const dynamic = "force-dynamic";
@@ -91,6 +91,17 @@ export async function POST(request: Request) {
           error: source
             ? "outside databases are switched off — ask the iTarang database or an uploaded file"
             : "that data source was not found — pick the iTarang database or an uploaded file",
+          code: "forbidden",
+        },
+        { status: 403 },
+      );
+    }
+    // ID 167 (23 Oct): the saved iTarang source is only asked while this server's DSN is the
+    // masked login — until then its answers would carry raw names and notes.
+    if (source?.name === CRM_SOURCE_NAME && !crmDsnIsMasked(process.env.ANALYST_CRM_READONLY_DSN)) {
+      return Response.json(
+        {
+          error: "the iTarang database is switched off on this server until personal data is masked — ask an uploaded file",
           code: "forbidden",
         },
         { status: 403 },

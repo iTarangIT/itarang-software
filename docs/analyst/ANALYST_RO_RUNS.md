@@ -47,8 +47,16 @@ To apply it:
 | 2026-10-16 | db-1 (sandbox) | real run, password unchanged | SELECT on 68 tables (38 in full, 69 with some readable column). `users` blocked, withheld columns blocked, `ecofy_leads` base table blocked, `leads.owner_name` blocked. `analyst_ecofy_leads` granted, sample "Customer #0560baad". |
 | 2026-10-16 | db-2 (prod) | `DRY_RUN=1` | **Role does NOT exist on prod.** 0 tables readable. The Analyst's "iTarang database" on prod therefore cannot be using a prod read-only login. See below. |
 | 2026-10-17 | db-1 (sandbox) | real run, password unchanged | SELECT on 69 tables (40 in full, 72 with some readable column). New masked views `analyst_loan_files` (no rows yet) and `analyst_loan_applications` (sample "Customer #LEAD1773") granted; base loan tables not granted. `users`, `ecofy_leads`, `leads.owner_name` still blocked. |
+| 2026-10-23 | db-1 (sandbox) | `DRY_RUN=1` (18 Oct script) | Role exists, 36 tables readable in full. Would create and grant all six masked views. |
+| 2026-10-23 | db-1 (sandbox) | real run, password unchanged (18 Oct script, first run anywhere) | SELECT on 73 tables (36 in full, 79 with some readable column). **`all_rules_hold: true`**, exit 0: 32 sampled withheld columns blocked, 15 sampled kept columns readable, `users` / raw `leads` / `ecofy_leads` blocked, no view carries a lead id. Samples: `analyst_leads` "Customer #2D5F9332", `analyst_ecofy_leads` "Customer #5f93763b", `analyst_staff` "ceo". Probed through the real DSN as `analyst_ro`: `dealer_leads.dealer_name` / `.memory`, `leads.*`, `ai_call_logs.summary`, `device_battery_map.vehicle_number`, `users` all refused (42501); `analyst_leads` and `dealer_leads.city` readable. **Refresh tables in the Analyst: still to press.** |
+| 2026-10-23 | Analyst agent | `_delete-analyst-outside-connections.ts` dry run | **Could not run.** The agent's sign-in project `okifeathrijchctwrdpu.supabase.co` (ANALYST_SUPABASE_URL) no longer exists in DNS (NXDOMAIN) and the Render agent did not answer within 90s. The saved outside sources stay hidden and refused, not deleted. This needs the agent's owner to restore or replace the Supabase project first. |
 
 ## Prod: to do (needs a password, so not run by Claude)
+
+**Since 23 Oct the CRM fails closed:** a server whose `ANALYST_CRM_READONLY_DSN` login is not
+`analyst_ro` (or that has no DSN at all) refuses to connect the iTarang database, refuses questions
+on a saved iTarang source (403), and the tab says personal data is not masked yet. Uploads still
+work. On prod that stays the case until steps 1 to 3 below are done.
 
 1. Choose a strong password (at least 16 characters) and keep it in the password manager.
 2. Run against prod:
@@ -62,4 +70,8 @@ To apply it:
 4. In the Analyst (CEO login), remove the old iTarang database source and connect it again.
 5. Business check: ask "show me a dealer's notes" and "a customer's vehicle number".
    The Analyst must say it cannot read them.
-6. Add a row to the table above.
+6. Data sources › iTarang database › **Refresh tables**, then pick the tables again.
+7. Clean-up of saved outside sources (once the agent's sign-in works again, see the 23 Oct row):
+   `node --import tsx --env-file=.env.production scripts/_delete-analyst-outside-connections.ts`, then again with `--apply`.
+   The agent is one shared tenant, so this clears sandbox too.
+8. Add a row to the table above for each step.

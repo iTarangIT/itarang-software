@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { CRM_SOURCE_NAME, CreateConnectionBody, canAskSource, forwardQuery, isOutsideConnection, matchSourceRoute, uploadAllowed } from "../sources-routes";
+import { CRM_SOURCE_NAME, CreateConnectionBody, canAskSource, crmDsnIsMasked, forwardQuery, isOutsideConnection, matchSourceRoute, uploadAllowed } from "../sources-routes";
 
 const ID = "3f6c2a1e-0b7d-4f7e-9a51-2c4b1d9e8f00";
 
@@ -107,5 +107,20 @@ describe("canAskSource (ID 167, fails closed)", () => {
   });
   it("refuses a kind it does not know", () => {
     expect(canAskSource({ kind: "mysql", name: CRM_SOURCE_NAME })).toBe(false);
+  });
+});
+
+describe("crmDsnIsMasked", () => {
+  it("accepts only the masked analyst_ro login", () => {
+    expect(crmDsnIsMasked("postgresql://analyst_ro:pw@db.example.com:5432/postgres?sslmode=require")).toBe(true);
+    expect(crmDsnIsMasked(" postgres://analyst%5Fro:p%40ss@db.example.com/postgres ")).toBe(true);
+  });
+
+  it("refuses any other login, and a missing or malformed DSN", () => {
+    expect(crmDsnIsMasked("postgresql://postgres:pw@db.example.com:5432/postgres")).toBe(false);
+    expect(crmDsnIsMasked("postgresql://analyst_ro_old:pw@db.example.com/postgres")).toBe(false);
+    expect(crmDsnIsMasked("")).toBe(false);
+    expect(crmDsnIsMasked(undefined)).toBe(false);
+    expect(crmDsnIsMasked("not a url")).toBe(false);
   });
 });

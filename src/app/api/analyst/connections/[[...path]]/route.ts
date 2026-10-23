@@ -16,6 +16,7 @@ import { AnalystError, errorResponse, normalizeAgentError } from "@/lib/analyst/
 import {
   CreateConnectionBody,
   CRM_SOURCE_NAME,
+  crmDsnIsMasked,
   forwardQuery,
   isOutsideConnection,
   matchSourceRoute,
@@ -39,6 +40,15 @@ function agentBody(route: SourceRoute, data: unknown): unknown {
   if (!dsn) {
     throw new AnalystError(
       "the iTarang database is not set up for the analyst on this server (ANALYST_CRM_READONLY_DSN is missing)",
+      503,
+      "not_configured",
+    );
+  }
+  // ID 167 (23 Oct): only the masked login may be connected — any other would show Gemini raw
+  // names, phones and notes.
+  if (!crmDsnIsMasked(dsn)) {
+    throw new AnalystError(
+      "the iTarang database is not masked on this server yet (its login is not analyst_ro), so it cannot be connected",
       503,
       "not_configured",
     );
