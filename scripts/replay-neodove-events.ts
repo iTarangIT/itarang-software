@@ -16,6 +16,10 @@
 //        --since=2026-10-06 --to=https://crm.itarang.com/api/neodove/webhook
 //        (dry run: lists what would be sent, sends nothing)
 //   NEODOVE_TARGET_SECRET=<prod NEODOVE_WEBHOOK_SECRET> … --commit
+//   --skip-campaign="<exact campaign_name>"  (repeatable) leave out sandbox test campaigns
+//   --only="syn_a,syn_b"  resend just these event ids, e.g. the ones a run printed as failed.
+//   Prefer --only over a full re-run: an event whose payload has no time gets a fresh
+//   syn_ id each send, so a full re-run can load it twice.
 //
 // Sends one event at a time, 150 ms apart, in the order they first arrived.
 
@@ -28,6 +32,11 @@ const COMMIT = args.includes("--commit");
 const SINCE = opt("since") ?? "2026-10-06";
 const TO = opt("to");
 const LIMIT = opt("max") ? Number(opt("max")) : Infinity;
+// --skip-campaign="A" --skip-campaign="B": leave out campaigns that were sandbox test calls
+// (exact campaign_name, one flag each — names can contain commas)
+const SKIP = new Set(
+    args.filter((a) => a.startsWith("--skip-campaign=")).map((a) => a.slice("--skip-campaign=".length).trim()).filter(Boolean),
+);
 
 const rowsOf = <T>(r: unknown): T[] => (Array.isArray(r) ? r : ((r as { rows?: T[] })?.rows ?? [])) as T[];
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -41,16 +50,24 @@ async function main() {
     if (COMMIT && !secret) throw new Error("NEODOVE_TARGET_SECRET (the TARGET's NEODOVE_WEBHOOK_SECRET) is required with --commit");
     console.log(`${COMMIT ? "COMMIT" : "DRY RUN"} · from ${source} since ${SINCE} → ${TO}\n`);
 
-    const events = rowsOf<{ id: string; external_event_id: string | null; created_at: string; payload: Record<string, unknown> }>(
+    const all = rowsOf<{ id: string; external_event_id: string | null; created_at: string; payload: Record<string, unknown> }>(
         await db.execute(sql`
             SELECT e.id::text AS id, e.external_event_id, e.created_at::text AS created_at, e.request_payload AS payload
               FROM neodove_sync_events e
              WHERE e.direction = 'inbound' AND e.created_at >= ${SINCE}::date AND e.request_payload IS NOT NULL
              ORDER BY e.created_at, e.id`),
     );
+    const campaignOf = (e: { payload: Record<string, unknown> }) =>
+        String((e.payload as { campaign_name?: string }).campaign_name ?? "(none)");
+    // --only="syn_a,syn_b": resend just these event ids (e.g. the ones a previous run printed as failed)
+    const ONLY = new Set((opt("only") ?? "").split(",").map((s) => s.trim()).filter(Boolean));
+    const events = all.filter(
+        (e) => !SKIP.has(campaignOf(e)) && (!ONLY.size || ONLY.has(e.external_event_id ?? e.id)),
+    );
+    if (SKIP.size) console.log(`skipping ${all.length - events.length} event(s) in: ${[...SKIP].join(" | ")}\n`);
     const byCampaign = new Map<string, number>();
     for (const e of events) {
-        const c = String((e.payload as { campaign_name?: string }).campaign_name ?? "(none)");
+        const c = campaignOf(e);
         byCampaign.set(c, (byCampaign.get(c) ?? 0) + 1);
     }
     console.log(`${events.length} inbound event(s) on ${source} since ${SINCE}:`);
