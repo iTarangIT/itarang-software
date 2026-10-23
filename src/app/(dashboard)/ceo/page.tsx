@@ -565,7 +565,9 @@ export default function CEODashboard() {
     const split =
       [
         t && t.sum > 0
-          ? `Accepted ${fmt(Math.round(t.accepted))} · Not yet accepted ${fmt(Math.round(t.notAccepted))}`
+          ? `Accepted ${fmt(Math.round(t.accepted))} · Not yet accepted ${fmt(Math.round(t.notAccepted))}` +
+            // ID 189 (22 Oct): old-flow rejected targets shown apart, not inside "Not yet accepted".
+            (t.rejected > 0 ? ` · Rejected ${fmt(Math.round(t.rejected))}` : "")
           : null,
         stretch,
       ]
