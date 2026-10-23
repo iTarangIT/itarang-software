@@ -29,12 +29,14 @@ export function SourcesPanel({
   initialView,
   connections,
   canManage,
+  crmMasked,
   onClose,
   onChanged,
 }: {
   initialView: PanelView;
   connections: Connection[];
   canManage: boolean;
+  crmMasked: boolean;
   onClose: () => void;
   /** Re-read the connection list; returns the fresh list. */
   onChanged: () => Promise<Connection[] | void>;
@@ -93,6 +95,7 @@ export function SourcesPanel({
             <SourceListView connections={connections} canManage={canManage} setView={setView} onChanged={onChanged} />
           ) : view.view === "add" && canManage ? (
             <AddSource
+              crmMasked={crmMasked}
               onCreated={async (connection, next) => {
                 await onChanged();
                 setView(next === "tables" ? { view: "tables", connectionId: connection } : { view: "list" });
@@ -272,7 +275,13 @@ const ADD_TABS = [
   { value: "google", label: "Google Sheets / Drive" },
 ];
 
-function AddSource({ onCreated }: { onCreated: (connectionId: string, next: "tables" | "list") => Promise<void> }) {
+function AddSource({
+  crmMasked,
+  onCreated,
+}: {
+  crmMasked: boolean;
+  onCreated: (connectionId: string, next: "tables" | "list") => Promise<void>;
+}) {
   const [tab, setTab] = useState("crm");
   // A Google dataset is created before its link is checked; if the flow is abandoned the agent
   // keeps an empty dataset, so it is removed here on the way out.
@@ -287,7 +296,7 @@ function AddSource({ onCreated }: { onCreated: (connectionId: string, next: "tab
   return (
     <div className="flex flex-col gap-4">
       <Tabs tabs={ADD_TABS} value={tab} onValueChange={setTab} className="overflow-x-auto" />
-      {tab === "crm" ? <CrmDatabase onCreated={onCreated} /> : null}
+      {tab === "crm" ? <CrmDatabase masked={crmMasked} onCreated={onCreated} /> : null}
       {tab === "files" ? <FilesForm onCreated={onCreated} /> : null}
       {tab === "google" ? (
         <GoogleSourceFlow
@@ -302,23 +311,40 @@ function AddSource({ onCreated }: { onCreated: (connectionId: string, next: "tab
   );
 }
 
-function CrmDatabase({ onCreated }: { onCreated: (id: string, next: "tables") => Promise<void> }) {
+function CrmDatabase({
+  masked,
+  onCreated,
+}: {
+  masked: boolean;
+  onCreated: (id: string, next: "tables") => Promise<void>;
+}) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   return (
     <div className="flex flex-col gap-3 text-[0.8125rem] text-ink">
-      <p className="leading-relaxed">
-        Connect the CRM&rsquo;s own database — leads, dealers, AI calls, invoices, expenses and more — through a
-        read-only login. The analyst can never change data. Personal data is withheld: names, phone numbers,
-        addresses, vehicle numbers, KYC documents, notes, remarks and call summaries are not readable through it,
-        and Ecofy customers appear only as &ldquo;Customer #&hellip;&rdquo; with their city.
-      </p>
-      <p className="text-ink-muted">Next you choose which tables (up to 12) the analyst may use.</p>
+      {/* ID 167: the masking is only claimed when this server's login really is analyst_ro. */}
+      {masked ? (
+        <>
+          <p className="leading-relaxed">
+            Connect the CRM&rsquo;s own database — leads, dealers, AI calls, invoices, expenses and more — through a
+            read-only login. The analyst can never change data. Personal data is withheld: customers appear only as
+            &ldquo;Customer #&hellip;&rdquo; with their city and state, and names, phone numbers, addresses, vehicle
+            numbers, KYC documents, notes, reasons, call summaries and dealer or shop names and locations are not
+            readable through it. Per-person answers show staff ids and roles, not names.
+          </p>
+          <p className="text-ink-muted">Next you choose which tables (up to 12) the analyst may use.</p>
+        </>
+      ) : (
+        <p className="leading-relaxed text-danger">
+          Personal data is not masked on this server yet, so the iTarang database cannot be connected here. Uploaded
+          files still work.
+        </p>
+      )}
       {error ? <p className="text-danger">{error}</p> : null}
       <div>
         <button
           type="button"
-          disabled={busy}
+          disabled={busy || !masked}
           onClick={async () => {
             setBusy(true);
             setError(null);

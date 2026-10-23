@@ -62,6 +62,8 @@ export type AnalystWorkspaceProps = {
   problem: string | null;
   /** CEO / admin: may add, change and remove data sources. */
   canManage?: boolean;
+  /** ID 167: this server's iTarang database login is the masked analyst_ro. */
+  crmMasked?: boolean;
 };
 
 export function AnalystWorkspace({
@@ -73,6 +75,7 @@ export function AnalystWorkspace({
   unreachable,
   problem,
   canManage = false,
+  crmMasked = false,
 }: AnalystWorkspaceProps) {
   const { state, turns, ask, cancel } = useRun();
   const { viewportRef, contentRef, onSubmit: followSubmittedQuestion } = useTranscriptScroll();
@@ -288,6 +291,7 @@ export function AnalystWorkspace({
           initialView={panel}
           connections={connections}
           canManage={canManage}
+          crmMasked={crmMasked}
           onClose={() => setPanel(null)}
           onChanged={refreshConnections}
         />
