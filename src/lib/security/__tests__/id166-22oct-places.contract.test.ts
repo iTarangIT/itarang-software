@@ -70,6 +70,13 @@ describe("ID 166 — expense tracker for Finance and the CEO", () => {
         expect(code).not.toMatch(/bill_url: r\.bill_url \?\? ""/);
     });
 
+    it("the checked link a spreadsheet carries redirects relatively (never to the proxy's localhost origin)", () => {
+        const code = src("app/api/files/open/route.ts");
+        expect(code).not.toMatch(/nextUrl\.origin/);
+        expect(code).toMatch(/return redirectHere\("\/login"\)/);
+        expect(code).toMatch(/return redirectHere\(fresh \?\? target\.path\)/);
+    });
+
     it("the list still blanks bill links the viewer may not open (Sales Head: own only)", () => {
         expect(src("app/api/admin/ai-expenses/route.ts")).toMatch(/withAllowedBill\(/);
     });
