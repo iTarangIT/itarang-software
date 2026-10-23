@@ -67,6 +67,8 @@ const ALLOWED = [
   "lead_assignments", "lead_flow_events", "lead_products", "lead_visits", "lead_touchpoints",
   "lead_escalations", "dealer_leads", "dealer_lead_status_history", "deals", "dealers",
   "dealer_subscriptions", "sales_targets", "sales_target_versions", "manual_dealer_sales", "asm_territories", "region_groups",
+  // ID 155 — who reported to whom on a date (dated teams; its free-text reason stays withheld)
+  "user_reporting_lines",
   "states", "cities",
   // AI dialer & campaigns
   "campaigns", "campaign_segments", "dialer_campaigns", "dialer_campaign_leads", "ai_call_logs",
@@ -160,6 +162,8 @@ const KEPT = new Set([
   "campaign_segments.description", "region_groups.description",
   // ID 184 — why a lead became sales-ready: a fixed code (salesReady.ts SALES_READY_REASONS)
   "sales_ready_reason",
+  // ID 169 — why a lead was lost: a fixed code (transitions.ts LOST_REASON); lost_reason_notes stays withheld
+  "dealer_leads.lost_reason",
   // a warehouse is ours, not a customer's
   "inventory.warehouse_location",
 ]);
@@ -319,7 +323,8 @@ const viewSql = (v) => v.sql(viewCols.get(v.base) ?? []);
 // readable for the metric rules. Pairs not in this database are skipped.
 const SAMPLE_WITHHELD = [
   ["dealer_leads", "dealer_name"], ["dealer_leads", "shop_name"], ["dealer_leads", "location"], ["dealer_leads", "area"],
-  ["dealer_leads", "memory"], ["dealer_leads", "follow_up_history"], ["dealer_leads", "lost_reason"],
+  ["dealer_leads", "memory"], ["dealer_leads", "follow_up_history"], ["dealer_leads", "lost_reason_notes"],
+  ["user_reporting_lines", "reason"],
   ["lead_touchpoints", "attachments"], ["lead_touchpoints", "external_agent_name"], ["lead_escalations", "ceo_recommendation"],
   ["lead_flow_events", "actor_label"], ["ai_call_logs", "intent_reason"], ["ai_call_logs", "signals"],
   ["ai_call_logs", "score_breakdown"], ["dialer_campaign_leads", "call_outcome"], ["dialer_campaign_leads", "attempt_history"],
@@ -335,6 +340,7 @@ const SAMPLE_KEPT = [
   ["ai_call_logs", "total_cost_cents"], ["expense_submissions", "amount"], ["expense_submissions", "category"],
   ["expense_submissions", "department"], ["invoice_line_items", "product_id"], ["accounts", "city"],
   ["account_closures", "closed_at"], ["lead_visits", "visit_status"],
+  ["dealer_leads", "lost_reason"], ["user_reporting_lines", "manager_id"], ["user_reporting_lines", "effective_to"],
 ];
 const present = (pairs, side) => pairs.filter(([t, c]) => plan.get(t)?.[side].includes(c));
 
