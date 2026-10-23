@@ -6,7 +6,7 @@ import { leads, loanSanctions } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 import { evaluateEnachGate } from "@/lib/nbfc/enach";
 import { externalLenderName } from "@/lib/leads/bajaj-fallback-text";
-// ID 183 (16 Oct): dispatch is the file's dealer's — and, since 16 Oct evening, the iTarang house login on a file it pushed out; never Admin / Sales Head acting for the dealer.
+// ID 183: dispatch is the file's dealer's. The iTarang house login on a file it pushed out may see Step 5 but not act (23 Oct); Admin / Sales Head acting for the dealer never.
 import { dealerMayDispatch } from "@/lib/auth/requireLeadAccess";
 
 // BRD V2 §4.0 — access gate for Step 5 (Loan Review + OTP + Dispatch).

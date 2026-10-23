@@ -3,9 +3,10 @@ import { db } from '@/lib/db';
 import { leads, auditLogs } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
 import { requireRole } from '@/lib/auth-utils';
-import { dealerMayActOnLead } from '@/lib/auth/requireLeadAccess';
+// ID 183 (23 Oct): the house login's saves here take the dealer-wins check and the "Done by" record.
+import { recordActorStep, requireLeadWriter } from '@/lib/leads/actForDealerGuard';
 
-export const DELETE = withErrorHandler(async (_req: Request, { params }: { params: Promise<{ leadId: string }> }) => {
+export const DELETE = withErrorHandler(async (req: Request, { params }: { params: Promise<{ leadId: string }> }) => {
     const user = await requireRole(['dealer']);
     const { leadId } = await params;
 
@@ -13,12 +14,12 @@ export const DELETE = withErrorHandler(async (_req: Request, { params }: { param
     if (!lead) return errorResponse('Draft not found', 404);
 
     const isOwner = lead.uploader_id === user.id;
-    // ID 119: resolves a dealer login with no users.dealer_id via its onboarding code.
-    const isSameDealer = await dealerMayActOnLead(user, lead.dealer_id, leadId);
-    // 16 Oct (ID 183): the creator only while the lead has no dealer — the house
-    // login no longer changes a file it pushed to another dealer.
-    if (!isSameDealer && !(isOwner && !lead.dealer_id)) {
-        return errorResponse('Forbidden: You do not have permission to delete this draft', 403);
+    // The creator while the lead has no dealer; otherwise the file's dealer, or the
+    // house login on a file it pushed out (dealer-wins check + "Done by", ID 183).
+    let writer: Awaited<ReturnType<typeof requireLeadWriter>> | null = null;
+    if (!(isOwner && !lead.dealer_id)) {
+        writer = await requireLeadWriter(leadId, req, user, { lead: { id: leadId, dealer_id: lead.dealer_id } });
+        if (!writer.ok) return errorResponse('Forbidden: You do not have permission to delete this draft', 403);
     }
 
     if (lead.kyc_status !== 'draft') {
@@ -48,6 +49,8 @@ export const DELETE = withErrorHandler(async (_req: Request, { params }: { param
     } catch (auditErr) {
         console.error('[KYC Draft Delete] Audit insert failed:', auditErr);
     }
+
+    if (writer?.ok) await recordActorStep(writer.actor, 'cleared the draft');
 
     return successResponse({ message: 'Draft cleared. Lead retained.' });
 });

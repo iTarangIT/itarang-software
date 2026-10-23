@@ -3,7 +3,8 @@ import { leads, loanOffers } from '@/lib/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { withErrorHandler, successResponse, errorResponse } from '@/lib/api-utils';
 import { requireRole } from '@/lib/auth-utils';
-import { dealerMayActOnLead } from '@/lib/auth/requireLeadAccess';
+// ID 183 (23 Oct): the house login's saves here take the dealer-wins check and the "Done by" record.
+import { recordActorStep, requireLeadWriter } from '@/lib/leads/actForDealerGuard';
 
 export const POST = withErrorHandler(async (req: Request, { params }: { params: Promise<{ id: string; offerId: string }> }) => {
     const user = await requireRole(['dealer']);
@@ -13,7 +14,8 @@ export const POST = withErrorHandler(async (req: Request, { params }: { params: 
         .from(leads).where(eq(leads.id, leadId)).limit(1);
 
     if (!lead) return errorResponse('Lead not found', 404);
-    if (!(await dealerMayActOnLead(user, lead.dealer_id, leadId))) return errorResponse('Access denied', 403);
+    const writer = await requireLeadWriter(leadId, req, user, { lead: { id: leadId, dealer_id: lead.dealer_id } });
+    if (!writer.ok) return writer.response;
 
     const [offer] = await db.select().from(loanOffers)
         .where(and(eq(loanOffers.id, offerId), eq(loanOffers.lead_id, leadId))).limit(1);
@@ -28,6 +30,8 @@ export const POST = withErrorHandler(async (req: Request, { params }: { params: 
         sm_review_status: 'option_booked',
         updated_at: new Date(),
     }).where(eq(leads.id, leadId));
+
+    await recordActorStep(writer.actor, 'booked a loan offer', { offer_id: offerId });
 
     return successResponse({ message: 'Option booked successfully' });
 });

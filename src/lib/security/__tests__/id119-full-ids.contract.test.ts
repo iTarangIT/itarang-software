@@ -117,8 +117,9 @@ describe("dealer lead routes resolve the dealer, never compare users.dealer_id r
     ];
     // 14 Oct added the leadId (house access); 16 Oct (ID 183) routes the lender
     // journey through gateLeadActor (dealer / house / Admin acting for the
-    // dealer) and the dispatch steps through dealerMayDispatch (owner only).
-    const RESOLVED = /dealerMayActOnLead\(user, lead\.dealer_id(, [\w.]+)?\)|dealerMayDispatch\(user, lead\.dealer_id(, leadId)?\)|gateLeadActor\(user, lead\b/;
+    // dealer) and the dispatch steps through dealerMayDispatch (owner only);
+    // 23 Oct the older loan-option / review routes use requireLeadWriter.
+    const RESOLVED = /dealerMayActOnLead\(user, lead\.dealer_id(, [\w.]+)?\)|dealerMayDispatch\(user, lead\.dealer_id(, leadId)?\)|gateLeadActor\(user, lead\b|requireLeadWriter\(leadId, req, user\b/;
     it.each(ROUTES)("%s", (route) => {
         const src = code(route);
         expect(src).toMatch(RESOLVED);
@@ -126,9 +127,10 @@ describe("dealer lead routes resolve the dealer, never compare users.dealer_id r
     });
 });
 
-// 16 Oct evening (user): the iTarang house login on a file it pushed out may
-// dispatch too (dealerMayDispatch with the lead id → houseMayActOnLead). What
-// stays pinned: no Admin / Sales Head acting for the dealer on these steps.
+// The iTarang house login on a file it pushed out may SEE these steps
+// (dealerMayDispatch with the lead id → houseMayActOnLead), but its writes are
+// refused by leadActorVerdict (dispatch: true, 23 Oct). Admin / Sales Head
+// acting for the dealer never take them either.
 describe("ID 183: dispatch is the file's dealer's (or the house's), never iTarang staff", () => {
     it.each([
         "lead/[id]/step-5/confirm-dispatch",

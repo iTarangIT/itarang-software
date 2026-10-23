@@ -308,9 +308,10 @@ export async function dealerMayViewLead(
 
 /**
  * Step 5 (the dealer's stock, the customer's dispatch OTP, dispatch), the cash
- * sale and "delivered": the dealer the file belongs to, and — 16 Oct evening
- * (user) — the iTarang house login on a file it pushed out, when the lead id
- * is passed. Admin / Sales Head acting for the dealer never dispatch.
+ * sale and "delivered": the dealer the file belongs to, and the iTarang house
+ * login on a file it pushed out, when the lead id is passed — the house only
+ * SEES them: its writes are refused by leadActorVerdict (dispatch, 23 Oct).
+ * Admin / Sales Head acting for the dealer never dispatch.
  */
 export async function dealerMayDispatch(
   user: { id: string; role: string | null; dealer_id: string | null },

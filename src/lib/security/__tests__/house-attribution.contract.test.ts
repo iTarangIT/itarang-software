@@ -78,3 +78,29 @@ describe("ID 183: the printable consent form names the file's dealer", () => {
     expect(code("kyc/[leadId]/consent-preview")).toMatch(/!ownDealer[\s\S]*fileDealerNames\(/);
   });
 });
+
+// 23 Oct: the older routes (unlinked loan-options page, send for review, clear
+// draft) let the house login change a pushed file with no dealer-wins check
+// and no "Done by". They now go through the shared writer gate and record.
+describe("ID 183 (23 Oct): the older loan-option, review and draft routes gate and record", () => {
+  for (const rel of [
+    "leads/[id]/loan-offers/[offerId]/select",
+    "leads/[id]/loan-offers/[offerId]/book",
+    "leads/[id]/submit-to-sm",
+    "dealer/leads/drafts/[leadId]",
+  ]) {
+    it(rel, () => {
+      const src = code(rel);
+      expect(src).not.toMatch(/\bdealerMayActOnLead\s*\(/);
+      expect(src).toMatch(/\brequireLeadWriter\s*\(\s*leadId\s*,\s*req\s*,/);
+      expect(src).toMatch(/\brecordActorStep\s*\(/);
+    });
+  }
+  it("the Step 3 screen sends the dealer-wins header (LeadWorkNote)", () => {
+    const page = readFileSync(
+      join(process.cwd(), "src", "app", "(dashboard)", "dealer-portal", "leads", "[id]", "borrower-consent", "page.tsx"),
+      "utf8",
+    );
+    expect(page).toMatch(/<LeadWorkNote leadId=\{leadId\} \/>/);
+  });
+});
