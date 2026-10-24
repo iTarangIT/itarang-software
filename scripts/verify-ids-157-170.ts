@@ -107,9 +107,9 @@ async function main() {
         const rows = await listTargets({ month });
         const t = summariseCompanyTargets([{ month, rows: rows as never }], [month], month);
         for (const m of ["revenue", "batteries_sold"] as const) {
-            if (Math.abs(t[m].accepted + t[m].notAccepted - t[m].sum) > 1e-6) throw new Error(`${m} split ≠ sum`);
+            if (Math.abs(t[m].accepted + t[m].notAccepted + t[m].rejected - t[m].sum) > 1e-6) throw new Error(`${m} split ≠ sum`);
         }
-        return `revenue ${Math.round(t.revenue.accepted)} + ${Math.round(t.revenue.notAccepted)} = ${Math.round(t.revenue.sum)}`;
+        return `revenue ${Math.round(t.revenue.accepted)} + ${Math.round(t.revenue.notAccepted)} + rejected ${Math.round(t.revenue.rejected)} = ${Math.round(t.revenue.sum)}`;
     });
 
     await check("159 CEO New dealers query (closer credit)", async () => {

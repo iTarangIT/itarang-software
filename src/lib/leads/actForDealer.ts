@@ -4,13 +4,14 @@
 //
 //   Who:    Admin and Sales Head, from the CRM file screen (ACT_FOR_DEALER_ROLES).
 //           The iTarang house logins work files the house pushed out in the
-//           dealer portal like the dealer (16 Oct evening) — leadActorVerdict.
+//           dealer portal like the dealer (16 Oct evening), except dispatch
+//           (Kartik, 18 Oct; enforced 23 Oct) — leadActorVerdict.
 //   When:   a file iTarang pushed from the house — any time; the dealer's own
 //           file — only after the dealer has done nothing for 1 working day,
 //           or while the dealer has asked iTarang to help.
 //   Never:  dispatch from the CRM panel. Step 5 (stock, the customer's OTP,
-//           dispatch), the cash sale and "delivered" stay with the dealer — and
-//           the house login on a file it pushed out (recorded, 21 Oct).
+//           dispatch), the cash sale and "delivered" stay with the dealer — the
+//           house login on a file it pushed out is refused them too (23 Oct).
 //   Clash:  the file shows "being worked by <name>" for 30 minutes; a second
 //           iTarang person is refused while that is live; the dealer's own
 //           action always wins (it clears the note, and an iTarang save made on
@@ -18,9 +19,9 @@
 //           consent OTP at a time.
 //   Record: every step is written as "Done by <name> for <dealer>" and the
 //           dealer is told (bell + WhatsApp) — from the CRM panel and, since
-//           21 Oct, from the house login in the dealer portal too (Step 5,
-//           cash sale, delivered, customer edits, drafts, consent form,
-//           coupon, product photo). The dealer sees "being worked by" on his
+//           21 Oct, from the house login in the dealer portal too (customer
+//           edits, drafts, consent form, coupon, product photo, loan offers,
+//           send for review). The dealer sees "being worked by" on his
 //           own screens, and the lines are on the file's general history.
 
 import { workingDaysDueAt, type OfficeHoursArg } from "@/lib/calendar/officeCalendar";
@@ -43,7 +44,7 @@ export const ACTED_FOR_DEALER = "ACTED_FOR_DEALER";
 /**
  * Who is acting on a file:
  *   dealer  — the dealer the file belongs to (its owner)
- *   house   — an iTarang house login on a file the house pushed out (reads only)
+ *   house   — an iTarang house login on a file the house pushed out (never dispatch)
  *   itarang — Admin / Sales Head from the CRM "Act for dealer" panel
  */
 export type LeadActorKind = "dealer" | "house" | "itarang";
@@ -260,8 +261,8 @@ export function carriesSeenHeader(url: string, method: string | null | undefined
  * The steps iTarang never takes for a dealer (decided 14 Oct, "never
  * dispatch"): they move the dealer's stock or need the customer's dispatch OTP.
  * Kept here so the routes and the panel name the same list. Applies to Admin /
- * Sales Head (the CRM panel). The house login on a file it pushed out may take
- * them (16 Oct evening, user) — recorded "Done by" and the dealer told (21 Oct).
+ * Sales Head (the CRM panel) and, since 23 Oct, to the house login on a file it
+ * pushed out (Kartik, 18 Oct: iTarang never dispatches).
  */
 export const DEALER_ONLY_STEPS = [
   "step-5/product-selection",
@@ -292,8 +293,9 @@ export type LeadActorVerdict =
 /**
  * Who may take a step on a customer file (ID 183, decided 16 Oct):
  *  - the file's own dealer: everything, dispatch included;
- *  - a house login on a file the house pushed to another dealer: everything,
- *    dispatch included (16 Oct evening, user — full access like the dealer);
+ *  - a house login on a file the house pushed to another dealer: everything
+ *    but dispatch (16 Oct evening full access, narrowed 23 Oct per Kartik's
+ *    18 Oct "never dispatch");
  *  - Admin / Sales Head: reads, and writes through the act-for-dealer checks
  *    (permission, note, record, notice) — never dispatch;
  *  - anyone else (CEO, other back-office roles, other dealers): refused for
@@ -312,9 +314,10 @@ export function leadActorVerdict(input: {
   if (role === "dealer") {
     if (input.ownsFile) return { ok: true, kind: "dealer" };
     if (!input.houseOnPushedFile) return { ok: false, status: 403, message: "Access denied" };
-    // 16 Oct evening (user): the house keeps FULL access on a file it pushed
-    // out — every step, Step 5 included, like the file's dealer. Its writes
-    // still take the note, the "dealer changed" check and the "Done by" record.
+    // The house works a file it pushed out like the dealer, except Step 5, the
+    // cash sale and "delivered" (Kartik, 18 Oct: never dispatch). Its writes
+    // take the note, the "dealer changed" check and the "Done by" record.
+    if (input.dispatch) return { ok: false, status: 403, message: DEALER_ONLY_MESSAGE };
     return { ok: true, kind: "house" };
   }
   if (isActForDealerRole(role)) {

@@ -85,7 +85,7 @@ export async function buildXlsx(sheets: DatasetSheet[], ctx: FileContext): Promi
         ["Downloaded by", ctx.downloadedBy],
         ["Downloaded at (IST)", nowIst()],
         ...sheets.map((s): [string, string] => [`Rows — ${s.name}`, s.rows.length.toLocaleString("en-IN")]),
-        ["Rows included", ctx.ownOnly ? "Only the rows this person owns." : "Every row matching the filters."],
+        ["Rows included", ctx.ownOnly ? "Only the rows this person owns (a manager: also his team's, ID 155)." : "Every row matching the filters."],
         ["Phone numbers", ctx.fullPhone ? "Full numbers (a reason was recorded)." : "Masked (98xxxxx343)."],
         ...Object.entries(ctx.filters).map(([k, v]): [string, string] => [`Filter — ${k}`, v]),
     ];

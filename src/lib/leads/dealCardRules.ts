@@ -69,6 +69,18 @@ export function dealCardRequired(args: { role: string | null | undefined; dealer
     return dealCardRequiredFor(args.role);
 }
 
+/**
+ * ID 186 (22 Oct): the refusal when a quote that needs the card has none. It
+ * must say WHY: a brand-new dealer, or (onboarded dealer) the saving role must
+ * fill it — before, Admin / partner on an onboarded dealer were told "not
+ * onboarded yet". Unknown (no check run) reads as a brand-new dealer. Pure.
+ */
+export function dealCardMissingMessage(dealerOnboarded: boolean | null | undefined): string {
+    return dealerOnboarded
+        ? "Fill the deal card — onboarding fee, batteries per month and finance files per month. Only ISR, ASM and Sales Head may skip it for an already onboarded dealer."
+        : "This dealer is not onboarded yet: fill the deal card — onboarding fee, batteries per month and finance files per month.";
+}
+
 export const DealCardSchema = z
     .object({
         onboarding_fee: z.number().min(0).max(10_000_000),

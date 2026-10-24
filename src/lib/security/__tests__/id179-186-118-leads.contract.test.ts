@@ -20,8 +20,11 @@ describe("ID 186 — a brand-new dealer's quote needs the deal card (server)", (
   const src = route("inside-sales/lead/[id]/commercials");
 
   it("the quote save decides with dealCardRequired and the onboarded check, not the role alone", () => {
-    expect(src).toMatch(/dealCardRequired\(\{ role: user\.role, dealerOnboarded: \(await isDealerOnboarded\(id\)\)\.onboarded \}\)/);
+    expect(src).toMatch(/const dealerOnboarded = isQuote \? \(await isDealerOnboarded\(id\)\)\.onboarded : undefined;/);
+    expect(src).toMatch(/dealCardRequired\(\{ role: user\.role, dealerOnboarded: !!dealerOnboarded \}\)/);
     expect(src).toMatch(/requireDealCard,/);
+    // 22 Oct: the onboarded answer also picks the refusal text (dealCardMissingMessage).
+    expect(src).toMatch(/dealerOnboarded,\s*\}\)/);
     expect(src).not.toMatch(/requireDealCard: dealCardRequiredFor\(/);
   });
 

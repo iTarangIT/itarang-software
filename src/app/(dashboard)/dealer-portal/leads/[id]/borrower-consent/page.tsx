@@ -16,6 +16,7 @@ import { DatePicker } from '@/components/ui/date-picker';
 import { FINANCE_DOCUMENTS } from '@/components/dealer-portal/lead-wizard/constants';
 import OtherDocumentsSection, { type RequestedDoc as OtherRequestedDoc } from '@/components/dealer-portal/lead-wizard/OtherDocumentsSection';
 import ConsentOtpCard from '@/components/dealer-portal/lead-wizard/ConsentOtpCard';
+import LeadWorkNote from '@/components/dealer-portal/lead-wizard/LeadWorkNote';
 import { isMaskedAadhaar } from '@/lib/kyc/aadhaarMask';
 import { onFreshFileClick } from '@/lib/storage/freshFileLink';
 
@@ -1167,6 +1168,9 @@ export default function BorrowerConsentPage() {
                 />
 
                 <ErrorBanner message={apiError} onDismiss={() => setApiError(null)} />
+
+                {/* ID 183 (23 Oct): "being worked by" — and the house login's dealer-wins check on Step 3 saves. */}
+                <LeadWorkNote leadId={leadId} />
 
                 {/* ─── Admin Request Banner (BRD §2.9.3) ────────────────── */}
                 {step3Ctx && (

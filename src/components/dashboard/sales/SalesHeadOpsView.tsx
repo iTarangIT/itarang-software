@@ -33,6 +33,7 @@ import type { DealerHealthGroup, DealerHealthRow } from "@/lib/dealers/accountHe
 import type { RegionsResponse } from "@/app/api/locations/regions/route";
 import type { ActionKey, ActionSummary } from "@/lib/dashboard/salesHeadActions";
 import type { IsrScore } from "@/lib/admin/isrScorecard";
+import type { ItarangAssistScore } from "@/lib/admin/itarangAssistScore";
 import type { SalesHeadMeasures } from "@/lib/dashboard/salesHeadMeasures";
 import { STUCK_DAYS, batteryText, countWithShare, hoursText, share } from "@/lib/dashboard/salesHeadMeasureFormat";
 import { LEAD_STATUS_LABEL } from "@/lib/leads/queueFilters";
@@ -280,6 +281,17 @@ export function SalesHeadOpsView() {
         queryKey: ["sales-head-ops", "isr-scorecard", isrQs.toString()],
         queryFn: () => getData(`/api/admin/reports/isr-scorecard?${isrQs}`),
         enabled: score === "inside",
+        placeholderData: (prev) => prev,
+        retry: false,
+    });
+    // ID 183 — the iTarang team's credit for customer files worked for the
+    // dealer (the dealer keeps the file's credit); one line on the scorecard.
+    const assistQs = new URLSearchParams({ from, to });
+    if (filters.state) assistQs.set("state", filters.state);
+    if (filters.city) assistQs.set("city", filters.city);
+    const assist = useQuery<ItarangAssistScore>({
+        queryKey: ["sales-head-ops", "itarang-assist", assistQs.toString()],
+        queryFn: () => getData(`/api/admin/reports/itarang-assist?${assistQs}`),
         placeholderData: (prev) => prev,
         retry: false,
     });
@@ -770,9 +782,11 @@ export function SalesHeadOpsView() {
             <DashCard
                 title="Team scorecard against target"
                 caption={
-                    monthToDate
+                    (monthToDate
                         ? `Actual / target to date${daysLeft == null ? "" : `, and what each person needs per working day for the rest of the month. ${daysLeft} working days left.`}`
-                        : `Actual / target for the selected days — the monthly target pro-rata to ${periodDays} working ${periodDays === 1 ? "day" : "days"}${daysLeft == null ? "" : `. Revenue needed per day is for the rest of the month: ${daysLeft} working days left`}.`
+                        : `Actual / target for the selected days — the monthly target pro-rata to ${periodDays} working ${periodDays === 1 ? "day" : "days"}${daysLeft == null ? "" : `. Revenue needed per day is for the rest of the month: ${daysLeft} working days left`}.`) +
+                    // ID 155 (22 Oct): no team subtotal here — say how teams are grouped and where the dated total is.
+                    " Each row is that person's own numbers, grouped under today's manager (↳); a team's total for the days each member was in it is on Performance › Team total."
                 }
                 action={
                     <SegmentedControl
@@ -929,6 +943,33 @@ export function SalesHeadOpsView() {
                             </div>
                         );
                     })()
+                )}
+                {/* ID 183 — iTarang team credit, tracked apart from the people above. */}
+                {assist.data && (
+                    <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 rounded-[10px] bg-[#f6f8fa] px-3 py-2 text-[13px] text-ink">
+                        <span className="font-semibold">iTarang team, files worked for dealers:</span>
+                        {assist.data.files === 0 ? (
+                            <span className="text-ink-muted">none in this period.</span>
+                        ) : (
+                            <>
+                                <span className="tabular-nums">
+                                    <span className="font-bold">{num(assist.data.files)}</span> {assist.data.files === 1 ? "file" : "files"},{" "}
+                                    {num(assist.data.steps)} {assist.data.steps === 1 ? "step" : "steps"}
+                                </span>
+                                <span className="text-ink-muted">
+                                    ·{" "}
+                                    {assist.data.people
+                                        .map((p) => `${p.name} ${num(p.files)} ${p.files === 1 ? "file" : "files"} (${num(p.steps)} ${p.steps === 1 ? "step" : "steps"})`)
+                                        .join(", ")}
+                                </span>
+                            </>
+                        )}
+                        <span className="basis-full text-xs text-ink-muted">
+                            Steps Admin, Sales Head and the house logins did on a customer file for the dealer (&ldquo;Done by &lt;name&gt; for
+                            &lt;dealer&gt;&rdquo;). The dealer keeps the credit for the file; this is counted separately and is not in anyone&apos;s
+                            figures above.
+                        </span>
+                    </div>
                 )}
                 {/* ID 171 — revenue and batteries are only as fresh as the invoices read. */}
                 {score === "field" && <InvoicesReadUpTo />}

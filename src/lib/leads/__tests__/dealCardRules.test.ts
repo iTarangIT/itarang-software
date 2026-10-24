@@ -4,6 +4,7 @@ import {
     DealCardSchema,
     dealCardChips,
     dealCardLockedBy,
+    dealCardMissingMessage,
     normaliseDealCard,
     parseDealCard,
     sameDealCard,
@@ -54,5 +55,16 @@ describe("deal card (ID 172)", () => {
         expect(dealCardChips(card).map(([k]) => k)).toEqual(["Onboarding fee", "Batteries / month", "Finance files / month"]);
         expect(dealCardChips({ ...card, onboarding_fee: 0, fee_waived_reason: "big order" })[0][1]).toBe("Waived — big order");
         expect(dealCardChips(null)).toEqual([]);
+    });
+});
+
+describe("ID 186: the missing-card refusal says why", () => {
+    it("a brand-new dealer (or no check) is told it is not onboarded", () => {
+        expect(dealCardMissingMessage(false)).toMatch(/^This dealer is not onboarded yet/);
+        expect(dealCardMissingMessage(undefined)).toMatch(/^This dealer is not onboarded yet/);
+    });
+    it("an onboarded dealer (Admin / partner saving) is not told it is not onboarded", () => {
+        expect(dealCardMissingMessage(true)).not.toMatch(/not onboarded/);
+        expect(dealCardMissingMessage(true)).toMatch(/Only ISR, ASM and Sales Head may skip it/);
     });
 });

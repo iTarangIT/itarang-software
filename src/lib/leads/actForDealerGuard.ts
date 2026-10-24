@@ -228,8 +228,8 @@ async function takeLock(leadId: string, user: ActorUser, name: string): Promise<
  * Who is acting on this file, and may they take this step now?
  * (leadActorVerdict holds the rule.)
  *  - the file's own dealer: always (writes stamp + clear the iTarang note);
- *  - an iTarang house login on a file the house pushed out: every step,
- *    like the dealer (16 Oct evening) — but its writes take / refresh its own
+ *  - an iTarang house login on a file the house pushed out: every step but
+ *    dispatch (Step 5, cash sale, delivered — refused since 23 Oct) — its writes take / refresh its own
  *    note (never clear someone else's), are refused when the dealer acted
  *    after its page loaded (the dealer portal sends the header, LeadWorkNote),
  *    and are recorded "Done by" (21 Oct);

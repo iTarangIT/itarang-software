@@ -37,9 +37,9 @@ export async function parseLeadListFilters(
         id: string;
         role: string | null | undefined;
         /**
-         * ID 155: the viewer's direct reports. Only GET /api/dealer-leads (the
-         * list) passes it, widening a manager's scope to their team's leads;
-         * exports omit it and stay own-only (ID 58).
+         * ID 155: the viewer's direct reports, widening a manager's scope to
+         * their team's leads. GET /api/dealer-leads (the list) and, since
+         * 22 Oct, Data downloads pass it; other exports stay own-only (ID 58).
          */
         teamMemberIds?: string[];
     },

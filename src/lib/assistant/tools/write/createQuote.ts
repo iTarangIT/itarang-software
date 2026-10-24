@@ -425,6 +425,8 @@ export const createQuoteApplier = defineApplier<CreateQuotePlan>({
                 409,
             );
         }
+        // Only a skipped card needs the onboarded check (it also picks the refusal text).
+        const dealerOnboarded = p.deal_card ? undefined : (await isDealerOnboarded(p.lead_id)).onboarded;
         const res = await createLeadCommercial(
             {
                 leadId: p.lead_id,
@@ -443,7 +445,8 @@ export const createQuoteApplier = defineApplier<CreateQuotePlan>({
                 // swallows its own errors, which would abort the transaction.
                 requireDealCard: p.deal_card
                     ? true
-                    : dealCardRequired({ role: user.role, dealerOnboarded: (await isDealerOnboarded(p.lead_id)).onboarded }),
+                    : dealCardRequired({ role: user.role, dealerOnboarded: !!dealerOnboarded }),
+                dealerOnboarded,
             },
             { tx },
         );

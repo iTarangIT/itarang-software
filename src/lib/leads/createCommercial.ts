@@ -45,7 +45,7 @@ import {
     readLockedDealCard,
     writeDealCard,
 } from "@/lib/leads/dealCard";
-import { DEAL_CARD_EDIT_ROLES, sameDealCard, type DealCard } from "@/lib/leads/dealCardRules";
+import { DEAL_CARD_EDIT_ROLES, dealCardMissingMessage, sameDealCard, type DealCard } from "@/lib/leads/dealCardRules";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -111,6 +111,8 @@ export type CreateCommercialArgs = {
      * dealerOnboarded }) — always for a brand-new dealer.
      */
     requireDealCard?: boolean;
+    /** ID 186: whether the dealer is already onboarded — picks the refusal text (dealCardMissingMessage). */
+    dealerOnboarded?: boolean;
     /** Defaults to now — the instant the quote is stamped and judged. */
     performedAt?: Date;
 };
@@ -175,10 +177,7 @@ export async function createLeadCommercial(
         if (isGatedQuoteEvent(body.event_type)) {
             const locked = cardColumns ? await readLockedDealCard(tx, id) : null;
             if (args.requireDealCard && !body.deal_card && !locked) {
-                throw new CommercialInputError(
-                    "This dealer is not onboarded yet: fill the deal card — onboarding fee, batteries per month and finance files per month.",
-                    400,
-                );
+                throw new CommercialInputError(dealCardMissingMessage(args.dealerOnboarded), 400);
             }
             const canEdit = (DEAL_CARD_EDIT_ROLES as readonly string[]).includes(actor.role ?? "");
             if (locked && body.deal_card && !canEdit && !sameDealCard(locked.card, body.deal_card)) {

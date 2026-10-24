@@ -31,10 +31,13 @@ export type CompanyTarget = {
     sum: number;
     /**
      * ID 157 (10 Oct): the part of `sum` its people have accepted, and the rest
-     * (Posted + Pushed). accepted + notAccepted === sum.
+     * (Posted + Pushed). ID 189 (22 Oct): a target its person rejected under
+     * the old flow is apart (`rejected`), not inside "Not yet accepted".
+     * accepted + notAccepted + rejected === sum.
      */
     accepted: number;
     notAccepted: number;
+    rejected: number;
     /** ID 189 — the Sales Head stretch on top of `sum` (same to-date rule). */
     stretch: number;
     /** Months of the period ("YYYY-MM") with no target for the metric. */
@@ -63,6 +66,7 @@ export function summariseCompanyTargets(
         batteries_sold: new Map(),
     };
     const accepted: Record<CompanyTargetMetric, number> = { revenue: 0, batteries_sold: 0 };
+    const rejected: Record<CompanyTargetMetric, number> = { revenue: 0, batteries_sold: 0 };
     const stretch: Record<CompanyTargetMetric, number> = { revenue: 0, batteries_sold: 0 };
     for (const { month, rows } of lists) {
         for (const r of rows) {
@@ -78,6 +82,7 @@ export function summariseCompanyTargets(
                 const m = perMonth[r.metric];
                 m.set(month, (m.get(month) ?? 0) + v);
                 if (r.status === "accepted") accepted[r.metric] += v;
+                else if (r.status === "rejected") rejected[r.metric] += v;
             }
             stretch[r.metric] += Math.max(pick(r.progress) - pick(ceo), 0);
         }
@@ -88,7 +93,8 @@ export function summariseCompanyTargets(
         return {
             sum,
             accepted: accepted[metric],
-            notAccepted: sum - accepted[metric],
+            notAccepted: sum - accepted[metric] - rejected[metric],
+            rejected: rejected[metric],
             stretch: stretch[metric],
             missing: months.filter((mo) => !m.has(mo)),
         };
