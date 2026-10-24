@@ -400,8 +400,11 @@ export function buildDigestEmail(
   if (p.attachment) textParts.push("", `Attached: ${p.attachment.filename}`);
   textParts.push("", `${p.kind.ctaLabel}: ${href}`);
 
+  // IDs 194 #2 / 188 #4: on a Monday the subject names Saturday, the day the
+  // numbers are about, not the Sunday the engine covers.
+  const subjectDay = p.figures.coveredDay ?? p.istDay;
   const subject = p.kind.subject
-    ? p.kind.subject({ istDay: p.istDay, dayLabel, slot: p.slot }) +
+    ? p.kind.subject({ istDay: subjectDay, dayLabel: istDayLabel(subjectDay), slot: p.slot }) +
       (p.slot === "test" ? " (test send)" : "")
     : p.slot === "evening"
       ? `[iTarang] ${p.kind.label} — today (${dayLabel})`

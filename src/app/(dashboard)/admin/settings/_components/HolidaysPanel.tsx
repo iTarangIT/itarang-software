@@ -47,8 +47,9 @@ export function HolidaysPanel({ readOnly = false }: { readOnly?: boolean }) {
         <div className="space-y-4">
             <p className="text-sm text-ink-muted">
                 Entered each December for the coming year. A holiday is not a working day for any limit or clock. It
-                counts only for clocks still running when it is added, so adding a past date never changes a result
-                already reached.
+                counts only for clocks still running when it is added, and for waits and periods that had not ended
+                by then (field visit waits, quote answers, the turnaround analysis), so adding a past date never
+                changes those results. Counts of days up to today (idle days, days waiting) use today&rsquo;s list.
             </p>
             <HolidayCalendarManager holidays={data.holidays} queryKey={QUERY_KEY} readOnly={!canEdit} />
             <div className="space-y-2">

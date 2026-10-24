@@ -28,6 +28,8 @@ import type {
 import { ALERT_PANELS } from "./types";
 import { countOnboardingDropouts, daysAgoSql, dropoutWhere } from "./listQueries";
 import { nonResponsiveSql } from "@/lib/leads/nonResponsive";
+import { OWNER_ROLE_SQL } from "@/lib/leads/idleLimit";
+import { staleThresholdsFor } from "@/lib/inside-sales/staleness";
 import { DEALER_YES_AT_SQL, finalisedNotWonSql } from "@/lib/leads/finalisedNotWon";
 import {
     TRANSFER_AT_EXPR,
@@ -70,6 +72,16 @@ function workingDaysSince(expr: string): SQL {
 
 /** A validated whole number for a SQL comparison (time limits are integers). */
 const n = (v: number): SQL => sql.raw(String(Math.floor(v)));
+
+/**
+ * ID 85 #5 — a no-touch warning's threshold for the lead's holder: the ASM
+ * set for an ASM, the inside-sales set otherwise (unowned leads included).
+ * `role` defaults to the holder of the alias `dl`.
+ */
+function staleLimitSql(limits: TimeLimits, band: "yellow" | "red" | "critical", role: SQL = OWNER_ROLE_SQL): SQL {
+    const t = { isr: staleThresholdsFor(limits, null), asm: staleThresholdsFor(limits, "asm") };
+    return sql`(CASE WHEN (${role}) = 'asm' THEN ${n(t.asm[band])} ELSE ${n(t.isr[band])} END)`;
+}
 
 // ID 84.3 — onboarding stalled, the same rule as the lead page (src/lib/
 // onboarding/stall.ts): waiting on the DEALER (draft / correction requested /
@@ -404,13 +416,13 @@ export async function fetchTeamPerformance(
                WHERE dl.current_owner_id = u.id::text
                  AND dl.lead_status IN (${WORKABLE_LIST})
                  AND dl.is_active IS NOT FALSE
-                 AND ${workingDaysSince(LAST_TOUCH)} > ${n(limits.stale_yellow)}
+                 AND ${workingDaysSince(LAST_TOUCH)} > ${staleLimitSql(limits, "yellow", sql`lower(u.role)`)}
                  AND ${NOT_NON_RESPONSIVE}) AS stale_leads,
             (SELECT COUNT(*) FROM dealer_leads dl
                WHERE dl.current_owner_id = u.id::text
                  AND dl.lead_status IN (${WORKABLE_LIST})
                  AND dl.is_active IS NOT FALSE
-                 AND ${workingDaysSince(LAST_TOUCH)} > ${n(limits.stale_red)}
+                 AND ${workingDaysSince(LAST_TOUCH)} > ${staleLimitSql(limits, "red", sql`lower(u.role)`)}
                  AND ${NOT_NON_RESPONSIVE}) AS critical_stale,
             (SELECT up.pref_value->>'status' FROM user_preferences up
                WHERE up.user_id = u.id::text
@@ -451,11 +463,11 @@ function panelCountSql(key: AlertPanelKey, lf: SQL, limits: TimeLimits, transfer
         case "no_touch_5d":
             return sql`SELECT COUNT(*)::text AS c FROM dealer_leads dl
                 WHERE dl.lead_status IN (${WORKABLE_LIST}) AND dl.is_active IS NOT FALSE
-                  AND ${workingDaysSince(LAST_TOUCH)} > ${n(limits.stale_yellow)} AND ${NOT_NON_RESPONSIVE} ${lf}`;
+                  AND ${workingDaysSince(LAST_TOUCH)} > ${staleLimitSql(limits, "yellow")} AND ${NOT_NON_RESPONSIVE} ${lf}`;
         case "no_touch_10d":
             return sql`SELECT COUNT(*)::text AS c FROM dealer_leads dl
                 WHERE dl.lead_status IN (${WORKABLE_LIST}) AND dl.is_active IS NOT FALSE
-                  AND ${workingDaysSince(LAST_TOUCH)} > ${n(limits.stale_red)} AND ${NOT_NON_RESPONSIVE} ${lf}`;
+                  AND ${workingDaysSince(LAST_TOUCH)} > ${staleLimitSql(limits, "red")} AND ${NOT_NON_RESPONSIVE} ${lf}`;
         case "non_responsive":
             return sql`SELECT COUNT(*)::text AS c FROM dealer_leads dl
                 WHERE dl.lead_status IN (${OPEN_LIST}) AND dl.is_active IS NOT FALSE
@@ -464,7 +476,7 @@ function panelCountSql(key: AlertPanelKey, lf: SQL, limits: TimeLimits, transfer
             return sql`SELECT COUNT(*)::text AS c FROM dealer_leads dl
                 WHERE dl.lead_status = 'Awaiting_Customer_Decision'
                   AND dl.is_active IS NOT FALSE
-                  AND ${workingDaysSince(LAST_TOUCH)} > ${n(limits.stale_critical)} ${lf}`;
+                  AND ${workingDaysSince(LAST_TOUCH)} > ${staleLimitSql(limits, "critical")} ${lf}`;
         case "pending_escalations":
             return sql`SELECT COUNT(*)::text AS c FROM lead_escalations
                 WHERE status = 'pending_review'`;
@@ -561,19 +573,17 @@ export async function fetchAlertPanel(
         case "no_touch_5d":
         case "no_touch_10d":
         case "awaiting_decision_14d": {
-            const threshold =
-                key === "no_touch_5d"
-                    ? limits.stale_yellow
-                    : key === "no_touch_10d"
-                      ? limits.stale_red
-                      : limits.stale_critical;
+            const threshold = staleLimitSql(
+                limits,
+                key === "no_touch_5d" ? "yellow" : key === "no_touch_10d" ? "red" : "critical",
+            );
             const statusFilter =
                 key === "awaiting_decision_14d"
                     ? sql`dl.lead_status = 'Awaiting_Customer_Decision'`
                     : sql`dl.lead_status IN (${WORKABLE_LIST})`;
             const rows = await leadPanel(
                 sql`${statusFilter} AND dl.is_active IS NOT FALSE
-                    AND ${workingDaysSince(LAST_TOUCH)} > ${n(threshold)}
+                    AND ${workingDaysSince(LAST_TOUCH)} > ${threshold}
                     ${key === "awaiting_decision_14d" ? sql`` : sql`AND ${NOT_NON_RESPONSIVE}`} ${lf}`,
                 sql`CONCAT(${workingDaysSince(LAST_TOUCH)}, ' working days idle')`,
                 sql`${workingDaysSince(LAST_TOUCH)} DESC`,

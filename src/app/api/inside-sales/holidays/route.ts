@@ -10,6 +10,7 @@ import { requireRole } from "@/lib/auth-utils";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
 import { getTimeLimits } from "@/lib/timeLimits/store";
 import { getOfficeHours } from "@/lib/calendar/officeHoursStore";
+import { staleThresholdsFor } from "@/lib/inside-sales/staleness";
 
 const READ_ROLES = [
     "inside_sales_rep",
@@ -23,7 +24,7 @@ const READ_ROLES = [
 ];
 
 export const GET = withErrorHandler(async () => {
-    await requireRole(READ_ROLES);
+    const user = await requireRole(READ_ROLES);
     const [rows, limits, officeHours] = await Promise.all([
         db.execute<{ holiday_date: string }>(sql`
             SELECT holiday_date::text AS holiday_date FROM holiday_calendar WHERE is_active = TRUE
@@ -33,11 +34,8 @@ export const GET = withErrorHandler(async () => {
     ]);
     return successResponse({
         dates: rows.map((r) => r.holiday_date),
-        stale_thresholds: {
-            yellow: limits.stale_yellow,
-            red: limits.stale_red,
-            critical: limits.stale_critical,
-        },
+        // ID 85 #5: an ASM's queue uses the ASM no-touch warnings, everyone else the inside-sales ones.
+        stale_thresholds: staleThresholdsFor(limits, user.role),
         office_hours: officeHours,
         // 18 Oct row 33: the ISR queue's row colours and "past limit" state.
         idle_limit_days: limits.idle_cc,

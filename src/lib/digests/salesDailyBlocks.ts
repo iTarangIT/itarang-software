@@ -257,6 +257,25 @@ const ISR_COLS: ColSpec[] = [
 
 const COLS = { asm: ASM_COLS, inside_sales_rep: ISR_COLS } as const;
 
+/**
+ * ID 194 #1 — the metrics a block shows for Yesterday, named without the
+ * " · Yesterday" suffix ("Dealers visited", "Calls", …), in column order. My
+ * day compares each with the same day last week.
+ */
+export function yesterdayMetricsOf(role: "asm" | "inside_sales_rep"): Array<{ label: string; metric: RepMetricKey }> {
+    return COLS[role].flatMap((c) =>
+        "metric" in c && c.period === "y" ? [{ label: c.header.replace(/ · Yesterday$/, ""), metric: c.metric }] : [],
+    );
+}
+
+/** One per-rep figure as the blocks print it ("—" unmeasured, ₹ for money, one decimal for hours). */
+export function formatRepValue(metric: RepMetricKey, v: number | null): string | number {
+    if (v == null) return REP_NOT_MEASURED;
+    const kind = METRICS[metric].kind;
+    if (kind === "hours") return Math.round(v * 10) / 10;
+    return kind === "money" ? fmtValue(v, "money") : v;
+}
+
 export const BLOCK_B_COLUMNS = ASM_COLS.map((c) => c.header);
 export const BLOCK_C_COLUMNS = ISR_COLS.map((c) => c.header);
 /**
@@ -378,13 +397,7 @@ export function repBlockTableRows(role: "asm" | "inside_sales_rep", blocks: RepB
     const primary = PRIMARY_TARGET[role].metric;
     const cell = (r: RepBlock, c: ColSpec): string | number => {
         if ("name" in c) return r.name;
-        if ("metric" in c) {
-            const v = r.values[c.metric]?.[c.period] ?? null;
-            if (v == null) return REP_NOT_MEASURED;
-            const kind = METRICS[c.metric].kind;
-            if (kind === "hours") return Math.round(v * 10) / 10;
-            return kind === "money" ? fmtValue(v, "money") : v;
-        }
+        if ("metric" in c) return formatRepValue(c.metric, r.values[c.metric]?.[c.period] ?? null);
         if ("ratio" in c) {
             const n = r.values[c.ratio[0]]?.mtd ?? null;
             const d = r.values[c.ratio[1]]?.mtd ?? null;

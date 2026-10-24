@@ -66,7 +66,16 @@ export function NeedsAttentionView() {
     const { data, isLoading, error } = useQuery<{
         rows: NeedsAttentionRow[];
         holders: NeedsAttentionHolderSummary[];
-        limits?: { idle_cc: number; idle_asm: number; stale_critical: number; stale_yellow?: number; stale_red?: number };
+        limits?: {
+            idle_cc: number;
+            idle_asm: number;
+            stale_critical: number;
+            stale_yellow?: number;
+            stale_red?: number;
+            stale_yellow_asm?: number;
+            stale_red_asm?: number;
+            stale_critical_asm?: number;
+        };
     }>({
         queryKey: [...QUERY_KEY, holder],
         queryFn: async () => {
@@ -99,6 +108,13 @@ export function NeedsAttentionView() {
         stale_red: Math.floor(data?.limits?.stale_red ?? DEFAULT_BANDS.stale_red),
         stale_critical: Math.floor(data?.limits?.stale_critical ?? DEFAULT_BANDS.stale_critical),
     };
+    // ID 85 #5: the ASM set colours the rows an ASM holds.
+    const asmBands: Bands = {
+        stale_yellow: Math.floor(data?.limits?.stale_yellow_asm ?? bands.stale_yellow),
+        stale_red: Math.floor(data?.limits?.stale_red_asm ?? bands.stale_red),
+        stale_critical: Math.floor(data?.limits?.stale_critical_asm ?? bands.stale_critical),
+    };
+    const bandsOf = (holderRole: string | null) => (String(holderRole ?? "").toLowerCase() === "asm" ? asmBands : bands);
     const rows = data?.rows ?? [];
     const shown = filterNeedsAttention(rows, filters);
     const anyFilter = Boolean(q || role || status || interest || minDays);
@@ -225,7 +241,7 @@ export function NeedsAttentionView() {
                                         </div>
                                     )}
                                 </td>
-                                <td className={`px-3 py-2 text-right tabular-nums ${idleTone(r.days_idle, bands)}`}>{r.days_idle}</td>
+                                <td className={`px-3 py-2 text-right tabular-nums ${idleTone(r.days_idle, bandsOf(r.holder_role))}`}>{r.days_idle}</td>
                                 <td className="px-3 py-2 text-ink-muted">
                                     {COUNTED_FROM_LABEL[r.counted_from] ?? "—"}
                                     {r.counted_from_at && <span className="ml-1 text-[11px]">· {fmtDate(r.counted_from_at)}</span>}

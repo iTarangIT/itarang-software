@@ -137,4 +137,19 @@ describe("the masthead layout", () => {
         expect((m.html.match(/<th class="sd-desk"/g) ?? []).length).toBe(4);
         expect(m.html).toContain('<div class="sd-mob" style="display:none');
     });
+
+    // 188 #3: neither comparison day was visible on a phone.
+    it("prints the comparison days under Yesterday on a phone", () => {
+        const table = {
+            key: "block_a",
+            title: "A · Company",
+            columns: ["Metric", "Yesterday", "Day before · Fri 23 Oct", "Same day last week · Sat 17 Oct", "MTD"],
+            rows: [["Calls made", 40, 31, 28, 600]],
+            textColumns: 1,
+            phoneColumns: [0, 1, 4],
+            phoneCompareUnder: { under: 1, columns: [2, 3], labels: ["Fri 23 Oct", "Last wk"] },
+        };
+        const p = buildDigestEmail({ kind: KIND, to: ["a@b.c"], slot: "morning", istDay: "2026-10-25", figures: { ...figures, tables: [table] } });
+        expect(p.html).toMatch(/class="sd-mob"[^>]*>Fri 23 Oct 31 · Last wk 28<\/div>/);
+    });
 });

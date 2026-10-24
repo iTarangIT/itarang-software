@@ -224,11 +224,11 @@ async function salesReady(s: ActionScope): Promise<Built> {
     const hotPast = raw.filter((r) => r.past_limit && isHot(r)).length;
     const otherPast = raw.filter((r) => r.past_limit && !isHot(r)).length;
     const pastText = `${hotPast} Hot past ${limits.hot_ready_to_assigned} working hours · ${otherPast} others past ${plural(limits.ready_to_assigned, "working day")}`;
-    // ID 184: one bucket per lead — AI qualified first, then Hot (only when not
-    // AI qualified), then other — so the parts add up to the number.
+    // ID 184: one bucket per lead — Hot first, then AI qualified (only when not
+    // Hot), then other — so the parts add up to the number.
     const n = { ai: 0, hot: 0, other: 0 };
     for (const r of raw) n[readySplitOf(r.interest_level as string | null, r.reason as string | null)]++;
-    return { rows, sub: `AI-qualified ${n.ai} · Hot ${n.hot} · Other ${n.other} · ${pastText} · oldest waiting ${plural(oldest, "working day")}` };
+    return { rows, sub: `Hot ${n.hot} · AI-qualified ${n.ai} · Other ${n.other} · ${pastText} · oldest waiting ${plural(oldest, "working day")}` };
 }
 
 async function hotNotCalled(s: ActionScope): Promise<Built> {

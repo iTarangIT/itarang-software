@@ -202,11 +202,22 @@ const LIMIT_OF: Record<ClockKind, TimeLimitKey> = {
 };
 
 /**
- * The limit that times a clock kind. The owner clock's depends on the lead
- * being Hot when the stint started (rework 2); `hotAtStart` picks it.
+ * IST day the Hot / non-Hot owner limits took over (22 Oct rework, ID 85 #3).
+ * An owner stint that started before it is timed by the old owner limit
+ * (owner_first_attempt, 4 working hours), so those clocks agree with the
+ * "Limit passed" records already written under it.
  */
-export function clockLimitKey(kind: ClockKind, hotAtStart = false): TimeLimitKey {
-    if (kind === "owner") return hotAtStart ? "hot_owner_first_attempt" : "nonhot_owner_first_attempt";
+export const OWNER_SPLIT_FROM = "2026-10-21";
+
+/**
+ * The limit that times a clock kind. The owner clock's depends on when the
+ * stint started (`startDay`, IST) and on the lead being Hot then (rework 2).
+ */
+export function clockLimitKey(kind: ClockKind, hotAtStart = false, startDay?: string): TimeLimitKey {
+    if (kind === "owner") {
+        if (startDay && startDay < OWNER_SPLIT_FROM) return "owner_first_attempt";
+        return hotAtStart ? "hot_owner_first_attempt" : "nonhot_owner_first_attempt";
+    }
     return LIMIT_OF[kind];
 }
 
@@ -375,15 +386,18 @@ export function clocksForLead(
                     holidays,
                     now,
                     viaTransfer(s.at),
-                    // Rework 2: Hot when the stint started → the Hot limit, else the non-Hot one.
-                    clockLimitKey("owner", hotAt(s.at)),
+                    // Rework 2: Hot when the stint started → the Hot limit, else the non-Hot one;
+                    // a stint before 21 Oct keeps the old owner limit (ID 85 #3).
+                    clockLimitKey("owner", hotAt(s.at), istDay(s.at)),
                 ),
             );
         });
     }
 
     // Lead clock: from sales-ready, else (inferred) from the first assignment.
-    // Charged to the owner when it fell due (ID 86), not today's owner.
+    // 22 Oct rework (ID 85 #1/#2): a team figure only, never charged to a
+    // person. Its 4 working hours fell on non-Hot owners who were inside their
+    // own 1-working-day owner clock; owners are judged by the owner clocks.
     const leadStart = lead.sales_ready_at ?? stints[0]?.at ?? null;
     if (leadStart && want("lead")) {
         const attempt = firstTouch(touches, leadStart, null, (t) => t.attempt);
@@ -405,7 +419,7 @@ export function clocksForLead(
             holidays,
             now,
         );
-        out.push({ ...c, ...chargeTo(stints, c, now) });
+        out.push(c);
     }
 
     // Transfer clocks: each move to Transferred_to_ASM until the next status change.

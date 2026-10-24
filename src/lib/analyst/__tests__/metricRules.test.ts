@@ -101,11 +101,11 @@ describe("withMetricRules", () => {
         expect(withMetricRules("Which leads are idle past the limit?")).toContain(idle);
     });
 
-    it("ready leads with no owner: the awaitingAssignment rule, split AI-qualified first (ID 184)", () => {
+    it("ready leads with no owner: the awaitingAssignment rule, split Hot first (ID 184)", () => {
         const ready = rule(/^Ready leads with no owner/);
         expect(ready).toMatch(/sales_ready_at set, current_owner_id NULL/);
         expect(ready).toMatch(/contactability NULL/);
-        expect(ready.indexOf("ai_qualified")).toBeLessThan(ready.indexOf("'hot'"));
+        expect(ready.indexOf("'hot'")).toBeLessThan(ready.indexOf("ai_qualified"));
         expect(withMetricRules("How many ready leads have no owner?")).toContain(ready);
     });
 

@@ -8,7 +8,7 @@ import {
     workingDaysSince as officeWorkingDaysSince,
     type OfficeHoursArg,
 } from "@/lib/calendar/officeCalendar";
-import { TIME_LIMIT_DEFAULTS } from "@/lib/timeLimits/registry";
+import { TIME_LIMIT_DEFAULTS, type TimeLimits } from "@/lib/timeLimits/registry";
 
 export type StaleSeverity = "normal" | "yellow" | "red" | "critical";
 
@@ -20,6 +20,22 @@ export const DEFAULT_STALE_THRESHOLDS: StaleThresholds = {
     red: TIME_LIMIT_DEFAULTS.stale_red,
     critical: TIME_LIMIT_DEFAULTS.stale_critical,
 };
+
+type StaleLimits = Pick<
+    TimeLimits,
+    "stale_yellow" | "stale_red" | "stale_critical" | "stale_yellow_asm" | "stale_red_asm" | "stale_critical_asm"
+>;
+
+/**
+ * ID 85 #5 (22 Oct) — the no-touch cues for a holder's role: the ASM set
+ * (stale_*_asm) for an ASM, the inside-sales set for everyone else (the idle
+ * limit's split, idle_asm / idle_cc).
+ */
+export function staleThresholdsFor(l: StaleLimits, role: string | null | undefined): StaleThresholds {
+    return String(role ?? "").toLowerCase() === "asm"
+        ? { yellow: l.stale_yellow_asm, red: l.stale_red_asm, critical: l.stale_critical_asm }
+        : { yellow: l.stale_yellow, red: l.stale_red, critical: l.stale_critical };
+}
 
 // BRD §0.1: working day = a working weekday (office hours setting, default
 // Mon–Sat) that is not a holiday. Since 18 Oct (row 40) these are thin
