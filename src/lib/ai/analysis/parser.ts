@@ -11,6 +11,7 @@ import {
   DEALER_SEGMENTS,
   DEALER_ROLES,
   DISQUALIFIERS,
+  CALLBACK_TOPICS,
 } from "@/lib/ai/scoring";
 import { renderCalibrationExamples } from "./calibrationExamples";
 import { loadActiveCalibrationExamples } from "./calibrationStore";
@@ -91,6 +92,19 @@ RULES for each field:
   "ok / theek hai / haan" to an AGENT-OFFERED callback COUNTS as "yes". You do
   NOT need the dealer to actively request the callback — agreement, even passive,
   is enough.
+- callback_when = the dealer's own words for WHEN to call back, verbatim (e.g.
+  "kal shaam 5 baje", "2 ghante baad", "Monday"), or "" if he named no time.
+- callback_at = callback_when read against CURRENT TIME as an ISO 8601
+  timestamp in IST with offset (e.g. "2026-10-24T17:00:00+05:30"), or "" if he
+  named no time or callback_agreed is "no". Never invent a time he did not say.
+- callback_topic = what the follow-up is for:
+  "pricing" (rate / price / margin / EMI amount), "negotiation" (discount,
+  terms, a better deal), "dealership" (becoming a dealer / distributor /
+  partnership), "purchase" (placing an order, stock, delivery, buying now),
+  "general_info" (just wants details / a brochure / is busy now), else "none".
+  Pick the most commercial one that applies.
+- wants_human = "yes" if he asks to speak to a person — a manager, a senior,
+  "someone from the company", a salesperson, a real human — else "no".
 - disqualifier = "dont_call" (asked not to be called again), "hostile" (abusive),
   "not_interested" (firm no after the pitch), "call_dropped" (the call ended
   before its natural close), else "none". Allowed: ${DISQUALIFIERS.join(" | ")}.
@@ -115,6 +129,10 @@ OUTPUT EXACTLY THIS JSON SHAPE (fill every field):
   "financing_value_acknowledged": "yes" | "no",
   "pitch_heard": "yes" | "no",
   "callback_agreed": "yes" | "no",
+  "callback_when": "<his words for when, or empty>",
+  "callback_at": "<ISO 8601 IST timestamp, or empty>",
+  "callback_topic": ${CALLBACK_TOPICS.map((t) => `"${t}"`).join(" | ")},
+  "wants_human": "yes" | "no",
   "disqualifier": "none" | "dont_call" | "hostile" | "not_interested" | "call_dropped",
   "evidence": {
     "lithium_dealer": "<his answer to the lithium-dealer question>",

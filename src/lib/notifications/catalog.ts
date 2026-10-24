@@ -132,6 +132,8 @@ export const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   "lead.discarded": "Leads",
   "lead.closed": "Leads",
   "lead.qualified": "Leads",
+  // AI dialer review — a dealer asked an AI call for a callback from sales.
+  "lead.callback_requested": "Leads",
   // ID 81 — a dealer we already hold arrived again through one of the doors.
   "lead.reinquiry": "Leads",
   // 14 Oct — a customer file pushed between the iTarang house dealer and a dealer.

@@ -30,6 +30,8 @@ import {
 } from "@/lib/ai-dialer/call-duration/derive";
 import { resolveDurationBucketConfig } from "@/lib/ai-dialer/call-duration/config-store";
 import { ownedByCondition, requireCampaignReader } from "@/lib/ai-dialer/campaignAccess";
+import { isCallCategory } from "@/lib/ai-dialer/callCategory";
+import { hasCallOutcomeTables } from "@/lib/ai/storage/callOutcomeStore";
 
 const PAGE_SIZE = 50;
 const BANNER_LIMIT = 100; // per bucket on bucket=all
@@ -92,8 +94,20 @@ function shapeRow(r: any) {
         : null,
     convertedOnAttempt:
       r.convertedOnAttempt != null ? Number(r.convertedOnAttempt) : null,
+    // AI dialer review — this attempt's outcome category (E-356), null when
+    // not recorded.
+    category: r.category ?? null,
   };
 }
+
+// The category of the row's CURRENT attempt (its bolna_call_id). Only added to
+// the select when E-356 exists — naming the table on a database without it
+// would fail the whole table with a 42P01.
+const categorySql = sql<string | null>`(
+  select category from ai_call_outcomes
+  where call_id = ${dialerCampaignLeads.bolna_call_id}
+  limit 1
+)`;
 
 const selectShape = {
   id: dialerCampaignLeads.id,
@@ -211,10 +225,15 @@ export const GET = withErrorHandler(
     const bucket = (searchParams.get("bucket") || "all").toLowerCase();
     const page = Math.max(1, Number(searchParams.get("page") || 1));
     const durationBucketKey = searchParams.get("durationBucket");
+    const categoryParam = searchParams.get("category");
 
     if (!VALID_BUCKETS.has(bucket)) {
       return errorResponse(`Invalid bucket: ${bucket}`, 400);
     }
+    if (categoryParam && !isCallCategory(categoryParam)) {
+      return errorResponse(`Invalid category: ${categoryParam}`, 400);
+    }
+    const hasOutcomes = await hasCallOutcomeTables();
 
     // Duration filter, set by clicking a bar on the campaign's call-duration
     // histogram. Resolved against the SAME configured buckets the chart was
@@ -233,7 +252,7 @@ export const GET = withErrorHandler(
     // bucket=all returns three buckets in one round-trip for the banner. A
     // duration filter always wants the paginated list instead, whatever status
     // tab happens to be showing.
-    if (bucket === "all" && !durationBounds) {
+    if (bucket === "all" && !durationBounds && !categoryParam) {
       const [pending, calling, completed, failed] = await Promise.all([
         db
           .select(selectShape)
@@ -334,8 +353,16 @@ export const GET = withErrorHandler(
     // that never did. That was not true until the wall-clock fallback was gated
     // on the transcript — before then a trigger_failed lead carried the seconds
     // the dialer spent failing as its "duration" and matched these bounds.
-    if (bucket !== "all" && !durationBounds) {
+    // A category tile (the outcome breakdown) also REPLACES the status filter:
+    // the tile counted the category alone, whatever the reach status.
+    if (bucket !== "all" && !durationBounds && !categoryParam) {
       conditions.push(inArray(dialerCampaignLeads.status, [bucket]));
+    }
+    if (categoryParam) {
+      if (!hasOutcomes) {
+        return successResponse({ data: [], page, pageSize: PAGE_SIZE });
+      }
+      conditions.push(sql`${categorySql} = ${categoryParam}`);
     }
 
     if (durationBounds) {
@@ -357,7 +384,7 @@ export const GET = withErrorHandler(
     const where = conditions.length === 1 ? conditions[0] : and(...conditions);
 
     const rows = await db
-      .select(detailSelectShape)
+      .select(hasOutcomes ? { ...detailSelectShape, category: categorySql } : detailSelectShape)
       .from(dialerCampaignLeads)
       .leftJoin(dealerLeads, eq(dealerLeads.id, dialerCampaignLeads.lead_id))
       .where(where)

@@ -17,6 +17,7 @@ import {
   type CampaignLeadStatus,
 } from "@/lib/ai-dialer/campaignLeadStatus";
 import { requireCampaignReader } from "@/lib/ai-dialer/campaignAccess";
+import { campaignOutcomeReport } from "@/lib/ai-dialer/campaignOutcomes";
 
 export const GET = withErrorHandler(
   async (_req: Request, ctx: { params: Promise<{ id: string }> }) => {
@@ -92,12 +93,17 @@ export const GET = withErrorHandler(
       .where(eq(dialerCampaignLeads.campaign_id, id));
     const retry = retryRows[0];
 
+    // AI dialer review — how each call was categorised (E-356; available:false
+    // on a database without it).
+    const outcomes = await campaignOutcomeReport(id);
+
     return successResponse({
       ...campaign,
       statusCounts,
       retryScheduled: Number(retry?.retryScheduled ?? 0),
       nextRetryAt: retry?.nextRetryAt ? new Date(retry.nextRetryAt).toISOString() : null,
       totalDials: Number(retry?.totalDials ?? 0),
+      outcomes,
     });
   },
 );

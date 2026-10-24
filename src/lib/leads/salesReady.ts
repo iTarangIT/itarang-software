@@ -47,6 +47,10 @@ export const SALES_READY_REASONS = [
     "admin_marked",
     "admin_assigned",
     "reactivated",
+    // AI dialer review (23 Oct 2026) — the dealer asked an AI call for a
+    // callback on pricing / negotiation / dealership / purchase, or for a
+    // Sales Manager (src/lib/ai-dialer/postCallOutcome.ts).
+    "ai_callback",
 ] as const;
 export type SalesReadyReason = (typeof SALES_READY_REASONS)[number];
 
@@ -59,7 +63,11 @@ const LABEL: Record<SalesReadyReason, string> = {
     admin_marked: "marked qualified by a reviewer",
     admin_assigned: "assigned by an admin",
     reactivated: "reactivated into the sales pool",
+    ai_callback: "asked an AI call for a callback from sales",
 };
+
+/** The reasons the "AI qualified" split of Ready to assign counts. */
+const AI_READY_REASONS: readonly SalesReadyReason[] = ["ai_qualified", "ai_callback"];
 
 export async function markSalesReady(
     exec: Tx | typeof db,
@@ -142,6 +150,8 @@ export const READY_NO_OWNER_TITLE = "Ready leads with no owner";
 export const READY_SPLITS = ["ai", "hot", "other"] as const;
 export type ReadySplit = (typeof READY_SPLITS)[number];
 export const READY_SPLIT_LABEL: Record<ReadySplit, string> = { ai: "AI qualified", hot: "Hot", other: "other" };
+// "AI qualified" also counts the AI's sales callbacks (ai_callback) — both are
+// the AI dialer handing the lead to people.
 
 export function isReadySplit(v: unknown): v is ReadySplit {
     return typeof v === "string" && (READY_SPLITS as readonly string[]).includes(v);
@@ -149,13 +159,13 @@ export function isReadySplit(v: unknown): v is ReadySplit {
 
 /** JS twin of readySplitSql(). */
 export function readySplitOf(interestLevel: string | null | undefined, reason: string | null | undefined): ReadySplit {
-    if (reason === "ai_qualified") return "ai";
+    if ((AI_READY_REASONS as readonly string[]).includes(reason ?? "")) return "ai";
     return String(interestLevel ?? "").toLowerCase() === "hot" ? "hot" : "other";
 }
 
 /** The split bucket of a lead, as SQL text 'hot' | 'ai' | 'other'. */
 export function readySplitSql(dl: SQL = sql`dl`): SQL {
-    return sql`CASE WHEN (to_jsonb(${dl}) ->> 'sales_ready_reason') = 'ai_qualified' THEN 'ai'
+    return sql`CASE WHEN (to_jsonb(${dl}) ->> 'sales_ready_reason') IN ('ai_qualified', 'ai_callback') THEN 'ai'
                     WHEN lower(COALESCE(${dl}.interest_level, '')) = 'hot' THEN 'hot'
                     ELSE 'other' END`;
 }

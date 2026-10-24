@@ -78,16 +78,25 @@ const NEVER_RETRY_OUTCOME = [
     /stopped_by_user/i,
 ];
 
+/**
+ * call_outcome of a conversation that was cut off before it finished (AI dialer
+ * review point 8; callCategory.ts 'disconnected'). The dealer spoke, so the row
+ * is 'completed' — but nothing was settled, so it is redialled like a hang-up,
+ * within the same max_retries budget.
+ */
+export const DISCONNECTED_OUTCOME = "disconnected";
+
 export function isAutoRetryable(status: string, callOutcome: string | null): boolean {
     const outcome = callOutcome ?? "";
     if (NEVER_RETRY_OUTCOME.some((re) => re.test(outcome))) return false;
     if (RETRY_STATUSES.has(status)) return true;
+    if (status === "completed" && outcome === DISCONNECTED_OUTCOME) return true;
     if (status === "failed") {
         // The watchdog's "we never heard back" — the call may never have rung.
         if (outcome === "no_webhook") return true;
         return isRetryableFailure({ status, callOutcome });
     }
-    return false; // completed, skipped, pending, calling, unknown
+    return false; // completed (a finished conversation), skipped, pending, calling, unknown
 }
 
 // ── Line blocked on OUR side ────────────────────────────────────────────────

@@ -12,6 +12,12 @@
 //   never clearly answered      → Cold, 30
 // The other info signals are still extracted and shown for audit, but only
 // volume_shared moves the score.
+//
+// qualification-2.1.0 — a callback is buying intent (AI dialer review, 23 Oct
+// 2026). A dealer who agreed to a callback, or asked to speak to a person, and
+// did not rule himself out is Warm (60) instead of Cold (30). Qualified still
+// wins and a disqualifier still wins — this only lifts the "never answered the
+// lithium question" floor.
 
 import { countInfoSignals, type QualificationSignals } from "./signals";
 import { SCORING_VERSION } from "./version";
@@ -34,7 +40,8 @@ export type BandAction =
 // intent_score field so every downstream threshold/bucket/sort keeps working
 // (75/90 ≥ 75 → qualified, 60 ≥ 45 → warm, 30 ≥ 20 → cold). These are the
 // BASE scores; a Qualified lead with volume adds VOLUME_BONUS on top. The AI
-// never produces Warm any more — it stays reachable through the human override.
+// produces Warm only for a callback / ask-for-a-person (2.1.0); otherwise Warm
+// comes from the human override.
 const BAND_LEAD_SCORE: Record<Band, number> = {
   Qualified: 75,
   Warm: 60,
@@ -152,6 +159,13 @@ function buildBreakdown(s: QualificationSignals): SignalLine[] {
       info: false,
       evidence: s.evidence.callback_agreed,
     },
+    {
+      signal: "wants_human",
+      label: "Asked to speak to a person",
+      present: s.wants_human === "yes",
+      info: false,
+      evidence: "",
+    },
   );
   if (s.disqualifier !== "none") {
     lines.push({
@@ -170,6 +184,7 @@ const HARD_DISQUALIFIERS = new Set(["dont_call", "hostile", "not_interested"]);
 export function computeBand(signals: QualificationSignals): BandResult {
   const info = countInfoSignals(signals);
   const callbackYes = signals.callback_agreed === "yes";
+  const wantsHuman = signals.wants_human === "yes";
   const lithium = signals.lithium_dealer;
   const volumeYes = signals.volume_shared === "yes";
   const breakdown = buildBreakdown(signals);
@@ -177,7 +192,7 @@ export function computeBand(signals: QualificationSignals): BandResult {
   // ── Call status — a dropped call only voids the lead if NOTHING was captured
   let call_status: CallStatus;
   if (signals.disqualifier === "call_dropped") {
-    if (lithium === "unknown" && info === 0 && !callbackYes) {
+    if (lithium === "unknown" && info === 0 && !callbackYes && !wantsHuman) {
       // dropped_empty: no band written, auto-retry. Not a hard-negative — the
       // lead is simply untouched (leadStore keeps any prior band).
       return {
@@ -205,6 +220,8 @@ export function computeBand(signals: QualificationSignals): BandResult {
     band = "Disqualified"; // not a lithium battery dealer — not our market
   } else if (lithium === "yes") {
     band = "Qualified";
+  } else if (callbackYes || wantsHuman) {
+    band = "Warm"; // 2.1.0 — asked to be called back / to speak to a person
   } else {
     band = "Cold"; // never clearly answered the lithium question
   }

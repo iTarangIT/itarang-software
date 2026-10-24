@@ -24,14 +24,19 @@ import {
   type CallEndClassification,
 } from "@/lib/ai-dialer/campaignLeadStatus";
 import { advanceCampaign } from "@/lib/queue/advanceCampaign";
-import { scheduleCall } from "@/lib/queue/scheduler";
 import {
   appendSalesCallLog,
   appendCallReview,
   callReviewSheetEnabled,
 } from "@/lib/google/sheet";
-import { resolveNextCallAt } from "@/lib/ai/analysis/postCallHelpers";
 import { claimCallForProcessing } from "@/lib/ai/analysis/callClaim";
+import {
+  applyPostCall,
+  campaignOutcomeFor,
+  connectedScore,
+  preparePostCall,
+} from "@/lib/ai-dialer/postCallOutcome";
+import { resolveLeadIdForCall } from "@/lib/ai/storage/callOutcomeStore";
 import { fetchAndPersistCallCost } from "@/lib/ai/storage/costStore";
 import { writeAiCallTouchpoint } from "@/lib/ai/storage/callTouchpoint";
 import {
@@ -96,7 +101,7 @@ export async function finalizeBolnaCall(
     recordingUrl: providerRecordingUrl,
     duration,
     phone,
-    leadId: leadIdHint,
+    leadId: providedLeadId,
     conversation,
     executionId,
     answeredByVoicemail,
@@ -114,6 +119,11 @@ export async function finalizeBolnaCall(
       return;
     }
   }
+
+  // The webhook carries no lead id and an E.164 phone that never equalled the
+  // stored 10 digits — resolve by call id first, then every phone variant.
+  const leadIdHint =
+    providedLeadId ?? (await resolveLeadIdForCall(callId, phone)) ?? undefined;
 
   // ID 166 (decision 13): copy the recording into iTarang storage BEFORE any
   // row stores it, so the call log, the touchpoint and the review sheet all
@@ -208,6 +218,27 @@ export async function finalizeBolnaCall(
         intentScore: null,
       });
       campaignIdAfterComplete = r.campaignId;
+
+      // AI dialer review — the outcome category (and an AI callback re-dial
+      // that did not get through goes back on the list).
+      await applyPostCall({
+        provider: "bolna",
+        callId,
+        leadId: leadForPhone.id,
+        plan: await preparePostCall({
+          callEnd,
+          callOutcome: status,
+          analysis: null,
+          transcript: null,
+          leadId: leadForPhone.id,
+        }),
+        callEnd,
+        band: null,
+        intentScore: null,
+        summary: null,
+        transcript: null,
+        campaign: r,
+      });
 
       // "All calls" requirement: log no-conversation calls (no_answer / busy /
       // failed) to the Campaign_Call_Review sheet too. No transcript exists, so
@@ -307,6 +338,24 @@ export async function finalizeBolnaCall(
       reason: result.reason,
       callEnd,
     });
+    await applyPostCall({
+      provider: "bolna",
+      callId,
+      leadId: lead.id,
+      plan: await preparePostCall({
+        callEnd,
+        analysis: null,
+        analysisFailed: true,
+        transcript,
+        leadId: lead.id,
+      }),
+      callEnd,
+      band: null,
+      intentScore: null,
+      summary: `analysis_failed — ${result.reason}`,
+      transcript,
+      campaign: r,
+    });
     if (r.campaignId) {
       await advanceCampaign(r.campaignId, { preCallDelayMs: ADVANCE_DELAY_MS });
     }
@@ -320,7 +369,17 @@ export async function finalizeBolnaCall(
   // ── dropped_empty: the line dropped before anything was captured (no info
   // signals, no callback). No band is written — the lead is left untouched and
   // the call is tagged so normal campaign scheduling re-attempts it. ──
+  // AI dialer review — category, callback and retry decided once, up front.
+  const plan = await preparePostCall({
+    callEnd,
+    analysis,
+    transcript,
+    leadId: lead.id,
+  });
+
   if (analysis.band === null) {
+    // Review point 7: a connected call always carries a score — 0 here.
+    const droppedScore = connectedScore(plan, null);
     const history = (lead.follow_up_history as unknown[]) || [];
     const droppedEntry = {
       attempt: history.length + 1,
@@ -356,7 +415,7 @@ export async function finalizeBolnaCall(
       recordingUrl,
       duration,
       phone: phone ?? lead.phone,
-      intentScore: null,
+      intentScore: droppedScore,
       intentReason: null,
       nextAction: "auto_retry",
       scoringVersion: analysis.scoring_version,
@@ -392,12 +451,26 @@ export async function finalizeBolnaCall(
     // but not automatically a conversation either: classifyCallEnd marks it
     // completed only if the dealer spoke. The Outcome column still carries
     // "dropped_empty" to preserve the call-quality nuance.
+    // When the dealer did speak, the outcome is 'disconnected' — the campaign
+    // redials it (review point 8) instead of treating it as a conversation.
     const dr = await completeCampaignLead({
       leadId: lead.id,
       status: callEnd.status,
       bolnaCallId: callId || null,
-      outcome: callEnd.outcome ?? "dropped_empty",
-      intentScore: null,
+      outcome: campaignOutcomeFor(plan, callEnd.outcome ?? "dropped_empty"),
+      intentScore: droppedScore,
+    });
+    await applyPostCall({
+      provider: "bolna",
+      callId,
+      leadId: lead.id,
+      plan,
+      callEnd,
+      band: null,
+      intentScore: droppedScore,
+      summary: analysis.memory?.intent_summary ?? null,
+      transcript,
+      campaign: dr,
     });
     if (dr.campaignId) {
       await advanceCampaign(dr.campaignId, { preCallDelayMs: ADVANCE_DELAY_MS });
@@ -405,11 +478,11 @@ export async function finalizeBolnaCall(
     return;
   }
 
-  const nextCallAt = resolveNextCallAt(
-    { callback_time: analysis.callback_time, intent_score: analysis.intent_score },
-    transcript,
-    action,
-  );
+  // A requested callback is a lead_callbacks record now (postCallOutcome.ts),
+  // not dealer_leads.next_call_at: that legacy AI follow-up loop is retired for
+  // connected leads (AI_FOLLOWUP_LOOP_RETIRES_CONNECTED), so the column stays
+  // null and the due time rides on the history entry and the touchpoint.
+  const nextCallAt = plan.callbackDue;
 
   const updatedLead = updateLeadAfterCall(
     {
@@ -449,7 +522,7 @@ export async function finalizeBolnaCall(
       info_signals_count: updatedLead.info_signals_count,
       intent_band: updatedLead.intent_band,
       memory: updatedLead.memory,
-      next_call_at: nextCallAt,
+      next_call_at: null,
     })
     .where(eq(dealerLeads.id, lead.id));
 
@@ -529,24 +602,27 @@ export async function finalizeBolnaCall(
     leadId: lead.id,
     status: callEnd.status,
     bolnaCallId: callId || null,
-    outcome: callEnd.outcome ?? analysis.outcome,
+    outcome: campaignOutcomeFor(plan, callEnd.outcome ?? analysis.outcome),
     intentScore: analysis.intent_score,
   });
 
-  if (action === "schedule_call" && nextCallAt && phone) {
-    const messageId = await scheduleCall({
-      phone,
-      leadId: lead.id,
-      runAt: nextCallAt,
-    });
-    if (!messageId) {
-      console.warn(
-        `[bolna:finalize] scheduleCall returned null for ${lead.id} — call-scheduler cron is the recovery path`,
-      );
-    }
-  }
-  // Qualified (action push_to_crm) already lands current_status="qualified" via
-  // updateLeadAfterCall above — the inside-sales queue reads it from there.
+  // The category, the callback record and the sales hand-off. A Warm band
+  // (schedule_call) is no longer a QStash re-dial: the callback record is the
+  // one scheduling path (aiCallbacks.ts re-dials AI callbacks). Qualified
+  // (push_to_crm) already landed current_status="qualified" + Sales-ready above.
+  await applyPostCall({
+    provider: "bolna",
+    callId,
+    leadId: lead.id,
+    plan,
+    callEnd,
+    band: analysis.band,
+    intentScore: analysis.intent_score,
+    summary: analysis.memory?.intent_summary ?? null,
+    transcript,
+    requestedText: analysis.signals.callback_when || null,
+    campaign: completeR,
+  });
 
   appendSalesCallLog({
     leadId: lead.id,
@@ -773,7 +849,7 @@ async function markLeadNeedsReview(opts: {
   reason: string;
   callEnd: CallEndClassification;
   endEvidence?: CallEndEvidenceRow;
-}): Promise<{ campaignId: string | null }> {
+}): Promise<Awaited<ReturnType<typeof completeCampaignLead>>> {
   const history = opts.followUpHistory || [];
   const newEntry = {
     attempt: history.length + 1,
@@ -843,5 +919,5 @@ async function markLeadNeedsReview(opts: {
     outcome: opts.callEnd.outcome ?? "needs_review",
     intentScore: null,
   });
-  return { campaignId: r.campaignId };
+  return r;
 }
