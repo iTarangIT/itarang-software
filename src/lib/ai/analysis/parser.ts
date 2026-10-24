@@ -151,8 +151,13 @@ ${calibrationBlock}
 Return ONLY the JSON object.`;
 }
 
-export async function extractSignals(transcript: string): Promise<ExtractionResult> {
-  const now = new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
+export async function extractSignals(
+  transcript: string,
+  // When the call happened — re-reading an old call must resolve "kal" against
+  // the call's day, not today's (scripts/reprocess-campaign-outcomes.ts).
+  opts: { now?: Date } = {},
+): Promise<ExtractionResult> {
+  const now = (opts.now ?? new Date()).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
 
   // The active few-shot set: the built-in seed plus any admin-promoted
   // examples. Never throws — a DB problem degrades to the seed set rather than
@@ -188,6 +193,17 @@ export async function extractSignals(transcript: string): Promise<ExtractionResu
           response_format: { type: "json_object" },
         }),
       });
+
+      // Out of credits is also a 429, but no wait fixes it — fail at once with a
+      // reason that says so (it was hiding as "exhausted_retries" after 60s, on
+      // every call, 21–22 Oct 2026).
+      if (res.status === 429) {
+        const body = await res.clone().text().catch(() => "");
+        if (/insufficient_quota|credit_balance_exhausted|no credits/i.test(body)) {
+          console.error("[OPENAI] Out of credits — add credits to the OpenAI organization");
+          return { status: "failed", reason: "openai_no_credits" };
+        }
+      }
 
       // Rate limited — wait and retry (preserve the 10/20/30s behaviour).
       if (res.status === 429) {

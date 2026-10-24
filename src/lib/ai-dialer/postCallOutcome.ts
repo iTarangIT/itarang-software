@@ -88,6 +88,8 @@ export async function preparePostCall(input: {
     analysisFailed?: boolean;
     transcript: string | null;
     leadId: string | null;
+    /** When the call happened — defaults to now (a live call). */
+    now?: Date;
 }): Promise<PostCallPlan> {
     const cat = categorizeCall({
         campaignStatus: input.callEnd.status,
@@ -98,15 +100,20 @@ export async function preparePostCall(input: {
     if (!cat.callbackOwner || !input.analysis) return { cat, callbackDue: null };
 
     try {
-        // A lead a person already owns, or that is in the sales lifecycle, is
-        // never re-dialled by the AI: the callback goes to the people instead.
-        if (cat.callbackOwner === "ai" && input.leadId) {
-            const l = rows<{ owned: boolean }>(await db.execute(sql`
-                SELECT (current_owner_id IS NOT NULL OR lead_status IS NOT NULL) AS owned
+        if (input.leadId) {
+            const l = rows<{ owned: boolean; won: boolean }>(await db.execute(sql`
+                SELECT (current_owner_id IS NOT NULL OR lead_status IS NOT NULL) AS owned,
+                       COALESCE(lead_status, '') IN ('Won', 'Converted') AS won
                   FROM dealer_leads WHERE id = ${input.leadId}
             `));
-            if (l[0]?.owned) cat.callbackOwner = "sales";
-            if (l[0]?.owned) cat.category = "callback_sales";
+            // Already won business needs no callback record — the category stays.
+            if (l[0]?.won) return { cat: { ...cat, callbackOwner: null }, callbackDue: null };
+            // A lead a person already owns, or that is in the sales lifecycle, is
+            // never re-dialled by the AI: the callback goes to the people instead.
+            if (cat.callbackOwner === "ai" && l[0]?.owned) {
+                cat.callbackOwner = "sales";
+                cat.category = "callback_sales";
+            }
         }
         const window = await defaultRetryWindow();
         const callbackDue = callbackDueAt({
@@ -114,7 +121,7 @@ export async function preparePostCall(input: {
             callbackAt: input.analysis.callback_time,
             callbackWhen: input.analysis.signals.callback_when ?? null,
             transcript: input.transcript,
-            now: new Date(),
+            now: input.now ?? new Date(),
             window,
         });
         return { cat, callbackDue };

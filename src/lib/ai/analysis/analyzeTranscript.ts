@@ -56,8 +56,11 @@ export interface AnalysisFailed {
 
 export type AnalysisResult = AnalysisOk | AnalysisFailed;
 
-export async function analyzeTranscript(transcript: string): Promise<AnalysisResult> {
-  const extraction = await extractSignals(transcript);
+export async function analyzeTranscript(
+  transcript: string,
+  opts: { now?: Date } = {},
+): Promise<AnalysisResult> {
+  const extraction = await extractSignals(transcript, opts);
   if (extraction.status === "failed") {
     // Genuine extraction failure (no JSON / network / schema) → needs_review,
     // keep any prior band. An all-"no" extraction is NOT a failure here: it is a

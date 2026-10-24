@@ -213,18 +213,62 @@ async function rescoreNeedsReview(): Promise<number> {
     let rescored = 0;
     for (const c of claimed) {
         if (!c.lead_id) continue;
-        const log = (
-            await db
-                .select({ id: aiCallLogs.id, status: aiCallLogs.status, transcript: aiCallLogs.transcript })
-                .from(aiCallLogs)
-                .where(eq(aiCallLogs.call_id, c.call_id))
-                .limit(1)
-        )[0];
-        if (!log?.transcript || log.status !== "needs_review") continue;
+        const r = await reprocessCall({
+            callId: c.call_id,
+            provider: c.provider ?? "bolna",
+            leadId: c.lead_id,
+            campaignId: c.campaign_id,
+            campaignLeadId: c.campaign_lead_id,
+            campaignStatus: c.campaign_status,
+            onlyIfNeedsReview: true,
+        });
+        if (r.status !== "rescored") continue;
+        rescored++;
+        console.log("[aiCallbacks] re-scored a needs_review call", { callId: c.call_id, band: r.band, score: r.score });
+    }
+    return rescored;
+}
 
-        const analysis = await analyzeTranscript(log.transcript);
-        if (analysis.status === "failed") continue;
+export type ReprocessResult =
+    | { status: "rescored"; band: string | null; score: number; category: string; callbackOwner: string | null }
+    | { status: "skipped"; reason: string };
 
+/**
+ * Read one finished call's transcript again with the CURRENT prompt and band
+ * rule, and apply the result the way a live call would — score on the call log,
+ * the lead and the campaign row; the outcome category; a callback record and the
+ * sales hand-off. Used by the needs_review re-score above and by
+ * scripts/reprocess-campaign-outcomes.ts (calls made before this logic existed).
+ *
+ * Unlike a live call it appends NO follow_up_history entry (the attempt is
+ * already recorded) and books no campaign retry (the row was finalized then).
+ * `now` = when the call happened, so "kal" resolves against the call's day.
+ */
+export async function reprocessCall(input: {
+    callId: string;
+    provider: "bolna" | "elevenlabs";
+    leadId: string;
+    campaignId: string | null;
+    campaignLeadId: string | null;
+    campaignStatus: string | null;
+    now?: Date;
+    onlyIfNeedsReview?: boolean;
+}): Promise<ReprocessResult> {
+    const c = input;
+    const log = (
+        await db
+            .select({ id: aiCallLogs.id, status: aiCallLogs.status, transcript: aiCallLogs.transcript })
+            .from(aiCallLogs)
+            .where(eq(aiCallLogs.call_id, c.callId))
+            .limit(1)
+    )[0];
+    if (!log?.transcript) return { status: "skipped", reason: "no transcript" };
+    if (c.onlyIfNeedsReview && log.status !== "needs_review") return { status: "skipped", reason: "already scored" };
+
+    const analysis = await analyzeTranscript(log.transcript, { now: c.now });
+    if (analysis.status === "failed") return { status: "skipped", reason: `analysis failed: ${analysis.reason}` };
+
+    {
         const score = analysis.band === null ? 0 : analysis.intent_score;
         const summary = analysis.memory?.intent_summary
             ? `${analysis.band ?? "dropped_empty"} — ${analysis.memory.intent_summary}`
@@ -233,7 +277,7 @@ async function rescoreNeedsReview(): Promise<number> {
         await db
             .update(aiCallLogs)
             .set({
-                status: "completed",
+                ...(log.status === "needs_review" ? { status: "completed" } : {}),
                 summary,
                 intent_score: score,
                 intent_reason: analysis.memory?.intent_summary ?? null,
@@ -251,8 +295,10 @@ async function rescoreNeedsReview(): Promise<number> {
             .where(eq(aiCallLogs.id, log.id));
 
         if (analysis.band !== null) {
-            const lead = await db.query.dealerLeads.findFirst({ where: (l, { eq }) => eq(l.id, c.lead_id!) });
+            const lead = await db.query.dealerLeads.findFirst({ where: (l, { eq }) => eq(l.id, c.leadId) });
             if (lead) {
+                // Reuses the live rule for the headline fields; the history entry it
+                // builds is discarded — this attempt is already in the history.
                 const updated = updateLeadAfterCall(
                     {
                         ...lead,
@@ -263,7 +309,7 @@ async function rescoreNeedsReview(): Promise<number> {
                         transcript: log.transcript,
                         outcome: analysis.outcome,
                         memory: analysis.memory,
-                        provider: c.provider ?? "bolna",
+                        provider: c.provider,
                         intentScore: analysis.intent_score,
                         band: analysis.band,
                         callStatus: analysis.call_status,
@@ -279,8 +325,6 @@ async function rescoreNeedsReview(): Promise<number> {
                 await db
                     .update(dealerLeads)
                     .set({
-                        follow_up_history: updated.follow_up_history,
-                        total_attempts: updated.total_attempts,
                         final_intent_score: updated.final_intent_score,
                         current_status: updated.current_status,
                         interest_level: aiInterestLevelSql(updated.interest_level ?? null),
@@ -299,14 +343,20 @@ async function rescoreNeedsReview(): Promise<number> {
         await db
             .update(dialerCampaignLeads)
             .set({ intent_score: score })
-            .where(eq(dialerCampaignLeads.bolna_call_id, c.call_id));
+            .where(eq(dialerCampaignLeads.bolna_call_id, c.callId));
 
-        const callEnd = { status: (c.campaign_status ?? "completed") as CallEndStatus, outcome: null };
-        const plan = await preparePostCall({ callEnd, analysis, transcript: log.transcript, leadId: c.lead_id });
+        const callEnd = { status: (c.campaignStatus ?? "completed") as CallEndStatus, outcome: null };
+        const plan = await preparePostCall({
+            callEnd,
+            analysis,
+            transcript: log.transcript,
+            leadId: c.leadId,
+            now: c.now,
+        });
         await applyPostCall({
-            provider: c.provider ?? "bolna",
-            callId: c.call_id,
-            leadId: c.lead_id,
+            provider: c.provider,
+            callId: c.callId,
+            leadId: c.leadId,
             plan,
             callEnd,
             band: analysis.band,
@@ -315,10 +365,14 @@ async function rescoreNeedsReview(): Promise<number> {
             transcript: log.transcript,
             requestedText: analysis.signals.callback_when || null,
             // The campaign row was finalized when the call ended — no retry now.
-            campaign: { campaignId: c.campaign_id, campaignLeadId: c.campaign_lead_id, retryAt: null },
+            campaign: { campaignId: c.campaignId, campaignLeadId: c.campaignLeadId, retryAt: null },
         });
-        rescored++;
-        console.log("[aiCallbacks] re-scored a needs_review call", { callId: c.call_id, band: analysis.band, score });
+        return {
+            status: "rescored",
+            band: analysis.band,
+            score,
+            category: plan.cat.category,
+            callbackOwner: plan.cat.callbackOwner,
+        };
     }
-    return rescored;
 }
