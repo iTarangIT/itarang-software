@@ -24,6 +24,7 @@ import {
 } from "@/lib/db/schema";
 import { eq, sql } from "drizzle-orm";
 import {
+  isConversationTouchpoint,
   isWorkedTouchpoint,
   type CallStatus,
   type NextAction,
@@ -38,6 +39,7 @@ import { setInterestLevel } from "@/lib/leads/interestLevel";
 import { cancelPendingWonUndo } from "@/lib/leads/wonUndoCancel";
 import { scheduleOverallSummaryRefresh } from "@/lib/leads/overallSummary";
 import { refreshOnTouchpointWrite } from "@/lib/leads/overallSummaryRules";
+import { settleCallbacksForLeadWork } from "@/lib/ai/storage/callOutcomeStore";
 
 /**
  * A status move the S3 rules refuse (statusRules.ts). Carries an HTTP status so
@@ -487,6 +489,19 @@ export async function writeTouchpoint(
   };
 
   const result = await (opts?.tx ? run(opts.tx) : db.transaction(run));
+
+  // E-356 — a person talking to the dealer (call / visit / WhatsApp) is the
+  // callback the AI promised; a closed lead needs none. Settles the lead's open
+  // AI-dialer callback. After the write, best-effort, never awaited — with a
+  // caller-owned tx the touchpoint may still roll back, so this only runs on
+  // the self-committed path.
+  const closesLead = !!input.statusChange && isTerminal(input.statusChange.to);
+  if (!opts?.tx && input.performedBy && (isConversationTouchpoint(input.touchpointType) || closesLead)) {
+    void settleCallbacksForLeadWork(input.dealerLeadId, input.performedBy, {
+      terminal: closesLead,
+      note: closesLead ? `Lead closed (${input.statusChange!.to}).` : `Rep logged a ${input.touchpointType.replace(/_/g, " ")}.`,
+    });
+  }
 
   // ID 118 option B: after a call, the server refreshes the lead's Overall
   // Summary — in the background, so this write never waits on (or fails

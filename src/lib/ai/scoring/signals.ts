@@ -36,6 +36,16 @@ export const DISQUALIFIERS = [
   "call_dropped",
 ] as const;
 export const LANGUAGES = ["hindi", "english", "hinglish", "unknown"] as const;
+// What a requested callback is ABOUT — decides who makes it (callCategory.ts):
+// general_info / none → the AI calls back; the commercial four → a person.
+export const CALLBACK_TOPICS = [
+  "none",
+  "general_info",
+  "pricing",
+  "negotiation",
+  "dealership",
+  "purchase",
+] as const;
 
 export type YesNo = (typeof YES_NO)[number];
 export type YesNoUnknown = (typeof YES_NO_UNKNOWN)[number];
@@ -43,6 +53,7 @@ export type DealerSegment = (typeof DEALER_SEGMENTS)[number];
 export type DealerRole = (typeof DEALER_ROLES)[number];
 export type Disqualifier = (typeof DISQUALIFIERS)[number];
 export type LanguageType = (typeof LANGUAGES)[number];
+export type CallbackTopic = (typeof CALLBACK_TOPICS)[number];
 
 // ── Schema ───────────────────────────────────────────────────────────────────
 
@@ -75,6 +86,17 @@ export const QualificationSignalsSchema = z.object({
   // callback_agreed = yes if he agreed to a follow-up — a PASSIVE "ok / theek
   // hai" to an AGENT-OFFERED callback COUNTS as yes (the qualifying event).
   callback_agreed: yesNo,
+
+  // ── Callback detail (signals-2.2.0) — routing facts, no band impact on their
+  // own. callback_at is the model's reading of the dealer's words as an IST
+  // timestamp ("" when no time was named); callback_when keeps the words so a
+  // reviewer can check it. Neither is trusted blindly — see callbackDueAt().
+  callback_when: z.string().catch(""),
+  callback_at: z.string().catch(""),
+  callback_topic: z.enum(CALLBACK_TOPICS).catch("none"),
+  // The dealer asked to speak to a person — a manager, "your senior", "someone
+  // from the company". Routes the lead to the sales team.
+  wants_human: yesNo,
 
   // ── Hard negative ──
   disqualifier: z.enum(DISQUALIFIERS).catch("none"),

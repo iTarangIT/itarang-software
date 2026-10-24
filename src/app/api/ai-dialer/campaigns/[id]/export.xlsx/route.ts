@@ -24,9 +24,15 @@ import {
   bucketFor,
   resolveDurationBucketConfig,
 } from "@/lib/ai-dialer/call-duration/config-store";
-import { asc, eq } from "drizzle-orm";
+import { asc, eq, sql } from "drizzle-orm";
 import ExcelJS from "exceljs";
 import { CAMPAIGN_EXPORT_ROLES } from "@/lib/leads/access";
+import { campaignOutcomeReport } from "@/lib/ai-dialer/campaignOutcomes";
+import {
+  CALL_CATEGORY_LABELS,
+  CALL_CATEGORY_ORDER,
+  isCallCategory,
+} from "@/lib/ai-dialer/callCategory";
 
 function styleHeader(row: ExcelJS.Row) {
   row.eachCell((cell) => {
@@ -142,6 +148,9 @@ export const GET = withErrorHandler(
           // Same already-joined row again. Duration is derived rather than read
           // straight off this column — see deriveDurationSeconds.
           call_duration: aiCallLogs.call_duration,
+          // AI dialer review — the band and the AI's summary of the call.
+          band: aiCallLogs.band,
+          summary: aiCallLogs.summary,
         })
         .from(dialerCampaignLeads)
         .leftJoin(dealerLeads, eq(dealerLeads.id, dialerCampaignLeads.lead_id))
@@ -153,6 +162,26 @@ export const GET = withErrorHandler(
         .orderBy(asc(dialerCampaignLeads.queue_position)),
       resolveDurationBucketConfig(),
     ]);
+
+    // AI dialer review (E-356) — each call's outcome category and callback, by
+    // the call id the Leads sheet already carries. Empty without E-356.
+    const outcomes = await campaignOutcomeReport(id);
+    const outcomeByCall = new Map<
+      string,
+      { category: string; callback_owner: string | null; callback_due_at: string | null }
+    >();
+    if (outcomes.available) {
+      const rows = (await db.execute(sql`
+        SELECT call_id, category, callback_owner, callback_due_at
+          FROM ai_call_outcomes WHERE campaign_id = ${id}
+      `)) as unknown as Array<{
+        call_id: string;
+        category: string;
+        callback_owner: string | null;
+        callback_due_at: string | null;
+      }>;
+      for (const r of rows) outcomeByCall.set(r.call_id, r);
+    }
 
     // ID 58: a rep's or ASM's sheet holds only the leads they own — a campaign
     // spans the unowned pool, and this sheet carries every phone number. The
@@ -218,6 +247,30 @@ export const GET = withErrorHandler(
       entries.forEach(([k, v]) => meta.addRow({ k, v }));
     }
 
+    // AI dialer review (point 9) — the outcome breakdown, the same numbers the
+    // campaign page's "Call outcomes" panel shows.
+    if (outcomes.available) {
+      const os = workbook.addWorksheet("Outcomes");
+      os.columns = [
+        { header: "Outcome", key: "k", width: 30 },
+        { header: "Leads (latest call)", key: "leads", width: 20 },
+        { header: "Calls (all dials)", key: "calls", width: 18 },
+      ];
+      styleHeader(os.getRow(1));
+      os.addRow({ k: "Total", leads: outcomes.leads, calls: outcomes.calls });
+      os.addRow({ k: "Connected", leads: outcomes.connectedLeads, calls: outcomes.connectedCalls });
+      for (const c of CALL_CATEGORY_ORDER) {
+        os.addRow({ k: CALL_CATEGORY_LABELS[c], leads: outcomes.byCategory[c], calls: outcomes.byCategoryCalls[c] });
+      }
+      os.addRow({ k: "Retry booked", leads: outcomes.retryBooked, calls: "" });
+      os.addRow({});
+      os.addRow({ k: "Callbacks open with sales", leads: outcomes.callbacks.salesOpen });
+      os.addRow({ k: "Callbacks open with the AI", leads: outcomes.callbacks.aiOpen });
+      os.addRow({ k: "Callbacks done", leads: outcomes.callbacks.done });
+      os.addRow({ k: "Callbacks not reached", leads: outcomes.callbacks.expired });
+      os.addRow({ k: "Callbacks cancelled", leads: outcomes.callbacks.cancelled });
+    }
+
     const sheet = workbook.addWorksheet("Leads", {
       views: [{ state: "frozen", ySplit: 1 }],
     });
@@ -235,6 +288,11 @@ export const GET = withErrorHandler(
       { header: "Failure Reason", key: "failure_reason", width: 24 },
       { header: "Retryable", key: "retryable", width: 11 },
       { header: "Intent Score", key: "intent_score", width: 14 },
+      { header: "Band", key: "band", width: 12 },
+      { header: "Category", key: "category", width: 24 },
+      { header: "Callback Owner", key: "callback_owner", width: 15 },
+      { header: "Callback Due", key: "callback_due", width: 22 },
+      { header: "AI Summary", key: "summary", width: 50 },
       { header: "Lead Score", key: "final_intent_score", width: 14 },
       { header: "Current Status", key: "current_status", width: 16 },
       { header: "Started", key: "started_at", width: 22 },
@@ -267,6 +325,16 @@ export const GET = withErrorHandler(
           return fr ? (fr.retryable ? "Yes" : "No") : "—";
         })(),
         intent_score: r.intent_score ?? "—",
+        band: r.band ?? "—",
+        ...(() => {
+          const o = r.bolna_call_id ? outcomeByCall.get(r.bolna_call_id) : undefined;
+          return {
+            category: o && isCallCategory(o.category) ? CALL_CATEGORY_LABELS[o.category] : "—",
+            callback_owner: o?.callback_owner === "sales" ? "Sales" : o?.callback_owner === "ai" ? "AI" : "—",
+            callback_due: o?.callback_due_at ? fmt(new Date(o.callback_due_at)) : "—",
+          };
+        })(),
+        summary: r.summary ?? "—",
         final_intent_score: r.final_intent_score ?? "—",
         current_status: r.current_status ?? "—",
         started_at: fmt(r.started_at),

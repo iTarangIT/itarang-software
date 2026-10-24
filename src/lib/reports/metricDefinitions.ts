@@ -276,7 +276,7 @@ export const ANALYST_RULES: ReadonlyArray<{ topics: readonly AnalystTopic[]; tex
         text:
             "Ready leads with no owner = dealer_leads with sales_ready_at set, current_owner_id NULL, is_active not false, " +
             "lead_status not Won/Converted/Lost and contactability NULL (number not dead). " +
-            "Split, one bucket each: sales_ready_reason 'ai_qualified' first, then interest_level 'hot', then other.",
+            "Split, one bucket each: sales_ready_reason 'ai_qualified' or 'ai_callback' first, then interest_level 'hot', then other.",
     },
     // ID 148 — accountList.ts countAccounts(): live = not closed; gstinMissingSql().
     {

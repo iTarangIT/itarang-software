@@ -14,14 +14,19 @@ import {
   type CallEndClassification,
 } from "@/lib/ai-dialer/campaignLeadStatus";
 import { advanceCampaign } from "@/lib/queue/advanceCampaign";
-import { scheduleElevenLabsCall } from "@/lib/queue/scheduler";
 import {
   appendSalesCallLog,
   appendCallReview,
   callReviewSheetEnabled,
 } from "@/lib/google/sheet";
-import { resolveNextCallAt } from "@/lib/ai/analysis/postCallHelpers";
 import { claimCallForProcessing } from "@/lib/ai/analysis/callClaim";
+import {
+  applyPostCall,
+  campaignOutcomeFor,
+  connectedScore,
+  preparePostCall,
+} from "@/lib/ai-dialer/postCallOutcome";
+import { resolveLeadIdForCall } from "@/lib/ai/storage/callOutcomeStore";
 import { fetchAndPersistCallCost } from "@/lib/ai/storage/costStore";
 import { writeAiCallTouchpoint } from "@/lib/ai/storage/callTouchpoint";
 import {
@@ -95,7 +100,7 @@ export async function finalizeElevenLabsCall(
     recordingUrl,
     duration,
     phone,
-    leadId: leadIdHint,
+    leadId: providedLeadId,
     conversation,
     startedAt,
     endedAt,
@@ -114,6 +119,13 @@ export async function finalizeElevenLabsCall(
       return;
     }
   }
+
+  // By call id first (campaign row / AI callback re-dial), then every stored
+  // variant of the phone — an exact phone match misses +91 vs 10-digit.
+  const leadIdHint =
+    providedLeadId ??
+    (await resolveLeadIdForCall(conversationId, phone)) ??
+    undefined;
 
   // What this attempt ENDED as. Decided once, from the whole payload, before
   // any branch below: the branches decide what to STORE about the call, and
@@ -209,6 +221,27 @@ export async function finalizeElevenLabsCall(
         intentScore: null,
       });
       campaignIdAfterComplete = r.campaignId;
+
+      // AI dialer review — the outcome category (an unreached AI callback
+      // re-dial goes back on the list).
+      await applyPostCall({
+        provider: "elevenlabs",
+        callId: conversationId,
+        leadId: leadForPhone.id,
+        plan: await preparePostCall({
+          callEnd,
+          callOutcome: status,
+          analysis: null,
+          transcript: null,
+          leadId: leadForPhone.id,
+        }),
+        callEnd,
+        band: null,
+        intentScore: null,
+        summary: null,
+        transcript: null,
+        campaign: r,
+      });
 
       // "All calls" requirement: log no-conversation calls to the
       // Campaign_Call_Review sheet too. No transcript exists, so the Transcript
@@ -343,6 +376,24 @@ export async function finalizeElevenLabsCall(
       agentId,
       callEnd,
     });
+    await applyPostCall({
+      provider: "elevenlabs",
+      callId: conversationId,
+      leadId: lead.id,
+      plan: await preparePostCall({
+        callEnd,
+        analysis: null,
+        analysisFailed: true,
+        transcript,
+        leadId: lead.id,
+      }),
+      callEnd,
+      band: null,
+      intentScore: null,
+      summary: `analysis_failed — ${result.reason}`,
+      transcript,
+      campaign: r,
+    });
     if (r.campaignId) {
       await advanceCampaign(r.campaignId, { preCallDelayMs: ADVANCE_DELAY_MS });
     }
@@ -355,7 +406,17 @@ export async function finalizeElevenLabsCall(
 
   // ── dropped_empty: line dropped before anything was captured. No band is
   // written; tag the call and let normal scheduling re-attempt it. ──
+  // AI dialer review — category, callback and retry decided once, up front.
+  const plan = await preparePostCall({
+    callEnd,
+    analysis,
+    transcript,
+    leadId: lead.id,
+  });
+
   if (analysis.band === null) {
+    // Review point 7: a connected call always carries a score — 0 here.
+    const droppedScore = connectedScore(plan, null);
     const history = (lead.follow_up_history as unknown[]) || [];
     const droppedEntry = {
       attempt: history.length + 1,
@@ -392,7 +453,7 @@ export async function finalizeElevenLabsCall(
       duration,
       phone: phone ?? lead.phone,
       transcriptTurns: conversation ?? null,
-      intentScore: null,
+      intentScore: droppedScore,
       intentReason: null,
       nextAction: "auto_retry",
       scoringVersion: analysis.scoring_version,
@@ -429,12 +490,26 @@ export async function finalizeElevenLabsCall(
     // where the dealer never spoke. classifyCallEnd tells the two apart —
     // completed if the dealer said something, silent / hung_up / busy / … if
     // not. The Outcome column still carries "dropped_empty".
+    // When the dealer did speak, the outcome is 'disconnected' — the campaign
+    // redials it (review point 8).
     const dr = await completeCampaignLead({
       leadId: lead.id,
       status: callEnd.status,
       bolnaCallId: conversationId || null,
-      outcome: callEnd.outcome ?? "dropped_empty",
-      intentScore: null,
+      outcome: campaignOutcomeFor(plan, callEnd.outcome ?? "dropped_empty"),
+      intentScore: droppedScore,
+    });
+    await applyPostCall({
+      provider: "elevenlabs",
+      callId: conversationId,
+      leadId: lead.id,
+      plan,
+      callEnd,
+      band: null,
+      intentScore: droppedScore,
+      summary: analysis.memory?.intent_summary ?? null,
+      transcript,
+      campaign: dr,
     });
     if (dr.campaignId) {
       await advanceCampaign(dr.campaignId, { preCallDelayMs: ADVANCE_DELAY_MS });
@@ -442,11 +517,9 @@ export async function finalizeElevenLabsCall(
     return;
   }
 
-  const nextCallAt = resolveNextCallAt(
-    { callback_time: analysis.callback_time, intent_score: analysis.intent_score },
-    transcript,
-    action,
-  );
+  // The callback's due time — a lead_callbacks record now, not next_call_at
+  // (see the Bolna twin).
+  const nextCallAt = plan.callbackDue;
 
   const updatedLead = updateLeadAfterCall(
     {
@@ -486,7 +559,7 @@ export async function finalizeElevenLabsCall(
       info_signals_count: updatedLead.info_signals_count,
       intent_band: updatedLead.intent_band,
       memory: updatedLead.memory,
-      next_call_at: nextCallAt,
+      next_call_at: null,
       provider: "elevenlabs",
     })
     .where(eq(dealerLeads.id, lead.id));
@@ -556,24 +629,25 @@ export async function finalizeElevenLabsCall(
     leadId: lead.id,
     status: callEnd.status,
     bolnaCallId: conversationId || null,
-    outcome: callEnd.outcome ?? analysis.outcome,
+    outcome: campaignOutcomeFor(plan, callEnd.outcome ?? analysis.outcome),
     intentScore: analysis.intent_score,
   });
 
-  if (action === "schedule_call" && nextCallAt && phone) {
-    const messageId = await scheduleElevenLabsCall({
-      phone,
-      leadId: lead.id,
-      runAt: nextCallAt,
-    });
-    if (!messageId) {
-      console.warn(
-        `[elevenlabs:finalize] scheduleElevenLabsCall returned null for ${lead.id} — call-scheduler cron is the recovery path`,
-      );
-    }
-  }
-  // Qualified (action push_to_crm) already lands current_status="qualified" via
-  // updateLeadAfterCall above.
+  // The category, the callback record and the sales hand-off — the one
+  // scheduling path for a callback (see the Bolna twin).
+  await applyPostCall({
+    provider: "elevenlabs",
+    callId: conversationId,
+    leadId: lead.id,
+    plan,
+    callEnd,
+    band: analysis.band,
+    intentScore: analysis.intent_score,
+    summary: analysis.memory?.intent_summary ?? null,
+    transcript,
+    requestedText: analysis.signals.callback_when || null,
+    campaign: completeR,
+  });
 
   appendSalesCallLog({
     leadId: lead.id,
@@ -832,7 +906,7 @@ async function markLeadNeedsReview(opts: {
   agentId?: string | null;
   callEnd: CallEndClassification;
   endEvidence?: CallEndEvidenceRow;
-}): Promise<{ campaignId: string | null }> {
+}): Promise<Awaited<ReturnType<typeof completeCampaignLead>>> {
   const history = opts.followUpHistory || [];
   const newEntry = {
     attempt: history.length + 1,
@@ -902,5 +976,5 @@ async function markLeadNeedsReview(opts: {
     outcome: opts.callEnd.outcome ?? "needs_review",
     intentScore: null,
   });
-  return { campaignId: r.campaignId };
+  return r;
 }

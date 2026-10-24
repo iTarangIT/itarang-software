@@ -40,6 +40,7 @@ import {
   isAiDialable,
 } from "@/lib/ai-dialer/exclusionFilter";
 import { classifyCallEnd } from "@/lib/ai-dialer/campaignLeadStatus";
+import { DISCONNECTED_OUTCOME } from "@/lib/ai-dialer/retryPolicy";
 import {
   nextWindowOpenSql,
   pauseForWindow,
@@ -73,7 +74,12 @@ export type AdvanceOptions = {
   preCallDelayMs?: number;
 };
 
-type ClaimedRow = { id: string; lead_id: string; attempt_count: number };
+type ClaimedRow = {
+  id: string;
+  lead_id: string;
+  attempt_count: number;
+  last_outcome: string | null;
+};
 
 // Atomically claim the next row to dial. Uses SKIP LOCKED so concurrent
 // callers (webhook + polling tick) won't both pick the same row, and
@@ -92,6 +98,8 @@ async function claimNextPending(campaignId: string): Promise<{
   campaignLeadId: string;
   leadId: string;
   attemptCount: number;
+  /** The previous attempt's call_outcome (attempt_history tail), or null. */
+  lastOutcome: string | null;
 } | null> {
   // Use Drizzle's raw SQL for the CTE — gives us SKIP LOCKED which the
   // builder helpers don't expose. The subquery picks one row, locks it, and
@@ -117,7 +125,8 @@ async function claimNextPending(campaignId: string): Promise<{
         bolna_call_id = NULL,
         call_outcome = NULL
     WHERE id IN (SELECT id FROM next_row)
-    RETURNING id, lead_id, attempt_count
+    RETURNING id, lead_id, attempt_count,
+              attempt_history -> -1 ->> 'outcome' AS last_outcome
   `);
 
   // drizzle-orm + postgres-js returns rows on .execute() as the array
@@ -131,6 +140,7 @@ async function claimNextPending(campaignId: string): Promise<{
     campaignLeadId: row.id,
     leadId: row.lead_id,
     attemptCount: Number(row.attempt_count),
+    lastOutcome: row.last_outcome ?? null,
   };
 }
 
@@ -376,7 +386,13 @@ export async function advanceCampaign(
       //
       // Reachable in normal operation: a concurrent campaign, or a manual call,
       // can connect with this lead after it was enrolled here.
-      if (lead[0].ai_connected) {
+      //
+      // Exempt: this row's own retry of a conversation that was cut off
+      // (review point 8). That dropped call is exactly what made the lead
+      // "AI-connected", and redialling it is the point of the retry.
+      const resumingDroppedCall =
+        claimed.attemptCount > 1 && claimed.lastOutcome === DISCONNECTED_OUTCOME;
+      if (lead[0].ai_connected && !resumingDroppedCall) {
         console.warn("[advanceCampaign] skipping lead the AI has already spoken to", {
           campaignId,
           leadId: claimed.leadId,

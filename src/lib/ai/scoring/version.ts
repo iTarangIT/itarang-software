@@ -19,12 +19,17 @@
 // Disqualified, unknown → Cold. The five-info-signal threshold and the
 // callback path to Qualified are retired. signals-2.1.0 adds lithium_dealer
 // (yes/no/unknown); extract-2.1.0 teaches the prompt to read it.
-export const SCORING_VERSION = "qualification-2.0.0";
-export const SIGNAL_SCHEMA_VERSION = "signals-2.1.0";
+//
+// qualification-2.1.0: a callback is buying intent — callback_agreed or
+// wants_human without a disqualifier lifts Cold → Warm (60). signals-2.2.0 adds
+// callback_when / callback_at / callback_topic / wants_human; extract-2.2.0
+// teaches the prompt to read them (AI dialer review, 23 Oct 2026).
+export const SCORING_VERSION = "qualification-2.1.0";
+export const SIGNAL_SCHEMA_VERSION = "signals-2.2.0";
 
 // Tags the EXTRACTION prompt (parser.ts) + its few-shot calibration set
 // (analysis/calibrationExamples.ts). Bump whenever the prompt wording or the
 // calibration examples change — this is the Lever-A (extraction-side)
 // counterpart to SCORING_VERSION, so an audit can tell whether a signal shift
 // came from a new prompt or a new band rule.
-export const EXTRACTION_VERSION = "extract-2.1.0";
+export const EXTRACTION_VERSION = "extract-2.2.0";

@@ -6,6 +6,7 @@
 import { describe, expect, it } from "vitest";
 import {
     clampIntoWindow,
+    DISCONNECTED_OUTCOME,
     isAutoRetryable,
     isLineBlockedFailure,
     MAX_LINE_BLOCKED_RETRIES,
@@ -71,6 +72,17 @@ describe("planRetry — attempt budget", () => {
 
     it("does not retry a completed call", () => {
         expect(planRetry(base({ status: "completed" }))).toBeNull();
+        expect(planRetry(base({ status: "completed", callOutcome: "callback_requested" }))).toBeNull();
+    });
+
+    // AI dialer review point 8 — cut off mid-conversation.
+    it("retries a conversation cut off mid-call, like a hang-up, within the same budget", () => {
+        expect(isAutoRetryable("completed", DISCONNECTED_OUTCOME)).toBe(true);
+        expect(planRetry(base({ status: "completed", callOutcome: DISCONNECTED_OUTCOME }))).toEqual(
+            ist("2026-09-28T12:00:00"),
+        );
+        expect(planRetry(base({ status: "completed", callOutcome: DISCONNECTED_OUTCOME, attemptCount: 4 }))).toBeNull();
+        expect(planRetry(base({ status: "completed", callOutcome: DISCONNECTED_OUTCOME, maxRetries: null }))).toBeNull();
     });
 });
 
