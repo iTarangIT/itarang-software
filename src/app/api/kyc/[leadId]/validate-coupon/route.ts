@@ -83,7 +83,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         const coupon = coupons[0];
 
         // ID 183: iTarang acting for the dealer spends the dealer's own coupon
-        // (credit goes to the dealer) — never another dealer's.
+        // (credit goes to the dealer) — never another dealer's. Business answer
+        // (24 Oct): a dealer himself is NOT limited to his own coupons, a coupon
+        // with no dealer is open to anyone, and the free coupon stays — so only
+        // iTarang actors are checked here.
         if (isItarangActor(gate.actor.kind) && coupon.dealer_id && coupon.dealer_id !== gateLead.dealer_id) {
             return NextResponse.json({ valid: false, message: "This coupon belongs to another dealer. Use one from this file's dealer." });
         }
