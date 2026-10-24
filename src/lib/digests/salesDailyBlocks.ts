@@ -367,6 +367,28 @@ export type TeamOf = ReadonlyMap<string, string>;
 export type TeamGroups = ReadonlyMap<string, RepBlock[]>;
 
 /**
+ * ID 155 (24 Oct): managers who are NOT in the block's role but have members
+ * in it — a Sales Manager over ASMs — manager id → name. Without them the
+ * block lists those members flat, with no team subtotal.
+ */
+export type OutsideManagers = ReadonlyMap<string, string>;
+
+/**
+ * ID 155: the stand-in for a manager outside the block's role — no numbers
+ * of his own in this block and no target here, so his team subtotal is his
+ * members' and its "% of target" is "—". Pure.
+ */
+export function outsideManagerBlock(id: string, name: string, like: readonly RepBlock[]): RepBlock {
+    const keys = like.length ? (Object.keys(like[0].values) as RepMetricKey[]) : [];
+    const values: Partial<Record<RepMetricKey, RepValue>> = {};
+    for (const k of keys) values[k] = { y: null, mtd: null };
+    return { id, name, values, target: null };
+}
+
+/** The header row naming a team whose manager is not in the block. */
+export const OUTSIDE_TEAM_SUFFIX = " · team";
+
+/**
  * ID 155: one manager's dated group. `windows` come from teamWindows over the
  * month to date; `full` holds each rep's block for the whole month (yesterday
  * and MTD), `partial` (window "from|to" → rep → block) the MTD read over a
@@ -421,12 +443,16 @@ export const TEAM_SUBTOTAL_PREFIX = "Team subtotal · ";
  *
  * ID 155: with `teamGroups`, the subtotal sums the manager's dated group
  * instead of [manager, ...today's members] (the rows listed stay as they are).
+ * With `outsideManagers` (24 Oct), a manager of another role gets the same
+ * group after the block's own teams: a header row with his name, his members
+ * (↳) and "Team subtotal · <manager>" — their numbers only, "% of target" "—".
  */
 export function repBlockTableRows(
     role: "asm" | "inside_sales_rep",
     blocks: RepBlock[],
     teamOf?: TeamOf,
     teamGroups?: TeamGroups,
+    outsideManagers?: OutsideManagers,
 ): Rows {
     const cols = COLS[role];
     const primary = PRIMARY_TARGET[role].metric;
@@ -478,9 +504,15 @@ export function repBlockTableRows(
     }
     const rows: Rows = [];
     const placed = new Set<string>();
+    // ID 155: teams whose manager is in another role (not listed in this block).
+    const outside = new Map<string, RepBlock[]>();
+    for (const b of blocks) {
+        const m = teamOf?.get(b.id);
+        if (m && m !== b.id && !byId.has(m) && outsideManagers?.has(m)) outside.set(m, [...(outside.get(m) ?? []), b]);
+    }
     const inShownTeam = (b: RepBlock) => {
         const m = teamOf?.get(b.id);
-        return !!m && teams.has(m);
+        return !!m && (teams.has(m) || outside.has(m));
     };
     for (const b of blocks) {
         // A member is listed under their manager, not on its own.
@@ -499,6 +531,16 @@ export function repBlockTableRows(
                 pctOfTarget(sumOf(group.map((x) => x.values[primary]?.mtd ?? null)), b.target),
             ),
         );
+    }
+    for (const [mId, members] of outside) {
+        const name = outsideManagers!.get(mId)!;
+        rows.push(cols.map((c) => ("name" in c ? name + OUTSIDE_TEAM_SUFFIX : "")));
+        for (const m of members) {
+            rows.push(cols.map((c) => cell({ ...m, name: TEAM_MEMBER_PREFIX + m.name }, c)));
+            placed.add(m.id);
+        }
+        const group = teamGroups?.get(mId) ?? [outsideManagerBlock(mId, name, members), ...members];
+        rows.push(summed(TEAM_SUBTOTAL_PREFIX + name, group, () => null));
     }
     // A member of a member (nested teams) is not lost: listed at the end, ungrouped.
     for (const b of blocks) if (!placed.has(b.id)) rows.push(cols.map((c) => cell(b, c)));

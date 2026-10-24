@@ -14,6 +14,7 @@ const {
     blockDRows,
     buildRepBlocks,
     datedTeamGroup,
+    outsideManagerBlock,
     repBlockTableRows,
 } = await import("../salesDailyBlocks");
 const { NOT_MEASURED } = await import("../salesDailyBlockA");
@@ -178,6 +179,49 @@ describe("Block B (ASM) — one row per rep", () => {
             partial: new Map([["2026-10-01|2026-10-05", new Map([["a2", full.get("a2")!]])]]),
         });
         for (const v of Object.values(group[1].values)) expect(v?.y).toBeNull();
+    });
+
+    it("ID 155: a manager in another role (Sales Manager over ASMs) gets a header, his members and their subtotal", () => {
+        const blocks = buildRepBlocks("asm", y, mtd, extras, targets);
+        // Both ASMs report to sm1, a Sales Manager who is not in Block B.
+        const teamOf = new Map([["a1", "sm1"], ["a2", "sm1"]]);
+        const rows = repBlockTableRows("asm", blocks, teamOf, undefined, new Map([["sm1", "Sam"]]));
+        expect(rows.map((r) => r[0])).toEqual(["Sam · team", "↳ Amy", "↳ Zed", "Team subtotal · Sam", "Total"]);
+        // The header carries no numbers; the subtotal is the members' 10 + 40 = 50, with no target of his own here.
+        expect(rows[0].slice(1).every((c) => c === "")).toBe(true);
+        expect(rows[3][2]).toBe(50);
+        expect(rows[3][rows[3].length - 1]).toBe(REP_NOT_MEASURED);
+        // The block Total is unchanged.
+        expect(rows[4][2]).toBe(50);
+        expect(rows[4][rows[4].length - 1]).toBe("80%");
+    });
+
+    it("ID 155: an outside manager's dated group counts a joiner only for his days", () => {
+        const blocks = buildRepBlocks("asm", y, mtd, extras, targets);
+        const full = new Map(blocks.map((b) => [b.id, b]));
+        const amyLate = { ...full.get("a2")!, values: { ...full.get("a2")!.values, visited: { y: null, mtd: 4 } } };
+        const group = datedTeamGroup({
+            manager: outsideManagerBlock("sm1", "Sam", blocks),
+            windows: [
+                { from: "2026-10-01", to: "2026-10-20", ids: ["sm1", "a1"] },
+                { from: "2026-10-10", to: "2026-10-20", ids: ["a2"] },
+            ],
+            mtd: { from: "2026-10-01", to: "2026-10-20" },
+            yesterday: "2026-10-20",
+            full,
+            partial: new Map([["2026-10-10|2026-10-20", new Map([["a2", amyLate]])]]),
+        });
+        expect(group.map((b) => b.id)).toEqual(["sm1", "a1", "a2"]);
+        const rows = repBlockTableRows("asm", blocks, new Map([["a1", "sm1"], ["a2", "sm1"]]), new Map([["sm1", group]]), new Map([["sm1", "Sam"]]));
+        // Zed's 40 + Amy's 4 from her days in the team.
+        expect(rows[3][0]).toBe("Team subtotal · Sam");
+        expect(rows[3][2]).toBe(44);
+    });
+
+    it("ID 155: without the manager's name the members stay ungrouped, as before", () => {
+        const blocks = buildRepBlocks("asm", y, mtd, extras, targets);
+        const rows = repBlockTableRows("asm", blocks, new Map([["a1", "sm1"], ["a2", "sm1"]]));
+        expect(rows.map((r) => r[0])).toEqual(["Amy", "Zed", "Total"]);
     });
 
     it("no Total row for a single rep, and none for no reps", () => {
