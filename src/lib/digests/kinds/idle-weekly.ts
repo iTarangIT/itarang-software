@@ -51,7 +51,7 @@ const SECTIONS: DigestSection[] = [
 // A snapshot of now: the covered day only labels the mail, so it is not read.
 async function collect(): Promise<{ ok: boolean; figures: DigestFigures; error?: string }> {
   try {
-    const [{ summarizeNeedsAttention }, { getTimeLimits }, { idleLimitLabel }] = await Promise.all([
+    const [{ summarizeNeedsAttention }, { getTimeLimits }, { idleLimitLabel, staleCriticalShort }] = await Promise.all([
       import("@/lib/leads/needsAttention"),
       import("@/lib/timeLimits/store"),
       import("@/lib/timeLimits/labels"),
@@ -59,7 +59,8 @@ async function collect(): Promise<{ ok: boolean; figures: DigestFigures; error?:
     // Totals in SQL over every lead — never from a capped list. No minDays:
     // each holder is judged by their own role's limit, as on the page.
     const [holders, limits] = await Promise.all([summarizeNeedsAttention(), getTimeLimits()]);
-    const critical = Math.floor(limits.stale_critical);
+    // ID 85 #5: each holder's critical count uses their role's band (summarizeNeedsAttention).
+    const critical = staleCriticalShort(limits);
     const list = holders
       .map((h) => ({
         name: h.holder_name ?? h.holder_id,

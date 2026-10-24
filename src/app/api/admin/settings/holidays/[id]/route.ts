@@ -16,7 +16,8 @@ const BodySchema = z.object({ is_active: z.boolean() });
 
 export const PATCH = withErrorHandler(
     async (req: Request, ctx: { params: Promise<{ id: string }> }) => {
-        const user = await requireRole(["admin", "sales_head"]);
+        // ID 85 #4: Admin only, as the list's POST.
+        const user = await requireRole(["admin"]);
         const { id } = await ctx.params;
         if (!id) return errorResponse("Holiday id required.", 400);
         const b = BodySchema.parse(await req.json());

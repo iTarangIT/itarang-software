@@ -137,6 +137,12 @@ export type DigestTable = {
   /** Masthead layout: on a phone, show column [0]'s value small under column [1]. */
   phoneDeltaUnder?: [number, number];
   /**
+   * Masthead layout (188 #3): on a phone, print these hidden columns as one
+   * small line under column `under` — "Fri 16 Oct 12 · Last wk 9". `labels`
+   * name each value (default: its header).
+   */
+  phoneCompareUnder?: { under: number; columns: number[]; labels?: string[] };
+  /**
    * Column indexes whose "NN%" cells are coloured red / amber / green by
    * ragToneOfCell (src/lib/digests/rag.ts) — the "% of target" columns.
    */
@@ -173,6 +179,12 @@ export type DigestFigures = {
    * "/asm" for an ASM's My day). Absent = the kind's own ctaHref.
    */
   ctaHref?: string;
+  /**
+   * IDs 194 #2 / 188 #4 — the IST day the numbers actually cover, when it is
+   * not the engine's calendar-previous day (on a Monday the covered day is
+   * Sunday, but "Yesterday" is Saturday). The subject names this day.
+   */
+  coveredDay?: string;
 };
 
 export type DigestMasthead = {
@@ -270,7 +282,10 @@ export type DigestKindDescriptor = {
    * screen; a failure to resolve it sends to the stored list alone.
    */
   audience?: { label: string; resolve(): Promise<string[]> };
-  /** Custom subject line. Absent = the shared "[iTarang] <label> — yesterday (…)" form. */
+  /**
+   * Custom subject line. Absent = the shared "[iTarang] <label> — yesterday (…)" form.
+   * `dayLabel` names the figures' coveredDay when the kind sets one.
+   */
   subject?: (args: { istDay: string; dayLabel: string; slot: "morning" | "evening" | "test" }) => string;
   /** The figures. Must never throw — return ok:false and the send is cancelled. */
   collect(

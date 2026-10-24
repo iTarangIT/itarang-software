@@ -43,7 +43,7 @@ export default async function ReadyToAssignPage({
     const sp = await searchParams;
     const requested = Number.parseInt(sp.min_days ?? "", 10);
     const minDays = Number.isFinite(requested) && requested > 0 ? Math.min(requested, 3650) : 0;
-    // ID 184: AI qualified / Hot / other, the card's split (one bucket per lead, AI first).
+    // ID 184: Hot / AI qualified / other, the card's split (one bucket per lead, Hot first).
     const split = isReadySplit(sp.split) ? sp.split : undefined;
     // ID 184: the Sales dashboard's filters ride in on the card link. State
     // narrows the list as it narrows the card; ready leads have no owner, so

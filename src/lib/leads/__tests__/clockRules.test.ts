@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import { clocksForLead, medianAndP90, type ClockLead, type ClockTouch } from "@/lib/leads/clockRules";
-import { TIME_LIMIT_DEFAULTS, crossLimitProblem, formatLimit } from "@/lib/timeLimits/registry";
+import { TIME_LIMITS, TIME_LIMIT_DEFAULTS, crossLimitProblem, formatLimit, isRetiredLimit } from "@/lib/timeLimits/registry";
+import { staleThresholdsFor } from "@/lib/inside-sales/staleness";
+import { staleBandLabel, staleCriticalShort } from "@/lib/timeLimits/labels";
 
 const ist = (day: string, hhmm: string) => new Date(`${day}T${hhmm}:00+05:30`);
 const NONE = new Set<string>();
@@ -32,9 +34,9 @@ describe("lead clocks (ID 86)", () => {
         expect(owner.clock).toBe("owner");
         expect(owner.owner_inferred).toBe(true);
         expect(owner.first_attempt_at).toBeNull();
-        // 18 Oct rework 2: not Hot → 1 working day: due end of Tue 13 Oct, never attempted → passed then.
-        expect(owner.limit_key).toBe("nonhot_owner_first_attempt");
-        expect(owner.limit_passed_at?.toISOString()).toBe(new Date("2026-10-13T18:29:59.999Z").toISOString());
+        // ID 85 #3: a hand-over before 21 Oct keeps the old 4 working hours: due Mon 14:00, never attempted → passed then.
+        expect(owner.limit_key).toBe("owner_first_attempt");
+        expect(owner.limit_passed_at?.toISOString()).toBe(ist("2026-10-12", "14:00").toISOString());
     });
 
     it("a stint handed on before its limit fell due never passes", () => {
@@ -80,7 +82,7 @@ describe("lead clocks (ID 86)", () => {
     });
 
     it("the limit is the one in force on the day the clock started", () => {
-        const dated = (day: string) => ({ ...TIME_LIMIT_DEFAULTS, nonhot_owner_first_attempt: day >= "2026-10-13" ? 3 : 2 });
+        const dated = (day: string) => ({ ...TIME_LIMIT_DEFAULTS, owner_first_attempt: day >= "2026-10-13" ? 3 : 2 });
         const [owner] = clocksForLead(lead(), [], [], [], dated, NONE, NOW);
         expect(owner.limit_value).toBe(2);
     });
@@ -102,5 +104,27 @@ describe("time limit registry (ID 85)", () => {
     it("the no-touch warnings must rise", () => {
         expect(crossLimitProblem(TIME_LIMIT_DEFAULTS)).toBeNull();
         expect(crossLimitProblem({ ...TIME_LIMIT_DEFAULTS, stale_red: 4 })).toMatch(/must rise/);
+        expect(crossLimitProblem({ ...TIME_LIMIT_DEFAULTS, stale_red_asm: 4 })).toMatch(/\(ASM\) must rise/);
+    });
+
+    // ID 85 #5 (22 Oct): the no-touch warnings split by ISR and ASM.
+    it("picks the no-touch warnings by the holder's role", () => {
+        const l = { ...TIME_LIMIT_DEFAULTS, stale_yellow_asm: 7, stale_red_asm: 12, stale_critical_asm: 20 };
+        expect(staleThresholdsFor(l, "asm")).toEqual({ yellow: 7, red: 12, critical: 20 });
+        expect(staleThresholdsFor(l, "ASM")).toEqual({ yellow: 7, red: 12, critical: 20 });
+        expect(staleThresholdsFor(l, "inside_sales_rep")).toEqual({ yellow: 5, red: 10, critical: 14 });
+        expect(staleThresholdsFor(l, null)).toEqual({ yellow: 5, red: 10, critical: 14 });
+        expect(staleBandLabel(l, "yellow")).toBe("ISR 5, ASM 7 working days");
+        expect(staleBandLabel(TIME_LIMIT_DEFAULTS, "yellow")).toBe("5 working days");
+        expect(staleCriticalShort(l)).toBe("ISR 14 / ASM 20");
+        expect(staleCriticalShort(TIME_LIMIT_DEFAULTS)).toBe("14");
+    });
+
+    // ID 85 #3: the two limits retired on 21 Oct are not on the settings page.
+    it("marks the two retired limits", () => {
+        expect(TIME_LIMITS.filter((d) => isRetiredLimit(d.key)).map((d) => d.key).sort()).toEqual([
+            "owner_first_attempt",
+            "sales_ready_unassigned",
+        ]);
     });
 });

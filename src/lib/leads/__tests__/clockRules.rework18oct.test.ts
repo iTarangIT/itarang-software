@@ -70,6 +70,15 @@ describe("registry (18 Oct)", () => {
         expect(clockLimitKey("owner", false)).toBe("nonhot_owner_first_attempt");
         expect(clockLimitKey("ready_assign")).toBe("ready_to_assigned");
     });
+
+    // ID 85 #3 (22 Oct): the settings page said the 4-hour owner limit still
+    // applies to hand-overs before 21 Oct — now it does.
+    it("an owner stint before 21 Oct keeps the old owner limit, Hot or not", () => {
+        expect(clockLimitKey("owner", false, "2026-10-20")).toBe("owner_first_attempt");
+        expect(clockLimitKey("owner", true, "2026-10-20")).toBe("owner_first_attempt");
+        expect(clockLimitKey("owner", false, "2026-10-21")).toBe("nonhot_owner_first_attempt");
+        expect(clockLimitKey("owner", true, "2026-10-21")).toBe("hot_owner_first_attempt");
+    });
 });
 
 describe("#1 ready → assigned for leads that are not Hot", () => {
@@ -133,11 +142,12 @@ describe("#1 ready → assigned for leads that are not Hot", () => {
 });
 
 describe("#2 owner clock: Hot 4 working hours, others 1 working day", () => {
+    // Hand-overs on Mon 26 Oct, after the 21 Oct switch to these limits.
     it("a non-Hot lead's owner has until the end of the next working day", () => {
-        const at = ist("2026-10-12", "15:00");
+        const at = ist("2026-10-26", "15:00");
         const owner = clocksForLead(
             lead({ assigned_at: at, current_owner_id: "rep" }),
-            [call(ist("2026-10-13", "18:00"), "rep")],
+            [call(ist("2026-10-27", "18:00"), "rep")],
             [hop(at, "rep")],
             [],
             limits,
@@ -145,19 +155,19 @@ describe("#2 owner clock: Hot 4 working hours, others 1 working day", () => {
             LATER,
         ).find((x) => x.clock === "owner")!;
         expect(owner.limit_key).toBe("nonhot_owner_first_attempt");
-        expect(owner.due_at?.toISOString()).toBe(endOf("2026-10-13").toISOString());
+        expect(owner.due_at?.toISOString()).toBe(endOf("2026-10-27").toISOString());
         // A call the next evening is in time (it would have been late under 4 hours).
         expect(owner.limit_passed_at).toBeNull();
     });
 
     it("a lead Hot when assigned is timed by the Hot limit", () => {
-        const at = ist("2026-10-12", "15:00");
+        const at = ist("2026-10-26", "15:00");
         const owner = clocksForLead(lead({ assigned_at: at, current_owner_id: "rep" }), [], [hop(at, "rep")], [], limits, NONE, LATER, {
             interest: [hot(ist("2026-10-12", "09:00"))],
         }).find((x) => x.clock === "owner")!;
         expect(owner.limit_key).toBe("hot_owner_first_attempt");
         // Mon 15:00 + 4 office hours = Mon 19:00.
-        expect(owner.due_at?.toISOString()).toBe(ist("2026-10-12", "19:00").toISOString());
+        expect(owner.due_at?.toISOString()).toBe(ist("2026-10-26", "19:00").toISOString());
     });
 });
 

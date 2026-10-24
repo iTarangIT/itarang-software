@@ -52,7 +52,7 @@
 import { sql, type SQL } from "drizzle-orm";
 
 import { db } from "@/lib/db";
-import { workingDaysBetweenSql } from "@/lib/calendar/holidays";
+import { primeHolidayLog, workingDaysBetweenAsOfSql } from "@/lib/calendar/holidays";
 import { limitOnDay } from "@/lib/timeLimits/store";
 import { DEFAULT_OFFICE_HOURS } from "@/lib/calendar/officeHours";
 import { currentTeamOf } from "@/lib/users/team";
@@ -170,7 +170,9 @@ function segScope(s: ActionScope): SQL {
  */
 export async function fieldVisitSegmentsSql(s: ActionScope, fromDay: string, toDay: string): Promise<SQL> {
     if (fromDay > toDay) [fromDay, toDay] = [toDay, fromDay];
-    const limitOn = await limitOnDay("asm_transfer_first_visit");
+    // ID 85 #6: the day counts use the holidays as they stood at each segment's
+    // end, so a past holiday added later does not move a past period.
+    const [limitOn] = await Promise.all([limitOnDay("asm_transfer_first_visit"), primeHolidayLog()]);
     const lim = sql`FLOOR(${limitOn(sql`(wait_start AT TIME ZONE 'Asia/Kolkata')::date`)})`;
     // Period bounds as instants: IST midnight of the first day, IST midnight after the last.
     const A = sql`((${fromDay})::date::timestamp AT TIME ZONE 'Asia/Kolkata')`;
@@ -284,9 +286,9 @@ export async function fieldVisitSegmentsSql(s: ActionScope, fromDay: string, toD
                    FALSE AS moved,
                    (NOT ended) AS waiting,
                    CASE WHEN ended AND end_kind = 'visit'
-                        THEN ${workingDaysBetweenSql(sql`wait_start`, sql`seg_end`)} END AS days_to_visit,
+                        THEN ${workingDaysBetweenAsOfSql(sql`wait_start`, sql`seg_end`)} END AS days_to_visit,
                    CASE WHEN NOT ended
-                        THEN ${workingDaysBetweenSql(sql`wait_start`, lastMoment)} END AS age_end
+                        THEN ${workingDaysBetweenAsOfSql(sql`wait_start`, lastMoment)} END AS age_end
               FROM m
         )
         SELECT x.lead_id, x.asm_id, x.wait_start, x.seg_start, x.seg_end, x.end_kind, x.lim, x.days_to_visit, x.age_end,

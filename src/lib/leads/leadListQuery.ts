@@ -133,7 +133,7 @@ export type LeadListFilters = {
      * state exactly, as the card does.
      */
     readyNoOwner?: boolean;
-    /** With readyNoOwner: one of the card's buckets (AI qualified first, then Hot, then other — ID 184). */
+    /** With readyNoOwner: one of the card's buckets (Hot first, then AI qualified, then other — ID 184). */
     readySplit?: ReadySplit | null;
     /**
      * Rep-set temperature — lower(interest_level) — the same field the ASM /

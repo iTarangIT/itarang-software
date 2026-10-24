@@ -458,9 +458,9 @@ export default function CEODashboard() {
           tone: "warn",
           label: "Ready leads with no owner",
           count: num(x.awaiting_assignment_total),
-          // ID 184: the same AI / Hot / other split (AI first) as the Sales dashboard card.
+          // ID 184: the same Hot / AI / other split (Hot first) as the Sales dashboard card.
           // 18 Oct rows 10 #6 / 29: past each limit, read from Admin › Time limits.
-          sub: `${x.awaiting_assignment_split ? `${num(x.awaiting_assignment_split.ai)} AI qualified · ${num(x.awaiting_assignment_split.hot)} Hot · ${num(x.awaiting_assignment_split.other)} other · ` : ""}${num(x.unassigned_hot_past ?? 0)} Hot past ${x.unassigned_hot_limit_hours ?? 9} working hours · ${num(x.unassigned_other_past ?? 0)} others past ${x.unassigned_overdue_days} working day${x.unassigned_overdue_days === 1 ? "" : "s"}`,
+          sub: `${x.awaiting_assignment_split ? `${num(x.awaiting_assignment_split.hot)} Hot · ${num(x.awaiting_assignment_split.ai)} AI qualified · ${num(x.awaiting_assignment_split.other)} other · ` : ""}${num(x.unassigned_hot_past ?? 0)} Hot past ${x.unassigned_hot_limit_hours ?? 9} working hours · ${num(x.unassigned_other_past ?? 0)} others past ${x.unassigned_overdue_days} working day${x.unassigned_overdue_days === 1 ? "" : "s"}`,
           href: "/admin/ready-to-assign",
           cta: "Open list",
         },

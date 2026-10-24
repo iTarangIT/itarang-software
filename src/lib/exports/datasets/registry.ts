@@ -23,7 +23,7 @@ import { countEvents, fetchEvents, type EventLogFilters } from "@/lib/leads/even
 import { LEAD_EVENT_TYPES, parseEventTypes } from "@/lib/leads/eventTypes";
 import { parseLeadListFilters } from "@/lib/leads/leadListParams";
 import { hasLeadClocks } from "@/lib/leads/clocks";
-import { loadOfficeCalendar, workingDaysBetweenSql } from "@/lib/calendar/holidays";
+import { loadOfficeCalendar, primeHolidayLog, workingDaysBetweenAsOfSql } from "@/lib/calendar/holidays";
 import { workingHoursBetween } from "@/lib/leads/workingHours";
 import { idleDays } from "@/lib/leads/idle";
 import { idlePastLimitSql } from "@/lib/leads/idleLimit";
@@ -34,7 +34,7 @@ import { getTimeLimits, hasTimeLimitTable, limitOnDay, limitOnDaySql } from "@/l
 import { doorLabel, LEAD_DOOR_LABEL, LEAD_DOORS, originLabel, scrapeRunLabels, SOURCE_DOOR_NONE } from "@/lib/leads/leadSourceVocab";
 import { fetchScrapeRunFacets } from "@/lib/leads/acquisitionCampaigns";
 import { CAMPAIGN_NONE, CAMPAIGN_SYSTEM_LABEL } from "@/lib/leads/campaign";
-import { fetchCampaignFacets } from "@/lib/leads/leadCampaign";
+import { fetchCampaignFacets, fetchCampaignForLeads, type LeadCampaign } from "@/lib/leads/leadCampaign";
 import { displayCampaignName } from "@/lib/leads/regionSummary";
 import { onboardingStall, STALL_LABEL } from "@/lib/onboarding/stall";
 import { connectedCall, engagedCall, engagedState, humanCall } from "@/lib/reports/metricDefinitions";
@@ -184,8 +184,6 @@ async function leadExtras(ids: string[]): Promise<Map<string, Record<string, unk
                    x.j ->> 'created_at' AS created_on,
                    ${effectiveDoorSql(sql`dl`)} AS source_door,
                    x.j ->> 'source_origin' AS source_origin,
-                   (SELECT ac.name FROM acquisition_campaigns ac
-                     WHERE ac.id::text = x.j ->> 'acquisition_campaign_id') AS campaign,
                    cb.name AS created_by, ou.role AS owner_role,
                    x.j ->> 'sales_ready_at' AS sales_ready_on,
                    x.j ->> 'sales_ready_reason' AS sales_ready_reason,
@@ -233,6 +231,10 @@ async function leadExtras(ids: string[]): Promise<Map<string, Record<string, unk
                    WHERE ao.source_dealer_lead_id = dl.id LIMIT 1) acct ON TRUE
              WHERE dl.id IN ${jsonIds(ids)}
         `);
+        // HANDOVER-A31 (22 Oct check): the Leads list's campaign — the latest AI
+        // dialer / NeoDove campaign — from its own lookup (never throws).
+        const campaigns: Record<string, LeadCampaign> = {};
+        for (let i = 0; i < ids.length; i += 1_000) Object.assign(campaigns, await fetchCampaignForLeads(ids.slice(i, i + 1_000)));
         for (const r of data) {
             // created_at has no time zone and is stored as UTC.
             const created = r.created_on ? `${String(r.created_on).replace(" ", "T")}Z` : null;
@@ -242,6 +244,8 @@ async function leadExtras(ids: string[]): Promise<Map<string, Record<string, unk
                 created_on: created,
                 source_door: doorLabel(r.source_door as string | null),
                 source_origin: originLabel(r.source_origin as string | null),
+                campaign: campaigns[String(r.lead_id)]?.name ?? null,
+                campaign_system: campaigns[String(r.lead_id)] ? CAMPAIGN_SYSTEM_LABEL[campaigns[String(r.lead_id)].system] : null,
                 owner_role: ((r.owner_role as string | null) ?? "").replace(/_/g, " ") || null,
                 // The score column defaults to 0; a lead the AI never scored shows blank, not 0.
                 ai_score: r.ai_band || Number(r.ai_score) > 0 ? r.ai_score : null,
@@ -315,7 +319,7 @@ const leads: Dataset = {
         { key: "ready_no_owner", label: `${READY_NO_OWNER_TITLE} only`, type: "select", options: yesNo },
         {
             key: "ready_split",
-            label: "Ready leads: AI qualified / Hot / other (with the filter above)",
+            label: "Ready leads: Hot / AI qualified / other (with the filter above)",
             type: "select",
             options: READY_SPLITS.map((k) => ({ value: k, label: k === "other" ? "Other" : READY_SPLIT_LABEL[k] })),
         },
@@ -365,7 +369,8 @@ const leads: Dataset = {
                 { key: "created_on", header: "Created on", meaning: "When the lead was created.", kind: "datetime" },
                 { key: "source_door", header: "Door", meaning: "How the lead came in (the lead-source door): the door stamped on the lead, else the one its older source field implies — the same as the Leads list." },
                 { key: "source_origin", header: "Origin", meaning: "Where behind that door it came from." },
-                { key: "campaign", header: "Campaign", meaning: "The acquisition campaign, when the lead belongs to one.", width: 24 },
+                { key: "campaign", header: "Campaign", meaning: "The lead's latest AI dialer or NeoDove campaign — the same as the Leads list's Campaign.", width: 24 },
+                { key: "campaign_system", header: "Campaign system", meaning: "Which system that campaign ran on: AI Dialer or NeoDove." },
                 { key: "created_by", header: "Created by", meaning: "Who created the lead. Blank on leads created before this was recorded.", width: 22 },
                 { key: "owner_role", header: "Owner's role", meaning: "The current owner's role." },
                 { key: "sales_ready_on", header: "Sales-ready on", meaning: "When the lead became ready for a salesperson.", kind: "datetime" },
@@ -1174,7 +1179,9 @@ const visits: Dataset = {
             : sql`NULL::int AS visit_limit_days, NULL::text AS visit_limit_passed`;
         // 18 Oct row 37 — working days on the office calendar, judged by the
         // limit in force on the transfer's day.
-        const transferToVisitDays = workingDaysBetweenSql(sql`tr.performed_at`, sql`((v.actual_visit_date + TIME '10:00') AT TIME ZONE 'Asia/Kolkata')`);
+        // ID 85 #6: the holidays as they stood on the visit day.
+        await primeHolidayLog();
+        const transferToVisitDays = workingDaysBetweenAsOfSql(sql`tr.performed_at`, sql`((v.actual_visit_date + TIME '10:00') AT TIME ZONE 'Asia/Kolkata')`);
         const visitLimitOnTransferDay = (await limitOnDay("asm_transfer_first_visit"))(sql`(tr.performed_at AT TIME ZONE 'Asia/Kolkata')::date`);
         const data = await rows(sql`
             SELECT COALESCE(v.actual_visit_date, v.scheduled_date) AS visit_date, v.scheduled_date,
@@ -1388,6 +1395,8 @@ const quotes: Dataset = {
         // 18 Oct row 38 — the delivery and decline clocks (E-355), and the two
         // waits judged in SQL on the office calendar by the limit of their day.
         const tl = await hasTimeLimitTable();
+        // ID 85 #6: a wait that ended is counted with the holidays as they stood then.
+        await primeHolidayLog();
         const passedText = (alias: string) =>
             sql.raw(`CASE WHEN ${alias}.limit_value IS NULL THEN NULL WHEN ${alias}.limit_passed_at IS NULL THEN 'No'
                      ELSE 'Yes · ' || to_char(${alias}.limit_passed_at AT TIME ZONE 'Asia/Kolkata', 'DD Mon YYYY HH24:MI') END`);
@@ -1398,8 +1407,8 @@ const quotes: Dataset = {
                        AND qrc.started_at = date_trunc('milliseconds', c.dealer_decision_at)`
             : sql``;
         const wonAt = sql`(to_jsonb(dl) ->> 'won_at')::timestamptz`;
-        const answerDays = workingDaysBetweenSql(sql`qd.delivered_at`, sql`COALESCE(c.dealer_decision_at, NOW())`);
-        const wonDays = workingDaysBetweenSql(sql`c.dealer_decision_at`, sql`COALESCE(${wonAt}, NOW())`);
+        const answerDays = workingDaysBetweenAsOfSql(sql`qd.delivered_at`, sql`COALESCE(c.dealer_decision_at, NOW())`);
+        const wonDays = workingDaysBetweenAsOfSql(sql`c.dealer_decision_at`, sql`COALESCE(${wonAt}, NOW())`);
         const waitCols = sql`
                    CASE WHEN qd.delivered_at IS NOT NULL THEN ${answerDays} END AS delivered_to_answer_wd,
                    CASE WHEN qd.delivered_at IS NOT NULL THEN
@@ -1411,7 +1420,7 @@ const quotes: Dataset = {
                        ? sql`ROUND((qdc.attempt_working_minutes / 60.0)::numeric, 1) AS approved_to_delivered_wh,
                    ${passedText("qdc")} AS delivery_limit_passed,
                    CASE WHEN c.dealer_decision = 'declined' AND c.dealer_decision_at IS NOT NULL
-                        THEN ${workingDaysBetweenSql(sql`c.dealer_decision_at`, sql`COALESCE(qrc.first_attempt_at, NOW())`)} END AS declined_to_revised_wd,
+                        THEN ${workingDaysBetweenAsOfSql(sql`c.dealer_decision_at`, sql`COALESCE(qrc.first_attempt_at, NOW())`)} END AS declined_to_revised_wd,
                    ${passedText("qrc")} AS revise_limit_passed`
                        : sql`NULL::numeric AS approved_to_delivered_wh, NULL::text AS delivery_limit_passed,
                    NULL::int AS declined_to_revised_wd, NULL::text AS revise_limit_passed`}`;

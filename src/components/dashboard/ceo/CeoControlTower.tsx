@@ -119,7 +119,7 @@ export function CeoControlTower({ windowQs }: { windowQs: string }) {
                             href="/admin/ready-to-assign?past=any"
                             extra={
                                 x.awaiting_assignment_total != null
-                                    ? `${num(x.unassigned_hot_past ?? 0)} Hot · ${num(x.unassigned_other_past ?? 0)} others past · ${num(x.awaiting_assignment_total)} in all${x.awaiting_assignment_split ? ` · ${num(x.awaiting_assignment_split.ai)} AI · ${num(x.awaiting_assignment_split.hot)} Hot · ${num(x.awaiting_assignment_split.other)} other` : ""}`
+                                    ? `${num(x.unassigned_hot_past ?? 0)} Hot · ${num(x.unassigned_other_past ?? 0)} others past · ${num(x.awaiting_assignment_total)} in all${x.awaiting_assignment_split ? ` · ${num(x.awaiting_assignment_split.hot)} Hot · ${num(x.awaiting_assignment_split.ai)} AI · ${num(x.awaiting_assignment_split.other)} other` : ""}`
                                     : undefined
                             }
                         />

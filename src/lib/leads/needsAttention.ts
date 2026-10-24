@@ -206,14 +206,16 @@ export type NeedsAttentionHolderSummary = {
  */
 export async function summarizeNeedsAttention(opts: Opts = {}): Promise<NeedsAttentionHolderSummary[]> {
     const [limits, transferLimit] = await Promise.all([getTimeLimits(), transferLimitSql()]);
+    // ID 85 #5: the critical band by the holder's role (ASM set for an ASM).
     const critical = Math.floor(limits.stale_critical);
+    const criticalAsm = Math.floor(limits.stale_critical_asm);
     const rows = await db.execute(sql`
         -- ID 192: "idle" counts only leads past their idle limit. A lead the page
         -- lists only because its field visit is overdue (baseQuery's
         -- OR visit_overdue) is counted apart, never as idle.
         SELECT x.holder_id, MAX(x.holder_name) AS holder_name, MAX(x.holder_role) AS holder_role,
                COUNT(*) FILTER (WHERE NOT x.non_responsive AND x.past_idle)::int    AS idle,
-               COUNT(*) FILTER (WHERE NOT x.non_responsive AND x.past_idle AND x.days_idle >= ${critical}::int)::int AS idle_over_14,
+               COUNT(*) FILTER (WHERE NOT x.non_responsive AND x.past_idle AND x.days_idle >= (CASE WHEN lower(x.holder_role) = 'asm' THEN ${criticalAsm}::int ELSE ${critical}::int END))::int AS idle_over_14,
                COALESCE(MAX(x.days_idle) FILTER (WHERE NOT x.non_responsive AND x.past_idle), 0)::int AS oldest_days,
                COUNT(*) FILTER (WHERE x.non_responsive)::int                         AS non_responsive,
                COUNT(*) FILTER (WHERE NOT x.non_responsive AND x.past_idle AND x.far_follow_up)::int AS parked,
@@ -231,7 +233,7 @@ export async function summarizeNeedsAttention(opts: Opts = {}): Promise<NeedsAtt
         oldest_days: Number(r.oldest_days ?? 0),
         non_responsive: Number(r.non_responsive ?? 0),
         parked: Number(r.parked ?? 0),
-        critical_days: critical,
+        critical_days: String(r.holder_role ?? "").toLowerCase() === "asm" ? criticalAsm : critical,
         visit_overdue_only: Number(r.visit_overdue_only ?? 0),
     }));
     return out;

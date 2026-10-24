@@ -15,7 +15,7 @@
 // Filters live in the URL (same keys as the sales dashboard API), so a view
 // survives a refresh and can be shared.
 
-import { idleLimitLabel } from "@/lib/timeLimits/labels";
+import { idleLimitLabel, staleCriticalShort } from "@/lib/timeLimits/labels";
 import { shortOfficeHours, type OfficeHours } from "@/lib/calendar/officeHours";
 import { freshRepeatSplit } from "@/lib/visits/freshRepeat";
 import React from "react";
@@ -193,7 +193,7 @@ export function SalesHeadOpsView() {
     });
     const idle = useQuery<{
         holders: NeedsAttentionHolderSummary[];
-        limits?: { idle_cc: number; idle_asm: number; stale_critical: number };
+        limits?: { idle_cc: number; idle_asm: number; stale_critical: number; stale_critical_asm?: number };
     }>({
         queryKey: ["sales-head-ops", "idle"],
         queryFn: () => getData("/api/admin/needs-attention"),
@@ -461,7 +461,7 @@ export function SalesHeadOpsView() {
             // Labelled from Admin › Time limits (ID 85 Decision 6), never fixed numbers.
             // ID 192: the idle rule — no work, follow-up or handover (followUpAgeing.ts).
             sub: idle.data?.limits
-                ? `No work, follow-up or handover in ${idleLimitLabel(idle.data.limits)} · ${num(idleOver14)} at ${Math.floor(idle.data.limits.stale_critical)}+`
+                ? `No work, follow-up or handover in ${idleLimitLabel(idle.data.limits)} · ${num(idleOver14)} at ${staleCriticalShort(idle.data.limits)}+`
                 : `No work, follow-up or handover past the idle limit · ${num(idleOver14)} critical`,
             href: "/admin/reports/needs-attention",
         },

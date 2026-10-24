@@ -26,6 +26,8 @@ import { buildExportWhere } from "@/lib/leads/leadListQuery";
 import { parseLeadListFilters } from "@/lib/leads/leadListParams";
 import { businessTypeLabel } from "@/lib/leads/businessType";
 import { leadSourceLabel } from "@/lib/leads/leadSourceVocab";
+import { fetchCampaignForLeads, type LeadCampaign } from "@/lib/leads/leadCampaign";
+import { CAMPAIGN_SYSTEM_LABEL } from "@/lib/leads/campaign";
 import { styleHeader, zebra } from "@/lib/excel/sheetStyle";
 import ExcelJS from "exceljs";
 
@@ -41,6 +43,8 @@ export const maxDuration = 60;
 // it is REPORTED (see X-Export-Truncated) rather than quietly short-changing
 // the sheet, which is the failure mode that makes an export untrustworthy.
 const EXPORT_ROW_CAP = 20_000;
+/** Lead ids per campaign lookup (each builds one IN (...) list). */
+const CAMPAIGN_CHUNK = 1_000;
 
 function csvEscape(v: unknown): string {
     if (v == null) return "";
@@ -87,9 +91,12 @@ const COLUMNS: { header: string; key: string; date?: boolean }[] = [
     // exactly as the chip on screen does.
     { header: "Business Type", key: "business_type" },
     // HANDOVER-A31: the list's "Lead source" column (stamped door, else the one
-    // the legacy source implies — leadSourceLabel) and the acquisition campaign.
+    // the legacy source implies — leadSourceLabel) and the list's campaign: the
+    // lead's latest AI dialer / NeoDove campaign (fetchCampaignForLeads, 22 Oct
+    // check), with the system it ran on.
     { header: "Lead Source", key: "lead_source" },
     { header: "Campaign", key: "campaign" },
+    { header: "Campaign System", key: "campaign_system" },
     { header: "Follow-up Owner", key: "owner_name" },
     { header: "ASM", key: "asm_name" },
     { header: "Last Call At", key: "last_call_at", date: true },
@@ -136,6 +143,7 @@ export const GET = withErrorHandler(async (req: Request) => {
 
     const rows = (await db.execute<Row>(sql`
         SELECT
+            dl.id               AS lead_id,
             dl.dealer_name,
             dl.shop_name,
             dl.phone,
@@ -175,10 +183,9 @@ export const GET = withErrorHandler(async (req: Request) => {
             to_jsonb(dl) ->> 'last_disposition_source' AS disposition_source,
             -- E-296, same to_jsonb guard.
             to_jsonb(dl) ->> 'business_type'           AS business_type,
-            -- E-314 / E-319, same guard. The campaign NAME is looked up below.
+            -- E-314, same guard. The campaign is looked up below.
             to_jsonb(dl) ->> 'source_door'             AS source_door,
             dl.source                                  AS legacy_source,
-            to_jsonb(dl) ->> 'acquisition_campaign_id' AS acquisition_campaign_id,
             ai.called_at        AS ai_last_called_at,
             ai.band             AS ai_band,
             -- BLANK, not 0, when nothing was extracted. "0/5" means the dealer
@@ -243,25 +250,20 @@ export const GET = withErrorHandler(async (req: Request) => {
         LIMIT ${EXPORT_ROW_CAP}
     `)) as unknown as Row[];
 
-    // HANDOVER-A31: campaign names in their own statement, allowed to fail —
-    // a database without acquisition_campaigns (E-319) gets a blank column,
-    // not a broken export.
-    const campaignIds = [...new Set(rows.map((r) => r.acquisition_campaign_id).filter((v): v is string => typeof v === "string" && v !== ""))];
-    const campaignNames = new Map<string, string>();
-    if (campaignIds.length) {
-        try {
-            const names = (await db.execute<{ id: string; name: string }>(sql`
-                SELECT ac.id::text AS id, ac.name FROM acquisition_campaigns ac
-                 WHERE ac.id::text IN (SELECT jsonb_array_elements_text(${JSON.stringify(campaignIds)}::jsonb))
-            `)) as unknown as { id: string; name: string }[];
-            for (const n of names) campaignNames.set(n.id, n.name);
-        } catch (e) {
-            console.warn("[dealer-leads/export] campaign names unavailable:", e instanceof Error ? e.message : e);
-        }
+    // HANDOVER-A31 (22 Oct check): the same campaign the Leads list shows —
+    // the latest AI dialer / NeoDove campaign — from the list's own lookup,
+    // which never throws (a database without the NeoDove tables keeps the
+    // dialer half). In chunks: it builds IN (…) from the ids.
+    const campaigns: Record<string, LeadCampaign> = {};
+    const ids = rows.map((r) => String(r.lead_id));
+    for (let i = 0; i < ids.length; i += CAMPAIGN_CHUNK) {
+        Object.assign(campaigns, await fetchCampaignForLeads(ids.slice(i, i + CAMPAIGN_CHUNK)));
     }
     for (const r of rows) {
         r.lead_source = leadSourceLabel(r.source_door as string | null, r.legacy_source as string | null);
-        r.campaign = r.acquisition_campaign_id ? (campaignNames.get(String(r.acquisition_campaign_id)) ?? null) : null;
+        const c = campaigns[String(r.lead_id)];
+        r.campaign = c?.name ?? null;
+        r.campaign_system = c ? CAMPAIGN_SYSTEM_LABEL[c.system] : null;
     }
 
     // Owner and ASM are oversight-only. Blanked rather than omitted so the

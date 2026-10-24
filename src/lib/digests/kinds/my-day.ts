@@ -44,6 +44,7 @@ import {
 import {
   membersOf,
   personRows,
+  sameDayLastWeekRows,
   targetRows,
   teamOverdueRows,
   teamRows,
@@ -61,12 +62,13 @@ import type {
   DigestTable,
 } from "../types";
 import { addDays, salesDailyPeriodsFor } from "./sales-daily";
+import { limitPassedWords } from "@/lib/leads/limitEventLabels";
 
 const ROLES = ["inside_sales_rep", "asm"] as const;
 type Role = (typeof ROLES)[number];
 
 const SECTIONS: DigestSection[] = [
-  { key: "my_numbers", label: "My numbers", hint: "The person's own row of the management email (yesterday and MTD), and each target to date against the actual.", group: "activity" },
+  { key: "my_numbers", label: "My numbers", hint: "The person's own row of the management email (yesterday and MTD), yesterday against the same day last week, and each target to date against the actual.", group: "activity" },
   { key: "work_list", label: "My work list", hint: "Follow-ups due today, tomorrow or overdue; visits due or overdue; time limits passed and still unanswered; every lead waiting for a field visit; quotes with no answer from the dealer; and idle leads — each opens the lead.", group: "backlog" },
   { key: "my_team", label: "My team (managers only)", hint: "Each person reporting to them and the team subtotal, as in the management email.", group: "activity" },
 ];
@@ -92,6 +94,8 @@ async function people(settings: { roles: Record<string, boolean> }): Promise<Dig
 
 type Shared = {
   blocks: Record<Role, RepBlock[]>;
+  /** ID 194 #1: the same blocks over the same day last week (its figures in `.y`). */
+  wkBlocks: Record<Role, RepBlock[]>;
   teamOf: Map<string, string>;
   /** user id → metric → pro-rated MTD target (calls_per_day: × working days). */
   targets: Map<string, Map<string, number>>;
@@ -112,20 +116,28 @@ async function buildShared(istDay: string): Promise<Shared> {
   const { measuresFor } = await import("@/lib/targets/service");
   const periods = await salesDailyPeriodsFor(istDay);
   // The same calls, with the same arguments, as the management email's collect.
-  const [yesterday, mtd, extrasY, extrasMtd, t, teamOf] = await Promise.all([
+  const [yesterday, mtd, wk, extrasY, extrasMtd, extrasWk, t, teamOf] = await Promise.all([
     buildSalesDashboard({ ...periods.yesterday, granularity: "day" }),
     buildSalesDashboard({ ...periods.mtd, granularity: "day" }),
+    buildSalesDashboard({ ...periods.sameDayLastWeek, granularity: "day" }),
     loadRepExtras(db as never, periods.yesterday),
     loadRepExtras(db as never, periods.mtd),
+    loadRepExtras(db as never, periods.sameDayLastWeek),
     companyTargets(db as never, periods.mtd.from, periods.mtd.to),
     currentTeamOf(),
   ]);
   const extras = { y: extrasY, mtd: extrasMtd };
+  // Same day last week in the "y" slot; its MTD half is never read.
+  const extrasWkPair = { y: extrasWk, mtd: extrasWk };
   const measure = await measuresFor(periods.mtd.from, periods.mtd.to, t.elapsed);
   return {
     blocks: {
       asm: buildRepBlocks("asm", yesterday, mtd, extras, t.perUser),
       inside_sales_rep: buildRepBlocks("inside_sales_rep", yesterday, mtd, extras, t.perUser),
+    },
+    wkBlocks: {
+      asm: buildRepBlocks("asm", wk, wk, extrasWkPair, t.perUser),
+      inside_sales_rep: buildRepBlocks("inside_sales_rep", wk, wk, extrasWkPair, t.perUser),
     },
     teamOf,
     targets: t.perUser,
@@ -273,7 +285,7 @@ async function workItems(person: DigestPerson, sendDay: string): Promise<WorkIte
           lead_id: p.dealer_lead_id,
           dealer: p.dealer_name ?? byId.get(p.dealer_lead_id)?.shop_name ?? p.dealer_lead_id,
           city: byId.get(p.dealer_lead_id)?.city ?? null,
-          what: `Limit passed: ${CLOCK_WORDS[p.clock] ?? p.clock}`,
+          what: `Limit passed: ${limitPassedWords(p.clock)}`,
           due,
           days: daysLate(due),
         });
@@ -330,15 +342,10 @@ async function overdueByPerson(ids: string[], sendDay: string): Promise<MemberOv
   return rows.map((r) => ({ id: r.id, name: r.name, followUps: Number(r.follow_ups ?? 0), visits: Number(r.visits ?? 0) }));
 }
 
-const CLOCK_WORDS: Record<string, string> = {
-  lead: "first call or visit",
-  owner: "owner's first call or visit",
-  transfer: "first field visit",
-  hot_assign: "Hot lead getting an owner",
-  hot_owner: "Hot lead first call or visit",
-  retry: "retry after an unanswered call",
-  quote: "CEO quote approval",
-};
+/** "Sat 24 Oct". */
+function dayShort(istDay: string): string {
+  return new Date(`${istDay}T12:00:00Z`).toLocaleDateString("en-GB", { timeZone: "UTC", weekday: "short", day: "numeric", month: "short" });
+}
 
 function dayLong(istDay: string): string {
   return new Date(`${istDay}T12:00:00Z`)
@@ -389,6 +396,15 @@ export async function collectMyDay(
           `Yesterday = ${periods.yesterday.from}; MTD = ${periods.mtd.from} to ${periods.mtd.to}. ` +
           "The same row as yours in the management Sales email.",
         empty: "Nothing recorded for you yesterday or this month.",
+      },
+      {
+        // ID 194 #1 (Kartik, 18 Oct): Yesterday against the same weekday last week.
+        key: "my_numbers",
+        title: "Yesterday against the same day last week",
+        columns: ["Metric", `Yesterday · ${dayShort(periods.yesterday.from)}`, `Same day last week · ${dayShort(periods.sameDayLastWeek.from)}`],
+        rows: sameDayLastWeekRows(role, s.blocks[role], s.wkBlocks[role], person.id),
+        textColumns: 1,
+        empty: "Nothing recorded for you on either day.",
       },
       {
         key: "my_numbers",
@@ -461,6 +477,8 @@ export async function collectMyDay(
         // ID 194: "Open my queue" opens the reader's own queue — /asm for an
         // ASM (who may not open the inside-sales queue), /inside-sales otherwise.
         ctaHref: queueHrefFor(role),
+        // 194 #2: the subject names the day the numbers cover (Monday: Saturday).
+        coveredDay: periods.yesterday.from,
         headline: [
           `Work list: ${list.rows.length + list.more} item${list.rows.length + list.more === 1 ? "" : "s"} for today.`,
         ],
@@ -470,7 +488,7 @@ export async function collectMyDay(
           dataAsOf: istStamp(computedAt),
           eyebrow: "ITARANG · MY DAY",
           dayHeading: dayLong(sendDay),
-          intro: `Good morning ${first}. Your numbers cover ${dayLong(istDay)} and the month so far; the work list is for today.`,
+          intro: `Good morning ${first}. Your numbers cover ${dayLong(periods.yesterday.from)} and the month so far; the work list is for today.`,
           firstBlockHint: "Open a dealer to work the lead",
           footer: "Sent by the iTarang CRM every working morning. Admin switches it on per role.",
         },
