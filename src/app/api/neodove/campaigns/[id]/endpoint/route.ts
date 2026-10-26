@@ -12,12 +12,13 @@ import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-util
 import { db } from "@/lib/db";
 import { sql } from "drizzle-orm";
 import { endpointStoreStatus, saveCampaignEndpoint, validEndpointUrl } from "@/lib/neodove/endpointStore";
+import { NEODOVE_MANAGE_ROLES } from "@/lib/neodove/roles";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/** Admin only (13 Oct proposed answer): the URL grants write access to the NeoDove campaign. */
-const ENDPOINT_ROLES = ["admin"];
+/** Admin and Sales Head (26 Oct): the URL grants write access to the NeoDove campaign. */
+const ENDPOINT_ROLES = NEODOVE_MANAGE_ROLES;
 
 const Body = z.object({
     kind: z.enum(["push", "update"]).default("push"),

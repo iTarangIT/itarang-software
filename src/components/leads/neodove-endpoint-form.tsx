@@ -1,6 +1,6 @@
 "use client";
 
-// A32 — Admin pastes a NeoDove campaign's Custom Integration URL here; it is
+// A32 — Admin / Sales Head (26 Oct) paste a NeoDove campaign's Custom Integration URL here; it is
 // stored encrypted (E-351) and never shown again — only its last 4
 // characters. Replaces "ask a developer to add an env var" for a new campaign.
 
@@ -35,7 +35,7 @@ export function NeodoveEndpointForm({
             });
             const j = await r.json().catch(() => null);
             if (!r.ok || !j?.success) {
-                throw new Error(r.status === 403 ? "Only an Admin can set a campaign's endpoint." : (j?.error?.message ?? "Could not save the endpoint"));
+                throw new Error(r.status === 403 ? "Only Admin or Sales Head can set a campaign's NeoDove URL." : (j?.error?.message ?? "Could not save the endpoint"));
             }
             setUrl("");
             toast.success(`Endpoint saved (…${j.data.last4}). Leads can now be sent to this campaign.`);
@@ -51,7 +51,7 @@ export function NeodoveEndpointForm({
         <div className="mt-4 rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm">
             <div className="flex items-center gap-2 font-medium text-gray-900">
                 <KeyRound className="h-4 w-4 text-gray-500" />
-                NeoDove endpoint (Admin)
+                NeoDove URL (Admin / Sales Head)
             </div>
             <p className="mt-1 text-xs text-gray-500">
                 Paste the campaign&apos;s Custom Integration URL from NeoDove. It is stored encrypted and never shown again — the
