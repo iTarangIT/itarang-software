@@ -92,18 +92,15 @@ describe("categorizeCall — connected", () => {
         }
     });
 
-    it.each(["pricing", "negotiation", "dealership", "purchase"] as const)("callback about %s → callback_sales", (topic) => {
-        const r = categorizeCall({ campaignStatus: done, analysis: a({ callback_agreed: "yes", callback_topic: topic }) });
-        expect(r.category).toBe("callback_sales");
-        expect(r.callbackOwner).toBe("sales");
-        expect(r.callbackTopic).toBe(topic);
-    });
-
-    it.each(["general_info", "none"] as const)("callback about %s → callback_ai", (topic) => {
-        const r = categorizeCall({ campaignStatus: done, analysis: a({ callback_agreed: "yes", callback_topic: topic }) });
-        expect(r.category).toBe("callback_ai");
-        expect(r.callbackOwner).toBe("ai");
-    });
+    it.each(["pricing", "negotiation", "dealership", "purchase", "general_info", "none"] as const)(
+        "every agreed callback goes to sales — topic %s",
+        (topic) => {
+            const r = categorizeCall({ campaignStatus: done, analysis: a({ callback_agreed: "yes", callback_topic: topic }) });
+            expect(r.category).toBe("callback_sales");
+            expect(r.callbackOwner).toBe("sales");
+            expect(r.callbackTopic).toBe(topic);
+        },
+    );
 
     it("a Qualified lead's simple callback still goes to sales — never an AI re-dial", () => {
         const r = categorizeCall({
@@ -137,7 +134,7 @@ describe("categorizeCall — connected", () => {
             campaignStatus: done,
             analysis: a({ disqualifier: "call_dropped", callback_agreed: "yes" }, { band: "Warm", call_status: "dropped_partial" }),
         });
-        expect(r.category).toBe("callback_ai");
+        expect(r.category).toBe("callback_sales");
         expect(r.retryAsDisconnected).toBe(false);
     });
 

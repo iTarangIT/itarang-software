@@ -41,8 +41,8 @@ const TONE: Record<CallCategory, string> = {
 const HINT: Partial<Record<CallCategory, string>> = {
   interested: "Qualified on the call, or shared at least one business detail.",
   sales_manager_request: "Asked to speak to a person — sent to Ready to assign.",
-  callback_sales: "Callback about pricing, negotiation, dealership or purchase — sent to Ready to assign.",
-  callback_ai: "Simple callback — the AI calls back.",
+  callback_sales: "Agreed to a callback — sent to Ready to assign for a Sales Manager.",
+  callback_ai: "Older calls only — a simple callback the AI was to make.",
   disconnected: "Cut off mid-conversation — redialled automatically (within the retry budget).",
   no_interest_signal: "Spoke, but shared nothing and asked for nothing.",
   needs_review: "The transcript could not be analysed — retried in the background.",

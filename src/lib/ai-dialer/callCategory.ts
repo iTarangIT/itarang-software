@@ -19,7 +19,7 @@ import type { CallbackTopic, QualificationSignals } from "@/lib/ai/scoring/signa
 import type { Band, CallStatus } from "@/lib/ai/scoring/computeBand";
 
 /** Bump when the rule below changes — stamped on every ai_call_outcomes row. */
-export const CALL_CATEGORY_VERSION = "category-1.0.0";
+export const CALL_CATEGORY_VERSION = "category-1.1.0";
 
 export const CALL_CATEGORIES = [
     // ── connected: the dealer spoke ──
@@ -79,8 +79,6 @@ export function isCallCategory(v: unknown): v is CallCategory {
 
 export type CallbackOwner = "ai" | "sales";
 
-/** The topics a person must handle (review point 3). */
-const SALES_TOPICS: ReadonlySet<CallbackTopic> = new Set(["pricing", "negotiation", "dealership", "purchase"]);
 const HARD_DISQUALIFIERS = new Set(["dont_call", "hostile", "not_interested"]);
 
 /** The slice of a successful analysis this rule reads. */
@@ -180,13 +178,14 @@ export function categorizeCall(input: CategoryInput): CategoryResult {
     }
 
     if (callbackYes) {
-        // A Qualified lead is already the sales team's — an AI re-dial on a lead
-        // a rep is about to own would only get in the way.
-        const sales = SALES_TOPICS.has(topic) || a.band === "Qualified";
+        // Every agreed callback goes to Sales (26 Oct 2026): Priya's script
+        // promises "our sales manager will call", whatever the topic. The topic
+        // stays on the record so the rep knows what the dealer wants.
+        // (callback_ai is kept for rows written by category-1.0.0.)
         return {
-            category: sales ? "callback_sales" : "callback_ai",
+            category: "callback_sales",
             connected: true,
-            callbackOwner: sales ? "sales" : "ai",
+            callbackOwner: "sales",
             callbackTopic: topic,
             wantsHuman: false,
             retryAsDisconnected: false,
