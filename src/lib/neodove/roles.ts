@@ -16,6 +16,12 @@ export const NEODOVE_ADMIN_ROLES = [
     "partner",
 ];
 
+// Roles that run the NeoDove set-up themselves, with no developer (26 Oct):
+// paste a campaign's Custom Integration URL, delete a campaign, and create or
+// switch off the rep / ASM logins its leads go to. Narrower than
+// NEODOVE_ADMIN_ROLES because the URL is write access to the NeoDove campaign.
+export const NEODOVE_MANAGE_ROLES = ["admin", "sales_head"];
+
 // Roles a pushed lead may be assigned to in the CRM (E-237).
 //
 // DELIBERATELY NARROWER THAN "anyone who could own a lead", and the reason is a

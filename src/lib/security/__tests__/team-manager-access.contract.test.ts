@@ -86,3 +86,25 @@ describe("reassign within the team needs a reason and logs like any owner change
         expect(lib).toMatch(/remarks:\s*input\.reason/);
     });
 });
+
+describe("a manager's own-rows Data downloads carry his team (ID 155, 22 Oct)", () => {
+    // Raw text: the registry holds strings with "/*" that the comment stripper would eat across.
+    const reg = readFileSync(join(SRC, "lib", "exports", "datasets", "registry.ts"), "utf8");
+    const route = code(join(SRC, "app", "api", "admin", "data-downloads", "[dataset]", "route.ts"));
+
+    it("the route loads today's team for an own-rows role", () => {
+        expect(route).toMatch(/access\.ownOnly \? await getTeamMemberIds\(user\.id\) : \[\]/);
+        expect(route).toMatch(/ownOnly: access\.ownOnly, teamIds/);
+    });
+
+    it("calls, visits, quotes and targets use the team clause, not `= me`", () => {
+        for (const col of ["t.performed_by", "v.asm_id", "c.created_by", "t.user_id"]) {
+            expect(reg.includes("ownRows(ctx, sql`" + col + "`)"), col).toBe(true);
+            expect(reg.includes("sql`" + col + " = ${ctx.user.id}`"), col).toBe(false);
+        }
+    });
+
+    it("the Leads download passes the team to the list filters", () => {
+        expect(reg).toMatch(/parseLeadListFilters\(leadParams\(ctx\), capabilitiesFor\(ctx\.user\.role\), \{ \.\.\.ctx\.user, teamMemberIds: ctx\.teamIds \}\)/);
+    });
+});

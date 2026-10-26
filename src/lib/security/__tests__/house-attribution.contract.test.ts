@@ -38,14 +38,18 @@ const DISPATCH = [
   "lead/[id]/mark-delivered",
 ];
 
+// KYC routes record through lib/kyc/kycEventLog (recordKycStep /
+// recordKycMilestone), which call recordActorStep and add the KYC log line.
+const RECORD = String.raw`record(?:ActorStep|KycStep|KycMilestone)\(`;
+const COALESCED = String.raw`[^;]*coalesce:\s*true`;
 const SMALL_SAVES: Array<[string, RegExp]> = [
-  ["kyc/[leadId]/save-draft", /recordActorStep\([^;]*coalesce:\s*true/],
-  ["kyc/[leadId]/complete-step2", /recordActorStep\(/],
-  ["kyc/[leadId]/complete-step3", /recordActorStep\(/],
-  ["coborrower/[leadId]", /recordActorStep\([^;]*coalesce:\s*true/],
-  ["coborrower/[leadId]/save-draft", /recordActorStep\([^;]*coalesce:\s*true/],
-  ["kyc/[leadId]/generate-consent-pdf", /recordActorStep\(/],
-  ["kyc/[leadId]/release-coupon", /recordActorStep\(/],
+  ["kyc/[leadId]/save-draft", new RegExp(RECORD + COALESCED)],
+  ["kyc/[leadId]/complete-step2", new RegExp(RECORD)],
+  ["kyc/[leadId]/complete-step3", new RegExp(RECORD)],
+  ["coborrower/[leadId]", new RegExp(RECORD + COALESCED)],
+  ["coborrower/[leadId]/save-draft", new RegExp(RECORD + COALESCED)],
+  ["kyc/[leadId]/generate-consent-pdf", new RegExp(RECORD)],
+  ["kyc/[leadId]/release-coupon", new RegExp(RECORD)],
   ["lead/[id]/product-photo", /recordActorStep\(/],
 ];
 
@@ -67,6 +71,14 @@ describe("ID 183: the smaller saves write the Done-by line and the notice", () =
   for (const [rel, re] of SMALL_SAVES) {
     it(rel, () => expect(code(rel)).toMatch(re));
   }
+  it("the KYC wrappers still write the Done-by line (recordActorStep)", () => {
+    const lib = readFileSync(join(process.cwd(), "src", "lib", "kyc", "kycEventLog.ts"), "utf8");
+    for (const fn of ["recordKycStep", "recordKycMilestone"]) {
+      const body = lib.slice(lib.indexOf(`export async function ${fn}(`));
+      const end = body.search(/\r?\n\}\r?\n/);
+      expect(body.slice(0, end), fn).toMatch(/await recordActorStep\(actor, step, extra, opts\)/);
+    }
+  });
 });
 
 describe("ID 183: the printable consent form names the file's dealer", () => {
@@ -76,5 +88,31 @@ describe("ID 183: the printable consent form names the file's dealer", () => {
   });
   it("consent-preview does the same", () => {
     expect(code("kyc/[leadId]/consent-preview")).toMatch(/!ownDealer[\s\S]*fileDealerNames\(/);
+  });
+});
+
+// 23 Oct: the older routes (unlinked loan-options page, send for review, clear
+// draft) let the house login change a pushed file with no dealer-wins check
+// and no "Done by". They now go through the shared writer gate and record.
+describe("ID 183 (23 Oct): the older loan-option, review and draft routes gate and record", () => {
+  for (const rel of [
+    "leads/[id]/loan-offers/[offerId]/select",
+    "leads/[id]/loan-offers/[offerId]/book",
+    "leads/[id]/submit-to-sm",
+    "dealer/leads/drafts/[leadId]",
+  ]) {
+    it(rel, () => {
+      const src = code(rel);
+      expect(src).not.toMatch(/\bdealerMayActOnLead\s*\(/);
+      expect(src).toMatch(/\brequireLeadWriter\s*\(\s*leadId\s*,\s*req\s*,/);
+      expect(src).toMatch(/\brecordActorStep\s*\(/);
+    });
+  }
+  it("the Step 3 screen sends the dealer-wins header (LeadWorkNote)", () => {
+    const page = readFileSync(
+      join(process.cwd(), "src", "app", "(dashboard)", "dealer-portal", "leads", "[id]", "borrower-consent", "page.tsx"),
+      "utf8",
+    );
+    expect(page).toMatch(/<LeadWorkNote leadId=\{leadId\} \/>/);
   });
 });

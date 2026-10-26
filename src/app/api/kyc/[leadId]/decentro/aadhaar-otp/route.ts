@@ -5,7 +5,8 @@ import { kycVerifications } from '@/lib/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { aadhaarGenerateOtp } from '@/lib/decentro';
 import { requireLeadAccess } from '@/lib/auth/requireLeadAccess';
-import { recordActorStep, requireLeadWriter } from '@/lib/leads/actForDealerGuard';
+import { requireLeadWriter } from '@/lib/leads/actForDealerGuard';
+import { recordKycStep } from '@/lib/kyc/kycEventLog';
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
     try {
@@ -69,7 +70,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             });
         }
 
-        await recordActorStep(writer.actor, 'sent the Aadhaar OTP to the customer');
+        await recordKycStep(writer.actor, 'sent the Aadhaar OTP to the customer');
         return NextResponse.json({
             success,
             responseStatus: decentroRes.responseStatus,

@@ -8,7 +8,8 @@ import { notifyAdminsOfUpload } from "@/lib/nbfc/doc-request-notify";
 import { requireLeadAccess } from "@/lib/auth/requireLeadAccess";
 import { stampUploader } from "@/lib/storage/uploaderStamp";
 import { dealerViewableFiles } from "@/lib/storage/fileAuthz";
-import { recordActorStep, requireLeadWriter } from "@/lib/leads/actForDealerGuard";
+import { requireLeadWriter } from "@/lib/leads/actForDealerGuard";
+import { recordKycMilestone } from "@/lib/kyc/kycEventLog";
 
 /**
  * GET — Fetch all document requests for a lead (from admin "Request More Docs")
@@ -168,7 +169,7 @@ export async function POST(
             }).catch(() => {});
         }
 
-        await recordActorStep(writer.actor, `uploaded the requested document "${request.doc_label}"`);
+        await recordKycMilestone(writer.actor, `uploaded the requested document "${request.doc_label}"`);
         return NextResponse.json({
             success: true,
             fileUrl,

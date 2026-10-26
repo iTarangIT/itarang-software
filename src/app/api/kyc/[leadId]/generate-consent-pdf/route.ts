@@ -11,7 +11,8 @@ import {
     type ConsentFor,
 } from '@/lib/kyc/consent-service';
 import { requireLeadAccess } from '@/lib/auth/requireLeadAccess';
-import { fileDealerNames, recordActorStep, requireLeadWriter } from '@/lib/leads/actForDealerGuard';
+import { fileDealerNames, requireLeadWriter } from '@/lib/leads/actForDealerGuard';
+import { recordKycStep } from '@/lib/kyc/kycEventLog';
 import { isItarangActor } from '@/lib/leads/actForDealer';
 
 type RouteContext = { params: Promise<{ leadId: string }> };
@@ -53,7 +54,7 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
             return NextResponse.json({ success: false, error: { message: result.error } }, { status: result.status });
         }
 
-        await recordActorStep(writer.actor, `made the printable consent form${body?.consent_for === 'borrower' ? ' (co-borrower)' : ''}`);
+        await recordKycStep(writer.actor, `made the printable consent form${body?.consent_for === 'borrower' ? ' (co-borrower)' : ''}`);
         return NextResponse.json({
             success: true,
             consentId: result.consentId,

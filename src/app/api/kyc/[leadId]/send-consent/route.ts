@@ -18,7 +18,8 @@ import { isNextRedirectError } from "@/lib/api-utils";
 import { notifyHouseOfDealerStep } from "@/lib/leads/pushNotices";
 import { getOpenQueueEntryForLead } from "@/lib/kyc/admin-workflow";
 import { isActForDealerRole, isItarangActor } from "@/lib/leads/actForDealer";
-import { fileDealerNames, recordActorStep, requireLeadWriter } from "@/lib/leads/actForDealerGuard";
+import { fileDealerNames, requireLeadWriter } from "@/lib/leads/actForDealerGuard";
+import { recordKycMilestone } from "@/lib/kyc/kycEventLog";
 type RouteContext = {
   params: Promise<{ leadId: string }>;
 };
@@ -97,7 +98,7 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
       // 14 Oct: tell the iTarang house dealer when the dealer moves a file it pushed.
       await notifyHouseOfDealerStep(leadId, "sent the consent to the customer", leadGate.user.dealer_id);
       // ID 183: "Done by <name> for <dealer>" + the dealer told.
-      await recordActorStep(actor, `sent the consent code to the customer (${otpResult.channel})`);
+      await recordKycMilestone(actor, `sent the consent code to the customer (${otpResult.channel})`);
       return NextResponse.json({
         success: true,
         hasDigioIntegration: false,
@@ -136,7 +137,7 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
 
     // 14 Oct: tell the iTarang house dealer when the dealer moves a file it pushed.
     await notifyHouseOfDealerStep(leadId, "sent the consent to the customer", leadGate.user.dealer_id);
-    await recordActorStep(actor, "sent the consent link to the customer");
+    await recordKycMilestone(actor, "sent the consent link to the customer");
     return NextResponse.json({
       success: true,
       alreadyActive: result.alreadyActive,

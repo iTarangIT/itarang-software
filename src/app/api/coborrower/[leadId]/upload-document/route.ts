@@ -6,7 +6,8 @@ import { createClient } from '@/lib/supabase/server';
 import { isS3Backend, putObject, filesProxyPath } from '@/lib/storage/s3';
 import { requireLeadAccess } from "@/lib/auth/requireLeadAccess";
 import { stampUploader } from '@/lib/storage/uploaderStamp';
-import { recordActorStep, requireLeadWriter } from "@/lib/leads/actForDealerGuard";
+import { requireLeadWriter } from "@/lib/leads/actForDealerGuard";
+import { recordKycStep } from "@/lib/kyc/kycEventLog";
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
     // ID 118: signed in, and this lead is the caller's to touch (a dealer's own lead, or back office).
@@ -75,7 +76,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         // ID 166: who uploaded it decides whether the dealer may open it later.
         await stampUploader('co_borrower_documents', { id: docId }, { userId: leadGate.user.id, source: 'portal', actForDealer: writer.actor.kind === 'itarang' });
 
-        await recordActorStep(writer.actor, 'uploaded a co-borrower document');
+        await recordKycStep(writer.actor, 'uploaded a co-borrower document');
         return NextResponse.json({ success: true, file_url: documentUrl });
     } catch (error) {
         return NextResponse.json({ success: false, error: { message: 'Server error' } }, { status: 500 });

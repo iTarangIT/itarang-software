@@ -38,6 +38,8 @@ interface CrossMatchResult {
 
 interface CaseReviewProps {
   leadId: string;
+  /** ID 183: Admin / Sales Head only — the CEO is refused by send-consent, so the button is hidden for him. */
+  canRegenerateConsent?: boolean;
 }
 
 interface LeadInfo {
@@ -455,7 +457,7 @@ const DOC_TYPE_LABELS: Record<string, string> = {
   cheque_4: "Cheque 4",
 };
 
-export default function CaseReview({ leadId }: CaseReviewProps) {
+export default function CaseReview({ leadId, canRegenerateConsent = true }: CaseReviewProps) {
   const [data, setData] = useState<CaseData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -1433,7 +1435,7 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
                       const canFetchSigned = !pdfUrl && !!c.esignTransactionId;
                       const canDecide = !isVerified && !isRejected && (isViewable || isEsignCompleted);
                       // Re-issue a fresh consent after rejection or an Aadhaar mismatch/failure.
-                      const canRegenerate = isRejected || isMismatch;
+                      const canRegenerate = canRegenerateConsent && (isRejected || isMismatch);
                       const isRegeneratingThis = consentActionLoading === `${c.id}:regenerate`;
                       const isConfirmingReject = pendingRejectId === c.id;
                       const isApprovingThis = consentActionLoading === `${c.id}:approve`;

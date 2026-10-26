@@ -17,6 +17,7 @@ import OtherDocumentsSection, { type RequestedDoc } from '@/components/dealer-po
 import ConsentOtpCard from '@/components/dealer-portal/lead-wizard/ConsentOtpCard';
 import AskItarangHelp from '@/components/dealer-portal/lead-wizard/AskItarangHelp';
 import LeadWorkNote from '@/components/dealer-portal/lead-wizard/LeadWorkNote';
+import KycTimeline from '@/components/kyc/KycTimeline';
 import { onFreshFileClick } from '@/lib/storage/freshFileLink';
 
 type UploadedDoc = {
@@ -743,6 +744,8 @@ export default function KYCPage() {
                 {/* ID 183 (21 Oct): "being worked by" — and the house login's dealer-wins check. */}
                 <LeadWorkNote leadId={leadId} />
                 <AskItarangHelp leadId={leadId} />
+                {/* KYC history: who did what on this file's KYC, and when. */}
+                <KycTimeline leadId={leadId} />
 
                 {draftResumedAt && !draftBannerDismissed && (
                     <div className="mb-4 flex items-center justify-between gap-3 px-4 py-3 rounded-xl bg-blue-50 border border-blue-200">

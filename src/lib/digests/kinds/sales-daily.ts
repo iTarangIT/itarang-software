@@ -89,10 +89,14 @@ import {
   blockDRows,
   buildRepBlocks,
   byPersonRows,
+  datedTeamGroup,
+  outsideManagerBlock,
   loadAwaitingFieldVisit,
   loadRepExtras,
   loadAwaitingFieldVisitPast,
   repBlockTableRows,
+  type RepBlock,
+  type TeamGroups,
 } from "../salesDailyBlocks";
 import { formatSlotTime } from "../schedule";
 import { fmtDay, staleAlertText } from "@/lib/sales/invoiceFreshnessRules";
@@ -616,6 +620,64 @@ async function collect(
     const asmBlocks = buildRepBlocks("asm", yesterday, mtd, extras, blockA.userTargets);
     const isrBlocks = buildRepBlocks("inside_sales_rep", yesterday, mtd, extras, blockA.userTargets);
 
+    // ID 155 (22 Oct): a "Team subtotal" adds each member only for the days he
+    // reported to the manager this month (dated reporting lines, leavers too),
+    // as the Performance page's Team total does. A failure leaves that manager
+    // on today's members (repBlockTableRows' default) and is logged.
+    //
+    // ID 155 (24 Oct): a manager in another role (a Sales Manager over ASMs)
+    // gets the same subtotal under his members — named from users.
+    const outsideOf = (blocks: RepBlock[]): string[] => {
+      const ids = new Set(blocks.map((b) => b.id));
+      return [...new Set(blocks.map((b) => teamOf.get(b.id)).filter((m): m is string => !!m && !ids.has(m)))];
+    };
+    const outsideIds = [...new Set([...outsideOf(asmBlocks), ...outsideOf(isrBlocks)])];
+    const outsideNames = new Map<string, string>();
+    if (outsideIds.length) {
+      try {
+        const rows = (await db.execute(sql`
+          SELECT id::text AS id, name FROM users
+           WHERE id::text IN (${sql.join(outsideIds.map((m) => sql`${m}`), sql`, `)})
+        `)) as unknown as Array<{ id: string; name: string | null }>;
+        for (const r of rows) outsideNames.set(r.id, r.name?.trim() || "Unnamed manager");
+      } catch (err) {
+        console.error("[digest:sales_daily] names of managers outside Blocks B / C failed; their members stay ungrouped:", err);
+      }
+    }
+    const datedGroups = async (role: "asm" | "inside_sales_rep", blocks: RepBlock[]): Promise<TeamGroups> => {
+      const out = new Map<string, RepBlock[]>();
+      const full = new Map(blocks.map((b) => [b.id, b]));
+      const managers = [...new Set(teamOf.values())].filter((m) => full.has(m) || (outsideNames.has(m) && outsideOf(blocks).includes(m)));
+      if (managers.length === 0) return out;
+      const { teamStints } = await import("@/lib/admin/teamPerformance");
+      const { teamWindows } = await import("@/lib/users/teamWindows");
+      const { from, to } = periods.mtd;
+      for (const m of managers) {
+        try {
+          const members = [...teamOf].filter(([, mg]) => mg === m).map(([id]) => id);
+          const stints =
+            (await teamStints(m, from, to)) ?? members.map((id) => ({ user_id: id, effective_from: from, effective_to: null }));
+          const windows = teamWindows(m, stints, from, to);
+          const partial = new Map<string, Map<string, RepBlock>>();
+          for (const w of windows) {
+            if (w.from === from && w.to === to) continue;
+            const [dash, ex] = await Promise.all([
+              buildSalesDashboard({ from: w.from, to: w.to, granularity: "day", spoc_ids: w.ids }),
+              loadRepExtras(db as never, { from: w.from, to: w.to }),
+            ]);
+            const wb = buildRepBlocks(role, { per_spoc: [] }, dash, { y: ex, mtd: ex }, blockA.userTargets);
+            partial.set(`${w.from}|${w.to}`, new Map(wb.map((b) => [b.id, b])));
+          }
+          const manager = full.get(m) ?? outsideManagerBlock(m, outsideNames.get(m)!, blocks);
+          out.set(m, datedTeamGroup({ manager, windows, mtd: periods.mtd, yesterday: periods.yesterday.from, full, partial }));
+        } catch (err) {
+          console.error(`[digest:sales_daily] dated team subtotal for ${m} failed; using today's team:`, err);
+        }
+      }
+      return out;
+    };
+    const [asmGroups, isrGroups] = await Promise.all([datedGroups("asm", asmBlocks), datedGroups("inside_sales_rep", isrBlocks)]);
+
     // Names for Block E: the builder's per-rep blocks, then users for the rest.
     const names = new Map<string, string>();
     for (const d of [yesterday, mtd]) for (const b of d.per_spoc ?? []) names.set(b.spoc_id, b.name ?? b.spoc_id);
@@ -785,7 +847,7 @@ async function collect(
             key: "block_b",
             title: "B · Field team (ASM)",
             columns: BLOCK_B_COLUMNS,
-            rows: repBlockTableRows("asm", asmBlocks, teamOf),
+            rows: repBlockTableRows("asm", asmBlocks, teamOf, asmGroups, outsideNames),
             textColumns: 1,
             toneColumns: [BLOCK_B_PCT_COLUMN],
             note:
@@ -800,7 +862,7 @@ async function collect(
             key: "block_c",
             title: "C · Inside sales (ISR / CC)",
             columns: BLOCK_C_COLUMNS,
-            rows: repBlockTableRows("inside_sales_rep", isrBlocks, teamOf),
+            rows: repBlockTableRows("inside_sales_rep", isrBlocks, teamOf, isrGroups, outsideNames),
             textColumns: 1,
             toneColumns: [BLOCK_C_PCT_COLUMN],
             note:

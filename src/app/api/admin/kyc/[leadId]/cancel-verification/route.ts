@@ -6,6 +6,7 @@ import { requireRole } from '@/lib/auth-utils';
 import { backOfficeMayReachLead } from '@/lib/auth/requireLeadAccess';
 import { logCouponAction } from '@/lib/coupon-audit';
 import { z } from 'zod';
+import { recordKycEvent } from '@/lib/kyc/kycEventLog';
 
 const cancelSchema = z.object({
     couponAction: z.enum(['release', 'consume']),
@@ -101,6 +102,12 @@ export async function POST(req: NextRequest, context: RouteContext) {
                 notes: notes || 'Verification cancelled by admin - coupon released',
             });
 
+            await recordKycEvent({
+                leadId,
+                action: notes ? `Verification cancelled (coupon released to the dealer): ${notes}` : 'Verification cancelled (coupon released to the dealer)',
+                actor: { id: user.id, name: user.name, role: user.role },
+            });
+
             return NextResponse.json({
                 success: true,
                 message: 'Verification cancelled. Coupon released back to dealer.',
@@ -128,6 +135,12 @@ export async function POST(req: NextRequest, context: RouteContext) {
                 leadId,
                 performedBy: user.id,
                 notes: notes || 'Verification cancelled by admin - coupon consumed',
+            });
+
+            await recordKycEvent({
+                leadId,
+                action: notes ? `Verification cancelled (coupon used): ${notes}` : 'Verification cancelled (coupon used)',
+                actor: { id: user.id, name: user.name, role: user.role },
             });
 
             return NextResponse.json({

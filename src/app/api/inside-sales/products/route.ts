@@ -15,7 +15,8 @@ import type {
 
 export const dynamic = "force-dynamic";
 
-const READ_ROLES = ["inside_sales_rep", "asm", "admin", "partner"];
+// E-358: Sales Head and CEO raise account quotations, which pick from the same master.
+const READ_ROLES = ["inside_sales_rep", "asm", "admin", "partner", "sales_head", "ceo"];
 
 export const GET = withErrorHandler(async () => {
     await requireRole(READ_ROLES);

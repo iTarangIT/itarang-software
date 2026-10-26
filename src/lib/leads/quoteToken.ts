@@ -36,6 +36,13 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 /** Kept short — it rides in a URL and in a WhatsApp caption. */
 const SIG_LENGTH = 32;
 
+/**
+ * E-358 — the payload prefix of an ACCOUNT quotation's token. Inside the HMAC,
+ * so a lead token can never be replayed as an account token or the reverse:
+ * each reader refuses the other family's payload.
+ */
+const ACCOUNT_PREFIX = "a:";
+
 export class QuoteTokenSecretMissingError extends Error {
   constructor() {
     super(
@@ -121,6 +128,10 @@ export function readQuoteToken(token: string | null | undefined): QuoteTokenClai
   const b = Buffer.from(provided);
   if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
 
+  // E-358: an ACCOUNT quotation's token signs "a:<id>.<version>". It is a
+  // different quotation family, so it never opens a lead quotation here.
+  if (payload.startsWith(ACCOUNT_PREFIX)) return null;
+
   const sep = payload.lastIndexOf(".");
   if (sep <= 0) return null;
   const commercialId = payload.slice(0, sep);
@@ -143,4 +154,55 @@ export function quoteApprovalUrl(claims: QuoteTokenClaims): string {
     "https://crm.itarang.com"
   ).replace(/\/+$/, "");
   return `${base}/quote/${mintQuoteToken(claims)}`;
+}
+
+/** E-358 — the claims behind an ACCOUNT quotation's link. */
+export interface AccountQuoteTokenClaims {
+  quotationId: string;
+  versionNo: number;
+}
+
+/** `<base64url("a:" + quotationId.versionNo)>.<sig>` */
+export function mintAccountQuoteToken(claims: AccountQuoteTokenClaims): string {
+  const payload = `${ACCOUNT_PREFIX}${claims.quotationId}.${claims.versionNo}`;
+  return `${b64url(payload)}.${sign(payload)}`;
+}
+
+/** Verify an ACCOUNT quotation token. Null for anything else, lead tokens included. */
+export function readAccountQuoteToken(
+  token: string | null | undefined,
+): AccountQuoteTokenClaims | null {
+  if (!token || typeof token !== "string") return null;
+  const dot = token.lastIndexOf(".");
+  if (dot <= 0) return null;
+  const payload = unb64url(token.slice(0, dot));
+  if (!payload || !payload.startsWith(ACCOUNT_PREFIX)) return null;
+
+  let expected: string;
+  try {
+    expected = sign(payload);
+  } catch {
+    return null;
+  }
+  const a = Buffer.from(expected);
+  const b = Buffer.from(token.slice(dot + 1));
+  if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
+
+  const body = payload.slice(ACCOUNT_PREFIX.length);
+  const sep = body.lastIndexOf(".");
+  if (sep <= 0) return null;
+  const quotationId = body.slice(0, sep);
+  const versionNo = Number(body.slice(sep + 1));
+  if (!quotationId || !Number.isInteger(versionNo)) return null;
+  return { quotationId, versionNo };
+}
+
+/** E-358 — the absolute URL of an account quotation's response page. */
+export function accountQuoteApprovalUrl(claims: AccountQuoteTokenClaims): string {
+  const base = (
+    process.env.NEXT_PUBLIC_APP_URL ||
+    process.env.APP_URL ||
+    "https://crm.itarang.com"
+  ).replace(/\/+$/, "");
+  return `${base}/quote/a/${mintAccountQuoteToken(claims)}`;
 }

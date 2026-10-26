@@ -86,9 +86,8 @@ export const POST = withErrorHandler(
         // the card for a brand-new dealer is refused. Only quote events need
         // the onboarded check.
         const isQuote = body.event_type === "quote_issue" || body.event_type === "quote_revision";
-        const requireDealCard = isQuote
-            ? dealCardRequired({ role: user.role, dealerOnboarded: (await isDealerOnboarded(id)).onboarded })
-            : false;
+        const dealerOnboarded = isQuote ? (await isDealerOnboarded(id)).onboarded : undefined;
+        const requireDealCard = isQuote ? dealCardRequired({ role: user.role, dealerOnboarded: !!dealerOnboarded }) : false;
 
         const outcome = await createLeadCommercial({
             leadId: id,
@@ -98,6 +97,7 @@ export const POST = withErrorHandler(
             // for an onboarded dealer ISR, ASM and Sales Head may leave it
             // empty. The WhatsApp Assistant applies the same rule.
             requireDealCard,
+            dealerOnboarded,
         });
         // Draft PDF, paired touchpoint and notifications — after the commit.
         await outcome.afterCommit();

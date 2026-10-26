@@ -5,7 +5,8 @@ import { eq, and } from 'drizzle-orm';
 import { createClient } from '@/lib/supabase/server';
 import { createPaymentQr, calculateDiscount } from '@/lib/razorpay';
 import { requireLeadAccess } from '@/lib/auth/requireLeadAccess';
-import { recordActorStep, requireLeadWriter } from '@/lib/leads/actForDealerGuard';
+import { requireLeadWriter } from '@/lib/leads/actForDealerGuard';
+import { recordKycStep } from '@/lib/kyc/kycEventLog';
 
 const BASE_FEE = Number(process.env.FACILITATION_FEE_BASE_AMOUNT) || 1500;
 
@@ -114,7 +115,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             created_by: user.id,
         });
 
-        await recordActorStep(writer.actor, 'created the facilitation fee payment QR');
+        await recordKycStep(writer.actor, 'created the facilitation fee payment QR');
         return NextResponse.json({
             success: true,
             data: {

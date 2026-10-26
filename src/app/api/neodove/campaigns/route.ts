@@ -15,9 +15,15 @@ import {
     successResponse,
     withErrorHandler,
 } from "@/lib/api-utils";
-import { NEODOVE_ADMIN_ROLES } from "@/lib/neodove/roles";
+import { NEODOVE_ADMIN_ROLES, NEODOVE_MANAGE_ROLES } from "@/lib/neodove/roles";
 import { isEndpointWired } from "@/lib/neodove/config";
-import { DB_ENDPOINT_REF, campaignsWithStoredEndpoint } from "@/lib/neodove/endpointStore";
+import {
+    DB_ENDPOINT_REF,
+    campaignsWithStoredEndpoint,
+    endpointStoreStatus,
+    saveCampaignEndpoint,
+    validEndpointUrl,
+} from "@/lib/neodove/endpointStore";
 import { mirrorConfigSchema } from "@/lib/neodove/types";
 import { resolveNeodoveAssignee } from "@/lib/neodove/assignAfterPush";
 
@@ -56,6 +62,11 @@ const createSchema = z.object({
     // Nothing is sent to NeoDove — it mirrors the assignee a human set in
     // NeoDove's own campaign settings. Nullable so it can be cleared.
     crmOwnerUserId: z.string().trim().min(1).nullable().optional(),
+    // The Custom Integration URL itself, pasted from NeoDove (26 Oct). Stored
+    // encrypted (E-351) and the campaign pointed at it — no env var, no
+    // restart. Write-only: never echoed back. Takes precedence over
+    // pushEndpointRef.
+    endpointUrl: z.string().trim().min(10).max(2000).optional(),
 });
 
 function makeCampaignId(): string {
@@ -175,6 +186,18 @@ export const POST = withErrorHandler(async (req: Request) => {
     const data = parsed.data;
     const id = makeCampaignId();
 
+    // Checked before the INSERT so a bad URL or a server without the store
+    // refuses the whole create instead of leaving an unwired campaign behind.
+    if (data.endpointUrl) {
+        if (!NEODOVE_MANAGE_ROLES.includes(user.role)) {
+            return errorResponse("Only Admin or Sales Head can set a campaign's NeoDove URL.", 403);
+        }
+        const store = await endpointStoreStatus();
+        if (!store.ready) return errorResponse(store.reason ?? "The endpoint store is not set up.", 503);
+        const bad = validEndpointUrl(data.endpointUrl);
+        if (bad) return errorResponse(bad, 400);
+    }
+
     // mirror_config is named only when the caller actually sent one. Naming a
     // column that does not exist fails at PARSE time, so an unconditional
     // reference would break campaign creation outright on any DB where E-225
@@ -225,6 +248,18 @@ export const POST = withErrorHandler(async (req: Request) => {
                 ${priority ? sql`, true` : sql``}
                 ${crmOwner ? sql`, ${crmOwner}` : sql``})
     `);
+
+    if (data.endpointUrl) {
+        try {
+            const { last4 } = await saveCampaignEndpoint({ campaignId: id, kind: "push", url: data.endpointUrl, actorId: user.id });
+            console.log(`[neodove] campaign ${id} created with stored push endpoint by ${user.id} (…${last4})`);
+            return successResponse({ id, last4 });
+        } catch (err) {
+            // Don't leave a campaign that looks created but cannot push.
+            await db.execute(sql`DELETE FROM neodove_campaigns WHERE id = ${id}`).catch(() => undefined);
+            throw err;
+        }
+    }
 
     return successResponse({ id });
 });

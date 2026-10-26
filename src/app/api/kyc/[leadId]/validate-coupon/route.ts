@@ -5,7 +5,8 @@ import { eq, and } from 'drizzle-orm';
 import { calculateDiscount } from '@/lib/razorpay';
 import { requireLeadAccess } from "@/lib/auth/requireLeadAccess";
 import { isItarangActor } from "@/lib/leads/actForDealer";
-import { recordActorStep, requireLeadWriter } from "@/lib/leads/actForDealerGuard";
+import { requireLeadWriter } from "@/lib/leads/actForDealerGuard";
+import { recordKycStep } from "@/lib/kyc/kycEventLog";
 
 const BASE_FEE = Number(process.env.FACILITATION_FEE_BASE_AMOUNT) || 1500;
 
@@ -83,7 +84,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         const coupon = coupons[0];
 
         // ID 183: iTarang acting for the dealer spends the dealer's own coupon
-        // (credit goes to the dealer) — never another dealer's.
+        // (credit goes to the dealer) — never another dealer's. Business answer
+        // (24 Oct): a dealer himself is NOT limited to his own coupons, a coupon
+        // with no dealer is open to anyone, and the free coupon stays — so only
+        // iTarang actors are checked here.
         if (isItarangActor(gate.actor.kind) && coupon.dealer_id && coupon.dealer_id !== gateLead.dealer_id) {
             return NextResponse.json({ valid: false, message: "This coupon belongs to another dealer. Use one from this file's dealer." });
         }
@@ -124,7 +128,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             return NextResponse.json({ valid: false, message: 'Coupon unavailable' });
         }
 
-        await recordActorStep(gate.actor, `applied verification coupon ${coupon.code}`);
+        await recordKycStep(gate.actor, `applied verification coupon ${coupon.code}`);
         return NextResponse.json({
             valid: true,
             success: true,

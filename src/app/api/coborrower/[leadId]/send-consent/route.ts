@@ -4,7 +4,8 @@ import { consentRecords, coBorrowers } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
 import crypto from 'crypto';
 import { requireLeadAccess } from "@/lib/auth/requireLeadAccess";
-import { recordActorStep, requireLeadWriter } from "@/lib/leads/actForDealerGuard";
+import { requireLeadWriter } from "@/lib/leads/actForDealerGuard";
+import { recordKycMilestone } from "@/lib/kyc/kycEventLog";
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
     // ID 118: signed in, and this lead is the caller's to touch (a dealer's own lead, or back office).
@@ -44,7 +45,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
 
         // TODO: Send actual SMS/WhatsApp via Twilio
 
-        await recordActorStep(writer.actor, 'sent the consent to the co-borrower');
+        await recordKycMilestone(writer.actor, 'sent the consent to the co-borrower');
         return NextResponse.json({ success: true, sentAt: now.toISOString() });
     } catch (error) {
         return NextResponse.json({ success: false, error: { message: 'Server error' } }, { status: 500 });

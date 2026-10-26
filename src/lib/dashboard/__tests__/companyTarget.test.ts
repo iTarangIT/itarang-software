@@ -17,18 +17,18 @@ describe("summariseCompanyTargets", () => {
             ["2026-09", "2026-10"],
             "2026-10",
         );
-        expect(t.revenue).toEqual({ sum: 240, accepted: 0, notAccepted: 240, stretch: 0, missing: [] });
-        expect(t.batteries_sold).toEqual({ sum: 9, accepted: 0, notAccepted: 9, stretch: 0, missing: ["2026-09"] });
+        expect(t.revenue).toEqual({ sum: 240, accepted: 0, notAccepted: 240, rejected: 0, stretch: 0, missing: [] });
+        expect(t.batteries_sold).toEqual({ sum: 9, accepted: 0, notAccepted: 9, rejected: 0, stretch: 0, missing: ["2026-09"] });
     });
 
     it("treats a zero monthly target as no target", () => {
         const t = summariseCompanyTargets([{ month: "2026-09", rows: [row("revenue", 0, 0)] }], ["2026-09"], "2026-10");
-        expect(t.revenue).toEqual({ sum: 0, accepted: 0, notAccepted: 0, stretch: 0, missing: ["2026-09"] });
+        expect(t.revenue).toEqual({ sum: 0, accepted: 0, notAccepted: 0, rejected: 0, stretch: 0, missing: ["2026-09"] });
     });
 
     it("does not call the current month missing on the 1st (to-date target 0)", () => {
         const t = summariseCompanyTargets([{ month: "2026-10", rows: [row("revenue", 300, 0)] }], ["2026-10"], "2026-10");
-        expect(t.revenue).toEqual({ sum: 0, accepted: 0, notAccepted: 0, stretch: 0, missing: [] });
+        expect(t.revenue).toEqual({ sum: 0, accepted: 0, notAccepted: 0, rejected: 0, stretch: 0, missing: [] });
     });
 
     it("ignores other metrics", () => {
@@ -81,7 +81,7 @@ describe("accepted / not yet accepted split (ID 157)", () => {
         );
         // ID 189 (16 Oct): the CEO's never-posted draft is not in force, so it is
         // in neither the target nor "not yet accepted".
-        expect(t.revenue).toEqual({ sum: 150, accepted: 100, notAccepted: 50, stretch: 0, missing: [] });
+        expect(t.revenue).toEqual({ sum: 150, accepted: 100, notAccepted: 50, rejected: 0, stretch: 0, missing: [] });
     });
 
     it("counts only the version in force: posted, pushed, accepted — never a draft or a removed row (ID 189)", () => {
@@ -100,9 +100,9 @@ describe("accepted / not yet accepted split (ID 157)", () => {
             ["2026-10"],
             "2026-10",
         );
-        expect(t.revenue).toEqual({ sum: 100, accepted: 0, notAccepted: 100, stretch: 0, missing: [] });
+        expect(t.revenue).toEqual({ sum: 100, accepted: 0, notAccepted: 100, rejected: 0, stretch: 0, missing: [] });
         // A month with only a CEO draft has no target yet.
-        expect(t.batteries_sold).toEqual({ sum: 0, accepted: 0, notAccepted: 0, stretch: 0, missing: ["2026-10"] });
+        expect(t.batteries_sold).toEqual({ sum: 0, accepted: 0, notAccepted: 0, rejected: 0, stretch: 0, missing: ["2026-10"] });
     });
 });
 
@@ -127,7 +127,7 @@ describe("CEO target on CEO tiles, stretch apart (ID 189)", () => {
             ["2026-10"],
             "2026-10",
         );
-        expect(t.revenue).toEqual({ sum: 130, accepted: 100, notAccepted: 30, stretch: 50, missing: [] });
+        expect(t.revenue).toEqual({ sum: 130, accepted: 100, notAccepted: 30, rejected: 0, stretch: 50, missing: [] });
     });
 
     it("a stretch on a CEO target of 0 counts as stretch, not as a CEO target", () => {
@@ -141,6 +141,26 @@ describe("CEO target on CEO tiles, stretch apart (ID 189)", () => {
             ["2026-09"],
             "2026-10",
         );
-        expect(t.revenue).toEqual({ sum: 0, accepted: 0, notAccepted: 0, stretch: 80, missing: ["2026-09"] });
+        expect(t.revenue).toEqual({ sum: 0, accepted: 0, notAccepted: 0, rejected: 0, stretch: 80, missing: ["2026-09"] });
+    });
+});
+
+describe("ID 189 (22 Oct): an old-flow rejected target is shown apart", () => {
+    it("counts in the target but not inside Not yet accepted", () => {
+        const t = summariseCompanyTargets(
+            [
+                {
+                    month: "2026-09",
+                    rows: [
+                        { metric: "revenue", status: "accepted", progress: { monthly_target: 100, mtd_target: 50 } },
+                        { metric: "revenue", status: "pushed", progress: { monthly_target: 40, mtd_target: 20 } },
+                        { metric: "revenue", status: "rejected", progress: { monthly_target: 60, mtd_target: 30 } },
+                    ],
+                },
+            ],
+            ["2026-09"],
+            "2026-10",
+        );
+        expect(t.revenue).toEqual({ sum: 200, accepted: 100, notAccepted: 40, rejected: 60, stretch: 0, missing: [] });
     });
 });

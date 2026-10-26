@@ -2,7 +2,10 @@ import CaseReview from "@/components/kyc/CaseReview";
 import ProductReviewLinkBanner from "@/components/kyc/ProductReviewLinkBanner";
 import PushToDealerPanel from "@/components/kyc/PushToDealerPanel";
 import ActForDealerPanel from "@/components/kyc/ActForDealerPanel";
+import KycTimeline from "@/components/kyc/KycTimeline";
 import DealerPaymentChip from "@/components/loans/DealerPaymentChip";
+import { getSessionUser } from "@/lib/nbfc/tenant";
+import { isActForDealerRole } from "@/lib/leads/actForDealer";
 
 export default async function CaseReviewPage({
   params,
@@ -10,6 +13,8 @@ export default async function CaseReviewPage({
   params: Promise<{ leadId: string }>;
 }) {
   const { leadId } = await params;
+  // ID 183 (18 Oct): only Admin / Sales Head may re-issue a consent (send-consent refuses the CEO).
+  const canActForDealer = isActForDealerRole((await getSessionUser())?.role);
 
   return (
     <div className="p-6 max-w-7xl mx-auto">
@@ -22,7 +27,9 @@ export default async function CaseReviewPage({
       <PushToDealerPanel leadId={leadId} />
       {/* ID 183: Act for dealer (Admin / Sales Head) — renders nothing for others. */}
       <ActForDealerPanel leadId={leadId} />
-      <CaseReview leadId={leadId} />
+      {/* KYC history: who did what on this file's KYC, and when. */}
+      <KycTimeline leadId={leadId} />
+      <CaseReview leadId={leadId} canRegenerateConsent={canActForDealer} />
     </div>
   );
 }

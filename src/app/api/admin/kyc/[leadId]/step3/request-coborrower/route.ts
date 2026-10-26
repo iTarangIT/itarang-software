@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { requireAdminAppUserForLead } from "@/lib/kyc/admin-workflow";
 import { requestCoBorrowerForLead } from "@/lib/kyc/coborrower-request";
+import { kycDecisionLine, kycCardLabel, recordKycEvent } from "@/lib/kyc/kycEventLog";
 
 // BRD §2.9.3 "Request Co-Borrower KYC" — admin opens this form from the CIBIL
 // card or the primary final-decision panel. The route creates a stub
@@ -57,6 +58,12 @@ export async function POST(
         { status: 404 },
       );
     }
+
+    await recordKycEvent({
+      leadId,
+      action: reason?.trim() ? `Co-borrower requested: ${reason.trim()}` : "Co-borrower requested",
+      actor: { id: appUser.id, name: appUser.name, role: appUser.role },
+    });
 
     return NextResponse.json({
       success: true,

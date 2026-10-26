@@ -8,7 +8,8 @@ import { requireRole } from "@/lib/auth-utils";
 import { verifyConsentOtp, type ConsentFor } from "@/lib/kyc/consent-service";
 import { requireLeadAccess } from "@/lib/auth/requireLeadAccess";
 import { isNextRedirectError } from "@/lib/api-utils";
-import { recordActorStep, requireLeadWriter } from "@/lib/leads/actForDealerGuard";
+import { requireLeadWriter } from "@/lib/leads/actForDealerGuard";
+import { recordKycMilestone } from "@/lib/kyc/kycEventLog";
 
 type RouteContext = {
   params: Promise<{ leadId: string }>;
@@ -61,7 +62,7 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
       );
     }
 
-    await recordActorStep(gate.actor, "entered the customer's consent code (consent verified)");
+    await recordKycMilestone(gate.actor, "entered the customer's consent code (consent verified)");
     return NextResponse.json({
       success: true,
       data: {

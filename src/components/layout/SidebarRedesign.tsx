@@ -72,7 +72,7 @@ const BUYBACK: Ref = {
 };
 const NEODOVE: Ref = {
     node: "NeoDove",
-    children: ["neodove-campaigns", "neodove-activity", "neodove-reconcile"],
+    children: ["neodove-campaigns", "neodove-agents", "neodove-team", "neodove-activity", "neodove-reconcile"],
 };
 
 /**

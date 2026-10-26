@@ -16,6 +16,7 @@ import {
   recomputeWrapperStatus,
 } from "@/lib/nbfc/doc-requests";
 import { notifyNbfcOfUpdate } from "@/lib/nbfc/doc-request-notify";
+import { kycDecisionLine, recordKycEvent } from "@/lib/kyc/kycEventLog";
 
 // BRD §2.9.3 Panel 2 "Per-Document Action Buttons" — admin verifies or
 // rejects an uploaded supporting document from the case-review screen.
@@ -158,6 +159,13 @@ export async function POST(
         }
       }
     }
+
+    await recordKycEvent({
+      leadId,
+      action: kycDecisionLine(`Document ${row.doc_label ?? row.doc_key ?? ""}`.trim(), action, rejection_reason),
+      actor: { id: appUser.id, name: appUser.name, role: appUser.role },
+      detail: { request_id: requestId },
+    });
 
     return NextResponse.json({
       success: true,

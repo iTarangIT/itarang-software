@@ -76,6 +76,20 @@ describe("ID 173 item 5 — Inventory download has Uploaded by and upload batch"
     });
 });
 
+describe("ID 173 (23 Oct) — the plain stock list and the Data downloads Inventory list", () => {
+    it("GET /api/inventory is scoped by role (back office + CEO all, a dealer its own)", () => {
+        const r = code("app/api/inventory/route.ts");
+        expect(r).toMatch(/inventoryListScope\(user\.role\)/);
+        expect(r).toMatch(/scope === 'none'\) return errorResponse\([^)]*403\)/);
+        expect(r).toMatch(/filters\.push\(eq\(inventory\.dealer_id, own\)\)/);
+    });
+    it("the Data downloads Inventory list has Uploaded by and the batch", () => {
+        const r = code("lib/exports/datasets/registry.ts");
+        expect(r).toMatch(/COALESCE\(u\.name, u\.email\) AS uploaded_by, i\.upload_event_id AS upload_batch/);
+        expect(r).toMatch(/LEFT JOIN users u ON u\.id = i\.created_by/);
+    });
+});
+
 describe("ID 174 item 2 — not a dealer sale closes the task", () => {
     it("the Invoice Ledger action closes the task", () => {
         const r = code("app/api/dashboard/ceo/invoices/[id]/link/route.ts");

@@ -10,7 +10,8 @@ import { activeVideoLivenessInitiate } from '@/lib/decentro';
 import { publicOrigin, PublicOriginError } from '@/lib/public-origin';
 import { sendKycSms } from '@/lib/sms';
 import { requireLeadAccess } from '@/lib/auth/requireLeadAccess';
-import { recordActorStep, requireLeadWriter } from '@/lib/leads/actForDealerGuard';
+import { requireLeadWriter } from '@/lib/leads/actForDealerGuard';
+import { recordKycStep } from '@/lib/kyc/kycEventLog';
 
 function buildSmsMessage(url: string): string {
     return `Complete Video KYC for your Itarang loan: ${url} (valid 24h)`;
@@ -211,7 +212,7 @@ export async function POST(
             });
         }
 
-        await recordActorStep(writer.actor, 'started the video KYC');
+        await recordKycStep(writer.actor, 'started the video KYC');
         return NextResponse.json({
             success: true,
             data: {

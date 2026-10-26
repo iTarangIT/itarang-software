@@ -25,6 +25,7 @@ import { logDataDownload } from "@/lib/exports/downloadLog";
 import { prepareAndEmail } from "@/lib/exports/datasets/background";
 import { saveColumnSet } from "@/lib/exports/datasets/columnSets";
 import { datasetAccess, datasetById, type RunContext } from "@/lib/exports/datasets/registry";
+import { getTeamMemberIds } from "@/lib/users/team";
 import {
     BACKGROUND_LINK_HOURS,
     BACKGROUND_ROW_CAP,
@@ -46,7 +47,9 @@ async function open(context: Ctx, params: URLSearchParams) {
     const dataset = datasetById((await context.params).dataset);
     const access = dataset ? datasetAccess(dataset, user.role) : null;
     if (!dataset || !access) return null;
-    const run: RunContext = { params, user, ownOnly: access.ownOnly };
+    // ID 155: a manager's own-rows download also carries his team (today's reporting lines).
+    const teamIds = access.ownOnly ? await getTeamMemberIds(user.id) : [];
+    const run: RunContext = { params, user, ownOnly: access.ownOnly, teamIds };
     return { user, dataset, run };
 }
 

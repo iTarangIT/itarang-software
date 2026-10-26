@@ -5,7 +5,8 @@ import { db } from '@/lib/db';
 import { kycVerifications } from '@/lib/db/schema';
 import { createWorkflowId } from '@/lib/kyc/admin-workflow';
 import { requireLeadAccess } from '@/lib/auth/requireLeadAccess';
-import { recordActorStep, requireLeadWriter } from '@/lib/leads/actForDealerGuard';
+import { requireLeadWriter } from '@/lib/leads/actForDealerGuard';
+import { recordKycStep } from '@/lib/kyc/kycEventLog';
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
     try {
@@ -58,7 +59,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             console.error('[kyc/face-match] kyc_verifications insert failed:', persistErr);
         }
 
-        await recordActorStep(writer.actor, 'ran the face match');
+        await recordKycStep(writer.actor, 'ran the face match');
         return NextResponse.json({
             success,
             responseStatus: decentroRes.responseStatus,

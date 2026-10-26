@@ -26,10 +26,13 @@ import {
     Info,
     Plus,
     Upload,
+    UserPlus,
     UserPlus2,
     UsersRound,
 } from "lucide-react";
 import { NeodoveCampaignModal } from "@/components/leads/neodove-campaign-modal";
+import { NeodoveDeleteCampaignButton } from "@/components/leads/neodove-delete-campaign";
+import { NeodoveSetupCard, useNeodoveSetup } from "@/components/leads/neodove-setup";
 
 type CampaignRow = {
     id: string;
@@ -92,6 +95,7 @@ function segmentOf(filter: unknown): string {
 export default function NeodoveCampaignsPage() {
     const router = useRouter();
     const [showCreate, setShowCreate] = useState(false);
+    const setup = useNeodoveSetup();
 
     const { data, isLoading, isError, error, refetch } = useQuery<CampaignRow[]>({
         queryKey: ["neodove-campaigns"],
@@ -136,6 +140,14 @@ export default function NeodoveCampaignsPage() {
                     >
                         <UsersRound className="w-4 h-4" /> Agents
                     </Link>
+                    {setup.data?.canManage && (
+                        <Link
+                            href="/leads/neodove-campaigns/team"
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                        >
+                            <UserPlus className="w-4 h-4" /> Team logins
+                        </Link>
+                    )}
                     <Link
                         href="/leads/neodove-campaigns/reconcile"
                         className="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
@@ -163,6 +175,9 @@ export default function NeodoveCampaignsPage() {
                     CSV reconciliation from a campaign.
                 </span>
             </div>
+
+            {/* 26 Oct: the one-time server checks + the webhook URL to copy. */}
+            <NeodoveSetupCard />
 
             {isLoading && (
                 <p className="mt-8 text-sm text-gray-500">Loading campaigns…</p>
@@ -264,9 +279,9 @@ export default function NeodoveCampaignsPage() {
                                                 {!c.is_wired && (
                                                     <span className="inline-flex items-center gap-1 text-amber-600">
                                                         <AlertTriangle className="w-3 h-3" />
-                                                        {c.push_endpoint_ref
+                                                        {c.push_endpoint_ref && c.push_endpoint_ref !== "DB"
                                                             ? `${c.push_endpoint_ref} not set on this server`
-                                                            : "not wired"}
+                                                            : "NeoDove URL not pasted yet"}
                                                     </span>
                                                 )}
                                                 {/* Two campaigns, one endpoint = one
@@ -344,7 +359,14 @@ export default function NeodoveCampaignsPage() {
                                                 ? ` · ${c.created_by_name}`
                                                 : ""}
                                         </td>
-                                        <td className="px-4 py-3 text-right text-gray-400 group-hover:text-emerald-600">
+                                        <td className="px-4 py-3 text-right text-gray-400 group-hover:text-emerald-600 whitespace-nowrap">
+                                            <NeodoveDeleteCampaignButton
+                                                compact
+                                                campaignId={c.id}
+                                                campaignName={c.name}
+                                                pushedLeads={c.delivered}
+                                                onDeleted={() => void refetch()}
+                                            />
                                             <ChevronRight className="w-4 h-4 inline-block" />
                                         </td>
                                     </tr>

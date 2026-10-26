@@ -52,8 +52,17 @@ export function AdminDashboardView({ readOnly }: { readOnly: boolean }) {
         <div className="space-y-5">
             <DashboardFilterBar filters={filters} onApply={setFilters} />
 
-            {/* ID 45: ASM claims outside their territory (renders nothing when none). */}
-            <OutsideTerritoryClaims />
+            {/* ID 45: ASM claims outside their territory (renders nothing when none).
+                HANDOVER-A6: follows this dashboard's period, person, state and city. */}
+            <OutsideTerritoryClaims
+                filters={{
+                    from: filters.date_from ?? undefined,
+                    to: filters.date_to ?? undefined,
+                    spoc_id: filters.owner_id ?? undefined,
+                    state: filters.state ?? undefined,
+                    city: filters.city ?? undefined,
+                }}
+            />
 
             {query.isLoading && <DashboardSkeleton />}
 

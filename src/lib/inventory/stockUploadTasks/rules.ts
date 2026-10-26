@@ -60,6 +60,14 @@ export function serialsFromDescription(description: string | null | undefined): 
     return cleanSerials(m[1].split(/[,;/|\n\r\t ]+/));
 }
 
+/**
+ * Serials from a cell that holds only serials — a register's "Serial No" /
+ * "IMEI" column: one or several, split on commas, slashes, spaces or lines.
+ */
+export function serialsFromList(cell: unknown): string[] {
+    return cleanSerials(String(cell ?? "").split(/[,;/|\n\r\t ]+/));
+}
+
 export type LineForSerials = {
     line_no: number;
     hsn_code: string | null;

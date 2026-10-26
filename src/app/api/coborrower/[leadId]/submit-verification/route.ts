@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 
 import { submitCoBorrowerVerification } from '@/lib/kyc/coborrower-submit';
 import { requireLeadAccess } from "@/lib/auth/requireLeadAccess";
-import { recordActorStep, requireLeadWriter } from "@/lib/leads/actForDealerGuard";
+import { requireLeadWriter } from "@/lib/leads/actForDealerGuard";
+import { recordKycMilestone } from "@/lib/kyc/kycEventLog";
 
 // BRD §2.9.3 step 5 — When dealer submits Step 3 (co-borrower KYC), the
 // lead must move to 'pending_itarang_reverification' and a high-priority
@@ -22,7 +23,7 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ le
     try {
         const { leadId } = await params;
         const result = await submitCoBorrowerVerification(leadId);
-        await recordActorStep(writer.actor, 'submitted the co-borrower KYC for verification');
+        await recordKycMilestone(writer.actor, 'submitted the co-borrower KYC for verification');
         return NextResponse.json({ success: true, ...result });
     } catch (error) {
         console.error('[Co-borrower Submit Verification] Error:', error);

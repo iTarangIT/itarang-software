@@ -24,6 +24,29 @@ export const STOCK_UPLOAD_ANY_DEALER_ROLES: ReadonlySet<string> = new Set([
     "partner",
 ]);
 
+/**
+ * ID 173 (22 Oct check, scope agreed 23 Oct): who may READ the plain stock list
+ * (GET /api/inventory, the CEO menu's Inventory page). It carries every
+ * dealer's stock with cost price, so: the Admin › Inventory viewers
+ * (INVENTORY_ADMIN_ROLES in auth-utils.ts) plus the CEO see all dealers; a
+ * dealer sees its own account only; everyone else is refused.
+ */
+export const INVENTORY_LIST_ANY_DEALER_ROLES: ReadonlySet<string> = new Set([
+    "admin",
+    "ceo",
+    "ops_manager",
+    "inventory_manager",
+    "sales_head",
+    "partner",
+]);
+
+export function inventoryListScope(role: string | null | undefined): "any" | "own" | "none" {
+    const r = (role ?? "").trim();
+    if (INVENTORY_LIST_ANY_DEALER_ROLES.has(r)) return "any";
+    if (r === "dealer") return "own";
+    return "none";
+}
+
 export type StockUploadDecision =
     | { ok: true; dealerId: string; scope: "any" | "own" }
     | { ok: false; status: 400 | 403; message: string };

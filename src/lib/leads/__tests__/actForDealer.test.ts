@@ -137,13 +137,13 @@ describe("leadActorVerdict — who may write on a customer file (16 Oct)", () =>
     expect(leadActorVerdict({ ...base, role: "dealer", ownsFile: true, dispatch: true })).toEqual({ ok: true, kind: "dealer" });
   });
 
-  // 16 Oct evening (user): the house keeps FULL access on a file it pushed
-  // out — read, write and dispatch, like the file's dealer.
-  it("the house login works every step of a file it pushed to another dealer, dispatch included", () => {
+  // 23 Oct (Kartik, 18 Oct "never dispatch"): the house works a file it pushed
+  // out like the dealer — except Step 5, the cash sale and "delivered".
+  it("the house login works a file it pushed to another dealer, but never dispatches", () => {
     const house = { ...base, role: "dealer", houseOnPushedFile: true };
     expect(leadActorVerdict({ ...house, write: false })).toEqual({ ok: true, kind: "house" });
     expect(leadActorVerdict(house)).toEqual({ ok: true, kind: "house" });
-    expect(leadActorVerdict({ ...house, dispatch: true })).toEqual({ ok: true, kind: "house" });
+    expect(leadActorVerdict({ ...house, dispatch: true })).toEqual({ ok: false, status: 403, message: DEALER_ONLY_MESSAGE });
   });
 
   it("the house still fully works a file that is with the house (it owns it)", () => {

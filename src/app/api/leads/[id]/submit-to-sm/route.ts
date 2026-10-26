@@ -3,7 +3,8 @@ import { leads } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
 import { withErrorHandler, successResponse, errorResponse } from '@/lib/api-utils';
 import { requireRole } from '@/lib/auth-utils';
-import { dealerMayActOnLead } from '@/lib/auth/requireLeadAccess';
+// ID 183 (23 Oct): the house login's saves here take the dealer-wins check and the "Done by" record.
+import { recordActorStep, requireLeadWriter } from '@/lib/leads/actForDealerGuard';
 
 // kyc_status values that indicate the lead is currently in a Step 3 "dealer
 // action required" state and is being re-submitted after the dealer has
@@ -28,7 +29,8 @@ export const POST = withErrorHandler(async (req: Request, { params }: { params: 
     }).from(leads).where(eq(leads.id, leadId)).limit(1);
 
     if (!lead) return errorResponse('Lead not found', 404);
-    if (!(await dealerMayActOnLead(user, lead.dealer_id, leadId))) return errorResponse('Access denied', 403);
+    const writer = await requireLeadWriter(leadId, req, user, { lead: { id: leadId, dealer_id: lead.dealer_id } });
+    if (!writer.ok) return writer.response;
 
     const currentKycStatus = String(lead.kyc_status || '');
     const isStep3Resubmission = STEP_3_AWAITING_STATES.has(currentKycStatus);
@@ -45,6 +47,8 @@ export const POST = withErrorHandler(async (req: Request, { params }: { params: 
             updated_at: new Date(),
         }).where(eq(leads.id, leadId));
 
+        await recordActorStep(writer.actor, 'sent the file for iTarang re-verification');
+
         return successResponse({
             message: 'Submitted for iTarang re-verification.',
             kyc_status: 'pending_itarang_reverification',
@@ -60,6 +64,8 @@ export const POST = withErrorHandler(async (req: Request, { params }: { params: 
         submitted_to_sm_at: new Date(),
         updated_at: new Date(),
     }).where(eq(leads.id, leadId));
+
+    await recordActorStep(writer.actor, "sent the file for the sales manager's review");
 
     return successResponse({ message: 'Lead submitted to Itarang Sales Manager successfully' });
 });

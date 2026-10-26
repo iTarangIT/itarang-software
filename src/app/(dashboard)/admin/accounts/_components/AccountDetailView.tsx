@@ -9,6 +9,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, ArrowLeft, Loader2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { AccountQuotationsPanel } from "@/components/accounts/AccountQuotations";
 import { CameThroughBadge } from "./AccountsView";
 import { AssignOwnerDialog, api, fmtDate, inputCls } from "./shared";
 
@@ -207,6 +208,10 @@ export function AccountDetailView({ accountId }: { accountId: string }) {
                     </table>
                 </div>
             </section>
+
+            {/* E-358 — the account's quotations. Admin reads them; Create shows only
+                for a role the API lets raise one (Sales Head / CEO here). */}
+            <AccountQuotationsPanel accountId={a.id} />
 
             {assignOpen && (
                 <AssignOwnerDialog

@@ -30,7 +30,8 @@ export type WaTemplateKey =
   | "lead_action"
   | "dispatch_otp"
   | "sanctioned"
-  | "dispatch_done";
+  | "dispatch_done"
+  | "kyc_update";
 
 export interface WaTemplateSpec {
   /** Name registered in Meta Business Manager. */
@@ -81,6 +82,20 @@ export const WA_TEMPLATES: Record<WaTemplateKey, WaTemplateSpec> = {
     params: ["customerName", "referenceId", "batterySerial"],
     envOverride: "WA_DISPATCH_DONE_TEMPLATE",
     envLangOverride: "WA_DISPATCH_DONE_TEMPLATE_LANG",
+  },
+  /**
+   * The KYC action log for iTarang staff and the dealer (lib/kyc/kycEventLog):
+   * "{action} by {actor} at {time} on {customerName} ({referenceId})". A staff
+   * member rarely has an open window with our number, so this is the send that
+   * reaches them; until it is approved the log goes out as free text, which
+   * only lands inside the 24h window.
+   */
+  kyc_update: {
+    name: "itarang_kyc_update",
+    lang: "en",
+    params: ["customerName", "referenceId", "action", "actor", "time"],
+    envOverride: "WA_KYC_UPDATE_TEMPLATE",
+    envLangOverride: "WA_KYC_UPDATE_TEMPLATE_LANG",
   },
 };
 

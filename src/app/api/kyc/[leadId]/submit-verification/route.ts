@@ -9,7 +9,8 @@ import { dealerDisplayName } from '@/lib/notifications/emit';
 import { getKycAutoApprovalSettings, slaStampFor } from '@/lib/kyc/auto-approval-settings';
 import { requireLeadAccess } from "@/lib/auth/requireLeadAccess";
 import { isMaskedPan } from "@/lib/kyc/panMask";
-import { recordActorStep, requireLeadWriter } from "@/lib/leads/actForDealerGuard";
+import { requireLeadWriter } from "@/lib/leads/actForDealerGuard";
+import { recordKycMilestone } from "@/lib/kyc/kycEventLog";
 
 const VERIFICATION_LABELS: Record<string, string> = {
     aadhaar: 'Aadhaar Verification',
@@ -363,7 +364,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             failed_reason: v.failed_reason,
         }));
 
-        await recordActorStep(gate.actor, 'submitted the KYC for verification');
+        await recordKycMilestone(gate.actor, 'submitted the KYC for verification');
         return NextResponse.json({
             success: true,
             verificationsInitiated: allVers.length,

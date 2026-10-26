@@ -12,6 +12,7 @@ import {
   createWorkflowId,
   requireAdminAppUserForLead,
 } from "@/lib/kyc/admin-workflow";
+import { kycDecisionLine, kycCardLabel, recordKycEvent } from "@/lib/kyc/kycEventLog";
 
 // BRD §2.9.3 Panel 3 "Co-Borrower Document Cards — Per-Check Action Buttons"
 // Admin approves or rejects individual co-borrower documents from the case
@@ -128,6 +129,13 @@ export async function POST(
       },
       performed_by: appUser.id,
       timestamp: now,
+    });
+
+    await recordKycEvent({
+      leadId,
+      action: kycDecisionLine(`Co-borrower document ${kycCardLabel(row.document_type)}`, action, rejection_reason),
+      actor: { id: appUser.id, name: appUser.name, role: appUser.role },
+      detail: { doc_id: docId },
     });
 
     return NextResponse.json({

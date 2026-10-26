@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { otherDocumentRequests } from "@/lib/db/schema";
 import { requireLeadAccess } from "@/lib/auth/requireLeadAccess";
-import { recordActorStep, requireLeadWriter } from "@/lib/leads/actForDealerGuard";
+import { requireLeadWriter } from "@/lib/leads/actForDealerGuard";
+import { recordKycStep } from "@/lib/kyc/kycEventLog";
 
 // Dealer-side creation of an additional-document request row. Mirrors the
 // admin "Request More Docs" flow but with the dealer as the requester so they
@@ -68,7 +69,7 @@ export async function POST(
             updated_at: now,
         });
 
-        await recordActorStep(writer.actor, `added a document slot "${docLabelRaw}"`);
+        await recordKycStep(writer.actor, `added a document slot "${docLabelRaw}"`);
         return NextResponse.json({
             success: true,
             data: {

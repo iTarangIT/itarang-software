@@ -7,7 +7,8 @@ import { kycVerifications } from '@/lib/db/schema';
 import { and, desc, eq } from 'drizzle-orm';
 import { createWorkflowId } from '@/lib/kyc/admin-workflow';
 import { requireLeadAccess } from '@/lib/auth/requireLeadAccess';
-import { recordActorStep, requireLeadWriter } from '@/lib/leads/actForDealerGuard';
+import { requireLeadWriter } from '@/lib/leads/actForDealerGuard';
+import { recordKycStep } from '@/lib/kyc/kycEventLog';
 
 const MAX_VIDEO_BYTES = 25 * 1024 * 1024; // 25 MB — accommodates ~10s @ 720p MediaRecorder webm
 // MediaRecorder hands back MIME types like "video/webm;codecs=vp9,opus" — match
@@ -176,7 +177,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             });
         }
 
-        await recordActorStep(writer.actor, 'uploaded the video liveness check');
+        await recordKycStep(writer.actor, 'uploaded the video liveness check');
         return NextResponse.json({
             success: passiveOk,
             status: persistedStatus,

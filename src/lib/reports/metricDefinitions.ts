@@ -252,6 +252,13 @@ export const ANALYST_RULES: ReadonlyArray<{ topics: readonly AnalystTopic[]; tex
             "ignore sales_head_target); company % of target uses ceo_target only; custom_* metrics use manual_actual.",
     },
     { topics: ["won", "leads"], text: "A Lost to Lost history row is a reason change, not a loss." },
+    // ID 169 (22 Oct) — as the Lost report (src/lib/admin/reports.ts): lost_reason is a fixed code.
+    { topics: ["won"], text: "Lost by reason = dealer_leads.lead_status 'Lost' grouped by lost_reason, dated by closed_at." },
+    // ID 155 — dated teams, as the Performance page (teamPerformance.ts teamStints / teamWindows).
+    {
+        topics: ["people"],
+        text: "Team = the manager + user_reporting_lines members on each day (effective_from <= day < effective_to; NULL = open).",
+    },
     // ID 185 — Fresh / Repeat / New to iTarang, as salesDashboard.ts queryTotals (fv / rv) counts them.
     // Topic "visits" only: a people question not about visits should not spend its room here.
     {

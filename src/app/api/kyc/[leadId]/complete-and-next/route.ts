@@ -3,7 +3,8 @@ import { db } from '@/lib/db';
 import { leads, kycDocuments, kycVerifications, consentRecords } from '@/lib/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { requireLeadAccess } from "@/lib/auth/requireLeadAccess";
-import { recordActorStep, requireLeadWriter } from "@/lib/leads/actForDealerGuard";
+import { requireLeadWriter } from "@/lib/leads/actForDealerGuard";
+import { recordKycStep } from "@/lib/kyc/kycEventLog";
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
     // ID 118: signed in, and this lead is the caller's to touch (a dealer's own lead, or back office).
@@ -75,7 +76,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
                 })
                 .where(eq(leads.id, leadId));
 
-            await recordActorStep(writer.actor, 'completed the KYC step');
+            await recordKycStep(writer.actor, 'completed the KYC step');
             return NextResponse.json({
                 success: true,
                 requiresInterim: true,
@@ -99,7 +100,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         // - Email to dealer: 'KYC approved for {customer_name}'
         // - SMS to customer: 'Your KYC is verified. Next: Select product.'
 
-        await recordActorStep(writer.actor, 'completed the KYC step');
+        await recordKycStep(writer.actor, 'completed the KYC step');
         return NextResponse.json({
             success: true,
             requiresInterim: false,

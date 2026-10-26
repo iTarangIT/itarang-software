@@ -9,7 +9,8 @@ import {
     isDealerKycEditsLocked,
 } from '@/lib/kyc/admin-workflow';
 import { requireLeadAccess } from "@/lib/auth/requireLeadAccess";
-import { recordActorStep, requireLeadWriter } from "@/lib/leads/actForDealerGuard";
+import { requireLeadWriter } from "@/lib/leads/actForDealerGuard";
+import { recordKycStep } from "@/lib/kyc/kycEventLog";
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
     // ID 118: signed in, and this lead is the caller's to touch (a dealer's own lead, or back office).
@@ -122,7 +123,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
 
         // file_url on the record: the dealer opens a file iTarang uploaded for
         // him (ID 166 rule, fileAuthz — kyc_documents has no upload_source).
-        await recordActorStep(gate.actor, `uploaded ${docType.replace(/_/g, ' ')}${docFor === 'borrower' ? ' (co-borrower)' : ''}`, { file_url: fileUrl });
+        await recordKycStep(gate.actor, `uploaded ${docType.replace(/_/g, ' ')}${docFor === 'borrower' ? ' (co-borrower)' : ''}`, { file_url: fileUrl });
         return NextResponse.json({
             success: true,
             fileUrl,
