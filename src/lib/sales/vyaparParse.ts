@@ -15,6 +15,7 @@
 import * as XLSX from "xlsx";
 import { classifyHsn, normalizeHsn, parseAmount, type ProductClass } from "./invoiceLines";
 import { screenCustomerGstin } from "@/lib/leads/gstin";
+import { cleanSerials, serialsFromDescription, serialsFromList } from "@/lib/inventory/stockUploadTasks/rules";
 
 export type ImportKind = "vyapar_register" | "gstr1";
 
@@ -37,7 +38,9 @@ type Field =
     | "tax"
     | "total"
     | "status"
-    | "doc_type";
+    | "doc_type"
+    | "serial"
+    | "description";
 
 const CANDIDATES: Record<Field, string[]> = {
     number: ["invoiceno", "invoicenumber", "billno", "billnumber", "txnno", "transactionno", "refno", "voucherno", "notenumber", "notevoucherno", "documentnumber", "docno"],
@@ -54,10 +57,14 @@ const CANDIDATES: Record<Field, string[]> = {
     total: ["invoicevalue", "notevalue", "grandtotal", "totalamount", "invoiceamount", "total"],
     status: ["status", "invoicestatus", "txnstatus"],
     doc_type: ["transactiontype", "txntype", "documenttype", "notetype", "type"],
+    // ID 174: battery serials — Vyapar's serial / IMEI tracking column, and the
+    // line description where serials are typed as "Serial No: …".
+    serial: ["serialno", "serialnumber", "serialnos", "serialnumbers", "serials", "serialnoimei", "imeino", "imeinumber", "imei"],
+    description: ["description", "itemdescription", "itemdetails", "desc"],
 };
 
 /** Headers that a GSTR-1 rate split carries and we deliberately ignore. */
-const IGNORED = ["placeofsupply", "cess", "cessamount", "rate", "reversecharge", "applicable", "ecommerce", "unit", "discount", "sno", "srno", "paymenttype", "received", "balance", "description"];
+const IGNORED = ["placeofsupply", "cess", "cessamount", "rate", "reversecharge", "applicable", "ecommerce", "unit", "discount", "sno", "srno", "paymenttype", "received", "balance"];
 
 function pick(headers: string[], field: Field, taken: Set<number>): number {
     const cands = CANDIDATES[field];
@@ -74,8 +81,10 @@ function pick(headers: string[], field: Field, taken: Set<number>): number {
     return -1;
 }
 
-// Order matters: specific fields claim their column before generic ones.
-const FIELD_ORDER: Field[] = ["gstin", "number", "date", "party", "hsn", "item", "qty", "taxable", "tax", "total", "rate", "amount", "status", "doc_type"];
+// Order matters: specific fields claim their column before generic ones
+// ("Item Serial No" goes to serial before item's substring match sees it; an
+// only "Item Description" column goes to item before description).
+const FIELD_ORDER: Field[] = ["gstin", "number", "date", "party", "hsn", "serial", "item", "description", "qty", "taxable", "tax", "total", "rate", "amount", "status", "doc_type"];
 
 function mapColumns(headers: string[]): Partial<Record<Field, number>> {
     const taken = new Set<number>();
@@ -131,6 +140,10 @@ export interface ParsedLine {
     quantity: number | null;
     rate: number | null;
     amount_excl_gst: number | null;
+    /** The line's description column, when the export has one. */
+    description: string | null;
+    /** ID 174 — battery serials read for this line (serial column, else "Serial No: …" in the description or name). */
+    serials: string[];
 }
 
 export interface ParsedDocument {
@@ -272,7 +285,20 @@ export function parseInvoiceWorkbook(buffer: ArrayBuffer | Buffer, kind: ImportK
         }
 
         const item = String(cell(row, "item") ?? "").trim();
+        const description = String(cell(row, "description") ?? "").trim();
+        const serials = cleanSerials([
+            ...serialsFromList(cell(row, "serial")),
+            ...serialsFromDescription(description),
+            ...serialsFromDescription(item),
+        ]);
         if (!item) {
+            // A row carrying only serials (one serial per row under its item):
+            // they belong to the line above.
+            const prev = doc.lines[doc.lines.length - 1];
+            if (prev && serials.length) {
+                prev.serials = cleanSerials([...prev.serials, ...serials]);
+                continue;
+            }
             // An invoice-level row with totals only.
             if (total != null) doc.total = total;
             continue;
@@ -292,6 +318,8 @@ export function parseInvoiceWorkbook(buffer: ArrayBuffer | Buffer, kind: ImportK
             quantity: qty,
             rate,
             amount_excl_gst: excl == null ? null : Math.round(excl * 100) / 100,
+            description: description || null,
+            serials,
         });
         if (tax != null) doc.tax = (doc.tax ?? 0) + tax;
         if (total != null && c.item != null && c.total != null) doc.total = (doc.total ?? 0) + total;
