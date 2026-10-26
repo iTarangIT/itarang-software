@@ -5,7 +5,7 @@ import "server-only";
 // One handler for every source call (list, connect a Postgres database, upload files, Google
 // Sheets/Drive, choose tables, sync, delete). What may pass is decided by the allowlist in
 // src/lib/analyst/sources-routes.ts: reads are open to every analyst user, changes only to a
-// source manager (ceo/admin), because sources are shared by the whole CRM.
+// source manager (ceo/sales_head/admin), because sources are shared by the whole CRM.
 //
 // Uploads are streamed through untouched — the multipart boundary is in the content-type, so
 // the header travels with the bytes and nothing is buffered in this process.

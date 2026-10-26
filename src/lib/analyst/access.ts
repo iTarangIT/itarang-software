@@ -29,9 +29,9 @@ export async function requireAnalystUser(): Promise<AnalystUser> {
 
 /**
  * Who may add, change or remove data sources. Sources are shared by every CRM user (one agent
- * tenant), so a sales head asks on them but does not manage them.
+ * tenant per environment). Sales Head manages them too (26 Oct), same as the CEO.
  */
-export const ANALYST_MANAGER_ROLES = new Set(["ceo", "admin"]);
+export const ANALYST_MANAGER_ROLES = new Set(["ceo", "sales_head", "admin"]);
 
 export function canManageSources(role: string): boolean {
   return ANALYST_MANAGER_ROLES.has(role);
@@ -40,7 +40,7 @@ export function canManageSources(role: string): boolean {
 export async function requireAnalystManager(): Promise<AnalystUser> {
   const user = await requireAnalystUser();
   if (!canManageSources(user.role)) {
-    throw new AnalystError("only the CEO or an admin can change the analyst's data sources", 403, "forbidden");
+    throw new AnalystError("only the CEO, Sales Head or an admin can change the analyst's data sources", 403, "forbidden");
   }
   return user;
 }

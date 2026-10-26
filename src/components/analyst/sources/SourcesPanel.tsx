@@ -162,7 +162,7 @@ function SourceListView({
         </button>
       ) : (
         <p className="text-[0.8125rem] text-ink-muted">
-          Data sources are managed by the CEO or an admin. You can ask questions on any of them.
+          Data sources are managed by the CEO, Sales Head or an admin. You can ask questions on any of them.
         </p>
       )}
 
