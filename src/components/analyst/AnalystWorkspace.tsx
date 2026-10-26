@@ -253,7 +253,7 @@ export function AnalystWorkspace({
                     Choose tables
                   </button>
                 ) : (
-                  "Ask the CEO or an admin to choose them."
+                  "Ask the CEO, Sales Head or an admin to choose them."
                 )}
               </p>
             ) : null}
@@ -499,7 +499,7 @@ function Welcome({
             </>
           ) : (
             <p className="mt-2 max-w-[52ch] text-[0.9375rem] leading-relaxed text-ink-muted">
-              The CEO or an admin needs to connect a data source before questions can be asked.
+              The CEO, Sales Head or an admin needs to connect a data source before questions can be asked.
             </p>
           )}
         </>

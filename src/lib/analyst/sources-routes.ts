@@ -2,7 +2,7 @@
 //
 // /api/analyst/connections/[[...path]] is one proxy for the agent's whole /connections API, so
 // it must be an allowlist and not an open relay: anything not listed here is refused before the
-// agent sees it. Each entry says whether the caller must be a source manager (ceo/admin — see
+// agent sees it. Each entry says whether the caller must be a source manager (ceo/sales_head/admin — see
 // access.ts), what body it carries, how long it may take, and which query keys pass through.
 //
 // Pure (no server-only import) so the matcher is unit-tested.
