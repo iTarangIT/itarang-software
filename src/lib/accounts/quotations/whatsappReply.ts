@@ -1,5 +1,5 @@
 /**
- * E-356 — an account answering its quotation from the WhatsApp buttons
+ * E-358 — an account answering its quotation from the WhatsApp buttons
  * (`aquote_approve:<id>` / `aquote_decline:<id>`). The account twin of
  * src/lib/whatsapp/quotationReply.ts, with the same rule: the button id is not
  * authority — the quotation must have been SENT over WhatsApp to this number

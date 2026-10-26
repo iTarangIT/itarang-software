@@ -1,4 +1,4 @@
-// E-356 — who may raise an account quotation, on real accounts and users.
+// E-358 — who may raise an account quotation, on real accounts and users.
 //
 //   node --import tsx --env-file=.env.local scripts/verify-account-quotations.ts
 //
@@ -7,7 +7,7 @@
 // and sample users (Sonu, a team member, an unrelated ISR, Sales Head, CEO,
 // Partner, Admin), then prints canCreate / canView from the real
 // accountQuoteAccess (src/lib/accounts/quotations/access.ts). Also says
-// whether E-356 is applied on this database. Writes nothing.
+// whether E-358 is applied on this database. Writes nothing.
 
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
@@ -22,7 +22,7 @@ const rows = <T>(r: unknown) => r as T[];
 async function main() {
     const host = (process.env.DATABASE_URL ?? "").match(/@([^:/]+)/)?.[1] ?? "?";
     console.log(`DB host: ${host}`);
-    console.log(`E-356 applied: ${await hasAccountQuotationTables()}`);
+    console.log(`E-358 applied: ${await hasAccountQuotationTables()}`);
 
     const sonu = rows<U>(
         await db.execute(sql`SELECT id::text, name, role, email FROM users

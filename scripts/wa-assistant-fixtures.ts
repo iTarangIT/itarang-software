@@ -155,6 +155,9 @@ export function routerDeps(
             replies.push({ to, text: payload.body });
         },
         openLead: async () => ({ kind: "text", body: "lead card" }),
+        pageList: async () => ({ payload: { kind: "text", body: "next page" }, title: "list page 2" }),
+        listProductType: async () => ({ kind: "text", body: "products" }),
+        pickProduct: async () => null,
         proposeInvite: async () => ({ kind: "text", body: "invite preview" }),
         editAction: async () => ({ kind: "text", body: "edit" }),
         confirmAction: async (user, actionId, rowId) =>

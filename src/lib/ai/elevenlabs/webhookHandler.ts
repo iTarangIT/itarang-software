@@ -10,6 +10,7 @@ import { eq } from "drizzle-orm";
 import { advanceCampaign } from "@/lib/queue/advanceCampaign";
 import { completeCampaignLead } from "@/lib/queue/campaignTracker";
 import { classifyCallEnd } from "@/lib/ai-dialer/campaignLeadStatus";
+import { applyPostCall, preparePostCall } from "@/lib/ai-dialer/postCallOutcome";
 import type { ElevenLabsWebhookEvent } from "./types";
 import { normalizePostCall } from "./normalizePostCall";
 
@@ -74,21 +75,44 @@ export async function handleElevenLabsWebhook(event: ElevenLabsWebhookEvent) {
           .limit(1);
         if (row[0]) {
           const telephony = initiationTelephony(data.metadata);
+          // busy / no-answer / unknown, sharpened by the SIP code or Twilio
+          // CallStatus when the reason alone says "unknown".
+          const callEnd = classifyCallEnd({
+            initiationFailureReason: [data.failure_reason, telephony.detail]
+              .filter(Boolean)
+              .join(" "),
+            sipStatusCode: telephony.sipStatusCode,
+          });
+          const outcome = data.failure_reason ?? "initiation_failed";
           const r = await completeCampaignLead({
             leadId: row[0].lead_id,
-            // busy / no-answer / unknown, sharpened by the SIP code or Twilio
-            // CallStatus when the reason alone says "unknown".
-            status: classifyCallEnd({
-              initiationFailureReason: [data.failure_reason, telephony.detail]
-                .filter(Boolean)
-                .join(" "),
-              sipStatusCode: telephony.sipStatusCode,
-            }).status,
+            status: callEnd.status,
             bolnaCallId: data.conversation_id,
-            outcome: data.failure_reason ?? "initiation_failed",
+            outcome,
             intentScore: null,
             campaignId: row[0].campaign_id,
           });
+          // AI dialer review — counted in the campaign's outcome report too.
+          if (data.conversation_id) {
+            await applyPostCall({
+              provider: "elevenlabs",
+              callId: data.conversation_id,
+              leadId: row[0].lead_id,
+              plan: await preparePostCall({
+                callEnd,
+                callOutcome: outcome,
+                analysis: null,
+                transcript: null,
+                leadId: row[0].lead_id,
+              }),
+              callEnd,
+              band: null,
+              intentScore: null,
+              summary: null,
+              transcript: null,
+              campaign: r,
+            });
+          }
           if (r.campaignId) {
             await advanceCampaign(r.campaignId, { preCallDelayMs: 5_000 });
           }

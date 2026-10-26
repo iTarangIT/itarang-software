@@ -9,6 +9,7 @@ import { randomUUID } from "node:crypto";
 import { canManageSources, newThreadId, ownsThread, requireAnalystUser } from "@/lib/analyst/access";
 import { agentAwake, agentJson, analystConfigured } from "@/lib/analyst/client";
 import { AnalystError } from "@/lib/analyst/errors";
+import { crmDsnIsMasked } from "@/lib/analyst/sources-routes";
 import { ownThreads } from "@/lib/analyst/threads";
 import type { Connection, RunPage, Thread } from "@/lib/analyst/types";
 
@@ -84,6 +85,7 @@ export async function AnalystPage({
       unreachable={false}
       problem={null}
       canManage={canManageSources(user.role)}
+      crmMasked={crmDsnIsMasked(process.env.ANALYST_CRM_READONLY_DSN)}
     />
   );
 }

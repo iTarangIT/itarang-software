@@ -44,8 +44,8 @@ export interface AnalysisOk {
   // ── Derived back-compat shapes ──
   outcome: LegacyOutcome;
   memory: LegacyMemory;
-  // The band model never extracts a callback time; kept null for the shared
-  // resolveNextCallAt (it falls back to a score-tiered / transcript-parsed delay).
+  // The model's reading of the dealer's requested callback time (signals-2.2.0
+  // callback_at), or null. Validated before use — see callbackDueAt().
   callback_time: string | null;
 }
 
@@ -56,8 +56,11 @@ export interface AnalysisFailed {
 
 export type AnalysisResult = AnalysisOk | AnalysisFailed;
 
-export async function analyzeTranscript(transcript: string): Promise<AnalysisResult> {
-  const extraction = await extractSignals(transcript);
+export async function analyzeTranscript(
+  transcript: string,
+  opts: { now?: Date } = {},
+): Promise<AnalysisResult> {
+  const extraction = await extractSignals(transcript, opts);
   if (extraction.status === "failed") {
     // Genuine extraction failure (no JSON / network / schema) → needs_review,
     // keep any prior band. An all-"no" extraction is NOT a failure here: it is a
@@ -84,6 +87,6 @@ export async function analyzeTranscript(transcript: string): Promise<AnalysisRes
     calibration_set_hash: extraction.calibrationSetHash,
     outcome: deriveOutcome(signals),
     memory: toLegacyMemory(signals),
-    callback_time: null,
+    callback_time: signals.callback_at?.trim() || null,
   };
 }

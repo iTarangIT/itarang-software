@@ -3,7 +3,7 @@
 /**
  * E-243 — the dealer's quotation response page. PUBLIC, no login.
  *
- * E-356: shared by the lead link (/quote/[token] → /api/public/quotations) and
+ * E-358: shared by the lead link (/quote/[token] → /api/public/quotations) and
  * the account link (/quote/a/[token] → /api/public/account-quotations); both
  * APIs answer the same shape.
  *

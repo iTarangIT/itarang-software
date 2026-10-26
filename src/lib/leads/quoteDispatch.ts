@@ -50,7 +50,7 @@ export { quotationFileName };
  * the additive half of this feature.
  */
 function approvalLink(input: DispatchQuotationInput): string | null {
-  // E-356: an account quotation brings its own link (or null for none).
+  // E-358: an account quotation brings its own link (or null for none).
   if (input.approvalUrl !== undefined) return input.approvalUrl;
   try {
     return quoteApprovalUrl({
@@ -107,7 +107,7 @@ export interface DispatchQuotationInput {
   senderName?: string | null;
   sentBy: string;
   /**
-   * E-356 — account quotations reuse this dispatcher. Each override defaults
+   * E-358 — account quotations reuse this dispatcher. Each override defaults
    * to the lead behaviour when left undefined, so lead sends are unchanged:
    *   approvalUrl  the signed response link (null = none)
    *   buttonIds    the WhatsApp Approve / Decline button ids

@@ -165,6 +165,7 @@ export async function setTimeLimit(input: {
 }): Promise<void> {
     const def = timeLimitDef(input.key);
     if (!def) throw new Error("Unknown time limit.");
+    if (def.retiredOn) throw new Error(`${def.label}: retired on ${def.retiredOn}; it can no longer be changed.`);
     if (!Number.isInteger(input.value) || input.value < def.min || input.value > def.max) {
         throw new Error(`${def.label}: enter a whole number from ${def.min} to ${def.max}.`);
     }

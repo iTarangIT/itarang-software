@@ -14,7 +14,7 @@ beforeAll(() => {
     process.env.QUOTE_TOKEN_SECRET = "test-secret-for-token-families";
 });
 
-describe("lead and account quotation tokens never cross (E-356)", () => {
+describe("lead and account quotation tokens never cross (E-358)", () => {
     it("each family reads its own token", () => {
         expect(readQuoteToken(mintQuoteToken({ commercialId: ID, versionNo: 2 }))).toEqual({
             commercialId: ID,

@@ -77,6 +77,48 @@ export function workingDaysBetweenSql(from: SQL, to: SQL): SQL {
     )::int`;
 }
 
+/**
+ * ID 85 #6 (22 Oct) — workingDaysBetweenSql with the holidays as they stood
+ * at `to` (the SQL twin of buildHolidayBook): a holiday added after a period
+ * ended does not change that period's day counts. For a count that ends in
+ * the past (a wait that ended, a period end); one ending NOW() is the same as
+ * workingDaysBetweenSql.
+ *
+ * A date's state at moment T: its last add / remove at or before T; before
+ * its first logged change it was on the calendar unless that change is the
+ * add; a date never logged follows today's list. Needs E-350's
+ * holiday_calendar_log — call primeHolidayLog() first; until it has found
+ * the log this falls back to today's list (workingDaysBetweenSql).
+ */
+export function workingDaysBetweenAsOfSql(from: SQL, to: SQL): SQL {
+    if (holidayLogKnown !== true) return workingDaysBetweenSql(from, to);
+    return sql`(
+        SELECT COUNT(*) FROM generate_series(
+            ((${from}) AT TIME ZONE 'Asia/Kolkata')::date + 1,
+            ((${to}) AT TIME ZONE 'Asia/Kolkata')::date, INTERVAL '1 day'
+        ) gs
+         WHERE ${workingWeekdaySql(sql`gs::date`)}
+           AND NOT COALESCE(
+                (SELECT hl.action = 'add' FROM holiday_calendar_log hl
+                  WHERE hl.holiday_date = gs::date AND hl.action <> 'rename' AND hl.changed_at <= (${to})
+                  ORDER BY hl.changed_at DESC, hl.id DESC LIMIT 1),
+                (SELECT hl.action <> 'add' FROM holiday_calendar_log hl
+                  WHERE hl.holiday_date = gs::date AND hl.action <> 'rename'
+                  ORDER BY hl.changed_at, hl.id LIMIT 1),
+                (SELECT hc.is_active IS NOT FALSE FROM holiday_calendar hc
+                  WHERE hc.holiday_date = gs::date LIMIT 1),
+                FALSE)
+    )::int`;
+}
+
+let holidayLogKnown: boolean | null = null;
+
+/** Look once for E-350's holiday log, so workingDaysBetweenAsOfSql can use it. Never throws. */
+export async function primeHolidayLog(): Promise<void> {
+    if (holidayLogKnown === true) return;
+    holidayLogKnown = await hasHolidayLog();
+}
+
 // ── Holiday change log (E-350, ID 85 item 7) ─────────────────────────────────
 
 const rowsOf = <T>(r: unknown): T[] => (Array.isArray(r) ? r : ((r as { rows?: T[] })?.rows ?? [])) as T[];

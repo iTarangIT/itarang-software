@@ -1,5 +1,5 @@
 /**
- * E-356 — the account-facing quotation endpoint. NO SESSION REQUIRED; the
+ * E-358 — the account-facing quotation endpoint. NO SESSION REQUIRED; the
  * signed token (readAccountQuoteToken — a lead token never verifies here) is
  * the only credential. Same contract as /api/public/quotations/[token], so the
  * one response page serves both:

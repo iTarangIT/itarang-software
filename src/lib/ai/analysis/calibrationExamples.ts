@@ -44,6 +44,10 @@ export const CALIBRATION_EXAMPLES: CalibrationExample[] = [
       volume_shared: "yes",
       pitch_heard: "yes",
       callback_agreed: "yes",
+      // The example has no CURRENT TIME, so callback_at stays "" here; on a
+      // real call "कल" is read against CURRENT TIME into an IST timestamp.
+      callback_when: "कल",
+      callback_topic: "general_info",
       disqualifier: "none",
       evidence: {
         ...EMPTY_SIGNALS.evidence,
@@ -132,6 +136,32 @@ export const CALIBRATION_EXAMPLES: CalibrationExample[] = [
       },
       language: "hindi",
       call_summary: "Dealer sells only lead-acid batteries, not lithium.",
+    },
+  },
+  {
+    why: "He never answered the lithium question, but asked for a callback about the RATE and to talk to a senior person — callback_agreed=yes, callback_topic=pricing (the most commercial topic), wants_human=yes. (→ Warm, routed to a Sales Manager.)",
+    transcript: [
+      "agent: नमस्ते sir, Priya iTarang से, lithium battery EMI पर…",
+      "user: अभी दुकान पे भीड़ है। rate क्या रहेगा, वो आपके किसी senior से बात करवा दो।",
+      "agent: ज़रूर sir, कब call करवाऊँ?",
+      "user: शाम को 5 बजे के बाद कर लेना।",
+    ].join("\n"),
+    signals: {
+      ...EMPTY_SIGNALS,
+      lithium_dealer: "unknown",
+      relevant_dealer: "no",
+      pitch_heard: "no",
+      callback_agreed: "yes",
+      callback_when: "शाम को 5 बजे के बाद",
+      callback_topic: "pricing",
+      wants_human: "yes",
+      disqualifier: "none",
+      evidence: {
+        ...EMPTY_SIGNALS.evidence,
+        callback_agreed: "शाम को 5 बजे के बाद कर लेना",
+      },
+      language: "hindi",
+      call_summary: "Busy dealer asked for a senior person to call back after 5 pm about the rate.",
     },
   },
 ];

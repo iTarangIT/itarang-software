@@ -348,7 +348,8 @@ export async function syncCampaignCounters(
 let defaultWindowCache: { at: number; window: RetryWindow } | null = null;
 const DEFAULT_WINDOW_TTL_MS = 5 * 60 * 1000;
 
-async function defaultRetryWindow(): Promise<RetryWindow> {
+/** Also the window AI-dialer callbacks are due inside (postCallOutcome.ts). */
+export async function defaultRetryWindow(): Promise<RetryWindow> {
   if (defaultWindowCache && Date.now() - defaultWindowCache.at < DEFAULT_WINDOW_TTL_MS) {
     return defaultWindowCache.window;
   }
@@ -485,7 +486,13 @@ export async function completeCampaignLead(opts: {
   outcome?: string | null;
   intentScore?: number | null;
   campaignId?: string | null;
-}): Promise<{ campaignId: string | null }> {
+}): Promise<{
+  campaignId: string | null;
+  /** The dialer_campaign_leads row this result closed (null = none / stale). */
+  campaignLeadId?: string | null;
+  /** E-315 — when the row is redialled, or null when it is done. */
+  retryAt?: Date | null;
+}> {
   try {
     let campaignId =
       opts.campaignId ?? (await dialerSession.getCampaignId());
@@ -549,7 +556,7 @@ export async function completeCampaignLead(opts: {
       return { campaignId: null };
     }
 
-    await recordAttemptOutcome({
+    const recorded = await recordAttemptOutcome({
       campaignLeadId: targetRowId,
       status: opts.status,
       outcome: opts.outcome,
@@ -561,7 +568,7 @@ export async function completeCampaignLead(opts: {
     // syncCampaignCounters for why this is a recompute and not a ±1 bump.
     await syncCampaignCounters(campaignId);
 
-    return { campaignId };
+    return { campaignId, campaignLeadId: targetRowId, retryAt: recorded.retryAt };
   } catch (err) {
     console.error("[campaignTracker.completeCampaignLead] failed:", err);
     return { campaignId: null };

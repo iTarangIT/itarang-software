@@ -62,6 +62,23 @@ export function canAskSource(c: { kind: string; name: string } | undefined | nul
   return c.kind === "postgres" && c.name === CRM_SOURCE_NAME;
 }
 
+/** The masked read-only login scripts/_create-analyst-readonly-role.mjs sets up. */
+export const CRM_READONLY_ROLE = "analyst_ro";
+
+/**
+ * ID 167 (23 Oct) — is the iTarang database DSN the masked read-only login? Only analyst_ro
+ * reads through the withheld columns and "Customer #" views; any other login (an admin, a
+ * malformed or missing DSN) would hand raw names and notes to Gemini, so it is refused.
+ */
+export function crmDsnIsMasked(dsn: string | null | undefined): boolean {
+  if (!dsn?.trim()) return false;
+  try {
+    return decodeURIComponent(new URL(dsn.trim()).username) === CRM_READONLY_ROLE;
+  } catch {
+    return false;
+  }
+}
+
 const DatasetBody = z.object({ name: z.string().trim().min(1).max(200) });
 
 const ResolveBody = z.object({

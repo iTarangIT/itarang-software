@@ -72,6 +72,7 @@ function renderTable(t: DigestTable, on: (k: string) => boolean, hint?: string):
   const delta = new Set(t.deltaColumns ?? []);
   const strong = t.strongColumn;
   const deltaUnder = t.phoneDeltaUnder;
+  const compare = t.phoneCompareUnder;
   const isGroup = (r: Array<string | number>) => !!t.groupHeaders && r.slice(1).every((v) => v === "" || v == null);
 
   // Many-column blocks (B, C) get tighter cells so they fit an 880 px card.
@@ -125,9 +126,18 @@ function renderTable(t: DigestTable, on: (k: string) => boolean, hint?: string):
             deltaUnder && deltaUnder[1] === i && !isMuted(r[deltaUnder[0]])
               ? `<div class="sd-mob" style="display:none;font-size:11px;font-weight:600;color:${deltaColor(r[deltaUnder[0]])}">${esc(r[deltaUnder[0]])}</div>`
               : "";
+          const compareLine =
+            compare && compare.under === i
+              ? compare.columns
+                  .map((c, k) => `${compare.labels?.[k] ?? t.columns[c]} ${r[c] ?? ""}`)
+                  .join(" · ")
+              : "";
+          const compareUnder = compareLine
+            ? `<div class="sd-mob" style="display:none;font-size:11px;color:${MUTE}">${esc(compareLine)}</div>`
+            : "";
           const weight = i === strong ? "font-weight:700;color:" + INK + ";" : "";
           return `<td${cls(i)} style="${base}white-space:nowrap;font-variant-numeric:tabular-nums">` +
-            (weight ? `<span style="${weight}">${esc(v)}</span>` : cellText(v)) + under + `</td>`;
+            (weight ? `<span style="${weight}">${esc(v)}</span>` : cellText(v)) + under + compareUnder + `</td>`;
         })
         .join("");
       return `<tr>${cells}</tr>`;

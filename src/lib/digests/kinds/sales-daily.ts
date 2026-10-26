@@ -76,6 +76,7 @@ import {
 } from "../salesDailyBlockA";
 import { workingDaysElapsed } from "@/lib/calendar/officeCalendar";
 import { medianAndP90 } from "@/lib/leads/clockRules";
+import { limitPassedWords } from "@/lib/leads/limitEventLabels";
 import {
   BLOCK_B_COLUMNS,
   BLOCK_B_PCT_COLUMN,
@@ -137,7 +138,7 @@ const SECTIONS: DigestSection[] = [
   { key: "block_a", label: "A · Company", hint: "Company metrics: yesterday, the day before, the same day last week, MTD, MTD target, % of target.", group: "activity" },
   // ID 188 — overall first, then per person, on the same columns.
   { key: "block_a_people", label: "A2 · By person", hint: "Each ASM on dealers visited and each ISR / CC on calls: yesterday, the day before, the same day last week, MTD, MTD target, % of target.", group: "activity" },
-  { key: "right_now", label: "Right now", hint: "Ready leads with no owner (AI qualified / Hot / other), and the oldest wait.", group: "backlog" },
+  { key: "right_now", label: "Right now", hint: "Ready leads with no owner (Hot / AI qualified / other), and the oldest wait.", group: "backlog" },
   { key: "block_b", label: "B · Field team (ASM)", hint: "One row per ASM: dealers visited; visits = Fresh (the person's first visit to that dealer) + Repeat, of which new to iTarang (the dealer's first visit by anyone); hot received, quotes created (yesterday and MTD); quotes delivered, dealer approved, Won, converted, revenue (MTD); % of dealer-visit target.", group: "activity" },
   { key: "block_c", label: "C · Inside sales (ISR / CC)", hint: "One row per ISR: calls, dealers called (yesterday and MTD); connected, connect %, engaged, hot to field, quotes created, Won, converted (MTD); % of calls target.", group: "activity" },
   { key: "block_d", label: "D · Position this morning", hint: "Open Hot / Warm / Cold per owner, Hot rated 8+ days ago, awaiting field visit, and ready leads with no owner, with a Total row — as of the send time.", group: "backlog" },
@@ -417,16 +418,6 @@ async function followUpsPerOwner(today: string, tomorrow: string): Promise<Map<s
   return new Map(rows.map((r) => [r.spoc, { today: Number(r.today), tomorrow: Number(r.tomorrow) }]));
 }
 
-const CLOCK_WORDS: Record<string, string> = {
-  lead: "first call or visit",
-  owner: "owner's first call or visit",
-  transfer: "first field visit",
-  hot_assign: "Hot lead getting an owner",
-  hot_owner: "Hot lead first call or visit",
-  retry: "retry after an unanswered call",
-  quote: "CEO quote approval",
-};
-
 /**
  * Block F: the 10 oldest overdue follow-ups, visits and (IDs 85 / 86) time
  * limits passed and still unanswered — by name and city, never a phone
@@ -472,7 +463,7 @@ async function oldestOverdue(): Promise<DigestTable["rows"]> {
         dealer: p.dealer_name ?? lead?.shop_name ?? p.dealer_lead_id,
         city: lead?.city ?? null,
         owner: p.owner_name,
-        what: `Limit passed: ${CLOCK_WORDS[p.clock] ?? p.clock}`,
+        what: `Limit passed: ${limitPassedWords(p.clock)}`,
         due: istDayOf(new Date(p.passed_at)),
       });
     }
@@ -577,7 +568,8 @@ async function collect(
       loadAwaitingFieldVisit(db as never),
       unmatchedRevenuePerPeriod(periods),
       medianWaitToAssign(periods.mtd),
-      ecofySnapshot(istDay),
+      // 188 #4: Block G's "New leads yesterday" is the same Yesterday as the rest (Monday: Saturday).
+      ecofySnapshot(periods.yesterday.from),
     ]);
     const blockA = await buildBlockA(db as never, periods, { yesterday, dayBefore, sameDayLastWeek, mtd }, unmatched);
     // 18 Oct row 25: Block D splits Awaiting field visit at the transfer → visit limit.
@@ -716,6 +708,8 @@ async function collect(
         headline: blockAHeadlineParts(blockA.rows),
         wide: true,
         backlog: [],
+        // 188 #4: the subject names the day the numbers cover (Monday: Saturday).
+        coveredDay: periods.yesterday.from,
         // Business template "Daily Sales email · Block A" (docs/crm-reports-admin).
         masthead: {
           title: `Daily Sales · ${days.short}`,
@@ -746,6 +740,12 @@ async function collect(
             strongColumn: col("MTD"),
             // Phone frame: METRIC · YDAY · MTD · TARGET.
             phoneColumns: [0, col("Yesterday"), col("MTD"), BLOCK_A_PCT_COLUMN],
+            // 188 #3: the two comparison days ride under Yesterday on a phone.
+            phoneCompareUnder: {
+              under: col("Yesterday"),
+              columns: [col("Day before"), col("Same day last week")],
+              labels: [shortDay(periods.dayBefore.from), "Last wk"],
+            },
             // The working-days sentence is already the intro; keep the rest.
             note: blockA.targetsNote.replace(/^Month to date is [^.]*\.\s*/, "") || undefined,
             // "Right now" sits right after the table, as in the mockup.
@@ -759,10 +759,10 @@ async function collect(
                   // 18 Oct row 31: the oldest NON-Hot wait in working days, as
                   // the Ready to assign page counts it, against ready_to_assigned;
                   // Hot leads have their own line below.
-                  // ID 184: the card's AI / Hot / other split (AI first) rides in front.
+                  // ID 184: the card's Hot / AI / other split (Hot first) rides in front.
                   hint:
                     [
-                      now.split ? `${now.split.ai} AI qualified · ${now.split.hot} Hot · ${now.split.other} other` : null,
+                      now.split ? `${now.split.hot} Hot · ${now.split.ai} AI qualified · ${now.split.other} other` : null,
                       now.oldestDays != null
                         ? `others: oldest waiting ${now.oldestDays} working day${now.oldestDays === 1 ? "" : "s"} · ${now.otherPast ?? 0} past the ${now.limitDays}-working-day limit`
                         : null,
@@ -833,6 +833,11 @@ async function collect(
             toneColumns: [BY_PERSON_PCT_COLUMN],
             strongColumn: BY_PERSON_COLUMNS.indexOf("MTD"),
             phoneColumns: [0, 1, BY_PERSON_COLUMNS.indexOf("MTD"), BY_PERSON_PCT_COLUMN],
+            phoneCompareUnder: {
+              under: 1,
+              columns: [BY_PERSON_COLUMNS.indexOf("Day before"), BY_PERSON_COLUMNS.indexOf("Same day last week")],
+              labels: [shortDay(periods.dayBefore.from), "Last wk"],
+            },
             note:
               "ASMs on dealers visited, ISRs / CCs on calls — the metric their % of target is read on, as in Blocks B and C, with the same people. " +
               "Total = the people listed; Block A also counts work credited to nobody.",
@@ -903,7 +908,7 @@ async function collect(
             textColumns: 1,
             groupHeaders: true,
             note: ecofy
-              ? "Pickup queue: at S1 with no owner, as on the Ecofy Pickup Queue page. New leads yesterday: first received from Ecofy on the covered day."
+              ? "Pickup queue: at S1 with no owner, as on the Ecofy Pickup Queue page. New leads yesterday: first received from Ecofy on the Yesterday day above (the last working day)."
               : undefined,
             empty: ecofy ? "No Ecofy leads yet." : "Ecofy leads could not be read on this database.",
           },

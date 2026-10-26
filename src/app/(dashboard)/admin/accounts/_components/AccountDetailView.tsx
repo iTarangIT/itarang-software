@@ -209,7 +209,7 @@ export function AccountDetailView({ accountId }: { accountId: string }) {
                 </div>
             </section>
 
-            {/* E-356 — the account's quotations. Admin reads them; Create shows only
+            {/* E-358 — the account's quotations. Admin reads them; Create shows only
                 for a role the API lets raise one (Sales Head / CEO here). */}
             <AccountQuotationsPanel accountId={a.id} />
 

@@ -1,5 +1,5 @@
 /**
- * E-356 — account quotations: the presence probe and the access check, read
+ * E-358 — account quotations: the presence probe and the access check, read
  * from the database. Pure rules: ../quotationAccess.ts.
  */
 import { sql } from "drizzle-orm";
@@ -16,7 +16,7 @@ const PROBE_TTL_MS = 5 * 60_000;
 let present: boolean | null = null;
 let probedAt = 0;
 
-/** E-356 applied (and E-321, which owners come from)? Same TTL idiom as ../tables.ts. */
+/** E-358 applied (and E-321, which owners come from)? Same TTL idiom as ../tables.ts. */
 export async function hasAccountQuotationTables(): Promise<boolean> {
     const now = Date.now();
     if (present !== null && now - probedAt < PROBE_TTL_MS) return present;
@@ -96,7 +96,7 @@ export async function assertAccountQuoteAccess(
     need: "view" | "create",
 ): Promise<AccountQuoteAccess> {
     if (!(await hasAccountQuotationTables())) {
-        throw new AccountQuoteError("Account quotations are not set up on this server yet (E-356).", 503);
+        throw new AccountQuoteError("Account quotations are not set up on this server yet (E-358).", 503);
     }
     const access = await accountQuoteAccess(user, accountId);
     if (!access) throw new AccountQuoteError("Account not found.", 404);

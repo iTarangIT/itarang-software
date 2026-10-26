@@ -1,5 +1,5 @@
 /**
- * E-356 — reading account quotations: an account's list, one row with what
+ * E-358 — reading account quotations: an account's list, one row with what
  * the send / answer gates need, and its send history.
  *
  * "Live" mirrors LIVE_QUOTE_VERSION on leads (ID 60): approved and not

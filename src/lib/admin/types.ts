@@ -9,6 +9,7 @@ import type {
 } from "@/lib/inside-sales/types";
 import type { LeadStatus } from "@/lib/lifecycle/transitions";
 import { TIME_LIMIT_DEFAULTS, type TimeLimits } from "@/lib/timeLimits/registry";
+import { staleBandLabel } from "@/lib/timeLimits/labels";
 
 // ─────────────────────────────── Dashboard ────────────────────────────────
 
@@ -109,11 +110,11 @@ const wd = (n: number) => `${n} working day${n === 1 ? "" : "s"}`;
 export function alertPanelLabel(key: AlertPanelKey, limits: TimeLimits = TIME_LIMIT_DEFAULTS): string {
     switch (key) {
         case "no_touch_5d":
-            return `No Touch > ${wd(limits.stale_yellow)}`;
+            return `No Touch > ${staleBandLabel(limits, "yellow")}`;
         case "no_touch_10d":
-            return `No Touch > ${wd(limits.stale_red)}`;
+            return `No Touch > ${staleBandLabel(limits, "red")}`;
         case "awaiting_decision_14d":
-            return `Awaiting Customer Decision > ${wd(limits.stale_critical)}`;
+            return `Awaiting Customer Decision > ${staleBandLabel(limits, "critical")}`;
         case "stale_converted":
             return `Stale Won / Converted (no onboarding activity ${limits.won_not_converted}+ days)`;
         case "onboarding_stalled":

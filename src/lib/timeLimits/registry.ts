@@ -32,6 +32,13 @@ export type TimeLimitDef = {
     max: number;
     /** What the limit decides, and where it shows. */
     help: string;
+    /**
+     * IST day from which the limit no longer times anything new (22 Oct
+     * rework, ID 85 #3). A retired limit keeps its dated values for what it
+     * timed before that day, but is not shown on the settings page and cannot
+     * be changed.
+     */
+    retiredOn?: string;
 };
 
 export const TIME_LIMITS = [
@@ -54,7 +61,8 @@ export const TIME_LIMITS = [
         default: 4,
         min: 1,
         max: 72,
-        help: "Kept for the owner clocks timed before 21 Oct 2026. Since the 18 Oct rework a Hot lead's owner has the Hot limit below and every other owner has 'Non-Hot lead: owner's first call or visit'.",
+        help: "Times every hand-over made before 21 Oct 2026, so those owner clocks agree with the misses already recorded. From 21 Oct a Hot lead's owner has the Hot limit and every other owner has 'Non-Hot lead: owner's first call or visit'.",
+        retiredOn: "2026-10-21",
     },
     {
         key: "nonhot_owner_first_attempt",
@@ -188,6 +196,7 @@ export const TIME_LIMITS = [
         min: 1,
         max: 60,
         help: "Kept for the record of what was in force before the 18 Oct rework. Nothing counts against it now: non-Hot leads use 'Non-Hot lead: sales-ready to having an owner', Hot leads the Hot limit.",
+        retiredOn: "2026-10-21",
     },
     {
         key: "idle_cc",
@@ -212,32 +221,63 @@ export const TIME_LIMITS = [
     {
         key: "stale_yellow",
         group: "Follow-up",
-        label: "No touch: first warning",
+        label: "No touch: first warning (inside sales)",
         unit: "working_days",
         default: 5,
         min: 1,
         max: 60,
-        help: "Yellow cue on lead rows; admin alert 'no touch'. Must be below the red warning.",
+        help: "Leads held by inside sales and everyone but ASMs. Yellow cue on lead rows; admin alert 'no touch'. Must be below the red warning.",
     },
     {
         key: "stale_red",
         group: "Follow-up",
-        label: "No touch: red warning",
+        label: "No touch: red warning (inside sales)",
         unit: "working_days",
         default: 10,
         min: 2,
         max: 90,
-        help: "Red cue on lead rows; admin alert 'no touch'. Must be below the critical warning.",
+        help: "Leads held by inside sales and everyone but ASMs. Red cue on lead rows; admin alert 'no touch'. Must be below the critical warning.",
     },
     {
         key: "stale_critical",
         group: "Follow-up",
-        label: "Awaiting a decision: critical",
+        label: "Awaiting a decision: critical (inside sales)",
         unit: "working_days",
         default: 14,
         min: 3,
         max: 120,
-        help: "Critical cue on lead rows; admin alert 'awaiting decision'.",
+        help: "Leads held by inside sales and everyone but ASMs. Critical cue on lead rows; admin alert 'awaiting decision'.",
+    },
+    // ID 85 #5 (22 Oct): the same three warnings for leads an ASM holds.
+    {
+        key: "stale_yellow_asm",
+        group: "Follow-up",
+        label: "No touch: first warning (ASM)",
+        unit: "working_days",
+        default: 5,
+        min: 1,
+        max: 60,
+        help: "Leads held by an ASM. Yellow cue on lead rows; admin alert 'no touch'. Must be below the ASM red warning.",
+    },
+    {
+        key: "stale_red_asm",
+        group: "Follow-up",
+        label: "No touch: red warning (ASM)",
+        unit: "working_days",
+        default: 10,
+        min: 2,
+        max: 90,
+        help: "Leads held by an ASM. Red cue on lead rows; admin alert 'no touch'. Must be below the ASM critical warning.",
+    },
+    {
+        key: "stale_critical_asm",
+        group: "Follow-up",
+        label: "Awaiting a decision: critical (ASM)",
+        unit: "working_days",
+        default: 14,
+        min: 3,
+        max: 120,
+        help: "Leads held by an ASM. Critical cue on lead rows; admin alert 'awaiting decision'.",
     },
     {
         key: "won_not_converted",
@@ -312,6 +352,11 @@ export function timeLimitDef(key: string): TimeLimitDef | undefined {
     return BY_KEY.get(key);
 }
 
+/** A limit retired from the settings page (ID 85 #3); still resolves for what it timed before. */
+export function isRetiredLimit(key: string): boolean {
+    return !!BY_KEY.get(key)?.retiredOn;
+}
+
 export function isTimeLimitKey(key: unknown): key is TimeLimitKey {
     return typeof key === "string" && BY_KEY.has(key);
 }
@@ -336,11 +381,14 @@ export function formatLimit(value: number, unit: LimitUnit): string {
 
 /**
  * Rules that span limits, checked on save with the would-be values: the three
- * no-touch cues must rise. Returns the reason a set of values is refused, or null.
+ * no-touch cues must rise, for inside sales and for ASMs. Returns the reason a set of values is refused, or null.
  */
 export function crossLimitProblem(v: TimeLimits): string | null {
     if (!(v.stale_yellow < v.stale_red && v.stale_red < v.stale_critical)) {
-        return "The no-touch warnings must rise: first warning < red warning < critical.";
+        return "The no-touch warnings (inside sales) must rise: first warning < red warning < critical.";
+    }
+    if (!(v.stale_yellow_asm < v.stale_red_asm && v.stale_red_asm < v.stale_critical_asm)) {
+        return "The no-touch warnings (ASM) must rise: first warning < red warning < critical.";
     }
     return null;
 }

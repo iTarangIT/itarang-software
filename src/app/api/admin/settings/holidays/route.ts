@@ -15,10 +15,12 @@ const BodySchema = z.object({
     holiday_name: z.string().trim().min(2).max(200),
 });
 
-const EDITOR_ROLES = ["admin", "sales_head"];
+// ID 85 #4 (22 Oct): only Admin changes what the clocks count by; the Sales
+// Head and the CEO can read the list.
+const EDITOR_ROLES = ["admin"];
 
 export const GET = withErrorHandler(async () => {
-    const user = await requireRole([...EDITOR_ROLES, "ceo"]);
+    const user = await requireRole([...EDITOR_ROLES, "sales_head", "ceo"]);
     const [holidays, log] = await Promise.all([
         db.execute(sql`
             SELECT holiday_id, holiday_date::text AS holiday_date, holiday_name, is_active

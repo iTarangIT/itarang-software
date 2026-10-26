@@ -3,7 +3,8 @@ import { computeBand, VOLUME_BONUS } from "../computeBand";
 import { deriveOutcome } from "../legacyAnalysis";
 import { mk } from "./_fixtures";
 
-// The band rule (qualification-2.0.0 — the lithium-dealer rule). Top rule wins.
+// The band rule (qualification-2.0.0 — the lithium-dealer rule; 2.1.0 — a
+// callback / ask-for-a-person lifts Cold to Warm). Top rule wins.
 // These pin production behaviour — any change to the rule must update these on
 // purpose.
 describe("computeBand — the lithium-dealer rule (top rule wins)", () => {
@@ -44,10 +45,9 @@ describe("computeBand — the lithium-dealer rule (top rule wins)", () => {
     expect(r.hard_negative).toBe(true);
   });
 
-  it("lithium never answered → Cold 30, even with callback + substance", () => {
+  it("lithium never answered → Cold 30, even with substance", () => {
     for (const signals of [
       mk({ pitch: true }),
-      mk({ callback: true }),
       mk({ spec: true, volume: true, need: true }),
     ]) {
       const r = computeBand(signals);
@@ -59,12 +59,29 @@ describe("computeBand — the lithium-dealer rule (top rule wins)", () => {
     }
   });
 
-  it("the AI never produces Warm", () => {
+  it("2.1.0 — a callback or an ask for a person lifts the unanswered lead to Warm 60", () => {
+    for (const signals of [
+      mk({ callback: true }),
+      mk({ wantsHuman: true }),
+      mk({ callback: true, topic: "pricing", spec: true }),
+    ]) {
+      const r = computeBand(signals);
+      expect(r.band).toBe("Warm");
+      expect(r.lead_score).toBe(60);
+      expect(r.interest_level).toBe("warm");
+      expect(r.hard_negative).toBe(false);
+    }
+  });
+
+  it("2.1.0 — Warm only from a callback / ask for a person; Qualified and disqualifiers still win", () => {
     for (const lithium of ["yes", "no", "unknown"] as const) {
       for (const volume of [true, false]) {
         expect(computeBand(mk({ lithium, volume, spec: true })).band).not.toBe("Warm");
       }
     }
+    expect(computeBand(mk({ lithium: "yes", callback: true })).band).toBe("Qualified");
+    expect(computeBand(mk({ lithium: "no", callback: true, wantsHuman: true })).band).toBe("Disqualified");
+    expect(computeBand(mk({ callback: true, disqualifier: "not_interested" })).band).toBe("Disqualified");
   });
 
   it("relevant_dealer no longer gates the band", () => {
@@ -109,6 +126,12 @@ describe("computeBand — dropped calls", () => {
     const r = computeBand(mk({ disqualifier: "call_dropped", volume: true }));
     expect(r.call_status).toBe("dropped_partial");
     expect(r.band).toBe("Cold");
+  });
+
+  it("dropped after asking for a person → dropped_partial Warm, not dropped_empty", () => {
+    const r = computeBand(mk({ relevant: false, disqualifier: "call_dropped", wantsHuman: true }));
+    expect(r.call_status).toBe("dropped_partial");
+    expect(r.band).toBe("Warm");
   });
 });
 

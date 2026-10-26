@@ -15,7 +15,7 @@ import type {
 
 export const dynamic = "force-dynamic";
 
-// E-356: Sales Head and CEO raise account quotations, which pick from the same master.
+// E-358: Sales Head and CEO raise account quotations, which pick from the same master.
 const READ_ROLES = ["inside_sales_rep", "asm", "admin", "partner", "sales_head", "ceo"];
 
 export const GET = withErrorHandler(async () => {

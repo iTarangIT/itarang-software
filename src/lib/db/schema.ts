@@ -10274,7 +10274,7 @@ export const quotationDispatches = pgTable(
   }),
 );
 
-// E-356 — account-level quotations (24 Oct meeting, items 8–11). Raised for an
+// E-358 — account-level quotations (24 Oct meeting, items 8–11). Raised for an
 // onboarded dealer ACCOUNT by its owner from My Dealers; same approval rule as
 // a lead quote, but its own rows so the lead flow is untouched. Library:
 // src/lib/accounts/quotations/.
@@ -10326,7 +10326,7 @@ export const accountQuotations = pgTable(
   }),
 );
 
-// E-356 — one row per channel per send of an account quotation, never updated.
+// E-358 — one row per channel per send of an account quotation, never updated.
 export const accountQuotationDispatches = pgTable(
   "account_quotation_dispatches",
   {

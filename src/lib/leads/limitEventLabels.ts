@@ -19,6 +19,15 @@ export const CLOCK_GOAL: Record<string, string> = {
     quote_revise: "declined quote revised or lead marked Lost",
 };
 
+/**
+ * "approved quote sent to the dealer" — what a "Limit passed: …" line in the
+ * daily emails names. Never the raw clock code: an unknown clock reads
+ * "a time limit".
+ */
+export function limitPassedWords(clock: string): string {
+    return CLOCK_GOAL[clock] ?? "a time limit";
+}
+
 /** Short names of the clocks, for chips and tables. */
 export const CLOCK_SHORT: Record<string, string> = {
     lead: "First attempt",

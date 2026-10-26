@@ -12,7 +12,7 @@ import { z } from "zod";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
 import { requireRole } from "@/lib/auth-utils";
 import { istDay } from "@/lib/calendar/officeCalendar";
-import { TIME_LIMITS } from "@/lib/timeLimits/registry";
+import { TIME_LIMITS, isRetiredLimit } from "@/lib/timeLimits/registry";
 import {
     TimeLimitsUnavailableError,
     getTimeLimits,
@@ -47,7 +47,12 @@ async function bundle(canEdit: boolean) {
         today,
         available,
         can_edit: canEdit && available,
-        limits: TIME_LIMITS.map((d) => ({ ...d, value: values[d.key], scheduled: scheduled[d.key] ?? null })),
+        // ID 85 #3: retired limits are neither shown nor editable.
+        limits: TIME_LIMITS.filter((d) => !isRetiredLimit(d.key)).map((d) => ({
+            ...d,
+            value: values[d.key],
+            scheduled: scheduled[d.key] ?? null,
+        })),
         log,
     };
 }

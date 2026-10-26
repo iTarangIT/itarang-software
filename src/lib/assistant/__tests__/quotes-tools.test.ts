@@ -139,6 +139,7 @@ describe("product_catalogue", () => {
             kind: "products",
             total: 1,
             rows: [{ product_id: "b-105", asset_type: "battery", product_name: "LFP 51.2V 105Ah", model_id: "ITB-51105", detail: "51.2V · 105Ah · LFP" }],
+            paging: { page: 1, page_size: 10, args: { query: "51.2v 105ah" } },
         });
         const all = await run(ASM, "product_catalogue", {});
         expect(JSON.stringify(all)).not.toMatch(/oem_price|price_id|41000|33000|4500/);
@@ -152,6 +153,10 @@ describe("product_catalogue", () => {
         const r = await run(ISR, "product_catalogue", { query: "battery" });
         expect(r).toMatchObject({ kind: "products", total: 14 });
         expect(r.kind === "products" && r.rows.length).toBe(10);
+        // Page 2 = the remaining 4, same total, and the inputs to ask for it again.
+        const p2 = await run(ISR, "product_catalogue", { query: "battery", page: 2 });
+        expect(p2).toMatchObject({ kind: "products", total: 14, paging: { page: 2, page_size: 10, args: { query: "battery" } } });
+        expect(p2.kind === "products" && p2.rows.map((x) => x.product_id)).toEqual(["b-10", "b-11", "b-12", "b-13"]);
     });
 });
 

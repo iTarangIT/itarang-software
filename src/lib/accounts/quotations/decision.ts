@@ -1,5 +1,5 @@
 /**
- * E-356 — the three state changes on an account quotation after it is raised:
+ * E-358 — the three state changes on an account quotation after it is raised:
  *
  *   decideAccountQuotation   the CEO approves / rejects a pending version
  *   recordAccountDealerDecision  the account answers a sent version (link / WhatsApp)

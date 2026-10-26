@@ -24,7 +24,7 @@ export default function CeoQuotationsPage() {
             </div>
             <div className="max-w-3xl space-y-6">
                 <QuotationApprovalsPanel />
-                {/* E-356 — account quotations (My Dealers), kept apart from lead quotes. */}
+                {/* E-358 — account quotations (My Dealers), kept apart from lead quotes. */}
                 <AccountQuotationApprovalsPanel />
             </div>
         </div>

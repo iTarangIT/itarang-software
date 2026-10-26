@@ -29,6 +29,10 @@ export const HANDLING = [
     "tap_lead",
     "tap_invite",
     "tap_edit",
+    // "Next 10" under a list, a product type button, a tapped product.
+    "tap_more",
+    "tap_product_type",
+    "tap_product",
     "tap_ignored",
     "media",
     "text_not_ready",

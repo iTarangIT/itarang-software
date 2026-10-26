@@ -26,23 +26,24 @@ const hop = (at: Date, owner_id: string) => ({ lead_id: "L1", at, owner_id });
 
 describe("Hot clocks", () => {
     it("a Hot lead reaching its owner at 18:00 Saturday is due by 13:00 Monday (4 office hours)", () => {
-        const sat = ist("2026-10-17", "18:00");
+        // After 21 Oct, when the Hot owner limit took over (ID 85 #3).
+        const sat = ist("2026-10-24", "18:00");
         const clocks = clocksForLead(
-            lead({ sales_ready_at: ist("2026-10-17", "09:00"), assigned_at: sat }),
+            lead({ sales_ready_at: ist("2026-10-24", "09:00"), assigned_at: sat }),
             [],
             [hop(sat, "rep")],
             [],
             limits,
             NONE,
-            LATER,
-            { interest: [hot(ist("2026-10-17", "09:00"))] },
+            ist("2026-10-28", "12:00"),
+            { interest: [hot(ist("2026-10-24", "09:00"))] },
         );
         // 18 Oct rework 2: assigned while Hot → the owner clock carries the Hot limit (no second hot_owner clock).
         expect(clocks.some((c) => c.clock === "hot_owner")).toBe(false);
         const owner = clocks.find((c) => c.clock === "owner")!;
         expect(owner.limit_key).toBe("hot_owner_first_attempt");
         expect(owner.started_at.toISOString()).toBe(sat.toISOString());
-        expect(owner.due_at?.toISOString()).toBe(ist("2026-10-19", "13:00").toISOString());
+        expect(owner.due_at?.toISOString()).toBe(ist("2026-10-26", "13:00").toISOString());
     });
 
     it("ready → assigned: 9 office hours, until the first assignment", () => {
@@ -107,7 +108,7 @@ describe("Hot clocks", () => {
 });
 
 describe("who a miss is charged to", () => {
-    it("a missed lead clock goes to the owner when it fell due, not to today's owner", () => {
+    it("a missed lead clock is a team figure: charged to nobody (22 Oct rework, ID 85 #1)", () => {
         const clocks = clocksForLead(
             lead({ current_owner_id: "b" }),
             [],
@@ -119,8 +120,10 @@ describe("who a miss is charged to", () => {
         );
         const leadClock = clocks.find((c) => c.clock === "lead")!;
         expect(leadClock.limit_passed_at?.toISOString()).toBe(ist("2026-10-12", "14:00").toISOString());
-        expect(leadClock.owner_id).toBe("a");
+        expect(leadClock.owner_id).toBeNull();
         expect(leadClock.owner_inferred).toBe(false);
+        // The owners are judged by their own clocks, each charged to its holder.
+        expect(clocks.filter((c) => c.clock === "owner").map((c) => c.owner_id)).toEqual(["a", "b"]);
     });
 
     it("a miss before 10 Sep (inferred owner) is flagged, so per-person counts leave it out", () => {
@@ -133,10 +136,9 @@ describe("who a miss is charged to", () => {
             NONE,
             LATER,
         );
-        const leadClock = clocks.find((c) => c.clock === "lead")!;
-        expect(leadClock.limit_passed_at).not.toBeNull();
-        expect(leadClock.owner_id).toBe("rep");
-        expect(leadClock.owner_inferred).toBe(true);
+        const owner = clocks.find((c) => c.clock === "owner")!;
+        expect(owner.owner_id).toBe("rep");
+        expect(owner.owner_inferred).toBe(true);
     });
 });
 

@@ -36,8 +36,10 @@ const COLUMNS: { key: SortKey; label: string; numeric: boolean }[] = [
 ];
 
 function columnLabel(key: SortKey, label: string, limits: TimeLimits): string {
-    if (key === "stale_leads") return `${label} >${limits.stale_yellow}d`;
-    if (key === "critical_stale") return `${label} >${limits.stale_red}d`;
+    // ID 85 #5: each row is judged by its own role's warning (ASM or inside sales).
+    const band = (isr: number, asm: number) => (Math.floor(isr) === Math.floor(asm) ? `${Math.floor(isr)}d` : `${Math.floor(isr)}d ISR / ${Math.floor(asm)}d ASM`);
+    if (key === "stale_leads") return `${label} >${band(limits.stale_yellow, limits.stale_yellow_asm)}`;
+    if (key === "critical_stale") return `${label} >${band(limits.stale_red, limits.stale_red_asm)}`;
     return label;
 }
 

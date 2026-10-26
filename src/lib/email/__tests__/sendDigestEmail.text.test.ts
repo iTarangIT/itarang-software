@@ -95,3 +95,24 @@ describe("buildDigestEmail % of target tones (ID 9)", () => {
         expect(html.match(/background:#fee2e2/g)).toHaveLength(1);
     });
 });
+
+// IDs 194 #2 / 188 #4 — on a Monday the engine covers Sunday, but the numbers
+// are Saturday's: the subject names the figures' coveredDay.
+describe("buildDigestEmail subject on a Monday", () => {
+    const withSubject = { ...(kind as object), subject: ({ dayLabel }: { dayLabel: string }) => `Sales Daily — ${dayLabel}` } as never;
+    it("names the covered day when the kind sets one", () => {
+        const { subject } = buildDigestEmail({
+            kind: withSubject,
+            to: ["x@y.z"],
+            slot: "morning",
+            istDay: "2026-10-25",
+            figures: { ...figures, coveredDay: "2026-10-24" },
+        });
+        expect(subject).toMatch(/Sat/);
+        expect(subject).not.toMatch(/Sun/);
+    });
+    it("falls back to the engine's day", () => {
+        const { subject } = buildDigestEmail({ kind: withSubject, to: ["x@y.z"], slot: "morning", istDay: "2026-10-25", figures });
+        expect(subject).toMatch(/Sun/);
+    });
+});

@@ -168,6 +168,7 @@ export const TYPE_LABELS: Record<string, string> = {
   "lead.discarded": "Lead discarded",
   "lead.closed": "Lead closed",
   "lead.qualified": "Lead qualified",
+  "lead.callback_requested": "Callback requested on an AI call",
   "lead.reinquiry": "Known dealer came in again (re-inquiry)",
   "lead.pushed_to_dealer": "Customer file pushed to a dealer by iTarang",
   "lead.dealer_progress": "Dealer moved a file iTarang pushed to them",

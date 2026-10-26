@@ -11,7 +11,7 @@ const SONU = "sonu-asm";
 const ASSOC = "associate-isr";
 const OTHER = "other-isr";
 
-describe("account quotation access (E-356, 24 Oct items 8 + 11)", () => {
+describe("account quotation access (E-358, 24 Oct items 8 + 11)", () => {
     it("an ISR quotes only the account they own", () => {
         expect(mayCreateAccountQuote({ role: "inside_sales_rep", userId: ASSOC, ownerId: ASSOC })).toBe(true);
         expect(mayCreateAccountQuote({ role: "inside_sales_rep", userId: OTHER, ownerId: ASSOC })).toBe(false);

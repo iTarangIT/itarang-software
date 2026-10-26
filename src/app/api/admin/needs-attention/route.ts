@@ -73,6 +73,10 @@ export const GET = withErrorHandler(async (req: Request) => {
         stale_critical: l.stale_critical,
         stale_yellow: l.stale_yellow,
         stale_red: l.stale_red,
+        // ID 85 #5: a row an ASM holds is coloured by the ASM set.
+        stale_yellow_asm: l.stale_yellow_asm,
+        stale_red_asm: l.stale_red_asm,
+        stale_critical_asm: l.stale_critical_asm,
     };
     return successResponse({ rows, holders, limits });
 });

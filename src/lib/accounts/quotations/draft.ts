@@ -1,5 +1,5 @@
 /**
- * E-356 — the document for an APPROVED account quotation. The account-keyed
+ * E-358 — the document for an APPROVED account quotation. The account-keyed
  * twin of src/lib/leads/quoteDraft.ts: same proforma template, same tax and
  * place-of-supply rules, same render and upload — but billed to the dealer
  * ACCOUNT (accounts row), numbered in its own "<prefix>A" series, and written

@@ -1,5 +1,6 @@
 import { requireRole } from "@/lib/auth-utils";
 import { getTimeLimits } from "@/lib/timeLimits/store";
+import { staleBandLabel } from "@/lib/timeLimits/labels";
 import { NeedsAttentionView } from "./NeedsAttentionView";
 
 export const dynamic = "force-dynamic";
@@ -23,8 +24,9 @@ export default async function NeedsAttentionPage() {
                     follow-up date once it has passed. A follow-up still ahead keeps a lead off
                     this list; one more than 30 days ahead is ignored. Listed from{" "}
                     {limits.idle_cc} idle working days for inside sales, {limits.idle_asm} for
-                    ASMs; rows turn amber at {limits.stale_yellow}, red at {limits.stale_red} and dark red at{" "}
-                    {limits.stale_critical} working days (Admin › Time limits).
+                    ASMs; rows turn amber at {staleBandLabel(limits, "yellow")}, red at{" "}
+                    {staleBandLabel(limits, "red")} and dark red at {staleBandLabel(limits, "critical")}{" "}
+                    (Admin › Time limits).
                     The &ldquo;Counted from&rdquo; column says which date the count runs from.
                     Reassign straight from the row.
                 </p>

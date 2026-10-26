@@ -1,5 +1,5 @@
 /**
- * GET /api/dashboard/ceo/account-quotations — E-356: the CEO's queue of
+ * GET /api/dashboard/ceo/account-quotations — E-358: the CEO's queue of
  * ACCOUNT quotations. `?status=pending` (default) is the approval queue,
  * oldest first; `?status=history` is what was approved or rejected, newest
  * first. Each row carries the Account ID and name and why it is waiting (the

@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * E-356 — the CEO's queue of ACCOUNT quotations, beside the lead quotation
+ * E-358 — the CEO's queue of ACCOUNT quotations, beside the lead quotation
  * panel on /ceo/quotations. Every row is tagged "Account" and names the
  * Account ID, so an account quote is never mistaken for a lead's. Same
  * decision rules: approve releases it (the document is made and the owner

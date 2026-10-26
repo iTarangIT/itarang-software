@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/db", () => ({ db: {} }));
 const { buildRepBlocks, repBlockTableRows, TEAM_SUBTOTAL_PREFIX, TEAM_MEMBER_PREFIX } = await import("../salesDailyBlocks");
-const { personRows, teamRows, membersOf, targetRows, workListRows } = await import("../myDayShape");
+const { personRows, teamRows, membersOf, targetRows, workListRows, sameDayLastWeekRows } = await import("../myDayShape");
 const { buildDigestEmail } = await import("@/lib/email/sendDigestEmail");
 
 const spoc = (id: string, name: string, role: string, calls: number, visits = 0) => ({
@@ -55,6 +55,24 @@ describe("personRows", () => {
     });
     it("is empty for someone not in the block", () => {
         expect(personRows("inside_sales_rep", blocks, "nobody")).toEqual([]);
+    });
+});
+
+// ID 194 #1 — Yesterday against the same day last week, per metric.
+describe("sameDayLastWeekRows", () => {
+    const wkDash = { per_spoc: [spoc("c", "Chetan", "inside_sales_rep", 12)] } as never;
+    const wkBlocks = buildRepBlocks("inside_sales_rep", wkDash, wkDash, { y: extras(), mtd: extras() }, targets);
+    it("lists each Yesterday metric with both days", () => {
+        const rows = sameDayLastWeekRows("inside_sales_rep", blocks, wkBlocks, "c");
+        expect(rows.map((r) => r[0])).toEqual(["Calls", "Dealers called", "Limits passed"]);
+        expect(rows[0]).toEqual(["Calls", 5, 12]);
+    });
+    it("is 0 on the day the person is missing from", () => {
+        const rows = sameDayLastWeekRows("inside_sales_rep", blocks, wkBlocks, "a");
+        expect(rows[0]).toEqual(["Calls", 10, 0]);
+    });
+    it("is empty for someone in neither", () => {
+        expect(sameDayLastWeekRows("inside_sales_rep", blocks, wkBlocks, "nobody")).toEqual([]);
     });
 });
 

@@ -1,5 +1,5 @@
 /**
- * E-356 — send an APPROVED account quotation to the account's email and / or
+ * E-358 — send an APPROVED account quotation to the account's email and / or
  * WhatsApp. Reuses the lead dispatcher (src/lib/leads/quoteDispatch.ts) with
  * account overrides: the account's own signed link (/quote/a/…), its own
  * WhatsApp button ids, and its own dispatch log. CC: the account owner, the

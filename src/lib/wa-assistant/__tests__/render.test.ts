@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("@/lib/db", () => ({ db: {} }));
 
 const { fit, fmtDate, leadRow, renderTurn, renderLeadCard, renderLeadReport, whatsappText, RENDER_LIMITS, SORRY } = await import("../render");
+const { encodeMore, decodeMore, nextPageFollowUp, renderProducts, renderProductPicked, productRow } = await import("../render");
 const { fmtDay } = await import("@/lib/assistant/format");
 const { normalizeSearch } = await import("@/lib/assistant/tools/read/searchLead");
 const { shapeNumbers, numbersInputs, METRIC_DEFINITIONS } = await import("@/lib/assistant/tools/read/myNumbers");
@@ -112,7 +113,7 @@ describe("renderTurn", () => {
         expect(p.rows).toHaveLength(10);
         expect(p.header).toBe("Today's Schedule");
         expect(p.button.length).toBeLessThanOrEqual(RENDER_LIMITS.listButton);
-        expect(p.body).toBe("Today's Schedule: 14\nAaj 14 visits hain.\n\nAll 14: https://crm.itarang.com/asm");
+        expect(p.body).toBe("Today's Schedule: 14 · showing 1–10\nAaj 14 visits hain.\n\nAll 14: https://crm.itarang.com/asm");
         expect(p.rows.every((r) => r.id.startsWith("ast:lead:"))).toBe(true);
     });
 
@@ -191,9 +192,9 @@ describe("renderTurn", () => {
 
     it("list body: the first line is OUR total; a model line with a wrong count is dropped, a right one kept", () => {
         const wrong = renderTurn({ text: "Aapke 5 visits hain.", results: [{ tool: "my_queue", result: leads(3, 7) }] });
-        expect(wrong.kind === "list" && wrong.body).toBe("Today's Schedule: 7\n\nAll 7: https://crm.itarang.com/asm");
+        expect(wrong.kind === "list" && wrong.body).toBe("Today's Schedule: 7 · showing 1–3\n\nAll 7: https://crm.itarang.com/asm");
         const right = renderTurn({ text: "Aapke 7 visits hain.\nShop details below", results: [{ tool: "my_queue", result: leads(3, 7) }] });
-        expect(right.kind === "list" && right.body).toBe("Today's Schedule: 7\nAapke 7 visits hain.\n\nAll 7: https://crm.itarang.com/asm");
+        expect(right.kind === "list" && right.body).toBe("Today's Schedule: 7 · showing 1–3\nAapke 7 visits hain.\n\nAll 7: https://crm.itarang.com/asm");
         const cands = renderTurn({
             text: "I found 3 leads.",
             results: [{ tool: "search_lead", result: { kind: "candidates", question: "Which ABC?", rows: [lead({ id: "A" }), lead({ id: "B" })] } }],
@@ -353,5 +354,202 @@ describe("tool helpers", () => {
         expect(out.planned_visits).toEqual({ today: 2, next_7_days: 6 });
         // Phase B5: the link opens the same range.
         expect(out.crm_url).toMatch(/\/asm\/performance\?from=2026-09-01&to=2026-09-25$/);
+    });
+});
+
+describe("paging — total first, Next 10, the whole list reachable", () => {
+    const paged = (n: number, total: number, page = 1, args: Record<string, string> = { tab: "my_open" }): ToolResult => ({
+        kind: "leads",
+        title: "My open leads",
+        rows: Array.from({ length: n }, (_, i) => lead({ id: `DL-${page}-${i}` })),
+        total,
+        crm_url: "https://crm.itarang.com/inside-sales",
+        paging: { page, page_size: 10, args },
+    });
+
+    it("encodeMore / decodeMore round-trip; ids fit Meta's 256", () => {
+        const id = encodeMore("my_queue", { tab: "my_open", search: "x".repeat(60), interest: "hot" }, 2)!;
+        expect(id.startsWith("ast:more:")).toBe(true);
+        expect(id.length).toBeLessThanOrEqual(256);
+        expect(decodeMore(id.slice("ast:more:".length))).toEqual({
+            tool: "my_queue",
+            args: { tab: "my_open", search: "x".repeat(60), interest: "hot" },
+            page: 2,
+        });
+    });
+
+    it("decodeMore refuses anything that isn't one of ours", () => {
+        const b = (v: unknown) => Buffer.from(JSON.stringify(v)).toString("base64url");
+        for (const bad of [
+            "", "not-base64!", b(null), b([]), b({ t: "z", a: {}, p: 2 }), b({ t: "constructor", a: {}, p: 2 }),
+            b({ t: "q", a: {}, p: 1 }), b({ t: "q", a: {}, p: 99 }), b({ t: "q", a: { tab: 5 }, p: 2 }),
+            b({ t: "q", a: { page: "9" }, p: 2 }), b({ t: "q", a: [], p: 2 }),
+        ]) {
+            expect(decodeMore(bad), bad).toBeNull();
+        }
+        expect(encodeMore("get_lead_details", {}, 2)).toBeNull();
+        expect(encodeMore("my_queue", { search: "y".repeat(400) }, 2)).toBeNull();
+    });
+
+    it("page 1 of 23: list of 10 with the total first, then a Next 10 message carrying the CRM link", () => {
+        const p = renderTurn({ text: "", results: [{ tool: "my_queue", result: paged(10, 23) }] });
+        expect(p.kind).toBe("list");
+        if (p.kind !== "list") return;
+        expect(p.rows).toHaveLength(10);
+        expect(p.body.split("\n")[0]).toBe("My open leads: 23 · showing 1–10");
+        expect(p.body).not.toContain("All 23"); // the link rides on the Next message
+        const f = p.followUp!;
+        expect(f.kind).toBe("buttons");
+        if (f.kind !== "buttons") return;
+        expect(f.body).toBe("Showing 1–10 of 23.\nAll 23 in the CRM: https://crm.itarang.com/inside-sales");
+        expect(f.buttons).toHaveLength(1);
+        expect(f.buttons[0].title).toBe("Next 10 ▶");
+        expect(decodeMore(f.buttons[0].id.slice("ast:more:".length))).toEqual({ tool: "my_queue", args: { tab: "my_open" }, page: 2 });
+    });
+
+    it("page 2 of 23 offers the last 3; the last page has no Next and keeps the link in the body", () => {
+        const p2 = renderTurn({ text: "", results: [{ tool: "my_queue", result: paged(10, 23, 2) }] });
+        expect(p2.kind === "list" && p2.body.split("\n")[0]).toBe("My open leads: 23 · showing 11–20");
+        expect(p2.kind === "list" && p2.followUp?.kind === "buttons" && p2.followUp.buttons[0].title).toBe("Next 3 ▶");
+        const p3 = renderTurn({ text: "", results: [{ tool: "my_queue", result: paged(3, 23, 3) }] });
+        expect(p3.kind === "list" && p3.followUp).toBeUndefined();
+        expect(p3.kind === "list" && p3.body).toBe("My open leads: 23 · showing 21–23\n\nAll 23: https://crm.itarang.com/inside-sales");
+    });
+
+    it("a list that fits one page has no range and no Next", () => {
+        const p = renderTurn({ text: "", results: [{ tool: "my_queue", result: paged(7, 7) }] });
+        expect(p.kind === "list" && p.body).toBe("My open leads: 7");
+        expect(p.kind === "list" && p.followUp).toBeUndefined();
+    });
+
+    it("past the last page says so instead of '0 leads'", () => {
+        const p = renderTurn({ text: "", results: [{ tool: "my_queue", result: paged(0, 0, 4) }] });
+        expect(p).toEqual({ kind: "text", body: "No more leads — that was the whole list." });
+    });
+
+    it("search candidates page too", () => {
+        const r: ToolResult = {
+            kind: "candidates", question: "14 leads match \"sharma\". Which one do you mean?",
+            rows: Array.from({ length: 10 }, (_, i) => lead({ id: `C-${i}` })), total: 14, crm_url: "https://crm/x",
+            paging: { page: 1, page_size: 10, args: { query: "sharma" } },
+        };
+        const p = renderTurn({ text: "", results: [{ tool: "search_lead", result: r }] });
+        expect(p.kind === "list" && p.body.split("\n")[0]).toContain("(showing 1–10)");
+        expect(p.kind === "list" && p.followUp?.kind === "buttons" && decodeMore(p.followUp.buttons[0].id.slice(9))?.tool).toBe("search_lead");
+    });
+
+    it("hot report: numbered from the page's first row; Next only when the whole page fit", () => {
+        const report = (n: number, total: number, page: number): ToolResult => ({
+            kind: "lead_report", title: "Hot leads", definition: "d",
+            rows: Array.from({ length: n }, (_, i) => ({ ...lead({ id: `H-${i}`, shop_name: `Shop ${i}` }), age_days: 3 })),
+            total, crm_url: "https://crm/perf", paging: { page, page_size: 10, args: { interest: "hot" } },
+        });
+        const p1 = renderTurn({ text: "", results: [{ tool: "my_leads_by_temperature", result: report(10, 25, 1) }] });
+        expect(p1.kind).toBe("text");
+        expect(p1.kind === "text" && p1.body).toContain("+15 more: https://crm/perf");
+        expect(p1.kind === "text" && p1.followUp?.kind === "buttons" && p1.followUp.buttons[0].title).toBe("Next 10 ▶");
+        const p2 = renderTurn({ text: "", results: [{ tool: "my_leads_by_temperature", result: report(10, 25, 2) }] });
+        expect(p2.kind === "text" && p2.body).toContain("\n11. Shop 0");
+        expect(p2.kind === "text" && p2.body).toContain("+5 more");
+        // Two reports in one turn: no Next (they share the room), "+N more" links instead.
+        const two = renderTurn({
+            text: "",
+            results: [
+                { tool: "my_leads_by_temperature", result: report(10, 25, 1) },
+                { tool: "my_leads_by_temperature", result: { ...(report(10, 12, 1) as Extract<ToolResult, { kind: "lead_report" }>), title: "Warm leads" } },
+            ],
+        });
+        expect(two.kind === "text" && two.followUp).toBeUndefined();
+        const past = renderTurn({ text: "", results: [{ tool: "my_leads_by_temperature", result: report(0, 0, 4) }] });
+        expect(past.kind === "text" && past.body).toBe("No more hot leads — that was the whole list.");
+    });
+
+    it("my_queue pages are cut from the screen's own pages of 25 (page 3 = rows 21–30 spans two)", async () => {
+        const { sliceScreenPages } = await import("@/lib/assistant/tools/read/myQueue");
+        const screen = Array.from({ length: 60 }, (_, i) => i + 1);
+        const asked: number[] = [];
+        const fetchPage = async (p: number) => {
+            asked.push(p);
+            return screen.slice((p - 1) * 25, p * 25);
+        };
+        expect(await sliceScreenPages(0, fetchPage)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+        expect(asked).toEqual([1]);
+        asked.length = 0;
+        expect(await sliceScreenPages(20, fetchPage)).toEqual([21, 22, 23, 24, 25, 26, 27, 28, 29, 30]);
+        expect(asked).toEqual([1, 2]);
+        expect(await sliceScreenPages(50, fetchPage)).toEqual([51, 52, 53, 54, 55, 56, 57, 58, 59, 60]);
+        expect(await sliceScreenPages(60, fetchPage)).toEqual([]);
+    });
+
+    it("nextPageFollowUp: nothing without paging or when rows were cut short", () => {
+        expect(nextPageFollowUp("my_queue", { total: 30 }, 10)).toBeNull();
+        expect(nextPageFollowUp("my_queue", { total: 30, paging: { page: 1, page_size: 10, args: {} } }, 7)).toBeNull();
+    });
+
+    // ── Products ──
+    const product = (i: number, asset_type: "battery" | "charger" | "paraphernalia" = "battery") => ({
+        product_id: `p-${i}`, asset_type, product_name: `LFP 51.2V ${100 + i}Ah`, model_id: `LFP-${i}`, detail: "51.20V · 105Ah · LFP",
+    });
+    const products = (n: number, total: number, args: Record<string, string> = {}, page = 1): ToolResult => ({
+        kind: "products", rows: Array.from({ length: n }, (_, i) => product(i)), total, paging: { page, page_size: 10, args },
+    });
+
+    it("productRow: name, model · spec, id ast:prod:<type>:<id>, within limits", () => {
+        const r = productRow({ ...product(1), product_name: "A very long battery name that will not fit", detail: "d".repeat(200) });
+        expect(r.id).toBe("ast:prod:battery:p-1");
+        expect(within(r.title, RENDER_LIMITS.rowTitle)).toBe(true);
+        expect(within(r.description!, RENDER_LIMITS.rowDescription)).toBe(true);
+        expect(r.description!.startsWith("LFP-1 · ")).toBe(true);
+    });
+
+    it("whole catalogue bigger than a list → the product types first", () => {
+        const p = renderTurn({ text: "Yeh rahe products: LFP …", results: [{ tool: "product_catalogue", result: products(10, 32) }] });
+        expect(p.kind).toBe("buttons");
+        expect(p.kind === "buttons" && p.buttons.map((b) => b.id)).toEqual(["ast:ptype:battery", "ast:ptype:charger", "ast:ptype:paraphernalia"]);
+        expect(p.kind === "buttons" && p.buttons.every((b) => b.title.length <= 20)).toBe(true);
+        expect(p.body).toContain("32 products");
+    });
+
+    it("a type with 16 → list of 10 to tap + Next 6; the model's typed product list is dropped", () => {
+        const p = renderTurn({ text: "1. LFP 51.2V 100Ah\n2. …", results: [{ tool: "product_catalogue", result: products(10, 16, { asset_type: "battery" }) }] });
+        expect(p.kind).toBe("list");
+        if (p.kind !== "list") return;
+        expect(p.header).toBe("Battery products");
+        expect(p.body).toBe("Battery products: 16 · showing 1–10\nTap one to choose it.");
+        expect(p.button).toBe("Choose product");
+        expect(p.rows.every((r) => r.id.startsWith("ast:prod:battery:"))).toBe(true);
+        expect(p.followUp?.kind === "buttons" && p.followUp.buttons[0].title).toBe("Next 6 ▶");
+        expect(p.followUp?.kind === "buttons" && decodeMore(p.followUp.buttons[0].id.slice(9))).toEqual({
+            tool: "product_catalogue", args: { asset_type: "battery" }, page: 2,
+        });
+    });
+
+    it("a small catalogue or a searched query → straight to the list; one clear match → the model's answer", () => {
+        expect(renderTurn({ text: "", results: [{ tool: "product_catalogue", result: products(8, 8) }] }).kind).toBe("list");
+        expect(renderTurn({ text: "", results: [{ tool: "product_catalogue", result: products(10, 12, { query: "lfp" }) }] }).kind).toBe("list");
+        const one = renderTurn({ text: "LFP 51.2V 100Ah mila. Kitni quantity?", results: [{ tool: "product_catalogue", result: products(1, 1, { query: "100ah" }) }] });
+        expect(one).toEqual({ kind: "text", body: "LFP 51.2V 100Ah mila. Kitni quantity?" });
+        expect(renderTurn({ text: "", results: [{ tool: "product_catalogue", result: products(1, 1, { query: "100ah" }) }] }).kind).toBe("list");
+    });
+
+    it("no match / past the end say so", () => {
+        expect(renderProducts(products(0, 0, { query: "zzz" }) as Extract<ToolResult, { kind: "products" }>).body).toContain("No product");
+        expect(renderProducts(products(0, 16, { asset_type: "battery" }, 3) as Extract<ToolResult, { kind: "products" }>).body).toContain("No more products");
+    });
+
+    it("a write preview still wins over a product list in the same turn", () => {
+        const preview: ToolResult = {
+            kind: "preview", action_id: "a1",
+            preview: { title: "Quote — ABC", lines: [], resets_idle_clock: false, warning: null, needs_second_confirm: false, crm_url: "u" },
+        };
+        const p = renderTurn({ text: "", results: [{ tool: "product_catalogue", result: products(3, 3) }, { tool: "create_quote", result: preview }] });
+        expect(p.kind).toBe("buttons");
+    });
+
+    it("renderProductPicked: names the product and asks for quantity + price; gone → says so", () => {
+        const p = renderProductPicked(product(5));
+        expect(p.body).toContain("LFP 51.2V 105Ah (LFP-5) chosen");
+        expect(p.body).toMatch(/quantity/i);
+        expect(renderProductPicked(null).body).toContain("no longer");
     });
 });

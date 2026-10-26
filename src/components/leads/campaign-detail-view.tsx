@@ -51,6 +51,15 @@ import { describeRegion, displayCampaignName } from "@/lib/leads/regionSummary";
 import { formatWindow } from "@/lib/queue/campaignSchedule";
 import { toast } from "sonner";
 import { confirmDialog } from "@/components/ui/confirm-dialog";
+import {
+  CallCategoryBadge,
+  CampaignOutcomeBreakdown,
+} from "./campaign-outcome-breakdown";
+import {
+  CALL_CATEGORY_LABELS,
+  type CallCategory,
+} from "@/lib/ai-dialer/callCategory";
+import type { CampaignOutcomeReport } from "@/lib/ai-dialer/campaignOutcomes";
 
 type Campaign = {
   id: string;
@@ -81,6 +90,8 @@ type Campaign = {
   retryScheduled?: number;
   nextRetryAt?: string | null;
   totalDials?: number;
+  /** AI dialer review — per-category outcome counts (E-356). */
+  outcomes?: CampaignOutcomeReport;
 };
 
 // "Mon, 29 Sept, 09:00 am" in IST — for booked retry times.
@@ -126,6 +137,8 @@ type Lead = {
   convertedOnAttempt: number | null;
   /** E-315 — when this lead's automatic retry goes out; null = none booked. */
   nextAttemptAt?: string | null;
+  /** AI dialer review — this attempt's outcome category (callCategory.ts). */
+  category?: string | null;
 };
 
 type Bucket = "all" | CampaignLeadStatus;
@@ -347,6 +360,7 @@ function LeadRow({
           outcome={row.callOutcome}
           failureReason={row.failureReason}
         />
+        <CallCategoryBadge category={row.category} />
       </td>
       <td className="px-3 py-2.5 text-xs">
         {row.intentScore != null ? (
@@ -424,6 +438,9 @@ export function CampaignDetailView({
   const [durationBucket, setDurationBucket] = useState<
     { key: string; label: string } | null
   >(null);
+  // Outcome-category filter, set from the outcome breakdown tiles. Like the
+  // duration bucket it is server-side and replaces the status tab.
+  const [category, setCategory] = useState<CallCategory | null>(null);
   const queryClient = useQueryClient();
   const router = useRouter();
 
@@ -595,7 +612,7 @@ export function CampaignDetailView({
     resumableLeads > 0;
 
   const { data: leadsData, isLoading: leadsLoading } = useQuery({
-    queryKey: ["dialer-campaign-leads", campaignId, bucket, page, durationBucket?.key ?? null],
+    queryKey: ["dialer-campaign-leads", campaignId, bucket, page, durationBucket?.key ?? null, category],
     queryFn: async () => {
       const params = new URLSearchParams({
         bucket,
@@ -605,6 +622,7 @@ export function CampaignDetailView({
       // page, so filtering the loaded rows would show a fraction of the calls
       // the histogram just counted — with no sign anything was dropped.
       if (durationBucket) params.set("durationBucket", durationBucket.key);
+      if (category) params.set("category", category);
       const res = await fetch(
         `/api/ai-dialer/campaigns/${campaignId}/leads?${params}`,
       );
@@ -629,7 +647,20 @@ export function CampaignDetailView({
   const selectDurationBucket = (next: { key: string; label: string } | null) => {
     setDurationBucket(next);
     setPage(1);
-    if (next) setBucket("all");
+    if (next) {
+      setBucket("all");
+      setCategory(null);
+    }
+  };
+
+  // An outcome tile — same contract as a duration bar: replaces the status tab.
+  const selectCategory = (next: CallCategory | null) => {
+    setCategory(next);
+    setPage(1);
+    if (next) {
+      setBucket("all");
+      setDurationBucket(null);
+    }
   };
 
   if (campaignLoading || !campaign) {
@@ -996,6 +1027,12 @@ export function CampaignDetailView({
         />
       )}
 
+      <CampaignOutcomeBreakdown
+        outcomes={campaign.outcomes}
+        selected={category}
+        onSelect={selectCategory}
+      />
+
       <div className="rounded-2xl border border-gray-200 bg-white overflow-hidden">
         <div className="flex items-center justify-between gap-2 border-b border-gray-100 px-4 pt-3">
           <div className="flex min-w-0 items-center gap-1 overflow-x-auto">
@@ -1011,6 +1048,7 @@ export function CampaignDetailView({
                     // picking one clears the other rather than silently
                     // intersecting two filters the user chose separately.
                     setDurationBucket(null);
+                    setCategory(null);
                   }}
                   className={`shrink-0 whitespace-nowrap px-3 py-2 text-sm font-medium border-b-2 transition-colors ${
                     isActive
@@ -1037,6 +1075,16 @@ export function CampaignDetailView({
                 className="mb-2 ml-2 inline-flex cursor-pointer items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
               >
                 Duration: {durationBucket.label}
+                <X className="h-3 w-3" />
+              </button>
+            )}
+            {category && (
+              <button
+                type="button"
+                onClick={() => setCategory(null)}
+                className="mb-2 ml-2 inline-flex cursor-pointer items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+              >
+                Outcome: {CALL_CATEGORY_LABELS[category]}
                 <X className="h-3 w-3" />
               </button>
             )}
@@ -1164,7 +1212,7 @@ export function CampaignDetailView({
           onClose={() => setSelectedLeadId(null)}
         />
 
-        {bucket !== "all" && (
+        {(bucket !== "all" || durationBucket || category) && (
           <div className="flex justify-between items-center px-4 py-3 border-t border-gray-100">
             <button
               onClick={() => setPage((p) => Math.max(1, p - 1))}

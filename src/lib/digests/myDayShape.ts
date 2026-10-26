@@ -11,7 +11,15 @@
 // Pure (no db) — unit tested in __tests__/myDayShape.test.ts.
 
 import { pctOfTarget } from "./salesDailyBlockA";
-import { repBlockTableRows, TEAM_MEMBER_PREFIX, TEAM_SUBTOTAL_PREFIX, type RepBlock, type TeamOf } from "./salesDailyBlocks";
+import {
+    formatRepValue,
+    repBlockTableRows,
+    TEAM_MEMBER_PREFIX,
+    TEAM_SUBTOTAL_PREFIX,
+    yesterdayMetricsOf,
+    type RepBlock,
+    type TeamOf,
+} from "./salesDailyBlocks";
 
 type Rows = Array<Array<string | number>>;
 type Role = "asm" | "inside_sales_rep";
@@ -20,6 +28,22 @@ type Role = "asm" | "inside_sales_rep";
 export function personRows(role: Role, blocks: RepBlock[], personId: string): Rows {
     const mine = blocks.filter((b) => b.id === personId);
     return mine.length ? repBlockTableRows(role, mine) : [];
+}
+
+/**
+ * ID 194 #1 (Kartik, 18 Oct) — the person's Yesterday figures against the same
+ * weekday a week earlier: one row per metric their block shows for Yesterday
+ * ("Calls", Yesterday, Same day last week). `wkBlocks` are buildRepBlocks run
+ * with the same-day-last-week window as their "y". [] when they are in neither.
+ */
+export function sameDayLastWeekRows(role: Role, yBlocks: RepBlock[], wkBlocks: RepBlock[], personId: string): Rows {
+    const y = yBlocks.find((b) => b.id === personId);
+    const wk = wkBlocks.find((b) => b.id === personId);
+    if (!y && !wk) return [];
+    // Missing from one window's list = nothing of theirs that day.
+    const val = (b: RepBlock | undefined, m: Parameters<typeof formatRepValue>[0]) =>
+        formatRepValue(m, b ? (b.values[m]?.y ?? null) : 0);
+    return yesterdayMetricsOf(role).map(({ label, metric }) => [label, val(y, metric), val(wk, metric)]);
 }
 
 /** Member id → their manager, for the people who report to `managerId`. */

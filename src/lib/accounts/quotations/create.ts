@@ -1,5 +1,5 @@
 /**
- * E-356 — raise a new version of an ACCOUNT quotation.
+ * E-358 — raise a new version of an ACCOUNT quotation.
  *
  * The same gate as a lead quote (src/lib/leads/createCommercial.ts), reused,
  * not restated: every line is judged against its OEM reference price in force

@@ -621,7 +621,7 @@ const roleNavigation: Record<string, any[]> = {
           icon: LayoutDashboard,
           href: "/ceo",
         },
-        // E-356 — every dealer account, each with its account quotations.
+        // E-358 — every dealer account, each with its account quotations.
         { id: "ceo-my-dealers", label: "My Dealers", icon: Store, href: "/my-dealers" },
       ],
     },
@@ -876,7 +876,7 @@ const roleNavigation: Record<string, any[]> = {
           icon: LayoutDashboard,
           href: "/sales-head",
         },
-        // E-356 — every dealer account, each with its account quotations.
+        // E-358 — every dealer account, each with its account quotations.
         { id: "sh-my-dealers", label: "My Dealers", icon: Store, href: "/my-dealers" },
       ],
     },
@@ -1271,7 +1271,7 @@ const roleNavigation: Record<string, any[]> = {
           icon: Receipt,
           href: "/partner/quotations",
         },
-        // E-356 — every dealer account, each with its account quotations.
+        // E-358 — every dealer account, each with its account quotations.
         { id: "partner-my-dealers", label: "My Dealers", icon: Store, href: "/my-dealers" },
       ],
     },

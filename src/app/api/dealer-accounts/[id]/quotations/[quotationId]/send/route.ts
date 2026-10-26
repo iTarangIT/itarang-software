@@ -1,5 +1,5 @@
 /**
- * E-356 — send an approved account quotation to the account.
+ * E-358 — send an approved account quotation to the account.
  *
  *   GET   the recipients the dialog prefills (the account's email / phone)
  *         and every past send attempt.

@@ -1,5 +1,5 @@
 /**
- * E-356 — an account's quotations (24 Oct meeting, items 8–11).
+ * E-358 — an account's quotations (24 Oct meeting, items 8–11).
  *
  *   GET   every version on the account, newest first.
  *   POST  raise a new version { product_lines, terms, notes? }. Auto-approved

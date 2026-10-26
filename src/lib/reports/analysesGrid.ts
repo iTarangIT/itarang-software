@@ -16,7 +16,7 @@
 import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { matchedUnion, REVENUE_IS_ORDER } from "@/lib/dashboard/revenueSource";
-import { workingDaysBetweenSql } from "@/lib/calendar/holidays";
+import { primeHolidayLog, workingDaysBetweenAsOfSql } from "@/lib/calendar/holidays";
 import { medianAndP90 } from "@/lib/leads/clockRules";
 import { hasLeadClocks } from "@/lib/leads/clocks";
 import { leadKeyValidOn, leadsByGstinKey } from "@/lib/leads/gstinMatch";
@@ -152,6 +152,8 @@ const STAGES = [
 
 export async function turnaround(f: GridFilters): Promise<GridResult> {
     const p = await period(f, 179);
+    // ID 85 #6: each stage's days use the holidays as they stood when it ended.
+    await primeHolidayLog();
     const orders = await ordersCte();
     // A date (visit, invoice) is read as office opening, 10:00 IST, that day.
     const at10 = (d: SQL) => sql`((${d}) + TIME '10:00') AT TIME ZONE ${IST}`;
@@ -174,11 +176,11 @@ export async function turnaround(f: GridFilters): Promise<GridResult> {
         )
         SELECT
             CASE WHEN v1 IS NOT NULL AND ${at10(sql`v1`)} >= created
-                 THEN ${workingDaysBetweenSql(sql`created`, at10(sql`v1`))} END AS s1,
+                 THEN ${workingDaysBetweenAsOfSql(sql`created`, at10(sql`v1`))} END AS s1,
             CASE WHEN v1 IS NOT NULL AND q1 IS NOT NULL AND q1 >= ${at10(sql`v1`)} - INTERVAL '10 hours'
-                 THEN ${workingDaysBetweenSql(at10(sql`v1`), sql`q1`)} END AS s2,
+                 THEN ${workingDaysBetweenAsOfSql(at10(sql`v1`), sql`q1`)} END AS s2,
             CASE WHEN q1 IS NOT NULL AND b1 IS NOT NULL AND ${at10(sql`b1`)} >= q1 - INTERVAL '10 hours'
-                 THEN ${workingDaysBetweenSql(sql`q1`, at10(sql`b1`))} END AS s3,
+                 THEN ${workingDaysBetweenAsOfSql(sql`q1`, at10(sql`b1`))} END AS s3,
             (b2 - b1) AS s4,
             (b3 - b2) AS s5
           FROM j`);

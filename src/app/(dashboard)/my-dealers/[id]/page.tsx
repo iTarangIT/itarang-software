@@ -4,7 +4,7 @@ import { AccountPageView } from "./AccountPageView";
 
 export const dynamic = "force-dynamic";
 
-// E-356 — one dealer account from My Dealers: its details and its account
+// E-358 — one dealer account from My Dealers: its details and its account
 // quotations. Who may open it and who may raise a quotation is decided per
 // account by the API (src/lib/accounts/quotationAccess.ts).
 export default async function MyDealerAccountPage({ params }: { params: Promise<{ id: string }> }) {

@@ -16,7 +16,8 @@ import { verifyLinkCode } from "./link";
 import { withUserLease } from "./lock";
 import { hasNewerInbound, markHandled, pendingCardIsLatest, recordOutbound } from "./messages";
 import { isAcceptedMime, MAX_MEDIA_BYTES, normalizeMediaMime, storeLocation, storeMediaFile } from "@/lib/assistant/media";
-import { renderLeadCard, renderPreview, renderTapOutcome, renderTurn, type WaPayload } from "./render";
+import { decodeMore, renderLeadCard, renderPreview, renderTapOutcome, renderTurn, type WaPayload } from "./render";
+import { loadCatalogue } from "@/lib/assistant/tools/quotes";
 import type { RouterDeps } from "./router";
 import type { AssistantUser } from "@/lib/assistant/types";
 import {
@@ -51,11 +52,35 @@ export async function proposeInvitePayload(user: AssistantUser, leadId: string, 
     return { kind: "text", body: LEAD_NOT_FOUND };
 }
 
+/**
+ * A "Next 10" tap: the same list tool, next page, through runToolDirect (the
+ * tool's schema and the user's scope again — the token grants nothing). Null
+ * for a token that doesn't decode.
+ */
+export async function pageListPayload(
+    user: AssistantUser,
+    token: string,
+    messageRowId: string,
+): Promise<{ payload: WaPayload; title: string } | null> {
+    const next = decodeMore(token);
+    if (!next) return null;
+    const result = await runToolDirect(user, next.tool, { ...next.args, page: next.page }, { messageId: messageRowId });
+    const title = "title" in result && typeof result.title === "string" ? result.title : next.tool.replace(/_/g, " ");
+    return { payload: renderTurn({ text: "", results: [{ tool: next.tool, result }] }), title: `${title} page ${next.page}` };
+}
+
 export function defaultRouterDeps(env: WaAssistEnv): RouterDeps {
     const client = new WaAssistClient(env);
     const logFn: RouterDeps["log"] = (level, msg, meta) => log[level](msg, meta);
 
+    // A list or report that isn't the last page carries a "Next 10" follow-up:
+    // sent after it, in order (a failed first send still lets the button go out).
     const sendPayload: RouterDeps["sendPayload"] = async (waPhone, payload, userId) => {
+        await sendOne(waPhone, payload, userId);
+        if (payload.kind !== "buttons" && payload.followUp) await sendOne(waPhone, payload.followUp, userId);
+    };
+
+    const sendOne: RouterDeps["sendPayload"] = async (waPhone, payload, userId) => {
         try {
             const res =
                 payload.kind === "list"
@@ -107,6 +132,13 @@ export function defaultRouterDeps(env: WaAssistEnv): RouterDeps {
                 body: result.kind === "lead" ? renderLeadCard(result.lead) : LEAD_NOT_FOUND,
             };
         },
+        pageList: pageListPayload,
+        listProductType: async (user, assetType, messageRowId) => {
+            const result = await runToolDirect(user, "product_catalogue", { asset_type: assetType }, { messageId: messageRowId });
+            return renderTurn({ text: "", results: [{ tool: "product_catalogue", result }] });
+        },
+        pickProduct: async (_user, assetType, productId) =>
+            (await loadCatalogue()).find((p) => p.asset_type === assetType && p.product_id === productId) ?? null,
         proposeInvite: proposeInvitePayload,
         editAction: editActionPayload,
         confirmAction: async (user, actionId, messageRowId) =>

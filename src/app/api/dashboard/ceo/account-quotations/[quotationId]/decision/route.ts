@@ -1,5 +1,5 @@
 /**
- * POST /api/dashboard/ceo/account-quotations/[quotationId]/decision — E-356:
+ * POST /api/dashboard/ceo/account-quotations/[quotationId]/decision — E-358:
  * { decision: "approve" | "reject", reason } on a pending ACCOUNT quotation.
  * Reason required on reject. Approve generates the document and tells the
  * account owner it is ready to send; reject restores the previous approved

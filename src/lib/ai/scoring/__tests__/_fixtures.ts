@@ -17,6 +17,8 @@ export interface SignalSpec {
   // progression
   pitch?: boolean; // pitch_heard — default true
   callback?: boolean; // callback_agreed
+  topic?: QualificationSignals["callback_topic"];
+  wantsHuman?: boolean; // wants_human
   disqualifier?: Disqualifier;
 }
 
@@ -36,6 +38,8 @@ export function mk(p: SignalSpec = {}): QualificationSignals {
     financing_value_acknowledged: yn(p.value),
     pitch_heard: yn(p.pitch ?? true),
     callback_agreed: yn(p.callback),
+    callback_topic: p.topic ?? "none",
+    wants_human: yn(p.wantsHuman),
     disqualifier: p.disqualifier ?? "none",
   };
 }

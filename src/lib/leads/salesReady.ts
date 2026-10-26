@@ -47,6 +47,10 @@ export const SALES_READY_REASONS = [
     "admin_marked",
     "admin_assigned",
     "reactivated",
+    // AI dialer review (23 Oct 2026) — the dealer asked an AI call for a
+    // callback on pricing / negotiation / dealership / purchase, or for a
+    // Sales Manager (src/lib/ai-dialer/postCallOutcome.ts).
+    "ai_callback",
 ] as const;
 export type SalesReadyReason = (typeof SALES_READY_REASONS)[number];
 
@@ -59,7 +63,11 @@ const LABEL: Record<SalesReadyReason, string> = {
     admin_marked: "marked qualified by a reviewer",
     admin_assigned: "assigned by an admin",
     reactivated: "reactivated into the sales pool",
+    ai_callback: "asked an AI call for a callback from sales",
 };
+
+/** The reasons the "AI qualified" split of Ready to assign counts. */
+const AI_READY_REASONS: readonly SalesReadyReason[] = ["ai_qualified", "ai_callback"];
 
 export async function markSalesReady(
     exec: Tx | typeof db,
@@ -135,13 +143,16 @@ export function awaitingAssignment(dl: SQL = sql`dl`): SQL {
 export const READY_NO_OWNER_TITLE = "Ready leads with no owner";
 
 /**
- * ID 184 — the card's split, one bucket per lead (no overlap). Decided 21 Oct:
- * AI-qualified first, then Hot (only when not AI-qualified), then everything
- * else (rep-created, NeoDove, inbound, …). The order here is the order shown.
+ * ID 184 — the card's split, one bucket per lead (no overlap). Decided 21 Oct,
+ * re-decided 23 Oct (Kartik): Hot first, then AI-qualified (only when not Hot),
+ * then everything else (rep-created, NeoDove, inbound, …). The order here is
+ * the order shown.
  */
-export const READY_SPLITS = ["ai", "hot", "other"] as const;
+export const READY_SPLITS = ["hot", "ai", "other"] as const;
 export type ReadySplit = (typeof READY_SPLITS)[number];
 export const READY_SPLIT_LABEL: Record<ReadySplit, string> = { ai: "AI qualified", hot: "Hot", other: "other" };
+// "AI qualified" also counts the AI's sales callbacks (ai_callback) — both are
+// the AI dialer handing the lead to people.
 
 export function isReadySplit(v: unknown): v is ReadySplit {
     return typeof v === "string" && (READY_SPLITS as readonly string[]).includes(v);
@@ -149,14 +160,14 @@ export function isReadySplit(v: unknown): v is ReadySplit {
 
 /** JS twin of readySplitSql(). */
 export function readySplitOf(interestLevel: string | null | undefined, reason: string | null | undefined): ReadySplit {
-    if (reason === "ai_qualified") return "ai";
-    return String(interestLevel ?? "").toLowerCase() === "hot" ? "hot" : "other";
+    if (String(interestLevel ?? "").toLowerCase() === "hot") return "hot";
+    return (AI_READY_REASONS as readonly string[]).includes(reason ?? "") ? "ai" : "other";
 }
 
 /** The split bucket of a lead, as SQL text 'hot' | 'ai' | 'other'. */
 export function readySplitSql(dl: SQL = sql`dl`): SQL {
-    return sql`CASE WHEN (to_jsonb(${dl}) ->> 'sales_ready_reason') = 'ai_qualified' THEN 'ai'
-                    WHEN lower(COALESCE(${dl}.interest_level, '')) = 'hot' THEN 'hot'
+    return sql`CASE WHEN lower(COALESCE(${dl}.interest_level, '')) = 'hot' THEN 'hot'
+                    WHEN (to_jsonb(${dl}) ->> 'sales_ready_reason') IN ('ai_qualified', 'ai_callback') THEN 'ai'
                     ELSE 'other' END`;
 }
 
@@ -227,7 +238,7 @@ export type AwaitingAssignmentCounts = {
     oldestDays: number | null;
     /** The longest wait of a lead that is not Hot, in working days. */
     oldestOtherDays: number | null;
-    /** ID 184 — AI qualified / Hot / other (AI first); sums to `total`. */
+    /** ID 184 — Hot / AI qualified / other (Hot first); sums to `total`. */
     split: Record<ReadySplit, number>;
 };
 

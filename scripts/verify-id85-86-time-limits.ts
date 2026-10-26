@@ -17,6 +17,9 @@
 //    passed" record; a missed lead clock is charged to the owner on record at
 //    the moment it fell due; per-person counts leave inferred owners out; the
 //    SQL "limit in force on a day" matches the TS one; holiday log present.
+// 6. 22 Oct rework (after a clock refresh with this code): lead clocks are a
+//    team figure (no owner); owner clocks that started before 21 Oct are timed
+//    by the old owner limit, later ones by the Hot / non-Hot limit.
 
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
@@ -125,13 +128,16 @@ async function main() {
               (SELECT COUNT(*)::int FROM lead_limit_events WHERE owner_inferred) AS inferred,
               -- A recorded lead-clock miss charged to someone other than the owner
               -- on record (the last owner-change touchpoint at or before the miss).
+              -- Only records written under the 15 Oct rule (charged to a person):
+              -- since the 22 Oct rework a lead-clock miss is charged to nobody.
               (SELECT COUNT(*)::int FROM lead_limit_events e
                  JOIN LATERAL (
                      SELECT to_jsonb(t) ->> 'to_owner_id' AS owner FROM lead_touchpoints t
                       WHERE t.dealer_lead_id = e.dealer_lead_id AND to_jsonb(t) ->> 'to_owner_id' IS NOT NULL
                         AND t.performed_at <= e.passed_at
                       ORDER BY t.performed_at DESC LIMIT 1) h ON TRUE
-                WHERE e.clock = 'lead' AND e.owner_inferred = false AND e.owner_id IS DISTINCT FROM h.owner) AS charged_wrong,
+                WHERE e.clock = 'lead' AND e.owner_inferred = false AND e.owner_id IS NOT NULL
+                  AND e.owner_id IS DISTINCT FROM h.owner) AS charged_wrong,
               (SELECT COUNT(*)::int FROM lead_clocks WHERE clock IN ('hot_assign', 'hot_owner')) AS hot_clocks,
               (SELECT COUNT(*)::int FROM lead_clocks WHERE clock = 'retry') AS retry_clocks,
               (SELECT COUNT(*)::int FROM lead_clocks WHERE clock = 'quote') AS quote_clocks`);
@@ -146,6 +152,24 @@ async function main() {
                AND (passed_at AT TIME ZONE 'Asia/Kolkata')::date BETWEEN ${monthFrom}::date AND ${today}::date`);
         check(`per-person Limits passed MTD (${sumPeople}) = records with an owner on record (${onRecord?.n}) — inferred left out`, sumPeople === Number(onRecord?.n));
     }
+
+    // 6 — the 22 Oct rework (ID 85 #1-#3). lead_clocks is rebuilt every hour, so
+    // these hold once the refresh has run with this code.
+    console.log("\n— 22 Oct rework —");
+    const rw = await one<Record<string, number>>(sql`
+        SELECT
+          (SELECT COUNT(*)::int FROM lead_clocks WHERE clock = 'lead' AND owner_id IS NOT NULL) AS lead_with_owner,
+          (SELECT COUNT(*)::int FROM lead_clocks WHERE clock = 'owner' AND limit_key IS NOT NULL
+             AND (started_at AT TIME ZONE 'Asia/Kolkata')::date < '2026-10-21'::date
+             AND limit_key <> 'owner_first_attempt') AS old_stint_new_limit,
+          (SELECT COUNT(*)::int FROM lead_clocks WHERE clock = 'owner' AND limit_key IS NOT NULL
+             AND (started_at AT TIME ZONE 'Asia/Kolkata')::date >= '2026-10-21'::date
+             AND limit_key NOT IN ('hot_owner_first_attempt', 'nonhot_owner_first_attempt')) AS new_stint_old_limit,
+          (SELECT COUNT(*)::int FROM lead_limit_events WHERE clock = 'lead' AND owner_id IS NOT NULL) AS lead_records_charged`);
+    check("lead clocks are a team figure (no owner)", rw.lead_with_owner === 0, rw.lead_with_owner);
+    check("owner clocks before 21 Oct use the old 4-hour owner limit", rw.old_stint_new_limit === 0, rw.old_stint_new_limit);
+    check("owner clocks from 21 Oct use the Hot / non-Hot owner limit", rw.new_stint_old_limit === 0, rw.new_stint_old_limit);
+    console.log(`      ${rw.lead_records_charged} lead-clock records charged to a person under the old rule stay (removing them is the L2 clean-up)`);
 
     console.log(failed === 0 ? "\nAll checks passed." : `\n${failed} check(s) FAILED.`);
     process.exit(failed === 0 ? 0 : 1);

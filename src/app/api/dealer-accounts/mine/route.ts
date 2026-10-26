@@ -3,7 +3,7 @@
  * accounts the signed-in user owns, with their health bucket (Dealer Health's
  * rows, filtered to the owner) and any open "Order placed" claim.
  *
- * E-356 (24 Oct meeting): an ASM also sees their direct reports' accounts, and
+ * E-358 (24 Oct meeting): an ASM also sees their direct reports' accounts, and
  * Sales Head / CEO / Partner see every account — the same scope as account
  * quotations (src/lib/accounts/quotationAccess.ts). Each row says whose it is
  * (`scope`: own / team / other) so the page can filter.

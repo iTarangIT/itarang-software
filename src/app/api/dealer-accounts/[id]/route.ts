@@ -1,5 +1,5 @@
 /**
- * GET /api/dealer-accounts/[id] — E-356: the account page in My Dealers. The
+ * GET /api/dealer-accounts/[id] — E-358: the account page in My Dealers. The
  * account's header and whether the signed-in user may raise its quotations.
  * Only someone in the account's quotation scope (or Admin) reaches it.
  */

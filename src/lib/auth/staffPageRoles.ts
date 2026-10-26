@@ -68,7 +68,7 @@ export const MY_DEALERS_PAGE_ROLES = [
   "business_head",
   "admin",
   "ceo",
-  // E-356 — Partner raises account quotations on any account (24 Oct meeting).
+  // E-358 — Partner raises account quotations on any account (24 Oct meeting).
   "partner",
 ] as const;
 

@@ -1,5 +1,5 @@
 /**
- * E-356 — who may raise and work an ACCOUNT quotation. CLIENT-SAFE, pure (no
+ * E-358 — who may raise and work an ACCOUNT quotation. CLIENT-SAFE, pure (no
  * db import). The DB wrapper is canQuoteAccount in ./quotations/access.ts.
  *
  * 24 Oct meeting (Kartik, items 8 + 11), decided by the user:

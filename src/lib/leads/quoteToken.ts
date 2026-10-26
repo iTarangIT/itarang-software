@@ -37,7 +37,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 const SIG_LENGTH = 32;
 
 /**
- * E-356 — the payload prefix of an ACCOUNT quotation's token. Inside the HMAC,
+ * E-358 — the payload prefix of an ACCOUNT quotation's token. Inside the HMAC,
  * so a lead token can never be replayed as an account token or the reverse:
  * each reader refuses the other family's payload.
  */
@@ -128,7 +128,7 @@ export function readQuoteToken(token: string | null | undefined): QuoteTokenClai
   const b = Buffer.from(provided);
   if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
 
-  // E-356: an ACCOUNT quotation's token signs "a:<id>.<version>". It is a
+  // E-358: an ACCOUNT quotation's token signs "a:<id>.<version>". It is a
   // different quotation family, so it never opens a lead quotation here.
   if (payload.startsWith(ACCOUNT_PREFIX)) return null;
 
@@ -156,7 +156,7 @@ export function quoteApprovalUrl(claims: QuoteTokenClaims): string {
   return `${base}/quote/${mintQuoteToken(claims)}`;
 }
 
-/** E-356 — the claims behind an ACCOUNT quotation's link. */
+/** E-358 — the claims behind an ACCOUNT quotation's link. */
 export interface AccountQuoteTokenClaims {
   quotationId: string;
   versionNo: number;
@@ -197,7 +197,7 @@ export function readAccountQuoteToken(
   return { quotationId, versionNo };
 }
 
-/** E-356 — the absolute URL of an account quotation's response page. */
+/** E-358 — the absolute URL of an account quotation's response page. */
 export function accountQuoteApprovalUrl(claims: AccountQuoteTokenClaims): string {
   const base = (
     process.env.NEXT_PUBLIC_APP_URL ||

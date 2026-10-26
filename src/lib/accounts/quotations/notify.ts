@@ -1,5 +1,5 @@
 /**
- * E-356 — notifications for ACCOUNT quotations. Same event types as the lead
+ * E-358 — notifications for ACCOUNT quotations. Same event types as the lead
  * quotation family (catalog.ts files them under Leads with the same colours),
  * but every one carries the Account ID and name, no lead id, and links to the
  * account's page in My Dealers. emit() never throws, so none of these can fail

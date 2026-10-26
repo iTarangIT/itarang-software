@@ -12,6 +12,10 @@ import { db } from "@/lib/db";
 import { dialerCampaigns, dialerCampaignLeads } from "@/lib/db/schema";
 import { advanceCampaign } from "./advanceCampaign";
 import { windowOpenSql } from "./campaignWindow";
+import {
+  runAiCallbackTick,
+  type AiCallbackTickOutcome,
+} from "@/lib/ai-dialer/aiCallbacks";
 
 export type WindowTickOutcome = {
   /** Campaigns parked because their window closed. */
@@ -22,6 +26,8 @@ export type WindowTickOutcome = {
   advanced: string[];
   /** E-315 — idle campaigns woken because an automatic retry fell due. */
   retried: string[];
+  /** E-356 — AI callbacks re-dialled / settled, needs_review calls re-scored. */
+  callbacks?: AiCallbackTickOutcome;
 };
 
 /**
@@ -229,5 +235,15 @@ export async function runCampaignWindowTick(): Promise<WindowTickOutcome> {
       err instanceof Error ? err.message : err,
     );
   }
-  return { parked, resumed, advanced, retried };
+  // E-356 — the AI dialer's callbacks. Last, and isolated for the same reason.
+  let callbacks: AiCallbackTickOutcome | undefined;
+  try {
+    callbacks = await runAiCallbackTick();
+  } catch (err) {
+    console.error(
+      "[runCampaignWindowTick] runAiCallbackTick failed:",
+      err instanceof Error ? err.message : err,
+    );
+  }
+  return { parked, resumed, advanced, retried, callbacks };
 }

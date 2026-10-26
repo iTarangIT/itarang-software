@@ -11,6 +11,7 @@ import {
   DEALER_SEGMENTS,
   DEALER_ROLES,
   DISQUALIFIERS,
+  CALLBACK_TOPICS,
 } from "@/lib/ai/scoring";
 import { renderCalibrationExamples } from "./calibrationExamples";
 import { loadActiveCalibrationExamples } from "./calibrationStore";
@@ -91,6 +92,22 @@ RULES for each field:
   "ok / theek hai / haan" to an AGENT-OFFERED callback COUNTS as "yes". You do
   NOT need the dealer to actively request the callback — agreement, even passive,
   is enough.
+- callback_when = the dealer's own words for WHEN to call back, verbatim (e.g.
+  "kal shaam 5 baje", "2 ghante baad", "Monday"), or "" if he named no time.
+- callback_at = callback_when read against CURRENT TIME as an ISO 8601
+  timestamp in IST with offset (e.g. "2026-10-24T17:00:00+05:30"), or "" if he
+  named no time or callback_agreed is "no". Never invent a time he did not say.
+- callback_topic = what the follow-up is for:
+  "pricing" (rate / price / margin / EMI amount), "negotiation" (discount,
+  terms, a better deal), "dealership" (becoming a dealer / distributor /
+  partnership), "purchase" (placing an order, stock, delivery, buying now),
+  "general_info" (just wants details / a brochure / is busy now), else "none".
+  Pick the most commercial one that applies.
+- wants_human = "yes" only if HE HIMSELF asks to speak to a person — a manager,
+  a senior, "someone from the company", a salesperson, a real human — else
+  "no". The agent's script itself offers "our sales manager will call you";
+  agreeing to that offer (giving a time, "ok", "theek hai") is callback_agreed,
+  NOT wants_human.
 - disqualifier = "dont_call" (asked not to be called again), "hostile" (abusive),
   "not_interested" (firm no after the pitch), "call_dropped" (the call ended
   before its natural close), else "none". Allowed: ${DISQUALIFIERS.join(" | ")}.
@@ -115,6 +132,10 @@ OUTPUT EXACTLY THIS JSON SHAPE (fill every field):
   "financing_value_acknowledged": "yes" | "no",
   "pitch_heard": "yes" | "no",
   "callback_agreed": "yes" | "no",
+  "callback_when": "<his words for when, or empty>",
+  "callback_at": "<ISO 8601 IST timestamp, or empty>",
+  "callback_topic": ${CALLBACK_TOPICS.map((t) => `"${t}"`).join(" | ")},
+  "wants_human": "yes" | "no",
   "disqualifier": "none" | "dont_call" | "hostile" | "not_interested" | "call_dropped",
   "evidence": {
     "lithium_dealer": "<his answer to the lithium-dealer question>",
@@ -133,8 +154,13 @@ ${calibrationBlock}
 Return ONLY the JSON object.`;
 }
 
-export async function extractSignals(transcript: string): Promise<ExtractionResult> {
-  const now = new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
+export async function extractSignals(
+  transcript: string,
+  // When the call happened — re-reading an old call must resolve "kal" against
+  // the call's day, not today's (scripts/reprocess-campaign-outcomes.ts).
+  opts: { now?: Date } = {},
+): Promise<ExtractionResult> {
+  const now = (opts.now ?? new Date()).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
 
   // The active few-shot set: the built-in seed plus any admin-promoted
   // examples. Never throws — a DB problem degrades to the seed set rather than
@@ -170,6 +196,17 @@ export async function extractSignals(transcript: string): Promise<ExtractionResu
           response_format: { type: "json_object" },
         }),
       });
+
+      // Out of credits is also a 429, but no wait fixes it — fail at once with a
+      // reason that says so (it was hiding as "exhausted_retries" after 60s, on
+      // every call, 21–22 Oct 2026).
+      if (res.status === 429) {
+        const body = await res.clone().text().catch(() => "");
+        if (/insufficient_quota|credit_balance_exhausted|no credits/i.test(body)) {
+          console.error("[OPENAI] Out of credits — add credits to the OpenAI organization");
+          return { status: "failed", reason: "openai_no_credits" };
+        }
+      }
 
       // Rate limited — wait and retry (preserve the 10/20/30s behaviour).
       if (res.status === 429) {

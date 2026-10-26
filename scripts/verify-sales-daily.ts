@@ -76,7 +76,12 @@ async function verifyMyDay(istDay: string, who: string, renderTo: string | null)
     const same = (a: Array<string | number>, b: Array<string | number>) => JSON.stringify(a) === JSON.stringify(b);
     let bad = 0;
 
-    const [numbers, targets, work] = table(mine.figures, "my_numbers").concat(table(mine.figures, "work_list"));
+    // By title: "my_numbers" holds three tables (own row, same day last week — ID 194 #1 — and targets).
+    const mineTables = table(mine.figures, "my_numbers");
+    const numbers = mineTables[0];
+    const lastWeek = mineTables.find((t) => t.title.startsWith("Yesterday against"));
+    const targets = mineTables.find((t) => t.title === "Targets to date");
+    const [work] = table(mine.figures, "work_list");
     const own = numbers.rows[0];
     const theirs = block?.rows.find((r) => String(r[0]).replace(/^↳ /, "") === own?.[0]);
     if (!own) {
@@ -90,6 +95,9 @@ async function verifyMyDay(istDay: string, who: string, renderTo: string | null)
             bad++;
         }
     }
+    console.log(`  Yesterday against the same day last week: ${lastWeek?.columns.slice(1).join(" | ") ?? "(missing)"}`);
+    for (const r of lastWeek?.rows ?? []) console.log(`    ${r.join(" | ")}`);
+    if (!lastWeek) bad++;
     console.log(`  Targets to date: ${targets?.rows.length ?? 0} line(s)`);
     for (const r of targets?.rows ?? []) console.log(`    ${r.join(" | ")}`);
     console.log(`  Work list: ${work?.rows.length ?? 0} item(s), ${work?.rowLinks?.filter(Boolean).length ?? 0} linked`);

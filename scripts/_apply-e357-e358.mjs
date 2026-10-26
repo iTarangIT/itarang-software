@@ -1,8 +1,8 @@
-// One-off: apply E-356 (account quotations) and E-357 (Accounts screen
+// One-off: apply E-358 (account quotations) and E-357 (Accounts screen
 // indexes) to database-1 (sandbox) or database-2 (prod).
 //
-//   node scripts/_apply-e356-e357.mjs database-1
-//   node scripts/_apply-e356-e357.mjs database-2
+//   node scripts/_apply-e357-e358.mjs database-1
+//   node scripts/_apply-e357-e358.mjs database-2
 //
 // DDL, additive. Reads that host's URL from .env.local (commented or not),
 // never prints it. Applies each file twice (the second pass must be a no-op),
@@ -21,7 +21,7 @@ const host = new URL(url).host;
 if (!host.startsWith(`${target}.`)) throw new Error(`host mismatch: ${host}`);
 console.log("target:", host.split(".")[0]);
 
-const files = ["drizzle/E-356_account_quotations.sql", "drizzle/E-357_accounts_list_perf_indexes.sql"];
+const files = ["drizzle/E-358_account_quotations.sql", "drizzle/E-357_accounts_list_perf_indexes.sql"];
 const opts = { max: 1, prepare: false, ssl: { rejectUnauthorized: false } };
 
 const sql = postgres(url, { ...opts, onnotice: (n) => console.log("notice:", n.message) });
