@@ -7,7 +7,7 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 
 import { canManageSources, newThreadId, ownsThread, requireAnalystUser } from "@/lib/analyst/access";
-import { agentAwake, agentJson, analystConfigured } from "@/lib/analyst/client";
+import { agentJson, analystConfigured } from "@/lib/analyst/client";
 import { AnalystError } from "@/lib/analyst/errors";
 import { crmDsnIsMasked } from "@/lib/analyst/sources-routes";
 import { ownThreads } from "@/lib/analyst/threads";
@@ -52,10 +52,8 @@ export async function AnalystPage({
   const continuing = typeof thread === "string" && ownsThread(user, thread);
   const threadId = continuing ? thread : newThreadId(user);
 
-  if (!(await agentAwake())) {
-    return <AnalystWorkspace {...empty} threadId={threadId} unreachable problem={null} />;
-  }
-
+  // No /health pre-flight: the agent runs always-on, so the loads go straight out in parallel and
+  // an unreachable agent shows up as their failure instead of costing every page a round-trip.
   let loaded: [Connection[], RunPage, Thread[]];
   try {
     loaded = await Promise.all([
@@ -66,6 +64,9 @@ export async function AnalystPage({
       agentJson<Thread[]>("/runs/threads?limit=200").catch(() => [] as Thread[]),
     ]);
   } catch (error) {
+    if (error instanceof AnalystError && error.code === "upstream" && error.status >= 502 && error.status <= 504) {
+      return <AnalystWorkspace {...empty} threadId={threadId} unreachable problem={null} />;
+    }
     console.error("[analyst] page load failed:", error);
     const message = error instanceof AnalystError ? error.message : "the analyst service returned an unexpected error";
     return <AnalystWorkspace {...empty} threadId={threadId} problem={message} />;

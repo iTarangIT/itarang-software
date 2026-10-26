@@ -30,7 +30,7 @@ if (!login.ok) {
 }
 const auth = { authorization: `Bearer ${session.access_token}`, "content-type": "application/json" };
 
-console.log("waking the agent…");
+console.log("checking the agent is up…");
 await fetch(`${api}/health`, { signal: AbortSignal.timeout(90_000) }).catch(() => {});
 
 let me = await fetch(`${api}/auth/me`, { headers: auth });
