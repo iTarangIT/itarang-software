@@ -176,7 +176,7 @@ async function send(cfg: Config, path: string, options: Options, bearer: string)
     const timedOut = error instanceof Error && error.name === "TimeoutError";
     throw new AnalystError(
       timedOut
-        ? "the analyst service did not respond in time — it may be waking up, try again in a minute"
+        ? "the analyst service did not respond in time, try again in a minute"
         : "could not reach the analyst service",
       504,
       "upstream",
@@ -204,16 +204,3 @@ export async function agentJson<T>(path: string, options: Options = {}): Promise
   return (await response.json()) as T;
 }
 
-/** Whether the agent answers at all, within five seconds. A sleeping Render service does not. */
-export async function agentAwake(): Promise<boolean> {
-  try {
-    const cfg = config();
-    const response = await fetch(`${cfg.apiUrl}/health`, {
-      signal: AbortSignal.timeout(5_000),
-      cache: "no-store",
-    });
-    return response.ok;
-  } catch {
-    return false;
-  }
-}

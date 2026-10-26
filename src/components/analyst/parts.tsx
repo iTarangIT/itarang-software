@@ -322,7 +322,7 @@ function recovery(error: RunError): string | null {
     case "not_configured":
       return "The analyst is not set up on this server yet. Ask IT to check the ANALYST_* settings.";
     case "upstream":
-      return "The analyst service may be waking up (up to a minute). Try again shortly.";
+      return "The analyst service is not reachable right now. Try again shortly.";
     default:
       break;
   }

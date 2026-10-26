@@ -50,6 +50,33 @@ To apply it:
 | 2026-10-23 | db-1 (sandbox) | `DRY_RUN=1` (18 Oct script) | Role exists, 36 tables readable in full. Would create and grant all six masked views. |
 | 2026-10-23 | db-1 (sandbox) | real run, password unchanged (18 Oct script, first run anywhere) | SELECT on 73 tables (36 in full, 79 with some readable column). **`all_rules_hold: true`**, exit 0: 32 sampled withheld columns blocked, 15 sampled kept columns readable, `users` / raw `leads` / `ecofy_leads` blocked, no view carries a lead id. Samples: `analyst_leads` "Customer #2D5F9332", `analyst_ecofy_leads` "Customer #5f93763b", `analyst_staff` "ceo". Probed through the real DSN as `analyst_ro`: `dealer_leads.dealer_name` / `.memory`, `leads.*`, `ai_call_logs.summary`, `device_battery_map.vehicle_number`, `users` all refused (42501); `analyst_leads` and `dealer_leads.city` readable. **Refresh tables in the Analyst: still to press.** |
 | 2026-10-23 | Analyst agent | `_delete-analyst-outside-connections.ts` dry run | **Could not run.** The agent's sign-in project `okifeathrijchctwrdpu.supabase.co` (ANALYST_SUPABASE_URL) no longer exists in DNS (NXDOMAIN) and the Render agent did not answer within 90s. The saved outside sources stay hidden and refused, not deleted. This needs the agent's owner to restore or replace the Supabase project first. |
+| 2026-10-26 | Analyst agent | moved off Render to `analyst.itarang.com` (Hostinger VPS 187.127.128.78) | Supabase `okifeathrijchctwrdpu` resolves again; service sign-in works; the new box has the same tenant (CRM threads/sources/usage intact). FastAPI listens on 127.0.0.1:8000 only, so the CRM calls it through nginx at `/agent-api/`. |
+| 2026-10-26 | db-2 (prod) | `DRY_RUN=1`, then real run (new generated password, kept out of git) | Target confirmed `database-2`. Role created, SELECT on 73 tables; re-run: 36 readable in full, **`all_rules_hold: true`**, exit 0, 32 sampled withheld columns blocked. Probed as `analyst_ro`: `analyst_leads` 49 rows ("Customer #42D3F64E"), `dealer_leads.city` readable; `users`, raw `leads`, `dealer_leads.memory`, `device_battery_map.vehicle_number` refused (42501); writes refused (25006). Prod env (`ANALYST_CRM_READONLY_DSN` + ANALYST_*) still to set. |
+
+## Agent host (26 Oct): `ANALYST_API_URL=https://analyst.itarang.com/agent-api`
+
+1. On the analyst VPS (187.127.128.78), inside the analyst.itarang.com TLS server block:
+   ```nginx
+   location /agent-api/ {
+       proxy_pass http://127.0.0.1:8000/;
+       proxy_http_version 1.1;
+       proxy_set_header Host $host;
+       proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+       proxy_set_header X-Forwarded-Proto $scheme;
+       proxy_buffering off;
+       proxy_cache off;
+       proxy_read_timeout 300s;
+       proxy_send_timeout 300s;
+       client_max_body_size 520m;
+   }
+   ```
+   `nginx -t && systemctl reload nginx`, then `curl https://analyst.itarang.com/agent-api/health` → `{"status":"ok"}`.
+2. Sandbox: set `ANALYST_API_URL` above in `shared/.env` on the box, `pm2 reload sandbox-web --update-env`.
+3. Prod gets its **own** agent service user (e.g. `analyst-prod@itarang.com`, created in the agent's
+   Supabase, auto-confirmed) so its "iTarang CRM" source (db-2) never shows up in sandbox's tenant. With
+   the six ANALYST_* values for prod: `node --env-file=<prod analyst env> scripts/_provision-analyst-tenant.mjs "iTarang Prod"`.
+   Put all six (plus `ANALYST_CRM_READONLY_DSN` from the steps below) in prod `shared/.env` **and** `PROD_ENV_FILE_B64`.
+   Prod's tenant starts empty, so step 4 below is "connect", not "remove and connect".
 
 ## Prod: to do (needs a password, so not run by Claude)
 

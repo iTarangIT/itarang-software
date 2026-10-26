@@ -56,7 +56,7 @@ export type AnalystWorkspaceProps = {
   connections: Connection[];
   history: RunSummary[];
   threads: Thread[];
-  /** The agent did not answer (a sleeping Render service takes up to a minute to wake). */
+  /** The agent could not be reached or did not answer in time. */
   unreachable: boolean;
   /** Set when the page could not load the agent's data, to say why. */
   problem: string | null;
@@ -467,9 +467,9 @@ function Welcome({
         </>
       ) : unreachable ? (
         <>
-          <h2 className="text-xl font-semibold text-ink">The analyst service is waking up</h2>
+          <h2 className="text-xl font-semibold text-ink">The analyst service is not reachable</h2>
           <p className="mt-2 max-w-[46ch] text-[0.9375rem] leading-relaxed text-ink-muted">
-            It sleeps when idle and can take up to a minute to start. Try again in a moment.
+            It did not answer just now. Try again in a moment.
           </p>
           <button
             type="button"
