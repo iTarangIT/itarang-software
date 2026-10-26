@@ -4,6 +4,11 @@
 // who onboarded it, lead vs direct, and the GSTIN-missing flag. The "No
 // owner" queue shows a suggested owner as a HINT; nothing is assigned until
 // someone clicks.
+//
+// Three requests, so the table is never held back: the page of rows, the tab
+// numbers (cached 5 min; they ignore the filters) and the suggested owners for
+// the unowned rows on this page (fetched after the rows arrive). All three keys
+// start with "admin-accounts", so done() refreshes them together.
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
@@ -39,12 +44,13 @@ export type AccountRow = {
 };
 
 type ListResponse = {
-    rows: AccountRow[];
+    rows: Omit<AccountRow, "suggested_owner">[];
     filtered_total: number;
-    counts: { total: number; no_owner: number; gstin_missing: number; closed?: number };
     limit: number;
     offset: number;
 };
+
+type CountsResponse = { total: number; no_owner: number; gstin_missing: number; closed: number };
 
 type Tab = "all" | "no_owner" | "gstin_missing" | "closed";
 const PAGE = 100;
@@ -98,13 +104,36 @@ export function AccountsView() {
     }, [debouncedQ, tab, ownerFilter, cameThrough, page]);
 
     const { data, isLoading, isFetching, error } = useQuery<ListResponse>({
-        queryKey: ["admin-accounts", params],
+        queryKey: ["admin-accounts", "list", params],
         queryFn: () => api(`/api/admin/accounts?${params}`),
         placeholderData: (prev) => prev,
     });
+    const { data: counts } = useQuery<CountsResponse>({
+        queryKey: ["admin-accounts", "counts"],
+        queryFn: () => api("/api/admin/accounts/counts"),
+        staleTime: 5 * 60_000,
+    });
 
-    const rows = data?.rows ?? [];
-    const counts = data?.counts;
+    const unownedIds = useMemo(
+        () => (data?.rows ?? []).filter((r) => !r.owner_user_id).map((r) => r.id),
+        [data],
+    );
+    const unownedKey = unownedIds.join(",");
+    const { data: suggestions } = useQuery<{ suggestions: Record<string, Suggested> }>({
+        queryKey: ["admin-accounts", "suggestions", unownedKey],
+        queryFn: () => api(`/api/admin/accounts/suggestions?ids=${encodeURIComponent(unownedKey)}`),
+        enabled: unownedIds.length > 0,
+        staleTime: 5 * 60_000,
+    });
+
+    const rows: AccountRow[] = useMemo(
+        () =>
+            (data?.rows ?? []).map((r) => ({
+                ...r,
+                suggested_owner: r.owner_user_id ? null : (suggestions?.suggestions[r.id] ?? null),
+            })),
+        [data, suggestions],
+    );
     const allOnPageSelected = rows.length > 0 && rows.every((r) => selected.has(r.id));
     const selectedRows = rows.filter((r) => selected.has(r.id));
     const withSuggestion = selectedRows.filter((r) => !r.owner_user_id && r.suggested_owner);
@@ -128,6 +157,7 @@ export function AccountsView() {
         setDialog(null);
         setSelected(new Set());
         setFlash(msg);
+        // Prefix match: the list, the tab counts and the suggestions.
         qc.invalidateQueries({ queryKey: ["admin-accounts"] });
         qc.invalidateQueries({ queryKey: ["admin-accounts-owners"] });
     };

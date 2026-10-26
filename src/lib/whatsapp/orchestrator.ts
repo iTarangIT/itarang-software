@@ -372,6 +372,9 @@ export async function runTurn(event: InboundEvent): Promise<void> {
   try {
     const { handleQuotationReply } = await import("./quotationReply");
     if (await handleQuotationReply(event)) return;
+    // E-356 — the same gate for an ACCOUNT quotation's buttons (aquote_*).
+    const { handleAccountQuotationReply } = await import("@/lib/accounts/quotations/whatsappReply");
+    if (await handleAccountQuotationReply(event)) return;
   } catch (err) {
     console.error("[WhatsApp/orchestrator] quotation-reply gate failed:", err);
   }

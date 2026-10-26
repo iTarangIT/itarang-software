@@ -50,6 +50,8 @@ export { quotationFileName };
  * the additive half of this feature.
  */
 function approvalLink(input: DispatchQuotationInput): string | null {
+  // E-356: an account quotation brings its own link (or null for none).
+  if (input.approvalUrl !== undefined) return input.approvalUrl;
   try {
     return quoteApprovalUrl({
       commercialId: input.commercialId,
@@ -104,6 +106,16 @@ export interface DispatchQuotationInput {
   /** Display name of the sender, for the internal notice. */
   senderName?: string | null;
   sentBy: string;
+  /**
+   * E-356 — account quotations reuse this dispatcher. Each override defaults
+   * to the lead behaviour when left undefined, so lead sends are unchanged:
+   *   approvalUrl  the signed response link (null = none)
+   *   buttonIds    the WhatsApp Approve / Decline button ids
+   *   logRow       where the per-channel outcome is recorded
+   */
+  approvalUrl?: string | null;
+  buttonIds?: { approve: string; decline: string };
+  logRow?: (outcome: DispatchOutcome, cc: string[] | null) => Promise<void>;
 }
 
 function greeting(dealerName: string | null): string {
@@ -138,6 +150,10 @@ async function logDispatch(
       ? outcome.cc
       : null;
   try {
+    if (input.logRow) {
+      await input.logRow(outcome, cc);
+      return;
+    }
     try {
       await db.execute(sql`
         INSERT INTO quotation_dispatches
@@ -319,8 +335,14 @@ async function dispatchWhatsApp(
           [
             // Titles are capped at 20 characters by WhatsApp; the IDs carry the
             // quotation and are what quotationReply.ts matches on.
-            { id: `${QUOTE_APPROVE_PREFIX}${input.commercialId}`, title: "Approve" },
-            { id: `${QUOTE_DECLINE_PREFIX}${input.commercialId}`, title: "Not right now" },
+            {
+              id: input.buttonIds?.approve ?? `${QUOTE_APPROVE_PREFIX}${input.commercialId}`,
+              title: "Approve",
+            },
+            {
+              id: input.buttonIds?.decline ?? `${QUOTE_DECLINE_PREFIX}${input.commercialId}`,
+              title: "Not right now",
+            },
           ],
         );
       } catch (e) {
