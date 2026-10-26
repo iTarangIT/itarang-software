@@ -23,7 +23,8 @@
 // qualification-2.1.0: a callback is buying intent — callback_agreed or
 // wants_human without a disqualifier lifts Cold → Warm (60). signals-2.2.0 adds
 // callback_when / callback_at / callback_topic / wants_human; extract-2.2.0
-// teaches the prompt to read them (AI dialer review, 23 Oct 2026).
+// teaches the prompt to read them (AI dialer review, 23 Oct 2026). extract-2.2.1:
+// agreeing to the agent's own "our sales manager will call" is not wants_human.
 export const SCORING_VERSION = "qualification-2.1.0";
 export const SIGNAL_SCHEMA_VERSION = "signals-2.2.0";
 
@@ -32,4 +33,4 @@ export const SIGNAL_SCHEMA_VERSION = "signals-2.2.0";
 // calibration examples change — this is the Lever-A (extraction-side)
 // counterpart to SCORING_VERSION, so an audit can tell whether a signal shift
 // came from a new prompt or a new band rule.
-export const EXTRACTION_VERSION = "extract-2.2.0";
+export const EXTRACTION_VERSION = "extract-2.2.1";

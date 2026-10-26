@@ -103,8 +103,11 @@ RULES for each field:
   partnership), "purchase" (placing an order, stock, delivery, buying now),
   "general_info" (just wants details / a brochure / is busy now), else "none".
   Pick the most commercial one that applies.
-- wants_human = "yes" if he asks to speak to a person — a manager, a senior,
-  "someone from the company", a salesperson, a real human — else "no".
+- wants_human = "yes" only if HE HIMSELF asks to speak to a person — a manager,
+  a senior, "someone from the company", a salesperson, a real human — else
+  "no". The agent's script itself offers "our sales manager will call you";
+  agreeing to that offer (giving a time, "ok", "theek hai") is callback_agreed,
+  NOT wants_human.
 - disqualifier = "dont_call" (asked not to be called again), "hostile" (abusive),
   "not_interested" (firm no after the pitch), "call_dropped" (the call ended
   before its natural close), else "none". Allowed: ${DISQUALIFIERS.join(" | ")}.
