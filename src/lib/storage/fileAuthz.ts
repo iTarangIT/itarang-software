@@ -16,6 +16,8 @@ import {
     nbfcLeadAssignments,
     nbfcUsers,
 } from "@/lib/db/schema";
+import { ACCOUNT_QUOTE_TEAM_ROLES, mayViewAccountQuotes } from "@/lib/accounts/quotationAccess";
+import { getTeamMemberIds } from "@/lib/users/team";
 import { filesProxyTarget } from "@/lib/storage/fileAccess";
 import { supabaseUrlToProxyPath } from "@/lib/storage/legacyUrl";
 import {
@@ -103,6 +105,32 @@ async function dealerLeadAttachmentOwners(bucket: string, key: string): Promise<
     );
     const owners = await dealerLeadOwners([...new Set(rows.map((r) => r.dealer_lead_id))]);
     return [...owners, ...rows.map((r) => r.visitor)];
+}
+
+/**
+ * E-358: an account quotation PDF (documents/quotations/ITQA-….pdf) shares the
+ * folder with dealer lead quotes but lives on account_quotations. It opens for
+ * whoever may read that account's quotations (mayViewAccountQuotes: the owner,
+ * the owner's ASM, Partner) — returned as the viewer's id when allowed.
+ */
+async function accountQuotationViewers(bucket: string, key: string, viewer: FileViewer): Promise<string[]> {
+    const rows = await safeRows<{ owner_id: string | null }>(
+        "account quotation",
+        sql`
+            SELECT ao.owner_user_id::text AS owner_id FROM account_quotations q
+              LEFT JOIN account_ownership ao ON ao.account_id = q.account_id
+             WHERE q.quote_pdf_url LIKE ${`%/${bucket}/${key}`}
+             LIMIT 20
+        `,
+    );
+    if (rows.length === 0) return [];
+    const teamIds = (ACCOUNT_QUOTE_TEAM_ROLES as readonly string[]).includes(viewer.role)
+        ? await getTeamMemberIds(viewer.id)
+        : [];
+    const ok = rows.some((r) =>
+        mayViewAccountQuotes({ role: viewer.role, userId: viewer.id, ownerId: r.owner_id, teamIds }),
+    );
+    return ok ? [viewer.id] : [];
 }
 
 /** Customer lead facts, shared by customer KYC files and the NBFC store's per-lead files. */
@@ -372,8 +400,11 @@ async function factsFor(file: FileKind, bucket: string, key: string, viewer: Fil
             );
             return { ownerTenantIds: row?.tenant_id ? [row.tenant_id] : [] };
         }
-        case "dealer_lead_attachment":
-            return { dealerLeadOwnerIds: await dealerLeadAttachmentOwners(bucket, key) };
+        case "dealer_lead_attachment": {
+            const owners = await dealerLeadAttachmentOwners(bucket, key);
+            if (file.source !== "quotation") return { dealerLeadOwnerIds: owners };
+            return { dealerLeadOwnerIds: [...owners, ...(await accountQuotationViewers(bucket, key, viewer))] };
+        }
         case "buyback": {
             if (!file.requestId) return {};
             const [row] = await safeRows<{ dealer_entity_id: string | null }>(
