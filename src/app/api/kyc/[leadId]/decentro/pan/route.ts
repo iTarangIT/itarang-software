@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { executePanVerification } from '@/lib/kyc/pan-verification';
 import { requireLeadAccess } from '@/lib/auth/requireLeadAccess';
-import { recordActorStep, requireLeadWriter } from '@/lib/leads/actForDealerGuard';
+import { requireLeadWriter } from '@/lib/leads/actForDealerGuard';
+import { recordKycStep } from '@/lib/kyc/kycEventLog';
 import { isMaskedPan } from '@/lib/kyc/panMask';
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
@@ -40,7 +41,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             );
         }
 
-        await recordActorStep(writer.actor, 'ran the PAN check');
+        await recordKycStep(writer.actor, 'ran the PAN check');
         return NextResponse.json(result);
     } catch (error) {
         console.error('Decentro PAN verification error:', error);

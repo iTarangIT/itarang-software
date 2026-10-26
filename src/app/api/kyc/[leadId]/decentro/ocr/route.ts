@@ -6,7 +6,8 @@ import { db } from '@/lib/db';
 import { kycVerifications } from '@/lib/db/schema';
 import { createWorkflowId } from '@/lib/kyc/admin-workflow';
 import { requireLeadAccess } from '@/lib/auth/requireLeadAccess';
-import { recordActorStep, requireLeadWriter } from '@/lib/leads/actForDealerGuard';
+import { requireLeadWriter } from '@/lib/leads/actForDealerGuard';
+import { recordKycStep } from '@/lib/kyc/kycEventLog';
 
 const ALLOWED_TYPES: OcrDocType[] = ['PAN', 'AADHAAR', 'DRIVING_LICENSE', 'VOTERID'];
 
@@ -80,7 +81,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             console.error('[kyc/ocr] kyc_verifications insert failed:', persistErr);
         }
 
-        await recordActorStep(writer.actor, `read ${document_type} (${side}) by OCR`);
+        await recordKycStep(writer.actor, `read ${document_type} (${side}) by OCR`);
         return NextResponse.json({
             success: decentroRes.responseStatus === 'SUCCESS',
             responseStatus: decentroRes.responseStatus,

@@ -14,6 +14,7 @@ import {
   createWorkflowId,
   requireAdminAppUserForLead,
 } from "@/lib/kyc/admin-workflow";
+import { kycDecisionLine, kycCardLabel, recordKycEvent } from "@/lib/kyc/kycEventLog";
 
 // BRD §2.9.3 "Request Additional Documents" — admin opens the Request More Docs
 // form from any primary KYC verification card or supporting-docs card and the
@@ -180,6 +181,12 @@ export async function POST(
       },
       performed_by: appUser.id,
       timestamp: now,
+    });
+
+    await recordKycEvent({
+      leadId,
+      action: `Documents requested${doc_for === "co_borrower" ? " (co-borrower)" : ""}: ${created.map((c) => c.doc_label).join(", ")}`,
+      actor: { id: appUser.id, name: appUser.name, role: appUser.role },
     });
 
     // E-264 — actually deliver the request. Until now this route minted an

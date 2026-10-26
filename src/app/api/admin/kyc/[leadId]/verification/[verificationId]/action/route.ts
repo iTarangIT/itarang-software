@@ -8,6 +8,7 @@ import {
   requireAdminAppUserForLead,
 } from "@/lib/kyc/admin-workflow";
 import { notifyKycCardAction } from "@/lib/notifications";
+import { kycDecisionLine, kycCardLabel, recordKycEvent } from "@/lib/kyc/kycEventLog";
 
 const VALID_ACTIONS = ["accept", "reject", "request_more_docs"] as const;
 type CardAction = (typeof VALID_ACTIONS)[number];
@@ -148,6 +149,13 @@ export async function POST(
         .set({ kyc_status: "docs_requested", updated_at: now })
         .where(eq(leads.id, leadId));
     }
+
+    await recordKycEvent({
+      leadId,
+      action: kycDecisionLine(`${kycCardLabel(verification.verification_type, verification.verification_for)} check`, action, notes || rejectionReason),
+      actor: { id: appUser.id, name: appUser.name, role: appUser.role },
+      detail: { verification_id: verificationId },
+    });
 
     // Notify dealer (non-blocking)
     notifyKycCardAction({

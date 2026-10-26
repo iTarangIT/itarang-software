@@ -18,6 +18,16 @@
     "idDiscovery": null
   },
   {
+    "url": "/admin/accounts",
+    "sourceFile": "src/app/(dashboard)/admin/accounts/page.tsx",
+    "roles": [
+      "ceo",
+      "sales_head"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
     "url": "/admin/calculator",
     "sourceFile": "src/app/(dashboard)/admin/calculator/page.tsx",
     "roles": [

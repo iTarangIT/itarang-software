@@ -5,7 +5,8 @@ import {
 } from '@/lib/kyc/admin-workflow';
 import { storeSignedConsent, type ConsentFor } from '@/lib/kyc/consent-service';
 import { requireLeadAccess } from "@/lib/auth/requireLeadAccess";
-import { recordActorStep, requireLeadWriter } from "@/lib/leads/actForDealerGuard";
+import { requireLeadWriter } from "@/lib/leads/actForDealerGuard";
+import { recordKycMilestone } from "@/lib/kyc/kycEventLog";
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
     // ID 118: signed in, and this lead is the caller's to touch (a dealer's own lead, or back office).
@@ -44,7 +45,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             return NextResponse.json({ success: false, error: { message: result.error } }, { status: result.status });
         }
 
-        await recordActorStep(writer.actor, `uploaded the signed consent${consentFor === 'borrower' ? ' (co-borrower)' : ''}`);
+        await recordKycMilestone(writer.actor, `uploaded the signed consent${consentFor === 'borrower' ? ' (co-borrower)' : ''}`);
         return NextResponse.json({ success: true, fileUrl: result.fileUrl });
     } catch (error) {
         console.error('[Upload Signed Consent] Error:', error);

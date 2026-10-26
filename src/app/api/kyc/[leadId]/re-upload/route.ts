@@ -9,7 +9,8 @@ import {
     isDealerKycEditsLocked,
 } from '@/lib/kyc/admin-workflow';
 import { requireLeadAccess } from "@/lib/auth/requireLeadAccess";
-import { recordActorStep, requireLeadWriter } from "@/lib/leads/actForDealerGuard";
+import { requireLeadWriter } from "@/lib/leads/actForDealerGuard";
+import { recordKycMilestone } from "@/lib/kyc/kycEventLog";
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
     // ID 118: signed in, and this lead is the caller's to touch (a dealer's own lead, or back office).
@@ -105,7 +106,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         // TODO: Re-trigger specific verification API
 
         // file_url on the record: the dealer opens a file iTarang uploaded for him (fileAuthz).
-        await recordActorStep(writer.actor, `re-uploaded for the ${verificationType} check`, { file_url: fileUrl });
+        await recordKycMilestone(writer.actor, `re-uploaded for the ${verificationType} check`, { file_url: fileUrl });
         return NextResponse.json({ success: true, newStatus: 'awaiting_action' });
     } catch {
         return NextResponse.json({ success: false, error: { message: 'Server error' } }, { status: 500 });

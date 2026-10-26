@@ -18,6 +18,7 @@ import {
 
 // ID 166: invoice PDFs open through a fresh 15-minute link on each click.
 import FreshFileLink from "@/components/shared/FreshFileLink";
+import DebtorTable, { type Debtor } from "./_components/DebtorTable";
 export const dynamic = "force-dynamic";
 
 type AgeKey = ReceivableAgeKey | "all";
@@ -61,24 +62,27 @@ export default async function CeoReceivablesPage({
     const shown = age === "all" ? rows : rows.filter((r) => ageOf(r) === age);
 
     // Who owes the most — the list a collections call starts from.
-    const byDealer = new Map<string, { name: string; accountId: string | null; leadId: string | null; n: number; owed: number; oldest: number | null }>();
+    // Each customer keeps its rows so the table can expand to the invoices behind the count.
+    const byDealer = new Map<string, Debtor>();
     for (const r of rows) {
         const key = r.account_id ?? r.dealer_lead_id ?? `name:${(r.customer_name ?? "").toLowerCase()}`;
         const d = byDealer.get(key) ?? {
+            key,
             name: r.dealer_name ?? r.customer_name ?? "(no name)",
             accountId: r.account_id,
             leadId: r.dealer_lead_id,
-            n: 0,
             owed: 0,
             oldest: null,
+            rows: [],
         };
-        d.n += 1;
+        d.rows.push(r);
         d.owed += r.balance;
         if (r.age_days != null) d.oldest = Math.max(d.oldest ?? 0, r.age_days);
         byDealer.set(key, d);
     }
     for (const d of byDealer.values()) d.owed = Math.max(0, d.owed);
     const debtors = [...byDealer.values()].sort((a, b) => b.owed - a.owed).slice(0, 15);
+    for (const d of debtors) d.rows.sort((a, b) => b.balance - a.balance);
 
     const tab = (k: AgeKey, text: string, xs: Row[]) => (
         <Link
@@ -150,39 +154,8 @@ export default async function CeoReceivablesPage({
             {debtors.length > 0 && (
                 <section className="space-y-2">
                     <h2 className="text-sm font-semibold text-gray-900">Who owes the most</h2>
-                    <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white">
-                        <table className="min-w-full text-sm">
-                            <thead className="bg-gray-50 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
-                                <tr>
-                                    <th className="px-4 py-3">Dealer / customer</th>
-                                    <th className="px-4 py-3 text-right">Invoices</th>
-                                    <th className="px-4 py-3 text-right">Oldest (days)</th>
-                                    <th className="px-4 py-3 text-right">Owed</th>
-                                    <th className="px-4 py-3 text-right">Share</th>
-                                </tr>
-                            </thead>
-                            <tbody className="divide-y divide-gray-100">
-                                {debtors.map((d) => (
-                                    <tr key={`${d.accountId ?? ""}:${d.leadId ?? ""}:${d.name}`}>
-                                        <td className="px-4 py-3">
-                                            {dealerLink(d.name, d.accountId, d.leadId)}
-                                            {!d.accountId && !d.leadId && (
-                                                <span className="block text-xs text-amber-700">Not linked to a dealer</span>
-                                            )}
-                                        </td>
-                                        <td className="px-4 py-3 text-right tabular-nums text-gray-700">{d.n}</td>
-                                        <td className="px-4 py-3 text-right tabular-nums text-gray-700">{d.oldest ?? "—"}</td>
-                                        <td className="whitespace-nowrap px-4 py-3 text-right font-semibold tabular-nums text-gray-900">
-                                            {inr(d.owed)}
-                                        </td>
-                                        <td className="px-4 py-3 text-right tabular-nums text-gray-600">
-                                            {owed ? `${Math.round((d.owed / owed) * 100)}%` : "—"}
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
+                    <p className="text-xs text-gray-500">Click a customer to see the invoices behind its balance.</p>
+                    <DebtorTable debtors={debtors} owed={owed} />
                     {byDealer.size > debtors.length && (
                         <p className="text-xs text-gray-500">Top {debtors.length} of {byDealer.size}. Every invoice is listed below.</p>
                     )}

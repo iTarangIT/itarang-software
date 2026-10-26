@@ -4,6 +4,7 @@ import { and, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { coBorrowers, consentRecords, leads } from "@/lib/db/schema";
 import { requireAdminAppUserForLead } from "@/lib/kyc/admin-workflow";
+import { kycDecisionLine, kycCardLabel, recordKycEvent } from "@/lib/kyc/kycEventLog";
 
 const ALLOWED_ACTIONS = new Set(["approve", "reject"]);
 
@@ -108,6 +109,12 @@ export async function POST(
         .set({ consent_status: nextStatus, updated_at: now })
         .where(eq(leads.id, leadId));
     }
+
+    await recordKycEvent({
+      leadId,
+      action: kycDecisionLine(record.consent_for === "co_borrower" ? "Co-borrower consent" : "Customer consent", nextStatus),
+      actor: { id: appUser.id, name: appUser.name, role: appUser.role },
+    });
 
     return NextResponse.json({
       success: true,

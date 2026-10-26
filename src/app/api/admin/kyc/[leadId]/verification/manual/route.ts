@@ -8,6 +8,7 @@ import {
   requireAdminAppUserForLead,
 } from "@/lib/kyc/admin-workflow";
 import { notifyKycCardAction } from "@/lib/notifications";
+import { kycDecisionLine, kycCardLabel, recordKycEvent } from "@/lib/kyc/kycEventLog";
 
 // Manual override endpoint. Lets admins accept / reject a KYC card without
 // running the underlying API verification — we create a kyc_verifications row
@@ -180,6 +181,13 @@ export async function POST(
       },
       performed_by: appUser.id,
       timestamp: now,
+    });
+
+    await recordKycEvent({
+      leadId,
+      action: kycDecisionLine(`${kycCardLabel(verificationType, applicant)} check (manual)`, action, notes || rejectionReason),
+      actor: { id: appUser.id, name: appUser.name, role: appUser.role },
+      detail: { verification_id: verificationId },
     });
 
     notifyKycCardAction({

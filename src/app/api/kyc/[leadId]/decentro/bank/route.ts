@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { executeBankVerification } from '@/lib/kyc/bank-verification';
 import { requireLeadAccess } from '@/lib/auth/requireLeadAccess';
-import { recordActorStep, requireLeadWriter } from '@/lib/leads/actForDealerGuard';
+import { requireLeadWriter } from '@/lib/leads/actForDealerGuard';
+import { recordKycStep } from '@/lib/kyc/kycEventLog';
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
     try {
@@ -34,7 +35,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             );
         }
 
-        await recordActorStep(writer.actor, 'ran the bank account check');
+        await recordKycStep(writer.actor, 'ran the bank account check');
         return NextResponse.json(result);
     } catch (error) {
         console.error('Decentro bank verify error:', error);

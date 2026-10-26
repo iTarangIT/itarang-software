@@ -6,7 +6,8 @@ import { kycVerifications, leads } from '@/lib/db/schema';
 import { sendKycSms } from '@/lib/sms';
 import { createClient } from '@/lib/supabase/server';
 import { requireLeadAccess } from '@/lib/auth/requireLeadAccess';
-import { recordActorStep, requireLeadWriter } from '@/lib/leads/actForDealerGuard';
+import { requireLeadWriter } from '@/lib/leads/actForDealerGuard';
+import { recordKycStep } from '@/lib/kyc/kycEventLog';
 
 function buildSmsMessage(url: string): string {
     return `Complete Video KYC for your Itarang loan: ${url} (valid 24h)`;
@@ -125,7 +126,7 @@ export async function POST(
             })
             .where(eq(kycVerifications.id, row.id));
 
-        await recordActorStep(writer.actor, 'resent the video KYC link to the customer');
+        await recordKycStep(writer.actor, 'resent the video KYC link to the customer');
         return NextResponse.json({
             success: sms.success,
             data: {

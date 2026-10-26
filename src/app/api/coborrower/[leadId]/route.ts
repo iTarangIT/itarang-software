@@ -3,7 +3,8 @@ import { db } from '@/lib/db';
 import { coBorrowers, leads } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
 import { requireLeadAccess } from '@/lib/auth/requireLeadAccess';
-import { recordActorStep, requireLeadWriter } from '@/lib/leads/actForDealerGuard';
+import { requireLeadWriter } from '@/lib/leads/actForDealerGuard';
+import { recordKycStep } from '@/lib/kyc/kycEventLog';
 import { isMaskedAadhaar, maskAadhaar, restoreMaskedAadhaar } from '@/lib/kyc/aadhaarMask';
 import { isMaskedPan, maskPan, restoreMaskedPan } from '@/lib/kyc/panMask';
 
@@ -87,7 +88,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
 
         if (existing) {
             await db.update(coBorrowers).set(fields).where(eq(coBorrowers.id, existing.id));
-            await recordActorStep(writer.actor, 'saved the co-borrower details', {}, { coalesce: true });
+            await recordKycStep(writer.actor, 'saved the co-borrower details', {}, { coalesce: true });
             return NextResponse.json({ success: true, id: existing.id, created: false });
         }
 
@@ -95,7 +96,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         const seq = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
         const id = `COBOR-${dateStr}-${seq}`;
         await db.insert(coBorrowers).values({ id, lead_id: leadId, created_at: now, ...fields });
-        await recordActorStep(writer.actor, 'saved the co-borrower details', {}, { coalesce: true });
+        await recordKycStep(writer.actor, 'saved the co-borrower details', {}, { coalesce: true });
         return NextResponse.json({ success: true, id, created: true });
     } catch (error) {
         console.error('[coborrower] upsert error:', error);

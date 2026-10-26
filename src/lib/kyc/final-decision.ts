@@ -37,6 +37,7 @@ import {
     notifyKycFinalDecision,
     notifyStep3DealerActionRequired,
 } from "@/lib/notifications";
+import { recordKycEvent } from "@/lib/kyc/kycEventLog";
 
 export const VALID_DECISIONS = [
     "approved",
@@ -426,6 +427,22 @@ export async function applyKycFinalDecision(input: {
         });
     });
 
+    // The KYC action log + WhatsApp line (lib/kyc/kycEventLog). The timeline
+    // shows the kyc_final_decision row above, so this one is marked to skip.
+    await recordKycEvent({
+        leadId,
+        action: withReasonLine(
+            decision === "approved"
+                ? "KYC approved (final decision)"
+                : decision === "rejected"
+                  ? "KYC rejected (final decision)"
+                  : `KYC final decision: ${decision.replace(/_/g, " ")}`,
+            rejectionReason ?? notes,
+        ),
+        actor: { id: actor.id, name: null, role: actor.source === "system" ? "system" : null },
+        detail: { final_decision: true },
+    });
+
     // Notify dealer on every terminal decision. The dashboard push helpers
     // each map to a specific notification type so the dealer UI can render
     // the correct banner (step_3_cleared vs kyc_approved_final vs action-required).
@@ -527,4 +544,8 @@ export function messageForDecision(
         dealer_action_required: `Saved. Dealer must action items (${leadStatus.replace(/_/g, " ")}).`,
     };
     return messages[decision];
+}
+
+function withReasonLine(line: string, reason: string | null): string {
+    return reason?.trim() ? `${line}: ${reason.trim()}` : line;
 }

@@ -38,14 +38,18 @@ const DISPATCH = [
   "lead/[id]/mark-delivered",
 ];
 
+// KYC routes record through lib/kyc/kycEventLog (recordKycStep /
+// recordKycMilestone), which call recordActorStep and add the KYC log line.
+const RECORD = String.raw`record(?:ActorStep|KycStep|KycMilestone)\(`;
+const COALESCED = String.raw`[^;]*coalesce:\s*true`;
 const SMALL_SAVES: Array<[string, RegExp]> = [
-  ["kyc/[leadId]/save-draft", /recordActorStep\([^;]*coalesce:\s*true/],
-  ["kyc/[leadId]/complete-step2", /recordActorStep\(/],
-  ["kyc/[leadId]/complete-step3", /recordActorStep\(/],
-  ["coborrower/[leadId]", /recordActorStep\([^;]*coalesce:\s*true/],
-  ["coborrower/[leadId]/save-draft", /recordActorStep\([^;]*coalesce:\s*true/],
-  ["kyc/[leadId]/generate-consent-pdf", /recordActorStep\(/],
-  ["kyc/[leadId]/release-coupon", /recordActorStep\(/],
+  ["kyc/[leadId]/save-draft", new RegExp(RECORD + COALESCED)],
+  ["kyc/[leadId]/complete-step2", new RegExp(RECORD)],
+  ["kyc/[leadId]/complete-step3", new RegExp(RECORD)],
+  ["coborrower/[leadId]", new RegExp(RECORD + COALESCED)],
+  ["coborrower/[leadId]/save-draft", new RegExp(RECORD + COALESCED)],
+  ["kyc/[leadId]/generate-consent-pdf", new RegExp(RECORD)],
+  ["kyc/[leadId]/release-coupon", new RegExp(RECORD)],
   ["lead/[id]/product-photo", /recordActorStep\(/],
 ];
 
@@ -67,6 +71,14 @@ describe("ID 183: the smaller saves write the Done-by line and the notice", () =
   for (const [rel, re] of SMALL_SAVES) {
     it(rel, () => expect(code(rel)).toMatch(re));
   }
+  it("the KYC wrappers still write the Done-by line (recordActorStep)", () => {
+    const lib = readFileSync(join(process.cwd(), "src", "lib", "kyc", "kycEventLog.ts"), "utf8");
+    for (const fn of ["recordKycStep", "recordKycMilestone"]) {
+      const body = lib.slice(lib.indexOf(`export async function ${fn}(`));
+      const end = body.search(/\r?\n\}\r?\n/);
+      expect(body.slice(0, end), fn).toMatch(/await recordActorStep\(actor, step, extra, opts\)/);
+    }
+  });
 });
 
 describe("ID 183: the printable consent form names the file's dealer", () => {

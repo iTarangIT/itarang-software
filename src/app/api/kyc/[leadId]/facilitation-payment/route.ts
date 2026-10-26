@@ -3,7 +3,8 @@ import { db } from '@/lib/db';
 import { facilitationPayments } from '@/lib/db/schema';
 import { eq, desc } from 'drizzle-orm';
 import { requireLeadAccess } from '@/lib/auth/requireLeadAccess';
-import { recordActorStep, requireLeadWriter } from '@/lib/leads/actForDealerGuard';
+import { requireLeadWriter } from '@/lib/leads/actForDealerGuard';
+import { recordKycStep } from '@/lib/kyc/kycEventLog';
 
 // POST - Record manual payment (UTR / screenshot)
 export async function POST(req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
@@ -53,7 +54,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             })
             .where(eq(facilitationPayments.id, payment.id));
 
-        await recordActorStep(writer.actor, 'recorded the facilitation fee payment (UTR / screenshot)');
+        await recordKycStep(writer.actor, 'recorded the facilitation fee payment (UTR / screenshot)');
         return NextResponse.json({
             success: true,
             data: {
