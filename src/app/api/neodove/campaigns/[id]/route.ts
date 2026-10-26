@@ -6,7 +6,14 @@
 // vendor integration you cannot query: pushes that failed, and dispositions
 // that never came back.
 
-import { DB_ENDPOINT_REF, endpointStoreStatus, isCampaignWired, storedEndpointInfo } from "@/lib/neodove/endpointStore";
+import {
+    DB_ENDPOINT_REF,
+    endpointStoreStatus,
+    isCampaignWired,
+    saveCampaignEndpoint,
+    storedEndpointInfo,
+    validEndpointUrl,
+} from "@/lib/neodove/endpointStore";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
@@ -16,9 +23,10 @@ import {
     successResponse,
     withErrorHandler,
 } from "@/lib/api-utils";
-import { NEODOVE_ADMIN_ROLES } from "@/lib/neodove/roles";
+import { NEODOVE_ADMIN_ROLES, NEODOVE_MANAGE_ROLES } from "@/lib/neodove/roles";
 import { mirrorConfigSchema } from "@/lib/neodove/types";
 import { resolveNeodoveAssignee } from "@/lib/neodove/assignAfterPush";
+import { deleteNeodoveCampaign } from "@/lib/neodove/deleteCampaign";
 import { resolveAudience, type AudienceSelection } from "@/lib/ai-dialer/audience";
 
 export const runtime = "nodejs";
@@ -309,11 +317,14 @@ const patchSchema = z.object({
     // E-237. Absent = leave alone; explicit null = stop auto-assigning leads
     // pushed into this campaign.
     crmOwnerUserId: z.string().trim().min(1).nullable().optional(),
+    // 26 Oct: a pasted Custom Integration URL, stored encrypted (E-351) and
+    // the campaign pointed at it. Admin / Sales Head only. Never echoed back.
+    endpointUrl: z.string().trim().min(10).max(2000).optional(),
 });
 
 export const PATCH = withErrorHandler(
     async (req: Request, context: { params: Promise<{ id: string }> }) => {
-        await requireRole(NEODOVE_ADMIN_ROLES);
+        const user = await requireRole(NEODOVE_ADMIN_ROLES);
         const { id } = await context.params;
 
         const parsed = patchSchema.safeParse(await req.json().catch(() => ({})));
@@ -332,6 +343,23 @@ export const PATCH = withErrorHandler(
             SELECT id FROM neodove_campaigns WHERE id = ${id} LIMIT 1
         `);
         if (!existing[0]) return errorResponse("Campaign not found", 404);
+
+        // The URL first, and on its own: saveCampaignEndpoint() also sets
+        // push_endpoint_ref = 'DB', so a pushEndpointRef in the same body
+        // would overwrite it — the pasted URL wins.
+        let last4: string | undefined;
+        if (d.endpointUrl !== undefined) {
+            if (!NEODOVE_MANAGE_ROLES.includes(user.role)) {
+                return errorResponse("Only Admin or Sales Head can set a campaign's NeoDove URL.", 403);
+            }
+            const store = await endpointStoreStatus();
+            if (!store.ready) return errorResponse(store.reason ?? "The endpoint store is not set up.", 503);
+            const bad = validEndpointUrl(d.endpointUrl);
+            if (bad) return errorResponse(bad, 400);
+            ({ last4 } = await saveCampaignEndpoint({ campaignId: id, kind: "push", url: d.endpointUrl, actorId: user.id }));
+            console.log(`[neodove] push endpoint for ${id} stored by ${user.id} (…${last4})`);
+            delete d.pushEndpointRef;
+        }
 
         // Built field-by-field rather than with COALESCE(${v}, col): that idiom
         // cannot express "set this to NULL", which is exactly what clearing a
@@ -393,6 +421,21 @@ export const PATCH = withErrorHandler(
              WHERE id = ${id}
         `);
 
-        return successResponse({ id });
+        return successResponse({ id, ...(last4 ? { last4 } : {}) });
+    },
+);
+
+// DELETE /api/neodove/campaigns/[id] — remove a campaign for good (26 Oct,
+// Admin / Sales Head). What goes and what stays: src/lib/neodove/deleteCampaign.ts.
+export const DELETE = withErrorHandler(
+    async (_req: Request, context: { params: Promise<{ id: string }> }) => {
+        const user = await requireRole(NEODOVE_MANAGE_ROLES);
+        const { id } = await context.params;
+
+        const r = await deleteNeodoveCampaign(id);
+        if (!r.ok) return errorResponse(r.message, r.status);
+
+        console.log(`[neodove] campaign ${id} ("${r.name}") deleted by ${user.id}; ${r.removedLinks} lead link(s) removed`);
+        return successResponse({ id, removedLinks: r.removedLinks });
     },
 );

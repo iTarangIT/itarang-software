@@ -657,7 +657,10 @@ export async function middleware(request: NextRequest) {
     ? ["admin", "sales_head"]
     : path.startsWith("/admin/house-team-logins")
       ? ["admin", "sales_head"]
-      : null;
+      : // NeoDove → Team (26 Oct): same list as /api/neodove/team-logins.
+        path.startsWith("/leads/neodove-campaigns/team")
+        ? ["admin", "sales_head"]
+        : null;
   if (teamPageRoles && !teamPageRoles.includes(role)) {
     return finalize(NextResponse.redirect(new URL(myDashboard, request.url)));
   }

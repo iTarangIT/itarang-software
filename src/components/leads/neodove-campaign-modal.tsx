@@ -1,5 +1,11 @@
 // Create a NeoDove campaign (E-224).
 //
+// 26 Oct: the Custom Integration URL is now PASTED here and stored encrypted
+// (E-351, src/lib/neodove/endpointStore.ts) — Sales Head wires a campaign
+// without a developer, an env change or a restart. The env-var-name design
+// described below still works for campaigns set up that way, behind
+// "Use a server variable instead".
+//
 // A NeoDove campaign here is a MAPPING, not an engine. NeoDove has no campaign
 // creation API, so the campaign must already exist on their side; what this
 // form records is which audience of ours feeds it and which endpoint to send to.
@@ -107,7 +113,15 @@ export function NeodoveCampaignModal({
         campaign?.neodove_campaign_name ?? "",
     );
     const [pushEndpointRef, setPushEndpointRef] = useState(
-        campaign?.push_endpoint_ref ?? "",
+        campaign?.push_endpoint_ref && campaign.push_endpoint_ref !== "DB"
+            ? campaign.push_endpoint_ref
+            : "",
+    );
+    // 26 Oct: the URL itself, pasted from NeoDove and stored encrypted (E-351).
+    const [endpointUrl, setEndpointUrl] = useState("");
+    // The env-var picker is only for campaigns already wired that way.
+    const [showLegacy, setShowLegacy] = useState(
+        Boolean(campaign?.push_endpoint_ref && campaign.push_endpoint_ref !== "DB"),
     );
     const [category, setCategory] = useState<"all" | "hot" | "warm" | "cold">(
         ((campaign?.audience_filter as { category?: string } | undefined)
@@ -267,14 +281,17 @@ export function NeodoveCampaignModal({
             // longer trip the PARSE-time failure on a DB without E-226.
             if (isEdit) {
                 body.neodoveCampaignName = neodoveCampaignName.trim() || null;
-                body.pushEndpointRef = pushEndpointRef.trim() || null;
-            } else {
-                if (neodoveCampaignName.trim()) {
-                    body.neodoveCampaignName = neodoveCampaignName.trim();
-                }
-                if (pushEndpointRef.trim()) {
-                    body.pushEndpointRef = pushEndpointRef.trim();
-                }
+            } else if (neodoveCampaignName.trim()) {
+                body.neodoveCampaignName = neodoveCampaignName.trim();
+            }
+            // A pasted URL wins. Otherwise the env-var ref is sent only when
+            // that option is open — a campaign on a stored URL ("DB") must not
+            // have its ref rewritten by merely opening Settings.
+            if (endpointUrl.trim()) {
+                body.endpointUrl = endpointUrl.trim();
+            } else if (showLegacy) {
+                if (isEdit) body.pushEndpointRef = pushEndpointRef.trim() || null;
+                else if (pushEndpointRef.trim()) body.pushEndpointRef = pushEndpointRef.trim();
             }
 
             const res = await fetch(
@@ -349,9 +366,46 @@ export function NeodoveCampaignModal({
 
                     <div>
                         <label className="block text-sm font-medium text-gray-700">
-                            Push endpoint
+                            NeoDove Custom Integration URL
                         </label>
+                        {isEdit && campaign?.push_endpoint_ref === "DB" && (
+                            <p className="mt-1 flex items-center gap-1.5 text-xs text-emerald-700">
+                                <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                                A URL is already stored for this campaign. Paste a new one
+                                only to replace it.
+                            </p>
+                        )}
+                        <input
+                            type="password"
+                            autoComplete="off"
+                            spellCheck={false}
+                            value={endpointUrl}
+                            onChange={(e) => setEndpointUrl(e.target.value)}
+                            placeholder="https://….neodove.com/integration/custom/…/leads"
+                            aria-label="NeoDove Custom Integration URL"
+                            className="mt-1.5 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-gray-900 focus:outline-none"
+                        />
+                        <p className="mt-1 text-xs text-gray-500">
+                            In NeoDove: create the campaign → Integrations → Custom
+                            Integration → copy the URL and paste it here. It is stored
+                            encrypted and never shown again; only Admin and Sales Head can
+                            set it. No server change or restart is needed.
+                        </p>
 
+                        {/* Legacy: a server env var holding the URL. Kept so
+                            campaigns wired that way keep working; folded away
+                            because pasting the URL replaces it. */}
+                        {(showLegacy || (endpoints?.length ?? 0) > 0) && (
+                            <button
+                                type="button"
+                                onClick={() => setShowLegacy((v) => !v)}
+                                className="mt-2 text-xs font-medium text-gray-500 underline-offset-2 hover:underline"
+                            >
+                                {showLegacy ? "Hide server variable option" : "Use a server variable instead (old way)"}
+                            </button>
+                        )}
+                        {showLegacy && !endpointUrl.trim() && (
+                            <div className="mt-2 rounded-lg border border-gray-200 p-3">
                         {endpoints === null ? (
                             <p className="mt-1.5 text-sm text-gray-400">
                                 Checking configured endpoints…
@@ -361,14 +415,8 @@ export function NeodoveCampaignModal({
                                 <p className="flex items-start gap-2 text-xs text-amber-800">
                                     <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
                                     <span>
-                                        No NeoDove push endpoint is configured on this
-                                        server. Add the campaign&apos;s Custom Integration
-                                        URL as an env var named{" "}
-                                        <code className="font-mono">
-                                            NEODOVE_PUSH_ENDPOINT_&lt;LABEL&gt;
-                                        </code>{" "}
-                                        and restart, then reopen this form. You can still
-                                        create the campaign now — it just cannot push.
+                                        No server variable is set here. Paste the
+                                        NeoDove URL above instead.
                                     </span>
                                 </p>
                             </div>
@@ -426,6 +474,8 @@ export function NeodoveCampaignModal({
                                 is the sole credential NeoDove issues and never reaches the
                                 database or the browser.
                             </p>
+                        )}
+                            </div>
                         )}
                     </div>
 

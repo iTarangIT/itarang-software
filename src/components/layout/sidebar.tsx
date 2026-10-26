@@ -223,6 +223,12 @@ const NEODOVE_SECTION = {
       // detail page, which is precisely the U5 bug documented further down.
     },
     {
+      id: "neodove-agents",
+      label: "Agents",
+      icon: UserCheck,
+      href: "/leads/neodove-campaigns/agents",
+    },
+    {
       id: "neodove-activity",
       label: "Sync Activity",
       icon: History,
@@ -234,6 +240,23 @@ const NEODOVE_SECTION = {
       icon: Upload,
       href: "/leads/neodove-campaigns/reconcile",
     },
+  ],
+};
+
+// Admin and Sales Head also manage the team logins NeoDove leads go to
+// (26 Oct) — the page and /api/neodove/team-logins admit only those two, so
+// the link is not shown to the other NeoDove roles.
+const NEODOVE_MANAGE_SECTION = {
+  ...NEODOVE_SECTION,
+  items: [
+    ...NEODOVE_SECTION.items.slice(0, 2),
+    {
+      id: "neodove-team",
+      label: "Team logins",
+      icon: UserPlus,
+      href: "/leads/neodove-campaigns/team",
+    },
+    ...NEODOVE_SECTION.items.slice(2),
   ],
 };
 
@@ -1227,7 +1250,7 @@ const roleNavigation: Record<string, any[]> = {
         },
       ],
     },
-    NEODOVE_SECTION,
+    NEODOVE_MANAGE_SECTION,
     BUYBACK_ADMIN_SECTION,
   ],
 
@@ -1709,7 +1732,7 @@ const roleNavigation: Record<string, any[]> = {
         },
       ],
     },
-    NEODOVE_SECTION,
+    NEODOVE_MANAGE_SECTION,
     {
       section: "REVIEW",
       items: [

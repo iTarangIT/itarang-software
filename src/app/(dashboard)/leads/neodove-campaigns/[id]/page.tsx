@@ -13,6 +13,7 @@
 
 import { use, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
     AlertTriangle,
@@ -24,6 +25,8 @@ import {
 import { NeodovePushPanel } from "@/components/leads/neodove-push-panel";
 import { NeodoveCampaignModal } from "@/components/leads/neodove-campaign-modal";
 import { NeodoveEndpointForm } from "@/components/leads/neodove-endpoint-form";
+import { NeodoveDeleteCampaignButton } from "@/components/leads/neodove-delete-campaign";
+import { ASSIGN_ON_PUSH } from "@/lib/neodove/assignPolicy";
 
 type Detail = {
     campaign: {
@@ -49,6 +52,7 @@ type Detail = {
         // so NOT round-tripping this would clear the campaign's CRM owner every
         // time someone opened Settings and saved.
         crm_owner_user_id?: string | null;
+        crm_owner_name?: string | null;
         total_pushed: number;
         push_failed: number;
         dispositions_received: number;
@@ -109,6 +113,7 @@ export default function NeodoveCampaignDetailPage({
 }) {
     const { id } = use(params);
     const queryClient = useQueryClient();
+    const router = useRouter();
     const [editing, setEditing] = useState(false);
 
     const { data, isLoading, isError, error } = useQuery<Detail>({
@@ -175,6 +180,23 @@ export default function NeodoveCampaignDetailPage({
                         )}
                         {c.created_by_name ? ` · created by ${c.created_by_name}` : ""}
                     </p>
+                    {/* Who the leads end up with. While ASSIGN_ON_PUSH is off
+                        (tracker ID 63) that is decided by the first call of a
+                        LINKED NeoDove agent, so the place to set it is Agents. */}
+                    <p className="text-xs text-gray-500 mt-1">
+                        {ASSIGN_ON_PUSH && c.crm_owner_name ? (
+                            <>Leads go to {c.crm_owner_name} in the CRM · </>
+                        ) : (
+                            <>Lead owner = the CRM user linked to the NeoDove agent who calls first · </>
+                        )}
+                        <Link href="/leads/neodove-campaigns/agents" className="font-medium text-gray-700 underline-offset-2 hover:underline">
+                            Link agents
+                        </Link>
+                        {" · "}
+                        <Link href="/leads/neodove-campaigns/team" className="font-medium text-gray-700 underline-offset-2 hover:underline">
+                            Team logins
+                        </Link>
+                    </p>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
                     <button
@@ -183,6 +205,15 @@ export default function NeodoveCampaignDetailPage({
                     >
                         <Settings className="w-4 h-4" /> Settings
                     </button>
+                    <NeodoveDeleteCampaignButton
+                        campaignId={c.id}
+                        campaignName={c.name}
+                        pushedLeads={data.delivered}
+                        onDeleted={() => {
+                            void queryClient.invalidateQueries({ queryKey: ["neodove-campaigns"] });
+                            router.push("/leads/neodove-campaigns");
+                        }}
+                    />
                     <span className="px-2.5 py-1 text-xs font-medium rounded-full bg-purple-50 text-purple-700">
                         {c.status}
                     </span>
@@ -194,16 +225,10 @@ export default function NeodoveCampaignDetailPage({
                     <Info className="w-4 h-4 mt-0.5 shrink-0" />
                     <div>
                         <p>
-                            No push endpoint configured. This campaign cannot send
-                            anything until it knows which environment variable holds its
-                            NeoDove Custom Integration URL.
+                            Not connected to NeoDove yet. Paste the campaign&apos;s Custom
+                            Integration URL from NeoDove in the box below — it starts
+                            working straight away.
                         </p>
-                        <button
-                            onClick={() => setEditing(true)}
-                            className="mt-2 rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-700"
-                        >
-                            Configure endpoint
-                        </button>
                     </div>
                 </div>
             )}
@@ -217,19 +242,12 @@ export default function NeodoveCampaignDetailPage({
                     <Info className="w-4 h-4 mt-0.5 shrink-0" />
                     <div>
                         <p>
-                            This campaign points at{" "}
+                            This campaign points at the server variable{" "}
                             <strong className="font-mono">{c.push_endpoint_ref}</strong>,
-                            but that environment variable is not set on this server — so
-                            nothing can be pushed here. Add it to the environment (the
-                            value is NeoDove&apos;s Custom Integration URL) and restart,
-                            or point the campaign at an endpoint that is configured.
+                            which is not set on this server — so nothing can be pushed
+                            from here. Paste the campaign&apos;s NeoDove URL in the box
+                            below to switch it to a stored URL.
                         </p>
-                        <button
-                            onClick={() => setEditing(true)}
-                            className="mt-2 rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-rose-700"
-                        >
-                            Change endpoint
-                        </button>
                     </div>
                 </div>
             )}
