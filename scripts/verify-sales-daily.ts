@@ -104,6 +104,12 @@ async function verifyMyDay(istDay: string, who: string, renderTo: string | null)
 
     for (const t of table(mine.figures, "my_team")) {
         console.log(`  ${t.title}`);
+        // ID 194: the overdue-work table shares the key but is not in the management email.
+        if (t.title === "My team · overdue work") {
+            console.log(`    ${t.columns.join(" | ")}`);
+            for (const r of t.rows) console.log(`    info      ${r.join(" | ")}`);
+            continue;
+        }
         for (const r of t.rows) {
             // A "Team total" exists only here (manager outside the block); every
             // other line must be printed in the management email.
