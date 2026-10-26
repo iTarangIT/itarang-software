@@ -10274,6 +10274,80 @@ export const quotationDispatches = pgTable(
   }),
 );
 
+// E-358 — account-level quotations (24 Oct meeting, items 8–11). Raised for an
+// onboarded dealer ACCOUNT by its owner from My Dealers; same approval rule as
+// a lead quote, but its own rows so the lead flow is untouched. Library:
+// src/lib/accounts/quotations/.
+export const accountQuotations = pgTable(
+  "account_quotations",
+  {
+    quotation_id: uuid("quotation_id").primaryKey().defaultRandom(),
+    account_id: varchar("account_id", { length: 255 }).notNull(),
+    version_no: integer("version_no").notNull(),
+    is_current: boolean("is_current").default(true).notNull(),
+    // quote_issue | quote_revision
+    event_type: varchar("event_type", { length: 30 }).notNull(),
+    product_lines: jsonb("product_lines").default([]).notNull(),
+    price_quoted: numeric("price_quoted", { precision: 14, scale: 2 }),
+    payment_method: varchar("payment_method", { length: 20 }),
+    dealer_payment_terms: varchar("dealer_payment_terms", { length: 10 }),
+    credit_days: integer("credit_days"),
+    credit_terms: text("credit_terms"),
+    delivery_terms: text("delivery_terms"),
+    warranty_terms: text("warranty_terms"),
+    notes: text("notes"),
+    // pending | approved | rejected
+    approval_status: varchar("approval_status", { length: 20 }).default("pending").notNull(),
+    approval_mode: varchar("approval_mode", { length: 10 }),
+    oem_evaluation: jsonb("oem_evaluation"),
+    approved_by: uuid("approved_by"),
+    approved_at: timestamp("approved_at", { withTimezone: true }),
+    rejection_reason: text("rejection_reason"),
+    quote_number: varchar("quote_number", { length: 50 }),
+    quote_pdf_url: text("quote_pdf_url"),
+    quote_pdf_generated_at: timestamp("quote_pdf_generated_at", { withTimezone: true }),
+    quote_pdf_error: text("quote_pdf_error"),
+    quote_snapshot: jsonb("quote_snapshot"),
+    dealer_decision: varchar("dealer_decision", { length: 20 }),
+    dealer_decision_at: timestamp("dealer_decision_at", { withTimezone: true }),
+    dealer_decision_via: varchar("dealer_decision_via", { length: 20 }),
+    dealer_decision_actor: text("dealer_decision_actor"),
+    dealer_decision_note: text("dealer_decision_note"),
+    withdrawn_at: timestamp("withdrawn_at", { withTimezone: true }),
+    withdrawn_by: uuid("withdrawn_by"),
+    withdraw_reason: text("withdraw_reason"),
+    created_by: uuid("created_by").notNull(),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    accountVersionUniq: uniqueIndex("account_quotations_account_version_uniq").on(t.account_id, t.version_no),
+    accountIdx: index("account_quotations_account_idx").on(t.account_id, t.created_at),
+  }),
+);
+
+// E-358 — one row per channel per send of an account quotation, never updated.
+export const accountQuotationDispatches = pgTable(
+  "account_quotation_dispatches",
+  {
+    dispatch_id: uuid("dispatch_id").primaryKey().defaultRandom(),
+    quotation_id: uuid("quotation_id").notNull(),
+    account_id: varchar("account_id", { length: 255 }).notNull(),
+    channel: varchar("channel", { length: 20 }).notNull(),
+    recipient: text("recipient").notNull(),
+    status: varchar("status", { length: 20 }).notNull(),
+    provider_message_id: text("provider_message_id"),
+    error: text("error"),
+    sent_by: text("sent_by").notNull(),
+    cc_recipients: jsonb("cc_recipients"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    quotationIdx: index("account_quotation_dispatches_quotation_idx").on(t.quotation_id, t.created_at),
+    accountIdx: index("account_quotation_dispatches_account_idx").on(t.account_id, t.created_at),
+  }),
+);
+
 // E-117 — Full status change audit (BRD §0.7).
 export const dealerLeadStatusHistory = pgTable(
   "dealer_lead_status_history",

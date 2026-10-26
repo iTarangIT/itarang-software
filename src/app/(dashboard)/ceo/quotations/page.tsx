@@ -8,6 +8,7 @@ import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
 
 import { QuotationApprovalsPanel } from "@/components/dashboard/ceo/PendingQuotationsPanel";
+import { AccountQuotationApprovalsPanel } from "@/components/dashboard/ceo/AccountQuotationApprovalsPanel";
 
 export default function CeoQuotationsPage() {
     return (
@@ -21,8 +22,10 @@ export default function CeoQuotationsPage() {
                     Quotes waiting for your decision, and the ones already approved or rejected.
                 </p>
             </div>
-            <div className="max-w-3xl">
+            <div className="max-w-3xl space-y-6">
                 <QuotationApprovalsPanel />
+                {/* E-358 — account quotations (My Dealers), kept apart from lead quotes. */}
+                <AccountQuotationApprovalsPanel />
             </div>
         </div>
     );

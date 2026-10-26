@@ -243,7 +243,14 @@ export async function suggestedOwners(
     const roles = sql.join(SALESPERSON_ROLES.map((r) => sql`${r}`), sql`, `);
     const rows = (await runner.execute(sql`
         WITH acc AS (
-            SELECT a.id AS account_id, a.gstin, a.contact_phone,
+            -- The two rank-7 match keys are worked out once per account here,
+            -- NULL when unusable, so rank 7 is two plain equality joins (hash-
+            -- or index-joinable — E-357) instead of an OR that ran the regexes
+            -- on every dealer_leads row for every account.
+            SELECT a.id AS account_id,
+                   CASE WHEN ${gstinKeyIsMatchable(GSTIN_KEY(sql`a.gstin`))}
+                        THEN ${GSTIN_KEY(sql`a.gstin`)} END AS gstin_key,
+                   NULLIF(${last10(sql`a.contact_phone`)}, '') AS phone_key,
                    COALESCE(
                        (SELECT app.id FROM dealer_onboarding_applications app
                           JOIN dealers d ON d.application_id = app.id::text
@@ -275,29 +282,42 @@ export async function suggestedOwners(
             SELECT acc.account_id, app.onboarding_operator_id::text, 'Filled the onboarding form', 5
               FROM acc JOIN dealer_onboarding_applications app ON app.id = acc.app_id
             UNION ALL
+            -- Rank 6 (and 7 below) were one OR join; split into one equality
+            -- join per key. A row matching both keys appears twice at the same
+            -- rank, which DISTINCT ON below collapses — same answer as the OR.
             SELECT acc.account_id, su.id::text, 'Typed as sales manager on the onboarding', 6
               FROM acc
               JOIN dealer_onboarding_applications app ON app.id = acc.app_id
               JOIN users su
-                ON (app.sales_manager_email IS NOT NULL AND lower(su.email) = lower(btrim(app.sales_manager_email)))
-                OR (length(${last10(sql`app.sales_manager_mobile`)}) = 10
-                    AND ${last10(sql`su.phone`)} = ${last10(sql`app.sales_manager_mobile`)})
+                ON app.sales_manager_email IS NOT NULL AND lower(su.email) = lower(btrim(app.sales_manager_email))
+            UNION ALL
+            SELECT acc.account_id, su.id::text, 'Typed as sales manager on the onboarding', 6
+              FROM acc
+              JOIN dealer_onboarding_applications app ON app.id = acc.app_id
+              JOIN users su
+                ON length(${last10(sql`app.sales_manager_mobile`)}) = 10
+               AND ${last10(sql`su.phone`)} = ${last10(sql`app.sales_manager_mobile`)}
+            UNION ALL
+            -- ID 62: only a GSTIN that passes the check (not PENDING, not ours) links
+            -- two dealers — acc.gstin_key is NULL otherwise, so it joins nothing.
+            SELECT acc.account_id, sl.closing_owner_id, 'Closed a lead with the same GSTIN or phone', 7
+              FROM acc
+              JOIN dealer_leads sl ON ${GSTIN_KEY(sql`sl.gstin`)} = acc.gstin_key
             UNION ALL
             SELECT acc.account_id, sl.closing_owner_id, 'Closed a lead with the same GSTIN or phone', 7
               FROM acc
-              JOIN dealer_leads sl
-                -- ID 62: only a GSTIN that passes the check (not PENDING, not ours) links two dealers.
-                ON (${gstinKeyIsMatchable(GSTIN_KEY(sql`acc.gstin`))}
-                    AND ${GSTIN_KEY(sql`sl.gstin`)} = ${GSTIN_KEY(sql`acc.gstin`)})
-                OR (length(${last10(sql`acc.contact_phone`)}) = 10
-                    AND ${last10(sql`sl.phone`)} = ${last10(sql`acc.contact_phone`)})
+              JOIN dealer_leads sl ON ${last10(sql`sl.phone`)} = acc.phone_key
+             WHERE length(acc.phone_key) = 10
         )
         SELECT DISTINCT ON (c.account_id) c.account_id, u.id::text AS user_id, u.name, c.basis
           FROM cand c
           JOIN users u ON u.id::text = c.user_id
          WHERE u.is_active IS NOT FALSE
            AND lower(u.role) IN (${roles})
-         ORDER BY c.account_id, c.rank
+         -- Two candidates at one rank (e.g. two people each closed a lead with
+         -- the same phone): the user id breaks the tie, so the hint never flips
+         -- between page loads.
+         ORDER BY c.account_id, c.rank, u.id
     `)) as unknown as Array<{ account_id: string; user_id: string; name: string | null; basis: string }>;
     for (const r of rows) out.set(r.account_id, { user_id: r.user_id, name: r.name, basis: r.basis });
     return out;

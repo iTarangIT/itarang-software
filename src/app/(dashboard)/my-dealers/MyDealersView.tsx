@@ -3,8 +3,11 @@
 // Tracker ID 5 — "My dealers": Dealer Health's rows for the accounts the
 // signed-in user owns, with "Order placed" and their own
 // "Order claimed, no invoice raised" list.
+// E-358: an ASM also sees their team's accounts, Sales Head / CEO / Partner
+// every account; each dealer opens its account page (account quotations).
 
 import { useState } from "react";
+import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 
@@ -32,9 +35,18 @@ const inr = (n: number) => `₹${n.toLocaleString("en-IN", { maximumFractionDigi
 /** Most urgent first: Orange, Red, Dormant, then the rest. */
 const URGENCY: AccountBucket[] = ["orange", "red", "dormant", "cooling", "never_ordered", "not_ordered_yet", "active", "closed"];
 
+type MyDealerRow = DealerHealthRow & { scope: "own" | "team" | "other" };
+type Whose = "" | "own" | "team" | "other";
+const WHOSE_LABEL: Record<Exclude<Whose, "">, string> = { own: "Mine", team: "My team", other: "Others" };
+
 export function MyDealersView() {
     const [bucket, setBucket] = useState<AccountBucket | "">("");
-    const { data, isLoading, error } = useQuery<{ rows: DealerHealthRow[]; can_record_orders: boolean }>({
+    const [whose, setWhose] = useState<Whose>("");
+    const { data, isLoading, error } = useQuery<{
+        rows: MyDealerRow[];
+        scope: "own" | "team" | "all";
+        can_record_orders: boolean;
+    }>({
         queryKey: ["my-dealers"],
         queryFn: async () => {
             const res = await fetch("/api/dealer-accounts/mine", { cache: "no-store" });
@@ -53,7 +65,8 @@ export function MyDealersView() {
     }
     if (error) return <p className="text-sm text-rose-600">{(error as Error).message}</p>;
 
-    const rows = [...(data?.rows ?? [])].sort(
+    const allRows = data?.rows ?? [];
+    const rows = [...(whose ? allRows.filter((r) => r.scope === whose) : allRows)].sort(
         (a, b) =>
             URGENCY.indexOf(a.bucket) - URGENCY.indexOf(b.bucket) ||
             (b.days_since_last_order ?? 0) - (a.days_since_last_order ?? 0),
@@ -64,7 +77,7 @@ export function MyDealersView() {
     >;
     const visible = bucket ? rows.filter((r) => r.bucket === bucket) : rows;
 
-    if (rows.length === 0) {
+    if (allRows.length === 0) {
         return (
             <p className="rounded-xl border border-border bg-surface px-4 py-8 text-center text-sm text-ink-muted">
                 No dealer accounts are assigned to you yet. Your Sales Head assigns owners on the Accounts page.
@@ -74,6 +87,20 @@ export function MyDealersView() {
 
     return (
         <div className="space-y-5">
+            {data?.scope && data.scope !== "own" && (
+                <div className="flex flex-wrap gap-2">
+                    {(["", "own", data.scope === "team" ? "team" : "other"] as Whose[]).map((w) => (
+                        <button
+                            key={w || "all"}
+                            type="button"
+                            onClick={() => setWhose(w)}
+                            className={`rounded-lg border px-3 py-1 text-xs font-semibold ${whose === w ? "bg-brand-navy text-white border-brand-navy" : "border-border text-ink"}`}
+                        >
+                            {w ? WHOSE_LABEL[w] : "All"} · {w ? allRows.filter((r) => r.scope === w).length : allRows.length}
+                        </button>
+                    ))}
+                </div>
+            )}
             <div className="flex flex-wrap gap-2">
                 <button
                     type="button"
@@ -112,9 +139,24 @@ export function MyDealersView() {
                         {visible.map((r) => (
                             <tr key={r.key}>
                                 <td className="px-3 py-2">
-                                    <span className="font-medium text-ink">{r.dealer}</span>
+                                    {r.account_id ? (
+                                        <Link
+                                            href={`/my-dealers/${encodeURIComponent(r.account_id)}`}
+                                            className="font-medium text-brand-sky hover:underline"
+                                        >
+                                            {r.dealer}
+                                        </Link>
+                                    ) : (
+                                        <span className="font-medium text-ink">{r.dealer}</span>
+                                    )}
                                     <div className="text-[11px] text-ink-muted">
-                                        {[r.city, r.gstin_missing ? "GSTIN missing" : r.gstin].filter(Boolean).join(" · ")}
+                                        {[
+                                            r.city,
+                                            r.gstin_missing ? "GSTIN missing" : r.gstin,
+                                            r.scope !== "own" ? `Owner: ${r.owner_name ?? "none"}` : null,
+                                        ]
+                                            .filter(Boolean)
+                                            .join(" · ")}
                                     </div>
                                 </td>
                                 <td className="px-3 py-2">
@@ -133,7 +175,7 @@ export function MyDealersView() {
                                 <td className="px-3 py-2 text-right tabular-nums">{inr(r.revenue_lifetime)}</td>
                                 {data?.can_record_orders && (
                                     <td className="px-3 py-2 text-right">
-                                        {r.account_id && r.bucket !== "closed" && !r.order_claim && (
+                                        {r.account_id && r.scope === "own" && r.bucket !== "closed" && !r.order_claim && (
                                             <OrderPlacedButton accountId={r.account_id} />
                                         )}
                                     </td>

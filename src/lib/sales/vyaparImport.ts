@@ -47,6 +47,8 @@ export interface ImportPlanRow {
     cancelled: boolean;
     lines: number;
     batteries: number;
+    /** ID 174: battery serials read on this invoice (a "Stock to upload" task closes by itself only when serials are read). */
+    serials: number;
     taxable: number | null;
     /** invoice_imports apply outcome: 'update' an existing invoice, or 'create'. */
     action: "update" | "create" | "gstr1";
@@ -67,6 +69,7 @@ export interface ImportPreview {
         cancelled: number;
         lines: number;
         batteries: number;
+        serials: number;
         unmapped_items: number;
         /** ID 62: documents whose GSTIN failed the check (kept off any dealer match). */
         gstin_refused: number;
@@ -91,6 +94,10 @@ function batteriesOf(d: ParsedDocument): number {
     return sum(d.lines.filter((l) => l.product_class === "battery").map((l) => l.quantity ?? 0));
 }
 
+function serialsOf(d: ParsedDocument): number {
+    return sum(d.lines.filter((l) => l.product_class === "battery").map((l) => l.serials.length));
+}
+
 export async function previewImport(parsed: ParseResult): Promise<ImportPreview> {
     const docs = parsed.documents;
     const keyOf = (d: ParsedDocument) => normalizeInvoiceNumber(d.number);
@@ -113,6 +120,7 @@ export async function previewImport(parsed: ParseResult): Promise<ImportPreview>
             cancelled: d.cancelled,
             lines: d.lines.length,
             batteries: batteriesOf(d),
+            serials: serialsOf(d),
             taxable: d.taxable,
             action: parsed.kind === "gstr1" ? "gstr1" : id ? "update" : "create",
             existing_id: id,
@@ -133,6 +141,7 @@ export async function previewImport(parsed: ParseResult): Promise<ImportPreview>
             cancelled: rows.filter((r) => r.cancelled).length,
             lines: sum(rows.map((r) => r.lines)),
             batteries: sum(rows.map((r) => r.batteries)),
+            serials: sum(rows.map((r) => r.serials)),
             unmapped_items: unmapped.size,
             gstin_refused: rows.filter((r) => r.gstin_attention).length,
         },
@@ -233,12 +242,15 @@ export async function commitImport(
                     n++;
                     const m = l.item_name ? productFor(mapped, l.item_name) : undefined;
                     const productClass = m ? classFor(m, l.product_class, l.hsn) : l.product_class;
-                    // Serials, when printed, sit in the item name ("… Serial No: X, Y").
+                    // Serials as the parser read them (serial column, "Serial No: …"
+                    // in the description or name); the name and description stay
+                    // the rules' fallback.
                     taskLines.push({
                         line_no: n,
                         hsn_code: l.hsn,
                         quantity: l.quantity ?? 0,
-                        description: l.item_name ?? "",
+                        description: [l.item_name, l.description].filter(Boolean).join("\n"),
+                        serials: l.serials,
                         product_class: productClass,
                     });
                     await tx.execute(sql`

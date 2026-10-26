@@ -16,7 +16,8 @@ export default async function MyDealersPage() {
                 <p className="mt-1 text-sm text-ink-muted">
                     The dealers you own, by days since their last invoice. Orange (31–45 days) is the time to
                     pitch — you get a reminder each morning. Got an order whose invoice is not raised yet? Press
-                    &ldquo;Order placed&rdquo; and the reminders pause while accounts raise it.
+                    &ldquo;Order placed&rdquo; and the reminders pause while accounts raise it. Open a dealer to raise
+                    an account quotation.
                 </p>
             </header>
             <MyDealersView />

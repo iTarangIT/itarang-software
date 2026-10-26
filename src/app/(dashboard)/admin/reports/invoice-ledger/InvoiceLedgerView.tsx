@@ -79,6 +79,7 @@ type Preview = {
         cancelled: number;
         lines: number;
         batteries: number;
+        serials?: number;
         unmapped_items: number;
         gstin_refused?: number;
     };
@@ -195,7 +196,7 @@ function ImportTab() {
                             Sheet <strong>{preview.sheet ?? "—"}</strong> · {preview.period.from ?? "?"} to {preview.period.to ?? "?"} ·{" "}
                             {preview.totals.documents} documents
                             {preview.kind === "vyapar_register" &&
-                                ` · ${preview.totals.update} update · ${preview.totals.create} new · ${preview.totals.cancelled} cancelled · ${preview.totals.lines} lines · ${preview.totals.batteries} batteries`}
+                                ` · ${preview.totals.update} update · ${preview.totals.create} new · ${preview.totals.cancelled} cancelled · ${preview.totals.lines} lines · ${preview.totals.batteries} batteries · ${preview.totals.serials ?? 0} battery serials read`}
                         </p>
                         <p>
                             Columns read:{" "}

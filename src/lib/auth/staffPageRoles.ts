@@ -68,6 +68,8 @@ export const MY_DEALERS_PAGE_ROLES = [
   "business_head",
   "admin",
   "ceo",
+  // E-358 — Partner raises account quotations on any account (24 Oct meeting).
+  "partner",
 ] as const;
 
 /** Prefix → roles, for middleware. Matched on a whole path segment. */

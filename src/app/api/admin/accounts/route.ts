@@ -3,22 +3,21 @@
  *
  * Every dealer account with its current owner, who onboarded it, whether it
  * came through a lead or a direct onboarding, and a "GSTIN missing" flag.
- * Unowned rows carry a SUGGESTED owner (suggestedOwners) — a hint only; a
- * person assigns it from the page.
+ * Unowned rows carry a SUGGESTED owner — a hint only; a person assigns it
+ * from the page. For speed it is NOT computed here: the page fetches it from
+ * ./suggestions once the rows are on screen, and the tab numbers from
+ * ./counts (they never depend on the filters). SQL: lib/accounts/accountsScreen.
  *
  * Query: q, owner=<uuid>|none, gstin_missing=1, came_through=lead|direct,
  *        status, limit (≤ 500, default 100), offset.
  */
-import { sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
 
 import { db } from "@/lib/db";
 import { requireRole } from "@/lib/auth-utils";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
-import { suggestedOwners } from "@/lib/accounts/ownership";
-import { ACCOUNT_ADMIN_ROLES, gstinMissingSql, requireAccountTables } from "./_lib";
-import { dealerAccountSql } from "@/lib/accounts/accountList";
-import { closedColumns } from "@/lib/accounts/accountClosures";
+import { ACCOUNT_ADMIN_ROLES, requireAccountTables } from "./_lib";
+import { accountsPageSql, accountsTotalSql } from "@/lib/accounts/accountsScreen";
 
 export const dynamic = "force-dynamic";
 
@@ -51,7 +50,6 @@ type Row = {
     /** ID 5 — closed by hand (E-332), with the reason. */
     closed: boolean;
     closed_reason: string | null;
-    filtered_total: number;
 };
 
 export const GET = withErrorHandler(async (req: Request) => {
@@ -62,95 +60,28 @@ export const GET = withErrorHandler(async (req: Request) => {
         [...new URL(req.url).searchParams.entries()].filter(([, v]) => v !== ""),
     );
     const f = QuerySchema.parse(params);
+    const filters = {
+        q: f.q,
+        owner: f.owner,
+        gstin_missing: Boolean(f.gstin_missing),
+        came_through: f.came_through,
+        status: f.status,
+    };
 
-    // Dealer accounts only: a scrap-vendor entity (users.vendor_entity_id)
-    // with no dealer onboarding behind it is not a dealer account.
-    const closed = await closedColumns(sql`a.id`);
-    const base = sql`
-        SELECT a.id,
-               a.business_entity_name                     AS name,
-               a.gstin,
-               ${gstinMissingSql(sql`a.gstin`)}           AS gstin_missing,
-               a.city, a.state, a.status, a.created_at,
-               ${closed},
-               o.owner_user_id::text                      AS owner_user_id,
-               ou.name                                    AS owner_name,
-               o.onboarded_by_user_id::text               AS onboarded_by_user_id,
-               ob.name                                    AS onboarded_by_name,
-               o.came_through,
-               o.source_dealer_lead_id,
-               COALESCE(o.source_application_id,
-                        (SELECT app.id::text FROM dealer_onboarding_applications app
-                          WHERE app.dealer_code = a.id
-                          ORDER BY app.created_at ASC LIMIT 1)) AS source_application_id
-          FROM accounts a
-          LEFT JOIN account_ownership o ON o.account_id = a.id
-          LEFT JOIN users ou ON ou.id = o.owner_user_id
-          LEFT JOIN users ob ON ob.id = o.onboarded_by_user_id
-         WHERE ${dealerAccountSql()}`;
-
-    const where: SQL[] = [];
-    if (f.q) {
-        const like = `%${f.q.replace(/[\\%_]/g, (m) => `\\${m}`)}%`;
-        where.push(sql`(b.name ILIKE ${like} OR b.id ILIKE ${like} OR b.gstin ILIKE ${like}
-                        OR b.city ILIKE ${like} OR b.owner_name ILIKE ${like})`);
-    }
-    if (f.owner === "none") where.push(sql`b.owner_user_id IS NULL`);
-    else if (f.owner) where.push(sql`b.owner_user_id = ${f.owner}`);
-    if (f.gstin_missing) where.push(sql`b.gstin_missing`);
-    if (f.came_through === "unknown") where.push(sql`b.came_through IS NULL`);
-    else if (f.came_through) where.push(sql`b.came_through = ${f.came_through}`);
-    // ID 5 — "closed" is a closure (E-332), not an accounts.status value.
-    if (f.status === "closed") where.push(sql`b.closed`);
-    else {
-        // ID 148: every other tab lists live (not closed) dealers.
-        where.push(sql`NOT b.closed`);
-        if (f.status) where.push(sql`b.status = ${f.status}`);
-    }
-    const whereSql = where.length ? sql`WHERE ${sql.join(where, sql` AND `)}` : sql``;
-
-    const [rowsRes, countsRes] = await Promise.all([
-        db.execute(sql`
-            WITH b AS (${base})
-            SELECT b.*, count(*) OVER () AS filtered_total
-              FROM b
-              ${whereSql}
-             ORDER BY (b.owner_user_id IS NULL) DESC, b.created_at DESC, b.id
-             LIMIT ${f.limit} OFFSET ${f.offset}
-        `),
-        db.execute(sql`
-            WITH b AS (${base})
-            SELECT count(*) FILTER (WHERE NOT b.closed)                               AS total,
-                   count(*) FILTER (WHERE NOT b.closed AND b.owner_user_id IS NULL)   AS no_owner,
-                   count(*) FILTER (WHERE NOT b.closed AND b.gstin_missing)           AS gstin_missing,
-                   count(*) FILTER (WHERE b.closed)                                   AS closed
-              FROM b
-        `),
+    const [rowsRes, totalRes] = await Promise.all([
+        accountsPageSql(filters, f.limit, f.offset).then((q) => db.execute(q)),
+        accountsTotalSql(filters).then((q) => db.execute(q)),
     ]);
     const rows = rowsRes as unknown as Row[];
-    const c = (countsRes as unknown as Array<Record<string, unknown>>)[0] ?? {};
-
-    const unowned = rows.filter((r) => !r.owner_user_id).map((r) => r.id);
-    const suggestions = await suggestedOwners(unowned);
+    const total = (totalRes as unknown as Array<{ n: number | string }>)[0]?.n ?? 0;
 
     return successResponse({
-        rows: rows.map((full) => {
-            const r: Omit<Row, "filtered_total"> & { filtered_total?: number } = { ...full };
-            delete r.filtered_total;
-            return {
-                ...r,
-                gstin_missing: Boolean(r.gstin_missing),
-                created_at: r.created_at ? new Date(r.created_at).toISOString() : null,
-                suggested_owner: r.owner_user_id ? null : (suggestions.get(r.id) ?? null),
-            };
-        }),
-        filtered_total: Number(rows[0]?.filtered_total ?? 0),
-        counts: {
-            total: Number(c.total ?? 0),
-            no_owner: Number(c.no_owner ?? 0),
-            gstin_missing: Number(c.gstin_missing ?? 0),
-            closed: Number(c.closed ?? 0),
-        },
+        rows: rows.map((r) => ({
+            ...r,
+            gstin_missing: Boolean(r.gstin_missing),
+            created_at: r.created_at ? new Date(r.created_at).toISOString() : null,
+        })),
+        filtered_total: Number(total),
         limit: f.limit,
         offset: f.offset,
     });
