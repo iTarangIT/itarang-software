@@ -54,7 +54,8 @@
 // preferred call time and closure reason. `accounts` / `account_closures` are granted (GSTIN,
 // PAN, bank, contact and address withheld) for live-dealer counts, with `analyst_account_flags`
 // giving each account's GSTIN-missing / is-dealer answer without the GSTIN itself, and
-// `analyst_staff` (user id + role, nothing else from `users`) for the idle rule's ASM / ISR limit.
+// `analyst_staff` (user id, name, role, active — nothing else from `users`) for the idle rule's
+// ASM / ISR limit and per-rep questions (27 Oct: name added; phone, email and auth stay blocked).
 // time_limit_settings and holiday_calendar are granted for the same rule.
 // After every run: press "Refresh tables" in the Analyst's iTarang database source, so the
 // withheld columns drop out of its table list.
@@ -272,12 +273,14 @@ const MASKED_VIEWS = [
   },
   {
     // ID 192 — the idle rule needs the holder's role (an ASM gets idle_asm, everyone else
-    // idle_cc). `users` stays blocked: this is the id and role only — no name, phone or email.
+    // idle_cc). 27 Oct: the staff member's name and active flag too, so "leads per sales rep"
+    // can be answered (staff are employees, not customers). `users` itself stays blocked: no
+    // phone, email, auth or token columns. STAFF_COLUMNS below is checked after every run.
     name: "analyst_staff",
     base: "users",
-    sample: "role",
+    sample: "name",
     sql: () => `CREATE VIEW public.analyst_staff AS
-      SELECT u.id::text AS user_id, u.role FROM public.users u`,
+      SELECT u.id::text AS user_id, u.name, u.role, u.is_active FROM public.users u`,
   },
 ];
 
@@ -342,6 +345,7 @@ const SAMPLE_KEPT = [
   ["account_closures", "closed_at"], ["lead_visits", "visit_status"],
   ["dealer_leads", "lost_reason"], ["user_reporting_lines", "manager_id"], ["user_reporting_lines", "effective_to"],
 ];
+const STAFF_COLUMNS = ["user_id", "name", "role", "is_active"];
 const present = (pairs, side) => pairs.filter(([t, c]) => plan.get(t)?.[side].includes(c));
 
 // The rules, from the catalogue (where the role's privileges are recorded). Sets exitCode 1 on a miss.
@@ -363,6 +367,11 @@ async function catalogChecks() {
                                   and ((table_name = 'analyst_leads' and column_name in ('id', 'lead_id'))
                                        or (table_name in ('analyst_loan_files', 'analyst_loan_applications') and column_name = 'lead_id'))`;
   const [u] = await admin`select has_table_privilege(${ROLE}, 'public.users', 'SELECT') as ok`;
+  // analyst_staff may carry exactly these columns of `users`, nothing more (27 Oct).
+  const staffExtra = (await admin`select column_name from information_schema.columns
+                                    where table_schema = 'public' and table_name = 'analyst_staff'`)
+    .map((r) => r.column_name)
+    .filter((c) => !STAFF_COLUMNS.includes(c));
   const [e] = await admin`select to_regclass('public.ecofy_leads') is null
                               or not has_table_privilege(${ROLE}, 'public.ecofy_leads', 'SELECT') as ok`;
   const masked = [];
@@ -382,11 +391,12 @@ async function catalogChecks() {
     sample_kept_checked: present(SAMPLE_KEPT, "grant").length,
     sample_kept_not_readable: lost,
     masked_view_lead_id_columns: leadIds.map((r) => `${r.table_name}.${r.column_name}`),
+    staff_view_extra_columns: staffExtra,
     masked_views: masked,
   };
   result.all_rules_hold =
     result.users_blocked && result.leads_base_table_blocked && result.ecofy_base_table_blocked &&
-    !leaked.length && !lost.length && !leadIds.length;
+    !leaked.length && !lost.length && !leadIds.length && !staffExtra.length;
   if (!result.all_rules_hold) process.exitCode = 1;
   return result;
 }
