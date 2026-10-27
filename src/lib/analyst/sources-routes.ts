@@ -23,7 +23,7 @@ export type SourceRoute = {
   query?: string[];
 };
 
-type Method = "GET" | "POST" | "PUT" | "DELETE";
+type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
 /** Agent ids are uuids; this is looser on purpose but still path-safe. */
 const ID = /^[A-Za-z0-9_-]{1,100}$/;
@@ -103,6 +103,9 @@ const RulesBody = z.object({
 
 const TablesBody = z.object({ tables: z.array(z.string().min(1).max(300)).max(1000) });
 
+/** "all": the analyst may read every table and finds the ones each question needs. */
+export const ScopeBody = z.object({ table_scope: z.enum(["all", "selected"]) });
+
 // ── Upload limits (the agent's own, checked here first so a too-big upload never leaves) ──
 
 export const UPLOAD_EXTENSIONS = [".csv", ".tsv", ".xlsx", ".parquet", ".pdf"] as const;
@@ -151,7 +154,10 @@ export function matchSourceRoute(method: string, segments: string[]): SourceRout
   const base = `/connections/${enc(first)}`;
 
   if (segments.length === 1) {
-    return m === "DELETE" ? { agentPath: base, manage: true, body: "none", timeoutMs: WRITE } : null;
+    if (m === "DELETE") return { agentPath: base, manage: true, body: "none", timeoutMs: WRITE };
+    // Re-reads the structure and stats of every table in play, as a refresh does.
+    if (m === "PATCH") return { agentPath: base, manage: true, body: "json", timeoutMs: SLOW, schema: ScopeBody };
+    return null;
   }
 
   if (segments.length === 2) {

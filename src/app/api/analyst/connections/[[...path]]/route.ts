@@ -98,7 +98,7 @@ async function handle(request: Request, ctx: Ctx): Promise<Response> {
         return Response.json({ error: message, code: "invalid_request" }, { status: 422 });
       }
       upstream = await agentFetch(target, {
-        method: request.method as "POST" | "PUT",
+        method: request.method as "POST" | "PUT" | "PATCH",
         body: agentBody(route, parsed.data),
         signal: request.signal,
         timeoutMs: route.timeoutMs,
@@ -129,4 +129,5 @@ async function handle(request: Request, ctx: Ctx): Promise<Response> {
 export const GET = handle;
 export const POST = handle;
 export const PUT = handle;
+export const PATCH = handle;
 export const DELETE = handle;

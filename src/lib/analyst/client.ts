@@ -130,7 +130,7 @@ async function serviceToken(cfg: Config, force = false): Promise<string> {
 // ── Calls ─────────────────────────────────────────────────────────────────────
 
 type Options = {
-  method?: "GET" | "POST" | "PUT" | "DELETE";
+  method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   /** Sent as JSON. */
   body?: unknown;
   /**

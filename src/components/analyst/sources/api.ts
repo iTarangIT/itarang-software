@@ -12,6 +12,7 @@ import type {
   SourceList,
   SourceRule,
   TableList,
+  TableScope,
 } from "@/lib/analyst/types";
 
 const BASE = "/api/analyst/connections";
@@ -96,6 +97,8 @@ export const sourcesApi = {
     call<TableList>(`/${id(connectionId)}/tables`, json("PUT", { tables })),
   refreshTables: (connectionId: string) =>
     call<TableList>(`/${id(connectionId)}/tables/refresh`, { method: "POST" }),
+  setScope: (connectionId: string, table_scope: TableScope) =>
+    call<TableList>(`/${id(connectionId)}`, json("PATCH", { table_scope })),
 };
 
 export function formatBytes(bytes: number | null | undefined): string {

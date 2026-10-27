@@ -15,6 +15,16 @@ describe("matchSourceRoute", () => {
     expect(matchSourceRoute("DELETE", [ID])).toMatchObject({ agentPath: `/connections/${ID}`, manage: true });
   });
 
+  it("lets only managers switch a source between every table and chosen ones", () => {
+    const route = matchSourceRoute("PATCH", [ID]);
+    expect(route).toMatchObject({ agentPath: `/connections/${ID}`, manage: true, body: "json" });
+    expect(route!.schema!.safeParse({ table_scope: "all" }).success).toBe(true);
+    expect(route!.schema!.safeParse({ table_scope: "selected" }).success).toBe(true);
+    expect(route!.schema!.safeParse({ table_scope: "everything" }).success).toBe(false);
+    expect(route!.schema!.safeParse({ name: "renamed" }).success).toBe(false);
+    expect(matchSourceRoute("PATCH", [ID, "tables"])).toBeNull();
+  });
+
   it("maps uploads to multipart", () => {
     expect(matchSourceRoute("POST", ["file"])).toMatchObject({ agentPath: "/connections/file", body: "multipart" });
     expect(matchSourceRoute("POST", [ID, "files"])).toMatchObject({ agentPath: `/connections/${ID}/files`, body: "multipart" });
