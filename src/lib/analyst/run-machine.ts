@@ -117,6 +117,9 @@ export function runReducer(state: RunState, action: RunAction): RunState {
     case "chart":
       return { ...state, chart: action.data };
 
+    case "tables":
+      return { ...state, focus: action.data.focus };
+
     case "token":
       return { ...state, answer: state.answer + action.data.text };
 

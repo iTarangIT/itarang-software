@@ -433,3 +433,17 @@ describe("runReducer", () => {
     });
   });
 });
+
+describe("a whole-database run", () => {
+  it("keeps the tables the agent gave the question, and a new question clears them", () => {
+    const tables: RunAction = { type: "tables", data: { focus: ["dealer_leads", "analyst_staff"], total: 80 } };
+    const done = drive([submit, { type: "@open" }, tables, ...HAPPY.slice(2)]);
+    expect(done.phase).toBe("done");
+    expect(done.focus).toEqual(["dealer_leads", "analyst_staff"]);
+    expect(drive([submit], done).focus).toBeNull();
+  });
+
+  it("leaves focus null for a chosen-tables source", () => {
+    expect(drive(HAPPY).focus).toBeNull();
+  });
+});

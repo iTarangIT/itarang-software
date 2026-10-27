@@ -31,6 +31,8 @@ export type RunEvent =
   | { type: "rows"; data: ResultTable & { ms?: number } }
   | { type: "chart"; data: ChartSpec }
   | { type: "token"; data: { text: string } }
+  /** Whole-database sources only, before anything else: the tables this question was given. */
+  | { type: "tables"; data: { focus: string[]; total: number } }
   | { type: "done"; data: { run_id: string; duration_ms: number } }
   | { type: "error"; data: { message: string } };
 
@@ -79,6 +81,8 @@ export type RunState = {
   sql: string | null;
   result: ResultTable | null;
   chart: ChartSpec | null;
+  /** The tables a whole-database source gave this question; null for a chosen-tables source. */
+  focus: string[] | null;
   answer: string;
   /** Only ever set by `done`: the terminal `error` event carries no run id. */
   runId: string | null;
@@ -98,6 +102,7 @@ export const IDLE_RUN: RunState = {
   sql: null,
   result: null,
   chart: null,
+  focus: null,
   answer: "",
   runId: null,
   durationMs: null,

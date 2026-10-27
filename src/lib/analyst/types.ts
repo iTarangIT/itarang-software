@@ -10,6 +10,11 @@ export type Connection = {
   kind: "postgres" | "file";
   selected_tables: number;
   total_tables: number;
+  /**
+   * "all": every table the source's login can read is in play, and the agent finds the ones
+   * each question needs, so nothing has to be chosen. "selected": only the chosen tables.
+   */
+  table_scope: TableScope;
   file_count: number;
   catalog_refreshed_at: string | null;
   sync_status: "syncing" | "ready" | "failed" | null;
@@ -57,6 +62,8 @@ export type Attempt = {
 export type RunTrace = {
   stages: Stage[];
   attempts: Attempt[];
+  /** Whole-database runs: the tables the agent judged this question needs, best first. */
+  focus?: string[];
 };
 
 export type RunSummary = {
@@ -185,8 +192,11 @@ export type TableInfo = {
   stats: Record<string, unknown> | null;
 };
 
+export type TableScope = "all" | "selected";
+
 export type TableList = {
   max_selected: number;
+  scope: TableScope;
   refreshed_at: string | null;
   tables: TableInfo[];
   relationships: unknown[];

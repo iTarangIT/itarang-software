@@ -98,8 +98,10 @@ export function AnalystWorkspace({
   const past = history.filter((run) => !shown.has(run.id));
   const empty = !started && turns.length === 0 && past.length === 0;
   const active = connections.find((c) => c.id === connectionId) ?? null;
-  // The agent refuses a source whose tables were listed but none chosen.
-  const needsTables = active !== null && active.total_tables > 0 && active.selected_tables === 0;
+  // The agent refuses a source whose tables were listed but none chosen — unless the source
+  // lets every table answer, when the agent finds the ones each question needs itself.
+  const needsTables =
+    active !== null && active.table_scope !== "all" && active.total_tables > 0 && active.selected_tables === 0;
   const ready = connectionId !== "" && !needsTables && !unreachable;
   const canSend = question.trim().length >= 3 && question.trim().length <= ANALYST_QUESTION_MAX && ready && !busy;
 
@@ -274,7 +276,9 @@ export function AnalystWorkspace({
                     : needsTables
                       ? "Choose which tables the analyst may read first"
                       : empty
-                        ? "Ask anything about your data"
+                        ? active?.table_scope === "all"
+                          ? "Ask anything about your business data"
+                          : "Ask anything about your data"
                         : "Ask a follow-up"
               }
             />

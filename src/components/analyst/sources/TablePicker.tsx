@@ -1,6 +1,8 @@
 "use client";
 
-// Data Analyst — choosing which tables of a source the analyst may read. The agent refuses to
+// Data Analyst — the tables of a source. A source whose scope is "all" (the iTarang database
+// by default) lets the analyst read every table and find the ones each question needs, so this
+// is only a browse view of what it holds. Otherwise it is the picker: the agent refuses to
 // answer on a source whose tables were listed but none chosen, and caps the choice (12 by
 // default) so the model's prompt stays small enough to write good SQL.
 
@@ -8,7 +10,7 @@ import { ChevronRight, Loader2, RefreshCw } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
-import type { TableList } from "@/lib/analyst/types";
+import type { TableList, TableScope } from "@/lib/analyst/types";
 import { cn } from "@/lib/utils";
 
 import { sourcesApi } from "./api";
@@ -27,7 +29,7 @@ export function TablePicker({
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
   const [open, setOpen] = useState<string | null>(null);
-  const [busy, setBusy] = useState<"save" | "refresh" | null>(null);
+  const [busy, setBusy] = useState<"save" | "refresh" | "scope" | null>(null);
 
   function take(next: TableList) {
     setList(next);
@@ -59,6 +61,7 @@ export function TablePicker({
     );
   }
 
+  const whole = list.scope === "all";
   const max = list.max_selected;
   const full = chosen.size >= max;
 
@@ -79,6 +82,23 @@ export function TablePicker({
       const added = next.added?.length ?? 0;
       const removed = next.removed?.length ?? 0;
       toast.success(added || removed ? `Tables refreshed: ${added} new, ${removed} gone` : "Tables are up to date");
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function setScope(scope: TableScope) {
+    setBusy("scope");
+    try {
+      take(await sourcesApi.setScope(connectionId, scope));
+      toast.success(
+        scope === "all"
+          ? "The analyst can now read every table and picks the ones each question needs"
+          : "The analyst now reads only the tables chosen here",
+      );
+      onSaved();
     } catch (e) {
       toast.error((e as Error).message);
     } finally {
@@ -122,10 +142,41 @@ export function TablePicker({
         ) : null}
       </div>
 
-      <p className={cn("text-[0.75rem]", full ? "text-warning" : "text-ink-muted")}>
-        {chosen.size} of at most {max} chosen{full ? " — untick one to choose another" : ""}. Pick only what the
-        questions need; fewer tables give better SQL.
-      </p>
+      {whole ? (
+        <div className="flex flex-col gap-1.5 rounded-lg bg-brand-50 px-3 py-2 text-[0.75rem] text-ink">
+          <p>
+            The analyst can read all {list.tables.length} tables and works out which ones each question needs — nothing
+            to choose. Open a table to see what it holds.
+          </p>
+          {canManage ? (
+            <button
+              type="button"
+              onClick={() => void setScope("selected")}
+              disabled={busy !== null}
+              className="w-fit text-ink-muted underline underline-offset-2 hover:text-ink disabled:opacity-60"
+            >
+              Limit it to tables I choose instead
+            </button>
+          ) : null}
+        </div>
+      ) : (
+        <div className="flex flex-col gap-1.5">
+          <p className={cn("text-[0.75rem]", full ? "text-warning" : "text-ink-muted")}>
+            {chosen.size} of at most {max} chosen{full ? " — untick one to choose another" : ""}. Pick only what the
+            questions need; fewer tables give better SQL.
+          </p>
+          {canManage ? (
+            <button
+              type="button"
+              onClick={() => void setScope("all")}
+              disabled={busy !== null}
+              className="w-fit text-[0.75rem] font-medium text-brand-700 underline underline-offset-2 hover:text-brand-600 disabled:opacity-60"
+            >
+              {busy === "scope" ? "Switching…" : "Let it read every table instead"}
+            </button>
+          ) : null}
+        </div>
+      )}
 
       {list.tables.length === 0 ? (
         <p className="text-[0.875rem] text-ink-muted">This source has no tables the analyst can read yet.</p>
@@ -137,14 +188,16 @@ export function TablePicker({
             return (
               <li key={t.name}>
                 <div className="flex items-center gap-2 px-2.5 py-2">
-                  <input
-                    type="checkbox"
-                    checked={on}
-                    disabled={!canManage || (!on && full)}
-                    onChange={() => toggle(t.name)}
-                    aria-label={`Let the analyst read ${t.name}`}
-                    className="size-4 accent-brand-500"
-                  />
+                  {whole ? null : (
+                    <input
+                      type="checkbox"
+                      checked={on}
+                      disabled={!canManage || (!on && full)}
+                      onChange={() => toggle(t.name)}
+                      aria-label={`Let the analyst read ${t.name}`}
+                      className="size-4 accent-brand-500"
+                    />
+                  )}
                   <button
                     type="button"
                     onClick={() => setOpen(open === t.name ? null : t.name)}
@@ -180,7 +233,7 @@ export function TablePicker({
         </ul>
       )}
 
-      {canManage ? (
+      {canManage && !whole ? (
         <div className="flex justify-end">
           <button
             type="button"

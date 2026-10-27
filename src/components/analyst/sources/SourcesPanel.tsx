@@ -55,7 +55,7 @@ export function SourcesPanel({
     view.view === "add"
       ? "Add a data source"
       : view.view === "tables"
-        ? `Tables · ${current?.name ?? ""}`
+        ? `${current?.table_scope === "all" ? "What's in" : "Tables ·"} ${current?.name ?? ""}`
         : view.view === "files"
           ? `Files · ${current?.name ?? ""}`
           : "Data sources";
@@ -185,18 +185,25 @@ function SourceListView({
                   <p className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[0.75rem] text-ink-muted">
                     <span>{c.kind === "file" ? `Dataset · ${c.file_count} file${c.file_count === 1 ? "" : "s"}` : "Database"}</span>
                     <span>
-                      {c.selected_tables} of {c.total_tables} tables chosen
+                      {c.table_scope === "all"
+                        ? `Whole database · ${c.total_tables} tables`
+                        : `${c.selected_tables} of ${c.total_tables} tables chosen`}
                     </span>
                     <SyncBadge status={c.sync_status} />
                   </p>
-                  {c.total_tables > 0 && c.selected_tables === 0 ? (
+                  {c.table_scope === "all" ? (
+                    <p className="mt-1 text-[0.75rem] text-ink-muted">
+                      Ask anything — the analyst finds the tables each question needs.
+                    </p>
+                  ) : c.total_tables > 0 && c.selected_tables === 0 ? (
                     <p className="mt-1 text-[0.75rem] text-warning">Choose tables before asking on this source.</p>
                   ) : null}
                 </div>
               </div>
               <div className="mt-2.5 flex flex-wrap gap-1.5">
                 <SmallButton onClick={() => setView({ view: "tables", connectionId: c.id })}>
-                  <Table2 aria-hidden className="size-3.5" /> {canManage ? "Choose tables" : "Tables"}
+                  <Table2 aria-hidden className="size-3.5" />{" "}
+                  {c.table_scope === "all" ? "What's in it" : canManage ? "Choose tables" : "Tables"}
                 </SmallButton>
                 {c.kind === "file" ? (
                   <SmallButton onClick={() => setView({ view: "files", connectionId: c.id })}>
@@ -332,7 +339,9 @@ function CrmDatabase({
             numbers, KYC documents, notes, reasons, call summaries and dealer or shop names and locations are not
             readable through it. Per-person answers show staff ids and roles, not names.
           </p>
-          <p className="text-ink-muted">Next you choose which tables (up to 12) the analyst may use.</p>
+          <p className="text-ink-muted">
+            The analyst can then answer from every table it may read, and finds the ones each question needs.
+          </p>
         </>
       ) : (
         <p className="leading-relaxed text-danger">

@@ -487,6 +487,7 @@ export function RunProcess({ state, detail }: ProcessProps) {
   const accepted = attempts.filter((a) => a.sql && !a.rejected);
   const refused = attempts.filter((a) => a.sql && a.rejected);
   const sql = state?.sql ?? detail?.sql;
+  const focus = state ? state.focus : (detail!.trace?.focus ?? null);
 
   // `contents`: the toggle joins the action row beside Copy / Ask again, and the panel wraps
   // onto a full-width line of its own.
@@ -530,6 +531,11 @@ export function RunProcess({ state, detail }: ProcessProps) {
               {truncated === true ? " · cut off" : truncated === false ? " · complete" : ""}
             </Fact>
             <Fact term="Time">{(duration / 1000).toFixed(1)}s</Fact>
+            {focus?.length ? (
+              <Fact term="Tables looked at">
+                <span className="font-mono">{focus.join(", ")}</span>
+              </Fact>
+            ) : null}
             {detail ? (
               <Fact term="Tokens">
                 {detail.prompt_tokens} prompt · {detail.completion_tokens} completion
