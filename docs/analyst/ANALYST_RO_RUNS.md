@@ -52,6 +52,18 @@ To apply it:
 | 2026-10-23 | Analyst agent | `_delete-analyst-outside-connections.ts` dry run | **Could not run.** The agent's sign-in project `okifeathrijchctwrdpu.supabase.co` (ANALYST_SUPABASE_URL) no longer exists in DNS (NXDOMAIN) and the Render agent did not answer within 90s. The saved outside sources stay hidden and refused, not deleted. This needs the agent's owner to restore or replace the Supabase project first. |
 | 2026-10-26 | Analyst agent | moved off Render to `analyst.itarang.com` (Hostinger VPS 187.127.128.78) | Supabase `okifeathrijchctwrdpu` resolves again; service sign-in works; the new box has the same tenant (CRM threads/sources/usage intact). FastAPI listens on 127.0.0.1:8000 only, so the CRM calls it through nginx at `/agent-api/`. |
 | 2026-10-26 | db-2 (prod) | `DRY_RUN=1`, then real run (new generated password, kept out of git) | Target confirmed `database-2`. Role created, SELECT on 73 tables; re-run: 36 readable in full, **`all_rules_hold: true`**, exit 0, 32 sampled withheld columns blocked. Probed as `analyst_ro`: `analyst_leads` 49 rows ("Customer #42D3F64E"), `dealer_leads.city` readable; `users`, raw `leads`, `dealer_leads.memory`, `device_battery_map.vehicle_number` refused (42501); writes refused (25006). Prod env (`ANALYST_CRM_READONLY_DSN` + ANALYST_*) still to set. |
+| 2026-10-27 | db-1 (sandbox) | real run, password unchanged (`analyst_staff` now `user_id, name, role, is_active`) | SELECT on 74 tables, **`all_rules_hold: true`**, exit 0; `staff_view_extra_columns: []`, sample "Sanchit Gupta"; `users` blocked, no readable `*filename` column. |
+| 2026-10-27 | db-2 (prod) | real run, password unchanged (same change) | Target `database-2`. SELECT on 74 tables, **`all_rules_hold: true`**, exit 0; same checks as db-1. Prod Analyst: Refresh tables pressed (386 → 79), `dealer_leads` + `analyst_staff` chosen, Sales Head question answered with 0 rejected; phone / email refused. |
+
+## 27 Oct: "permission denied" on every question (agent catalog fix)
+
+The agent's Postgres reader listed tables and columns from `pg_class` / `pg_attribute`, which ignore
+privileges. As `analyst_ro` the picker offered 386 tables (74 readable), every withheld column, and none
+of the `analyst_*` views, so a question on `users` or a withheld column was refused twice and answered
+"permissions error". Fixed in the agent (Data-Analysis-Agent-backend 5ebb109): only what the login can
+read is listed, views included. **After every role-script run, press Refresh tables** on each iTarang
+source so the saved list and the selected tables' columns are re-read. `analyst_staff` gained `name` and
+`is_active` (staff are employees; phone, email and auth stay blocked).
 
 ## Agent host (26 Oct): `ANALYST_API_URL=https://analyst.itarang.com/agent-api`
 
