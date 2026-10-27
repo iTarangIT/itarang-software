@@ -352,6 +352,9 @@ export function NeodoveCampaignModal({
                             NeoDove campaign name
                         </label>
                         <input
+                            autoComplete="off"
+                            data-1p-ignore
+                            data-lpignore="true"
                             value={neodoveCampaignName}
                             onChange={(e) => setNeodoveCampaignName(e.target.value)}
                             placeholder="CUSTOM_INTEGRATION-campaign"
@@ -377,7 +380,12 @@ export function NeodoveCampaignModal({
                         )}
                         <input
                             type="password"
-                            autoComplete="off"
+                            // Masked secret, not a login: "off" is ignored on password
+                            // fields, and Chrome would fill the saved CRM login here and
+                            // its email into the name field above.
+                            autoComplete="new-password"
+                            data-1p-ignore
+                            data-lpignore="true"
                             spellCheck={false}
                             value={endpointUrl}
                             onChange={(e) => setEndpointUrl(e.target.value)}
