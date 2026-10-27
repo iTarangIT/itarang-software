@@ -64,7 +64,10 @@ export function NeodoveEndpointForm({
                 <div className="mt-2 flex flex-wrap gap-2">
                     <input
                         type="password"
-                        autoComplete="off"
+                        // "off" is ignored on password fields; this stops the saved CRM login filling in.
+                        autoComplete="new-password"
+                        data-1p-ignore
+                        data-lpignore="true"
                         spellCheck={false}
                         value={url}
                         onChange={(e) => setUrl(e.target.value)}
