@@ -136,3 +136,11 @@ describe("B3 — at most two dials a day", () => {
         expect(countDialsOnIstDay(history, now)).toBe(2);
     });
 });
+
+describe("D2 — a switchboard is never redialled", () => {
+    it("is not auto-retried, a personal voicemail still is", () => {
+        expect(isAutoRetryable("switchboard", null)).toBe(false);
+        expect(isAutoRetryable("voicemail", null)).toBe(true);
+        expect(planRetry(base({ status: "switchboard" }))).toBeNull();
+    });
+});

@@ -103,3 +103,18 @@ describe("dialTimeSkip / phoneKey", () => {
         expect(phoneKey("12345")).toBeNull();
     });
 });
+
+describe("D7 — numbers a call already marked", () => {
+    it("skips a switchboard or dead number, even under another lead", () => {
+        const out = planEnrolment([
+            { id: "a", phone: "+919811022422", name: null, observed: "switchboard" },
+            { id: "b", phone: "+917000123456", name: null, observed: "dead_number" },
+            { id: "c", phone: "+919000012345", name: null, observed: null },
+        ]);
+        expect(out.map((d) => [d.id, d.skip, d.phoneType])).toEqual([
+            ["a", "switchboard", "switchboard"],
+            ["b", "dead_number", "dead_number"],
+            ["c", null, "mobile"],
+        ]);
+    });
+});

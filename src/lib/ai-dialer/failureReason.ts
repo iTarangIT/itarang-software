@@ -39,6 +39,7 @@ export const FAILURE_REASON_CODES = [
     "not_answered",
     "busy",
     "voicemail",
+    "switchboard",
     "disconnected",
     "rejected",
     "invalid_number",
@@ -99,6 +100,13 @@ const SPECS: Record<FailureReasonCode, Spec> = {
         label: "Voicemail",
         hint: "The call reached voicemail rather than the dealer.",
         retryable: true,
+        ourFault: false,
+    },
+    switchboard: {
+        code: "switchboard",
+        label: "Switchboard",
+        hint: "A company IVR menu, hold message or voice bot answered. Not redialled; the number is listed under Needs dealer mobile.",
+        retryable: false,
         ourFault: false,
     },
     disconnected: {
@@ -194,6 +202,7 @@ const STATUS_REASON = new Map<string, FailureReasonCode>([
     ["no_response", "not_answered"],
     ["rejected", "rejected"],
     ["voicemail", "voicemail"],
+    ["switchboard", "switchboard"],
     ["silent", "silent_call"],
     ["hung_up", "hung_up_early"],
     // Legacy: the single pre-2026-09-26 bucket the two above were split from.
@@ -252,6 +261,14 @@ const ENROL_SKIP_LABELS: Record<string, { label: string; hint: string }> = {
     skipped_vehicle_showroom: {
         label: "Skipped, vehicle showroom",
         hint: "The listing is a two-wheeler / vehicle showroom, not a battery dealer.",
+    },
+    skipped_switchboard: {
+        label: "Skipped, switchboard",
+        hint: "An earlier call to this number reached a company IVR or hold message.",
+    },
+    skipped_dead_number: {
+        label: "Skipped, dead number",
+        hint: "An earlier call to this number was told it does not exist.",
     },
 };
 

@@ -119,6 +119,8 @@ export async function runDialerPollOnce(): Promise<DialerPollResult> {
             // existed for only some calls.
             conversation: s.rawTranscriptTurns,
             terminationReason: s.terminationReason ?? null,
+            answeredBy: s.answeredBy ?? null,
+            callResult: s.callResult ?? null,
           });
           result.finalized += 1;
           result.perRow.push({

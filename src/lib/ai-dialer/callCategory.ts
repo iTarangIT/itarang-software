@@ -129,6 +129,7 @@ const NOT_CONNECTED: Partial<Record<CallEndStatus, CallCategory>> = {
     busy: "unavailable",
     rejected: "unavailable",
     voicemail: "unavailable",
+    switchboard: "unavailable",
     silent: "unavailable",
     no_conversation: "unavailable",
     hung_up: "hung_up",

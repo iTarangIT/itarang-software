@@ -36,7 +36,15 @@ export type PhoneType =
     | "fixed_line"
     | "toll_free"
     | "other"
-    | "invalid";
+    | "invalid"
+    // D2 / D7 — learned from a call, never from the number's shape (see
+    // phoneTypeStore.noteCallResultForNumber): a company IVR answered, or the
+    // carrier said the number does not exist. Cleared when a person answers.
+    | "switchboard"
+    | "dead_number";
+
+/** Phone types a call taught us. A re-classification must not overwrite them. */
+export const OBSERVED_PHONE_TYPES = ["switchboard", "dead_number"] as const;
 
 /** What kind of number this is. Indian numbers without +91 are read as Indian. */
 export function classifyPhone(raw: string | null | undefined): PhoneType {
@@ -80,7 +88,13 @@ export function isVehicleShowroom(name: string | null | undefined): boolean {
     return SHOWROOM_RE.test(s) && !DEALER_WORDS_RE.test(s);
 }
 
-export type EnrolSkip = "no_phone" | "not_mobile" | "vehicle_showroom" | "duplicate_number";
+export type EnrolSkip =
+    | "no_phone"
+    | "not_mobile"
+    | "vehicle_showroom"
+    | "duplicate_number"
+    | "switchboard"
+    | "dead_number";
 
 /** The dialer_campaign_leads.call_outcome written for a lead skipped at enrolment. */
 export const ENROL_SKIP_OUTCOME: Record<EnrolSkip, string> = {
@@ -88,9 +102,17 @@ export const ENROL_SKIP_OUTCOME: Record<EnrolSkip, string> = {
     not_mobile: "skipped_not_mobile",
     vehicle_showroom: "skipped_vehicle_showroom",
     duplicate_number: "skipped_duplicate_number",
+    switchboard: "skipped_switchboard",
+    dead_number: "skipped_dead_number",
 };
 
-export type EnrolCandidate = { id: string; phone: string | null; name: string | null };
+export type EnrolCandidate = {
+    id: string;
+    phone: string | null;
+    name: string | null;
+    /** D7 — a switchboard / dead number a call already found on this number. */
+    observed?: "switchboard" | "dead_number" | null;
+};
 export type EnrolDecision = { id: string; phoneType: PhoneType; skip: EnrolSkip | null };
 
 /**
@@ -103,6 +125,7 @@ export function planEnrolment(leads: EnrolCandidate[]): EnrolDecision[] {
         const phoneType = classifyPhone(l.phone);
         if (!(l.phone ?? "").trim()) return { id: l.id, phoneType, skip: "no_phone" };
         if (!isDialablePhoneType(phoneType)) return { id: l.id, phoneType, skip: "not_mobile" };
+        if (l.observed) return { id: l.id, phoneType: l.observed, skip: l.observed };
         if (isVehicleShowroom(l.name)) return { id: l.id, phoneType, skip: "vehicle_showroom" };
         const key = phoneKey(l.phone);
         if (key && seen.has(key)) return { id: l.id, phoneType, skip: "duplicate_number" };
@@ -121,6 +144,12 @@ export function describeEnrolSkips(counts: Record<EnrolSkip, number>): string | 
     }
     if (counts.duplicate_number) {
         parts.push(`${counts.duplicate_number} duplicate number${counts.duplicate_number === 1 ? "" : "s"}`);
+    }
+    if (counts.switchboard) {
+        parts.push(`${counts.switchboard} switchboard${counts.switchboard === 1 ? "" : "s"}`);
+    }
+    if (counts.dead_number) {
+        parts.push(`${counts.dead_number} dead number${counts.dead_number === 1 ? "" : "s"}`);
     }
     return parts.length ? parts.join(", ") : null;
 }

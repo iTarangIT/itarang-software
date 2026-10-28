@@ -31,6 +31,7 @@ import {
   PhoneMissed,
   PhoneOff,
   Voicemail,
+  Building2,
   Hourglass,
   MicOff,
   PhoneForwarded,
@@ -151,6 +152,13 @@ const LEAD_STYLES: Record<
     text: "text-violet-800",
     label: LABELS.voicemail,
     Icon: Voicemail,
+  },
+  // D2 — an IVR / hold message / company bot. Never redialled.
+  switchboard: {
+    bg: "bg-slate-200",
+    text: "text-slate-800",
+    label: LABELS.switchboard,
+    Icon: Building2,
   },
   silent: {
     bg: "bg-indigo-100",

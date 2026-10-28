@@ -206,6 +206,8 @@ export async function finalizeBolnaCall(
         callId,
         transcript: null,
         providerStatus: status || "failed",
+        // B5 — the campaign row's own verdict: connected = a person spoke.
+        callEndStatus: callEnd.status,
         durationSec: duration ?? null,
         recordingUrl,
       });
@@ -438,6 +440,8 @@ export async function finalizeBolnaCall(
       callId,
       transcript,
       providerStatus: status || "completed",
+      // B5 — the campaign row's own verdict: connected = a person spoke.
+      callEndStatus: callEnd.status,
       bandCallStatus: "dropped_empty",
       band: null,
       infoSignalsCount: 0,
@@ -585,6 +589,8 @@ export async function finalizeBolnaCall(
     callId,
     transcript,
     providerStatus: status || "completed",
+    // B5 — the campaign row's own verdict: connected = a person spoke.
+    callEndStatus: callEnd.status,
     band: analysis.band,
     bandCallStatus: analysis.call_status,
     infoSignalsCount: analysis.info_signals_count,
@@ -907,6 +913,8 @@ async function markLeadNeedsReview(opts: {
     callId: opts.callId,
     transcript: opts.transcript,
     providerStatus: opts.status || "needs_review",
+    // B5 — the campaign row's own verdict: connected = a person spoke.
+    callEndStatus: opts.callEnd.status,
     analysisFailed: true,
     durationSec: opts.duration,
     recordingUrl: opts.recordingUrl,

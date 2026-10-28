@@ -66,6 +66,13 @@ export type ElevenLabsFinalizePayload = {
    * for one thing: a voicemail-detection hang-up, which is not a conversation.
    */
   terminationReason?: string | null;
+  /**
+   * D2 / B5 — the agent's data collection (analysis.data_collection_results),
+   * sent by the v9 agent: who picked up, and `switchboard_or_recording`. Null
+   * when the agent does not collect them (every agent before v9).
+   */
+  answeredBy?: string | null;
+  callResult?: string | null;
 };
 
 const IN_PROGRESS = new Set(["initiated", "ringing", "in-progress"]);
@@ -106,6 +113,8 @@ export async function finalizeElevenLabsCall(
     endedAt,
     agentId,
     terminationReason,
+    answeredBy,
+    callResult,
   } = payload;
 
   if (IN_PROGRESS.has(status)) {
@@ -137,6 +146,8 @@ export async function finalizeElevenLabsCall(
     transcript,
     terminationReason,
     durationSecs: duration,
+    answeredBy,
+    callResult,
   });
   // E-310 — kept on ai_call_logs so the split above can be re-read later.
   const endEvidence: CallEndEvidenceRow = { endReason: terminationReason };
@@ -209,6 +220,8 @@ export async function finalizeElevenLabsCall(
         callId: conversationId,
         transcript: null,
         providerStatus: status || "failed",
+        // B5 — the campaign row's own verdict: connected = a person spoke.
+        callEndStatus: callEnd.status,
         durationSec: duration ?? null,
         recordingUrl,
       });
@@ -475,6 +488,8 @@ export async function finalizeElevenLabsCall(
       callId: conversationId,
       transcript,
       providerStatus: status || "completed",
+      // B5 — the campaign row's own verdict: connected = a person spoke.
+      callEndStatus: callEnd.status,
       bandCallStatus: "dropped_empty",
       band: null,
       infoSignalsCount: 0,
@@ -612,6 +627,8 @@ export async function finalizeElevenLabsCall(
     callId: conversationId,
     transcript,
     providerStatus: status || "completed",
+    // B5 — the campaign row's own verdict: connected = a person spoke.
+    callEndStatus: callEnd.status,
     band: analysis.band,
     bandCallStatus: analysis.call_status,
     infoSignalsCount: analysis.info_signals_count,
@@ -964,6 +981,8 @@ async function markLeadNeedsReview(opts: {
     callId: opts.callId,
     transcript: opts.transcript,
     providerStatus: opts.status || "needs_review",
+    // B5 — the campaign row's own verdict: connected = a person spoke.
+    callEndStatus: opts.callEnd.status,
     analysisFailed: true,
     durationSec: opts.duration,
     recordingUrl: opts.recordingUrl,

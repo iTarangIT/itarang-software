@@ -12,10 +12,15 @@ import { summarizeRegion } from "@/lib/leads/regionSummary";
 import { partitionAiConnected } from "@/lib/ai-dialer/aiConnection";
 import {
   ENROL_SKIP_OUTCOME,
+  phoneKey,
   planEnrolment,
   type EnrolSkip,
 } from "@/lib/ai-dialer/numberHygiene";
-import { recordPhoneTypes } from "@/lib/ai-dialer/phoneTypeStore";
+import {
+  noteCallResultForNumber,
+  observedNumbers,
+  recordPhoneTypes,
+} from "@/lib/ai-dialer/phoneTypeStore";
 import {
   ATTEMPTED_STATUSES,
   sqlStatusList,
@@ -95,6 +100,8 @@ const NO_ENROL_SKIPS = (): Record<EnrolSkip, number> => ({
   not_mobile: 0,
   vehicle_showroom: 0,
   duplicate_number: 0,
+  switchboard: 0,
+  dead_number: 0,
 });
 
 export async function createCampaign(opts: {
@@ -160,8 +167,13 @@ export async function createCampaign(opts: {
         leadInfo.set(r.id, { phone: r.phone, name: name || null });
       }
     }
+    // D7 — numbers an earlier call found to be a switchboard or dead.
+    const observed = await observedNumbers([...leadInfo.values()].map((l) => l.phone));
     const plan = planEnrolment(
-      enrolIds.map((id) => ({ id, ...(leadInfo.get(id) ?? { phone: null, name: null }) })),
+      enrolIds.map((id) => {
+        const info = leadInfo.get(id) ?? { phone: null, name: null };
+        return { id, ...info, observed: observed.get(phoneKey(info.phone) ?? "") ?? null };
+      }),
     );
     await recordPhoneTypes(
       plan.flatMap((d) => {
@@ -466,6 +478,7 @@ export async function recordAttemptOutcome(opts: {
 }): Promise<{ written: boolean; retryAt: Date | null }> {
   const row = await db
     .select({
+      lead_id: dialerCampaignLeads.lead_id,
       attempt_count: dialerCampaignLeads.attempt_count,
       attempt_history: dialerCampaignLeads.attempt_history,
       max_retries: dialerCampaigns.max_retries,
@@ -552,6 +565,12 @@ export async function recordAttemptOutcome(opts: {
     .returning({ id: dialerCampaignLeads.id });
 
   const written = updated.length > 0;
+  // D2 / D7 — a switchboard or dead number is remembered against the number
+  // (Needs dealer mobile, skipped by later campaigns); a person answering
+  // clears it. Best-effort, never throws.
+  if (written && r?.lead_id) {
+    await noteCallResultForNumber(r.lead_id, opts.status, opts.outcome ?? null);
+  }
   if (written && retryAt) {
     console.log("[CAMPAIGN] retry scheduled", {
       campaignLeadId: opts.campaignLeadId,

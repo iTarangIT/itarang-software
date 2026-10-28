@@ -59,6 +59,26 @@ export interface NormalizedPostCall {
   endedAt: Date | null;
   /** metadata.termination_reason, or null when absent or blank. */
   terminationReason: string | null;
+  /** D2 / B5 — data collection `answered_by`, when the agent collects it. */
+  answeredBy: string | null;
+  /** D2 — data collection `call_result` (switchboard_or_recording, …). */
+  callResult: string | null;
+}
+
+/**
+ * One data-collection value from a conversation's `analysis`, as a trimmed
+ * string, or null. ElevenLabs nests it as
+ * analysis.data_collection_results.<key>.value; shared by the webhook and the
+ * poller (getCallStatus.ts).
+ */
+export function dataCollectionValue(analysis: unknown, key: string): string | null {
+  const results = (analysis as { data_collection_results?: Record<string, unknown> } | null | undefined)
+    ?.data_collection_results;
+  const entry = results?.[key] as { value?: unknown } | undefined;
+  const v = entry?.value;
+  if (typeof v === "string" && v.trim()) return v.trim();
+  if (typeof v === "number" || typeof v === "boolean") return String(v);
+  return null;
 }
 
 type Meta = {
@@ -151,5 +171,7 @@ export function normalizePostCall(
       typeof meta?.termination_reason === "string" && meta.termination_reason.trim()
         ? meta.termination_reason.trim()
         : null,
+    answeredBy: dataCollectionValue(data.analysis, "answered_by"),
+    callResult: dataCollectionValue(data.analysis, "call_result"),
   };
 }

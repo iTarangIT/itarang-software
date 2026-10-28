@@ -31,6 +31,7 @@ import {
   PhoneMissed,
   PhoneOff,
   Voicemail,
+  Building2,
   Hourglass,
   MicOff,
   PhoneForwarded,
@@ -157,6 +158,7 @@ const BUCKET_ORDER: Bucket[] = [
   "busy",
   "rejected",
   "voicemail",
+  "switchboard",
   "silent",
   "hung_up",
   "no_conversation",
@@ -810,7 +812,7 @@ export function CampaignDetailView({
                     retryCandidates === 1 ? "" : "s"
                   }?`,
                   message:
-                    "Busy, no response, rejected, voicemail, no-conversation and failed calls. This starts a new campaign and begins calling them.",
+                    "Busy, no response, rejected, voicemail, no-conversation and failed calls (not switchboards). This starts a new campaign and begins calling them.",
                   confirmText: "Retry",
                 });
                 if (ok) {
@@ -1001,6 +1003,14 @@ export function CampaignDetailView({
           value={count("voicemail")}
           Icon={Voicemail}
           tone="violet"
+        />
+        {/* D2 — an IVR menu, hold message or company bot. Not redialled. */}
+        <StatCard
+          label={CAMPAIGN_LEAD_STATUS_LABELS.switchboard}
+          value={count("switchboard")}
+          Icon={Building2}
+          tone="neutral"
+          hint="A company IVR menu, hold message or voice bot answered. These numbers are not redialled."
         />
         {/* The old single "Pending" card, split. Legacy no_conversation rows
             (not yet re-classified) count as Silent Call. */}

@@ -28,6 +28,7 @@ import {
     NOT_CONNECTED_REASONS,
 } from "@/lib/leads/dispositions";
 import { CALL_STATUS } from "@/lib/lifecycle/touchpointTypes";
+import { dealerSpoke } from "@/lib/ai-dialer/campaignLeadStatus";
 import { DISQUALIFIERS } from "@/lib/ai/scoring/signals";
 
 const BANDS = ["Qualified", "Warm", "Cold", "Disqualified", null] as const;
@@ -80,6 +81,11 @@ function* allInputs(): Generator<AiCallDispositionInput> {
             yield { transcript, providerStatus, band: "Qualified", infoSignalsCount: 5 };
         }
     }
+
+    // B5 — answered, but no person: a switchboard / voicemail transcript, or a
+    // transcript the campaign row classified as not a conversation.
+    yield { transcript: "agent: Namaste\nuser: For sales, press 1.", providerStatus: "done" };
+    yield { transcript: "agent: hello\nuser: haan", providerStatus: "done", callEndStatus: "switchboard" };
 
     // Connected: the full cross-product of everything the band engine produces.
     for (const band of BANDS) {
@@ -148,15 +154,16 @@ describe("mapAiCallToDisposition — invariants over every input", () => {
         }
     });
 
-    it("treats the transcript as the absolute connect gate", () => {
+    // B5 / D2 — connected means a PERSON spoke: the campaign row's verdict
+    // when given, else dealerSpoke(transcript). "Has a transcript" counted
+    // switchboards and voicemail greetings as connected.
+    it("treats 'a person spoke' as the absolute connect gate", () => {
         for (const input of allInputs()) {
             const out = mapAiCallToDisposition(input);
-            const hasTranscript = Boolean(
-                input.transcript && input.transcript.trim() !== "",
-            );
-            expect(out.connectStatus).toBe(
-                hasTranscript ? "connected" : "not_connected",
-            );
+            const personSpoke = input.callEndStatus
+                ? input.callEndStatus === "completed"
+                : dealerSpoke(input.transcript);
+            expect(out.connectStatus).toBe(personSpoke ? "connected" : "not_connected");
         }
     });
 
@@ -211,6 +218,7 @@ describe("mapAiCallToDisposition — invariants over every input", () => {
             "nc:unreachable",
             "nc:failed",
             "nc:unknown",
+            "nc:no_person",
             "c:analysis_failed",
             "c:not_analysed",
             "c:dropped_empty",
@@ -383,5 +391,24 @@ describe("aiExternalTag", () => {
         expect(
             aiExternalTag({ transcript: "x", providerStatus: "c", analysisFailed: true }),
         ).toBe("needs_review");
+    });
+});
+
+describe("B5 — connected means a person spoke", () => {
+    it("a machine-only transcript is not connected", () => {
+        const out = mapAiCallToDisposition({
+            transcript: "agent: Namaste ji\nuser: Welcome to Tata Motors. For sales, press 1.",
+            providerStatus: "done",
+        });
+        expect(out.connectStatus).toBe("not_connected");
+        expect(out.disposition).toBe("Did not pick");
+        expect(out.reasonCode).toBe("nc:no_person");
+    });
+
+    it("the campaign row's verdict wins over the transcript", () => {
+        const spoke = { transcript: "agent: hello\nuser: haan bolo", providerStatus: "done" };
+        expect(mapAiCallToDisposition({ ...spoke, callEndStatus: "completed" }).connectStatus).toBe("connected");
+        expect(mapAiCallToDisposition({ ...spoke, callEndStatus: "voicemail" }).connectStatus).toBe("not_connected");
+        expect(mapAiCallToDisposition({ ...spoke, callEndStatus: "silent" }).connectStatus).toBe("not_connected");
     });
 });

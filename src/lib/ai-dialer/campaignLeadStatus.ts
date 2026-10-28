@@ -52,6 +52,7 @@ export const CAMPAIGN_LEAD_STATUSES = [
     "busy",
     "rejected",
     "voicemail",
+    "switchboard",
     "silent",
     "hung_up",
     "no_conversation",
@@ -68,6 +69,7 @@ export const ATTEMPTED_STATUSES = [
     "busy",
     "rejected",
     "voicemail",
+    "switchboard",
     "silent",
     "hung_up",
     "no_conversation",
@@ -82,6 +84,7 @@ export const NON_CONVERSATION_STATUSES = [
     "busy",
     "rejected",
     "voicemail",
+    "switchboard",
     "silent",
     "hung_up",
     "no_conversation",
@@ -91,8 +94,11 @@ export const NON_CONVERSATION_STATUSES = [
 /**
  * Rows the Retry / Recall flows may re-queue. `failed` is further narrowed by
  * isRetryableFailure (a config error is retryable, an invalid number is not).
+ * `switchboard` (D2) is not: a company IVR answers every redial the same way.
  */
-export const RETRYABLE_STATUSES = NON_CONVERSATION_STATUSES;
+export const RETRYABLE_STATUSES = NON_CONVERSATION_STATUSES.filter(
+    (s): s is Exclude<(typeof NON_CONVERSATION_STATUSES)[number], "switchboard"> => s !== "switchboard",
+);
 
 /** Finished rows — nothing moves a row out of these. */
 export const TERMINAL_STATUSES = [
@@ -124,6 +130,7 @@ export const CAMPAIGN_LEAD_STATUS_LABELS: Record<CampaignLeadStatus, string> = {
     busy: "Busy",
     rejected: "Rejected",
     voicemail: "Voicemail",
+    switchboard: "Switchboard",
     silent: "Silent Call",
     hung_up: "Hung Up Early",
     no_conversation: "Silent Call (legacy)",
@@ -233,7 +240,14 @@ const VOICEMAIL_PHRASES = [
 // Same bar as the frame list: phrases a dealer would not say to a sales call.
 // Seeded from that campaign, then widened against every prod transcript
 // (926, 2026-09-22); the calibration tests pin each family.
-const MACHINE_PHRASES = [
+//
+// D2 (AI Dialer Fixes, 10 Oct) splits them in two. A missed-call auto-reply or
+// a call-screening assistant sits on a PERSON's phone: Voicemail, retried as
+// before. An IVR menu, a hold / queue message or another company's bot is a
+// SWITCHBOARD: the same machine answers every redial (a Tata Motors switchboard
+// was dialled again after 1 h, 3 h and next window), so it is never retried and
+// the number is marked for list cleaning.
+const PERSONAL_MACHINE_PHRASES = [
     // Missed-call auto-reply
     "your call went unanswered",
     "we have noted your number",
@@ -245,6 +259,9 @@ const MACHINE_PHRASES = [
     "call assistant",
     "person you are trying to reach",
     "reason for calling",
+] as const;
+
+const SWITCHBOARD_PHRASES = [
     // IVR menus, hold and transfer messages
     "select any option",
     "please confirm the language",
@@ -273,6 +290,8 @@ const MACHINE_PHRASES = [
     "अन्य कोई सहायता",
     "कोई और सहायता",
 ] as const;
+
+const MACHINE_PHRASES = [...PERSONAL_MACHINE_PHRASES, ...SWITCHBOARD_PHRASES] as const;
 
 // IVR key prompts — "press 1", "press one", "2 दबाएँ", "दो दबाइए". Raw
 // fragments, NOT escaped, so each must mean the same in a JS RegExp and a
@@ -307,6 +326,8 @@ function alternation(phrases: readonly string[]): string {
 }
 
 const MACHINE_PATTERN = [alternation(MACHINE_PHRASES), ...MACHINE_PATTERNS].join("|");
+// IVR key prompts are switchboard by definition.
+const SWITCHBOARD_PATTERN = [alternation(SWITCHBOARD_PHRASES), ...MACHINE_PATTERNS].join("|");
 
 /** The one pattern both twins test a dealer turn against. */
 export const ANNOUNCEMENT_PATTERN = [
@@ -319,6 +340,7 @@ const FRAME_RE = new RegExp(alternation(ANNOUNCEMENT_FRAME_PHRASES), "i");
 const VOICEMAIL_RE = new RegExp(alternation(VOICEMAIL_PHRASES), "i");
 const BUSY_RE = new RegExp(alternation(BUSY_WORDS), "i");
 const INVALID_RE = new RegExp(alternation(INVALID_WORDS), "i");
+const SWITCHBOARD_RE = new RegExp(SWITCHBOARD_PATTERN, "i");
 
 /**
  * At least one character that is not whitespace or punctuation.
@@ -331,7 +353,7 @@ const INVALID_RE = new RegExp(alternation(INVALID_WORDS), "i");
 const CONTENT_RE = /[^\s!-\/:-@\[-`{-~…।]/;
 const CONTENT_SQL_CLASS = "[^[:space:][:punct:]…।]";
 
-export type AnnouncementKind = "busy" | "no_response" | "voicemail" | "invalid";
+export type AnnouncementKind = "busy" | "no_response" | "voicemail" | "switchboard" | "invalid";
 
 /** Is this dealer turn really a recording or a machine, and if so which kind? */
 export function classifyCarrierAnnouncement(
@@ -348,9 +370,10 @@ export function classifyCarrierAnnouncement(
         // case the dealer was not reached, which is what No Response means.
         return "no_response";
     }
-    // No frame, so a MACHINE_PHRASES / MACHINE_PATTERNS match: an auto-reply,
-    // screening assistant or IVR answered instead of the dealer.
-    return "voicemail";
+    // No frame, so a MACHINE_PHRASES / MACHINE_PATTERNS match: an IVR, hold
+    // message or company bot (switchboard), or an auto-reply / screening
+    // assistant on a person's phone (voicemail).
+    return SWITCHBOARD_RE.test(text) ? "switchboard" : "voicemail";
 }
 
 type TranscriptReading = {
@@ -358,7 +381,11 @@ type TranscriptReading = {
     anyTurn: boolean;
     /** At least one real dealer turn. */
     dealerSpoke: boolean;
-    /** The first announcement found in a dealer turn, if any. */
+    /**
+     * The first announcement found in a dealer turn, if any — except that a
+     * switchboard turn anywhere wins: a screening assistant that hands over to
+     * an IVR menu is still a company line.
+     */
     announcement: AnnouncementKind | null;
 };
 
@@ -369,7 +396,8 @@ function readTranscript(transcript: string | null | undefined): TranscriptReadin
     for (const turn of turns) {
         if (turn.speaker !== "user" || !CONTENT_RE.test(turn.text)) continue;
         const kind = classifyCarrierAnnouncement(turn.text);
-        if (kind) announcement ??= kind;
+        if (kind === "switchboard") announcement = kind;
+        else if (kind) announcement ??= kind;
         else dealerSpoke = true;
     }
     return { anyTurn: turns.length > 0, dealerSpoke, announcement };
@@ -419,6 +447,14 @@ export type CallEndEvidence = {
     terminationReason?: string | null;
     /** How long the call lasted, in seconds (ai_call_logs.call_duration). */
     durationSecs?: number | string | null;
+    /**
+     * ElevenLabs data collection (v9 agent; absent from earlier agents): who
+     * picked up. owner | staff_or_family | other_business | unclear are a
+     * person (B5); anything else (voicemail, ivr, nobody_spoke, ...) is not.
+     */
+    answeredBy?: string | null;
+    /** ElevenLabs data collection: `switchboard_or_recording` retires the number. */
+    callResult?: string | null;
 };
 
 export type CallEndClassification = {
@@ -432,6 +468,9 @@ export type CallEndClassification = {
 };
 
 const VOICEMAIL_TERMINATION = /voice ?mail|answering machine|machine detected|machine_detected/i;
+
+/** ElevenLabs `answered_by` values that are a person (B5). */
+const ANSWERED_BY_PERSON = new Set(["owner", "staff_or_family", "other_business", "unclear"]);
 
 /**
  * A termination reason saying the OTHER side ended the call — the dealer hung
@@ -512,11 +551,35 @@ function telephonyText(e: CallEndEvidence): string {
  *   7. failed.
  */
 export function classifyCallEnd(e: CallEndEvidence): CallEndClassification {
-    if (e.answeredByVoicemail === true || VOICEMAIL_TERMINATION.test(e.terminationReason ?? "")) {
-        return { status: "voicemail", outcome: null };
+    // D2 — the transcript is read BEFORE the voicemail flag. The live agent
+    // uses its voicemail tool on every kind of machine, so the flag alone filed
+    // IVR menus as Voicemail and they were redialled.
+    const reading = readTranscript(e.transcript);
+
+    // The agent's own verdict (v9 data collection), when it sends one.
+    if (/switchboard|recording/i.test(e.callResult ?? "")) {
+        return { status: "switchboard", outcome: null };
     }
 
-    const reading = readTranscript(e.transcript);
+    if (e.answeredByVoicemail === true || VOICEMAIL_TERMINATION.test(e.terminationReason ?? "")) {
+        return {
+            status: reading.announcement === "switchboard" ? "switchboard" : "voicemail",
+            outcome: null,
+        };
+    }
+
+    // B5 — "connected" means a person. When the agent says nobody human picked
+    // up, a dealer-looking turn (a machine phrase we do not know yet) does not
+    // make it a conversation.
+    const answeredBy = (e.answeredBy ?? "").trim().toLowerCase();
+    if (answeredBy && !ANSWERED_BY_PERSON.has(answeredBy)) {
+        if (reading.announcement === "switchboard" || /ivr|switchboard|recording|tracking|bot/.test(answeredBy)) {
+            return { status: "switchboard", outcome: null };
+        }
+        if (/voice ?mail|machine/.test(answeredBy)) return { status: "voicemail", outcome: null };
+        return { status: silentOrHungUp(e), outcome: null };
+    }
+
     if (reading.dealerSpoke) return { status: "completed", outcome: null };
 
     switch (reading.announcement) {
@@ -526,6 +589,8 @@ export function classifyCallEnd(e: CallEndEvidence): CallEndClassification {
             return { status: "no_response", outcome: null };
         case "voicemail":
             return { status: "voicemail", outcome: null };
+        case "switchboard":
+            return { status: "switchboard", outcome: null };
         case "invalid":
             return { status: "failed", outcome: "invalid_number" };
     }
@@ -603,6 +668,11 @@ export function reclassifyStoredAttempt(a: StoredAttempt): StoredClassification 
     // Never dialled. Written as 'failed' before, 'skipped' now.
     if (lower === "no_phone" || lower.startsWith("ineligible")) {
         return { status: "skipped", outcome: null };
+    }
+    // B1 / D7 — skipped at enrolment (numberHygiene.ENROL_SKIP_OUTCOME). Kept
+    // as written: the outcome is the reason the campaign page shows.
+    if (a.status === "skipped" && lower.startsWith("skipped_")) {
+        return { status: "skipped", outcome: outcome };
     }
     // Our own terminal outcomes with nothing to re-read — unless a transcript
     // turned up afterwards, in which case the call did happen.

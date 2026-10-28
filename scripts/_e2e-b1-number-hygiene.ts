@@ -29,7 +29,9 @@ const uniq = String(Date.now()).slice(-4);
 const LEADS = [
     { id: n("good"), phone: `+9170000${uniq}1`, shop_name: "Shree Batteries" },
     { id: n("dup"), phone: `70000${uniq}1`, shop_name: "Shree Batteries (branch)" }, // same number, other shape
-    { id: n("landline"), phone: `+91 80 6${uniq}123`, shop_name: "Exide Care - Need Battery House" },
+    // Patna 0612-2xxxxxx: always a fixed line, whatever `uniq` is (some 080-6
+    // series are shared with mobiles, which made this check flaky).
+    { id: n("landline"), phone: `+91 612 2${uniq}12`, shop_name: "Exide Care - Need Battery House" },
     { id: n("showroom"), phone: `+9170000${uniq}2`, shop_name: "TVS - Kunal Automobile" },
     { id: n("motors"), phone: `+9170000${uniq}3`, shop_name: "Terra Motors Bhopal" },
 ];
