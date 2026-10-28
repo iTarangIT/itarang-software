@@ -20,7 +20,8 @@
 
 import { sql } from "drizzle-orm";
 
-import { db } from "@/lib/db";
+// Background pool: collectors run off the request pool (see db/background.ts).
+import { bgDb as db } from "@/lib/db/background";
 import { usageTrackingEnabled } from "@/lib/usage/track";
 
 import { buildUsageSamples, numFrom } from "../usageSamples";

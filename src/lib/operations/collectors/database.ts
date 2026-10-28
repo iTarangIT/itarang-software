@@ -25,7 +25,8 @@
 
 import { getTableName, is, sql, Table } from "drizzle-orm";
 
-import { db } from "@/lib/db";
+// Background pool: collectors run off the request pool (see db/background.ts).
+import { bgDb as db } from "@/lib/db/background";
 import * as schema from "@/lib/db/schema";
 import {
   connectionCapacityPct,
@@ -786,6 +787,14 @@ function unreachableSamples(
   ];
 }
 
+// The per-table size scans (pg_total_relation_size over every table, CRM and
+// IoT) and the drift read are the slow part of this collector — 40 s+ seen on
+// db-1. Table sizes and schema drift move slowly, so they run at most every
+// 30 min; the connection-headroom numbers keep the 2 min cadence. Readers
+// look back 48 h, so the latest table sample stays on screen in between.
+const SLOW_PROBE_EVERY_MS = 30 * MINUTE;
+let lastSlowProbeAt = 0;
+
 export const databaseCollector: OpsCollector = {
   id: "db.rds",
   label: "Database health (RDS + IoT)",
@@ -796,6 +805,8 @@ export const databaseCollector: OpsCollector = {
 
   async run(): Promise<CollectedSample[]> {
     const samples: CollectedSample[] = [];
+    const slowProbes = Date.now() - lastSlowProbeAt >= SLOW_PROBE_EVERY_MS;
+    if (slowProbes) lastSlowProbeAt = Date.now();
 
     // ---- CRM RDS: the one that must always be probed ----------------------
     // Each half is isolated. probeTables runs pg_total_relation_size over every
@@ -809,7 +820,7 @@ export const databaseCollector: OpsCollector = {
       samples.push(...unreachableSamples("rds:crm", "probe failed", e, null));
     }
 
-    try {
+    if (slowProbes) try {
       samples.push(...(await probeTables(db, "table")));
     } catch (e) {
       samples.push({
@@ -820,7 +831,7 @@ export const databaseCollector: OpsCollector = {
       });
     }
 
-    try {
+    if (slowProbes) try {
       const drift = await migrationDrift();
       samples.push({
         metric_key: "db.migration_drift",
@@ -878,7 +889,7 @@ export const databaseCollector: OpsCollector = {
       // telemetry database's tables to the CRM. Runs pg_total_relation_size
       // across a tunnel, so it gets its own try/catch and never gates the
       // numbers above.
-      try {
+      if (slowProbes) try {
         samples.push(...(await probeTables(getIotDb(), "iot_table")));
       } catch {
         // Silent: when the bridge is unreachable this always fails, and a

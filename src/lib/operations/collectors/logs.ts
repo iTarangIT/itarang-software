@@ -13,7 +13,8 @@
 
 import { sql } from "drizzle-orm";
 
-import { db } from "@/lib/db";
+// Background pool: collectors run off the request pool (see db/background.ts).
+import { bgDb as db } from "@/lib/db/background";
 
 import type { CollectedSample, OpsCollector } from "./types";
 import { MINUTE } from "./types";

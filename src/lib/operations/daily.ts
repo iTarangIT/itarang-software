@@ -18,7 +18,8 @@
 
 import { sql } from "drizzle-orm";
 
-import { db } from "@/lib/db";
+// Background pool: collectors run off the request pool (see db/background.ts).
+import { bgDb as db } from "@/lib/db/background";
 import { log } from "@/lib/log";
 import { previousIstDate } from "./istClock";
 

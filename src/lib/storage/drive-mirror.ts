@@ -51,6 +51,7 @@ import { and, desc, eq, inArray, lte, sql } from "drizzle-orm";
 import { google, type drive_v3 } from "googleapis";
 
 import { db } from "@/lib/db";
+import { bgDb } from "@/lib/db/background";
 import { storageDriveMirror } from "@/lib/db/schema";
 import { describeDriveError, parseDriveFolderId } from "@/lib/google/drive";
 import {
@@ -380,7 +381,7 @@ export async function enqueueDriveMirror(input: {
 
 async function markDone(id: number, r: DriveUploadResult): Promise<void> {
   const now = new Date();
-  await db
+  await bgDb
     .update(storageDriveMirror)
     .set({
       status: "done",
@@ -398,7 +399,7 @@ async function markDone(id: number, r: DriveUploadResult): Promise<void> {
 async function markFailed(id: number, attempts: number, err: unknown): Promise<void> {
   const now = new Date();
   const message = describeDriveError(err).slice(0, 2000);
-  await db
+  await bgDb
     .update(storageDriveMirror)
     .set({
       status: "failed",
@@ -421,14 +422,14 @@ async function mirrorRow(
 ): Promise<"done" | "failed" | "missing"> {
   if (isDriveMirrorExcluded(row.bucket, row.object_key)) {
     // Queued before the category was excluded — drop it, never upload.
-    await db.delete(storageDriveMirror).where(eq(storageDriveMirror.id, row.id));
+    await bgDb.delete(storageDriveMirror).where(eq(storageDriveMirror.id, row.id));
     return "missing";
   }
   try {
     const bytes = body ?? (await getObject(row.bucket, row.object_key));
     if (!bytes) {
       // Object gone from S3 between enqueue and upload — nothing to back up.
-      await db
+      await bgDb
         .update(storageDriveMirror)
         .set({
           status: "source_deleted",
@@ -461,7 +462,7 @@ async function mirrorRow(
  * from seeing them.
  */
 async function claimDue(limit: number): Promise<LedgerRow[]> {
-  const rows = await db.execute<LedgerRow>(sql`
+  const rows = await bgDb.execute<LedgerRow>(sql`
     UPDATE storage_drive_mirror
        SET status = 'uploading', updated_at = now()
      WHERE id IN (
@@ -485,7 +486,7 @@ async function claimDue(limit: number): Promise<LedgerRow[]> {
 /** Return rows orphaned in 'uploading' (process died mid-upload) to pending. */
 async function recoverStale(): Promise<number> {
   const cutoff = new Date(Date.now() - STALE_UPLOADING_MS);
-  const rows = await db
+  const rows = await bgDb
     .update(storageDriveMirror)
     .set({ status: "pending", updated_at: new Date() })
     .where(and(eq(storageDriveMirror.status, "uploading"), lte(storageDriveMirror.updated_at, cutoff)))
@@ -540,7 +541,7 @@ export async function onObjectStored(input: {
   inlineInFlight += 1;
   void (async () => {
     try {
-      const claimed = await db
+      const claimed = await bgDb
         .update(storageDriveMirror)
         .set({ status: "uploading", updated_at: new Date() })
         .where(
@@ -630,7 +631,9 @@ export async function runDriveMirrorTick(
   }
 
   result.recovered_stale = await recoverStale();
-  await purgeExcludedQueue();
+  // No purgeExcludedQueue() here: it reads every pending/failed row (seen at
+  // 299 s on db-1) and ran every minute. claimDue skips excluded buckets and
+  // mirrorRow drops excluded keys, so the 6-hourly backfill's purge is enough.
   const rows = await claimDue(max);
   result.claimed = rows.length;
 
@@ -652,7 +655,7 @@ export async function runDriveMirrorTick(
   // Anything claimed but never started (budget hit) goes back to pending.
   if (idx < rows.length) {
     const leftover = rows.slice(idx).map((r) => r.id);
-    await db
+    await bgDb
       .update(storageDriveMirror)
       .set({ status: "pending", updated_at: new Date() })
       .where(inArray(storageDriveMirror.id, leftover));
@@ -676,7 +679,7 @@ export interface DriveMirrorBackfillResult {
  * what is in Drive. Cheap once the backlog is clean (id/bucket/key only).
  */
 export async function purgeExcludedQueue(): Promise<number> {
-  const rows = await db
+  const rows = await bgDb
     .select({
       id: storageDriveMirror.id,
       bucket: storageDriveMirror.bucket,
@@ -687,7 +690,7 @@ export async function purgeExcludedQueue(): Promise<number> {
   const ids = rows.filter((r) => isDriveMirrorExcluded(r.bucket, r.object_key)).map((r) => r.id);
   const CHUNK = 500;
   for (let i = 0; i < ids.length; i += CHUNK) {
-    await db.delete(storageDriveMirror).where(inArray(storageDriveMirror.id, ids.slice(i, i + CHUNK)));
+    await bgDb.delete(storageDriveMirror).where(inArray(storageDriveMirror.id, ids.slice(i, i + CHUNK)));
   }
   return ids.length;
 }
@@ -727,7 +730,7 @@ export async function runDriveMirrorBackfill(
       })
       .filter((v): v is NonNullable<typeof v> => v !== null);
     if (!values.length) continue;
-    const inserted = await db
+    const inserted = await bgDb
       .insert(storageDriveMirror)
       .values(values)
       .onConflictDoNothing({ target: [storageDriveMirror.bucket, storageDriveMirror.object_key] })
@@ -739,7 +742,7 @@ export async function runDriveMirrorBackfill(
 
 /** Reset every failed row's clock so the next tick retries it immediately. */
 export async function retryFailedNow(): Promise<number> {
-  const rows = await db
+  const rows = await bgDb
     .update(storageDriveMirror)
     .set({ status: "pending", next_attempt_at: new Date(), updated_at: new Date() })
     .where(eq(storageDriveMirror.status, "failed"))
