@@ -31,6 +31,7 @@ import {
   PhoneMissed,
   PhoneOff,
   Voicemail,
+  Building2,
   Hourglass,
   MicOff,
   PhoneForwarded,
@@ -85,6 +86,8 @@ type Campaign = {
   windowDays: unknown;
   resumeAfter: string | null;
   pausedAt: string | null;
+  /** D1 (E-360) — set when the carrier refused 10 calls in a row and the campaign paused itself. */
+  carrierPause?: { pauseReason: string; lastCarrierError: string | null; pausedAt: string | null } | null;
   // E-315 — automatic retries. maxRetries null = auto-retry off (older runs).
   maxRetries?: number | null;
   retryScheduled?: number;
@@ -155,6 +158,7 @@ const BUCKET_ORDER: Bucket[] = [
   "busy",
   "rejected",
   "voicemail",
+  "switchboard",
   "silent",
   "hung_up",
   "no_conversation",
@@ -808,7 +812,7 @@ export function CampaignDetailView({
                     retryCandidates === 1 ? "" : "s"
                   }?`,
                   message:
-                    "Busy, no response, rejected, voicemail, no-conversation and failed calls. This starts a new campaign and begins calling them.",
+                    "Busy, no response, rejected, voicemail, no-conversation and failed calls (not switchboards). This starts a new campaign and begins calling them.",
                   confirmText: "Retry",
                 });
                 if (ok) {
@@ -912,7 +916,17 @@ export function CampaignDetailView({
                   {campaign.status === "stopped" && " (resume to continue)"}
                 </p>
               )}
-            {campaign.status === "paused" && (
+            {campaign.status === "paused" && campaign.carrierPause && (
+              <p className="mt-2 text-xs text-rose-700">
+                Paused because the carrier refused 10 calls in a row
+                {campaign.carrierPause.lastCarrierError
+                  ? ` ("${campaign.carrierPause.lastCarrierError}")`
+                  : ""}
+                . No leads were used up. Press Resume calling once the line is
+                working again.
+              </p>
+            )}
+            {campaign.status === "paused" && !campaign.carrierPause && (
               <p className="mt-2 text-xs text-slate-600">
                 Paused at the end of its calling window with {pendingLeads} lead
                 {pendingLeads === 1 ? "" : "s"} left. Single-run campaigns do not
@@ -989,6 +1003,14 @@ export function CampaignDetailView({
           value={count("voicemail")}
           Icon={Voicemail}
           tone="violet"
+        />
+        {/* D2 — an IVR menu, hold message or company bot. Not redialled. */}
+        <StatCard
+          label={CAMPAIGN_LEAD_STATUS_LABELS.switchboard}
+          value={count("switchboard")}
+          Icon={Building2}
+          tone="neutral"
+          hint="A company IVR menu, hold message or voice bot answered. These numbers are not redialled."
         />
         {/* The old single "Pending" card, split. Legacy no_conversation rows
             (not yet re-classified) count as Silent Call. */}

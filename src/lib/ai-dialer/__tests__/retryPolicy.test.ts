@@ -98,23 +98,23 @@ describe("planRetry — gaps", () => {
         const now = ist("2026-09-28T11:00:00");
         expect(planRetry(base({ attemptCount: 1, now }))).toEqual(ist("2026-09-28T12:00:00"));
         expect(planRetry(base({ attemptCount: 2, now }))).toEqual(ist("2026-09-28T14:00:00"));
-        expect(planRetry(base({ attemptCount: 3, now }))).toEqual(ist("2026-09-29T09:00:00"));
+        expect(planRetry(base({ attemptCount: 3, now }))).toEqual(ist("2026-09-29T10:00:00"));
     });
 });
 
 describe("planRetry — calling hours", () => {
-    it("moves an evening retry to 09:00 the next day", () => {
-        expect(planRetry(base({ now: ist("2026-09-28T18:30:00") }))).toEqual(ist("2026-09-29T09:00:00"));
+    it("moves an evening retry to 10:00 the next day (dialler hours, B3)", () => {
+        expect(planRetry(base({ now: ist("2026-09-28T18:30:00") }))).toEqual(ist("2026-09-29T10:00:00"));
     });
 
     it("skips Sunday", () => {
-        // Saturday 18:30 + 1 h → Saturday 19:30 (shut) → Monday 09:00
-        expect(planRetry(base({ now: ist("2026-10-03T18:30:00") }))).toEqual(ist("2026-10-05T09:00:00"));
+        // Saturday 18:30 + 1 h → Saturday 19:30 (shut) → Monday 10:00
+        expect(planRetry(base({ now: ist("2026-10-03T18:30:00") }))).toEqual(ist("2026-10-05T10:00:00"));
     });
 
     it("an early-morning result waits for the window to open the same day", () => {
         expect(planRetry(base({ status: "busy", now: ist("2026-09-28T07:00:00") }))).toEqual(
-            ist("2026-09-28T09:00:00"),
+            ist("2026-09-28T10:00:00"),
         );
     });
 });
@@ -151,7 +151,7 @@ describe("line blocked on our side (refunded attempts)", () => {
         const plan = planRetryDetailed(
             base({ status: "failed", callOutcome: SIP_403, now: ist("2026-09-30T18:45:00") }),
         );
-        expect(plan?.at).toEqual(ist("2026-10-01T09:00:00"));
+        expect(plan?.at).toEqual(ist("2026-10-01T10:00:00"));
     });
 
     it("after MAX_LINE_BLOCKED_RETRIES the dial counts like any failure", () => {

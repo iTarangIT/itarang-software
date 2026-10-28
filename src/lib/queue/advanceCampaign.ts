@@ -40,7 +40,12 @@ import {
   isAiDialable,
 } from "@/lib/ai-dialer/exclusionFilter";
 import { classifyCallEnd } from "@/lib/ai-dialer/campaignLeadStatus";
-import { DISCONNECTED_OUTCOME } from "@/lib/ai-dialer/retryPolicy";
+import {
+  DISCONNECTED_OUTCOME,
+  FAILED_TRIGGER_GAP_MS,
+} from "@/lib/ai-dialer/retryPolicy";
+import { noteTriggerResult } from "@/lib/ai-dialer/lineHealth";
+import { dialTimeSkip, ENROL_SKIP_OUTCOME } from "@/lib/ai-dialer/numberHygiene";
 import {
   nextWindowOpenSql,
   pauseForWindow,
@@ -57,6 +62,10 @@ export type AdvanceResult =
   | { kind: "waiting-retry"; nextAt: Date | null }
   | { kind: "skipped"; reason: string }
   | { kind: "campaign-not-running" }
+  // D1 (E-360) — the carrier refused CARRIER_PAUSE_THRESHOLD dials in a row.
+  // The campaign is now 'paused' and an alert has gone out; `error` is the
+  // carrier's last refusal text.
+  | { kind: "carrier-paused"; error: string }
   // E-254 — the calling window is shut. The campaign has been parked (see
   // pauseForWindow) and no call was placed. This is a NORMAL outcome, not an
   // error: callers that report "did the first call go out?" must not turn it
@@ -169,6 +178,34 @@ async function hasCallingRows(campaignId: string): Promise<boolean> {
     )
     .limit(1);
   return r.length > 0;
+}
+
+// D1 — re-read before every dial after the first. The loop can run for a while
+// (up to MAX_SKIPS leads, 2s apart after a failed trigger), and a Stop, a
+// carrier pause or a window park written meanwhile must stop the NEXT dial,
+// not the next advanceCampaign call.
+async function isStillRunning(campaignId: string): Promise<boolean> {
+  const r = await db
+    .select({ status: dialerCampaigns.status })
+    .from(dialerCampaigns)
+    .where(eq(dialerCampaigns.id, campaignId))
+    .limit(1);
+  return r[0]?.status === "running";
+}
+
+// After a failed trigger. Reports it to the carrier-pause counter; returns the
+// carrier-paused result when that pause just happened, else waits the gap
+// before the next lead so a refusing line is not hammered.
+async function afterFailedTrigger(
+  campaignId: string,
+  outcome: string,
+  reason: string,
+): Promise<AdvanceResult | null> {
+  if (await noteTriggerResult(campaignId, outcome)) {
+    return { kind: "carrier-paused", error: reason };
+  }
+  await new Promise((r) => setTimeout(r, FAILED_TRIGGER_GAP_MS));
+  return null;
 }
 
 // Is anything still waiting to be dialled? Consulted only when the window has
@@ -290,6 +327,9 @@ export async function advanceCampaign(
     // numbers — 20 was too tight and stalled real campaigns.
     const MAX_SKIPS = 100;
     for (let i = 0; i < MAX_SKIPS; i++) {
+      if (i > 0 && !(await isStillRunning(campaignId))) {
+        return { kind: "campaign-not-running" };
+      }
       const claimed = await claimNextPending(campaignId);
       if (!claimed) {
         // No more pending rows. If nothing is calling either, the
@@ -313,6 +353,8 @@ export async function advanceCampaign(
         .select({
           id: dealerLeads.id,
           phone: dealerLeads.phone,
+          shop_name: dealerLeads.shop_name,
+          dealer_name: dealerLeads.dealer_name,
           lead_status: dealerLeads.lead_status,
           ai_recall_status: dealerLeads.ai_recall_status,
           // Projected here rather than checked inside isAiDialable(), which is
@@ -350,6 +392,31 @@ export async function advanceCampaign(
           })
           .where(eq(dialerCampaignLeads.id, claimed.campaignLeadId));
         // Counters are derived from the rows — see syncCampaignCounters.
+        await syncCampaignCounters(campaignId);
+        continue;
+      }
+
+      // B1 — mobiles only, no vehicle showrooms. createCampaign already
+      // enrols these as skipped; this catches campaigns created before that,
+      // and a number edited to a landline after enrolment.
+      const hygieneSkip = dialTimeSkip({
+        phone: lead[0].phone,
+        name: [lead[0].shop_name, lead[0].dealer_name].filter(Boolean).join(" | ") || null,
+      });
+      if (hygieneSkip) {
+        console.warn("[advanceCampaign] skipping lead that is not dialable", {
+          campaignId,
+          leadId: claimed.leadId,
+          reason: hygieneSkip,
+        });
+        await db
+          .update(dialerCampaignLeads)
+          .set({
+            status: "skipped",
+            completed_at: new Date(),
+            call_outcome: ENROL_SKIP_OUTCOME[hygieneSkip],
+          })
+          .where(eq(dialerCampaignLeads.id, claimed.campaignLeadId));
         await syncCampaignCounters(campaignId);
         continue;
       }
@@ -447,12 +514,15 @@ export async function advanceCampaign(
             error: err instanceof Error ? err.message : String(err),
           },
         );
+        const exOutcome = `trigger_exception: ${exReason}`;
         await recordAttemptOutcome({
           campaignLeadId: claimed.campaignLeadId,
           status: classifyCallEnd({ triggerError: exReason }).status,
-          outcome: `trigger_exception: ${exReason}`,
+          outcome: exOutcome,
         });
         await syncCampaignCounters(campaignId);
+        const stop = await afterFailedTrigger(campaignId, exOutcome, exReason);
+        if (stop) return stop;
         continue;
       }
 
@@ -476,14 +546,20 @@ export async function advanceCampaign(
         // line HERE, synchronously, as the INVITE's SIP status (486 / 480 /
         // 603) — so this is where most "the dealer didn't pick up" outcomes
         // are born. Classify it instead of filing every one as failed.
+        const failOutcome = `trigger_failed: ${reason}`;
         await recordAttemptOutcome({
           campaignLeadId: claimed.campaignLeadId,
           status: classifyCallEnd({ triggerError: reason }).status,
-          outcome: `trigger_failed: ${reason}`,
+          outcome: failOutcome,
         });
         await syncCampaignCounters(campaignId);
+        const stop = await afterFailedTrigger(campaignId, failOutcome, reason);
+        if (stop) return stop;
         continue;
       }
+
+      // D1 — the call reached the carrier: the refused-in-a-row run is over.
+      await noteTriggerResult(campaignId, null);
 
       // Success path: attach the provider call id to the row so the
       // polling backstop can look up status later. If the attach fails,

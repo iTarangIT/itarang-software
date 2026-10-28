@@ -9,6 +9,7 @@ import { successResponse, withErrorHandler } from "@/lib/api-utils";
 import { and, desc, eq, sql, type SQL } from "drizzle-orm";
 import { DURATION_SECONDS_SQL } from "@/lib/ai-dialer/call-duration/derive";
 import { requireCampaignReader } from "@/lib/ai-dialer/campaignAccess";
+import { carrierPausesFor } from "@/lib/ai-dialer/lineHealth";
 
 export const GET = withErrorHandler(async (req: Request) => {
   // ID 45: was unauthenticated. Campaign-level rows only (no lead names or
@@ -94,5 +95,9 @@ export const GET = withErrorHandler(async (req: Request) => {
     .limit(limit)
     .offset(offset);
 
-  return successResponse({ data: rows, page });
+  // D1 (E-360) — the carrier-pause reason for any campaign that paused itself.
+  const pauses = await carrierPausesFor(rows.map((r) => r.id));
+  const data = rows.map((r) => ({ ...r, carrierPause: pauses.get(r.id) ?? null }));
+
+  return successResponse({ data, page });
 });

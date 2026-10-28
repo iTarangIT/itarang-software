@@ -161,6 +161,7 @@ const REACHED_NETWORK: ReadonlySet<FailureReasonCode> = new Set<FailureReasonCod
     "busy",
     "not_answered",
     "voicemail",
+    "switchboard",
     "disconnected",
     "rejected",
     "invalid_number",

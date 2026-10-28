@@ -180,18 +180,20 @@ async function main() {
     true,
   );
 
-  console.log("\nwindowOpenSql — overnight window 22:00-06:00 (the wrap)");
+  // B3 — dialler hours (10:00-19:00 IST) are ANDed on every window, so an
+  // overnight window never opens: the AI dialer does not ring dealers at night.
+  console.log("\nwindowOpenSql — overnight window 22:00-06:00 (shut by dialler hours, B3)");
   await expectOpen(
-    "open before midnight (23:00)",
+    "shut before midnight (23:00)",
     OVERNIGHT,
     ist(WED, "23:00"),
-    true,
+    false,
   );
   await expectOpen(
-    "open after midnight (02:00)",
+    "shut after midnight (02:00)",
     OVERNIGHT,
     ist(THU, "02:00"),
-    true,
+    false,
   );
   await expectOpen(
     "shut at midday (12:00)",
@@ -206,19 +208,26 @@ async function main() {
     false,
   );
 
-  console.log("\nwindowOpenSql — backward compatibility (E-228's guarantee)");
+  // B3 — an unscheduled ('now') campaign is no longer always open; it dials
+  // inside dialler hours only, and still ignores any stale window values.
+  console.log("\nwindowOpenSql — unscheduled rows follow dialler hours (B3)");
+  await expectOpen("unscheduled row shut at 03:00", UNSCHEDULED, ist(WED, "03:00"), false);
+  await expectOpen("unscheduled row shut at 09:59", UNSCHEDULED, ist(WED, "09:59"), false);
+  await expectOpen("unscheduled row open at 10:00", UNSCHEDULED, ist(WED, "10:00"), true);
+  await expectOpen("unscheduled row shut at 19:00", UNSCHEDULED, ist(WED, "19:00"), false);
   await expectOpen(
-    "unscheduled row open at 03:00",
-    UNSCHEDULED,
-    ist(WED, "03:00"),
-    true,
-  );
-  await expectOpen(
-    "mode='now' short-circuits stale window values at 03:00",
+    "mode='now' ignores stale window values (open 16:00, outside 11-15)",
     NOW_WITH_STALE,
-    ist(WED, "03:00"),
+    ist(WED, "16:00"),
     true,
   );
+
+  console.log("\nwindowOpenSql — a scheduled window is narrowed to dialler hours (B3)");
+  const EARLY: Row = { ...EVERY_DAY, window_start: "09:00", window_end: "21:00" };
+  await expectOpen("09:00-21:00 shut at 09:30", EARLY, ist(WED, "09:30"), false);
+  await expectOpen("09:00-21:00 open at 10:00", EARLY, ist(WED, "10:00"), true);
+  await expectOpen("09:00-21:00 shut at 19:30", EARLY, ist(WED, "19:30"), false);
+  await expectNext("09:00-21:00 next opening is 10:00", EARLY, ist(WED, "08:00"), `${WED} 10:00`);
 
   console.log("\nwindowOpenSql — single run uses the same gate as recurring");
   await expectOpen("single open mid-window", SINGLE, ist(WED, "13:00"), true);
@@ -255,17 +264,24 @@ async function main() {
     ist(MON_NEXT, "15:00"),
     "2026-08-31 11:00",
   );
+  // B3 — a 'now' campaign shut by dialler hours resumes itself at 10:00.
   await expectNext(
-    "unscheduled row has no next opening",
+    "unscheduled row, evening → tomorrow 10:00",
     UNSCHEDULED,
-    ist(WED, "15:00"),
-    null,
+    ist(WED, "19:30"),
+    `${THU} 10:00`,
   );
   await expectNext(
-    "mode='now' has no next opening even with window values set",
+    "unscheduled row, early morning → today 10:00",
+    UNSCHEDULED,
+    ist(WED, "07:00"),
+    `${WED} 10:00`,
+  );
+  await expectNext(
+    "mode='now' uses 10:00 even with window values set",
     NOW_WITH_STALE,
-    ist(WED, "15:00"),
-    null,
+    ist(WED, "19:30"),
+    `${THU} 10:00`,
   );
 
   // The tight-loop regression. If nextWindowOpenSql used >= instead of >, a

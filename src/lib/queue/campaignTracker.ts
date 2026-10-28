@@ -5,11 +5,22 @@
 // running"; this module is the source of truth for "what happened?".
 
 import { db } from "@/lib/db";
-import { dialerCampaigns, dialerCampaignLeads } from "@/lib/db/schema";
+import { dealerLeads, dialerCampaigns, dialerCampaignLeads } from "@/lib/db/schema";
 import { and, desc, eq, inArray, lt, sql } from "drizzle-orm";
 import { dialerSession, type DialerProvider } from "./dialerSession";
 import { summarizeRegion } from "@/lib/leads/regionSummary";
 import { partitionAiConnected } from "@/lib/ai-dialer/aiConnection";
+import {
+  ENROL_SKIP_OUTCOME,
+  phoneKey,
+  planEnrolment,
+  type EnrolSkip,
+} from "@/lib/ai-dialer/numberHygiene";
+import {
+  noteCallResultForNumber,
+  observedNumbers,
+  recordPhoneTypes,
+} from "@/lib/ai-dialer/phoneTypeStore";
 import {
   ATTEMPTED_STATUSES,
   sqlStatusList,
@@ -20,7 +31,11 @@ import {
   scheduleColumns,
   type ValidatedSchedule,
 } from "./campaignWindow";
-import { planRetryDetailed, type RetryWindow } from "@/lib/ai-dialer/retryPolicy";
+import {
+  countDialsOnIstDay,
+  planRetryDetailed,
+  type RetryWindow,
+} from "@/lib/ai-dialer/retryPolicy";
 
 // E-315 — automatic redials per unreached lead for every NEW campaign. A lead
 // gets at most 1 + this many dials. Old campaigns keep max_retries NULL (off).
@@ -68,9 +83,26 @@ export type CreateCampaignResult = {
   campaignId: string | null;
   /** Rows actually inserted — never more than queueIds.length. */
   queued: number;
+  /** The lead ids queued to dial, in order (excludes every skip below). */
+  dialIds: string[];
   /** Lead ids dropped because the AI has already had a connected call. */
   blockedAiConnected: string[];
+  /**
+   * B1 / D7 — leads enrolled as 'skipped' instead of dialled: not a mobile, a
+   * vehicle showroom, a number already in this campaign, or no phone. They are
+   * listed in the campaign with the reason and are not in total_leads.
+   */
+  skippedAtEnrol: Record<EnrolSkip, number>;
 };
+
+const NO_ENROL_SKIPS = (): Record<EnrolSkip, number> => ({
+  no_phone: 0,
+  not_mobile: 0,
+  vehicle_showroom: 0,
+  duplicate_number: 0,
+  switchboard: 0,
+  dead_number: 0,
+});
 
 export async function createCampaign(opts: {
   queueIds: string[];
@@ -106,7 +138,7 @@ export async function createCampaign(opts: {
     //
     // Unconditional, not flag-driven: every caller of this function is an AI
     // dialer campaign. The NeoDove human push does not come through here.
-    const { dialable: queueIds, blockedAiConnected } = await partitionAiConnected(
+    const { dialable: enrolIds, blockedAiConnected } = await partitionAiConnected(
       opts.queueIds,
     );
 
@@ -116,11 +148,56 @@ export async function createCampaign(opts: {
       );
     }
 
+    // B1 / D7 — mobiles only, no vehicle showrooms, one lead per number. Also
+    // unconditional and here for the same reason as the scrub above: every
+    // path into a campaign (region, list, scraper run, retry) passes through.
+    const leadInfo = new Map<string, { phone: string | null; name: string | null }>();
+    for (let i = 0; i < enrolIds.length; i += 5000) {
+      const found = await db
+        .select({
+          id: dealerLeads.id,
+          phone: dealerLeads.phone,
+          shop_name: dealerLeads.shop_name,
+          dealer_name: dealerLeads.dealer_name,
+        })
+        .from(dealerLeads)
+        .where(inArray(dealerLeads.id, enrolIds.slice(i, i + 5000)));
+      for (const r of found) {
+        const name = [r.shop_name, r.dealer_name].filter(Boolean).join(" | ");
+        leadInfo.set(r.id, { phone: r.phone, name: name || null });
+      }
+    }
+    // D7 — numbers an earlier call found to be a switchboard or dead.
+    const observed = await observedNumbers([...leadInfo.values()].map((l) => l.phone));
+    const plan = planEnrolment(
+      enrolIds.map((id) => {
+        const info = leadInfo.get(id) ?? { phone: null, name: null };
+        return { id, ...info, observed: observed.get(phoneKey(info.phone) ?? "") ?? null };
+      }),
+    );
+    await recordPhoneTypes(
+      plan.flatMap((d) => {
+        // Stored exactly as dealer_leads has it: the filter matches on equality.
+        const phone = leadInfo.get(d.id)?.phone;
+        return phone?.trim() ? [{ leadId: d.id, phone, phoneType: d.phoneType }] : [];
+      }),
+    );
+    const queueIds = plan.filter((d) => d.skip === null).map((d) => d.id);
+    const skippedRows = plan.filter((d) => d.skip !== null);
+    const skippedAtEnrol = NO_ENROL_SKIPS();
+    for (const d of skippedRows) skippedAtEnrol[d.skip!]++;
+    if (skippedRows.length > 0) {
+      console.warn(
+        "[campaignTracker.createCampaign] skipped at enrolment",
+        skippedAtEnrol,
+      );
+    }
+
     // Nothing left to dial. Do NOT create the campaign — an empty queue would
     // finalize on its first advance and leave a confusing zero-lead row in the
     // history. The caller turns this into an honest error message.
     if (queueIds.length === 0) {
-      return { campaignId: null, queued: 0, blockedAiConnected };
+      return { campaignId: null, queued: 0, dialIds: [], blockedAiConnected, skippedAtEnrol };
     }
 
     const campaignId = newId("camp");
@@ -144,13 +221,25 @@ export async function createCampaign(opts: {
     });
 
     if (queueIds.length > 0) {
-      const rows = queueIds.map((leadId, idx) => ({
-        id: newId("cl"),
-        campaign_id: campaignId,
-        lead_id: leadId,
-        queue_position: idx,
-        status: "pending",
-      }));
+      const rows = [
+        ...queueIds.map((leadId, idx) => ({
+          id: newId("cl"),
+          campaign_id: campaignId,
+          lead_id: leadId,
+          queue_position: idx,
+          status: "pending",
+        })),
+        // Listed in the campaign with the reason, after the dialable queue.
+        ...skippedRows.map((d, idx) => ({
+          id: newId("cl"),
+          campaign_id: campaignId,
+          lead_id: d.id,
+          queue_position: queueIds.length + idx,
+          status: "skipped",
+          call_outcome: ENROL_SKIP_OUTCOME[d.skip!],
+          completed_at: new Date(),
+        })),
+      ];
 
       // Chunk to keep the bind-parameter count below Postgres' 64k cap on
       // very large queues. 500 rows × ~5 columns = well within limits.
@@ -160,10 +249,16 @@ export async function createCampaign(opts: {
       }
     }
 
-    return { campaignId, queued: queueIds.length, blockedAiConnected };
+    return { campaignId, queued: queueIds.length, dialIds: queueIds, blockedAiConnected, skippedAtEnrol };
   } catch (err) {
     console.error("[campaignTracker.createCampaign] failed:", err);
-    return { campaignId: null, queued: 0, blockedAiConnected: [] };
+    return {
+      campaignId: null,
+      queued: 0,
+      dialIds: [],
+      blockedAiConnected: [],
+      skippedAtEnrol: NO_ENROL_SKIPS(),
+    };
   }
 }
 
@@ -383,6 +478,7 @@ export async function recordAttemptOutcome(opts: {
 }): Promise<{ written: boolean; retryAt: Date | null }> {
   const row = await db
     .select({
+      lead_id: dialerCampaignLeads.lead_id,
       attempt_count: dialerCampaignLeads.attempt_count,
       attempt_history: dialerCampaignLeads.attempt_history,
       max_retries: dialerCampaigns.max_retries,
@@ -416,16 +512,19 @@ export async function recordAttemptOutcome(opts: {
         }
       : await defaultRetryWindow();
     const history = Array.isArray(r.attempt_history)
-      ? (r.attempt_history as Array<{ counted?: boolean }>)
+      ? (r.attempt_history as Array<{ counted?: boolean; at?: string | null }>)
       : [];
+    const now = new Date();
     const plan = planRetryDetailed({
       status: opts.status,
       callOutcome: opts.outcome ?? null,
       attemptCount: attempt,
       maxRetries: r.max_retries,
-      now: new Date(),
+      now,
       window,
       lineBlockedRetriesUsed: history.filter((h) => h.counted === false).length,
+      // B3 — earlier dials today plus the one that just ended.
+      dialsToday: countDialsOnIstDay(history, now) + 1,
     });
     retryAt = plan?.at ?? null;
     consumesAttempt = plan?.consumesAttempt ?? true;
@@ -466,6 +565,12 @@ export async function recordAttemptOutcome(opts: {
     .returning({ id: dialerCampaignLeads.id });
 
   const written = updated.length > 0;
+  // D2 / D7 — a switchboard or dead number is remembered against the number
+  // (Needs dealer mobile, skipped by later campaigns); a person answering
+  // clears it. Best-effort, never throws.
+  if (written && r?.lead_id) {
+    await noteCallResultForNumber(r.lead_id, opts.status, opts.outcome ?? null);
+  }
   if (written && retryAt) {
     console.log("[CAMPAIGN] retry scheduled", {
       campaignLeadId: opts.campaignLeadId,

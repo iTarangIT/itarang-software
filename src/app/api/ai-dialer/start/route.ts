@@ -4,6 +4,7 @@ import { dealerLeads, regionGroups } from "@/lib/db/schema";
 import { inArray } from "drizzle-orm";
 import { NextRequest, NextResponse } from "next/server";
 import { createCampaign } from "@/lib/queue/campaignTracker";
+import { describeEnrolSkips } from "@/lib/ai-dialer/numberHygiene";
 import { advanceCampaign } from "@/lib/queue/advanceCampaign";
 import { guardApi } from "@/lib/auth/apiGuard";
 import { CALLING_LIST_ROLES } from "@/lib/leads/access";
@@ -117,7 +118,7 @@ export async function POST(req: NextRequest) {
   // with. That matters here specifically: this route trusts the client's
   // queueIds as authoritative, so a modal left open for ten minutes can carry
   // ids that became ineligible in the meantime.
-  const { campaignId, queued, blockedAiConnected } = await createCampaign({
+  const { campaignId, queued, dialIds, blockedAiConnected, skippedAtEnrol } = await createCampaign({
     queueIds,
     provider,
     category: typeof category === "string" ? category : null,
@@ -140,9 +141,23 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // B1 / D7 — nothing left once landlines, showrooms and repeat numbers were
+  // skipped. Same reason as above: say why instead of "failed to create".
+  const enrolSkips = describeEnrolSkips(skippedAtEnrol);
+  if (!campaignId && enrolSkips) {
+    return NextResponse.json(
+      {
+        success: false,
+        error: `None of these leads can be dialled by the AI (${enrolSkips}).`,
+        skippedAtEnrol,
+      },
+      { status: 409 },
+    );
+  }
+
   // The session drives the banner, so it must reflect what will actually be
   // dialled — not the pre-scrub selection.
-  const dialedIds = queueIds.filter((id) => !blockedAiConnected.includes(id));
+  const dialedIds = dialIds;
 
   await dialerSession.start(dialedIds, {
     provider,
@@ -183,6 +198,10 @@ export async function POST(req: NextRequest) {
       if (r.kind === "error") {
         firstCallError = r.error;
       }
+      // D1 — the carrier refused 10 dials in a row and the campaign paused itself.
+      if (r.kind === "carrier-paused") {
+        firstCallError = `Carrier refused the calls (${r.error}); campaign paused`;
+      }
       if (r.kind === "window-closed") {
         armedStatus = r.status;
         resumeAt = r.resumeAt ? r.resumeAt.toISOString() : null;
@@ -202,6 +221,8 @@ export async function POST(req: NextRequest) {
     // spoken to them. The modal shows this so a shrunken queue is explained
     // rather than just smaller than the preview said.
     blockedAiConnected: blockedAiConnected.length,
+    // B1 / D7 — enrolled as skipped (not a mobile, showroom, repeat number).
+    skippedAtEnrol,
     campaignId,
     firstCallPlaced,
     firstCallError,

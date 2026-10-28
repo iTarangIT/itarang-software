@@ -98,6 +98,10 @@ export async function startDraftCampaign(
     const r = await advanceCampaign(campaignId);
     firstCallPlaced = r.kind === "placed";
     if (r.kind === "error") firstCallError = r.error;
+    // D1 — the carrier refused 10 dials in a row and the campaign paused itself.
+    if (r.kind === "carrier-paused") {
+      firstCallError = `Carrier refused the calls (${r.error}); campaign paused`;
+    }
     // The window was shut. advanceCampaign has already flipped the campaign out
     // of 'running' — which is why this function needs no window logic of its
     // own, and why a manual resume outside business hours re-arms rather than

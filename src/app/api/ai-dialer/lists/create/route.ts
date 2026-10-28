@@ -12,6 +12,7 @@ import { guardApi } from "@/lib/auth/apiGuard";
 import { CALLING_LIST_ROLES } from "@/lib/leads/access";
 import { createCampaign } from "@/lib/queue/campaignTracker";
 import { importListRows } from "@/lib/ai-dialer/listImport";
+import { describeEnrolSkips } from "@/lib/ai-dialer/numberHygiene";
 import { LEAD_ORIGINS, type LeadOrigin } from "@/lib/leads/leadSourceVocab";
 import Papa from "papaparse";
 import * as XLSX from "xlsx";
@@ -87,7 +88,7 @@ export const POST = withErrorHandler(async (req: Request) => {
     );
   }
 
-  const { campaignId, queued, blockedAiConnected } = await createCampaign({
+  const { campaignId, queued, blockedAiConnected, skippedAtEnrol } = await createCampaign({
     queueIds: summary.queueIds,
     // Placeholder — the real provider is chosen when the user presses Start.
     provider: "bolna",
@@ -119,6 +120,12 @@ export const POST = withErrorHandler(async (req: Request) => {
     );
   }
 
+  // B1 / D7 — every row was a landline, a showroom or a repeat number.
+  const enrolSkips = describeEnrolSkips(skippedAtEnrol);
+  if (!campaignId && enrolSkips) {
+    return errorResponse(`None of the dealers in this list can be dialled by the AI (${enrolSkips}).`, 409);
+  }
+
   if (!campaignId) {
     return errorResponse("Failed to create the campaign. Please try again.", 500);
   }
@@ -133,5 +140,6 @@ export const POST = withErrorHandler(async (req: Request) => {
     invalid: summary.invalid,
     queued,
     blockedAiConnected: blockedAiConnected.length,
+    skippedAtEnrol,
   });
 });

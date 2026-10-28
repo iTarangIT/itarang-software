@@ -104,6 +104,7 @@ export function classifyOutcomeFamily(code: FailureReasonCode | null | undefined
         case "not_answered":
         case "busy":
         case "voicemail":
+        case "switchboard":
         case "config_error":
             return "dropped";
         case "stopped":

@@ -26,6 +26,7 @@ import { IDLE_WORKING_DAYS_SQL, idlePastLimitSql } from "@/lib/leads/idleLimit";
 import { awaitingAssignment, readySplitSql, type ReadySplit } from "@/lib/leads/salesReady";
 import { SOURCE_DOOR_NONE } from "@/lib/leads/leadSourceVocab";
 import { effectiveDoorSql } from "@/lib/leads/leadSourceDoorSql";
+import { NEEDS_DEALER_MOBILE_SQL } from "@/lib/ai-dialer/phoneTypeStore";
 import { ownerScopeIds } from "@/lib/users/teamRules";
 
 // Shared with the API route. Both ends of a created-at range must look like a
@@ -211,6 +212,14 @@ export type LeadListFilters = {
      * asking "who wants a callback" does not care who recorded it.
      */
     callback?: boolean;
+    /**
+     * B1 (E-361) — the AI dialer cannot call these: no phone, or a landline /
+     * toll-free / tracking number (dealer_lead_phone_type). `phoneTypeTable` =
+     * hasPhoneTypeTable(), probed by the async parser; without it only the
+     * no-phone half applies.
+     */
+    needsMobile?: boolean;
+    phoneTypeTable?: boolean;
     // ── Type of Business (E-296) ─────────────────────────────────────────
     /**
      * battery_sale | buyback | scrap | other, or BUSINESS_TYPE_UNSET
@@ -533,6 +542,11 @@ function buildWhere(f: LeadListFilters, opts?: { ignoreIntent?: boolean }) {
     if (f.callback) {
         conds.push(
             sql`(ai.callback_agreed = 'yes' OR dl.last_disposition = 'As to Call Back')`,
+        );
+    }
+    if (f.needsMobile) {
+        conds.push(
+            f.phoneTypeTable ? NEEDS_DEALER_MOBILE_SQL : sql`coalesce(btrim(dl.phone), '') = ''`,
         );
     }
 

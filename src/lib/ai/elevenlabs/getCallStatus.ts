@@ -10,6 +10,8 @@
 // Returns a normalized shape so the poller doesn't have to know about
 // ElevenLabs' specific response keys.
 
+import { dataCollectionValue } from "./normalizePostCall";
+
 const BASE_URL = process.env.ELEVENLABS_API_BASE_URL || "https://api.elevenlabs.io";
 
 export type NormalizedElevenLabsStatus = {
@@ -25,6 +27,13 @@ export type NormalizedElevenLabsStatus = {
   rawTranscriptTurns?: unknown[];
   /** metadata.termination_reason — see normalizePostCall. */
   terminationReason?: string | null;
+  /**
+   * D2 / B5 — the agent's data collection (analysis.data_collection_results),
+   * sent by the v9 agent: who picked up, and `switchboard_or_recording`. Null
+   * when the agent does not collect them (every agent before v9).
+   */
+  answeredBy?: string | null;
+  callResult?: string | null;
   error?: string;
 };
 
@@ -136,6 +145,8 @@ export async function getElevenLabsCallStatus(
         data.metadata.termination_reason.trim()
           ? data.metadata.termination_reason.trim()
           : null,
+      answeredBy: dataCollectionValue(data?.analysis, "answered_by"),
+      callResult: dataCollectionValue(data?.analysis, "call_result"),
     };
   } catch (err) {
     return {

@@ -43,6 +43,8 @@ type CampaignRow = {
   windowEnd?: string | null;
   windowDays?: unknown;
   resumeAfter?: string | null;
+  /** D1 (E-360) — set when the carrier refused 10 calls in a row and the campaign paused itself. */
+  carrierPause?: { pauseReason: string; lastCarrierError: string | null } | null;
 };
 
 // Total talk time across a campaign's calls, as "1h 03m" / "7m 12s" / "45s".
@@ -291,7 +293,14 @@ export function CampaignsTable({
                         for WHEN, which is the question this row exists to
                         answer. Show the wake time for a parked campaign and the
                         window itself for one that is merely constrained. */}
-                    {c.status === "scheduled" && c.resumeAfter ? (
+                    {c.status === "paused" && c.carrierPause ? (
+                      <p
+                        className="text-[11px] text-rose-700 mt-0.5"
+                        title={c.carrierPause.lastCarrierError ?? undefined}
+                      >
+                        Carrier refused calls
+                      </p>
+                    ) : c.status === "scheduled" && c.resumeAfter ? (
                       <p className="text-[11px] text-blue-700 mt-0.5">
                         Resumes {fmtResume(c.resumeAfter)}
                       </p>

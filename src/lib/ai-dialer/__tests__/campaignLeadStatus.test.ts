@@ -338,7 +338,8 @@ describe("vocabulary invariants", () => {
         expect(attempted.has("skipped")).toBe(false);
         expect(NON_CONVERSATION_STATUSES).not.toContain("completed");
         for (const s of NON_CONVERSATION_STATUSES) expect(attempted.has(s)).toBe(true);
-        expect([...RETRYABLE_STATUSES]).toEqual([...NON_CONVERSATION_STATUSES]);
+        // D2 — a switchboard is never re-queued; every other non-conversation is.
+        expect([...RETRYABLE_STATUSES]).toEqual(NON_CONVERSATION_STATUSES.filter((s) => s !== "switchboard"));
         expect(TERMINAL_STATUSES).toContain("skipped");
         expect(TERMINAL_STATUSES).not.toContain("pending");
     });
@@ -589,11 +590,25 @@ describe("calibration — a machine answered, not the dealer", () => {
         ],
     ];
 
+    // D2 — a machine on a PERSON's phone (auto-reply, call screening) is
+    // Voicemail and retried; an IVR, hold message or company recording is a
+    // Switchboard and is not.
+    const PERSONAL = new Set([
+        "auto-reply",
+        "auto-reply after silence",
+        "call assistant",
+        "call screening",
+        "call screening (sandbox)",
+        "call screening after silence",
+        "call screening, then silence",
+        "screening, 'reason for calling'",
+    ]);
     for (const [name, userTurns] of machineOnly) {
-        it(`${name} → voicemail`, () => {
+        const want = PERSONAL.has(name) ? "voicemail" : "switchboard";
+        it(`${name} → ${want}`, () => {
             const transcript = [agent, ...userTurns.map((t) => `user: ${t}`)].join("\n");
             expect(dealerSpoke(transcript)).toBe(false);
-            expect(classifyCallEnd({ providerStatus: "done", transcript }).status).toBe("voicemail");
+            expect(classifyCallEnd({ providerStatus: "done", transcript }).status).toBe(want);
         });
     }
 
@@ -656,7 +671,7 @@ describe("calibration — a machine answered, not the dealer", () => {
             classifyCarrierAnnouncement(
                 "All our executives are busy. Your call is important to us, please stay on the line.",
             ),
-        ).toBe("voicemail");
+        ).toBe("switchboard");
     });
 
     it("a carrier call-waiting message stays busy", () => {
@@ -671,5 +686,39 @@ describe("calibration — a machine answered, not the dealer", () => {
         const s = dealerSpokeSql("acl");
         expect(s).toContain("your call went unanswered");
         expect(s).toContain("press ([0-9]|one|");
+    });
+});
+
+describe("D2 / B5 — switchboards, the voicemail flag and answered_by", () => {
+    const ivr = [agent, "user: Welcome to Tata Motors. For sales, press 1. For service, press 2."].join("\n");
+    const screening = [agent, "user: Thanks, please stay on the line."].join("\n");
+
+    it("reads the transcript before ElevenLabs' voicemail flag", () => {
+        expect(classifyCallEnd({ transcript: ivr, terminationReason: "Voicemail detected" }).status).toBe("switchboard");
+        expect(classifyCallEnd({ transcript: screening, terminationReason: "Voicemail detected" }).status).toBe("voicemail");
+        expect(classifyCallEnd({ transcript: null, terminationReason: "Voicemail detected" }).status).toBe("voicemail");
+    });
+
+    it("a switchboard turn wins over an earlier personal-machine turn", () => {
+        const t = [agent, "user: Please stay on the line.", "user: For sales, press 1."].join("\n");
+        expect(classifyCallEnd({ transcript: t }).status).toBe("switchboard");
+    });
+
+    it("call_result switchboard_or_recording is a switchboard", () => {
+        const spoke = [agent, "user: हाँ बोलिए"].join("\n");
+        expect(classifyCallEnd({ transcript: spoke, callResult: "switchboard_or_recording" }).status).toBe("switchboard");
+    });
+
+    it("answered_by decides whether a person was reached", () => {
+        const spoke = [agent, "user: हाँ बोलिए, कौन?"].join("\n");
+        for (const who of ["owner", "staff_or_family", "other_business", "unclear"]) {
+            expect(classifyCallEnd({ transcript: spoke, answeredBy: who }).status).toBe("completed");
+        }
+        expect(classifyCallEnd({ transcript: spoke, answeredBy: "ivr" }).status).toBe("switchboard");
+        expect(classifyCallEnd({ transcript: spoke, answeredBy: "tracking_number" }).status).toBe("switchboard");
+        expect(classifyCallEnd({ transcript: spoke, answeredBy: "voicemail" }).status).toBe("voicemail");
+        expect(classifyCallEnd({ transcript: spoke, answeredBy: "nobody_spoke", durationSecs: 25 }).status).toBe("silent");
+        // Absent (every agent before v9): the transcript decides, as before.
+        expect(classifyCallEnd({ transcript: spoke, answeredBy: null }).status).toBe("completed");
     });
 });

@@ -134,6 +134,8 @@ export const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   "lead.qualified": "Leads",
   // AI dialer review — a dealer asked an AI call for a callback from sales.
   "lead.callback_requested": "Leads",
+  // D1 (E-360) — the carrier refused 10 AI-dialer calls in a row; campaign paused.
+  "dialer.campaign_paused": "Leads",
   // ID 81 — a dealer we already hold arrived again through one of the doors.
   "lead.reinquiry": "Leads",
   // 14 Oct — a customer file pushed between the iTarang house dealer and a dealer.
@@ -442,6 +444,8 @@ export const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
 
 /** Something went wrong or a decision is blocked — surfaced red. */
 const CRITICAL = new Set([
+  // D1 (E-360) — the AI dialer stopped itself; nothing dials until someone acts.
+  "dialer.campaign_paused",
   "kyc.rejected",
   "kyc_rejected",
   "kyc_rejected_final",

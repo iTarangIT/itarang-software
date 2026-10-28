@@ -496,6 +496,34 @@ export function LeadsFilterBar({
                     Callback{aiFacets ? ` (${aiFacets.leadsCallback})` : ""}
                 </button>
 
+                {/* B1 (E-361): leads the AI dialer skips — no phone, or a
+                    landline / toll-free / tracking number. An ACTION filter for
+                    the same reason as Callback: someone has to find the dealer's
+                    mobile before anyone can call. */}
+                <button
+                    type="button"
+                    onClick={() => onChange("needsMobile", draft.needsMobile ? "" : "1")}
+                    aria-pressed={draft.needsMobile === "1"}
+                    title={
+                        draft.needsMobile
+                            ? "Showing only leads without a dealer mobile — click to show all"
+                            : "Show only leads with no phone or a landline / toll-free / tracking number. The AI dialer skips them; find the dealer's mobile."
+                    }
+                    className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${
+                        draft.needsMobile
+                            ? "border-rose-300 bg-rose-50 text-rose-700"
+                            : "border-gray-200 bg-white text-gray-600 hover:border-gray-400"
+                    }`}
+                >
+                    <span
+                        aria-hidden
+                        className={`h-1.5 w-1.5 rounded-full ${
+                            draft.needsMobile ? "bg-rose-500" : "bg-gray-300"
+                        }`}
+                    />
+                    Needs dealer mobile
+                </button>
+
                 {/* ID 184: the Sales dashboard card "Ready leads with no owner",
                     same rule (awaitingAssignment), so this list and its export
                     give the card's number. The split matches the card. */}

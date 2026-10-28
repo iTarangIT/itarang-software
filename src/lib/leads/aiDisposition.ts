@@ -17,6 +17,7 @@
 import type { Band, CallStatus as BandCallStatus } from "@/lib/ai/scoring/computeBand";
 import type { Disqualifier } from "@/lib/ai/scoring/signals";
 import type { CallStatus } from "@/lib/lifecycle/touchpointTypes";
+import { dealerSpoke } from "@/lib/ai-dialer/campaignLeadStatus";
 import {
     callStatusForDisposition,
     classifyDisposition,
@@ -25,8 +26,16 @@ import {
 } from "@/lib/leads/dispositions";
 
 export type AiCallDispositionInput = {
-    /** ai_call_logs.transcript. THE connected gate. */
+    /** ai_call_logs.transcript. */
     transcript: string | null;
+    /**
+     * B5 / D2 — classifyCallEnd().status for this call, THE connected gate:
+     * only 'completed' (a person spoke) is connected. A switchboard, voicemail
+     * greeting or the AI's own hello into silence leaves a transcript too, and
+     * counting "has a transcript" as connected inflated the CEO connect rate.
+     * Absent → dealerSpoke(transcript), the same rule from the text alone.
+     */
+    callEndStatus?: string | null;
     /** ai_call_logs.status — the raw provider status string. */
     providerStatus: string | null;
     /** analyzeTranscript() returned {status:"failed"} — a call we cannot read. */
@@ -50,6 +59,7 @@ export type AiDispositionReason =
     | "nc:unreachable"
     | "nc:failed"
     | "nc:unknown"
+    | "nc:no_person"
     | "c:analysis_failed"
     | "c:not_analysed"
     | "c:dropped_empty"
@@ -143,10 +153,23 @@ const NOT_CONNECTED_RULES: {
 export function mapAiCallToDisposition(
     input: AiCallDispositionInput,
 ): AiCallDisposition {
-    const connected = Boolean(input.transcript && input.transcript.trim() !== "");
+    const connected = input.callEndStatus
+        ? input.callEndStatus === "completed"
+        : dealerSpoke(input.transcript);
 
-    if (!connected) return notConnected(input);
-    return connectedDisposition(input);
+    if (connected) return connectedDisposition(input);
+    // Answered, no person: a machine, a switchboard or a silent line. The
+    // sheet has no "machine" label; nobody picked up is the truthful one.
+    if (input.transcript && input.transcript.trim() !== "") {
+        return {
+            connectStatus: "not_connected",
+            bucket: null,
+            disposition: "Did not pick",
+            callStatus: callStatusFor("Did not pick", "not_connected"),
+            reasonCode: "nc:no_person",
+        };
+    }
+    return notConnected(input);
 }
 
 function notConnected(input: AiCallDispositionInput): AiCallDisposition {

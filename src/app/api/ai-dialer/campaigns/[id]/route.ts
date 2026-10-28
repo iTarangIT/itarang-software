@@ -18,6 +18,7 @@ import {
 } from "@/lib/ai-dialer/campaignLeadStatus";
 import { requireCampaignReader } from "@/lib/ai-dialer/campaignAccess";
 import { campaignOutcomeReport } from "@/lib/ai-dialer/campaignOutcomes";
+import { carrierPausesFor } from "@/lib/ai-dialer/lineHealth";
 
 export const GET = withErrorHandler(
   async (_req: Request, ctx: { params: Promise<{ id: string }> }) => {
@@ -97,6 +98,9 @@ export const GET = withErrorHandler(
     // on a database without it).
     const outcomes = await campaignOutcomeReport(id);
 
+    // D1 (E-360) — why a paused campaign stopped itself (null = not a carrier pause).
+    const carrierPause = (await carrierPausesFor([id])).get(id) ?? null;
+
     return successResponse({
       ...campaign,
       statusCounts,
@@ -104,6 +108,7 @@ export const GET = withErrorHandler(
       nextRetryAt: retry?.nextRetryAt ? new Date(retry.nextRetryAt).toISOString() : null,
       totalDials: Number(retry?.totalDials ?? 0),
       outcomes,
+      carrierPause,
     });
   },
 );

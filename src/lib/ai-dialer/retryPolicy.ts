@@ -17,6 +17,7 @@
 // night even though a manual 'now' campaign may be started at any hour.
 
 import { classifyTriggerDetail, isRetryableFailure } from "./failureReason";
+import { DIALER_HOURS } from "@/lib/queue/campaignSchedule";
 
 export type RetryWindow = {
     /** 'HH:MM' IST */
@@ -40,6 +41,11 @@ export type RetryInput = {
     window: RetryWindow;
     /** Retries already granted free because OUR line was blocked (see below). */
     lineBlockedRetriesUsed?: number;
+    /**
+     * B3 — counted dials of this row on the IST day of `now`, INCLUDING the one
+     * that just ended. At MAX_DIALS_PER_DAY the next retry moves to tomorrow.
+     */
+    dialsToday?: number;
 };
 
 export type RetryPlan = {
@@ -123,6 +129,66 @@ export function isLineBlockedFailure(callOutcome: string | null): boolean {
     return classifyTriggerDetail(detail) === "config_error";
 }
 
+// ── D1: pause the campaign when the carrier keeps refusing ──────────────────
+//
+// The refund above protects the LEAD; nothing protected the CAMPAIGN. A line
+// that stays blocked made advanceCampaign fire the next lead at once, up to 100
+// per run (690 refused dials on 30 Sep). So line-blocked trigger failures are
+// counted in a row per campaign (src/lib/ai-dialer/lineHealth.ts), and at
+// CARRIER_PAUSE_THRESHOLD the campaign pauses until someone presses Resume.
+
+export const CARRIER_PAUSE_THRESHOLD = 10;
+/** After any failed trigger, wait this long before dialling the next lead. */
+export const FAILED_TRIGGER_GAP_MS = 2_000;
+
+/**
+ * The line-blocked count after one trigger result. `outcome` is the
+ * call_outcome written for a failed trigger, or null when the call was placed.
+ * Anything that reached the carrier — a placed call, busy, unanswered, a dead
+ * number — resets the run to 0.
+ */
+export function nextLineBlockedCount(previous: number, outcome: string | null): number {
+    return isLineBlockedFailure(outcome) ? previous + 1 : 0;
+}
+
+export function shouldPauseForCarrier(consecutiveLineBlocked: number): boolean {
+    return consecutiveLineBlocked >= CARRIER_PAUSE_THRESHOLD;
+}
+
+// ── B3: at most two dials a day, inside dialler hours ───────────────────────
+
+/** Counted dials of one number per IST day. A third waits for tomorrow. */
+export const MAX_DIALS_PER_DAY = 2;
+
+/**
+ * A campaign window narrowed to DIALER_HOURS — the JS twin of the clause
+ * campaignWindow.windowOpenSql ANDs on. An overnight window, or one with no
+ * overlap, has nothing inside dialler hours; it falls back to the dialler hours
+ * on the window's days rather than booking a retry the gate will refuse.
+ */
+export function withinDialerHours(window: RetryWindow): RetryWindow {
+    const s = hhmmToMinutes(window.start);
+    const e = hhmmToMinutes(window.end);
+    const ds = hhmmToMinutes(DIALER_HOURS.start);
+    const de = hhmmToMinutes(DIALER_HOURS.end);
+    if (e <= s) return { ...window, start: DIALER_HOURS.start, end: DIALER_HOURS.end };
+    const start = Math.max(s, ds);
+    const end = Math.min(e, de);
+    if (end <= start) return { ...window, start: DIALER_HOURS.start, end: DIALER_HOURS.end };
+    return { ...window, start: minutesToHhmm(start), end: minutesToHhmm(end) };
+}
+
+/** Counted dials in `history` on the IST day of `now` (entries carry ISO `at`). */
+export function countDialsOnIstDay(
+    history: ReadonlyArray<{ at?: string | null; counted?: boolean }>,
+    now: Date,
+): number {
+    const today = istParts(now).dayIndex;
+    return history.filter(
+        (h) => h.counted !== false && h.at && istParts(new Date(h.at)).dayIndex === today,
+    ).length;
+}
+
 /**
  * planRetry plus whether the dial that just ended counts against the lead's
  * attempt budget. null = the lead is done.
@@ -130,12 +196,13 @@ export function isLineBlockedFailure(callOutcome: string | null): boolean {
 export function planRetryDetailed(input: RetryInput): RetryPlan | null {
     const { maxRetries } = input;
     if (maxRetries == null || maxRetries <= 0) return null;
+    const window = withinDialerHours(input.window);
     if (
         isLineBlockedFailure(input.callOutcome) &&
         (input.lineBlockedRetriesUsed ?? 0) < MAX_LINE_BLOCKED_RETRIES
     ) {
         return {
-            at: clampIntoWindow(new Date(input.now.getTime() + LINE_BLOCKED_PAUSE_MS), input.window),
+            at: clampIntoWindow(new Date(input.now.getTime() + LINE_BLOCKED_PAUSE_MS), window),
             consumesAttempt: false,
         };
     }
@@ -154,14 +221,26 @@ export function planRetry(input: RetryInput): Date | null {
     if (attemptCount < 1 || attemptCount >= 1 + maxRetries) return null;
     if (!isAutoRetryable(input.status, input.callOutcome)) return null;
 
+    const window = withinDialerHours(input.window);
     const gaps = input.status === "busy" ? BUSY_GAPS : DEFAULT_GAPS;
     // attemptCount 1 → first retry → gaps[0]. Past the table, reuse its tail.
     const gap = gaps[Math.min(attemptCount - 1, gaps.length - 1)];
 
-    if (gap === "next_window") {
-        return nextWindowOpen(input.now, input.window) ?? null;
+    const at =
+        gap === "next_window"
+            ? nextWindowOpen(input.now, window)
+            : clampIntoWindow(new Date(input.now.getTime() + gap), window);
+    if (!at) return null;
+
+    // B3 — the day's two dials are spent: the redial waits for tomorrow's window.
+    if (
+        (input.dialsToday ?? 0) >= MAX_DIALS_PER_DAY &&
+        istParts(at).dayIndex === istParts(input.now).dayIndex
+    ) {
+        const tomorrow = new Date((istParts(input.now).dayIndex + 1) * DAY_MS - IST_OFFSET_MS);
+        return clampIntoWindow(tomorrow, window);
     }
-    return clampIntoWindow(new Date(input.now.getTime() + gap), input.window);
+    return at;
 }
 
 // ── IST calendar arithmetic ────────────────────────────────────────────────
@@ -174,6 +253,10 @@ const WEEKDAY_BY_UTC_DAY = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
 function hhmmToMinutes(s: string): number {
     const [h, m] = s.split(":").map(Number);
     return h * 60 + m;
+}
+
+function minutesToHhmm(n: number): string {
+    return `${String(Math.floor(n / 60)).padStart(2, "0")}:${String(n % 60).padStart(2, "0")}`;
 }
 
 /** IST wall clock of an instant: whole-day index since epoch + minute of day. */

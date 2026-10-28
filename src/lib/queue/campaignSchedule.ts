@@ -106,6 +106,20 @@ export function scheduleColumns(s: ValidatedSchedule | null | undefined) {
   };
 }
 
+/**
+ * B3 (Priya call drops, 27 Oct) — the hours the AI dialer may place a call,
+ * IST, on top of whatever window a campaign carries. Shops are not open at
+ * 09:01 (four IVR redials went out then on 22 Oct) and nobody wants a sales
+ * call after 19:00. A 'now' campaign used to be "always open"; it now dials
+ * inside these hours only and resumes itself at the next opening.
+ *
+ * Enforced in both halves of the window rule so they cannot disagree:
+ * campaignWindow.windowOpenSql / nextWindowOpenSql (the dial-time gate) and
+ * retryPolicy.withinDialerHours (when a retry is booked). A campaign window is
+ * intersected with these hours; an overnight window therefore never opens.
+ */
+export const DIALER_HOURS = { start: "10:00", end: "19:00" } as const;
+
 export const FALLBACK_DEFAULTS: {
   window_start: string;
   window_end: string;

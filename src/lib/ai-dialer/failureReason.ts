@@ -39,6 +39,7 @@ export const FAILURE_REASON_CODES = [
     "not_answered",
     "busy",
     "voicemail",
+    "switchboard",
     "disconnected",
     "rejected",
     "invalid_number",
@@ -99,6 +100,13 @@ const SPECS: Record<FailureReasonCode, Spec> = {
         label: "Voicemail",
         hint: "The call reached voicemail rather than the dealer.",
         retryable: true,
+        ourFault: false,
+    },
+    switchboard: {
+        code: "switchboard",
+        label: "Switchboard",
+        hint: "A company IVR menu, hold message or voice bot answered. Not redialled; the number is listed under Needs dealer mobile.",
+        retryable: false,
         ourFault: false,
     },
     disconnected: {
@@ -194,6 +202,7 @@ const STATUS_REASON = new Map<string, FailureReasonCode>([
     ["no_response", "not_answered"],
     ["rejected", "rejected"],
     ["voicemail", "voicemail"],
+    ["switchboard", "switchboard"],
     ["silent", "silent_call"],
     ["hung_up", "hung_up_early"],
     // Legacy: the single pre-2026-09-26 bucket the two above were split from.
@@ -237,8 +246,42 @@ function sipCode(d: string, code: number): boolean {
  * we control, so this matches on substrings and falls back to `unknown` rather
  * than guessing. Every pattern here was taken from a real row.
  */
+// B1 / D7 — the reasons a lead is enrolled as 'skipped' (numberHygiene.ts
+// ENROL_SKIP_OUTCOME). Spelled out because "Skipped" alone sends a rep looking
+// for a rule that does not apply.
+const ENROL_SKIP_LABELS: Record<string, { label: string; hint: string }> = {
+    skipped_duplicate_number: {
+        label: "Skipped, duplicate number",
+        hint: "Another lead in this campaign has the same number; it is dialled once.",
+    },
+    skipped_not_mobile: {
+        label: "Skipped, not a mobile",
+        hint: "A landline, toll-free or tracking number. Listed under Needs dealer mobile on Leads.",
+    },
+    skipped_vehicle_showroom: {
+        label: "Skipped, vehicle showroom",
+        hint: "The listing is a two-wheeler / vehicle showroom, not a battery dealer.",
+    },
+    skipped_switchboard: {
+        label: "Skipped, switchboard",
+        hint: "An earlier call to this number reached a company IVR or hold message.",
+    },
+    skipped_dead_number: {
+        label: "Skipped, dead number",
+        hint: "An earlier call to this number was told it does not exist.",
+    },
+};
+
 export function classifyTriggerDetail(detail: string): FailureReasonCode {
     const d = detail.toLowerCase();
+
+    // SIP 404 Not Found is the DEALER's number not existing ("INVITE failed:
+    // sip status: 404: Not Found"). It must be read before the config check
+    // below, whose "not found" would file it as ours — and config_error counts
+    // as a line-blocked dial, so a dead number was refunded and redialled every
+    // 30 minutes (8 dead numbers redialled up to 5x on 21-22 Oct) and would trip
+    // the carrier pause. Requires "sip" so "Document … not found" stays ours.
+    if (d.includes("sip") && sipCode(d, 404)) return "invalid_number";
 
     // OURS, not the dealer's. Checked first: a misconfigured from_number also
     // produces SIP noise, and reporting that as "busy" would blame the lead.
@@ -387,6 +430,9 @@ export function deriveFailureReason(
 
     // ── Explicit outcomes written by our own pipeline ─────────────────────
     if (lower === "stopped_by_user") return { ...SPECS.stopped, detail: null };
+    // B1 / D7 — skipped when the campaign was created (numberHygiene.ts).
+    const enrolSkip = ENROL_SKIP_LABELS[lower];
+    if (enrolSkip) return { ...SPECS.ineligible, ...enrolSkip, detail: null };
     if (lower.startsWith("ineligible") || lower === "no_phone") {
         return { ...SPECS.ineligible, detail: outcome };
     }

@@ -27,6 +27,7 @@ import { neodoveTablesPresent } from "@/lib/leads/leadCampaign";
 import { businessTypeFilterParam } from "@/lib/leads/businessType";
 import { exportsOwnLeadsOnly } from "@/lib/exports/downloadLog";
 import { isReadySplit, type ReadySplit } from "@/lib/leads/salesReady";
+import { hasPhoneTypeTable } from "@/lib/ai-dialer/phoneTypeStore";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -60,6 +61,8 @@ export async function parseLeadListFilters(
     const hasNeodoveTables = campaignParam ? await neodoveTablesPresent() : false;
     const idlePastLimit = idleParam === "past_limit";
     const idleLimitsTable = idlePastLimit ? await hasTimeLimitTable() : false;
+    const needsMobile = searchParams.get("needs_mobile") === "1";
+    const phoneTypeTable = needsMobile ? await hasPhoneTypeTable() : false;
 
     return {
         status: searchParams.get("status") || null,
@@ -103,6 +106,8 @@ export async function parseLeadListFilters(
             return Number.isInteger(n) && n >= 1 && n <= 5 ? n : null;
         })(),
         callback: searchParams.get("callback") === "1",
+        needsMobile,
+        phoneTypeTable,
         disposition: searchParams.get("disposition")?.trim() || null,
         businessType: businessTypeFilterParam(searchParams.get("business_type")),
         ownerId: caps.canSeeOwnerAsm ? searchParams.get("owner_id") || null : null,

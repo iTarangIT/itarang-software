@@ -31,7 +31,7 @@ export interface CallTimingFilters {
     city: string | null;
 }
 
-const DIALLED = ["completed", "no_response", "busy", "rejected", "voicemail", "silent", "hung_up", "no_conversation"];
+const DIALLED = ["completed", "no_response", "busy", "rejected", "voicemail", "switchboard", "silent", "hung_up", "no_conversation"];
 const ANSWERED = ["completed", "silent", "hung_up", "no_conversation"];
 
 const list = (values: string[]): SQL => sql.join(values.map((v) => sql`${v}`), sql`, `);
