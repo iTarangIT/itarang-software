@@ -80,6 +80,8 @@ export type LeadFilters = {
     signalsMin: string;
     /** "1" = the dealer asked to be called back, per either system. */
     callback: "" | "1";
+    /** "1" = B1: no phone, or not a mobile — the AI dialer skips these. */
+    needsMobile: "" | "1";
     /**
      * E-296 "Type of Business" — a BUSINESS_TYPES value, or "unset" for leads
      * with none recorded. "" = any.
@@ -127,6 +129,7 @@ export const EMPTY_FILTERS: LeadFilters = {
     aiBand: "",
     signalsMin: "",
     callback: "",
+    needsMobile: "",
     businessType: "",
     showDead: "",
     readyNoOwner: "",
@@ -209,6 +212,7 @@ export function toSearchParams(
     if (f.aiBand) p.set("ai_band", f.aiBand);
     if (f.signalsMin) p.set("signals_min", f.signalsMin);
     if (f.callback) p.set("callback", f.callback);
+    if (f.needsMobile) p.set("needs_mobile", f.needsMobile);
     if (f.businessType) p.set("business_type", f.businessType);
     if (f.showDead) p.set("hide_dead", "0");
     if (f.readyNoOwner) {
@@ -275,6 +279,7 @@ export function fromSearchParams(sp: URLSearchParams): LeadFilters {
             ? (sp.get("signals_min") as string)
             : "",
         callback: sp.get("callback") === "1" ? "1" : "",
+        needsMobile: sp.get("needs_mobile") === "1" ? "1" : "",
         // Closed vocabulary (+ "unset"), validated for the same blank-<select>
         // reason as the fields above.
         businessType: businessTypeFilterParam(sp.get("business_type")) ?? "",

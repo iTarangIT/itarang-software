@@ -237,6 +237,24 @@ function sipCode(d: string, code: number): boolean {
  * we control, so this matches on substrings and falls back to `unknown` rather
  * than guessing. Every pattern here was taken from a real row.
  */
+// B1 / D7 — the reasons a lead is enrolled as 'skipped' (numberHygiene.ts
+// ENROL_SKIP_OUTCOME). Spelled out because "Skipped" alone sends a rep looking
+// for a rule that does not apply.
+const ENROL_SKIP_LABELS: Record<string, { label: string; hint: string }> = {
+    skipped_duplicate_number: {
+        label: "Skipped, duplicate number",
+        hint: "Another lead in this campaign has the same number; it is dialled once.",
+    },
+    skipped_not_mobile: {
+        label: "Skipped, not a mobile",
+        hint: "A landline, toll-free or tracking number. Listed under Needs dealer mobile on Leads.",
+    },
+    skipped_vehicle_showroom: {
+        label: "Skipped, vehicle showroom",
+        hint: "The listing is a two-wheeler / vehicle showroom, not a battery dealer.",
+    },
+};
+
 export function classifyTriggerDetail(detail: string): FailureReasonCode {
     const d = detail.toLowerCase();
 
@@ -395,6 +413,9 @@ export function deriveFailureReason(
 
     // ── Explicit outcomes written by our own pipeline ─────────────────────
     if (lower === "stopped_by_user") return { ...SPECS.stopped, detail: null };
+    // B1 / D7 — skipped when the campaign was created (numberHygiene.ts).
+    const enrolSkip = ENROL_SKIP_LABELS[lower];
+    if (enrolSkip) return { ...SPECS.ineligible, ...enrolSkip, detail: null };
     if (lower.startsWith("ineligible") || lower === "no_phone") {
         return { ...SPECS.ineligible, detail: outcome };
     }

@@ -45,6 +45,7 @@ import {
   FAILED_TRIGGER_GAP_MS,
 } from "@/lib/ai-dialer/retryPolicy";
 import { noteTriggerResult } from "@/lib/ai-dialer/lineHealth";
+import { dialTimeSkip, ENROL_SKIP_OUTCOME } from "@/lib/ai-dialer/numberHygiene";
 import {
   nextWindowOpenSql,
   pauseForWindow,
@@ -352,6 +353,8 @@ export async function advanceCampaign(
         .select({
           id: dealerLeads.id,
           phone: dealerLeads.phone,
+          shop_name: dealerLeads.shop_name,
+          dealer_name: dealerLeads.dealer_name,
           lead_status: dealerLeads.lead_status,
           ai_recall_status: dealerLeads.ai_recall_status,
           // Projected here rather than checked inside isAiDialable(), which is
@@ -389,6 +392,31 @@ export async function advanceCampaign(
           })
           .where(eq(dialerCampaignLeads.id, claimed.campaignLeadId));
         // Counters are derived from the rows — see syncCampaignCounters.
+        await syncCampaignCounters(campaignId);
+        continue;
+      }
+
+      // B1 — mobiles only, no vehicle showrooms. createCampaign already
+      // enrols these as skipped; this catches campaigns created before that,
+      // and a number edited to a landline after enrolment.
+      const hygieneSkip = dialTimeSkip({
+        phone: lead[0].phone,
+        name: [lead[0].shop_name, lead[0].dealer_name].filter(Boolean).join(" | ") || null,
+      });
+      if (hygieneSkip) {
+        console.warn("[advanceCampaign] skipping lead that is not dialable", {
+          campaignId,
+          leadId: claimed.leadId,
+          reason: hygieneSkip,
+        });
+        await db
+          .update(dialerCampaignLeads)
+          .set({
+            status: "skipped",
+            completed_at: new Date(),
+            call_outcome: ENROL_SKIP_OUTCOME[hygieneSkip],
+          })
+          .where(eq(dialerCampaignLeads.id, claimed.campaignLeadId));
         await syncCampaignCounters(campaignId);
         continue;
       }
