@@ -216,6 +216,13 @@ export type ProductMasterOption = {
     detail: string | null;
     unit_price: number | null;
     max_quantity: number | null;
+    // The live LIST price (product_list_prices) shown beside the unit-price
+    // field for reference. Only a real list price — never the OEM price, which
+    // salespeople must not see. Null when none is set.
+    list_price?: number | null;
+    // GST % for the product (master rate, else the asset-type default), so the
+    // form can show GST and the total incl. GST before the quote is saved.
+    gst_rate_pct?: number | null;
 };
 
 export type ProductMasterResponse = {

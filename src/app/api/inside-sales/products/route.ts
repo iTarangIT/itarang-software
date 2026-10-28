@@ -3,15 +3,26 @@
 // BRD product-master tables — batteries / chargers / paraphernalia — and
 // normalises each into one ProductMasterOption shape so the modal stays
 // simple. Active rows only.
+//
+// Each option also carries its live LIST price (shown beside the unit-price
+// field for reference) and its GST rate (so the form can show GST and the
+// total incl. GST). The OEM reference price is deliberately NOT read here: it
+// is internal and salespeople must never see it — so a product with no list
+// price shows none, rather than falling back to OEM the way the PDF does.
 
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { requireRole } from "@/lib/auth-utils";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
 import type {
+    CommercialsProductLine,
     ProductMasterOption,
     ProductMasterResponse,
 } from "@/lib/inside-sales/types";
+import { loadLiveListPrices } from "@/lib/leads/listPrices";
+import { refKey } from "@/lib/leads/oemPricing";
+import { DEFAULT_TAX_BY_ASSET_TYPE, taxRefKey } from "@/lib/leads/quote-pdf/view";
+import { loadLineTaxRefs } from "@/lib/leads/quote-pdf/view-store";
 
 export const dynamic = "force-dynamic";
 
@@ -102,6 +113,35 @@ export const GET = withErrorHandler(async () => {
             }),
         ),
     };
+
+    // List price + GST rate, looked up for every option in one pass each. Both
+    // are best-effort: a database without E-321 has no list prices, and a
+    // master that errors on its tax columns falls back to the asset-type rate.
+    const all: CommercialsProductLine[] = (["battery", "charger", "paraphernalia"] as const).flatMap((t) =>
+        body[t].map((o) => ({
+            asset_type: t,
+            product_id: o.id,
+            product_name: o.label,
+            model_id: o.model_id,
+            unit_price: null,
+            quantity: 1,
+        })),
+    );
+    const [listRefs, taxRefs] = await Promise.all([
+        loadLiveListPrices(all).catch((e) => {
+            console.warn("[inside-sales/products] list prices unavailable", e);
+            return new Map<string, { list_price: number }>();
+        }),
+        loadLineTaxRefs(all),
+    ]);
+    for (const t of ["battery", "charger", "paraphernalia"] as const) {
+        body[t] = body[t].map((o) => ({
+            ...o,
+            list_price: listRefs.get(refKey(t, o.id))?.list_price ?? null,
+            gst_rate_pct:
+                taxRefs.get(taxRefKey(t, o.id))?.gstRatePct ?? DEFAULT_TAX_BY_ASSET_TYPE[t]?.gstRatePct ?? null,
+        }));
+    }
 
     return successResponse(body);
 });

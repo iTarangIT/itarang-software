@@ -13,6 +13,7 @@ import { eq, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { dealerLeadCommercials, dealerLeads } from "@/lib/db/schema";
 import { writeTouchpoint } from "@/lib/touchpoints/write";
+import { sendQuoteApprovalRequestEmail, termsLabel } from "@/lib/leads/quoteApprovalEmail";
 import { advanceLeadOnQuoteEvent } from "@/lib/leads/quoteStatus";
 import { initialApprovalStatus, isGatedQuoteEvent } from "@/lib/leads/quoteApproval";
 import { tryGenerateQuotationDraft } from "@/lib/leads/quoteDraft";
@@ -463,14 +464,32 @@ export async function createLeadCommercial(
                         ? `credit terms (${outcome.termsHold.credit_days ?? "?"} days) need approval`
                         : null,
                 ].filter(Boolean);
+                const reason = reasons.length ? reasons.join("; ") : null;
+
+                // 28 Oct item 3 — the approval request to the CEO, CC the
+                // salesperson, their manager and care@. Never throws.
+                const ceoEmailSent = await sendQuoteApprovalRequestEmail({
+                    family: "lead",
+                    dealerName: lead?.dealerName ?? null,
+                    refId: id,
+                    versionNo: outcome.versionNo,
+                    lines: body.product_lines ?? [],
+                    termsLabel: body.terms ? termsLabel(body.terms) : null,
+                    notes: body.notes ?? null,
+                    raisedBy: actor.id,
+                    raisedByName: actor.name,
+                    reason,
+                    href: "/ceo/quotations",
+                });
 
                 await notifyQuotationPendingApproval({
                     leadId: id,
                     commercialId: outcome.commercialId,
                     dealerName: lead?.dealerName ?? null,
                     value: Number(total ?? 0),
-                    reason: reasons.length ? reasons.join("; ") : null,
+                    reason,
                     raisedByName: actor.name,
+                    ceoEmailSent,
                 });
             }
             // ID 75: a quote in the system is what makes it Commercials explained.

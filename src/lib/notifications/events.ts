@@ -1996,6 +1996,8 @@ export async function notifyQuotationPendingApproval(p: {
   /** e.g. "2 lines below OEM reference" — from the gate's evaluation. */
   reason?: string | null;
   raisedByName?: string | null;
+  /** 28 Oct — the CEO already has the approval email (with CCs); bell only for them. */
+  ceoEmailSent?: boolean;
 }) {
   const dealer = p.dealerName?.trim() || "a dealer";
   const money = p.value > 0 ? ` for ₹${p.value.toLocaleString("en-IN")}` : "";
@@ -2016,7 +2018,13 @@ export async function notifyQuotationPendingApproval(p: {
     },
     to: [
       {
-        audience: { kind: "roles" as const, roles: ["ceo", "admin"] },
+        audience: { kind: "roles" as const, roles: ["ceo"] },
+        as: ADMIN_PARTY,
+        href: "/ceo",
+        ...(p.ceoEmailSent ? { email: false } : {}),
+      },
+      {
+        audience: { kind: "roles" as const, roles: ["admin"] },
         as: ADMIN_PARTY,
         href: "/ceo",
       },
@@ -2036,6 +2044,8 @@ export async function notifyQuotationApproved(p: {
   approverName?: string | null;
   /** False when the PDF could not be produced — say so rather than imply a draft exists. */
   draftReady: boolean;
+  /** 28 Oct — reached by the approval email already; bell only for them. */
+  emailedUserIds?: string[];
 }) {
   const dealer = p.dealerName?.trim() || "a dealer";
   const money = p.value > 0 ? ` for ₹${p.value.toLocaleString("en-IN")}` : "";
@@ -2076,6 +2086,7 @@ export async function notifyQuotationApproved(p: {
               audience: { kind: "user" as const, userId: p.ownerUserId },
               as: ADMIN_PARTY,
               href: `/inside-sales/lead/${p.leadId}?quote=${p.commercialId}`,
+              ...(p.emailedUserIds?.includes(p.ownerUserId) ? { email: false } : {}),
             },
           ]
         : []),
