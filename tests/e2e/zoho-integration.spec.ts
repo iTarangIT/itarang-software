@@ -91,7 +91,7 @@ test.describe('Zoho integration', () => {
     });
     await expect(page.getByText('Total Revenue')).toBeVisible();
     await expect(page.getByText('Total Expense')).toBeVisible();
-    await expect(page.getByText('Outstanding Credits')).toBeVisible();
+    await expect(page.getByText('Accounts Receivable')).toBeVisible();
   });
 
   test('Business Snapshot tile values match /api/dashboard/ceo JSON', async ({ page }) => {

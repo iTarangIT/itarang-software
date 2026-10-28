@@ -14,8 +14,6 @@ import { pctOfTarget } from "./salesDailyBlockA";
 import {
     formatRepValue,
     repBlockTableRows,
-    TEAM_MEMBER_PREFIX,
-    TEAM_SUBTOTAL_PREFIX,
     yesterdayMetricsOf,
     type RepBlock,
     type TeamOf,
@@ -57,47 +55,72 @@ export function membersOf(teamOf: TeamOf, managerId: string): string[] {
  * The manager's team table for one role: the manager's own row (when they are
  * in this block), each member (↳) and the "Team subtotal" — exactly the lines
  * under that manager in the management email. When the manager is not in this
- * block (an ASM lead managing ISRs), only the members' rows are listed — the
- * management email lists them ungrouped with no total of their own, so (ID
- * 194, 18 Oct rework 1) neither does My day. [] when no member is in this block.
+ * block (an ASM lead managing ISRs), the management email groups the members
+ * under "<manager> · team" with their own subtotal (24 Oct, outsideManagers);
+ * ID 198 prints the same lines, so a team subtotal is always there. [] when no
+ * member is in this block.
  */
-export function teamRows(role: Role, blocks: RepBlock[], managerId: string, teamOf: TeamOf): Rows {
+export function teamRows(
+    role: Role,
+    blocks: RepBlock[],
+    managerId: string,
+    teamOf: TeamOf,
+    managerName?: string,
+): Rows {
     const members = new Set(membersOf(teamOf, managerId));
     const inBlock = blocks.filter((b) => members.has(b.id));
     if (inBlock.length === 0) return [];
     const manager = blocks.find((b) => b.id === managerId);
     const group = manager ? [manager, ...inBlock] : inBlock;
-    const rows = repBlockTableRows(role, group, teamOf);
-    // With the manager present the block's "Total" repeats the subtotal; without
-    // them it is a cross-role total the management email does not print. Drop it.
+    const outside = manager ? undefined : new Map([[managerId, managerName ?? "Team"]]);
+    const rows = repBlockTableRows(role, group, teamOf, undefined, outside);
+    // The block's "Total" repeats the team subtotal. Drop it.
     if (group.length > 1 && rows.length && rows[rows.length - 1][0] === "Total") rows.pop();
     return rows;
 }
 
-/** One team member's overdue work, for the manager's "My team · overdue" table. */
-export type MemberOverdue = { id: string; name: string; followUps: number; visits: number };
+/** ID 198 — the lists a manager reviews per member, in the order they print. */
+export const REVIEW_LISTS = [
+    { key: "follow_up", label: "Overdue follow-ups" },
+    { key: "visit", label: "Visits due or overdue" },
+    { key: "limit", label: "Time limits passed" },
+    { key: "field_visit", label: "Waiting for a field visit" },
+    { key: "idle", label: "Idle leads" },
+] as const;
+export type ReviewListKey = (typeof REVIEW_LISTS)[number]["key"];
 
 /**
- * ID 194 — the manager's team: each member's overdue follow-ups and overdue
- * visits (the same rules as each member's own work list: a follow-up dated
- * before today, a scheduled visit dated before today), the manager first when
- * they are in it, then a team subtotal. [] for no members.
+ * ID 198 — one member's leads to review, list by list (REVIEW_LISTS order):
+ * a header row per list that has anything, up to `cap` leads (oldest first),
+ * then "… and N more" when it has more. `links` is aligned with `rows`: the
+ * lead's id for a lead row, the list key for an "and N more" row, null for a
+ * header. [] when the member has nothing on any list.
  */
-export function teamOverdueRows(managerId: string, people: MemberOverdue[]): Rows {
-    if (people.length === 0) return [];
-    const ordered = [...people].sort((a, b) =>
-        a.id === managerId ? -1 : b.id === managerId ? 1 : a.name.localeCompare(b.name),
-    );
-    const rows: Rows = ordered.map((p) => [p.id === managerId ? p.name : `${TEAM_MEMBER_PREFIX}${p.name}`, p.followUps, p.visits]);
-    if (ordered.length > 1) {
-        const manager = ordered.find((p) => p.id === managerId);
-        rows.push([
-            manager ? `${TEAM_SUBTOTAL_PREFIX}${manager.name}` : "Team subtotal",
-            ordered.reduce((s, p) => s + p.followUps, 0),
-            ordered.reduce((s, p) => s + p.visits, 0),
-        ]);
+export function reviewRows(
+    items: WorkItem[],
+    cap = 10,
+): { rows: Rows; links: Array<{ lead: string } | { more: ReviewListKey } | null> } {
+    const rows: Rows = [];
+    const links: Array<{ lead: string } | { more: ReviewListKey } | null> = [];
+    for (const list of REVIEW_LISTS) {
+        const seen = new Set<string>();
+        const mine = items
+            .filter((i) => i.list === list.key && !seen.has(i.lead_id) && seen.add(i.lead_id))
+            .sort((a, b) => b.days - a.days || a.dealer.localeCompare(b.dealer));
+        if (mine.length === 0) continue;
+        rows.push([`${list.label} (${mine.length})`, "", "", "", ""]);
+        links.push(null);
+        for (const i of mine.slice(0, cap)) {
+            rows.push([i.dealer, i.city?.trim() || "—", i.what, i.due ?? "—", i.days]);
+            links.push({ lead: i.lead_id });
+        }
+        if (mine.length > cap) {
+            // Not all-blank, so it renders as a linked row rather than a group header.
+            rows.push([`… and ${mine.length - cap} more`, "", "Open the full list", "", ""]);
+            links.push({ more: list.key });
+        }
     }
-    return rows;
+    return { rows, links };
 }
 
 export type TargetLine = {
@@ -138,6 +161,8 @@ export type WorkItem = {
     due: string | null;
     /** Days past due (or idle days for an idle lead). */
     days: number;
+    /** ID 198 — which review list it belongs to in the My team email; absent = My day only. */
+    list?: ReviewListKey;
 };
 
 /**

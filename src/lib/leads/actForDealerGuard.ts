@@ -37,6 +37,7 @@ import {
   beingWorkedMessage,
   DEALER_CHANGED_MESSAGE,
   dealerChangedSince,
+  dealerFacingDoneByLine,
   doneByLine,
   isLockLive,
   leadActorVerdict,
@@ -313,14 +314,17 @@ export interface RecordOptions {
    * save (recordPlan).
    */
   coalesce?: boolean;
+  /** ID 201: the caller (recordKycStep / recordKycMilestone) writes the KYC history line itself. */
+  kycLine?: boolean;
 }
 
 /**
  * After an iTarang step succeeded (Admin / Sales Head from the CRM panel, or
  * the house login in the dealer portal on a file it pushed out): "Done by
  * <name> for <dealer>" on the file's history and the dealer told (bell +
- * WhatsApp, at most once per person per file per 30 minutes). Nothing for the
- * dealer's own steps. Never throws.
+ * WhatsApp, at most once per person per file per 30 minutes). The dealer's
+ * own step is no "Done by" line and no notice — since ID 201 (27 Oct) it is a
+ * plain line in the file's KYC history instead. Never throws.
  */
 export async function recordActorStep(
   actor: LeadActor,
@@ -328,7 +332,24 @@ export async function recordActorStep(
   extra: Record<string, unknown> = {},
   opts: RecordOptions = {},
 ): Promise<void> {
-  if (actor.kind === "dealer") return;
+  if (actor.kind === "dealer") {
+    // ID 201 #4: the owning dealer's own steps (Step 1, Step 4 / 5, cash sale,
+    // lender choice …) as plain history lines. Draft autosaves are not steps.
+    if (opts.kycLine || opts.coalesce) return;
+    try {
+      const { recordKycEvent, sentence } = await import("@/lib/kyc/kycEventLog");
+      await recordKycEvent({
+        leadId: actor.leadId,
+        action: sentence(step),
+        actor: { id: actor.userId, name: actor.userName, role: actor.role, type: "dealer", channel: "web" },
+        detail: { step, ...extra },
+        notify: false,
+      });
+    } catch (err) {
+      console.error(`[actForDealer] dealer step for ${actor.leadId} not logged:`, err);
+    }
+    return;
+  }
   try {
     let anyRecent = false;
     let sameStepRecent = false;
@@ -374,7 +395,8 @@ export async function recordActorStep(
     });
     if (notify) {
       const { notifyDealerOfAssist } = await import("./pushNotices");
-      await notifyDealerOfAssist(actor.leadId, line, step);
+      // ID 201 #6: the dealer is told "iTarang team", not the person's name.
+      await notifyDealerOfAssist(actor.leadId, dealerFacingDoneByLine(display), step);
     }
   } catch (err) {
     console.error(`[actForDealer] record for ${actor.leadId} failed:`, err);
@@ -387,6 +409,13 @@ export interface ActHistoryRow {
   step: string | null;
   byName: string | null;
   via: string | null;
+  /** ID 201: for the dealer-facing wording ("Done by iTarang team for <dealer>"). */
+  forDealerName: string | null;
+}
+
+/** ID 201 #6 — the same rows as the file's dealer sees them: no iTarang names. */
+export function dealerFacingHistory(rows: ActHistoryRow[]): ActHistoryRow[] {
+  return rows.map((r) => ({ ...r, line: dealerFacingDoneByLine(r.forDealerName), byName: "iTarang team" }));
 }
 
 /** Every "Done by <name> for <dealer>" line on a file, newest first. */
@@ -407,6 +436,7 @@ export async function actHistory(leadId: string, limit = 50): Promise<ActHistory
       step: s(c.step),
       byName: r.byName ?? s(c.by_name),
       via: s(c.via),
+      forDealerName: s(c.for_dealer_name),
     };
   });
 }

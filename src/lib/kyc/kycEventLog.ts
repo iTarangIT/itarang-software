@@ -14,6 +14,13 @@
  * `kyc_update` template once Meta approves it (WA_TEMPLATES_APPROVED); until
  * then the line goes out as free text and only lands inside the window.
  *
+ * ID 201 (Kartik, 27 Oct): each line also holds the actor type (owning
+ * dealer, its WhatsApp salesperson, the iTarang house login, iTarang staff,
+ * a customer, the system), the channel (web / WhatsApp / system) and the
+ * dealer acted for — in `changes`, no migration. The owning dealer sees
+ * "iTarang team" instead of iTarang people's names (history and WhatsApp);
+ * iTarang logins keep the names.
+ *
  * Never throws: a log line or a WhatsApp send must never fail the action it
  * describes.
  */
@@ -21,10 +28,21 @@ import { sql } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import { auditLogs } from "@/lib/db/schema";
-import { recordActorStep, type LeadActor } from "@/lib/leads/actForDealerGuard";
-import { actorLabel, istTime, kycEventMessage, kycRecipients, type KycActor } from "./kycEventText";
+import { fileDealerNames, recordActorStep, type LeadActor } from "@/lib/leads/actForDealerGuard";
+import {
+    actorLabel,
+    istTime,
+    ITARANG_TEAM,
+    kycActorType,
+    kycChannel,
+    kycEventMessage,
+    kycRecipients,
+    type KycActor,
+    type KycActorType,
+    type KycChannel,
+} from "./kycEventText";
 
-export { kycCardLabel, kycDecisionLine, type KycActor } from "./kycEventText";
+export { kycCardLabel, kycDecisionLine, type KycActor, type KycActorType, type KycChannel } from "./kycEventText";
 
 export const KYC_EVENT = "kyc_event";
 
@@ -57,6 +75,18 @@ export async function recordKycEvent(input: KycEventInput): Promise<void> {
     } catch {
         /* the line is still worth writing without a name */
     }
+    // ID 201: a dealer-role login that is the house is iTarang, not the dealer.
+    try {
+        if (input.actor.id && kycActorType(input.actor) === "dealer" && (await isHouseUser(input.actor.id))) {
+            input = { ...input, actor: { ...input.actor, type: "house" } };
+        }
+        if (input.actor.forDealerId && !input.actor.forDealerName) {
+            const { display } = await fileDealerNames(input.actor.forDealerId);
+            input = { ...input, actor: { ...input.actor, forDealerName: display } };
+        }
+    } catch {
+        /* written without the house / dealer name */
+    }
     try {
         await db.insert(auditLogs).values({
             id: `AUDIT-${at.getTime()}-${Math.random().toString(36).slice(2, 8)}-kyc`,
@@ -68,6 +98,10 @@ export async function recordKycEvent(input: KycEventInput): Promise<void> {
                 by_name: input.actor.name,
                 by_role: input.actor.role,
                 ...(input.detail ?? {}),
+                actor_type: kycActorType(input.actor),
+                channel: kycChannel(input.actor),
+                for_dealer_id: input.actor.forDealerId ?? null,
+                for_dealer_name: input.actor.forDealerName ?? null,
             },
             performed_by: input.actor.id,
             timestamp: at,
@@ -81,6 +115,16 @@ export async function recordKycEvent(input: KycEventInput): Promise<void> {
     void fanOutKycEvent(input, at).catch((err) =>
         console.error(`[kycEventLog] WhatsApp for ${input.leadId} failed:`, err),
     );
+}
+
+/** Is this user a login of the iTarang house dealer? */
+async function isHouseUser(userId: string): Promise<boolean> {
+    const { houseDealerCode } = await import("@/lib/leads/dealerByMobile");
+    const house = await houseDealerCode();
+    if (!house) return false;
+    const [u] = (await db.execute(sql`
+        SELECT dealer_id FROM users WHERE id::text = ${userId} LIMIT 1`)) as unknown as Array<{ dealer_id: string | null }>;
+    return !!u?.dealer_id && u.dealer_id === house;
 }
 
 async function fanOutKycEvent(input: KycEventInput, at: Date): Promise<void> {
@@ -141,13 +185,20 @@ async function fanOutKycEvent(input: KycEventInput, at: Date): Promise<void> {
         }),
     );
 
-    // The dealer who owns the file — unless a dealer login did it (their own
-    // step), or the file is the house's own (already covered above).
-    const actorIsDealer = (input.actor.role ?? "").toLowerCase() === "dealer";
-    if (!actorIsDealer && lead.dealer_id && lead.dealer_id !== house?.dealerCode) {
+    // The dealer who owns the file — unless their own side did it (their login,
+    // their salesperson, their customer), or the file is the house's own
+    // (already covered above). ID 201: the house acting on a file it pushed out
+    // is iTarang, so the dealer is told; iTarang people are "iTarang team" to them.
+    const type = kycActorType(input.actor);
+    const ownSide = type === "dealer" || type === "salesperson" || type === "customer";
+    if (!ownSide && lead.dealer_id && lead.dealer_id !== house?.dealerCode) {
+        const forDealer = type === "system" ? actor : ITARANG_TEAM;
         const { pushToLeadDealer } = await import("@/lib/whatsapp/lead-push");
         await pushToLeadDealer(input.leadId, (t) => ({
-            prompt: { kind: "text", body: kycEventMessage({ customerName: t.customerName, referenceId: t.referenceId, action: input.action, actor, at }) },
+            prompt: {
+                kind: "text",
+                body: kycEventMessage({ customerName: t.customerName, referenceId: t.referenceId, action: input.action, actor: forDealer, at }),
+            },
             nudge: { template: "lead_action", params: [t.customerName, t.referenceId, `KYC update: ${input.action}`] },
         }));
     }
@@ -161,6 +212,10 @@ export interface KycTimelineRow {
     byName: string | null;
     byRole: string | null;
     kind: "kyc" | "final_decision";
+    /** ID 201. Lines written before 28 Oct are worked out from the role (house by the login's dealer). */
+    actorType: KycActorType;
+    channel: KycChannel;
+    forDealerName: string | null;
 }
 
 /**
@@ -171,7 +226,8 @@ export interface KycTimelineRow {
  */
 export async function kycTimeline(leadId: string, limit = 200): Promise<KycTimelineRow[]> {
     const rows = (await db.execute(sql`
-        SELECT l.timestamp AS at, l.entity_type, l.action, l.changes, u.name AS user_name, u.role AS user_role
+        SELECT l.timestamp AS at, l.entity_type, l.action, l.changes, u.name AS user_name, u.role AS user_role,
+               u.dealer_id AS user_dealer_id, l.performed_by::text AS performed_by
           FROM audit_logs l
           LEFT JOIN users u ON u.id = l.performed_by
          WHERE l.entity_id = ${leadId}
@@ -185,7 +241,12 @@ export async function kycTimeline(leadId: string, limit = 200): Promise<KycTimel
         changes: Record<string, unknown> | null;
         user_name: string | null;
         user_role: string | null;
+        user_dealer_id: string | null;
+        performed_by: string | null;
     }>;
+    const { houseDealerCode } = await import("@/lib/leads/dealerByMobile");
+    const house = await houseDealerCode();
+    const TYPES: KycActorType[] = ["dealer", "salesperson", "house", "itarang", "customer", "system"];
     return rows.map((r) => {
         const c = r.changes ?? {};
         const str = (v: unknown) => (typeof v === "string" && v.trim() ? v : null);
@@ -196,26 +257,86 @@ export async function kycTimeline(leadId: string, limit = 200): Promise<KycTimel
                 : `Final decision: ${(r.action ?? "").replace(/_/g, " ")}${
                       str(c.rejection_reason) ? ` — ${str(c.rejection_reason)}` : ""
                   }`;
+        const byRole = str(c.by_role) ?? r.user_role;
+        const stored = str(c.actor_type) as KycActorType | null;
+        let actorType = stored && TYPES.includes(stored) ? stored : kycActorType({ id: r.performed_by, role: byRole });
+        if (!stored && actorType === "dealer" && house && r.user_dealer_id === house) actorType = "house";
+        const channel = (str(c.channel) as KycChannel | null) ?? (actorType === "system" ? "system" : "web");
         return {
             at: new Date(r.at).toISOString(),
             line,
             byName: str(c.by_name) ?? r.user_name ?? (c.decided_by === "system" ? "iTarang (automatic)" : null),
-            byRole: str(c.by_role) ?? r.user_role,
+            byRole,
             kind,
+            actorType,
+            channel,
+            forDealerName: str(c.for_dealer_name),
         };
     });
+}
+
+// ── CRM checks (ID 201 #2) ──────────────────────────────────────────────────
+
+/**
+ * A check, field override or consent decision on the CRM's KYC review screen
+ * (Admin, Sales Head …): "PAN check run (passed)" with who, on the web, for the
+ * file's dealer. Log only unless `notify`. Never throws.
+ */
+export async function recordStaffKycStep(
+    leadId: string,
+    user: { id: string; name?: string | null; role?: string | null },
+    action: string,
+    opts: {
+        result?: unknown;
+        detail?: Record<string, unknown>;
+        notify?: boolean;
+        /** Write the line only the first time this key is seen on the file (a polled status). */
+        once?: string;
+    } = {},
+): Promise<void> {
+    try {
+        if (opts.once) {
+            const seen = (await db.execute(sql`
+                SELECT 1 FROM audit_logs
+                 WHERE entity_type = ${KYC_EVENT} AND entity_id = ${leadId} AND changes->>'once' = ${opts.once}
+                 LIMIT 1`)) as unknown as unknown[];
+            if (seen.length) return;
+        }
+        const { kycCheckOutcome } = await import("./kycEventText");
+        const outcome = "result" in opts ? kycCheckOutcome(opts.result) : null;
+        const [lead] = (await db.execute(sql`
+            SELECT dealer_id FROM leads WHERE id = ${leadId} LIMIT 1`)) as unknown as Array<{ dealer_id: string | null }>;
+        await recordKycEvent({
+            leadId,
+            action: outcome ? `${action} (${outcome})` : action,
+            actor: { id: user.id, name: user.name ?? null, role: user.role ?? null, channel: "web", forDealerId: lead?.dealer_id ?? null },
+            detail: opts.once ? { ...(opts.detail ?? {}), once: opts.once } : opts.detail,
+            notify: opts.notify ?? false,
+        });
+    } catch (err) {
+        console.error(`[kycEventLog] staff step for ${leadId} not logged:`, err);
+    }
 }
 
 // ── Dealer-portal steps ─────────────────────────────────────────────────────
 
 /** "uploaded pan card" → "Uploaded pan card". */
-function sentence(step: string): string {
+export function sentence(step: string): string {
     const s = step.trim();
     return s ? s.charAt(0).toUpperCase() + s.slice(1) : "KYC step";
 }
 
 function actorOf(actor: LeadActor): KycActor {
-    return { id: actor.userId, name: actor.userName, role: actor.role };
+    // ID 201: who it was and, for iTarang, which dealer's file.
+    const type: KycActorType = actor.kind === "house" ? "house" : actor.kind === "itarang" ? "itarang" : "dealer";
+    return {
+        id: actor.userId,
+        name: actor.userName,
+        role: actor.role,
+        type,
+        channel: "web",
+        forDealerId: actor.kind === "dealer" ? null : actor.leadDealerId,
+    };
 }
 
 /**
@@ -227,8 +348,10 @@ export async function recordKycStep(
     actor: LeadActor,
     step: string,
     extra: Record<string, unknown> = {},
-    opts: { coalesce?: boolean } = {},
+    opts: { coalesce?: boolean; kycLine?: boolean } = {},
 ): Promise<void> {
+    // The KYC line is written below, so the dealer's own step is not logged twice.
+    opts = { ...opts, kycLine: true };
     await recordActorStep(actor, step, extra, opts);
     // A draft autosave is not an action anybody needs to see on the timeline.
     if (opts.coalesce) return;
@@ -240,8 +363,9 @@ export async function recordKycMilestone(
     actor: LeadActor,
     step: string,
     extra: Record<string, unknown> = {},
-    opts: { coalesce?: boolean } = {},
+    opts: { coalesce?: boolean; kycLine?: boolean } = {},
 ): Promise<void> {
+    opts = { ...opts, kycLine: true };
     await recordActorStep(actor, step, extra, opts);
     await recordKycEvent({ leadId: actor.leadId, action: sentence(step), actor: actorOf(actor), detail: extra });
 }

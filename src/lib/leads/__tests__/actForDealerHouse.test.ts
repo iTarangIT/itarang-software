@@ -35,9 +35,10 @@ describe("workNoteText (being worked by, on the dealer's own screens)", () => {
     expect(workNoteText(null, { userId: "d1", kind: "dealer" }, NOW)).toBeNull();
     expect(workNoteText({ ...LIVE, expiresAt: ist("2026-10-21T10:59:00") }, { userId: "d1", kind: "dealer" }, NOW)).toBeNull();
   });
-  it("the dealer sees who and until when, and that he still wins", () => {
+  it("the dealer sees the iTarang team (not the person), until when, and that he still wins (ID 201)", () => {
     const t = workNoteText(LIVE, { userId: "d1", kind: "dealer" }, NOW)!;
-    expect(t).toMatch(/^Being worked by Ravi \(iTarang\) until /);
+    expect(t).toMatch(/^Being worked by the iTarang team until /);
+    expect(t).not.toMatch(/Ravi/);
     expect(t).toMatch(/still yours/);
   });
   it("the holder sees their own note; another iTarang person is told they are blocked", () => {

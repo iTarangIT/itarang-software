@@ -19,7 +19,7 @@ import { dealerMayDispatch } from "@/lib/auth/requireLeadAccess";
 import { emit } from "@/lib/notifications/emit";
 import { dealerParty } from "@/lib/notifications/provenance";
 import { dealerDisplayNames } from "@/lib/leads/pushGuards";
-import { actHistory } from "@/lib/leads/actForDealerGuard";
+import { actHistory, dealerFacingHistory } from "@/lib/leads/actForDealerGuard";
 
 export const dynamic = "force-dynamic";
 
@@ -53,10 +53,13 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   const g = await gate((await params).id);
   if (!g) return json({ success: false, error: { message: "Access denied" } }, 403);
   // ID 183: the dealer's own file timeline of "Done by <name> for <dealer>" lines.
-  const history = await actHistory(g.lead.id, 20).catch((err) => {
-    console.error("[assist-request] act history read failed:", err);
-    return [];
-  });
+  // ID 201 #6: the dealer reads "Done by iTarang team", not staff names.
+  const history = dealerFacingHistory(
+    await actHistory(g.lead.id, 20).catch((err) => {
+      console.error("[assist-request] act history read failed:", err);
+      return [];
+    }),
+  );
   try {
     return json({ success: true, data: { open: await openAsk(g.lead.id), history } });
   } catch (err) {

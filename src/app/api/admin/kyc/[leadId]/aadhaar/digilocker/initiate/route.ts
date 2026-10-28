@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { requireAdminAppUserForLead } from "@/lib/kyc/admin-workflow";
+import { recordStaffKycStep } from "@/lib/kyc/kycEventLog";
 import { executeDigilockerInitiate } from "@/lib/kyc/digilocker";
 import { publicOrigin, PublicOriginError } from "@/lib/public-origin";
 
@@ -57,6 +58,8 @@ export async function POST(
       // Admin initiate consumes the dealer's first-API coupon (BRD §1).
       stampCoupon: true,
     });
+    // ID 201: the check, who ran it and its outcome in the file's KYC history.
+    await recordStaffKycStep(leadId, appUser, "DigiLocker (Aadhaar) request sent", { result });
 
     return NextResponse.json(result.body, { status: result.status });
   } catch (error) {

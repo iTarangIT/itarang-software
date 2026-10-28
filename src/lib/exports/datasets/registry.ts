@@ -1702,7 +1702,7 @@ const invoicesDataset: Dataset = {
                     key: "balance",
                     header: "Balance (₹)",
                     meaning:
-                        "Still owed on this invoice; a credit note's balance is its (negative) amount. The column does NOT add up to Money owed on the dashboards: Money owed nets each customer's credit notes against their unpaid invoices only (paid, void and draft invoices left out) and never goes below zero for a customer.",
+                        "Still owed on this invoice; a credit note's balance is its (negative) amount. The column does NOT add up to Accounts Receivable on the dashboards: Accounts Receivable nets each customer's credit notes against their unpaid invoices only (paid, void and draft invoices left out) and never goes below zero for a customer.",
                     kind: "money",
                 },
                 { key: "status", header: "Status", meaning: "Draft, sent, overdue, paid, partially paid or void; 'credit_note' on a credit note that is not void." },

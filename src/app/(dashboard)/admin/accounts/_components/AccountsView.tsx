@@ -43,9 +43,11 @@ export type AccountRow = {
     suggested_owner: Suggested | null;
 };
 
-type ListResponse = {
+export type ListResponse = {
     rows: Omit<AccountRow, "suggested_owner">[];
     filtered_total: number;
+    /** ID 203: when the server read it (ms), so the page's first rows are not refetched at once. */
+    read_at?: number;
     limit: number;
     offset: number;
 };
@@ -54,6 +56,8 @@ type CountsResponse = { total: number; no_owner: number; gstin_missing: number; 
 
 type Tab = "all" | "no_owner" | "gstin_missing" | "closed";
 const PAGE = 100;
+// Page 1 of the default tab — what the page fetches on the server (ID 203).
+const DEFAULT_PARAMS = `limit=${PAGE}&offset=0`;
 
 export function CameThroughBadge({ value }: { value: string | null }) {
     if (value === "lead")
@@ -67,7 +71,7 @@ export function CameThroughBadge({ value }: { value: string | null }) {
     return <span className="text-[11px] text-ink-muted">—</span>;
 }
 
-export function AccountsView() {
+export function AccountsView({ initialPage = null }: { initialPage?: ListResponse | null }) {
     const qc = useQueryClient();
     const owners = useOwners();
     const [tab, setTab] = useState<Tab>("all");
@@ -107,6 +111,9 @@ export function AccountsView() {
         queryKey: ["admin-accounts", "list", params],
         queryFn: () => api(`/api/admin/accounts?${params}`),
         placeholderData: (prev) => prev,
+        // ID 203: the first rows arrive with the HTML.
+        initialData: params === DEFAULT_PARAMS && initialPage ? initialPage : undefined,
+        initialDataUpdatedAt: initialPage?.read_at,
     });
     const { data: counts } = useQuery<CountsResponse>({
         queryKey: ["admin-accounts", "counts"],

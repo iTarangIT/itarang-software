@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { executeCibilScore } from "@/lib/kyc/cibil-verification";
 import { requireAdminAppUserForLead } from "@/lib/kyc/admin-workflow";
+import { recordStaffKycStep } from "@/lib/kyc/kycEventLog";
 
 // Mirrors the primary CIBIL score route at
 // src/app/api/admin/kyc/[leadId]/cibil/score/route.ts but sources name / pan /
@@ -24,6 +25,8 @@ export async function POST(
     const { leadId } = await params;
 
     const result = await executeCibilScore(leadId, { applicant: "co_borrower" });
+    // ID 201: the check, who ran it and its outcome in the file's KYC history.
+    await recordStaffKycStep(leadId, appUser, "CIBIL score pulled (co-borrower)", { result });
 
     return NextResponse.json(
       {

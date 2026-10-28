@@ -15,8 +15,8 @@ import { z } from "zod";
 
 import { requireRole } from "@/lib/auth-utils";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
-import { runDigest } from "@/lib/digests/engine";
-import { DIGEST_KIND_IDS, digestKind } from "@/lib/digests/registry";
+import { NOT_ON_LIST, runDigest } from "@/lib/digests/engine";
+import { DIGEST_KIND_IDS, DIGEST_KINDS, digestKind } from "@/lib/digests/registry";
 import { MAX_RECIPIENTS } from "@/lib/digests/schedule";
 
 export const dynamic = "force-dynamic";
@@ -70,12 +70,33 @@ export const POST = withErrorHandler(
 
         const outcome = result.outcomes[0];
 
+        // ID 198 — a test "as" a manager also sends the kinds that ride on this
+        // one's settings (My team with My day). Someone with nobody reporting
+        // to them is not on that list: they get the one mail, quietly.
+        const also: Array<{ kind: string; label: string; sent: boolean; error: string | null }> = [];
+        if (body.personId) {
+            for (const sibling of DIGEST_KINDS.filter((k) => k.settingsOf === kind.id)) {
+                const r = await runDigest({
+                    kind: sibling,
+                    slot: "test",
+                    triggeredBy: "manual",
+                    toOverride: body.to ?? (user.email ? [user.email] : undefined),
+                    istDayOverride: body.istDay,
+                    personId: body.personId,
+                });
+                const o = r.outcomes[0];
+                if (o?.error === NOT_ON_LIST) continue;
+                also.push({ kind: sibling.id, label: sibling.label, sent: o?.sent ?? false, error: o?.error ?? null });
+            }
+        }
+
         return successResponse({
             ok: result.ok,
             sent: outcome?.sent ?? false,
             recipients: outcome?.recipients ?? [],
             digestDate: outcome?.digestDate ?? null,
             error: outcome?.error ?? null,
+            also,
         });
     },
 );

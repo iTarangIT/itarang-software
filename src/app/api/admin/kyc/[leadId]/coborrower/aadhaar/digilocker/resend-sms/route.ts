@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { executeCoBorrowerDigilockerResendSms } from "@/lib/kyc/coborrower-verification";
 import { requireAdminAppUserForLead } from "@/lib/kyc/admin-workflow";
+import { recordStaffKycStep } from "@/lib/kyc/kycEventLog";
 
 /**
  * Co-borrower variant of the DigiLocker resend-sms endpoint.
@@ -26,6 +27,8 @@ export async function POST(
 
     const { leadId } = await params;
     const result = await executeCoBorrowerDigilockerResendSms(leadId);
+    // ID 201: the check, who ran it and its outcome in the file's KYC history.
+    await recordStaffKycStep(leadId, appUser, "DigiLocker (Aadhaar) SMS resent (co-borrower)", { result });
     return NextResponse.json(result.body, { status: result.status });
   } catch (error) {
     console.error("[Co-Borrower DigiLocker Resend-SMS] Error:", error);

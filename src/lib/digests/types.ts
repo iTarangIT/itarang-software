@@ -28,7 +28,8 @@ export type DigestKindId =
   | "buyback_daily"
   | "idle_weekly"
   | "targets_pending"
-  | "my_day";
+  | "my_day"
+  | "my_team";
 
 /** One figure about the covered day. */
 export type ActivityLine = {
@@ -231,6 +232,13 @@ export type DigestKindDescriptor = {
   description: string;
   /** `app_settings` key holding this kind's settings blob. */
   settingsKey: string;
+  /**
+   * ID 198 — this kind has no settings of its own: it reads (never writes) the
+   * named kind's blob under the same `settingsKey` — its switch, time, days and
+   * roles. Its `sections` are a subset of that kind's, so a tick-box there
+   * switches this mail. The settings API refuses to save through it.
+   */
+  settingsOf?: DigestKindId;
   /** Route the settings screen lives at, for the sidebar and the contract test. */
   settingsHref: string;
   /** Where the email's button goes (a per-recipient DigestFigures.ctaHref overrides it). */

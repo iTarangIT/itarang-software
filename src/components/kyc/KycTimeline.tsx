@@ -8,12 +8,18 @@
 import { useCallback, useEffect, useState } from "react";
 import { ChevronDown, ChevronRight, History, RefreshCw } from "lucide-react";
 
+import { ITARANG_TEAM, kycLineTags, type KycActorType, type KycChannel } from "@/lib/kyc/kycEventText";
+
 interface Row {
     at: string;
     line: string;
     byName: string | null;
     byRole: string | null;
     kind: "kyc" | "final_decision";
+    /** ID 201 (absent on an older API response). */
+    actorType?: KycActorType;
+    channel?: KycChannel;
+    forDealerName?: string | null;
 }
 
 const ROLE_LABEL: Record<string, string> = {
@@ -37,6 +43,10 @@ const fmt = (iso: string) =>
     });
 
 function who(r: Row): string {
+    if (r.byName === ITARANG_TEAM) return ITARANG_TEAM;
+    // ID 201: the house login's role is 'dealer', but it is not the file's dealer.
+    if (r.actorType === "house") return r.byName ?? "iTarang house";
+    if (r.actorType === "salesperson" || r.actorType === "customer") return r.byName ?? "Someone";
     const role = r.byRole ? (ROLE_LABEL[r.byRole.toLowerCase()] ?? r.byRole.replace(/_/g, " ")) : null;
     if (!r.byName && (!role || role === "System")) return "iTarang (automatic)";
     return [r.byName ?? "Someone", role ? `(${role})` : null].filter(Boolean).join(" ");
@@ -99,7 +109,23 @@ export default function KycTimeline({ leadId, defaultOpen = false }: { leadId: s
                         <li key={`${r.at}:${i}`} className="grid grid-cols-1 gap-1 px-4 py-2.5 text-sm sm:grid-cols-[11rem_1fr_14rem]">
                             <span className="whitespace-nowrap text-xs tabular-nums text-gray-500 sm:text-sm">{fmt(r.at)}</span>
                             <span className={r.kind === "final_decision" ? "font-semibold text-gray-900" : "text-gray-800"}>{r.line}</span>
-                            <span className="text-xs text-gray-600 sm:text-right sm:text-sm">{who(r)}</span>
+                            <span className="text-xs text-gray-600 sm:text-right sm:text-sm">
+                                {who(r)}
+                                {r.actorType && r.channel && (
+                                    <span className="mt-0.5 flex flex-wrap gap-1 sm:justify-end">
+                                        {kycLineTags({ channel: r.channel, actorType: r.actorType, forDealerName: r.forDealerName ?? null }).map((t) => (
+                                            <span
+                                                key={t}
+                                                className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${
+                                                    t === "WhatsApp" ? "bg-emerald-50 text-emerald-700" : "bg-gray-100 text-gray-600"
+                                                }`}
+                                            >
+                                                {t}
+                                            </span>
+                                        ))}
+                                    </span>
+                                )}
+                            </span>
                         </li>
                     ))}
                 </ol>

@@ -248,6 +248,11 @@ export function DigestSettingsForm({ kind }: { kind: string }) {
             } else {
                 toast.error(d.error ?? "The test did not send.");
             }
+            // ID 198: a manager's test also sends their My team email.
+            for (const o of (d.also ?? []) as Array<{ label: string; sent: boolean; error: string | null }>) {
+                if (o.sent) toast.success(`${o.label} test sent too.`);
+                else toast.error(`${o.label}: ${o.error ?? "the test did not send."}`);
+            }
             qc.invalidateQueries({ queryKey: ["digest-settings", kind] });
         } catch (err) {
             toast.error(err instanceof Error ? err.message : "Test send failed");

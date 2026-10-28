@@ -102,20 +102,30 @@ async function verifyMyDay(istDay: string, who: string, renderTo: string | null)
     for (const r of targets?.rows ?? []) console.log(`    ${r.join(" | ")}`);
     console.log(`  Work list: ${work?.rows.length ?? 0} item(s), ${work?.rowLinks?.filter(Boolean).length ?? 0} linked`);
 
-    for (const t of table(mine.figures, "my_team")) {
-        console.log(`  ${t.title}`);
-        // ID 194: the overdue-work table shares the key but is not in the management email.
-        if (t.title === "My team · overdue work") {
-            console.log(`    ${t.columns.join(" | ")}`);
-            for (const r of t.rows) console.log(`    info      ${r.join(" | ")}`);
-            continue;
-        }
-        for (const r of t.rows) {
-            // A "Team total" exists only here (manager outside the block); every
-            // other line must be printed in the management email.
-            const ok = r[0] === "Team total" || mgmtRows.some((m) => same(m, r));
-            if (!ok) bad++;
-            console.log(`    ${ok ? "ok      " : "MISMATCH"}  ${r.join(" | ")}`);
+    // ID 198: the team is a separate "My team" email; My day must not carry it.
+    if (table(mine.figures, "my_team").length) {
+        console.log("  My day still carries a team table (ID 198: it moved to My team)");
+        bad++;
+    }
+    const { collectMyTeam, myTeamDigest } = await import("@/lib/digests/kinds/my-team");
+    const managers = await myTeamDigest.perRecipient!.resolve({ roles: { inside_sales_rep: true, asm: true } });
+    if (!managers.some((p) => p.id === person.id)) {
+        console.log("  My team: nobody reports to them — one email only");
+    } else {
+        const team = await collectMyTeam(istDay, person);
+        if (!team.ok) throw new Error(`My team failed: ${team.error}`);
+        for (const t of table(team.figures, "my_team")) {
+            console.log(`  ${t.title}`);
+            if (t.title.endsWith("leads to review")) {
+                console.log(`    info      ${t.rows.length} row(s), ${t.rowLinks?.filter(Boolean).length ?? 0} linked`);
+                continue;
+            }
+            for (const r of t.rows) {
+                // Every team line (the "<manager> · team" header included) is printed in the management email.
+                const ok = mgmtRows.some((m) => same(m, r) || (m[0] === r[0] && r.slice(1).every((v) => v === "")));
+                if (!ok) bad++;
+                console.log(`    ${ok ? "ok      " : "MISMATCH"}  ${r.join(" | ")}`);
+            }
         }
     }
 

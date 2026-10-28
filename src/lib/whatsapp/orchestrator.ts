@@ -163,6 +163,7 @@ import {
 // Re-exported here because three call sites already import it from here.
 import { PLACEHOLDER_COMPANY } from "./labels";
 import { checkCustomerGstin, normalizeGstin } from "@/lib/leads/gstin";
+import { recordWhatsAppKycStep } from "@/lib/kyc/kycWhatsAppLog";
 export { PLACEHOLDER_COMPANY };
 
 const MIN_CONFIDENCE = Number(process.env.WHATSAPP_MIN_CONFIDENCE ?? 0.55);
@@ -4213,6 +4214,8 @@ async function onLeadPayment(
   await mergeContext(session, (ctx) => {
     ctx.lead = { ...(ctx.lead ?? {}), paymentMethod, leadId };
   });
+  // ID 201: every WhatsApp KYC step goes in the file's KYC history.
+  await recordWhatsAppKycStep({ session, dealer, leadId, action: `Payment chosen: ${humanPayment(paymentMethod)}` });
 
   // CASH SKIPS EVERYTHING ELSE. A cash sale is a counter transaction: no
   // lender, no KYC to verify, no admin approval. It goes straight to
@@ -4519,6 +4522,7 @@ async function onConsentChannel(
       gen.fileName,
       "✍ Print this, get the customer's signature, then *upload the signed PDF here*.",
     );
+    await recordWhatsAppKycStep({ session, dealer, leadId: lead.leadId, action: "Consent form (to sign by hand) generated" });
     await setSession(session.id, { current_state: "DC_LEAD_CONSENT_WAIT" });
     return;
   }
@@ -4541,6 +4545,7 @@ async function onConsentChannel(
     await mergeContext(session, (ctx) => {
       ctx.lead = { ...(ctx.lead ?? {}), consentOtpAttempts: 0, consentOtpChannel: channel };
     });
+    await recordWhatsAppKycStep({ session, dealer, leadId: lead.leadId, action: "Consent code sent to the customer (call)" });
     await setSession(session.id, { current_state: "DC_LEAD_CONSENT_OTP_WAIT" });
     await reply(
       session,
@@ -4589,6 +4594,7 @@ async function onConsentWait(
       await reply(session, `Couldn't save the signed consent: ${res.error}. Please resend.`);
       return;
     }
+    await recordWhatsAppKycStep({ session, leadId: lead.leadId, action: "Signed consent uploaded", notify: true });
     await presentSignedConsent(
       session,
       res.fileUrl,
@@ -4709,6 +4715,7 @@ async function onConsentOtpWait(
     await mergeContext(session, (ctx) => {
       ctx.lead = { ...(ctx.lead ?? {}), consentOtpAttempts: 0 };
     });
+    await recordWhatsAppKycStep({ session, dealer, leadId: lead.leadId, action: "Consent code resent to the customer" });
     await reply(
       session,
       `🔁 A fresh OTP was sent to the customer on ${res.otpSentTo}. Ask them to read it out and type the 6 digits here.` +
@@ -4730,6 +4737,7 @@ async function onConsentOtpWait(
 
   const res = await verifyConsentOtp({ leadId: lead.leadId, otp });
   if (res.ok) {
+    await recordWhatsAppKycStep({ session, dealer, leadId: lead.leadId, action: "Customer consent given (code confirmed)", notify: true });
     await reply(session, "✅ *Consent recorded.* Thank you!");
     await afterConsentCaptured(session);
     return;
@@ -5438,6 +5446,7 @@ async function ingestCustomerZip(
       r.fields,
       uploaderId,
     );
+    await recordWhatsAppKycStep({ session, leadId: lead.leadId, action: `Uploaded ${customerDocLabel(r.docType)}` });
     savedTypes.push(r.docType);
     acceptedLabels.add(customerDocLabel(r.docType));
   }
@@ -5547,6 +5556,7 @@ async function ingestCustomerDoc(
   }
 
   await persistCustomerDoc(lead.leadId, docType, buffer, mimeType, fileName, cls.fields, uploaderId);
+  await recordWhatsAppKycStep({ session, leadId: lead.leadId, action: `Uploaded ${customerDocLabel(docType)}` });
 
   await mergeContext(session, (ctx) => {
     if (!ctx.lead) ctx.lead = {};
@@ -5836,6 +5846,7 @@ async function finalizeLead(session: SessionRow): Promise<void> {
     // E-278 — explicit 'submitted' marker: the choke point only sees the walk
     // back to DC_MENU here, which is indistinguishable from parking.
     await recordLeadSubmitted(lead.leadId, session);
+    await recordWhatsAppKycStep({ session, leadId: lead.leadId, action: "Submitted to iTarang for KYC review", notify: true });
   }
 
   const fresh = await loadSession(session.id);

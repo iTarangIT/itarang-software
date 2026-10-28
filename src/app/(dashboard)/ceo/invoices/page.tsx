@@ -797,7 +797,7 @@ export default function CEOInvoicesPage() {
         </div>
         <div className="p-4 rounded-2xl bg-amber-50/40 border border-amber-100 shadow-sm">
           <p className="text-[10px] font-bold uppercase tracking-wider text-amber-700/70">
-            Outstanding Balance
+            Accounts Receivable
           </p>
           <p data-testid="summary-balance" data-balance={summary?.balance ?? ""} className="text-2xl font-bold text-amber-900 mt-1">
             {summary ? formatINR(summary.balance) : "—"}

@@ -3,11 +3,96 @@
  * no database — so the unit tests import it directly.
  */
 
+/**
+ * ID 201 — who acted, as the history shows it: the dealer who owns the file
+ * (or one of its WhatsApp salespeople), the iTarang house login, iTarang staff
+ * (Admin, Sales Head …) acting for the dealer, a customer on WhatsApp, or the
+ * system.
+ */
+export type KycActorType = "dealer" | "salesperson" | "house" | "itarang" | "customer" | "system";
+/** ID 201 — where the step was taken. */
+export type KycChannel = "web" | "whatsapp" | "system";
+
 export interface KycActor {
     /** users.id; null for the system (auto-approval, provider callbacks). */
     id: string | null;
     name: string | null;
     role: string | null;
+    /** ID 201: absent = worked out from id / role (kycActorType). */
+    type?: KycActorType;
+    /** ID 201: absent = web for a person, system for the system. */
+    channel?: KycChannel;
+    /** ID 201: the dealer whose file it is, when someone else acted for them. */
+    forDealerId?: string | null;
+    forDealerName?: string | null;
+}
+
+/** ID 201 — the actor type when the caller did not say. */
+export function kycActorType(actor: Pick<KycActor, "id" | "role" | "type">): KycActorType {
+    if (actor.type) return actor.type;
+    const role = (actor.role ?? "").toLowerCase();
+    if (!actor.id && (!role || role === "system")) return "system";
+    if (role === "dealer") return "dealer";
+    if (role === "salesperson") return "salesperson";
+    if (role === "customer") return "customer";
+    return "itarang";
+}
+
+export function kycChannel(actor: Pick<KycActor, "id" | "role" | "type" | "channel">): KycChannel {
+    return actor.channel ?? (kycActorType(actor) === "system" ? "system" : "web");
+}
+
+/** ID 201 #6 — the owning dealer never sees iTarang people's names. */
+export const ITARANG_TEAM = "iTarang team";
+
+/**
+ * ID 201 — the name a viewer sees for a line. The owning dealer sees their own
+ * people (their login, their salespeople, their customer) by name and everyone
+ * at iTarang — staff and the house login — as "iTarang team". iTarang logins
+ * see every name.
+ */
+export function kycWhoFor(
+    viewer: "owning_dealer" | "itarang",
+    row: { byName: string | null; actorType: KycActorType },
+): string | null {
+    if (viewer === "owning_dealer" && (row.actorType === "itarang" || row.actorType === "house")) return ITARANG_TEAM;
+    return row.byName;
+}
+
+/**
+ * ID 201 #6 — who is reading a file's KYC history: the dealer who owns the
+ * file, or iTarang (staff, and the house login, which has role 'dealer').
+ */
+export function kycViewerOf(user: { role: string | null; dealer_id: string | null }, houseCode: string | null): "owning_dealer" | "itarang" {
+    const dealer = (user.role ?? "").toLowerCase() === "dealer";
+    return dealer && !(houseCode && user.dealer_id === houseCode) ? "owning_dealer" : "itarang";
+}
+
+/** ID 201 #6 — the history rows as `viewer` sees them; a redacted row also loses its role. */
+export function kycRowsForViewer<T extends { byName: string | null; byRole: string | null; actorType: KycActorType }>(
+    rows: T[],
+    viewer: "owning_dealer" | "itarang",
+): T[] {
+    return rows.map((r) => {
+        const byName = kycWhoFor(viewer, r);
+        return byName === r.byName ? r : { ...r, byName, byRole: null };
+    });
+}
+
+/** ID 201 #5 — "WhatsApp · iTarang house · for Sharma Batteries". */
+export function kycLineTags(row: {
+    channel: KycChannel;
+    actorType: KycActorType;
+    forDealerName: string | null;
+}): string[] {
+    const tags: string[] = [];
+    if (row.channel === "web") tags.push("Web");
+    if (row.channel === "whatsapp") tags.push("WhatsApp");
+    if (row.actorType === "house") tags.push("iTarang house");
+    if (row.actorType === "salesperson") tags.push("Dealer's salesperson");
+    if (row.actorType === "customer") tags.push("Customer");
+    if ((row.actorType === "house" || row.actorType === "itarang") && row.forDealerName) tags.push(`for ${row.forDealerName}`);
+    return tags;
 }
 
 const ROLE_LABEL: Record<string, string> = {
@@ -21,6 +106,12 @@ const ROLE_LABEL: Record<string, string> = {
 
 export function actorLabel(actor: KycActor): string {
     const role = (actor.role ?? "").toLowerCase();
+    const type = kycActorType(actor);
+    if (type === "system") return "iTarang (automatic)";
+    // ID 201: the house login has role 'dealer' but is iTarang.
+    if (type === "house") return `${actor.name?.trim() || "Someone"} (iTarang house)`;
+    if (type === "salesperson") return `${actor.name?.trim() || "Salesperson"} (dealer's salesperson)`;
+    if (type === "customer") return `${actor.name?.trim() || "The customer"} (customer)`;
     if (!actor.id && (!role || role === "system")) return "iTarang (automatic)";
     const name = actor.name?.trim() || "Someone";
     const r = ROLE_LABEL[role] ?? (role ? role.replace(/_/g, " ") : "");
@@ -102,3 +193,20 @@ export function kycDecisionLine(what: string, decision: string, reason?: string 
     return withReason(`${what}: ${d.replace(/_/g, " ")}`, reason);
 }
 
+
+/**
+ * ID 201 #2 — "passed" / "failed" for a check's result, whatever shape the
+ * provider service returned ({ success }, { ok }, { status, body }); null
+ * when it cannot be told.
+ */
+export function kycCheckOutcome(result: unknown): "passed" | "failed" | null {
+    if (!result || typeof result !== "object") return null;
+    const r = result as Record<string, unknown>;
+    if (typeof r.status === "number" && "body" in r) {
+        if (r.status >= 400) return "failed";
+        return kycCheckOutcome(r.body) ?? "passed";
+    }
+    if (typeof r.success === "boolean") return r.success ? "passed" : "failed";
+    if (typeof r.ok === "boolean") return r.ok ? "passed" : "failed";
+    return null;
+}

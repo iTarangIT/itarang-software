@@ -928,6 +928,15 @@ export const POST = withErrorHandler(async (req: Request) => {
             } else if (step1Actor) {
                 // ID 183: the house saved Step 1 of a file it pushed out.
                 await recordActorStep(step1Actor, 'saved the customer details (Step 1)');
+            } else if (data.leadId) {
+                // ID 201 #4: the dealer's own Step 1 save, as a plain line in the file's history.
+                const { recordKycEvent } = await import('@/lib/kyc/kycEventLog');
+                await recordKycEvent({
+                    leadId: data.leadId,
+                    action: 'Saved the customer details (Step 1)',
+                    actor: { id: user.id, name: user.name ?? null, role: user.role, channel: 'web' },
+                    notify: false,
+                });
             }
 
             return successResponse({

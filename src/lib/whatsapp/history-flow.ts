@@ -291,8 +291,9 @@ export async function leadHistoryCard(
   // file — belong on the file's general history too, merged in by time.
   const doneBy = await (async () => {
     try {
-      const { actHistory } = await import("@/lib/leads/actForDealerGuard");
-      return await actHistory(leadId, 30);
+      // ID 201 #6: this card is read by the dealer's side — no iTarang names.
+      const { actHistory, dealerFacingHistory } = await import("@/lib/leads/actForDealerGuard");
+      return dealerFacingHistory(await actHistory(leadId, 30));
     } catch (err) {
       console.error("[WhatsApp/history] done-by read failed:", err);
       return [];

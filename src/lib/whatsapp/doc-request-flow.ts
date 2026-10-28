@@ -46,6 +46,7 @@ import { patchLeadSub, reply, setSession, type SessionRow } from "./session-stor
 import { saveMedia } from "./storage";
 import type { InboundEvent } from "./types";
 import { oneLine } from "./window";
+import { recordWhatsAppKycStep } from "@/lib/kyc/kycWhatsAppLog";
 
 /** Waiting for the customer or dealer to send a requested document. */
 export const DC_DOCREQ_WAIT = "DC_DOCREQ_WAIT";
@@ -289,6 +290,8 @@ async function onDocRequestWait(
     { id: target.id },
     { userId: await whatsappUploaderId(session.application_id), source: "whatsapp" },
   );
+  // ID 201: every WhatsApp KYC step goes in the file's KYC history.
+  await recordWhatsAppKycStep({ session, leadId, action: `Requested document uploaded: ${target.doc_label}`, notify: true });
 
   // E-200 — an NBFC-originated child re-projects its wrapper and notifies the
   // admins, exactly as the web upload does. Best-effort: a notification failure

@@ -1,4 +1,4 @@
-// Money owed to us by age — the pure part of receivables.ts (no database), so
+// Accounts Receivable by age — the pure part of receivables.ts (no database), so
 // the netting rule can be unit-tested. receivables.ts re-exports all of it.
 //
 // ID 89 / 71: credit notes are netted per customer BEFORE bucketing. A
@@ -17,7 +17,7 @@ export type AgeingRow = {
     owe_key: string;
 };
 
-/** Σ per customer of max(0, Σ balance) — the "Money owed to us" figure. */
+/** Σ per customer of max(0, Σ balance) — the "Accounts Receivable" figure. */
 export function netOwed(rows: Pick<AgeingRow, "owe_key" | "balance">[]): number {
     const per = new Map<string, number>();
     for (const r of rows) per.set(r.owe_key, (per.get(r.owe_key) ?? 0) + r.balance);
@@ -84,4 +84,54 @@ export function ageReceivables(rows: AgeingRow[]): ReceivablesAgeing {
         invoices: net.length,
         buckets: [...RECEIVABLE_AGES.map((a) => bucket(a.key, a.label)), ...(noDate.invoices ? [noDate] : [])],
     };
+}
+
+// ─────────────── ID 200: where each invoice comes from, and finding a dealer ───────────────
+
+/** What the source of a row is called on the Accounts Receivable page. */
+export const RECEIVABLE_SOURCE_LABEL: Record<string, string> = {
+    zoho: "Zoho (old)",
+    drive: "Drive PDF",
+    vyapar: "Vyapar register",
+    credit: "Credit note",
+};
+
+/** `origin` is `source` with Drive split into the PDF scan and the Vyapar register. */
+export function receivableSourceLabel(r: { source: string; origin?: string | null }): string {
+    const k = r.origin ?? r.source;
+    return RECEIVABLE_SOURCE_LABEL[k] ?? k;
+}
+
+/**
+ * Shown instead of a file link when the invoice has none: a register-only
+ * invoice (read from the Vyapar register, its PDF not yet found by the Drive
+ * scan) says so; null when there is a file.
+ */
+export function receivableFileNote(r: { document_url: string | null; origin?: string | null }): string | null {
+    if (r.document_url) return null;
+    return r.origin === "vyapar" ? "Register only, no PDF yet" : "No file";
+}
+
+/**
+ * The page's dealer search: every word must appear in the matched dealer, the
+ * customer printed on the invoice, the invoice number, the account id or the
+ * GSTIN the balance nets under — case and spacing ignored.
+ */
+export function matchesReceivableSearch(
+    r: {
+        dealer_name: string | null;
+        customer_name: string | null;
+        invoice_number: string | null;
+        account_id: string | null;
+        owe_key: string;
+    },
+    q: string,
+): boolean {
+    const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+    if (words.length === 0) return true;
+    const hay = [r.dealer_name, r.customer_name, r.invoice_number, r.account_id, r.owe_key]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+    return words.every((w) => hay.includes(w));
 }

@@ -761,7 +761,7 @@ export const METRICS: MetricDef[] = [
   },
   {
     key: "business.outstanding",
-    label: "Outstanding receivables",
+    label: "Accounts Receivable",
     module: "business",
     unit: "inr_paise",
     direction: "neutral",

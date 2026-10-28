@@ -9,7 +9,7 @@
 //
 // ID 89 — revenue, costs, the net and money owed by age now sit on this one
 // page: a net strip for the selected window and the receivables ageing (the
-// same buckets as "Money owed to us"), in the redesign's card style.
+// same buckets as "Accounts Receivable"), in the redesign's card style.
 
 import React from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -85,7 +85,7 @@ export default function RevenueAndCostsPage() {
         queryKey: ["ceo-receivables-ageing"],
         queryFn: async () => {
             const res = await fetch(`/api/dashboard/ceo/receivables-ageing`, { cache: "no-store" });
-            if (!res.ok) throw new Error("Failed to load money owed");
+            if (!res.ok) throw new Error("Failed to load accounts receivable");
             return (await res.json()).data as ReceivablesAgeing;
         },
         refetchInterval: 5 * 60_000,
@@ -152,14 +152,14 @@ export default function RevenueAndCostsPage() {
             </DashCard>
 
             <DashCard
-                title="Money owed to us, by age"
+                title="Accounts Receivable, by age"
                 caption="As of today, every unpaid invoice whatever its date — the period above does not apply."
-                action={<CardLink href="/ceo/receivables">Open money owed to us</CardLink>}
+                action={<CardLink href="/ceo/receivables">Open Accounts Receivable</CardLink>}
             >
                 {ageing.isLoading ? (
                     <LoadingBlock />
                 ) : ageing.isError || !ageing.data ? (
-                    <NotAvailable reason="Money owed could not be loaded." />
+                    <NotAvailable reason="Accounts Receivable could not be loaded." />
                 ) : (
                     <>
                         <div data-testid="receivables-ageing" className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">

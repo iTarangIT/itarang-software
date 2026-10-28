@@ -339,7 +339,7 @@ export const NAV_LAYOUTS: Record<string, Layout> = {
                 items: [
                     { id: "revenue-costs", label: "Revenue & costs" },
                     // A page with no menu entry until now (ceo/receivables).
-                    { add: "ceo-receivables", label: "Money owed to us", href: "/ceo/receivables" },
+                    { add: "ceo-receivables", label: "Accounts Receivable", href: "/ceo/receivables" },
                     { node: "Invoices", children: [{ id: "sales-invoices", label: "Sales invoices" }, "ceo-invoice-ledger"] },
                     // ID 166 (18 Oct): the CEO opens every expense bill, so it gets the tracker.
                     { add: "ceo-ai-expense-tracker", label: "Expense tracker", href: "/admin/expense-tracker" },

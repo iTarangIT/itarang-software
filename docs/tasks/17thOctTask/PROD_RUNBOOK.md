@@ -34,6 +34,23 @@ node --import tsx --env-file=.env.production scripts/verify-id85-86-time-limits.
 The first refresh records every miss so far under the new rules. The hourly
 ticker keeps the table up to date after that.
 
+## 1b. L2 (IDs 85, 86): clear the false "Limit passed" records, re-record — needs Kartik's go-ahead
+
+Run after the NeoDove replay (section 2, done 23 Oct). It clears every miss
+that fell due on or after 16 Oct (recorded while live had no NeoDove calls)
+and every older lead-wide miss charged to a person (a team figure since
+24 Oct), then the clock refresh records again each miss that still stands.
+The dry run prints each person's "Limits passed" this month before and after.
+`--apply` writes a JSON backup of every cleared row to `reports/` first.
+
+```bash
+node --import tsx --env-file=.env.production scripts/cleanup-limit-events-l2.ts                       # dry run: check the host says database-2 and read the before → after
+node --import tsx --env-file=.env.production scripts/cleanup-limit-events-l2.ts --apply --confirm-live
+node --import tsx --env-file=.env.production scripts/verify-id85-86-time-limits.ts
+```
+
+Way back: the backup JSON holds the cleared rows exactly as they were.
+
 ## 2. NeoDove (A32): point the webhook back at prod, then replay
 
 **Since 6 Oct, NeoDove has been posting every call to the SANDBOX CRM.**

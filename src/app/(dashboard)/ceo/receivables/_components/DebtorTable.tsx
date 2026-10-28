@@ -10,6 +10,7 @@ import { ChevronDown, ChevronRight, FileText } from "lucide-react";
 
 import FreshFileLink from "@/components/shared/FreshFileLink";
 import type { ReceivableRow } from "@/lib/dashboard/receivables";
+import { receivableFileNote, receivableSourceLabel } from "@/lib/dashboard/receivablesAgeing";
 
 export type Debtor = {
     key: string;
@@ -21,7 +22,6 @@ export type Debtor = {
     rows: ReceivableRow[];
 };
 
-const SOURCE_LABEL: Record<string, string> = { zoho: "Zoho", drive: "Drive", credit: "Credit note" };
 
 const rupees = (n: number) => `${n < 0 ? "−" : ""}₹${Math.abs(n).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
 const inr = (n: number) =>
@@ -71,7 +71,7 @@ export default function DebtorTable({ debtors, owed }: { debtors: Debtor[]; owed
                         <th className="px-4 py-3">Dealer / customer</th>
                         <th className="px-4 py-3 text-right">Invoices</th>
                         <th className="px-4 py-3 text-right">Oldest (days)</th>
-                        <th className="px-4 py-3 text-right">Owed</th>
+                        <th className="px-4 py-3 text-right">Receivable</th>
                         <th className="px-4 py-3 text-right">Share</th>
                     </tr>
                 </thead>
@@ -130,7 +130,7 @@ export default function DebtorTable({ debtors, owed }: { debtors: Debtor[]; owed
                                                         <th className="px-3 py-2">Customer on invoice</th>
                                                         <th className="px-3 py-2 text-right">Age</th>
                                                         <th className="px-3 py-2 text-right">Invoice total</th>
-                                                        <th className="px-3 py-2 text-right">Owed</th>
+                                                        <th className="px-3 py-2 text-right">Receivable</th>
                                                     </tr>
                                                 </thead>
                                                 <tbody className="divide-y divide-gray-100">
@@ -148,10 +148,13 @@ export default function DebtorTable({ debtors, owed }: { debtors: Debtor[]; owed
                                                                 ) : (
                                                                     <span className="font-medium text-gray-900">
                                                                         {r.invoice_number ?? "(no number)"}
+                                                                        <span className="block font-normal text-amber-700">
+                                                                            {receivableFileNote(r)}
+                                                                        </span>
                                                                     </span>
                                                                 )}
-                                                                <span className="block capitalize text-gray-500">
-                                                                    {SOURCE_LABEL[r.source] ?? r.source} ·{" "}
+                                                                <span className="block text-gray-500">
+                                                                    {receivableSourceLabel(r)} ·{" "}
                                                                     {(r.status ?? "no status").replace(/_/g, " ")}
                                                                 </span>
                                                             </td>
@@ -182,7 +185,7 @@ export default function DebtorTable({ debtors, owed }: { debtors: Debtor[]; owed
                                                 <tfoot className="bg-gray-50 font-semibold">
                                                     <tr>
                                                         <td className="px-3 py-2" colSpan={6}>
-                                                            Net owed ({d.rows.length}, credit notes netted, never below zero)
+                                                            Net receivable ({d.rows.length}, credit notes netted, never below zero)
                                                         </td>
                                                         <td className="whitespace-nowrap px-3 py-2 text-right text-brand-navy">
                                                             {rupees(d.owed)}

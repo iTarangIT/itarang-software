@@ -15,7 +15,22 @@ import { NAV_QUEUES_BY_ROLE, navQueueCounts } from "@/lib/nav/queueCounts";
 
 export const dynamic = "force-dynamic";
 
+// ID 203: the counts depend only on the role, and every open tab polls them
+// every 60 s and on focus. Kept 45 s per role in this process, so a page load
+// and the poll do not fire ten COUNTs each for every user at once.
+const CACHE_MS = 45_000;
+const cache = new Map<string, { at: number; value: ReturnType<typeof navQueueCounts> }>();
+
+function countsFor(role: string): ReturnType<typeof navQueueCounts> {
+    const hit = cache.get(role);
+    if (hit && Date.now() - hit.at < CACHE_MS) return hit.value;
+    const value = navQueueCounts(role);
+    value.catch(() => cache.delete(role));
+    cache.set(role, { at: Date.now(), value });
+    return value;
+}
+
 export const GET = withErrorHandler(async () => {
     const user = await requireRole(Object.keys(NAV_QUEUES_BY_ROLE));
-    return successResponse(await navQueueCounts(user.role));
+    return successResponse(await countsFor(user.role));
 });

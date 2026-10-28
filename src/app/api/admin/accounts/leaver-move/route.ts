@@ -10,6 +10,7 @@ import { z } from "zod";
 
 import { requireRole } from "@/lib/auth-utils";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
+import { clearAccountsCache } from "@/lib/accounts/accountsPage";
 import { bulkMoveOwner } from "@/lib/accounts/ownership";
 import {
     ACCOUNT_ADMIN_ROLES,
@@ -41,5 +42,6 @@ export const POST = withErrorHandler(async (req: Request) => {
         reason: body.reason,
         actorId: user.id,
     });
+    clearAccountsCache(); // ID 203: tab counts and owners
     return successResponse(result);
 });

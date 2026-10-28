@@ -899,7 +899,7 @@ export default function CEODashboard() {
           sub="Ordered in the last 30 days · as of today"
         />
         <KpiTile
-          label="Money owed to us"
+          label="Accounts Receivable"
           value={owed == null ? "—" : inr(owed)}
           href="/ceo/receivables"
           sub="Unpaid on all invoices, as of now · not limited to the period · open for ageing"

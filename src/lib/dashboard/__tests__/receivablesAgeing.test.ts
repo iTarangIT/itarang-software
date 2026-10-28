@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-import { ageReceivables, netInvoicesAfterCredits, netOwed, type AgeingRow } from "../receivablesAgeing";
+import {
+    ageReceivables,
+    matchesReceivableSearch,
+    netInvoicesAfterCredits,
+    netOwed,
+    receivableFileNote,
+    receivableSourceLabel,
+    type AgeingRow,
+} from "../receivablesAgeing";
 
 const inv = (id: string, key: string, balance: number, age: number | null): AgeingRow => ({
     source: "zoho",
@@ -60,5 +68,22 @@ describe("ageReceivables (ID 89)", () => {
         expect(a.buckets.every((b) => b.amount >= 0)).toBe(true);
         expect(a.buckets.find((b) => b.key === "61_90")).toMatchObject({ amount: 0, invoices: 0 });
         expect(a.buckets.find((b) => b.key === "no_date")).toMatchObject({ amount: 15, invoices: 1 });
+    });
+});
+
+describe("ID 200 — source, file note and dealer search", () => {
+    it("names a register-only invoice and says it has no PDF yet", () => {
+        expect(receivableSourceLabel({ source: "drive", origin: "vyapar" })).toBe("Vyapar register");
+        expect(receivableSourceLabel({ source: "zoho", origin: "zoho" })).toBe("Zoho (old)");
+        expect(receivableFileNote({ document_url: null, origin: "vyapar" })).toBe("Register only, no PDF yet");
+        expect(receivableFileNote({ document_url: "/api/files/x", origin: "vyapar" })).toBeNull();
+    });
+    it("finds a dealer by any word of its name, the customer, the invoice number or GSTIN", () => {
+        const r = { dealer_name: "Ayansh Battery", customer_name: "AYANSH BATTERIES", invoice_number: "ITG/202627/012", account_id: "D-1", owe_key: "27ABCDE1234F1Z5" };
+        expect(matchesReceivableSearch(r, "ayansh")).toBe(true);
+        expect(matchesReceivableSearch(r, "ayansh 012")).toBe(true);
+        expect(matchesReceivableSearch(r, "27abcde")).toBe(true);
+        expect(matchesReceivableSearch(r, "sanchit")).toBe(false);
+        expect(matchesReceivableSearch(r, "  ")).toBe(true);
     });
 });

@@ -10,9 +10,10 @@
  *                overdue, time limits passed and still unanswered, every lead
  *                waiting for a field visit, quotes with no dealer answer, and
  *                idle leads — each a link to the lead.
- *   My team      only for someone with people reporting to them: each member's
- *                row and the team subtotal, as printed under them in the
- *                management email.
+ *
+ * A manager's team is NOT in this mail (ID 198, Kartik 27 Oct): it is a second,
+ * separate email, "My team" (./my-team.ts), sent at the same time under the
+ * same switch.
  *
  * No company totals, no other teams, no ranking.
  *
@@ -42,14 +43,10 @@ import {
   type RepBlock,
 } from "../salesDailyBlocks";
 import {
-  membersOf,
   personRows,
   sameDayLastWeekRows,
   targetRows,
-  teamOverdueRows,
-  teamRows,
   workListRows,
-  type MemberOverdue,
   type TargetLine,
   type WorkItem,
 } from "../myDayShape";
@@ -64,19 +61,20 @@ import type {
 import { addDays, salesDailyPeriodsFor } from "./sales-daily";
 import { limitPassedWords } from "@/lib/leads/limitEventLabels";
 
-const ROLES = ["inside_sales_rep", "asm"] as const;
-type Role = (typeof ROLES)[number];
+export const ROLES = ["inside_sales_rep", "asm"] as const;
+export type Role = (typeof ROLES)[number];
 
 const SECTIONS: DigestSection[] = [
   { key: "my_numbers", label: "My numbers", hint: "The person's own row of the management email (yesterday and MTD), yesterday against the same day last week, and each target to date against the actual.", group: "activity" },
   { key: "work_list", label: "My work list", hint: "Follow-ups due today, tomorrow or overdue; visits due or overdue; time limits passed and still unanswered; every lead waiting for a field visit; quotes with no answer from the dealer; and idle leads — each opens the lead.", group: "backlog" },
-  { key: "my_team", label: "My team (managers only)", hint: "Each person reporting to them and the team subtotal, as in the management email.", group: "activity" },
+  // ID 198: switches the separate "My team" email (./my-team.ts), which reads these settings.
+  { key: "my_team", label: "My team email (managers only)", hint: "A second email to anyone with people reporting to them: each member's numbers and the team subtotal (as in the management email), then each member's leads to review.", group: "backlog" },
 ];
 
 // ─────────────────────────────── people ─────────────────────────────────────
 
 /** Active ISRs and ASMs with an email, for the roles switched on. */
-async function people(settings: { roles: Record<string, boolean> }): Promise<DigestPerson[]> {
+export async function people(settings: { roles: Record<string, boolean> }): Promise<DigestPerson[]> {
   const roles = ROLES.filter((r) => settings.roles[r]);
   if (roles.length === 0) return [];
   const { db } = await import("@/lib/db");
@@ -92,7 +90,7 @@ async function people(settings: { roles: Record<string, boolean> }): Promise<Dig
 
 // ─────────────────────────────── shared per day ─────────────────────────────
 
-type Shared = {
+export type Shared = {
   blocks: Record<Role, RepBlock[]>;
   /** ID 194 #1: the same blocks over the same day last week (its figures in `.y`). */
   wkBlocks: Record<Role, RepBlock[]>;
@@ -147,7 +145,7 @@ async function buildShared(istDay: string): Promise<Shared> {
   };
 }
 
-function sharedFor(istDay: string): Promise<Shared> {
+export function sharedFor(istDay: string): Promise<Shared> {
   const hit = cache.get(istDay);
   if (hit && Date.now() - hit.at < CACHE_MS) return hit.value;
   const value = buildShared(istDay);
@@ -195,7 +193,7 @@ async function targetLines(person: DigestPerson, s: Shared, monthFirst: string):
  * dealer (the "Quotes with no answer" card's rule); and leads idle past the
  * holder's limit (the Needs Attention rule).
  */
-async function workItems(person: DigestPerson, sendDay: string): Promise<WorkItem[]> {
+export async function workItems(person: Pick<DigestPerson, "id">, sendDay: string): Promise<WorkItem[]> {
   const { db } = await import("@/lib/db");
   const tomorrow = addDays(sendDay, 1);
   const dated = (await db.execute(sql`
@@ -219,6 +217,7 @@ async function workItems(person: DigestPerson, sendDay: string): Promise<WorkIte
   const items: WorkItem[] = dated.map((r) => {
     const due = String(r.due).slice(0, 10);
     const late = daysLate(due);
+    const visit = r.what === "Visit";
     return {
       lead_id: r.lead_id,
       dealer: r.dealer,
@@ -226,6 +225,8 @@ async function workItems(person: DigestPerson, sendDay: string): Promise<WorkIte
       what: late > 0 ? `${r.what} overdue` : due > sendDay ? `${r.what} tomorrow` : `${r.what} today`,
       due,
       days: late,
+      // ID 198: visits due or overdue; follow-ups only once overdue.
+      list: visit ? "visit" : late > 0 ? "follow_up" : undefined,
     };
   });
 
@@ -250,6 +251,7 @@ async function workItems(person: DigestPerson, sendDay: string): Promise<WorkIte
         what: r.past_limit ? "Waiting for a field visit · past the limit" : "Waiting for a field visit",
         due: null,
         days: Number(r.days ?? 0),
+        list: "field_visit",
       });
     }
     for (const r of quotes) {
@@ -270,9 +272,8 @@ async function workItems(person: DigestPerson, sendDay: string): Promise<WorkIte
   try {
     const { limitPassedEvents } = await import("@/lib/leads/clocks");
     const { istDay } = await import("@/lib/calendar/officeCalendar");
-    const passed = (await limitPassedEvents({ openOnly: true, limit: 2000 })).filter(
-      (e) => e.owner_id === person.id && !e.owner_inferred,
-    );
+    // Guessed owners are left out by limitPassedEvents itself.
+    const passed = await limitPassedEvents({ openOnly: true, ownerId: person.id, limit: 500 });
     if (passed.length) {
       const cities = (await db.execute(sql`
         SELECT id, city, shop_name FROM dealer_leads
@@ -288,6 +289,7 @@ async function workItems(person: DigestPerson, sendDay: string): Promise<WorkIte
           what: `Limit passed: ${limitPassedWords(p.clock)}`,
           due,
           days: daysLate(due),
+          list: "limit",
         });
       }
     }
@@ -308,6 +310,7 @@ async function workItems(person: DigestPerson, sendDay: string): Promise<WorkIte
         what: `Idle ${r.days_idle} working days`,
         due: null,
         days: r.days_idle,
+        list: "idle",
       });
     }
   } catch (e) {
@@ -316,44 +319,18 @@ async function workItems(person: DigestPerson, sendDay: string): Promise<WorkIte
   return items;
 }
 
-/**
- * ID 194 — each person's overdue follow-ups and overdue visits, by the work
- * list's own rules (a follow-up dated before the send day on an open lead they
- * hold; a scheduled visit of theirs dated before it). One query for the team.
- */
-async function overdueByPerson(ids: string[], sendDay: string): Promise<MemberOverdue[]> {
-  if (ids.length === 0) return [];
-  const { db } = await import("@/lib/db");
-  const list = sql.join(ids.map((i) => sql`${i}`), sql`, `);
-  const rows = (await db.execute(sql`
-    SELECT u.id::text AS id, COALESCE(u.name, u.email) AS name,
-           (SELECT COUNT(*)::int FROM dealer_leads dl
-             WHERE dl.current_owner_id = u.id::text AND dl.is_active IS NOT FALSE
-               AND COALESCE(dl.lead_status, '') NOT IN ('Won', 'Converted', 'Lost')
-               AND (dl.next_follow_up_at AT TIME ZONE 'Asia/Kolkata')::date < ${sendDay}::date) AS follow_ups,
-           (SELECT COUNT(*)::int FROM lead_visits v JOIN dealer_leads dl ON dl.id = v.dealer_lead_id
-             WHERE v.asm_id::text = u.id::text
-               AND v.scheduled_date < ${sendDay}::date
-               AND v.visit_status IN ('scheduled', 'pending_scheduling')
-               AND COALESCE(dl.lead_status, '') NOT IN ('Won', 'Converted', 'Lost')) AS visits
-      FROM users u
-     WHERE u.id::text IN (${list})
-  `)) as unknown as Array<{ id: string; name: string; follow_ups: number; visits: number }>;
-  return rows.map((r) => ({ id: r.id, name: r.name, followUps: Number(r.follow_ups ?? 0), visits: Number(r.visits ?? 0) }));
-}
-
 /** "Sat 24 Oct". */
-function dayShort(istDay: string): string {
+export function dayShort(istDay: string): string {
   return new Date(`${istDay}T12:00:00Z`).toLocaleDateString("en-GB", { timeZone: "UTC", weekday: "short", day: "numeric", month: "short" });
 }
 
-function dayLong(istDay: string): string {
+export function dayLong(istDay: string): string {
   return new Date(`${istDay}T12:00:00Z`)
     .toLocaleDateString("en-GB", { timeZone: "UTC", weekday: "long", day: "numeric", month: "long" })
     .replace(/,/g, "");
 }
 
-function istStamp(d: Date): string {
+export function istStamp(d: Date): string {
   return d.toLocaleString("en-GB", {
     timeZone: "Asia/Kolkata",
     day: "numeric",
@@ -432,41 +409,6 @@ export async function collectMyDay(
       },
     ];
 
-    // Managers only: their team, as under them in the management email.
-    for (const r of ROLES) {
-      const rows = teamRows(r, s.blocks[r], person.id, s.teamOf);
-      if (rows.length === 0) continue;
-      tables.push({
-        key: "my_team",
-        title: r === "asm" ? "My team · field (ASM)" : "My team · calling (ISR)",
-        columns: r === "asm" ? BLOCK_B_COLUMNS : BLOCK_C_COLUMNS,
-        rows,
-        textColumns: 1,
-        toneColumns: [r === "asm" ? BLOCK_B_PCT_COLUMN : BLOCK_C_PCT_COLUMN],
-        note: "Your team (↳) and the team subtotal, as in the management Sales email. % of target is against your own target.",
-      });
-    }
-
-    // ID 194: each member's overdue follow-ups and visits (the work-list rules).
-    const members = membersOf(s.teamOf, person.id);
-    if (members.length > 0) {
-      try {
-        const rows = teamOverdueRows(person.id, await overdueByPerson([person.id, ...members], sendDay));
-        if (rows.length) {
-          tables.push({
-            key: "my_team",
-            title: "My team · overdue work",
-            columns: ["Person", "Overdue follow-ups", "Overdue visits"],
-            rows,
-            textColumns: 1,
-            note: "Follow-ups dated before today on open leads each person holds, and their scheduled visits dated before today.",
-          });
-        }
-      } catch (e) {
-        console.warn("[digest:my_day] team overdue not listed:", e instanceof Error ? e.message : e);
-      }
-    }
-
     const first = person.name.split(/\s+/)[0] || person.name;
     return {
       ok: true,
@@ -526,9 +468,9 @@ export const myDayDigest: DigestKindDescriptor = {
   description:
     "One email to each active ISR and ASM every working morning (Mon–Sat) at the time set below " +
     "(default 09:00 IST): their own numbers (yesterday, month to date, targets to date), their work " +
-    "list with a link to each lead, and — for anyone with people reporting to them — their team and " +
-    "the team subtotal. No company totals and no ranking. Switch it on per role; nothing is sent " +
-    "until a role is on.",
+    "list with a link to each lead. Anyone with people reporting to them also gets a second email, " +
+    "My team: each member's numbers, the team subtotal and each member's leads to review. No company " +
+    "totals and no ranking. Switch it on per role; nothing is sent until a role is on.",
   settingsKey: "my_day_digest",
   settingsHref: "/admin/settings/my-day",
   ctaHref: "/inside-sales",

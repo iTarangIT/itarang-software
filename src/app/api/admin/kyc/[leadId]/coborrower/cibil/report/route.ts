@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { executeCibilReport } from "@/lib/kyc/cibil-verification";
 import { requireAdminAppUserForLead } from "@/lib/kyc/admin-workflow";
+import { recordStaffKycStep } from "@/lib/kyc/kycEventLog";
 
 // Mirrors the primary CIBIL report route at
 // src/app/api/admin/kyc/[leadId]/cibil/report/route.ts but sources data from
@@ -24,6 +25,8 @@ export async function POST(
     const { leadId } = await params;
 
     const result = await executeCibilReport(leadId, { applicant: "co_borrower" });
+    // ID 201: the check, who ran it and its outcome in the file's KYC history.
+    await recordStaffKycStep(leadId, appUser, "CIBIL report pulled (co-borrower)", { result });
 
     return NextResponse.json(
       {

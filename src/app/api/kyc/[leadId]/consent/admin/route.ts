@@ -5,6 +5,7 @@ import { db } from '@/lib/db';
 import { leads, consentRecords } from '@/lib/db/schema';
 import { eq, and, desc } from 'drizzle-orm';
 import { requireRole } from '@/lib/auth-utils';
+import { kycDecisionLine, recordStaffKycStep } from '@/lib/kyc/kycEventLog';
 import { backOfficeMayReachLead } from '@/lib/auth/requireLeadAccess';
 
 type RouteContext = {
@@ -87,6 +88,9 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
                 .set(approveUpdate)
                 .where(eq(leads.id, leadId));
 
+            // ID 201: consent decisions in the file's KYC history (and on WhatsApp).
+            await recordStaffKycStep(leadId, user, kycDecisionLine(consentFor === 'borrower' ? 'Consent (co-borrower)' : 'Consent', 'approved'), { notify: true });
+
             return NextResponse.json({
                 success: true,
                 status: finalStatus,
@@ -111,6 +115,13 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
             await db.update(leads)
                 .set(rejectUpdate)
                 .where(eq(leads.id, leadId));
+
+            await recordStaffKycStep(
+                leadId,
+                user,
+                kycDecisionLine(consentFor === 'borrower' ? 'Consent (co-borrower)' : 'Consent', 'rejected', rejectionReason),
+                { notify: true },
+            );
 
             return NextResponse.json({
                 success: true,

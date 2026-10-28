@@ -446,6 +446,9 @@ export async function digestRecipients(
   return out;
 }
 
+/** A personal kind's test "as" someone it does not mail (ID 198 skips it quietly). */
+export const NOT_ON_LIST = "that person is not on this digest's list";
+
 /**
  * Send every slot this kind currently owes, or one named slot.
  *
@@ -531,7 +534,7 @@ export async function runDigest(opts: {
               slot: "test",
               digestDate,
               sent: false,
-              error: opts.personId ? "that person is not on this digest's list" : "nobody to write a test mail for",
+              error: opts.personId ? NOT_ON_LIST : "nobody to write a test mail for",
             },
           ],
         };
