@@ -20,7 +20,11 @@ import {
   scheduleColumns,
   type ValidatedSchedule,
 } from "./campaignWindow";
-import { planRetryDetailed, type RetryWindow } from "@/lib/ai-dialer/retryPolicy";
+import {
+  countDialsOnIstDay,
+  planRetryDetailed,
+  type RetryWindow,
+} from "@/lib/ai-dialer/retryPolicy";
 
 // E-315 — automatic redials per unreached lead for every NEW campaign. A lead
 // gets at most 1 + this many dials. Old campaigns keep max_retries NULL (off).
@@ -416,16 +420,19 @@ export async function recordAttemptOutcome(opts: {
         }
       : await defaultRetryWindow();
     const history = Array.isArray(r.attempt_history)
-      ? (r.attempt_history as Array<{ counted?: boolean }>)
+      ? (r.attempt_history as Array<{ counted?: boolean; at?: string | null }>)
       : [];
+    const now = new Date();
     const plan = planRetryDetailed({
       status: opts.status,
       callOutcome: opts.outcome ?? null,
       attemptCount: attempt,
       maxRetries: r.max_retries,
-      now: new Date(),
+      now,
       window,
       lineBlockedRetriesUsed: history.filter((h) => h.counted === false).length,
+      // B3 — earlier dials today plus the one that just ended.
+      dialsToday: countDialsOnIstDay(history, now) + 1,
     });
     retryAt = plan?.at ?? null;
     consumesAttempt = plan?.consumesAttempt ?? true;

@@ -21,6 +21,7 @@
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { DURATION_SECONDS_SQL } from "@/lib/ai-dialer/call-duration/derive";
+import { carrierPausesFor } from "@/lib/ai-dialer/lineHealth";
 import { requireAuth } from "@/lib/auth-utils";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
 
@@ -200,5 +201,10 @@ export const GET = withErrorHandler(async (req: Request) => {
 
     // Same envelope as /api/ai-dialer/campaigns so CampaignsTable's existing
     // `data?.data` access keeps working.
-    return successResponse({ data: rows, page });
+    // D1 (E-360) — why an AI campaign paused itself (NeoDove ids never match).
+    const list = Array.from(rows as unknown as UnifiedCampaignRow[]);
+    const pauses = await carrierPausesFor(list.map((r) => r.id));
+    const data = list.map((r) => ({ ...r, carrierPause: pauses.get(r.id) ?? null }));
+
+    return successResponse({ data, page });
 });

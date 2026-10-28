@@ -22,6 +22,7 @@ import { and, eq, sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { dialerCampaigns } from "@/lib/db/schema";
 import {
+  DIALER_HOURS,
   FALLBACK_DEFAULTS,
   WEEKDAYS,
   toHHMM,
@@ -49,8 +50,15 @@ const IST = "Asia/Kolkata";
 // `nowExpr` exists so scripts/verify-e254-campaign-window.mjs can evaluate the
 // predicate at a synthetic instant instead of waiting for a real 11am. Nothing
 // in the application passes it.
+//
+// B3 — whatever the campaign's own window says, a call is only placed inside
+// DIALER_HOURS (10:00-19:00 IST). That clause is ANDed on the outside, so a
+// 'now' campaign is no longer always open; it parks and resumes at 10:00.
 export function windowOpenSql(nowExpr: SQL = sql`now()`): SQL<boolean> {
   return sql<boolean>`(
+    to_char(${nowExpr} AT TIME ZONE ${IST}, 'HH24:MI') >= ${DIALER_HOURS.start}
+    AND to_char(${nowExpr} AT TIME ZONE ${IST}, 'HH24:MI') < ${DIALER_HOURS.end}
+    AND (
     schedule_mode = 'now'
     OR schedule_mode IS NULL
     OR window_start IS NULL
@@ -70,6 +78,7 @@ export function windowOpenSql(nowExpr: SQL = sql`now()`): SQL<boolean> {
               OR to_char(${nowExpr} AT TIME ZONE ${IST}, 'HH24:MI') <  window_end
           END
     )
+    )
   )`;
 }
 
@@ -85,8 +94,11 @@ export function windowOpenSql(nowExpr: SQL = sql`now()`): SQL<boolean> {
 // past — and the resume ticker would wake it instantly into a shut window, a
 // tight pause/resume loop that would burn a tick every 60 seconds forever.
 //
-// NULL when the row is unscheduled or names no reachable day. Callers treat a
-// NULL as "nothing to arm" and fall back to the manual-resume state.
+// B3 — an unscheduled ('now') campaign opens at the next DIALER_HOURS start on
+// any day; a scheduled one opens at the later of its own start and that start.
+//
+// NULL when the row names no reachable day. Callers treat a NULL as "nothing to
+// arm" and fall back to the manual-resume state.
 //
 // The day series is generate_series(0, 7) over INTEGERS added to a date, and not
 // generate_series(date, date, interval). That looks like the obvious spelling
@@ -100,10 +112,18 @@ export function windowOpenSql(nowExpr: SQL = sql`now()`): SQL<boolean> {
 export function nextWindowOpenSql(nowExpr: SQL = sql`now()`): SQL<Date | null> {
   return sql<Date | null>`(
     CASE
-      WHEN window_start IS NULL OR schedule_mode = 'now' OR schedule_mode IS NULL
-        THEN NULL
+      WHEN window_start IS NULL OR window_end IS NULL
+        OR schedule_mode = 'now' OR schedule_mode IS NULL
+        THEN (
+          SELECT min((g.day + ${DIALER_HOURS.start}::time) AT TIME ZONE ${IST})
+            FROM generate_series(0, 7) AS n
+            CROSS JOIN LATERAL (
+              SELECT ((${nowExpr} AT TIME ZONE ${IST})::date + n) AS day
+            ) AS g
+           WHERE (g.day + ${DIALER_HOURS.start}::time) AT TIME ZONE ${IST} > ${nowExpr}
+        )
       ELSE (
-        SELECT min((g.day + window_start::time) AT TIME ZONE ${IST})
+        SELECT min((g.day + greatest(window_start, ${DIALER_HOURS.start})::time) AT TIME ZONE ${IST})
           FROM generate_series(0, 7) AS n
           CROSS JOIN LATERAL (
             SELECT ((${nowExpr} AT TIME ZONE ${IST})::date + n) AS day
@@ -112,7 +132,7 @@ export function nextWindowOpenSql(nowExpr: SQL = sql`now()`): SQL<Date | null> {
                  window_days IS NULL
                  OR window_days @> to_jsonb(lower(to_char(g.day, 'dy')))
                )
-           AND (g.day + window_start::time) AT TIME ZONE ${IST} > ${nowExpr}
+           AND (g.day + greatest(window_start, ${DIALER_HOURS.start})::time) AT TIME ZONE ${IST} > ${nowExpr}
       )
     END
   )`;
@@ -146,7 +166,11 @@ export async function pauseForWindow(
   // A recurring campaign with no reachable next opening has nothing to arm, so
   // it falls back to the manual state rather than sitting in 'scheduled' with a
   // NULL resume_after that no ticker will ever claim.
-  const auto = mode === "recurring" && nextOpenAt != null;
+  //
+  // B3 — a 'now' campaign is only ever shut by DIALER_HOURS (it has no window of
+  // its own), so it is armed for the next 10:00 like a recurring one. Only a
+  // 'single' run that reached the end of its own window waits for a human.
+  const auto = (mode === "recurring" || mode === "now") && nextOpenAt != null;
   const status = auto ? "scheduled" : "paused";
 
   await db

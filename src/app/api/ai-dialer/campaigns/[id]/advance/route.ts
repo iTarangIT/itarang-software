@@ -41,6 +41,13 @@ export const POST = withErrorHandler(
     if (result.kind === "error") {
       return errorResponse(result.error, 500);
     }
+    // D1 — the carrier keeps refusing; the campaign paused itself.
+    if (result.kind === "carrier-paused") {
+      return errorResponse(
+        `Carrier refused the calls (${result.error}) — campaign paused. Resume once the line works.`,
+        409,
+      );
+    }
 
     return successResponse({ campaignId, ...result });
   },

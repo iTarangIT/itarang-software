@@ -15,6 +15,7 @@
 import { db } from "@/lib/db";
 import { dialerCampaigns, dialerCampaignLeads } from "@/lib/db/schema";
 import { startDraftCampaign } from "@/lib/queue/startCampaign";
+import { clearCarrierPause } from "@/lib/ai-dialer/lineHealth";
 import type { DialerProvider } from "@/lib/queue/dialerSession";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
 import { guardApi } from "@/lib/auth/apiGuard";
@@ -93,6 +94,10 @@ export const POST = withErrorHandler(
     if (pending === 0) {
       return errorResponse("No pending leads or booked retries to resume", 400);
     }
+
+    // D1 (E-360) — a campaign the carrier paused restarts its refusal count at
+    // zero; if the line is still refusing it pauses again after 10 more.
+    await clearCarrierPause(campaignId);
 
     const result = await startDraftCampaign(
       campaignId,

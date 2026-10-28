@@ -183,6 +183,10 @@ export async function POST(req: NextRequest) {
       if (r.kind === "error") {
         firstCallError = r.error;
       }
+      // D1 — the carrier refused 10 dials in a row and the campaign paused itself.
+      if (r.kind === "carrier-paused") {
+        firstCallError = `Carrier refused the calls (${r.error}); campaign paused`;
+      }
       if (r.kind === "window-closed") {
         armedStatus = r.status;
         resumeAt = r.resumeAt ? r.resumeAt.toISOString() : null;

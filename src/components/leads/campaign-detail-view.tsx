@@ -85,6 +85,8 @@ type Campaign = {
   windowDays: unknown;
   resumeAfter: string | null;
   pausedAt: string | null;
+  /** D1 (E-360) — set when the carrier refused 10 calls in a row and the campaign paused itself. */
+  carrierPause?: { pauseReason: string; lastCarrierError: string | null; pausedAt: string | null } | null;
   // E-315 — automatic retries. maxRetries null = auto-retry off (older runs).
   maxRetries?: number | null;
   retryScheduled?: number;
@@ -912,7 +914,17 @@ export function CampaignDetailView({
                   {campaign.status === "stopped" && " (resume to continue)"}
                 </p>
               )}
-            {campaign.status === "paused" && (
+            {campaign.status === "paused" && campaign.carrierPause && (
+              <p className="mt-2 text-xs text-rose-700">
+                Paused because the carrier refused 10 calls in a row
+                {campaign.carrierPause.lastCarrierError
+                  ? ` ("${campaign.carrierPause.lastCarrierError}")`
+                  : ""}
+                . No leads were used up. Press Resume calling once the line is
+                working again.
+              </p>
+            )}
+            {campaign.status === "paused" && !campaign.carrierPause && (
               <p className="mt-2 text-xs text-slate-600">
                 Paused at the end of its calling window with {pendingLeads} lead
                 {pendingLeads === 1 ? "" : "s"} left. Single-run campaigns do not

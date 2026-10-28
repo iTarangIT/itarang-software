@@ -240,6 +240,14 @@ function sipCode(d: string, code: number): boolean {
 export function classifyTriggerDetail(detail: string): FailureReasonCode {
     const d = detail.toLowerCase();
 
+    // SIP 404 Not Found is the DEALER's number not existing ("INVITE failed:
+    // sip status: 404: Not Found"). It must be read before the config check
+    // below, whose "not found" would file it as ours — and config_error counts
+    // as a line-blocked dial, so a dead number was refunded and redialled every
+    // 30 minutes (8 dead numbers redialled up to 5x on 21-22 Oct) and would trip
+    // the carrier pause. Requires "sip" so "Document … not found" stays ours.
+    if (d.includes("sip") && sipCode(d, 404)) return "invalid_number";
+
     // OURS, not the dealer's. Checked first: a misconfigured from_number also
     // produces SIP noise, and reporting that as "busy" would blame the lead.
     if (
