@@ -59,6 +59,26 @@ export function kycWhoFor(
     return row.byName;
 }
 
+/**
+ * ID 201 #6 — who is reading a file's KYC history: the dealer who owns the
+ * file, or iTarang (staff, and the house login, which has role 'dealer').
+ */
+export function kycViewerOf(user: { role: string | null; dealer_id: string | null }, houseCode: string | null): "owning_dealer" | "itarang" {
+    const dealer = (user.role ?? "").toLowerCase() === "dealer";
+    return dealer && !(houseCode && user.dealer_id === houseCode) ? "owning_dealer" : "itarang";
+}
+
+/** ID 201 #6 — the history rows as `viewer` sees them; a redacted row also loses its role. */
+export function kycRowsForViewer<T extends { byName: string | null; byRole: string | null; actorType: KycActorType }>(
+    rows: T[],
+    viewer: "owning_dealer" | "itarang",
+): T[] {
+    return rows.map((r) => {
+        const byName = kycWhoFor(viewer, r);
+        return byName === r.byName ? r : { ...r, byName, byRole: null };
+    });
+}
+
 /** ID 201 #5 — "WhatsApp · iTarang house · for Sharma Batteries". */
 export function kycLineTags(row: {
     channel: KycChannel;

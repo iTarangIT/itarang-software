@@ -96,9 +96,23 @@ export async function collectMyTeam(
     let total = 0;
     // One member at a time: each work list is a handful of queries, and a team
     // must not take every database connection at once.
+    // The lead page opens a lead only when the manager or a team member owns it
+    // (leadVisibleTo, ID 155). A visit on a lead owned outside the team is
+    // listed without a link rather than with one that is refused.
+    const owners = [person.id, ...memberIds];
+    const openable = async (ids: string[]): Promise<Set<string>> => {
+      if (ids.length === 0) return new Set();
+      const rows = (await db.execute(sql`
+        SELECT id FROM dealer_leads
+         WHERE id IN (${sql.join(ids.map((i) => sql`${i}`), sql`, `)})
+           AND current_owner_id IN (${sql.join(owners.map((o) => sql`${o}`), sql`, `)})
+      `)) as unknown as Array<{ id: string }>;
+      return new Set(rows.map((r) => r.id));
+    };
     for (const m of names) {
       const items = (await workItems(m, sendDay)).filter((i) => i.list);
       const review = reviewRows(items);
+      const canOpen = await openable([...new Set(review.links.flatMap((l) => (l && "lead" in l ? [l.lead] : [])))]);
       total += new Set(items.map((i) => `${i.list}|${i.lead_id}`)).size;
       tables.push({
         key: "my_team",
@@ -106,7 +120,13 @@ export async function collectMyTeam(
         columns: ["Dealer", "City", "What", "Due", "Days (late / waiting / idle)"],
         rows: review.rows,
         rowLinks: review.links.map((l) =>
-          l == null ? null : "lead" in l ? `${base}${leadHrefFor(role, l.lead)}` : `${base}${moreHref(l.more, m.id, role)}`,
+          l == null
+            ? null
+            : "lead" in l
+              ? canOpen.has(l.lead)
+                ? `${base}${leadHrefFor(role, l.lead)}`
+                : null
+              : `${base}${moreHref(l.more, m.id, role)}`,
         ),
         textColumns: 4,
         groupHeaders: true,

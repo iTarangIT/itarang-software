@@ -5,7 +5,8 @@
  *     → iTarang staff, for the file's dealer;
  *   - a dealer's salesperson on the dealer console → their name, "dealer's
  *     salesperson" (they have no CRM login);
- *   - a customer onboarding themselves → "Customer";
+ *   - a customer onboarding themselves → the iTarang house (whose flow it is),
+ *     named "Customer (self-onboarding)";
  *   - otherwise the dealer's own login (the house login is recognised as
  *     iTarang house by recordKycEvent).
  * Log only unless `notify`. Never throws: a log line must never break the chat.
@@ -56,7 +57,8 @@ async function whatsAppActor(session: SessionLike, dealer: ActiveDealer | null |
     }
     const flow = (session.context as { flow?: string } | null | undefined)?.flow;
     if (flow === "customer") {
-        return { id: null, name: "Customer", role: "customer", type: "customer", channel: "whatsapp" };
+        // The customer's own flow runs as the iTarang house dealer (resolveCustomerFlowDealer).
+        return { id: null, name: "Customer (self-onboarding)", role: "customer", type: "house", channel: "whatsapp", forDealerId };
     }
     let uploader = dealer?.uploaderId ?? null;
     if (!uploader) {

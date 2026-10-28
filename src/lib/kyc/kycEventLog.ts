@@ -286,9 +286,22 @@ export async function recordStaffKycStep(
     leadId: string,
     user: { id: string; name?: string | null; role?: string | null },
     action: string,
-    opts: { result?: unknown; detail?: Record<string, unknown>; notify?: boolean } = {},
+    opts: {
+        result?: unknown;
+        detail?: Record<string, unknown>;
+        notify?: boolean;
+        /** Write the line only the first time this key is seen on the file (a polled status). */
+        once?: string;
+    } = {},
 ): Promise<void> {
     try {
+        if (opts.once) {
+            const seen = (await db.execute(sql`
+                SELECT 1 FROM audit_logs
+                 WHERE entity_type = ${KYC_EVENT} AND entity_id = ${leadId} AND changes->>'once' = ${opts.once}
+                 LIMIT 1`)) as unknown as unknown[];
+            if (seen.length) return;
+        }
         const { kycCheckOutcome } = await import("./kycEventText");
         const outcome = "result" in opts ? kycCheckOutcome(opts.result) : null;
         const [lead] = (await db.execute(sql`
@@ -297,7 +310,7 @@ export async function recordStaffKycStep(
             leadId,
             action: outcome ? `${action} (${outcome})` : action,
             actor: { id: user.id, name: user.name ?? null, role: user.role ?? null, channel: "web", forDealerId: lead?.dealer_id ?? null },
-            detail: opts.detail,
+            detail: opts.once ? { ...(opts.detail ?? {}), once: opts.once } : opts.detail,
             notify: opts.notify ?? false,
         });
     } catch (err) {

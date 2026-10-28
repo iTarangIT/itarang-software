@@ -30,6 +30,7 @@ import { voidInvoice } from "@/lib/sales/invoiceVoids";
 import { recheckStockTasks, recordInvoiceSerials } from "@/lib/inventory/stockUploadTasks/service";
 import type { LineForSerials } from "@/lib/inventory/stockUploadTasks/rules";
 import type { ImportKind, ParseResult, ParsedDocument } from "@/lib/sales/vyaparParse";
+import { importActionFor, type ImportAction } from "@/lib/sales/importAction";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type Runner = typeof db | Tx;
@@ -55,7 +56,7 @@ export interface ImportPlanRow {
      * 'in_zoho' (ID 200) — the number is an old Zoho invoice, already counted
      * from zoho_invoices, so it is skipped rather than counted twice.
      */
-    action: "update" | "create" | "gstr1" | "in_zoho";
+    action: ImportAction;
     existing_id: string | null;
 }
 
@@ -132,7 +133,7 @@ export async function previewImport(parsed: ParseResult): Promise<ImportPreview>
             batteries: batteriesOf(d),
             serials: serialsOf(d),
             taxable: d.taxable,
-            action: parsed.kind === "gstr1" ? "gstr1" : id ? "update" : zoho.has(keyOf(d) ?? "") ? "in_zoho" : "create",
+            action: importActionFor(parsed.kind, id, zoho.has(keyOf(d) ?? "")),
             existing_id: id,
         };
     });

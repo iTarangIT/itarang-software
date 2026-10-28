@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { requireAdminAppUserForLead } from "@/lib/kyc/admin-workflow";
+import { recordStaffKycStep } from "@/lib/kyc/kycEventLog";
 import { executeCoBorrowerDigilockerStatus } from "@/lib/kyc/coborrower-verification";
 
 export async function GET(
@@ -31,6 +32,12 @@ export async function GET(
       );
     }
 
+    // ID 201: polled, so only the fetch is logged, once per request.
+    if (result.data?.status === "document_fetched") {
+      await recordStaffKycStep(leadId, appUser, "Aadhaar fetched from DigiLocker (co-borrower)", {
+        once: `digilocker:${transactionId}:document_fetched`,
+      });
+    }
     return NextResponse.json(result);
   } catch (error) {
     console.error("[Co-Borrower DigiLocker Status] Error:", error);
