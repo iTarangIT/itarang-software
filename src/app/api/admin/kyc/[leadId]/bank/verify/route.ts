@@ -4,6 +4,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { kycVerificationMetadata } from "@/lib/db/schema";
 import { requireAdminAppUserForLead } from "@/lib/kyc/admin-workflow";
+import { recordStaffKycStep } from "@/lib/kyc/kycEventLog";
 import { executeBankVerification } from "@/lib/kyc/bank-verification";
 
 export async function POST(
@@ -29,6 +30,8 @@ export async function POST(
       performNameMatch: body.perform_name_match,
       validationType: body.validation_type,
     });
+    // ID 201: the check, who ran it and its outcome in the file's KYC history.
+    await recordStaffKycStep(leadId, appUser, "Bank account check run", { result });
 
     if ("error" in result) {
       const err =

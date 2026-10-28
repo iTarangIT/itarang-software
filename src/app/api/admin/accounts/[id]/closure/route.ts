@@ -12,6 +12,7 @@ import { z } from "zod";
 
 import { requireRole } from "@/lib/auth-utils";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
+import { clearAccountsCache } from "@/lib/accounts/accountsPage";
 import { ACCOUNT_CLOSE_ROLES, closeAccount, reopenAccount } from "@/lib/accounts/accountClosures";
 
 export const dynamic = "force-dynamic";
@@ -31,5 +32,6 @@ export const POST = withErrorHandler(async (req: Request, ctx: { params: Promise
     } else {
         await reopenAccount(id);
     }
+    clearAccountsCache(); // ID 203: tab counts and owners
     return successResponse({ account_id: id, closed: body.action === "close" });
 });

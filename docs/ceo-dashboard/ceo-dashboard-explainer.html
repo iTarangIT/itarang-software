@@ -125,9 +125,9 @@ footer{color:var(--muted);font-size:13px;margin-top:40px;max-width:72ch}
   <p style="margin-top:14px">For the full end-to-end map of tables, server modules and screen sections, open the companion diagram: <a href="ceo-overview-dataflow.html">ceo-overview-dataflow.html</a> (same folder; it supports zoom, search and export).</p>
   <h3>Three facts that apply to the whole page</h3>
   <ul>
-    <li><strong>Invoices come from two systems.</strong> Zoho invoices and the Drive (Vyapar) invoices are joined into one list. Cancelled (void) invoices are dropped everywhere. Draft invoices <em>count as revenue</em> but <em>never as money owed</em>. Credit notes count as negative revenue on the day they are issued.</li>
+    <li><strong>Invoices come from two systems.</strong> Zoho invoices and the Drive (Vyapar) invoices are joined into one list. Cancelled (void) invoices are dropped everywhere. Draft invoices <em>count as revenue</em> but <em>never as Accounts Receivable</em>. Credit notes count as negative revenue on the day they are issued.</li>
     <li><strong>Days are Indian days.</strong> Most date checks convert timestamps to Asia/Kolkata before deciding which day a thing happened on.</li>
-    <li><strong>Some cards follow the period, some do not.</strong> "As of now" cards (Needs you today, Money owed, Dealer base, Trust checks) ignore the period chips. Each card below says which kind it is.</li>
+    <li><strong>Some cards follow the period, some do not.</strong> "As of now" cards (Needs you today, Accounts Receivable, Dealer base, Trust checks) ignore the period chips. Each card below says which kind it is.</li>
   </ul>
 </section>
 
@@ -212,7 +212,7 @@ footer{color:var(--muted);font-size:13px;margin-top:40px;max-width:72ch}
   <div class="flow" data-steps='[{"k":"table","l":"accounts + invoices"},{"k":"rule","l":"last invoice 0–30 days ago","s":"Active + Cooling buckets"},{"k":"calc","l":"Count ÷ all live dealers"},{"k":"out","l":"N dealers","s":"pill: x% of live"}]'></div>
   <p>Ignores the period. "Live" is every dealer in every bucket, including those who never ordered.</p>
 
-  <h3>Money owed to us <span class="pill">as of now</span></h3>
+  <h3>Accounts Receivable <span class="pill">as of now</span></h3>
   <div class="flow" data-steps='[{"k":"table","l":"zoho_invoices + sales_invoices"},{"k":"rule","l":"not paid · not void · not draft","s":"balance above zero"},{"k":"calc","l":"Sum of balances","s":"Drive: total − amount paid"},{"k":"out","l":"₹ owed","s":"pill: Watch"}]'></div>
   <dl class="facts">
     <dt>Zoho side</dt><dd>Zoho tracks payments, so the balance it sends is reliable.</dd>
@@ -348,7 +348,7 @@ footer{color:var(--muted);font-size:13px;margin-top:40px;max-width:72ch}
     <li>The sales-engine headline conversion ignores the chosen period once the CRM is older than 120 days. This is by design but is not stated on screen.</li>
     <li>The subtitle promises a comparison for every figure; only Revenue and buyback kg have one.</li>
     <li>Buyback "deals closed" is dated by submission, not by the close.</li>
-    <li>Money owed treats every Drive invoice as unpaid until a payment is recorded by hand.</li>
+    <li>Accounts Receivable treats every Drive invoice as unpaid until a payment is recorded by hand.</li>
   </ol>
 </section>
 
@@ -356,7 +356,7 @@ footer{color:var(--muted);font-size:13px;margin-top:40px;max-width:72ch}
   <h2>Glossary</h2>
   <div class="grid2">
     <div class="mini"><h4>Void</h4><p>A cancelled invoice. Dropped from every figure.</p></div>
-    <div class="mini"><h4>Draft</h4><p>An invoice not yet sent. Counted as revenue, never as money owed.</p></div>
+    <div class="mini"><h4>Draft</h4><p>An invoice not yet sent. Counted as revenue, never as Accounts Receivable.</p></div>
     <div class="mini"><h4>Credit note</h4><p>A refund document. Subtracts from revenue on its issue date.</p></div>
     <div class="mini"><h4>Matched invoice</h4><p>An invoice linked to a dealer by GSTIN or by a manual link.</p></div>
     <div class="mini"><h4>Sales-ready</h4><p>A lead that a rep, the AI call or a NeoDove agent has shown is worth working.</p></div>

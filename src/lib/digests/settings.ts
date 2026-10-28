@@ -38,7 +38,15 @@ export async function getDigestSettings(
       .from(appSettings)
       .where(eq(appSettings.key, kind.settingsKey))
       .limit(1);
-    return normalizeSettings(row?.value, kind.sections, defaultSettings(kind.sections, kind.defaults));
+    const settings = normalizeSettings(row?.value, kind.sections, defaultSettings(kind.sections, kind.defaults));
+    // ID 198: a kind riding on another's settings is switched by its own
+    // tick-boxes there — all of them off means it is off (normalizeSections
+    // would otherwise turn an all-off set back on).
+    if (kind.settingsOf) {
+      const stored = (row?.value as { sections?: Record<string, unknown> } | undefined)?.sections ?? {};
+      if (kind.sections.every((s) => stored[s.key] === false)) settings.enabled = false;
+    }
+    return settings;
   } catch (err) {
     console.error(`[digest:${kind.id}] failed to read settings:`, err);
     return defaultSettings(kind.sections, kind.defaults);
@@ -53,6 +61,11 @@ export async function setDigestSettings(
   kind: DigestKindDescriptor,
   patch: DigestSettingsPatch,
 ): Promise<DigestSettings> {
+  // ID 198: a kind reading another's settings would save only its own
+  // section keys over them and wipe the rest.
+  if (kind.settingsOf) {
+    throw Object.assign(new Error(`${kind.label} uses the ${kind.settingsOf} settings; change them there`), { status: 409 });
+  }
   const current = await getDigestSettings(kind);
   const next = normalizeSettings(patch, kind.sections, current);
   const now = new Date();

@@ -76,6 +76,7 @@ type Preview = {
         documents: number;
         update: number;
         create: number;
+        in_zoho?: number;
         cancelled: number;
         lines: number;
         batteries: number;
@@ -196,7 +197,7 @@ function ImportTab() {
                             Sheet <strong>{preview.sheet ?? "—"}</strong> · {preview.period.from ?? "?"} to {preview.period.to ?? "?"} ·{" "}
                             {preview.totals.documents} documents
                             {preview.kind === "vyapar_register" &&
-                                ` · ${preview.totals.update} update · ${preview.totals.create} new · ${preview.totals.cancelled} cancelled · ${preview.totals.lines} lines · ${preview.totals.batteries} batteries · ${preview.totals.serials ?? 0} battery serials read`}
+                                ` · ${preview.totals.update} update · ${preview.totals.create} new · ${preview.totals.in_zoho ?? 0} already in Zoho (skipped) · ${preview.totals.cancelled} cancelled · ${preview.totals.lines} lines · ${preview.totals.batteries} batteries · ${preview.totals.serials ?? 0} battery serials read`}
                         </p>
                         <p>
                             Columns read:{" "}
@@ -252,7 +253,7 @@ function ImportTab() {
                                         <td className="px-2 py-1 text-right">{r.batteries}</td>
                                         <td className="px-2 py-1 text-right">{inr(r.taxable)}</td>
                                         <td className="px-2 py-1">
-                                            {r.cancelled ? <span className="text-rose-700">void (cancelled)</span> : r.doc_type === "credit_note" ? "credit note" : r.action}
+                                            {r.cancelled ? <span className="text-rose-700">void (cancelled)</span> : r.doc_type === "credit_note" ? "credit note" : r.action === "in_zoho" ? "already in Zoho (skipped)" : r.action}
                                         </td>
                                     </tr>
                                 ))}

@@ -206,7 +206,11 @@ export type AnalystTopic =
  * about their topic (metricRules.ts), so a long question still carries the
  * rules it needs inside the agent's 2,000-character limit.
  */
-export const ANALYST_RULES: ReadonlyArray<{ topics: readonly AnalystTopic[]; text: string }> = [
+/**
+ * `first` (ID 184): a question that names this exact thing gets the rule
+ * before the topic's other rules, so it is never the one left out for room.
+ */
+export const ANALYST_RULES: ReadonlyArray<{ topics: readonly AnalystTopic[]; text: string; first?: RegExp }> = [
     { topics: [], text: "Days, yesterday and months are IST calendar days." },
     {
         topics: ["leads"],
@@ -280,6 +284,7 @@ export const ANALYST_RULES: ReadonlyArray<{ topics: readonly AnalystTopic[]; tex
     // ID 184 — salesReady.ts awaitingAssignment() and its split.
     {
         topics: ["leads"],
+        first: /ready|no owner|unowned|unassigned|ownerless|awaiting assignment/i,
         text:
             "Ready leads with no owner = dealer_leads with sales_ready_at set, current_owner_id NULL, is_active not false, " +
             "lead_status not Won/Converted/Lost and contactability NULL (number not dead). " +
@@ -309,7 +314,7 @@ export const ANALYST_RULES: ReadonlyArray<{ topics: readonly AnalystTopic[]; tex
         topics: ["revenue"],
         text:
             "A credit note is never an order: leave it out of order counts and last order. " +
-            "Money owed = unpaid invoice balances less that customer's credit notes, never below zero per customer.",
+            "Accounts Receivable (formerly 'Money owed to us') = unpaid invoice balances less that customer's credit notes, never below zero per customer.",
     },
     {
         topics: ["batteries"],

@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("@/lib/db", () => ({ db: {} }));
 const { buildRepBlocks, repBlockTableRows, TEAM_SUBTOTAL_PREFIX, TEAM_MEMBER_PREFIX } = await import("../salesDailyBlocks");
 const { personRows, teamRows, membersOf, targetRows, workListRows, sameDayLastWeekRows } = await import("../myDayShape");
+import type { WorkItem } from "../myDayShape";
 const { buildDigestEmail } = await import("@/lib/email/sendDigestEmail");
 
 const spoc = (id: string, name: string, role: string, calls: number, visits = 0) => ({
@@ -94,27 +95,40 @@ describe("teamRows", () => {
         expect(teamRows("inside_sales_rep", blocks, "c", teamOf)).toEqual([]);
         expect(membersOf(teamOf, "c")).toEqual([]);
     });
-    it("lists only the members when the manager is not in this block — no cross-role Team total (ID 194)", () => {
-        const rows = teamRows("inside_sales_rep", blocks, "asm-lead", new Map([["a", "asm-lead"], ["b", "asm-lead"]]));
-        expect(rows.map((r) => r[0])).toEqual(["Asha", "Bala"]);
+    it("groups the members under the manager with a team subtotal when the manager is not in this block (ID 198)", () => {
+        const rows = teamRows("inside_sales_rep", blocks, "asm-lead", new Map([["a", "asm-lead"], ["b", "asm-lead"]]), "Sonu");
+        expect(rows.map((r) => r[0])).toEqual([
+            "Sonu · team",
+            `${TEAM_MEMBER_PREFIX}Asha`,
+            `${TEAM_MEMBER_PREFIX}Bala`,
+            `${TEAM_SUBTOTAL_PREFIX}Sonu`,
+        ]);
+        expect(rows.some((r) => r[0] === "Total")).toBe(false);
     });
 });
 
-describe("teamOverdueRows (ID 194)", () => {
-    it("lists the manager, each member (↳) and a team subtotal of overdue follow-ups and visits", async () => {
-        const { teamOverdueRows } = await import("../myDayShape");
-        const rows = teamOverdueRows("m", [
-            { id: "b", name: "Bala", followUps: 2, visits: 1 },
-            { id: "m", name: "Mona", followUps: 0, visits: 3 },
-            { id: "a", name: "Asha", followUps: 4, visits: 0 },
-        ]);
-        expect(rows).toEqual([
-            ["Mona", 0, 3],
-            ["↳ Asha", 4, 0],
-            ["↳ Bala", 2, 1],
-            ["Team subtotal · Mona", 6, 4],
-        ]);
-        expect(teamOverdueRows("m", [])).toEqual([]);
+describe("reviewRows (ID 198)", () => {
+    const item = (lead: string, list: WorkItem["list"], days = 0): WorkItem => ({
+        lead_id: lead, dealer: `D${lead}`, city: null, what: String(list), due: null, days, list,
+    });
+    it("prints each list with a header, its leads oldest first, in the decided order", async () => {
+        const { reviewRows } = await import("../myDayShape");
+        const r = reviewRows([item("1", "idle", 3), item("2", "follow_up", 1), item("3", "follow_up", 5), item("4", undefined)]);
+        expect(r.rows.map((x) => x[0])).toEqual(["Overdue follow-ups (2)", "D3", "D2", "Idle leads (1)", "D1"]);
+        expect(r.links).toEqual([null, { lead: "3" }, { lead: "2" }, null, { lead: "1" }]);
+    });
+    it("caps a list at 10 and links 'and N more' to the list", async () => {
+        const { reviewRows } = await import("../myDayShape");
+        const many = Array.from({ length: 13 }, (_, i) => item(String(i), "limit", i));
+        const r = reviewRows([...many, item("0", "limit", 0)]);
+        expect(r.rows).toHaveLength(1 + 10 + 1);
+        expect(r.rows[0][0]).toBe("Time limits passed (13)");
+        expect(r.rows[11][0]).toBe("… and 3 more");
+        expect(r.links[11]).toEqual({ more: "limit" });
+    });
+    it("is empty for a member with nothing to review", async () => {
+        const { reviewRows } = await import("../myDayShape");
+        expect(reviewRows([]).rows).toEqual([]);
     });
 });
 

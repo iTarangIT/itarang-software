@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { requireAdminAppUserForLead } from "@/lib/kyc/admin-workflow";
+import { recordStaffKycStep } from "@/lib/kyc/kycEventLog";
 import { executeRcVerification } from "@/lib/kyc/rc-verification";
 
 export async function POST(
@@ -23,6 +24,8 @@ export async function POST(
       rcNumber: typeof body?.rc_number === "string" ? body.rc_number : undefined,
       applicant: "co_borrower",
     });
+    // ID 201: the check, who ran it and its outcome in the file's KYC history.
+    await recordStaffKycStep(leadId, appUser, "RC check run (co-borrower)", { result });
 
     // Validation short-circuit (Decentro was NOT called): surface the status.
     if (result.status) {

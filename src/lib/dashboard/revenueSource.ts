@@ -353,7 +353,7 @@ export const REVENUE_OUTSTANDING = sql`(
 export const REVENUE_IS_CREDIT = sql`(r.source = 'credit')`;
 export const REVENUE_IS_ORDER = sql`(${REVENUE_NOT_VOID} AND r.source <> 'credit')`;
 
-/** Money owed rule: an outstanding invoice, or a non-void credit note (negative balance) netted against it. */
+/** Accounts Receivable rule: an outstanding invoice, or a non-void credit note (negative balance) netted against it. */
 export const REVENUE_OWED = sql`(${REVENUE_OUTSTANDING} OR (r.source = 'credit' AND r.status = 'credit_note'))`;
 
 /**
@@ -393,7 +393,7 @@ export async function revenueTotal(
 
 /**
  * Receivables. Pass no window for the all-time snapshot the standalone
- * Outstanding Credits card uses; pass one for the windowed figure that sits
+ * Accounts Receivable card uses; pass one for the windowed figure that sits
  * inside the Realization drill-down beside a windowed revenue and expense.
  */
 export async function outstandingTotal(

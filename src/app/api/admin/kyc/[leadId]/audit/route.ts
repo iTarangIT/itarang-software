@@ -7,6 +7,7 @@ import {
   createWorkflowId,
   requireAdminAppUserForLead,
 } from "@/lib/kyc/admin-workflow";
+import { recordStaffKycStep } from "@/lib/kyc/kycEventLog";
 
 const VALID_DATA_SOURCES = ["ocr", "api", "manual"] as const;
 
@@ -108,6 +109,11 @@ export async function POST(
       entered_by: appUser.id,
       entered_at: now,
       reason,
+    });
+
+    // ID 201: a field typed over by hand, in the file's KYC history (not the value).
+    await recordStaffKycStep(leadId, appUser, `Field changed by hand: ${fieldName.replace(/_/g, " ")} (${dataSource})`, {
+      detail: { field_name: fieldName, data_source: dataSource, reason: reason ?? null },
     });
 
     return NextResponse.json({

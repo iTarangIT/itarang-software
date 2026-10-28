@@ -212,8 +212,13 @@ export function workNoteText(
   if (viewer.userId && lock!.holderUserId === viewer.userId) return `You are working this file until ${hhmm(lock!.expiresAt!)}.`;
   // Another iTarang person (e.g. the house login while Admin holds the file): their saves are refused.
   if (viewer.kind !== "dealer") return beingWorkedMessage(lock!.holderName, lock!.expiresAt!);
-  const who = (lock!.holderName ?? "").trim() || "someone from iTarang";
-  return `Being worked by ${who} (iTarang) until ${hhmm(lock!.expiresAt!)}. The file is still yours — anything you do wins.`;
+  // ID 201 #6 (Kartik, 27 Oct): the dealer sees "iTarang team", not the person.
+  return `Being worked by the iTarang team until ${hhmm(lock!.expiresAt!)}. The file is still yours — anything you do wins.`;
+}
+
+/** ID 201 #6 — a "Done by" line as the file's dealer sees it: "Done by iTarang team for <dealer>". */
+export function dealerFacingDoneByLine(dealerName: string | null | undefined): string {
+  return doneByLine("iTarang team", dealerName);
 }
 
 /**

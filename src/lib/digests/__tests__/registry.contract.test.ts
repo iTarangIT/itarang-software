@@ -52,7 +52,8 @@ describe("digest registry", () => {
 
   it("gives every kind a unique id and settings key", () => {
     const ids = DIGEST_KINDS.map((k) => k.id);
-    const keys = DIGEST_KINDS.map((k) => k.settingsKey);
+    // ID 198: a kind reading another's settings (settingsOf) shares its key on purpose.
+    const keys = DIGEST_KINDS.filter((k) => !k.settingsOf).map((k) => k.settingsKey);
     expect(new Set(ids).size, "two kinds share an id — they would share a ledger row").toBe(
       ids.length,
     );
@@ -95,6 +96,17 @@ describe("digest registry", () => {
         ).toBe(true);
         expect(kind.ctaLabel.trim().length).toBeGreaterThan(0);
       });
+
+      if (kind.settingsOf) {
+        it("reads a registered kind's settings, with a subset of its sections", () => {
+          const owner = DIGEST_KINDS.find((k) => k.id === kind.settingsOf);
+          expect(owner, `${kind.id} reads the settings of unknown kind "${kind.settingsOf}"`).toBeTruthy();
+          expect(owner!.settingsOf, "settings must not be borrowed twice over").toBeUndefined();
+          expect(kind.settingsKey).toBe(owner!.settingsKey);
+          const ownerKeys = new Set(owner!.sections.map((s) => s.key));
+          for (const s of kind.sections) expect(ownerKeys.has(s.key), `${s.key} is not a ${owner!.id} section`).toBe(true);
+        });
+      }
 
       it("declares at least one section, all with unique keys", () => {
         expect(kind.sections.length).toBeGreaterThan(0);

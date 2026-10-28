@@ -1,5 +1,7 @@
 import { requireRole } from "@/lib/auth-utils";
-import { AccountsView } from "./_components/AccountsView";
+import { hasAccountOwnershipTables } from "@/lib/accounts/tables";
+import { AccountsListQuerySchema, listAccountsPage } from "@/lib/accounts/accountsPage";
+import { AccountsView, type ListResponse } from "./_components/AccountsView";
 
 export const dynamic = "force-dynamic";
 
@@ -8,6 +10,17 @@ export const dynamic = "force-dynamic";
 // reaches it at /ceo/accounts).
 export default async function AccountsPage() {
     await requireRole(["admin", "ceo", "sales_head"]);
+
+    // ID 203: page 1 of the default tab runs here, so the list arrives with the
+    // HTML. On any failure the view fetches it itself, as before.
+    let initialPage: ListResponse | null = null;
+    try {
+        if (await hasAccountOwnershipTables()) {
+            initialPage = (await listAccountsPage(AccountsListQuerySchema.parse({ limit: 100, offset: 0 }))) as ListResponse;
+        }
+    } catch (e) {
+        console.warn("[admin/accounts] server first page skipped:", e instanceof Error ? e.message : e);
+    }
 
     return (
         <div className="px-4 sm:px-6 md:px-8 py-6 space-y-5 max-w-[1500px]">
@@ -19,7 +32,7 @@ export default async function AccountsPage() {
                     Nothing is assigned automatically — the suggested owner in the No owner queue is a hint.
                 </p>
             </header>
-            <AccountsView />
+            <AccountsView initialPage={initialPage} />
         </div>
     );
 }

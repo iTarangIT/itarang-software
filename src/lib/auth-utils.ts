@@ -32,6 +32,47 @@ const USER_COLUMNS = {
   updated_at: users.updated_at,
 } as const;
 
+type SupabaseServerClient = Awaited<ReturnType<typeof createClient>>;
+type SessionUser = NonNullable<Awaited<ReturnType<SupabaseServerClient["auth"]["getUser"]>>["data"]["user"]>;
+
+/**
+ * ID 203 — who is calling, without a Supabase round-trip on every API call.
+ * The same rule as the middleware (src/middleware.ts): getClaims() verifies
+ * the session JWT locally when the project signs with an asymmetric key (and
+ * does the getUser() round-trip itself when it does not); a verification
+ * error falls back to the authoritative getUser(); no session → null with no
+ * extra call. Only id, email and the metadata are read off the result.
+ */
+async function sessionUser(supabase: SupabaseServerClient): Promise<SessionUser | null> {
+  const { data, error } = await supabase.auth.getClaims();
+  const claims = data?.claims;
+  if (claims?.sub) {
+    return {
+      id: claims.sub,
+      email: typeof claims.email === "string" ? claims.email : undefined,
+      app_metadata: (claims.app_metadata ?? {}) as SessionUser["app_metadata"],
+      user_metadata: (claims.user_metadata ?? {}) as SessionUser["user_metadata"],
+      aud: typeof claims.aud === "string" ? claims.aud : "authenticated",
+      created_at: "",
+    } as SessionUser;
+  }
+  if (!error) return null;
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  return user;
+}
+
+/**
+ * ID 203 — the users row per auth id, for 15 seconds: a page firing five API
+ * calls reads it once. A deactivation or role change takes effect within that.
+ */
+const USER_ROW_TTL_MS = 15_000;
+async function userRowById(id: string) {
+  return (await db.select(USER_COLUMNS).from(users).where(eq(users.id, id)).limit(1))[0] ?? null;
+}
+const userRowCache = new Map<string, { at: number; row: NonNullable<Awaited<ReturnType<typeof userRowById>>> }>();
+
 /**
  * Like requireAuth, but also returns the Supabase auth user so callers that
  * need `app_metadata` (e.g. /api/user/profile's role sync) don't have to pay
@@ -39,23 +80,17 @@ const USER_COLUMNS = {
  */
 export async function requireAuthWithSupabaseUser() {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await sessionUser(supabase);
 
   if (!user) {
     redirect("/login");
   }
 
   try {
-    let dbUser =
-      (
-        await db
-          .select(USER_COLUMNS)
-          .from(users)
-          .where(eq(users.id, user.id))
-          .limit(1)
-      )[0] ?? null;
+    const cached = userRowCache.get(user.id);
+    const fresh = cached && Date.now() - cached.at < USER_ROW_TTL_MS;
+    let dbUser = fresh ? { ...cached.row } : await userRowById(user.id);
+    if (dbUser && !fresh) userRowCache.set(user.id, { at: Date.now(), row: { ...dbUser } });
 
     // Fallback by email in case older rows were created with a random UUID
     if (!dbUser && user.email) {

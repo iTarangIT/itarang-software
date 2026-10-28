@@ -5,6 +5,7 @@ import { db } from "@/lib/db";
 import { kycVerificationMetadata } from "@/lib/db/schema";
 import { executeCibilReport } from "@/lib/kyc/cibil-verification";
 import { requireAdminAppUserForLead } from "@/lib/kyc/admin-workflow";
+import { recordStaffKycStep } from "@/lib/kyc/kycEventLog";
 
 export async function POST(
   _req: NextRequest,
@@ -22,6 +23,8 @@ export async function POST(
     const { leadId } = await params;
 
     const result = await executeCibilReport(leadId, { applicant: "primary" });
+    // ID 201: the check, who ran it and its outcome in the file's KYC history.
+    await recordStaffKycStep(leadId, appUser, "CIBIL report pulled", { result });
 
     // Coupon / first-API-execution stamp — admin-only, and only once the
     // provider actually ran (helper sets `status` on early-return failures).

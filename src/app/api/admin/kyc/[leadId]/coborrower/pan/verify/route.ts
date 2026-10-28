@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { requireAdminAppUserForLead } from "@/lib/kyc/admin-workflow";
+import { recordStaffKycStep } from "@/lib/kyc/kycEventLog";
 import { executeCoBorrowerPanVerification } from "@/lib/kyc/coborrower-verification";
 
 export async function POST(
@@ -22,6 +23,8 @@ export async function POST(
     const result = await executeCoBorrowerPanVerification(leadId, {
       panNumber: body.pan_number,
     });
+    // ID 201: the check, who ran it and its outcome in the file's KYC history.
+    await recordStaffKycStep(leadId, appUser, "PAN check run (co-borrower)", { result });
 
     if ("error" in result) {
       return NextResponse.json(

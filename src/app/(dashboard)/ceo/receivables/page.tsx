@@ -1,4 +1,4 @@
-// What the CEO overview's "Money owed to us" card is made of: every invoice
+// What the CEO overview's "Accounts Receivable" card is made of: every invoice
 // still owed, with the same rule and source the card sums. The query and the
 // ageing buckets live in lib/dashboard/receivables.ts, which the ageing strip
 // on "Revenue & costs" (ID 89) reads too.
@@ -9,7 +9,10 @@ import { ArrowLeft, FileText } from "lucide-react";
 import { requireRole } from "@/lib/auth-utils";
 import {
     listReceivables,
+    matchesReceivableSearch,
     netOwed,
+    receivableFileNote,
+    receivableSourceLabel,
     RECEIVABLE_AGES as AGES,
     receivableAgeOf as ageOf,
     type ReceivableAgeKey,
@@ -23,7 +26,6 @@ export const dynamic = "force-dynamic";
 
 type AgeKey = ReceivableAgeKey | "all";
 
-const SOURCE_LABEL: Record<string, string> = { zoho: "Zoho", drive: "Drive", credit: "Credit note" };
 
 const rupees = (n: number) => `${n < 0 ? "−" : ""}₹${Math.abs(n).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
 const inr = (n: number) =>
@@ -43,14 +45,29 @@ const fmtDate = (d: string) =>
 export default async function CeoReceivablesPage({
     searchParams,
 }: {
-    searchParams: Promise<{ age?: string }>;
+    searchParams: Promise<{ age?: string; q?: string }>;
 }) {
     await requireRole(["ceo", "admin"]);
     const sp = await searchParams;
     const validAges: string[] = ["all", "no_date", ...AGES.map((a) => a.key)];
     const age: AgeKey = validAges.includes(sp.age ?? "") ? (sp.age as AgeKey) : "all";
 
-    const rows = await listReceivables();
+    const q = (sp.q ?? "").trim().slice(0, 100);
+
+    const [rows, freshness] = await Promise.all([
+        listReceivables(),
+        import("@/lib/sales/invoiceFreshness").then((m) => m.invoiceFreshness()).catch(() => null),
+    ]);
+    const updated = freshness?.last_read_at
+        ? new Date(freshness.last_read_at).toLocaleString("en-IN", {
+              timeZone: "Asia/Kolkata",
+              day: "numeric",
+              month: "short",
+              year: "numeric",
+              hour: "numeric",
+              minute: "2-digit",
+          })
+        : null;
 
     const sum = (xs: Row[]) => xs.reduce((a, r) => a + r.balance, 0);
     const owed = netOwed(rows);
@@ -59,12 +76,14 @@ export default async function CeoReceivablesPage({
     const unlinked = rows.filter((r) => r.account_id == null && r.dealer_lead_id == null);
     const byAge = AGES.map((a) => ({ ...a, rows: rows.filter((r) => ageOf(r) === a.key) }));
     const noDate = rows.filter((r) => ageOf(r) === "no_date");
-    const shown = age === "all" ? rows : rows.filter((r) => ageOf(r) === age);
+    // ID 200: the search narrows the invoice list and the customers alike.
+    const found = q ? rows.filter((r) => matchesReceivableSearch(r, q)) : rows;
+    const shown = age === "all" ? found : found.filter((r) => ageOf(r) === age);
 
     // Who owes the most — the list a collections call starts from.
     // Each customer keeps its rows so the table can expand to the invoices behind the count.
     const byDealer = new Map<string, Debtor>();
-    for (const r of rows) {
+    for (const r of found) {
         const key = r.account_id ?? r.dealer_lead_id ?? `name:${(r.customer_name ?? "").toLowerCase()}`;
         const d = byDealer.get(key) ?? {
             key,
@@ -81,13 +100,14 @@ export default async function CeoReceivablesPage({
         byDealer.set(key, d);
     }
     for (const d of byDealer.values()) d.owed = Math.max(0, d.owed);
-    const debtors = [...byDealer.values()].sort((a, b) => b.owed - a.owed).slice(0, 15);
+    // Top 15 by default; a search lists every customer it finds.
+    const debtors = [...byDealer.values()].sort((a, b) => b.owed - a.owed).slice(0, q ? undefined : 15);
     for (const d of debtors) d.rows.sort((a, b) => b.balance - a.balance);
 
     const tab = (k: AgeKey, text: string, xs: Row[]) => (
         <Link
             key={k}
-            href={k === "all" ? "/ceo/receivables" : `/ceo/receivables?age=${k}`}
+            href={`/ceo/receivables?${new URLSearchParams({ ...(k === "all" ? {} : { age: k }), ...(q ? { q } : {}) })}`}
             className={`rounded-full border px-3 py-1 text-xs font-semibold ${
                 age === k ? "border-gray-900 bg-gray-900 text-white" : "border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
             }`}
@@ -117,19 +137,23 @@ export default async function CeoReceivablesPage({
                 <Link href="/ceo" className="inline-flex items-center gap-1 text-xs font-semibold text-brand-sky hover:underline">
                     <ArrowLeft className="h-3.5 w-3.5" /> CEO overview
                 </Link>
-                <h1 className="mt-2 text-2xl font-bold tracking-tight text-brand-navy">Money owed to us</h1>
+                <h1 className="mt-2 text-2xl font-bold tracking-tight text-brand-navy">Accounts Receivable</h1>
                 <p className="mt-1 text-sm text-ink-muted">
                     Every Zoho and Drive invoice that is not paid, void or draft and still has a balance — as of now,
                     whatever date it was raised. The amount is the unpaid balance (invoice total minus what has been
                     paid), including GST, less any credit note issued to the same customer (never below zero per
                     customer). Age is days since the invoice or credit note date.
                 </p>
+                <p className="mt-1 text-xs text-gray-500">
+                    From Zoho (old invoices), Drive invoice PDFs and the Vyapar register; payments from Zoho&apos;s own
+                    balance and the amounts entered on each invoice.{updated ? ` Updated ${updated}.` : ""}
+                </p>
             </div>
 
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
                 {[
                     {
-                        k: "Owed to us",
+                        k: "Receivable",
                         v: inr(owed),
                         s: `${rows.length - credits.length} invoice${rows.length - credits.length === 1 ? "" : "s"}${
                             credits.length ? ` · less ${credits.length} credit note${credits.length === 1 ? "" : "s"} (${inr(-sum(credits))})` : ""
@@ -151,12 +175,41 @@ export default async function CeoReceivablesPage({
                 ))}
             </div>
 
+            <form method="get" className="flex flex-wrap items-center gap-2">
+                {age !== "all" && <input type="hidden" name="age" value={age} />}
+                <input
+                    name="q"
+                    defaultValue={q}
+                    placeholder="Search any dealer, customer, invoice number or GSTIN"
+                    className="w-full max-w-md rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm"
+                />
+                <button type="submit" className="rounded-lg bg-gray-900 px-3 py-2 text-sm font-semibold text-white">
+                    Search
+                </button>
+                {q && (
+                    <Link
+                        href={age === "all" ? "/ceo/receivables" : `/ceo/receivables?age=${age}`}
+                        className="text-xs font-semibold text-brand-sky hover:underline"
+                    >
+                        Clear
+                    </Link>
+                )}
+            </form>
+
+            {q && debtors.length === 0 && (
+                <p className="rounded-lg border border-gray-200 bg-white p-4 text-sm text-gray-500">
+                    No unpaid invoice matches &ldquo;{q}&rdquo;.
+                </p>
+            )}
+
             {debtors.length > 0 && (
                 <section className="space-y-2">
-                    <h2 className="text-sm font-semibold text-gray-900">Who owes the most</h2>
+                    <h2 className="text-sm font-semibold text-gray-900">
+                        {q ? `Customers matching “${q}”` : "Who owes the most"}
+                    </h2>
                     <p className="text-xs text-gray-500">Click a customer to see the invoices behind its balance.</p>
                     <DebtorTable debtors={debtors} owed={owed} />
-                    {byDealer.size > debtors.length && (
+                    {!q && byDealer.size > debtors.length && (
                         <p className="text-xs text-gray-500">Top {debtors.length} of {byDealer.size}. Every invoice is listed below.</p>
                     )}
                 </section>
@@ -165,14 +218,14 @@ export default async function CeoReceivablesPage({
             <section className="space-y-2">
                 <h2 className="text-sm font-semibold text-gray-900">Invoices by age</h2>
                 <div className="flex flex-wrap gap-2">
-                    {tab("all", "All", rows)}
-                    {byAge.map((a) => tab(a.key, a.label, a.rows))}
-                    {noDate.length > 0 && tab("no_date", "No invoice date", noDate)}
+                    {tab("all", "All", found)}
+                    {byAge.map((a) => tab(a.key, a.label, q ? a.rows.filter((r) => found.includes(r)) : a.rows))}
+                    {noDate.length > 0 && tab("no_date", "No invoice date", q ? noDate.filter((r) => found.includes(r)) : noDate)}
                 </div>
             </section>
 
             {shown.length === 0 ? (
-                <p className="rounded-lg border border-gray-200 bg-white p-6 text-sm text-gray-500">Nothing owed in this group.</p>
+                <p className="rounded-lg border border-gray-200 bg-white p-6 text-sm text-gray-500">Nothing receivable in this group.</p>
             ) : (
                 <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white">
                     <table className="min-w-full text-sm">
@@ -185,7 +238,7 @@ export default async function CeoReceivablesPage({
                                 <th className="px-4 py-3">Owner</th>
                                 <th className="px-4 py-3 text-right">Age</th>
                                 <th className="px-4 py-3 text-right">Invoice total</th>
-                                <th className="px-4 py-3 text-right">Owed</th>
+                                <th className="px-4 py-3 text-right">Receivable</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100">
@@ -207,10 +260,13 @@ export default async function CeoReceivablesPage({
                                                 {r.invoice_number ?? "(no number)"}
                                             </FreshFileLink>
                                         ) : (
-                                            <span className="font-medium text-gray-900">{r.invoice_number ?? "(no number)"}</span>
+                                            <span className="font-medium text-gray-900">
+                                                {r.invoice_number ?? "(no number)"}
+                                                <span className="block text-xs font-normal text-amber-700">{receivableFileNote(r)}</span>
+                                            </span>
                                         )}
-                                        <span className="block text-xs capitalize text-gray-500">
-                                            {SOURCE_LABEL[r.source] ?? r.source} · {(r.status ?? "no status").replace(/_/g, " ")}
+                                        <span className="block text-xs text-gray-500">
+                                            {receivableSourceLabel(r)} · {(r.status ?? "no status").replace(/_/g, " ")}
                                         </span>
                                     </td>
                                     <td className="px-4 py-3 text-gray-800">{r.customer_name ?? "—"}</td>

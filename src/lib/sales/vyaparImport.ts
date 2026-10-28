@@ -50,8 +50,12 @@ export interface ImportPlanRow {
     /** ID 174: battery serials read on this invoice (a "Stock to upload" task closes by itself only when serials are read). */
     serials: number;
     taxable: number | null;
-    /** invoice_imports apply outcome: 'update' an existing invoice, or 'create'. */
-    action: "update" | "create" | "gstr1";
+    /**
+     * invoice_imports apply outcome: 'update' an existing invoice, or 'create';
+     * 'in_zoho' (ID 200) — the number is an old Zoho invoice, already counted
+     * from zoho_invoices, so it is skipped rather than counted twice.
+     */
+    action: "update" | "create" | "gstr1" | "in_zoho";
     existing_id: string | null;
 }
 
@@ -66,6 +70,8 @@ export interface ImportPreview {
         documents: number;
         update: number;
         create: number;
+        /** ID 200: register invoices already in Zoho, skipped (no double counting). */
+        in_zoho: number;
         cancelled: number;
         lines: number;
         batteries: number;
@@ -105,6 +111,10 @@ export async function previewImport(parsed: ParseResult): Promise<ImportPreview>
         parsed.kind === "vyapar_register"
             ? await existingByKey(db, docs.map(keyOf).filter((k): k is string => !!k))
             : new Map<string, string>();
+    // ID 200: an invoice number already in Zoho is the same sale; the register
+    // must not add it a second time (the Drive scan has the same check).
+    const zoho =
+        parsed.kind === "vyapar_register" ? await (await import("@/lib/sales/driveSalesScan")).loadZohoNumberKeys() : new Set<string>();
     const mapped = await mappedItems(db);
     const unmapped = new Set<string>();
     const rows: ImportPlanRow[] = docs.map((d) => {
@@ -122,7 +132,7 @@ export async function previewImport(parsed: ParseResult): Promise<ImportPreview>
             batteries: batteriesOf(d),
             serials: serialsOf(d),
             taxable: d.taxable,
-            action: parsed.kind === "gstr1" ? "gstr1" : id ? "update" : "create",
+            action: parsed.kind === "gstr1" ? "gstr1" : id ? "update" : zoho.has(keyOf(d) ?? "") ? "in_zoho" : "create",
             existing_id: id,
         };
     });
@@ -138,6 +148,7 @@ export async function previewImport(parsed: ParseResult): Promise<ImportPreview>
             documents: rows.length,
             update: rows.filter((r) => r.action === "update").length,
             create: rows.filter((r) => r.action === "create").length,
+            in_zoho: rows.filter((r) => r.action === "in_zoho").length,
             cancelled: rows.filter((r) => r.cancelled).length,
             lines: sum(rows.map((r) => r.lines)),
             batteries: sum(rows.map((r) => r.batteries)),
@@ -194,7 +205,9 @@ export async function commitImport(
             if (d.doc_type === "credit_note") continue; // credit notes arrive through their own Drive folder
             const key = normalizeInvoiceNumber(d.number);
             if (!key) continue;
-            let id = preview.rows.find((r) => r.number === d.number)?.existing_id ?? null;
+            const plan = preview.rows.find((r) => r.number === d.number);
+            if (plan?.action === "in_zoho") continue; // ID 200: counted from Zoho already
+            let id = plan?.existing_id ?? null;
             if (!id) {
                 const org = resolveSalesOrg({ invoiceNumber: d.number });
                 const [row] = rowsOf<{ id: string }>(

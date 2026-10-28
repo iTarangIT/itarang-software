@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { requireAdminAppUserForLead } from "@/lib/kyc/admin-workflow";
+import { recordStaffKycStep } from "@/lib/kyc/kycEventLog";
 import { executeCoBorrowerBankVerification } from "@/lib/kyc/coborrower-verification";
 
 export async function POST(
@@ -26,6 +27,8 @@ export async function POST(
       perform_name_match: body.perform_name_match,
       validation_type: body.validation_type,
     });
+    // ID 201: the check, who ran it and its outcome in the file's KYC history.
+    await recordStaffKycStep(leadId, appUser, "Bank account check run (co-borrower)", { result });
 
     if ("error" in result) {
       // result.error may be a plain string OR an object { message, code }

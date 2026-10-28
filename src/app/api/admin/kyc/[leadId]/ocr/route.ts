@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { runKycOcr } from '@/lib/kyc/ocr-extract';
 import { requireLeadAccess } from '@/lib/auth/requireLeadAccess';
+import { recordStaffKycStep } from '@/lib/kyc/kycEventLog';
 import { maskAadhaarDeep } from '@/lib/kyc/aadhaarMask';
 import { maskPanDeep } from '@/lib/kyc/panMask';
 
@@ -23,6 +24,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
     const doc_for: string = typeof body.doc_for === 'string' ? body.doc_for : 'customer';
 
     const { status, ...result } = await runKycOcr(leadId, { docType: doc_type, docFor: doc_for });
+    // ID 201: who read which document, in the file's KYC history (names resolved from the id).
+    await recordStaffKycStep(
+        leadId,
+        { id: user.id },
+        `OCR run on ${doc_type.replace(/_/g, ' ') || 'a document'}${doc_for === 'borrower' ? ' (co-borrower)' : ''}`,
+        { result: { status: status ?? 200, body: result } },
+    );
     // ID 119: the OCR'd Aadhaar number is saved server-side, never sent back in
     // full; the PAN only to Admin, Sales Head, CEO and the lead's owner.
     const safe = access.user.fullIds ? maskAadhaarDeep(result) : maskPanDeep(maskAadhaarDeep(result));

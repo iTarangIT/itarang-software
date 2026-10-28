@@ -52,7 +52,10 @@ export function questionTopics(question: string): AnalystTopic[] {
 /** The rules for a question, in their written order, inside `room` characters. */
 export function rulesForQuestion(question: string, room: number): string {
     const topics = new Set(questionTopics(question));
-    const wanted = ANALYST_RULES.filter((r) => r.topics.length === 0 || topics.size === 0 || r.topics.some((t) => topics.has(t)));
+    const matched = ANALYST_RULES.filter((r) => r.topics.length === 0 || topics.size === 0 || r.topics.some((t) => topics.has(t)));
+    // ID 184: a rule the question names exactly goes first (then written order).
+    const named = matched.filter((r) => r.first?.test(question));
+    const wanted = [...named, ...matched.filter((r) => !named.includes(r))];
     const picked: string[] = [];
     let used = -1;
     for (const r of wanted) {

@@ -1,11 +1,11 @@
-// Read-only check of ID 71: a credit note nets revenue, money owed, batteries
+// Read-only check of ID 71: a credit note nets revenue, Accounts Receivable, batteries
 // sold, By SKU and gross margin — and is never an order.
 //
 //   node --import tsx --env-file=.env.local scripts/verify-id71-credit-notes.ts
 //
 // 1. Credit notes: how many, how many voided, how many have item lines
 //    (source 'credit', stored negative). Every credit line is ≤ 0.
-// 2. Money owed: outstandingTotal() (the CEO card) = the /ceo/receivables
+// 2. Accounts Receivable: outstandingTotal() (the CEO card) = the /ceo/receivables
 //    page's netted total; credit notes reduce it, never below zero per customer.
 // 3. Orders: no account's order count / last order comes from a credit note —
 //    Dealer Health and the Accounts download agree with an order-only count.
@@ -60,10 +60,10 @@ async function main() {
         SELECT COUNT(*)::int AS n, MAX(created_at)::text AS last FROM invoice_imports WHERE kind = 'credit_lines_fill'`);
     console.log(`      credit-note fill-in runs recorded: ${fill.n}${fill.last ? ` (last ${fill.last})` : ""}`);
 
-    // 2 — money owed
+    // 2 — Accounts Receivable
     const [card, rows] = await Promise.all([outstandingTotal(), listReceivables()]);
     const page = netOwed(rows);
-    check(`Money owed: CEO card ${card.toFixed(0)} = receivables page ${page.toFixed(0)}`, Math.abs(card - page) < 1);
+    check(`Accounts Receivable: CEO card ${card.toFixed(0)} = receivables page ${page.toFixed(0)}`, Math.abs(card - page) < 1);
     const credits = rows.filter((r) => r.source === "credit");
     const gross = rows.filter((r) => r.source !== "credit").reduce((a, r) => a + r.balance, 0);
     console.log(`      unpaid invoices ${gross.toFixed(0)} − credit notes netted ${(gross - page).toFixed(0)} (${credits.length} on the page) = ${page.toFixed(0)}`);

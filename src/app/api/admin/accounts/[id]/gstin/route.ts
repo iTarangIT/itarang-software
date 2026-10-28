@@ -25,6 +25,7 @@ import { db } from "@/lib/db";
 import { accountGstins, accounts, auditLogs, dealerOnboardingDocuments } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 import { generateId, storedFileUrl, successResponse, withErrorHandler } from "@/lib/api-utils";
+import { clearAccountsCache } from "@/lib/accounts/accountsPage";
 import { checkCustomerGstin, GSTIN_CHECK_MESSAGE, isValidGstin, normalizeGstin } from "@/lib/leads/gstin";
 import { saveMedia } from "@/lib/whatsapp/storage";
 import {
@@ -229,6 +230,7 @@ export const PATCH = withErrorHandler(async (req: Request, context: RouteContext
         });
     });
 
+    clearAccountsCache(); // ID 203: tab counts and owners
     return successResponse({
         account_id: id,
         gstin,

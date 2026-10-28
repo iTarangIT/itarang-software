@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { executeDigilockerResendSms } from "@/lib/kyc/digilocker";
 import { requireAdminAppUserForLead } from "@/lib/kyc/admin-workflow";
+import { recordStaffKycStep } from "@/lib/kyc/kycEventLog";
 
 /**
  * Resend the DigiLocker SMS for the customer WITHOUT recreating the
@@ -29,6 +30,8 @@ export async function POST(
 
     const { leadId } = await params;
     const result = await executeDigilockerResendSms(leadId);
+    // ID 201: the check, who ran it and its outcome in the file's KYC history.
+    await recordStaffKycStep(leadId, appUser, "DigiLocker (Aadhaar) SMS resent", { result });
     return NextResponse.json(result.body, { status: result.status });
   } catch (error) {
     console.error("[DigiLocker Resend-SMS] Error:", error);

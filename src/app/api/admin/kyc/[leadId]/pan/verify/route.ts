@@ -4,6 +4,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { kycVerificationMetadata } from "@/lib/db/schema";
 import { requireAdminAppUserForLead } from "@/lib/kyc/admin-workflow";
+import { recordStaffKycStep } from "@/lib/kyc/kycEventLog";
 import { executePanVerification } from "@/lib/kyc/pan-verification";
 
 export async function POST(
@@ -27,6 +28,8 @@ export async function POST(
       documentType: body.document_type,
       dob: body.dob,
     });
+    // ID 201: the check, who ran it and its outcome in the file's KYC history.
+    await recordStaffKycStep(leadId, appUser, "PAN check run", { result });
 
     if ("error" in result) {
       return NextResponse.json(

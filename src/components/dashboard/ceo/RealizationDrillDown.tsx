@@ -99,11 +99,11 @@ export function RealizationDrillDown({
             the realization figure, not a term in it. */}
         <button
           type="button"
-          onClick={() => onOpenMetric("outstanding", "Outstanding Credits")}
+          onClick={() => onOpenMetric("outstanding", "Accounts Receivable")}
           className="w-full flex items-center justify-between gap-4 p-4 rounded-xl border border-amber-100 bg-amber-50/60 text-left transition-colors hover:bg-amber-50 mt-4"
         >
           <div className="min-w-0">
-            <p className="text-sm font-semibold text-amber-900">Outstanding Credits</p>
+            <p className="text-sm font-semibold text-amber-900">Accounts Receivable</p>
             <p className="text-xs text-amber-700/80 mt-0.5">
               Unpaid balances on invoices raised in this period — already counted in
               revenue above, not yet collected

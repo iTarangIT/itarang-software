@@ -4,6 +4,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { kycVerificationMetadata } from "@/lib/db/schema";
 import { requireAdminAppUserForLead } from "@/lib/kyc/admin-workflow";
+import { recordStaffKycStep } from "@/lib/kyc/kycEventLog";
 import { executeRcVerification } from "@/lib/kyc/rc-verification";
 
 export async function POST(
@@ -26,6 +27,8 @@ export async function POST(
       rcNumber: typeof body?.rc_number === "string" ? body.rc_number : undefined,
       applicant: "primary",
     });
+    // ID 201: the check, who ran it and its outcome in the file's KYC history.
+    await recordStaffKycStep(leadId, appUser, "RC check run", { result });
 
     // Validation short-circuit (Decentro was NOT called): surface the status and
     // do NOT stamp the coupon — identical to the old inline early-returns.

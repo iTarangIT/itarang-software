@@ -252,8 +252,13 @@ export async function suggestedOwners(
                         THEN ${GSTIN_KEY(sql`a.gstin`)} END AS gstin_key,
                    NULLIF(${last10(sql`a.contact_phone`)}, '') AS phone_key,
                    COALESCE(
-                       (SELECT app.id FROM dealer_onboarding_applications app
-                          JOIN dealers d ON d.application_id = app.id::text
+                       -- ID 203: dealers.application_id is text; cast IT (when it is
+                       -- a uuid) so the applications primary key is used, instead of
+                       -- casting app.id and reading every application per account.
+                       (SELECT app.id FROM dealers d
+                          JOIN dealer_onboarding_applications app
+                            ON app.id = CASE WHEN d.application_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+                                             THEN d.application_id::uuid END
                          WHERE d.dealer_id = a.id LIMIT 1),
                        (SELECT app.id FROM dealer_onboarding_applications app
                          WHERE app.dealer_code = a.id

@@ -123,7 +123,7 @@ export async function GET(req: NextRequest) {
     const revenueQ = revenueTotal(startStr, endStr);
 
     // ── Outstanding ──────────────────────────────────────────────────────────
-    // Windowed on invoice_date, unlike the standalone Outstanding Credits card
+    // Windowed on invoice_date, unlike the standalone Accounts Receivable card
     // which is an all-time snapshot. Inside the Realization drill-down it sits
     // beside a windowed revenue and a windowed expense, and a receivable from
     // outside the period would not belong next to either.

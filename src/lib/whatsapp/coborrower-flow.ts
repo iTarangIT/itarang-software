@@ -70,6 +70,7 @@ import {
 import { saveMedia } from "./storage";
 import type { InboundEvent, ListRow, ReplyButton } from "./types";
 import { oneLine } from "./window";
+import { recordWhatsAppKycStep } from "@/lib/kyc/kycWhatsAppLog";
 
 export const DC_CB_FIELD = "DC_CB_FIELD";
 export const DC_CB_DOCS = "DC_CB_DOCS";
@@ -291,6 +292,8 @@ async function onCoBorrowerStart(
   }
 
   const coBorrowerId = await ensureCoBorrowerRow(leadId);
+  // ID 201: every WhatsApp KYC step goes in the file's KYC history.
+  await recordWhatsAppKycStep({ session, leadId, action: "Co-borrower started" });
   await patchLeadSub(session.id, "cb", {
     coBorrowerId,
     qIndex: 0,
@@ -379,6 +382,7 @@ async function onCoBorrowerField(
   }
 
   if (next >= CO_BORROWER_QUESTIONS.length) {
+    await recordWhatsAppKycStep({ session, leadId, action: "Co-borrower details entered" });
     return await startDocs(session);
   }
 
@@ -545,6 +549,7 @@ async function onCoBorrowerDocs(
     fields: classified.fields,
     applicationId: session.application_id,
   });
+  await recordWhatsAppKycStep({ session, leadId, action: `Uploaded ${DOC_LABEL[docType as keyof typeof DOC_LABEL] ?? docType} (co-borrower)` });
 
   // Extracted identity numbers belong on co_borrowers — and ONLY there.
   await applyExtractedFields(leadId, docType, classified.fields);
@@ -686,6 +691,7 @@ async function onCoBorrowerConsent(
   }
 
   await patchLeadSub(session.id, "cb", { consentOtpAttempts: 0, consentOtpChannel: channel });
+  await recordWhatsAppKycStep({ session, leadId, action: `Consent code sent to the co-borrower (${channel})` });
   await setSession(session.id, { current_state: DC_CB_CONSENT_OTP });
   await reply(session, otpSentText(channel), CB_OTP_WAIT_BUTTONS);
 }
@@ -780,6 +786,7 @@ async function onCoBorrowerConsentManual(
     return;
   }
 
+  await recordWhatsAppKycStep({ session, leadId, action: "Signed consent uploaded (co-borrower)", notify: true });
   await reply(session, "✅ *Signed consent received.*");
   await showReview(session, leadId);
 }
@@ -817,6 +824,7 @@ async function onCoBorrowerConsentOtp(
       return;
     }
     await patchLeadSub(session.id, "cb", { consentOtpAttempts: 0, consentOtpChannel: channel });
+    await recordWhatsAppKycStep({ session, leadId, action: "Consent code resent to the co-borrower" });
     await reply(session, otpSentText(channel, true), CB_OTP_WAIT_BUTTONS);
     return;
   }
@@ -852,6 +860,7 @@ async function onCoBorrowerConsentOtp(
     return;
   }
 
+  await recordWhatsAppKycStep({ session, leadId, action: "Co-borrower consent given (code confirmed)", notify: true });
   await showReview(session, leadId);
 }
 
@@ -1020,6 +1029,7 @@ async function ingestCoBorrowerZip(
       fields: classified.fields,
       applicationId: session.application_id,
     });
+    await recordWhatsAppKycStep({ session, leadId, action: `Uploaded ${DOC_LABEL[docType as keyof typeof DOC_LABEL] ?? docType} (co-borrower)` });
     await applyExtractedFields(leadId, docType, classified.fields);
     docs[docType] = true;
     accepted.push(DOC_LABEL[docType] ?? docType);
@@ -1365,6 +1375,7 @@ async function onCoBorrowerReview(
   }
 
   await submitCoBorrowerVerification(leadId);
+  await recordWhatsAppKycStep({ session, leadId, action: "Co-borrower submitted to iTarang", notify: true });
   await setSession(session.id, { current_state: DC_CB_WAIT });
   await reply(
     session,

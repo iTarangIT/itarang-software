@@ -71,6 +71,7 @@ import { stampUploader } from "@/lib/storage/uploaderStamp";
 import { saveMedia } from "./storage";
 import type { InboundEvent, ReplyButton } from "./types";
 import { oneLine } from "./window";
+import { recordWhatsAppKycStep } from "@/lib/kyc/kycWhatsAppLog";
 
 /** "Attach extra documents?" — the optional offer in the new-lead ladder. */
 export const DC_XD_ASK = "DC_XD_ASK";
@@ -337,6 +338,13 @@ async function onExtraDocsWait(
 
   const count = result.items.length;
   await patchLeadSub(session.id, "xd", { count, batch: (xd.batch ?? 0) + 1 });
+  // ID 201: every WhatsApp KYC step goes in the file's KYC history.
+  await recordWhatsAppKycStep({
+    session,
+    dealer,
+    leadId,
+    action: answered ? `Requested document uploaded: ${answered}` : `Extra document uploaded: ${item.name}`,
+  });
 
   if (count >= PRE_SANCTION_MAX) {
     await reply(session, `✅ Saved *${item.name}* (${counter(count)}). That's the maximum.`);

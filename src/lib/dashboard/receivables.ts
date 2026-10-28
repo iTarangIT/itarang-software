@@ -1,8 +1,8 @@
-// Money owed to us — every invoice still owed, read once for the
+// Accounts Receivable (was "Money owed to us", ID 200) — every invoice still owed, read once for the
 // /ceo/receivables page and the ageing strip on "Revenue & costs" (ID 89), so
 // the two can never bucket the same invoice differently.
 //
-// Same rule and source as the CEO overview's "Money owed to us" card:
+// Same rule and source as the CEO overview's "Accounts Receivable" card:
 // outstandingTotal() is SUM(balance) over revenueUnion() WHERE
 // REVENUE_OUTSTANDING, all-time. matchedUnion() is that same union plus the
 // dealer match, so the total here is the card's number. Ageing is days since
@@ -25,12 +25,18 @@ export {
     netOwed,
     RECEIVABLE_AGES,
     receivableAgeOf,
+    receivableFileNote,
+    receivableSourceLabel,
+    matchesReceivableSearch,
+    RECEIVABLE_SOURCE_LABEL,
     type ReceivableAgeKey,
     type ReceivablesAgeing,
 } from "@/lib/dashboard/receivablesAgeing";
 
 export type ReceivableRow = {
     source: string;
+    /** ID 200: `source` with a Drive row split into 'drive' (PDF scan) or 'vyapar' (register only). */
+    origin: string;
     id: string;
     invoice_number: string | null;
     invoice_date: string | null;
@@ -59,7 +65,9 @@ export async function listReceivables(): Promise<ReceivableRow[]> {
             SELECT r.*, ${OWED_KEY} AS owe_key, ${REVENUE_OUTSTANDING} AS outstanding
               FROM ${inv} r
              WHERE ${REVENUE_OWED})
-        SELECT r.source, r.id, r.invoice_number, r.invoice_date::text AS invoice_date, r.due_date::text AS due_date,
+        SELECT r.source,
+               CASE WHEN r.source = 'drive' AND si.source = 'vyapar' THEN 'vyapar' ELSE r.source END AS origin,
+               r.id, r.invoice_number, r.invoice_date::text AS invoice_date, r.due_date::text AS due_date,
                r.customer_name, COALESCE(r.total, 0) AS total, COALESCE(r.balance, 0) AS balance, r.status,
                r.document_url, r.dealer_lead_id, r.account_id, r.dealer_name, u.name AS owner_name,
                ((now() AT TIME ZONE 'Asia/Kolkata')::date - r.invoice_date::date) AS age_days,
@@ -68,6 +76,7 @@ export async function listReceivables(): Promise<ReceivableRow[]> {
                r.owe_key
           FROM x r
           LEFT JOIN users u ON u.id::text = r.dealer_owner_id::text
+          LEFT JOIN sales_invoices si ON r.source = 'drive' AND si.id::text = r.id::text
          WHERE r.owe_key IN (SELECT owe_key FROM x WHERE outstanding)
          ORDER BY r.balance DESC NULLS LAST
     `)) as unknown as Array<Record<string, unknown>>;

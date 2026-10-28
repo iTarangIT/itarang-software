@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { requireAdminAppUserForLead } from "@/lib/kyc/admin-workflow";
+import { recordStaffKycStep } from "@/lib/kyc/kycEventLog";
 import { executeCoBorrowerDigilockerInit } from "@/lib/kyc/coborrower-verification";
 import { publicOrigin, PublicOriginError } from "@/lib/public-origin";
 
@@ -64,6 +65,8 @@ export async function POST(
       email: body.email,
       redirect_url: callbackUrl,
     });
+    // ID 201: the check, who ran it and its outcome in the file's KYC history.
+    await recordStaffKycStep(leadId, appUser, "DigiLocker (Aadhaar) request sent (co-borrower)", { result });
 
     if ("error" in result) {
       return NextResponse.json(

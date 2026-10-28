@@ -11,6 +11,7 @@ import { db } from "@/lib/db";
 import { requireRole } from "@/lib/auth-utils";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
 import { ACCOUNT_ADMIN_ROLES, ASSIGNABLE_OWNER_ROLES, requireAccountTables } from "../_lib";
+import { cachedAccounts } from "@/lib/accounts/accountsPage";
 
 export const dynamic = "force-dynamic";
 
@@ -18,6 +19,11 @@ export const GET = withErrorHandler(async () => {
     await requireRole(ACCOUNT_ADMIN_ROLES);
     await requireAccountTables();
 
+    // ID 203: cached two minutes on the server, cleared by every write route.
+    return successResponse(await cachedAccounts("owners", loadOwners));
+});
+
+async function loadOwners() {
     const [assignable, current] = await Promise.all([
         db.execute(sql`
             SELECT id::text AS id, name, lower(role) AS role
@@ -36,6 +42,5 @@ export const GET = withErrorHandler(async () => {
              ORDER BY u.name
         `),
     ]);
-
-    return successResponse({ assignable, current });
-});
+    return { assignable, current };
+}
