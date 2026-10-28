@@ -42,6 +42,8 @@ import { writeTouchpoint } from "@/lib/touchpoints/write";
 import { rollbackTarget, type CommercialVersion } from "@/lib/leads/quoteApproval";
 import { tryGenerateQuotationDraft } from "@/lib/leads/quoteDraft";
 import { notifyQuotationApproved } from "@/lib/notifications/events";
+import { sendQuoteApprovedEmail, termsLabel } from "@/lib/leads/quoteApprovalEmail";
+import type { CommercialsProductLine } from "@/lib/inside-sales/types";
 import {
   leadMoveOnWithdraw,
   lockLeadForQuote,
@@ -107,10 +109,15 @@ export async function POST(
         final_price: string | null;
         quote_document_url: string | null;
         withdrawn_at: string | null;
+        created_by: string | null;
+        product_lines: CommercialsProductLine[] | null;
+        dealer_payment_terms: string | null;
+        credit_days: number | null;
       }>(sql`
         SELECT commercial_id, dealer_lead_id, version_no, quote_number, approval_status,
                price_quoted, final_price, quote_document_url,
-               withdrawn_at::text AS withdrawn_at
+               withdrawn_at::text AS withdrawn_at,
+               created_by, product_lines, dealer_payment_terms, credit_days
           FROM dealer_lead_commercials
          WHERE commercial_id = ${commercialId}
          FOR UPDATE
@@ -178,6 +185,10 @@ export async function POST(
           quoteUrl: row.quote_document_url,
           ownerId: lead.current_owner_id,
           dealerName: lead.dealer_name,
+          versionNo: row.version_no,
+          createdBy: row.created_by,
+          lines: row.product_lines ?? [],
+          termsLabel: termsLabel(row),
         };
       }
 
@@ -314,6 +325,23 @@ export async function POST(
       // Tell the people who have to act on it. Until E-242 nobody was told at
       // all — the rep who raised the quote learned the outcome by going and
       // looking. emit() never throws, so this cannot fail the decision.
+      //
+      // 28 Oct item 3 — one email to the salesperson who raised it and the
+      // owner, CC their managers and care@. Never throws.
+      const emailedUserIds = await sendQuoteApprovedEmail({
+        family: "lead",
+        dealerName: outcome.dealerName,
+        refId: outcome.leadId,
+        versionNo: outcome.versionNo,
+        lines: outcome.lines,
+        termsLabel: outcome.termsLabel,
+        raisedBy: outcome.createdBy,
+        ownerId: outcome.ownerId,
+        approverName: user.name,
+        quoteNumber: draft?.quote_number ?? null,
+        draftReady: !!draft,
+        href: `/inside-sales/lead/${outcome.leadId}?quote=${commercialId}`,
+      });
       await notifyQuotationApproved({
         leadId: outcome.leadId,
         commercialId,
@@ -324,6 +352,7 @@ export async function POST(
         mode: "manual",
         approverName: user.name,
         draftReady: !!draft,
+        emailedUserIds,
       });
     } else {
       // ID 135: the timeline note (and any status move) was written in the

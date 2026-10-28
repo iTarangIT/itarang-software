@@ -22,6 +22,8 @@ import {
     notifyAccountQuotationRejected,
 } from "./notify";
 import { LIVE_ACCOUNT_QUOTE, latestLiveAccountQuote, loadAccountQuotationById } from "./store";
+import type { CommercialsProductLine } from "@/lib/inside-sales/types";
+import { sendQuoteApprovedEmail, termsLabel } from "@/lib/leads/quoteApprovalEmail";
 
 export async function decideAccountQuotation(input: {
     quotationId: string;
@@ -34,7 +36,7 @@ export async function decideAccountQuotation(input: {
         const locked = (await tx.execute(sql`
             SELECT quotation_id::text AS quotation_id, account_id, version_no, approval_status,
                    price_quoted::text AS price_quoted, created_by::text AS created_by,
-                   withdrawn_at::text AS withdrawn_at
+                   withdrawn_at::text AS withdrawn_at, product_lines, dealer_payment_terms, credit_days
               FROM account_quotations WHERE quotation_id = ${input.quotationId}::uuid FOR UPDATE
         `)) as unknown as Array<{
             quotation_id: string;
@@ -44,6 +46,9 @@ export async function decideAccountQuotation(input: {
             price_quoted: string | null;
             created_by: string;
             withdrawn_at: string | null;
+            product_lines: CommercialsProductLine[] | null;
+            dealer_payment_terms: string | null;
+            credit_days: number | null;
         }>;
         const row = locked[0];
         if (!row) throw new AccountQuoteError("Quotation not found.", 404);
@@ -91,6 +96,21 @@ export async function decideAccountQuotation(input: {
     const value = Number(row.price_quoted ?? 0);
     if (input.decision === "approve") {
         const draft = await tryGenerateAccountQuotationDraft(row.quotation_id);
+        // 28 Oct item 3 — tell the salesperson and owner, CC managers + care@.
+        const emailedUserIds = await sendQuoteApprovedEmail({
+            family: "account",
+            dealerName: account?.name ?? null,
+            refId: row.account_id,
+            versionNo: row.version_no,
+            lines: row.product_lines ?? [],
+            termsLabel: termsLabel(row),
+            raisedBy: row.created_by,
+            ownerId: account?.owner_id ?? null,
+            approverName: input.actor.name,
+            quoteNumber: draft?.quote_number ?? null,
+            draftReady: !!draft,
+            href: `/my-dealers/${encodeURIComponent(row.account_id)}?quote=${row.quotation_id}`,
+        });
         await notifyAccountQuotationApproved({
             accountId: row.account_id,
             accountName: account?.name ?? null,
@@ -102,6 +122,7 @@ export async function decideAccountQuotation(input: {
             mode: "manual",
             approverName: input.actor.name,
             draftReady: !!draft,
+            emailedUserIds,
         });
         return { decision: "approved", restoredVersion: null, quoteNumber: draft?.quote_number ?? null };
     }

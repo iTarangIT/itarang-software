@@ -16,6 +16,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { FileText, Loader2, Plus, Send, Trash2, Undo2 } from "lucide-react";
 
 import type { AssetType, CommercialsProductLine, ProductMasterResponse } from "@/lib/inside-sales/types";
+import { buildQuotePreview } from "@/lib/inside-sales/quotePreview";
 
 type Quotation = {
     quotation_id: string;
@@ -295,7 +296,9 @@ function CreateAccountQuoteDialog({
     const [formError, setFormError] = useState<string | null>(null);
 
     const options = useMemo(() => products.data?.[assetType] ?? [], [products.data, assetType]);
-    const total = lines.reduce((s, l) => s + (l.unit_price ?? 0) * l.quantity, 0);
+    // List price (reference only, never the OEM price) and GST rate per product.
+    const optionFor = (l: CommercialsProductLine) => products.data?.[l.asset_type]?.find((o) => o.id === l.product_id);
+    const preview = buildQuotePreview(lines, (l) => optionFor(l)?.gst_rate_pct);
 
     const save = useMutation({
         mutationFn: () =>
@@ -362,7 +365,7 @@ function CreateAccountQuoteDialog({
                     </select>
                     <select value={productId} onChange={(e) => setProductId(e.target.value)} className="rounded-lg border border-border px-2 py-1.5" disabled={products.isLoading}>
                         <option value="">{products.isLoading ? "Loading products…" : "Pick a product"}</option>
-                        {options.map((o) => <option key={o.id} value={o.id}>{o.label}{o.unit_price != null ? ` — ${inr(o.unit_price)}` : ""}</option>)}
+                        {options.map((o) => <option key={o.id} value={o.id}>{o.label}{o.list_price != null ? ` — list ${inr(o.list_price)}` : ""}</option>)}
                     </select>
                     <input value={qty} onChange={(e) => setQty(e.target.value)} inputMode="numeric" className="rounded-lg border border-border px-2 py-1.5" aria-label="Quantity" />
                     <button type="button" onClick={add} className="rounded-lg border border-border px-3 py-1.5 text-xs font-semibold hover:bg-bg">Add</button>
@@ -370,42 +373,57 @@ function CreateAccountQuoteDialog({
                 {products.error && <p className="text-xs text-rose-600">{(products.error as Error).message}</p>}
 
                 {lines.length > 0 && (
-                    <table className="w-full text-xs">
-                        <thead className="text-ink-muted">
-                            <tr>
-                                <th className="py-1 text-left font-medium">Product</th>
-                                <th className="py-1 text-right font-medium">Qty</th>
-                                <th className="py-1 text-right font-medium">Unit price (₹, ex-GST)</th>
-                                <th />
-                            </tr>
-                        </thead>
-                        <tbody className="divide-y divide-border">
-                            {lines.map((l) => (
-                                <tr key={`${l.asset_type}:${l.product_id}`}>
-                                    <td className="py-1.5">{l.product_name}</td>
-                                    <td className="py-1.5 text-right tabular-nums">{l.quantity}</td>
-                                    <td className="py-1.5 text-right">
-                                        <input
-                                            value={l.unit_price ?? ""}
-                                            inputMode="decimal"
-                                            onChange={(e) => {
-                                                const v = e.target.value.trim() === "" ? null : Number(e.target.value);
-                                                setLines((prev) => prev.map((x) => (x === l ? { ...x, unit_price: v != null && Number.isFinite(v) ? v : null } : x)));
-                                            }}
-                                            className="w-28 rounded border border-border px-2 py-1 text-right"
-                                        />
-                                    </td>
-                                    <td className="py-1.5 text-right">
-                                        <button type="button" onClick={() => setLines((p) => p.filter((x) => x !== l))} aria-label="Remove line">
-                                            <Trash2 className="h-3.5 w-3.5 text-ink-muted" />
-                                        </button>
-                                    </td>
+                    <div className="overflow-x-auto">
+                        <table className="w-full text-xs">
+                            <thead className="text-ink-muted">
+                                <tr>
+                                    <th className="py-1 text-left font-medium">Product</th>
+                                    <th className="py-1 text-right font-medium">Qty</th>
+                                    <th className="py-1 text-right font-medium">List price</th>
+                                    <th className="py-1 text-right font-medium">Your unit price (₹, ex-GST)</th>
+                                    <th className="py-1 text-right font-medium">Amount</th>
+                                    <th className="py-1 text-right font-medium">GST</th>
+                                    <th />
                                 </tr>
-                            ))}
-                        </tbody>
-                    </table>
+                            </thead>
+                            <tbody className="divide-y divide-border">
+                                {preview.lines.map(({ line: l, amount, gstRatePct, gst }) => {
+                                    const listPrice = optionFor(l)?.list_price ?? null;
+                                    return (
+                                        <tr key={`${l.asset_type}:${l.product_id}`}>
+                                            <td className="py-1.5">{l.product_name}</td>
+                                            <td className="py-1.5 text-right tabular-nums">{l.quantity}</td>
+                                            <td className="py-1.5 text-right tabular-nums text-ink-muted">{listPrice != null ? inr(listPrice) : "—"}</td>
+                                            <td className="py-1.5 text-right">
+                                                <input
+                                                    value={l.unit_price ?? ""}
+                                                    inputMode="decimal"
+                                                    onChange={(e) => {
+                                                        const v = e.target.value.trim() === "" ? null : Number(e.target.value);
+                                                        setLines((prev) => prev.map((x) => (x === l ? { ...x, unit_price: v != null && Number.isFinite(v) ? v : null } : x)));
+                                                    }}
+                                                    aria-label={`Unit price for ${l.product_name}`}
+                                                    className="w-28 rounded border border-border px-2 py-1 text-right"
+                                                />
+                                            </td>
+                                            <td className="py-1.5 text-right tabular-nums">{amount != null ? inr(amount) : "—"}</td>
+                                            <td className="py-1.5 text-right tabular-nums">
+                                                {gst != null ? inr(gst) : "—"}
+                                                {gstRatePct != null && <span className="ml-1 text-ink-muted">({gstRatePct}%)</span>}
+                                            </td>
+                                            <td className="py-1.5 text-right">
+                                                <button type="button" onClick={() => setLines((p) => p.filter((x) => x !== l))} aria-label="Remove line">
+                                                    <Trash2 className="h-3.5 w-3.5 text-ink-muted" />
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
+                    </div>
                 )}
-                <p className="text-right text-sm font-semibold">Total (ex-GST): {inr(total)}</p>
+                <QuoteTotals subTotal={preview.subTotal} gstTotal={preview.gstTotal} total={preview.total} hasUnsetGst={preview.hasUnsetGst} hasUnpriced={preview.hasUnpriced} />
 
                 <div className="flex flex-wrap items-center gap-4">
                     <span className="text-xs font-medium text-ink-muted">Dealer payment terms</span>
@@ -430,6 +448,18 @@ function CreateAccountQuoteDialog({
                 </div>
             </div>
         </Dialog>
+    );
+}
+
+function QuoteTotals(p: { subTotal: number; gstTotal: number; total: number; hasUnsetGst: boolean; hasUnpriced: boolean }) {
+    return (
+        <div className="ml-auto w-full max-w-xs space-y-0.5 rounded-lg bg-bg px-3 py-2 text-xs">
+            <div className="flex justify-between"><span className="text-ink-muted">Sub-total (ex-GST)</span><span className="tabular-nums">{inr(p.subTotal)}</span></div>
+            <div className="flex justify-between"><span className="text-ink-muted">GST</span><span className="tabular-nums">{inr(p.gstTotal)}</span></div>
+            <div className="flex justify-between border-t border-border pt-1 text-sm font-semibold"><span>Total incl. GST</span><span className="tabular-nums">{inr(p.total)}</span></div>
+            {p.hasUnpriced && <p className="text-[11px] text-amber-700">A line has no unit price yet — it is not in the total.</p>}
+            {p.hasUnsetGst && <p className="text-[11px] text-amber-700">A product has no GST rate set — its GST is not included.</p>}
+        </div>
     );
 }
 

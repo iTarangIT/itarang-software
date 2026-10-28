@@ -17,6 +17,7 @@ import type {
     ProductMasterOption,
     ProductMasterResponse,
 } from "@/lib/inside-sales/types";
+import { buildQuotePreview } from "@/lib/inside-sales/quotePreview";
 
 type Props = {
     open: boolean;
@@ -174,6 +175,11 @@ export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercia
         (sum, l) => sum + (l.unit_price != null ? l.unit_price * l.quantity : 0),
         0,
     );
+    // The list price beside each unit price (reference only — never the OEM
+    // price) and the GST / total incl. GST the dealer will see on the quote.
+    const optionFor = (l: CommercialsProductLine) =>
+        products?.[l.asset_type]?.find((o) => o.id === l.product_id) ?? null;
+    const preview = buildQuotePreview(lines, (l) => optionFor(l)?.gst_rate_pct);
 
     const handleClose = () => {
         if (submitting) return;
@@ -422,7 +428,7 @@ export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercia
                                         <option key={o.id} value={o.id}>
                                             {o.label}
                                             {o.detail ? ` · ${o.detail}` : ""}
-                                            {o.unit_price != null ? ` · ${inr(o.unit_price)}` : ""}
+                                            {o.list_price != null ? ` · list ${inr(o.list_price)}` : ""}
                                         </option>
                                     ))}
                                 </select>
@@ -463,6 +469,12 @@ export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercia
                                         ) : null}
                                     </span>
                                     <span className="shrink-0 tabular-nums text-gray-700">× {ln.quantity}</span>
+                                    <span
+                                        className="w-24 shrink-0 text-right text-xs tabular-nums text-gray-500"
+                                        title="List price — for reference"
+                                    >
+                                        {optionFor(ln)?.list_price != null ? `List ${inr(optionFor(ln)!.list_price!)}` : "No list price"}
+                                    </span>
                                     <div className="flex shrink-0 items-center gap-1">
                                         <span className="text-xs text-gray-400">₹</span>
                                         <Input
@@ -495,9 +507,25 @@ export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercia
                         </ul>
                     )}
                     {lines.length > 0 && (
-                        <div className="flex items-center justify-end gap-2 border-t border-gray-200 pt-2 text-sm">
-                            <span className="text-gray-500">Total (final price)</span>
-                            <span className="text-base font-semibold tabular-nums text-gray-900">{inr(linesSubtotal)}</span>
+                        <div className="ml-auto w-full max-w-xs space-y-1 border-t border-gray-200 pt-2 text-sm">
+                            <div className="flex items-center justify-between">
+                                <span className="text-gray-500">Sub-total (final price, ex-GST)</span>
+                                <span className="tabular-nums text-gray-900">{inr(preview.subTotal)}</span>
+                            </div>
+                            <div className="flex items-center justify-between">
+                                <span className="text-gray-500">GST</span>
+                                <span className="tabular-nums text-gray-900">{inr(preview.gstTotal)}</span>
+                            </div>
+                            <div className="flex items-center justify-between">
+                                <span className="font-medium text-gray-700">Total incl. GST</span>
+                                <span className="text-base font-semibold tabular-nums text-gray-900">{inr(preview.total)}</span>
+                            </div>
+                            {preview.hasUnpriced && (
+                                <p className="text-xs text-amber-700">A line has no unit price yet — it is not in the total.</p>
+                            )}
+                            {preview.hasUnsetGst && (
+                                <p className="text-xs text-amber-700">A product has no GST rate set — its GST is not included.</p>
+                            )}
                         </div>
                     )}
                 </div>
