@@ -15,7 +15,8 @@
 
 import { and, desc, eq, inArray, lt, sql } from "drizzle-orm";
 
-import { db } from "@/lib/db";
+// Background pool: collectors run off the request pool (see db/background.ts).
+import { bgDb as db } from "@/lib/db/background";
 import { opsCollectorRuns, opsMetricSamples } from "@/lib/db/schema";
 import { log } from "@/lib/log";
 

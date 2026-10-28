@@ -50,7 +50,8 @@
 
 import { sql } from "drizzle-orm";
 
-import { db } from "@/lib/db";
+// Background pool: collectors run off the request pool (see db/background.ts).
+import { bgDb as db } from "@/lib/db/background";
 import { unavailableText } from "@/lib/operations/errors";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 

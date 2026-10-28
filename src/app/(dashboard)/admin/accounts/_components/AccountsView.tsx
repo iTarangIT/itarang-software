@@ -325,7 +325,13 @@ export function AccountsView({ initialPage = null }: { initialPage?: ListRespons
                                         <input type="checkbox" checked={selected.has(r.id)} onChange={() => toggle(r.id)} aria-label={`Select ${r.name}`} />
                                     </td>
                                     <td className="px-3 py-2">
-                                        <Link href={`/admin/accounts/${encodeURIComponent(r.id)}`} className="font-medium text-ink hover:underline">
+                                        {/* No prefetch: one server render per visible row (each with its
+                                            auth DB reads) on every list load. */}
+                                        <Link
+                                            href={`/admin/accounts/${encodeURIComponent(r.id)}`}
+                                            prefetch={false}
+                                            className="font-medium text-ink hover:underline"
+                                        >
                                             {r.name}
                                         </Link>
                                         <div className="text-[11px] text-ink-muted">
