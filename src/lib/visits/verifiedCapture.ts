@@ -38,7 +38,10 @@ export function checkVisitLocation(
     if (accuracyM > MAX_VISIT_ACCURACY_M) {
         return {
             ok: false,
-            message: `Location is only accurate to ${Math.round(accuracyM)} m. Step outside or wait a moment, then try again (100 m or better).`,
+            message:
+                `Your location is not within ${MAX_VISIT_ACCURACY_M} m. The phone can only place you within ` +
+                `${Math.round(accuracyM)} m, and a visit needs ${MAX_VISIT_ACCURACY_M} m or less. Turn on GPS ` +
+                `(precise location), step outside or near a window, wait a few seconds, then tap "Read location again".`,
         };
     }
     return { ok: true };

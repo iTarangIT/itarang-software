@@ -170,7 +170,9 @@ export function VerifiedVisitCapture({
                 </Button>
                 {loc && (
                     <span className={`text-xs ${locOk ? "text-emerald-700" : "text-amber-700"}`}>
-                        Accurate to {Math.round(loc.accuracy)} m
+                        {locOk
+                            ? `Location OK: within ${Math.round(loc.accuracy)} m`
+                            : `Location not within ${MAX_VISIT_ACCURACY_M} m (now ${Math.round(loc.accuracy)} m)`}
                     </span>
                 )}
             </div>
