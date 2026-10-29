@@ -16,6 +16,7 @@ import {
     repBlockTableRows,
     yesterdayMetricsOf,
     type RepBlock,
+    type TeamGroups,
     type TeamOf,
 } from "./salesDailyBlocks";
 
@@ -58,7 +59,8 @@ export function membersOf(teamOf: TeamOf, managerId: string): string[] {
  * block (an ASM lead managing ISRs), the management email groups the members
  * under "<manager> · team" with their own subtotal (24 Oct, outsideManagers);
  * ID 198 prints the same lines, so a team subtotal is always there. [] when no
- * member is in this block.
+ * member is in this block. With `teamGroups` (ID 198, 29 Oct) the subtotal adds
+ * the manager's dated group, as the management email's does (ID 155).
  */
 export function teamRows(
     role: Role,
@@ -66,6 +68,7 @@ export function teamRows(
     managerId: string,
     teamOf: TeamOf,
     managerName?: string,
+    teamGroups?: TeamGroups,
 ): Rows {
     const members = new Set(membersOf(teamOf, managerId));
     const inBlock = blocks.filter((b) => members.has(b.id));
@@ -73,7 +76,7 @@ export function teamRows(
     const manager = blocks.find((b) => b.id === managerId);
     const group = manager ? [manager, ...inBlock] : inBlock;
     const outside = manager ? undefined : new Map([[managerId, managerName ?? "Team"]]);
-    const rows = repBlockTableRows(role, group, teamOf, undefined, outside);
+    const rows = repBlockTableRows(role, group, teamOf, teamGroups, outside);
     // The block's "Total" repeats the team subtotal. Drop it.
     if (group.length > 1 && rows.length && rows[rows.length - 1][0] === "Total") rows.pop();
     return rows;

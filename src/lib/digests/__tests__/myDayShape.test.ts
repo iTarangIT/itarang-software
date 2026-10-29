@@ -105,6 +105,18 @@ describe("teamRows", () => {
         ]);
         expect(rows.some((r) => r[0] === "Total")).toBe(false);
     });
+    it("adds the dated team to the subtotal, as the management email does (ID 198, 29 Oct)", () => {
+        // Bala left the team mid-month: the dated group holds Sonu and Asha only.
+        const lead = blocks.find((x) => x.id === "lead")!;
+        const asha = blocks.find((x) => x.id === "a")!;
+        const groups = new Map([["lead", [lead, asha]]]);
+        const rows = teamRows("inside_sales_rep", blocks, "lead", teamOf, "Sonu", groups);
+        const dated = repBlockTableRows("inside_sales_rep", blocks, teamOf, groups);
+        const sub = rows.find((r) => r[0] === `${TEAM_SUBTOTAL_PREFIX}Sonu`);
+        expect(sub).toEqual(dated.find((r) => r[0] === `${TEAM_SUBTOTAL_PREFIX}Sonu`));
+        // Calls: Sonu 40 + Asha 10, not + Bala 20.
+        expect(sub?.[1]).toBe(50);
+    });
 });
 
 describe("reviewRows (ID 198)", () => {
