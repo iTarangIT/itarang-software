@@ -31,6 +31,7 @@ import { db } from "@/lib/db";
 import { salesInvoices } from "@/lib/db/schema";
 import { requireAuth } from "@/lib/auth-utils";
 import { errorMessage, isNextRedirectError } from "@/lib/api-utils";
+import { isOverpaid, paymentStatusFor } from "@/lib/sales/paymentStatus";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -129,7 +130,7 @@ export async function PATCH(
     // and is SUMmed across every invoice for the Outstanding figure, so a
     // negative one here would quietly cancel out somebody else's genuine
     // receivable. An overpayment is a credit, not this invoice's balance.
-    if (amountPaid > total + 0.005) {
+    if (isOverpaid(amountPaid, total)) {
       return NextResponse.json(
         {
           success: false,
@@ -142,9 +143,9 @@ export async function PATCH(
     }
 
     // Half a paisa of tolerance so a floating-point round trip does not leave a
-    // fully-settled invoice reading as partially paid for ever.
-    const settled = amountPaid >= total - 0.005;
-    const status = amountPaid <= 0 ? "sent" : settled ? "paid" : "partially_paid";
+    // fully-settled invoice reading as partially paid for ever (paymentStatus.ts,
+    // shared with the Vyapar register import, ID 200).
+    const status = paymentStatusFor(amountPaid, total);
 
     const [row] = await db
       .update(salesInvoices)

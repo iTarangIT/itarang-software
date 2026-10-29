@@ -14,6 +14,7 @@
 import React from "react";
 import Link from "next/link";
 import { InvoicesReadUpTo } from "@/components/sales/InvoicesReadUpTo";
+import { ReceivablesSource } from "@/components/sales/ReceivablesSource";
 import { useQuery } from "@tanstack/react-query";
 import {
   AlertCircle,
@@ -903,6 +904,7 @@ export default function CEODashboard() {
           value={owed == null ? "—" : inr(owed)}
           href="/ceo/receivables"
           sub="Unpaid on all invoices, as of now · not limited to the period · open for ageing"
+          footer={<ReceivablesSource />}
         />
       </div>
 

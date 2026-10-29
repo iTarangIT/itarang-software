@@ -625,10 +625,37 @@ async function processFile(
   // Layer 2a: the same invoice already imported from Drive.
   if (numberKey) {
     const [dup] = await db
-      .select({ id: salesInvoices.id })
+      .select({ id: salesInvoices.id, source: salesInvoices.source, drive_file_id: salesInvoices.drive_file_id })
       .from(salesInvoices)
       .where(eq(salesInvoices.invoice_number_key, numberKey))
       .limit(1);
+    // ID 200: an invoice the Vyapar register created has no file ("Register
+    // only, no PDF yet"). This is its PDF: link the file to that row instead
+    // of skipping it as a duplicate. The register's figures stay.
+    if (dup && dup.source === "vyapar" && !dup.drive_file_id) {
+      if (!ctx.dryRun) {
+        await db
+          .update(salesInvoices)
+          .set({
+            drive_file_id: file.id,
+            file_name: file.name.slice(0, 255),
+            folder_path: file.folderPath || null,
+            document_url: documentUrl,
+            storage_key: storageKey,
+            updated_at: new Date(),
+          })
+          .where(eq(salesInvoices.id, dup.id));
+      }
+      return {
+        outcome: {
+          status: "imported",
+          reason: `Linked the PDF to register invoice ${value.invoice_number}${ctx.dryRun ? " (dry run)" : ""}.`,
+          invoiceIds: ctx.dryRun ? [] : [dup.id],
+          storageKey,
+        },
+        proposal,
+      };
+    }
     if (dup) {
       return {
         outcome: {

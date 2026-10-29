@@ -155,3 +155,76 @@ describe("dates", () => {
         expect(parseDateCell("")).toBeNull();
     });
 });
+
+// ID 200 (28 Oct) — Vyapar's two-sheet "Sale Report" export, shaped like the
+// sample Finance shared (22 Jul to 28 Oct): payments per invoice on "Sale
+// Report", the lines on "Item Details".
+describe("Vyapar Sale Report + Item Details (ID 200)", () => {
+    const saleReport = [
+        ["iTarang Technologies"],
+        ["Sale Report"],
+        ["Date", "Invoice No", "Party Name", "GSTIN", "Party Phone No.", "Transaction Type", "Total Amount", "Received/Paid Amount", "Balance Due", "Due Date", "Status", "sales manager"],
+        ["22/07/2026", "ITD/202627/020", "Ayansh Battery", "09GVUPP6577G1ZF", "9876543210", "Sale", "1,18,000.00", "1,18,000.00", "0.00", "", "Paid", "Sonu"],
+        ["01/09/2026", "ITD/202627/030", "Ayansh Battery", "09GVUPP6577G1ZF", "9876543210", "Sale", "2,36,000.00", "36,000.00", "2,00,000.00", "15/09/2026", "Overdue 44 Days", "Sonu"],
+        ["05/09/2026", "ICNH/202627/06", "Ayansh Battery", "09GVUPP6577G1ZF", "", "Credit Note", "5,900.00", "0.00", "5,900.00", "", "Unpaid", ""],
+        ["06/09/2026", "ITD/202627/031", "Sharma Batteries", "", "", "Sale[Cancelled]", "", "", "", "", "Cancelled", ""],
+        ["10/09/2026", "ITD/202627/032", "Verma Traders", "", "", "Sale", "59,000.00", "", "59,000.00", "", "Unpaid", ""],
+        ["Total", "", "", "", "", "", "4,18,900.00", "1,54,000.00", "2,64,900.00", "", "", ""],
+    ];
+    const itemDetails = [
+        ["Date", "Invoice No", "Party Name", "Item Name", "HSN/SAC", "Quantity", "Price/Unit", "Amount"],
+        ["22/07/2026", "ITD/202627/020", "Ayansh Battery", "LFP 51.2V 105Ah", "8507", 2, 50000, "1,18,000.00"],
+        ["01/09/2026", "ITD/202627/030", "Ayansh Battery", "LFP 51.2V 105Ah", "8507", 4, 50000, "2,36,000.00"],
+        ["10/09/2026", "ITD/202627/032", "Verma Traders", "Charger 10A", "850440", 10, 5000, "59,000.00"],
+        ["12/09/2026", "ITD/202627/033", "Gupta EV", "Wiring kit", "8544", 1, 500, "590.00"],
+    ];
+    const parse = () =>
+        parseInvoiceWorkbook(book({ "Sale Report": saleReport, "Item Details": itemDetails }), "vyapar_register");
+
+    it("reads both sheets, joined on the invoice number", () => {
+        const r = parse();
+        expect(r.sheet).toBe("Sale Report + Item Details");
+        expect(r.columns).toMatchObject({ received: "Received/Paid Amount", balance: "Balance Due", due_date: "Due Date", total: "Total Amount" });
+        // Phone and sales-manager columns are deliberately ignored.
+        expect(r.unknown_columns.some((c) => /phone|sales manager/i.test(c))).toBe(false);
+        expect(r.documents.map((d) => d.number)).toEqual([
+            "ITD/202627/020",
+            "ITD/202627/030",
+            "ICNH/202627/06",
+            "ITD/202627/031",
+            "ITD/202627/032",
+            "ITD/202627/033",
+        ]);
+        const paid = r.documents[0];
+        expect(paid.lines.map((l) => [l.product_class, l.quantity])).toEqual([["battery", 2]]);
+        expect(paid).toMatchObject({ gstin: "09GVUPP6577G1ZF", total: 118000, amount_paid: 118000, balance_due: 0, due_date: null, status_text: "Paid" });
+    });
+
+    it("takes payments, due dates and overdue status from the Sale Report", () => {
+        const [, overdue] = parse().documents;
+        expect(overdue).toMatchObject({ total: 236000, amount_paid: 36000, balance_due: 200000, due_date: "2026-09-15", status_text: "Overdue 44 Days", cancelled: false });
+    });
+
+    it("a credit note, a cancelled sale and a received-blank invoice", () => {
+        const docs = parse().documents;
+        expect(docs[2]).toMatchObject({ number: "ICNH/202627/06", doc_type: "credit_note", total: 5900 });
+        expect(docs[3]).toMatchObject({ number: "ITD/202627/031", cancelled: true, total: null });
+        // No Received figure: paid = total less the balance.
+        expect(docs[4]).toMatchObject({ total: 59000, amount_paid: 0, balance_due: 59000 });
+    });
+
+    it("keeps an Item Details invoice missing from the Sale Report, without payments, and says so", () => {
+        const r = parse();
+        const lone = r.documents.find((d) => d.number === "ITD/202627/033")!;
+        expect(lone.amount_paid).toBeUndefined();
+        expect(lone.lines).toHaveLength(1);
+        expect(r.warnings).toContain("ITD/202627/033: on Item Details but not on Sale Report; read without payments.");
+    });
+
+    it("a single-sheet register is read as before, with no payments", () => {
+        const r = parseInvoiceWorkbook(book({ Items: itemDetails }), "vyapar_register");
+        expect(r.sheet).toBe("Items");
+        expect(r.documents).toHaveLength(4);
+        expect(r.documents[0].amount_paid).toBeUndefined();
+    });
+});
