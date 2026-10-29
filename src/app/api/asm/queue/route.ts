@@ -19,7 +19,7 @@ import { pastLimitFilter, pastLimitLabelsByLead } from "@/lib/leads/queuePastLim
 import { fetchBusinessTypeForLeads } from "@/lib/leads/leadListQuery";
 import { ASM_QUEUE_TABS, type AsmQueueResponse } from "@/lib/asm/types";
 import { readAsmQueueFilters } from "@/lib/asm/queueFilterParams";
-import { teamForOwnScopedViewer } from "@/lib/users/team";
+import { teamScopeFromParams } from "@/lib/users/team";
 import { fetchIvrLeadIds } from "@/lib/ai-dialer/phoneTypeStore";
 
 export const dynamic = "force-dynamic";
@@ -64,7 +64,8 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
     // ID 155: a manager (own-scoped role with direct reports) also sees the
     // team's leads in their own tabs, read-only. ids_only (bulk claim) is not
     // widened: it feeds actions, and those stay with the owner.
-    const teamMemberIds = await teamForOwnScopedViewer(user);
+    // ID 199: `?member=` narrows a manager's view to one person (or "me").
+    const { teamMemberIds, member } = await teamScopeFromParams(user, url.searchParams);
 
     if (parsed.ids_only === "1") {
         const ids = await fetchAsmQueueIds({
@@ -87,6 +88,7 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
             ...filters,
             pastLimit,
             teamMemberIds,
+            member,
         }),
         countAsmQueueRows({
             tab: parsed.tab,
@@ -95,6 +97,7 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
             ...filters,
             pastLimit,
             teamMemberIds,
+            member,
         }),
     ]);
 

@@ -10,7 +10,7 @@ import { countFinalisedNotWon, countQueueRows, fetchAllTabCounts } from "@/lib/i
 import { hasLeadClocks, pastALimitSql } from "@/lib/leads/clocks";
 import { sql } from "drizzle-orm";
 import { readQueueFilters } from "@/lib/leads/queueFilters";
-import { teamForOwnScopedViewer } from "@/lib/users/team";
+import { teamScopeFromParams } from "@/lib/users/team";
 
 export const dynamic = "force-dynamic";
 
@@ -39,7 +39,7 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
             pastLimit: sp.get("past_limit") === "1" ? (past ?? sql`FALSE`) : null,
             filters: readQueueFilters(sp),
             // ID 155: a manager's own-tab badges include the team, like the table.
-            teamMemberIds: await teamForOwnScopedViewer(user),
+            ...(await teamScopeFromParams(user, sp)), // ID 155 team + ID 199 member pick
         }),
         countFinalisedNotWon(user.id),
         past ? countQueueRows({ tab: "my_open", userId: user.id, pastLimit: past }).catch(() => 0) : Promise.resolve(0),

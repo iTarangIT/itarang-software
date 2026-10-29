@@ -14,6 +14,7 @@ import {
     QUEUE_SELECT_CLASS,
 } from "@/components/leads/QueueFilterBar";
 import { QueueCsvButton } from "@/components/leads/QueueCsvButton";
+import { TeamMemberFilter, type TeamPerson } from "@/components/leads/TeamMemberFilter";
 import { BulkClaimBar } from "@/components/leads/BulkClaimBar";
 import { ClaimLeadConfirm } from "@/components/leads/ClaimLeadConfirm";
 import { ClaimByNumberPanel } from "@/components/leads/ClaimByNumberPanel";
@@ -51,6 +52,8 @@ import {
 type Props = {
     viewerId: string;
     viewerRole: string;
+    /** ID 199: the viewer's direct reports — non-empty shows the Team member pick. */
+    teamPeople?: TeamPerson[];
 };
 
 const PAGE_SIZE = 25;
@@ -65,7 +68,7 @@ function pretty(v: string): string {
     return v.replaceAll("_", " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-export function AsmQueueView({ viewerId, viewerRole }: Props) {
+export function AsmQueueView({ viewerId, viewerRole, teamPeople = [] }: Props) {
     const router = useRouter();
     const params = useSearchParams();
     const queryClient = useQueryClient();
@@ -106,6 +109,9 @@ export function AsmQueueView({ viewerId, viewerRole }: Props) {
     const [finalisedOnly, setFinalisedOnly] = useState(params.get("finalised") === "1");
     // 18 Oct row 34: only leads past a time limit.
     const [pastLimitOnly, setPastLimitOnly] = useState(params.get("past_limit") === "1");
+    // ID 199: a manager's Team member pick ("" = whole team, "me", or an id).
+    // Seeded from the URL so the My team email's links open it filtered.
+    const [member, setMember] = useState(params.get("member") ?? "");
     // Open on load when ANY filter arrived in the URL, so a filter inherited
     // from a pasted link is never doing invisible work. Derived from the parsed
     // values rather than from param names, so it cannot fall out of step with
@@ -134,11 +140,12 @@ export function AsmQueueView({ viewerId, viewerRole }: Props) {
         if (visitOutcome) p.set("visit_outcome", visitOutcome);
         if (finalisedOnly) p.set("finalised", "1");
         if (pastLimitOnly) p.set("past_limit", "1");
+        if (member) p.set("member", member);
         // The sort rides along: the rows and the CSV honour it, the counts and
         // facets simply never read it.
         writeQueueSort(p, sort);
         return writeQueueFilters(p, filters);
-    }, [searchDebounced, visitStatus, visitOutcome, finalisedOnly, pastLimitOnly, filters, sort]);
+    }, [searchDebounced, visitStatus, visitOutcome, finalisedOnly, pastLimitOnly, member, filters, sort]);
 
     const filterKey = filterParams.toString();
 
@@ -393,6 +400,14 @@ export function AsmQueueView({ viewerId, viewerRole }: Props) {
                         </span>
                     ) : null}
                 </button>
+                <TeamMemberFilter
+                    people={teamPeople}
+                    value={member}
+                    onChange={(m) => {
+                        setMember(m);
+                        setPage(1);
+                    }}
+                />
                 <QueueFilterBar
                     values={filters}
                     onChange={patchFilter}
@@ -459,6 +474,8 @@ export function AsmQueueView({ viewerId, viewerRole }: Props) {
             </div>
             <AsmQueueTable
                 tab={tab}
+                // ID 199: the review columns on a manager's team view.
+                showReview={teamPeople.length > 0 && member !== "me"}
                 rows={data?.rows ?? []}
                 total={data?.total ?? 0}
                 page={page}

@@ -23,6 +23,7 @@ import { QUEUE_TABS, TAB_LABELS, type QueueRow } from "@/lib/inside-sales/types"
 import { LEAD_STATUS_LABEL, readQueueFilters } from "@/lib/leads/queueFilters";
 import { readQueueSort } from "@/lib/leads/queueSort";
 import {
+    csvDate,
     csvDateTime,
     csvPretty,
     csvResponse,
@@ -33,7 +34,7 @@ import {
 import { fetchBusinessTypeForLeads } from "@/lib/leads/leadListQuery";
 import { businessTypeLabel } from "@/lib/leads/businessType";
 import { exportsOwnLeadsOnly, logDataDownload } from "@/lib/exports/downloadLog";
-import { teamForOwnScopedViewer } from "@/lib/users/team";
+import { teamScopeFromParams } from "@/lib/users/team";
 import { pastLimitFilter, pastLimitLabelsByLead } from "@/lib/leads/queuePastLimit";
 
 export const runtime = "nodejs";
@@ -89,6 +90,12 @@ const COLUMNS: CsvColumn<ExportRow>[] = [
     { header: "Created At", value: (r) => csvDateTime(r.created_at) },
     // IDs 85 / 86: which time limits the lead is past — the chip on screen.
     { header: "Past a limit", value: (r) => (r.past_limits ?? []).join("; ") },
+    // ID 199: the manager's review columns.
+    { header: "Last Action", value: (r) => csvPretty(r.last_action) },
+    { header: "Last Action At", value: (r) => csvDateTime(r.last_action_at) },
+    { header: "Last Visit Date", value: (r) => csvDate(r.last_visit_date) },
+    { header: "Last Visit Outcome", value: (r) => csvPretty(r.last_visit_outcome) },
+    { header: "Days Since Last Action", value: (r) => r.days_since_action?.toString() ?? "" },
 ];
 
 export const GET = withErrorHandler(async (req: NextRequest) => {
@@ -114,6 +121,8 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
     // filter after the row cap would drop a rep's own leads that sort below the
     // first QUEUE_EXPORT_ROW_CAP rows of a big tab.
     const ownOnly = exportsOwnLeadsOnly(user.role);
+    // ID 199: the Team member pick, like the screen.
+    const scope = ownOnly ? await teamScopeFromParams(user, url.searchParams) : { teamMemberIds: [], member: null };
     const common = {
         tab: parsed.tab,
         userId: user.id,
@@ -127,7 +136,8 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
         ownedBy: ownOnly ? user.id : null,
         // ID 155: a manager's export covers what their table shows — their
         // own leads plus their direct reports'.
-        teamMemberIds: ownOnly ? await teamForOwnScopedViewer(user) : [],
+        teamMemberIds: scope.teamMemberIds,
+        member: scope.member,
     };
 
     const [rows, total] = await Promise.all([
@@ -147,7 +157,7 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
         dataset: `inside_sales_queue:${parsed.tab}`,
         rowCount: rows.length,
         ownOnly,
-        filters: { q: parsed.q ?? null, neodove: parsed.neodove ?? null, callback: parsed.callback ?? null, finalised: parsed.finalised ?? null, past_limit: parsed.past_limit ?? null, format: parsed.format },
+        filters: { q: parsed.q ?? null, neodove: parsed.neodove ?? null, callback: parsed.callback ?? null, finalised: parsed.finalised ?? null, past_limit: parsed.past_limit ?? null, member: scope.member, format: parsed.format },
     });
 
     // Who handed each lead over. Decorated in a SEPARATE, fail-tolerant

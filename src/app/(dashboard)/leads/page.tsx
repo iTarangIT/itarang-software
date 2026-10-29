@@ -71,6 +71,7 @@ import {
   BUSINESS_TYPE_UNSET,
   BUSINESS_TYPE_UNSET_LABEL,
 } from "@/lib/leads/businessType";
+import { TeamMemberFilter, type TeamPerson } from "@/components/leads/TeamMemberFilter";
 
 const ENDED_VISIBLE_MS = 8000;
 const MANUAL_CALL_MAX_MS = 3 * 60 * 1000;
@@ -1189,6 +1190,15 @@ export default function LeadsUnifiedPage() {
   // — this is only so the UI doesn't flash controls it is about to hide.
   // Defaults to all-false so a failed fetch hides actions the API would refuse.
   const [caps, setCaps] = useState(NO_CAPABILITIES);
+  // ID 199: a manager's direct reports — non-empty shows the Team member pick
+  // and the Owner column (their team's leads are in the list since ID 155).
+  const [teamPeople, setTeamPeople] = useState<TeamPerson[]>([]);
+  useEffect(() => {
+    fetch("/api/me/team")
+      .then((r) => r.json())
+      .then((json) => setTeamPeople(json?.data?.people ?? []))
+      .catch(() => {});
+  }, []);
   useEffect(() => {
     let cancelled = false;
     fetch("/api/user/profile")
@@ -1257,6 +1267,7 @@ export default function LeadsUnifiedPage() {
     fromSearchParams(new URLSearchParams(searchParams?.toString() ?? "")),
   );
   const [applied, setApplied] = useState<LeadFilters>(draft);
+  const teamView = teamPeople.length > 0 && draft.member !== "me";
   useEffect(() => {
     const t = window.setTimeout(() => {
       setApplied(draft);
@@ -2168,6 +2179,15 @@ export default function LeadsUnifiedPage() {
           drives the stat cards AND the list from one shared WHERE clause. */}
       {tab === "leads" && (
         <div className="mb-5">
+          {teamPeople.length > 0 && (
+            <div className="mb-2">
+              <TeamMemberFilter
+                people={teamPeople}
+                value={draft.member}
+                onChange={(m) => setFilter("member", m)}
+              />
+            </div>
+          )}
           <LeadsFilterBar
             draft={draft}
             onChange={setFilter}
@@ -2315,7 +2335,8 @@ export default function LeadsUnifiedPage() {
           <LeadsTable
             rows={leads as LeadRow[]}
             loading={leadsLoading}
-            caps={caps}
+            // ID 199: a manager's team view shows whose lead each row is.
+            caps={teamView ? { ...caps, canSeeOwnerAsm: true } : caps}
             hasFilters={hasAnyFilter(draft)}
             selected={selectedLeadIds}
             onToggle={toggleLeadSelected}

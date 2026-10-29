@@ -24,9 +24,12 @@ import { followUpAgeingBasis } from "@/lib/leads/followUpAgeing";
 import { wonWithoutQuote, type QueueRow, type QueueTab } from "@/lib/inside-sales/types";
 import { WonWithoutQuoteChip } from "@/components/leads/won-without-quote-chip";
 import { PastLimitChip } from "@/components/leads/past-limit-chip";
+import { TEAM_REVIEW_COLUMN_COUNT, TeamReviewCells, TeamReviewHeaders } from "@/components/leads/TeamReviewColumns";
 
 type Props = {
     tab: QueueTab;
+    /** ID 199: a manager's team view — adds the review columns. */
+    showReview?: boolean;
     rows: QueueRow[];
     total: number;
     page: number;
@@ -103,9 +106,10 @@ export function LeadQueueTable({
     officeHours,
     leadHrefBase = "/inside-sales/lead",
     selection,
+    showReview = false,
 }: Props) {
     const router = useRouter();
-    const colCount = selection ? 10 : 9;
+    const colCount = (selection ? 10 : 9) + (showReview ? TEAM_REVIEW_COLUMN_COUNT : 0);
     const allOnPageSelected =
         !!selection && rows.length > 0 && rows.every((r) => selection.selected.has(r.id));
     const totalPages = Math.max(1, Math.ceil(total / pageSize));
@@ -150,6 +154,7 @@ export function LeadQueueTable({
                             <th className="text-left px-4 py-3 font-semibold">Last Touch</th>
                             <th className="text-left px-4 py-3 font-semibold">Follow-up</th>
                             <th className="text-right px-4 py-3 font-semibold">Days Idle</th>
+                            {showReview && <TeamReviewHeaders />}
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
@@ -280,6 +285,7 @@ export function LeadQueueTable({
                                             </div>
                                         )}
                                     </td>
+                                    {showReview && <TeamReviewCells row={row} />}
                                 </tr>
                             );
                         })}

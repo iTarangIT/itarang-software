@@ -47,8 +47,8 @@ async function people(settings: { roles: Record<string, boolean> }): Promise<Dig
 function moreHref(list: ReviewListKey, memberId: string, managerRole: Role): string {
   // The one needs-action list a manager may open for their team (needsActionAccess).
   if (list === "field_visit") return `/admin/reports/needs-action/visit_overdue?spoc_id=${encodeURIComponent(memberId)}`;
-  // Their queue lists the team's leads read-only (ID 155) until the team view (ID 199).
-  return managerRole === "asm" ? "/asm" : "/inside-sales";
+  // ID 199: their queue, filtered to that team member (read-only).
+  return `${managerRole === "asm" ? "/asm" : "/inside-sales"}?member=${encodeURIComponent(memberId)}`;
 }
 
 /** One manager's mail. Exported for scripts/verify-sales-daily.ts --my-team. */
