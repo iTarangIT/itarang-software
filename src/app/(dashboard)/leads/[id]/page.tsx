@@ -33,6 +33,7 @@ import { limitPassedEvents } from "@/lib/leads/clocks";
 import { failedSendTimelineEntries, mergeNewestFirst } from "@/lib/leads/quoteSends";
 import { listLeadQuoteSends } from "@/lib/leads/quoteSendsStore";
 import { IvrTag } from "@/components/leads/ivr-tag";
+import { CallbackBriefCard } from "@/components/leads/callback-brief-card";
 import { fetchIvrLeadIds } from "@/lib/ai-dialer/phoneTypeStore";
 
 export const dynamic = "force-dynamic";
@@ -212,6 +213,9 @@ export default async function LeadDetailPage({ params }: any) {
           <ArrowLeft className="w-4 h-4" />
           Back to Leads
         </Link>
+
+        {/* D8 — the promised callback and its brief. */}
+        {lead && <CallbackBriefCard leadId={lead.id} className="mb-4" />}
 
         {/* Header — light CRM card */}
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 mb-6">

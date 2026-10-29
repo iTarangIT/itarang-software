@@ -208,9 +208,39 @@ describe("callbackDueAt", () => {
         );
     });
 
-    it("defaults by owner — AI a day later, sales within 2 hours", () => {
+    it("defaults by owner — AI a day later, sales the next working morning (D8)", () => {
         expect(callbackDueAt({ owner: "ai", now, window: WINDOW })).toEqual(ist("2026-10-24T11:00:00"));
-        expect(callbackDueAt({ owner: "sales", now, window: WINDOW })).toEqual(ist("2026-10-23T13:00:00"));
+        expect(callbackDueAt({ owner: "sales", now, window: WINDOW })).toEqual(ist("2026-10-24T11:00:00"));
+    });
+
+    it("D8 — time words without a clock", () => {
+        // now = Fri 23 Oct 11:00 IST
+        expect(callbackDueAt({ owner: "sales", callbackWhen: "kal shaam", now, window: WINDOW })).toEqual(
+            ist("2026-10-24T17:00:00"),
+        );
+        expect(callbackDueAt({ owner: "sales", callbackWhen: "dopahar mein", now, window: WINDOW })).toEqual(
+            ist("2026-10-23T14:00:00"),
+        );
+        expect(callbackDueAt({ owner: "sales", callbackWhen: "tomorrow", now, window: WINDOW })).toEqual(
+            ist("2026-10-24T11:00:00"),
+        );
+        // "subah" said at 11:00 → tomorrow morning.
+        expect(callbackDueAt({ owner: "sales", callbackWhen: "subah", now, window: WINDOW })).toEqual(
+            ist("2026-10-24T11:00:00"),
+        );
+        // A clock time still wins over the word.
+        expect(callbackDueAt({ owner: "sales", callbackWhen: "kal shaam 6 baje", now, window: WINDOW })).toEqual(
+            ist("2026-10-24T18:00:00"),
+        );
+    });
+
+    it("D8 — a complaint goes to a person, whatever else was said", () => {
+        const r = categorizeCall({
+            campaignStatus: "completed",
+            analysis: a({ callback_topic: "complaint", disqualifier: "not_interested" }),
+        });
+        expect(r.callbackOwner).toBe("sales");
+        expect(r.callbackTopic).toBe("complaint");
     });
 
     it("is always moved into the calling window", () => {

@@ -106,8 +106,10 @@ RULES for each field:
   "pricing" (rate / price / margin / EMI amount), "negotiation" (discount,
   terms, a better deal), "dealership" (becoming a dealer / distributor /
   partnership), "purchase" (placing an order, stock, delivery, buying now),
-  "general_info" (just wants details / a brochure / is busy now), else "none".
-  Pick the most commercial one that applies.
+  "general_info" (just wants details / a brochure / is busy now),
+  "complaint" (he reports a problem with a battery or service he already has
+  — even without asking for a callback), else "none". A complaint wins over
+  every other topic; otherwise pick the most commercial one that applies.
 - wants_human = "yes" only if HE HIMSELF asks to speak to a person — a manager,
   a senior, "someone from the company", a salesperson, a real human — else
   "no". The agent's script itself offers "our sales manager will call you";

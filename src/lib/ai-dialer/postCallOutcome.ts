@@ -51,6 +51,9 @@ import {
     reopenCallback,
     upsertOpenCallback,
 } from "@/lib/ai/storage/callOutcomeStore";
+import type { QualificationSignals } from "@/lib/ai/scoring/signals";
+import { buildCallbackBrief, handOffToIsr, type CallbackKind } from "./callbackLoop";
+import { nextWorkingMorning } from "./callCategory";
 
 export const CALLBACK_NOTIFICATION_TYPE = "lead.callback_requested";
 
@@ -71,6 +74,10 @@ export type PostCallAnalysis = CategoryAnalysis & {
 export type PostCallPlan = {
     cat: CategoryResult;
     callbackDue: Date | null;
+    /** D8 — what the callback is: a promised call, a complaint, or Qualified with no time agreed. */
+    kind?: CallbackKind;
+    /** D8 — the call's signals, for the brief. */
+    signals?: Partial<QualificationSignals> | null;
 };
 
 function rows<T>(r: unknown): T[] {
@@ -97,7 +104,27 @@ export async function preparePostCall(input: {
         analysis: input.analysis,
         analysisFailed: input.analysisFailed,
     });
+    const signals = (input.analysis?.signals ?? null) as Partial<QualificationSignals> | null;
+    // D8 (B-2) — Qualified with no callback agreed is handed to a person too,
+    // due the next working morning; the brief says no time was agreed.
+    if (!cat.callbackOwner && input.analysis?.band === "Qualified" && cat.connected) {
+        try {
+            const won = input.leadId
+                ? rows<{ won: boolean }>(await db.execute(sql`
+                      SELECT COALESCE(lead_status, '') IN ('Won', 'Converted') AS won
+                        FROM dealer_leads WHERE id = ${input.leadId}
+                  `))[0]?.won
+                : false;
+            if (!won) {
+                const due = nextWorkingMorning(input.now ?? new Date(), await defaultRetryWindow());
+                return { cat: { ...cat, callbackOwner: "sales" }, callbackDue: due, kind: "qualified", signals };
+            }
+        } catch (e) {
+            console.warn("[postCallOutcome] qualified hand-off not planned:", e instanceof Error ? e.message : e);
+        }
+    }
     if (!cat.callbackOwner || !input.analysis) return { cat, callbackDue: null };
+    const kind: CallbackKind = cat.callbackTopic === "complaint" ? "complaint" : "sales";
 
     try {
         if (input.leadId) {
@@ -124,10 +151,10 @@ export async function preparePostCall(input: {
             now: input.now ?? new Date(),
             window,
         });
-        return { cat, callbackDue };
+        return { cat, callbackDue, kind, signals };
     } catch (e) {
         console.warn("[postCallOutcome] callback time not resolved:", e instanceof Error ? e.message : e);
-        return { cat, callbackDue: new Date(Date.now() + AI_CALLBACK_REDIAL_GAP_MS) };
+        return { cat, callbackDue: new Date(Date.now() + AI_CALLBACK_REDIAL_GAP_MS), kind, signals };
     }
 }
 
@@ -222,8 +249,12 @@ export async function applyPostCall(input: {
         if (owner === "sales") {
             await handOffSalesCallback({
                 leadId,
+                callbackId: cb?.id ?? null,
                 dueAt: plan.callbackDue,
                 cat,
+                kind: plan.kind ?? "sales",
+                signals: plan.signals ?? null,
+                transcript: input.transcript,
                 band: input.band,
                 summary: input.summary,
                 notify: cb?.created ?? true,
@@ -236,8 +267,12 @@ export async function applyPostCall(input: {
 
 async function handOffSalesCallback(input: {
     leadId: string;
+    callbackId: string | null;
     dueAt: Date;
     cat: CategoryResult;
+    kind: CallbackKind;
+    signals: Partial<QualificationSignals> | null;
+    transcript: string | null;
     band: string | null;
     summary: string | null;
     notify: boolean;
@@ -247,9 +282,14 @@ async function handOffSalesCallback(input: {
 
     // D10 — a callback agreed on an AI call is a sales-ready event for any band
     // except Disqualified (a dealer outside our lines who still asked for a
-    // person is handed to sales, but is not counted ready).
+    // person is handed to sales, but is not counted ready). A Qualified lead
+    // with no callback keeps its own reason (ai_qualified, set by the finalizer).
     if (input.band !== "Disqualified") {
-        await markSalesReady(db, { leadId, reason: "ai_callback", actorId: null });
+        await markSalesReady(db, {
+            leadId,
+            reason: input.kind === "qualified" ? "ai_qualified" : "ai_callback",
+            actorId: null,
+        });
     }
 
     // The follow-up date the rep queues already sort by. Moved EARLIER only — a
@@ -267,6 +307,37 @@ async function handOffSalesCallback(input: {
             ...(cat.wantsHuman ? { interest_level: aiInterestLevelSql("hot") } : {}),
         })
         .where(sql`${dealerLeads.id} = ${leadId}`);
+
+    // D8 — one named ISR owns it: assigned, told with the brief, reminded and
+    // chased by the 5-minute tick (callbackLoop.ts). Falls through to the
+    // admin bell below only when nobody could be picked (no E-362, or an empty
+    // "callback owners" list on an unowned lead).
+    if (input.callbackId) {
+        const info = rows<{ shop: string | null; city: string | null; phone: string | null }>(await db.execute(sql`
+            SELECT COALESCE(shop_name, dealer_name) AS shop, city, phone FROM dealer_leads WHERE id = ${leadId}
+        `))[0];
+        const brief = buildCallbackBrief({
+            kind: input.kind,
+            shop: info?.shop ?? null,
+            city: info?.city ?? null,
+            leadPhone: info?.phone ?? null,
+            productLines: input.signals?.product_lines ?? [],
+            volumeEvidence: input.signals?.evidence?.volume_shared ?? null,
+            callbackWhen: input.signals?.callback_when ?? null,
+            dueAt,
+            transcript: input.transcript,
+            summary: input.summary,
+        });
+        const isr = await handOffToIsr({
+            leadId,
+            callbackId: input.callbackId,
+            kind: input.kind,
+            dueAt,
+            brief,
+            notify: input.notify,
+        });
+        if (isr) return;
+    }
 
     if (!input.notify) return;
     const lead = rows<{ name: string | null; owner_id: string | null; owner_role: string | null }>(await db.execute(sql`

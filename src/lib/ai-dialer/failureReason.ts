@@ -266,6 +266,10 @@ const ENROL_SKIP_LABELS: Record<string, { label: string; hint: string }> = {
         label: "Skipped, IVR number",
         hint: "An earlier call to this number reached a company IVR or hold message.",
     },
+    skipped_open_callback: {
+        label: "Skipped, callback promised",
+        hint: "Priya promised this dealer a call from a person; the AI does not ring him until it is done.",
+    },
     skipped_dead_number: {
         label: "Skipped, dead number",
         hint: "An earlier call to this number was told it does not exist.",

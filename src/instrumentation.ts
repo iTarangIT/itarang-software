@@ -45,6 +45,7 @@ export async function register() {
       startLeadClocksTicker,
       startInvoiceFreshnessTicker,
       startStockUploadSweepTicker,
+      startCallbackLoopTicker,
     } = await import("./instrumentation-node");
     // ID 125 — every ticker runs as a named job. Its timers inherit the job
     // context, so the email / WhatsApp / Telegram senders drop what a job tries
@@ -77,6 +78,9 @@ export async function register() {
     await runAsJob("invoice-freshness", startInvoiceFreshnessTicker);
     // ID 174 — "Stock to upload" tasks: re-check + escalate, hourly (kickoff 250s out).
     await runAsJob("stock-upload-sweep", startStockUploadSweepTicker);
+    // D8 — AI-call callbacks: reminder / NeoDove push 15 min before, escalation
+    // 30 min overdue, every 5 minutes (kickoff 255s out).
+    await runAsJob("callback-loop", startCallbackLoopTicker);
     await runAsJob("recording-transcription", startRecordingTranscriptionTicker);
     await runAsJob("drive-mirror", startDriveMirrorTicker);
     // E-280 — Drive sales-invoice scan. Kickoff staggered 195s out, the last

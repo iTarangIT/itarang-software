@@ -227,6 +227,9 @@ export async function fetchKpis(f: DashboardFilters): Promise<AdminKpis> {
                 SELECT COUNT(*)::text AS c
                 FROM dealer_lead_status_history h
                 WHERE h.changed_at >= NOW() - INTERVAL '30 days'
+                  -- D8: a status the SYSTEM moved (an assignment after an AI
+                  -- call) owes no human a log entry.
+                  AND COALESCE(h.changed_by, '') <> 'system'
                   AND NOT EXISTS (
                     SELECT 1 FROM lead_touchpoints t
                     WHERE t.dealer_lead_id = h.dealer_lead_id

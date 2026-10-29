@@ -496,7 +496,15 @@ export async function writeTouchpoint(
   // caller-owned tx the touchpoint may still roll back, so this only runs on
   // the self-committed path.
   const closesLead = !!input.statusChange && isTerminal(input.statusChange.to);
-  if (!opts?.tx && input.performedBy && (isConversationTouchpoint(input.touchpointType) || closesLead)) {
+  // D8 — a call that did not connect is not the callback: it is re-tried
+  // (callbackLoop.noteNeodoveCallForCallback), not closed.
+  const unansweredCall =
+    input.touchpointType === "inside_sales_call" && !!input.callStatus && input.callStatus !== "connected";
+  if (
+    !opts?.tx &&
+    input.performedBy &&
+    ((isConversationTouchpoint(input.touchpointType) && !unansweredCall) || closesLead)
+  ) {
     void settleCallbacksForLeadWork(input.dealerLeadId, input.performedBy, {
       terminal: closesLead,
       note: closesLead ? `Lead closed (${input.statusChange!.to}).` : `Rep logged a ${input.touchpointType.replace(/_/g, " ")}.`,

@@ -65,6 +65,9 @@ export const CALLBACK_TOPICS = [
   "negotiation",
   "dealership",
   "purchase",
+  // D8 — a problem with a battery / service he already has. Not a sales lead:
+  // a person takes it, labelled Complaint, and nobody pitches.
+  "complaint",
 ] as const;
 
 export type YesNo = (typeof YES_NO)[number];

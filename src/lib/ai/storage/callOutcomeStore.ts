@@ -304,15 +304,25 @@ export async function openCallbackForLead(leadId: string): Promise<{
     summary: string | null;
     source_call_id: string | null;
     created_at: string;
+    /** D8 (E-362) — sales | complaint | qualified; null without E-362. */
+    kind: string | null;
+    /** D8 — the call brief (callbackLoop.CallbackBrief); null without E-362. */
+    brief: unknown;
+    /** D8 — the ISR it was given to. */
+    assigned_name: string | null;
 } | null> {
     if (!(await hasCallOutcomeTables())) return null;
     try {
         const r = rows<NonNullable<Awaited<ReturnType<typeof openCallbackForLead>>>>(await db.execute(sql`
-            SELECT id, owner_type, status, topic, category, requested_text, due_at::text AS due_at,
-                   (due_at < now()) AS overdue,
-                   attempts, summary, source_call_id, created_at::text AS created_at
-              FROM lead_callbacks
-             WHERE lead_id = ${leadId} AND status IN ('open', 'dialing')
+            SELECT lc.id, lc.owner_type, lc.status, lc.topic, lc.category, lc.requested_text,
+                   lc.due_at::text AS due_at, (lc.due_at < now()) AS overdue,
+                   lc.attempts, lc.summary, lc.source_call_id, lc.created_at::text AS created_at,
+                   -- D8 columns through to_jsonb: safe on a database without E-362.
+                   to_jsonb(lc) ->> 'kind' AS kind,
+                   to_jsonb(lc) -> 'brief' AS brief,
+                   (SELECT u.name FROM users u WHERE u.id::text = lc.assigned_user_id) AS assigned_name
+              FROM lead_callbacks lc
+             WHERE lc.lead_id = ${leadId} AND lc.status IN ('open', 'dialing')
              LIMIT 1
         `));
         return r[0] ?? null;

@@ -102,6 +102,7 @@ const NO_ENROL_SKIPS = (): Record<EnrolSkip, number> => ({
   duplicate_number: 0,
   switchboard: 0,
   dead_number: 0,
+  open_callback: 0,
 });
 
 export async function createCampaign(opts: {
@@ -169,10 +170,18 @@ export async function createCampaign(opts: {
     }
     // D7 — numbers an earlier call found to be a switchboard or dead.
     const observed = await observedNumbers([...leadInfo.values()].map((l) => l.phone));
+    // D8 — a lead with an open promised callback is a person's to call.
+    const { leadsWithOpenCallback } = await import("@/lib/ai-dialer/callbackLoop");
+    const promised = await leadsWithOpenCallback(enrolIds);
     const plan = planEnrolment(
       enrolIds.map((id) => {
         const info = leadInfo.get(id) ?? { phone: null, name: null };
-        return { id, ...info, observed: observed.get(phoneKey(info.phone) ?? "") ?? null };
+        return {
+          id,
+          ...info,
+          observed: observed.get(phoneKey(info.phone) ?? "") ?? null,
+          openCallback: promised.has(id),
+        };
       }),
     );
     await recordPhoneTypes(

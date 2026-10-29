@@ -40,4 +40,5 @@ export const SIGNAL_SCHEMA_VERSION = "signals-2.3.0";
 // calibration examples change — this is the Lever-A (extraction-side)
 // counterpart to SCORING_VERSION, so an audit can tell whether a signal shift
 // came from a new prompt or a new band rule.
-export const EXTRACTION_VERSION = "extract-2.3.0";
+// extract-2.3.1 (D8): callback_topic "complaint" — a problem with a battery / service he has.
+export const EXTRACTION_VERSION = "extract-2.3.1";
