@@ -164,6 +164,8 @@ interface PreviewResponse {
     byReason: Record<string, number>;
   };
   totalWithPhone?: number;
+  // ID 207 — still in the queue, but createCampaign will leave them out.
+  skipped?: { total: number; text: string | null };
   queueIds: string[];
   queue: DialerQueueItem[];
 }
@@ -202,6 +204,10 @@ export function DialerStartModal({
     byReason: Record<string, number>;
   }>({ total: 0, byReason: {} });
   const [totalWithPhone, setTotalWithPhone] = useState(0);
+  const [skipped, setSkipped] = useState<{ total: number; text: string | null }>({
+    total: 0,
+    text: null,
+  });
   const [queue, setQueue] = useState<DialerQueueItem[]>([]);
   // E-254 — the calling window. Seeded from assignment_config by
   // useScheduleDefaults below; mode starts at "now" so the modal behaves
@@ -274,11 +280,13 @@ export function DialerStartModal({
         if (json.success) {
           setCounts(json.counts);
           setExcluded(json.excluded ?? { total: 0, byReason: {} });
+          setSkipped(json.skipped ?? { total: 0, text: null });
           setTotalWithPhone(json.totalWithPhone ?? 0);
           setQueue(json.queue ?? []);
         } else {
           setCounts({ ...EMPTY_COUNTS });
           setExcluded({ total: 0, byReason: {} });
+          setSkipped({ total: 0, text: null });
           setTotalWithPhone(0);
           setQueue([]);
         }
@@ -286,6 +294,7 @@ export function DialerStartModal({
         if (myId === reqIdRef.current) {
           setCounts({ ...EMPTY_COUNTS });
           setExcluded({ total: 0, byReason: {} });
+          setSkipped({ total: 0, text: null });
           setTotalWithPhone(0);
           setQueue([]);
         }
@@ -672,6 +681,15 @@ export function DialerStartModal({
                   .filter(([, n]) => n > 0)
                   .map(([reason, n]) => `${n} ${excludedReasonLabel(reason)}`)
                   .join(" · ")}
+              </div>
+            )}
+
+            {!previewing && skipped.total > 0 && (
+              <div className="mb-4 -mt-2 text-[11px] text-gray-500">
+                <span className="font-medium text-gray-600">
+                  skipped: {skipped.total}
+                </span>{" "}
+                ({skipped.text}) — left out when the campaign starts
               </div>
             )}
 

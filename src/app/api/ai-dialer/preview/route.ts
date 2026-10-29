@@ -22,6 +22,7 @@ import {
   resolveDialerAudience,
   type AudienceSelection,
 } from "@/lib/ai-dialer/audience";
+import { previewEnrolSkips } from "@/lib/ai-dialer/enrolPreview";
 import { requireRole } from "@/lib/auth-utils";
 import { LEADS_OVERSIGHT_ROLES } from "@/lib/leads/access";
 
@@ -51,11 +52,16 @@ export async function POST(req: NextRequest) {
     };
 
     const result = await resolveDialerAudience(selection);
+    // ID 207 — the leads enrolment will leave out of this queue (not a mobile,
+    // showroom, duplicate number, switchboard / dead, a callback a person
+    // owes). Still in queueIds: createCampaign applies the same rules.
+    const skipped = await previewEnrolSkips(result.queue);
 
     return NextResponse.json({
       success: true,
       counts: result.counts,
       excluded: result.excluded,
+      skipped,
       totalWithPhone: result.totalWithPhone,
       aiConnectedCount: result.aiConnectedCount,
       queueIds: result.queueIds,

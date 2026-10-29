@@ -15,7 +15,7 @@
 //      or "… Showroom" is a two-wheeler showroom, not a battery dealer. "Motors"
 //      is deliberately NOT on the list: many genuine e-rickshaw dealers are
 //      "X Motors". A name that also says battery / e-rickshaw / inverter / solar
-//      is kept.
+//      / EV / lithium / electric / ESS / energy / Toto is kept (ID 207).
 //   3. One dial per number per campaign (D7), compared on the last 10 digits
 //      like the ID 81 duplicate check. The first lead in queue order is kept.
 
@@ -80,7 +80,12 @@ export function phoneKey(raw: string | null | undefined): string | null {
 
 const SHOWROOM_RE =
     /\b(?:tvs|hero\s*moto\s*corp|euler|bajaj\s+auto|honda|ather|ola(?:\s+electric)?|showroom)\b/i;
-const DEALER_WORDS_RE = /batter(?:y|ies)|e[\s-]?rick?shaw|inverter|solar/i;
+// ID 207 (Kartik, 28 Oct): two-wheeler EV and ESS dealers are in range, so a
+// name that also says EV / lithium / electric / ESS / BESS / energy / Toto or
+// any rickshaw spelling (rickshaw, rikshaw, riksha) is kept. EV and ESS are
+// whole words so "Seva" and "Express" do not count.
+const DEALER_WORDS_RE =
+    /batter(?:y|ies)|ric?ksha|inverter|solar|lithium|electric|energy|\btoto\b|\bevs?\b|\bb?ess\b/i;
 
 /** A two-wheeler / vehicle showroom by its listing title. */
 export function isVehicleShowroom(name: string | null | undefined): boolean {
