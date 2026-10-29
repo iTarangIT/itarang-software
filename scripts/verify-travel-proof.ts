@@ -1,15 +1,17 @@
 // ID 197 pilot sheet — travel proof for 2 ASMs, every working day of a month.
 //
-//   node --import tsx --env-file=.env.local scripts/verify-travel-proof.ts [--month=2026-10] [--asm=<email or id> ...]
+//   node --import tsx --env-file=.env.local scripts/verify-travel-proof.ts [--month=2026-10] [--asm=<email or id> ...] [--csv=<file>]
 //
 // For each ASM (default: the two ASMs with the most visits in the month) and
 // each working day (Mon–Sat) of the month, prints the verdict the submit form
 // would show — Supported (a verified visit that day, ID 196) or Not supported —
-// with verified / unverified visits, cities and calls. Uses the real
+// with verified / unverified visits, cities and calls (--csv also writes the
+// sheet, one row per ASM per day). Uses the real
 // dayEvidence() the form and the CEO's Day evidence use. Writes nothing.
 // Visits before E-363 are all unverified, so October reads mostly Not
 // supported: that is the point of the pilot (what the rule would have said).
 
+import { writeFileSync } from "node:fs";
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { dayEvidence } from "@/lib/expenses/travelProofStore";
@@ -20,6 +22,11 @@ async function main() {
     const args = process.argv.slice(2);
     const month = args.find((a) => a.startsWith("--month="))?.slice(8) ?? "2026-10";
     const wanted = args.filter((a) => a.startsWith("--asm=")).map((a) => a.slice(6));
+    const csvPath = args.find((a) => a.startsWith("--csv="))?.slice(6);
+    const csv: string[] = ["ASM,Day,Verdict,Verified visits,Not verified visits,Calls,First visit (IST),Last visit (IST),Cities"];
+    const q = (s: string) => `"${s.replace(/"/g, '""')}"`;
+    const ist = (ts: string | null) =>
+        ts ? new Date(ts).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit" }) : "";
     const first = `${month}-01`;
 
     const asms = wanted.length
@@ -58,11 +65,20 @@ async function main() {
             const ev = await dayEvidence(a.id, day);
             if (ev.verdict === "supported") supported++;
             const ver = ev.visits.filter((v) => v.verified).length;
+            csv.push(
+                [q(a.name), day, ev.verdict === "supported" ? "Supported" : "Not supported", ver, ev.visits.length - ver, ev.calls,
+                 ist(ev.first_visit_at), ist(ev.last_visit_at), q(ev.cities.join(", "))].join(","),
+            );
             console.log(
                 `  ${day}  ${(ev.verdict === "supported" ? "Supported" : "Not supported").padEnd(14)}  ${String(ver).padStart(8)}  ${String(ev.visits.length - ver).padStart(12)}  ${String(ev.calls).padStart(5)}  ${ev.cities.join(", ")}`,
             );
         }
         console.log(`  → ${supported} of ${days.length} working days supported`);
+    }
+    if (csvPath) {
+        // BOM so Excel reads the names as UTF-8.
+        writeFileSync(csvPath, "﻿" + csv.join("\r\n") + "\r\n", "utf8");
+        console.log(`\nSheet written: ${csvPath}`);
     }
 }
 

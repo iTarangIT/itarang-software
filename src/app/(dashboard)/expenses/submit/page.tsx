@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { onFreshFileClick } from "@/lib/storage/freshFileLink";
 import { TravelDaysPicker, travelDaysReady, type PickedDay } from "@/components/expenses/TravelDaysPicker";
 import { needsTravelProof } from "@/lib/expenses/travelProof";
+import { TravelProofPanel } from "@/components/expenses/TravelProofPanel";
 const CATEGORIES = [
   "Travel",
   "Office",
@@ -29,6 +30,8 @@ interface Submission {
   rejection_reason: string | null;
   created_at: string;
   approved_at: string | null;
+  /** ID 197: claimed travel days' summary; null for other claims. */
+  travel_proof?: { summary: string } | null;
 }
 
 function StatusBadge({ status }: { status: Submission["status"] }) {
@@ -59,6 +62,8 @@ export default function SubmitExpensePage() {
   // ID 197: the day(s) a Travel / Vehicle/Fuel claim covers.
   const [travelDays, setTravelDays] = useState<PickedDay[]>([]);
   const isTravel = needsTravelProof(category);
+  // ID 197: the submitter's own Day evidence, opened from My Submissions.
+  const [proofFor, setProofFor] = useState<string | null>(null);
 
   const { data: mineRaw, isLoading } = useQuery({
     queryKey: ["expenses-mine"],
@@ -254,7 +259,8 @@ export default function SubmitExpensePage() {
                     <th className="py-2 pr-4 font-semibold">Category</th>
                     <th className="py-2 pr-4 font-semibold">Amount</th>
                     <th className="py-2 pr-4 font-semibold">Status</th>
-                    <th className="py-2 font-semibold">Bill</th>
+                    <th className="py-2 pr-4 font-semibold">Bill</th>
+                    <th className="py-2 font-semibold">Travel proof</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -273,7 +279,7 @@ export default function SubmitExpensePage() {
                           <p className="text-[10px] text-rose-600 mt-1">{s.rejection_reason}</p>
                         )}
                       </td>
-                      <td className="py-3 text-xs">
+                      <td className="py-3 pr-4 text-xs">
                         {s.bill_url ? (
                           <a
                             href={s.bill_url}
@@ -284,6 +290,19 @@ export default function SubmitExpensePage() {
                           >
                             View
                           </a>
+                        ) : (
+                          <span className="text-gray-300">—</span>
+                        )}
+                      </td>
+                      <td className="py-3 text-xs">
+                        {s.travel_proof ? (
+                          <button
+                            type="button"
+                            onClick={() => setProofFor(s.id)}
+                            className="text-brand-600 hover:underline font-semibold text-left"
+                          >
+                            {s.travel_proof.summary}
+                          </button>
                         ) : (
                           <span className="text-gray-300">—</span>
                         )}
@@ -330,12 +349,22 @@ export default function SubmitExpensePage() {
                       <span className="text-xs text-gray-300">No bill</span>
                     )}
                   </div>
+                  {s.travel_proof && (
+                    <button
+                      type="button"
+                      onClick={() => setProofFor(s.id)}
+                      className="mt-2 text-xs text-brand-600 hover:underline font-semibold"
+                    >
+                      Travel proof: {s.travel_proof.summary}
+                    </button>
+                  )}
                 </div>
               ))}
             </div>
           </>
         )}
       </div>
+      {proofFor && <TravelProofPanel expenseId={proofFor} onClose={() => setProofFor(null)} />}
     </div>
   );
 }
