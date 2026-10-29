@@ -172,3 +172,49 @@ export async function retryMsg91Otp(params: {
     return { success: false, messageId: null, error: msg, raw: null };
   }
 }
+
+// ─── MSG91 Flow (ordinary transactional SMS) ───────────────────────────────
+// Tracker ID 204 — EMI messages. A Flow template is created in MSG91 against
+// the DLT-registered text, its variables written ##name##, ##amount## … The
+// caller passes the same names here. Same "skipped when not configured"
+// contract as the OTP sender. Scheduled jobs off the live site send nothing
+// (ID 125), like every other channel.
+
+export async function sendMsg91Flow(p: {
+  mobile_number: string;
+  /** MSG91 Flow template id. */
+  template_id: string;
+  /** Template variables by name (without the ##). */
+  variables: Record<string, string>;
+}): Promise<SendSmsResult> {
+  const { suppressJobSend } = await import("./runtime/liveSite");
+  if (suppressJobSend("sms")) {
+    return { success: false, skipped: true, messageId: null, error: "not_live_site", raw: null };
+  }
+  const key = authKey();
+  if (!key || !p.template_id?.trim()) {
+    return { success: false, skipped: true, messageId: null, error: "msg91_disabled", raw: null };
+  }
+  const digits = p.mobile_number.replace(/\D/g, "").slice(-10);
+  if (digits.length !== 10) {
+    return { success: false, messageId: null, error: `invalid_mobile:${p.mobile_number}`, raw: null };
+  }
+  try {
+    const res = await fetch(`${BASE_URL}/flow`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", accept: "application/json", authkey: key },
+      body: JSON.stringify({
+        template_id: p.template_id.trim(),
+        short_url: "0",
+        recipients: [{ mobiles: `${countryCode()}${digits}`, ...p.variables }],
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    const ok = res.ok && String(data?.type ?? "").toLowerCase() === "success";
+    // On success MSG91 puts the request id in `message`; delivery reports carry it.
+    const messageId = ok ? String(data?.message ?? data?.request_id ?? "") || null : null;
+    return { success: ok, messageId, error: ok ? null : data?.message ?? `HTTP ${res.status}`, raw: data };
+  } catch (err) {
+    return { success: false, messageId: null, error: err instanceof Error ? err.message : "network_error", raw: null };
+  }
+}

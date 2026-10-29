@@ -343,6 +343,13 @@ export async function updateDeliveryStatus(event: InboundEvent): Promise<void> {
     .update(whatsappMessages)
     .set({ delivery_status: event.deliveryStatus })
     .where(eq(whatsappMessages.provider_message_id, event.providerMessageId));
+  // ID 204: an EMI message to a customer (emi_customer_messages, E-365).
+  try {
+    const { applyEmiDelivery } = await import("@/lib/emi-messages/store");
+    await applyEmiDelivery(event.providerMessageId, event.deliveryStatus);
+  } catch (err) {
+    console.warn("[whatsapp] EMI message status not recorded:", err instanceof Error ? err.message : err);
+  }
 }
 
 /** Run one conversation turn for a dealer message. */

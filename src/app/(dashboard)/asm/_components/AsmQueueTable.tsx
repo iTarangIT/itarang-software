@@ -22,6 +22,7 @@ import { IntentBadge } from "@/app/(dashboard)/inside-sales/_components/IntentBa
 import { InterestChip } from "@/app/(dashboard)/inside-sales/_components/InterestChip";
 import { OwnerIndicator } from "@/app/(dashboard)/inside-sales/_components/OwnerIndicator";
 import { SentByStamp } from "@/components/leads/sent-by-stamp";
+import { TEAM_REVIEW_COLUMN_COUNT, TeamReviewCells, TeamReviewHeaders } from "@/components/leads/TeamReviewColumns";
 import { VISIT_OUTCOME_LABELS } from "@/lib/asm/types";
 import { businessTypeLabel, businessTypeTone } from "@/lib/leads/businessType";
 import type {
@@ -33,6 +34,8 @@ import type {
 
 type Props = {
     tab: AsmQueueTab;
+    /** ID 199: a manager's team view — adds the review columns. */
+    showReview?: boolean;
     rows: AsmQueueRow[];
     total: number;
     page: number;
@@ -117,9 +120,10 @@ export function AsmQueueTable({
     viewerId,
     onClaim,
     selection,
+    showReview = false,
 }: Props) {
     const router = useRouter();
-    const colCount = selection ? 10 : 9;
+    const colCount = (selection ? 10 : 9) + (showReview ? TEAM_REVIEW_COLUMN_COUNT : 0);
     // Header checkbox reflects the CLAIMABLE rows only — on Territory Feed an
     // owned row has no box, so it must not keep the header from reading "all".
     const claimableRows = rows.filter((r) => !r.current_owner_id);
@@ -164,6 +168,7 @@ export function AsmQueueTable({
                             <th className="text-left px-4 py-3 font-semibold">Scheduled</th>
                             <th className="text-left px-4 py-3 font-semibold">Interest / AI</th>
                             <th className="text-left px-4 py-3 font-semibold">Owner</th>
+                            {showReview && <TeamReviewHeaders />}
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
@@ -316,6 +321,12 @@ export function AsmQueueTable({
                                             </Button>
                                         )}
                                     </td>
+                                    {showReview && (
+                                        <TeamReviewCells
+                                            row={row}
+                                            outcomeLabel={(o) => VISIT_OUTCOME_LABELS[o as VisitOutcome] ?? o}
+                                        />
+                                    )}
                                 </tr>
                             );
                         })}

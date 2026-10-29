@@ -100,6 +100,12 @@ export type LeadFilters = {
     readyNoOwner: "" | "1";
     /** With readyNoOwner: "" | hot | ai | other (the card's split). URL: ready_split. */
     readySplit: string;
+    /**
+     * ID 199: a manager's Team member pick — "" (whole team), "me", or a
+     * direct report's id. URL: member. The API ignores it for anyone without
+     * a team.
+     */
+    member: string;
 };
 
 export const EMPTY_FILTERS: LeadFilters = {
@@ -109,6 +115,7 @@ export const EMPTY_FILTERS: LeadFilters = {
     scoreMin: "",
     scoreMax: "",
     ownerId: "",
+    member: "",
     asmId: "",
     source: "",
     sourceDoor: "",
@@ -192,6 +199,7 @@ export function toSearchParams(
     if (f.scoreMin) p.set("score_min", f.scoreMin);
     if (f.scoreMax) p.set("score_max", f.scoreMax);
     if (f.ownerId) p.set("owner_id", f.ownerId);
+    if (f.member) p.set("member", f.member);
     if (f.asmId) p.set("asm_id", f.asmId);
     if (f.source) p.set("source", f.source);
     if (f.sourceDoor) p.set("source_door", f.sourceDoor);
@@ -236,6 +244,7 @@ export function fromSearchParams(sp: URLSearchParams): LeadFilters {
         scoreMin: sp.get("score_min") ?? "",
         scoreMax: sp.get("score_max") ?? "",
         ownerId: sp.get("owner_id") ?? "",
+        member: sp.get("member") ?? "",
         asmId: sp.get("asm_id") ?? "",
         source: sp.get("source") ?? "",
         sourceDoor: sp.get("source_door") ?? "",

@@ -10,7 +10,7 @@ import { countAsmFinalisedNotWon, countAsmQueueRows, fetchAllAsmTabCounts } from
 import { hasLeadClocks, pastALimitSql } from "@/lib/leads/clocks";
 import { sql } from "drizzle-orm";
 import { readAsmQueueFilters } from "@/lib/asm/queueFilterParams";
-import { teamForOwnScopedViewer } from "@/lib/users/team";
+import { teamScopeFromParams } from "@/lib/users/team";
 
 export const dynamic = "force-dynamic";
 
@@ -31,12 +31,15 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
     const filters = readAsmQueueFilters(sp);
     // 18 Oct row 34 — the "Past a limit" predicate, only where lead_clocks exists.
     const past = (await hasLeadClocks()) ? pastALimitSql(sql`dl.id`) : null;
+    // ID 199: the Team member pick narrows the badges like the table.
+    const { teamMemberIds, member } = await teamScopeFromParams(user, sp);
     const [counts, finalisedNotWon, pastLimitCount] = await Promise.all([
         // ID 155: a manager's own-tab badges include the team, like the table.
         fetchAllAsmTabCounts(user.id, {
             ...filters,
             pastLimit: sp.get("past_limit") === "1" ? (past ?? sql`FALSE`) : null,
-            teamMemberIds: await teamForOwnScopedViewer(user),
+            teamMemberIds,
+            member,
         }),
         countAsmFinalisedNotWon(user.id),
         past ? countAsmQueueRows({ tab: "my_visits", asmId: user.id, pastLimit: past }).catch(() => 0) : Promise.resolve(0),

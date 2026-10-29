@@ -363,6 +363,13 @@ function nbfcSettingsSubnav(idPrefix: string) {
         icon: Timer,
         href: "/admin/settings/nbfc-request-sla",
       },
+      {
+        // ID 204 — EMI follow-up / "EMI received" messages to customers.
+        id: `${idPrefix}-nbfc-emi-messages`,
+        label: "EMI messages",
+        icon: MessageSquare,
+        href: "/admin/settings/emi-messages",
+      },
     ],
   };
 }
@@ -446,6 +453,16 @@ function targetsPendingDigestItem(idPrefix: string) {
     label: "Targets Pending Report",
     icon: MailCheck,
     href: "/admin/settings/targets-pending",
+  };
+}
+
+// ID 204 — the daily line per lender for the EMI messages to customers.
+function emiMessagesDigestItem(idPrefix: string) {
+  return {
+    id: `${idPrefix}-emi-messages-digest`,
+    label: "EMI Messages Report",
+    icon: MailCheck,
+    href: "/admin/settings/emi-messages-daily",
   };
 }
 
@@ -561,6 +578,7 @@ const ROLE_TRAILING_SECTIONS: Record<string, any[]> = {
         salesDailyDigestItem("sh"),
         idleWeeklyDigestItem("sh"),
         targetsPendingDigestItem("sh"),
+        emiMessagesDigestItem("sh"),
         myDayDigestItem("sh"),
         buybackDailyDigestItem("sh"),
         loanProductSettingsItem("sh"),
@@ -1716,6 +1734,7 @@ const roleNavigation: Record<string, any[]> = {
         salesDailyDigestItem("admin"),
         idleWeeklyDigestItem("admin"),
         targetsPendingDigestItem("admin"),
+        emiMessagesDigestItem("admin"),
         myDayDigestItem("admin"),
         buybackDailyDigestItem("admin"),
         timeLimitsItem("admin"),

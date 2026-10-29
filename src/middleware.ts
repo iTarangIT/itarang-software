@@ -527,6 +527,9 @@ export async function middleware(request: NextRequest) {
     path.startsWith("/provisions") ||
     path.startsWith("/disputes") ||
     path.startsWith("/expenses") ||
+    // ID 196 — the camera + live-location visit page (WhatsApp "log visit"
+    // links here). Signed in only; the page checks the lead / counter.
+    path.startsWith("/visits") ||
     // /profile is every role's own account page. It is deliberately NOT in
     // roleDashboards — those values also drive the "wrong role → bounce to your
     // own dashboard" check below, so a /profile entry keyed to one role would

@@ -1,6 +1,8 @@
 import { requireRole } from "@/lib/auth-utils";
 import { EcofyMyLeadsCard } from "@/components/ecofy/pages";
 import { QueueView } from "./_components/QueueView";
+import { exportsOwnLeadsOnly } from "@/lib/leads/access";
+import { getTeamPeople } from "@/lib/users/team";
 
 export const dynamic = "force-dynamic";
 
@@ -17,6 +19,8 @@ export default async function InsideSalesQueuePage() {
         "sales_head",
         "business_head",
     ]);
+    // ID 199: an ISR who manages ISRs gets the Team member pick.
+    const teamPeople = exportsOwnLeadsOnly(user.role) ? await getTeamPeople(user.id) : [];
 
     return (
         <div className="px-6 md:px-8 py-6 space-y-5 max-w-[1600px]">
@@ -32,7 +36,7 @@ export default async function InsideSalesQueuePage() {
             </header>
             {/* E-307 — Ecofy leads the Sales Head assigned to this rep. */}
             <EcofyMyLeadsCard href="/inside-sales/ecofy-leads" />
-            <QueueView viewerId={user.id} viewerRole={user.role} />
+            <QueueView viewerId={user.id} viewerRole={user.role} teamPeople={teamPeople} />
         </div>
     );
 }

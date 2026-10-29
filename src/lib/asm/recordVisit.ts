@@ -14,16 +14,30 @@
 //
 // Ownership is the CALLER's job (assertOwner before calling), exactly as it was
 // in the route: this function records, it does not authorise.
+//
+// ID 196: a done visit CLOSES the lead's booked visit instead of sitting next
+// to it — the open scheduled / pending row (on or before the visit day) becomes
+// the visit, and any older open ones are cancelled. Before, nothing ever closed
+// a plan, so My day kept it as "Visit overdue" and the Planned counts grew.
+// A verified visit (`capture`, E-363) takes its photo, location and date (the
+// IST day the photo reached the server) from the capture.
 
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { leadVisits } from "@/lib/db/schema";
 import { writeTouchpoint, type WriteTouchpointInput } from "@/lib/touchpoints/write";
 import { ENGAGED_OUTCOMES, type VisitInput } from "@/lib/asm/types";
+import { istDay } from "@/lib/visits/verifiedCapture";
+import { applyCaptureToVisit, type VisitCapture } from "@/lib/visits/verifiedStore";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
-export type RecordVisitInput = VisitInput & { leadId: string; asmId: string };
+export type RecordVisitInput = VisitInput & {
+    leadId: string;
+    asmId: string;
+    /** ID 196: the verified camera photo + live location (checked by the caller). */
+    capture?: VisitCapture | null;
+};
 
 export type RecordVisitResult = {
     visitId: string | null;
@@ -158,13 +172,34 @@ export async function recordVisit(
     input: RecordVisitInput,
     opts?: { tx?: Tx },
 ): Promise<RecordVisitResult> {
-    const plan = planVisit(input, new Date().toISOString().slice(0, 10));
+    const today = istDay(new Date());
+    const capture = input.capture ?? null;
+    const plan = planVisit(
+        capture
+            ? {
+                  ...input,
+                  // The capture decides where and when — never the form.
+                  actual_visit_date: istDay(new Date(capture.captured_at)),
+                  photos: [capture.photo_url],
+                  gps_check_in_lat: capture.gps_lat,
+                  gps_check_in_lng: capture.gps_lng,
+              }
+            : input,
+        today,
+    );
 
     const run = async (tx: Tx): Promise<RecordVisitResult> => {
-        const inserted = await tx
-            .insert(leadVisits)
-            .values({ ...plan.visitRow, photos: plan.visitRow.photos as never })
-            .returning({ visit_id: leadVisits.visit_id });
+        const visitId =
+            input.visit_status === "visited"
+                ? await closeBookedVisit(tx, input.leadId, plan.visitRow)
+                : null;
+        const inserted = visitId
+            ? [{ visit_id: visitId }]
+            : await tx
+                  .insert(leadVisits)
+                  .values({ ...plan.visitRow, photos: plan.visitRow.photos as never })
+                  .returning({ visit_id: leadVisits.visit_id });
+        if (capture && inserted[0]?.visit_id) await applyCaptureToVisit(tx, inserted[0].visit_id, capture);
         await writeTouchpoint(plan.touchpoint, { tx });
         const scheduled = plan.scheduled
             ? await scheduleVisit(plan.scheduled, { tx })
@@ -173,4 +208,57 @@ export async function recordVisit(
     };
 
     return opts?.tx ? run(opts.tx) : db.transaction(run);
+}
+
+/**
+ * ID 196: a done visit takes over the lead's open booked visit (scheduled or
+ * pending scheduling, booked for the visit day or earlier, or not yet dated)
+ * — the newest one becomes the visit, keeping its planned date; any others
+ * are cancelled. Returns the visit id, or null when nothing was booked (the
+ * caller then inserts a fresh, unplanned visit row).
+ */
+async function closeBookedVisit(
+    tx: Tx,
+    leadId: string,
+    row: ReturnType<typeof planVisit>["visitRow"],
+): Promise<string | null> {
+    const day = row.actual_visit_date;
+    if (!day) return null;
+    const open = (await tx.execute(sql`
+        SELECT visit_id::text AS visit_id FROM lead_visits
+         WHERE dealer_lead_id = ${leadId}
+           AND visit_status IN ('scheduled', 'pending_scheduling')
+           AND (scheduled_date IS NULL OR scheduled_date <= ${day}::date)
+         ORDER BY scheduled_date DESC NULLS LAST, created_at DESC
+         FOR UPDATE
+    `)) as unknown as Array<{ visit_id: string }>;
+    if (open.length === 0) return null;
+    const [keep, ...rest] = open;
+    await tx
+        .update(leadVisits)
+        .set({
+            asm_id: row.asm_id,
+            actual_visit_date: day,
+            visit_status: row.visit_status,
+            visit_outcome: row.visit_outcome,
+            visit_remarks: row.visit_remarks,
+            photos: row.photos as never,
+            gps_check_in_lat: row.gps_check_in_lat,
+            gps_check_in_lng: row.gps_check_in_lng,
+            next_action: row.next_action,
+            next_visit_date: row.next_visit_date,
+            updated_at: new Date(),
+        })
+        .where(eq(leadVisits.visit_id, keep!.visit_id));
+    if (rest.length > 0) {
+        await tx
+            .update(leadVisits)
+            .set({
+                visit_status: "cancelled",
+                visit_remarks: sql`concat_ws(' · ', ${leadVisits.visit_remarks}, ${`Closed by the visit on ${day}`})`,
+                updated_at: new Date(),
+            })
+            .where(inArray(leadVisits.visit_id, rest.map((r) => r.visit_id)));
+    }
+    return keep!.visit_id;
 }

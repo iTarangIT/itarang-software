@@ -13,7 +13,7 @@ import { isPoolTabFor } from "@/lib/leads/claimScope";
 import { successResponse, withErrorHandler, errorResponse } from "@/lib/api-utils";
 import { fetchAsmQueueRegions } from "@/lib/asm/queryBuilder";
 import { ASM_QUEUE_TABS } from "@/lib/asm/types";
-import { teamForOwnScopedViewer } from "@/lib/users/team";
+import { teamScopeFromParams } from "@/lib/users/team";
 
 export const dynamic = "force-dynamic";
 
@@ -42,6 +42,8 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
         return errorResponse("Search by mobile number to find and claim a lead.", 403);
     }
 
-    const regions = await fetchAsmQueueRegions(user.id, parsed.tab, await teamForOwnScopedViewer(user)); // ID 155: + a manager's team
+    // ID 155: + a manager's team; ID 199: narrowed by the Team member pick.
+    const { teamMemberIds, member } = await teamScopeFromParams(user, url.searchParams);
+    const regions = await fetchAsmQueueRegions(user.id, parsed.tab, teamMemberIds, member);
     return successResponse({ regions });
 });

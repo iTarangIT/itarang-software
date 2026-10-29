@@ -10,7 +10,7 @@ import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { hasReportingHistoryTable, hasReportsToColumn } from "./reportingLines";
 import { exportsOwnLeadsOnly } from "@/lib/leads/access";
-import { ownerScopeIds } from "./teamRules";
+import { ownerScopeIds, pickTeamMember } from "./teamRules";
 
 /** Direct reports of `managerId` on their current line (empty = not a manager). */
 export async function getTeamMemberIds(managerId: string | null | undefined): Promise<string[]> {
@@ -79,6 +79,19 @@ export async function leadVisibleTo(leadId: string, userId: string): Promise<boo
  */
 export async function teamForOwnScopedViewer(user: { id: string; role: string | null | undefined }): Promise<string[]> {
     return exportsOwnLeadsOnly(user.role) ? getTeamMemberIds(user.id) : [];
+}
+
+/**
+ * ID 199: the viewer's team (teamForOwnScopedViewer) and their "Team member"
+ * pick from `?member=` (pickTeamMember) in one call, so the list, counts,
+ * facets and download routes of a queue read the pick the same way.
+ */
+export async function teamScopeFromParams(
+    user: { id: string; role: string | null | undefined },
+    sp: URLSearchParams,
+): Promise<{ teamMemberIds: string[]; member: string | null }> {
+    const teamMemberIds = await teamForOwnScopedViewer(user);
+    return { teamMemberIds, member: pickTeamMember(user.id, sp.get("member"), teamMemberIds) };
 }
 
 /**

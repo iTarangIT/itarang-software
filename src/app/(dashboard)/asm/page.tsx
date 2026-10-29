@@ -2,6 +2,8 @@ import { requireRole } from "@/lib/auth-utils";
 import { EcofyMyLeadsCard } from "@/components/ecofy/pages";
 import { AsmQueueView } from "./_components/AsmQueueView";
 import { AsmPerformanceStrip } from "@/components/dashboard/sales/AsmPerformanceStrip";
+import { exportsOwnLeadsOnly } from "@/lib/leads/access";
+import { getTeamPeople } from "@/lib/users/team";
 
 export const dynamic = "force-dynamic";
 
@@ -17,6 +19,8 @@ export default async function AsmQueuePage() {
         "sales_head",
         "business_head",
     ]);
+    // ID 199: a manager's direct reports, for the Team member pick.
+    const teamPeople = exportsOwnLeadsOnly(user.role) ? await getTeamPeople(user.id) : [];
 
     return (
         <div className="px-4 sm:px-6 md:px-8 py-6 space-y-5 max-w-[1600px]">
@@ -34,7 +38,7 @@ export default async function AsmQueuePage() {
             <AsmPerformanceStrip />
             {/* E-307 — Ecofy leads the Sales Head assigned to this rep. */}
             <EcofyMyLeadsCard href="/asm/ecofy-leads" />
-            <AsmQueueView viewerId={user.id} viewerRole={user.role} />
+            <AsmQueueView viewerId={user.id} viewerRole={user.role} teamPeople={teamPeople} />
         </div>
     );
 }

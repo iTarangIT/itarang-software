@@ -6,6 +6,8 @@ import { Loader2, Upload, Receipt, CheckCircle2, XCircle, Clock } from "lucide-r
 import { Button } from "@/components/ui/button";
 
 import { onFreshFileClick } from "@/lib/storage/freshFileLink";
+import { TravelDaysPicker, travelDaysReady, type PickedDay } from "@/components/expenses/TravelDaysPicker";
+import { needsTravelProof } from "@/lib/expenses/travelProof";
 const CATEGORIES = [
   "Travel",
   "Office",
@@ -54,6 +56,9 @@ export default function SubmitExpensePage() {
   const [bill, setBill] = useState<File | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  // ID 197: the day(s) a Travel / Vehicle/Fuel claim covers.
+  const [travelDays, setTravelDays] = useState<PickedDay[]>([]);
+  const isTravel = needsTravelProof(category);
 
   const { data: mineRaw, isLoading } = useQuery({
     queryKey: ["expenses-mine"],
@@ -74,6 +79,9 @@ export default function SubmitExpensePage() {
       fd.set("amount", amount);
       if (description) fd.set("description", description);
       if (bill) fd.set("bill", bill);
+      if (isTravel) {
+        fd.set("travel_days", JSON.stringify(travelDays.map((d) => ({ day: d.day, note: d.note.trim() || null }))));
+      }
       const r = await fetch("/api/expenses/submit", { method: "POST", body: fd });
       const j = await r.json();
       if (!r.ok || !j.success) {
@@ -85,6 +93,7 @@ export default function SubmitExpensePage() {
       setAmount("");
       setDescription("");
       setBill(null);
+      setTravelDays([]);
       setSuccessMsg("Expense submitted — awaiting CEO approval.");
       qc.invalidateQueries({ queryKey: ["expenses-mine"] });
     },
@@ -114,6 +123,13 @@ export default function SubmitExpensePage() {
           if (!amount) {
             setFormError("Amount is required.");
             return;
+          }
+          if (isTravel) {
+            const notReady = travelDaysReady(travelDays);
+            if (notReady) {
+              setFormError(notReady);
+              return;
+            }
           }
           submitMutation.mutate();
         }}
@@ -152,6 +168,8 @@ export default function SubmitExpensePage() {
             />
           </div>
         </div>
+
+        {isTravel && <TravelDaysPicker category={category} value={travelDays} onChange={setTravelDays} />}
 
         <div>
           <label className="block text-xs font-semibold text-gray-700 mb-1.5 uppercase tracking-wider">

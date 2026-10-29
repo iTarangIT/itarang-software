@@ -19,6 +19,7 @@ import type { QueueRegion } from "@/lib/leads/queueFilters";
 import { finalisedNotWonSql } from "@/lib/leads/finalisedNotWon";
 import type { QueueSort } from "@/lib/leads/queueSort";
 import { ownerScopeSql } from "@/lib/users/teamSql";
+import { LAST_DONE_VISIT_JOIN, TEAM_REVIEW_SELECT } from "@/lib/leads/teamReviewSql";
 
 const OPEN_LIST = sql.raw(
     OPEN_STATUSES.map((s) => `'${s}'`).join(", "),
@@ -87,7 +88,19 @@ type BuildArgs = {
      * empty = exactly the old SQL.
      */
     teamMemberIds?: readonly string[] | null;
+    /**
+     * ID 199: a manager's "Team member" pick (pickTeamMember) — only this
+     * person's leads on the own tabs. Null = no narrowing. Ignored on the
+     * pool tabs (unassigned, team).
+     */
+    member?: string | null;
 };
+
+/** ID 199: the `member` narrowing for one tab (empty on the pool tabs). */
+function memberClause(tab: QueueTab, member: string | null | undefined): SQL {
+    if (!member || tab === "unassigned" || tab === "team") return sql``;
+    return sql` AND dl.current_owner_id = ${member}`;
+}
 
 /**
  * The date a `from`/`to` range means on THIS queue.
@@ -219,11 +232,12 @@ export async function fetchQueueRows({
     sort,
     ownedBy,
     teamMemberIds,
+    member,
 }: BuildArgs): Promise<QueueRow[]> {
     const offset = (page - 1) * limit;
     const where = tabFilter(tab, userId, teamMemberIds);
     const order = queueSortOrder(sort, tabOrder(tab));
-    const search = extraFilters({ q, neodoveOnly, callbackOnly, finalisedOnly, pastLimit, filters, ownedBy, teamMemberIds });
+    const search = sql`${extraFilters({ q, neodoveOnly, callbackOnly, finalisedOnly, pastLimit, filters, ownedBy, teamMemberIds })}${memberClause(tab, member)}`;
 
     const rows = await db.execute<QueueRow>(sql`
         SELECT
@@ -248,7 +262,9 @@ export async function fetchQueueRows({
             dl.updated_at,
             ${NEODOVE_STATUS} AS neodove_sync_status,
             ${WON_WITHOUT_QUOTE} AS won_without_approved_quote
+            ${TEAM_REVIEW_SELECT}
         FROM dealer_leads dl
+        ${LAST_DONE_VISIT_JOIN}
         LEFT JOIN users owner ON owner.id::text = dl.current_owner_id
         WHERE ${where} ${search}
         ${order}
@@ -299,12 +315,13 @@ export async function countQueueRows({
     filters,
     ownedBy,
     teamMemberIds,
+    member,
 }: Pick<
     BuildArgs,
-    "tab" | "userId" | "q" | "neodoveOnly" | "callbackOnly" | "finalisedOnly" | "pastLimit" | "filters" | "ownedBy" | "teamMemberIds"
+    "tab" | "userId" | "q" | "neodoveOnly" | "callbackOnly" | "finalisedOnly" | "pastLimit" | "filters" | "ownedBy" | "teamMemberIds" | "member"
 >): Promise<number> {
     const where = tabFilter(tab, userId, teamMemberIds);
-    const search = extraFilters({ q, neodoveOnly, callbackOnly, finalisedOnly, pastLimit, filters, ownedBy, teamMemberIds });
+    const search = sql`${extraFilters({ q, neodoveOnly, callbackOnly, finalisedOnly, pastLimit, filters, ownedBy, teamMemberIds })}${memberClause(tab, member)}`;
     const rows = await db.execute<{ c: string }>(sql`
         SELECT COUNT(*)::text AS c FROM dealer_leads dl WHERE ${where} ${search}
     `);
@@ -322,10 +339,12 @@ export async function countQueueRows({
  */
 export async function fetchAllTabCounts(
     userId: string,
-    opts?: Pick<BuildArgs, "neodoveOnly" | "callbackOnly" | "finalisedOnly" | "pastLimit" | "filters" | "teamMemberIds">,
+    opts?: Pick<BuildArgs, "neodoveOnly" | "callbackOnly" | "finalisedOnly" | "pastLimit" | "filters" | "teamMemberIds" | "member">,
 ): Promise<Record<QueueTab, number>> {
     // ID 155: a manager's own-tab badges count the team too, like the tables.
     const team = opts?.teamMemberIds;
+    // ID 199: …and follow the Team member pick.
+    const m = (tab: QueueTab) => memberClause(tab, opts?.member);
     const extra = extraFilters({
         neodoveOnly: opts?.neodoveOnly,
         callbackOnly: opts?.callbackOnly,
@@ -341,11 +360,11 @@ export async function fetchAllTabCounts(
         my_closed: string;
     }>(sql`
         SELECT
-            (SELECT COUNT(*)::text FROM dealer_leads dl WHERE ${tabFilter("my_open", userId, team)} ${extra}) AS my_open,
-            (SELECT COUNT(*)::text FROM dealer_leads dl WHERE ${tabFilter("follow_ups", userId, team)} ${extra}) AS follow_ups,
+            (SELECT COUNT(*)::text FROM dealer_leads dl WHERE ${tabFilter("my_open", userId, team)} ${extra}${m("my_open")}) AS my_open,
+            (SELECT COUNT(*)::text FROM dealer_leads dl WHERE ${tabFilter("follow_ups", userId, team)} ${extra}${m("follow_ups")}) AS follow_ups,
             (SELECT COUNT(*)::text FROM dealer_leads dl WHERE ${tabFilter("unassigned", userId)} ${extra}) AS unassigned,
             (SELECT COUNT(*)::text FROM dealer_leads dl WHERE ${tabFilter("team", userId)} ${extra}) AS team,
-            (SELECT COUNT(*)::text FROM dealer_leads dl WHERE ${tabFilter("my_closed", userId, team)} ${extra}) AS my_closed
+            (SELECT COUNT(*)::text FROM dealer_leads dl WHERE ${tabFilter("my_closed", userId, team)} ${extra}${m("my_closed")}) AS my_closed
     `);
     const r = rows[0]!;
     return {
@@ -383,9 +402,11 @@ export async function fetchQueueRegions(
     tab: QueueTab,
     /** ID 155: a manager's direct reports — the facets span what the table shows. */
     teamMemberIds?: readonly string[] | null,
+    /** ID 199: the Team member pick. */
+    member?: string | null,
 ): Promise<QueueRegion[]> {
     const rows = await db.execute<{ state: string | null; city: string | null }>(
-        regionFacetQuery(tabFilter(tab, userId, teamMemberIds)),
+        regionFacetQuery(sql`${tabFilter(tab, userId, teamMemberIds)}${memberClause(tab, member)}`),
     );
     return foldRegionFacets(rows as unknown as { state: string | null; city: string | null }[]);
 }

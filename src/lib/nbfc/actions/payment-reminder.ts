@@ -16,6 +16,12 @@
  *      here as a payload-only record (channel, queued_at).
  *   5. Insert an immutable nbfc_audit_log row with action_id, actor, before/after.
  *   6. Return action_id, loan_sanction_id, channel, status, created_at.
+ *
+ * ID 204 (28 Oct): step 4 is real now — the reminder goes to the customer at
+ * once on SMS or WhatsApp with the EMI messages' approved Hindi text
+ * (src/lib/emi-messages/run.ts sendPortalReminder), once per action. When the
+ * EMI messages are off or not set up, the action is still recorded and
+ * `delivery` says why nothing was sent.
  */
 import { db } from "@/lib/db";
 import { eq } from "drizzle-orm";
@@ -53,6 +59,8 @@ export interface SendPaymentReminderResult {
   channel: PaymentReminderChannel;
   status: string;
   created_at: string;
+  /** ID 204: whether the reminder actually went out, and why not. */
+  delivery: { sent: boolean; reason?: string };
 }
 
 export async function sendPaymentReminder(
@@ -130,11 +138,20 @@ export async function sendPaymentReminder(
     created_at: now,
   });
 
+  // ID 204: send it. Never fails the recorded action.
+  const { sendPortalReminder } = await import("@/lib/emi-messages/run");
+  const delivery = await sendPortalReminder({
+    loanSanctionId: input.loan_sanction_id,
+    channel: input.channel,
+    actionId: actionRow.id,
+  }).catch((err) => ({ sent: false, reason: err instanceof Error ? err.message : String(err) }));
+
   return {
     action_id: actionRow.id,
     loan_sanction_id: input.loan_sanction_id,
     channel: input.channel,
     status: "auto_approved",
     created_at: (actionRow.created_at ?? now).toISOString(),
+    delivery,
   };
 }
