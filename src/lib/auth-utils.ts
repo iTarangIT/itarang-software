@@ -56,7 +56,7 @@ async function sessionUser(supabase: SupabaseServerClient): Promise<SessionUser 
       user_metadata: (claims.user_metadata ?? {}) as SessionUser["user_metadata"],
       aud: typeof claims.aud === "string" ? claims.aud : "authenticated",
       created_at: "",
-      // ID 206 — /api/user/profile records the login against this.
+      // ID 206 â€” /api/user/profile records the login against this.
       last_sign_in_at: signInTimeFromClaims(claims),
     } as SessionUser;
   }
