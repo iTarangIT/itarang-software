@@ -490,7 +490,7 @@ function Welcome({
           {canManage ? (
             <>
               <p className="mt-2 max-w-[52ch] text-[0.9375rem] leading-relaxed text-ink-muted">
-                Connect the iTarang database or another Postgres database, upload CSV, Excel or PDF files, or link a
+                Connect the iTarang database, upload CSV, Excel or PDF files, or link a
                 Google Sheet. Then ask questions about it in plain English.
               </p>
               <button

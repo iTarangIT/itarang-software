@@ -55,6 +55,7 @@ To apply it:
 | 2026-10-27 | db-1 (sandbox) | real run, password unchanged (`analyst_staff` now `user_id, name, role, is_active`) | SELECT on 74 tables, **`all_rules_hold: true`**, exit 0; `staff_view_extra_columns: []`, sample "Sanchit Gupta"; `users` blocked, no readable `*filename` column. |
 | 2026-10-27 | db-2 (prod) | real run, password unchanged (same change) | Target `database-2`. SELECT on 74 tables, **`all_rules_hold: true`**, exit 0; same checks as db-1. Prod Analyst: Refresh tables pressed (386 → 79), `dealer_leads` + `analyst_staff` chosen, Sales Head question answered with 0 rejected; phone / email refused. |
 | 2026-10-29 | Analyst agent (sandbox tenant) | `_delete-analyst-outside-connections.ts` dry run | analyst.itarang.com reachable, sign-in works. 1 source, **0 outside databases**: only `iTarang CRM` (kept). Nothing to delete on this tenant. Prod has its own tenant: run the same dry run with the prod ANALYST_* values. |
+| 2026-10-29 | Analyst agent (prod tenant) | `_delete-analyst-outside-connections.ts` dry run (prod ANALYST_* values) | 1 source, **0 outside databases**: only `iTarang CRM` (kept). Nothing to delete. Row 43 closed on both tenants. |
 
 ## 27 Oct: "permission denied" on every question (agent catalog fix)
 
