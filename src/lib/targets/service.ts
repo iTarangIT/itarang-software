@@ -265,6 +265,8 @@ export async function measuresFor(monthFirst: string, upTo: string, elapsedWorki
             case "dealer_visits":
                 // ID 59: DISTINCT dealers visited (M08) — the figure the daily
                 // email puts against this target — not the number of visits.
+                // ID 185 (29 Oct): kept on this basis; Fresh + Repeat stays a
+                // Sales drill split, not the target's actual.
                 return ok(b?.totals.unique_visits ?? 0);
             case "new_dealer_visits":
                 return ok(b?.totals.new_visits ?? 0);

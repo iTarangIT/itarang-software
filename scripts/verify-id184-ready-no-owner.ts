@@ -39,7 +39,7 @@ async function main() {
 
     const tile = (await salesHeadActionSummary({ viewerRole: "admin" })).sales_ready;
     check(`Sales dashboard card (${tile?.count}) = rule (${c.total})`, tile?.count === c.total);
-    check("card line reads Hot · AI qualified · other", (tile?.sub ?? "").startsWith(`${c.split.hot} Hot · ${c.split.ai} AI qualified · ${c.split.other} other`), tile?.sub);
+    check("card line reads Hot · AI-qualified · Other (Hot first)", (tile?.sub ?? "").startsWith(`Hot ${c.split.hot} · AI-qualified ${c.split.ai} · Other ${c.split.other}`), tile?.sub);
 
     const tower = await buildControlTower({ startStr: new Date().toISOString().slice(0, 8) + "01", endStr: null });
     const x = tower.exceptions;
