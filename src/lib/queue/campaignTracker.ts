@@ -11,7 +11,6 @@ import { dialerSession, type DialerProvider } from "./dialerSession";
 import { summarizeRegion } from "@/lib/leads/regionSummary";
 import { partitionAiConnected } from "@/lib/ai-dialer/aiConnection";
 import {
-  ENROL_SKIP_OUTCOME,
   phoneKey,
   planEnrolment,
   type EnrolSkip,
@@ -88,9 +87,9 @@ export type CreateCampaignResult = {
   /** Lead ids dropped because the AI has already had a connected call. */
   blockedAiConnected: string[];
   /**
-   * B1 / D7 — leads enrolled as 'skipped' instead of dialled: not a mobile, a
-   * vehicle showroom, a number already in this campaign, or no phone. They are
-   * listed in the campaign with the reason and are not in total_leads.
+   * B1 / D7 — leads left out instead of dialled: not a mobile, a vehicle
+   * showroom, a number already in this campaign, or no phone. They are
+   * not added to the campaign; these are the counts per reason.
    */
   skippedAtEnrol: Record<EnrolSkip, number>;
 };
@@ -230,25 +229,17 @@ export async function createCampaign(opts: {
     });
 
     if (queueIds.length > 0) {
-      const rows = [
-        ...queueIds.map((leadId, idx) => ({
-          id: newId("cl"),
-          campaign_id: campaignId,
-          lead_id: leadId,
-          queue_position: idx,
-          status: "pending",
-        })),
-        // Listed in the campaign with the reason, after the dialable queue.
-        ...skippedRows.map((d, idx) => ({
-          id: newId("cl"),
-          campaign_id: campaignId,
-          lead_id: d.id,
-          queue_position: queueIds.length + idx,
-          status: "skipped",
-          call_outcome: ENROL_SKIP_OUTCOME[d.skip!],
-          completed_at: new Date(),
-        })),
-      ];
+      // Skipped leads are NOT added (29 Oct): a campaign holds only the leads
+      // it dials, so every count on its page agrees. What was skipped and why
+      // is in skippedAtEnrol (the start screen) and, for a number that is not a
+      // mobile, the lead's "Needs dealer mobile" flag.
+      const rows = queueIds.map((leadId, idx) => ({
+        id: newId("cl"),
+        campaign_id: campaignId,
+        lead_id: leadId,
+        queue_position: idx,
+        status: "pending",
+      }));
 
       // Chunk to keep the bind-parameter count below Postgres' 64k cap on
       // very large queues. 500 rows × ~5 columns = well within limits.

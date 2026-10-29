@@ -78,7 +78,7 @@ async function main() {
     campaigns.push(c2.campaignId!);
     const rows2 = await db.select().from(dialerCampaignLeads).where(eq(dialerCampaignLeads.campaign_id, c2.campaignId!));
     const r2 = rows2.find((r) => r.lead_id === LEADS[1].id);
-    check("next campaign skips the switchboard number under another lead", r2?.status === "skipped" && r2?.call_outcome === "skipped_switchboard", `${r2?.status}/${r2?.call_outcome}`);
+    check("next campaign leaves out the switchboard number under another lead", !r2 && rows2.length === 1, `${rows2.length} rows`);
     check("skip counted", c2.skippedAtEnrol.switchboard === 1, JSON.stringify(c2.skippedAtEnrol));
 
     // A person answers on a later attempt: the mark clears.
