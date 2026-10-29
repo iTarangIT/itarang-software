@@ -51,7 +51,7 @@ import { and, desc, eq, inArray, lte, sql } from "drizzle-orm";
 import { google, type drive_v3 } from "googleapis";
 
 import { db } from "@/lib/db";
-import { bgDb } from "@/lib/db/background";
+import { bgDb, withLongStatements } from "@/lib/db/background";
 import { storageDriveMirror } from "@/lib/db/schema";
 import { describeDriveError, parseDriveFolderId } from "@/lib/google/drive";
 import {
@@ -677,22 +677,27 @@ export interface DriveMirrorBackfillResult {
  * backup — rows enqueued before the allow-list / excluded-bucket rules were
  * tightened. Rows already `done` are left alone so the ledger still records
  * what is in Drive. Cheap once the backlog is clean (id/bucket/key only).
+ *
+ * ID 203: the scan took 299 s on the sandbox, past the background pool's 60 s
+ * limit, so it runs with a 15-minute limit of its own (withLongStatements).
  */
 export async function purgeExcludedQueue(): Promise<number> {
-  const rows = await bgDb
-    .select({
-      id: storageDriveMirror.id,
-      bucket: storageDriveMirror.bucket,
-      object_key: storageDriveMirror.object_key,
-    })
-    .from(storageDriveMirror)
-    .where(inArray(storageDriveMirror.status, ["pending", "failed"]));
-  const ids = rows.filter((r) => isDriveMirrorExcluded(r.bucket, r.object_key)).map((r) => r.id);
-  const CHUNK = 500;
-  for (let i = 0; i < ids.length; i += CHUNK) {
-    await bgDb.delete(storageDriveMirror).where(inArray(storageDriveMirror.id, ids.slice(i, i + CHUNK)));
-  }
-  return ids.length;
+  return withLongStatements(async (tx) => {
+    const rows = await tx
+      .select({
+        id: storageDriveMirror.id,
+        bucket: storageDriveMirror.bucket,
+        object_key: storageDriveMirror.object_key,
+      })
+      .from(storageDriveMirror)
+      .where(inArray(storageDriveMirror.status, ["pending", "failed"]));
+    const ids = rows.filter((r) => isDriveMirrorExcluded(r.bucket, r.object_key)).map((r) => r.id);
+    const CHUNK = 500;
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      await tx.delete(storageDriveMirror).where(inArray(storageDriveMirror.id, ids.slice(i, i + CHUNK)));
+    }
+    return ids.length;
+  }, "15min");
 }
 
 /**
@@ -705,7 +710,13 @@ export async function runDriveMirrorBackfill(
   opts: { prefix?: string } = {},
 ): Promise<DriveMirrorBackfillResult> {
   const started = Date.now();
-  await purgeExcludedQueue();
+  // ID 203: a failed purge (excluded rows left queued) must not stop the
+  // backfill enqueueing what is missing; the next run purges again.
+  try {
+    await purgeExcludedQueue();
+  } catch (err) {
+    console.error("[drive-mirror] purge of excluded queue rows failed; backfill continues:", err instanceof Error ? err.message : err);
+  }
   const objects = await listAllObjects(opts.prefix ?? "");
   let enqueued = 0;
   const now = new Date();

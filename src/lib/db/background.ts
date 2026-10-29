@@ -1,3 +1,4 @@
+import { sql, type SQL } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import { applicationName } from './applicationName';
@@ -50,3 +51,25 @@ if (process.env.NODE_ENV !== 'production') {
 }
 
 export const bgDb = drizzle(bgClient, { schema });
+
+/**
+ * ID 203 — run `fn` in one background-pool transaction whose statements may
+ * take up to `timeout` instead of the pool's 60 s. SET LOCAL ends with the
+ * transaction, so every other job on the pool keeps the 60 s limit. For the
+ * few long jobs: the Drive mirror's queue purge (299 s on the sandbox) and
+ * the daily Ops rollup and prunes.
+ */
+export function withLongStatements<T>(
+    fn: (tx: Parameters<Parameters<typeof bgDb.transaction>[0]>[0]) => Promise<T>,
+    timeout: `${number}min` = '10min',
+): Promise<T> {
+    return bgDb.transaction(async (tx) => {
+        await tx.execute(sql.raw(`SET LOCAL statement_timeout = '${timeout}'`));
+        return fn(tx);
+    });
+}
+
+/** One statement under withLongStatements. */
+export function bgExecuteLong(statement: SQL, timeout: `${number}min` = '10min') {
+    return withLongStatements((tx) => tx.execute(statement), timeout);
+}
