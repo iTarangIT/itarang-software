@@ -326,7 +326,10 @@ function eventsUnion(f: EventLogFilters, s: Sources): SQL {
             sql: sql`
         SELECT COALESCE(v.actual_visit_date::timestamp AT TIME ZONE 'Asia/Kolkata', v.created_at),
                v.dealer_lead_id, 'Visit', NULL, v.visit_status, v.asm_id, v.meeting_mode,
-               v.visit_outcome || CASE WHEN v.gps_check_in_lat IS NOT NULL THEN ' · GPS Y' ELSE ' · GPS N' END,
+               v.visit_outcome || CASE WHEN v.gps_check_in_lat IS NOT NULL THEN ' · GPS Y' ELSE ' · GPS N' END
+                   -- ID 196: verified = live GPS + camera photo (E-363, read through to_jsonb).
+                   || CASE WHEN (to_jsonb(v) ->> 'verified') = 'true' THEN ' · verified'
+                           WHEN v.visit_status = 'visited' THEN ' · not verified' ELSE '' END,
                NULL, v.visit_remarks
           FROM lead_visits v
          WHERE ${inRange(sql`COALESCE(v.actual_visit_date::timestamp AT TIME ZONE 'Asia/Kolkata', v.created_at)`, f)}`,

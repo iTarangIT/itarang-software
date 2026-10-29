@@ -6,7 +6,7 @@
 
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, Loader2 } from "lucide-react";
+import { ArrowLeft, Camera, Loader2 } from "lucide-react";
 
 import { AccountQuotationsPanel } from "@/components/accounts/AccountQuotations";
 import type { AccountSummary } from "@/lib/accounts/quotations/access";
@@ -41,8 +41,21 @@ export function AccountPageView({ accountId }: { accountId: string }) {
             {data && (
                 <>
                     <header className="rounded-xl border border-border bg-surface px-4 py-4 shadow-card">
-                        <h1 className="text-xl font-semibold tracking-tight text-ink">{data.account.name}</h1>
-                        <p className="font-mono text-xs text-ink-muted">{data.account.id}</p>
+                        <div className="flex flex-wrap items-start justify-between gap-2">
+                            <div>
+                                <h1 className="text-xl font-semibold tracking-tight text-ink">{data.account.name}</h1>
+                                <p className="font-mono text-xs text-ink-muted">{data.account.id}</p>
+                            </div>
+                            {/* ID 196: a verified visit on this counter (owner or their manager). */}
+                            {data.can_create && (
+                                <Link
+                                    href={`/visits/capture?account=${encodeURIComponent(accountId)}`}
+                                    className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-sm font-medium text-ink hover:bg-gray-50"
+                                >
+                                    <Camera className="h-4 w-4" /> Log visit
+                                </Link>
+                            )}
+                        </div>
                         <dl className="mt-3 grid grid-cols-1 gap-x-6 gap-y-2 text-sm sm:grid-cols-2 lg:grid-cols-4">
                             <div>
                                 <dt className="text-[11px] uppercase tracking-wide text-ink-muted">GSTIN</dt>

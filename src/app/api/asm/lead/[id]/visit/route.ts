@@ -15,6 +15,11 @@
 // or null for "leave as is") is the ASM's own choice. All of it is written in the
 // SAME transaction as the visit: a status_change_note touchpoint + history,
 // and an audited setInterestLevel.
+//
+// ID 196 (PJP phase 1): a DONE visit needs `capture_id` — the camera photo and
+// live location sent first to POST /api/visits/capture. The visit takes its
+// photo, location and date from the capture (today, IST); the form's own date,
+// photos and GPS are ignored for it. Enforced once E-363 is applied.
 
 import { z } from "zod";
 import { requireRole } from "@/lib/auth-utils";
@@ -24,6 +29,8 @@ import { recordVisit } from "@/lib/asm/recordVisit";
 import { applyVisitStatus } from "@/lib/asm/visitStatus";
 import { assertOwner } from "@/lib/leads/ownership";
 import { withLeadActor } from "@/lib/leads/actorContext";
+import { checkCaptureUse } from "@/lib/visits/verifiedCapture";
+import { hasVerifiedVisits, loadVisitCapture } from "@/lib/visits/verifiedStore";
 import {
     VISIT_NEXT_ACTION,
     VISIT_OUTCOME,
@@ -70,6 +77,8 @@ const BodySchema = z
         interest_level: z.enum(["hot", "warm", "cold"]).nullable().optional(),
         /** True when interest_level came from the auto rule untouched (audit reason). */
         interest_auto: z.boolean().optional(),
+        /** ID 196: the verified photo + location (POST /api/visits/capture). */
+        capture_id: z.string().uuid().nullable().optional(),
     })
     .refine((b) => b.visit_status !== "visited" || !!b.visit_outcome, {
         message: "visit_outcome required when visit_status='visited'",
@@ -79,6 +88,11 @@ const BodySchema = z
         message: "next_visit_date required when next_action='next_visit'",
         path: ["next_visit_date"],
     });
+
+/** A capture that cannot be used — answered 422 with its message. */
+class VisitCaptureError extends Error {
+    readonly status = 422;
+}
 
 export const POST = withErrorHandler(
     async (req: Request, ctx: { params: Promise<{ id: string }> }) => {
@@ -90,11 +104,22 @@ export const POST = withErrorHandler(
         await assertOwner(id, user.id);
 
         // status_to is dropped here on purpose — see the header.
-        const { status_to: _ignoredStatusTo, interest_level, interest_auto, ...visit } = body;
+        const { status_to: _ignoredStatusTo, interest_level, interest_auto, capture_id, ...visit } = body;
         void _ignoredStatusTo;
         const visited = visit.visit_status === "visited";
+        // ID 196: no photo + live location, no done visit.
+        const verifiedOn = visited && (await hasVerifiedVisits());
+        if (verifiedOn && !capture_id) {
+            return errorResponse("Take the shop photo with location on before saving a done visit.", 422);
+        }
         const { visitId } = await withLeadActor(user.id, async (tx) => {
-            const recorded = await recordVisit({ ...visit, leadId: id, asmId: user.id }, { tx });
+            const capture = verifiedOn && capture_id ? await loadVisitCapture(capture_id, tx) : null;
+            if (verifiedOn) {
+                if (!capture) throw new VisitCaptureError("That shop photo was not found. Take it again.");
+                const use = checkCaptureUse(capture, { userId: user.id, leadId: id, now: new Date() });
+                if (!use.ok) throw new VisitCaptureError(use.message);
+            }
+            const recorded = await recordVisit({ ...visit, leadId: id, asmId: user.id, capture }, { tx });
             // A visit that didn't happen can't move the lead. A visit that DID
             // ends Awaiting field visit and restores the pre-transfer stage
             // when that is further along (ID 77, applyVisitStatus).

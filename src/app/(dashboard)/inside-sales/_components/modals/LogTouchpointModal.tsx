@@ -332,7 +332,7 @@ export function LogTouchpointModal({
                 </div>
 
                 {isVisit ? (
-                    <VisitFields form={visitForm} />
+                    <VisitFields form={visitForm} leadId={leadId} />
                 ) : (
                     <>
                         {type === "inside_sales_call" && (
