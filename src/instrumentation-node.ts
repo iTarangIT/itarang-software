@@ -962,6 +962,44 @@ export async function startEcofyReminderTicker() {
   console.log("[instrumentation] Ecofy reminder sweep (5m) started in-process");
 }
 
+// D8 — the AI-call callback loop (src/lib/ai-dialer/callbackLoop.ts): 15 min
+// before a promised callback the ISR is reminded (and, with the switch on, the
+// lead is pushed into her NeoDove campaign); 30 min overdue with no call, the
+// Sales Head is told. Each step claims its rows, so nothing is sent twice.
+export async function startCallbackLoopTicker() {
+  if (process.env.VERCEL === "1") return;
+
+  const TICK_INTERVAL_MS = 5 * 60_000;
+  let inFlight = false;
+
+  const tick = async () => {
+    if (inFlight) return;
+    inFlight = true;
+    try {
+      const { runCallbackLoopTick } = await import("@/lib/ai-dialer/callbackLoop");
+      const r = await runCallbackLoopTick();
+      if (r.reminded || r.escalated) {
+        console.log(`[instrumentation:callback-loop] reminded ${r.reminded} (pushed ${r.pushed}), escalated ${r.escalated}`);
+      }
+    } catch (err) {
+      console.error(
+        "[instrumentation:callback-loop] tick failed:",
+        err instanceof Error ? err.message : err,
+      );
+    } finally {
+      inFlight = false;
+    }
+  };
+
+  const kickoff = setTimeout(tick, 255_000);
+  if (typeof kickoff.unref === "function") kickoff.unref();
+
+  const interval = setInterval(tick, TICK_INTERVAL_MS);
+  if (typeof interval.unref === "function") interval.unref();
+
+  console.log("[instrumentation] AI-call callback loop (5m) started in-process");
+}
+
 export async function startNbfcRequestSlaTicker() {
   // Skip on Vercel — /api/cron/nbfc-request-sla owns it there.
   if (process.env.VERCEL === "1") return;

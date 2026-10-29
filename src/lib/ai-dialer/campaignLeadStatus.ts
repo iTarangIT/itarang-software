@@ -130,7 +130,9 @@ export const CAMPAIGN_LEAD_STATUS_LABELS: Record<CampaignLeadStatus, string> = {
     busy: "Busy",
     rejected: "Rejected",
     voicemail: "Voicemail",
-    switchboard: "Switchboard",
+    // D2 — an IVR menu, hold message or company bot. Shown as "IVR" everywhere
+    // (badge, tab, card, drawer, export); the stored value stays `switchboard`.
+    switchboard: "IVR",
     silent: "Silent Call",
     hung_up: "Hung Up Early",
     no_conversation: "Silent Call (legacy)",

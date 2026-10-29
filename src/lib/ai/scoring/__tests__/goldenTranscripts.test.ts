@@ -37,10 +37,27 @@ const GOLDENS: Golden[] = [
     bands: ["Qualified"],
   },
   {
-    name: "lead-acid only — Disqualified",
+    // D10 — a lead-acid dealer in our lines is a prospect.
+    name: "lead-acid e-rickshaw batteries only — Warm",
     transcript: [
       "agent: नमस्ते sir, Priya iTarang से। क्या आप lithium battery dealer हैं?",
-      "user: नहीं, हम सिर्फ lead-acid बेचते हैं।",
+      "user: नहीं, हम सिर्फ e-rickshaw की lead-acid batteries बेचते हैं।",
+    ].join("\n"),
+    bands: ["Warm"],
+  },
+  {
+    name: "inverter battery dealer — Warm (D9: one of our lines)",
+    transcript: [
+      "agent: नमस्ते sir, Priya iTarang से। क्या आप lithium battery dealer हैं?",
+      "user: नहीं जी, हमारी inverter battery की दुकान है।",
+    ].join("\n"),
+    bands: ["Warm"],
+  },
+  {
+    name: "car batteries only — Disqualified (outside our lines)",
+    transcript: [
+      "agent: नमस्ते sir, Priya iTarang से। क्या आप lithium battery dealer हैं?",
+      "user: नहीं, हम सिर्फ car की batteries रखते हैं।",
     ].join("\n"),
     bands: ["Disqualified"],
   },

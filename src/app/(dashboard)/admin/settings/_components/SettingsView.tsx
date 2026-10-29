@@ -9,6 +9,7 @@ import { Tabs } from "@/components/ui/tabs";
 import { NotificationAccessManager } from "./NotificationAccessManager";
 import { EmailNotificationManager } from "./EmailNotificationManager";
 import { QuotationCcForm } from "./QuotationCcForm";
+import { CallbackLoopForm } from "./CallbackLoopForm";
 import { QuotationTermsForm } from "./QuotationTermsForm";
 import { TerritoryManager } from "./TerritoryManager";
 import { ReportingLinesManager } from "./ReportingLinesManager";
@@ -48,6 +49,8 @@ const TAB_VALUES = [
     "reporting-lines",
     // A39 — who can sign in: deactivate leavers, force a new password.
     "logins",
+    // D8 — who takes AI-call callbacks, and the NeoDove push switch.
+    "ai-callbacks",
 ] as const;
 type TabValue = (typeof TAB_VALUES)[number];
 
@@ -100,6 +103,7 @@ export function SettingsView() {
                     { value: "territories", label: "ASM Territories" },
                     { value: "reporting-lines", label: "Reporting lines" },
                     { value: "logins", label: "Logins" },
+                    { value: "ai-callbacks", label: "AI callbacks" },
                 ]}
             />
 
@@ -111,6 +115,7 @@ export function SettingsView() {
                     {active === "quotation-terms" && <QuotationTermsForm />}
                     {active === "reporting-lines" && <ReportingLinesManager />}
                     {active === "logins" && <LoginsManager />}
+                    {active === "ai-callbacks" && <CallbackLoopForm />}
                     {active === "territories" &&
                         (bundleQuery.isLoading ? (
                             <div className="flex items-center gap-2 py-8 text-sm text-ink-muted">

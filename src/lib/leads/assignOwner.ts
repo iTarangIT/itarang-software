@@ -190,7 +190,8 @@ export type AssignLeadOwnerInput = {
      */
     fromStatus: LeadStatus | null;
     target: AssignTarget;
-    actorId: string;
+    /** null = the system (D8: assigned after an AI call). */
+    actorId: string | null;
     actorRole: string | null | undefined;
     remarks: string;
     /**

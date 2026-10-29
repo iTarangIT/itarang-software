@@ -8,7 +8,8 @@
  *               (oemPricing.ts — UNCHANGED by this file).
  *   List price  the MRP printed on the quotation as "List price", with the
  *               discount down to the quoted rate. Optional: with none set, the
- *               OEM price prints as list price. Never a gate.
+ *               quotation prints no list price and no discount for that line —
+ *               the OEM price is never printed in its place. Never a gate.
  *
  * Same append-only, windowed shape as oem_reference_prices (oemPrices.ts): each
  * open row (effective_to IS NULL) owns a half-open window [effective_from,
@@ -26,7 +27,7 @@
  * pre-commit state.
  *
  * Every reader probes for the table first (to_regclass), so a database without
- * E-321 behaves exactly as before: no list prices, the OEM price prints.
+ * E-321 has no list prices, and its quotations print none.
  *
  * Only TYPE imports from ./oemPrices — oemPrices imports this module at runtime,
  * and a value import back would make the two a cycle.
@@ -36,7 +37,7 @@ import { and, eq, gt, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { productListPrices } from "@/lib/db/schema";
 import type { CommercialsProductLine } from "@/lib/inside-sales/types";
-import { refKey, type OemPriceRef } from "./oemPricing";
+import { refKey } from "./oemPricing";
 import type { OemAssetType } from "./oemPrices";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -94,9 +95,13 @@ export interface ListPriceRef {
 }
 
 /**
- * PURE. Stamp each line with the list price that prints on the quote:
- * the live list price, else the live OEM price, else null (no list price —
- * the document prints no discount for that line).
+ * PURE. Stamp each line with the list price that prints on the quote: the
+ * live list price the CEO set, else null — the document then prints no list
+ * price and no discount for that line.
+ *
+ * Deliberately NO fallback to the OEM price. The OEM price is internal; with
+ * only an OEM price set, printing it as "List price" showed the dealer our
+ * reference cost.
  *
  * Snapshotted at write time so the PDF of a past quote never changes when a
  * list price is revised later.
@@ -104,11 +109,9 @@ export interface ListPriceRef {
 export function snapshotListPrices(
     lines: CommercialsProductLine[],
     listRefs: Map<string, ListPriceRef>,
-    oemRefs: Map<string, OemPriceRef>,
 ): CommercialsProductLine[] {
     return lines.map((l) => {
-        const key = refKey(l.asset_type, l.product_id);
-        const list = listRefs.get(key)?.list_price ?? oemRefs.get(key)?.oem_price ?? null;
+        const list = listRefs.get(refKey(l.asset_type, l.product_id))?.list_price ?? null;
         return { ...l, list_price: list != null && Number.isFinite(list) ? list : null };
     });
 }
@@ -283,7 +286,7 @@ export async function listListPriceHistory(
 export interface ListPriceCatalogueRow {
     asset_type: string;
     product_id: string;
-    /** In force right now. null = none set; the OEM price prints. */
+    /** In force right now. null = none set; the quotation prints no list price. */
     list_price: number | null;
     price_id: string | null;
     effective_from: string | null;
@@ -296,7 +299,7 @@ export interface ListPriceCatalogueRow {
 
 /**
  * The live and next-scheduled list price for every product that has any.
- * Keyed by product on the client; products with no row print the OEM price.
+ * Keyed by product on the client; products with no row print no list price.
  */
 export async function listLiveListPrices(): Promise<{
     available: boolean;

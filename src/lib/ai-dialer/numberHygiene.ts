@@ -94,7 +94,9 @@ export type EnrolSkip =
     | "vehicle_showroom"
     | "duplicate_number"
     | "switchboard"
-    | "dead_number";
+    | "dead_number"
+    // D8 — a person owes this dealer a promised call; the AI does not ring him.
+    | "open_callback";
 
 /** The dialer_campaign_leads.call_outcome written for a lead skipped at enrolment. */
 export const ENROL_SKIP_OUTCOME: Record<EnrolSkip, string> = {
@@ -104,6 +106,7 @@ export const ENROL_SKIP_OUTCOME: Record<EnrolSkip, string> = {
     duplicate_number: "skipped_duplicate_number",
     switchboard: "skipped_switchboard",
     dead_number: "skipped_dead_number",
+    open_callback: "skipped_open_callback",
 };
 
 export type EnrolCandidate = {
@@ -112,6 +115,8 @@ export type EnrolCandidate = {
     name: string | null;
     /** D7 — a switchboard / dead number a call already found on this number. */
     observed?: "switchboard" | "dead_number" | null;
+    /** D8 — an open promised callback: a person calls him, not the AI. */
+    openCallback?: boolean;
 };
 export type EnrolDecision = { id: string; phoneType: PhoneType; skip: EnrolSkip | null };
 
@@ -123,6 +128,7 @@ export function planEnrolment(leads: EnrolCandidate[]): EnrolDecision[] {
     const seen = new Set<string>();
     return leads.map((l) => {
         const phoneType = classifyPhone(l.phone);
+        if (l.openCallback) return { id: l.id, phoneType, skip: "open_callback" };
         if (!(l.phone ?? "").trim()) return { id: l.id, phoneType, skip: "no_phone" };
         if (!isDialablePhoneType(phoneType)) return { id: l.id, phoneType, skip: "not_mobile" };
         if (l.observed) return { id: l.id, phoneType: l.observed, skip: l.observed };
@@ -150,6 +156,9 @@ export function describeEnrolSkips(counts: Record<EnrolSkip, number>): string | 
     }
     if (counts.dead_number) {
         parts.push(`${counts.dead_number} dead number${counts.dead_number === 1 ? "" : "s"}`);
+    }
+    if (counts.open_callback) {
+        parts.push(`${counts.open_callback} with a callback a person owes`);
     }
     return parts.length ? parts.join(", ") : null;
 }

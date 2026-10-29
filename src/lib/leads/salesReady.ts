@@ -63,7 +63,8 @@ const LABEL: Record<SalesReadyReason, string> = {
     admin_marked: "marked qualified by a reviewer",
     admin_assigned: "assigned by an admin",
     reactivated: "reactivated into the sales pool",
-    ai_callback: "asked an AI call for a callback from sales",
+    // D10 — its own reason, for any band except Disqualified.
+    ai_callback: "callback agreed on an AI call",
 };
 
 /** The reasons the "AI qualified" split of Ready to assign counts. */

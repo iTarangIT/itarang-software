@@ -76,6 +76,8 @@ export type QueueRow = {
     past_limit?: boolean;
     /** 18 Oct row 34 — which limits are past, e.g. "Field visit (3 working days)" (limitChipLabel). */
     past_limits?: string[];
+    /** D2 — an IVR / company bot answered the AI call on this number (the "IVR" chip). */
+    is_ivr?: boolean;
 };
 
 export type QueueResponse = {
@@ -203,8 +205,8 @@ export type CommercialsProductLine = {
     unit_price: number | null;
     quantity: number;
     // E-321 — the list price (MRP) printed on the quotation, snapshotted when
-    // the quote is written: the live list price, else the live OEM price, else
-    // null. Absent on lines written before E-321. Never part of approval.
+    // the quote is written: the live list price, else null (never the OEM
+    // price). Absent on lines written before E-321. Never part of approval.
     list_price?: number | null;
 };
 

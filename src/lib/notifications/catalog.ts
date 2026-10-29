@@ -134,6 +134,11 @@ export const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   "lead.qualified": "Leads",
   // AI dialer review — a dealer asked an AI call for a callback from sales.
   "lead.callback_requested": "Leads",
+  // D8 — the callback loop: assigned to an ISR with the brief, reminded 15 min
+  // before, escalated 30 min overdue (src/lib/ai-dialer/callbackLoop.ts).
+  "lead.callback_assigned": "Leads",
+  "lead.callback_reminder": "Leads",
+  "lead.callback_overdue": "Leads",
   // D1 (E-360) — the carrier refused 10 AI-dialer calls in a row; campaign paused.
   "dialer.campaign_paused": "Leads",
   // ID 81 — a dealer we already hold arrived again through one of the doors.
@@ -471,6 +476,7 @@ const CRITICAL = new Set([
 
 /** Waiting on the recipient to act — surfaced amber. */
 const WARNING = new Set([
+  "lead.callback_overdue",
   // 14 Oct — a file iTarang pushed is waiting on the dealer to continue it.
   "lead.pushed_to_dealer",
   // ID 171 — someone has to drop the invoices into Drive / import the register.

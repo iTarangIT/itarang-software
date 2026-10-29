@@ -247,7 +247,17 @@ async function hotNotCalled(s: ActionScope): Promise<Built> {
                  AND c.first_attempt_at IS NULL AND (c.ended_at IS NULL OR c.ended_at > NOW())
                ORDER BY c.started_at DESC LIMIT 1) hc ON TRUE`
         : sql``;
-    const since = clocks ? sql`hc.started_at` : sql`COALESCE(dl.assigned_at, dl.created_at)`;
+    const clockStart = clocks ? sql`hc.started_at` : sql`COALESCE(dl.assigned_at, dl.created_at)`;
+    // D8 clock rule — while a callback Priya promised is open, the clock runs
+    // from the PROMISED time, not the assignment: a callback booked for
+    // tomorrow evening is not "late" before it is due.
+    const { hasCallOutcomeTables } = await import("@/lib/ai/storage/callOutcomeStore");
+    const since = (await hasCallOutcomeTables())
+        ? sql`GREATEST(${clockStart}, COALESCE((
+              SELECT max(lc.due_at) FROM lead_callbacks lc
+               WHERE lc.lead_id = dl.id AND lc.owner_type = 'sales'
+                 AND lc.status IN ('open', 'dialing')), ${clockStart}))`
+        : clockStart;
     const raw = await run(sql`
         SELECT dl.id AS lead_id, ${NAME} AS dealer, dl.city, dl.state, u.name AS owner_name, u.id::text AS owner_id,
                ${since} AS since, ${clocks ? sql`hc.limit_value::float` : sql`NULL::float`} AS lim

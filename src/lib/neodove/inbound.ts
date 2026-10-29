@@ -13,6 +13,7 @@
 // the second after it: a crash between them would otherwise leave an event
 // marked-seen but unprocessed.
 
+import { noteNeodoveCallForCallback } from "@/lib/ai-dialer/callbackLoop";
 import { sql } from "drizzle-orm";
 import { rehostRecording } from "@/lib/ai/storage/recordingStore";
 import crypto from "crypto";
@@ -273,6 +274,17 @@ async function handleDisposition(
             agentUserId,
             callAt,
             agentName: event.agentName,
+        });
+        // D8 — the call on a promised callback: connected closes it (a
+        // call-back disposition books the next working morning), not connected
+        // re-arms it 2 h later, the 3rd closes it as Not reached.
+        await noteNeodoveCallForCallback({
+            leadId: dealerLeadId,
+            connected: callStatus === "connected",
+            callBackAsked:
+                classifyDisposition(event.disposition ?? event.tag ?? "", {
+                    callConnected: event.callConnected ?? false,
+                })?.label === "As to Call Back",
         });
         // ID 36: contactability after every call.
         await reviewLeadContactability({

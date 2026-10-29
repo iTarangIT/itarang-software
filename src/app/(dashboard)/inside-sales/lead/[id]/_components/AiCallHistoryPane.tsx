@@ -14,84 +14,10 @@
  * was only ever called one-off showed "No AI calls yet".
  */
 import { useQuery } from "@tanstack/react-query";
-import { Loader2, PhoneCall, PhoneOff } from "lucide-react";
+import { Loader2, PhoneOff } from "lucide-react";
 
 import { AttemptsTab } from "@/components/leads/CampaignLeadTranscriptDrawer";
 import type { Attempt } from "@/components/leads/CampaignLeadTranscriptDrawer";
-import { CALL_CATEGORY_LABELS, isCallCategory } from "@/lib/ai-dialer/callCategory";
-
-type OpenCallback = {
-    owner_type: "ai" | "sales";
-    status: string;
-    topic: string | null;
-    category: string | null;
-    requested_text: string | null;
-    due_at: string;
-    /** Server clock — keeps render pure. */
-    overdue: boolean;
-    attempts: number;
-    summary: string | null;
-};
-
-/**
- * AI dialer review — the callback the dealer asked an AI call for, until a
- * person logs a conversation (sales) or the AI calls back (ai). Renders nothing
- * when there is none (or the database has no E-356).
- */
-function CallbackCard({ leadId }: { leadId: string }) {
-    const q = useQuery({
-        queryKey: ["lead-ai-callback", leadId],
-        staleTime: 30_000,
-        queryFn: async () => {
-            const res = await fetch(`/api/inside-sales/lead/${encodeURIComponent(leadId)}/callback`, {
-                cache: "no-store",
-            });
-            const json = (await res.json()) as { data?: { callback: OpenCallback | null } };
-            return json.data?.callback ?? null;
-        },
-    });
-    const cb = q.data;
-    if (!cb) return null;
-    const due = new Date(cb.due_at);
-    const overdue = cb.overdue;
-    const sales = cb.owner_type === "sales";
-    return (
-        <div
-            className={`mx-4 mt-4 rounded-xl border px-4 py-3 text-sm ${
-                sales ? "border-orange-200 bg-orange-50" : "border-sky-200 bg-sky-50"
-            }`}
-        >
-            <div className="flex items-center gap-2 font-semibold text-gray-900">
-                <PhoneCall className="h-4 w-4" />
-                {sales ? "Callback requested — for the sales team" : "Callback requested — the AI will call back"}
-            </div>
-            <p className={`mt-1 text-xs ${overdue ? "font-semibold text-rose-700" : "text-gray-700"}`}>
-                Due{" "}
-                {due.toLocaleString("en-IN", {
-                    timeZone: "Asia/Kolkata",
-                    weekday: "short",
-                    day: "numeric",
-                    month: "short",
-                    hour: "numeric",
-                    minute: "2-digit",
-                })}
-                {overdue && " · overdue"}
-                {cb.requested_text && ` · dealer said “${cb.requested_text}”`}
-            </p>
-            <p className="mt-1 text-xs text-gray-600">
-                {cb.category && isCallCategory(cb.category) ? CALL_CATEGORY_LABELS[cb.category] : "Callback"}
-                {cb.topic && cb.topic !== "none" && ` · topic: ${cb.topic.replace(/_/g, " ")}`}
-                {!sales && cb.attempts > 0 && ` · ${cb.attempts} AI attempt${cb.attempts === 1 ? "" : "s"}`}
-            </p>
-            {cb.summary && <p className="mt-1 text-xs text-gray-600">{cb.summary}</p>}
-            {sales && (
-                <p className="mt-1 text-[11px] text-gray-500">
-                    Closes when a call, visit or WhatsApp chat with the dealer is logged.
-                </p>
-            )}
-        </div>
-    );
-}
 
 type TranscriptResponse = {
     success?: boolean;
@@ -162,7 +88,6 @@ export function AiCallHistoryPane({ leadId }: { leadId: string }) {
 
     return (
         <div className="h-full overflow-y-auto">
-            <CallbackCard leadId={leadId} />
             <AttemptsTab
                 data={{
                     attempts: query.data?.attempts ?? [],

@@ -722,3 +722,9 @@ describe("D2 / B5 — switchboards, the voicemail flag and answered_by", () => {
         expect(classifyCallEnd({ transcript: spoke, answeredBy: null }).status).toBe("completed");
     });
 });
+
+describe("D2 — IVR label", () => {
+    it("a switchboard row reads IVR everywhere the shared label is used", () => {
+        expect(CAMPAIGN_LEAD_STATUS_LABELS.switchboard).toBe("IVR");
+    });
+});

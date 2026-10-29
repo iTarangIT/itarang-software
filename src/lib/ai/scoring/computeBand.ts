@@ -19,7 +19,7 @@
 // wins and a disqualifier still wins — this only lifts the "never answered the
 // lithium question" floor.
 
-import { countInfoSignals, type QualificationSignals } from "./signals";
+import { countInfoSignals, PRODUCT_LINE_LABELS, type QualificationSignals } from "./signals";
 import { SCORING_VERSION } from "./version";
 
 // Added to a Qualified lead's score when the dealer also shared his monthly
@@ -128,10 +128,17 @@ function buildBreakdown(s: QualificationSignals): SignalLine[] {
     },
     {
       signal: "relevant_dealer",
-      label: "Relevant dealer",
+      label: "Deals in our product lines",
       present: s.relevant_dealer === "yes",
       info: false,
       evidence: s.evidence.relevant_dealer,
+    },
+    {
+      signal: "product_lines",
+      label: "Product lines",
+      present: s.product_lines.length > 0,
+      info: false,
+      evidence: s.product_lines.map((l) => PRODUCT_LINE_LABELS[l]).join(", "),
     },
   ];
   for (const key of Object.keys(INFO_LABELS)) {
@@ -214,10 +221,16 @@ export function computeBand(signals: QualificationSignals): BandResult {
 
   // ── Band — top rule wins (runs for complete AND dropped_partial calls) ──
   let band: Band;
+  // D10 (qualification-2.2.0): "not lithium" no longer drops the lead. A
+  // lead-acid dealer in one of our lines is a prospect (Warm); only a dealer
+  // OUTSIDE our lines (car / truck / petrol-bike batteries only) is dropped.
+  const outOfSegment = lithium === "no" && signals.relevant_dealer === "no";
   if (HARD_DISQUALIFIERS.has(signals.disqualifier)) {
     band = "Disqualified"; // a firm no / don't-call beats a "yes"
+  } else if (outOfSegment) {
+    band = "Disqualified"; // not in our product lines — not our market
   } else if (lithium === "no") {
-    band = "Disqualified"; // not a lithium battery dealer — not our market
+    band = "Warm"; // lead-acid only, in our lines — the script's target (B-1)
   } else if (lithium === "yes") {
     band = "Qualified";
   } else if (callbackYes || wantsHuman) {
@@ -226,8 +239,7 @@ export function computeBand(signals: QualificationSignals): BandResult {
     band = "Cold"; // never clearly answered the lithium question
   }
 
-  const hard_negative =
-    lithium === "no" || HARD_DISQUALIFIERS.has(signals.disqualifier);
+  const hard_negative = outOfSegment || HARD_DISQUALIFIERS.has(signals.disqualifier);
 
   const lead_score =
     BAND_LEAD_SCORE[band] + (band === "Qualified" && volumeYes ? VOLUME_BONUS : 0);

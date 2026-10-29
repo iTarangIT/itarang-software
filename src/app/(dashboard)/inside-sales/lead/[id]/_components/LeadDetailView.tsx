@@ -21,6 +21,7 @@ import { ReassignToIsrModal } from "../../../_components/modals/ReassignToIsrMod
 import { EscalateModal } from "../../../_components/modals/EscalateModal";
 import { ClaimLeadConfirm } from "../../../_components/modals/ClaimLeadConfirm";
 import { canExportLeadHistory } from "@/lib/leads/access";
+import { CallbackBriefCard } from "@/components/leads/callback-brief-card";
 
 export const LEAD_NOT_ACCESSIBLE =
     "This lead is not assigned to you any more — it may have been transferred to another owner. Ask your manager if you still need it.";
@@ -147,6 +148,9 @@ export function LeadDetailView({ leadId, viewerId, viewerRole, backHref = "/insi
                 statusModalActions={["mark_converted", "mark_lost", "transfer_asm"]}
                 onStatusModal={(a) => setActiveModal(a)}
             />
+
+            {/* D8 — the promised callback and its brief, before anything else. */}
+            <CallbackBriefCard leadId={leadId} className="mx-6 mt-3" />
 
             {staleInfo && (
                 <div className="px-6 pt-3">

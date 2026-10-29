@@ -447,6 +447,29 @@ async function oldestOverdue(): Promise<DigestTable["rows"]> {
     LIMIT 10
   `)) as unknown as Array<{ dealer: string; city: string | null; owner: string | null; what: string; due: string }>;
   const items = rows.map((r) => ({ ...r, due: String(r.due).slice(0, 10) }));
+  // D8 — callbacks Priya promised that are overdue, and every unresolved
+  // complaint, by ISR. lead_callbacks is raw SQL (E-356), so probed first.
+  try {
+    const { hasCallOutcomeTables } = await import("@/lib/ai/storage/callOutcomeStore");
+    if (await hasCallOutcomeTables()) {
+      const cbs = (await db.execute(sql`
+        SELECT COALESCE(dl.dealer_name, dl.shop_name, dl.id) AS dealer, dl.city AS city, u.name AS owner,
+               CASE WHEN to_jsonb(lc) ->> 'kind' = 'complaint' THEN 'Complaint (unresolved)'
+                    ELSE 'AI callback overdue' END AS what,
+               (lc.due_at AT TIME ZONE 'Asia/Kolkata')::date AS due
+          FROM lead_callbacks lc
+          JOIN dealer_leads dl ON dl.id = lc.lead_id
+          LEFT JOIN users u ON u.id::text = lc.assigned_user_id
+         WHERE lc.owner_type = 'sales' AND lc.status IN ('open', 'dialing')
+           AND (lc.due_at < now() OR to_jsonb(lc) ->> 'kind' = 'complaint')
+         ORDER BY lc.due_at ASC
+         LIMIT 20
+      `)) as unknown as Array<{ dealer: string; city: string | null; owner: string | null; what: string; due: string }>;
+      for (const c of cbs) items.push({ ...c, due: String(c.due).slice(0, 10) });
+    }
+  } catch (e) {
+    console.warn("[sales-daily] AI callbacks block skipped:", e instanceof Error ? e.message : e);
+  }
   try {
     const { limitPassedEvents } = await import("@/lib/leads/clocks");
     const { istDay: istDayOf } = await import("@/lib/calendar/officeCalendar");

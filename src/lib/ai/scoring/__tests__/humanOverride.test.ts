@@ -25,7 +25,7 @@ describe("bandOutcome — the shared band → lead mapping", () => {
     const cases: Array<{ band: Band; signals: Parameters<typeof computeBand>[0] }> = [
       { band: "Qualified", signals: mk({ lithium: "yes" }) },
       { band: "Cold", signals: mk({ pitch: true }) },
-      { band: "Disqualified", signals: mk({ lithium: "no" }) },
+      { band: "Disqualified", signals: mk({ lithium: "no", relevant: false }) },
     ];
 
     for (const { band, signals } of cases) {

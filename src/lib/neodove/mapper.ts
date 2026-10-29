@@ -66,7 +66,11 @@ export type PushableLead = {
  * Returns null when the lead has no usable mobile: `mobile` is NeoDove's only
  * mandatory field, so such a push would be rejected anyway.
  */
-export function dealerLeadToNeodove(lead: PushableLead): NeodovePushLead | null {
+export function dealerLeadToNeodove(
+    lead: PushableLead,
+    /** D8 — extra custom fields (the callback brief); blanks are dropped like the rest. */
+    extra?: Record<string, string>,
+): NeodovePushLead | null {
     const mobile = lead.phone ? normalizePhone(lead.phone) : null;
     if (!mobile) return null;
 
@@ -93,6 +97,7 @@ export function dealerLeadToNeodove(lead: PushableLead): NeodovePushLead | null 
         itarang_source: lead.source,
         itarang_status: lead.lead_status,
         itarang_interest: lead.interest_level,
+        ...extra,
     };
     for (const [k, v] of Object.entries(custom)) {
         if (v !== null && v !== undefined && String(v).trim() !== "") {

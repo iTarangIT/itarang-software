@@ -19,7 +19,7 @@ import type { CallbackTopic, QualificationSignals } from "@/lib/ai/scoring/signa
 import type { Band, CallStatus } from "@/lib/ai/scoring/computeBand";
 
 /** Bump when the rule below changes — stamped on every ai_call_outcomes row. */
-export const CALL_CATEGORY_VERSION = "category-1.1.0";
+export const CALL_CATEGORY_VERSION = "category-1.2.0";
 
 export const CALL_CATEGORIES = [
     // ── connected: the dealer spoke ──
@@ -157,13 +157,27 @@ export function categorizeCall(input: CategoryInput): CategoryResult {
     const wantsHuman = s.wants_human === "yes";
     const topic: CallbackTopic = s.callback_topic ?? "none";
 
+    // D8 — a complaint is a person's job whatever else was said: the loop
+    // assigns it, labelled Complaint, and nobody pitches.
+    if (topic === "complaint") {
+        return {
+            category: "callback_sales",
+            connected: true,
+            callbackOwner: "sales",
+            callbackTopic: "complaint",
+            wantsHuman: false,
+            retryAsDisconnected: false,
+        };
+    }
+
     // A firm no beats anything said before it.
     if (HARD_DISQUALIFIERS.has(s.disqualifier)) {
         return { category: "not_interested", connected: true, ...none };
     }
-    // Not our market (not a lithium dealer / not in the trade) — unless he still
-    // asked for a person, which a rep should hear.
-    if ((s.lithium_dealer === "no" || (s.relevant_dealer === "no" && a.band === "Disqualified")) && !wantsHuman) {
+    // Not our market (outside our product lines → Disqualified; D10) — unless he
+    // still asked for a person, which a rep should hear. A lead-acid dealer IN
+    // our lines is Warm and keeps his callback.
+    if (a.band === "Disqualified" && !wantsHuman) {
         return { category: "not_relevant", connected: true, ...none };
     }
 
@@ -212,8 +226,47 @@ const HOUR = 60 * MIN;
 const IST_OFFSET_MS = 330 * MIN;
 /** A model-read time further out than this is not trusted. */
 const MAX_AHEAD_MS = 30 * 24 * HOUR;
-/** No time named: the AI calls back a day later; a person within 2 hours. */
-const DEFAULT_DELAY_MS: Record<CallbackOwner, number> = { ai: 24 * HOUR, sales: 2 * HOUR };
+/** No time named: the AI calls back a day later (a person: next working morning, D8). */
+const AI_DEFAULT_DELAY_MS = 24 * HOUR;
+
+/** IST wall-clock `hour:00`, `dayShift` days after `now`'s IST date. */
+function istAt(now: Date, dayShift: number, hour: number): Date {
+    const istNow = new Date(now.getTime() + IST_OFFSET_MS);
+    return new Date(
+        Date.UTC(istNow.getUTCFullYear(), istNow.getUTCMonth(), istNow.getUTCDate() + dayShift, hour, 0) -
+            IST_OFFSET_MS,
+    );
+}
+
+/**
+ * D8 — the promised time from words with no clock: evening = 17:00, afternoon
+ * = 14:00, morning = 11:00, "kal / tomorrow" alone = 11:00 the next day. A
+ * time already past today means the next day. null when no such word is there.
+ */
+export function partOfDayTime(text: string, now: Date): Date | null {
+    const t = text.toLowerCase();
+    const hour = /shaam|sham\b|शाम|evening/.test(t)
+        ? 17
+        : /dopahar|dophar|दोपहर|afternoon/.test(t)
+          ? 14
+          : /subah|सुबह|morning/.test(t)
+            ? 11
+            : /kal|कल|tomorrow|parso|परसों|day after/.test(t)
+              ? 11
+              : null;
+    if (hour == null) return null;
+    const dayShift = /parso|परसों|day after/.test(t) ? 2 : /kal|कल|tomorrow/.test(t) ? 1 : 0;
+    const at = istAt(now, dayShift, hour);
+    return at.getTime() <= now.getTime() ? new Date(at.getTime() + 24 * HOUR) : at;
+}
+
+/**
+ * D8 — 11:00 on the next working day (the window's days), for a callback with
+ * no time agreed and for a lead Qualified with no callback.
+ */
+export function nextWorkingMorning(now: Date, window: RetryWindow): Date {
+    return clampIntoWindow(istAt(now, 1, 11), window);
+}
 
 /** "5 baje", "शाम 6 बजे", "4 pm", "kal 11 baje" → an IST clock time after `now`. */
 export function parseClockTime(text: string, now: Date): Date | null {
@@ -263,13 +316,20 @@ export function callbackDueAt(input: {
         if (!isNaN(ms) && ms > nowMs - 10 * MIN && ms < nowMs + MAX_AHEAD_MS) due = new Date(Math.max(ms, nowMs));
     }
     if (!due && input.callbackWhen) {
-        due = parseClockTime(input.callbackWhen, now) ?? relativeFrom(`user: ${input.callbackWhen}`, now);
+        due =
+            parseClockTime(input.callbackWhen, now) ??
+            partOfDayTime(input.callbackWhen, now) ??
+            relativeFrom(`user: ${input.callbackWhen}`, now);
     }
     if (!due && input.transcript) {
         const lines = extractDealerLines(input.transcript);
-        due = parseClockTime(lines, now) ?? relativeFrom(input.transcript, now);
+        due = parseClockTime(lines, now) ?? relativeFrom(input.transcript, now) ?? partOfDayTime(lines, now);
     }
-    if (!due) due = new Date(nowMs + DEFAULT_DELAY_MS[input.owner]);
+    if (!due) {
+        return input.owner === "sales"
+            ? nextWorkingMorning(now, input.window)
+            : clampIntoWindow(new Date(nowMs + AI_DEFAULT_DELAY_MS), input.window);
+    }
     return clampIntoWindow(due, input.window);
 }
 

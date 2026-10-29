@@ -281,6 +281,8 @@ export const GET = withErrorHandler(
       { header: "City", key: "city", width: 16 },
       { header: "State", key: "state", width: 16 },
       { header: "Status", key: "status", width: 14 },
+      // D2 — an IVR menu / company bot answered; filterable on its own.
+      { header: "IVR", key: "ivr", width: 6 },
       { header: "Call Outcome", key: "outcome", width: 22 },
       // Why the call produced no conversation, in the same words the campaign
       // table shows. The raw outcome column stays beside it: the derived reason
@@ -315,6 +317,7 @@ export const GET = withErrorHandler(
         city: r.city ?? "—",
         state: r.state ?? "—",
         status: campaignLeadStatusLabel(r.status),
+        ivr: r.status === "switchboard" ? "Yes" : "",
         outcome: r.call_outcome ?? "—",
         failure_reason: failureReasonOf(r)?.label ?? "—",
         // Blank rather than "No" for a successful call — "No" would read as

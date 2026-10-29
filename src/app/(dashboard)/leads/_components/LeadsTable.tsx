@@ -25,6 +25,7 @@ import {
 import { CallButton } from "@/components/leads/call-button";
 import { SendToNeodoveButton } from "@/components/leads/send-to-neodove-button";
 import { NeodoveTag } from "@/components/leads/neodove-tag";
+import { IvrTag } from "@/components/leads/ivr-tag";
 import { SentByStamp } from "@/components/leads/sent-by-stamp";
 // TYPE-ONLY — both modules import `db`; a value import here would pull the
 // postgres driver into the client bundle. Runtime constants come from
@@ -132,6 +133,8 @@ export type LeadRow = LeadListRow & {
     // E-296 "Type of Business". Decorated by the API in a separate statement;
     // null = not set (or the migration is not applied here).
     business_type?: string | null;
+    /** D2 — an IVR / company bot answered the AI call on this number. */
+    is_ivr?: boolean;
 };
 
 type Props = {
@@ -358,6 +361,7 @@ export function LeadsTable({
                                                     beside it. Renders nothing for a lead that has never
                                                     been to NeoDove, and nothing for a failed push. */}
                                                 <NeodoveTag syncStatus={row.neodove_sync_status} />
+                                                <IvrTag isIvr={row.is_ivr} />
                                                 {isBeingCalled && <LeadCallStatus status="calling" />}
                                                 {endedLeadIds.has(row.id) && (
                                                     <LeadCallStatus status="ended" />

@@ -43,6 +43,8 @@ export async function pushOneLead(input: {
     leadId: string;
     campaignId: string;
     force?: boolean;
+    /** D8 — extra custom fields (the callback brief) for the ISR's calling screen. */
+    extraFields?: Record<string, string>;
 }): Promise<PushOneResult> {
     const campaigns = await db.execute<{
         id: string;
@@ -78,7 +80,7 @@ export async function pushOneLead(input: {
         };
     }
 
-    const payload = dealerLeadToNeodove(lead);
+    const payload = dealerLeadToNeodove(lead, input.extraFields);
     if (!payload) {
         return {
             ok: false,

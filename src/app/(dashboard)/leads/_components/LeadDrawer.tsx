@@ -18,6 +18,7 @@ import { toast } from "sonner";
 import { ExternalLink, Loader2, Phone, RotateCcw, Tag, Users, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { LeadTrackingPanel } from "@/components/leads/lead-tracking-panel";
+import { IvrTag } from "@/components/leads/ivr-tag";
 import { ReactivateLeadButton } from "@/components/leads/ReactivateLeadButton";
 import { ChangeLostReasonButton } from "@/components/leads/ChangeLostReasonButton";
 import { WonUndoControl } from "@/components/leads/WonUndoControl";
@@ -250,6 +251,7 @@ export function LeadDrawer({ lead, caps, onClose, onDone }: Props) {
                             </div>
                             <div className="mt-2 flex flex-wrap items-center gap-1.5">
                                 <StatusChip status={lead.lead_status as LeadStatus | null} />
+                                <IvrTag isIvr={lead.is_ivr} />
                                 <span
                                     className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium ${INTENT_BUCKET_TONE[bucket]}`}
                                 >

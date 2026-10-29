@@ -46,6 +46,7 @@ import {
 } from "@/lib/ai-dialer/retryPolicy";
 import { noteTriggerResult } from "@/lib/ai-dialer/lineHealth";
 import { dialTimeSkip, ENROL_SKIP_OUTCOME } from "@/lib/ai-dialer/numberHygiene";
+import { leadsWithOpenCallback } from "@/lib/ai-dialer/callbackLoop";
 import {
   nextWindowOpenSql,
   pauseForWindow,
@@ -470,6 +471,21 @@ export async function advanceCampaign(
             status: "skipped",
             completed_at: new Date(),
             call_outcome: "ineligible_ai_connected",
+          })
+          .where(eq(dialerCampaignLeads.id, claimed.campaignLeadId));
+        await syncCampaignCounters(campaignId);
+        continue;
+      }
+
+      // D8 — a person owes this dealer a promised call (callback, complaint,
+      // qualified hand-off): the AI does not ring him, retries included.
+      if ((await leadsWithOpenCallback([claimed.leadId])).size > 0) {
+        await db
+          .update(dialerCampaignLeads)
+          .set({
+            status: "skipped",
+            completed_at: new Date(),
+            call_outcome: ENROL_SKIP_OUTCOME.open_callback,
           })
           .where(eq(dialerCampaignLeads.id, claimed.campaignLeadId));
         await syncCampaignCounters(campaignId);

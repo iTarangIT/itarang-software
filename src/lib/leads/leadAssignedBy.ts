@@ -28,6 +28,9 @@ const ASSIGNMENT_TOUCHPOINTS = [
     "asm_transfer",
 ] as const;
 
+/** D8 — remarks of the touchpoint a system (post-AI-call) assignment writes. */
+export const SYSTEM_ASSIGNMENT_REMARK = "Assigned after AI call";
+
 export type LeadAssignedBy = {
     id: string;
     name: string | null;
@@ -39,7 +42,7 @@ export type LeadAssignedBy = {
 
 type Row = {
     id: string;
-    actor_id: string;
+    actor_id: string | null;
     name: string | null;
     role: string | null;
     at: string | null;
@@ -77,18 +80,19 @@ export async function fetchAssignedByForLeads(
                    u.role            AS role,
                    lt.performed_at   AS at
               FROM lead_touchpoints lt
-              JOIN users u ON u.id::text = lt.performed_by
+              LEFT JOIN users u ON u.id::text = lt.performed_by
              WHERE lt.dealer_lead_id IN (${idList})
                AND lt.touchpoint_type IN (${types})
+               -- D8: a system assignment after an AI call has no human actor;
+               -- recognised by its own remark so older null-actor rows stay out.
+               AND (u.id IS NOT NULL
+                    OR (lt.performed_by IS NULL AND lt.remarks LIKE ${`${SYSTEM_ASSIGNMENT_REMARK}%`}))
              ORDER BY lt.dealer_lead_id, lt.performed_at DESC
         `);
         for (const r of rows as unknown as Row[]) {
-            out[r.id] = {
-                id: r.actor_id,
-                name: r.name,
-                role: r.role,
-                at: r.at,
-            };
+            out[r.id] = r.actor_id
+                ? { id: r.actor_id, name: r.name, role: r.role, at: r.at }
+                : { id: "system", name: "AI call", role: null, at: r.at };
         }
     } catch {
         // Degrade to no stamp rather than taking the list down.
