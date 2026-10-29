@@ -12,7 +12,7 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("@/lib/db", () => ({ db: {} }));
 
 import type { CommercialsProductLine } from "@/lib/inside-sales/types";
-import { refKey, type OemPriceRef } from "@/lib/leads/oemPricing";
+import { refKey } from "@/lib/leads/oemPricing";
 import {
     listPriceViolations,
     snapshotListPrices,
@@ -84,22 +84,18 @@ describe("snapshotListPrices", () => {
         quantity: 2,
     });
 
-    it("prefers the list price, falls back to OEM, else null", () => {
+    it("uses the list price, else null — never the OEM price", () => {
         const listRefs = new Map<string, ListPriceRef>([
             [refKey("battery", "a"), { price_id: "l1", list_price: 45_000 }],
         ]);
-        const oemRefs = new Map<string, OemPriceRef>([
-            [refKey("battery", "a"), { price_id: "o1", oem_price: 38_000 }],
-            [refKey("battery", "b"), { price_id: "o2", oem_price: 39_000 }],
-        ]);
-        const out = snapshotListPrices([line("a"), line("b"), line("c")], listRefs, oemRefs);
-        expect(out.map((l) => l.list_price)).toEqual([45_000, 39_000, null]);
+        // "b" has only an OEM price set: it must not print as the list price.
+        const out = snapshotListPrices([line("a"), line("b"), line("c")], listRefs);
+        expect(out.map((l) => l.list_price)).toEqual([45_000, null, null]);
     });
 
     it("overwrites any list_price the caller sent", () => {
         const out = snapshotListPrices(
             [{ ...line("c"), list_price: 99_999 }],
-            new Map(),
             new Map(),
         );
         expect(out[0].list_price).toBeNull();

@@ -179,7 +179,7 @@ export function ListPriceDrawer({
                         <h3 className="text-sm font-semibold text-gray-900">List price</h3>
                         <p className="text-[11px] text-gray-500 mt-0.5 truncate">
                             {productName} · {assetType} · printed on quotations; never below the
-                            OEM price. With none set, the OEM price prints.
+                            OEM price. With none set, the quotation shows no list price.
                         </p>
                     </div>
                     <button
