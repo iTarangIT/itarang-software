@@ -254,10 +254,11 @@ export const GET = withErrorHandler(
       os.columns = [
         { header: "Outcome", key: "k", width: 30 },
         { header: "Leads (latest call)", key: "leads", width: 20 },
-        { header: "Calls (all dials)", key: "calls", width: 18 },
+        { header: "Answered calls", key: "calls", width: 18 },
       ];
       styleHeader(os.getRow(1));
       os.addRow({ k: "Total", leads: outcomes.leads, calls: outcomes.calls });
+      os.addRow({ k: "Dials (incl. refused by the carrier)", leads: "", calls: outcomes.dials });
       os.addRow({ k: "Connected", leads: outcomes.connectedLeads, calls: outcomes.connectedCalls });
       for (const c of CALL_CATEGORY_ORDER) {
         os.addRow({ k: CALL_CATEGORY_LABELS[c], leads: outcomes.byCategory[c], calls: outcomes.byCategoryCalls[c] });
