@@ -14,6 +14,7 @@ import { pastLimitFilter, pastLimitLabelsByLead } from "@/lib/leads/queuePastLim
 import { BULK_CLAIM_CAP, QUEUE_TABS, type QueueResponse } from "@/lib/inside-sales/types";
 import { readQueueFilters } from "@/lib/leads/queueFilters";
 import { readQueueSort } from "@/lib/leads/queueSort";
+import { fetchIvrLeadIds } from "@/lib/ai-dialer/phoneTypeStore";
 import { teamForOwnScopedViewer } from "@/lib/users/team";
 
 export const dynamic = "force-dynamic";
@@ -136,10 +137,12 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
     // told who sent them the lead, which is the one person who has always had a
     // right to know and was the only one who could not see it.
     const pageIds = rows.map((r) => r.id).filter(Boolean);
-    const [assignedBy, pastLimit_] = await Promise.all([
+    const [assignedBy, pastLimit_, ivrLeads] = await Promise.all([
         fetchAssignedByForLeads(pageIds),
         // IDs 85 / 86 — the "Past a limit" chip; same fail-tolerant decoration.
         pastLimitLabelsByLead(pageIds),
+        // D2 — the "IVR" chip; same.
+        fetchIvrLeadIds(pageIds),
     ]);
 
     const body: QueueResponse = {
@@ -148,6 +151,7 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
             assigned_by: assignedBy[r.id] ?? null,
             past_limit: pastLimit_.has(r.id),
             past_limits: pastLimit_.get(r.id) ?? [],
+            is_ivr: ivrLeads.has(r.id),
         })),
         total,
         page: parsed.page,

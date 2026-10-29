@@ -16,6 +16,7 @@ import { IntentBadge } from "./IntentBadge";
 import { InterestChip } from "./InterestChip";
 import { OwnerIndicator } from "./OwnerIndicator";
 import { NeodoveTag } from "@/components/leads/neodove-tag";
+import { IvrTag } from "@/components/leads/ivr-tag";
 import { SentByStamp } from "@/components/leads/sent-by-stamp";
 import { idleSeverity, staleSeverity, workingDaysSince, type StaleThresholds } from "@/lib/inside-sales/staleness";
 import type { OfficeHours } from "@/lib/calendar/officeHours";
@@ -221,6 +222,7 @@ export function LeadQueueTable({
                                             {/* Renders nothing unless the lead is actually with the
                                                 calling team — see NeodoveTag. */}
                                             <NeodoveTag syncStatus={row.neodove_sync_status} />
+                                            <IvrTag isIvr={row.is_ivr} />
                                             {wonWithoutQuote(row) && <WonWithoutQuoteChip />}
                                             {row.past_limit && <PastLimitChip limits={row.past_limits} />}
                                         </div>

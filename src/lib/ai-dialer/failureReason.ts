@@ -104,7 +104,7 @@ const SPECS: Record<FailureReasonCode, Spec> = {
     },
     switchboard: {
         code: "switchboard",
-        label: "Switchboard",
+        label: "IVR / company line",
         hint: "A company IVR menu, hold message or voice bot answered. Not redialled; the number is listed under Needs dealer mobile.",
         retryable: false,
         ourFault: false,
@@ -263,7 +263,7 @@ const ENROL_SKIP_LABELS: Record<string, { label: string; hint: string }> = {
         hint: "The listing is a two-wheeler / vehicle showroom, not a battery dealer.",
     },
     skipped_switchboard: {
-        label: "Skipped, switchboard",
+        label: "Skipped, IVR number",
         hint: "An earlier call to this number reached a company IVR or hold message.",
     },
     skipped_dead_number: {

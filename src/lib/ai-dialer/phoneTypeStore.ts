@@ -165,3 +165,33 @@ export const NEEDS_DEALER_MOBILE_SQL = sql`(
            AND pt.phone_type NOT IN ('mobile', 'fixed_or_mobile')
     )
 )`;
+
+/**
+ * D2 — which of `leadIds` have an IVR / company line on their CURRENT number
+ * (phone_type 'switchboard'). For the "IVR" chip on lead lists and pages: a
+ * per-page decoration, so it never throws and returns an empty set without
+ * E-361.
+ */
+export async function fetchIvrLeadIds(leadIds: string[]): Promise<Set<string>> {
+    const out = new Set<string>();
+    if (leadIds.length === 0 || !(await hasPhoneTypeTable())) return out;
+    try {
+        const r = (await db.execute(sql`
+            SELECT pt.lead_id
+              FROM dealer_lead_phone_type pt
+              JOIN dealer_leads dl ON dl.id = pt.lead_id AND dl.phone = pt.phone
+             WHERE pt.phone_type = 'switchboard'
+               AND pt.lead_id IN (${sql.join(
+                   leadIds.map((id) => sql`${id}`),
+                   sql`, `,
+               )})
+        `)) as unknown as Array<{ lead_id: string }> | { rows: Array<{ lead_id: string }> };
+        for (const row of Array.isArray(r) ? r : r.rows) out.add(row.lead_id);
+    } catch (err) {
+        console.error(
+            "[phoneTypeStore.fetchIvrLeadIds] failed:",
+            err instanceof Error ? err.message : err,
+        );
+    }
+    return out;
+}

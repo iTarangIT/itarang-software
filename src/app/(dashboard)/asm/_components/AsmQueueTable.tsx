@@ -1,6 +1,7 @@
 "use client";
 
 import { PastLimitChip } from "@/components/leads/past-limit-chip";
+import { IvrTag } from "@/components/leads/ivr-tag";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -229,6 +230,7 @@ export function AsmQueueTable({
                                         >
                                             {row.dealer_name || row.shop_name || "(unnamed dealer)"}
                                         </Link>
+                                        <IvrTag className="ml-1.5" isIvr={row.is_ivr} />
                                         {row.past_limit && <PastLimitChip className="ml-1.5" limits={row.past_limits} />}
                                         {row.shop_name && row.dealer_name && (
                                             <div className="text-[11px] text-gray-500 mt-0.5">{row.shop_name}</div>

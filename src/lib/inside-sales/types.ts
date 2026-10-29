@@ -76,6 +76,8 @@ export type QueueRow = {
     past_limit?: boolean;
     /** 18 Oct row 34 — which limits are past, e.g. "Field visit (3 working days)" (limitChipLabel). */
     past_limits?: string[];
+    /** D2 — an IVR / company bot answered the AI call on this number (the "IVR" chip). */
+    is_ivr?: boolean;
 };
 
 export type QueueResponse = {

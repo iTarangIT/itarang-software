@@ -20,6 +20,7 @@ import { fetchBusinessTypeForLeads } from "@/lib/leads/leadListQuery";
 import { ASM_QUEUE_TABS, type AsmQueueResponse } from "@/lib/asm/types";
 import { readAsmQueueFilters } from "@/lib/asm/queueFilterParams";
 import { teamForOwnScopedViewer } from "@/lib/users/team";
+import { fetchIvrLeadIds } from "@/lib/ai-dialer/phoneTypeStore";
 
 export const dynamic = "force-dynamic";
 
@@ -102,13 +103,15 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
     // one of the three touchpoint types this reads, so a lead pushed down by the
     // CEO or a rep is stamped with whoever pushed it.
     const ids = rows.map((r) => r.id).filter(Boolean);
-    const [assignedBy, businessTypes, pastByLead] = await Promise.all([
+    const [assignedBy, businessTypes, pastByLead, ivrLeads] = await Promise.all([
         fetchAssignedByForLeads(ids),
         // E-296 business_type — same separate, fail-tolerant decoration as the
         // inside-sales queue: a database without the column shows "Not set".
         fetchBusinessTypeForLeads(ids),
         // IDs 85 / 86 — the "Past a limit" chip.
         pastLimitLabelsByLead(ids),
+        // D2 — the "IVR" chip.
+        fetchIvrLeadIds(ids),
     ]);
 
     const body: AsmQueueResponse = {
@@ -118,6 +121,7 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
             business_type: businessTypes[r.id] ?? null,
             past_limit: pastByLead.has(r.id),
             past_limits: pastByLead.get(r.id) ?? [],
+            is_ivr: ivrLeads.has(r.id),
         })),
         total,
         page: parsed.page,

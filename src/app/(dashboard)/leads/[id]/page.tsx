@@ -32,6 +32,8 @@ import {
 import { limitPassedEvents } from "@/lib/leads/clocks";
 import { failedSendTimelineEntries, mergeNewestFirst } from "@/lib/leads/quoteSends";
 import { listLeadQuoteSends } from "@/lib/leads/quoteSendsStore";
+import { IvrTag } from "@/components/leads/ivr-tag";
+import { fetchIvrLeadIds } from "@/lib/ai-dialer/phoneTypeStore";
 
 export const dynamic = "force-dynamic";
 
@@ -51,6 +53,8 @@ export default async function LeadDetailPage({ params }: any) {
   const lead = await db.query.dealerLeads.findFirst({
     where: (l, { eq }) => eq(l.id, id),
   });
+  // D2 — the "IVR" chip; never throws, empty without E-361.
+  const ivrLeads = lead ? await fetchIvrLeadIds([lead.id]) : new Set<string>();
 
   // ID 45: a rep (asm, inside_sales_rep) reads only leads they own — someone
   // else's lead gets the same answer as no lead at all. ID 155: a manager also
@@ -213,8 +217,9 @@ export default async function LeadDetailPage({ params }: any) {
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 mb-6">
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0">
-              <h1 className="text-xl font-bold text-gray-900 truncate">
+              <h1 className="flex items-center gap-2 text-xl font-bold text-gray-900 truncate">
                 {lead.shop_name || lead.dealer_name || "Unnamed Shop"}
+                <IvrTag isIvr={ivrLeads.has(lead.id)} />
               </h1>
               <p className="text-xs text-gray-400 mt-0.5 font-mono">{lead.id}</p>
             </div>

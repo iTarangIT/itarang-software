@@ -14,6 +14,7 @@ import { db } from "@/lib/db";
 import { callerNotLinkedFor } from "@/lib/neodove/ownerFromCall";
 import { engagedState } from "@/lib/reports/metricDefinitions";
 import { fetchAssignedByForLeads } from "@/lib/leads/leadAssignedBy";
+import { fetchIvrLeadIds } from "@/lib/ai-dialer/phoneTypeStore";
 import { onboardingStall, STALL_LABEL } from "@/lib/onboarding/stall";
 import { getTimeLimits } from "@/lib/timeLimits/store";
 import { loadOfficeCalendar } from "@/lib/calendar/holidays";
@@ -331,8 +332,14 @@ export async function fetchLeadDetailBundle(leadId: string): Promise<LeadDetailB
         };
     }
 
+    // D2 — the "IVR" chip in the header; fail-tolerant like assigned_by.
+    const ivrLeads = await fetchIvrLeadIds([leadId]);
     const bundle: LeadDetailBundle = {
-        lead: { ...(lead as LeadDetailLead), assigned_by: assignedBy[leadId] ?? null },
+        lead: {
+            ...(lead as LeadDetailLead),
+            assigned_by: assignedBy[leadId] ?? null,
+            is_ivr: ivrLeads.has(leadId),
+        },
         latest_campaign_id: campaignRows[0]?.campaign_id ?? null,
         current_commercials:
             (commercialsHistory as LeadDetailCommercials[]).find((c) => c.is_current) ?? null,

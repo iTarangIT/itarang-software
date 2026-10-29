@@ -9,6 +9,7 @@ import { InterestLevelEditor } from "../../../_components/InterestLevelEditor";
 import { LeadStatusEditor, type StatusModalAction } from "../../../_components/LeadStatusEditor";
 import { OwnerIndicator } from "../../../_components/OwnerIndicator";
 import { NeodoveTag } from "@/components/leads/neodove-tag";
+import { IvrTag } from "@/components/leads/ivr-tag";
 import { SentByStamp } from "@/components/leads/sent-by-stamp";
 import { ReactivateLeadButton } from "@/components/leads/ReactivateLeadButton";
 import { ChangeLostReasonButton } from "@/components/leads/ChangeLostReasonButton";
@@ -111,6 +112,7 @@ export function LeadDetailHeader({
                         {/* Same chip as the queue row, so a lead does not gain or
                             lose its NeoDove provenance by being opened. */}
                         <NeodoveTag syncStatus={lead.neodove_sync_status} />
+                        <IvrTag isIvr={lead.is_ivr} />
                         {wonWithoutQuote(lead) && <WonWithoutQuoteChip />}
                         {/* ID 158: Admin, Sales Head, CEO — not partner. */}
                         {lead.lead_status === "Lost" && canReactivateLead(viewerRole) && (
