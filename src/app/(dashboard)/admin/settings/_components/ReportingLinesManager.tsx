@@ -10,7 +10,7 @@
 import { Fragment, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Loader2 } from "lucide-react";
+import { Loader2, X } from "lucide-react";
 import { Input } from "@/components/ui/input";
 
 type Row = {
@@ -34,7 +34,7 @@ type HistoryRow = {
     reason: string | null;
 };
 
-type ListData = { rows: Row[]; available: boolean; history_available?: boolean; can_edit?: boolean };
+type ListData = { rows: Row[]; available: boolean; history_available?: boolean; can_edit?: boolean; can_remove?: boolean };
 
 const roleLabel = (r: string) => r.replace(/_/g, " ");
 
@@ -76,6 +76,78 @@ function ReportingHistory({ userId }: { userId: string }) {
     );
 }
 
+/**
+ * 29 Oct: the Team column — the people who report to this person, as chips.
+ * The Sales Head adds a member with the picker (that person's "Reports to"
+ * becomes this person) and removes one with the cross (their line ends). Both
+ * start on "Change starts on". Everyone else sees the names only.
+ */
+function TeamCell({
+    manager,
+    members,
+    candidates,
+    canManage,
+    busy,
+    onAdd,
+    onRemove,
+}: {
+    manager: Row;
+    members: Row[];
+    /** Active people who could join: not this person, not already in the team. */
+    candidates: Row[];
+    canManage: boolean;
+    busy: boolean;
+    onAdd: (member: Row) => void;
+    onRemove: (member: Row) => void;
+}) {
+    return (
+        <div className="flex min-w-[220px] flex-wrap items-center gap-1.5">
+            {members.length === 0 && !canManage && <span className="text-ink-muted">—</span>}
+            {members.map((m) => (
+                <span
+                    key={m.user_id}
+                    className="inline-flex items-center gap-1 rounded-full border border-border bg-bg px-2 py-0.5 text-xs text-ink"
+                    title={`${m.name ?? m.email} · ${roleLabel(m.role)}${m.reports_since ? ` · since ${m.reports_since}` : ""}`}
+                >
+                    {m.name ?? m.email}
+                    {canManage && (
+                        <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => onRemove(m)}
+                            aria-label={`Remove ${m.name ?? m.email} from the team of ${manager.name ?? manager.email}`}
+                            className="rounded-full text-rose-600 hover:bg-rose-50 disabled:opacity-40"
+                        >
+                            <X className="h-3.5 w-3.5" />
+                        </button>
+                    )}
+                </span>
+            ))}
+            {canManage && manager.is_active && (
+                <select
+                    value=""
+                    disabled={busy}
+                    onChange={(e) => {
+                        const m = candidates.find((c) => c.user_id === e.target.value);
+                        if (m) onAdd(m);
+                    }}
+                    aria-label={`Add a team member to ${manager.name ?? manager.email}`}
+                    className="h-7 rounded-md border border-dashed border-border bg-surface px-1 text-xs text-ink-muted"
+                >
+                    <option value="">+ Add member</option>
+                    {candidates.map((c) => (
+                        <option key={c.user_id} value={c.user_id}>
+                            {c.name ?? c.email} · {roleLabel(c.role)}
+                            {c.reports_to_name ? ` (now under ${c.reports_to_name})` : ""}
+                        </option>
+                    ))}
+                </select>
+            )}
+            {busy && <Loader2 className="h-3.5 w-3.5 animate-spin text-ink-muted" />}
+        </div>
+    );
+}
+
 export function ReportingLinesManager() {
     const qc = useQueryClient();
     const [q, setQ] = useState("");
@@ -95,18 +167,15 @@ export function ReportingLinesManager() {
     });
     const rows = query.data?.rows ?? [];
     const canEdit = Boolean(query.data?.available && query.data?.can_edit);
+    // 29 Oct: only the Sales Head removes someone from a team (the API checks too).
+    const canRemove = canEdit && Boolean(query.data?.can_remove);
     const managers = useMemo(() => rows.filter((r) => r.is_active), [rows]);
-    const teamSize = useMemo(() => {
-        const m = new Map<string, number>();
-        for (const r of rows) if (r.reports_to && r.is_active) m.set(r.reports_to, (m.get(r.reports_to) ?? 0) + 1);
-        return m;
-    }, [rows]);
     const needle = q.trim().toLowerCase();
     const shown = needle
         ? rows.filter((r) => `${r.name ?? ""} ${r.email} ${r.role} ${r.reports_to_name ?? ""}`.toLowerCase().includes(needle))
         : rows;
 
-    async function save(userId: string, reportsTo: string) {
+    async function save(userId: string, reportsTo: string, doneMessage?: string) {
         setSavingId(userId);
         try {
             const res = await fetch("/api/admin/reporting-lines", {
@@ -121,7 +190,7 @@ export function ReportingLinesManager() {
             });
             const json = await res.json().catch(() => null);
             if (!res.ok || !json?.success) throw new Error(json?.error?.message ?? json?.message ?? "Could not save");
-            toast.success(json?.data?.unchanged ? "No change." : `Reporting line saved, from ${startDate}.`);
+            toast.success(json?.data?.unchanged ? "No change." : (doneMessage ?? `Reporting line saved, from ${startDate}.`));
             await qc.invalidateQueries({ queryKey: ["admin-reporting-lines"] });
         } catch (e) {
             toast.error((e as Error).message);
@@ -188,20 +257,26 @@ export function ReportingLinesManager() {
                             <th className="px-3 py-2">Person</th>
                             <th className="px-3 py-2">Role</th>
                             <th className="px-3 py-2">Reports to</th>
-                            <th className="px-3 py-2 text-right">Team</th>
+                            <th className="px-3 py-2">Team (reports to this person)</th>
                             <th className="px-3 py-2 text-right">History</th>
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-border">
                         {shown.map((r) => (
                             <Fragment key={r.user_id}>
-                                <tr className={r.is_active ? "" : "opacity-60"}>
+                                {/* 29 Oct: a row that reports to someone is tinted, so the lines stand out. */}
+                                <tr className={`${r.is_active ? "" : "opacity-60"} ${r.reports_to ? "bg-sky-50/60" : ""}`}>
                                     <td className="px-3 py-2">
                                         <div className="font-medium text-ink">{r.name ?? r.email}</div>
                                         <div className="text-xs text-ink-muted">
                                             {r.email}
                                             {r.is_active ? "" : " · inactive"}
                                         </div>
+                                        {r.reports_to && (
+                                            <span className="mt-1 inline-flex items-center gap-1 rounded-full bg-sky-100 px-2 py-0.5 text-[11px] font-medium text-sky-800">
+                                                Reports to {r.reports_to_name ?? "Unknown user"}
+                                            </span>
+                                        )}
                                     </td>
                                     <td className="px-3 py-2 capitalize text-ink-muted">{roleLabel(r.role)}</td>
                                     <td className="px-3 py-2">
@@ -211,9 +286,15 @@ export function ReportingLinesManager() {
                                                 value={r.reports_to ?? ""}
                                                 disabled={!canEdit || savingId === r.user_id}
                                                 onChange={(e) => save(r.user_id, e.target.value)}
-                                                className="h-9 min-w-[220px] rounded-md border border-border bg-surface px-2 text-sm"
+                                                className={`h-9 min-w-[220px] rounded-md border px-2 text-sm ${
+                                                    r.reports_to
+                                                        ? "border-sky-400 bg-sky-50 font-medium text-sky-900"
+                                                        : "border-border bg-surface"
+                                                }`}
                                             >
-                                                <option value="">Nobody</option>
+                                                <option value="" disabled={!!r.reports_to && !canRemove}>
+                                                    Nobody{r.reports_to && !canRemove ? " (Sales Head removes)" : ""}
+                                                </option>
                                                 {/* Keep a current manager who has since been deactivated visible. */}
                                                 {r.reports_to && !managers.some((m) => m.user_id === r.reports_to) && (
                                                     <option value={r.reports_to}>{r.reports_to_name ?? "Unknown user"} (inactive)</option>
@@ -232,7 +313,28 @@ export function ReportingLinesManager() {
                                             <div className="mt-1 text-xs text-ink-muted">since {r.reports_since}</div>
                                         )}
                                     </td>
-                                    <td className="px-3 py-2 text-right tabular-nums text-ink-muted">{teamSize.get(r.user_id) ?? "—"}</td>
+                                    <td className="px-3 py-2">
+                                        <TeamCell
+                                            manager={r}
+                                            members={rows.filter((m) => m.reports_to === r.user_id)}
+                                            candidates={managers.filter((m) => m.user_id !== r.user_id && m.reports_to !== r.user_id)}
+                                            canManage={canRemove}
+                                            busy={savingId !== null}
+                                            onAdd={(m) => {
+                                                const who = m.name ?? m.email;
+                                                const team = r.name ?? r.email;
+                                                const moving = m.reports_to_name ? ` (moves from the team of ${m.reports_to_name})` : "";
+                                                if (!window.confirm(`Add ${who} to the team of ${team}${moving}, from ${startDate}?`)) return;
+                                                void save(m.user_id, r.user_id, `${who} added to the team of ${team}, from ${startDate}.`);
+                                            }}
+                                            onRemove={(m) => {
+                                                const who = m.name ?? m.email;
+                                                const team = r.name ?? r.email;
+                                                if (!window.confirm(`Remove ${who} from the team of ${team}, from ${startDate}?`)) return;
+                                                void save(m.user_id, "", `${who} removed from the team of ${team}, from ${startDate}.`);
+                                            }}
+                                        />
+                                    </td>
                                     <td className="px-3 py-2 text-right">
                                         <button
                                             type="button"
@@ -246,6 +348,9 @@ export function ReportingLinesManager() {
                                 {openHistory === r.user_id && (
                                     <tr>
                                         <td colSpan={5} className="bg-bg px-3 py-2">
+                                            <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-ink-muted">
+                                                Who {r.name ?? r.email} reported to (history)
+                                            </div>
                                             <ReportingHistory userId={r.user_id} />
                                         </td>
                                     </tr>
