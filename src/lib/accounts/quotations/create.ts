@@ -36,6 +36,7 @@ import {
 import { AccountQuoteError, type AccountSummary } from "./access";
 import { tryGenerateAccountQuotationDraft } from "./draft";
 import { notifyAccountQuotationApproved, notifyAccountQuotationPendingApproval } from "./notify";
+import { sendQuoteApprovalRequestEmail, termsLabel } from "@/lib/leads/quoteApprovalEmail";
 
 export const AccountQuoteLineSchema = z.object({
     asset_type: z.enum(["battery", "charger", "paraphernalia"]),
@@ -127,7 +128,7 @@ export async function createAccountQuotation(args: {
             .returning({ id: accountQuotations.quotation_id });
         const quotationId = inserted[0]?.id;
         if (!quotationId) throw new AccountQuoteError("Could not save the quotation.", 500);
-        return { quotationId, versionNo, decision, evaluation, hold };
+        return { quotationId, versionNo, decision, evaluation, hold, terms };
     });
 
     const afterCommit = async (): Promise<{ quote_number: string | null }> => {
@@ -153,13 +154,30 @@ export async function createAccountQuotation(args: {
                 : null,
             outcome.hold ? `credit terms (${outcome.hold.credit_days ?? "?"} days) need approval` : null,
         ].filter(Boolean);
+        const reason = reasons.length ? reasons.join("; ") : null;
+        // 28 Oct item 3 — the approval request to the CEO, CC salesperson,
+        // their manager and care@. Never throws.
+        const ceoEmailSent = await sendQuoteApprovalRequestEmail({
+            family: "account",
+            dealerName: account.name,
+            refId: account.id,
+            versionNo: outcome.versionNo,
+            lines,
+            termsLabel: termsLabel(outcome.terms),
+            notes: body.notes ?? null,
+            raisedBy: actor.id,
+            raisedByName: actor.name,
+            reason,
+            href: "/ceo/quotations",
+        });
         await notifyAccountQuotationPendingApproval({
             accountId: account.id,
             accountName: account.name,
             quotationId: outcome.quotationId,
             value: total,
-            reason: reasons.length ? reasons.join("; ") : null,
+            reason,
             raisedByName: actor.name,
+            ceoEmailSent,
         });
         return { quote_number: null };
     };

@@ -15,17 +15,28 @@ const money = (v: number) => (v > 0 ? ` for ₹${v.toLocaleString("en-IN")}` : "
 const accountHref = (accountId: string, quotationId: string) =>
     `/my-dealers/${encodeURIComponent(accountId)}?quote=${quotationId}`;
 
-/** The owner and whoever raised it — deduped, unset ids dropped. */
-function people(ids: Array<string | null | undefined>, href: string): Recipient[] {
+/**
+ * The owner and whoever raised it — deduped, unset ids dropped. `emailed`: ids
+ * the approval email (quoteApprovalEmail.ts) already reached — bell only.
+ */
+function people(ids: Array<string | null | undefined>, href: string, emailed: string[] = []): Recipient[] {
     return [...new Set(ids.filter((x): x is string => !!x))].map((userId) => ({
         audience: { kind: "user" as const, userId },
         as: ADMIN_PARTY,
         href,
+        ...(emailed.includes(userId) ? { email: false } : {}),
     }));
 }
 
 export async function notifyAccountQuotationPendingApproval(
-    p: AccountRef & { quotationId: string; value: number; reason?: string | null; raisedByName?: string | null },
+    p: AccountRef & {
+        quotationId: string;
+        value: number;
+        reason?: string | null;
+        raisedByName?: string | null;
+        /** The CEO already has the approval email (with CCs) — bell only for them. */
+        ceoEmailSent?: boolean;
+    },
 ) {
     const who = p.raisedByName?.trim() ? ` by ${p.raisedByName.trim()}` : "";
     const why = p.reason?.trim() ? ` Flagged: ${p.reason.trim()}.` : "";
@@ -36,7 +47,15 @@ export async function notifyAccountQuotationPendingApproval(
         stage: "Account quotation",
         from: ADMIN_PARTY,
         data: { accountId: p.accountId, quotationId: p.quotationId, value: p.value, reason: p.reason ?? null, family: "account" },
-        to: [{ audience: { kind: "roles" as const, roles: ["ceo", "admin"] }, as: ADMIN_PARTY, href: "/ceo/quotations" }],
+        to: [
+            {
+                audience: { kind: "roles" as const, roles: ["ceo"] },
+                as: ADMIN_PARTY,
+                href: "/ceo/quotations",
+                ...(p.ceoEmailSent ? { email: false } : {}),
+            },
+            { audience: { kind: "roles" as const, roles: ["admin"] }, as: ADMIN_PARTY, href: "/ceo/quotations" },
+        ],
     });
 }
 
@@ -50,6 +69,8 @@ export async function notifyAccountQuotationApproved(
         mode: "auto" | "manual";
         approverName?: string | null;
         draftReady: boolean;
+        /** Reached by the approval email already — bell only. */
+        emailedUserIds?: string[];
     },
 ) {
     const ref = p.quoteNumber ? ` (${p.quoteNumber})` : "";
@@ -67,7 +88,7 @@ export async function notifyAccountQuotationApproved(
         stage: "Account quotation",
         from: ADMIN_PARTY,
         data: { accountId: p.accountId, quotationId: p.quotationId, quoteNumber: p.quoteNumber, mode: p.mode, family: "account" },
-        to: people([p.ownerUserId, p.createdBy], accountHref(p.accountId, p.quotationId)),
+        to: people([p.ownerUserId, p.createdBy], accountHref(p.accountId, p.quotationId), p.emailedUserIds),
     });
 }
 
