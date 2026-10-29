@@ -153,6 +153,7 @@ import {
 } from "./stock-rows";
 import type { InboundEvent } from "./types";
 import { oneLine } from "./window";
+import { recordWhatsAppKycStep } from "@/lib/kyc/kycWhatsAppLog";
 
 export const DC_DP_PRODUCT = "DC_DP_PRODUCT";
 export const DC_DP_CHARGER = "DC_DP_CHARGER";
@@ -1434,6 +1435,8 @@ async function completeOrder(
         body: lineFields,
       });
       await setSession(session.id, { current_state: DC_DP_WAIT });
+      // ID 201 (28 Oct gap 1): the cash sale closed on WhatsApp, in the KYC history.
+      await recordWhatsAppKycStep({ session, dealer, leadId, action: `Confirmed the cash sale (battery ${sale.batterySerial})` });
       // The dealer closed it; the customer still needs their own copy of what
       // they bought. Best-effort — the sale is committed either way.
       if (dealerDriven) {
@@ -1629,6 +1632,13 @@ async function onDispatchOtp(
       otp: digits,
       performedBy: dealer.uploaderId,
       dealerId: dealer.dealerCode,
+    });
+    // ID 201 (28 Oct gap 1): the dispatch confirmed on WhatsApp, in the KYC history.
+    await recordWhatsAppKycStep({
+      session,
+      dealer,
+      leadId,
+      action: `Confirmed the dispatch with the customer's code (Step 5, battery ${result.batterySerial})`,
     });
     // `confirmDispatch` fans the "Dispatched!" announcement out to both chats
     // itself (pushDispatched). This is the acting dealer's own receipt, sent

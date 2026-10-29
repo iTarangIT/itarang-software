@@ -102,3 +102,33 @@ describe("ID 201 #6: the owning dealer never sees staff names", () => {
         expect(lib("kyc/kycEventLog.ts")).toMatch(/const forDealer = type === "system" \? actor : ITARANG_TEAM;/);
     });
 });
+
+describe("ID 201, 28 Oct gaps", () => {
+    it("1: the dealer's WhatsApp steps outside KYC are logged (Step 4, offer, cash sale, dispatch)", () => {
+        const counts: Array<[string, number]> = [
+            ["whatsapp/step4-flow.ts", 2],
+            ["whatsapp/offer-flow.ts", 1],
+            ["whatsapp/dispatch-flow.ts", 2],
+            ["whatsapp/cash-flow.ts", 2],
+        ];
+        for (const [rel, n] of counts) {
+            expect(lib(rel).match(/\brecordWhatsAppKycStep\s*\(/g)?.length ?? 0, rel).toBeGreaterThanOrEqual(n);
+        }
+    });
+    it("2: a staff line with no dealer given is for the file's dealer", () => {
+        const src = lib("kyc/kycEventLog.ts");
+        const body = src.slice(src.indexOf("export async function recordKycEvent("));
+        expect(body.slice(0, body.indexOf("db.insert(auditLogs)"))).toMatch(
+            /forDealerId === undefined[\s\S]*SELECT dealer_id FROM leads/,
+        );
+    });
+    it("4: a product-only change is a Step 4 line", () => {
+        expect(route("dealer/leads/[id]")).toMatch(/changed the product \(Step 4\)/);
+    });
+    it("5: an iTarang / house step outside KYC is also a KYC history line, before the Done-by coalescing", () => {
+        const src = lib("leads/actForDealerGuard.ts");
+        const body = src.slice(src.indexOf("export async function recordActorStep("));
+        const head = body.slice(0, body.indexOf("let anyRecent"));
+        expect(head).toMatch(/!opts\.kycLine && !opts\.coalesce[\s\S]*recordKycEvent\([\s\S]*actorOf\(actor\)/);
+    });
+});

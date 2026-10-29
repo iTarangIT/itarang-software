@@ -44,6 +44,9 @@ const normalizePhone = (phone?: string | null) => {
     return phone.startsWith('+') ? phone : `+91${clean}`;
 };
 
+/** ID 201 — the fields the Step 4 product cart PATCHes (useProductScope). */
+const STEP4_PRODUCT_FIELDS = new Set(['product_category_id', 'product_type_id', 'primary_product_id']);
+
 // GET /api/dealer/leads/[id]
 // Returns the lead in the shape the Step 1 wizard expects so a dealer can
 // jump back into an already-created lead and edit fields like address.
@@ -268,7 +271,18 @@ export const PATCH = withErrorHandler(async (req: Request, { params }: { params:
             });
         });
 
-        if (actor) await recordActorStep(actor, 'edited the customer details (Step 1)', { fields: Object.keys(data).filter((k) => k !== 'commitStep') });
+        if (actor) {
+            const changed = Object.keys(data).filter((k) => k !== 'commitStep');
+            // ID 201 (28 Oct gap 4): the Step 4 product cart saves through this
+            // PATCH; a change of product only is a Step 4 line, not a Step 1 edit.
+            const productOnly =
+                changed.length > 0 && changed.every((k) => STEP4_PRODUCT_FIELDS.has(k));
+            await recordActorStep(
+                actor,
+                productOnly ? 'changed the product (Step 4)' : 'edited the customer details (Step 1)',
+                { fields: changed },
+            );
+        }
         return successResponse({ success: true, message: 'Step 1 updated' });
     } catch (err) {
         console.error("Lead update failed:", err);

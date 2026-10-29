@@ -38,6 +38,7 @@ import { eq } from "drizzle-orm";
 
 import { db } from "@/lib/db/index";
 import { leads } from "@/lib/db/schema";
+import { recordWhatsAppKycStep } from "@/lib/kyc/kycWhatsAppLog";
 
 import type { ActiveDealer } from "./customer-lead";
 import { askBattery } from "./dispatch-flow";
@@ -94,6 +95,8 @@ async function onCashName(
     .update(leads)
     .set({ full_name: name, owner_name: name, updated_at: new Date() })
     .where(eq(leads.id, leadId));
+  // ID 201 (28 Oct gap 1): cash-sale details given on WhatsApp, in the KYC history.
+  await recordWhatsAppKycStep({ session, leadId, action: "Entered the customer's name (cash sale)" });
 
   await askVehicleRc(session);
 }
@@ -137,6 +140,7 @@ async function onCashRc(
     .update(leads)
     .set({ vehicle_rc: rc, updated_at: new Date() })
     .where(eq(leads.id, leadId));
+  await recordWhatsAppKycStep({ session, dealer, leadId, action: `Entered the vehicle number ${rc} (cash sale)` });
 
   // Straight into the shared picker. No category filter is applied for a cash
   // lead — nothing has tagged one yet, and showing the dealer their whole
