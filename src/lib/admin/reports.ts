@@ -11,7 +11,7 @@ import { ONBOARDING_DROPOUT_REASONS, OWNER_DRILL_METRICS } from "./types";
 import { isUndefinedColumn, ownerConversionRate, roleLabel } from "./reportHelpers";
 import { asmTransferRecipientFromVisitSql } from "@/lib/leads/closingOwner";
 import { hasLeadClocks } from "@/lib/leads/clocks";
-import { workingDaysBetweenSql } from "@/lib/calendar/holidays";
+import { primeHolidayLog, workingDaysBetweenAsOfSql } from "@/lib/calendar/holidays";
 import { FOLLOW_UP_HORIZON_DAYS } from "@/lib/leads/followUpAgeing";
 import type {
     DashboardFilters,
@@ -414,9 +414,11 @@ async function sourcePerformance(f: DashboardFilters): Promise<ReportResult> {
 // Each lead is counted once however many times it was handed to the same ASM.
 async function asmHandoff(f: DashboardFilters): Promise<ReportResult> {
     // 18 Oct row 39 — "Speed": both waits in working days on the office
-    // calendar (holidays off), not calendar days.
-    const closeDays = workingDaysBetweenSql(sql`p.first_handoff_at`, sql`p.closed_at`);
-    const visitDays = workingDaysBetweenSql(sql`p.first_handoff_at`, sql`p.first_visit_at`);
+    // calendar (holidays off), not calendar days. ID 85 #6: both waits have
+    // ended, so they use the holidays as they stood when they ended.
+    await primeHolidayLog();
+    const closeDays = workingDaysBetweenAsOfSql(sql`p.first_handoff_at`, sql`p.closed_at`);
+    const visitDays = workingDaysBetweenAsOfSql(sql`p.first_handoff_at`, sql`p.first_visit_at`);
     const rows = await db.execute<{
         asm_id: string | null;
         asm_name: string | null;
