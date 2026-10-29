@@ -19,7 +19,7 @@ import type { CallbackTopic, QualificationSignals } from "@/lib/ai/scoring/signa
 import type { Band, CallStatus } from "@/lib/ai/scoring/computeBand";
 
 /** Bump when the rule below changes — stamped on every ai_call_outcomes row. */
-export const CALL_CATEGORY_VERSION = "category-1.1.0";
+export const CALL_CATEGORY_VERSION = "category-1.2.0";
 
 export const CALL_CATEGORIES = [
     // ── connected: the dealer spoke ──
@@ -161,9 +161,10 @@ export function categorizeCall(input: CategoryInput): CategoryResult {
     if (HARD_DISQUALIFIERS.has(s.disqualifier)) {
         return { category: "not_interested", connected: true, ...none };
     }
-    // Not our market (not a lithium dealer / not in the trade) — unless he still
-    // asked for a person, which a rep should hear.
-    if ((s.lithium_dealer === "no" || (s.relevant_dealer === "no" && a.band === "Disqualified")) && !wantsHuman) {
+    // Not our market (outside our product lines → Disqualified; D10) — unless he
+    // still asked for a person, which a rep should hear. A lead-acid dealer IN
+    // our lines is Warm and keeps his callback.
+    if (a.band === "Disqualified" && !wantsHuman) {
         return { category: "not_relevant", connected: true, ...none };
     }
 

@@ -224,6 +224,7 @@ export async function applyPostCall(input: {
                 leadId,
                 dueAt: plan.callbackDue,
                 cat,
+                band: input.band,
                 summary: input.summary,
                 notify: cb?.created ?? true,
             });
@@ -237,13 +238,19 @@ async function handOffSalesCallback(input: {
     leadId: string;
     dueAt: Date;
     cat: CategoryResult;
+    band: string | null;
     summary: string | null;
     notify: boolean;
 }): Promise<void> {
     const { leadId, dueAt, cat } = input;
     const due = dueAt.toISOString();
 
-    await markSalesReady(db, { leadId, reason: "ai_callback", actorId: null });
+    // D10 — a callback agreed on an AI call is a sales-ready event for any band
+    // except Disqualified (a dealer outside our lines who still asked for a
+    // person is handed to sales, but is not counted ready).
+    if (input.band !== "Disqualified") {
+        await markSalesReady(db, { leadId, reason: "ai_callback", actorId: null });
+    }
 
     // The follow-up date the rep queues already sort by. Moved EARLIER only — a
     // rep's own sooner follow-up is never pushed back by the AI.

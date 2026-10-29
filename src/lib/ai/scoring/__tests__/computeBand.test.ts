@@ -34,15 +34,27 @@ describe("computeBand — the lithium-dealer rule (top rule wins)", () => {
     expect(r.info_signals_count).toBe(4); // still counted for audit
   });
 
-  it("lithium no → Disqualified 0, overriding callback + volume", () => {
+  it("D10 — lithium no, outside our lines → Disqualified 0, overriding callback + volume", () => {
     const r = computeBand(
-      mk({ lithium: "no", callback: true, spec: true, volume: true, need: true }),
+      mk({ lithium: "no", relevant: false, callback: true, spec: true, volume: true, need: true }),
     );
     expect(r.band).toBe("Disqualified");
     expect(r.lead_score).toBe(0);
     expect(r.interest_level).toBe(null);
     expect(r.action).toBe("stop");
     expect(r.hard_negative).toBe(true);
+  });
+
+  it("D10 — lead-acid only, in our lines → Warm 60, not a hard negative", () => {
+    const r = computeBand(mk({ lithium: "no", relevant: true }));
+    expect(r.band).toBe("Warm");
+    expect(r.lead_score).toBe(60);
+    expect(r.hard_negative).toBe(false);
+    expect(computeBand(mk({ lithium: "no", relevant: true, callback: true })).band).toBe("Warm");
+    // A firm no still drops him.
+    expect(computeBand(mk({ lithium: "no", relevant: true, disqualifier: "not_interested" })).band).toBe(
+      "Disqualified",
+    );
   });
 
   it("lithium never answered → Cold 30, even with substance", () => {
@@ -74,13 +86,15 @@ describe("computeBand — the lithium-dealer rule (top rule wins)", () => {
   });
 
   it("2.1.0 — Warm only from a callback / ask for a person; Qualified and disqualifiers still win", () => {
-    for (const lithium of ["yes", "no", "unknown"] as const) {
+    for (const lithium of ["yes", "unknown"] as const) {
       for (const volume of [true, false]) {
         expect(computeBand(mk({ lithium, volume, spec: true })).band).not.toBe("Warm");
       }
     }
     expect(computeBand(mk({ lithium: "yes", callback: true })).band).toBe("Qualified");
-    expect(computeBand(mk({ lithium: "no", callback: true, wantsHuman: true })).band).toBe("Disqualified");
+    expect(
+      computeBand(mk({ lithium: "no", relevant: false, callback: true, wantsHuman: true })).band,
+    ).toBe("Disqualified");
     expect(computeBand(mk({ callback: true, disqualifier: "not_interested" })).band).toBe("Disqualified");
   });
 
@@ -116,8 +130,8 @@ describe("computeBand — dropped calls", () => {
     expect(r.lead_score).toBe(90);
   });
 
-  it("dropped after a lithium no → dropped_partial Disqualified", () => {
-    const r = computeBand(mk({ disqualifier: "call_dropped", lithium: "no" }));
+  it("dropped after a lithium no, outside our lines → dropped_partial Disqualified", () => {
+    const r = computeBand(mk({ disqualifier: "call_dropped", lithium: "no", relevant: false }));
     expect(r.call_status).toBe("dropped_partial");
     expect(r.band).toBe("Disqualified");
   });
@@ -172,5 +186,22 @@ describe("deriveOutcome (legacy bridge)", () => {
     expect(deriveOutcome(mk({ callback: true }))).toBe("callback_requested");
     expect(deriveOutcome(mk({ volume: true }))).toBe("interested");
     expect(deriveOutcome(mk())).toBe("unknown");
+  });
+});
+
+describe("D9 — product lines", () => {
+  it("the breakdown lists the lines he deals in", () => {
+    const r = computeBand({ ...mk({ lithium: "no" }), product_lines: ["three_wheeler", "inverter_battery"] });
+    const row = r.score_breakdown.find((l) => l.signal === "product_lines");
+    expect(row?.present).toBe(true);
+    expect(row?.evidence).toBe("E-rickshaw / e-auto, Inverter battery");
+  });
+
+  it("the schema keeps known lines, drops unknown ones, and still reads old rows", async () => {
+    const { QualificationSignalsSchema } = await import("../signals");
+    const s = QualificationSignalsSchema.parse({ product_lines: ["two_wheeler", "tractor"], dealer_segment: "battery" });
+    expect(s.product_lines).toEqual(["two_wheeler"]);
+    expect(s.dealer_segment).toBe("battery");
+    expect(QualificationSignalsSchema.parse({}).product_lines).toEqual([]);
   });
 });

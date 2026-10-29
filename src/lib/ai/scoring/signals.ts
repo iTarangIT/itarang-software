@@ -20,6 +20,8 @@ export const YES_NO = ["yes", "no"] as const;
 // The lithium-dealer gate needs a third value: "no" disqualifies the lead while
 // "never answered" only leaves it Cold, so the two must stay distinguishable.
 export const YES_NO_UNKNOWN = ["yes", "no", "unknown"] as const;
+// Legacy (signals <= 2.2.0): ONE segment per call. Old rows keep it and still
+// display; new calls write product_lines instead (D9).
 export const DEALER_SEGMENTS = [
   "battery",
   "e_rickshaw",
@@ -27,6 +29,24 @@ export const DEALER_SEGMENTS = [
   "multiple",
   "none",
 ] as const;
+// D9 (signals-2.3.0) — every line iTarang sells into. A dealer in ANY of them is
+// relevant; one in none of them (car / truck / petrol-bike batteries only) is not.
+export const PRODUCT_LINES = [
+  "three_wheeler", // e-rickshaw / e-auto (L3, L5) batteries
+  "two_wheeler", // electric two-wheeler batteries
+  "inverter_battery",
+  "inverter",
+  "solar",
+  "ess_bess",
+] as const;
+export const PRODUCT_LINE_LABELS: Record<(typeof PRODUCT_LINES)[number], string> = {
+  three_wheeler: "E-rickshaw / e-auto",
+  two_wheeler: "Electric 2-wheeler",
+  inverter_battery: "Inverter battery",
+  inverter: "Inverter",
+  solar: "Solar",
+  ess_bess: "ESS / BESS",
+};
 export const DEALER_ROLES = ["oem", "dealer", "both", "unknown"] as const;
 export const DISQUALIFIERS = [
   "none",
@@ -50,6 +70,7 @@ export const CALLBACK_TOPICS = [
 export type YesNo = (typeof YES_NO)[number];
 export type YesNoUnknown = (typeof YES_NO_UNKNOWN)[number];
 export type DealerSegment = (typeof DEALER_SEGMENTS)[number];
+export type ProductLine = (typeof PRODUCT_LINES)[number];
 export type DealerRole = (typeof DEALER_ROLES)[number];
 export type Disqualifier = (typeof DISQUALIFIERS)[number];
 export type LanguageType = (typeof LANGUAGES)[number];
@@ -68,10 +89,20 @@ export const QualificationSignalsSchema = z.object({
   // volume_shared), no → Disqualified, unknown (never answered) → Cold.
   lithium_dealer: z.enum(YES_NO_UNKNOWN).catch("unknown"),
 
-  // ── Market relevance + routing context (context only since
-  // qualification-2.0.0 — lithium_dealer is the gate now) ──
+  // ── Market relevance (D9/D10, qualification-2.2.0) ──
+  // relevant_dealer = he deals in at least one PRODUCT_LINE. Together with
+  // lithium_dealer it decides a lead-acid dealer: in our lines → Warm, outside
+  // them → Disqualified (computeBand).
   relevant_dealer: yesNo,
-  dealer_segment: z.enum(DEALER_SEGMENTS).catch("none"), // context/routing only
+  // Every line he deals in (several allowed); [] when none was stated.
+  product_lines: z
+    .array(z.string())
+    .catch([])
+    .transform((xs) =>
+      xs.filter((x): x is ProductLine => (PRODUCT_LINES as readonly string[]).includes(x)),
+    ),
+  // Legacy single segment — read from old rows only, never asked for now.
+  dealer_segment: z.enum(DEALER_SEGMENTS).optional().catch(undefined),
   dealer_role: z.enum(DEALER_ROLES).catch("unknown"), // context/routing only
 
   // ── The five INFO signals (info_signals_count = how many are "yes") ──

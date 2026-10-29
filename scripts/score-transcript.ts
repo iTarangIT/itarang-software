@@ -48,7 +48,7 @@ async function main() {
   row("financing_value_acknowledged", s.financing_value_acknowledged, ev.financing_value_acknowledged);
   row("pitch_heard", s.pitch_heard, "");
   row("callback_agreed", s.callback_agreed, ev.callback_agreed);
-  console.log(`  dealer_segment : ${s.dealer_segment} · dealer_role : ${s.dealer_role}`);
+  console.log(`  product_lines  : ${s.product_lines.join(", ") || "—"} · dealer_role : ${s.dealer_role}`);
   console.log(`  disqualifier   : ${s.disqualifier}`);
   console.log(`  language       : ${s.language}`);
   console.log(`  summary        : ${s.call_summary}`);

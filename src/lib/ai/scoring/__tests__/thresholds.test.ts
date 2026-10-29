@@ -13,7 +13,7 @@ describe("score↔band agreement", () => {
       computeBand(mk({ lithium: "yes", volume: true })), // Qualified 90
       computeBand(mk({ lithium: "yes" })), // Qualified 75
       computeBand(mk({ pitch: true })), // Cold 30
-      computeBand(mk({ lithium: "no" })), // Disqualified 0
+      computeBand(mk({ lithium: "no", relevant: false })), // Disqualified 0 (outside our lines)
     ];
     expect(results.map((r) => r.lead_score)).toEqual([90, 75, 30, 0]);
     for (const r of results) {

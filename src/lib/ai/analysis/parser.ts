@@ -8,7 +8,7 @@
 import {
   QualificationSignalsSchema,
   type QualificationSignals,
-  DEALER_SEGMENTS,
+  PRODUCT_LINES,
   DEALER_ROLES,
   DISQUALIFIERS,
   CALLBACK_TOPICS,
@@ -42,9 +42,9 @@ function buildPrompt(
   calibrationBlock: string,
 ): string {
   return `You are analysing a transcript of an outbound sales call between iTarang's
-AI agent ("Priya") and a battery dealer. The agent pitched EV / lithium-ion
-batteries and an EMI financing scheme to e-rickshaw / EV battery dealers across
-India.
+AI agent ("Priya") and a dealer. iTarang sells lithium batteries for
+e-rickshaws / e-autos, electric two-wheelers and inverters, plus inverters,
+solar and ESS / BESS, with an EMI financing scheme, to dealers across India.
 
 CURRENT TIME (Asia/Kolkata): ${now}
 
@@ -68,11 +68,16 @@ RULES for each field:
   COUNTS as "yes". "no" if he says he does not (only lead-acid, or does not
   deal in batteries at all). "unknown" if the question never came up or he
   never clearly answered it. This is the most important field.
-- relevant_dealer = "yes" if he manufactures, assembles, sells, OR trades
-  batteries, e-rickshaws, OR electric two-wheelers (any one qualifies); capture
-  which in dealer_segment.
-- dealer_segment = ${DEALER_SEGMENTS.join(" | ")} (which market he is in; context
-  only — no band impact).
+- relevant_dealer = "yes" if he makes, assembles, sells OR trades anything in
+  one of OUR product lines below — lithium OR lead-acid both count. A shop
+  that deals ONLY in car, truck or petrol-bike batteries (or no batteries,
+  inverters or solar at all) is "no". A lead-acid e-rickshaw or inverter
+  battery dealer is "yes".
+- product_lines = every one of OUR lines he deals in, as a list (several
+  allowed, [] if none was stated):
+  "three_wheeler" (e-rickshaw / e-auto batteries), "two_wheeler" (electric
+  scooter / bike batteries), "inverter_battery", "inverter", "solar",
+  "ess_bess" (energy storage / BESS). Allowed: ${PRODUCT_LINES.join(" | ")}.
 - dealer_role = ${DEALER_ROLES.join(" | ")} (oem if he makes/assembles the
   product, dealer if he resells it, both if applicable, else unknown; context
   only — no band impact).
@@ -123,7 +128,7 @@ OUTPUT EXACTLY THIS JSON SHAPE (fill every field):
 {
   "lithium_dealer": "yes" | "no" | "unknown",
   "relevant_dealer": "yes" | "no",
-  "dealer_segment": "battery" | "e_rickshaw" | "e_2w" | "multiple" | "none",
+  "product_lines": [${PRODUCT_LINES.map((l) => `"${l}"`).join(", ")}] (only those he deals in),
   "dealer_role": "oem" | "dealer" | "both" | "unknown",
   "battery_spec_shared": "yes" | "no",
   "volume_shared": "yes" | "no",

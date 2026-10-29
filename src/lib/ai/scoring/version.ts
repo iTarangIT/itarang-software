@@ -25,12 +25,19 @@
 // callback_when / callback_at / callback_topic / wants_human; extract-2.2.0
 // teaches the prompt to read them (AI dialer review, 23 Oct 2026). extract-2.2.1:
 // agreeing to the agent's own "our sales manager will call" is not wants_human.
-export const SCORING_VERSION = "qualification-2.1.0";
-export const SIGNAL_SCHEMA_VERSION = "signals-2.2.0";
+//
+// qualification-2.2.0 (D9/D10, 29 Oct 2026): a lead-acid-only dealer in our
+// product lines is Warm, not Disqualified; only a dealer outside them (car /
+// truck / petrol-bike batteries only) is Disqualified and a hard negative.
+// signals-2.3.0 replaces the single dealer_segment with product_lines
+// (three_wheeler, two_wheeler, inverter_battery, inverter, solar, ess_bess);
+// extract-2.3.0 widens the prompt to inverter / solar / ESS dealers.
+export const SCORING_VERSION = "qualification-2.2.0";
+export const SIGNAL_SCHEMA_VERSION = "signals-2.3.0";
 
 // Tags the EXTRACTION prompt (parser.ts) + its few-shot calibration set
 // (analysis/calibrationExamples.ts). Bump whenever the prompt wording or the
 // calibration examples change — this is the Lever-A (extraction-side)
 // counterpart to SCORING_VERSION, so an audit can tell whether a signal shift
 // came from a new prompt or a new band rule.
-export const EXTRACTION_VERSION = "extract-2.2.1";
+export const EXTRACTION_VERSION = "extract-2.3.0";

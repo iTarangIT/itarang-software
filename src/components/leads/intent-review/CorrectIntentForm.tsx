@@ -44,7 +44,7 @@ export const CORRECTABLE_FACTS: Array<{
     info: false,
     options: ["yes", "no", "unknown"],
   },
-  { key: "relevant_dealer", label: "Relevant dealer", info: false },
+  { key: "relevant_dealer", label: "Deals in our product lines", info: false },
   { key: "battery_spec_shared", label: "Battery spec shared", info: true },
   { key: "volume_shared", label: "Volume shared", info: true },
   {

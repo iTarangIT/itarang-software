@@ -77,6 +77,15 @@ describe("categorizeCall — connected", () => {
         expect(r.callbackOwner).toBeNull();
     });
 
+    it("D10 — lead-acid dealer in our lines (Warm) keeps his callback", () => {
+        const r = categorizeCall({
+            campaignStatus: done,
+            analysis: a({ lithium_dealer: "no", relevant_dealer: "yes", callback_agreed: "yes" }, { band: "Warm" }),
+        });
+        expect(r.category).toBe("callback_sales");
+        expect(r.callbackOwner).toBe("sales");
+    });
+
     it("not a lithium dealer → not_relevant", () => {
         expect(categorizeCall({ campaignStatus: done, analysis: a({ lithium_dealer: "no" }, { band: "Disqualified" })}).category).toBe(
             "not_relevant",
