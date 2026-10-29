@@ -6,6 +6,7 @@ import { Loader2, CheckCircle2, XCircle, Clock, FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 import { onFreshFileClick } from "@/lib/storage/freshFileLink";
+import { TravelProofPanel } from "@/components/expenses/TravelProofPanel";
 type Status = "pending" | "approved" | "rejected";
 
 interface ExpenseRow {
@@ -21,6 +22,8 @@ interface ExpenseRow {
   submitter_name: string | null;
   submitter_email: string | null;
   submitter_role: string | null;
+  /** ID 197: claimed travel days and their verdicts (E-364); null for other claims. */
+  travel_proof: { summary: string } | null;
 }
 
 export default function CEOExpenseApprovalsPage() {
@@ -28,6 +31,8 @@ export default function CEOExpenseApprovalsPage() {
   const [tab, setTab] = useState<Status>("pending");
   const [rejecting, setRejecting] = useState<string | null>(null);
   const [reason, setReason] = useState("");
+  // ID 197: the claim whose Day evidence is open.
+  const [proofFor, setProofFor] = useState<string | null>(null);
 
   const { data: rows, isLoading } = useQuery({
     queryKey: ["admin-expenses", tab],
@@ -126,6 +131,7 @@ export default function CEOExpenseApprovalsPage() {
                   <th className="py-2 font-semibold">Amount</th>
                   <th className="py-2 font-semibold">Description</th>
                   <th className="py-2 font-semibold">Bill</th>
+                  <th className="py-2 font-semibold">Travel proof</th>
                   {tab === "pending" && <th className="py-2 font-semibold text-right">Action</th>}
                   {tab === "rejected" && <th className="py-2 font-semibold">Reason</th>}
                 </tr>
@@ -162,6 +168,19 @@ export default function CEOExpenseApprovalsPage() {
                         >
                           View
                         </a>
+                      ) : (
+                        <span className="text-gray-300">—</span>
+                      )}
+                    </td>
+                    <td className="py-3 text-xs">
+                      {row.travel_proof ? (
+                        <button
+                          type="button"
+                          onClick={() => setProofFor(row.id)}
+                          className="text-brand-600 hover:underline font-semibold text-left"
+                        >
+                          {row.travel_proof.summary}
+                        </button>
                       ) : (
                         <span className="text-gray-300">—</span>
                       )}
@@ -245,6 +264,7 @@ export default function CEOExpenseApprovalsPage() {
           </div>
         </div>
       )}
+      {proofFor && <TravelProofPanel expenseId={proofFor} onClose={() => setProofFor(null)} />}
     </div>
   );
 }

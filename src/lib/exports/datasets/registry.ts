@@ -50,6 +50,8 @@ import { houseDealerCode } from "@/lib/leads/dealerByMobile";
 import { LEAD_PUSHED_TO_DEALER } from "@/lib/leads/pushGuards";
 import { assistedByLabel, assistedBySql } from "@/lib/exports/assistedBy";
 import { billCell, exportOrigin, recordingCell } from "@/lib/exports/fileLinks";
+import { claimDaysFor, type ClaimDay } from "@/lib/expenses/travelProofStore";
+import { VERDICT_LABEL, isExpenseCeo } from "@/lib/expenses/travelProof";
 
 // ID 122: the one onboarding clock (src/lib/onboarding/clock.ts).
 const ONBOARDING_CLOCK = sql.raw(onboardingClockSql("app"));
@@ -1815,6 +1817,8 @@ const expenses: Dataset = {
                 { key: "source", header: "Entered through", meaning: "'manual' = typed in; 'ai' = read from an uploaded or Drive bill." },
                 { key: "attention_reason", header: "Needs checking", meaning: "Why the row was flagged when it was read, if it was.", width: 30 },
                 { key: "bill_url", header: "Bill link", meaning: "A CRM link to the bill. Clicking it checks who you are (Finance, Admin, CEO or whoever submitted it) and then opens it through a fresh link that lasts 15 minutes; the file itself never sits in this download.", width: 40 },
+                // ID 197 (PJP phase 1) — E-364; only the CEO's download carries it.
+                { key: "travel_proof", header: "Travel proof", meaning: "Travel / Vehicle-Fuel claims: each claimed day with Supported (a verified visit that day — live GPS + camera photo) or Not supported, and the note given. CEO's download only; blank for everyone else and for other claims.", width: 44 },
             ],
         },
     ],
@@ -1829,7 +1833,7 @@ const expenses: Dataset = {
                    e.description, e.invoice_number, e.amount, e.currency, e.original_amount, e.status,
                    ab.name AS approved_by, e.approved_at, e.rejection_reason, e.source,
                    CASE WHEN e.needs_attention THEN COALESCE(e.attention_reason, 'Flagged') END AS attention_reason,
-                   e.bill_url
+                   e.bill_url, e.id
               FROM expense_submissions e
               LEFT JOIN users su ON su.id = e.submitted_by
               LEFT JOIN users ab ON ab.id = e.approved_by
@@ -1839,7 +1843,20 @@ const expenses: Dataset = {
         `);
         // ID 166: a checked CRM link, never the stored bill link.
         const origin = exportOrigin();
-        return [{ ...this.sheets[0], rows: data.map((r) => ({ ...r, bill_url: billCell(r.bill_url, origin) })) }];
+        // ID 197: the travel proof is for the CEO (and the submitter, on screen) only.
+        const proof = isExpenseCeo(ctx.user)
+            ? await claimDaysFor(data.map((r) => String(r.id))).catch(() => new Map<string, ClaimDay[]>())
+            : new Map<string, ClaimDay[]>();
+        const proofCell = (id: unknown) =>
+            (proof.get(String(id)) ?? [])
+                .map((d) => `${d.day}: ${VERDICT_LABEL[d.verdict]}${d.note ? ` (${d.note})` : ""}`)
+                .join("; ");
+        return [
+            {
+                ...this.sheets[0],
+                rows: data.map((r) => ({ ...r, bill_url: billCell(r.bill_url, origin), travel_proof: proofCell(r.id) })),
+            },
+        ];
     },
 };
 
