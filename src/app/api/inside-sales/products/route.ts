@@ -8,7 +8,7 @@
 // field for reference) and its GST rate (so the form can show GST and the
 // total incl. GST). The OEM reference price is deliberately NOT read here: it
 // is internal and salespeople must never see it — so a product with no list
-// price shows none, rather than falling back to OEM the way the PDF does.
+// price shows none — and the PDF prints none either.
 
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";

@@ -98,7 +98,7 @@ export function renderProformaHtml(view: QuotationView): string {
         <td class="num">${esc(qty(line.quantity))}${line.unit ? `<span class="unit">${esc(line.unit)}</span>` : ""}</td>
         ${
           showDiscount
-            ? `<td class="num">${esc(money(line.discount > 0 && line.listPrice != null ? line.listPrice : line.rate))}</td>
+            ? `<td class="num">${line.listPrice != null ? esc(money(line.listPrice)) : "—"}</td>
         <td class="num">${line.discount > 0 ? esc(money(line.discount)) : "—"}</td>`
             : ""
         }

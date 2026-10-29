@@ -96,7 +96,7 @@ export async function createAccountQuotation(args: {
         };
         const decision = applyTermsHold(resolveQuoteApproval(evaluation), hold);
         const listRefs = await loadLiveListPrices(lines, tx, performedAt);
-        const snapshotted = snapshotListPrices(lines, listRefs, refs);
+        const snapshotted = snapshotListPrices(lines, listRefs);
 
         await tx.execute(sql`
             UPDATE account_quotations SET is_current = false, updated_at = NOW()

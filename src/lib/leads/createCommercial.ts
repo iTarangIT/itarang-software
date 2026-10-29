@@ -232,11 +232,11 @@ export async function createLeadCommercial(
             oemEvaluation = { ...oemEvaluation, terms_hold: hold };
 
             // ── E-321 list price snapshot (display only, approval untouched) ──
-            // Live list price at performedAt, else the live OEM price, else
-            // null. Frozen on the row so a later list-price change never
+            // Live list price at performedAt, else null — never the OEM
+            // price. Frozen on the row so a later list-price change never
             // alters a quote's document.
             const listRefs = await loadLiveListPrices(lines, tx, performedAt);
-            snapshottedLines = snapshotListPrices(lines, listRefs, refs);
+            snapshottedLines = snapshotListPrices(lines, listRefs);
             // ── end E-321 ──
         }
 
