@@ -53,7 +53,7 @@ export function currentJob(): string | undefined {
   return jobs.getStore();
 }
 
-export type JobSendChannel = "email" | "whatsapp" | "telegram";
+export type JobSendChannel = "email" | "whatsapp" | "telegram" | "sms";
 
 const reported = new Set<string>();
 
