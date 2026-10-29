@@ -57,6 +57,29 @@ export function pickPerformanceScope(
     return { spoc_id: pickScopedPerson(selfId, requested, teamMemberIds), spoc_ids: null };
 }
 
+/** ID 199: the `?member=` values besides a person's id. */
+export const MEMBER_ME = "me";
+export const MEMBER_TEAM = "team";
+
+/**
+ * ID 199: whose leads a manager's queue / Leads list shows. `?member=me` →
+ * only the viewer's own; a direct report's id → only that person's; anything
+ * else (absent, `team`, an id outside the team) → the whole team as today
+ * (ID 155). Without a team the filter does not exist: always null.
+ *
+ * Returns the one owner id to narrow to, or null for "no narrowing".
+ */
+export function pickTeamMember(
+    selfId: string,
+    requested: string | null | undefined,
+    teamMemberIds: readonly string[] | null | undefined,
+): string | null {
+    const team = teamMemberIds ?? [];
+    if (team.length === 0 || !requested) return null;
+    if (requested === MEMBER_ME) return selfId;
+    return team.includes(requested) ? requested : null;
+}
+
 export type TeamReassignCheck =
     | { ok: true }
     | { ok: false; reason: "not_manager" | "target_outside_team" | "same_owner"; message: string };

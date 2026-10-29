@@ -6,6 +6,7 @@ import type { LeadStatus, LostReason } from "@/lib/lifecycle/transitions";
 import type { LeadAssignedBy } from "@/lib/leads/leadAssignedBy";
 import type { DealerOnboardedVerdict } from "@/lib/leads/dealerOnboardedRules";
 import type { QuoteSend } from "@/lib/leads/quoteSends";
+import type { TeamReviewFields } from "@/lib/leads/teamReviewSql";
 import type {
     CallStatus,
     NextAction,
@@ -29,7 +30,7 @@ export const TAB_LABELS: Record<QueueTab, string> = {
     my_closed: "My Closed Leads",
 };
 
-export type QueueRow = {
+export type QueueRow = TeamReviewFields & {
     id: string;
     dealer_name: string | null;
     shop_name: string | null;

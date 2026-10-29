@@ -224,6 +224,10 @@ export async function POST(
       );
     }
 
+    // ID 204: "EMI received" to the customer (pilot lender, after commit; never fails the payment).
+    const { queueEmiReceived } = await import("@/lib/emi-messages/run");
+    await queueEmiReceived({ emiId, amount, paymentRef: `manual:${emiId}:${now.getTime()}` });
+
     return NextResponse.json({ ok: true, ...result });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);

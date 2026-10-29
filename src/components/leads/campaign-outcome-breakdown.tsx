@@ -77,8 +77,8 @@ export function CampaignOutcomeBreakdown({
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h2 className="text-sm font-semibold text-gray-900">Call outcomes</h2>
         <p className="text-xs text-gray-500 tabular-nums">
-          {outcomes.calls} call{outcomes.calls === 1 ? "" : "s"} · {outcomes.connectedCalls} connected ·{" "}
-          {outcomes.leads} lead{outcomes.leads === 1 ? "" : "s"} categorised
+          {outcomes.leads} lead{outcomes.leads === 1 ? "" : "s"} · {outcomes.connectedLeads} connected ·{" "}
+          {outcomes.dials} dial{outcomes.dials === 1 ? "" : "s"} ({outcomes.calls} answered)
           {outcomes.retryBooked > 0 && ` · ${outcomes.retryBooked} retry booked`}
         </p>
       </div>

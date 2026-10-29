@@ -17,6 +17,15 @@ export function leadUrl(user: Pick<AssistantUser, "role">, leadId: string): stri
     return `${crmBaseUrl()}/${workspace(user)}/lead/${encodeURIComponent(leadId)}`;
 }
 
+/**
+ * ID 196: the CRM page that logs a verified visit on a lead — the camera +
+ * live-location form. Logged-in, like every CRM link (no document or action
+ * without a login).
+ */
+export function visitCaptureUrl(leadId: string): string {
+    return `${crmBaseUrl()}/visits/capture?lead=${encodeURIComponent(leadId)}`;
+}
+
 export function queueUrl(user: Pick<AssistantUser, "role">): string {
     return `${crmBaseUrl()}/${workspace(user)}`;
 }

@@ -77,6 +77,7 @@ import {
 } from "@/lib/leads/submit-step4";
 
 import { saveStep5ProductSelection } from "@/lib/leads/step5-product";
+import { recordWhatsAppKycStep } from "@/lib/kyc/kycWhatsAppLog";
 
 import type { ActiveDealer } from "./customer-lead";
 import {
@@ -832,6 +833,8 @@ async function onStep4Ack(
     } catch (err) {
       console.error("[WhatsApp/step4] reselect cart save failed:", err);
     }
+    // ID 201 (28 Oct gap 1): the dealer's Step 4 on WhatsApp, in the KYC history.
+    await recordWhatsAppKycStep({ session, dealer, leadId, action: `Sent the file to ${pick.label} after a rejection (Step 4)` });
     await reply(session, sentMessage([pick.label]));
     return;
   }
@@ -892,6 +895,14 @@ async function onStep4Ack(
     );
     return;
   }
+
+  // ID 201 (28 Oct gap 1): the dealer's Step 4 on WhatsApp, in the KYC history.
+  await recordWhatsAppKycStep({
+    session,
+    dealer,
+    leadId,
+    action: `Sent the file to ${external ? BAJAJ_FALLBACK.name : picks.map((p) => p.label).join(", ")} (Step 4)`,
+  });
 
   if (external) {
     // Sanctioned on the spot — no NBFC, no admin gate. The cart was already

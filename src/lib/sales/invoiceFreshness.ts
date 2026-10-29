@@ -13,6 +13,9 @@
  *                 hourly Zoho sync and the one-time Zoho copy still add rows,
  *                 so the alert must not fire while Zoho invoices arrive) and
  *                 credit_notes created_at (ID 71)
+ *   last_payment_at  ID 200 — when a Drive / Vyapar invoice's amount paid
+ *                 last changed (the Payment button sets payment_marked_by,
+ *                 the Vyapar register sets payment_reference)
  *
  * Cached for five minutes per process: it sits under several tiles.
  */
@@ -50,8 +53,10 @@ export async function invoiceFreshness(opts: { fresh?: boolean } = {}): Promise<
                  (SELECT MAX(si.created_at) FROM sales_invoices si),
                  (SELECT MAX(zi.created_at) FROM zoho_invoices zi)
                  ${ledger ? sql`, (SELECT MAX(cn.created_at) FROM credit_notes cn)` : sql``}
-               ) AS last_read_at
-    `)) as unknown as Array<{ read_up_to: string | null; last_read_at: string | Date | null }>;
+               ) AS last_read_at,
+               (SELECT MAX(si.updated_at) FROM sales_invoices si
+                 WHERE si.payment_marked_by IS NOT NULL OR si.payment_reference IS NOT NULL) AS last_payment_at
+    `)) as unknown as Array<{ read_up_to: string | null; last_read_at: string | Date | null; last_payment_at: string | Date | null }>;
     const [{ holidays, hours }, limits] = await Promise.all([loadOfficeCalendar(), getTimeLimits()]);
     const lastReadAt = row?.last_read_at ? new Date(row.last_read_at) : null;
     const since = lastReadAt ? workingDaysSince(lastReadAt, new Date(), holidays, hours) : null;
@@ -62,6 +67,7 @@ export async function invoiceFreshness(opts: { fresh?: boolean } = {}): Promise<
         working_days_since_read: since,
         stale_after: staleAfter,
         stale: isStale(since, staleAfter),
+        last_payment_at: row?.last_payment_at ? new Date(row.last_payment_at).toISOString() : null,
     };
     cached = { at: Date.now(), value };
     return value;

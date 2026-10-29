@@ -29,7 +29,8 @@ export type DigestKindId =
   | "idle_weekly"
   | "targets_pending"
   | "my_day"
-  | "my_team";
+  | "my_team"
+  | "emi_messages";
 
 /** One figure about the covered day. */
 export type ActivityLine = {

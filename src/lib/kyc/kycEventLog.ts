@@ -80,6 +80,16 @@ export async function recordKycEvent(input: KycEventInput): Promise<void> {
         if (input.actor.id && kycActorType(input.actor) === "dealer" && (await isHouseUser(input.actor.id))) {
             input = { ...input, actor: { ...input.actor, type: "house" } };
         }
+        // ID 201 (28 Oct gap 2): an iTarang / house line whose caller did not
+        // say which dealer's file it is — the older staff routes (card decisions,
+        // document requests, consent, cancel, the final decision) — is for the
+        // file's dealer. An explicit null means "no dealer" and is kept.
+        const type = kycActorType(input.actor);
+        if (input.actor.forDealerId === undefined && (type === "itarang" || type === "house")) {
+            const [lead] = (await db.execute(sql`
+                SELECT dealer_id FROM leads WHERE id = ${input.leadId} LIMIT 1`)) as unknown as Array<{ dealer_id: string | null }>;
+            input = { ...input, actor: { ...input.actor, forDealerId: lead?.dealer_id ?? null } };
+        }
         if (input.actor.forDealerId && !input.actor.forDealerName) {
             const { display } = await fileDealerNames(input.actor.forDealerId);
             input = { ...input, actor: { ...input.actor, forDealerName: display } };
@@ -326,7 +336,7 @@ export function sentence(step: string): string {
     return s ? s.charAt(0).toUpperCase() + s.slice(1) : "KYC step";
 }
 
-function actorOf(actor: LeadActor): KycActor {
+export function actorOf(actor: LeadActor): KycActor {
     // ID 201: who it was and, for iTarang, which dealer's file.
     const type: KycActorType = actor.kind === "house" ? "house" : actor.kind === "itarang" ? "itarang" : "dealer";
     return {

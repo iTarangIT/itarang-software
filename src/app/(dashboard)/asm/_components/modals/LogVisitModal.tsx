@@ -60,7 +60,7 @@ export function LogVisitModal({ open, onClose, leadId, onSuccess, lead }: Props)
                     void handleSubmit();
                 }}
             >
-                <VisitFields form={form} />
+                <VisitFields form={form} leadId={leadId} />
             </form>
         </Modal>
     );

@@ -9,6 +9,8 @@ import { desc, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { expenseSubmissions, users } from "@/lib/db/schema";
 import { requireAuth } from "@/lib/auth-utils";
+import { claimDaysFor } from "@/lib/expenses/travelProofStore";
+import { proofSummary } from "@/lib/expenses/travelProof";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -60,7 +62,15 @@ export async function GET(req: NextRequest) {
       .orderBy(desc(expenseSubmissions.created_at))
       .limit(200);
 
-    return NextResponse.json({ success: true, data: rows });
+    // ID 197: the Travel proof column — "2 of 3 days supported" per claim
+    // that carries days (E-364); the CEO opens the Day evidence from it.
+    const days = await claimDaysFor(rows.map((r) => r.id)).catch(() => new Map());
+    const data = rows.map((r) => {
+      const d = days.get(r.id) ?? [];
+      return { ...r, travel_proof: d.length ? { summary: proofSummary(d), days: d } : null };
+    });
+
+    return NextResponse.json({ success: true, data });
   } catch (e: any) {
     if (e?.digest?.startsWith?.("NEXT_REDIRECT")) throw e;
     const msg = e instanceof Error ? e.message : String(e);

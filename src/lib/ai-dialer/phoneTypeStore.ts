@@ -119,6 +119,63 @@ export async function noteCallResultForNumber(
 }
 
 /**
+ * ID 207 — the switchboard / dead-number mark on this lead's CURRENT number,
+ * or null. For the lead page's Admin "Clear mark" button.
+ */
+export async function observedMarkOf(leadId: string): Promise<"switchboard" | "dead_number" | null> {
+    if (!(await hasPhoneTypeTable())) return null;
+    try {
+        const r = (await db.execute(sql`
+            SELECT pt.phone_type
+              FROM dealer_lead_phone_type pt
+              JOIN dealer_leads dl ON dl.id = pt.lead_id AND dl.phone = pt.phone
+             WHERE pt.lead_id = ${leadId} AND pt.phone_type IN (${OBSERVED_SQL})
+        `)) as unknown as
+            | Array<{ phone_type: "switchboard" | "dead_number" }>
+            | { rows: Array<{ phone_type: "switchboard" | "dead_number" }> };
+        return (Array.isArray(r) ? r : r.rows)?.[0]?.phone_type ?? null;
+    } catch (err) {
+        console.error(
+            "[phoneTypeStore.observedMarkOf] failed:",
+            err instanceof Error ? err.message : err,
+        );
+        return null;
+    }
+}
+
+/**
+ * ID 207 — Admin clears a switchboard / dead-number mark: the number is
+ * dialled again by the next campaign. observedNumbers() matches on the last
+ * 10 digits across leads, so every row on that number is reset to the
+ * number's own type, not only this lead's. Returns the rows reset (0 when
+ * there was no mark). Throws on a database error: the caller reports it.
+ */
+export async function clearObservedMark(leadId: string): Promise<{ cleared: number; key: string | null }> {
+    if (!(await hasPhoneTypeTable())) return { cleared: 0, key: null };
+    const r = (await db.execute(sql`
+        SELECT phone FROM dealer_leads WHERE id = ${leadId}
+    `)) as unknown as Array<{ phone: string | null }> | { rows: Array<{ phone: string | null }> };
+    const key = phoneKey((Array.isArray(r) ? r : r.rows)?.[0]?.phone);
+    if (!key) return { cleared: 0, key: null };
+    const rows = (await db.execute(sql`
+        SELECT lead_id, phone FROM dealer_lead_phone_type
+         WHERE phone_type IN (${OBSERVED_SQL})
+           AND right(regexp_replace(phone, '[^0-9]', '', 'g'), 10) = ${key}
+    `)) as unknown as
+        | Array<{ lead_id: string; phone: string }>
+        | { rows: Array<{ lead_id: string; phone: string }> };
+    const marked = Array.isArray(rows) ? rows : rows.rows;
+    for (const m of marked) {
+        await db.execute(sql`
+            UPDATE dealer_lead_phone_type
+               SET phone_type = ${classifyPhone(m.phone)}, checked_at = now()
+             WHERE lead_id = ${m.lead_id} AND phone_type IN (${OBSERVED_SQL})
+        `);
+    }
+    return { cleared: marked.length, key };
+}
+
+/**
  * D7 — numbers (last 10 digits) a call has marked switchboard / dead, among
  * `phones`. Matched on the number, not the lead: another lead on the same
  * switchboard is the same switchboard.

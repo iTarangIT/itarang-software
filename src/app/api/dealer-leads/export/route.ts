@@ -24,6 +24,7 @@ import { withErrorHandler } from "@/lib/api-utils";
 import { LEADS_PAGE_ROLES, capabilitiesFor } from "@/lib/leads/access";
 import { buildExportWhere } from "@/lib/leads/leadListQuery";
 import { parseLeadListFilters } from "@/lib/leads/leadListParams";
+import { getTeamMemberIds } from "@/lib/users/team";
 import { businessTypeLabel } from "@/lib/leads/businessType";
 import { leadSourceLabel } from "@/lib/leads/leadSourceVocab";
 import { fetchCampaignForLeads, type LeadCampaign } from "@/lib/leads/leadCampaign";
@@ -133,8 +134,11 @@ export const GET = withErrorHandler(async (req: Request) => {
     // full-leads export (B11), so no two of them can disagree about a match.
     // ID 58 / ID 45: a rep's (or partner's) export holds only the leads they
     // own — via filters.ownerScopeId, the same scope the list itself applies.
-    const filters = await parseLeadListFilters(searchParams, caps, user);
+    // ID 155 / 199: a manager's sheet covers what their list shows — the team
+    // too, narrowed by the Team member pick. (It used to be own-only.)
     const ownOnly = exportsOwnLeadsOnly(user.role);
+    const teamMemberIds = ownOnly ? await getTeamMemberIds(user.id) : [];
+    const filters = await parseLeadListFilters(searchParams, caps, { ...user, teamMemberIds });
     const where = buildExportWhere(filters);
 
     const [{ n: total }] = (await db.execute<{ n: number }>(sql`

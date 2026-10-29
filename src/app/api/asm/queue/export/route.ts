@@ -21,7 +21,7 @@ import { fetchAssignedByForLeads } from "@/lib/leads/leadAssignedBy";
 import { fetchBusinessTypeForLeads } from "@/lib/leads/leadListQuery";
 import { businessTypeLabel } from "@/lib/leads/businessType";
 import { exportsOwnLeadsOnly, logDataDownload } from "@/lib/exports/downloadLog";
-import { teamForOwnScopedViewer } from "@/lib/users/team";
+import { teamScopeFromParams } from "@/lib/users/team";
 import { pastLimitFilter, pastLimitLabelsByLead } from "@/lib/leads/queuePastLimit";
 import {
     ASM_QUEUE_TABS,
@@ -96,6 +96,19 @@ const COLUMNS: CsvColumn<AsmQueueRow>[] = [
     { header: "Closed At", value: (r) => csvDateTime(r.closed_at) },
     // IDs 85 / 86: which time limits the lead is past — the chip on screen.
     { header: "Past a limit", value: (r) => (r.past_limits ?? []).join("; ") },
+    // ID 199: the manager's review columns.
+    { header: "Last Action", value: (r) => csvPretty(r.last_action) },
+    { header: "Last Action At", value: (r) => csvDateTime(r.last_action_at) },
+    { header: "Next Follow-up", value: (r) => csvDateTime(r.next_follow_up_at) },
+    { header: "Last Visit Date", value: (r) => csvDate(r.last_visit_date) },
+    {
+        header: "Last Visit Outcome",
+        value: (r) =>
+            r.last_visit_outcome
+                ? (VISIT_OUTCOME_LABELS[r.last_visit_outcome as VisitOutcome] ?? csvPretty(r.last_visit_outcome))
+                : "",
+    },
+    { header: "Days Since Last Action", value: (r) => r.days_since_action?.toString() ?? "" },
 ];
 
 export const GET = withErrorHandler(async (req: NextRequest) => {
@@ -129,7 +142,9 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
     const ownedBy = ownOnly && parsed.tab !== "today" ? user.id : null;
     // ID 155: a manager's export covers what their table shows — their own
     // leads plus their direct reports'.
-    const teamMemberIds = ownOnly ? await teamForOwnScopedViewer(user) : [];
+    // ID 199: and follows the Team member pick, like the screen.
+    const scope = ownOnly ? await teamScopeFromParams(user, url.searchParams) : { teamMemberIds: [], member: null };
+    const { teamMemberIds, member } = scope;
 
     const [rows, total] = await Promise.all([
         fetchAsmQueueRows({
@@ -142,6 +157,7 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
             pastLimit,
             ownedBy,
             teamMemberIds,
+            member,
         }),
         countAsmQueueRows({
             tab: parsed.tab,
@@ -151,6 +167,7 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
             pastLimit,
             ownedBy,
             teamMemberIds,
+            member,
         }),
     ]);
 
@@ -164,6 +181,7 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
             q: parsed.q ?? null,
             ...filters,
             past_limit: pastLimit ? "1" : null,
+            member,
             ...(ownOnly ? { scope: ownedBy ? "owned" : "assigned_visits_today" } : {}),
         },
     });

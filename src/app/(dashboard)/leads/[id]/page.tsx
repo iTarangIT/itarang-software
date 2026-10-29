@@ -34,7 +34,8 @@ import { failedSendTimelineEntries, mergeNewestFirst } from "@/lib/leads/quoteSe
 import { listLeadQuoteSends } from "@/lib/leads/quoteSendsStore";
 import { IvrTag } from "@/components/leads/ivr-tag";
 import { CallbackBriefCard } from "@/components/leads/callback-brief-card";
-import { fetchIvrLeadIds } from "@/lib/ai-dialer/phoneTypeStore";
+import { fetchIvrLeadIds, observedMarkOf } from "@/lib/ai-dialer/phoneTypeStore";
+import { ClearPhoneMarkButton } from "@/components/leads/clear-phone-mark-button";
 
 export const dynamic = "force-dynamic";
 
@@ -56,6 +57,8 @@ export default async function LeadDetailPage({ params }: any) {
   });
   // D2 — the "IVR" chip; never throws, empty without E-361.
   const ivrLeads = lead ? await fetchIvrLeadIds([lead.id]) : new Set<string>();
+  // ID 207 — Admin may clear a switchboard / dead-number mark.
+  const phoneMark = lead && user.role === "admin" ? await observedMarkOf(lead.id) : null;
 
   // ID 45: a rep (asm, inside_sales_rep) reads only leads they own — someone
   // else's lead gets the same answer as no lead at all. ID 155: a manager also
@@ -224,6 +227,7 @@ export default async function LeadDetailPage({ params }: any) {
               <h1 className="flex items-center gap-2 text-xl font-bold text-gray-900 truncate">
                 {lead.shop_name || lead.dealer_name || "Unnamed Shop"}
                 <IvrTag isIvr={ivrLeads.has(lead.id)} />
+                {phoneMark && <ClearPhoneMarkButton leadId={lead.id} mark={phoneMark} />}
               </h1>
               <p className="text-xs text-gray-400 mt-0.5 font-mono">{lead.id}</p>
             </div>

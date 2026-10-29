@@ -1621,6 +1621,49 @@ export async function startDealerPaymentReminderTicker() {
 }
 
 // ---------------------------------------------------------------------------
+// ID 204 — EMI messages to customers, hourly.
+//
+// Ages the EMIs first (runEmiAging: scheduled → overdue, DPD — it only ever
+// ran as a Vercel cron, which never fires on the PM2 boxes), then sends the
+// scheduled EMI messages for the pilot lender from the configured hour. Each
+// message is claimed once per EMI (emi_customer_messages, E-365), so hourly
+// ticks and a restart never send twice. Ships off (Admin > Settings > EMI
+// messages); off the live site the job claims nothing (ID 125).
+// ---------------------------------------------------------------------------
+
+export async function startEmiMessagesTicker() {
+  if (process.env.VERCEL === "1") return;
+
+  const TICK_INTERVAL_MS = 60 * 60_000;
+  let inFlight = false;
+
+  const tick = async () => {
+    if (inFlight) return;
+    inFlight = true;
+    try {
+      const { runEmiMessages } = await import("@/lib/emi-messages/run");
+      const r = await runEmiMessages();
+      if (r.sent > 0) console.log(`[instrumentation:emi-messages] sent ${r.sent}`);
+    } catch (err) {
+      console.error(
+        "[instrumentation:emi-messages] tick failed:",
+        err instanceof Error ? err.message : err,
+      );
+    } finally {
+      inFlight = false;
+    }
+  };
+
+  const kickoff = setTimeout(tick, 260_000);
+  if (typeof kickoff.unref === "function") kickoff.unref();
+
+  const interval = setInterval(tick, TICK_INTERVAL_MS);
+  if (typeof interval.unref === "function") interval.unref();
+
+  console.log("[instrumentation] EMI aging + EMI messages (1h) started in-process");
+}
+
+// ---------------------------------------------------------------------------
 // Fleet Monitor — the 08:00 IST card to Telegram.
 //
 // Same runtime argument as every ticker above: vercel.json's crons do not fire

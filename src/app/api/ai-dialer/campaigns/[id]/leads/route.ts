@@ -14,6 +14,7 @@
 // (shop_name, dealer_name, phone, score). Soft FK — no DB constraint, so a
 // LEFT JOIN handles the case where a lead row was deleted post-campaign.
 
+import { leadCategorySql } from "@/lib/ai-dialer/campaignOutcomes";
 import { deriveFailureReason } from "@/lib/ai-dialer/failureReason";
 import {
   CAMPAIGN_LEAD_STATUSES,
@@ -100,14 +101,11 @@ function shapeRow(r: any) {
   };
 }
 
-// The category of the row's CURRENT attempt (its bolna_call_id). Only added to
-// the select when E-356 exists — naming the table on a database without it
-// would fail the whole table with a 42P01.
-const categorySql = sql<string | null>`(
-  select category from ai_call_outcomes
-  where call_id = ${dialerCampaignLeads.bolna_call_id}
-  limit 1
-)`;
+// The row's outcome category — the SAME rule the outcome tiles count by
+// (campaignOutcomes.leadCategorySql), so a tile and the list it filters agree.
+// Only added to the select when E-356 exists — naming the table on a database
+// without it would fail the whole table with a 42P01.
+const categorySql = leadCategorySql("dialer_campaign_leads");
 
 const selectShape = {
   id: dialerCampaignLeads.id,

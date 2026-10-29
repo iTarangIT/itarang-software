@@ -41,6 +41,7 @@ import {
     type QueueResponse,
     type QueueTab,
 } from "@/lib/inside-sales/types";
+import { TeamMemberFilter, type TeamPerson } from "@/components/leads/TeamMemberFilter";
 
 type Props = {
     viewerId: string;
@@ -49,6 +50,8 @@ type Props = {
     basePath?: string;
     /** Lead-detail route prefix for row clicks; twins (/partner) pass their own. */
     leadHrefBase?: string;
+    /** ID 199: the viewer's direct reports — non-empty shows the Team member pick. */
+    teamPeople?: TeamPerson[];
 };
 
 // Roles allowed to bulk-upload leads — must match the upload page + API gate.
@@ -66,6 +69,7 @@ export function QueueView({
     viewerRole,
     basePath = "/inside-sales",
     leadHrefBase = "/inside-sales/lead",
+    teamPeople = [],
 }: Props) {
     const canUpload = UPLOAD_ROLES.includes(viewerRole);
     // Same list the claim routes enforce: a ceo/sales_head can read the
@@ -97,6 +101,8 @@ export function QueueView({
     const [finalisedOnly, setFinalisedOnly] = useState(params.get("finalised") === "1");
     // 18 Oct row 34: only leads past a time limit.
     const [pastLimitOnly, setPastLimitOnly] = useState(params.get("past_limit") === "1");
+    // ID 199: a manager's Team member pick ("" = whole team, "me", or an id).
+    const [member, setMember] = useState(params.get("member") ?? "");
     const [createOpen, setCreateOpen] = useState(false);
     // Seeded from the URL so a filtered view survives a reload and can be pasted
     // to a colleague — the same contract the tab and page already had.
@@ -132,11 +138,12 @@ export function QueueView({
         if (callbackOnly) p.set("callback", "1");
         if (finalisedOnly) p.set("finalised", "1");
         if (pastLimitOnly) p.set("past_limit", "1");
+        if (member) p.set("member", member);
         // The sort rides along: the rows and the CSV honour it, the counts and
         // facets simply never read it.
         writeQueueSort(p, sort);
         return writeQueueFilters(p, filters);
-    }, [searchDebounced, neodoveOnly, callbackOnly, finalisedOnly, pastLimitOnly, filters, sort]);
+    }, [searchDebounced, neodoveOnly, callbackOnly, finalisedOnly, pastLimitOnly, member, filters, sort]);
 
     const filterKey = filterParams.toString();
 
@@ -480,6 +487,14 @@ export function QueueView({
                             </span>
                         ) : null}
                     </button>
+                    <TeamMemberFilter
+                        people={teamPeople}
+                        value={member}
+                        onChange={(m) => {
+                            setMember(m);
+                            setPage(1);
+                        }}
+                    />
                     <QueueFilterBar
                         values={filters}
                         onChange={patchFilter}
@@ -521,6 +536,8 @@ export function QueueView({
                 </div>
                 <LeadQueueTable
                     tab={tab}
+                    // ID 199: the review columns on a manager's team view.
+                    showReview={teamPeople.length > 0 && member !== "me"}
                     leadHrefBase={leadHrefBase}
                     rows={data?.rows ?? []}
                     total={data?.total ?? 0}

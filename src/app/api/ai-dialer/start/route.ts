@@ -221,7 +221,8 @@ export async function POST(req: NextRequest) {
     // spoken to them. The modal shows this so a shrunken queue is explained
     // rather than just smaller than the preview said.
     blockedAiConnected: blockedAiConnected.length,
-    // B1 / D7 — enrolled as skipped (not a mobile, showroom, repeat number).
+    // B1 / D7 — left out of the campaign, counts per reason (not a mobile,
+    // showroom, repeat number, switchboard / dead, a callback a person owes).
     skippedAtEnrol,
     campaignId,
     firstCallPlaced,

@@ -18,7 +18,32 @@ export type InvoiceFreshness = {
     /** The limit in force (working days). */
     stale_after: number;
     stale: boolean;
+    /**
+     * ID 200 — when an invoice's amount paid last changed (the CEO's Payment
+     * button or a Vyapar register upload), ISO; null when never.
+     */
+    last_payment_at?: string | null;
 };
+
+/** ID 200 — where the Accounts Receivable figure comes from, said under the figure. */
+export const RECEIVABLES_SOURCE =
+    "From Zoho (old invoices), Drive invoice PDFs and the Vyapar register; payments from Zoho's own balance, " +
+    "the Vyapar register's Received column and the amounts entered on each invoice.";
+
+/** RECEIVABLES_SOURCE plus "Payments updated <IST time>." when known. */
+export function receivablesSourceText(f: InvoiceFreshness | null | undefined): string {
+    const at = f?.last_payment_at;
+    if (!at) return RECEIVABLES_SOURCE;
+    const stamp = new Date(at).toLocaleString("en-IN", {
+        timeZone: "Asia/Kolkata",
+        day: "numeric",
+        month: "short",
+        year: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+    });
+    return `${RECEIVABLES_SOURCE} Payments updated ${stamp}.`;
+}
 
 export function isStale(workingDaysSinceRead: number | null, staleAfter: number): boolean {
     return workingDaysSinceRead == null || workingDaysSinceRead >= staleAfter;

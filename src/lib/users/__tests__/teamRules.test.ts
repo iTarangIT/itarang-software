@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+    MEMBER_ME,
+    MEMBER_TEAM,
     TEAM_TOTAL_PERSON,
     checkLineStart,
     checkReassignReason,
@@ -9,6 +11,7 @@ import {
     ownerScopeIds,
     pickPerformanceScope,
     pickScopedPerson,
+    pickTeamMember,
 } from "@/lib/users/teamRules";
 import { canEditLead } from "@/lib/leads/access";
 
@@ -174,5 +177,27 @@ describe("pickPerformanceScope — Team total (ID 156)", () => {
     it("a team member asking for Team total gets only themself", () => {
         expect(pickPerformanceScope("a1", TEAM_TOTAL_PERSON, [])).toEqual({ spoc_id: "a1", spoc_ids: null });
         expect(pickPerformanceScope("a1", TEAM_TOTAL_PERSON, null)).toEqual({ spoc_id: "a1", spoc_ids: null });
+    });
+});
+
+describe("pickTeamMember (ID 199)", () => {
+    const team = ["u2", "u3"];
+    it("is no narrowing for someone without a team, whatever they ask", () => {
+        expect(pickTeamMember("u1", "me", [])).toBeNull();
+        expect(pickTeamMember("u1", "u2", null)).toBeNull();
+    });
+    it("is no narrowing for no pick or the whole team", () => {
+        expect(pickTeamMember("u1", null, team)).toBeNull();
+        expect(pickTeamMember("u1", "", team)).toBeNull();
+        expect(pickTeamMember("u1", MEMBER_TEAM, team)).toBeNull();
+    });
+    it("narrows to the viewer for 'me'", () => {
+        expect(pickTeamMember("u1", MEMBER_ME, team)).toBe("u1");
+    });
+    it("narrows to a direct report", () => {
+        expect(pickTeamMember("u1", "u3", team)).toBe("u3");
+    });
+    it("ignores an id outside the team (whole team, never that person)", () => {
+        expect(pickTeamMember("u1", "u9", team)).toBeNull();
     });
 });

@@ -181,6 +181,12 @@ export async function POST(req: NextRequest) {
         .where(eq(emiPaymentAttempts.id, attemptId));
     }
 
+    // ID 204: "EMI received" to the customer (pilot lender; never fails the webhook).
+    if (result.applied) {
+      const { queueEmiReceived } = await import("@/lib/emi-messages/run");
+      await queueEmiReceived({ emiId: targetEmiId as string, amount: result.amountPaid ?? null, paymentRef: paymentId ?? null });
+    }
+
     return NextResponse.json({
       status: "ok",
       outcome: "paid",

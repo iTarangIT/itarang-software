@@ -4,6 +4,7 @@
 
 import type { LeadStatus } from "@/lib/lifecycle/transitions";
 import type { LeadAssignedBy } from "@/lib/leads/leadAssignedBy";
+import type { TeamReviewFields } from "@/lib/leads/teamReviewSql";
 
 export const ASM_QUEUE_TABS = [
     "my_visits",
@@ -67,7 +68,7 @@ export type VisitNextAction = (typeof VISIT_NEXT_ACTION)[number];
 // Auto-engaged outcomes per BRD §0.1 Glossary.
 export const ENGAGED_OUTCOMES: VisitOutcome[] = ["productive", "commercials_progressed"];
 
-export type AsmQueueRow = {
+export type AsmQueueRow = TeamReviewFields & {
     id: string;
     dealer_name: string | null;
     shop_name: string | null;

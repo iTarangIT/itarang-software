@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Modal } from "../Modal";
 import { Input } from "@/components/ui/input";
@@ -41,6 +42,10 @@ export function CreateLeadModal({ open, onClose, onSuccess }: Props) {
     // ID 81: the acquisition campaign — required for Trade event / Digital ad.
     const [campaignId, setCampaignId] = useState("");
     const [submitting, setSubmitting] = useState(false);
+    // ID 196: "I'm at the shop now" — after the lead is created, log a
+    // verified visit on it (camera photo + live location).
+    const [atShop, setAtShop] = useState(false);
+    const router = useRouter();
 
     // Canonical state + city reference lists (E-108/E-110/E-111). Loaded once
     // when the modal first opens and cached by React Query.
@@ -142,8 +147,12 @@ export function CreateLeadModal({ open, onClose, onSuccess }: Props) {
             if (json?.data?.business_type_saved === false) {
                 toast.warning("Type of Business could not be saved on this database.");
             }
+            const newId: string | undefined = json?.data?.id;
+            const goVisit = atShop && json?.data?.owned_by_you && newId;
             reset();
+            setAtShop(false);
             onSuccess();
+            if (goVisit) router.push(`/visits/capture?lead=${encodeURIComponent(newId)}`);
         } catch (err) {
             toast.error((err as Error).message);
         } finally {
@@ -252,6 +261,20 @@ export function CreateLeadModal({ open, onClose, onSuccess }: Props) {
                     </select>
                 </div>
                 <CampaignPicker origin={origin} value={campaignId} onChange={setCampaignId} />
+                <label className="flex items-start gap-2 text-sm text-gray-700">
+                    <input
+                        type="checkbox"
+                        checked={atShop}
+                        onChange={(e) => setAtShop(e.target.checked)}
+                        className="mt-0.5 h-4 w-4 rounded border-gray-300"
+                    />
+                    <span>
+                        I&apos;m at the shop now
+                        <span className="block text-xs text-gray-500">
+                            After the lead is created, log the visit with a shop photo and your live location.
+                        </span>
+                    </span>
+                </label>
             </form>
         </Modal>
     );

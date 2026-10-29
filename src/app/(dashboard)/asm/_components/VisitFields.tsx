@@ -13,6 +13,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { PhotoUploader } from "./PhotoUploader";
+import { VerifiedVisitCapture, type CapturedVisit } from "@/components/visits/VerifiedVisitCapture";
+import { istDay } from "@/lib/visits/verifiedCapture";
 import {
     VISIT_STATUS,
     VISIT_OUTCOME,
@@ -60,8 +62,15 @@ type VisitStatusTarget = (typeof VISIT_STATUS_TARGETS)[number];
 export type VisitLeadState = { lead_status: string | null; interest_level: string | null };
 
 export function useVisitForm(open: boolean, lead?: VisitLeadState) {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = istDay(new Date());
+    // ID 196: the verified shop photo + live location for a done visit. The
+    // date of a done visit is today — no back-dating.
+    const [capture, setCapture] = useState<CapturedVisit | null>(null);
+    // Before E-363 is applied the capture route answers 503: the old photo +
+    // GPS fields come back and the visit logs unverified, as before.
+    const [verifyOff, setVerifyOff] = useState(false);
     const [visitStatus, setVisitStatus] = useState<VisitStatus>("visited");
+    const verify = visitStatus === "visited" && !verifyOff;
     const [actualDate, setActualDate] = useState(today);
     const [outcome, setOutcome] = useState<VisitOutcome | "">("productive");
     const [remarks, setRemarks] = useState("");
@@ -122,6 +131,7 @@ export function useVisitForm(open: boolean, lead?: VisitLeadState) {
             setNextAction("next_visit");
             setNextVisitDate("");
             setSubmitting(false);
+            setCapture(null);
         }
     }, [open, today]);
 
@@ -170,6 +180,10 @@ export function useVisitForm(open: boolean, lead?: VisitLeadState) {
             toast.error("Next visit date is required.");
             return null;
         }
+        if (verify && !capture) {
+            toast.error("Read your location and take the shop photo first.");
+            return null;
+        }
 
         setSubmitting(true);
         try {
@@ -179,14 +193,18 @@ export function useVisitForm(open: boolean, lead?: VisitLeadState) {
                 next_action: nextAction,
             };
             if (visitStatus === "visited") {
-                body.actual_visit_date = actualDate;
+                // ID 196: the server dates, places and photographs a done
+                // visit from the capture.
+                body.actual_visit_date = verify ? today : actualDate;
                 body.visit_outcome = outcome || null;
-            } else if (visitStatus === "scheduled" && actualDate) {
-                body.scheduled_date = actualDate;
+                body.capture_id = capture?.captureId ?? null;
             }
-            if (photos.length) body.photos = photos;
-            if (lat != null) body.gps_check_in_lat = lat;
-            if (lng != null) body.gps_check_in_lng = lng;
+            if (!verify) {
+                if (visitStatus === "scheduled" && actualDate) body.scheduled_date = actualDate;
+                if (photos.length) body.photos = photos;
+                if (lat != null) body.gps_check_in_lat = lat;
+                if (lng != null) body.gps_check_in_lng = lng;
+            }
             if (nextAction === "next_visit") body.next_visit_date = nextVisitDate;
             if (visitStatus === "visited" && statusTo) body.status_to = statusTo;
             // The server derives status and temperature from the outcome itself
@@ -233,6 +251,10 @@ export function useVisitForm(open: boolean, lead?: VisitLeadState) {
     };
 
     return {
+        capture,
+        setCapture,
+        verify,
+        setVerifyOff,
         visitStatus,
         setVisitStatus,
         actualDate,
@@ -262,8 +284,12 @@ export function useVisitForm(open: boolean, lead?: VisitLeadState) {
     };
 }
 
-export function VisitFields({ form }: { form: UseVisitForm }) {
+export function VisitFields({ form, leadId }: { form: UseVisitForm; leadId: string }) {
     const {
+        capture,
+        setCapture,
+        verify,
+        setVerifyOff,
         visitStatus,
         setVisitStatus,
         actualDate,
@@ -314,12 +340,17 @@ export function VisitFields({ form }: { form: UseVisitForm }) {
                             ? "Actual visit date"
                             : "Scheduled date"}
                     </Label>
-                    <Input
-                        type="date"
-                        value={actualDate}
-                        onChange={(e) => setActualDate(e.target.value)}
-                        className="mt-1"
-                    />
+                    {verify ? (
+                        // ID 196: a done visit is logged on the day it happens.
+                        <p className="mt-1 rounded-md bg-gray-50 px-3 py-2 text-sm text-gray-700">Today</p>
+                    ) : (
+                        <Input
+                            type="date"
+                            value={actualDate}
+                            onChange={(e) => setActualDate(e.target.value)}
+                            className="mt-1"
+                        />
+                    )}
                 </div>
             </div>
 
@@ -392,6 +423,23 @@ export function VisitFields({ form }: { form: UseVisitForm }) {
                 />
             </div>
 
+            {verify ? (
+                <div>
+                    <Label>
+                        Shop photo and location <span className="text-rose-600">*</span>
+                    </Label>
+                    <div className="mt-1">
+                        <VerifiedVisitCapture
+                            leadId={leadId}
+                            value={capture}
+                            onChange={setCapture}
+                            disabled={submitting}
+                            onUnavailable={() => setVerifyOff(true)}
+                        />
+                    </div>
+                </div>
+            ) : (
+            <>
             <div>
                 <Label>Photos</Label>
                 <div className="mt-1">
@@ -438,6 +486,8 @@ export function VisitFields({ form }: { form: UseVisitForm }) {
                     )}
                 </div>
             </div>
+            </>
+            )}
 
             <div className="grid grid-cols-1 gap-3 border-t border-gray-100 pt-2 md:grid-cols-2">
                 <div>

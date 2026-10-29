@@ -50,6 +50,8 @@ import { houseDealerCode } from "@/lib/leads/dealerByMobile";
 import { LEAD_PUSHED_TO_DEALER } from "@/lib/leads/pushGuards";
 import { assistedByLabel, assistedBySql } from "@/lib/exports/assistedBy";
 import { billCell, exportOrigin, recordingCell } from "@/lib/exports/fileLinks";
+import { claimDaysFor, type ClaimDay } from "@/lib/expenses/travelProofStore";
+import { VERDICT_LABEL, isExpenseCeo } from "@/lib/expenses/travelProof";
 
 // ID 122: the one onboarding clock (src/lib/onboarding/clock.ts).
 const ONBOARDING_CLOCK = sql.raw(onboardingClockSql("app"));
@@ -1136,6 +1138,9 @@ const visits: Dataset = {
                 { key: "scheduled_date", header: "Planned for", meaning: "The date the visit was scheduled for.", kind: "date" },
                 { key: "lead_id", header: "Lead ID", meaning: "The lead visited.", width: 24 },
                 { key: "dealer", header: "Dealer", meaning: "Dealer or shop name on the lead.", width: 28 },
+                // ID 196 (PJP phase 1) — E-363; read through to_jsonb so the sheet works before it.
+                { key: "counter", header: "Counter", meaning: "The dealer account (My Dealers) the visit was on: logged on the account, or on the lead the account came from. Blank = a lead with no account yet.", width: 28 },
+                { key: "verified", header: "Verified (GPS + photo)", meaning: "Yes = logged with the phone's live location (100 m or better, accuracy shown) and a camera photo stamped by the server (ID 196). No = not verified (every visit before 29 Oct, and any logged without it). Blank when the row is not a visit.", width: 26 },
                 { key: "city", header: "City", meaning: "Lead's city." },
                 { key: "state", header: "State", meaning: "Lead's state." },
                 { key: "visitor", header: "ASM", meaning: "The ASM on the visit.", width: 22 },
@@ -1196,7 +1201,12 @@ const visits: Dataset = {
         const data = await rows(sql`
             SELECT COALESCE(v.actual_visit_date, v.scheduled_date) AS visit_date, v.scheduled_date,
                    v.dealer_lead_id AS lead_id,
-                   COALESCE(dl.dealer_name, dl.shop_name) AS dealer, dl.city, dl.state,
+                   COALESCE(dl.dealer_name, dl.shop_name, acct.name) AS dealer, acct.name AS counter,
+                   CASE WHEN ${visitedRowSql("v")} THEN
+                        CASE WHEN (to_jsonb(v) ->> 'verified') = 'true'
+                             THEN 'Yes · ±' || round((to_jsonb(v) ->> 'gps_accuracy_m')::numeric)::text || ' m + photo'
+                             ELSE 'No (not verified)' END END AS verified,
+                   dl.city, dl.state,
                    u.name AS visitor, v.meeting_mode, v.visit_status, v.visit_outcome,
                    CASE WHEN ${visitedRowSql("v")} THEN ${isNewToItarangSql("v")} END AS new_visit,
                    CASE WHEN ${visitedRowSql("v")} THEN ${isFreshSql("v")} END AS fresh_for_rep,
@@ -1216,6 +1226,12 @@ const visits: Dataset = {
               LEFT JOIN dealer_leads dl ON dl.id = v.dealer_lead_id
               LEFT JOIN users u ON u.id::text = v.asm_id
               LEFT JOIN users ou ON ou.id::text = dl.current_owner_id
+              LEFT JOIN LATERAL (
+                  SELECT a.business_entity_name AS name FROM accounts a
+                   WHERE a.id = (to_jsonb(v) ->> 'account_id')
+                      OR a.id = (SELECT ao.account_id FROM account_ownership ao
+                                  WHERE ao.source_dealer_lead_id = v.dealer_lead_id LIMIT 1)
+                   LIMIT 1) acct ON TRUE
               ${freshRepeatJoins("v", true)}
               ${clockJoin}
               LEFT JOIN LATERAL (
@@ -1801,6 +1817,8 @@ const expenses: Dataset = {
                 { key: "source", header: "Entered through", meaning: "'manual' = typed in; 'ai' = read from an uploaded or Drive bill." },
                 { key: "attention_reason", header: "Needs checking", meaning: "Why the row was flagged when it was read, if it was.", width: 30 },
                 { key: "bill_url", header: "Bill link", meaning: "A CRM link to the bill. Clicking it checks who you are (Finance, Admin, CEO or whoever submitted it) and then opens it through a fresh link that lasts 15 minutes; the file itself never sits in this download.", width: 40 },
+                // ID 197 (PJP phase 1) — E-364; only the CEO's download carries it.
+                { key: "travel_proof", header: "Travel proof", meaning: "Travel / Vehicle-Fuel claims: each claimed day with Supported (a verified visit that day — live GPS + camera photo) or Not supported, and the note given. CEO's download only; blank for everyone else and for other claims.", width: 44 },
             ],
         },
     ],
@@ -1815,7 +1833,7 @@ const expenses: Dataset = {
                    e.description, e.invoice_number, e.amount, e.currency, e.original_amount, e.status,
                    ab.name AS approved_by, e.approved_at, e.rejection_reason, e.source,
                    CASE WHEN e.needs_attention THEN COALESCE(e.attention_reason, 'Flagged') END AS attention_reason,
-                   e.bill_url
+                   e.bill_url, e.id
               FROM expense_submissions e
               LEFT JOIN users su ON su.id = e.submitted_by
               LEFT JOIN users ab ON ab.id = e.approved_by
@@ -1825,7 +1843,20 @@ const expenses: Dataset = {
         `);
         // ID 166: a checked CRM link, never the stored bill link.
         const origin = exportOrigin();
-        return [{ ...this.sheets[0], rows: data.map((r) => ({ ...r, bill_url: billCell(r.bill_url, origin) })) }];
+        // ID 197: the travel proof is for the CEO (and the submitter, on screen) only.
+        const proof = isExpenseCeo(ctx.user)
+            ? await claimDaysFor(data.map((r) => String(r.id))).catch(() => new Map<string, ClaimDay[]>())
+            : new Map<string, ClaimDay[]>();
+        const proofCell = (id: unknown) =>
+            (proof.get(String(id)) ?? [])
+                .map((d) => `${d.day}: ${VERDICT_LABEL[d.verdict]}${d.note ? ` (${d.note})` : ""}`)
+                .join("; ");
+        return [
+            {
+                ...this.sheets[0],
+                rows: data.map((r) => ({ ...r, bill_url: billCell(r.bill_url, origin), travel_proof: proofCell(r.id) })),
+            },
+        ];
     },
 };
 

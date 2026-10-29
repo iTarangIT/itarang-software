@@ -11,6 +11,13 @@
  * scores best. Every column that was not recognised is reported back to the
  * person importing, and the preview shows what was read before anything is
  * written — check it against a real export.
+ *
+ * ID 200 (28 Oct, from Finance's sample): Vyapar's "Sale Report" export has
+ * two sheets — "Sale Report" (one row per invoice / credit note: GSTIN,
+ * Total Amount, Received/Paid Amount, Balance Due, Due Date, Status Paid /
+ * Unpaid / Overdue N Days / Cancelled) and "Item Details" (the lines). When
+ * both are there they are read together, joined on the invoice number, so
+ * the register carries each invoice's payments as well as its lines.
  */
 import * as XLSX from "xlsx";
 import { classifyHsn, normalizeHsn, parseAmount, type ProductClass } from "./invoiceLines";
@@ -40,7 +47,11 @@ type Field =
     | "status"
     | "doc_type"
     | "serial"
-    | "description";
+    | "description"
+    // ID 200 — payments, per invoice (the Sale Report sheet).
+    | "received"
+    | "balance"
+    | "due_date";
 
 const CANDIDATES: Record<Field, string[]> = {
     number: ["invoiceno", "invoicenumber", "billno", "billnumber", "txnno", "transactionno", "refno", "voucherno", "notenumber", "notevoucherno", "documentnumber", "docno"],
@@ -61,10 +72,13 @@ const CANDIDATES: Record<Field, string[]> = {
     // line description where serials are typed as "Serial No: …".
     serial: ["serialno", "serialnumber", "serialnos", "serialnumbers", "serials", "serialnoimei", "imeino", "imeinumber", "imei"],
     description: ["description", "itemdescription", "itemdetails", "desc"],
+    received: ["receivedpaidamount", "receivedamount", "paidamount", "amountreceived", "received"],
+    balance: ["balancedue", "balanceamount", "amountdue", "balance"],
+    due_date: ["duedate", "paymentduedate"],
 };
 
 /** Headers that a GSTR-1 rate split carries and we deliberately ignore. */
-const IGNORED = ["placeofsupply", "cess", "cessamount", "rate", "reversecharge", "applicable", "ecommerce", "unit", "discount", "sno", "srno", "paymenttype", "received", "balance"];
+const IGNORED = ["placeofsupply", "cess", "cessamount", "rate", "reversecharge", "applicable", "ecommerce", "unit", "discount", "sno", "srno", "paymenttype", "partyphone", "phoneno", "salesmanager"];
 
 function pick(headers: string[], field: Field, taken: Set<number>): number {
     const cands = CANDIDATES[field];
@@ -84,7 +98,9 @@ function pick(headers: string[], field: Field, taken: Set<number>): number {
 // Order matters: specific fields claim their column before generic ones
 // ("Item Serial No" goes to serial before item's substring match sees it; an
 // only "Item Description" column goes to item before description).
-const FIELD_ORDER: Field[] = ["gstin", "number", "date", "party", "hsn", "serial", "item", "description", "qty", "taxable", "tax", "total", "rate", "amount", "status", "doc_type"];
+// ID 200: "Due Date" before date, "Received/Paid Amount" and "Balance Due"
+// before the amount / total fields whose substring match would take them.
+const FIELD_ORDER: Field[] = ["gstin", "number", "due_date", "date", "party", "hsn", "serial", "item", "description", "qty", "received", "balance", "taxable", "tax", "total", "rate", "amount", "status", "doc_type"];
 
 function mapColumns(headers: string[]): Partial<Record<Field, number>> {
     const taken = new Set<number>();
@@ -159,6 +175,14 @@ export interface ParsedDocument {
     tax: number | null;
     total: number | null;
     lines: ParsedLine[];
+    /** ID 200 — "Received/Paid Amount" (or total less "Balance Due"); absent when the file has no payments. */
+    amount_paid?: number | null;
+    /** ID 200 — "Balance Due" as Vyapar shows it. */
+    balance_due?: number | null;
+    /** ID 200 — "Due Date"; null when blank (the CRM's own due date is kept). */
+    due_date?: string | null;
+    /** ID 200 — the status text as exported ("Paid", "Unpaid", "Overdue 28 Days"). */
+    status_text?: string | null;
 }
 
 export interface ParseResult {
@@ -186,53 +210,39 @@ function isCreditNote(sheetName: string, ...cells: unknown[]): boolean {
     return /cdn|credit/i.test(sheetName) || cells.some((c) => /credit\s*note|^c$|^cn$/i.test(String(c ?? "").trim()));
 }
 
-export function parseInvoiceWorkbook(buffer: ArrayBuffer | Buffer, kind: ImportKind): ParseResult {
-    const wb = XLSX.read(buffer, { cellDates: true });
-    let best: { sheet: string; row: number; cols: Partial<Record<Field, number>>; headers: string[]; rows: unknown[][] } | null = null;
-    let bestScore = -1;
-    for (const name of wb.SheetNames) {
-        const rows = XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[name], { header: 1, raw: true, defval: "" });
-        for (let r = 0; r < Math.min(rows.length, 20); r++) {
-            const headers = (rows[r] ?? []).map((h) => String(h ?? "").trim());
-            const cols = mapColumns(headers);
-            const score = Object.keys(cols).length + (REQUIRED[kind].every((f) => cols[f] != null) ? 10 : 0);
-            if (score > bestScore) {
-                bestScore = score;
-                best = { sheet: name, row: r, cols, headers, rows };
-            }
-        }
-    }
+type SheetPick = { sheet: string; row: number; cols: Partial<Record<Field, number>>; headers: string[]; rows: unknown[][] };
 
-    const empty: ParseResult = { kind, sheet: null, header_row: null, columns: {}, unknown_columns: [], documents: [], warnings: [] };
-    if (!best) return { ...empty, warnings: ["The file has no readable sheet."] };
-    const missing = REQUIRED[kind].filter((f) => best!.cols[f] == null);
-    const columns = Object.fromEntries(
-        Object.entries(best.cols).map(([f, i]) => [f, best!.headers[i as number]]),
-    ) as Partial<Record<Field, string>>;
-    const used = new Set(Object.values(best.cols));
-    const unknown_columns = best.headers.filter(
-        (h, i) => h && !used.has(i) && !IGNORED.some((g) => norm(h).includes(g)),
-    );
-    if (missing.length) {
-        return {
-            ...empty,
-            sheet: best.sheet,
-            header_row: best.row + 1,
-            columns,
-            unknown_columns,
-            warnings: [`Could not find a column for: ${missing.join(", ")}. Headers seen: ${best.headers.filter(Boolean).join(" | ")}`],
-        };
+/** The header row (within the first 20) that names the most known columns, +10 when `required` are all found. */
+function bestHeader(name: string, rows: unknown[][], required: Field[]): { pick: SheetPick; score: number } | null {
+    let best: { pick: SheetPick; score: number } | null = null;
+    for (let r = 0; r < Math.min(rows.length, 20); r++) {
+        const headers = (rows[r] ?? []).map((h) => String(h ?? "").trim());
+        const cols = mapColumns(headers);
+        const score = Object.keys(cols).length + (required.every((f) => cols[f] != null) ? 10 : 0);
+        if (!best || score > best.score) best = { pick: { sheet: name, row: r, cols, headers, rows }, score };
     }
+    return best;
+}
 
-    const c = best.cols;
+function columnsOf(p: SheetPick): Partial<Record<Field, string>> {
+    return Object.fromEntries(Object.entries(p.cols).map(([f, i]) => [f, p.headers[i as number]])) as Partial<Record<Field, string>>;
+}
+
+function unknownColumnsOf(p: SheetPick): string[] {
+    const used = new Set(Object.values(p.cols));
+    return p.headers.filter((h, i) => h && !used.has(i) && !IGNORED.some((g) => norm(h).includes(g)));
+}
+
+/** Every document on one sheet, in row order. Totals are finished by finishDocuments. */
+function readDocuments(p: SheetPick, kind: ImportKind): { docs: Map<string, ParsedDocument>; skipped: number } {
+    const c = p.cols;
     const cell = (row: unknown[], f: Field) => (c[f] != null ? row[c[f] as number] : undefined);
     const docs = new Map<string, ParsedDocument>();
-    const warnings: string[] = [];
     let last: ParsedDocument | null = null;
     let skipped = 0;
 
-    for (let r = best.row + 1; r < best.rows.length; r++) {
-        const row = best.rows[r] ?? [];
+    for (let r = p.row + 1; r < p.rows.length; r++) {
+        const row = p.rows[r] ?? [];
         if (row.every((v) => v === "" || v == null)) continue;
         const rawNumber = String(cell(row, "number") ?? "").trim();
         // Footer rows ("Total", "Grand Total") carry amounts but no document.
@@ -250,7 +260,7 @@ export function parseInvoiceWorkbook(buffer: ArrayBuffer | Buffer, kind: ImportK
                     gstin: gst.gstin,
                     gstin_attention: gst.attention,
                     cancelled: false,
-                    doc_type: isCreditNote(best.sheet, cell(row, "doc_type")) ? "credit_note" : "invoice",
+                    doc_type: isCreditNote(p.sheet, cell(row, "doc_type")) ? "credit_note" : "invoice",
                     taxable: null,
                     tax: null,
                     total: null,
@@ -275,6 +285,21 @@ export function parseInvoiceWorkbook(buffer: ArrayBuffer | Buffer, kind: ImportK
         const total = parseAmount(cell(row, "total"));
         const qty = parseAmount(cell(row, "qty"));
         const rate = parseAmount(cell(row, "rate"));
+
+        // ID 200 — payments, when the sheet has them (one row per invoice).
+        if (c.received != null || c.balance != null) {
+            const received = parseAmount(cell(row, "received"));
+            const balance = parseAmount(cell(row, "balance"));
+            if (received != null) doc.amount_paid = received;
+            if (balance != null) doc.balance_due = balance;
+        }
+        if (c.due_date != null) {
+            const due = parseDateCell(cell(row, "due_date"));
+            if (due) doc.due_date = due;
+            else if (doc.due_date === undefined) doc.due_date = null;
+        }
+        const statusText = String(cell(row, "status") ?? "").trim();
+        if (statusText) doc.status_text = statusText;
 
         if (kind === "gstr1") {
             // GSTR-1 splits one invoice into a row per tax rate: taxable values
@@ -324,8 +349,12 @@ export function parseInvoiceWorkbook(buffer: ArrayBuffer | Buffer, kind: ImportK
         if (tax != null) doc.tax = (doc.tax ?? 0) + tax;
         if (total != null && c.item != null && c.total != null) doc.total = (doc.total ?? 0) + total;
     }
+    return { docs, skipped };
+}
 
-    for (const d of docs.values()) {
+/** Taxable from the lines, total from taxable + tax, paid from total less balance; date warnings. */
+function finishDocuments(docs: Iterable<ParsedDocument>, kind: ImportKind, warnings: string[]): void {
+    for (const d of docs) {
         if (kind === "gstr1") {
             if (d.taxable != null && d.total != null) d.tax = Math.round((d.total - d.taxable) * 100) / 100;
             continue;
@@ -333,8 +362,111 @@ export function parseInvoiceWorkbook(buffer: ArrayBuffer | Buffer, kind: ImportK
         const sum = d.lines.reduce((s, l) => s + (l.amount_excl_gst ?? 0), 0);
         d.taxable = d.lines.length ? Math.round(sum * 100) / 100 : d.taxable;
         if (d.total == null && d.taxable != null && d.tax != null) d.total = Math.round((d.taxable + d.tax) * 100) / 100;
+        // ID 200: only a balance given — what was received is the rest.
+        if (d.amount_paid == null && d.balance_due != null && d.total != null) {
+            d.amount_paid = Math.round(Math.max(0, d.total - d.balance_due) * 100) / 100;
+        }
         if (!d.date) warnings.push(`${d.number}: no readable date.`);
     }
+}
+
+const numberKey = (n: string) => n.toUpperCase().replace(/\s+/g, "");
+
+/**
+ * ID 200 — Vyapar's two-sheet Sale Report: documents and payments from "Sale
+ * Report", lines from "Item Details", joined on the invoice number. An
+ * invoice on Item Details only is kept, with a warning.
+ */
+function parseSaleReportPair(wb: XLSX.WorkBook, saleName: string, itemsName: string): ParseResult {
+    const kind: ImportKind = "vyapar_register";
+    const rowsOfSheet = (n: string) => XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[n], { header: 1, raw: true, defval: "" });
+    const sale = bestHeader(saleName, rowsOfSheet(saleName), ["number", "total"]);
+    const items = bestHeader(itemsName, rowsOfSheet(itemsName), ["number", "item"]);
+    const sheet = `${saleName} + ${itemsName}`;
+    const empty: ParseResult = { kind, sheet, header_row: null, columns: {}, unknown_columns: [], documents: [], warnings: [] };
+    if (!sale || !items) return { ...empty, warnings: ["The file has no readable sheet."] };
+    const columns = { ...columnsOf(items.pick), ...columnsOf(sale.pick) };
+    const unknown_columns = [
+        ...unknownColumnsOf(sale.pick).map((h) => `${saleName}: ${h}`),
+        ...unknownColumnsOf(items.pick).map((h) => `${itemsName}: ${h}`),
+    ];
+    const missing = [
+        ...(["number", "total"] as Field[]).filter((f) => sale.pick.cols[f] == null).map((f) => `${f} (${saleName})`),
+        ...(["number", "item"] as Field[]).filter((f) => items.pick.cols[f] == null).map((f) => `${f} (${itemsName})`),
+    ];
+    if (missing.length) {
+        return {
+            ...empty,
+            header_row: sale.pick.row + 1,
+            columns,
+            unknown_columns,
+            warnings: [`Could not find a column for: ${missing.join(", ")}.`],
+        };
+    }
+
+    const warnings: string[] = [];
+    const head = readDocuments(sale.pick, kind);
+    const lines = readDocuments(items.pick, kind);
+    const byKey = new Map([...lines.docs.values()].map((d) => [numberKey(d.number), d]));
+    const out: ParsedDocument[] = [];
+    for (const d of head.docs.values()) {
+        const l = byKey.get(numberKey(d.number));
+        if (l) {
+            d.lines = l.lines;
+            if (d.tax == null) d.tax = l.tax;
+            if (!d.date) d.date = l.date;
+            if (l.cancelled) d.cancelled = true;
+            byKey.delete(numberKey(d.number));
+        }
+        out.push(d);
+    }
+    for (const l of byKey.values()) {
+        warnings.push(`${l.number}: on ${itemsName} but not on ${saleName}; read without payments.`);
+        out.push(l);
+    }
+    finishDocuments(out, kind, warnings);
+    const skipped = head.skipped + lines.skipped;
+    if (skipped) warnings.push(`${skipped} row(s) before the first invoice number were skipped.`);
+    return { kind, sheet, header_row: sale.pick.row + 1, columns, unknown_columns, documents: out, warnings };
+}
+
+export function parseInvoiceWorkbook(buffer: ArrayBuffer | Buffer, kind: ImportKind): ParseResult {
+    const wb = XLSX.read(buffer, { cellDates: true });
+    if (kind === "vyapar_register") {
+        const saleName = wb.SheetNames.find((n) => /sale\s*report/i.test(n));
+        const itemsName = wb.SheetNames.find((n) => /item\s*details/i.test(n));
+        if (saleName && itemsName) return parseSaleReportPair(wb, saleName, itemsName);
+    }
+    let best: SheetPick | null = null;
+    let bestScore = -1;
+    for (const name of wb.SheetNames) {
+        const rows = XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[name], { header: 1, raw: true, defval: "" });
+        const b = bestHeader(name, rows, REQUIRED[kind]);
+        if (b && b.score > bestScore) {
+            bestScore = b.score;
+            best = b.pick;
+        }
+    }
+
+    const empty: ParseResult = { kind, sheet: null, header_row: null, columns: {}, unknown_columns: [], documents: [], warnings: [] };
+    if (!best) return { ...empty, warnings: ["The file has no readable sheet."] };
+    const missing = REQUIRED[kind].filter((f) => best!.cols[f] == null);
+    const columns = columnsOf(best);
+    const unknown_columns = unknownColumnsOf(best);
+    if (missing.length) {
+        return {
+            ...empty,
+            sheet: best.sheet,
+            header_row: best.row + 1,
+            columns,
+            unknown_columns,
+            warnings: [`Could not find a column for: ${missing.join(", ")}. Headers seen: ${best.headers.filter(Boolean).join(" | ")}`],
+        };
+    }
+
+    const warnings: string[] = [];
+    const { docs, skipped } = readDocuments(best, kind);
+    finishDocuments(docs.values(), kind, warnings);
     if (skipped) warnings.push(`${skipped} row(s) before the first invoice number were skipped.`);
 
     return {

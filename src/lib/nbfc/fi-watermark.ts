@@ -19,6 +19,8 @@ export interface WatermarkMeta {
   accuracyM?: number | null;
   /** Server timestamp at form-open GPS capture (authoritative). */
   timestamp: Date;
+  /** The band's lead word — "iTarang FI" unless a caller names its own (ID 196: visits). */
+  label?: string;
 }
 
 function esc(s: string): string {
@@ -50,7 +52,7 @@ export async function watermarkPhoto(
       <svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
         <rect x="0" y="${height - band}" width="${width}" height="${band}" fill="rgba(15,23,42,0.62)"/>
         <text x="${pad}" y="${height - band + fontSize + pad / 2}" font-family="Arial, sans-serif"
-          font-size="${fontSize}" fill="#ffffff" font-weight="600">iTarang FI &#8226; ${esc(gps)}</text>
+          font-size="${fontSize}" fill="#ffffff" font-weight="600">${esc(meta.label ?? "iTarang FI")} &#8226; ${esc(gps)}</text>
         <text x="${pad}" y="${height - pad}" font-family="Arial, sans-serif"
           font-size="${Math.round(fontSize * 0.82)}" fill="#e2e8f0">${esc(ts)} IST</text>
       </svg>`;

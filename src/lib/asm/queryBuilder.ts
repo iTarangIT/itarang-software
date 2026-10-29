@@ -18,6 +18,7 @@ import type { QueueRegion } from "@/lib/leads/queueFilters";
 import { finalisedNotWonSql } from "@/lib/leads/finalisedNotWon";
 import type { QueueSort } from "@/lib/leads/queueSort";
 import { ownerScopeSql } from "@/lib/users/teamSql";
+import { LAST_DONE_VISIT_JOIN, TEAM_REVIEW_SELECT } from "@/lib/leads/teamReviewSql";
 
 const TERMINAL_LIST = sql.raw(
     TERMINAL_STATUSES.map((s) => `'${s}'`).join(", "),
@@ -58,7 +59,20 @@ type BuildArgs = {
      * within the team, nothing else). Absent / empty = exactly the old SQL.
      */
     teamMemberIds?: readonly string[] | null;
+    /**
+     * ID 199: a manager's "Team member" pick (pickTeamMember) — only this
+     * person's leads on the own tabs, read through the same column the tab
+     * scopes on. Null = no narrowing. Ignored on the pool tabs.
+     */
+    member?: string | null;
 };
+
+/** ID 199: the `member` narrowing for one tab (empty on the pool tabs). */
+function memberClause(tab: AsmQueueTab, member: string | null | undefined): SQL {
+    if (!member || tab === "territory" || tab === "unclaimed") return sql``;
+    const col = tab === "today" ? sql`dl.asm_id` : tab === "my_closed" ? sql`dl.closing_owner_id` : sql`dl.current_owner_id`;
+    return sql` AND ${col} = ${member}`;
+}
 
 /**
  * The WHERE clause that defines a tab. Exported for the WhatsApp Assistant's
@@ -211,11 +225,12 @@ export async function fetchAsmQueueRows({
     sort,
     ownedBy,
     teamMemberIds,
+    member,
 }: BuildArgs): Promise<AsmQueueRow[]> {
     const offset = (page - 1) * limit;
     const where = tabFilter(tab, asmId, teamMemberIds);
     const order = queueSortOrder(sort, tabOrder(tab));
-    const search = extraFilters({ q, filters, visitStatus, visitOutcome, finalisedOnly, pastLimit, ownedBy, teamMemberIds });
+    const search = sql`${extraFilters({ q, filters, visitStatus, visitOutcome, finalisedOnly, pastLimit, ownedBy, teamMemberIds })}${memberClause(tab, member)}`;
 
     const rows = await db.execute<AsmQueueRow>(sql`
         SELECT
@@ -238,9 +253,12 @@ export async function fetchAsmQueueRows({
             lv.visit_outcome,
             lv.scheduled_date::text AS scheduled_date,
             lv.actual_visit_date::text AS actual_visit_date,
-            dl.closed_at
+            dl.closed_at,
+            dl.next_follow_up_at
+            ${TEAM_REVIEW_SELECT}
         FROM dealer_leads dl
         ${LATEST_VISIT_JOIN}
+        ${LAST_DONE_VISIT_JOIN}
         LEFT JOIN users owner ON owner.id::text = dl.current_owner_id
         LEFT JOIN users asm ON asm.id::text = dl.asm_id
         WHERE ${where} ${search}
@@ -261,12 +279,13 @@ export async function countAsmQueueRows({
     pastLimit,
     ownedBy,
     teamMemberIds,
+    member,
 }: Pick<
     BuildArgs,
-    "tab" | "asmId" | "q" | "filters" | "visitStatus" | "visitOutcome" | "finalisedOnly" | "pastLimit" | "ownedBy" | "teamMemberIds"
+    "tab" | "asmId" | "q" | "filters" | "visitStatus" | "visitOutcome" | "finalisedOnly" | "pastLimit" | "ownedBy" | "teamMemberIds" | "member"
 >): Promise<number> {
     const where = tabFilter(tab, asmId, teamMemberIds);
-    const search = extraFilters({ q, filters, visitStatus, visitOutcome, finalisedOnly, pastLimit, ownedBy, teamMemberIds });
+    const search = sql`${extraFilters({ q, filters, visitStatus, visitOutcome, finalisedOnly, pastLimit, ownedBy, teamMemberIds })}${memberClause(tab, member)}`;
     const rows = await db.execute<{ c: string }>(sql`
         SELECT COUNT(*)::text AS c FROM dealer_leads dl ${LATEST_VISIT_JOIN} WHERE ${where} ${search}
     `);
@@ -331,10 +350,12 @@ export async function countAsmFinalisedNotWon(asmId: string): Promise<number> {
  */
 export async function fetchAllAsmTabCounts(
     asmId: string,
-    opts?: Pick<BuildArgs, "filters" | "visitStatus" | "visitOutcome" | "finalisedOnly" | "pastLimit" | "teamMemberIds">,
+    opts?: Pick<BuildArgs, "filters" | "visitStatus" | "visitOutcome" | "finalisedOnly" | "pastLimit" | "teamMemberIds" | "member">,
 ): Promise<Record<AsmQueueTab, number>> {
     // ID 155: a manager's own-tab badges count the team too, like the tables.
     const team = opts?.teamMemberIds;
+    // ID 199: …and follow the Team member pick.
+    const m = (tab: AsmQueueTab) => memberClause(tab, opts?.member);
     const extra = extraFilters({
         filters: opts?.filters,
         visitStatus: opts?.visitStatus,
@@ -350,11 +371,11 @@ export async function fetchAllAsmTabCounts(
         my_closed: string;
     }>(sql`
         SELECT
-            (SELECT COUNT(*)::text FROM dealer_leads dl ${LATEST_VISIT_JOIN} WHERE ${tabFilter("my_visits", asmId, team)} ${extra}) AS my_visits,
-            (SELECT COUNT(*)::text FROM dealer_leads dl ${LATEST_VISIT_JOIN} WHERE ${tabFilter("today", asmId, team)} ${extra}) AS today,
+            (SELECT COUNT(*)::text FROM dealer_leads dl ${LATEST_VISIT_JOIN} WHERE ${tabFilter("my_visits", asmId, team)} ${extra}${m("my_visits")}) AS my_visits,
+            (SELECT COUNT(*)::text FROM dealer_leads dl ${LATEST_VISIT_JOIN} WHERE ${tabFilter("today", asmId, team)} ${extra}${m("today")}) AS today,
             (SELECT COUNT(*)::text FROM dealer_leads dl ${LATEST_VISIT_JOIN} WHERE ${tabFilter("territory", asmId)} ${extra}) AS territory,
             (SELECT COUNT(*)::text FROM dealer_leads dl ${LATEST_VISIT_JOIN} WHERE ${tabFilter("unclaimed", asmId)} ${extra}) AS unclaimed,
-            (SELECT COUNT(*)::text FROM dealer_leads dl ${LATEST_VISIT_JOIN} WHERE ${tabFilter("my_closed", asmId, team)} ${extra}) AS my_closed
+            (SELECT COUNT(*)::text FROM dealer_leads dl ${LATEST_VISIT_JOIN} WHERE ${tabFilter("my_closed", asmId, team)} ${extra}${m("my_closed")}) AS my_closed
     `);
     const r = rows[0]!;
     return {
@@ -380,9 +401,11 @@ export async function fetchAsmQueueRegions(
     tab: AsmQueueTab,
     /** ID 155: a manager's direct reports — the facets span what the table shows. */
     teamMemberIds?: readonly string[] | null,
+    /** ID 199: the Team member pick. */
+    member?: string | null,
 ): Promise<QueueRegion[]> {
     const rows = await db.execute<{ state: string | null; city: string | null }>(
-        regionFacetQuery(tabFilter(tab, asmId, teamMemberIds), LATEST_VISIT_JOIN),
+        regionFacetQuery(sql`${tabFilter(tab, asmId, teamMemberIds)}${memberClause(tab, member)}`, LATEST_VISIT_JOIN),
     );
     return foldRegionFacets(
         rows as unknown as { state: string | null; city: string | null }[],

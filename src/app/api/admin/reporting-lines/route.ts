@@ -31,6 +31,8 @@ export const dynamic = "force-dynamic";
 const READ_ROLES = ["admin", "ceo", "sales_head"];
 /** ID 155: who may change a reporting line. */
 const WRITE_ROLES = ["admin", "sales_head"];
+/** 29 Oct: only the Sales Head takes someone out of a team (reports_to -> nobody). */
+const REMOVE_ROLES = ["sales_head"];
 
 const BodySchema = z.object({
     user_id: z.string().uuid(),
@@ -61,6 +63,7 @@ export const GET = withErrorHandler(async (req: Request) => {
         available,
         history_available: historyAvailable,
         can_edit: WRITE_ROLES.includes(user.role),
+        can_remove: REMOVE_ROLES.includes(user.role),
     });
 });
 
@@ -71,6 +74,9 @@ export const PATCH = withErrorHandler(async (req: Request) => {
         return errorResponse("Send user_id, reports_to (a user id, or null to clear) and optionally effective_from (YYYY-MM-DD).", 400);
     }
     const { user_id, reports_to, effective_from, reason } = parsed.data;
+    if (reports_to === null && !REMOVE_ROLES.includes(user.role)) {
+        return errorResponse("Only the Sales Head can remove someone from a team. You can move them to another manager.", 403);
+    }
     const res = await setReportsTo(user_id, reports_to, {
         changedBy: user.id,
         effectiveFrom: effective_from ?? null,

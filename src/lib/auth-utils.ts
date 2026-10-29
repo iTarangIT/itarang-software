@@ -3,6 +3,7 @@ import { users } from "./db/schema";
 import { eq } from "drizzle-orm";
 import { createClient } from "./supabase/server";
 import { redirect } from "next/navigation";
+import { signInTimeFromClaims } from "./auth/signInTime";
 
 // SECURITY: this projection exists so the queries below never do a bare
 // `db.select()`. A bare select returns EVERY users column — including
@@ -41,7 +42,8 @@ type SessionUser = NonNullable<Awaited<ReturnType<SupabaseServerClient["auth"]["
  * the session JWT locally when the project signs with an asymmetric key (and
  * does the getUser() round-trip itself when it does not); a verification
  * error falls back to the authoritative getUser(); no session → null with no
- * extra call. Only id, email and the metadata are read off the result.
+ * extra call. Only id, email, the metadata and the sign-in time (amr, ID 206)
+ * are read off the result.
  */
 async function sessionUser(supabase: SupabaseServerClient): Promise<SessionUser | null> {
   const { data, error } = await supabase.auth.getClaims();
@@ -54,6 +56,8 @@ async function sessionUser(supabase: SupabaseServerClient): Promise<SessionUser 
       user_metadata: (claims.user_metadata ?? {}) as SessionUser["user_metadata"],
       aud: typeof claims.aud === "string" ? claims.aud : "authenticated",
       created_at: "",
+      // ID 206 — /api/user/profile records the login against this.
+      last_sign_in_at: signInTimeFromClaims(claims),
     } as SessionUser;
   }
   if (!error) return null;

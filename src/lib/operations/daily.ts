@@ -19,7 +19,8 @@
 import { sql } from "drizzle-orm";
 
 // Background pool: collectors run off the request pool (see db/background.ts).
-import { bgDb as db } from "@/lib/db/background";
+// ID 203: the rollup and prunes can outlast the pool's 60 s limit (bgExecuteLong).
+import { bgDb as db, bgExecuteLong } from "@/lib/db/background";
 import { log } from "@/lib/log";
 import { previousIstDate } from "./istClock";
 
@@ -100,7 +101,7 @@ export async function runDailySnapshot(
   // DISTINCT ON gives the last sample per group; the aggregate CTE gives the
   // spread. Joined rather than done in two round trips so the frozen row is
   // internally consistent even if a collector writes mid-run.
-  const snapshotRows = (await db.execute(sql`
+  const snapshotRows = (await bgExecuteLong(sql`
     WITH day_samples AS (
       SELECT metric_key, source, value_num, captured_at
       FROM ops_metric_samples
@@ -143,13 +144,13 @@ export async function runDailySnapshot(
   // Prune only AFTER the rollup succeeded. If the INSERT above had thrown we
   // would never reach here, and a day's raw samples survive to be rolled up on
   // the next attempt rather than being deleted unrecorded.
-  const prunedSamples = (await db.execute(sql`
+  const prunedSamples = (await bgExecuteLong(sql`
     DELETE FROM ops_metric_samples
     WHERE captured_at < NOW() - MAKE_INTERVAL(days => ${SAMPLE_RETENTION_DAYS})
     RETURNING id
   `)) as unknown as Array<Record<string, unknown>>;
 
-  const prunedLogs = (await db.execute(sql`
+  const prunedLogs = (await bgExecuteLong(sql`
     DELETE FROM ops_log_events
     WHERE logged_at < NOW() - MAKE_INTERVAL(days => ${LOG_RETENTION_DAYS})
     RETURNING id
@@ -241,7 +242,7 @@ async function pruneQuietly(
   statement: ReturnType<typeof sql>,
 ): Promise<number> {
   try {
-    const rows = (await db.execute(statement)) as unknown as Array<
+    const rows = (await bgExecuteLong(statement)) as unknown as Array<
       Record<string, unknown>
     >;
     return rows.length;

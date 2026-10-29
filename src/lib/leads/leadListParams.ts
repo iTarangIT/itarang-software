@@ -28,6 +28,7 @@ import { businessTypeFilterParam } from "@/lib/leads/businessType";
 import { exportsOwnLeadsOnly } from "@/lib/exports/downloadLog";
 import { isReadySplit, type ReadySplit } from "@/lib/leads/salesReady";
 import { hasPhoneTypeTable } from "@/lib/ai-dialer/phoneTypeStore";
+import { pickTeamMember } from "@/lib/users/teamRules";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -110,7 +111,14 @@ export async function parseLeadListFilters(
         phoneTypeTable,
         disposition: searchParams.get("disposition")?.trim() || null,
         businessType: businessTypeFilterParam(searchParams.get("business_type")),
-        ownerId: caps.canSeeOwnerAsm ? searchParams.get("owner_id") || null : null,
+        // ID 199: a manager (own-scoped role with a team) narrows to one person
+        // with `?member=` — validated against their team, so it never reaches
+        // past the ownerScope above.
+        ownerId: caps.canSeeOwnerAsm
+            ? searchParams.get("owner_id") || null
+            : viewer && exportsOwnLeadsOnly(viewer.role)
+              ? pickTeamMember(viewer.id, searchParams.get("member"), viewer.teamMemberIds)
+              : null,
         asmId: caps.canSeeOwnerAsm ? searchParams.get("asm_id") || null : null,
         assignedFrom: caps.canSeeOwnerAsm ? searchParams.get("assigned_from")?.trim() || null : null,
         assignedTo: caps.canSeeOwnerAsm ? searchParams.get("assigned_to")?.trim() || null : null,

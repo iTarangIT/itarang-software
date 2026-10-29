@@ -324,7 +324,10 @@ export interface RecordOptions {
  * <name> for <dealer>" on the file's history and the dealer told (bell +
  * WhatsApp, at most once per person per file per 30 minutes). The dealer's
  * own step is no "Done by" line and no notice — since ID 201 (27 Oct) it is a
- * plain line in the file's KYC history instead. Never throws.
+ * plain line in the file's KYC history instead. ID 201 (28 Oct gap 5): an
+ * iTarang / house step outside KYC (Step 4 / 5, cash sale, lender choice …)
+ * is also a line in the file's KYC history, whatever the "Done by" coalescing
+ * decides. Never throws.
  */
 export async function recordActorStep(
   actor: LeadActor,
@@ -349,6 +352,20 @@ export async function recordActorStep(
       console.error(`[actForDealer] dealer step for ${actor.leadId} not logged:`, err);
     }
     return;
+  }
+  if (!opts.kycLine && !opts.coalesce) {
+    try {
+      const { actorOf, recordKycEvent, sentence } = await import("@/lib/kyc/kycEventLog");
+      await recordKycEvent({
+        leadId: actor.leadId,
+        action: sentence(step),
+        actor: actorOf(actor),
+        detail: { step, ...extra },
+        notify: false,
+      });
+    } catch (err) {
+      console.error(`[actForDealer] iTarang step for ${actor.leadId} not in KYC history:`, err);
+    }
   }
   try {
     let anyRecent = false;

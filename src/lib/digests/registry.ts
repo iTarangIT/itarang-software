@@ -13,6 +13,7 @@
  */
 
 import { buybackDailyDigest } from "./kinds/buyback-daily";
+import { emiMessagesDigest } from "./kinds/emi-messages";
 import { dealerValidationDigest } from "./kinds/dealer-validation";
 import { idleWeeklyDigest } from "./kinds/idle-weekly";
 import { targetsPendingDigest } from "./kinds/targets-pending";
@@ -33,6 +34,7 @@ export const DIGEST_KINDS: DigestKindDescriptor[] = [
   targetsPendingDigest,
   myDayDigest,
   myTeamDigest,
+  emiMessagesDigest,
 ];
 
 export function digestKind(id: string): DigestKindDescriptor | null {

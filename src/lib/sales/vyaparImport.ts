@@ -11,7 +11,12 @@
  *     GSTIN (so the invoice matches a dealer account) and the line items —
  *     replaced as a set in invoice_line_items (source 'vyapar');
  *   * an invoice the register lists as cancelled is voided (invoice_voids,
- *     origin 'vyapar'), which takes it out of revenue.
+ *     origin 'vyapar'), which takes it out of revenue;
+ *   * ID 200 (Vyapar's two-sheet Sale Report): each invoice's amount paid is
+ *     set from its "Received/Paid Amount" — re-uploads update it — so a paid
+ *     invoice drops out of Accounts Receivable; a blank Due Date keeps the
+ *     CRM's own. A credit note on the register is added to credit_notes (it
+ *     reduces what the customer owes), once per note number.
  * Lines are mapped to CRM products through vyapar_item_map; unmapped item
  * names are listed for someone to map (mapping back-fills earlier lines).
  *
@@ -31,6 +36,7 @@ import { recheckStockTasks, recordInvoiceSerials } from "@/lib/inventory/stockUp
 import type { LineForSerials } from "@/lib/inventory/stockUploadTasks/rules";
 import type { ImportKind, ParseResult, ParsedDocument } from "@/lib/sales/vyaparParse";
 import { importActionFor, type ImportAction } from "@/lib/sales/importAction";
+import { paymentStatusFor } from "@/lib/sales/paymentStatus";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type Runner = typeof db | Tx;
@@ -96,6 +102,51 @@ async function existingByKey(runner: Runner, keys: string[]): Promise<Map<string
 }
 
 const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
+
+/**
+ * ID 200 — the key a register credit note is kept under. Vyapar numbers some
+ * credit notes just "1", "2": those are keyed with their date so two years'
+ * note 1 stay two notes.
+ */
+export function registerCreditNoteKey(number: string, date: string | null): string {
+    const n = number.trim();
+    if (/^\d+$/.test(n)) return `VYAPAR-CN-${n}-${date ?? "nodate"}`;
+    return normalizeInvoiceNumber(n) ?? n.toUpperCase();
+}
+
+/**
+ * ID 200 — set one invoice's amount paid from the register. Never above the
+ * invoice total (an overpayment is a credit, not this invoice's balance); a
+ * void invoice is left alone. Returns whether anything changed.
+ */
+async function applyRegisterPayment(runner: Runner, id: string, d: ParsedDocument): Promise<boolean> {
+    if (d.amount_paid == null && !d.due_date) return false;
+    const [cur] = rowsOf<{ total: string | null; amount_paid: string | null; status: string | null }>(
+        await runner.execute(sql`SELECT total::text AS total, amount_paid::text AS amount_paid, status FROM sales_invoices WHERE id = ${id}::uuid`),
+    );
+    if (!cur || cur.status === "void") return false;
+    const total = Number(cur.total ?? d.total ?? 0);
+    const paid = d.amount_paid == null ? null : Math.round(Math.min(Math.max(d.amount_paid, 0), total) * 100) / 100;
+    const changed = paid != null && Number(cur.amount_paid ?? 0) !== paid;
+    if (changed) {
+        await runner.execute(sql`
+            UPDATE sales_invoices
+               SET amount_paid = ${paid!.toFixed(2)},
+                   status = ${paymentStatusFor(paid!, total)},
+                   payment_reference = 'Vyapar register',
+                   last_payment_date = ${paid! > 0 ? sql`CURRENT_DATE` : sql`NULL`},
+                   due_date = COALESCE(${d.due_date ?? null}::date, due_date),
+                   updated_at = now()
+             WHERE id = ${id}::uuid`);
+        return true;
+    }
+    if (d.due_date) {
+        await runner.execute(sql`
+            UPDATE sales_invoices SET due_date = ${d.due_date}::date, updated_at = now()
+             WHERE id = ${id}::uuid AND due_date IS DISTINCT FROM ${d.due_date}::date`);
+    }
+    return false;
+}
 
 function batteriesOf(d: ParsedDocument): number {
     return sum(d.lines.filter((l) => l.product_class === "battery").map((l) => l.quantity ?? 0));
@@ -165,7 +216,10 @@ export async function previewImport(parsed: ParseResult): Promise<ImportPreview>
 export async function commitImport(
     parsed: ParseResult,
     meta: { fileName: string | null; actorId: string },
-): Promise<{ import_id: string; summary: ImportPreview["totals"] & { voided: number; created_ids: number } }> {
+): Promise<{
+    import_id: string;
+    summary: ImportPreview["totals"] & { voided: number; created_ids: number; payments_set: number; credit_notes_added: number };
+}> {
     const preview = await previewImport(parsed);
     if (!parsed.documents.length) throw new Error("Nothing to import — no documents were read from the file.");
 
@@ -184,6 +238,8 @@ export async function commitImport(
         );
         let voided = 0;
         let created = 0;
+        let paymentsSet = 0;
+        let creditNotes = 0;
 
         if (parsed.kind === "gstr1") {
             const months = [...new Set(parsed.documents.map((d) => (d.date ? d.date.slice(0, 7) + "-01" : null)).filter(Boolean))] as string[];
@@ -198,15 +254,34 @@ export async function commitImport(
                             ${normalizeInvoiceNumber(d.number) ?? d.number.toUpperCase()}, ${d.date}::date, ${d.gstin},
                             ${d.taxable}, ${d.tax}, ${d.total})`);
             }
-            return { import_id: imp.id, summary: { ...preview.totals, voided, created_ids: 0 } };
+            return { import_id: imp.id, summary: { ...preview.totals, voided, created_ids: 0, payments_set: 0, credit_notes_added: 0 } };
         }
 
         const mapped = await mappedItems(tx);
         for (const d of parsed.documents) {
-            if (d.doc_type === "credit_note") continue; // credit notes arrive through their own Drive folder
+            const plan = preview.rows.find((r) => r.number === d.number);
+            if (d.doc_type === "credit_note") {
+                // ID 200: a register credit note (Vyapar's Sale Report lists them
+                // with the invoices) reduces what the customer owes. The Drive
+                // credit-note folder adds the same note once; whichever comes
+                // first keeps the number.
+                if (d.cancelled || plan?.action === "in_zoho" || d.total == null) continue;
+                const org = resolveSalesOrg({ invoiceNumber: d.number });
+                const added = rowsOf<{ id: string }>(
+                    await tx.execute(sql`
+                        INSERT INTO credit_notes (note_number, note_number_key, issue_date, customer_name, customer_gstin,
+                                                  organization_id, sub_total, tax_total, total, needs_attention, attention_reason)
+                        VALUES (${d.number}, ${registerCreditNoteKey(d.number, d.date)}, ${d.date}::date, ${d.party}, ${d.gstin},
+                                ${org.organizationId}, ${d.taxable}, ${d.tax}, ${d.total},
+                                ${d.gstin_attention !== null}, ${d.gstin_attention})
+                        ON CONFLICT DO NOTHING
+                        RETURNING id::text AS id`),
+                );
+                if (added.length) creditNotes++;
+                continue;
+            }
             const key = normalizeInvoiceNumber(d.number);
             if (!key) continue;
-            const plan = preview.rows.find((r) => r.number === d.number);
             if (plan?.action === "in_zoho") continue; // ID 200: counted from Zoho already
             let id = plan?.existing_id ?? null;
             if (!id) {
@@ -275,6 +350,7 @@ export async function commitImport(
                                 ${l.amount_excl_gst}, ${imp.id}::uuid)`);
                 }
             }
+            if (!d.cancelled && (await applyRegisterPayment(tx, id, d))) paymentsSet++;
             if (d.cancelled) {
                 const r = await voidInvoice(
                     { source: "drive", invoiceId: id, reason: "Cancelled in Vyapar (sales register import)", origin: "vyapar", actorId: meta.actorId },
@@ -290,7 +366,10 @@ export async function commitImport(
                 INSERT INTO vyapar_item_map (item_key, item_name) VALUES (${itemKey(name)}, ${name})
                 ON CONFLICT (item_key) DO NOTHING`);
         }
-        return { import_id: imp.id, summary: { ...preview.totals, voided, created_ids: created } };
+        return {
+            import_id: imp.id,
+            summary: { ...preview.totals, voided, created_ids: created, payments_set: paymentsSet, credit_notes_added: creditNotes },
+        };
     });
 
     // ID 174 (E-348): a "Stock to upload" task per battery invoice — the same

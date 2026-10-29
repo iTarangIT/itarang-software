@@ -15,6 +15,11 @@
 // for a completed visit, a next-visit date only with next_action next_visit.
 // The screen chains "convert" into the conversion flow; that needs a GSTIN and
 // starts onboarding, so it is declined here with the lead's link (BRD UC-11).
+//
+// ID 196 (PJP phase 1): a DONE visit is no longer made from WhatsApp — a
+// photo or pin sent in the chat proves nothing about when or where it was
+// taken. Once E-363 is applied the reply is a link to the CRM's camera +
+// live-location page instead. Postponed / cancelled / no-show still log here.
 
 import { z } from "zod";
 import { LEAD_STATUS, LOST_REASON, isHighImpactLostReason } from "@/lib/lifecycle/transitions";
@@ -33,7 +38,8 @@ import { istNow } from "../../prompt";
 import { fmtDate, reasonLabel, statusLabel } from "../../format";
 import type { Preview, ToolResult } from "../../types";
 import { defineTool, LeadId, ownedLeadOr, type ToolFactory } from "../spec";
-import { leadUrl } from "../leads";
+import { leadUrl, visitCaptureUrl } from "../leads";
+import { hasVerifiedVisits } from "@/lib/visits/verifiedStore";
 import { defineApplier } from "../../applierSpec";
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
@@ -149,6 +155,15 @@ export const logVisit: ToolFactory = () =>
 
             const today = istNow(ctx.now).isoDate;
             const visited = input.visit_status === "visited";
+            if (visited && (await hasVerifiedVisits())) {
+                return {
+                    kind: "declined",
+                    reason:
+                        "A done visit needs a shop photo taken with the camera and your live location. " +
+                        "Open this link at the shop, read your location, take the photo and save the visit there.",
+                    crm_url: visitCaptureUrl(lead.id),
+                };
+            }
             const remarks = input.remarks.trim();
 
             let visitDate: string | null = null;
@@ -354,6 +369,11 @@ export const logVisitApplier = defineApplier<LogVisitPlan>({
     apply: async ({ tx, user, step, actionId }, p) => {
         // A visit is an ASM's; the plan is bound to the role that proposed it.
         if (user.role !== "asm") throw new Error("visit plan does not match the user's role");
+        // ID 196: a done visit needs the CRM's camera + live-location page
+        // (a plan proposed before E-363 was applied is refused at Confirm).
+        if (p.visit_status === "visited" && (await hasVerifiedVisits())) {
+            throw new Error(`A done visit is logged with a shop photo and live location: ${visitCaptureUrl(p.lead_id)}`);
+        }
         await consumeMedia(tx, [...p.photos.map((f) => f.media_id), ...(p.gps ? [p.gps.media_id] : [])], actionId);
         const visitRemarks = p.gps ? `${p.remarks}\n${p.gps.note}` : p.remarks;
         const visit = await recordVisit(

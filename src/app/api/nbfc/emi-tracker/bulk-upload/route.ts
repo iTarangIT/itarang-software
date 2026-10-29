@@ -35,7 +35,7 @@ import {
   nbfcLoans,
 } from "@/lib/db/schema";
 import { getCurrentTenant, requireNbfcAccess } from "@/lib/nbfc/tenant";
-import { SYSTEM_USER_ID } from "@/lib/nbfc/servicing/applyEmiPayment";
+import { SYSTEM_USER_ID, applyEmiPayment } from "@/lib/nbfc/servicing/applyEmiPayment";
 import { runEmiAging } from "@/lib/nbfc/servicing/runEmiAging";
 import { runCdsNightlyJob } from "@/lib/nbfc/cds/computeCds";
 import { computePciForAllLoans } from "@/lib/nbfc/pci/computePci";
@@ -271,6 +271,9 @@ export async function POST(req: NextRequest) {
     let scheduleUpdated = 0; // total installments flipped across all rows
     const now = new Date();
 
+    // ID 204: installments this upload marked paid recently — they get the
+    // "EMI received" message once the upload has committed.
+    const receivedEmis: Array<{ emiId: string; paidOn: string }> = [];
     await db.transaction(async (tx) => {
       for (const r of toApply) {
         const sp = makeSavepoint(r.rowNumber);
@@ -330,6 +333,29 @@ export async function POST(req: NextRequest) {
           const p = parsedByRow.get(r.rowNumber);
           const plan = planScheduleUpdates(p?.collections ?? [], schedulesByLoan.get(r.loanId as string) ?? []);
           for (const u of plan.updates) {
+            // ID 204: settle it the way every other payment path does
+            // (amount_paid, outstanding, loan close) — in its own savepoint so
+            // a refusal leaves the row's sheet correction below untouched. The
+            // sheet's status / paid date / days overdue still win, as before.
+            if (u.newStatus === "paid" || u.newStatus === "paid_late") {
+              const ap = `${sp}_pay`;
+              await tx.execute(sql.raw(`SAVEPOINT ${ap}`));
+              try {
+                const res = await applyEmiPayment(tx, {
+                  emiId: u.emiId,
+                  paymentRef: `bulk:${u.newPaidAt}`,
+                  paidAt: new Date(`${u.newPaidAt}T00:00:00.000Z`),
+                  mode: "manual",
+                  channel: "bulk_upload",
+                  actorUserId,
+                });
+                await tx.execute(sql.raw(`RELEASE SAVEPOINT ${ap}`));
+                if (res.applied && u.newPaidAt) receivedEmis.push({ emiId: u.emiId, paidOn: u.newPaidAt });
+              } catch {
+                await tx.execute(sql.raw(`ROLLBACK TO SAVEPOINT ${ap}`));
+                await tx.execute(sql.raw(`RELEASE SAVEPOINT ${ap}`));
+              }
+            }
             await tx
               .update(emiSchedules)
               .set({
@@ -480,6 +506,16 @@ export async function POST(req: NextRequest) {
         },
       });
     });
+
+    // ID 204: "EMI received" for payments the sheet dates in the last 3 days
+    // (an old collection being back-filled is not news to the customer).
+    if (receivedEmis.length > 0) {
+      const { queueEmiReceived } = await import("@/lib/emi-messages/run");
+      const floor = new Date(Date.now() + 5.5 * 3600_000 - 3 * 86_400_000).toISOString().slice(0, 10);
+      for (const r of receivedEmis) {
+        if (r.paidOn >= floor) await queueEmiReceived({ emiId: r.emiId, paymentRef: `bulk:${r.paidOn}` });
+      }
+    }
 
     // ── Cascade recompute ───────────────────────────────────────────────────
     // The schedule writes above changed the inputs to DPD aging + CDS + PCI, all

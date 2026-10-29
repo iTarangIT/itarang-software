@@ -41,10 +41,11 @@ describe("isVehicleShowroom", () => {
         "Bajaj Auto (Shourya Bajaj, Niphad)",
         "BGS Honda, Bhopal",
         "Ather Space Raipur",
-        "Ola Electric Experience Centre",
         "Hero MotoCorp - Sai Motors",
         "Euler Motors Patna",
         "Liberty Exclusive Showroom",
+        "Seva Honda Showroom", // "Seva" is not EV
+        "Express TVS Motors", // "Express" is not ESS
     ])("skips %s", (name) => expect(isVehicleShowroom(name)).toBe(true));
 
     it.each([
@@ -55,6 +56,16 @@ describe("isVehicleShowroom", () => {
         "TVS Battery Point", // a battery shop that names a brand
         "Honda Inverter & Solar",
         "Mahindra E-Rickshaw Dealer",
+        // ID 207 (28 Oct): two-wheeler EV and ESS dealers are in range.
+        "Ather Energy dealer",
+        "Ola Electric",
+        "Ola Electric Experience Centre",
+        "TVS iQube EV Point",
+        "Honda Lithium House",
+        "Hero BESS Solutions",
+        "Bajaj Auto Toto Centre",
+        "TVS E Rikshaw Dealer",
+        "Euler Riksha Point",
         null,
     ])("dials %s", (name) => expect(isVehicleShowroom(name)).toBe(false));
 });

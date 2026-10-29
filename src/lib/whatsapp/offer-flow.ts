@@ -64,6 +64,7 @@ import {
 } from "./session-store";
 import type { InboundEvent, ListRow } from "./types";
 import { oneLine } from "./window";
+import { recordWhatsAppKycStep } from "@/lib/kyc/kycWhatsAppLog";
 
 export const DC_OF_VIEW = "DC_OF_VIEW";
 export const DC_OF_WAIT = "DC_OF_WAIT";
@@ -366,6 +367,8 @@ async function acceptOffer(
 
   const labels = await schemeLabelsForLead(leadId);
   await patchLeadSub(session.id, "of", { pickedNbfcId: nbfcId });
+  // ID 201 (28 Oct gap 1): the offer picked on WhatsApp, in the KYC history.
+  await recordWhatsAppKycStep({ session, leadId, action: `Picked the ${labelFor(labels, nbfcId, 0)} offer (Step 4)` });
   await reply(
     session,
     `🎉 *You've chosen ${labelFor(labels, nbfcId, 0)}.*\n\n` +

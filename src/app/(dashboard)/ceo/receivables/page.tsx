@@ -21,6 +21,7 @@ import {
 
 // ID 166: invoice PDFs open through a fresh 15-minute link on each click.
 import FreshFileLink from "@/components/shared/FreshFileLink";
+import { receivablesSourceText } from "@/lib/sales/invoiceFreshnessRules";
 import DebtorTable, { type Debtor } from "./_components/DebtorTable";
 export const dynamic = "force-dynamic";
 
@@ -58,16 +59,6 @@ export default async function CeoReceivablesPage({
         listReceivables(),
         import("@/lib/sales/invoiceFreshness").then((m) => m.invoiceFreshness()).catch(() => null),
     ]);
-    const updated = freshness?.last_read_at
-        ? new Date(freshness.last_read_at).toLocaleString("en-IN", {
-              timeZone: "Asia/Kolkata",
-              day: "numeric",
-              month: "short",
-              year: "numeric",
-              hour: "numeric",
-              minute: "2-digit",
-          })
-        : null;
 
     const sum = (xs: Row[]) => xs.reduce((a, r) => a + r.balance, 0);
     const owed = netOwed(rows);
@@ -144,10 +135,7 @@ export default async function CeoReceivablesPage({
                     paid), including GST, less any credit note issued to the same customer (never below zero per
                     customer). Age is days since the invoice or credit note date.
                 </p>
-                <p className="mt-1 text-xs text-gray-500">
-                    From Zoho (old invoices), Drive invoice PDFs and the Vyapar register; payments from Zoho&apos;s own
-                    balance and the amounts entered on each invoice.{updated ? ` Updated ${updated}.` : ""}
-                </p>
+                <p className="mt-1 text-xs text-gray-500">{receivablesSourceText(freshness)}</p>
             </div>
 
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
