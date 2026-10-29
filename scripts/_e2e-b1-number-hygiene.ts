@@ -67,10 +67,10 @@ async function main() {
         const row = by.get(id)!;
         return deriveFailureReason({ status: row.status, callOutcome: row.call_outcome })?.label;
     };
-    check("all 5 leads listed in the campaign", rows.length === 5, String(rows.length));
-    check("duplicate shows 'Skipped, duplicate number'", by.get(n("dup"))?.status === "skipped" && label(n("dup")) === "Skipped, duplicate number", `${by.get(n("dup"))?.call_outcome} / ${label(n("dup"))}`);
-    check("landline shows 'Skipped, not a mobile'", label(n("landline")) === "Skipped, not a mobile", String(label(n("landline"))));
-    check("showroom shows 'Skipped, vehicle showroom'", label(n("showroom")) === "Skipped, vehicle showroom", String(label(n("showroom"))));
+    // 29 Oct: skipped leads are not added — the campaign holds only what it dials.
+    check("only the 2 dialable leads are in the campaign", rows.length === 2, String(rows.length));
+    check("skipped leads are not listed", !by.has(n("dup")) && !by.has(n("landline")) && !by.has(n("showroom")));
+    void label;
     check("dialable rows are pending", by.get(n("good"))?.status === "pending" && by.get(n("motors"))?.status === "pending");
 
     const types = (await db.execute(sql`
