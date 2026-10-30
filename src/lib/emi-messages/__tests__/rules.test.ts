@@ -8,6 +8,7 @@ import {
     fillText,
     fmtDay,
     mobile10,
+    smsValues,
     templateParams,
     textFields,
     unknownFields,
@@ -104,5 +105,21 @@ describe("helpers", () => {
         expect(mobile10("+91 98765 43210")).toBe("9876543210");
         expect(mobile10("12345")).toBeNull();
         expect(mobile10("0123456789")).toBeNull();
+    });
+});
+
+describe("SMS texts (Exotel / DLT, 30 Oct)", () => {
+    it("fits the DLT typed variables: amount digits only, dates letters and digits", () => {
+        expect(smsValues({ amount: "4,250", due_date: "05-11-2026", next_due_date: "05-12-2026", days_overdue: "3" })).toEqual({
+            amount: "4250",
+            due_date: "05Nov2026",
+            next_due_date: "05Dec2026",
+            days_overdue: "3",
+        });
+        expect(smsValues({ amount: "1,24,999.6" }).amount).toBe("125000");
+    });
+
+    it("by default the SMS uses the WhatsApp text (no separate wording)", () => {
+        for (const m of Object.values(defaultEmiMessagesSettings().messages)) expect(m.smsText).toBe("");
     });
 });

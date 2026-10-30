@@ -11,7 +11,7 @@
  *   sendEmiTestMessages() Admin > Settings > EMI messages > test send.
  *
  * Every send is claimed first (./store.ts) and goes on WhatsApp (a Meta
- * template) and SMS (an MSG91 Flow template) with the APPROVED text only.
+ * template) and SMS (Exotel, the DLT-registered text) with the APPROVED text only.
  * Nothing is sent while the settings are off, without a pilot lender, or
  * before E-365. Rules: ./rules.ts.
  */
@@ -25,6 +25,7 @@ import {
     fmtAmount,
     fmtDay,
     mobile10,
+    smsValues,
     templateParams,
     type EmiChannel,
     type EmiFieldValues,
@@ -91,6 +92,14 @@ function valuesFor(e: EmiContext, kind: EmiMessageKind, opts: { paid?: number; t
     };
 }
 
+/**
+ * What goes out on a channel. SMS: the same text as WhatsApp unless a separate
+ * DLT wording is set (30 Oct), with the values in the DLT variable forms.
+ */
+function bodyFor(channel: EmiChannel, cfg: EmiMessageConfig, text: string, values: EmiFieldValues): string {
+    return channel === "sms" ? fillText(cfg.smsText.trim() || text, smsValues(values)) : fillText(text, values);
+}
+
 /** Send one message on one channel (the claim is the caller's). */
 async function deliver(
     channel: EmiChannel,
@@ -107,8 +116,9 @@ async function deliver(
         if (r.ok && !r.providerMessageId) return { status: "skipped", providerMessageId: null, error: "not sent (dry run or not the live site)" };
         return { status: r.ok ? "sent" : "failed", providerMessageId: r.providerMessageId, error: r.ok ? null : (r.error ?? "send failed") };
     }
-    const { sendMsg91Flow } = await import("@/lib/msg91");
-    const r = await sendMsg91Flow({ mobile_number: phone, template_id: cfg.smsTemplateId, variables: values as Record<string, string> });
+    // SMS go through Exotel (30 Oct): the DLT-registered text, under its DLT template id.
+    const { sendExotelSms } = await import("@/lib/exotel");
+    const r = await sendExotelSms({ mobile_number: phone, body: bodyFor("sms", cfg, text, values), dlt_template_id: cfg.dltTemplateId });
     if (r.skipped) return { status: "skipped", providerMessageId: null, error: r.error };
     return { status: r.success ? "sent" : "failed", providerMessageId: r.messageId, error: r.success ? null : r.error };
 }
@@ -136,7 +146,7 @@ async function claimAndSend(
             channel,
             ref,
             phone,
-            body: fillText(text, values),
+            body: bodyFor(channel, cfg, text, values),
         };
         const id = await claimEmiMessage(claim);
         if (!id) continue; // already sent for this EMI
@@ -280,7 +290,7 @@ export async function sendEmiTestMessages(input: {
                 kind,
                 channel,
                 phone,
-                body: fillText(text, sample),
+                body: bodyFor(channel, cfg, text, sample),
                 isTest: true,
             };
             const id = await claimEmiMessage(claim);

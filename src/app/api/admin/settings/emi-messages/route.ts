@@ -26,6 +26,8 @@ const Msg = z.object({
     waTemplate: z.string().trim().max(512),
     smsTemplateId: z.string().trim().max(64),
     dltTemplateId: z.string().trim().max(64),
+    /** The DLT-registered SMS text (30 Oct); taken as entered — the DLT id is its approval. */
+    smsText: z.string().trim().max(500).default(""),
 });
 
 const Body = z.object({
@@ -54,10 +56,10 @@ export const PUT = withErrorHandler(async (req: Request) => {
     for (const k of EMI_MESSAGE_KINDS) {
         const m = body.messages[k];
         if (!m) continue;
-        const bad = unknownFields(m.text);
+        const bad = [...unknownFields(m.text), ...unknownFields(m.smsText)];
         if (bad.length) return errorResponse(`"${k}" uses fields that do not exist: ${bad.map((f) => `{${f}}`).join(", ")}`, 400);
         let cfg = editText(
-            { ...prev.messages[k], on: m.on, day: m.day, waTemplate: m.waTemplate, smsTemplateId: m.smsTemplateId, dltTemplateId: m.dltTemplateId },
+            { ...prev.messages[k], on: m.on, day: m.day, waTemplate: m.waTemplate, smsTemplateId: m.smsTemplateId, dltTemplateId: m.dltTemplateId, smsText: m.smsText },
             m.text,
         );
         if (body.approve.includes(k)) cfg = approveText(cfg);
