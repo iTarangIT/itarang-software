@@ -98,7 +98,7 @@ export async function finishEmiMessage(
 const RANK: Record<string, number> = { sending: 0, sent: 1, delivered: 2, read: 3 };
 
 /**
- * A delivery report (WhatsApp status webhook or MSG91 delivery report) →
+ * A delivery report (WhatsApp status webhook or Exotel SMS status callback) →
  * the message row, forward only (a late "sent" never undoes "delivered").
  * Returns false when no EMI message has that provider id.
  */
