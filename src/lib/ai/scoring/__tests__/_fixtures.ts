@@ -19,6 +19,7 @@ export interface SignalSpec {
   callback?: boolean; // callback_agreed
   topic?: QualificationSignals["callback_topic"];
   wantsHuman?: boolean; // wants_human
+  emi?: boolean; // emi_finance_interest
   disqualifier?: Disqualifier;
 }
 
@@ -40,6 +41,7 @@ export function mk(p: SignalSpec = {}): QualificationSignals {
     callback_agreed: yn(p.callback),
     callback_topic: p.topic ?? "none",
     wants_human: yn(p.wantsHuman),
+    emi_finance_interest: yn(p.emi),
     disqualifier: p.disqualifier ?? "none",
   };
 }

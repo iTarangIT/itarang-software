@@ -61,7 +61,7 @@ export const CALIBRATION_EXAMPLES: CalibrationExample[] = [
     },
   },
   {
-    why: "Saying he works on lithium batteries is lithium_dealer=yes even without the direct question. Spec, volume, financier and financing need are each read only on explicit disclosure. (→ Qualified, 90.)",
+    why: "Saying he works on lithium batteries is lithium_dealer=yes even without the direct question. Spec, volume, financier and financing need are each read only on explicit disclosure. Naming the Bajaj loan he already takes is existing_financier_shared — he never asked for EMI on OUR batteries, so emi_finance_interest=no. (→ Qualified, 90.)",
     transcript: [
       "agent: namaste sir, Priya from iTarang, Trontek lithium battery with EMI financing.",
       "user: haan. main 60V 100Ah lithium pe kaam karta hoon, mahine ke 30 set. abhi Bajaj Finance se loan leta hoon par battery ke daam badh rahe hain, financing toh chahiye hi.",
@@ -136,6 +136,33 @@ export const CALIBRATION_EXAMPLES: CalibrationExample[] = [
       },
       language: "hindi",
       call_summary: "E-rickshaw battery dealer who sells only lead-acid, not lithium.",
+    },
+  },
+  {
+    why: "A lead-acid e-rickshaw dealer who asks whether our lithium batteries come on EMI through Bajaj Finserv — emi_finance_interest=yes (he asked about EMI on OUR batteries, not just named his own lender). (→ Qualified, 75: EMI interest lifts a lead-acid dealer in our lines.)",
+    transcript: [
+      "agent: नमस्ते sir, Priya iTarang से। क्या आप lithium battery dealer हैं?",
+      "user: नहीं, अभी lead-acid ही है, e-rickshaw की। Bajaj Finserv से EMI हो जाएगा क्या? customer को EMI चाहिए।",
+      "agent: हाँ sir, Trontek lithium पर Bajaj Finserv से EMI हो जाता है।",
+      "user: अच्छा, कितनी EMI बनेगी 51 volt वाली पे?",
+    ].join("\n"),
+    signals: {
+      ...EMPTY_SIGNALS,
+      lithium_dealer: "no",
+      relevant_dealer: "yes",
+      product_lines: ["three_wheeler"],
+      dealer_role: "dealer",
+      pitch_heard: "yes",
+      emi_finance_interest: "yes",
+      disqualifier: "none",
+      evidence: {
+        ...EMPTY_SIGNALS.evidence,
+        lithium_dealer: "nahi, abhi lead-acid hi hai",
+        relevant_dealer: "sells lead-acid e-rickshaw batteries",
+        emi_finance_interest: "Bajaj Finserv se EMI ho jayega? kitni EMI banegi 51 volt wali pe?",
+      },
+      language: "hindi",
+      call_summary: "Lead-acid e-rickshaw dealer asked about EMI via Bajaj Finserv on Trontek lithium batteries.",
     },
   },
   {

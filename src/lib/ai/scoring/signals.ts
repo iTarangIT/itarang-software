@@ -32,8 +32,8 @@ export const DEALER_SEGMENTS = [
 // D9 (signals-2.3.0) — every line iTarang sells into. A dealer in ANY of them is
 // relevant; one in none of them (car / truck / petrol-bike batteries only) is not.
 export const PRODUCT_LINES = [
-  "three_wheeler", // e-rickshaw / e-auto (L3, L5) batteries
-  "two_wheeler", // electric two-wheeler batteries
+  "three_wheeler", // e-rickshaw / e-auto (L3, L5) batteries, 51–72 V
+  "two_wheeler", // electric two-wheeler batteries (e-scooter, e-bike, "scooty")
   "inverter_battery",
   "inverter",
   "solar",
@@ -132,6 +132,12 @@ export const QualificationSignalsSchema = z.object({
   // from the company". Routes the lead to the sales team.
   wants_human: yesNo,
 
+  // ── EMI finance (signals-2.4.0) ──
+  // He asked about / wants EMI finance on Trontek lithium batteries through an
+  // NBFC partner (Bajaj Finserv etc.). Lifts the band one step (computeBand).
+  // Merely naming the financier he already uses is existing_financier_shared.
+  emi_finance_interest: yesNo,
+
   // ── Hard negative ──
   disqualifier: z.enum(DISQUALIFIERS).catch("none"),
 
@@ -145,6 +151,7 @@ export const QualificationSignalsSchema = z.object({
       existing_financier_shared: evidenceStr,
       financing_need_expressed: evidenceStr,
       financing_value_acknowledged: evidenceStr,
+      emi_finance_interest: evidenceStr,
       callback_agreed: evidenceStr,
     })
     .catch({
@@ -155,6 +162,7 @@ export const QualificationSignalsSchema = z.object({
       existing_financier_shared: "",
       financing_need_expressed: "",
       financing_value_acknowledged: "",
+      emi_finance_interest: "",
       callback_agreed: "",
     }),
 

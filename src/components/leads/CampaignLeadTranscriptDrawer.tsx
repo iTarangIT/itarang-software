@@ -94,6 +94,7 @@ type ClientSignals = {
   financing_value_acknowledged?: string;
   pitch_heard?: string;
   callback_agreed?: string;
+  emi_finance_interest?: string;
   disqualifier?: string;
   evidence?: Record<string, string>;
   [k: string]: unknown;

@@ -42,9 +42,12 @@ function buildPrompt(
   calibrationBlock: string,
 ): string {
   return `You are analysing a transcript of an outbound sales call between iTarang's
-AI agent ("Priya") and a dealer. iTarang sells lithium batteries for
-e-rickshaws / e-autos, electric two-wheelers and inverters, plus inverters,
-solar and ESS / BESS, with an EMI financing scheme, to dealers across India.
+AI agent ("Priya") and a dealer. iTarang sells, to dealers across India:
+e-rickshaw / e-auto batteries for L3 and L5 three-wheelers (51–72 V); electric
+two-wheeler batteries (e-scooter, e-bike, "scooty"); lithium inverter
+batteries; inverters; solar; ESS and BESS energy storage systems; and EMI
+finance on Trontek lithium batteries through NBFC partners such as Bajaj
+Finserv.
 
 CURRENT TIME (Asia/Kolkata): ${now}
 
@@ -75,9 +78,10 @@ RULES for each field:
   battery dealer is "yes".
 - product_lines = every one of OUR lines he deals in, as a list (several
   allowed, [] if none was stated):
-  "three_wheeler" (e-rickshaw / e-auto batteries), "two_wheeler" (electric
-  scooter / bike batteries), "inverter_battery", "inverter", "solar",
-  "ess_bess" (energy storage / BESS). Allowed: ${PRODUCT_LINES.join(" | ")}.
+  "three_wheeler" (e-rickshaw / e-auto / toto batteries, L3 or L5, 51–72 V),
+  "two_wheeler" (e-scooter / e-bike / "scooty" batteries), "inverter_battery"
+  (lithium or lead-acid inverter batteries), "inverter", "solar", "ess_bess"
+  (ESS / BESS / energy storage). Allowed: ${PRODUCT_LINES.join(" | ")}.
 - dealer_role = ${DEALER_ROLES.join(" | ")} (oem if he makes/assembles the
   product, dealer if he resells it, both if applicable, else unknown; context
   only — no band impact).
@@ -91,6 +95,11 @@ RULES for each field:
   battery prices make financing necessary.
 - financing_value_acknowledged = "yes" if he agrees financing would grow /
   improve his business.
+- emi_finance_interest = "yes" if he asks about or shows interest in EMI
+  finance on Trontek lithium batteries through our NBFC partners (Bajaj
+  Finserv etc.) — asks the EMI amount / tenure / down payment, says his
+  customers want EMI, or asks "EMI pe de sakte ho?". Only NAMING the financier
+  he already uses is existing_financier_shared, NOT this.
 - pitch_heard = "yes" if he stayed on the line through the battery + finance
   pitch without cutting it off.
 - callback_agreed = "yes" if he agreed to a follow-up call. IMPORTANT: a PASSIVE
@@ -137,6 +146,7 @@ OUTPUT EXACTLY THIS JSON SHAPE (fill every field):
   "existing_financier_shared": "yes" | "no",
   "financing_need_expressed": "yes" | "no",
   "financing_value_acknowledged": "yes" | "no",
+  "emi_finance_interest": "yes" | "no",
   "pitch_heard": "yes" | "no",
   "callback_agreed": "yes" | "no",
   "callback_when": "<his words for when, or empty>",
@@ -152,6 +162,7 @@ OUTPUT EXACTLY THIS JSON SHAPE (fill every field):
     "existing_financier_shared": "<financier/NBFC named, or 'none'>",
     "financing_need_expressed": "<what he said about needing financing>",
     "financing_value_acknowledged": "<what he said about financing helping business>",
+    "emi_finance_interest": "<what he asked / said about EMI finance on our batteries>",
     "callback_agreed": "<the line where they agreed>"
   },
   "language": "hindi" | "english" | "hinglish" | "unknown",

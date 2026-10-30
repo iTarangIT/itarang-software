@@ -64,6 +64,11 @@ export const CORRECTABLE_FACTS: Array<{
   },
   { key: "pitch_heard", label: "Pitch heard", info: false },
   { key: "callback_agreed", label: "Callback agreed", info: false },
+  {
+    key: "emi_finance_interest",
+    label: "Interested in EMI finance (Trontek / NBFC)",
+    info: false,
+  },
 ];
 
 const LEAD_STATUS_OPTIONS = [
