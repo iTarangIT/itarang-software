@@ -14,6 +14,11 @@ import {
     type CallTimingCount,
     type CallTimingGrid,
 } from "@/lib/ai-dialer/callTimingShape";
+import {
+    CALLING_HOURS_REASON_MIN,
+    callingHoursText,
+    type CallingHours,
+} from "@/lib/ai-dialer/callingHoursRules";
 
 type Metric = "talk" | "answer" | "dials";
 
@@ -23,6 +28,14 @@ type Payload = {
     grid: CallTimingGrid;
     places: Array<{ state: string; city: string | null }>;
     can_set_hours: boolean;
+    /** ID 85 — every change of the calling hours, newest first. */
+    hours_log?: Array<{
+        at: string;
+        before: CallingHours | null;
+        after: CallingHours | null;
+        reason: string | null;
+        by: string | null;
+    }>;
 };
 
 const METRICS: Array<{ key: Metric; label: string }> = [
@@ -86,8 +99,11 @@ export function CallTimingView() {
     });
 
     const qc = useQueryClient();
+    // ID 85: a change of the calling hours needs a reason (shown in the log the CEO reads).
+    const [reason, setReason] = useState("");
+    const reasonOk = reason.trim().length >= CALLING_HOURS_REASON_MIN;
     const apply = useMutation({
-        mutationFn: async (w: { window_start: string; window_end: string }) => {
+        mutationFn: async (w: { window_start: string; window_end: string; reason: string }) => {
             const res = await fetch("/api/campaigns/call-timing", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -96,7 +112,10 @@ export function CallTimingView() {
             const j = await res.json();
             if (!res.ok || !j.success) throw new Error(j?.error?.message ?? "Could not save calling hours");
         },
-        onSuccess: () => qc.invalidateQueries({ queryKey: ["call-timing"] }),
+        onSuccess: () => {
+            setReason("");
+            qc.invalidateQueries({ queryKey: ["call-timing"] });
+        },
     });
 
     const grid = q.data?.grid;
@@ -244,13 +263,25 @@ export function CallTimingView() {
                             </p>
                         )}
                         {s && q.data?.can_set_hours && (
-                            <button
-                                disabled={apply.isPending}
-                                onClick={() => apply.mutate({ window_start: s.window_start, window_end: s.window_end })}
-                                className="px-3 py-2 rounded-lg bg-gray-900 text-white text-sm font-medium disabled:opacity-50"
-                            >
-                                {apply.isSuccess ? "Saved as default calling hours" : "Use as default calling hours"}
-                            </button>
+                            <>
+                                <input
+                                    value={reason}
+                                    onChange={(e) => setReason(e.target.value)}
+                                    maxLength={500}
+                                    placeholder="Why (shown in the log the CEO reads)"
+                                    className={`${INPUT} min-w-[220px]`}
+                                />
+                                <button
+                                    disabled={apply.isPending || !reasonOk}
+                                    title={reasonOk ? undefined : "Give a reason first"}
+                                    onClick={() =>
+                                        apply.mutate({ window_start: s.window_start, window_end: s.window_end, reason })
+                                    }
+                                    className="px-3 py-2 rounded-lg bg-gray-900 text-white text-sm font-medium disabled:opacity-50"
+                                >
+                                    {apply.isSuccess ? "Saved as default calling hours" : "Use as default calling hours"}
+                                </button>
+                            </>
                         )}
                         {apply.isError && <p className="w-full text-xs text-rose-600">{(apply.error as Error).message}</p>}
                         {s && q.data?.can_set_hours && (
@@ -259,6 +290,46 @@ export function CallTimingView() {
                             </p>
                         )}
                     </div>
+
+                    {(q.data?.hours_log?.length ?? 0) > 0 && (
+                        <div className="bg-white border border-gray-200 rounded-2xl p-4">
+                            <p className="text-sm font-semibold text-gray-900 mb-2">Calling hours changes</p>
+                            <div className="overflow-x-auto">
+                                <table className="min-w-full text-xs">
+                                    <thead className="text-left text-gray-500">
+                                        <tr>
+                                            <th className="py-1 pr-4 font-medium">Changed</th>
+                                            <th className="py-1 pr-4 font-medium">From → to</th>
+                                            <th className="py-1 font-medium">By · why</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-gray-100 text-gray-700">
+                                        {q.data!.hours_log!.map((r, i) => (
+                                            <tr key={`${r.at}-${i}`}>
+                                                <td className="py-1.5 pr-4 whitespace-nowrap">
+                                                    {new Date(r.at).toLocaleString("en-IN", {
+                                                        timeZone: "Asia/Kolkata",
+                                                        day: "numeric",
+                                                        month: "short",
+                                                        year: "numeric",
+                                                        hour: "numeric",
+                                                        minute: "2-digit",
+                                                    })}
+                                                </td>
+                                                <td className="py-1.5 pr-4 whitespace-nowrap">
+                                                    {callingHoursText(r.before)} → {callingHoursText(r.after)}
+                                                </td>
+                                                <td className="py-1.5">
+                                                    {r.by ?? "—"}
+                                                    {r.reason ? ` · ${r.reason}` : ""}
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    )}
                 </>
             )}
             {q.isLoading && <p className="text-sm text-gray-500">Loading call timing…</p>}

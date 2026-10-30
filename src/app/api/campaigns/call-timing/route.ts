@@ -67,17 +67,24 @@ export const GET = withErrorHandler(async (req: Request) => {
         });
     }
 
-    const [grid, places] = await Promise.all([getCallTimingGrid(filters), getCallTimingPlaces()]);
+    const { callingHoursLog } = await import("@/lib/ai-dialer/callingHoursLog");
+    const [grid, places, hoursLog] = await Promise.all([getCallTimingGrid(filters), getCallTimingPlaces(), callingHoursLog()]);
     const canSetHours = (CALLING_HOURS_EDIT_ROLES as readonly string[]).includes(user.role);
-    return successResponse({ grid, places, filters, can_set_hours: canSetHours });
+    // ID 85: every change of the calling hours, with who and why (the CEO reads it here).
+    return successResponse({ grid, places, filters, can_set_hours: canSetHours, hours_log: hoursLog });
 });
 
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
-const Body = z.object({ window_start: z.string().regex(HHMM), window_end: z.string().regex(HHMM) });
+// ID 85: `reason` is checked by setDefaultCallingHours (shown in the CEO's log).
+const Body = z.object({
+    window_start: z.string().regex(HHMM),
+    window_end: z.string().regex(HHMM),
+    reason: z.string().max(500).optional(),
+});
 
 export const POST = withErrorHandler(async (req: Request) => {
     const user = await requireRole([...CALLING_HOURS_EDIT_ROLES]);
     const b = Body.parse(await req.json());
-    await setDefaultCallingHours(b.window_start, b.window_end, user.id);
-    return successResponse({ ok: true, ...b });
+    const { logged } = await setDefaultCallingHours(b.window_start, b.window_end, user.id, b.reason ?? null);
+    return successResponse({ ok: true, window_start: b.window_start, window_end: b.window_end, logged });
 });
