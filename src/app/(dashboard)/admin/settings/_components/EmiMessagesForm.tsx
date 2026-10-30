@@ -2,7 +2,7 @@
 
 // ID 204 — Admin > Settings > EMI messages. On/off, the pilot lender, the send
 // hour, and per message: on/off, the day, the Hindi text with fixed fields,
-// the WhatsApp template name, the MSG91 Flow template id and the DLT id. A
+// the WhatsApp template name and the DLT template id (SMS via Exotel). A
 // changed text is held as pending until "Meta + DLT approved" is ticked.
 // Test send: every message to one phone on both channels.
 
@@ -26,6 +26,7 @@ type MsgDraft = {
     waTemplate: string;
     smsTemplateId: string;
     dltTemplateId: string;
+    smsText: string;
     approved: string | null;
     pending: string | null;
 };
@@ -50,6 +51,7 @@ function toDraft(s: EmiMessagesSettings): Draft {
             waTemplate: m.waTemplate,
             smsTemplateId: m.smsTemplateId,
             dltTemplateId: m.dltTemplateId,
+            smsText: m.smsText,
             approved: m.text,
             pending: m.pendingText,
         };
@@ -98,7 +100,7 @@ export function EmiMessagesForm() {
             const messages = Object.fromEntries(
                 EMI_MESSAGE_KINDS.map((k) => {
                     const m = draft.messages[k];
-                    return [k, { on: m.on, day: m.day, text: m.text, waTemplate: m.waTemplate, smsTemplateId: m.smsTemplateId, dltTemplateId: m.dltTemplateId }];
+                    return [k, { on: m.on, day: m.day, text: m.text, waTemplate: m.waTemplate, smsTemplateId: m.smsTemplateId, dltTemplateId: m.dltTemplateId, smsText: m.smsText }];
                 }),
             );
             const r = await fetch("/api/admin/settings/emi-messages", {
@@ -199,7 +201,8 @@ export function EmiMessagesForm() {
 
             <p className="text-xs text-ink-muted">
                 Fields a text may use: {EMI_FIELDS.map((f) => `{${f}}`).join(" ")}. The WhatsApp template&apos;s body must
-                have the same fields in the same order; the MSG91 Flow template names its variables the same (##name## …).
+                have the same fields in the same order. SMS go through Exotel: register the same text on DLT with each field
+                as {"{#var#}"} and enter its DLT template id.
             </p>
 
             <div className="space-y-4">
@@ -248,17 +251,22 @@ export function EmiMessagesForm() {
                             {m.approved && changed && (
                                 <p className="mt-1 text-xs text-ink-muted">Sent now: {m.approved}</p>
                             )}
-                            <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-3">
+                            <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2">
                                 <label className="text-xs text-ink-muted">
                                     WhatsApp template name
                                     <input value={m.waTemplate} onChange={(e) => setMsg(k, { waTemplate: e.target.value })} className={INPUT} />
                                 </label>
                                 <label className="text-xs text-ink-muted">
-                                    MSG91 Flow template id
-                                    <input value={m.smsTemplateId} onChange={(e) => setMsg(k, { smsTemplateId: e.target.value })} className={INPUT} />
+                                    SMS text — leave empty to send the WhatsApp text (only if DLT approved a different wording)
+                                    <textarea
+                                        value={m.smsText}
+                                        onChange={(e) => setMsg(k, { smsText: e.target.value })}
+                                        rows={2}
+                                        className={INPUT}
+                                    />
                                 </label>
                                 <label className="text-xs text-ink-muted">
-                                    DLT template id
+                                    SMS: DLT template id (Exotel)
                                     <input value={m.dltTemplateId} onChange={(e) => setMsg(k, { dltTemplateId: e.target.value })} className={INPUT} />
                                 </label>
                             </div>

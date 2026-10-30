@@ -37,6 +37,7 @@ export function normaliseEmiSettings(v: Record<string, unknown> | null | undefin
             waTemplate: str(m.waTemplate, def.waTemplate),
             smsTemplateId: str(m.smsTemplateId, def.smsTemplateId),
             dltTemplateId: str(m.dltTemplateId, def.dltTemplateId),
+            smsText: str(m.smsText, def.smsText),
         } satisfies EmiMessageConfig;
     }
     const hour = Number(src.sendFromHourIst);

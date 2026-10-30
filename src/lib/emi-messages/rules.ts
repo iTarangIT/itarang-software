@@ -44,10 +44,16 @@ export type EmiMessageConfig = {
     pendingText: string | null;
     /** Meta template name (its body must match the approved text, fields in the same order). */
     waTemplate: string;
-    /** MSG91 Flow template id (DLT-registered text; variables named like the fields). */
+    /** Unused since 30 Oct (SMS go through Exotel by DLT template id); kept so saved settings still read. */
     smsTemplateId: string;
-    /** DLT template id, for the record. */
+    /** DLT template id — Exotel sends the SMS under it (the text must be the DLT text, fields filled). */
     dltTemplateId: string;
+    /**
+     * 30 Oct: the SMS goes with the same text as WhatsApp (Admin's choice);
+     * this is only for when DLT approves a different wording. Empty = the
+     * WhatsApp text. Filled with smsValues().
+     */
+    smsText: string;
 };
 
 export type EmiMessagesSettings = {
@@ -65,12 +71,12 @@ export type EmiMessagesSettings = {
 };
 
 const DEFAULT_TEXT: Record<EmiMessageKind, string> = {
-    due_3d: "नमस्ते {name}, आपकी EMI ₹{amount} {due_date} को देय है। कृपया समय पर भुगतान करें। – {lender}",
-    due_today: "नमस्ते {name}, आपकी EMI ₹{amount} आज ({due_date}) देय है। कृपया आज ही भुगतान करें। – {lender}",
-    overdue_1: "नमस्ते {name}, आपकी EMI ₹{amount} ({due_date} को देय) अभी तक नहीं मिली है। कृपया जल्द भुगतान करें। – {lender}",
-    overdue_3: "नमस्ते {name}, आपकी EMI ₹{amount} {days_overdue} दिन से बकाया है ({due_date} को देय)। कृपया तुरंत भुगतान करें। – {lender}",
-    overdue_7: "नमस्ते {name}, आपकी EMI ₹{amount} {days_overdue} दिन से बकाया है। देरी से आपका क्रेडिट स्कोर प्रभावित हो सकता है। कृपया आज ही भुगतान करें। – {lender}",
-    received: "नमस्ते {name}, आपकी EMI ₹{amount} प्राप्त हो गई है। धन्यवाद! अगली EMI {next_due_date} को देय है। – {lender}",
+    due_3d: "नमस्ते {name}, आपकी EMI ₹{amount} {due_date} को देय है। कृपया समय पर भुगतान करें। – {lender} टीम",
+    due_today: "नमस्ते {name}, आपकी EMI ₹{amount} आज ({due_date}) देय है। कृपया आज ही भुगतान करें। – {lender} टीम",
+    overdue_1: "नमस्ते {name}, आपकी EMI ₹{amount} ({due_date} को देय) अभी तक नहीं मिली है। कृपया जल्द भुगतान करें। – {lender} टीम",
+    overdue_3: "नमस्ते {name}, आपकी EMI ₹{amount} {days_overdue} दिन से बकाया है ({due_date} को देय)। कृपया तुरंत भुगतान करें। – {lender} टीम",
+    overdue_7: "नमस्ते {name}, आपकी EMI ₹{amount} {days_overdue} दिन से बकाया है। देरी से आपका क्रेडिट स्कोर प्रभावित हो सकता है। कृपया आज ही भुगतान करें। – {lender} टीम",
+    received: "नमस्ते {name}, आपकी EMI ₹{amount} प्राप्त हो गई है। धन्यवाद! अगली EMI {next_due_date} को देय है। – {lender} टीम",
 };
 
 const DEFAULT_DAY: Record<EmiMessageKind, number> = {
@@ -98,6 +104,7 @@ export function defaultEmiMessagesSettings(): EmiMessagesSettings {
             waTemplate: `emi_${k}_hi`,
             smsTemplateId: "",
             dltTemplateId: "",
+            smsText: "",
         };
     }
     return { enabled: false, pilotNbfcId: null, waLanguage: "hi", sendFromHourIst: 10, messages, updatedBy: null, updatedAt: null };
@@ -165,6 +172,27 @@ export function approveText(cfg: EmiMessageConfig): EmiMessageConfig {
 export function fmtAmount(n: number | string | null | undefined): string {
     const v = Number(n ?? 0);
     return Number.isFinite(v) ? v.toLocaleString("en-IN", { maximumFractionDigits: 2 }) : "-";
+}
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/**
+ * The SMS values: DLT typed variables match only their own characters — a
+ * {#number#} digits only (so "4,250" goes as "4250"), an {#alphanumeric#}
+ * letters and digits (so "05-11-2026" goes as "05Nov2026").
+ */
+export function smsValues(values: EmiFieldValues): EmiFieldValues {
+    const day = (v: string | undefined) => {
+        const m = /^(\d{2})-(\d{2})-(\d{4})$/.exec(v ?? "");
+        return m ? `${m[1]}${MONTHS[Number(m[2]) - 1] ?? m[2]}${m[3]}` : v;
+    };
+    const amount = Number((values.amount ?? "").replace(/,/g, ""));
+    return {
+        ...values,
+        amount: Number.isFinite(amount) && values.amount ? String(Math.round(amount)) : values.amount,
+        due_date: day(values.due_date),
+        next_due_date: day(values.next_due_date),
+    };
 }
 
 /** "05-11-2026" — the date form used in the texts. */
