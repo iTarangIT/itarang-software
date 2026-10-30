@@ -7,12 +7,14 @@ const { salesDailyPeriods, sameSpanLastMonth, addDays, firstOfMonth, lastWorking
 const { isWorkingDay } = await import("@/lib/calendar/officeCalendar");
 
 describe("salesDailyPeriods — the windows a Sales Daily is counted over", () => {
-    it("ID 188: Sun 4 Oct 2026 with no calendar — yesterday, the day before, the same day last week, MTD", () => {
+    it("ID 188: Sun 4 Oct 2026 with no calendar — yesterday, the day before, the same day last week, last 7 days, MTD, last month", () => {
         expect(salesDailyPeriods("2026-10-04")).toEqual({
             yesterday: { from: "2026-10-04", to: "2026-10-04" },
             dayBefore: { from: "2026-10-03", to: "2026-10-03" },
             sameDayLastWeek: { from: "2026-09-27", to: "2026-09-27" },
+            last7: { from: "2026-09-28", to: "2026-10-04" },
             mtd: { from: "2026-10-01", to: "2026-10-04" },
+            lastMonth: { from: "2026-09-01", to: "2026-09-04" },
         });
     });
 

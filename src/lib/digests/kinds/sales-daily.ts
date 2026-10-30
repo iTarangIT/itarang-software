@@ -73,6 +73,7 @@ import {
   blockATableRows,
   buildBlockA,
   lastMonthColumnLabel,
+  type RowValues,
 } from "../salesDailyBlockA";
 import { workingDaysElapsed } from "@/lib/calendar/officeCalendar";
 import { medianAndP90 } from "@/lib/leads/clockRules";
@@ -133,7 +134,7 @@ import type {
 //   G Ecofy                     pickup queue, new Ecofy leads yesterday, leads by stage (ID 51).
 const SECTIONS: DigestSection[] = [
   { key: "summary", label: "Headline", hint: "One line: yesterday's outcome and what is behind target.", group: "activity" },
-  { key: "block_a", label: "A · Company", hint: "Company metrics: yesterday, the day before, the same day last week, MTD, MTD target, % of target.", group: "activity" },
+  { key: "block_a", label: "A · Company", hint: "Company metrics: yesterday, the day before, the same day last week, the last 7 days, MTD, MTD target, % of target, the same period last month and Δ MTD.", group: "activity" },
   // ID 188 — overall first, then per person, on the same columns.
   { key: "block_a_people", label: "A2 · By person", hint: "Each ASM on dealers visited and each ISR / CC on calls: yesterday, the day before, the same day last week, MTD, MTD target, % of target.", group: "activity" },
   { key: "right_now", label: "Right now", hint: "Ready leads with no owner (Hot / AI qualified / other), and the oldest wait.", group: "backlog" },
@@ -184,13 +185,15 @@ export function lastWorkingDayOnOrBefore(istDay: string, isWorking?: (day: strin
 }
 
 /**
- * The four windows every Block A row is counted over, for the covered IST day
+ * The windows every Block A row is counted over, for the covered IST day
  * (ID 188, the Sales Head's format). Inclusive IST days.
  *   yesterday        the last working day on or before the covered day when
  *                    `isWorking` is given (ID 194: Monday's = Saturday)
  *   dayBefore        the working day before Yesterday (Saturday's = Friday)
  *   sameDayLastWeek  Yesterday − 7: the same weekday a week earlier
+ *   last7            the 7 days ending on the covered day (ID 188, 30 Oct)
  *   mtd              1st of the month to the covered day
+ *   lastMonth        the same span of last month (ID 188, 30 Oct)
  */
 export function salesDailyPeriods(istDay: string, isWorking?: (day: string) => boolean) {
   const y = lastWorkingDayOnOrBefore(istDay, isWorking);
@@ -200,7 +203,9 @@ export function salesDailyPeriods(istDay: string, isWorking?: (day: string) => b
     yesterday: { from: y, to: y },
     dayBefore: { from: prev, to: prev },
     sameDayLastWeek: { from: wk, to: wk },
+    last7: { from: addDays(istDay, -6), to: istDay },
     mtd: { from: firstOfMonth(istDay), to: istDay },
+    lastMonth: sameSpanLastMonth(istDay),
   };
 }
 
@@ -259,8 +264,8 @@ async function scheduledPerSpoc(
  * period that fails is left unmeasured rather than failing the email.
  */
 async function unmatchedRevenuePerPeriod(
-  periods: Record<"yesterday" | "dayBefore" | "sameDayLastWeek" | "mtd", { from: string; to: string }>,
-): Promise<{ y: number | null; prev: number | null; wk: number | null; mtd: number | null }> {
+  periods: Record<"yesterday" | "dayBefore" | "sameDayLastWeek" | "last7" | "mtd" | "lastMonth", { from: string; to: string }>,
+): Promise<RowValues> {
   const { revenueSummary } = await import("@/lib/dashboard/revenueSource");
   const one = async (p: { from: string; to: string }): Promise<number | null> => {
     try {
@@ -270,13 +275,15 @@ async function unmatchedRevenuePerPeriod(
       return null;
     }
   };
-  const [y, prev, wk, mtd] = await Promise.all([
+  const [y, prev, wk, d7, mtd, lm] = await Promise.all([
     one(periods.yesterday),
     one(periods.dayBefore),
     one(periods.sameDayLastWeek),
+    one(periods.last7),
     one(periods.mtd),
+    one(periods.lastMonth),
   ]);
-  return { y, prev, wk, mtd };
+  return { y, prev, wk, d7, mtd, lm };
 }
 
 type RightNow = {
@@ -574,11 +581,13 @@ async function collect(
     const periods = await salesDailyPeriodsFor(istDay);
 
     const { getDigestSettings } = await import("../settings");
-    const [yesterday, dayBefore, sameDayLastWeek, mtd, scheduled, followUps, now, overdue, settings, extrasY, extrasMtd, awaiting, unmatched, wait, ecofy] = await Promise.all([
+    const [yesterday, dayBefore, sameDayLastWeek, last7, mtd, lastMonth, scheduled, followUps, now, overdue, settings, extrasY, extrasMtd, awaiting, unmatched, wait, ecofy] = await Promise.all([
       buildSalesDashboard({ ...periods.yesterday, granularity: "day" }),
       buildSalesDashboard({ ...periods.dayBefore, granularity: "day" }),
       buildSalesDashboard({ ...periods.sameDayLastWeek, granularity: "day" }),
+      buildSalesDashboard({ ...periods.last7, granularity: "day" }),
       buildSalesDashboard({ ...periods.mtd, granularity: "day" }),
+      buildSalesDashboard({ ...periods.lastMonth, granularity: "day" }),
       scheduledPerSpoc(sendDay, dayAfter),
       followUpsPerOwner(sendDay, dayAfter),
       rightNow(),
@@ -592,7 +601,7 @@ async function collect(
       // 188 #4: Block G's "New leads yesterday" is the same Yesterday as the rest (Monday: Saturday).
       ecofySnapshot(periods.yesterday.from),
     ]);
-    const blockA = await buildBlockA(db as never, periods, { yesterday, dayBefore, sameDayLastWeek, mtd }, unmatched);
+    const blockA = await buildBlockA(db as never, periods, { yesterday, dayBefore, sameDayLastWeek, last7, mtd, lastMonth }, unmatched);
     // 18 Oct row 25: Block D splits Awaiting field visit at the transfer → visit limit.
     const awaitingPast = await loadAwaitingFieldVisitPast(db as never);
     // ID 156: each rep's manager today, so Blocks B / C show a team subtotal
@@ -621,6 +630,8 @@ async function collect(
     const comparisonLabel: Record<string, string> = {
       "Day before": `Day before · ${shortDay(periods.dayBefore.from)}`,
       "Same day last week": `Same day last week · ${shortDay(periods.sameDayLastWeek.from)}`,
+      // ID 188 (30 Oct): the last-month span named in the header, e.g. "Same period last month · 1–28 Sep".
+      "Same period last month": `Same period last month · ${lastMonthColumnLabel(periods.lastMonth)}`,
     };
     const blockAColumns = BLOCK_A_COLUMNS.map((c) => comparisonLabel[c] ?? c);
     const col = (name: string) => BLOCK_A_COLUMNS.indexOf(name);
@@ -729,12 +740,16 @@ async function collect(
             strongColumn: col("MTD"),
             // Phone frame: METRIC · YDAY · MTD · TARGET.
             phoneColumns: [0, col("Yesterday"), col("MTD"), BLOCK_A_PCT_COLUMN],
-            // 188 #3: the two comparison days ride under Yesterday on a phone.
+            // 188 #3: the comparison days ride under Yesterday on a phone.
             phoneCompareUnder: {
               under: col("Yesterday"),
-              columns: [col("Day before"), col("Same day last week")],
-              labels: [shortDay(periods.dayBefore.from), "Last wk"],
+              columns: [col("Day before"), col("Same day last week"), col("Last 7 days")],
+              labels: [shortDay(periods.dayBefore.from), "Last wk", "7 days"],
             },
+            // ID 188 (30 Oct): Δ MTD against the same period last month, green / red,
+            // and on a phone under MTD (as before 22 Oct).
+            deltaColumns: [col("Δ MTD")],
+            phoneDeltaUnder: [col("Δ MTD"), col("MTD")],
             // The working-days sentence is already the intro; keep the rest.
             note: blockA.targetsNote.replace(/^Month to date is [^.]*\.\s*/, "") || undefined,
             // "Right now" sits right after the table, as in the mockup.
@@ -922,7 +937,7 @@ export const salesDailyDigest: DigestKindDescriptor = {
   description:
     "Daily Sales email v1.1 — one management email every morning at the time set below " +
     "(default 09:00 IST): a one-line headline, " +
-    "A · Company (yesterday, the day before, the same day last week and MTD, with MTD target and % of target), " +
+    "A · Company (yesterday, the day before, the same day last week, the last 7 days and MTD, with MTD target, % of target, the same period last month and Δ MTD), " +
     "A2 · By person (each ASM / ISR on the same columns), " +
     "sales-ready leads waiting for an owner, B · Field team, C · Inside sales, D · Position " +
     "as of the send time, E · Today and tomorrow, F · the 10 oldest overdue items, and G · Ecofy " +

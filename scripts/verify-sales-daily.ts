@@ -168,13 +168,22 @@ async function main() {
 
     const dash = (p: Win) =>
         buildSalesDashboard({ ...p, city: null, state: null, spoc_id: null, business_type: null, granularity: "day" });
-    const [dy, dp, dw, dm] = await Promise.all([
+    const [dy, dp, dw, d7, dm, dlm] = await Promise.all([
         dash(periods.yesterday),
         dash(periods.dayBefore),
         dash(periods.sameDayLastWeek),
+        dash(periods.last7),
         dash(periods.mtd),
+        dash(periods.lastMonth),
     ]);
-    const blockA = await buildBlockA(db, periods, { yesterday: dy, dayBefore: dp, sameDayLastWeek: dw, mtd: dm });
+    const blockA = await buildBlockA(db, periods, {
+        yesterday: dy,
+        dayBefore: dp,
+        sameDayLastWeek: dw,
+        last7: d7,
+        mtd: dm,
+        lastMonth: dlm,
+    });
     const row = (label: string) => blockA.rows.find((r) => r.label === label)?.values;
 
     const one = async (q: ReturnType<typeof sql>): Promise<number> => {
@@ -204,7 +213,7 @@ async function main() {
                      WHERE t.touchpoint_type = 'quote_dispatched'
                        AND ${istDate(sql`t.performed_at`)} BETWEEN ${p.from}::date AND ${p.to}::date`),
     };
-    const emailValue: Record<string, (k: "y" | "prev" | "wk" | "mtd") => number | null> = {
+    const emailValue: Record<string, (k: "y" | "prev" | "wk" | "d7" | "mtd" | "lm") => number | null> = {
         "Leads in": (k) => row("Leads in")?.[k] ?? null,
         "Calls made": (k) => row("Calls made")?.[k] ?? null,
         "Dealers visited": (k) => row("Dealers visited")?.[k] ?? null,
@@ -219,7 +228,9 @@ async function main() {
         ["y", periods.yesterday],
         ["prev", periods.dayBefore],
         ["wk", periods.sameDayLastWeek],
+        ["d7", periods.last7],
         ["mtd", periods.mtd],
+        ["lm", periods.lastMonth],
     ] as const;
     let bad = 0;
     console.log("\nBlock A — email vs independent recount");
@@ -316,9 +327,9 @@ async function main() {
         ["Revenue", (d) => d.outcome.revenue],
         ["KYC submitted", (d) => d.outcome.kyc_submitted],
     ];
-    const dashBy = { y: dy, prev: dp, wk: dw, mtd: dm } as const;
+    const dashBy = { y: dy, prev: dp, wk: dw, d7, mtd: dm, lm: dlm } as const;
     for (const [label, get] of fromDash) {
-        const cells = (["y", "prev", "wk", "mtd"] as const).map((k) => {
+        const cells = (["y", "prev", "wk", "d7", "mtd", "lm"] as const).map((k) => {
             const e = row(label)?.[k] ?? null;
             const d = get(dashBy[k]);
             const ok = e === d;
