@@ -653,6 +653,9 @@ export async function executeCoBorrowerDigilockerInit(
     sms_attempts: 1,
     sms_delivered_at: now.toISOString(),
     sms_failed_reason: null,
+    // ID 201 gap 3: when this session started, so the status check can say
+    // "expired" after COBORROWER_DIGILOCKER_VALID_HOURS.
+    initiated_at: now.toISOString(),
   };
 
   const verificationId = await upsertCoBorrowerVerification(leadId, "aadhaar", {
@@ -687,6 +690,24 @@ export async function executeCoBorrowerDigilockerInit(
       sentTo: { mobile: phone },
     },
   };
+}
+
+/**
+ * ID 201 (28 Oct gap 3) — how long a co-borrower DigiLocker link is valid.
+ * Decentro sessions are typically valid for 24 h (the resend SMS says so).
+ */
+export const COBORROWER_DIGILOCKER_VALID_HOURS = 24;
+
+/**
+ * ID 201 — has this co-borrower DigiLocker session run out? Only a session
+ * whose start was recorded (initiated_at, since 30 Oct) can expire; an older
+ * row behaves as before. Pure.
+ */
+export function coBorrowerDigilockerExpired(initiatedAt: unknown, now: Date = new Date()): boolean {
+  if (typeof initiatedAt !== "string") return false;
+  const started = new Date(initiatedAt).getTime();
+  if (Number.isNaN(started)) return false;
+  return now.getTime() - started > COBORROWER_DIGILOCKER_VALID_HOURS * 60 * 60 * 1000;
 }
 
 export async function executeCoBorrowerDigilockerStatus(
@@ -764,7 +785,28 @@ export async function executeCoBorrowerDigilockerStatus(
     !!apiData.aadhaarUid ||
     !!apiData.name;
 
+  const initiatedAt = typeof apiData.initiated_at === "string" ? (apiData.initiated_at as string) : null;
+  const expired = coBorrowerDigilockerExpired(initiatedAt);
+
   if (!consentGivenAt && !alreadyHasData) {
+    // ID 201 gap 3: never consented and the link has run out.
+    if (expired) {
+      return {
+        success: true,
+        message: "Co-borrower DigiLocker link expired. Start a new DigiLocker request.",
+        data: {
+          verificationId: transactionId,
+          transactionId,
+          status: "expired",
+          initiatedAt,
+          documentFetched: false,
+          consentGiven: false,
+          linkOpened: false,
+          aadhaarData: {},
+          crossMatchResult: null,
+        },
+      };
+    }
     // Primary's status route returns success: true even pre-fetch — the
     // documentFetched boolean conveys whether eAadhaar is on file. Match
     // that so AadhaarCard's pollStatus doesn't surface this as an error
@@ -919,6 +961,9 @@ export async function executeCoBorrowerDigilockerStatus(
     api_response: {
       ...decentroRes,
       data: {
+        // Keep the session's own keys (decentro_txn_id, digilocker_url,
+        // initiated_at, sms_*): the next poll and the resend SMS read them.
+        ...apiData,
         ...remoteData,
         aadhaarData,
         crossMatchResult,
@@ -959,11 +1004,14 @@ export async function executeCoBorrowerDigilockerStatus(
     success: true,
     message: hasDocument
       ? "Co-borrower Aadhaar fetched from DigiLocker."
-      : "Awaiting co-borrower consent on DigiLocker.",
+      : expired
+        ? "Co-borrower DigiLocker link expired. Start a new DigiLocker request."
+        : "Awaiting co-borrower consent on DigiLocker.",
     data: {
       verificationId,
       transactionId,
-      status: hasDocument ? "document_fetched" : "awaiting_consent",
+      status: hasDocument ? "document_fetched" : expired ? "expired" : "awaiting_consent",
+      initiatedAt,
       // Match primary status-route response shape (lines 297-318) so
       // AadhaarCard's pollStatus (which reads s.documentFetched +
       // s.aadhaarData + s.crossMatchResult) finds the values it expects.

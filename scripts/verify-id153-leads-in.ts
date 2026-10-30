@@ -59,8 +59,8 @@ async function main() {
     const dash = await buildSalesDashboard({ ...win, city: null, state: null, spoc_id: null, business_type: null, granularity: "day" });
     const blockA = await buildBlockA(
         db,
-        { yesterday: win, dayBefore: win, sameDayLastWeek: win, mtd: win },
-        { yesterday: dash, dayBefore: dash, sameDayLastWeek: dash, mtd: dash },
+        { yesterday: win, dayBefore: win, sameDayLastWeek: win, last7: win, mtd: win, lastMonth: win },
+        { yesterday: dash, dayBefore: dash, sameDayLastWeek: dash, last7: dash, mtd: dash, lastMonth: dash },
     );
     const email = blockA.rows.find((r) => r.label === "Leads in")?.values.y;
 

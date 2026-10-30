@@ -16,7 +16,7 @@ const row = (label: string, group: "INTAKE" | "EFFORT", over: Record<string, unk
     group,
     label,
     kind: "count" as const,
-    values: { y: 4, prev: 3, wk: 2, mtd: 9 },
+    values: { y: 4, prev: 3, wk: 2, d7: null, mtd: 9, lm: null },
     target: null,
     ...over,
 });
@@ -29,7 +29,7 @@ describe("Block A pieces", () => {
 
     it("splits the headline into a Yesterday part and a Month to date part", () => {
         const parts = blockAHeadlineParts([
-            row("New dealers visited", "EFFORT", { values: { y: 12, prev: 9, wk: 10, mtd: 238 }, target: 305 }),
+            row("New dealers visited", "EFFORT", { values: { y: 12, prev: 9, wk: 10, d7: null, mtd: 238, lm: null }, target: 305 }),
         ]);
         expect(parts).toHaveLength(2);
         expect(parts[0]).toMatch(/^Yesterday: /);

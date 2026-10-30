@@ -97,21 +97,18 @@ export async function getCallTimingPlaces(): Promise<Array<{ state: string; city
  * ID 144 — "use the data to set calling hours": the hours new campaigns are
  * pre-filled with (resolveScheduleDefaults reads assignment_config's first row,
  * and nothing else reads these two columns). Days are left as they are.
+ *
+ * ID 85 (30 Oct): a change needs a reason and is logged for the CEO
+ * (callingHoursLog.ts); a missing reason throws a 400.
  */
-export async function setDefaultCallingHours(windowStart: string, windowEnd: string, userId: string): Promise<void> {
-    const updated = (await db.execute(sql`
-        UPDATE assignment_config
-           SET working_hours_start = ${windowStart}, working_hours_end = ${windowEnd},
-               updated_by = ${userId}, updated_at = now()
-         WHERE config_id = (SELECT config_id FROM assignment_config ORDER BY created_at ASC LIMIT 1)
-        RETURNING config_id
-    `)) as unknown as unknown[];
-    if (updated.length === 0) {
-        await db.execute(sql`
-            INSERT INTO assignment_config (working_hours_start, working_hours_end, updated_by)
-            VALUES (${windowStart}, ${windowEnd}, ${userId})
-        `);
-    }
+export async function setDefaultCallingHours(
+    windowStart: string,
+    windowEnd: string,
+    userId: string,
+    reason: string | null,
+): Promise<{ logged: boolean }> {
+    const { saveCallingHours } = await import("./callingHoursLog");
+    return saveCallingHours({ start: windowStart, end: windowEnd, reason, actorId: userId, source: "call_timing" });
 }
 
 /** Who may change the default calling hours — the same roles as the settings page. */

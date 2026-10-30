@@ -32,6 +32,8 @@ export function AssignmentConfigForm({
     const [end, setEnd] = useState(config.working_hours_end);
     const [days, setDays] = useState<string[]>(config.working_days);
     const [saving, setSaving] = useState(false);
+    // ID 85: a change of the hours or days needs a reason (logged for the CEO).
+    const [reason, setReason] = useState("");
 
     function toggleDay(d: string) {
         setDays((prev) =>
@@ -54,6 +56,7 @@ export function AssignmentConfigForm({
                     working_hours_start: start,
                     working_hours_end: end,
                     working_days: days,
+                    reason,
                 }),
             });
             const json = await res.json();
@@ -61,6 +64,7 @@ export function AssignmentConfigForm({
                 throw new Error(json?.error?.message ?? "Failed to save");
             }
             toast.success("Assignment config saved.");
+            setReason("");
             qc.invalidateQueries({ queryKey: ["admin-settings"] });
         } catch (e) {
             toast.error((e as Error).message);
@@ -137,6 +141,18 @@ export function AssignmentConfigForm({
                         );
                     })}
                 </div>
+            </div>
+
+            <div>
+                <label className="block text-sm font-medium text-ink mb-1">
+                    Why (needed when the hours or days change)
+                </label>
+                <Input
+                    value={reason}
+                    maxLength={500}
+                    onChange={(e) => setReason(e.target.value)}
+                    placeholder="Shown in the log the CEO reads"
+                />
             </div>
 
             <div className="flex items-center gap-3 pt-2">

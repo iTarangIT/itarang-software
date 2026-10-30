@@ -32,10 +32,18 @@ export async function GET(
       );
     }
 
-    // ID 201: polled, so only the fetch is logged, once per request.
-    if (result.data?.status === "document_fetched") {
+    // ID 201: polled, so only the end of a DigiLocker request is logged, once
+    // per request and outcome. The verification row is reused when the
+    // request is run again, so "expired" is keyed by the session's start.
+    const state = result.data?.status;
+    if (state === "document_fetched") {
       await recordStaffKycStep(leadId, appUser, "Aadhaar fetched from DigiLocker (co-borrower)", {
         once: `digilocker:${transactionId}:document_fetched`,
+      });
+    } else if (state === "expired") {
+      const started = "initiatedAt" in result.data ? (result.data.initiatedAt ?? "") : "";
+      await recordStaffKycStep(leadId, appUser, "DigiLocker (Aadhaar) request expired (co-borrower)", {
+        once: `digilocker:${transactionId}:expired:${started}`,
       });
     }
     return NextResponse.json(result);
