@@ -18,6 +18,12 @@
 // did not rule himself out is Warm (60) instead of Cold (30). Qualified still
 // wins and a disqualifier still wins — this only lifts the "never answered the
 // lithium question" floor.
+//
+// qualification-2.3.0 — EMI finance on Trontek lithium batteries through an
+// NBFC partner (Bajaj Finserv etc.) is buying intent. emi_finance_interest lifts
+// the lead one step: Cold → Warm, a lead-acid dealer in our lines Warm →
+// Qualified 75, a lithium dealer +EMI_BONUS (75 → 85, 90 → 100). A disqualifier
+// or an out-of-segment dealer still wins.
 
 import { countInfoSignals, PRODUCT_LINE_LABELS, type QualificationSignals } from "./signals";
 import { SCORING_VERSION } from "./version";
@@ -25,6 +31,9 @@ import { SCORING_VERSION } from "./version";
 // Added to a Qualified lead's score when the dealer also shared his monthly
 // volume (75 → 90).
 export const VOLUME_BONUS = 15;
+// Added to a lithium dealer's Qualified score when he also wants EMI finance
+// (2.3.0). A lead-acid dealer lifted to Qualified by EMI gets the flat 75.
+export const EMI_BONUS = 10;
 
 export type Band = "Qualified" | "Warm" | "Cold" | "Disqualified";
 export type CallStatus = "complete" | "dropped_partial" | "dropped_empty";
@@ -101,7 +110,7 @@ export interface BandResult {
   call_status: CallStatus;
   info_signals_count: number; // 0..5 — also the Qualified-queue sort key
   interest_level: InterestLevel | null;
-  lead_score: number; // 90 / 75 / 60 / 30 / 0
+  lead_score: number; // 100 / 90 / 85 / 75 / 60 / 30 / 0
   action: BandAction;
   // Did the latest call hard-negate the lead? (drives demotion in leadStore)
   hard_negative: boolean;
@@ -173,6 +182,13 @@ function buildBreakdown(s: QualificationSignals): SignalLine[] {
       info: false,
       evidence: "",
     },
+    {
+      signal: "emi_finance_interest",
+      label: "Interested in EMI finance (Trontek / NBFC)",
+      present: s.emi_finance_interest === "yes",
+      info: false,
+      evidence: s.evidence.emi_finance_interest,
+    },
   );
   if (s.disqualifier !== "none") {
     lines.push({
@@ -194,12 +210,13 @@ export function computeBand(signals: QualificationSignals): BandResult {
   const wantsHuman = signals.wants_human === "yes";
   const lithium = signals.lithium_dealer;
   const volumeYes = signals.volume_shared === "yes";
+  const emiYes = signals.emi_finance_interest === "yes";
   const breakdown = buildBreakdown(signals);
 
   // ── Call status — a dropped call only voids the lead if NOTHING was captured
   let call_status: CallStatus;
   if (signals.disqualifier === "call_dropped") {
-    if (lithium === "unknown" && info === 0 && !callbackYes && !wantsHuman) {
+    if (lithium === "unknown" && info === 0 && !callbackYes && !wantsHuman && !emiYes) {
       // dropped_empty: no band written, auto-retry. Not a hard-negative — the
       // lead is simply untouched (leadStore keeps any prior band).
       return {
@@ -230,19 +247,24 @@ export function computeBand(signals: QualificationSignals): BandResult {
   } else if (outOfSegment) {
     band = "Disqualified"; // not in our product lines — not our market
   } else if (lithium === "no") {
-    band = "Warm"; // lead-acid only, in our lines — the script's target (B-1)
+    // lead-acid only, in our lines — the script's target (B-1); wanting EMI
+    // finance on our lithium lifts him to Qualified (2.3.0)
+    band = emiYes ? "Qualified" : "Warm";
   } else if (lithium === "yes") {
     band = "Qualified";
-  } else if (callbackYes || wantsHuman) {
-    band = "Warm"; // 2.1.0 — asked to be called back / to speak to a person
+  } else if (callbackYes || wantsHuman || emiYes) {
+    band = "Warm"; // 2.1.0 callback / ask-for-a-person; 2.3.0 EMI interest
   } else {
     band = "Cold"; // never clearly answered the lithium question
   }
 
   const hard_negative = outOfSegment || HARD_DISQUALIFIERS.has(signals.disqualifier);
 
+  const lithiumQualified = band === "Qualified" && lithium === "yes";
   const lead_score =
-    BAND_LEAD_SCORE[band] + (band === "Qualified" && volumeYes ? VOLUME_BONUS : 0);
+    BAND_LEAD_SCORE[band] +
+    (lithiumQualified && volumeYes ? VOLUME_BONUS : 0) +
+    (lithiumQualified && emiYes ? EMI_BONUS : 0);
 
   return {
     band,

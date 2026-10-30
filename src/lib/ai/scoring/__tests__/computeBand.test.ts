@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computeBand, VOLUME_BONUS } from "../computeBand";
+import { computeBand, EMI_BONUS, VOLUME_BONUS } from "../computeBand";
 import { deriveOutcome } from "../legacyAnalysis";
 import { mk } from "./_fixtures";
 
@@ -203,5 +203,49 @@ describe("D9 — product lines", () => {
     expect(s.product_lines).toEqual(["two_wheeler"]);
     expect(s.dealer_segment).toBe("battery");
     expect(QualificationSignalsSchema.parse({}).product_lines).toEqual([]);
+  });
+});
+
+describe("qualification-2.3.0 — EMI finance on Trontek lithium lifts one step", () => {
+  it("EMI interest alone lifts Cold → Warm 60", () => {
+    const r = computeBand(mk({ emi: true }));
+    expect(r.band).toBe("Warm");
+    expect(r.lead_score).toBe(60);
+  });
+
+  it("lithium dealer + EMI → Qualified 85; + volume → 100", () => {
+    expect(computeBand(mk({ lithium: "yes", emi: true })).lead_score).toBe(75 + EMI_BONUS);
+    const r = computeBand(mk({ lithium: "yes", volume: true, emi: true }));
+    expect(r.band).toBe("Qualified");
+    expect(r.lead_score).toBe(75 + VOLUME_BONUS + EMI_BONUS);
+    expect(r.lead_score).toBe(100);
+  });
+
+  it("lead-acid dealer in our lines + EMI → Qualified at a flat 75", () => {
+    const r = computeBand(mk({ lithium: "no", relevant: true, emi: true, volume: true }));
+    expect(r.band).toBe("Qualified");
+    expect(r.lead_score).toBe(75);
+    expect(r.action).toBe("push_to_crm");
+  });
+
+  it("EMI does not rescue an out-of-segment dealer or beat a firm no", () => {
+    expect(computeBand(mk({ lithium: "no", relevant: false, emi: true })).band).toBe("Disqualified");
+    expect(computeBand(mk({ lithium: "yes", emi: true, disqualifier: "not_interested" })).band).toBe(
+      "Disqualified",
+    );
+  });
+
+  it("a dropped call where he asked about EMI is dropped_partial, banded Warm", () => {
+    const r = computeBand(mk({ emi: true, disqualifier: "call_dropped" }));
+    expect(r.call_status).toBe("dropped_partial");
+    expect(r.band).toBe("Warm");
+  });
+
+  it("EMI is not an info signal and shows in the breakdown", () => {
+    const r = computeBand(mk({ lithium: "yes", emi: true }));
+    expect(r.info_signals_count).toBe(0);
+    const row = r.score_breakdown.find((l) => l.signal === "emi_finance_interest");
+    expect(row?.present).toBe(true);
+    expect(row?.info).toBe(false);
   });
 });

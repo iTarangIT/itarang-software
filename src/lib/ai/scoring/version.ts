@@ -32,8 +32,14 @@
 // signals-2.3.0 replaces the single dealer_segment with product_lines
 // (three_wheeler, two_wheeler, inverter_battery, inverter, solar, ess_bess);
 // extract-2.3.0 widens the prompt to inverter / solar / ESS dealers.
-export const SCORING_VERSION = "qualification-2.2.0";
-export const SIGNAL_SCHEMA_VERSION = "signals-2.3.0";
+//
+// qualification-2.3.0 (30 Oct 2026): EMI finance on Trontek lithium batteries
+// through an NBFC partner (Bajaj Finserv etc.) lifts the lead one step — Cold →
+// Warm, lead-acid Warm → Qualified 75, lithium +10 (85 / 100). signals-2.4.0
+// adds emi_finance_interest; extract-2.4.0 teaches the prompt to read it and
+// spells out the product lines (L3/L5 51–72 V, scooty, lithium inverter battery).
+export const SCORING_VERSION = "qualification-2.3.0";
+export const SIGNAL_SCHEMA_VERSION = "signals-2.4.0";
 
 // Tags the EXTRACTION prompt (parser.ts) + its few-shot calibration set
 // (analysis/calibrationExamples.ts). Bump whenever the prompt wording or the
@@ -41,4 +47,5 @@ export const SIGNAL_SCHEMA_VERSION = "signals-2.3.0";
 // counterpart to SCORING_VERSION, so an audit can tell whether a signal shift
 // came from a new prompt or a new band rule.
 // extract-2.3.1 (D8): callback_topic "complaint" — a problem with a battery / service he has.
-export const EXTRACTION_VERSION = "extract-2.3.1";
+// extract-2.4.0: emi_finance_interest + sharper product-line wording.
+export const EXTRACTION_VERSION = "extract-2.4.0";
