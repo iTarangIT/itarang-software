@@ -122,6 +122,11 @@ describe("ID 201, 28 Oct gaps", () => {
             /forDealerId === undefined[\s\S]*SELECT dealer_id FROM leads/,
         );
     });
+    it("3: the co-borrower DigiLocker status logs an expired request, once per session", () => {
+        const src = route("admin/kyc/[leadId]/coborrower/aadhaar/digilocker/status/[transactionId]");
+        expect(src).toMatch(/state === "expired"/);
+        expect(src).toMatch(/once:\s*`digilocker:\$\{transactionId\}:expired:/);
+    });
     it("4: a product-only change is a Step 4 line", () => {
         expect(route("dealer/leads/[id]")).toMatch(/changed the product \(Step 4\)/);
     });
