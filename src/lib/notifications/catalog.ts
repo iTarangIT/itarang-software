@@ -157,6 +157,8 @@ export const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   // ID 75.2 — a one-off "System correction" telling an owner which of their
   // leads' commercials stages were recomputed from quote events.
   "lead.system_correction": "Leads",
+  // Store R-15 — a "Buy on finance" enquiry forwarded by the online store.
+  "lead.online_store_finance": "Leads",
   // E-242 — filed under Leads, not Inventory, because the recipient is the rep
   // or sales manager working the lead and the action is "review and send this
   // to your dealer". The OEM price types sit under Inventory for the mirror
@@ -479,6 +481,8 @@ const WARNING = new Set([
   "lead.callback_overdue",
   // 14 Oct — a file iTarang pushed is waiting on the dealer to continue it.
   "lead.pushed_to_dealer",
+  // Store R-15 — the customer is waiting for a call and the file for a dealer.
+  "lead.online_store_finance",
   // ID 171 — someone has to drop the invoices into Drive / import the register.
   "invoices.stale",
   "recovery.visit",

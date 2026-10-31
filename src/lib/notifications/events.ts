@@ -142,6 +142,52 @@ export async function notifyLeadClosed(p: {
   });
 }
 
+/**
+ * Store R-15 — a customer pressed "Buy on finance" on shop.itarang.com and the
+ * store forwarded it. The lead sits with the iTarang house dealer (D-12) until
+ * someone calls the customer and pushes the file to a dealer, so Admin and the
+ * Sales Head — the two roles that push house files — hear about it, bell and
+ * email. Deliberately not toAdmins(): the CEO, Business Head and Partner do not
+ * work this queue.
+ */
+export async function notifyOnlineStoreFinanceLead(p: {
+  leadId: string;
+  customerName: string;
+  mobile: string;
+  pincode: string;
+  productTitle?: string | null;
+  page: "product" | "checkout";
+}) {
+  const product = p.productTitle ? ` for ${p.productTitle}` : "";
+  const where = p.page === "checkout" ? "checkout" : "the product page";
+  await emit({
+    type: "lead.online_store_finance",
+    title: "Online store: Buy on finance enquiry",
+    message:
+      `${p.customerName} (${p.mobile}, pincode ${p.pincode}) asked to buy on finance${product} from ${where} ` +
+      `on the online store. The lead is with the iTarang house dealer — call the customer and push the file to a dealer.`,
+    leadId: p.leadId,
+    stage: "Lead source",
+    from: customerParty(p.customerName),
+    data: {
+      customer_name: p.customerName,
+      payment_method: "finance",
+      source: "online_store",
+      pincode: p.pincode,
+      page: p.page,
+    },
+    to: [
+      {
+        audience: { kind: "roles", roles: ["admin", "sales_head"] },
+        as: ADMIN_PARTY,
+        href: adminLead(p.leadId),
+      },
+    ],
+    email: true,
+    emailSubject: `[iTarang] Online store finance enquiry — ${p.customerName}, ${p.pincode}`,
+  });
+}
+
 /* ================================================================== *
  * DEALER ONBOARDING (portal + WhatsApp)
  * ================================================================== */

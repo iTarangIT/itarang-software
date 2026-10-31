@@ -49,6 +49,7 @@ export const PUBLIC_API_RULES: readonly PublicApiRule[] = [
   { pattern: /^\/api\/digio\/webhook\//, why: "Digio webhook — X-Digio-Checksum (DIGIO_WEBHOOK_SECRET)" },
   { pattern: /^\/api\/esign\/[^/]+\/webhook$/, why: "e-sign provider webhook — the provider checksum, keyed with the NBFC account secret" },
   { pattern: /^\/api\/integrations\/ecofy\/events$/, why: "Ecofy → CRM events — HMAC signature" },
+  { pattern: /^\/api\/integrations\/online-store\/finance-lead$/, why: "online store → CRM Buy on finance enquiries (Store R-15) — x-store-key, ONLINE_STORE_API_KEY" },
   { pattern: /^\/api\/nbfc\/(agreement|enach|vkyc)\/callback$/, why: "NBFC result callback — X-iTarang-Signature; the Decentro VKYC leg only flags, the result is fetched" },
   { pattern: /^\/api\/kyc\/decentro\/active-video-liveness\/(callback|return)$/, why: "Decentro has no signature here — the callback only flags the row; the result is fetched from Decentro" },
   { pattern: /^\/api\/kyc\/digilocker\/callback(\/|$)/, why: "DigiLocker browser redirect — cannot be signed; the Aadhaar data is fetched from Decentro" },

@@ -1226,20 +1226,10 @@ const roleNavigation: Record<string, any[]> = {
         },
       ],
     },
-    // Hostinger Ecommerce storefront. Deliberately a SEPARATE section from
-    // INVENTORY above: that one is the physical EV asset / Product Master
-    // system, this one is the online store. They share no data.
-    {
-      section: "ECOMMERCE",
-      items: [
-        {
-          id: "sh-ecommerce-products",
-          label: "Products",
-          icon: Store,
-          href: "/sales-head/ecommerce/products",
-        },
-      ],
-    },
+    // Store R-19 (27 Oct): the ECOMMERCE > Products entry is gone for every
+    // role — the online store's catalogue is no longer edited from the CRM.
+    // The /sales-head/ecommerce pages and /api/ecommerce routes stay until
+    // nothing calls them.
     {
       section: "EXPENSES",
       items: [
