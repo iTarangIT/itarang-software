@@ -52,7 +52,7 @@ import {
     upsertOpenCallback,
 } from "@/lib/ai/storage/callOutcomeStore";
 import type { QualificationSignals } from "@/lib/ai/scoring/signals";
-import { buildCallbackBrief, handOffToIsr, type CallbackKind } from "./callbackLoop";
+import { buildCallbackBrief, handOffToOwner, type CallbackKind } from "./callbackLoop";
 import { nextWorkingMorning } from "./callCategory";
 
 export const CALLBACK_NOTIFICATION_TYPE = "lead.callback_requested";
@@ -308,7 +308,7 @@ async function handOffSalesCallback(input: {
         })
         .where(sql`${dealerLeads.id} = ${leadId}`);
 
-    // D8 — one named ISR owns it: assigned, told with the brief, reminded and
+    // D8 — one named person owns it (the territory ASM, else an ISR — E-367): assigned, told with the brief, reminded and
     // chased by the 5-minute tick (callbackLoop.ts). Falls through to the
     // admin bell below only when nobody could be picked (no E-362, or an empty
     // "callback owners" list on an unowned lead).
@@ -328,7 +328,7 @@ async function handOffSalesCallback(input: {
             transcript: input.transcript,
             summary: input.summary,
         });
-        const isr = await handOffToIsr({
+        const isr = await handOffToOwner({
             leadId,
             callbackId: input.callbackId,
             kind: input.kind,

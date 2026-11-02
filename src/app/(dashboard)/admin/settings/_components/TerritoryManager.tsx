@@ -10,6 +10,7 @@ import { Loader2, MapPin, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { TerritoryRow, UserOption } from "@/lib/admin/types";
+import { TERRITORY_ROUTING_QUERY_KEY, TerritoryRoutingPanel } from "./TerritoryRoutingPanel";
 
 export function TerritoryManager({
     territories,
@@ -37,6 +38,7 @@ export function TerritoryManager({
 
     function refresh() {
         qc.invalidateQueries({ queryKey: ["admin-settings"] });
+        qc.invalidateQueries({ queryKey: TERRITORY_ROUTING_QUERY_KEY });
     }
 
     async function add() {
@@ -59,7 +61,15 @@ export function TerritoryManager({
             if (!res.ok || !json.success) {
                 throw new Error(json?.error?.message ?? "Failed to add");
             }
-            toast.success("Territory added.");
+            const overlap: string[] = json.data?.overlap ?? [];
+            const where = json.data?.city ?? json.data?.state ?? "This place";
+            if (overlap.length > 0) {
+                toast.warning(
+                    `${where} is already covered by ${overlap.join(", ")} — its leads will be shared in turn.`,
+                );
+            } else {
+                toast.success(`Territory added: ${[json.data?.city, json.data?.state].filter(Boolean).join(", ")}.`);
+            }
             setState("");
             setCity("");
             refresh();
@@ -88,6 +98,7 @@ export function TerritoryManager({
 
     return (
         <div className="space-y-4">
+            <TerritoryRoutingPanel />
             <div className="flex flex-wrap items-end gap-3 rounded-lg border border-border bg-bg/50 p-3">
                 <div>
                     <label className="block text-xs font-medium text-ink-muted mb-1">
