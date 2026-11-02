@@ -80,7 +80,7 @@ const COLUMNS: CsvColumn<ExportRow>[] = [
     { header: "Interest", value: (r) => csvPretty(r.interest_level) },
     { header: "Intent Score", value: (r) => r.final_intent_score?.toString() ?? "" },
     { header: "Owner", value: (r) => r.current_owner_name ?? "" },
-    { header: "Sent By", value: (r) => r.assigned_by?.name ?? "" },
+    { header: "Sent By", value: (r) => (r.assigned_by?.via === "ai" ? "Assigned by AI" : (r.assigned_by?.name ?? "")) },
     { header: "Language", value: (r) => r.language ?? "" },
     { header: "Attempts", value: (r) => r.total_attempts?.toString() ?? "" },
     { header: "NeoDove", value: (r) => csvPretty(r.neodove_sync_status) },

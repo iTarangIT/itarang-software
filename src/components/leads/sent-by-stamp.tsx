@@ -10,6 +10,7 @@
 // in `db`, so a value import here would drag the postgres driver into every
 // bundle that renders a queue.
 
+import { Sparkles } from "lucide-react";
 import type { LeadAssignedBy } from "@/lib/leads/leadAssignedBy";
 
 function pretty(value: string | null | undefined): string {
@@ -44,6 +45,30 @@ function fmtDate(iso: string): string {
           });
 }
 
+/**
+ * No person sent this lead: the AI dialer qualified it (or the dealer asked for
+ * a callback) and the system handed it to the area ASM / next ISR. A coloured
+ * pill rather than the grey "sent by" line, so the owner can tell at a glance
+ * that nobody briefed them — the call brief is on the lead.
+ */
+export function AssignedByAiBadge({ assignedBy }: { assignedBy: LeadAssignedBy }) {
+    const title = [
+        "Assigned automatically after an AI dialer call",
+        assignedBy.detail,
+        assignedBy.at ? `on ${fmtDate(assignedBy.at)}` : null,
+    ]
+        .filter(Boolean)
+        .join(" · ");
+    return (
+        <div className="mt-1" title={title}>
+            <span className="inline-flex items-center gap-1 rounded-full border border-violet-200 bg-violet-50 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-violet-700">
+                <Sparkles className="h-3 w-3" aria-hidden="true" />
+                Assigned by AI
+            </span>
+        </div>
+    );
+}
+
 type Props = {
     assignedBy: LeadAssignedBy | null | undefined;
     /** Current owner of the lead — used to suppress self-claims. */
@@ -61,6 +86,7 @@ type Props = {
  */
 export function SentByStamp({ assignedBy, currentOwnerId }: Props) {
     if (!assignedBy) return null;
+    if (assignedBy.via === "ai") return <AssignedByAiBadge assignedBy={assignedBy} />;
     if (currentOwnerId && assignedBy.id === currentOwnerId) return null;
 
     return (
