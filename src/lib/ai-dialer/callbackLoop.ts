@@ -2,10 +2,12 @@
 // ONE named ISR, in the CRM and (once switched on) in NeoDove. The CRM keeps
 // the clock, because NeoDove cannot.
 //
-//   handOffToIsr()          right after the call (postCallOutcome): the lead's
-//                           owner, or the next ISR on the "callback owners"
-//                           list, is assigned (system assignment, no human
-//                           actor), told by bell + email with the call brief.
+//   handOffToOwner()        right after the call (postCallOutcome): the lead's
+//                           owner, else the ASM whose territory covers the
+//                           lead's city (E-367, switch-gated), else the next
+//                           ISR on the "callback owners" list, is assigned
+//                           (system assignment, no human actor), told by
+//                           bell + email with the call brief.
 //   runCallbackLoopTick()   every 5 minutes (src/instrumentation-node.ts):
 //                           15 min before due → reminder (+ NeoDove push when
 //                           the switch is on); 30 min overdue with no call →
@@ -43,6 +45,8 @@ import {
 export { briefLines, buildCallbackBrief, pickInTurn } from "./callbackBrief";
 export type { CallbackBrief, CallbackKind } from "./callbackBrief";
 import { nextWorkingMorning } from "./callCategory";
+import { discardRoute, logRoute, routeToTerritoryAsm } from "./territoryRouting";
+import { placeLabel } from "./territoryRules";
 
 
 export const CALLBACK_LOOP_SETTINGS_KEY = "callback_loop";
@@ -170,11 +174,13 @@ export async function hasCallbackLoopColumns(): Promise<boolean> {
 // ── Hand-off ────────────────────────────────────────────────────────────────
 
 /**
- * Give the callback to one ISR. The lead's current owner keeps it; an unowned
- * lead goes to the next ISR on the list. Returns the ISR's id, or null when
- * nobody could be picked (the caller then falls back to telling the admins).
+ * Give the callback to one person. The lead's current owner keeps it; an
+ * unowned lead goes to the ASM whose territory covers its city (E-367, when
+ * the switch is on — territoryRouting.ts), else to the next ISR on the list.
+ * Returns the owner's id, or null when nobody could be picked (the caller then
+ * falls back to telling the admins).
  */
-export async function handOffToIsr(input: {
+export async function handOffToOwner(input: {
     leadId: string;
     callbackId: string;
     kind: CallbackKind;
@@ -211,9 +217,8 @@ export async function handOffToIsr(input: {
             hour: "numeric",
             minute: "2-digit",
         });
+        let routedPlace: string | null = null;
         if (!ownerId) {
-            const target = await nextCallbackOwner();
-            if (!target) return null;
             // Sales-ready reason BEFORE the assignment, or assigning stamps
             // "assigned by an admin" (first event wins).
             await markSalesReady(db, {
@@ -221,18 +226,58 @@ export async function handOffToIsr(input: {
                 reason: input.kind === "qualified" ? "ai_qualified" : "ai_callback",
                 actorId: null,
             });
-            const out = await assignLeadOwner({
-                leadId: input.leadId,
-                fromStatus: (lead.lead_status as LeadStatus | null) ?? null,
-                target,
-                actorId: null,
-                actorRole: null,
-                remarks: `${SYSTEM_ASSIGNMENT_REMARK} — ${KIND_LABEL[input.kind]}, due ${when}.`,
-                touchpointType: "lead_assigned",
-            });
-            if (!out.assigned) return null;
-            ownerId = target.id;
-            ownerRole = target.role;
+            const fromStatus = (lead.lead_status as LeadStatus | null) ?? null;
+
+            // 1. The ASM whose territory covers the lead's city (switch-gated;
+            //    complaints are never routed here). territoryRouting.ts.
+            const route = await routeToTerritoryAsm({ leadId: input.leadId, kind: input.kind });
+            if (route.target && route.rule) {
+                const place = placeLabel(route.place?.state ?? null, route.place?.city ?? null, route.rule);
+                const out = await assignLeadOwner({
+                    leadId: input.leadId,
+                    fromStatus,
+                    target: route.target,
+                    actorId: null,
+                    actorRole: null,
+                    remarks: `${SYSTEM_ASSIGNMENT_REMARK} — ${KIND_LABEL[input.kind]}, due ${when}. Routed to the ${place} territory ASM.`,
+                    touchpointType: "lead_assigned",
+                });
+                if (out.assigned) {
+                    ownerId = route.target.id;
+                    ownerRole = route.target.role;
+                    routedPlace = place;
+                } else {
+                    // Refused (e.g. a Won lead is never given to an ASM): the
+                    // turn goes back and the ISRs take it below.
+                    await discardRoute(route.logId);
+                }
+            }
+
+            // 2. Otherwise the next ISR on the callback owners list.
+            if (!ownerId) {
+                const target = await nextCallbackOwner();
+                const out = target
+                    ? await assignLeadOwner({
+                          leadId: input.leadId,
+                          fromStatus,
+                          target,
+                          actorId: null,
+                          actorRole: null,
+                          remarks: `${SYSTEM_ASSIGNMENT_REMARK} — ${KIND_LABEL[input.kind]}, due ${when}.`,
+                          touchpointType: "lead_assigned",
+                      })
+                    : null;
+                await logRoute({
+                    leadId: input.leadId,
+                    kind: input.kind,
+                    rule: target && out?.assigned ? "isr_round_robin" : "unassigned",
+                    place: route.place,
+                    chosenUserId: target && out?.assigned ? target.id : null,
+                });
+                if (!target || !out?.assigned) return null;
+                ownerId = target.id;
+                ownerRole = target.role;
+            }
         }
 
         await db.execute(sql`
@@ -246,7 +291,9 @@ export async function handOffToIsr(input: {
             const lines = briefLines(input.brief);
             await emit({
                 type: ASSIGNED_TYPE,
-                title: `${KIND_LABEL[input.kind]}: ${lead.name ?? "a dealer"} — due ${when}`,
+                title: routedPlace
+                    ? `New ${KIND_LABEL[input.kind].toLowerCase()} in ${routedPlace}: ${lead.name ?? "a dealer"} — call by ${when}`
+                    : `${KIND_LABEL[input.kind]}: ${lead.name ?? "a dealer"} — due ${when}`,
                 message: lines.join("\n"),
                 leadId: input.leadId,
                 stage: "AI callback",
@@ -268,6 +315,9 @@ export async function handOffToIsr(input: {
         return null;
     }
 }
+
+/** @deprecated the old name, from before territory routing — use handOffToOwner. */
+export const handOffToIsr = handOffToOwner;
 
 // ── NeoDove push ────────────────────────────────────────────────────────────
 
@@ -393,7 +443,9 @@ export async function runCallbackLoopTick(now: Date = new Date()): Promise<{
             ],
             email: true,
         });
-        if (settings.neodovePush) {
+        // ASMs (territory-routed leads, E-367) have no NeoDove campaign: pushing
+        // would only raise a false "has no campaign" alert to the Sales Head.
+        if (settings.neodovePush && (cb.owner_role ?? "").toLowerCase() !== "asm") {
             await pushToOwnerCampaign(cb).catch((e) =>
                 console.warn("[callbackLoop] push failed:", e instanceof Error ? e.message : e),
             );
@@ -416,7 +468,8 @@ export async function runCallbackLoopTick(now: Date = new Date()): Promise<{
                    AND NOT EXISTS (
                        SELECT 1 FROM lead_touchpoints t
                         WHERE t.dealer_lead_id = lc.lead_id
-                          AND t.touchpoint_type = 'inside_sales_call'
+                          -- a call, or (for a territory ASM) a visit, settles it
+                          AND t.touchpoint_type IN ('inside_sales_call', 'visit')
                           AND t.performed_at >= lc.due_at - interval '15 minutes')
                 RETURNING lc.*
             )
