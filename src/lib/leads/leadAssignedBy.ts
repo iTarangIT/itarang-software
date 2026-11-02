@@ -20,6 +20,7 @@
 
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
+import { aiAssignmentDetail, SYSTEM_ASSIGNMENT_REMARK } from "@/lib/leads/assignmentRemark";
 
 /** The three touchpoint types assignLeadOwner can write. */
 const ASSIGNMENT_TOUCHPOINTS = [
@@ -28,8 +29,8 @@ const ASSIGNMENT_TOUCHPOINTS = [
     "asm_transfer",
 ] as const;
 
-/** D8 — remarks of the touchpoint a system (post-AI-call) assignment writes. */
-export const SYSTEM_ASSIGNMENT_REMARK = "Assigned after AI call";
+// Re-exported: callers have always imported these from here.
+export { aiAssignmentDetail, SYSTEM_ASSIGNMENT_REMARK };
 
 export type LeadAssignedBy = {
     id: string;
@@ -38,6 +39,10 @@ export type LeadAssignedBy = {
     role: string | null;
     /** When the hand-off happened. */
     at: string | null;
+    /** "ai" = no human sent it: the system assigned it after an AI dialer call. */
+    via?: "ai";
+    /** For AI assignments, why it went to this owner ("Qualified lead, due …"). */
+    detail?: string | null;
 };
 
 type Row = {
@@ -46,6 +51,7 @@ type Row = {
     name: string | null;
     role: string | null;
     at: string | null;
+    remarks: string | null;
 };
 
 /**
@@ -78,7 +84,8 @@ export async function fetchAssignedByForLeads(
                    lt.performed_by   AS actor_id,
                    u.name            AS name,
                    u.role            AS role,
-                   lt.performed_at   AS at
+                   lt.performed_at   AS at,
+                   lt.remarks        AS remarks
               FROM lead_touchpoints lt
               LEFT JOIN users u ON u.id::text = lt.performed_by
              WHERE lt.dealer_lead_id IN (${idList})
@@ -92,7 +99,14 @@ export async function fetchAssignedByForLeads(
         for (const r of rows as unknown as Row[]) {
             out[r.id] = r.actor_id
                 ? { id: r.actor_id, name: r.name, role: r.role, at: r.at }
-                : { id: "system", name: "AI call", role: null, at: r.at };
+                : {
+                      id: "system",
+                      name: "AI",
+                      role: null,
+                      at: r.at,
+                      via: "ai",
+                      detail: aiAssignmentDetail(r.remarks),
+                  };
         }
     } catch {
         // Degrade to no stamp rather than taking the list down.
