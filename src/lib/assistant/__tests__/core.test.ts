@@ -47,18 +47,18 @@ describe("registry", () => {
     });
 
     it("off the pilot list → read tools only; on it → the role's writes", () => {
-        expect(toolNamesFor("inside_sales_rep", false)).toEqual(["my_queue", "search_lead", "get_lead_details", "my_numbers", "my_leads_by_temperature", "product_catalogue", "quote_status", "read_document"]);
-        expect(toolNamesFor("asm", false)).toEqual(["my_queue", "search_lead", "get_lead_details", "my_numbers", "my_leads_by_temperature", "product_catalogue", "quote_status", "read_document"]);
+        expect(toolNamesFor("inside_sales_rep", false)).toEqual(["my_queue", "search_lead", "get_lead_details", "my_numbers", "my_leads_by_temperature", "product_catalogue", "quote_status", "read_document", "my_dealers", "get_account_details", "account_visit_link"]);
+        expect(toolNamesFor("asm", false)).toEqual(["my_queue", "search_lead", "get_lead_details", "my_numbers", "my_leads_by_temperature", "product_catalogue", "quote_status", "read_document", "my_dealers", "get_account_details", "account_visit_link"]);
         expect(toolNamesFor("asm", true)).toContain("log_visit");
         expect(toolNamesFor("inside_sales_rep", true)).not.toContain("log_visit");
         expect(toolNamesFor("inside_sales_rep", true)).toEqual([...ROLE_TOOLS.inside_sales_rep]);
     });
 
-    it("all twenty-four tools have a Zod schema that rejects junk (unknown keys are stripped, never acted on)", () => {
+    it("all twenty-eight tools have a Zod schema that rejects junk (unknown keys are stripped, never acted on)", () => {
         const all = [...toolsFor("asm", true), ...toolsFor("inside_sales_rep", true)];
-        expect(new Set(all.map((t) => t.name)).size).toBe(24);
-        // my_numbers and product_catalogue take no lead: checked on their own below.
-        for (const t of all.filter((x) => x.name !== "my_numbers" && x.name !== "product_catalogue")) {
+        expect(new Set(all.map((t) => t.name)).size).toBe(28);
+        // my_numbers, product_catalogue and my_dealers take no lead: checked on their own below.
+        for (const t of all.filter((x) => x.name !== "my_numbers" && x.name !== "product_catalogue" && x.name !== "my_dealers")) {
             expect(t.schema.safeParse({ lead_id: "", evil: 1 }).success, t.name).toBe(false);
         }
         const numbers = all.find((t) => t.name === "my_numbers")!;
@@ -183,7 +183,10 @@ describe("scope predicate (INV1)", () => {
     it("in scope but not owned is read-only for every write tool", async () => {
         findLeadInScope.mockResolvedValue({ id: "DL-1", current_owner_id: "isr-2", lead_status: "Under_Discussion", updated_at: new Date(), owned: false });
         // claim_lead acts on UNOWNED leads and create_lead on none: both have their own gates.
-        for (const t of toolsFor("asm", true).filter((x) => x.kind === "write" && x.name !== "claim_lead" && x.name !== "create_lead")) {
+        // create_account_quote acts on a dealer account (accounts-tools.test.ts).
+        for (const t of toolsFor("asm", true).filter(
+            (x) => x.kind === "write" && x.name !== "claim_lead" && x.name !== "create_lead" && x.name !== "create_account_quote",
+        )) {
             const input =
                 t.name === "log_visit" ? { lead_id: "DL-1", visit_status: "visited", outcome: "productive", remarks: "x", next_action: "escalate" }
                 : t.name === "mark_lost" ? { lead_id: "DL-1", lost_reason: "not_interested" }

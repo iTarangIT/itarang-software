@@ -383,6 +383,7 @@ function renderConfirmed(o: Extract<ExecOutcome, { kind: "confirmed" }>): WaPayl
         };
     }
     if (o.tool === "create_quote") return { kind: "text", body: renderQuoteSaved(o) };
+    if (o.tool === "create_account_quote") return { kind: "text", body: renderAccountQuoteSaved(o) };
     if (o.tool === "send_quote") return { kind: "text", body: renderQuoteSent(o) };
     if (o.tool === "withdraw_quote") return { kind: "text", body: renderQuoteWithdrawn(o) };
     if (o.tool === "mark_converted" && o.leadId) {
@@ -410,6 +411,19 @@ function renderQuoteSaved(o: Extract<ExecOutcome, { kind: "confirmed" }>): strin
                 ? `✅ Quote${v} saved and auto-approved. PDF ${qn} is ready — say "send quote" to send it to the dealer.`
                 : `✅ Quote${v} saved and auto-approved, but the PDF could not be made yet. Regenerate it on the CRM screen before sending.`
             : `⏳ Quote${v} saved — waiting for CEO approval. It can be sent once approved; ask "quote status" to check.`;
+    return withLink(body, o.crmUrl);
+}
+
+/** ID 211 — an account quotation saved: it is sent from the account page, not over WhatsApp. */
+function renderAccountQuoteSaved(o: Extract<ExecOutcome, { kind: "confirmed" }>): string {
+    const v = typeof o.after.quote_version === "number" ? ` v${o.after.quote_version}` : "";
+    const qn = typeof o.extra?.quote_number === "string" ? o.extra.quote_number : null;
+    const body =
+        o.after.auto_approved === true
+            ? qn
+                ? `✅ Quote${v} saved and auto-approved. PDF ${qn} is ready — send it from the dealer's account page.`
+                : `✅ Quote${v} saved and auto-approved, but the PDF could not be made yet. Regenerate it on the account page before sending.`
+            : `⏳ Quote${v} saved — waiting for CEO approval. Send it from the account page once approved.`;
     return withLink(body, o.crmUrl);
 }
 
@@ -633,7 +647,13 @@ export function renderTurn(turn: {
         .reverse()
         .find(
             ({ result: r }) =>
-                r.kind === "lead_report" || r.kind === "leads" || r.kind === "candidates" || r.kind === "lead" || r.kind === "products",
+                r.kind === "lead_report" ||
+                r.kind === "leads" ||
+                r.kind === "candidates" ||
+                r.kind === "lead" ||
+                r.kind === "products" ||
+                r.kind === "accounts" ||
+                r.kind === "account",
         );
     const answer = answerAt?.result;
     const tool = answerAt?.tool ?? "";
@@ -650,6 +670,11 @@ export function renderTurn(turn: {
     }
     if (answer?.kind === "lead") {
         return { kind: "text", body: text ? fit(text, RENDER_LIMITS.text) : renderLeadCard(answer.lead as Detail) };
+    }
+    // ID 211 — dealer accounts: the list is built from the rows, never typed by the model.
+    if (answer?.kind === "accounts") return { kind: "text", body: renderAccountList(answer) };
+    if (answer?.kind === "account") {
+        return { kind: "text", body: text ? fit(text, RENDER_LIMITS.text) : renderAccountCard(answer.account) };
     }
     if (answer?.kind === "candidates" && answer.rows.length > 0) return renderList(answer, text, tool);
     if (answer?.kind === "leads") {
@@ -671,10 +696,56 @@ export function renderTurn(turn: {
     if (said?.kind === "declined") {
         return { kind: "text", body: said.crm_url ? withLink(said.reason, said.crm_url) : fit(said.reason, RENDER_LIMITS.text) };
     }
-    if (said?.kind === "not_found") return { kind: "text", body: "I couldn't find that lead." };
+    if (said?.kind === "not_found") {
+        const onAccount = turn.results.some((r) => r.result === said && ACCOUNT_TOOLS.has(r.tool));
+        return { kind: "text", body: onAccount ? "I couldn't find that dealer among your accounts." : "I couldn't find that lead." };
+    }
     if (said?.kind === "unavailable") return { kind: "text", body: fit(said.message, RENDER_LIMITS.text) };
     return { kind: "text", body: turn.stop && turn.stop !== "done" ? SORRY[turn.stop] : "Done." };
 }
+
+const ACCOUNT_TOOLS = new Set(["my_dealers", "get_account_details", "account_visit_link", "create_account_quote"]);
+
+/** ID 211 — "My dealers" as text: the true total first, then one line per account. */
+export function renderAccountList(r: Extract<ToolResult, { kind: "accounts" }>): string {
+    if (r.rows.length === 0) {
+        return r.total === 0 ? "No dealer accounts found." : "No more dealers — that was the whole list.";
+    }
+    const page = r.paging?.page ?? 1;
+    const start = (page - 1) * (r.paging?.page_size ?? r.rows.length);
+    const lines = [`*${r.title}*: ${r.total}`];
+    r.rows.forEach((a, i) => {
+        const last = a.last_order ? `last order ${fmtDate(a.last_order) ?? a.last_order}` : "no order yet";
+        const owner = a.owned_by_you ? "" : ` · ${a.owner_name ?? "no owner"}`;
+        lines.push(`${start + i + 1}. ${a.name}${a.city ? `, ${a.city}` : ""} — ${a.health}, ${last}${owner}`);
+    });
+    if (start + r.rows.length < r.total) lines.push(`Say "next" for more.`);
+    const tail = r.crm_url ? `\n${r.crm_url}` : "";
+    return fit(lines.join("\n"), RENDER_LIMITS.text - tail.length) + tail;
+}
+
+/** ID 211 — one dealer account, when the model said nothing about it. */
+export function renderAccountCard(a: Record<string, unknown>): string {
+    const lines = [`*${str(a.name) ?? "Dealer account"}*`];
+    const place = [str(a.city), str(a.state)].filter(Boolean).join(", ");
+    if (place) lines.push(place);
+    lines.push(a.owned_by_you ? "Owner: you" : `Owner: ${str(a.owner_name) ?? "nobody"}`);
+    if (a.health) lines.push(`Health: ${a.health}`);
+    lines.push(a.last_order ? `Last order: ${fmtDate(str(a.last_order)) ?? a.last_order}` : "No order yet");
+    const quotes = Array.isArray(a.quotations) ? (a.quotations as Record<string, unknown>[]) : [];
+    if (quotes.length) {
+        lines.push("", "*Quotations*");
+        for (const q of quotes.slice(0, 3)) {
+            const total = q.total != null ? ` · ${inrText(Number(q.total))}` : "";
+            lines.push(`v${q.version}${q.quote_number ? ` ${q.quote_number}` : ""}${total} · ${str(q.approval) ?? ""}`);
+        }
+    }
+    const url = str(a.crm_url);
+    const tail = url ? `\n\n${url}` : "";
+    return fit(lines.join("\n"), RENDER_LIMITS.text - tail.length) + tail;
+}
+
+const inrText = (n: number) => (Number.isFinite(n) ? `₹${Math.round(n).toLocaleString("en-IN")}` : "—");
 
 type Detail = Record<string, unknown> & {
     recent_touchpoints?: Record<string, unknown>[];
