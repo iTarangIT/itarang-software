@@ -18,11 +18,11 @@ import {
 
 import { eq, gte, lt, sql, and, desc, count, inArray } from "drizzle-orm";
 import {
-  outstandingTotal,
   recentRevenueInvoices,
   revenueBreakdown,
   revenueTotal,
 } from "@/lib/dashboard/revenueSource";
+import { receivablesSummary } from "@/lib/dashboard/receivables";
 import { requireAuth } from "@/lib/auth-utils";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
 import { approvedExpenseInWindow } from "@/lib/dashboard/salesWindow";
@@ -107,7 +107,8 @@ export const GET = withErrorHandler(
       // true ₹7.89L of overdue balances).
       // All-time snapshot, deliberately unwindowed — a receivable does not stop
       // being owed because the month turned over.
-      const outstandingAggQ = outstandingTotal();
+      // ID 217: the same computation as Revenue & costs and Accounts Receivable.
+      const outstandingAggQ = receivablesSummary().then((s) => s.owed);
 
       // OEM purchases MTD — aggregate from inventory.oem_invoice_date /
       // final_amount. If the inventory table isn't being populated, this

@@ -11,7 +11,7 @@ import { NextResponse } from "next/server";
 
 import { requireAuth } from "@/lib/auth-utils";
 import { errorMessage, isNextRedirectError } from "@/lib/api-utils";
-import { ageReceivables, listReceivables } from "@/lib/dashboard/receivables";
+import { receivablesSummary } from "@/lib/dashboard/receivables";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -28,7 +28,7 @@ export async function GET() {
         { status: 403 },
       );
     }
-    return NextResponse.json({ success: true, data: ageReceivables(await listReceivables()) });
+    return NextResponse.json({ success: true, data: await receivablesSummary() });
   } catch (e: unknown) {
     if (isNextRedirectError(e)) throw e;
     return NextResponse.json(

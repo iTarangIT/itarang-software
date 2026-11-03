@@ -10,6 +10,7 @@ import { requireRole } from "@/lib/auth-utils";
 import {
     listReceivables,
     matchesReceivableSearch,
+    netInvoicesAfterCredits,
     netOwed,
     receivableFileNote,
     receivableSourceLabel,
@@ -66,17 +67,22 @@ export default async function CeoReceivablesPage({
     const credits = rows.filter((r) => r.source === "credit");
     const overdue = rows.filter((r) => r.overdue_days != null && r.overdue_days > 0);
     const unlinked = rows.filter((r) => r.account_id == null && r.dealer_lead_id == null);
-    const byAge = AGES.map((a) => ({ ...a, rows: rows.filter((r) => ageOf(r) === a.key) }));
-    const noDate = rows.filter((r) => ageOf(r) === "no_date");
+    // ID 217: age tabs count what is left on each invoice after the customer's
+    // credit notes (oldest first) — the same buckets as Revenue & costs.
+    const net = netInvoicesAfterCredits(rows);
+    const byAge = AGES.map((a) => ({ ...a, rows: net.filter((r) => ageOf(r) === a.key) }));
+    const noDate = net.filter((r) => ageOf(r) === "no_date");
     // ID 200: the search narrows the invoice list and the customers alike.
     const found = q ? rows.filter((r) => matchesReceivableSearch(r, q)) : rows;
-    const shown = age === "all" ? found : found.filter((r) => ageOf(r) === age);
+    const shown =
+        age === "all" ? found : net.filter((r) => ageOf(r) === age && (!q || matchesReceivableSearch(r, q)));
 
     // Who owes the most — the list a collections call starts from.
     // Each customer keeps its rows so the table can expand to the invoices behind the count.
     const byDealer = new Map<string, Debtor>();
     for (const r of found) {
-        const key = r.account_id ?? r.dealer_lead_id ?? `name:${(r.customer_name ?? "").toLowerCase()}`;
+        // ID 217: one row per customer as the figure nets them (GSTIN key).
+        const key = r.owe_key;
         const d = byDealer.get(key) ?? {
             key,
             name: r.dealer_name ?? r.customer_name ?? "(no name)",

@@ -226,7 +226,7 @@ async function revenueUnion(): Promise<SQL> {
   // a negative amount on the issue date, matched to a dealer like an invoice.
   // Balance = the negative amount: a credit note also reduces what the dealer
   // owes us (Kartik, 10 Oct) — REVENUE_OWED, netted per customer GSTIN and
-  // never below zero (owedTotalSql). Its lines are negative too (source
+  // never below zero (outstandingTotal). Its lines are negative too (source
   // 'credit'), so batteries sold, By SKU and gross margin net it the same way.
   const credit = sql`
     SELECT
@@ -415,9 +415,10 @@ export async function revenueTotal(
 }
 
 /**
- * Receivables. Pass no window for the all-time snapshot the standalone
- * Accounts Receivable card uses; pass one for the windowed figure that sits
- * inside the Realization drill-down beside a windowed revenue and expense.
+ * Receivables in SQL. The windowed figure sits inside the Realization
+ * drill-down beside a windowed revenue and expense. The all-time Accounts
+ * Receivable figure on screens is receivablesSummary() (receivables.ts, ID
+ * 217); this unwindowed form is kept for the verify scripts' cross-check.
  */
 export async function outstandingTotal(
   startStr?: string | null,
