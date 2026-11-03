@@ -41,7 +41,7 @@ import {
   leadKeyValidOn,
 } from "@/lib/leads/gstinMatch";
 import { hasAccountOwnershipTables } from "@/lib/accounts/tables";
-import { hasInvoiceLedgerTables, hasZohoRefusedGstin } from "@/lib/sales/ledgerTables";
+import { hasCreditNoteApplications, hasInvoiceLedgerTables, hasZohoRefusedGstin } from "@/lib/sales/ledgerTables";
 
 /**
  * 'credit' (E-322, tracker ID 71) is a credit note: a NEGATIVE amount dated on
@@ -147,6 +147,9 @@ async function revenueUnion(): Promise<SQL> {
   // E-340 (ID 62): a Zoho invoice whose customer GSTIN failed the check goes to
   // Needs attention ("Customer GSTIN fails check" / "is ours"), like a Drive one.
   const refused = ledger && (await hasZohoRefusedGstin());
+  // E-368: the part of a credit note already used against an invoice in Vyapar
+  // (that invoice's Received already includes it) is not netted a second time.
+  const applied = ledger && (await hasCreditNoteApplications());
   const zoho = sql`
     SELECT
       'zoho'::text                                                   AS source,
@@ -221,7 +224,9 @@ async function revenueUnion(): Promise<SQL> {
       NULL::date                                                     AS due_date,
       cn.customer_name                                               AS customer_name,
       -(COALESCE(cn.total, 0))                                       AS total,
-      -(COALESCE(cn.total, 0))                                       AS balance,
+      ${applied
+        ? sql`-(COALESCE(cn.total, 0) - LEAST(GREATEST(COALESCE(cna.amount_applied, 0), 0), GREATEST(COALESCE(cn.total, 0), 0)))`
+        : sql`-(COALESCE(cn.total, 0))`}                             AS balance,
       CASE WHEN cv.invoice_id IS NOT NULL THEN 'void' ELSE 'credit_note' END AS status,
       cn.organization_id                                             AS organization_id,
       cn.document_url                                                AS document_url,
@@ -231,6 +236,7 @@ async function revenueUnion(): Promise<SQL> {
       ${GSTIN_KEY(sql`cn.customer_gstin`)}                           AS gstin_key
     FROM credit_notes cn
     LEFT JOIN invoice_voids cv ON cv.source = 'credit' AND cv.invoice_id = cn.id::text
+    ${applied ? sql`LEFT JOIN credit_note_applications cna ON cna.credit_note_id = cn.id` : sql``}
   `;
 
   return sql`(${zoho} UNION ALL ${drive} UNION ALL ${credit})`;
@@ -353,8 +359,12 @@ export const REVENUE_OUTSTANDING = sql`(
 export const REVENUE_IS_CREDIT = sql`(r.source = 'credit')`;
 export const REVENUE_IS_ORDER = sql`(${REVENUE_NOT_VOID} AND r.source <> 'credit')`;
 
-/** Accounts Receivable rule: an outstanding invoice, or a non-void credit note (negative balance) netted against it. */
-export const REVENUE_OWED = sql`(${REVENUE_OUTSTANDING} OR (r.source = 'credit' AND r.status = 'credit_note'))`;
+/**
+ * Accounts Receivable rule: an outstanding invoice, or a non-void credit note
+ * with an unused (negative) balance netted against it. E-368: a note fully
+ * used against an invoice in Vyapar has balance 0 and nets nothing.
+ */
+export const REVENUE_OWED = sql`(${REVENUE_OUTSTANDING} OR (r.source = 'credit' AND r.status = 'credit_note' AND COALESCE(r.balance, 0) < 0))`;
 
 /**
  * The customer a balance is netted under: the GSTIN key; a row without one

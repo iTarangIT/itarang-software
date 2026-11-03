@@ -1,6 +1,32 @@
 import { describe, expect, it } from "vitest";
 import * as XLSX from "xlsx";
-import { parseDateCell, parseInvoiceWorkbook } from "@/lib/sales/vyaparParse";
+import { isFooterRow, parseDateCell, parseGeneratedOn, parseInvoiceWorkbook } from "@/lib/sales/vyaparParse";
+
+describe("Vyapar export stamp and footer rows (payment sync)", () => {
+    it.each([
+        ["Generated on Oct 28, 2026 at 2:24 pm", "2026-10-28T14:24:00+05:30"],
+        ["Generated on Oct 28, 2026 at 12:05 am", "2026-10-28T00:05:00+05:30"],
+        ["Generated on Nov 3, 2026 at 12:30 PM", "2026-11-03T12:30:00+05:30"],
+        ["Generated on: 03 Nov 2026 17:45", "2026-11-03T17:45:00+05:30"],
+        ["Generated on 03/11/2026", "2026-11-03T00:00:00+05:30"],
+    ])("%s", (text, iso) => {
+        expect(parseGeneratedOn(text)).toBe(iso);
+    });
+
+    it("no stamp, or a nonsense date", () => {
+        expect(parseGeneratedOn("Sale Report")).toBeNull();
+        expect(parseGeneratedOn("Generated on Foo 99, 2026")).toBeNull();
+        expect(parseGeneratedOn(null)).toBeNull();
+    });
+
+    it("a footer is a numberless row holding just 'Total' anywhere; a real invoice never is", () => {
+        expect(isFooterRow(["", "", "", "", "Total", "", 23244479.8], "")).toBe(true);
+        expect(isFooterRow(["Grand Total", "", 100], "")).toBe(true);
+        expect(isFooterRow(["", "Total"], "Total")).toBe(true);
+        expect(isFooterRow(["", "", "", "", "Charger 10A", 2], "")).toBe(false);
+        expect(isFooterRow(["28/10/2026", "ITG/1", "Total Motors"], "ITG/1")).toBe(false);
+    });
+});
 
 function book(sheets: Record<string, unknown[][]>): Buffer {
     const wb = XLSX.utils.book_new();
@@ -219,6 +245,53 @@ describe("Vyapar Sale Report + Item Details (ID 200)", () => {
         expect(lone.amount_paid).toBeUndefined();
         expect(lone.lines).toHaveLength(1);
         expect(r.warnings).toContain("ITD/202627/033: on Item Details but not on Sale Report; read without payments.");
+    });
+
+    // Finance's SaleReport v4 (28 Oct): "Generated on …" in A1, and the footer
+    // prints "Total" under Party Phone No. — not under the date or number.
+    const v4Sale = [
+        ["Generated on Oct 28, 2026 at 2:24 pm"],
+        [],
+        ["Date", "Invoice No", "Party Name", "GSTIN", "Party Phone No.", "Transaction Type", "Total Amount", "Payment Type", "Received/Paid Amount", "Balance Due", "Due Date", "Status", "sales manager"],
+        ["20/10/2026", "ITG/202627/077", "HAKIM ALI AUTO SALES AND SERVICE", "05AHNPA0004C1ZE", "9927524962", "Sale ", "353705", "Axis", "300000", "53705", "20/10/2026", "Overdue 8 Days", ""],
+        ["26/10/2026", "ICNH/202627/06", "EFEV Charging Solutions Private Limited", "06AAFCE7198B1ZM", "", "Credit Note ", "463386", "IDFC Bank", "0", "463386", "", "Unpaid", ""],
+        ["28/10/2026", "ITG/202627/087", "GOBABYGO CABS PRIVATE LIMITED", "09AAKCG7198J1ZS", "", "Sale ", "8024000", "IDFC Bank", "0", "8024000", "28/10/2026", "Unpaid", ""],
+        [],
+        ["", "", "", "", "Total", "", "23244479.8", "", "", null, null, null, null],
+    ];
+    const v4Items = [
+        ["Generated on Oct 28, 2026 at 2:24 pm"],
+        [],
+        ["Date", "Invoice No./Txn No.", "Party Name", "Item Name", "Item Code", "HSN/SAC", "Category", "Model ID", "Challan/Order No.", "Quantity", "Unit", "UnitPrice", "Discount Percent", "Discount", "Tax Percent", "Tax", "Transaction Type", "Amount"],
+        [],
+        ["20/10/2026", "ITG/202627/077", "HAKIM ALI AUTO SALES AND SERVICE", "Battery 51V 140Ah", null, "85076000", "", "", "", "5", "Nos", "59950", "0", "0", "18", "53955", "Sale ", "353705"],
+        ["26/10/2026", "ICNH/202627/06", "EFEV Charging Solutions Private Limited", "Battery 61V 105Ah", null, "85076000", "", "", "", "7", "Nos", "56100", "0", "0", "18", "70686", "Credit Note ", "463386"],
+        ["28/10/2026", "ITG/202627/087", "GOBABYGO CABS PRIVATE LIMITED", "Lithium Battery Pack 51v 45Ah", null, "85076000", "", "", "", "200", "Unit", "34000", "0", "0", "18", "1224000", "Sale ", "8024000"],
+    ];
+
+    it("never adds the footer Total onto the last invoice (Total printed under Party Phone No.)", () => {
+        const r = parseInvoiceWorkbook(book({ "Sale Report": v4Sale, "Item Details": v4Items }), "vyapar_register");
+        const last = r.documents.find((d) => d.number === "ITG/202627/087")!;
+        expect(last).toMatchObject({ total: 8024000, amount_paid: 0, balance_due: 8024000 });
+        expect(r.documents).toHaveLength(3);
+        expect(r.warnings).toEqual([]);
+    });
+
+    it("reads the export's Generated on stamp as India time", () => {
+        const r = parseInvoiceWorkbook(book({ "Sale Report": v4Sale, "Item Details": v4Items }), "vyapar_register");
+        expect(r.generated_at).toBe("2026-10-28T14:24:00+05:30");
+    });
+
+    it("keeps a part-paid invoice and an unadjusted credit note's balance", () => {
+        const docs = parseInvoiceWorkbook(book({ "Sale Report": v4Sale, "Item Details": v4Items }), "vyapar_register").documents;
+        expect(docs[0]).toMatchObject({ number: "ITG/202627/077", total: 353705, amount_paid: 300000, balance_due: 53705, due_date: "2026-10-20" });
+        expect(docs[1]).toMatchObject({ doc_type: "credit_note", total: 463386, balance_due: 463386 });
+    });
+
+    it("warns when a row's Total is not Received + Balance", () => {
+        const bad = v4Sale.map((row) => (row[1] === "ITG/202627/077" ? row.map((v, i) => (i === 9 ? "50000" : v)) : row));
+        const r = parseInvoiceWorkbook(book({ "Sale Report": bad, "Item Details": v4Items }), "vyapar_register");
+        expect(r.warnings).toContain("ITG/202627/077: Total 353705 is not Received 300000 + Balance 50000.");
     });
 
     it("a single-sheet register is read as before, with no payments", () => {

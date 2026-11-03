@@ -18,6 +18,13 @@
  * Unpaid / Overdue N Days / Cancelled) and "Item Details" (the lines). When
  * both are there they are read together, joined on the invoice number, so
  * the register carries each invoice's payments as well as its lines.
+ *
+ * Payment sync (Vyapar is the source of truth for what has been collected):
+ * the export's "Generated on …" stamp is read as `generated_at`, so the
+ * importer can refuse an older export replayed over a newer one; the Sale
+ * Report's footer "Total" row (Vyapar prints the word under Party Phone No.,
+ * not under the invoice number) is never read as part of the last invoice;
+ * and a row whose Total differs from Received + Balance is reported.
  */
 import * as XLSX from "xlsx";
 import { classifyHsn, normalizeHsn, parseAmount, type ProductClass } from "./invoiceLines";
@@ -195,6 +202,12 @@ export interface ParseResult {
     unknown_columns: string[];
     documents: ParsedDocument[];
     warnings: string[];
+    /**
+     * When Vyapar produced the export ("Generated on Oct 28, 2026 at 2:24 pm"
+     * in the title rows), ISO with the IST offset; null when the file has no
+     * stamp. It is the "as of" of every payment in the file.
+     */
+    generated_at?: string | null;
 }
 
 const REQUIRED: Record<ImportKind, Field[]> = {
@@ -208,6 +221,79 @@ function isCancelled(...cells: unknown[]): boolean {
 
 function isCreditNote(sheetName: string, ...cells: unknown[]): boolean {
     return /cdn|credit/i.test(sheetName) || cells.some((c) => /credit\s*note|^c$|^cn$/i.test(String(c ?? "").trim()));
+}
+
+const FOOTER = /^(grand\s*)?total$/i;
+
+/**
+ * A footer row: no document number, and some cell is just "Total" / "Grand
+ * Total". Vyapar's Sale Report prints "Total" under Party Phone No. with the
+ * sum under Total Amount — read as a continuation row, it would add every
+ * invoice's total onto the last invoice.
+ */
+export function isFooterRow(row: unknown[], rawNumber: string): boolean {
+    if (/^(grand\s*)?total/i.test(rawNumber)) return true;
+    if (rawNumber) return false;
+    return row.some((v) => FOOTER.test(String(v ?? "").trim()));
+}
+
+const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+
+/**
+ * "Generated on Oct 28, 2026 at 2:24 pm" (Vyapar's export stamp, India time)
+ * → "2026-10-28T14:24:00+05:30". Also takes "28 Oct 2026" / "28/10/2026" and a
+ * 24-hour time. Null when the text carries no stamp.
+ */
+export function parseGeneratedOn(text: unknown): string | null {
+    const s = String(text ?? "").trim();
+    const m0 = s.match(/generated\s+on\s*:?\s*(.+)$/i);
+    if (!m0) return null;
+    const rest = m0[1].trim();
+    let y: number, mo: number, d: number;
+    let m = rest.match(/^([A-Za-z]{3})[A-Za-z]*\.?\s+(\d{1,2}),?\s+(\d{4})/);
+    if (m) {
+        mo = MONTHS.indexOf(m[1].toLowerCase()) + 1;
+        d = Number(m[2]);
+        y = Number(m[3]);
+    } else if ((m = rest.match(/^(\d{1,2})[\s-]([A-Za-z]{3})[A-Za-z]*,?[\s-](\d{4})/))) {
+        d = Number(m[1]);
+        mo = MONTHS.indexOf(m[2].toLowerCase()) + 1;
+        y = Number(m[3]);
+    } else if ((m = rest.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})/))) {
+        d = Number(m[1]);
+        mo = Number(m[2]);
+        y = Number(m[3]);
+    } else {
+        return null;
+    }
+    if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+    let hh = 0;
+    let mm = 0;
+    const t = rest.match(/(\d{1,2}):(\d{2})(?::\d{2})?\s*([ap]\.?m\.?)?/i);
+    if (t) {
+        hh = Number(t[1]);
+        mm = Number(t[2]);
+        const ap = t[3]?.toLowerCase().replace(/\./g, "");
+        if (ap === "pm" && hh < 12) hh += 12;
+        if (ap === "am" && hh === 12) hh = 0;
+        if (hh > 23 || mm > 59) return null;
+    }
+    const p2 = (n: number) => String(n).padStart(2, "0");
+    return `${y}-${p2(mo)}-${p2(d)}T${p2(hh)}:${p2(mm)}:00+05:30`;
+}
+
+/** The first "Generated on …" stamp in the title rows of any sheet. */
+function generatedAtOf(wb: XLSX.WorkBook): string | null {
+    for (const name of wb.SheetNames) {
+        const rows = XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[name], { header: 1, raw: false, defval: "" }).slice(0, 6);
+        for (const row of rows) {
+            for (const cell of row ?? []) {
+                const at = parseGeneratedOn(cell);
+                if (at) return at;
+            }
+        }
+    }
+    return null;
 }
 
 type SheetPick = { sheet: string; row: number; cols: Partial<Record<Field, number>>; headers: string[]; rows: unknown[][] };
@@ -246,7 +332,7 @@ function readDocuments(p: SheetPick, kind: ImportKind): { docs: Map<string, Pars
         if (row.every((v) => v === "" || v == null)) continue;
         const rawNumber = String(cell(row, "number") ?? "").trim();
         // Footer rows ("Total", "Grand Total") carry amounts but no document.
-        if (/^(grand\s*)?total/i.test(rawNumber) || /^(grand\s*)?total/i.test(String(row[0] ?? ""))) continue;
+        if (isFooterRow(row, rawNumber)) continue;
 
         let doc: ParsedDocument | null;
         if (rawNumber) {
@@ -366,6 +452,12 @@ function finishDocuments(docs: Iterable<ParsedDocument>, kind: ImportKind, warni
         if (d.amount_paid == null && d.balance_due != null && d.total != null) {
             d.amount_paid = Math.round(Math.max(0, d.total - d.balance_due) * 100) / 100;
         }
+        // Total = Received + Balance on every Vyapar row; when it does not, the
+        // row was edited or mis-read — say so rather than trust one of them.
+        if (!d.cancelled && d.total != null && d.amount_paid != null && d.balance_due != null &&
+            Math.abs(d.total - d.amount_paid - d.balance_due) > 1) {
+            warnings.push(`${d.number}: Total ${d.total} is not Received ${d.amount_paid} + Balance ${d.balance_due}.`);
+        }
         if (!d.date) warnings.push(`${d.number}: no readable date.`);
     }
 }
@@ -427,7 +519,7 @@ function parseSaleReportPair(wb: XLSX.WorkBook, saleName: string, itemsName: str
     finishDocuments(out, kind, warnings);
     const skipped = head.skipped + lines.skipped;
     if (skipped) warnings.push(`${skipped} row(s) before the first invoice number were skipped.`);
-    return { kind, sheet, header_row: sale.pick.row + 1, columns, unknown_columns, documents: out, warnings };
+    return { kind, sheet, header_row: sale.pick.row + 1, columns, unknown_columns, documents: out, warnings, generated_at: generatedAtOf(wb) };
 }
 
 export function parseInvoiceWorkbook(buffer: ArrayBuffer | Buffer, kind: ImportKind): ParseResult {
@@ -477,5 +569,6 @@ export function parseInvoiceWorkbook(buffer: ArrayBuffer | Buffer, kind: ImportK
         unknown_columns,
         documents: [...docs.values()],
         warnings,
+        generated_at: generatedAtOf(wb),
     };
 }

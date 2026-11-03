@@ -23,6 +23,11 @@ export type InvoiceFreshness = {
      * button or a Vyapar register upload), ISO; null when never.
      */
     last_payment_at?: string | null;
+    /**
+     * Payment sync — the "Generated on" of the newest Vyapar Sale Report
+     * imported (ISO): the payments on Drive / Vyapar invoices are true as of it.
+     */
+    payments_as_of?: string | null;
 };
 
 /** ID 200 — where the Accounts Receivable figure comes from, said under the figure. */
@@ -30,11 +35,19 @@ export const RECEIVABLES_SOURCE =
     "From Zoho (old invoices), Drive invoice PDFs and the Vyapar register; payments from Zoho's own balance, " +
     "the Vyapar register's Received column and the amounts entered on each invoice.";
 
-/** RECEIVABLES_SOURCE plus "Payments updated <IST time>." when known. */
+/**
+ * RECEIVABLES_SOURCE plus "Payments as of the Vyapar export of <IST time>." —
+ * else "Payments updated <IST time>." — when known.
+ */
 export function receivablesSourceText(f: InvoiceFreshness | null | undefined): string {
+    if (f?.payments_as_of) return `${RECEIVABLES_SOURCE} Payments as of the Vyapar export of ${istStamp(f.payments_as_of)}.`;
     const at = f?.last_payment_at;
     if (!at) return RECEIVABLES_SOURCE;
-    const stamp = new Date(at).toLocaleString("en-IN", {
+    return `${RECEIVABLES_SOURCE} Payments updated ${istStamp(at)}.`;
+}
+
+function istStamp(at: string): string {
+    return new Date(at).toLocaleString("en-IN", {
         timeZone: "Asia/Kolkata",
         day: "numeric",
         month: "short",
@@ -42,7 +55,6 @@ export function receivablesSourceText(f: InvoiceFreshness | null | undefined): s
         hour: "numeric",
         minute: "2-digit",
     });
-    return `${RECEIVABLES_SOURCE} Payments updated ${stamp}.`;
 }
 
 export function isStale(workingDaysSinceRead: number | null, staleAfter: number): boolean {
