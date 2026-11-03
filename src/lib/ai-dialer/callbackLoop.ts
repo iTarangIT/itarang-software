@@ -36,13 +36,15 @@ import type { LeadStatus } from "@/lib/lifecycle/transitions";
 import { hasCallOutcomeTables } from "@/lib/ai/storage/callOutcomeStore";
 import {
     briefLines,
+    callbackExpired,
+    CALLBACK_EXPIRE_WORKING_DAYS,
     KIND_LABEL,
     pickInTurn,
     type CallbackBrief,
     type CallbackKind,
 } from "./callbackBrief";
 
-export { briefLines, buildCallbackBrief, pickInTurn } from "./callbackBrief";
+export { briefLines, buildCallbackBrief, callbackExpired, CALLBACK_EXPIRE_WORKING_DAYS, pickInTurn } from "./callbackBrief";
 export type { CallbackBrief, CallbackKind } from "./callbackBrief";
 import { nextWorkingMorning } from "./callCategory";
 import { discardRoute, logRoute, routeToTerritoryAsm } from "./territoryRouting";
@@ -403,8 +405,9 @@ export async function runCallbackLoopTick(now: Date = new Date()): Promise<{
     reminded: number;
     pushed: number;
     escalated: number;
+    expired: number;
 }> {
-    const out = { reminded: 0, pushed: 0, escalated: 0 };
+    const out = { reminded: 0, pushed: 0, escalated: 0, expired: 0 };
     if (!(await hasCallOutcomeTables()) || !(await hasCallbackLoopColumns())) return out;
     const settings = await getCallbackLoopSettings();
     const remindBy = new Date(now.getTime() + REMIND_BEFORE_MS).toISOString();
@@ -504,7 +507,57 @@ export async function runCallbackLoopTick(now: Date = new Date()): Promise<{
             email: true,
         });
     }
+
+    out.expired = await expireStaleCallbacks(now);
     return out;
+}
+
+/**
+ * ID 212: a sales callback still open `CALLBACK_EXPIRE_WORKING_DAYS` working
+ * days after it fell due is closed as expired, with a follow-up for the owner
+ * (as after 3 unanswered tries). Complaints stay open until resolveComplaint.
+ * Old callbacks with no ISR are included: an open one kept the lead out of
+ * every AI campaign with nothing to end it.
+ */
+async function expireStaleCallbacks(now: Date): Promise<number> {
+    // Cheap pre-filter in SQL (3 working days are at least 3 calendar days),
+    // the exact working-day rule in JS.
+    const candidates = rows<{ id: string; lead_id: string; due_at: string }>(
+        await db.execute(sql`
+            SELECT id, lead_id, due_at::text AS due_at FROM lead_callbacks
+             WHERE owner_type = 'sales' AND status IN ('open', 'dialing')
+               AND COALESCE(kind, '') <> 'complaint'
+               AND due_at <= ${now.toISOString()}::timestamptz - make_interval(days => ${CALLBACK_EXPIRE_WORKING_DAYS})
+             LIMIT 2000
+        `),
+    );
+    if (candidates.length === 0) return 0;
+    const { loadOfficeCalendar } = await import("@/lib/calendar/holidays");
+    const { workingDaysDueAt } = await import("@/lib/calendar/officeCalendar");
+    const { holidays, hours } = await loadOfficeCalendar();
+    const ids = candidates.filter((c) => callbackExpired(new Date(c.due_at), now, holidays, hours)).map((c) => c.id);
+    if (ids.length === 0) return 0;
+    const note = `No call within ${CALLBACK_EXPIRE_WORKING_DAYS} working days of the due time.`;
+    const closed = rows<{ lead_id: string }>(
+        await db.execute(sql`
+            UPDATE lead_callbacks
+               SET status = 'expired', completed_at = now(), completion_note = ${note}, updated_at = now()
+             WHERE id IN (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})
+               AND status IN ('open', 'dialing')
+            RETURNING lead_id
+        `),
+    );
+    const follow = workingDaysDueAt(now, NOT_REACHED_FOLLOW_UP_WORKING_DAYS, holidays, hours);
+    const leadIds = [...new Set(closed.map((r) => r.lead_id))];
+    if (follow && leadIds.length) {
+        // Only where no later follow-up is already set.
+        await db.execute(sql`
+            UPDATE dealer_leads SET next_follow_up_at = ${follow.toISOString()}::timestamptz
+             WHERE id IN (${sql.join(leadIds.map((id) => sql`${id}`), sql`, `)})
+               AND (next_follow_up_at IS NULL OR next_follow_up_at < now())
+        `);
+    }
+    return closed.length;
 }
 
 // ── NeoDove results ─────────────────────────────────────────────────────────
@@ -574,7 +627,7 @@ export async function noteNeodoveCallForCallback(input: {
             await db.execute(sql`
                 UPDATE lead_callbacks
                    SET status = 'expired', push_attempts = ${tries}, completed_at = now(),
-                       completion_note = ${`Not reached after ${tries} NeoDove calls.`}, updated_at = now()
+                       completion_note = ${`Not reached after ${tries} unanswered calls.`}, updated_at = now()
                  WHERE id = ${cb.id}
             `);
             if (follow) {
@@ -626,6 +679,12 @@ export async function leadsWithOpenCallback(leadIds: string[]): Promise<Set<stri
                 await db.execute(sql`
                     SELECT DISTINCT lead_id FROM lead_callbacks
                      WHERE owner_type = 'sales' AND status IN ('open', 'dialing')
+                       -- ID 212: a callback the expiry tick missed (ticker down,
+                       -- E-362 not applied) stops blocking AI calls after 14
+                       -- days; a complaint blocks until resolved. to_jsonb: the
+                       -- kind column is E-362.
+                       AND (due_at > now() - interval '14 days'
+                            OR to_jsonb(lead_callbacks) ->> 'kind' = 'complaint')
                        AND lead_id IN (${sql.join(
                            chunk.map((id) => sql`${id}`),
                            sql`, `,
