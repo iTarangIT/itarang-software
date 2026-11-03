@@ -1,8 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { requireAdminAppUserForLead } from "@/lib/kyc/admin-workflow";
-import { recordStaffKycStep } from "@/lib/kyc/kycEventLog";
-import { executeCoBorrowerDigilockerStatus } from "@/lib/kyc/coborrower-verification";
+import { recordStaffKycStep, recordSystemKycStepOnce } from "@/lib/kyc/kycEventLog";
+import {
+  COBORROWER_DIGILOCKER_FAILED_STEP,
+  coBorrowerDigilockerFailedKey,
+  executeCoBorrowerDigilockerStatus,
+} from "@/lib/kyc/coborrower-verification";
 
 export async function GET(
   _req: NextRequest,
@@ -45,6 +49,15 @@ export async function GET(
       await recordStaffKycStep(leadId, appUser, "DigiLocker (Aadhaar) request expired (co-borrower)", {
         once: `digilocker:${transactionId}:expired:${started}`,
       });
+    } else if (state === "failed") {
+      // Normally logged by the callback already; this covers a callback that
+      // came in before the callback logged it. Same key, so never twice.
+      const started = "initiatedAt" in result.data ? result.data.initiatedAt : null;
+      await recordSystemKycStepOnce(
+        leadId,
+        COBORROWER_DIGILOCKER_FAILED_STEP,
+        coBorrowerDigilockerFailedKey(transactionId, started),
+      );
     }
     return NextResponse.json(result);
   } catch (error) {
