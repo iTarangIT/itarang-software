@@ -112,6 +112,8 @@ function ChangeBadge({ r }: { r: PreviewRow }) {
         case "no_data":
             return <span className="text-xs text-gray-500">No payment in file</span>;
         default:
+            if (r.total_mismatch)
+                return <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-700">Check invoice total</span>;
             return <span className="text-xs text-gray-500">{r.action === "create" ? "New invoice" : "No change"}</span>;
     }
 }
