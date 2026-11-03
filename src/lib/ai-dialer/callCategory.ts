@@ -19,7 +19,10 @@ import type { CallbackTopic, QualificationSignals } from "@/lib/ai/scoring/signa
 import type { Band, CallStatus } from "@/lib/ai/scoring/computeBand";
 
 /** Bump when the rule below changes — stamped on every ai_call_outcomes row. */
-export const CALL_CATEGORY_VERSION = "category-1.2.0";
+// category-1.3.0 (3 Nov 2026) — every unreached call gets a specific reason:
+// Wrong Number, No Response, Out of Service, Busy, Unavailable, Call
+// Disconnected, Early Hang-up. "Unavailable" used to hold all of them.
+export const CALL_CATEGORY_VERSION = "category-1.3.0";
 
 export const CALL_CATEGORIES = [
     // ── connected: the dealer spoke ──
@@ -33,9 +36,12 @@ export const CALL_CATEGORIES = [
     "no_interest_signal",
     "needs_review",
     // ── not connected ──
+    "wrong_number",
+    "no_response",
+    "out_of_service",
+    "busy",
     "unavailable",
     "hung_up",
-    "wrong_number",
     "failed",
 ] as const;
 export type CallCategory = (typeof CALL_CATEGORIES)[number];
@@ -47,13 +53,16 @@ export const CALL_CATEGORY_LABELS: Record<CallCategory, string> = {
     sales_manager_request: "Asked for Sales Manager",
     not_interested: "Not interested",
     not_relevant: "Not our market",
-    disconnected: "Disconnected mid-call",
+    disconnected: "Call Disconnected",
     no_interest_signal: "No interest shown",
     needs_review: "Needs review",
+    wrong_number: "Wrong Number",
+    no_response: "No Response",
+    out_of_service: "Out of Service",
+    busy: "Busy",
     unavailable: "Unavailable",
-    hung_up: "Hung up early",
-    wrong_number: "Wrong / invalid number",
-    failed: "Call failed",
+    hung_up: "Early Hang-up",
+    failed: "Call failed (system)",
 };
 
 /** Display order for the report — the actionable ones first. */
@@ -67,8 +76,11 @@ export const CALL_CATEGORY_ORDER: readonly CallCategory[] = [
     "not_interested",
     "not_relevant",
     "needs_review",
-    "unavailable",
     "hung_up",
+    "no_response",
+    "busy",
+    "out_of_service",
+    "unavailable",
     "wrong_number",
     "failed",
 ];
@@ -104,6 +116,11 @@ export type CategoryInput = {
     callOutcome?: string | null;
     /** null when there was no transcript, or analysis did not run. */
     analysis: CategoryAnalysis | null;
+    /**
+     * The voice agent's own call_result (ElevenLabs data collection), when it
+     * sends one: wrong_number / owner_not_available decide a connected call.
+     */
+    agentCallResult?: string | null;
     /** The transcript was sent to the model and the model failed. */
     analysisFailed?: boolean;
 };
@@ -124,26 +141,51 @@ export type CategoryResult = {
     retryAsDisconnected: boolean;
 };
 
+// 3 Nov 2026 — the specific reason for every unreached call.
+//   no_response  rang out, or answered and the dealer never said a word
+//   busy         engaged, or declined (a declined call plays "busy" in India)
+//   unavailable  a machine took it: voicemail, auto-reply, IVR / switchboard
+//   hung_up      Early Hang-up — dropped before / during the introduction
+// out_of_service and wrong_number come from the outcome (carrier message or
+// SIP code), see notConnectedCategory.
 const NOT_CONNECTED: Partial<Record<CallEndStatus, CallCategory>> = {
-    no_response: "unavailable",
-    busy: "unavailable",
-    rejected: "unavailable",
+    no_response: "no_response",
+    silent: "no_response",
+    no_conversation: "no_response",
+    busy: "busy",
+    rejected: "busy",
     voicemail: "unavailable",
     switchboard: "unavailable",
-    silent: "unavailable",
-    no_conversation: "unavailable",
     hung_up: "hung_up",
 };
+
+const WRONG_NUMBER_OUTCOME = /invalid_number|wrong_number|sip status: ?(404|484|604)|SIP (404|484|604)/i;
+const OUT_OF_SERVICE_OUTCOME = /out_of_service|switched_off|unreachable|out_of_coverage/i;
+const DISCONNECTED_OUTCOME_RE = /disconnect|cancell?ed/i;
+
+/** The category of a call the dealer did not speak on. */
+export function notConnectedCategory(status: CallEndStatus, callOutcome?: string | null): CallCategory {
+    const outcome = callOutcome ?? "";
+    if (WRONG_NUMBER_OUTCOME.test(outcome)) return "wrong_number";
+    if (status === "failed") {
+        // The line dropped on the network after it was placed — not our setup.
+        return DISCONNECTED_OUTCOME_RE.test(outcome) ? "disconnected" : "failed";
+    }
+    if (OUT_OF_SERVICE_OUTCOME.test(outcome)) return "out_of_service";
+    return NOT_CONNECTED[status] ?? "no_response";
+}
 
 export function categorizeCall(input: CategoryInput): CategoryResult {
     const none = { callbackOwner: null, callbackTopic: null, wantsHuman: false, retryAsDisconnected: false };
 
     if (input.campaignStatus !== "completed") {
-        if (input.campaignStatus === "failed") {
-            const wrong = /invalid_number/i.test(input.callOutcome ?? "");
-            return { category: wrong ? "wrong_number" : "failed", connected: false, ...none };
-        }
-        return { category: NOT_CONNECTED[input.campaignStatus] ?? "unavailable", connected: false, ...none };
+        return { category: notConnectedCategory(input.campaignStatus, input.callOutcome), connected: false, ...none };
+    }
+
+    // A person answered and said it is the wrong number.
+    const agentResult = (input.agentCallResult ?? "").trim().toLowerCase();
+    if (agentResult === "wrong_number") {
+        return { category: "wrong_number", connected: true, ...none };
     }
 
     // ── The dealer spoke. ──
@@ -215,6 +257,10 @@ export function categorizeCall(input: CategoryInput): CategoryResult {
 
     if (a.band === "Qualified" || a.info_signals_count >= 1) {
         return { category: "interested", connected: true, ...none };
+    }
+    // Someone else picked up and the owner was not there — no callback agreed.
+    if (agentResult === "owner_not_available") {
+        return { category: "unavailable", connected: true, ...none };
     }
     return { category: "no_interest_signal", connected: true, ...none };
 }

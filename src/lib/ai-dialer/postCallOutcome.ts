@@ -91,6 +91,8 @@ function rows<T>(r: unknown): T[] {
 export async function preparePostCall(input: {
     callEnd: CallEndClassification;
     callOutcome?: string | null;
+    /** The voice agent's own call_result (ElevenLabs data collection). */
+    agentCallResult?: string | null;
     analysis: PostCallAnalysis | null;
     analysisFailed?: boolean;
     transcript: string | null;
@@ -100,7 +102,10 @@ export async function preparePostCall(input: {
 }): Promise<PostCallPlan> {
     const cat = categorizeCall({
         campaignStatus: input.callEnd.status,
-        callOutcome: input.callOutcome ?? input.callEnd.outcome ?? null,
+        // What the classifier learned (out_of_service, invalid_number,
+        // early_hangup) beats the raw provider status the finalizer passes.
+        callOutcome: input.callEnd.outcome ?? input.callOutcome ?? null,
+        agentCallResult: input.agentCallResult ?? null,
         analysis: input.analysis,
         analysisFailed: input.analysisFailed,
     });

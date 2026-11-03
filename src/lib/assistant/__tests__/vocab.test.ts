@@ -9,7 +9,7 @@ import {
     checkCallProposal,
     checkVisitProposal,
 } from "../vocab";
-import { CONNECTED_DISPOSITIONS, NOT_CONNECTED_REASONS, classifyDisposition } from "@/lib/leads/dispositions";
+import { AI_ONLY_DISPOSITIONS, CONNECTED_DISPOSITIONS, NOT_CONNECTED_REASONS, classifyDisposition } from "@/lib/leads/dispositions";
 import { LEAD_STATUS, LOST_REASON } from "@/lib/lifecycle/transitions";
 import { VISIT_OUTCOME } from "@/lib/asm/types";
 
@@ -63,6 +63,8 @@ describe("INV6_closed_vocabulary: §9.3 map is a subset of the existing enums", 
     it("COVERAGE: every CONNECTED_DISPOSITIONS label maps to a call row in that bucket; every VISIT_OUTCOME to a visit row", () => {
         for (const [bucket, labels] of Object.entries(CONNECTED_DISPOSITIONS)) {
             for (const label of labels) {
+                // AI-only labels are not something a rep logs (dispositions.ts).
+                if (AI_ONLY_DISPOSITIONS.has(label)) continue;
                 const row = callRowFor(label, "connected");
                 expect(row, `${bucket}: ${label}`).not.toBeNull();
                 expect(row!.buckets, `${bucket}: ${label}`).toContain(bucket);

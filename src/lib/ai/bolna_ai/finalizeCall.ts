@@ -150,7 +150,14 @@ export async function finalizeBolnaCall(
   };
 
   // ── No-transcript path: busy / failed / no-answer ──
-  if (!transcript) {
+  // Item 5 (3 Nov 2026) — no conversation, no score. A call where the dealer
+  // never really spoke (Early Hang-up during the introduction, a silent line,
+  // voicemail, IVR, a carrier recording) still leaves a transcript: the AI's
+  // own greeting. Scoring that produced Cold / 0 intent from nothing, so every
+  // call that did not END as completed takes this path. The transcript is
+  // kept on the log; the lead's score and interest level are left alone.
+  if (!transcript || callEnd.status !== "completed") {
+    const keptTranscript = transcript || null;
     console.log(
       "[bolna:finalize] call ended without conversation, status:",
       status,
@@ -182,8 +189,10 @@ export async function finalizeBolnaCall(
         endEvidence,
         leadId: leadForPhone.id,
         status: status || "failed",
-        transcript: null,
+        transcript: keptTranscript,
         summary: null,
+        // Item 5: an Early Hang-up is not an AI conversation (exclusionFilter).
+        callStatus: callEnd.status === "hung_up" ? "early_hangup" : null,
         recordingUrl,
         duration,
         phone: phone ?? leadForPhone.phone,
@@ -204,10 +213,11 @@ export async function finalizeBolnaCall(
         leadId: leadForPhone.id,
         provider: "bolna",
         callId,
-        transcript: null,
+        transcript: keptTranscript,
         providerStatus: status || "failed",
         // B5 — the campaign row's own verdict: connected = a person spoke.
         callEndStatus: callEnd.status,
+        callOutcome: callEnd.outcome,
         durationSec: duration ?? null,
         recordingUrl,
       });
@@ -216,7 +226,7 @@ export async function finalizeBolnaCall(
         leadId: leadForPhone.id,
         status: callEnd.status,
         bolnaCallId: callId || null,
-        outcome: status || "no_answer",
+        outcome: callEnd.outcome ?? (status || "no_answer"),
         intentScore: null,
       });
       campaignIdAfterComplete = r.campaignId;
@@ -231,14 +241,14 @@ export async function finalizeBolnaCall(
           callEnd,
           callOutcome: status,
           analysis: null,
-          transcript: null,
+          transcript: keptTranscript,
           leadId: leadForPhone.id,
         }),
         callEnd,
         band: null,
         intentScore: null,
         summary: null,
-        transcript: null,
+        transcript: keptTranscript,
         campaign: r,
       });
 
@@ -598,6 +608,7 @@ export async function finalizeBolnaCall(
     callbackAgreed: analysis.signals?.callback_agreed === "yes",
     relevantDealer: analysis.signals?.relevant_dealer === "yes",
     pitchHeard: analysis.signals?.pitch_heard === "yes",
+    callbackTopic: analysis.signals?.callback_topic ?? null,
     durationSec: duration ?? null,
     recordingUrl,
     summary: analysis.memory?.intent_summary ?? null,

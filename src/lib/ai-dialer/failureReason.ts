@@ -37,6 +37,7 @@
 
 export const FAILURE_REASON_CODES = [
     "not_answered",
+    "out_of_service",
     "busy",
     "voicemail",
     "switchboard",
@@ -85,6 +86,13 @@ const SPECS: Record<FailureReasonCode, Spec> = {
         code: "not_answered",
         label: "Not answered",
         hint: "The dealer did not pick up. Worth trying again at a different time.",
+        retryable: true,
+        ourFault: false,
+    },
+    out_of_service: {
+        code: "out_of_service",
+        label: "Out of service",
+        hint: "The network says the phone is switched off, not reachable or out of coverage. Worth trying again later in the day.",
         retryable: true,
         ourFault: false,
     },
@@ -143,8 +151,8 @@ const SPECS: Record<FailureReasonCode, Spec> = {
     },
     hung_up_early: {
         code: "hung_up_early",
-        label: "Hung up early",
-        hint: "The dealer picked up and cut the call during the greeting, before saying anything. Worth trying again at a different time.",
+        label: "Early hang-up",
+        hint: "The dealer hung up before the conversation began or during the introduction. No intent score is given. Worth trying again at a different time.",
         retryable: true,
         ourFault: false,
     },
@@ -386,6 +394,10 @@ export function deriveFailureReason(
     // into the status itself (campaignLeadStatus.classifyCallEnd). When they
     // have, that is the answer; the evidence-order rules below exist for rows
     // written before they did, and for the two statuses that still need them.
+    // Out of service rides on a no_response row as its outcome (3 Nov 2026).
+    if (input.status === "no_response" && lower === "out_of_service") {
+        return { ...SPECS.out_of_service, detail: null };
+    }
     const byStatus = STATUS_REASON.get(input.status ?? "");
     if (byStatus) {
         return { ...SPECS[byStatus], detail: triggerDetail(outcome) };
