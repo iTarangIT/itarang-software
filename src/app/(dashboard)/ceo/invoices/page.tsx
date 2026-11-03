@@ -697,7 +697,7 @@ export default function CEOInvoicesPage() {
               className="flex items-center gap-2 border-brand-200 text-brand-700 hover:bg-brand-50"
             >
               <Download className="w-4 h-4" />
-              Export CSV
+              Download CSV
             </Button>
           </div>
         </div>
