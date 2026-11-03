@@ -73,6 +73,14 @@ async function main() {
         );
     }
     console.log(`\nactions: ${JSON.stringify(p.totals)}`);
+    // E-370 — duplicate / updated detection.
+    const t = p.totals;
+    console.log(`classification: ${t.new_docs} new · ${t.updated_docs} updated · ${t.duplicates} duplicates (skipped)`);
+    for (const r of p.rows.filter((r) => r.classification === "updated" || r.classification === "new")) {
+        console.log(`    ${r.number.padEnd(16)} ${String(r.classification).padEnd(8)} changes=[${(r.changes ?? []).join(",")}] drift=[${(r.drift ?? []).join(",")}]`);
+    }
+    const classifiedAll = p.rows.filter((r) => r.action !== "in_zoho").every((r) => r.classification);
+    check("every document (bar old Zoho ones) is classified new / updated / duplicate", classifiedAll);
     console.log(`Accounts Receivable now (overview card): ${inr(await outstandingTotal())}`);
 
     // The preview's "Receivable now → after import" must start from exactly the

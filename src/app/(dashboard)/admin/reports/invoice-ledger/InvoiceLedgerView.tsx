@@ -83,6 +83,9 @@ type Preview = {
         serials?: number;
         unmapped_items: number;
         gstin_refused?: number;
+        new_docs?: number;
+        updated_docs?: number;
+        duplicates?: number;
     };
     unmapped_items: string[];
     rows: Array<{
@@ -105,6 +108,7 @@ type Preview = {
         payment_change?: "none" | "increase" | "decrease" | "no_data";
         total_mismatch?: boolean;
         overrides_manual?: boolean;
+        classification?: "new" | "duplicate" | "updated";
     }>;
     payments?: {
         generated_at: string | null;
@@ -246,7 +250,10 @@ function ImportTab() {
                             Sheet <strong>{preview.sheet ?? "—"}</strong> · {preview.period.from ?? "?"} to {preview.period.to ?? "?"} ·{" "}
                             {preview.totals.documents} documents
                             {preview.kind === "vyapar_register" &&
-                                ` · ${preview.totals.update} update · ${preview.totals.create} new · ${preview.totals.in_zoho ?? 0} already in Zoho (skipped) · ${preview.totals.cancelled} cancelled · ${preview.totals.lines} lines · ${preview.totals.batteries} batteries · ${preview.totals.serials ?? 0} battery serials read`}
+                                (preview.totals.duplicates != null
+                                    ? ` · ${preview.totals.new_docs ?? 0} new · ${preview.totals.updated_docs ?? 0} updated · ${preview.totals.duplicates} duplicates (skipped)`
+                                    : ` · ${preview.totals.update} update · ${preview.totals.create} new`) +
+                                ` · ${preview.totals.in_zoho ?? 0} already in Zoho (skipped) · ${preview.totals.cancelled} cancelled · ${preview.totals.lines} lines · ${preview.totals.batteries} batteries · ${preview.totals.serials ?? 0} battery serials read`}
                         </p>
                         <p>
                             Columns read:{" "}
@@ -323,7 +330,15 @@ function ImportTab() {
                                             </td>
                                         )}
                                         <td className="px-2 py-1">
-                                            {r.cancelled ? <span className="text-rose-700">void (cancelled)</span> : r.doc_type === "credit_note" ? "credit note" : r.action === "in_zoho" ? "already in Zoho (skipped)" : r.action}
+                                            {r.action === "in_zoho" ? (
+                                                "already in Zoho (skipped)"
+                                            ) : r.classification === "duplicate" ? (
+                                                <span className="text-ink-muted">duplicate (skipped)</span>
+                                            ) : r.cancelled ? (
+                                                <span className="text-rose-700">void (cancelled)</span>
+                                            ) : (
+                                                `${r.doc_type === "credit_note" ? "credit note · " : ""}${r.classification ?? r.action}`
+                                            )}
                                         </td>
                                     </tr>
                                 ))}
