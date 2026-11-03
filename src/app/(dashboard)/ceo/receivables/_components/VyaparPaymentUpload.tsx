@@ -29,12 +29,27 @@ type PreviewRow = {
     total_mismatch?: boolean;
     overrides_manual?: boolean;
     already_void?: boolean;
+    /** new | duplicate (skipped, nothing written) | updated — against the last import and the CRM. */
+    classification?: "new" | "duplicate" | "updated";
+    changes?: Array<"amount" | "received" | "balance" | "date" | "lines" | "cancelled">;
+    drift?: Array<"amount" | "paid" | "date" | "cancelled" | "lines">;
+    crm_date?: string | null;
+    total_after?: number | null;
 };
 
 type Preview = {
     period: { from: string | null; to: string | null };
     warnings: string[];
-    totals: { documents: number; update: number; create: number; in_zoho?: number; cancelled: number };
+    totals: {
+        documents: number;
+        update: number;
+        create: number;
+        in_zoho?: number;
+        cancelled: number;
+        new_docs?: number;
+        updated_docs?: number;
+        duplicates?: number;
+    };
     rows: PreviewRow[];
     payments?: {
         generated_at: string | null;
@@ -98,8 +113,16 @@ function ChangeBadge({ r }: { r: PreviewRow }) {
                 {r.already_void ? "Cancelled · already void" : "Cancelled → void"}
             </span>
         );
-    if (r.doc_type === "credit_note") return <span className="rounded-full bg-sky-50 px-2 py-0.5 text-xs font-semibold text-sky-700">Credit note</span>;
     if (r.action === "in_zoho") return <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-semibold text-gray-600">Zoho invoice · skipped</span>;
+    if (r.classification === "duplicate")
+        return <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-semibold text-gray-600">Duplicate · skipped</span>;
+    if (r.doc_type === "credit_note")
+        return (
+            <span className="rounded-full bg-sky-50 px-2 py-0.5 text-xs font-semibold text-sky-700">
+                {r.classification === "new" ? "New credit note" : "Credit note updated"}
+            </span>
+        );
+    if (r.classification === "new") return <span className="rounded-full bg-sky-50 px-2 py-0.5 text-xs font-semibold text-sky-700">New invoice</span>;
     switch (r.payment_change) {
         case "increase":
             return (r.balance_after ?? 0) <= 0.5 ? (
@@ -112,10 +135,42 @@ function ChangeBadge({ r }: { r: PreviewRow }) {
         case "no_data":
             return <span className="text-xs text-gray-500">No payment in file</span>;
         default:
-            if (r.total_mismatch)
-                return <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-700">Check invoice total</span>;
-            return <span className="text-xs text-gray-500">{r.action === "create" ? "New invoice" : "No change"}</span>;
+            if (r.classification === "updated")
+                return <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-700">Updated</span>;
+            return <span className="text-xs text-gray-500">No change</span>;
     }
+}
+
+/** What an updated invoice gets from Vyapar, as small chips under its badge. */
+function ChangeChips({ r }: { r: PreviewRow }) {
+    if (r.classification !== "updated") return null;
+    const changes = r.changes ?? [];
+    const drift = r.drift ?? [];
+    const chips: Array<{ text: string; tone: "amber" | "gray" | "rose" }> = [];
+    if ((changes.includes("amount") || drift.includes("amount")) && r.register_total != null) {
+        chips.push({
+            text: `Amount ${r.crm_total != null ? rupees(r.crm_total) : "—"} → ${rupees(r.register_total)}`,
+            tone: "amber",
+        });
+    }
+    if ((changes.includes("date") || drift.includes("date")) && r.date) {
+        chips.push({ text: `Date ${fmtDate(r.crm_date ?? null)} → ${fmtDate(r.date)}`, tone: "amber" });
+    }
+    if (changes.includes("lines") || drift.includes("lines")) chips.push({ text: "Items updated", tone: "gray" });
+    if (drift.includes("paid") && !changes.includes("received") && !changes.includes("balance")) {
+        chips.push({ text: "CRM payment reset to Vyapar", tone: "rose" });
+    }
+    if (!chips.length) return null;
+    const cls = { amber: "bg-amber-50 text-amber-800", gray: "bg-gray-100 text-gray-700", rose: "bg-rose-50 text-rose-700" };
+    return (
+        <span className="mt-1 flex flex-wrap gap-1">
+            {chips.map((c) => (
+                <span key={c.text} className={`whitespace-nowrap rounded px-1.5 py-0.5 text-[11px] font-medium ${cls[c.tone]}`}>
+                    {c.text}
+                </span>
+            ))}
+        </span>
+    );
 }
 
 export default function VyaparPaymentUpload() {
@@ -158,10 +213,14 @@ export default function VyaparPaymentUpload() {
             }
             const data = await readData<{ summary: Record<string, number> }>(res, "Import failed");
             const s = data.summary ?? {};
+            const parts = [
+                s.created_ids ? `${s.created_ids} new` : null,
+                s.updated_existing ? `${s.updated_existing} updated` : null,
+                s.skipped_duplicates ? `${s.skipped_duplicates} duplicates skipped` : null,
+            ].filter(Boolean);
             toast.success(
-                s.payments_set
-                    ? `Payments updated on ${s.payments_set} invoice${s.payments_set === 1 ? "" : "s"} — ${inr(s.collected ?? 0)} newly collected.`
-                    : "Imported — payments already matched Vyapar.",
+                `Imported${parts.length ? `: ${parts.join(", ")}` : ""}.` +
+                    (s.payments_set ? ` Payments changed on ${s.payments_set} (${inr(s.collected ?? 0)} newly collected).` : ""),
             );
             reset();
             setOpen(false);
@@ -188,16 +247,24 @@ export default function VyaparPaymentUpload() {
     const p = preview?.payments ?? null;
     const recv = preview?.receivable ?? null;
     const synced = (preview?.rows ?? []).filter((r) => r.doc_type === "invoice");
-    const changed = (preview?.rows ?? []).filter(
-        (r) =>
-            r.payment_change === "increase" ||
-            r.payment_change === "decrease" ||
-            (r.cancelled && !r.already_void) ||
-            (r.action === "create" && r.doc_type === "invoice") ||
-            r.total_mismatch,
+    const classified = (preview?.rows ?? []).some((r) => r.classification);
+    const changed = (preview?.rows ?? []).filter((r) =>
+        classified
+            ? r.classification === "new" || r.classification === "updated"
+            : r.payment_change === "increase" ||
+              r.payment_change === "decrease" ||
+              (r.cancelled && !r.already_void) ||
+              (r.action === "create" && r.doc_type === "invoice") ||
+              r.total_mismatch,
     );
+    const counts = {
+        new: preview?.totals.new_docs ?? 0,
+        updated: preview?.totals.updated_docs ?? 0,
+        duplicates: preview?.totals.duplicates ?? 0,
+    };
+    const nothingToDo = classified && counts.new + counts.updated === 0;
     const shown = view === "changes" ? changed : (preview?.rows ?? []);
-    const flagged = (p?.total_mismatches ?? 0) + (p?.not_in_file.length ?? 0) + (p?.before_period.count ?? 0);
+    const flagged = (p?.not_in_file.length ?? 0) + (p?.before_period.count ?? 0);
     const blocked = !!p?.older_than_last && !allowOlder;
 
     const pill = (k: "changes" | "all", text: string, n: number) => (
@@ -285,6 +352,21 @@ export default function VyaparPaymentUpload() {
                         {p.last_generated_at && <> · last import was the export of {istStamp(p.last_generated_at)}</>}
                     </p>
 
+                    {classified && (
+                        <div className="flex flex-wrap items-center gap-2 text-xs">
+                            <span className="rounded-full border border-sky-200 bg-sky-50 px-3 py-1 font-semibold text-sky-800">{counts.new} new</span>
+                            <span className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 font-semibold text-amber-800">
+                                {counts.updated} updated
+                            </span>
+                            <span className="rounded-full border border-gray-200 bg-gray-50 px-3 py-1 font-semibold text-gray-700">
+                                {counts.duplicates} duplicate{counts.duplicates === 1 ? "" : "s"} · skipped
+                            </span>
+                            <span className="text-gray-500">
+                                Duplicates are invoices with the same number, date, amount and payments as the last import — nothing is written for them.
+                            </span>
+                        </div>
+                    )}
+
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
                         <div className="rounded-xl border border-gray-200 bg-white p-4">
                             <p className="text-xs font-semibold text-gray-500">Receivable</p>
@@ -321,7 +403,7 @@ export default function VyaparPaymentUpload() {
                         <div className="rounded-xl border border-gray-200 bg-white p-4">
                             <p className="text-xs font-semibold text-gray-500">Needs a look</p>
                             <p className={`mt-1 text-xl font-bold ${flagged ? "text-amber-700" : "text-brand-navy"}`}>{flagged}</p>
-                            <p className="text-xs text-gray-500">Totals that differ, invoices missing or too old for this file</p>
+                            <p className="text-xs text-gray-500">Open invoices missing from this file, or older than it</p>
                         </div>
                     </div>
 
@@ -348,8 +430,8 @@ export default function VyaparPaymentUpload() {
                             )}
                             {p.total_mismatches > 0 && (
                                 <li>
-                                    <span className="font-semibold">{p.total_mismatches} invoice total(s) differ from Vyapar</span> (marked ⚠ below) — the
-                                    PDF was probably misread. Payments are capped at the CRM total; correct the invoice.
+                                    <span className="font-semibold">{p.total_mismatches} invoice total(s) differ from Vyapar</span> — the CRM total
+                                    (usually a misread PDF) is corrected to Vyapar&apos;s on import.
                                 </li>
                             )}
                             {p.before_period.count > 0 && (
@@ -437,7 +519,7 @@ export default function VyaparPaymentUpload() {
                         {shown.length === 0 ? (
                             <p className="flex items-center gap-2 rounded-lg border border-gray-200 bg-white p-4 text-sm text-gray-600">
                                 <CheckCircle2 className="h-4 w-4 text-emerald-600" />
-                                Already up to date — every payment in this export is already in the CRM.
+                                Already up to date — every invoice in this export is a duplicate of the last import. Nothing to import.
                             </p>
                         ) : (
                             <div className="max-h-[32rem] overflow-auto rounded-xl border border-gray-200 bg-white">
@@ -465,11 +547,12 @@ export default function VyaparPaymentUpload() {
                                                         </td>
                                                         <td className="px-4 py-3 text-gray-800">{r.party ?? "—"}</td>
                                                         <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-gray-600">
-                                                            {r.crm_total != null ? rupees(r.crm_total) : "—"}
-                                                            {r.total_mismatch && (
-                                                                <span className="block text-xs font-semibold text-amber-700">
-                                                                    ⚠ Vyapar {rupees(r.register_total ?? 0)}
-                                                                </span>
+                                                            {r.crm_total != null && r.total_after != null ? (
+                                                                <BeforeAfter before={r.crm_total} after={r.total_after} />
+                                                            ) : r.crm_total != null ? (
+                                                                rupees(r.crm_total)
+                                                            ) : (
+                                                                "—"
                                                             )}
                                                         </td>
                                                         <td className="px-4 py-3 text-right">
@@ -485,7 +568,7 @@ export default function VyaparPaymentUpload() {
                                                             {r.overrides_manual && <span className="block text-xs text-rose-700">was typed in by hand</span>}
                                                         </td>
                                                         <td className="px-4 py-3 text-right">
-                                                            {hasPay && owedBefore != null ? (
+                                                            {hasPay && owedBefore != null && r.classification !== "duplicate" ? (
                                                                 <BeforeAfter
                                                                     before={owedBefore}
                                                                     after={r.balance_after ?? owedBefore}
@@ -497,6 +580,7 @@ export default function VyaparPaymentUpload() {
                                                         </td>
                                                         <td className="px-4 py-3">
                                                             <ChangeBadge r={r} />
+                                                            <ChangeChips r={r} />
                                                         </td>
                                                     </tr>
                                                 </Fragment>
@@ -518,14 +602,18 @@ export default function VyaparPaymentUpload() {
                         </button>
                         <button
                             type="button"
-                            disabled={busy !== null || blocked}
+                            disabled={busy !== null || blocked || nothingToDo}
                             onClick={() => send("commit")}
                             className="inline-flex items-center gap-2 rounded-lg bg-gray-900 px-3 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
                         >
                             {busy === "commit" && <Loader2 className="h-4 w-4 animate-spin" />}
-                            {p.increases + p.decreases > 0
-                                ? `Import · update ${p.increases + p.decreases} payment${p.increases + p.decreases === 1 ? "" : "s"}`
-                                : "Import"}
+                            {nothingToDo
+                                ? "Nothing to import — all duplicates"
+                                : classified
+                                  ? `Import · ${counts.new} new, ${counts.updated} updated${counts.duplicates ? ` (${counts.duplicates} duplicates skipped)` : ""}`
+                                  : p.increases + p.decreases > 0
+                                    ? `Import · update ${p.increases + p.decreases} payment${p.increases + p.decreases === 1 ? "" : "s"}`
+                                    : "Import"}
                         </button>
                     </div>
                 </div>

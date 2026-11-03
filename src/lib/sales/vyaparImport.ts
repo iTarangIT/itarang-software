@@ -28,6 +28,14 @@
  *     "Generated on". E-368: a register credit note's used part (total less
  *     Balance Due) goes to credit_note_applications, so a note Vyapar has
  *     already adjusted against an invoice is not netted a second time.
+ *   * Duplicate / updated detection (E-370, rules in
+ *     ./registerPaymentRules.ts classifyRegisterDoc): every document is
+ *     compared with how it stood in the LAST import (vyapar_register_rows)
+ *     and with the CRM record. Nothing changed anywhere → duplicate, skipped
+ *     with no writes. Anything changed (amount, received, balance, date,
+ *     items, cancelled) or the CRM disagrees with Vyapar → the existing
+ *     invoice is updated — only the parts that differ — never a second one.
+ *     The invoice number identifies the invoice; Vyapar's total and date win.
  * Lines are mapped to CRM products through vyapar_item_map; unmapped item
  * names are listed for someone to map (mapping back-fills earlier lines).
  *
@@ -45,11 +53,12 @@ import { classFor, isMapped, mappedClassSql, mappedItems, productFor, type ItemP
 import { voidInvoice } from "@/lib/sales/invoiceVoids";
 import { recheckStockTasks, recordInvoiceSerials } from "@/lib/inventory/stockUploadTasks/service";
 import type { LineForSerials } from "@/lib/inventory/stockUploadTasks/rules";
-import type { ImportKind, ParseResult, ParsedDocument } from "@/lib/sales/vyaparParse";
+import { linesHash, type ImportKind, type ParseResult, type ParsedDocument } from "@/lib/sales/vyaparParse";
 import { importActionFor, type ImportAction } from "@/lib/sales/importAction";
 import { paymentStatusFor } from "@/lib/sales/paymentStatus";
-import { hasCreditNoteApplications, hasInvoiceLedgerTables } from "@/lib/sales/ledgerTables";
+import { hasCreditNoteApplications, hasInvoiceLedgerTables, hasVyaparRegisterRows } from "@/lib/sales/ledgerTables";
 import {
+    classifyRegisterDoc,
     creditNoteAppliedFor,
     invoiceSeries,
     isOlderExport,
@@ -57,7 +66,12 @@ import {
     paymentChangeFor,
     registerPaidFor,
     totalsDisagree,
+    type Classification,
+    type CrmDrift,
+    type CrmFacts,
     type PaymentChange,
+    type RegisterChange,
+    type RegisterFacts,
 } from "@/lib/sales/registerPaymentRules";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -102,6 +116,19 @@ export interface ImportPlanRow {
     overrides_manual?: boolean;
     /** The CRM invoice is already void — a "cancelled" row changes nothing. */
     already_void?: boolean;
+    /**
+     * E-370 — new (create), duplicate (unchanged since the last import and in
+     * step with the CRM: skipped, nothing written) or updated.
+     */
+    classification?: Classification;
+    /** What changed in Vyapar since the last import. */
+    changes?: RegisterChange[];
+    /** Where the CRM disagrees with Vyapar now (re-applied — Vyapar wins). */
+    drift?: CrmDrift[];
+    /** The CRM's invoice date before the upload (Vyapar's wins when they differ). */
+    crm_date?: string | null;
+    /** The invoice total after the upload: Vyapar's (the CRM's when the file has none). */
+    total_after?: number | null;
 }
 
 /** Payment sync — what the upload does to amounts paid, and what it cannot see. */
@@ -151,6 +178,12 @@ export interface ImportPreview {
         unmapped_items: number;
         /** ID 62: documents whose GSTIN failed the check (kept off any dealer match). */
         gstin_refused: number;
+        /** E-370: documents the CRM does not have yet. */
+        new_docs: number;
+        /** E-370: existing documents with something to update. */
+        updated_docs: number;
+        /** E-370: unchanged since the last import and in step with the CRM — skipped. */
+        duplicates: number;
     };
     unmapped_items: string[];
     rows: ImportPlanRow[];
@@ -192,14 +225,36 @@ async function lastRegisterGeneratedAt(runner: Runner): Promise<string | null> {
     return row?.at ? new Date(row.at).toISOString() : null;
 }
 
-type CrmInvoice = { id: string; total: number | null; amount_paid: number; voided: boolean; hand_marked: boolean };
+type CrmInvoice = {
+    id: string;
+    total: number | null;
+    amount_paid: number;
+    voided: boolean;
+    hand_marked: boolean;
+    invoice_date: string | null;
+    /** Its item lines already came from a Vyapar register (undefined when lines are not stored). */
+    has_register_lines?: boolean;
+};
 
 async function crmInvoicesById(ids: string[]): Promise<Map<string, CrmInvoice>> {
     if (!ids.length) return new Map();
     const ledger = await hasInvoiceLedgerTables();
-    const rows = rowsOf<{ id: string; total: string | null; amount_paid: string | null; status: string | null; voided: boolean; hand_marked: boolean }>(
+    const rows = rowsOf<{
+        id: string;
+        total: string | null;
+        amount_paid: string | null;
+        status: string | null;
+        voided: boolean;
+        hand_marked: boolean;
+        invoice_date: string | null;
+        has_register_lines: boolean | null;
+    }>(
         await db.execute(sql`
             SELECT si.id::text AS id, si.total::text AS total, si.amount_paid::text AS amount_paid, si.status,
+                   si.invoice_date::text AS invoice_date,
+                   ${ledger
+                       ? sql`EXISTS (SELECT 1 FROM invoice_line_items l WHERE l.invoice_id::text = si.id::text AND l.source = 'vyapar')`
+                       : sql`NULL::boolean`} AS has_register_lines,
                    ${ledger
                        ? sql`EXISTS (SELECT 1 FROM invoice_voids v WHERE v.source = 'drive' AND v.invoice_id = si.id::text)`
                        : sql`false`} AS voided,
@@ -216,9 +271,121 @@ async function crmInvoicesById(ids: string[]): Promise<Map<string, CrmInvoice>> 
                 amount_paid: Number(r.amount_paid ?? 0),
                 voided: r.voided || r.status === "void",
                 hand_marked: r.hand_marked,
+                invoice_date: r.invoice_date,
+                has_register_lines: r.has_register_lines == null ? undefined : r.has_register_lines,
             },
         ]),
     );
+}
+
+/** E-370 — the key a document is remembered under in vyapar_register_rows. */
+export function registerRowKey(d: Pick<ParsedDocument, "number" | "date" | "doc_type">): string | null {
+    if (d.doc_type === "credit_note") return `credit_note:${registerCreditNoteKey(d.number, d.date)}`;
+    const k = normalizeInvoiceNumber(d.number);
+    return k ? `invoice:${k}` : null;
+}
+
+/** E-370 — how this file shows a document, in the shape the last import is remembered in. */
+function registerFactsOf(d: ParsedDocument): RegisterFacts {
+    return {
+        date: d.date,
+        total: d.total,
+        received: d.amount_paid ?? null,
+        balance: d.balance_due ?? null,
+        cancelled: d.cancelled,
+        lines_hash: linesHash(d.lines),
+    };
+}
+
+/** E-370 — each document as it stood in the last import; empty without the table. */
+async function lastRegisterRows(keys: string[]): Promise<Map<string, RegisterFacts>> {
+    if (!keys.length || !(await hasVyaparRegisterRows())) return new Map();
+    const num = (v: string | null) => (v == null ? null : Number(v));
+    const rows = rowsOf<{
+        number_key: string;
+        invoice_date: string | null;
+        total: string | null;
+        received: string | null;
+        balance: string | null;
+        cancelled: boolean;
+        lines_hash: string | null;
+    }>(
+        await db.execute(sql`
+            SELECT number_key, invoice_date::text AS invoice_date, total::text AS total, received::text AS received,
+                   balance::text AS balance, cancelled, lines_hash
+              FROM vyapar_register_rows
+             WHERE number_key IN (${sql.join(keys.map((k) => sql`${k}`), sql`, `)})`),
+    );
+    return new Map(
+        rows.map((r) => [
+            r.number_key,
+            {
+                date: r.invoice_date,
+                total: num(r.total),
+                received: num(r.received),
+                balance: num(r.balance),
+                cancelled: r.cancelled,
+                lines_hash: r.lines_hash,
+            },
+        ]),
+    );
+}
+
+type CrmCredit = { id: string; total: number | null; date: string | null; applied: number; voided: boolean };
+
+/** Credit notes the CRM already has, by note_number_key, with the used part (E-368) and void state. */
+async function crmCreditNotesByKey(keys: string[]): Promise<Map<string, CrmCredit>> {
+    if (!keys.length || !(await hasInvoiceLedgerTables())) return new Map();
+    const applied = await hasCreditNoteApplications();
+    const rows = rowsOf<{ k: string; id: string; total: string | null; date: string | null; applied: string | null; voided: boolean }>(
+        await db.execute(sql`
+            SELECT cn.note_number_key AS k, cn.id::text AS id, cn.total::text AS total, cn.issue_date::text AS date,
+                   ${applied ? sql`COALESCE(cna.amount_applied, 0)::text` : sql`'0'`} AS applied,
+                   EXISTS (SELECT 1 FROM invoice_voids v WHERE v.source = 'credit' AND v.invoice_id = cn.id::text) AS voided
+              FROM credit_notes cn
+              ${applied ? sql`LEFT JOIN credit_note_applications cna ON cna.credit_note_id = cn.id` : sql``}
+             WHERE cn.note_number_key IN (${sql.join(keys.map((k) => sql`${k}`), sql`, `)})`),
+    );
+    return new Map(
+        rows.map((r) => [
+            r.k,
+            { id: r.id, total: r.total == null ? null : Number(r.total), date: r.date, applied: Number(r.applied ?? 0), voided: r.voided },
+        ]),
+    );
+}
+
+/** E-370 — remember how this import saw a document (blank received / balance / lines keep what was known). */
+async function upsertRegisterRow(runner: Runner, d: ParsedDocument, importId: string, asOf: string | null): Promise<void> {
+    const key = registerRowKey(d);
+    if (!key) return;
+    const f = registerFactsOf(d);
+    await runner.execute(sql`
+        INSERT INTO vyapar_register_rows (number_key, doc_type, invoice_number, invoice_date, total, received, balance,
+                                          status_text, cancelled, lines_hash, import_id, generated_at, updated_at)
+        VALUES (${key}, ${d.doc_type}, ${d.number}, ${f.date}::date, ${f.total}, ${f.received}, ${f.balance},
+                ${d.status_text ?? null}, ${f.cancelled}, ${f.lines_hash}, ${importId}::uuid, ${asOf}::timestamptz, now())
+        ON CONFLICT (number_key) DO UPDATE
+           SET doc_type = EXCLUDED.doc_type,
+               invoice_number = EXCLUDED.invoice_number,
+               invoice_date = COALESCE(EXCLUDED.invoice_date, vyapar_register_rows.invoice_date),
+               total = COALESCE(EXCLUDED.total, vyapar_register_rows.total),
+               received = COALESCE(EXCLUDED.received, vyapar_register_rows.received),
+               balance = COALESCE(EXCLUDED.balance, vyapar_register_rows.balance),
+               status_text = COALESCE(EXCLUDED.status_text, vyapar_register_rows.status_text),
+               cancelled = EXCLUDED.cancelled,
+               lines_hash = COALESCE(EXCLUDED.lines_hash, vyapar_register_rows.lines_hash),
+               import_id = EXCLUDED.import_id,
+               generated_at = EXCLUDED.generated_at,
+               updated_at = now()`);
+}
+
+/** The newest committed register import (its id), to notice one finishing while another is being prepared. */
+async function lastRegisterImportId(runner: Runner): Promise<string | null> {
+    const [row] = rowsOf<{ id: string | null }>(
+        await runner.execute(sql`
+            SELECT id::text AS id FROM invoice_imports WHERE kind = 'vyapar_register' ORDER BY created_at DESC, id DESC LIMIT 1`),
+    );
+    return row?.id ?? null;
 }
 
 /**
@@ -394,7 +561,17 @@ export async function previewImport(parsed: ParseResult): Promise<ImportPreview>
     const unmapped = new Set<string>();
     // Payment sync: only a register that carries payments (Vyapar's Sale Report).
     const withPayments = parsed.kind === "vyapar_register" && docs.some((d) => d.amount_paid != null);
-    const crm = withPayments ? await crmInvoicesById([...new Set(existing.values())]) : new Map<string, CrmInvoice>();
+    const register = parsed.kind === "vyapar_register";
+    const crm = register ? await crmInvoicesById([...new Set(existing.values())]) : new Map<string, CrmInvoice>();
+    // E-370: how each document stood in the last import, and the credit notes the CRM has.
+    const snapshots = register
+        ? await lastRegisterRows(docs.map(registerRowKey).filter((k): k is string => !!k))
+        : new Map<string, RegisterFacts>();
+    const creditKeyOf = (d: ParsedDocument) => registerCreditNoteKey(d.number, d.date);
+    const credits = register
+        ? await crmCreditNotesByKey(docs.filter((d) => d.doc_type === "credit_note").map(creditKeyOf))
+        : new Map<string, CrmCredit>();
+    const cnApplied = register && (await hasCreditNoteApplications());
     const rows: ImportPlanRow[] = docs.map((d) => {
         for (const l of d.lines) if (l.item_name && !isMapped(mapped, l.item_name)) unmapped.add(l.item_name);
         const id = existing.get(keyOf(d) ?? "") ?? null;
@@ -414,16 +591,49 @@ export async function previewImport(parsed: ParseResult): Promise<ImportPreview>
             action,
             existing_id: id,
         };
-        if (withPayments && id && crm.get(id)?.voided) row.already_void = true;
+        if (register && id && d.doc_type === "invoice" && crm.get(id)?.voided) row.already_void = true;
+
+        // E-370 — new / duplicate / updated, against the last import and the CRM.
+        if (register && action !== "in_zoho") {
+            const facts = registerFactsOf(d);
+            const last = snapshots.get(registerRowKey(d) ?? "") ?? null;
+            let crmFacts: CrmFacts | null = null;
+            let expectedPaid: number | null = null;
+            if (d.doc_type === "credit_note") {
+                const cn = credits.get(creditKeyOf(d));
+                if (cn) crmFacts = { date: cn.date, total: cn.total, paid: cn.applied, voided: cn.voided };
+                // The used part is only compared once E-368 stores it.
+                expectedPaid = cnApplied ? creditNoteAppliedFor(d.total, d.balance_due) : null;
+            } else {
+                const cur = id ? crm.get(id) : undefined;
+                if (cur) {
+                    crmFacts = {
+                        date: cur.invoice_date,
+                        total: cur.total,
+                        paid: cur.amount_paid,
+                        voided: cur.voided,
+                        has_register_lines: cur.has_register_lines,
+                    };
+                }
+                // Vyapar's total wins, so the payment is capped at it.
+                expectedPaid = registerPaidFor(d.amount_paid, d.total ?? cur?.total ?? 0);
+            }
+            const verdict = classifyRegisterDoc({ doc: facts, last, crm: crmFacts, expectedPaid });
+            Object.assign(row, { classification: verdict.classification, changes: verdict.changes, drift: verdict.drift });
+        }
+
         if (withPayments && d.doc_type === "invoice" && !d.cancelled && (action === "update" || action === "create")) {
             const cur = id ? crm.get(id) : undefined;
             if (!(cur?.voided)) {
-                const total = cur ? (cur.total ?? d.total ?? 0) : (d.total ?? 0);
+                // Vyapar's total wins (E-370); the CRM's only when the file has none.
+                const total = d.total ?? cur?.total ?? 0;
                 const before = cur?.amount_paid ?? 0;
                 const after = registerPaidFor(d.amount_paid, total);
                 const change = paymentChangeFor(before, after);
                 Object.assign(row, {
-                    crm_total: total,
+                    crm_total: cur ? cur.total : d.total,
+                    total_after: total,
+                    crm_date: cur?.invoice_date ?? null,
                     register_total: d.total,
                     paid_before: before,
                     paid_after: after,
@@ -476,6 +686,9 @@ export async function previewImport(parsed: ParseResult): Promise<ImportPreview>
             serials: sum(rows.map((r) => r.serials)),
             unmapped_items: unmapped.size,
             gstin_refused: rows.filter((r) => r.gstin_attention).length,
+            new_docs: rows.filter((r) => r.classification === "new").length,
+            updated_docs: rows.filter((r) => r.classification === "updated").length,
+            duplicates: rows.filter((r) => r.classification === "duplicate").length,
         },
         unmapped_items: [...unmapped].sort(),
         rows,
@@ -494,6 +707,14 @@ export type CommitSummary = ImportPreview["totals"] & {
     credit_notes_added: number;
     /** E-368: credit notes whose used part changed. */
     credit_notes_applied: number;
+    /** E-370: documents skipped as duplicates (nothing changed). */
+    skipped_duplicates: number;
+    /** E-370: existing invoices / credit notes updated. */
+    updated_existing: number;
+    /** E-370: CRM totals replaced by Vyapar's. */
+    totals_corrected: number;
+    /** E-370: CRM invoice dates replaced by Vyapar's. */
+    dates_corrected: number;
     /** The export's "Generated on" (ISO, IST), when the file carries it. */
     generated_at: string | null;
 };
@@ -502,9 +723,14 @@ export async function commitImport(
     parsed: ParseResult,
     meta: { fileName: string | null; actorId: string; allowOlder?: boolean },
 ): Promise<{ import_id: string; summary: CommitSummary }> {
+    // E-370: the classification below is made against the CRM as it is now;
+    // if another register import commits before this one takes the lock, the
+    // preview is stale — refused (preview again) rather than applied.
+    const lastImportBefore = parsed.kind === "vyapar_register" ? await lastRegisterImportId(db) : null;
     const preview = await previewImport(parsed);
     if (!parsed.documents.length) throw new Error("Nothing to import — no documents were read from the file.");
     const asOf = parsed.generated_at ?? null;
+    const remember = parsed.kind === "vyapar_register" && (await hasVyaparRegisterRows());
     const ledger = await hasInvoiceLedgerTables();
     const cnApplications = parsed.kind === "vyapar_register" && (await hasCreditNoteApplications());
 
@@ -521,6 +747,10 @@ export async function commitImport(
         let collected = 0;
         let creditNotes = 0;
         let creditApplied = 0;
+        let skippedDuplicates = 0;
+        let updatedExisting = 0;
+        let totalsCorrected = 0;
+        let datesCorrected = 0;
         const done = (importId: string) => ({
             import_id: importId,
             summary: {
@@ -532,6 +762,10 @@ export async function commitImport(
                 collected: Math.round(collected * 100) / 100,
                 credit_notes_added: creditNotes,
                 credit_notes_applied: creditApplied,
+                skipped_duplicates: skippedDuplicates,
+                updated_existing: updatedExisting,
+                totals_corrected: totalsCorrected,
+                dates_corrected: datesCorrected,
                 generated_at: asOf,
             } satisfies CommitSummary,
         });
@@ -543,6 +777,9 @@ export async function commitImport(
             await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${IMPORT_LOCK}))`);
             const last = await lastRegisterGeneratedAt(tx);
             if (asOf && last && isOlderExport(asOf, last) && !meta.allowOlder) throw new OlderExportError(asOf, last);
+            if ((await lastRegisterImportId(tx)) !== lastImportBefore) {
+                throw new Error("Another Vyapar import finished while this one was being prepared. Preview the file again, then import.");
+            }
         }
 
         const [imp] = rowsOf<{ id: string }>(
@@ -577,7 +814,18 @@ export async function commitImport(
                 // with the invoices) reduces what the customer owes. The Drive
                 // credit-note folder adds the same note once; whichever comes
                 // first keeps the number.
-                if (d.cancelled || plan?.action === "in_zoho" || d.total == null) continue;
+                if (plan?.action === "in_zoho") continue;
+                if (d.cancelled || d.total == null) {
+                    if (remember) await upsertRegisterRow(tx, d, imp.id, asOf);
+                    continue;
+                }
+                // E-370: unchanged since the last import and in step with the CRM.
+                if (plan?.classification === "duplicate") {
+                    skippedDuplicates++;
+                    if (remember) await upsertRegisterRow(tx, d, imp.id, asOf);
+                    continue;
+                }
+                const noteKey = registerCreditNoteKey(d.number, d.date);
                 const org = resolveSalesOrg({ invoiceNumber: d.number });
                 const added = rowsOf<{ id: string }>(
                     await tx.execute(sql`
@@ -590,17 +838,35 @@ export async function commitImport(
                         RETURNING id::text AS id`),
                 );
                 if (added.length) creditNotes++;
+                else updatedExisting++;
+                // E-370: Vyapar's figures win on a note the CRM already has.
+                if (!added.length && (plan?.drift ?? []).some((x) => x === "amount" || x === "date")) {
+                    await tx.execute(sql`
+                        UPDATE credit_notes
+                           SET total = ${d.total}, sub_total = COALESCE(${d.taxable}, sub_total), tax_total = COALESCE(${d.tax}, tax_total),
+                               issue_date = COALESCE(${d.date}::date, issue_date), updated_at = now()
+                         WHERE note_number_key = ${noteKey}`);
+                }
                 // E-368: the part Vyapar has already adjusted against an invoice
                 // (that invoice's Received includes it) is not netted again.
-                if (cnApplications && (await applyCreditNoteUse(tx, registerCreditNoteKey(d.number, d.date), d, asOf, imp.id))) {
+                if (cnApplications && (await applyCreditNoteUse(tx, noteKey, d, asOf, imp.id))) {
                     creditApplied++;
                 }
+                if (remember) await upsertRegisterRow(tx, d, imp.id, asOf);
                 continue;
             }
             const key = normalizeInvoiceNumber(d.number);
             if (!key) continue;
             if (plan?.action === "in_zoho") continue; // ID 200: counted from Zoho already
+            // E-370: unchanged since the last import and in step with the CRM —
+            // not imported again (no line rewrite, no payment write).
+            if (plan?.classification === "duplicate") {
+                skippedDuplicates++;
+                if (remember) await upsertRegisterRow(tx, d, imp.id, asOf);
+                continue;
+            }
             let id = plan?.existing_id ?? null;
+            const isNew = !id;
             if (!id) {
                 const org = resolveSalesOrg({ invoiceNumber: d.number });
                 const [row] = rowsOf<{ id: string }>(
@@ -639,7 +905,35 @@ export async function commitImport(
                        AND position(${d.gstin_attention}::text IN COALESCE(attention_reason, '')) = 0`);
             }
 
-            if (d.lines.length) {
+            const changes = plan?.changes ?? [];
+            const drift = plan?.drift ?? [];
+            if (!isNew) {
+                updatedExisting++;
+                // E-370: Vyapar's total wins (a misread PDF, or the invoice edited
+                // in Vyapar) — before the payment, which is capped at the total.
+                if (drift.includes("amount") && d.total != null) {
+                    const note = `Total corrected from Vyapar (₹${d.total.toLocaleString("en-IN")}).`;
+                    await tx.execute(sql`
+                        UPDATE sales_invoices
+                           SET total = ${d.total}, sub_total = COALESCE(${d.taxable}, sub_total), tax_total = COALESCE(${d.tax}, tax_total),
+                               attention_reason = CASE WHEN needs_attention THEN concat_ws(' ', NULLIF(attention_reason, ''), ${note}::text)
+                                                       ELSE attention_reason END,
+                               updated_at = now()
+                         WHERE id = ${id}::uuid`);
+                    totalsCorrected++;
+                }
+                // The number identifies the invoice; Vyapar's date wins.
+                if (drift.includes("date") && d.date) {
+                    await tx.execute(sql`
+                        UPDATE sales_invoices SET invoice_date = ${d.date}::date, updated_at = now()
+                         WHERE id = ${id}::uuid AND invoice_date IS DISTINCT FROM ${d.date}::date`);
+                    datesCorrected++;
+                }
+            }
+
+            // Items: written for a new invoice, or when they changed in Vyapar,
+            // or the CRM still has only the PDF's reading of them.
+            if (d.lines.length && (isNew || changes.includes("lines") || drift.includes("lines"))) {
                 await tx.execute(sql`DELETE FROM invoice_line_items WHERE invoice_id = ${id} AND source IN ('vyapar', 'drive')`);
                 const taskLines: LineForSerials[] = [];
                 if (!d.cancelled) stockTaskInputs.push({ id, lines: taskLines });
@@ -681,7 +975,9 @@ export async function commitImport(
                 if (r.voided) voided++;
                 voidedAny = true;
             }
+            if (remember) await upsertRegisterRow(tx, d, imp.id, asOf);
         }
+        // (each processed invoice is remembered for the next upload)
         // Remember every item name seen, mapped or not, so the mapping list is complete.
         for (const name of preview.unmapped_items) {
             await tx.execute(sql`

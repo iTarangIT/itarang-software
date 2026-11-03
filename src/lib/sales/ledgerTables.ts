@@ -51,6 +51,29 @@ export async function hasCreditNoteApplications(): Promise<boolean> {
     return applications;
 }
 
+let registerRows: boolean | null = null;
+let registerRowsAt = 0;
+
+/**
+ * E-370: vyapar_register_rows — each invoice as it stood in the last Vyapar
+ * Sale Report imported (duplicate / updated detection). Without it the import
+ * compares with the CRM invoice itself.
+ */
+export async function hasVyaparRegisterRows(): Promise<boolean> {
+    const now = Date.now();
+    if (registerRows !== null && now - registerRowsAt < PROBE_TTL_MS) return registerRows;
+    try {
+        const res = (await db.execute(sql`
+            SELECT to_regclass('public.vyapar_register_rows') IS NOT NULL AS ok
+        `)) as unknown as Array<{ ok: boolean }>;
+        registerRows = Boolean(res[0]?.ok);
+    } catch {
+        registerRows = false;
+    }
+    registerRowsAt = now;
+    return registerRows;
+}
+
 let zohoPayments: boolean | null = null;
 let zohoPaymentsAt = 0;
 

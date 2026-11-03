@@ -56,14 +56,18 @@ export async function projectReceivablesAfterImport(parsed: ParseResult, preview
             if (r.existing_id) overrides.set(`drive:${r.existing_id}`, { balance: 0, status: "void" });
             continue;
         }
-        if (r.crm_total == null) continue; // no payments in the file for it
+        // E-370: Vyapar's total wins, so the balance after is against it.
+        const totalAfter = r.total_after ?? r.crm_total;
+        if (totalAfter == null) continue; // no payments in the file for it
         const paid = r.paid_after ?? r.paid_before ?? 0;
-        const balance = Math.round((r.crm_total - paid) * 100) / 100;
-        const status = paymentStatusFor(paid, r.crm_total);
+        const balance = Math.round((totalAfter - paid) * 100) / 100;
+        const status = paymentStatusFor(paid, totalAfter);
         if (r.existing_id) {
-            if (r.payment_change === "increase" || r.payment_change === "decrease") {
-                overrides.set(`drive:${r.existing_id}`, { balance, status });
-            }
+            // A duplicate is skipped — nothing it could change.
+            const touched = r.classification
+                ? r.classification === "updated"
+                : r.payment_change === "increase" || r.payment_change === "decrease";
+            if (touched) overrides.set(`drive:${r.existing_id}`, { balance, status });
         } else if (r.action === "create") {
             newInvoices.push({ number: r.number, gstin: r.gstin, name: r.party, balance, status });
         }
@@ -89,7 +93,11 @@ export async function projectReceivablesAfterImport(parsed: ParseResult, preview
         const used = applied ? (creditNoteAppliedFor(d.total, d.balance_due) ?? 0) : 0;
         const have = existingCredit.get(key);
         if (have) {
-            if (applied) overrides.set(`credit:${have.id}`, { balance: -(have.total - Math.min(used, have.total)), status: "credit_note" });
+            // E-370: Vyapar's total wins on a note the CRM has.
+            const total = d.total ?? have.total;
+            if (applied || Math.abs(total - have.total) > 1) {
+                overrides.set(`credit:${have.id}`, { balance: -(total - Math.min(used, total)), status: "credit_note" });
+            }
         } else {
             newCredits.push({ id: `new:${key}`, gstin: d.gstin, name: d.party, balance: -((d.total ?? 0) - Math.min(used, d.total ?? 0)) });
         }

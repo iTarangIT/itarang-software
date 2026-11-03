@@ -319,11 +319,40 @@ function unknownColumnsOf(p: SheetPick): string[] {
     return p.headers.filter((h, i) => h && !used.has(i) && !IGNORED.some((g) => norm(h).includes(g)));
 }
 
+/**
+ * E-370 — a stable fingerprint of a document's item lines (name, HSN,
+ * quantity, rate, amount before GST), so an upload can tell "same items" from
+ * "items changed" without storing the lines twice. FNV-1a, 8 hex chars; pure
+ * and order-sensitive (Vyapar exports lines in entry order). Null when the
+ * document has no lines (nothing to compare).
+ */
+export function linesHash(lines: Pick<ParsedLine, "item_name" | "hsn" | "quantity" | "rate" | "amount_excl_gst">[]): string | null {
+    if (!lines.length) return null;
+    const n = (v: number | null) => (v == null ? "" : (Math.round(v * 100) / 100).toFixed(2));
+    const text = lines
+        .map((l) => [String(l.item_name ?? "").trim().toLowerCase().replace(/\s+/g, " "), l.hsn ?? "", n(l.quantity), n(l.rate), n(l.amount_excl_gst)].join("|"))
+        .join("\n");
+    let h = 0x811c9dc5;
+    for (let i = 0; i < text.length; i++) {
+        h ^= text.charCodeAt(i);
+        h = Math.imul(h, 0x01000193) >>> 0;
+    }
+    return h.toString(16).padStart(8, "0");
+}
+
 /** Every document on one sheet, in row order. Totals are finished by finishDocuments. */
-function readDocuments(p: SheetPick, kind: ImportKind): { docs: Map<string, ParsedDocument>; skipped: number } {
+function readDocuments(
+    p: SheetPick,
+    kind: ImportKind,
+): { docs: Map<string, ParsedDocument>; skipped: number; repeated: string[] } {
     const c = p.cols;
     const cell = (row: unknown[], f: Field) => (c[f] != null ? row[c[f] as number] : undefined);
     const docs = new Map<string, ParsedDocument>();
+    // E-370: on a one-row-per-document sheet (the Sale Report, which carries
+    // Received / Balance) a number seen twice is a duplicate row, not another
+    // item line — the later row's figures win, and the importer is told.
+    const onePerDocument = c.received != null || c.balance != null;
+    const repeated: string[] = [];
     let last: ParsedDocument | null = null;
     let skipped = 0;
 
@@ -337,6 +366,18 @@ function readDocuments(p: SheetPick, kind: ImportKind): { docs: Map<string, Pars
         let doc: ParsedDocument | null;
         if (rawNumber) {
             doc = docs.get(rawNumber) ?? null;
+            if (doc && onePerDocument) {
+                const total = parseAmount(cell(row, "total"));
+                const received = parseAmount(cell(row, "received"));
+                const balance = parseAmount(cell(row, "balance"));
+                const date = parseDateCell(cell(row, "date"));
+                const moved = (a: number | null, b: number | null | undefined) => a != null && b != null && Math.abs(a - b) > 0.5;
+                const differs =
+                    moved(total, doc.total) || moved(received, doc.amount_paid) || moved(balance, doc.balance_due) || (!!date && !!doc.date && date !== doc.date);
+                repeated.push(
+                    `${rawNumber}: listed twice on ${p.sheet}${differs ? " with different figures — the later row is used" : " (same figures) — read once"}.`,
+                );
+            }
             if (!doc) {
                 const gst = screenCustomerGstin(String(cell(row, "gstin") ?? ""));
                 doc = {
@@ -435,7 +476,7 @@ function readDocuments(p: SheetPick, kind: ImportKind): { docs: Map<string, Pars
         if (tax != null) doc.tax = (doc.tax ?? 0) + tax;
         if (total != null && c.item != null && c.total != null) doc.total = (doc.total ?? 0) + total;
     }
-    return { docs, skipped };
+    return { docs, skipped, repeated };
 }
 
 /** Taxable from the lines, total from taxable + tax, paid from total less balance; date warnings. */
@@ -516,6 +557,7 @@ function parseSaleReportPair(wb: XLSX.WorkBook, saleName: string, itemsName: str
         warnings.push(`${l.number}: on ${itemsName} but not on ${saleName}; read without payments.`);
         out.push(l);
     }
+    warnings.push(...head.repeated);
     finishDocuments(out, kind, warnings);
     const skipped = head.skipped + lines.skipped;
     if (skipped) warnings.push(`${skipped} row(s) before the first invoice number were skipped.`);
@@ -557,7 +599,8 @@ export function parseInvoiceWorkbook(buffer: ArrayBuffer | Buffer, kind: ImportK
     }
 
     const warnings: string[] = [];
-    const { docs, skipped } = readDocuments(best, kind);
+    const { docs, skipped, repeated } = readDocuments(best, kind);
+    warnings.push(...repeated);
     finishDocuments(docs.values(), kind, warnings);
     if (skipped) warnings.push(`${skipped} row(s) before the first invoice number were skipped.`);
 

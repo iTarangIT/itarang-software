@@ -83,6 +83,100 @@ export function creditNoteAppliedFor(total: number | null, balanceDue: number | 
     return r2(Math.min(Math.max(total - balanceDue, 0), Math.max(total, 0)));
 }
 
+// ── Duplicate / updated detection (E-370) ──────────────────────────────────
+//
+// Business rules (3 Nov):
+//   * Duplicate — same number, date and amount as what was last imported, and
+//     nothing else changed → not imported again (no writes at all).
+//   * Updated — same number (the number identifies the invoice; a different
+//     date is a correction, not another invoice) but the amount, received,
+//     balance, date, items or cancelled flag changed → update the existing
+//     invoice, never create a second one.
+//   * Payment validation — compared with the LAST IMPORTED row, not only the
+//     CRM: received / balance changed → update; unchanged → skip.
+//   * Vyapar always wins — Vyapar unchanged but the CRM differs (a payment
+//     typed in by hand, a misread PDF total or date) → re-apply Vyapar
+//     ("drift").
+
+/** One document as Vyapar shows it (this file, or the last import). */
+export type RegisterFacts = {
+    date: string | null;
+    total: number | null;
+    received: number | null;
+    balance: number | null;
+    cancelled: boolean;
+    /** linesHash() of its items; null when unknown (no item sheet, or an old snapshot). */
+    lines_hash: string | null;
+};
+
+/**
+ * The CRM's own record of the same document. `paid` = amount paid (invoice) or
+ * used part (credit note). `has_register_lines` = its item lines already came
+ * from a Vyapar register (false = only the Drive PDF's reading; undefined =
+ * not known, e.g. a credit note).
+ */
+export type CrmFacts = { date: string | null; total: number | null; paid: number; voided: boolean; has_register_lines?: boolean };
+
+export type RegisterChange = "amount" | "received" | "balance" | "date" | "lines" | "cancelled";
+export type CrmDrift = "amount" | "paid" | "date" | "cancelled" | "lines";
+export type Classification = "new" | "duplicate" | "updated";
+
+export type RegisterVerdict = {
+    classification: Classification;
+    /** What changed in Vyapar since the last import (empty on the first import of a document). */
+    changes: RegisterChange[];
+    /** Where the CRM disagrees with Vyapar now — re-applied, Vyapar wins. */
+    drift: CrmDrift[];
+};
+
+const AMOUNT_TOLERANCE = 1; // ₹1: Vyapar rounds totals, the PDF reader does not
+const MONEY_TOLERANCE = 0.5;
+
+const moneyDiffers = (a: number | null, b: number | null, tol = MONEY_TOLERANCE) =>
+    a == null || b == null ? a !== b : Math.abs(a - b) > tol;
+const dayOf = (d: string | null) => (d ? d.slice(0, 10) : null);
+
+/**
+ * Classify one register document. `crm` null = the CRM does not have it →
+ * new. `last` null = never imported before (first upload after E-370): only
+ * the CRM comparison applies, so an invoice already in step is a duplicate.
+ * `expectedPaid` = what the CRM's amount paid should be after the upload
+ * (registerPaidFor against the total it will have), null when the file has no
+ * payment for it.
+ */
+export function classifyRegisterDoc(input: {
+    doc: RegisterFacts;
+    last: RegisterFacts | null;
+    crm: CrmFacts | null;
+    expectedPaid: number | null;
+}): RegisterVerdict {
+    const { doc, last, crm, expectedPaid } = input;
+    if (!crm) return { classification: "new", changes: [], drift: [] };
+
+    const changes: RegisterChange[] = [];
+    if (last) {
+        if (doc.total != null && moneyDiffers(doc.total, last.total, AMOUNT_TOLERANCE)) changes.push("amount");
+        if (doc.received != null && moneyDiffers(doc.received, last.received)) changes.push("received");
+        if (doc.balance != null && moneyDiffers(doc.balance, last.balance)) changes.push("balance");
+        if (doc.date && dayOf(doc.date) !== dayOf(last.date)) changes.push("date");
+        if (doc.lines_hash && last.lines_hash && doc.lines_hash !== last.lines_hash) changes.push("lines");
+        if (doc.cancelled !== last.cancelled) changes.push("cancelled");
+    }
+
+    const drift: CrmDrift[] = [];
+    if (doc.cancelled) {
+        if (!crm.voided) drift.push("cancelled");
+    } else if (!crm.voided) {
+        if (doc.total != null && moneyDiffers(doc.total, crm.total, AMOUNT_TOLERANCE)) drift.push("amount");
+        if (expectedPaid != null && moneyDiffers(expectedPaid, crm.paid)) drift.push("paid");
+        if (doc.date && crm.date && dayOf(doc.date) !== dayOf(crm.date)) drift.push("date");
+        // Vyapar's items replace the PDF reading once (batteries sold come from them).
+        if (doc.lines_hash && crm.has_register_lines === false) drift.push("lines");
+    }
+
+    return { classification: changes.length || drift.length ? "updated" : "duplicate", changes, drift };
+}
+
 /** "ITG/202627/045" → "ITG" — the series an invoice belongs to (one per firm / state). */
 export function invoiceSeries(number: string): string | null {
     const m = number.trim().toUpperCase().match(/^([A-Z]{2,})[/-]/);
