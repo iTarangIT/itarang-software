@@ -12,7 +12,7 @@ import { z } from "zod";
 
 import { requireRole } from "@/lib/auth-utils";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
-import { clockStats, clockStatsByOwner, clocksComputedAt, limitsPassed } from "@/lib/leads/clocks";
+import { clockStats, clockStatsByOwner, clocksComputedAt, hasLeadClocks, limitsPassed } from "@/lib/leads/clocks";
 import { getOfficeHours } from "@/lib/calendar/officeHoursStore";
 import { shortOfficeHours } from "@/lib/calendar/officeHours";
 
@@ -38,6 +38,9 @@ export const GET = withErrorHandler(async (req: Request) => {
         spoc_id: sp.get("spoc_id") || undefined,
         include_guessed: sp.get("include_guessed") === "1",
     });
+    // ID 218: probe once. "Not available" only when the table is truly absent;
+    // a database error propagates as a 500 so the card says "could not load".
+    if (!(await hasLeadClocks())) return successResponse({ available: false });
     const person = p.spoc_id ? { ownerIds: [p.spoc_id], includeGuessed: p.include_guessed } : {};
     const [lead, owner, transfer, passed, computedAt, byOwner, hours] = await Promise.all([
         p.spoc_id ? Promise.resolve(null) : clockStats("lead", p.from, p.to),
