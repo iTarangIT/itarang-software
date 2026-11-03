@@ -22,6 +22,7 @@ import {
 
 // ID 166: invoice PDFs open through a fresh 15-minute link on each click.
 import FreshFileLink from "@/components/shared/FreshFileLink";
+import { InfoTip } from "@/components/ui/info-tip";
 import { paymentsStaleText, receivablesSourceText } from "@/lib/sales/invoiceFreshnessRules";
 import DebtorTable, { type Debtor } from "./_components/DebtorTable";
 import VyaparPaymentUpload from "./_components/VyaparPaymentUpload";
@@ -137,10 +138,8 @@ export default async function CeoReceivablesPage({
                 </Link>
                 <h1 className="mt-2 text-2xl font-bold tracking-tight text-brand-navy">Accounts Receivable</h1>
                 <p className="mt-1 text-sm text-ink-muted">
-                    Every Zoho and Drive invoice that is not paid, void or draft and still has a balance — as of now,
-                    whatever date it was raised. The amount is the unpaid balance (invoice total minus what has been
-                    paid), including GST, less any credit note issued to the same customer (never below zero per
-                    customer). Age is days since the invoice or credit note date.
+                    Unpaid balance of every invoice, less the customer&apos;s credit notes, as of now.
+                    <InfoTip className="ml-1">{"Every Zoho, Drive and Vyapar invoice that is not paid, void or draft and still has a balance, whatever date it was raised. The amount is the invoice total minus what has been paid, including GST, less any credit note issued to the same customer (never below zero per customer). Age is days since the invoice or credit note date."}</InfoTip>
                 </p>
                 <p className="mt-1 text-xs text-gray-500">{receivablesSourceText(freshness)}</p>
                 {paymentsStaleText(freshness) && (
@@ -305,8 +304,7 @@ export default async function CeoReceivablesPage({
             )}
 
             <p className="text-xs text-gray-500">
-                Payments are only seen once they are recorded on the invoice (Zoho balance, or amount paid on a Drive
-                invoice). Money collected but not yet entered still shows here as owed.
+                Money collected shows as owed until the next Vyapar Sale Report upload.
             </p>
         </div>
     );

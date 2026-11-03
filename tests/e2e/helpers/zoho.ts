@@ -52,7 +52,7 @@ export async function fetchInvoicesJson(
 }
 
 /**
- * Click the "Export CSV" button on /ceo/invoices and capture the download.
+ * Click the "Download CSV" button on /ceo/invoices and capture the download.
  * Returns the CSV body + the suggested filename + the content-type the route
  * served when fetched directly (downloads don't expose headers — we re-fetch).
  */
