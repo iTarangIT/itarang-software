@@ -5,6 +5,7 @@ import { eq, inArray } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { normalizeIndianPhone, phoneLookupVariants } from "@/lib/ai/phone";
 import { dedupClaim } from "@/lib/queue/safeRedis";
+import { openingLanguageOverride } from "@/lib/ai-dialer/callLanguage";
 import { ElevenLabsCallPayload, ElevenLabsCallResponse } from "./types";
 
 // One ElevenLabs call per (lead, phone, day). Same rationale as Bolna —
@@ -256,12 +257,25 @@ export async function triggerElevenLabsCall(
       timezone: "Asia/Kolkata",
     };
 
+    // Item 2 (3 Nov 2026) — open in the dealer's own language when an earlier
+    // call learned it. ElevenLabs REJECTS the call unless the agent allows a
+    // language override (platform_settings.overrides), so it is switched on
+    // with ELEVENLABS_LANGUAGE_OVERRIDE=1 only once the agent is set up; the
+    // language preset then supplies that language's first message.
+    const languageOverride =
+      process.env.ELEVENLABS_LANGUAGE_OVERRIDE === "1"
+        ? openingLanguageOverride(lead.language)
+        : null;
+
     const bodyData = {
       agent_id: process.env.ELEVENLABS_AGENT_ID,
       agent_phone_number_id: process.env.ELEVENLABS_AGENT_PHONE_NUMBER_ID,
       to_number: recipientPhone,
       conversation_initiation_client_data: {
         dynamic_variables: dynamicVariables,
+        ...(languageOverride
+          ? { conversation_config_override: { agent: { language: languageOverride } } }
+          : {}),
       },
       call_recording_enabled: true,
     };

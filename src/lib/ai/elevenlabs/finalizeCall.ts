@@ -4,6 +4,7 @@
 import { aiInterestLevelSql } from "@/lib/ai/storage/aiInterest";
 import { markSalesReady } from "@/lib/leads/salesReady";
 import { analyzeTranscript } from "@/lib/ai/analysis";
+import { languageToStore } from "@/lib/ai-dialer/callLanguage";
 import { db } from "@/lib/db";
 import { aiCallLogs, dealerLeads, dialerCampaigns } from "@/lib/db/schema";
 import { eq, sql } from "drizzle-orm";
@@ -73,9 +74,25 @@ export type ElevenLabsFinalizePayload = {
    */
   answeredBy?: string | null;
   callResult?: string | null;
+  /** Item 2 — the language the agent spoke with the dealer (`call_language`). */
+  callLanguage?: string | null;
 };
 
 const IN_PROGRESS = new Set(["initiated", "ringing", "in-progress"]);
+
+/** Best-effort: a failure here must never stop the call being finalized. */
+async function rememberCallLanguage(leadId: string, callLanguage: string | null | undefined): Promise<void> {
+  const name = languageToStore({ callLanguage, dealerSpoke: true, current: null });
+  if (!name) return;
+  try {
+    await db.execute(sql`
+      UPDATE dealer_leads SET language = ${name}
+       WHERE id = ${leadId} AND lower(coalesce(language, '')) IS DISTINCT FROM ${name}
+    `);
+  } catch (e) {
+    console.warn("[elevenlabs:finalize] call language not stored:", e instanceof Error ? e.message : e);
+  }
+}
 const ADVANCE_DELAY_MS = 5_000;
 
 // Resolve a browser-playable recording URL for an ElevenLabs call. ElevenLabs
@@ -115,6 +132,7 @@ export async function finalizeElevenLabsCall(
     terminationReason,
     answeredBy,
     callResult,
+    callLanguage,
   } = payload;
 
   if (IN_PROGRESS.has(status)) {
@@ -374,6 +392,10 @@ export async function finalizeElevenLabsCall(
     await fetchAndPersistCallCost("elevenlabs", conversationId);
     return;
   }
+
+  // Item 2 — remember the language the dealer answered in, so the next call
+  // opens in it (triggerCall). Only completed calls reach here: a person spoke.
+  await rememberCallLanguage(lead.id, callLanguage);
 
   const result = await analyzeTranscript(transcript);
 
