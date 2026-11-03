@@ -1158,7 +1158,11 @@ export function SalesHeadOpsView() {
                         <span className={TABLE_HEAD}>Speed · median, slowest 1 in 10 (working hours)</span>
                         {!m?.speed ? (
                             <span className="text-xs text-ink-muted">
-                                {measures.isLoading ? "Loading…" : "Lead clocks are not set up on this server yet (migration E-337)."}
+                                {measures.isLoading
+                                    ? "Loading…"
+                                    : measures.isError
+                                      ? "Speed could not be loaded just now. Try again in a minute."
+                                      : "Response times are not available on this server yet."}
                             </span>
                         ) : (
                             [

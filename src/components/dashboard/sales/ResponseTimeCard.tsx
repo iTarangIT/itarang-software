@@ -123,8 +123,10 @@ export function ResponseTimeCard({ from, to, spocId }: { from: string; to: strin
         >
             {q.isLoading ? (
                 <LoadingBlock />
+            ) : q.isError && !d ? (
+                <NotAvailable reason="Response times could not be loaded just now. Try again in a minute." />
             ) : !d?.available ? (
-                <NotAvailable reason="Lead clocks are not set up on this server yet (migration E-337)." />
+                <NotAvailable reason="Response times are not available on this server yet." />
             ) : (
                 <div className="space-y-4">
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
