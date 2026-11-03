@@ -212,13 +212,13 @@ export function LeadsTable({
                                 Region
                             </th>
                             <th className="min-w-[150px] px-4 py-3 text-left font-semibold">
-                                Qualification
+                                Status
                             </th>
                             <th className="min-w-[120px] px-4 py-3 text-left font-semibold">
                                 Business Type
                             </th>
                             <th className="min-w-[110px] px-4 py-3 text-left font-semibold">
-                                Intent
+                                Interest
                             </th>
                             {caps.canSeeOwnerAsm && (
                                 <>
@@ -345,8 +345,10 @@ export function LeadsTable({
                                                 </span>
                                                 <span className="min-w-0">
                                                     <span className="block truncate font-medium text-gray-900">
+                                                        {/* C36: no name → the phone number. */}
                                                         {row.shop_name ||
                                                             row.dealer_name ||
+                                                            row.phone ||
                                                             "(unnamed dealer)"}
                                                     </span>
                                                     {row.dealer_name && row.shop_name && (
@@ -415,25 +417,29 @@ export function LeadsTable({
                                         </td>
 
                                         <td className="px-4 py-3 align-middle">
-                                            {/* Intent = the rep-set temperature, the
-                                                same field the Intent filter and the
+                                            {/* Interest = the rep-set temperature, the
+                                                same field the Interest filter and the
                                                 ASM / Inside Sales queues use. The AI
-                                                score sits beside it, labelled. */}
+                                                score sits beside it, labelled — only
+                                                when there is one (C36: "AI 0" told
+                                                the reader nothing). */}
                                             <span className="flex flex-wrap items-center gap-1">
                                                 {row.interest_level ? (
                                                     <InterestChip level={row.interest_level} />
                                                 ) : (
                                                     <span className="text-[11px] text-gray-400">—</span>
                                                 )}
-                                                <span
-                                                    className={`${CHIP_BASE} ${INTENT_BUCKET_TONE[bucket]}`}
-                                                    title={`AI intent score ${row.final_intent_score ?? 0} (${INTENT_BUCKET_LABEL[bucket]})`}
-                                                >
-                                                    AI
-                                                    <span className="ml-1 tabular-nums opacity-70">
-                                                        {row.final_intent_score ?? 0}
+                                                {(row.final_intent_score ?? 0) > 0 && (
+                                                    <span
+                                                        className={`${CHIP_BASE} ${INTENT_BUCKET_TONE[bucket]}`}
+                                                        title={`AI intent score ${row.final_intent_score} (${INTENT_BUCKET_LABEL[bucket]})`}
+                                                    >
+                                                        AI
+                                                        <span className="ml-1 tabular-nums opacity-70">
+                                                            {row.final_intent_score}
+                                                        </span>
                                                     </span>
-                                                </span>
+                                                )}
                                             </span>
                                             {(row.total_attempts ?? 0) > 0 && (
                                                 <span className="mt-1 flex items-center gap-1 text-[11px] text-gray-400">

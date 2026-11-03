@@ -234,7 +234,7 @@ export function LeadDrawer({ lead, caps, onClose, onDone }: Props) {
                     <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
                             <h2 className="truncate text-base font-semibold text-gray-900">
-                                {lead.dealer_name || lead.shop_name || "(unnamed dealer)"}
+                                {lead.dealer_name || lead.shop_name || lead.phone || "(unnamed dealer)"}
                             </h2>
                             {lead.shop_name && lead.dealer_name && (
                                 <p className="truncate text-[11px] text-gray-500">
@@ -252,14 +252,18 @@ export function LeadDrawer({ lead, caps, onClose, onDone }: Props) {
                             <div className="mt-2 flex flex-wrap items-center gap-1.5">
                                 <StatusChip status={lead.lead_status as LeadStatus | null} />
                                 <IvrTag isIvr={lead.is_ivr} />
-                                <span
-                                    className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium ${INTENT_BUCKET_TONE[bucket]}`}
-                                >
-                                    {INTENT_BUCKET_LABEL[bucket]}
-                                    <span className="ml-1 tabular-nums opacity-70">
-                                        {lead.final_intent_score ?? 0}
+                                {/* C36: the AI score chip only when there is a score. */}
+                                {(lead.final_intent_score ?? 0) > 0 && (
+                                    <span
+                                        title="AI intent score"
+                                        className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium ${INTENT_BUCKET_TONE[bucket]}`}
+                                    >
+                                        AI {INTENT_BUCKET_LABEL[bucket]}
+                                        <span className="ml-1 tabular-nums opacity-70">
+                                            {lead.final_intent_score}
+                                        </span>
                                     </span>
-                                </span>
+                                )}
                                 {/* E-296 Type of Business — NULL reads "Not set". */}
                                 <span
                                     title="Type of business"

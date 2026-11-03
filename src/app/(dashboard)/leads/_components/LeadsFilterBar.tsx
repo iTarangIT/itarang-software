@@ -252,16 +252,16 @@ export function LeadsFilterBar({
                 </p>
             )}
 
-            {/* ── Qualification · Intent · Owner · More filters, one row ── */}
+            {/* ── Status · Interest · Owner · More filters, one row (C34/C37) ── */}
             <div className="flex flex-wrap items-center gap-2">
-                {/* Qualification = the BRD §0.7 pipeline stage. */}
+                {/* Status = the BRD §0.7 pipeline stage. */}
                 <select
-                    aria-label="Qualification"
+                    aria-label="Status"
                     className={`${SELECT_CLASS} min-w-[150px] flex-1`}
                     value={draft.status}
                     onChange={(e) => onChange("status", e.target.value)}
                 >
-                    <option value="">All qualifications</option>
+                    <option value="">All statuses</option>
                     {/* "Unassigned" means no current owner (any/no status), not
                         the New_Unassigned lead_status — see leadsInfoFilters.ts. */}
                     <option value={UNASSIGNED_FILTER}>Unassigned</option>
@@ -273,80 +273,18 @@ export function LeadsFilterBar({
                 </select>
 
                 <select
-                    aria-label="Intent"
+                    aria-label="Interest"
                     className={`${SELECT_CLASS} min-w-[150px] flex-1`}
                     value={draft.intent}
                     onChange={(e) => setIntentBucket(e.target.value)}
                 >
-                    <option value="">All intent</option>
+                    <option value="">All interest</option>
                     {INTENT_BUCKET_OPTIONS.map((b) => (
                         <option key={b} value={b}>
                             {INTENT_BUCKET_LABEL[b]}
                         </option>
                     ))}
                 </select>
-
-                {/* E-296 Type of Business. In the primary row, mirrored by the
-                    count chips above the table — both set the same filter. */}
-                <select
-                    aria-label="Type of business"
-                    className={`${SELECT_CLASS} min-w-[150px] flex-1`}
-                    value={draft.businessType}
-                    onChange={(e) => onChange("businessType", e.target.value)}
-                >
-                    <option value="">All business types</option>
-                    {BUSINESS_TYPE_OPTIONS.map((o) => (
-                        <option key={o.value} value={o.value}>
-                            {o.label}
-                        </option>
-                    ))}
-                    <option value={BUSINESS_TYPE_UNSET}>{BUSINESS_TYPE_UNSET_LABEL}</option>
-                </select>
-
-                {/* AI intent score range (final_intent_score). A different
-                    column from the Intent select above, which is the rep-set
-                    temperature, so the two combine. */}
-                <div
-                    className="inline-flex items-center gap-1 rounded-lg border border-gray-200 bg-white px-2 py-1 transition-colors focus-within:border-gray-400"
-                    title={`Filter by AI intent score (${INTENT_SCORE_MIN}–${INTENT_SCORE_MAX}).`}
-                >
-                    <span className="text-[11px] font-semibold uppercase tracking-wider text-gray-400">
-                        AI score
-                    </span>
-                    <input
-                        type="number"
-                        inputMode="numeric"
-                        aria-label="Minimum intent score"
-                        placeholder="min"
-                        min={INTENT_SCORE_MIN}
-                        max={INTENT_SCORE_MAX}
-                        value={draft.scoreMin}
-                        onChange={(e) => setScore("scoreMin", e.target.value)}
-                        className="w-14 bg-transparent text-sm text-gray-700 outline-none"
-                    />
-                    <span className="text-gray-300">–</span>
-                    <input
-                        type="number"
-                        inputMode="numeric"
-                        aria-label="Maximum intent score"
-                        placeholder="max"
-                        min={INTENT_SCORE_MIN}
-                        max={INTENT_SCORE_MAX}
-                        value={draft.scoreMax}
-                        onChange={(e) => setScore("scoreMax", e.target.value)}
-                        className="w-14 bg-transparent text-sm text-gray-700 outline-none"
-                    />
-                    {(draft.scoreMin || draft.scoreMax) && (
-                        <button
-                            type="button"
-                            onClick={() => onPatch({ scoreMin: "", scoreMax: "" })}
-                            aria-label="Clear score range"
-                            className="rounded p-0.5 text-gray-400 transition-colors hover:bg-rose-50 hover:text-rose-600"
-                        >
-                            <X className="h-3 w-3" />
-                        </button>
-                    )}
-                </div>
 
                 {caps.canSeeOwnerAsm && (
                     <select
@@ -364,215 +302,6 @@ export function LeadsFilterBar({
                         ))}
                     </select>
                 )}
-
-                {/* Campaign — both systems in one control, grouped. Only
-                    campaigns that actually have leads are offered. PRIMARY row:
-                    "which campaign's leads are these?" is a first question, not
-                    a refinement (it was behind More filters until 14 Oct). */}
-                <select
-                    aria-label="Campaign"
-                    className={`${SELECT_CLASS} min-w-[170px] flex-1`}
-                    value={draft.campaign}
-                    onChange={(e) => onChange("campaign", e.target.value)}
-                >
-                    <option value="">All campaigns</option>
-                    <option value={CAMPAIGN_NONE}>Not in a campaign</option>
-                    {CAMPAIGN_SYSTEMS.map((system) => {
-                        const items = (facets?.campaigns ?? []).filter(
-                            (c) => c.system === system,
-                        );
-                        if (!items.length) return null;
-                        return (
-                            <optgroup
-                                key={system}
-                                label={CAMPAIGN_SYSTEM_LABEL[system]}
-                            >
-                                {items.map((c) => (
-                                    <option key={c.id} value={c.id}>
-                                        {campaignLabel(c)} ({c.lead_count})
-                                    </option>
-                                ))}
-                            </optgroup>
-                        );
-                    })}
-                </select>
-
-                {/* Lead source — the E-314 door (Scraper / Bulk upload /
-                    AI-dialer list / …). Paired with Campaign: Scraper + "Not in a
-                    campaign" is the scraper-only pool. */}
-                <select
-                    aria-label="Lead source"
-                    className={`${SELECT_CLASS} min-w-[150px] flex-1`}
-                    value={draft.sourceDoor}
-                    onChange={(e) => onChange("sourceDoor", e.target.value)}
-                >
-                    <option value="">All lead sources</option>
-                    {LEAD_DOORS.map((d) => (
-                        <option key={d} value={d}>
-                            {LEAD_DOOR_LABEL[d]}
-                        </option>
-                    ))}
-                    <option value={SOURCE_DOOR_NONE}>Unknown</option>
-                </select>
-
-                {/* Scrape run — every scraper run you have done, newest first,
-                    with how many of its leads are still unassigned. Pick one,
-                    Select all matching, Reassign → ISR: a run handed out whole. */}
-                <select
-                    aria-label="Scrape run"
-                    className={`${SELECT_CLASS} min-w-[220px] flex-1`}
-                    value={draft.scrapeRun}
-                    onChange={(e) => onChange("scrapeRun", e.target.value)}
-                >
-                    <option value="">All scrape runs</option>
-                    {scrapeRunOptions.map((r) => (
-                        <option key={r.id} value={r.id}>
-                            {r.label} — {r.lead_count} lead{r.lead_count === 1 ? "" : "s"}
-                            {r.unassigned ? ` (${r.unassigned} unassigned)` : " (all assigned)"}
-                        </option>
-                    ))}
-                </select>
-
-                {/* NeoDove — a toggle in the PRIMARY row, not an option in the
-                    "Source" select behind More filters. Two reasons: it is not a
-                    source (a scraped lead we pushed keeps source = 'scraper', so
-                    the select would answer a different question), and it removes
-                    most of the list when on, which is exactly the kind of filter
-                    the layout comment above says must never be hidden. */}
-                <button
-                    type="button"
-                    onClick={() => onChange("neodove", draft.neodove ? "" : "1")}
-                    aria-pressed={draft.neodove === "1"}
-                    title={
-                        draft.neodove
-                            ? "Showing only leads handed to the NeoDove calling team — click to show all"
-                            : "Show only leads handed to the NeoDove calling team"
-                    }
-                    className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${
-                        draft.neodove
-                            ? "border-sky-300 bg-sky-50 text-sky-700"
-                            : "border-gray-200 bg-white text-gray-600 hover:border-gray-400"
-                    }`}
-                >
-                    <span
-                        aria-hidden
-                        className={`h-1.5 w-1.5 rounded-full ${
-                            draft.neodove ? "bg-sky-500" : "bg-gray-300"
-                        }`}
-                    />
-                    NeoDove
-                </button>
-
-                {/* Callback requested. In the PRIMARY row, not behind "More
-                    filters", for the same reason NeoDove is: it is an ACTION
-                    filter — these dealers asked to be called back and the AI
-                    cannot do it — rather than a refinement, and it removes most
-                    of the list when on. Disabled at zero so nobody selects a
-                    filter that cannot match. */}
-                <button
-                    type="button"
-                    disabled={aiFacets?.leadsCallback === 0}
-                    onClick={() => onChange("callback", draft.callback ? "" : "1")}
-                    aria-pressed={draft.callback === "1"}
-                    title={
-                        aiFacets?.leadsCallback === 0
-                            ? "No lead has asked for a callback yet."
-                            : draft.callback
-                              ? "Showing only leads who asked to be called back — click to show all"
-                              : "Show only leads who asked to be called back. The AI cannot call them; they need a person."
-                    }
-                    className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
-                        draft.callback
-                            ? "border-amber-300 bg-amber-50 text-amber-700"
-                            : "border-gray-200 bg-white text-gray-600 hover:border-gray-400"
-                    }`}
-                >
-                    <span
-                        aria-hidden
-                        className={`h-1.5 w-1.5 rounded-full ${
-                            draft.callback ? "bg-amber-500" : "bg-gray-300"
-                        }`}
-                    />
-                    Callback{aiFacets ? ` (${aiFacets.leadsCallback})` : ""}
-                </button>
-
-                {/* B1 (E-361): leads the AI dialer skips — no phone, or a
-                    landline / toll-free / tracking number. An ACTION filter for
-                    the same reason as Callback: someone has to find the dealer's
-                    mobile before anyone can call. */}
-                <button
-                    type="button"
-                    onClick={() => onChange("needsMobile", draft.needsMobile ? "" : "1")}
-                    aria-pressed={draft.needsMobile === "1"}
-                    title={
-                        draft.needsMobile
-                            ? "Showing only leads without a dealer mobile — click to show all"
-                            : "Show only leads with no phone or a landline / toll-free / tracking number. The AI dialer skips them; find the dealer's mobile."
-                    }
-                    className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${
-                        draft.needsMobile
-                            ? "border-rose-300 bg-rose-50 text-rose-700"
-                            : "border-gray-200 bg-white text-gray-600 hover:border-gray-400"
-                    }`}
-                >
-                    <span
-                        aria-hidden
-                        className={`h-1.5 w-1.5 rounded-full ${
-                            draft.needsMobile ? "bg-rose-500" : "bg-gray-300"
-                        }`}
-                    />
-                    Needs dealer mobile
-                </button>
-
-                {/* ID 184: the Sales dashboard card "Ready leads with no owner",
-                    same rule (awaitingAssignment), so this list and its export
-                    give the card's number. The split matches the card. */}
-                {caps.canSeeOwnerAsm && (
-                    <span className="inline-flex items-center gap-1">
-                        <button
-                            type="button"
-                            onClick={() => onPatch({ readyNoOwner: draft.readyNoOwner ? "" : "1", readySplit: "" })}
-                            aria-pressed={draft.readyNoOwner === "1"}
-                            title="Sales-ready leads nobody owns: the same leads as the dashboard card and Ready to Assign"
-                            className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${
-                                draft.readyNoOwner
-                                    ? "border-rose-300 bg-rose-50 text-rose-700"
-                                    : "border-gray-200 bg-white text-gray-600 hover:border-gray-400"
-                            }`}
-                        >
-                            Ready, no owner
-                        </button>
-                        {draft.readyNoOwner && (
-                            <select
-                                aria-label="Ready, no owner: split"
-                                value={draft.readySplit}
-                                onChange={(e) => onChange("readySplit", e.target.value)}
-                                className="rounded-lg border border-gray-200 bg-white px-2 py-2 text-sm text-gray-700"
-                            >
-                                <option value="">All</option>
-                                <option value="hot">Hot</option>
-                                <option value="ai">AI qualified</option>
-                                <option value="other">Other</option>
-                            </select>
-                        )}
-                    </span>
-                )}
-
-                {/* ID 36: dead-number / non-responsive (Number Repair) and
-                    AI-disqualified leads are hidden by default. Unticking shows
-                    them (hide_dead=0); source reports always count them. */}
-                <label
-                    className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-600 hover:border-gray-400"
-                    title="Dead / non-responsive numbers (in Number Repair) and AI-disqualified leads are hidden by default"
-                >
-                    <input
-                        type="checkbox"
-                        className="h-3.5 w-3.5 rounded border-gray-300"
-                        checked={draft.showDead !== "1"}
-                        onChange={(e) => onChange("showDead", e.target.checked ? "" : "1")}
-                    />
-                    Hide dead &amp; disqualified
-                </label>
 
                 <button
                     type="button"
@@ -658,224 +387,502 @@ export function LeadsFilterBar({
                 )}
             </div>
 
-            {/* ── Assigned-date range ──
-                Same gate as the Owner column: "when was it assigned" only
-                means something to the people who can see who it was assigned
-                to, and the API drops the params for everyone else. */}
-            {caps.canSeeOwnerAsm && (
-                <div className="flex flex-wrap items-center gap-2">
-                    <span className="mr-0.5 text-[11px] font-semibold uppercase tracking-wider text-gray-400">
-                        Assigned
-                    </span>
-                    <select
-                        aria-label="Assigned date preset"
-                        className={`${SELECT_CLASS} min-w-[150px]`}
-                        value={assignedPreset}
-                        onChange={(e) => applyAssignedPreset(e.target.value)}
-                    >
-                        <option value="">Any time</option>
-                        {ASSIGNED_PRESETS.map((p) => (
-                            <option key={p.key} value={p.key}>
-                                {p.label}
-                            </option>
-                        ))}
-                        <option value="custom">Custom range</option>
-                    </select>
-                    <div className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-1.5 transition-colors focus-within:border-gray-400">
-                        <input
-                            type="date"
-                            value={draft.assignedFrom}
-                            max={draft.assignedTo || undefined}
-                            onChange={(e) => onChange("assignedFrom", e.target.value)}
-                            aria-label="From (lead assigned date)"
-                            className="bg-transparent text-sm text-gray-700 outline-none"
-                        />
-                        <span className="text-gray-300">–</span>
-                        <input
-                            type="date"
-                            value={draft.assignedTo}
-                            min={draft.assignedFrom || undefined}
-                            onChange={(e) => onChange("assignedTo", e.target.value)}
-                            aria-label="To (lead assigned date)"
-                            className="bg-transparent text-sm text-gray-700 outline-none"
-                        />
-                    </div>
-                    {(draft.assignedFrom || draft.assignedTo) && (
-                        <button
-                            type="button"
-                            onClick={() => onAssignedRange("", "")}
-                            className="inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-semibold text-rose-600 transition-colors hover:bg-rose-50"
-                        >
-                            <X className="h-3.5 w-3.5" /> Clear dates
-                        </button>
-                    )}
-                </div>
-            )}
-
             {/* ── More filters ── */}
             {showMore && (
-                <div className="grid grid-cols-2 gap-3 border-t border-gray-100 pt-3 md:grid-cols-4">
-                    {caps.canSeeOwnerAsm && (
+                <div className="space-y-3 border-t border-gray-100 pt-3">
+                    {/* C37 (wording audit, 2 Nov): moved here from the top row so the
+                        screen is calmer. Every one of them counts toward the badge on
+                        "More filters", and the panel opens on its own when a link
+                        arrives with one set, so none can narrow the list unseen. */}
+                    <div className="flex flex-wrap items-center gap-2">
+                        {/* E-296 Type of Business. Mirrored by the count chips above
+                            the table — both set the same filter. */}
                         <select
-                            aria-label="ASM"
-                            className={`${SELECT_CLASS} w-full`}
-                            value={draft.asmId}
-                            onChange={(e) => onChange("asmId", e.target.value)}
+                            aria-label="Type of business"
+                            className={`${SELECT_CLASS} min-w-[150px] flex-1`}
+                            value={draft.businessType}
+                            onChange={(e) => onChange("businessType", e.target.value)}
                         >
-                            <option value="">All ASMs</option>
-                            {(facets?.asms ?? []).map((a) => (
-                                <option key={a.id} value={a.id}>
-                                    {a.name ?? "Unnamed"}
+                            <option value="">All business types</option>
+                            {BUSINESS_TYPE_OPTIONS.map((o) => (
+                                <option key={o.value} value={o.value}>
+                                    {o.label}
+                                </option>
+                            ))}
+                            <option value={BUSINESS_TYPE_UNSET}>{BUSINESS_TYPE_UNSET_LABEL}</option>
+                        </select>
+
+                        {/* AI intent score range (final_intent_score). A different
+                            column from the Intent select above, which is the rep-set
+                            temperature, so the two combine. */}
+                        <div
+                            className="inline-flex items-center gap-1 rounded-lg border border-gray-200 bg-white px-2 py-1 transition-colors focus-within:border-gray-400"
+                            title={`Filter by AI intent score (${INTENT_SCORE_MIN}–${INTENT_SCORE_MAX}).`}
+                        >
+                            <span className="text-[11px] font-semibold uppercase tracking-wider text-gray-400">
+                                AI score
+                            </span>
+                            <input
+                                type="number"
+                                inputMode="numeric"
+                                aria-label="Minimum intent score"
+                                placeholder="min"
+                                min={INTENT_SCORE_MIN}
+                                max={INTENT_SCORE_MAX}
+                                value={draft.scoreMin}
+                                onChange={(e) => setScore("scoreMin", e.target.value)}
+                                className="w-14 bg-transparent text-sm text-gray-700 outline-none"
+                            />
+                            <span className="text-gray-300">–</span>
+                            <input
+                                type="number"
+                                inputMode="numeric"
+                                aria-label="Maximum intent score"
+                                placeholder="max"
+                                min={INTENT_SCORE_MIN}
+                                max={INTENT_SCORE_MAX}
+                                value={draft.scoreMax}
+                                onChange={(e) => setScore("scoreMax", e.target.value)}
+                                className="w-14 bg-transparent text-sm text-gray-700 outline-none"
+                            />
+                            {(draft.scoreMin || draft.scoreMax) && (
+                                <button
+                                    type="button"
+                                    onClick={() => onPatch({ scoreMin: "", scoreMax: "" })}
+                                    aria-label="Clear score range"
+                                    className="rounded p-0.5 text-gray-400 transition-colors hover:bg-rose-50 hover:text-rose-600"
+                                >
+                                    <X className="h-3 w-3" />
+                                </button>
+                            )}
+                        </div>
+
+                        {/* Campaign — both systems in one control, grouped. Only
+                            campaigns that actually have leads are offered. PRIMARY row:
+                            "which campaign's leads are these?" is a first question, not
+                            a refinement (it was behind More filters until 14 Oct). */}
+                        <select
+                            aria-label="Campaign"
+                            className={`${SELECT_CLASS} min-w-[170px] flex-1`}
+                            value={draft.campaign}
+                            onChange={(e) => onChange("campaign", e.target.value)}
+                        >
+                            <option value="">All campaigns</option>
+                            <option value={CAMPAIGN_NONE}>Not in a campaign</option>
+                            {CAMPAIGN_SYSTEMS.map((system) => {
+                                const items = (facets?.campaigns ?? []).filter(
+                                    (c) => c.system === system,
+                                );
+                                if (!items.length) return null;
+                                return (
+                                    <optgroup
+                                        key={system}
+                                        label={CAMPAIGN_SYSTEM_LABEL[system]}
+                                    >
+                                        {items.map((c) => (
+                                            <option key={c.id} value={c.id}>
+                                                {campaignLabel(c)} ({c.lead_count})
+                                            </option>
+                                        ))}
+                                    </optgroup>
+                                );
+                            })}
+                        </select>
+
+                        {/* Lead source — the E-314 door (Scraper / Bulk upload /
+                            AI-dialer list / …). Paired with Campaign: Scraper + "Not in a
+                            campaign" is the scraper-only pool. */}
+                        <select
+                            aria-label="Lead source"
+                            className={`${SELECT_CLASS} min-w-[150px] flex-1`}
+                            value={draft.sourceDoor}
+                            onChange={(e) => onChange("sourceDoor", e.target.value)}
+                        >
+                            <option value="">All lead sources</option>
+                            {LEAD_DOORS.map((d) => (
+                                <option key={d} value={d}>
+                                    {LEAD_DOOR_LABEL[d]}
+                                </option>
+                            ))}
+                            <option value={SOURCE_DOOR_NONE}>Unknown</option>
+                        </select>
+
+                        {/* Scrape run — every scraper run you have done, newest first,
+                            with how many of its leads are still unassigned. Pick one,
+                            Select all matching, Reassign → ISR: a run handed out whole. */}
+                        <select
+                            aria-label="Scrape run"
+                            className={`${SELECT_CLASS} min-w-[220px] flex-1`}
+                            value={draft.scrapeRun}
+                            onChange={(e) => onChange("scrapeRun", e.target.value)}
+                        >
+                            <option value="">All scrape runs</option>
+                            {scrapeRunOptions.map((r) => (
+                                <option key={r.id} value={r.id}>
+                                    {r.label} — {r.lead_count} lead{r.lead_count === 1 ? "" : "s"}
+                                    {r.unassigned ? ` (${r.unassigned} unassigned)` : " (all assigned)"}
                                 </option>
                             ))}
                         </select>
-                    )}
-                    <select
-                        aria-label="Raw source"
-                        className={`${SELECT_CLASS} w-full`}
-                        value={draft.source}
-                        onChange={(e) => onChange("source", e.target.value)}
-                    >
-                        <option value="">All raw sources</option>
-                        {(facets?.sources ?? []).map((s) => (
-                            <option key={s} value={s}>
-                                {pretty(s)}
-                            </option>
-                        ))}
-                    </select>
-                    {/* Idle band — the same thresholds the Idle column colours by,
-                        so a filtered list looks coherent rather than being an
-                        arbitrary slice through the ramp. */}
-                    <select
-                        aria-label="Idle"
-                        className={`${SELECT_CLASS} w-full`}
-                        value={draft.idle}
-                        onChange={(e) => onChange("idle", e.target.value)}
-                    >
-                        <option value="">Any idle time</option>
-                        {IDLE_RANGE_KEYS.map((k) => (
-                            <option key={k} value={k}>
-                                {IDLE_RANGES[k].label}
-                            </option>
-                        ))}
-                    </select>
-                    <Input
-                        value={draft.state}
-                        onChange={(e) => onChange("state", e.target.value)}
-                        placeholder="State"
-                    />
-                    <Input
-                        value={draft.city}
-                        onChange={(e) => onChange("city", e.target.value)}
-                        placeholder="City"
-                    />
-                    {/* ── Call disposition, L1 → L2 → L3 (E-236) ──
-                        Its own row: three selects that narrow each other read as
-                        one control, and interleaving them with the unrelated
-                        drill-downs above made the cascade invisible. */}
-                    <div className="col-span-2 space-y-2 border-t border-gray-100 pt-3 md:col-span-4">
-                        <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-400">
-                            Call disposition
-                        </p>
-                        {/* The cascade itself lives in DispositionPicker so the
-                            campaign builder and the rep's Log Touchpoint form use
-                            the identical control — including the rule that the
-                            bucket select disappears under Not Connected. */}
-                        <DispositionPicker
-                            mode="filter"
-                            extraDispositions={extraDispositions}
-                            value={{
-                                connectStatus: draft.connectStatus,
-                                bucket: draft.dispositionBucket,
-                                disposition: draft.disposition,
-                            }}
-                            onChange={(next) =>
-                                onPatch({
-                                    connectStatus:
-                                        next.connectStatus as LeadFilters["connectStatus"],
-                                    dispositionBucket:
-                                        next.bucket as LeadFilters["dispositionBucket"],
-                                    disposition: next.disposition,
-                                })
+
+                        {/* NeoDove — a toggle in the PRIMARY row, not an option in the
+                            "Source" select behind More filters. Two reasons: it is not a
+                            source (a scraped lead we pushed keeps source = 'scraper', so
+                            the select would answer a different question), and it removes
+                            most of the list when on, which is exactly the kind of filter
+                            the layout comment above says must never be hidden. */}
+                        <button
+                            type="button"
+                            onClick={() => onChange("neodove", draft.neodove ? "" : "1")}
+                            aria-pressed={draft.neodove === "1"}
+                            title={
+                                draft.neodove
+                                    ? "Showing only leads handed to the NeoDove calling team — click to show all"
+                                    : "Show only leads handed to the NeoDove calling team"
                             }
-                        />
-                    </div>
+                            className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${
+                                draft.neodove
+                                    ? "border-sky-300 bg-sky-50 text-sky-700"
+                                    : "border-gray-200 bg-white text-gray-600 hover:border-gray-400"
+                            }`}
+                        >
+                            <span
+                                aria-hidden
+                                className={`h-1.5 w-1.5 rounded-full ${
+                                    draft.neodove ? "bg-sky-500" : "bg-gray-300"
+                                }`}
+                            />
+                            NeoDove
+                        </button>
 
-                    {/* ── AI call state + signals ────────────────────────
-                        Every option carries its own count and is DISABLED at
-                        zero. The dialer has reached a small fraction of the
-                        pool, so most of these legitimately match almost
-                        nothing — and an option nobody can select is far better
-                        than one that silently returns an empty list. */}
-                    <div className="col-span-2 space-y-2 border-t border-gray-100 pt-3 md:col-span-4">
-                        <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-400">
-                            AI signals
-                            {aiFacets && (
-                                <span className="ml-2 font-normal normal-case tracking-normal text-gray-400">
-                                    {aiFacets.leadsCalled} of {aiFacets.totalLeads} leads
-                                    dialled · {aiFacets.leadsConnected} reached
-                                </span>
-                            )}
-                        </p>
-                        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-                            <select
-                                aria-label="AI dialled"
-                                className={`${SELECT_CLASS} w-full`}
-                                value={draft.aiCalled}
-                                onChange={(e) => onChange("aiCalled", e.target.value)}
-                            >
-                                <option value="">Any AI call state</option>
-                                <option
-                                    value="connected"
-                                    disabled={aiFacets?.leadsConnected === 0}
-                                >
-                                    AI reached them
-                                    {aiFacets ? ` (${aiFacets.leadsConnected})` : ""}
-                                </option>
-                                <option
-                                    value="attempted"
-                                    disabled={aiFacets?.leadsCalled === 0}
-                                >
-                                    AI called them
-                                    {aiFacets ? ` (${aiFacets.leadsCalled})` : ""}
-                                </option>
-                                <option value="never">Never called by AI</option>
-                            </select>
+                        {/* Callback requested. In the PRIMARY row, not behind "More
+                            filters", for the same reason NeoDove is: it is an ACTION
+                            filter — these dealers asked to be called back and the AI
+                            cannot do it — rather than a refinement, and it removes most
+                            of the list when on. Disabled at zero so nobody selects a
+                            filter that cannot match. */}
+                        <button
+                            type="button"
+                            disabled={aiFacets?.leadsCallback === 0}
+                            onClick={() => onChange("callback", draft.callback ? "" : "1")}
+                            aria-pressed={draft.callback === "1"}
+                            title={
+                                aiFacets?.leadsCallback === 0
+                                    ? "No lead has asked for a callback yet."
+                                    : draft.callback
+                                      ? "Showing only leads who asked to be called back — click to show all"
+                                      : "Show only leads who asked to be called back. The AI cannot call them; they need a person."
+                            }
+                            className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+                                draft.callback
+                                    ? "border-amber-300 bg-amber-50 text-amber-700"
+                                    : "border-gray-200 bg-white text-gray-600 hover:border-gray-400"
+                            }`}
+                        >
+                            <span
+                                aria-hidden
+                                className={`h-1.5 w-1.5 rounded-full ${
+                                    draft.callback ? "bg-amber-500" : "bg-gray-300"
+                                }`}
+                            />
+                            Callback{aiFacets ? ` (${aiFacets.leadsCallback})` : ""}
+                        </button>
 
-                            <select
-                                aria-label="AI band"
-                                className={`${SELECT_CLASS} w-full`}
-                                value={draft.aiBand}
-                                onChange={(e) => onChange("aiBand", e.target.value)}
-                            >
-                                <option value="">Any AI band</option>
-                                {(["Qualified", "Warm", "Cold", "Disqualified"] as const).map(
-                                    (b) => (
-                                        <option
-                                            key={b}
-                                            value={b}
-                                            disabled={aiFacets?.band?.[b] === 0}
-                                        >
-                                            {b}
-                                            {aiFacets ? ` (${aiFacets.band?.[b] ?? 0})` : ""}
-                                        </option>
-                                    ),
+                        {/* B1 (E-361): leads the AI dialer skips — no phone, or a
+                            landline / toll-free / tracking number. An ACTION filter for
+                            the same reason as Callback: someone has to find the dealer's
+                            mobile before anyone can call. */}
+                        <button
+                            type="button"
+                            onClick={() => onChange("needsMobile", draft.needsMobile ? "" : "1")}
+                            aria-pressed={draft.needsMobile === "1"}
+                            title={
+                                draft.needsMobile
+                                    ? "Showing only leads without a dealer mobile — click to show all"
+                                    : "Show only leads with no phone or a landline / toll-free / tracking number. The AI dialer skips them; find the dealer's mobile."
+                            }
+                            className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${
+                                draft.needsMobile
+                                    ? "border-rose-300 bg-rose-50 text-rose-700"
+                                    : "border-gray-200 bg-white text-gray-600 hover:border-gray-400"
+                            }`}
+                        >
+                            <span
+                                aria-hidden
+                                className={`h-1.5 w-1.5 rounded-full ${
+                                    draft.needsMobile ? "bg-rose-500" : "bg-gray-300"
+                                }`}
+                            />
+                            Needs dealer mobile
+                        </button>
+
+                        {/* ID 184: the Sales dashboard card "Ready leads with no owner",
+                            same rule (awaitingAssignment), so this list and its export
+                            give the card's number. The split matches the card. */}
+                        {caps.canSeeOwnerAsm && (
+                            <span className="inline-flex items-center gap-1">
+                                <button
+                                    type="button"
+                                    onClick={() => onPatch({ readyNoOwner: draft.readyNoOwner ? "" : "1", readySplit: "" })}
+                                    aria-pressed={draft.readyNoOwner === "1"}
+                                    title="Sales-ready leads nobody owns: the same leads as the dashboard card and Ready to Assign"
+                                    className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${
+                                        draft.readyNoOwner
+                                            ? "border-rose-300 bg-rose-50 text-rose-700"
+                                            : "border-gray-200 bg-white text-gray-600 hover:border-gray-400"
+                                    }`}
+                                >
+                                    Ready, no owner
+                                </button>
+                                {draft.readyNoOwner && (
+                                    <select
+                                        aria-label="Ready, no owner: split"
+                                        value={draft.readySplit}
+                                        onChange={(e) => onChange("readySplit", e.target.value)}
+                                        className="rounded-lg border border-gray-200 bg-white px-2 py-2 text-sm text-gray-700"
+                                    >
+                                        <option value="">All</option>
+                                        <option value="hot">Hot</option>
+                                        <option value="ai">AI qualified</option>
+                                        <option value="other">Other</option>
+                                    </select>
                                 )}
-                            </select>
+                            </span>
+                        )}
 
+                        {/* ID 36: dead-number / non-responsive (Number Repair) and
+                            AI-disqualified leads are hidden by default. Unticking shows
+                            them (hide_dead=0); source reports always count them. */}
+                        <label
+                            className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-600 hover:border-gray-400"
+                            title="Dead / non-responsive numbers (in Number Repair) and AI-disqualified leads are hidden by default"
+                        >
+                            <input
+                                type="checkbox"
+                                className="h-3.5 w-3.5 rounded border-gray-300"
+                                checked={draft.showDead !== "1"}
+                                onChange={(e) => onChange("showDead", e.target.checked ? "" : "1")}
+                            />
+                            Hide dead &amp; disqualified
+                        </label>
+                    </div>
+                    {/* ── Assigned-date range ──
+                        Same gate as the Owner column: "when was it assigned" only
+                        means something to the people who can see who it was assigned
+                        to, and the API drops the params for everyone else. */}
+                    {caps.canSeeOwnerAsm && (
+                        <div className="flex flex-wrap items-center gap-2">
+                            <span className="mr-0.5 text-[11px] font-semibold uppercase tracking-wider text-gray-400">
+                                Assigned
+                            </span>
                             <select
-                                aria-label="Minimum signals disclosed"
-                                className={`${SELECT_CLASS} w-full`}
-                                value={draft.signalsMin}
-                                onChange={(e) => onChange("signalsMin", e.target.value)}
+                                aria-label="Assigned date preset"
+                                className={`${SELECT_CLASS} min-w-[150px]`}
+                                value={assignedPreset}
+                                onChange={(e) => applyAssignedPreset(e.target.value)}
                             >
-                                <option value="">Any number of signals</option>
-                                {[1, 2, 3, 4, 5].map((n) => (
-                                    <option key={n} value={String(n)}>
-                                        {n}+ signals disclosed
+                                <option value="">Any time</option>
+                                {ASSIGNED_PRESETS.map((p) => (
+                                    <option key={p.key} value={p.key}>
+                                        {p.label}
+                                    </option>
+                                ))}
+                                <option value="custom">Custom range</option>
+                            </select>
+                            <div className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-1.5 transition-colors focus-within:border-gray-400">
+                                <input
+                                    type="date"
+                                    value={draft.assignedFrom}
+                                    max={draft.assignedTo || undefined}
+                                    onChange={(e) => onChange("assignedFrom", e.target.value)}
+                                    aria-label="From (lead assigned date)"
+                                    className="bg-transparent text-sm text-gray-700 outline-none"
+                                />
+                                <span className="text-gray-300">–</span>
+                                <input
+                                    type="date"
+                                    value={draft.assignedTo}
+                                    min={draft.assignedFrom || undefined}
+                                    onChange={(e) => onChange("assignedTo", e.target.value)}
+                                    aria-label="To (lead assigned date)"
+                                    className="bg-transparent text-sm text-gray-700 outline-none"
+                                />
+                            </div>
+                            {(draft.assignedFrom || draft.assignedTo) && (
+                                <button
+                                    type="button"
+                                    onClick={() => onAssignedRange("", "")}
+                                    className="inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-semibold text-rose-600 transition-colors hover:bg-rose-50"
+                                >
+                                    <X className="h-3.5 w-3.5" /> Clear dates
+                                </button>
+                            )}
+                        </div>
+                    )}
+
+                    <div className="grid grid-cols-2 gap-3 border-t border-gray-100 pt-3 md:grid-cols-4">
+                        {caps.canSeeOwnerAsm && (
+                            <select
+                                aria-label="ASM"
+                                className={`${SELECT_CLASS} w-full`}
+                                value={draft.asmId}
+                                onChange={(e) => onChange("asmId", e.target.value)}
+                            >
+                                <option value="">All ASMs</option>
+                                {(facets?.asms ?? []).map((a) => (
+                                    <option key={a.id} value={a.id}>
+                                        {a.name ?? "Unnamed"}
                                     </option>
                                 ))}
                             </select>
+                        )}
+                        <select
+                            aria-label="Raw source"
+                            className={`${SELECT_CLASS} w-full`}
+                            value={draft.source}
+                            onChange={(e) => onChange("source", e.target.value)}
+                        >
+                            <option value="">All raw sources</option>
+                            {(facets?.sources ?? []).map((s) => (
+                                <option key={s} value={s}>
+                                    {pretty(s)}
+                                </option>
+                            ))}
+                        </select>
+                        {/* Idle band — the same thresholds the Idle column colours by,
+                            so a filtered list looks coherent rather than being an
+                            arbitrary slice through the ramp. */}
+                        <select
+                            aria-label="Idle"
+                            className={`${SELECT_CLASS} w-full`}
+                            value={draft.idle}
+                            onChange={(e) => onChange("idle", e.target.value)}
+                        >
+                            <option value="">Any idle time</option>
+                            {IDLE_RANGE_KEYS.map((k) => (
+                                <option key={k} value={k}>
+                                    {IDLE_RANGES[k].label}
+                                </option>
+                            ))}
+                        </select>
+                        <Input
+                            value={draft.state}
+                            onChange={(e) => onChange("state", e.target.value)}
+                            placeholder="State"
+                        />
+                        <Input
+                            value={draft.city}
+                            onChange={(e) => onChange("city", e.target.value)}
+                            placeholder="City"
+                        />
+                        {/* ── Call disposition, L1 → L2 → L3 (E-236) ──
+                            Its own row: three selects that narrow each other read as
+                            one control, and interleaving them with the unrelated
+                            drill-downs above made the cascade invisible. */}
+                        <div className="col-span-2 space-y-2 border-t border-gray-100 pt-3 md:col-span-4">
+                            <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-400">
+                                Call disposition
+                            </p>
+                            {/* The cascade itself lives in DispositionPicker so the
+                                campaign builder and the rep's Log Touchpoint form use
+                                the identical control — including the rule that the
+                                bucket select disappears under Not Connected. */}
+                            <DispositionPicker
+                                mode="filter"
+                                extraDispositions={extraDispositions}
+                                value={{
+                                    connectStatus: draft.connectStatus,
+                                    bucket: draft.dispositionBucket,
+                                    disposition: draft.disposition,
+                                }}
+                                onChange={(next) =>
+                                    onPatch({
+                                        connectStatus:
+                                            next.connectStatus as LeadFilters["connectStatus"],
+                                        dispositionBucket:
+                                            next.bucket as LeadFilters["dispositionBucket"],
+                                        disposition: next.disposition,
+                                    })
+                                }
+                            />
+                        </div>
+
+                        {/* ── AI call state + signals ────────────────────────
+                            Every option carries its own count and is DISABLED at
+                            zero. The dialer has reached a small fraction of the
+                            pool, so most of these legitimately match almost
+                            nothing — and an option nobody can select is far better
+                            than one that silently returns an empty list. */}
+                        <div className="col-span-2 space-y-2 border-t border-gray-100 pt-3 md:col-span-4">
+                            <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-400">
+                                AI signals
+                                {aiFacets && (
+                                    <span className="ml-2 font-normal normal-case tracking-normal text-gray-400">
+                                        {aiFacets.leadsCalled} of {aiFacets.totalLeads} leads
+                                        dialled · {aiFacets.leadsConnected} reached
+                                    </span>
+                                )}
+                            </p>
+                            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                                <select
+                                    aria-label="AI dialled"
+                                    className={`${SELECT_CLASS} w-full`}
+                                    value={draft.aiCalled}
+                                    onChange={(e) => onChange("aiCalled", e.target.value)}
+                                >
+                                    <option value="">Any AI call state</option>
+                                    <option
+                                        value="connected"
+                                        disabled={aiFacets?.leadsConnected === 0}
+                                    >
+                                        AI reached them
+                                        {aiFacets ? ` (${aiFacets.leadsConnected})` : ""}
+                                    </option>
+                                    <option
+                                        value="attempted"
+                                        disabled={aiFacets?.leadsCalled === 0}
+                                    >
+                                        AI called them
+                                        {aiFacets ? ` (${aiFacets.leadsCalled})` : ""}
+                                    </option>
+                                    <option value="never">Never called by AI</option>
+                                </select>
+
+                                <select
+                                    aria-label="AI band"
+                                    className={`${SELECT_CLASS} w-full`}
+                                    value={draft.aiBand}
+                                    onChange={(e) => onChange("aiBand", e.target.value)}
+                                >
+                                    <option value="">Any AI band</option>
+                                    {(["Qualified", "Warm", "Cold", "Disqualified"] as const).map(
+                                        (b) => (
+                                            <option
+                                                key={b}
+                                                value={b}
+                                                disabled={aiFacets?.band?.[b] === 0}
+                                            >
+                                                {b}
+                                                {aiFacets ? ` (${aiFacets.band?.[b] ?? 0})` : ""}
+                                            </option>
+                                        ),
+                                    )}
+                                </select>
+
+                                <select
+                                    aria-label="Minimum signals disclosed"
+                                    className={`${SELECT_CLASS} w-full`}
+                                    value={draft.signalsMin}
+                                    onChange={(e) => onChange("signalsMin", e.target.value)}
+                                >
+                                    <option value="">Any number of signals</option>
+                                    {[1, 2, 3, 4, 5].map((n) => (
+                                        <option key={n} value={String(n)}>
+                                            {n}+ signals disclosed
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
                         </div>
                     </div>
                 </div>

@@ -3,7 +3,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { EventLogExportButton } from "@/components/leads/EventLogExportButton";
 import {
   Plus,
   Phone,
@@ -55,6 +54,7 @@ import type { UserOption } from "@/lib/admin/types";
 import { UNASSIGNED_FILTER } from "@/lib/admin/leadsInfoFilters";
 import type { LeadListFacets } from "@/lib/leads/leadListQuery";
 import { LeadsFilterBar } from "./_components/LeadsFilterBar";
+import { LeadsMoreActions } from "./_components/LeadsMoreActions";
 import { LeadsStatCards } from "./_components/LeadsStatCards";
 import { LeadsTable, type LeadRow } from "./_components/LeadsTable";
 import { LeadDrawer } from "./_components/LeadDrawer";
@@ -62,6 +62,7 @@ import { LeadsSelectionBar } from "./_components/LeadsSelectionBar";
 import {
   EMPTY_FILTERS,
   fromSearchParams,
+  shouldOpenMore,
   hasAnyFilter,
   toSearchParams,
   type LeadFilters,
@@ -1251,7 +1252,11 @@ export default function LeadsUnifiedPage() {
   } | null>(null);
   // Lead opened in the side drawer (row click).
   const [drawerLead, setDrawerLead] = useState<LeadRow | null>(null);
-  const [showMoreFilters, setShowMoreFilters] = useState(false);
+  // C37: open on load when the URL already sets a filter that lives in there
+  // (e.g. the Sales dashboard's ?ready_no_owner=1), so it is never hidden.
+  const [showMoreFilters, setShowMoreFilters] = useState(() =>
+    shouldOpenMore(fromSearchParams(new URLSearchParams(searchParams?.toString() ?? ""))),
+  );
   const [leadsPage, setLeadsPage] = useState(1);
   const [leadsLoading, setLeadsLoading] = useState(false);
   const [leadsError, setLeadsError] = useState<string | null>(null);
@@ -2055,10 +2060,13 @@ export default function LeadsUnifiedPage() {
               <Upload className="w-4 h-4" /> Import
             </button>
           )}
-          {/* Exports what the FILTERS match, not what is selected — the bulk
-              bar's export already covers a selection. Uses `applied`, the
-              debounced filter state the table itself is showing, so the sheet
-              and the screen are the same set of leads. */}
+          {/* C37 (wording audit, 2 Nov): three buttons in view — Import,
+              Download, New lead; "Download all" and "Activity log" sit under
+              More. C33: "Export" reads "Download" everywhere.
+              Download takes what the FILTERS match, not what is selected — the
+              bulk bar's download already covers a selection. Uses `applied`,
+              the debounced filter state the table itself is showing, so the
+              sheet and the screen are the same set of leads. */}
           {tab === "leads" && (
             <button
               onClick={exportFilteredExcel}
@@ -2071,29 +2079,19 @@ export default function LeadsUnifiedPage() {
               ) : (
                 <Download className="w-4 h-4" />
               )}
-              Export to Excel
+              Download
             </button>
           )}
-          {/* B11 — the full export (visits, calls, remarks, billing). Roles
-              outside the route's gate get its 403 as a toast rather than a
-              hidden button, so the export is discoverable. */}
+          {/* B11 full download + R-21 activity log. Roles outside the full
+              download's gate get its 403 as a toast rather than a hidden item,
+              so it stays discoverable. */}
           {tab === "leads" && (
-            <button
-              onClick={exportAllLeads}
-              disabled={exportingAll}
-              title="Download every lead matching the current filters with visit, call, remarks and billing columns"
-              className="flex items-center gap-2 px-4 py-2.5 bg-white border border-gray-200 text-gray-700 text-sm font-medium rounded-xl hover:border-gray-300 hover:bg-gray-50 transition-all shadow-sm disabled:opacity-50"
-            >
-              {exportingAll ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : (
-                <FileSpreadsheet className="w-4 h-4" />
-              )}
-              Export all leads
-            </button>
+            <LeadsMoreActions
+              onDownloadAll={exportAllLeads}
+              downloadingAll={exportingAll}
+              selectedIds={[...selectedLeadIds]}
+            />
           )}
-          {/* R-21 — every event on these leads, by the date it happened. */}
-          {tab === "leads" && <EventLogExportButton selectedIds={[...selectedLeadIds]} />}
           {/* "Add Lead" stood here — single-lead entry into the PROSPECT pool
               (dealer_leads), as distinct from "New Lead" on the right, which
               opens the 5-step loan-application wizard against `leads`. Removed

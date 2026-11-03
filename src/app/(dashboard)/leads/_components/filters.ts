@@ -14,7 +14,7 @@ import { businessTypeFilterParam } from "@/lib/leads/businessType";
 
 export type LeadFilters = {
     search: string;
-    /** lead_status pipeline stage, or UNASSIGNED_FILTER. Labelled "Qualification". */
+    /** lead_status pipeline stage, or UNASSIGNED_FILTER. Labelled "Status". */
     status: string;
     intent: "" | IntentBucket;
     /**
@@ -145,10 +145,22 @@ export const EMPTY_FILTERS: LeadFilters = {
 
 // Filters tucked behind the "More filters" disclosure. Counted for the badge so
 // a filter that is doing work can never be invisible.
-// `neodove` is NOT here: it lives in the primary row beside the search box, for
-// the same reason it does on the Inside Sales queue — a filter that silently
-// removes most of the list should not be one disclosure away from invisible.
+// C37 (wording audit, 2 Nov): the top row now keeps only search, Status,
+// Interest, Owner and the Created dates. Everything else moved here — including
+// NeoDove, Callback, Needs dealer mobile and Ready, no owner, which used to stay
+// on top because they remove most of the list. What keeps them visible now:
+// the badge counts them, and the panel opens on its own when the page loads
+// with one set (shouldOpenMore).
 export const SECONDARY_KEYS: (keyof LeadFilters)[] = [
+    "businessType",
+    "campaign",
+    "sourceDoor",
+    "scrapeRun",
+    "neodove",
+    "callback",
+    "needsMobile",
+    "readyNoOwner",
+    "showDead",
     "asmId",
     "source",
     "idle",
@@ -161,17 +173,23 @@ export const SECONDARY_KEYS: (keyof LeadFilters)[] = [
     "aiBand",
     "signalsMin",
 ];
-// `callback` is deliberately NOT secondary. Same argument as `neodove` above: it
-// is an ACTION filter — "who asked us to call back" — not a refinement, and the
-// leads it surfaces need a human today. One disclosure away from invisible is
-// the wrong place for it.
 
 export function isFilterSet(f: LeadFilters, key: keyof LeadFilters): boolean {
     return f[key] !== "";
 }
 
+/** One per control: the AI score range and the Assigned range count once each. */
 export function countSecondary(f: LeadFilters): number {
-    return SECONDARY_KEYS.filter((k) => isFilterSet(f, k)).length;
+    return (
+        SECONDARY_KEYS.filter((k) => isFilterSet(f, k)).length +
+        (f.scoreMin || f.scoreMax ? 1 : 0) +
+        (f.assignedFrom || f.assignedTo ? 1 : 0)
+    );
+}
+
+/** C37: open "More filters" on load when a link arrives with one of its filters set. */
+export function shouldOpenMore(f: LeadFilters): boolean {
+    return countSecondary(f) > 0;
 }
 
 export function hasAnyFilter(f: LeadFilters): boolean {
