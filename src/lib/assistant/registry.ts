@@ -33,6 +33,8 @@ import { readDocument } from "./tools/read/readDocument";
 import { attachDocument } from "./tools/write/attachDocument";
 import { updateLead } from "./tools/write/updateLead";
 import { recordReinquiryTool } from "./tools/write/recordReinquiry";
+import { accountVisitLink, getAccountDetails, myDealers } from "./tools/accounts";
+import { createAccountQuote } from "./tools/write/createAccountQuote";
 
 const FACTORIES: Readonly<Record<ToolName, ToolFactory>> = Object.freeze({
     my_queue: myQueue,
@@ -60,6 +62,10 @@ const FACTORIES: Readonly<Record<ToolName, ToolFactory>> = Object.freeze({
     attach_document: attachDocument,
     update_lead: updateLead,
     record_reinquiry: recordReinquiryTool,
+    my_dealers: myDealers,
+    get_account_details: getAccountDetails,
+    account_visit_link: accountVisitLink,
+    create_account_quote: createAccountQuote,
 });
 
 /**
@@ -77,6 +83,7 @@ export const ROLE_TOOLS: Readonly<Record<AssistantRole, readonly ToolName[]>> = 
         "invite_dealer_onboarding", "create_lead",
         "product_catalogue", "quote_status", "create_quote", "send_quote", "withdraw_quote",
         "read_document", "attach_document", "update_lead",
+        "my_dealers", "get_account_details", "account_visit_link", "create_account_quote",
     ] as const),
     asm: Object.freeze([
         "my_queue", "search_lead", "get_lead_details", "my_numbers", "my_leads_by_temperature",
@@ -84,6 +91,7 @@ export const ROLE_TOOLS: Readonly<Record<AssistantRole, readonly ToolName[]>> = 
         "reassign_lead", "escalate_lead", "mark_converted", "invite_dealer_onboarding", "create_lead",
         "product_catalogue", "quote_status", "create_quote", "send_quote", "withdraw_quote",
         "read_document", "attach_document", "update_lead",
+        "my_dealers", "get_account_details", "account_visit_link", "create_account_quote",
     ] as const),
 });
 

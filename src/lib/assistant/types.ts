@@ -37,6 +37,10 @@ export const READ_TOOL_NAMES = [
     "product_catalogue",
     "quote_status",
     "read_document",
+    // ID 211 — dealer accounts.
+    "my_dealers",
+    "get_account_details",
+    "account_visit_link",
 ] as const;
 export const WRITE_TOOL_NAMES = [
     "log_call",
@@ -57,6 +61,8 @@ export const WRITE_TOOL_NAMES = [
     "update_lead",
     // ID 137 — proposed by create_lead only; never in ROLE_TOOLS.
     "record_reinquiry",
+    // ID 211 — a quotation on a dealer account.
+    "create_account_quote",
 ] as const;
 export type ReadToolName = (typeof READ_TOOL_NAMES)[number];
 export type WriteToolName = (typeof WRITE_TOOL_NAMES)[number];
@@ -109,6 +115,21 @@ export type LeadSummary = {
     /** True when the acting user owns it — anything else is read-only. */
     owned_by_you: boolean;
     next_date: string | null;
+    crm_url: string;
+};
+
+/** ID 211 — one dealer account as a tool hands it back: an allowlisted projection. */
+export type AccountRowSummary = {
+    id: string;
+    name: string;
+    city: string | null;
+    owner_name: string | null;
+    owned_by_you: boolean;
+    /** Date of the last order (invoice), YYYY-MM-DD. */
+    last_order: string | null;
+    days_since_last_order: number | null;
+    /** Dealer Health's bucket label (Active, Cooling, …). */
+    health: string;
     crm_url: string;
 };
 
@@ -170,6 +191,10 @@ export type ToolResult =
           paging?: Paging;
       }
     | { kind: "lead"; lead: Record<string, unknown> }
+    /** ID 211 — dealer accounts (my_dealers), rendered as text. */
+    | { kind: "accounts"; title: string; rows: AccountRowSummary[]; total: number; crm_url: string | null; paging?: Paging }
+    /** ID 211 — one dealer account (get_account_details). */
+    | { kind: "account"; account: Record<string, unknown> }
     | { kind: "numbers"; data: Record<string, unknown> }
     /** Catalogue products — names and models only, never a price. */
     | { kind: "products"; rows: ProductSummary[]; total: number; paging?: Paging }

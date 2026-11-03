@@ -38,6 +38,8 @@ import { tryGenerateAccountQuotationDraft } from "./draft";
 import { notifyAccountQuotationApproved, notifyAccountQuotationPendingApproval } from "./notify";
 import { sendQuoteApprovalRequestEmail, termsLabel } from "@/lib/leads/quoteApprovalEmail";
 
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
 export const AccountQuoteLineSchema = z.object({
     asset_type: z.enum(["battery", "charger", "paraphernalia"]),
     product_id: z.string().min(1),
@@ -71,13 +73,15 @@ export async function createAccountQuotation(args: {
     actor: { id: string; name: string | null };
     body: CreateAccountQuoteInput;
     performedAt?: Date;
-}): Promise<CreateAccountQuoteResult> {
+}, opts?: { tx?: Tx }): Promise<CreateAccountQuoteResult> {
     const { account, actor, body } = args;
     const performedAt = args.performedAt ?? new Date();
     const lines = body.product_lines as CommercialsProductLine[];
     const total = lineTotal(lines);
 
-    const outcome = await db.transaction(async (tx) => {
+    // ID 211: the WhatsApp assistant writes inside its executor's transaction.
+    const inTx = <T>(fn: (tx: Tx) => Promise<T>): Promise<T> => (opts?.tx ? fn(opts.tx) : db.transaction(fn));
+    const outcome = await inTx(async (tx) => {
         // Serialise versions per account: two reps saving at once must not both take max+1.
         await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${"account_quote:" + account.id}))`);
         const maxRows = (await tx.execute(sql`

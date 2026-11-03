@@ -21,6 +21,8 @@ import { attachDocumentApplier } from "./tools/write/attachDocument";
 import { updateLeadApplier } from "./tools/write/updateLead";
 import { recordReinquiryApplier } from "./tools/write/recordReinquiry";
 
+import { createAccountQuoteApplier } from "./tools/write/createAccountQuote";
+
 export const APPLIERS: Readonly<Record<WriteToolName, Applier<unknown>>> = Object.freeze({
     log_call: logCallApplier,
     set_follow_up: setFollowUpApplier,
@@ -39,4 +41,5 @@ export const APPLIERS: Readonly<Record<WriteToolName, Applier<unknown>>> = Objec
     attach_document: attachDocumentApplier,
     update_lead: updateLeadApplier,
     record_reinquiry: recordReinquiryApplier,
+    create_account_quote: createAccountQuoteApplier,
 });
