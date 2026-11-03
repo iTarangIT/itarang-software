@@ -160,6 +160,7 @@ export interface CallQualityFunnel {
 const REACHED_NETWORK: ReadonlySet<FailureReasonCode> = new Set<FailureReasonCode>([
     "busy",
     "not_answered",
+    "out_of_service",
     "voicemail",
     "switchboard",
     "disconnected",

@@ -87,6 +87,31 @@ function* allInputs(): Generator<AiCallDispositionInput> {
     yield { transcript: "agent: Namaste\nuser: For sales, press 1.", providerStatus: "done" };
     yield { transcript: "agent: hello\nuser: haan", providerStatus: "done", callEndStatus: "switchboard" };
 
+    // D8 — a complaint, on every band.
+    for (const band of BANDS) {
+        for (const callbackAgreed of [true, false]) {
+            yield {
+                transcript: "Agent: hello\nUser: haan",
+                providerStatus: "completed",
+                band,
+                bandCallStatus: "complete",
+                infoSignalsCount: 1,
+                disqualifier: "none",
+                callbackAgreed,
+                callbackTopic: "complaint",
+            };
+        }
+    }
+
+    // 3 Nov 2026 — the campaign row's verdict names the not-connected reason.
+    for (const transcript of [null, "agent: hello\nuser: hello?"]) {
+        yield { transcript, providerStatus: "done", callEndStatus: "hung_up", callOutcome: "early_hangup" };
+        yield { transcript, providerStatus: "done", callEndStatus: "no_response", callOutcome: "out_of_service" };
+        yield { transcript, providerStatus: "failed", callEndStatus: "failed", callOutcome: "invalid_number" };
+        yield { transcript, providerStatus: "failed", callEndStatus: "busy" };
+        yield { transcript, providerStatus: "failed", callEndStatus: "rejected" };
+    }
+
     // Connected: the full cross-product of everything the band engine produces.
     for (const band of BANDS) {
         for (const bandCallStatus of BAND_CALL_STATUSES) {
@@ -219,12 +244,17 @@ describe("mapAiCallToDisposition — invariants over every input", () => {
             "nc:failed",
             "nc:unknown",
             "nc:no_person",
+            "nc:early_hangup",
             "c:analysis_failed",
             "c:not_analysed",
             "c:dropped_empty",
             "c:irrelevant",
             "c:disqualified",
             "c:callback_only",
+            "c:qualified",
+            "c:warm_callback",
+            "c:cold_details",
+            "c:complaint",
             "c:substance",
             "c:short_hangup",
             "c:no_disclosure",
@@ -325,12 +355,59 @@ describe("mapAiCallToDisposition — named cases", () => {
         });
     });
 
-    // An AI call cannot reach the sheet's Hot bucket — every Hot label names a
-    // commercial artefact only a human produces.
-    it("a Qualified band still lands in Warm", () => {
+    // 3 Nov 2026 (user decision) — L2 follows the band: an AI-Qualified call
+    // is Hot on its touchpoint, as the lead is.
+    it("a Qualified band lands in Hot / AI Qualified", () => {
         expect(
             connected({ band: "Qualified", infoSignalsCount: 4 }),
-        ).toMatchObject({ bucket: "Warm", disposition: "Information Collected" });
+        ).toMatchObject({ bucket: "Hot", disposition: "AI Qualified", reasonCode: "c:qualified" });
+        expect(connected({ band: "Qualified", callbackAgreed: true })).toMatchObject({ bucket: "Hot" });
+    });
+
+    it("L2 follows the band for every banded call", () => {
+        const want = { Qualified: "Hot", Warm: "Warm", Cold: "Cold", Disqualified: "Lost" } as const;
+        for (const band of ["Qualified", "Warm", "Cold", "Disqualified"] as const) {
+            for (const relevantDealer of [true, false]) {
+                for (const infoSignalsCount of [0, 2]) {
+                    const out = connected({ band, relevantDealer, infoSignalsCount });
+                    expect(out.bucket, `${band} rel=${relevantDealer} info=${infoSignalsCount}`).toBe(want[band]);
+                }
+            }
+        }
+    });
+
+    // The bug: relevantDealer arrives as `=== "yes"`, so "never said" was false
+    // and a Cold / Warm lead read "Some other Business" (Lost).
+    it("a dealer who never named his lines is not Lost when the band says otherwise", () => {
+        expect(connected({ band: "Cold", relevantDealer: false })).toMatchObject({
+            bucket: "Cold",
+            disposition: "Pitch Heard, No Response",
+        });
+        expect(connected({ band: "Warm", relevantDealer: false, callbackAgreed: true })).toMatchObject({
+            bucket: "Warm",
+            disposition: "Callback Agreed",
+        });
+    });
+
+    it("a firm no is Lost whatever the band", () => {
+        expect(connected({ band: "Warm", disqualifier: "not_interested" })).toMatchObject({
+            bucket: "Lost",
+            disposition: "Not Interested",
+        });
+    });
+
+    it("a complaint is a service matter", () => {
+        expect(connected({ band: "Warm", callbackTopic: "complaint" })).toMatchObject({
+            bucket: "Cold",
+            disposition: "Service Issue",
+        });
+    });
+
+    it("Cold with details shared has its own label", () => {
+        expect(connected({ band: "Cold", infoSignalsCount: 2 })).toMatchObject({
+            bucket: "Cold",
+            disposition: "Details Shared, Not Qualified",
+        });
     });
 
     it("analysis failure is connected with no label", () => {
@@ -358,9 +435,9 @@ describe("mapAiCallToDisposition — named cases", () => {
         expect(out.reasonCode).toBe("c:not_analysed");
     });
 
-    it("pitch heard, nothing disclosed, nothing refused → no honest label", () => {
+    it("pitch heard, nothing disclosed, nothing refused → Pitch Heard, No Response", () => {
         const out = connected({ pitchHeard: true, infoSignalsCount: 0 });
-        expect(out.disposition).toBeNull();
+        expect(out).toMatchObject({ bucket: "Cold", disposition: "Pitch Heard, No Response" });
         expect(out.reasonCode).toBe("c:no_disclosure");
     });
 
@@ -410,5 +487,30 @@ describe("B5 — connected means a person spoke", () => {
         expect(mapAiCallToDisposition({ ...spoke, callEndStatus: "completed" }).connectStatus).toBe("connected");
         expect(mapAiCallToDisposition({ ...spoke, callEndStatus: "voicemail" }).connectStatus).toBe("not_connected");
         expect(mapAiCallToDisposition({ ...spoke, callEndStatus: "silent" }).connectStatus).toBe("not_connected");
+    });
+});
+
+describe("3 Nov 2026 — not-connected reasons from the campaign row's verdict", () => {
+    const nc = (callEndStatus: string, callOutcome?: string, transcript: string | null = null) =>
+        mapAiCallToDisposition({ transcript, providerStatus: "done", callEndStatus, callOutcome });
+
+    it("Early Hang-up → User disconnected the call", () => {
+        expect(nc("hung_up", "early_hangup", "agent: hello\nuser: hello?")).toMatchObject({
+            connectStatus: "not_connected",
+            disposition: "User disconnected the call",
+            reasonCode: "nc:early_hangup",
+        });
+    });
+
+    it("out of service → Switch off", () => {
+        expect(nc("no_response", "out_of_service").disposition).toBe("Switch off");
+    });
+
+    it("a dead number → Incorrect / Invalid number", () => {
+        expect(nc("failed", "invalid_number").disposition).toBe("Incorrect / Invalid number");
+    });
+
+    it("busy → Busy in another call", () => {
+        expect(nc("busy").disposition).toBe("Busy in another call");
     });
 });

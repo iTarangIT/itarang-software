@@ -111,8 +111,13 @@ export function isAiDialable(row: {
  * One ai_call_logs row (aliased `acl`) on which the dealer spoke. Shared by
  * every AI-connected check so they cannot disagree about what "connected" is.
  */
+// 3 Nov 2026 — an Early Hang-up ("hello? kaun?" then the phone goes down during
+// Priya's introduction) has a dealer turn, so dealerSpokeSql alone counts it.
+// The finalizers stamp those calls call_status = 'early_hangup'; they are not
+// a conversation and must not retire the lead from AI redial.
 export const AI_CONNECTED_CALL_PREDICATE =
-    "acl.transcript IS NOT NULL AND " + dealerSpokeSql("acl");
+    "acl.transcript IS NOT NULL AND acl.call_status IS DISTINCT FROM 'early_hangup' AND " +
+    dealerSpokeSql("acl");
 
 export const AI_CONNECTED_CALL_SQL = sql.raw(AI_CONNECTED_CALL_PREDICATE);
 

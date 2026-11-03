@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+    CALL_CATEGORIES,
+    CALL_CATEGORY_LABELS,
+    CALL_CATEGORY_ORDER,
     callbackDueAt,
     categorizeCall,
     parseClockTime,
@@ -31,12 +34,13 @@ function a(over: Partial<CategoryAnalysis["signals"]> = {}, rest: Partial<Catego
 
 describe("categorizeCall — not connected", () => {
     it.each([
-        ["no_response", "unavailable"],
-        ["busy", "unavailable"],
-        ["rejected", "unavailable"],
+        ["no_response", "no_response"],
+        ["busy", "busy"],
+        ["rejected", "busy"],
         ["voicemail", "unavailable"],
-        ["silent", "unavailable"],
-        ["no_conversation", "unavailable"],
+        ["switchboard", "unavailable"],
+        ["silent", "no_response"],
+        ["no_conversation", "no_response"],
         ["hung_up", "hung_up"],
     ] as const)("%s → %s", (status, category) => {
         const r = categorizeCall({ campaignStatus: status, analysis: null });
@@ -54,9 +58,37 @@ describe("categorizeCall — not connected", () => {
         );
     });
 
+    it("3 Nov 2026 — the specific reason for every unreached call", () => {
+        const cat = (campaignStatus: Parameters<typeof categorizeCall>[0]["campaignStatus"], callOutcome?: string) =>
+            categorizeCall({ campaignStatus, callOutcome, analysis: null }).category;
+        // Wrong Number: a dead number, whatever status the row landed in.
+        expect(cat("failed", "trigger_failed: INVITE failed: sip status: 404: Not Found")).toBe("wrong_number");
+        expect(cat("failed", "trigger_failed: sip status: 484 Address Incomplete")).toBe("wrong_number");
+        expect(cat("failed", "trigger_failed: sip status: 604")).toBe("wrong_number");
+        // Out of Service: switched off / unreachable (classifyCallEnd's outcome).
+        expect(cat("no_response", "out_of_service")).toBe("out_of_service");
+        // Call Disconnected: the line dropped on the network.
+        expect(cat("failed", "call-disconnected")).toBe("disconnected");
+        // Early Hang-up.
+        expect(cat("hung_up", "early_hangup")).toBe("hung_up");
+        // Our own setup failing is not the dealer's outcome.
+        expect(cat("failed", "trigger_failed: agent not found")).toBe("failed");
+    });
+
+    it("labels read the CRM's words", () => {
+        expect(CALL_CATEGORY_LABELS.wrong_number).toBe("Wrong Number");
+        expect(CALL_CATEGORY_LABELS.no_response).toBe("No Response");
+        expect(CALL_CATEGORY_LABELS.out_of_service).toBe("Out of Service");
+        expect(CALL_CATEGORY_LABELS.busy).toBe("Busy");
+        expect(CALL_CATEGORY_LABELS.unavailable).toBe("Unavailable");
+        expect(CALL_CATEGORY_LABELS.disconnected).toBe("Call Disconnected");
+        expect(CALL_CATEGORY_LABELS.hung_up).toBe("Early Hang-up");
+        expect(new Set(CALL_CATEGORY_ORDER)).toEqual(new Set(CALL_CATEGORIES));
+    });
+
     it("a dealer who never spoke is never categorised from the transcript", () => {
         const r = categorizeCall({ campaignStatus: "silent", analysis: a({ callback_agreed: "yes" }) });
-        expect(r.category).toBe("unavailable");
+        expect(r.category).toBe("no_response");
         expect(r.callbackOwner).toBeNull();
     });
 });
@@ -251,5 +283,29 @@ describe("callbackDueAt", () => {
         // Saturday + a day = Sunday, closed → Monday 09:00.
         const sat = ist("2026-10-24T12:00:00");
         expect(callbackDueAt({ owner: "ai", now: sat, window: WINDOW })).toEqual(ist("2026-10-26T09:00:00"));
+    });
+});
+
+describe("categorizeCall — the agent's own call_result on a connected call", () => {
+    it("a person saying it is the wrong number → Wrong Number", () => {
+        const r = categorizeCall({ campaignStatus: "completed", agentCallResult: "wrong_number", analysis: a() });
+        expect(r.category).toBe("wrong_number");
+        expect(r.connected).toBe(true);
+    });
+
+    it("owner not available, nothing else agreed → Unavailable", () => {
+        expect(
+            categorizeCall({ campaignStatus: "completed", agentCallResult: "owner_not_available", analysis: a() }).category,
+        ).toBe("unavailable");
+    });
+
+    it("owner not available but a callback was agreed → still a callback", () => {
+        expect(
+            categorizeCall({
+                campaignStatus: "completed",
+                agentCallResult: "owner_not_available",
+                analysis: a({ callback_agreed: "yes" }),
+            }).category,
+        ).toBe("callback_sales");
     });
 });

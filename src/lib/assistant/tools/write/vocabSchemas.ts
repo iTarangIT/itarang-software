@@ -4,6 +4,7 @@
 
 import { z } from "zod";
 import {
+    AI_ONLY_DISPOSITIONS,
     ALL_CONNECTED_DISPOSITIONS,
     CONNECT_STATUS,
     DISPOSITION_BUCKETS,
@@ -17,7 +18,12 @@ import { NO_CHANGE } from "../../vocab";
 const tuple = (xs: readonly string[]) => xs as unknown as [string, ...string[]];
 
 export const DispositionLabel = z
-    .enum(tuple([...ALL_CONNECTED_DISPOSITIONS, ...NOT_CONNECTED_REASONS]))
+    .enum(
+        tuple([
+            ...ALL_CONNECTED_DISPOSITIONS.filter((d) => !AI_ONLY_DISPOSITIONS.has(d)),
+            ...NOT_CONNECTED_REASONS,
+        ]),
+    )
     .describe("The CC-sheet disposition, spelled exactly as listed");
 export const ConnectStatus = z.enum(CONNECT_STATUS);
 export const Bucket = z

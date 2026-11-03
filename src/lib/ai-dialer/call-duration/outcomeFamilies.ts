@@ -102,6 +102,7 @@ export function classifyOutcomeFamily(code: FailureReasonCode | null | undefined
         case "invalid_number":
         case "technical":
         case "not_answered":
+        case "out_of_service":
         case "busy":
         case "voicemail":
         case "switchboard":

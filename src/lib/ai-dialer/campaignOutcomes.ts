@@ -34,10 +34,11 @@ import { CALL_CATEGORIES, type CallCategory } from "./callCategory";
  *   * not finished (pending / calling / skipped) → NULL, not counted
  *   * the latest ANSWERED call, when it is what the row shows now (same status,
  *     or the dealer spoke) → its category
- *   * otherwise the row's own status, as callCategory.categorizeCall files a
- *     call with no analysis: failed → wrong_number for a dead number (SIP 404 /
- *     "invalid_number") else failed; hung_up → hung_up; completed →
- *     no_interest_signal; every other unreached status → unavailable.
+ *   * otherwise the row's own status, as callCategory.notConnectedCategory
+ *     files it (category-1.3.0): a dead number → wrong_number; out of service;
+ *     a dropped line → disconnected; busy / rejected → busy; no_response /
+ *     silent → no_response; voicemail / switchboard → unavailable; hung_up →
+ *     hung_up; completed → no_interest_signal.
  */
 export function leadCategorySql(campaignLeadAlias = "l") {
     const l = sql.raw(campaignLeadAlias);
@@ -56,12 +57,16 @@ export function leadCategorySql(campaignLeadAlias = "l") {
                       x.created_at)
               ORDER BY x.created_at DESC LIMIT 1),
             CASE
-              WHEN ${l}.status = 'failed'
-                   AND ${l}.call_outcome ~* '(invalid_number|sip status: ?404|SIP 404)' THEN 'wrong_number'
-              WHEN ${l}.status = 'failed' THEN 'failed'
-              WHEN ${l}.status = 'hung_up' THEN 'hung_up'
               WHEN ${l}.status = 'completed' THEN 'no_interest_signal'
-              ELSE 'unavailable'
+              WHEN ${l}.call_outcome ~* '(invalid_number|wrong_number|sip status: ?(404|484|604)|SIP (404|484|604))'
+                   THEN 'wrong_number'
+              WHEN ${l}.status = 'failed' AND ${l}.call_outcome ~* '(disconnect|cancell?ed)' THEN 'disconnected'
+              WHEN ${l}.status = 'failed' THEN 'failed'
+              WHEN ${l}.call_outcome ~* '(out_of_service|switched_off|unreachable|out_of_coverage)' THEN 'out_of_service'
+              WHEN ${l}.status IN ('busy', 'rejected') THEN 'busy'
+              WHEN ${l}.status IN ('voicemail', 'switchboard') THEN 'unavailable'
+              WHEN ${l}.status = 'hung_up' THEN 'hung_up'
+              ELSE 'no_response'
             END)
         END
     )`;
