@@ -395,9 +395,10 @@ export default function VyaparPaymentUpload() {
                         </div>
                         <div className="rounded-xl border border-gray-200 bg-white p-4">
                             <p className="text-xs font-semibold text-gray-500">Invoices updated</p>
-                            <p className="mt-1 text-xl font-bold text-brand-navy">{p.increases + p.decreases}</p>
+                            <p className="mt-1 text-xl font-bold text-brand-navy">{classified ? counts.updated : p.increases + p.decreases}</p>
                             <p className="text-xs text-gray-500">
-                                {p.increases} paid more{p.decreases ? ` · ${p.decreases} paid less` : ""} · {synced.length} in file
+                                {p.increases} paid more{p.decreases ? ` · ${p.decreases} paid less` : ""}
+                                {classified ? ` · ${counts.new} new · ${counts.duplicates} duplicates` : ` · ${synced.length} in file`}
                             </p>
                         </div>
                         <div className="rounded-xl border border-gray-200 bg-white p-4">
