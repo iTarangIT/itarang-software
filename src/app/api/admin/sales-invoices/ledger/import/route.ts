@@ -22,6 +22,7 @@ import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-util
 import { parseInvoiceWorkbook, type ImportKind } from "@/lib/sales/vyaparParse";
 import { commitImport, OlderExportError, previewImport } from "@/lib/sales/vyaparImport";
 import { invoiceFreshness } from "@/lib/sales/invoiceFreshness";
+import { projectReceivablesAfterImport } from "@/lib/sales/paymentSyncProjection";
 import { requireLedger } from "../_auth";
 
 export const dynamic = "force-dynamic";
@@ -43,7 +44,16 @@ export const POST = withErrorHandler(async (req: NextRequest) => {
 
     const parsed = parseInvoiceWorkbook(Buffer.from(await file.arrayBuffer()), kind);
     if (mode !== "commit") {
-        return successResponse({ mode: "preview", file_name: file.name, preview: await previewImport(parsed) });
+        const preview = await previewImport(parsed);
+        // Payment sync: Accounts Receivable before → after, by the receivables
+        // page's own rule. A failure here never blocks the preview.
+        const receivable = preview.payments
+            ? await projectReceivablesAfterImport(parsed, preview).catch((e) => {
+                  console.error("[ledger/import] receivable projection failed", e);
+                  return null;
+              })
+            : null;
+        return successResponse({ mode: "preview", file_name: file.name, preview: { ...preview, receivable } });
     }
     if (!parsed.documents.length) {
         return errorResponse(parsed.warnings[0] ?? "No invoices were read from the file — nothing imported.", 422);

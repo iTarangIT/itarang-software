@@ -18,6 +18,8 @@ import { parseInvoiceWorkbook } from "@/lib/sales/vyaparParse";
 import { previewImport } from "@/lib/sales/vyaparImport";
 import { outstandingTotal } from "@/lib/dashboard/revenueSource";
 import { hasCreditNoteApplications } from "@/lib/sales/ledgerTables";
+import { listReceivables, netOwed } from "@/lib/dashboard/receivables";
+import { projectReceivablesAfterImport } from "@/lib/sales/paymentSyncProjection";
 
 let failed = 0;
 function check(label: string, ok: boolean, detail?: unknown) {
@@ -71,7 +73,15 @@ async function main() {
         );
     }
     console.log(`\nactions: ${JSON.stringify(p.totals)}`);
-    console.log(`Accounts Receivable now: ${inr(await outstandingTotal())}`);
+    console.log(`Accounts Receivable now (overview card): ${inr(await outstandingTotal())}`);
+
+    // The preview's "Receivable now → after import" must start from exactly the
+    // figure CEO › Receivables shows (listReceivables + netOwed).
+    const page = netOwed(await listReceivables());
+    const proj = await projectReceivablesAfterImport(parsed, p);
+    console.log(`Receivables page: ${inr(page)} · preview before ${inr(proj.before)} → after ${inr(proj.after)}`);
+    check("preview 'Receivable now' = the receivables page figure", Math.abs(proj.before - page) < 1, { page, before: proj.before });
+    for (const c of proj.customers.slice(0, 10)) console.log(`    ${String(c.name).slice(0, 40).padEnd(40)} ${inr(c.before)} → ${inr(c.after)}`);
     console.log(`E-368 credit_note_applications applied: ${await hasCreditNoteApplications()}`);
 
     console.log(failed ? `\n${failed} check(s) FAILED` : "\nall checks passed");
