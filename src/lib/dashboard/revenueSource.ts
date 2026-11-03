@@ -41,7 +41,12 @@ import {
   leadKeyValidOn,
 } from "@/lib/leads/gstinMatch";
 import { hasAccountOwnershipTables } from "@/lib/accounts/tables";
-import { hasCreditNoteApplications, hasInvoiceLedgerTables, hasZohoRefusedGstin } from "@/lib/sales/ledgerTables";
+import {
+  hasCreditNoteApplications,
+  hasInvoiceLedgerTables,
+  hasZohoInvoicePayments,
+  hasZohoRefusedGstin,
+} from "@/lib/sales/ledgerTables";
 
 /**
  * 'credit' (E-322, tracker ID 71) is a credit note: a NEGATIVE amount dated on
@@ -150,6 +155,13 @@ async function revenueUnion(): Promise<SQL> {
   // E-368: the part of a credit note already used against an invoice in Vyapar
   // (that invoice's Received already includes it) is not netted a second time.
   const applied = ledger && (await hasCreditNoteApplications());
+  // E-369 (ID 200 f): payments entered in the CRM on old Zoho invoices come
+  // off Zoho's own balance; a fully paid one reads as paid.
+  const zohoPaid = await hasZohoInvoicePayments();
+  const zohoBalance = zohoPaid ? sql`GREATEST(COALESCE(zi.balance, 0) - COALESCE(zp.amount_paid, 0), 0)` : sql`zi.balance`;
+  const zohoStatus = zohoPaid
+    ? sql`CASE WHEN COALESCE(zp.amount_paid, 0) > 0 AND COALESCE(zi.balance, 0) - zp.amount_paid <= 0.005 AND zi.status IS DISTINCT FROM 'void' THEN 'paid' ELSE zi.status END`
+    : sql`zi.status`;
   const zoho = sql`
     SELECT
       'zoho'::text                                                   AS source,
@@ -159,11 +171,11 @@ async function revenueUnion(): Promise<SQL> {
       zi.due_date                                                    AS due_date,
       zi.customer_name                                               AS customer_name,
       zi.total                                                       AS total,
-      zi.balance                                                     AS balance,
-      ${ledger ? sql`CASE WHEN zv.invoice_id IS NOT NULL THEN 'void' ELSE zi.status END` : sql`zi.status`} AS status,
+      ${zohoBalance}                                                 AS balance,
+      ${ledger ? sql`CASE WHEN zv.invoice_id IS NOT NULL THEN 'void' ELSE ${zohoStatus} END` : zohoStatus} AS status,
       zi.organization_id                                             AS organization_id,
       ('/api/admin/zoho/invoices/' || zi.zoho_invoice_id || '/pdf')  AS document_url,
-      zi.payment_reference                                           AS payment_reference,
+      ${zohoPaid ? sql`COALESCE(zp.payment_reference, zi.payment_reference)` : sql`zi.payment_reference`} AS payment_reference,
       ${refused ? sql`(zcg.refused_gstin IS NOT NULL)` : sql`false`}  AS needs_attention,
       ${refused ? sql`zcg.refused_reason` : sql`NULL::text`}          AS attention_reason,
       -- Zoho's invoice LIST payload (what the sync stores) carries no GSTIN.
@@ -178,6 +190,7 @@ async function revenueUnion(): Promise<SQL> {
             LEFT JOIN invoice_voids zv
                    ON zv.source = 'zoho' AND zv.invoice_id = zi.id::text`
       : sql``}
+    ${zohoPaid ? sql`LEFT JOIN zoho_invoice_payments zp ON zp.invoice_id = zi.id` : sql``}
   `;
 
   if (!(await hasSalesInvoicesTable())) {

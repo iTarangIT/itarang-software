@@ -1052,16 +1052,16 @@ export default function CEOInvoicesPage() {
                           {formatINR(Number(r.balance || 0))}
                         </td>
                         <td className="py-3 text-right">
-                          {/* Drive rows only: a Zoho invoice's payment state is
-                              rewritten by the hourly sync, so anything recorded
-                              here would silently vanish within the hour. */}
-                          {r.source === "drive" && r.status !== "void" && (
+                          {/* ID 200 f: old Zoho invoices only. Drive / Vyapar
+                              payments come from the weekly Vyapar Sale Report
+                              upload (E-369 keeps the Zoho payment off the sync). */}
+                          {r.source === "zoho" && r.status !== "void" && r.status !== "paid" && (
                             <button
                               data-testid="record-payment"
                               onClick={() => {
                                 const opening = payingId !== r.id;
                                 setPayingId(opening ? r.id : null);
-                                setPayAmount(opening ? String(Number(r.total || 0)) : "");
+                                setPayAmount(opening ? String(Number(r.balance || 0)) : "");
                                 setPayRef(opening ? (r.payment_reference ?? "") : "");
                                 recordPayment.reset();
                               }}

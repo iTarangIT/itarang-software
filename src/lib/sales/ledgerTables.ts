@@ -51,6 +51,28 @@ export async function hasCreditNoteApplications(): Promise<boolean> {
     return applications;
 }
 
+let zohoPayments: boolean | null = null;
+let zohoPaymentsAt = 0;
+
+/**
+ * E-369 (ID 200 f): zoho_invoice_payments — payments entered in the CRM on old
+ * Zoho invoices. Without it the Zoho balance counts as before.
+ */
+export async function hasZohoInvoicePayments(): Promise<boolean> {
+    const now = Date.now();
+    if (zohoPayments !== null && now - zohoPaymentsAt < PROBE_TTL_MS) return zohoPayments;
+    try {
+        const res = (await db.execute(sql`
+            SELECT to_regclass('public.zoho_invoice_payments') IS NOT NULL AS ok
+        `)) as unknown as Array<{ ok: boolean }>;
+        zohoPayments = Boolean(res[0]?.ok);
+    } catch {
+        zohoPayments = false;
+    }
+    zohoPaymentsAt = now;
+    return zohoPayments;
+}
+
 let refusedCols: boolean | null = null;
 let refusedAt = 0;
 

@@ -21,7 +21,7 @@ import {
 
 // ID 166: invoice PDFs open through a fresh 15-minute link on each click.
 import FreshFileLink from "@/components/shared/FreshFileLink";
-import { receivablesSourceText } from "@/lib/sales/invoiceFreshnessRules";
+import { paymentsStaleText, receivablesSourceText } from "@/lib/sales/invoiceFreshnessRules";
 import DebtorTable, { type Debtor } from "./_components/DebtorTable";
 import VyaparPaymentUpload from "./_components/VyaparPaymentUpload";
 export const dynamic = "force-dynamic";
@@ -137,6 +137,9 @@ export default async function CeoReceivablesPage({
                     customer). Age is days since the invoice or credit note date.
                 </p>
                 <p className="mt-1 text-xs text-gray-500">{receivablesSourceText(freshness)}</p>
+                {paymentsStaleText(freshness) && (
+                    <p className="mt-1 text-xs font-medium text-red-600">{paymentsStaleText(freshness)}</p>
+                )}
                 <div className="mt-3">
                     <VyaparPaymentUpload />
                 </div>
