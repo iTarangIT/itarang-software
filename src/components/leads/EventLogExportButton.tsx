@@ -19,7 +19,14 @@ function isoDaysAgo(n: number): string {
     return d.toISOString().slice(0, 10);
 }
 
-export function EventLogExportButton({ selectedIds }: { selectedIds: string[] }) {
+export function EventLogExportButton({
+    selectedIds,
+    variant = "button",
+}: {
+    selectedIds: string[];
+    /** "menu": a full-width row inside a dropdown (Leads page "More", C37). */
+    variant?: "button" | "menu";
+}) {
     const [open, setOpen] = useState(false);
     const [from, setFrom] = useState(() => isoDaysAgo(6));
     const [to, setTo] = useState(() => isoDaysAgo(0));
@@ -66,13 +73,21 @@ export function EventLogExportButton({ selectedIds }: { selectedIds: string[] })
                 type="button"
                 onClick={() => setOpen((o) => !o)}
                 title="Download every change on these leads, filtered by the date it happened"
-                className="flex items-center gap-2 px-4 py-2.5 bg-white border border-gray-200 text-gray-700 text-sm font-medium rounded-xl hover:border-gray-300 hover:bg-gray-50 transition-all shadow-sm"
+                className={
+                    variant === "menu"
+                        ? "flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50"
+                        : "flex items-center gap-2 px-4 py-2.5 bg-white border border-gray-200 text-gray-700 text-sm font-medium rounded-xl hover:border-gray-300 hover:bg-gray-50 transition-all shadow-sm"
+                }
             >
                 <History className="w-4 h-4" />
-                Event log
+                Activity log
             </button>
             {open && (
-                <div className="absolute right-0 z-30 mt-2 w-72 rounded-xl border border-gray-200 bg-white p-4 shadow-xl">
+                <div
+                    className={`z-30 w-72 rounded-xl border border-gray-200 bg-white p-4 shadow-xl ${
+                        variant === "menu" ? "mt-1" : "absolute right-0 mt-2"
+                    }`}
+                >
                     <p className="text-xs text-gray-600">
                         Events that happened between these dates on{" "}
                         <b>{selectedIds.length ? `${selectedIds.length} selected lead(s)` : "all leads"}</b>.

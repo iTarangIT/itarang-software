@@ -59,13 +59,24 @@ const PAGE = 100;
 // Page 1 of the default tab — what the page fetches on the server (ID 203).
 const DEFAULT_PARAMS = `limit=${PAGE}&offset=0`;
 
+// C10 (wording audit, 2 Nov): short labels so the pill stays on one line.
 export function CameThroughBadge({ value }: { value: string | null }) {
     if (value === "lead")
-        return <span className="rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[11px] font-medium text-sky-700">Lead</span>;
+        return (
+            <span
+                title="Came through a lead"
+                className="whitespace-nowrap rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[11px] font-medium text-sky-700"
+            >
+                Lead
+            </span>
+        );
     if (value === "direct")
         return (
-            <span className="rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 text-[11px] font-medium text-violet-700">
-                Direct onboarding
+            <span
+                title="Direct onboarding (no lead)"
+                className="whitespace-nowrap rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 text-[11px] font-medium text-violet-700"
+            >
+                Direct
             </span>
         );
     return <span className="text-[11px] text-ink-muted">—</span>;
@@ -256,7 +267,7 @@ export function AccountsView({ initialPage = null }: { initialPage?: ListRespons
                 }}>
                     <option value="">Came through: any</option>
                     <option value="lead">Lead</option>
-                    <option value="direct">Direct onboarding</option>
+                    <option value="direct">Direct</option>
                     <option value="unknown">Not recorded</option>
                 </select>
                 {isFetching && <Loader2 className="h-4 w-4 animate-spin text-ink-muted" />}
