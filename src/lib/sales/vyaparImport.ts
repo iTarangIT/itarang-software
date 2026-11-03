@@ -100,6 +100,8 @@ export interface ImportPlanRow {
     total_mismatch?: boolean;
     /** The amount paid was entered by hand (Payment button) and this upload lowers it. */
     overrides_manual?: boolean;
+    /** The CRM invoice is already void — a "cancelled" row changes nothing. */
+    already_void?: boolean;
 }
 
 /** Payment sync — what the upload does to amounts paid, and what it cannot see. */
@@ -412,6 +414,7 @@ export async function previewImport(parsed: ParseResult): Promise<ImportPreview>
             action,
             existing_id: id,
         };
+        if (withPayments && id && crm.get(id)?.voided) row.already_void = true;
         if (withPayments && d.doc_type === "invoice" && !d.cancelled && (action === "update" || action === "create")) {
             const cur = id ? crm.get(id) : undefined;
             if (!(cur?.voided)) {

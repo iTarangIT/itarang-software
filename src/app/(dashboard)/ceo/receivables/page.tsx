@@ -23,6 +23,7 @@ import {
 import FreshFileLink from "@/components/shared/FreshFileLink";
 import { receivablesSourceText } from "@/lib/sales/invoiceFreshnessRules";
 import DebtorTable, { type Debtor } from "./_components/DebtorTable";
+import VyaparPaymentUpload from "./_components/VyaparPaymentUpload";
 export const dynamic = "force-dynamic";
 
 type AgeKey = ReceivableAgeKey | "all";
@@ -136,6 +137,9 @@ export default async function CeoReceivablesPage({
                     customer). Age is days since the invoice or credit note date.
                 </p>
                 <p className="mt-1 text-xs text-gray-500">{receivablesSourceText(freshness)}</p>
+                <div className="mt-3">
+                    <VyaparPaymentUpload />
+                </div>
             </div>
 
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
