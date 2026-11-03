@@ -738,7 +738,7 @@ export default function Step5Page() {
           </div>
 
           <p className="text-[11px] text-gray-400 text-center pt-2">
-            BRD §3.5: dispatched → sold runs daily via cron at 04:00 UTC, or via this button.
+            A dispatched sale is marked delivered automatically the next morning, or press this button.
           </p>
         </div>
       </div>
