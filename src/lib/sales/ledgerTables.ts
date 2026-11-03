@@ -29,6 +29,28 @@ export async function hasInvoiceLedgerTables(): Promise<boolean> {
     return present;
 }
 
+let applications: boolean | null = null;
+let applicationsAt = 0;
+
+/**
+ * E-368: credit_note_applications — the part of each credit note already used
+ * against an invoice in Vyapar. Without it a credit note nets at its full total.
+ */
+export async function hasCreditNoteApplications(): Promise<boolean> {
+    const now = Date.now();
+    if (applications !== null && now - applicationsAt < PROBE_TTL_MS) return applications;
+    try {
+        const res = (await db.execute(sql`
+            SELECT to_regclass('public.credit_note_applications') IS NOT NULL AS ok
+        `)) as unknown as Array<{ ok: boolean }>;
+        applications = Boolean(res[0]?.ok);
+    } catch {
+        applications = false;
+    }
+    applicationsAt = now;
+    return applications;
+}
+
 let refusedCols: boolean | null = null;
 let refusedAt = 0;
 
