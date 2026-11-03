@@ -78,7 +78,9 @@ type CardStatus =
   | "document_fetched"
   | "success"
   | "failed"
-  | "expired";
+  | "expired"
+  // ID 201: the co-borrower refused consent or DigiLocker failed (callback).
+  | "refused";
 
 const PROGRESS_STEPS: { key: DigilockerStep; label: string }[] = [
   { key: "link_sent", label: "Link Sent" },
@@ -322,6 +324,14 @@ export default function AadhaarCard({
     // existingTransaction. Treat it like awaiting_consent so the link panel
     // (gated on cardStatus === "awaiting_consent" + digilockerUrl truthy)
     // renders on a hard reload.
+    if (
+      applicant === "co_borrower" &&
+      cbVerData?.consent_status === "denied" &&
+      typeof cbVerData?.consent_given_at !== "string" &&
+      existingVerification?.status !== "success"
+    ) {
+      return "refused";
+    }
     if (applicant === "co_borrower" && cbHasDigilockerUrl && existingVerification?.status !== "success") {
       return "awaiting_consent";
     }
@@ -438,6 +448,10 @@ export default function AadhaarCard({
       if (s.status === "expired") {
         setDigiStatus("expired");
         setCardStatus("expired");
+        if (pollRef.current) clearInterval(pollRef.current);
+      } else if (s.status === "failed" && !s.documentFetched) {
+        setDigiStatus("failed");
+        setCardStatus("refused");
         if (pollRef.current) clearInterval(pollRef.current);
       }
       setTimeRemaining(s.timeRemaining || "");
@@ -617,6 +631,7 @@ export default function AadhaarCard({
     success: { bg: "bg-green-100 text-green-700", label: "Verified" },
     failed: { bg: "bg-red-100 text-red-700", label: "Failed" },
     expired: { bg: "bg-orange-100 text-orange-700", label: "Expired" },
+    refused: { bg: "bg-red-100 text-red-700", label: "Refused / failed" },
   };
 
   return (
@@ -661,7 +676,7 @@ export default function AadhaarCard({
 
       <div className="p-5 space-y-5">
         {/* Pending / Expired: Show initiate */}
-        {(cardStatus === "pending" || cardStatus === "expired") && (
+        {(cardStatus === "pending" || cardStatus === "expired" || cardStatus === "refused") && (
           <div className="space-y-4">
             <div className="bg-gray-50 rounded-lg p-4">
               <p className="text-xs text-gray-500 uppercase font-semibold tracking-wide mb-3">Customer Details</p>
@@ -697,6 +712,11 @@ export default function AadhaarCard({
             {cardStatus === "expired" && (
               <div className="bg-orange-50 border border-orange-200 rounded-lg p-3 text-orange-700 text-sm">
                 Previous link expired. Send a new one.
+              </div>
+            )}
+            {cardStatus === "refused" && (
+              <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-red-700 text-sm">
+                Co-borrower refused consent or DigiLocker failed. Send a new link.
               </div>
             )}
             <button

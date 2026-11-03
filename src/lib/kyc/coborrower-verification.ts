@@ -710,6 +710,25 @@ export function coBorrowerDigilockerExpired(initiatedAt: unknown, now: Date = ne
   return now.getTime() - started > COBORROWER_DIGILOCKER_VALID_HOURS * 60 * 60 * 1000;
 }
 
+/** ID 201 — the KYC history line when the co-borrower refuses or DigiLocker fails. */
+export const COBORROWER_DIGILOCKER_FAILED_STEP = "DigiLocker (Aadhaar) failed or refused (co-borrower)";
+
+/**
+ * ID 201 — the once-key of that line: per verification row and session start
+ * (the row is reused when the request is run again). Pure.
+ */
+export function coBorrowerDigilockerFailedKey(verificationId: string, initiatedAt: unknown): string {
+  return `digilocker:${verificationId}:failed:${typeof initiatedAt === "string" ? initiatedAt : ""}`;
+}
+
+/**
+ * ID 201 — did the DigiLocker callback come back refused / failed for this
+ * session (and nothing was fetched since)? Pure.
+ */
+export function coBorrowerDigilockerRefused(apiData: Record<string, unknown>): boolean {
+  return apiData.consent_status === "denied" && typeof apiData.consent_given_at !== "string";
+}
+
 export async function executeCoBorrowerDigilockerStatus(
   leadId: string,
   transactionId: string,
@@ -789,6 +808,25 @@ export async function executeCoBorrowerDigilockerStatus(
   const expired = coBorrowerDigilockerExpired(initiatedAt);
 
   if (!consentGivenAt && !alreadyHasData) {
+    // ID 201: the callback came back refused or failed — say so now instead
+    // of "awaiting consent" until the link runs out.
+    if (coBorrowerDigilockerRefused(apiData)) {
+      return {
+        success: true,
+        message: "Co-borrower refused consent or DigiLocker failed. Start a new DigiLocker request.",
+        data: {
+          verificationId: transactionId,
+          transactionId,
+          status: "failed",
+          initiatedAt,
+          documentFetched: false,
+          consentGiven: false,
+          linkOpened: false,
+          aadhaarData: {},
+          crossMatchResult: null,
+        },
+      };
+    }
     // ID 201 gap 3: never consented and the link has run out.
     if (expired) {
       return {

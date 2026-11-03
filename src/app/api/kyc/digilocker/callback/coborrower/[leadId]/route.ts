@@ -3,6 +3,11 @@ import { and, desc, eq } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import { kycVerifications } from "@/lib/db/schema";
+import { recordSystemKycStepOnce } from "@/lib/kyc/kycEventLog";
+import {
+  COBORROWER_DIGILOCKER_FAILED_STEP,
+  coBorrowerDigilockerFailedKey,
+} from "@/lib/kyc/coborrower-verification";
 import { publicOrigin } from "@/lib/public-origin";
 
 /**
@@ -88,6 +93,16 @@ export async function GET(
           updated_at: now,
         })
         .where(eq(kycVerifications.id, row.id));
+      // ID 201: a refusal or provider failure goes on the KYC history once
+      // (same key the status route uses, so neither path writes it twice).
+      if (!ok) {
+        await recordSystemKycStepOnce(
+          leadId,
+          COBORROWER_DIGILOCKER_FAILED_STEP,
+          coBorrowerDigilockerFailedKey(row.id, apiData.initiated_at),
+          { callback_status: status || null },
+        );
+      }
       console.log(
         `[Co-Borrower DigiLocker Callback] Recorded consent for lead=${leadId} verification=${row.id} (status=${status}, decentroTxnIdFromCallback=${callbackDecentroTxnId ?? "null"})`,
       );
