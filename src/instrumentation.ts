@@ -47,6 +47,7 @@ export async function register() {
       startStockUploadSweepTicker,
       startCallbackLoopTicker,
       startEmiMessagesTicker,
+      startDispatchToSoldTicker,
     } = await import("./instrumentation-node");
     // ID 125 — every ticker runs as a named job. Its timers inherit the job
     // context, so the email / WhatsApp / Telegram senders drop what a job tries
@@ -84,6 +85,8 @@ export async function register() {
     await runAsJob("callback-loop", startCallbackLoopTicker);
     // ID 204 — EMI aging + EMI messages to customers, hourly (kickoff 260s out).
     await runAsJob("emi-messages", startEmiMessagesTicker);
+    // ID 220 — dispatched → delivered, once a day from 09:30 IST (kickoff 265s out).
+    await runAsJob("dispatch-to-sold", startDispatchToSoldTicker);
     await runAsJob("recording-transcription", startRecordingTranscriptionTicker);
     await runAsJob("drive-mirror", startDriveMirrorTicker);
     // E-280 — Drive sales-invoice scan. Kickoff staggered 195s out, the last
