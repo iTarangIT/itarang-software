@@ -978,8 +978,8 @@ export async function startCallbackLoopTicker() {
     try {
       const { runCallbackLoopTick } = await import("@/lib/ai-dialer/callbackLoop");
       const r = await runCallbackLoopTick();
-      if (r.reminded || r.escalated) {
-        console.log(`[instrumentation:callback-loop] reminded ${r.reminded} (pushed ${r.pushed}), escalated ${r.escalated}`);
+      if (r.reminded || r.escalated || r.expired) {
+        console.log(`[instrumentation:callback-loop] reminded ${r.reminded} (pushed ${r.pushed}), escalated ${r.escalated}, expired ${r.expired}`);
       }
     } catch (err) {
       console.error(

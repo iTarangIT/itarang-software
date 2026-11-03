@@ -510,6 +510,16 @@ export async function writeTouchpoint(
       note: closesLead ? `Lead closed (${input.statusChange!.to}).` : `Rep logged a ${input.touchpointType.replace(/_/g, " ")}.`,
     });
   }
+  // ID 212: an unanswered call a rep logs by hand counts as one of the 3 tries
+  // on an open callback, as a NeoDove one does (NeoDove calls are counted by
+  // neodove/inbound.ts, so external calls are skipped here).
+  if (!opts?.tx && unansweredCall && !input.externalSystem) {
+    void import("@/lib/ai-dialer/callbackLoop")
+      .then(({ noteNeodoveCallForCallback }) =>
+        noteNeodoveCallForCallback({ leadId: input.dealerLeadId, connected: false, callBackAsked: false }),
+      )
+      .catch((e) => console.warn("[touchpoints] callback try not counted:", e instanceof Error ? e.message : e));
+  }
 
   // ID 118 option B: after a call, the server refreshes the lead's Overall
   // Summary — in the background, so this write never waits on (or fails

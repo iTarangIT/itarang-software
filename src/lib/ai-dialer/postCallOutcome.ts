@@ -355,16 +355,23 @@ async function handOffSalesCallback(input: {
         hour: "numeric",
         minute: "2-digit",
     });
-    const what = cat.wantsHuman ? "asked to speak to a Sales Manager" : "asked for a callback";
-    const topic = cat.callbackTopic && cat.callbackTopic !== "none" ? ` about ${cat.callbackTopic.replace(/_/g, " ")}` : "";
-    const message = `${name} ${what}${topic} on an AI call — due ${when}.${input.summary ? ` ${input.summary}` : ""}`;
+    // ID 212: a lead the AI qualified with no callback agreed did not ask for
+    // one — the bell must not say so.
+    const qualified = input.kind === "qualified";
+    const what = qualified
+        ? "qualified on an AI call — no callback time agreed"
+        : cat.wantsHuman
+          ? "asked to speak to a Sales Manager"
+          : "asked for a callback";
+    const topic = !qualified && cat.callbackTopic && cat.callbackTopic !== "none" ? ` about ${cat.callbackTopic.replace(/_/g, " ")}` : "";
+    const message = `${name} ${what}${topic}${qualified ? "; call by" : " on an AI call — due"} ${when}.${input.summary ? ` ${input.summary}` : ""}`;
     const data = { leadId, category: cat.category, dueAt: due, topic: cat.callbackTopic };
 
     try {
         if (lead?.owner_id) {
             await notifyUser(lead.owner_id, {
                 type: CALLBACK_NOTIFICATION_TYPE,
-                title: "Callback requested on your lead",
+                title: qualified ? "AI-qualified lead — call the dealer" : "Callback requested on your lead",
                 message,
                 data: { ...data, href: leadHrefFor(lead.owner_role, leadId) },
                 leadId,
@@ -372,7 +379,13 @@ async function handOffSalesCallback(input: {
         }
         await notifyRoles(ADMIN_AUDIENCE_ROLES, {
             type: CALLBACK_NOTIFICATION_TYPE,
-            title: lead?.owner_id ? "Callback requested (lead has an owner)" : "Callback requested — assign a rep",
+            title: qualified
+                ? lead?.owner_id
+                    ? "AI-qualified lead (lead has an owner)"
+                    : "AI-qualified lead — assign a rep"
+                : lead?.owner_id
+                  ? "Callback requested (lead has an owner)"
+                  : "Callback requested — assign a rep",
             message,
             data: { ...data, href: lead?.owner_id ? `/leads?lead=${leadId}` : "/admin/ready-to-assign" },
             leadId,
