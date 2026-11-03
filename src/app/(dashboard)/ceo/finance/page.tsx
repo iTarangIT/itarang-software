@@ -88,7 +88,8 @@ export default function RevenueAndCostsPage() {
             if (!res.ok) throw new Error("Failed to load accounts receivable");
             return (await res.json()).data as ReceivablesAgeing;
         },
-        refetchInterval: 5 * 60_000,
+        // ID 217: same refresh as the CEO overview card, so they never drift apart.
+        refetchInterval: 60_000,
     });
 
     const m = metrics || {};
