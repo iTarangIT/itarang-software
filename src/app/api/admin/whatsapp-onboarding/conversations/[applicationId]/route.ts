@@ -16,7 +16,7 @@ import {
   whatsappOperators,
 } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
-import { maskCapturedIds, maskDealerIdsDeep, seesFullDealerIds } from "@/lib/kyc/dealerIdMask";
+import { maskCapturedIds, maskDealerIdsDeep, maskIdsInText, seesFullDealerIds } from "@/lib/kyc/dealerIdMask";
 import { mayReadDealerApplication, ownsDealerApplication } from "@/lib/auth/dealerValidationRules";
 import {
   errorResponse,
@@ -201,7 +201,11 @@ export const GET = withErrorHandler(
         currentState,
         operator: operatorRow[0] ?? null,
         warnings: Array.isArray(application.verification_warnings)
-          ? maskDealerIdsDeep(application.verification_warnings, fullIds)
+          ? // ID 119: warnings are sentences ("Bank account 1234… could not be
+            // verified."), which the value/key maskers never look inside.
+            (application.verification_warnings as unknown[]).map((w) =>
+              typeof w === "string" ? maskIdsInText(w, fullIds) : maskDealerIdsDeep(w, fullIds),
+            )
           : [],
         extractionSummary: maskDealerIdsDeep(application.extraction_summary ?? null, fullIds),
       },

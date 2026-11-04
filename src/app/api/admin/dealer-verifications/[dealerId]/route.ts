@@ -19,7 +19,8 @@ import {
 import { type CompanyType, requiredDocuments } from "@/lib/whatsapp/checklist";
 import { normalizeAccountType } from "@/lib/onboarding/account-type";
 import { isMaskedAadhaar, maskAadhaar } from "@/lib/kyc/aadhaarMask";
-import { maskDealerIdsDeep } from "@/lib/kyc/dealerIdMask";
+import { maskDealerIdsDeep, maskIdsInText, seesFullDealerIds, isMaskedBankAccount } from "@/lib/kyc/dealerIdMask";
+import { isMaskedPan } from "@/lib/kyc/panMask";
 import { viewableFileUrl } from "@/lib/storage/legacyUrl";
 import { extractAddress, gstPrincipalAddress } from "@/lib/onboarding/dealer-address";
 import { checkCustomerGstin, GSTIN_CHECK_MESSAGE } from "@/lib/leads/gstin";
@@ -362,9 +363,13 @@ export async function GET(_req: NextRequest, context: RouteContext) {
     // admin UI flags it as "Not available / Missing" for manual review.
     const accountType = normalizeAccountType(ownershipSnapshot?.accountType);
 
-    return NextResponse.json({
-      success: true,
-      data: {
+    // ID 119 (decision 2, 23 Oct): full company PAN, bank account and the
+    // partners' / directors' PAN go only to Admin, the CEO and the Sales Head.
+    // The account owners who also read this page (ISR, ASM, Sales Executive,
+    // Sales Manager, Business Head — ID 166 item 11) get them masked.
+    const fullIds = seesFullDealerIds(auth.user.role);
+
+    const data = {
         id: row.id,
         dealerId: row.id,
 
@@ -382,8 +387,8 @@ export async function GET(_req: NextRequest, context: RouteContext) {
         ownerName: row.owner_name,
         ownerPhone: row.owner_phone,
         ownerEmail: row.owner_email,
-        // ID 119: never the full Aadhaar. PAN and account stay full — this
-        // route is Sales Head / CEO only (full-ID roles).
+        // ID 119: never the full Aadhaar, for anyone. PAN and account are
+        // masked below for everyone outside the full-ID roles.
         ownerAadhaarNo: maskAadhaar(row.owner_aadhaar_no) ?? "",
 
         bankName: row.bank_name,
@@ -412,8 +417,8 @@ export async function GET(_req: NextRequest, context: RouteContext) {
         }),
 
         // Partner / director lists — read-only reference for admins
-        partners: maskDealerIdsDeep(partnersSnapshot, true),
-        directors: maskDealerIdsDeep(directorsSnapshot, true),
+        partners: maskDealerIdsDeep(partnersSnapshot, fullIds),
+        directors: maskDealerIdsDeep(directorsSnapshot, fullIds),
 
         // Sales manager — prefer structured columns; fall back to snapshot
         salesManagerName: row.sales_manager_name || salesManagerSnapshot?.name || "",
@@ -441,8 +446,12 @@ export async function GET(_req: NextRequest, context: RouteContext) {
         // nothing passes silently (design §8, §16).
         source: (row.source || "web").toLowerCase(),
         waPhone: row.wa_phone || null,
+        // Warnings are sentences that can carry a PAN or account number
+        // ("Bank account 1234… could not be verified.").
         verificationWarnings: Array.isArray(row.verification_warnings)
-          ? row.verification_warnings
+          ? (row.verification_warnings as unknown[]).map((w) =>
+              typeof w === "string" ? maskIdsInText(w, fullIds) : maskDealerIdsDeep(w, fullIds),
+            )
           : [],
 
         correctionRemarks: row.correction_remarks || null,
@@ -500,7 +509,14 @@ export async function GET(_req: NextRequest, context: RouteContext) {
               statePresence: agreementData.statePresence || "",
             }
           : null,
-      },
+    };
+
+    return NextResponse.json({
+      success: true,
+      // Belt and braces for the non-full roles: every PAN-shaped value and
+      // every account-number key anywhere in the payload (documents, the
+      // correction round, the agreement block) is masked too.
+      data: fullIds ? data : maskDealerIdsDeep(data, false),
     });
   } catch (error: any) {
     console.error("ADMIN DEALER VERIFICATION DETAIL ERROR FULL:", error);
@@ -649,7 +665,9 @@ export async function PATCH(req: NextRequest, context: RouteContext) {
 
     if (companyName     !== undefined) updatePayload.company_name      = companyName;
     if (gstNumber       !== undefined) updatePayload.gst_number        = gstNumber;
-    if (panNumber       !== undefined) updatePayload.pan_number        = panNumber;
+    // ID 119: a masked PAN or account number coming back in a save means
+    // "unchanged" (same as the Aadhaar guard below) — never store the mask.
+    if (panNumber       !== undefined && !isMaskedPan(panNumber)) updatePayload.pan_number = panNumber;
     if (cinNumber       !== undefined) updatePayload.cin_number        = cinNumber;
     if (companyType     !== undefined) updatePayload.company_type      = companyType;
     if (ownerName       !== undefined) updatePayload.owner_name        = ownerName;
@@ -664,7 +682,7 @@ export async function PATCH(req: NextRequest, context: RouteContext) {
       updatePayload.owner_aadhaar_no = digits.length === 12 ? digits : null;
     }
     if (bankName        !== undefined) updatePayload.bank_name         = bankName;
-    if (accountNumber   !== undefined) updatePayload.account_number    = accountNumber;
+    if (accountNumber   !== undefined && !isMaskedBankAccount(accountNumber)) updatePayload.account_number = accountNumber;
     if (beneficiaryName !== undefined) updatePayload.beneficiary_name  = beneficiaryName;
     if (ifscCode        !== undefined) updatePayload.ifsc_code         = ifscCode;
     if (salesManagerName   !== undefined) updatePayload.sales_manager_name   = salesManagerName;

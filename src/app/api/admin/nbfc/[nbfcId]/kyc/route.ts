@@ -9,6 +9,8 @@ import {
   nbfcEntityKycVerifications,
 } from "@/lib/db/schema";
 import { requireAdminOrTestBypass } from "@/lib/auth/adminTestBypass";
+import { seesFullDealerIds } from "@/lib/kyc/dealerIdMask";
+import { maskPanDeep } from "@/lib/kyc/panMask";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -77,7 +79,7 @@ export async function GET(
     directorVerifMap.set(v.director_id, list);
   }
 
-  return NextResponse.json({
+  const payload = {
     ok: true,
     nbfc: nbfcRow,
     entityVerifications,
@@ -85,5 +87,11 @@ export async function GET(
       ...d,
       verifications: directorVerifMap.get(d.id) ?? [],
     })),
-  });
+  };
+
+  // ID 119 (decision 2, 23 Oct): full PAN only for Admin, the CEO and the
+  // Sales Head. Everyone else this route admits (the Business Head) gets the
+  // NBFC's and each director's PAN masked — including PANs echoed inside the
+  // stored provider responses (matched by value).
+  return NextResponse.json(seesFullDealerIds(auth.user.role) ? payload : maskPanDeep(payload));
 }
