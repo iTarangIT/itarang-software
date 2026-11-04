@@ -157,6 +157,43 @@ describe("a transcript outranks the outcome string", () => {
         ).toBe("no_response");
     });
 
+    // 4 Nov 2026 — the analyser writes 'unknown' whenever the dealer named no
+    // battery spec, volume or financing, so scored calls (intent 30, 75) read
+    // "No response". A banded call is a conversation.
+    it("a scored call is not 'no response', whatever the outcome word", () => {
+        for (const callOutcome of ["unknown", "needs_review", "no_response"]) {
+            for (const band of ["Qualified", "Warm", "Cold", "Disqualified"]) {
+                expect(
+                    deriveFailureReason({
+                        status: "completed",
+                        callOutcome,
+                        hasTranscript: true,
+                        bandCallStatus: "complete",
+                        band,
+                    }),
+                    `${callOutcome}/${band}`,
+                ).toBeNull();
+            }
+        }
+        // Unscored stays 'no response'; a failed row still gets a reason.
+        expect(
+            deriveFailureReason({
+                status: "completed",
+                callOutcome: "unknown",
+                hasTranscript: true,
+                band: null,
+            })?.code,
+        ).toBe("no_response");
+        expect(
+            deriveFailureReason({
+                status: "failed",
+                callOutcome: "done",
+                hasTranscript: true,
+                band: "Cold",
+            })?.code,
+        ).toBe("no_response");
+    });
+
     // A genuine conversation has nothing to explain — the analyzer outcome
     // already describes it, and inventing a "failure" for it would be wrong.
     it("returns null for a real conversation", () => {

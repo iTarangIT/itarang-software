@@ -115,6 +115,8 @@ type Lead = {
   queuePosition: number;
   status: string;
   callOutcome: string | null;
+  /** ai_call_logs.band for this attempt (Qualified | Warm | Cold | Disqualified). */
+  band?: string | null;
   /** Derived server-side — see src/lib/ai-dialer/failureReason.ts. */
   failureReason?: {
     code: string;
@@ -363,6 +365,7 @@ function LeadRow({
         <CampaignOutcomeBadge
           outcome={row.callOutcome}
           failureReason={row.failureReason}
+          band={row.band}
         />
         <CallCategoryBadge category={row.category} />
       </td>

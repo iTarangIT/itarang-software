@@ -228,6 +228,11 @@ export type FailureReasonInput = {
     providerStatus?: string | null;
     /** ai_call_logs.call_status — complete | dropped_partial | dropped_empty. */
     bandCallStatus?: string | null;
+    /**
+     * ai_call_logs.band — Qualified | Warm | Cold | Disqualified, null when the
+     * call was not scored. A banded call WAS a conversation (4 Nov 2026).
+     */
+    band?: string | null;
 };
 
 /** Everything after "trigger_failed:" / "trigger_exception:", or null. */
@@ -419,6 +424,12 @@ export function deriveFailureReason(
                 ? { ...SPECS.no_response, detail: null }
                 : { ...SPECS.silent_call, detail: null };
         }
+        // A scored call is a conversation. The analyser's legacy outcome is
+        // 'unknown' whenever the dealer named no battery spec, volume or
+        // financing (most Cold and many Warm calls), so without this a call
+        // scored 30 or 75 read "No response" in the Outcome column
+        // (4 Nov 2026). The band, not that word, says how the call went.
+        if (input.band && input.status === "completed") return null;
         // Answered, heard something, gave nothing usable back. Distinct from a
         // silent call: there WAS speech, it just carried no signal.
         if (lower === "unknown" || lower === "needs_review" || lower === "no_response") {

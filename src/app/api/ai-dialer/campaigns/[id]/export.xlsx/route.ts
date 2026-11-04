@@ -72,6 +72,7 @@ function failureReasonOf(r: {
   transcript: string | null;
   log_status: string | null;
   log_call_status: string | null;
+  band: string | null;
 }) {
   return deriveFailureReason({
     status: r.status,
@@ -79,6 +80,7 @@ function failureReasonOf(r: {
     hasTranscript: r.transcript != null,
     providerStatus: r.log_status,
     bandCallStatus: r.log_call_status,
+    band: r.band,
   });
 }
 

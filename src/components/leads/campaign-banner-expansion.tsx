@@ -29,6 +29,7 @@ type LeadRow = {
   queuePosition: number;
   status: string;
   callOutcome: string | null;
+  band?: string | null;
   intentScore: number | null;
   startedAt: string | null;
   completedAt: string | null;
@@ -111,7 +112,7 @@ function LeadCard({
             <div className="mt-1.5 flex items-center gap-1.5 flex-wrap">
               {/* The column holds several statuses; say which one. */}
               {isFailed && <CampaignLeadStatusBadge status={row.status} />}
-              <CampaignOutcomeBadge outcome={row.callOutcome} />
+              <CampaignOutcomeBadge outcome={row.callOutcome} band={row.band} />
               {row.intentScore != null && (
                 <span className="inline-flex items-center gap-0.5 text-[11px] text-emerald-400 font-medium">
                   <TrendingUp className="w-2.5 h-2.5" />
