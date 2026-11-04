@@ -251,10 +251,26 @@ describe("the routes use these rules", () => {
         expect(fn).not.toMatch(/if \(!buf/);
     });
 
-    it("a KYC signed link longer than 15 minutes is not honoured, and `by` is part of the check (ID 166)", () => {
+    it("no signed link lives longer than 15 minutes, and `by` is part of the check (ID 166, 2 Nov)", () => {
         const route = read("app", "api", "files", "[bucket]", "[...path]", "route.ts");
-        expect(route).toMatch(/isKycFile\(file\) && fileLinkTooLong\(exp\)/);
-        expect(route).toContain('fileLinkValid(bucket, key, exp, req.nextUrl.searchParams.get("sig"), Date.now(), by)');
+        expect(route).toMatch(/fileLinkValid\(bucket, key, exp, req\.nextUrl\.searchParams\.get\("sig"\), Date\.now\(\), by\) &&\s*!fileLinkTooLong\(exp\)/);
+        expect(route).not.toMatch(/isKycFile\(file\) && fileLinkTooLong/);
+    });
+
+    it("the plain stored address sends an allowed login on to a fresh link, never the bytes (ID 166, 4 Nov)", () => {
+        const route = read("app", "api", "files", "[bucket]", "[...path]", "route.ts");
+        const allowAt = route.indexOf("await canOpenStoredFile(user, bucket, key)");
+        const redirectAt = route.indexOf('via: "session_redirect"');
+        expect(allowAt).toBeGreaterThan(-1);
+        expect(redirectAt).toBeGreaterThan(allowAt);
+        expect(route).toMatch(/status: 302,\s*headers: \{ Location: fresh/);
+    });
+
+    it("an application-signed onboarding link opens only onboarding buckets, with no session (ID 166 decision 5)", () => {
+        const route = read("app", "api", "files", "[bucket]", "[...path]", "route.ts");
+        expect(route).toMatch(/signatureOk && isOnboardingLinkSubject\(by\) && ONBOARDING_LINK_BUCKETS\.includes\(bucket\)/);
+        // checked before the session lookup
+        expect(route.indexOf("isOnboardingLinkSubject(by)")).toBeLessThan(route.indexOf("const user = await sessionUser()"));
     });
 
     it("the fresh-link endpoint checks the file rule before it signs, for 15 minutes, for this user (ID 166)", () => {

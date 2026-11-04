@@ -28,9 +28,18 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { getAuthenticatedAppUser } from "@/lib/kyc/admin-workflow";
 import { readBucketObject, contentTypeForName } from "@/lib/storage/readStoredDocument";
-import { FILE_PROXY_BUCKETS, fileLinkTooLong, fileLinkValid, safeStorageKey } from "@/lib/storage/fileAccess";
+import {
+  FILE_PROXY_BUCKETS,
+  FRESH_LINK_TTL_SECONDS,
+  ONBOARDING_LINK_BUCKETS,
+  fileLinkTooLong,
+  fileLinkValid,
+  isOnboardingLinkSubject,
+  safeStorageKey,
+  signedFilePath,
+} from "@/lib/storage/fileAccess";
 import { canOpenStoredFile, logFileOpen } from "@/lib/storage/fileAuthz";
-import { classifyFile, isKycFile } from "@/lib/storage/fileRules";
+import { classifyFile } from "@/lib/storage/fileRules";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -71,29 +80,64 @@ export async function GET(
   const exp = req.nextUrl.searchParams.get("exp");
   const by = req.nextUrl.searchParams.get("by") || null;
   const file = classifyFile(bucket, key);
-  // ID 166: a link to a customer KYC file lives 15 minutes at most. A KYC link
-  // expiring further out was minted with a longer life, so it is not honoured
-  // (the viewer can still open the file with a session if allowed).
+  // ID 166 (2 Nov): every link lives 15 minutes at most, whatever the file. A
+  // link expiring further out was minted with a longer life and is not
+  // honoured (an allowed login is sent a fresh one instead, below).
   const signatureOk =
     fileLinkValid(bucket, key, exp, req.nextUrl.searchParams.get("sig"), Date.now(), by) &&
-    !(isKycFile(file) && fileLinkTooLong(exp));
+    !fileLinkTooLong(exp);
+  const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || null;
+
+  // ID 166 decision 5: a dealer with no login (resume code / correction link)
+  // views ITS OWN onboarding uploads through a link signed for the application
+  // (`by = app:<id>`), minted only after the file was matched to that
+  // application (lib/onboarding/onboardingFileLinks.ts). 15 minutes, onboarding
+  // buckets only, logged.
+  if (signatureOk && isOnboardingLinkSubject(by) && ONBOARDING_LINK_BUCKETS.includes(bucket)) {
+    await logFileOpen({ file, bucket, key, userId: null, role: by, via: "token_link", allowed: true, ip });
+    return serveFile(req, bucket, key);
+  }
+
   const user = await sessionUser();
   if (!user) return unauthorized(req);
   const signedLink = signatureOk && !!by && user.id === by;
-  const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || null;
   if (signedLink) {
     // A fresh in-app link, opened by the login it was minted for — that login
     // was checked against the file rule when the link was made.
     await logFileOpen({ file, bucket, key, userId: by, role: null, via: "signed_link", allowed: true, ip });
-  } else {
-    // No link for this login (none, expired, forged, or someone else's): the
-    // file rule decides for the signed-in user.
-
-    const { allowed } = await canOpenStoredFile(user, bucket, key);
-    await logFileOpen({ file, bucket, key, userId: user.id, role: user.role, via: "session", allowed, ip });
-    if (!allowed) return forbidden(req);
+    return serveFile(req, bucket, key);
   }
 
+  // No link for this login (none, expired, forged, or someone else's): the
+  // file rule decides for the signed-in user.
+  const { allowed } = await canOpenStoredFile(user, bucket, key);
+  if (!allowed) {
+    await logFileOpen({ file, bucket, key, userId: user.id, role: user.role, via: "session", allowed, ip });
+    return forbidden(req);
+  }
+
+  // ID 166 (decided 4 Nov): the plain stored address no longer serves the
+  // bytes. An allowed login is sent on to a fresh 15-minute link made for it,
+  // so every view goes through a signed link while <img>, <video> and old
+  // links keep working (same origin: the redirect carries the session).
+  const fresh = signedFilePath(`/api/files/${bucket}/${key.split("/").map(encodeURIComponent).join("/")}`, FRESH_LINK_TTL_SECONDS, {
+    by: user.id,
+  });
+  if (fresh && fresh.includes("sig=")) {
+    await logFileOpen({ file, bucket, key, userId: user.id, role: user.role, via: "session_redirect", allowed, ip });
+    // A RELATIVE Location: behind the proxy, req.nextUrl.origin can be the
+    // internal host; the browser resolves this against the address it used.
+    return new NextResponse(null, {
+      status: 302,
+      headers: { Location: fresh, "Cache-Control": "private, no-store" },
+    });
+  }
+  // No signing secret configured (dev): serve on the session, as before.
+  await logFileOpen({ file, bucket, key, userId: user.id, role: user.role, via: "session", allowed, ip });
+  return serveFile(req, bucket, key);
+}
+
+async function serveFile(req: NextRequest, bucket: string, key: string) {
   const contentType = contentTypeForName(key);
 
   // The active backend only (the old-storage fallback was removed, ID 166).

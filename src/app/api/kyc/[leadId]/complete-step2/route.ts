@@ -191,7 +191,8 @@ export async function POST(_req: NextRequest, { params }: RouteContext) {
                 leadId,
                 workflow_step: 3,
                 kyc_status: "completed",
-                nextStep: "/dealer-portal/leads/" + leadId + "/options",
+                // ID 183: the old loan-options page is retired; Step 3 comes next.
+                nextStep: "/dealer-portal/leads/" + leadId + "/borrower-consent",
                 completedAt: now.toISOString(),
                 message: "Step 2 completed successfully",
             },

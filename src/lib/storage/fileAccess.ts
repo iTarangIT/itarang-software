@@ -299,6 +299,71 @@ export function signedFilePath(
 }
 
 /**
+ * ID 166 (2 Nov check): the address a screen should put in an <img>, <video>
+ * or link for a viewer who is already allowed this file — a fresh 15-minute
+ * link signed for that login (our /api/files store or the NBFC store). Any
+ * other URL (a provider link, empty) comes back unchanged. Never store it.
+ */
+export function viewerFileLink(url: string | null | undefined, viewerId: string): string | null {
+    if (!url) return url ?? null;
+    if (nbfcUploadsTarget(url)) return signedNbfcPath(url, FRESH_LINK_TTL_SECONDS, { by: viewerId }) ?? url;
+    return signedFilePath(url, FRESH_LINK_TTL_SECONDS, { by: viewerId });
+}
+
+/**
+ * viewerFileLink() over a whole response, at any depth: every string that is
+ * one of OUR stored files (/api/files/… or /nbfc-uploads/…) becomes a fresh
+ * 15-minute link for `viewerId`. Matched on the value, so a URL is caught
+ * whatever its key (fileUrl, signedConsentUrl, api_response.video_url…).
+ */
+export function signFileLinksDeep<T>(value: T, viewerId: string): T {
+    const walk = (v: unknown): unknown => {
+        if (typeof v === "string") {
+            return v.includes("/api/files/") || v.includes("/nbfc-uploads/")
+                ? (filesProxyTarget(v) || nbfcUploadsTarget(v) ? viewerFileLink(v, viewerId) : v)
+                : v;
+        }
+        if (Array.isArray(v)) return v.map(walk);
+        if (v && typeof v === "object" && !(v instanceof Date)) {
+            const out: Record<string, unknown> = {};
+            for (const [k, x] of Object.entries(v as Record<string, unknown>)) out[k] = walk(x);
+            return out;
+        }
+        return v;
+    };
+    return walk(value) as T;
+}
+
+// ── dealer onboarding: links for a dealer with no login (ID 166 decision 5) ──
+//
+// A dealer filling or correcting its onboarding form has no CRM login. Once it
+// proves the application is its own (the resume code sent to its mobile, or
+// the correction link iTarang sent it), it may view ITS OWN uploads through a
+// link signed for the APPLICATION — `by = app:<applicationId>` — valid 15
+// minutes and minted fresh on each view. The files route honours such a link
+// with no session, only for the onboarding buckets.
+
+export const ONBOARDING_LINK_PREFIX = "app:";
+/** The buckets an application-signed link may open. */
+export const ONBOARDING_LINK_BUCKETS: readonly string[] = ["dealer-documents", "private-documents"];
+
+/** Is `by` an application subject (not a user id)? */
+export function isOnboardingLinkSubject(by: string | null | undefined): boolean {
+    return !!by && by.startsWith(ONBOARDING_LINK_PREFIX) && by.length > ONBOARDING_LINK_PREFIX.length;
+}
+
+/**
+ * A 15-minute link to `storedUrl` for the dealer of application `applicationId`.
+ * Callers MUST first check the file is one of that application's documents
+ * (lib/onboarding/onboardingFileLinks.ts does).
+ */
+export function onboardingFileLink(storedUrl: string, applicationId: string): string | null {
+    const t = filesProxyTarget(storedUrl);
+    if (!t || !ONBOARDING_LINK_BUCKETS.includes(t.bucket)) return null;
+    return signedFilePath(t.path, FRESH_LINK_TTL_SECONDS, { by: `${ONBOARDING_LINK_PREFIX}${applicationId}` });
+}
+
+/**
  * A files-proxy path made absolute with an expiring signature. NOTE (17 Oct,
  * user): the file routes no longer open a signed link without a login — a
  * signature only counts for the login named in `by`. So this link opens

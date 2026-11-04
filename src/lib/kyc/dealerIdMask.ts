@@ -58,6 +58,26 @@ function maskAccountsDeep(value: unknown, keyIsAccount: boolean): unknown {
   return value;
 }
 
+const PAN_IN_TEXT = /\b[A-Z]{5}[0-9]{4}[A-Z]\b/gi;
+// 9–18 digits (bank account numbers), optionally broken by single spaces or
+// hyphens; not part of a longer number. A 12-digit run is masked too, which
+// also covers an Aadhaar written into free text.
+const ACCOUNT_IN_TEXT = /(?<![\d])\d(?:[ -]?\d){8,17}(?![\d])/g;
+
+/**
+ * ID 119: PAN and account numbers written INSIDE a sentence (verification
+ * warnings such as "Bank account 1234567890 could not be verified."). The
+ * value-anchored maskers above never see them. Unless `fullIds`, every
+ * PAN-shaped word becomes `XXXXXX234F` and every 9–18 digit run `XXXXXX1234`.
+ */
+export function maskIdsInText(text: string | null | undefined, fullIds: boolean): string | null {
+  if (text === null || text === undefined) return null;
+  if (fullIds) return text;
+  return text
+    .replace(PAN_IN_TEXT, (m) => maskPan(m) ?? m)
+    .replace(ACCOUNT_IN_TEXT, (m) => maskBankAccount(m.replace(/[ -]/g, "")) ?? m);
+}
+
 /**
  * The WhatsApp console's captured-details list ({ key, value } rows, see
  * whatsapp/captured-details.ts): the key says what the value is, so mask by it.

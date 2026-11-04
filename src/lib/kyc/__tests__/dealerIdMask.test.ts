@@ -10,6 +10,7 @@ import {
     maskBankAccount,
     maskCapturedIds,
     maskDealerIdsDeep,
+    maskIdsInText,
     seesFullDealerIds,
 } from "../dealerIdMask";
 
@@ -87,5 +88,24 @@ describe("maskCapturedIds", () => {
         expect(maskCapturedIds(fields, false).map((f) => f.value)).toEqual([
             "XXXXXX234F", "XXXX XXXX 9012", "XXXXXX6789", "XXXXXX234F", "Acme Motors",
         ]);
+    });
+});
+
+describe("maskIdsInText (ID 119: IDs written inside a warning sentence)", () => {
+    it("masks a PAN and an account number inside text for non-full roles", () => {
+        expect(maskIdsInText("PAN ABCDE1234F could not be verified.", false)).toBe("PAN XXXXXX234F could not be verified.");
+        expect(maskIdsInText("Bank account 001234567890 could not be verified.", false)).toBe(
+            "Bank account XXXXXX7890 could not be verified.",
+        );
+        expect(maskIdsInText("Account 1234 5678 9012 3 failed", false)).toBe("Account XXXXXX0123 failed");
+    });
+
+    it("leaves GSTINs, short numbers and full-ID roles alone", () => {
+        expect(maskIdsInText("GSTIN 27ABCDE1234F1Z5 could not be verified.", false)).toBe(
+            "GSTIN 27ABCDE1234F1Z5 could not be verified.",
+        );
+        expect(maskIdsInText("Name match 87% on 2 checks", false)).toBe("Name match 87% on 2 checks");
+        expect(maskIdsInText("PAN ABCDE1234F, account 001234567890", true)).toBe("PAN ABCDE1234F, account 001234567890");
+        expect(maskIdsInText(null, false)).toBeNull();
     });
 });

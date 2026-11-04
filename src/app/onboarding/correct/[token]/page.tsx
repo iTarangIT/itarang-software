@@ -46,6 +46,28 @@ export default function DealerCorrectionPage() {
   const params = useParams();
   const token = (params?.token as string) || "";
 
+  // ID 166: the previous file opens through a link that lives 15 minutes, so
+  // each click asks for a fresh one (this correction link is the proof). The
+  // tab is opened first, inside the click, so the browser does not block it.
+  const openPreviousFile = async (e: React.MouseEvent, storedLink: string) => {
+    e.preventDefault();
+    const tab = window.open("", "_blank");
+    try {
+      const res = await fetch("/api/dealer/onboarding/file-link", {
+        method: "POST",
+        cache: "no-store",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ correctionToken: token, url: storedLink }),
+      });
+      const json = await res.json().catch(() => null);
+      const url = res.ok && json?.success && json.url ? json.url : storedLink;
+      if (tab) tab.location.href = url;
+      else window.location.href = url;
+    } catch {
+      if (tab) tab.location.href = storedLink;
+    }
+  };
+
   const [load, setLoad] = useState<LoadState>({ state: "loading" });
   const [fieldValues, setFieldValues] = useState<Record<string, string>>({});
   const [docValues, setDocValues] = useState<Record<string, UploadCardValue | null>>({});
@@ -323,6 +345,7 @@ export default function DealerCorrectionPage() {
                         href={item.previousDocument.fileUrl}
                         target="_blank"
                         rel="noopener noreferrer"
+                        onClick={(e) => openPreviousFile(e, item.previousDocument!.fileUrl!)}
                         className="truncate text-[#1F5C8F] hover:underline"
                       >
                         {item.previousDocument.fileName || "View previous"}

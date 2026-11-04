@@ -19,6 +19,7 @@ import { ownedLeadsWhere } from "@/lib/auth/ownedLeadsWhere";
 import { backOfficeMayReachLead } from "@/lib/auth/requireLeadAccess";
 import { maskAadhaarDeep } from "@/lib/kyc/aadhaarMask";
 import { maskPanDeep } from "@/lib/kyc/panMask";
+import { viewerFileLink } from "@/lib/storage/fileAccess";
 
 const ADMIN_ROLES = ["admin", "ceo", "business_head", "sales_head", "sales_manager", "sales_executive"] as const;
 const REVIEW_OUTCOMES = ["verified", "rejected", "request_additional"] as const;
@@ -693,7 +694,14 @@ export async function GET(req: NextRequest) {
     // only for Admin, Sales Head and CEO (an owning sales manager still sees it
     // masked on this list).
     const fullIds = (FULL_ID_ROLES as readonly string[]).includes(String(admin.role ?? "").toLowerCase());
-    const safe = fullIds ? maskAadhaarDeep(result) : maskPanDeep(maskAadhaarDeep(result));
+    const masked = fullIds ? maskAadhaarDeep(result) : maskPanDeep(maskAadhaarDeep(result));
+    // ID 166: every document, consent PDF and video KYC recording on this list
+    // leaves as a fresh 15-minute link signed for this login — never the
+    // stored address (clicks still mint their own fresh link on top).
+    const safe = masked.map((lead) => ({
+      ...lead,
+      documents: lead.documents.map((d) => ({ ...d, document_url: viewerFileLink(d.document_url, admin.id) })),
+    }));
     return NextResponse.json({ success: true, data: safe });
   } catch (error) {
     console.error("Admin KYC review fetch error:", error);

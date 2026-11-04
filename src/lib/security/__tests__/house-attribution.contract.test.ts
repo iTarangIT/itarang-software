@@ -96,8 +96,6 @@ describe("ID 183: the printable consent form names the file's dealer", () => {
 // and no "Done by". They now go through the shared writer gate and record.
 describe("ID 183 (23 Oct): the older loan-option, review and draft routes gate and record", () => {
   for (const rel of [
-    "leads/[id]/loan-offers/[offerId]/select",
-    "leads/[id]/loan-offers/[offerId]/book",
     "leads/[id]/submit-to-sm",
     "dealer/leads/drafts/[leadId]",
   ]) {

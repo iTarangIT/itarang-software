@@ -1529,7 +1529,8 @@ export async function notifyWinnerSelected(p: {
         title: "Your offer was accepted",
         message: `${who} accepted your financing offer. Proceed with verification and disbursal.`,
       }),
-      toLeadDealer(p.leadId, { href: dealerLead(p.leadId, "/options") }),
+      // ID 183 (27 Oct): the old loan-options page is retired — Step 4.
+      toLeadDealer(p.leadId, { href: dealerLead(p.leadId, "/product-selection") }),
       // Everyone else on this lead lost it — told separately, and last, so the
       // winner's copy is never overwritten by the loser's (emit de-dupes per
       // person in list order).
