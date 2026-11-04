@@ -84,6 +84,27 @@ export function idleSeverity(workingDays: number | null, idleLimit: number): Sta
     return "normal";
 }
 
+/** ID 85 #5 — the row cues for one holder role: no-touch thresholds + idle limit (working days). */
+export type HolderCues = { stale: StaleThresholds; idleDays: number };
+export type CuesByRole = { isr: HolderCues; asm: HolderCues };
+
+/** Both role sets from the limits in force (sent once with /api/inside-sales/holidays). */
+export function cuesByRole(l: StaleLimits & Pick<TimeLimits, "idle_cc" | "idle_asm">): CuesByRole {
+    return {
+        isr: { stale: staleThresholdsFor(l, "isr"), idleDays: l.idle_cc },
+        asm: { stale: staleThresholdsFor(l, "asm"), idleDays: l.idle_asm },
+    };
+}
+
+/**
+ * ID 85 #5 (22 Oct) — a queue row is judged by the role of the person HOLDING
+ * the lead (as the server-side idle and no-touch SQL does), not the viewer's:
+ * a Sales Head looking at an ASM-held lead sees the ASM limits.
+ */
+export function cuesForHolder(byRole: CuesByRole, holderRole: string | null | undefined): HolderCues {
+    return String(holderRole ?? "").toLowerCase() === "asm" ? byRole.asm : byRole.isr;
+}
+
 // BRD §0.5 visual cue thresholds. The live values come from the server
 // (getTimeLimits(), sent with /api/inside-sales/holidays); the default is the
 // registry's, for a caller that has not loaded them.

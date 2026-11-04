@@ -253,6 +253,7 @@ export async function fetchQueueRows({
             dl.interest_level,
             dl.current_owner_id,
             owner.name AS current_owner_name,
+            owner.role AS current_owner_role,
             dl.last_touchpoint_at,
             dl.last_worked_at,
             dl.next_follow_up_at,

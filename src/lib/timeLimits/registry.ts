@@ -51,7 +51,7 @@ export const TIME_LIMITS = [
         default: 4,
         min: 1,
         max: 72,
-        help: "Lead clock. Passed = a 'Limit passed' event; the daily email's Time limits missed.",
+        help: "Team figure: counts in the daily email's Time limits missed; never charged to a person.",
     },
     {
         key: "owner_first_attempt",
