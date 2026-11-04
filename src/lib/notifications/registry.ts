@@ -181,6 +181,7 @@ export const TYPE_LABELS: Record<string, string> = {
   "lead.assist_requested": "Dealer asked iTarang to help on a customer file",
   "lead.called_on_behalf": "Your lead was called on your behalf (after Call now)",
   "lead.system_correction": "System correction to your leads' stages",
+  "lead.online_store_finance": "Buy on finance enquiry from the online store",
 
   // --- Dealer onboarding ---
   "onboarding.chat_started": "Dealer started the WhatsApp onboarding chat",

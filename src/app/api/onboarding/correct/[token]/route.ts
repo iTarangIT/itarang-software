@@ -8,6 +8,7 @@ import {
   dealerOnboardingDocuments,
 } from "@/lib/db/schema";
 import { hashCorrectionToken } from "@/lib/onboarding/correction-token";
+import { onboardingFileLink } from "@/lib/storage/fileAccess";
 import {
   documentLabel,
   fieldLabel,
@@ -128,9 +129,11 @@ export async function GET(_req: NextRequest, context: RouteContext) {
         previousDocument: previousDoc
           ? {
               fileName: previousDoc.fileName,
-              // The dealer has no login here, and no document opens without
-              // one (17 Oct, user): the name is shown, the file is not linked.
-              fileUrl: null,
+              // ID 166 decision 5: the dealer has no login, but this
+              // correction link proves the application is its own, so it sees
+              // the file being replaced through a 15-minute link signed for
+              // the application (the page mints a fresh one on each click).
+              fileUrl: previousDoc.fileUrl ? onboardingFileLink(previousDoc.fileUrl, application.id) : null,
               uploadedAt: previousDoc.uploadedAt,
             }
           : null,

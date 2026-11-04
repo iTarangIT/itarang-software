@@ -52,10 +52,17 @@ type EmiContext = {
     customer_name: string | null;
     phone: string | null;
     next_due_date: string | null;
+    /** Unpaid on the loan's EMIs due up to GREATEST(this EMI's date, today) — missed months included. */
+    total_due: string | null;
+    pending_emis: number | null;
 };
 
-/** One EMI (or a lender's EMIs) with everything a message needs. */
-function contextSql(where: ReturnType<typeof sql>) {
+/**
+ * One EMI (or a lender's EMIs) with everything a message needs. `today`
+ * (IST, YYYY-MM-DD) bounds total_due: every unpaid EMI of the loan due on or
+ * before this EMI's date or today, whichever is later.
+ */
+function contextSql(where: ReturnType<typeof sql>, today: string) {
     return sql`
         SELECT e.id::text AS emi_id, e.due_date::text AS due_date, e.amount::text AS amount,
                e.amount_paid::text AS amount_paid, e.status, e.days_overdue,
@@ -66,8 +73,18 @@ function contextSql(where: ReturnType<typeof sql>) {
                (SELECT n.due_date::text FROM emi_schedules n
                  WHERE n.loan_sanction_id = e.loan_sanction_id AND n.due_date > e.due_date
                    AND n.status IN ('scheduled', 'overdue', 'missed')
-                 ORDER BY n.due_date LIMIT 1) AS next_due_date
+                 ORDER BY n.due_date LIMIT 1) AS next_due_date,
+               td.total_due, td.pending_emis
           FROM emi_schedules e
+          LEFT JOIN LATERAL (
+                SELECT COALESCE(SUM(COALESCE(p.amount, 0) - COALESCE(p.amount_paid, 0)), 0)::text AS total_due,
+                       COUNT(*)::int AS pending_emis
+                  FROM emi_schedules p
+                 WHERE p.loan_sanction_id = e.loan_sanction_id
+                   AND p.status IN ('scheduled', 'overdue', 'missed')
+                   AND COALESCE(p.amount_paid, 0) < COALESCE(p.amount, 0)
+                   AND p.due_date <= GREATEST(e.due_date, ${today}::date)
+          ) td ON TRUE
           JOIN loan_sanctions ls ON ls.id = e.loan_sanction_id
           LEFT JOIN nbfc_tenants t ON t.id = ls.nbfc_id
           LEFT JOIN leads l ON l.id = ls.lead_id
@@ -89,6 +106,8 @@ function valuesFor(e: EmiContext, kind: EmiMessageKind, opts: { paid?: number; t
         lender: e.lender ?? "",
         next_due_date: fmtDay(kind === "received" ? (e.status === "paid" || e.status === "paid_late" ? e.next_due_date : e.due_date) : e.next_due_date),
         days_overdue: String(overdue),
+        total_due: fmtAmount(e.total_due ?? 0),
+        pending_emis: String(e.pending_emis ?? 0),
     };
 }
 
@@ -190,7 +209,7 @@ export async function runEmiMessages(now = new Date()): Promise<{ aged: boolean;
             AND e.status IN ('scheduled', 'overdue', 'missed')
             AND e.amount_paid < COALESCE(e.amount, 0)
             AND e.due_date BETWEEN (${today}::date - ${maxDay}::int) AND (${today}::date - ${minDay}::int)
-        `)),
+        `, today)),
     );
 
     let sent = 0;
@@ -214,9 +233,9 @@ export async function queueEmiReceived(input: { emiId: string; amount?: number |
         const cfg = settings.messages.received;
         if (!settings.enabled || !settings.pilotNbfcId || !cfg.on || !cfg.text) return;
         if (!(await hasEmiMessages())) return;
-        const [e] = rowsOf<EmiContext>(await db.execute(contextSql(sql`e.id = ${input.emiId}::uuid`)));
-        if (!e || e.nbfc_id !== settings.pilotNbfcId) return;
         const today = istToday(new Date());
+        const [e] = rowsOf<EmiContext>(await db.execute(contextSql(sql`e.id = ${input.emiId}::uuid`, today)));
+        if (!e || e.nbfc_id !== settings.pilotNbfcId) return;
         const ref = (input.paymentRef ?? `paid-${e.amount_paid}`).slice(0, 100);
         await claimAndSend(e, "received", cfg, cfg.text, valuesFor(e, "received", { paid: input.amount ?? undefined, today }), settings, ref);
     } catch (err) {
@@ -239,15 +258,15 @@ export async function sendPortalReminder(input: {
     const settings = await getEmiMessagesSettings();
     if (!settings.enabled) return { sent: false, reason: "EMI messages are switched off (Admin > Settings > EMI messages)." };
     if (!(await hasEmiMessages())) return { sent: false, reason: "EMI messages are not set up on this server yet (E-365)." };
+    const today = istToday(new Date());
     const [e] = rowsOf<EmiContext>(
         await db.execute(sql`${contextSql(sql`
             e.loan_sanction_id = ${input.loanSanctionId}
             AND e.status IN ('scheduled', 'overdue', 'missed')
             AND e.amount_paid < COALESCE(e.amount, 0)
-        `)} ORDER BY e.due_date LIMIT 1`),
+        `, today)} ORDER BY e.due_date LIMIT 1`),
     );
     if (!e) return { sent: false, reason: "No unpaid EMI on this loan." };
-    const today = istToday(new Date());
     const kind: EmiMessageKind = e.due_date < today ? "overdue_1" : e.due_date === today ? "due_today" : "due_3d";
     const cfg = settings.messages[kind];
     if (!cfg.text) return { sent: false, reason: `The "${kind}" text is not approved yet.` };
@@ -275,6 +294,8 @@ export async function sendEmiTestMessages(input: {
         lender: "Test Lender",
         next_due_date: fmtDay(istToday(new Date(Date.now() + 30 * 86_400_000))),
         days_overdue: "3",
+        total_due: fmtAmount(12750),
+        pending_emis: "3",
     };
     const out: Array<{ kind: EmiMessageKind; channel: EmiChannel; status: string; error: string | null }> = [];
     for (const kind of input.kinds?.length ? input.kinds : EMI_MESSAGE_KINDS) {

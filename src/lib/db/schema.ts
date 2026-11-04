@@ -14044,3 +14044,30 @@ export const stockUploadTasks = pgTable(
     accountIdx: index("stock_upload_tasks_account_idx").on(t.account_id),
   }),
 );
+
+// E-366 — "Buy on finance" enquiries forwarded by the online store
+// (shop.itarang.com, Store R-15). Written only by
+// POST /api/integrations/online-store/finance-lead (src/lib/online-store/intake.ts);
+// UNIQUE store_ref makes a store retry return the lead it already made.
+export const onlineStoreFinanceLeads = pgTable(
+  "online_store_finance_leads",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    store_ref: varchar("store_ref", { length: 100 }).notNull(),
+    lead_id: varchar("lead_id", { length: 255 }).notNull(),
+    // 'product' | 'checkout'
+    page: varchar("page", { length: 16 }),
+    product_sku: varchar("product_sku", { length: 100 }),
+    product_title: text("product_title"),
+    product_url: text("product_url"),
+    price_paise: bigint("price_paise", { mode: "number" }),
+    pincode: varchar("pincode", { length: 6 }),
+    payload: jsonb("payload").default({}).notNull(),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    storeRefUniq: uniqueIndex("online_store_finance_leads_store_ref_uniq").on(t.store_ref),
+    leadIdx: index("online_store_finance_leads_lead_idx").on(t.lead_id),
+    createdIdx: index("online_store_finance_leads_created_idx").on(t.created_at),
+  }),
+);

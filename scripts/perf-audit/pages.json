@@ -756,16 +756,6 @@
     "idDiscovery": null
   },
   {
-    "url": "/dealer-portal/leads/:id/options",
-    "sourceFile": "src/app/(dashboard)/dealer-portal/leads/[id]/options/page.tsx",
-    "roles": [
-      "dealer",
-      "ceo"
-    ],
-    "dynamic": true,
-    "idDiscovery": null
-  },
-  {
     "url": "/dealer-portal/leads/:id/product-selection",
     "sourceFile": "src/app/(dashboard)/dealer-portal/leads/[id]/product-selection/page.tsx",
     "roles": [

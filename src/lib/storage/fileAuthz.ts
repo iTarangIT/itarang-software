@@ -503,7 +503,8 @@ export async function logFileOpen(input: {
     key: string;
     userId: string | null;
     role: string | null;
-    via: "session" | "signed_link";
+    // 16 chars max (file_access_log.via varchar(16)).
+    via: "session" | "signed_link" | "session_redirect" | "token_link";
     allowed: boolean;
     ip: string | null;
 }): Promise<void> {

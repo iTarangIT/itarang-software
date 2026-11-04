@@ -77,7 +77,7 @@ export function LeadsStatCards({
             ring: "ring-rose-400",
             active: filters.intent === "hot",
             onClick: toggleIntent("hot"),
-            hint: "Marked Hot by the rep (same as their queue)",
+            hint: "Interest: Hot, set by the rep (same as their queue)",
         },
         {
             label: "Warm",
@@ -86,7 +86,7 @@ export function LeadsStatCards({
             ring: "ring-amber-400",
             active: filters.intent === "warm",
             onClick: toggleIntent("warm"),
-            hint: "Marked Warm by the rep (same as their queue)",
+            hint: "Interest: Warm, set by the rep (same as their queue)",
         },
         {
             label: "Cold",
@@ -95,7 +95,7 @@ export function LeadsStatCards({
             ring: "ring-sky-400",
             active: filters.intent === "cold",
             onClick: toggleIntent("cold"),
-            hint: "Marked Cold by the rep (same as their queue)",
+            hint: "Interest: Cold, set by the rep (same as their queue)",
         },
         {
             label: "Unassigned",

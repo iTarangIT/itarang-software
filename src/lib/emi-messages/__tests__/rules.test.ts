@@ -119,6 +119,12 @@ describe("SMS texts (Exotel / DLT, 30 Oct)", () => {
         expect(smsValues({ amount: "1,24,999.6" }).amount).toBe("125000");
     });
 
+    it("total due (3 Nov) goes as digits too; pending count is untouched", () => {
+        const v = smsValues({ total_due: "12,750", pending_emis: "3" });
+        expect(v.total_due).toBe("12750");
+        expect(v.pending_emis).toBe("3");
+    });
+
     it("by default the SMS uses the WhatsApp text (no separate wording)", () => {
         for (const m of Object.values(defaultEmiMessagesSettings().messages)) expect(m.smsText).toBe("");
     });

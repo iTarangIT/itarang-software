@@ -15,7 +15,6 @@ export type ReadyToAssignTableRow = {
     id: string;
     dealer_name: string | null;
     location: string;
-    status: string;
     interest_level: string | null;
     reason: string;
     days_waiting: number;
@@ -78,7 +77,6 @@ export function ReadyToAssignTable({
                             )}
                             <th className="px-4 py-2">Dealer</th>
                             <th className="px-4 py-2">Location</th>
-                            <th className="px-4 py-2">Status</th>
                             <th className="px-4 py-2">Temperature</th>
                             <th className="px-4 py-2">Sales-ready because</th>
                             <th className="px-4 py-2 text-right">Waiting (working days)</th>
@@ -103,7 +101,6 @@ export function ReadyToAssignTable({
                                     </Link>
                                 </td>
                                 <td className="px-4 py-2 text-gray-600">{r.location}</td>
-                                <td className="px-4 py-2 text-gray-600">{r.status}</td>
                                 <td className="px-4 py-2 text-gray-600">{r.interest_level ?? "—"}</td>
                                 <td className="px-4 py-2 text-gray-600">{r.reason}</td>
                                 <td className={`px-4 py-2 text-right tabular-nums ${(r.past_limit ?? r.days_waiting > overdueDays) ? "font-semibold text-rose-700" : ""}`}>

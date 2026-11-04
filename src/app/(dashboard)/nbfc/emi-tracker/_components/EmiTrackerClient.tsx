@@ -791,6 +791,13 @@ function LoanDrawer({
           loanId={loan.loanId}
           borrower={loan.borrower}
           emi={payEmi}
+          olderUnpaid={(items ?? []).filter(
+            (o) =>
+              o.id !== payEmi.id &&
+              o.due_date < payEmi.due_date &&
+              ["scheduled", "overdue", "missed"].includes(o.status) &&
+              Number(o.amount_paid ?? 0) < Number(o.amount ?? 0),
+          )}
           onClose={() => setPayEmi(null)}
           onSuccess={async () => {
             setPayEmi(null);

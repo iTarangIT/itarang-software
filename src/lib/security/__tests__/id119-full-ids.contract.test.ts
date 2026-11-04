@@ -109,9 +109,6 @@ describe("dealer lead routes resolve the dealer, never compare users.dealer_id r
         "lead/[id]/step-5-access",
         "lead/[id]/submit-product-selection",
         "lead/[id]/switch-to-cash",
-        "leads/[id]/loan-offers",
-        "leads/[id]/loan-offers/[offerId]/book",
-        "leads/[id]/loan-offers/[offerId]/select",
         "leads/[id]/submit-to-sm",
         "product-selections/[id]",
     ];
@@ -149,5 +146,26 @@ describe("ID 183: dispatch is the file's dealer's (or the house's), never iTaran
         // through gateLeadActor — always with dispatch: true, which refuses
         // Admin / Sales Head (leadActorVerdict).
         for (const g of src.match(/gateLeadActor\([^;]*\)/g) ?? []) expect(g).toMatch(/dispatch:\s*true/);
+    });
+});
+
+// ID 119 (2 Nov check): the Dealer Validation page also opens for the dealer
+// account's owner (ISR / ASM / SE / SM / BH, ID 166 item 11) and the NBFC KYC
+// screen for the Business Head; both must mask PAN and account for them.
+describe("ID 119: dealer and NBFC IDs masked outside Admin / CEO / Sales Head", () => {
+    it("Dealer Validation detail masks by role and never stores a mask back", () => {
+        const src = code("admin/dealer-verifications/[dealerId]");
+        expect(src).toMatch(/const fullIds = seesFullDealerIds\(auth\.user\.role\)/);
+        expect(src).toMatch(/partners: maskDealerIdsDeep\(partnersSnapshot, fullIds\)/);
+        expect(src).toMatch(/directors: maskDealerIdsDeep\(directorsSnapshot, fullIds\)/);
+        expect(src).not.toMatch(/maskDealerIdsDeep\(\w+Snapshot, true\)/);
+        expect(src).toMatch(/maskIdsInText\(w, fullIds\)/);
+        expect(src).toMatch(/data: fullIds \? data : maskDealerIdsDeep\(data, false\)/);
+        expect(src).toMatch(/!isMaskedPan\(panNumber\)/);
+        expect(src).toMatch(/!isMaskedBankAccount\(accountNumber\)/);
+    });
+
+    it("NBFC KYC masks every PAN for roles outside the full-ID set", () => {
+        expect(code("admin/nbfc/[nbfcId]/kyc")).toMatch(/seesFullDealerIds\(auth\.user\.role\) \? payload : maskPanDeep\(payload\)/);
     });
 });

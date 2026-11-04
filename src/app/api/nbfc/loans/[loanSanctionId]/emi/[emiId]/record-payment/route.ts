@@ -7,7 +7,9 @@
  * An optional invoice/receipt document can be attached.
  *
  * Accepts multipart/form-data:
- *   amount     (rupees, required, 0 < amount <= remaining)
+ *   amount     (rupees, required, 0 < amount <= total still owed on the
+ *              loan's EMIs due up to this one — FIFO, 3 Nov: the money clears
+ *              the OLDEST unpaid EMI first, then the next, up to this EMI)
  *   mode       ('cash' | 'upi' | 'bank_transfer' | 'cheque' | 'qr', required)
  *   paid_at    (ISO/date, optional — defaults to now, must not be in the future)
  *   reference  (optional txn id / UPI ref / cheque no.)
@@ -26,7 +28,8 @@ import { clientError } from "@/lib/nbfc/http-error";
 import { emiPaymentAttempts, emiSchedules, nbfcLoans } from "@/lib/db/schema";
 import { getCurrentTenant, requireNbfcAccess } from "@/lib/nbfc/tenant";
 import { putNbfcObject } from "@/lib/nbfc/nbfc-storage";
-import { applyEmiPayment, SYSTEM_USER_ID } from "@/lib/nbfc/servicing/applyEmiPayment";
+import { SYSTEM_USER_ID } from "@/lib/nbfc/servicing/applyEmiPayment";
+import { applyLoanPaymentFifo, owedUpTo } from "@/lib/nbfc/servicing/applyLoanPaymentFifo";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -92,6 +95,7 @@ export async function POST(
       .select({
         id: emiSchedules.id,
         status: emiSchedules.status,
+        due_date: emiSchedules.due_date,
         amount: emiSchedules.amount,
         amount_paid: emiSchedules.amount_paid,
       })
@@ -136,9 +140,13 @@ export async function POST(
         { status: 400 },
       );
     }
-    if (amount > remaining + 0.001) {
+    // FIFO (3 Nov): the money clears the oldest unpaid EMI first, so the most
+    // one collection may take is everything still owed up to this EMI.
+    const dueDate = String(emi.due_date).slice(0, 10);
+    const maxCollectable = await owedUpTo(db, loanSanctionId, dueDate);
+    if (amount > maxCollectable + 0.001) {
       return NextResponse.json(
-        { ok: false, error: `BAD_REQUEST: amount exceeds remaining due (₹${remaining})` },
+        { ok: false, error: `BAD_REQUEST: amount exceeds the total due up to this EMI (₹${maxCollectable})` },
         { status: 400 },
       );
     }
@@ -185,29 +193,14 @@ export async function POST(
       documentUrl = url;
     }
 
-    const amountPaise = Math.round(amount * 100);
     const refForSchedule = reference ? `${mode.toUpperCase()}:${reference}` : `${mode}`;
+    const paymentKey = `manual:${emiId}:${now.getTime()}`;
 
-    const result = await db.transaction(async (tx) => {
-      // Record the collection event for the audit ledger.
-      await tx.insert(emiPaymentAttempts).values({
-        emi_schedule_id: emiId,
-        loan_sanction_id: loanSanctionId,
-        tenant_id: tenant.id,
-        idempotency_key: `manual:${emiId}:${now.getTime()}`,
-        mode: "manual",
-        channel: mode,
-        amount_paise: amountPaise,
-        status: "succeeded",
-        reference_no: reference,
-        document_url: documentUrl,
-        collected_at: paidAt,
-        note,
-        actor_user_id: actorUserId,
-      });
-      return applyEmiPayment(tx, {
-        emiId,
-        paymentAmount: amount,
+    const fifo = await db.transaction(async (tx) => {
+      const r = await applyLoanPaymentFifo(tx, {
+        loanSanctionId,
+        upToDueDate: dueDate,
+        amount,
         paymentRef: refForSchedule,
         paidAt,
         mode: "manual",
@@ -215,20 +208,56 @@ export async function POST(
         documentUrl,
         actorUserId,
       });
+      if (!r.applied) return r;
+      // One ledger row per EMI the money went to, so each EMI's history shows
+      // what it received. The first keeps the old key; the note says where a
+      // slice came from when it is not the EMI the collector opened.
+      for (const [i, s] of r.slices.entries()) {
+        const fifoNote = s.emiId === emiId ? null : `FIFO: part of ₹${amount} collected on another EMI, applied to the oldest unpaid EMI first`;
+        await tx.insert(emiPaymentAttempts).values({
+          emi_schedule_id: s.emiId,
+          loan_sanction_id: loanSanctionId,
+          tenant_id: tenant.id,
+          idempotency_key: i === 0 ? paymentKey : `${paymentKey}:${s.emiId}`,
+          mode: "manual",
+          channel: mode,
+          amount_paise: Math.round(s.amount * 100),
+          status: "succeeded",
+          reference_no: reference,
+          document_url: documentUrl,
+          collected_at: paidAt,
+          note: [note, fifoNote].filter(Boolean).join(" · ") || null,
+          actor_user_id: actorUserId,
+        });
+      }
+      return r;
     });
 
-    if (!result.applied) {
+    if (!fifo.applied) {
       return NextResponse.json(
-        { ok: false, error: `CONFLICT: ${result.reason ?? "not applied"}` },
+        { ok: false, error: `CONFLICT: ${fifo.reason ?? "not applied"}` },
         { status: 409 },
       );
     }
 
-    // ID 204: "EMI received" to the customer (pilot lender, after commit; never fails the payment).
+    // ID 204: "EMI received" to the customer (pilot lender, after commit; never
+    // fails the payment) — once per payment, on the last EMI the money reached.
+    const last = fifo.slices[fifo.slices.length - 1]!;
     const { queueEmiReceived } = await import("@/lib/emi-messages/run");
-    await queueEmiReceived({ emiId, amount, paymentRef: `manual:${emiId}:${now.getTime()}` });
+    await queueEmiReceived({ emiId: last.emiId, amount, paymentRef: paymentKey });
 
-    return NextResponse.json({ ok: true, ...result });
+    const lastResult = last.result;
+    return NextResponse.json({
+      ok: true,
+      ...lastResult,
+      loanClosed: fifo.loanClosed,
+      fifo: fifo.slices.map((s) => ({
+        emiId: s.emiId,
+        amount: s.amount,
+        status: s.result.status,
+        remaining: s.result.remaining,
+      })),
+    });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     const status = msg.includes("FORBIDDEN")

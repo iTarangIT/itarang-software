@@ -20,8 +20,23 @@ export type EmiMessageKind = (typeof EMI_MESSAGE_KINDS)[number];
 export type EmiChannel = "whatsapp" | "sms";
 export const EMI_CHANNELS: readonly EmiChannel[] = ["whatsapp", "sms"];
 
-/** The fixed fields a text may use, e.g. "{amount}". */
-export const EMI_FIELDS = ["name", "amount", "due_date", "lender", "next_due_date", "days_overdue"] as const;
+/**
+ * The fixed fields a text may use, e.g. "{amount}".
+ *   amount        this one EMI's unpaid part ("received": the amount paid)
+ *   total_due     3 Nov: everything unpaid on the loan up to this EMI (or up to
+ *                 today when that is later) — missed months included
+ *   pending_emis  how many EMIs make up total_due
+ */
+export const EMI_FIELDS = [
+    "name",
+    "amount",
+    "due_date",
+    "lender",
+    "next_due_date",
+    "days_overdue",
+    "total_due",
+    "pending_emis",
+] as const;
 export type EmiField = (typeof EMI_FIELDS)[number];
 export type EmiFieldValues = Partial<Record<EmiField, string>>;
 
@@ -186,10 +201,14 @@ export function smsValues(values: EmiFieldValues): EmiFieldValues {
         const m = /^(\d{2})-(\d{2})-(\d{4})$/.exec(v ?? "");
         return m ? `${m[1]}${MONTHS[Number(m[2]) - 1] ?? m[2]}${m[3]}` : v;
     };
-    const amount = Number((values.amount ?? "").replace(/,/g, ""));
+    const digits = (v: string | undefined) => {
+        const n = Number((v ?? "").replace(/,/g, ""));
+        return Number.isFinite(n) && v ? String(Math.round(n)) : v;
+    };
     return {
         ...values,
-        amount: Number.isFinite(amount) && values.amount ? String(Math.round(amount)) : values.amount,
+        amount: digits(values.amount),
+        total_due: digits(values.total_due),
         due_date: day(values.due_date),
         next_due_date: day(values.next_due_date),
     };

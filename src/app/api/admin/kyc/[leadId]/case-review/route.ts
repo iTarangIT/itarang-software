@@ -30,6 +30,7 @@ import { fetchAndStoreSignedConsent } from "@/lib/digio/fetch-signed-consent";
 import { syncConsentStatusFromDigio } from "@/lib/digio/sync-consent-status";
 import { sanitizeDbError } from "@/lib/error-utils";
 import { fullIdsForLead } from "@/lib/auth/requireLeadAccess";
+import { signFileLinksDeep } from "@/lib/storage/fileAccess";
 import { maskAadhaarDeep } from "@/lib/kyc/aadhaarMask";
 import { maskPanDeep } from "@/lib/kyc/panMask";
 
@@ -212,8 +213,14 @@ export async function GET(
     // ID 119 / 166: the full PAN only for Admin, Sales Head, CEO and the
     // lead's owner; sales managers / executives get it masked.
     const fullIds = await fullIdsForLead(appUser, leadId);
+    // ID 166: every stored file on the case (documents and their thumbnails,
+    // consent PDFs, supporting docs, video KYC recordings) leaves as a fresh
+    // 15-minute link signed for this login, never the stored address.
     const protectIds = <T,>(payload: T): T =>
-      fullIds ? maskAadhaarDeep(payload) : maskPanDeep(maskAadhaarDeep(payload));
+      signFileLinksDeep(
+        fullIds ? maskAadhaarDeep(payload) : maskPanDeep(maskAadhaarDeep(payload)),
+        appUser.id,
+      );
 
     return NextResponse.json(protectIds({
       success: true,

@@ -32,22 +32,36 @@ const money = (n: number) =>
 const fmtDate = (s: string) =>
   new Date(s).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
 
+const owedOn = (e: PaymentEmi) =>
+  Math.max(0, Math.round(((e.amount != null ? Number(e.amount) : 0) - (e.amount_paid != null ? Number(e.amount_paid) : 0)) * 100) / 100);
+
 export default function RecordPaymentModal({
   loanId,
   borrower,
   emi,
+  olderUnpaid = [],
   onClose,
   onSuccess,
 }: {
   loanId: string;
   borrower: string;
   emi: PaymentEmi;
+  /** Unpaid EMIs due before this one — FIFO (3 Nov): a payment clears these first. */
+  olderUnpaid?: PaymentEmi[];
   onClose: () => void;
   onSuccess: () => void;
 }) {
   const due = emi.amount != null ? Number(emi.amount) : 0;
   const paidSoFar = emi.amount_paid != null ? Number(emi.amount_paid) : 0;
-  const remaining = Math.max(0, Math.round((due - paidSoFar) * 100) / 100);
+  const thisOwed = owedOn(emi);
+  // Oldest first, then this EMI: the order the money is applied in.
+  const queue = useMemo(
+    () => [...olderUnpaid].sort((a, b) => (a.due_date < b.due_date ? -1 : 1)).concat(emi),
+    [olderUnpaid, emi],
+  );
+  const olderOwed = Math.round(olderUnpaid.reduce((s, e) => s + owedOn(e), 0) * 100) / 100;
+  // The most this collection may take: everything owed up to and including this EMI.
+  const remaining = Math.round((olderOwed + thisOwed) * 100) / 100;
 
   const today = new Date().toISOString().slice(0, 10);
   const [amount, setAmount] = useState<string>(remaining ? String(remaining) : "");
@@ -65,13 +79,26 @@ export default function RecordPaymentModal({
   const valid = Number.isFinite(amountNum) && amountNum > 0 && amountNum <= remaining + 0.001;
   const afterRemaining = valid ? Math.max(0, Math.round((remaining - amountNum) * 100) / 100) : remaining;
 
+  // FIFO preview: how the amount splits over the oldest EMIs first.
+  const split = useMemo(() => {
+    let left = valid ? Math.round(amountNum * 100) : 0;
+    return queue.map((e) => {
+      const owed = Math.round(owedOn(e) * 100);
+      const take = Math.min(owed, left);
+      left -= take;
+      return { e, paid: take / 100, pendingAfter: (owed - take) / 100 };
+    });
+  }, [queue, valid, amountNum]);
+
   const hint = useMemo(() => {
     if (!amount.trim()) return null;
     if (!Number.isFinite(amountNum) || amountNum <= 0) return { tone: "err", text: "Enter an amount greater than 0." };
-    if (amountNum > remaining + 0.001) return { tone: "err", text: `Cannot exceed the remaining ${money(remaining)} due.` };
-    if (afterRemaining > 0) return { tone: "warn", text: `Partial — ${money(afterRemaining)} will remain due on this EMI.` };
-    return { tone: "ok", text: "This clears the EMI in full." };
-  }, [amount, amountNum, remaining, afterRemaining]);
+    if (amountNum > remaining + 0.001)
+      return { tone: "err", text: `Cannot exceed the ${money(remaining)} due up to this EMI.` };
+    if (afterRemaining > 0)
+      return { tone: "warn", text: `Partial — ${money(afterRemaining)} will remain pending${olderUnpaid.length ? " (on the later EMI)" : " on this EMI"}.` };
+    return { tone: "ok", text: olderUnpaid.length ? "This clears every pending EMI up to this one." : "This clears the EMI in full." };
+  }, [amount, amountNum, remaining, afterRemaining, olderUnpaid.length]);
 
   async function submit() {
     if (!valid || busy) return;
@@ -135,11 +162,34 @@ export default function RecordPaymentModal({
         <div className="space-y-4 p-5">
           {/* Remaining due banner */}
           <div className="flex items-center justify-between rounded-xl bg-[color:var(--color-bg)] px-4 py-3">
-            <span className="section-label-muted">Remaining due</span>
+            <span className="section-label-muted">{olderUnpaid.length ? "Total due up to this EMI" : "Remaining due"}</span>
             <span className="text-xl font-semibold tabular-nums text-[color:var(--color-brand-navy)]">
               {money(remaining)}
             </span>
           </div>
+
+          {/* FIFO: older unpaid EMIs are cleared first */}
+          {olderUnpaid.length > 0 && (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm">
+              <p className="font-medium text-amber-800">
+                {olderUnpaid.length} older EMI{olderUnpaid.length > 1 ? "s are" : " is"} unpaid ({money(olderOwed)}). The
+                payment clears the oldest EMI first.
+              </p>
+              <ul className="mt-2 space-y-1 text-xs text-[color:var(--color-ink)]">
+                {split.map(({ e, paid, pendingAfter }) => (
+                  <li key={e.id} className="flex justify-between gap-3 tabular-nums">
+                    <span>
+                      EMI {e.emi_seq ?? "—"} · due {fmtDate(e.due_date)}
+                    </span>
+                    <span>
+                      {paid > 0 ? `${money(paid)} paid` : "—"}
+                      {pendingAfter > 0 ? ` · ${money(pendingAfter)} pending` : paid > 0 ? " · cleared" : ""}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
 
           {/* Amount */}
           <Field label="Amount to collect">

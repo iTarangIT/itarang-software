@@ -14,7 +14,8 @@ export type LeadRegistryEntry = {
   /** Person/company name as captured. Falls back to "Unknown" if empty. */
   name: string | null | undefined;
   phone?: string | null;
-  sourceChannel: "web" | "whatsapp" | "admin" | "scraper";
+  // E-366 — "online_store": a Buy on finance enquiry from shop.itarang.com.
+  sourceChannel: "web" | "whatsapp" | "admin" | "scraper" | "online_store";
   /** Originating table + row id, e.g. ('leads', lead.id). Powers idempotency. */
   sourceTable: string;
   sourceId: string | number;

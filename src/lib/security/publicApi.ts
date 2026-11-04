@@ -49,6 +49,7 @@ export const PUBLIC_API_RULES: readonly PublicApiRule[] = [
   { pattern: /^\/api\/digio\/webhook\//, why: "Digio webhook — X-Digio-Checksum (DIGIO_WEBHOOK_SECRET)" },
   { pattern: /^\/api\/esign\/[^/]+\/webhook$/, why: "e-sign provider webhook — the provider checksum, keyed with the NBFC account secret" },
   { pattern: /^\/api\/integrations\/ecofy\/events$/, why: "Ecofy → CRM events — HMAC signature" },
+  { pattern: /^\/api\/integrations\/online-store\/finance-lead$/, why: "online store → CRM Buy on finance enquiries (Store R-15) — x-store-key, ONLINE_STORE_API_KEY" },
   { pattern: /^\/api\/nbfc\/(agreement|enach|vkyc)\/callback$/, why: "NBFC result callback — X-iTarang-Signature; the Decentro VKYC leg only flags, the result is fetched" },
   { pattern: /^\/api\/kyc\/decentro\/active-video-liveness\/(callback|return)$/, why: "Decentro has no signature here — the callback only flags the row; the result is fetched from Decentro" },
   { pattern: /^\/api\/kyc\/digilocker\/callback(\/|$)/, why: "DigiLocker browser redirect — cannot be signed; the Aadhaar data is fetched from Decentro" },
@@ -75,6 +76,7 @@ export const PUBLIC_API_RULES: readonly PublicApiRule[] = [
   { pattern: /^\/api\/vendor\/register$/, why: "scrap-vendor self-registration" },
   { pattern: /^\/api\/dealer\/onboarding\/(submit|status)$/, why: "pre-login dealer onboarding form" },
   { pattern: /^\/api\/dealer\/onboarding\/resume\/(send-otp|verify-otp)$/, why: "one-time code to continue an existing application without a login — mailed to the owner e-mail on the application (ID 129)" },
+  { pattern: /^\/api\/dealer\/onboarding\/file-link$/, why: "a dealer with no login views its own earlier onboarding uploads — the resume token or a live correction token proves the application; the file is matched to it (ID 166 decision 5)" },
   { pattern: /^\/api\/dealer-onboarding\/salespeople$/, why: "salesperson dropdown on the pre-login onboarding form — names and roles only, no email or phone (ID 66)" },
   { pattern: /^\/api\/dealer-onboarding\/save$/, why: "autosave of the pre-login onboarding form — a prospective dealer has no account yet (ID 118 log review, 13 Oct)" },
   { pattern: /^\/api\/uploads\/dealer-documents$/, why: "uploads from the pre-login onboarding form and the correction link" },
@@ -143,7 +145,7 @@ export function apiGate(input: {
  * ID 130: the NBFC store (/api/nbfc-uploads/…, signedNbfcPath) is signed the
  * same way and its route checks the signature and the session the same way.
  */
-const FILES_PROXY_PATH = /^\/api\/(files\/(documents|dealer-documents|call-recordings)|nbfc-uploads)\/./;
+const FILES_PROXY_PATH = /^\/api\/(files\/(documents|dealer-documents|call-recordings|private-documents)|nbfc-uploads)\/./;
 
 export function isSignedFileLink(pathname: string, search: string | undefined): boolean {
   if (!FILES_PROXY_PATH.test(pathname)) return false;

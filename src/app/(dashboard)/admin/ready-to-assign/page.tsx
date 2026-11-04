@@ -4,14 +4,12 @@ import {
     countAwaitingAssignment,
     isReadySplit,
     listReadyToAssign,
-    READY_NO_OWNER_TITLE,
     READY_SPLIT_LABEL,
     READY_SPLITS,
     salesReadyReasonLabel,
 } from "@/lib/leads/salesReady";
-import { LEAD_STATUS_LABEL } from "@/lib/leads/queueFilters";
 import { LEADS_BULK_ROLES } from "@/lib/leads/access";
-import type { LeadStatus } from "@/lib/lifecycle/transitions";
+import { InfoTip } from "@/components/ui/info-tip";
 import { ReadyToAssignTable } from "./ReadyToAssignTable";
 
 export const dynamic = "force-dynamic";
@@ -94,11 +92,13 @@ export default async function ReadyToAssignPage({
         <div className="px-6 md:px-8 py-6 space-y-5 max-w-[1400px]">
             <header>
                 <h1 className="text-2xl font-semibold tracking-tight text-ink">Ready to assign</h1>
-                <p className="mt-1 text-sm text-ink-muted">
-                    {READY_NO_OWNER_TITLE}: leads that became sales-ready and have no owner.{" "}
-                    {canAssign ? "Tick leads and assign them from here. " : ""}
-                    The wait is counted from the Sales-ready event (or from when a reactivated lead came back to the
-                    pool). Leads with a dead or non-responsive number are not listed.
+                {/* C38 (wording audit, 2 Nov): one line on screen, the rules behind the "i". */}
+                <p className="mt-1 flex items-center gap-1.5 text-sm text-ink-muted">
+                    Sales-ready leads with no owner.{canAssign ? " Tick and assign." : ""}
+                    <InfoTip label="How this list works">
+                        The wait is counted from when the lead became sales-ready (or from when a reactivated lead
+                        came back to the pool). Leads with a dead or non-responsive number are not listed.
+                    </InfoTip>
                 </p>
                 {(state || personPicked) && (
                     <p className="mt-1 text-xs text-ink-muted">
@@ -165,7 +165,6 @@ export default async function ReadyToAssignPage({
                             id: r.id,
                             dealer_name: r.dealer_name,
                             location: [r.city, r.state].filter(Boolean).join(", ") || "—",
-                            status: r.lead_status ? (LEAD_STATUS_LABEL[r.lead_status as LeadStatus] ?? r.lead_status) : "—",
                             interest_level: r.interest_level,
                             reason: salesReadyReasonLabel(r.sales_ready_reason),
                             days_waiting: r.days_waiting,

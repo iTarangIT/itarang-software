@@ -66,6 +66,7 @@ import type { DrillKind, DrillRow } from "@/lib/dashboard/salesDrill";
 import { ResponseTimeCard } from "./ResponseTimeCard";
 import { BUSINESS_TYPE_OPTIONS, BUSINESS_TYPE_UNSET, BUSINESS_TYPE_UNSET_LABEL } from "@/lib/leads/businessType";
 import { orderByTeam } from "@/lib/users/teamRules";
+import type { TeamScorecardSubtotal } from "@/lib/admin/teamScorecardSubtotals";
 import { InvoicesReadUpTo } from "@/components/sales/InvoicesReadUpTo";
 
 type Period = "today" | "week" | "month";
@@ -340,6 +341,22 @@ export function SalesHeadOpsView() {
     const shown = people.filter((p) => inSeg(p.role, team));
     const fieldPeople = people.filter((p) => inSeg(p.role, "field"));
     const insidePeople = people.filter((p) => inSeg(p.role, "inside"));
+
+    // ID 155: a "Team subtotal" row under each manager's team, by the
+    // Performance › Team total rule (each member for the days in the team).
+    const scoreList = orderByTeam(score === "field" ? fieldPeople : insidePeople, managerOf);
+    const scoreManagers = scoreList.filter((p, i) => !p.member && scoreList[i + 1]?.member).map((p) => p.spoc_id);
+    const subtotalQs = new URLSearchParams(dashQs);
+    subtotalQs.delete("spoc_id");
+    subtotalQs.set("score", score);
+    subtotalQs.set("managers", scoreManagers.join(","));
+    const teamSubtotals = useQuery<Record<string, TeamScorecardSubtotal>>({
+        queryKey: ["sales-head-ops", "team-subtotals", subtotalQs.toString()],
+        queryFn: () => getData(`/api/admin/reports/team-subtotals?${subtotalQs}`),
+        enabled: scoreManagers.length > 0,
+        placeholderData: (prev) => prev,
+        retry: false,
+    });
 
     // ── Targets ──────────────────────────────────────────────────────────────
     // A target is a monthly figure. This month: the targets service's own
@@ -785,8 +802,8 @@ export function SalesHeadOpsView() {
                     (monthToDate
                         ? `Actual / target to date${daysLeft == null ? "" : `, and what each person needs per working day for the rest of the month. ${daysLeft} working days left.`}`
                         : `Actual / target for the selected days — the monthly target pro-rata to ${periodDays} working ${periodDays === 1 ? "day" : "days"}${daysLeft == null ? "" : `. Revenue needed per day is for the rest of the month: ${daysLeft} working days left`}.`) +
-                    // ID 155 (22 Oct): no team subtotal here — say how teams are grouped and where the dated total is.
-                    " Each row is that person's own numbers, grouped under today's manager (↳); a team's total for the days each member was in it is on Performance › Team total."
+                    // ID 155: teams are grouped under today's manager; the subtotal is dated.
+                    " Each row is that person's own numbers, grouped under today's manager (↳). The Team subtotal row is the manager plus each member for the days they were in the team, as on Performance › Team total."
                 }
                 action={
                     <SegmentedControl
@@ -806,7 +823,15 @@ export function SalesHeadOpsView() {
                 ) : (
                     (() => {
                         // ID 156: each manager's team right under them (↳).
-                        const list = orderByTeam(score === "field" ? fieldPeople : insidePeople, managerOf);
+                        const list = scoreList;
+                        // ID 155: the row index that closes each manager's team → that manager.
+                        const teamEnd = new Map<number, (typeof list)[number]>();
+                        list.forEach((p, i) => {
+                            if (p.member || !list[i + 1]?.member) return;
+                            let j = i + 1;
+                            while (list[j + 1]?.member) j++;
+                            teamEnd.set(j, p);
+                        });
                         const heads =
                             score === "field"
                                 ? ["Dealer visits", "Fresh / Repeat", "New dealer visits", "Batteries sold", "KYC submitted", "Revenue"]
@@ -826,7 +851,7 @@ export function SalesHeadOpsView() {
                                         ))}
                                         <span className="text-right">{score === "field" ? "Revenue needed per day" : monthToDate ? "Won this month" : "Won"}</span>
                                     </div>
-                                    {list.map((p) => {
+                                    {list.map((p, rowIndex) => {
                                         const cells: ScoreCell[] =
                                             score === "field"
                                                 ? [
@@ -866,7 +891,7 @@ export function SalesHeadOpsView() {
                                                       return cells;
                                                   })();
                                         const need = targetOf(p.spoc_id, "revenue")?.progress ?? null;
-                                        return (
+                                        const row = (
                                             <div
                                                 key={p.spoc_id}
                                                 className={`grid min-h-[50px] ${score === "field" ? "grid-cols-[180px_repeat(6,minmax(0,1fr))_150px]" : "grid-cols-[180px_repeat(5,minmax(0,1fr))_150px]"} items-center gap-3 border-b border-[#f1f4f7]`}
@@ -937,6 +962,19 @@ export function SalesHeadOpsView() {
                                                               : `${inr(need.required_per_day)} a day`}
                                                 </span>
                                             </div>
+                                        );
+                                        const head = teamEnd.get(rowIndex);
+                                        if (!head) return row;
+                                        return (
+                                            <React.Fragment key={p.spoc_id}>
+                                                {row}
+                                                <TeamSubtotalRow
+                                                    name={head.name ?? "Unnamed"}
+                                                    score={score}
+                                                    data={teamSubtotals.data?.[head.spoc_id] ?? null}
+                                                    loading={teamSubtotals.isLoading}
+                                                />
+                                            </React.Fragment>
                                         );
                                     })}
                                 </div>
@@ -1581,6 +1619,72 @@ function StuckGrid({ rows, loading }: { rows: SalesHeadMeasures["stuck"]; loadin
                     </div>
                 ))}
             </div>
+        </div>
+    );
+}
+
+/**
+ * ID 155 — the dated "Team subtotal" row under a manager's team in the
+ * scorecard: actuals only (each person's target stays on their own row; the
+ * manager's team target is on Performance › Team).
+ */
+function TeamSubtotalRow({
+    name,
+    score,
+    data,
+    loading,
+}: {
+    name: string;
+    score: string;
+    data: TeamScorecardSubtotal | null;
+    loading: boolean;
+}) {
+    const field = score === "field";
+    const grid = field ? "grid-cols-[180px_repeat(6,minmax(0,1fr))_150px]" : "grid-cols-[180px_repeat(5,minmax(0,1fr))_150px]";
+    let cells: Array<{ actual: string; note?: string }>;
+    let last = "—";
+    if (!data) {
+        cells = Array.from({ length: field ? 6 : 5 }, () => ({ actual: loading ? "…" : "—" }));
+    } else if (field) {
+        const fr = freshRepeatSplit(data.totals);
+        const r = batteryReading(data.outcome);
+        const batteries =
+            r.state === "unknown"
+                ? batteryText(r, "", undefined, num)
+                : { actual: batteryText(r, num(data.outcome.batteries_to_dealers), undefined, num).actual, note: undefined };
+        cells = [
+            { actual: num(data.totals.unique_visits) },
+            { actual: num(fr.fresh), note: `${num(fr.repeat)} repeat` },
+            { actual: num(data.totals.new_visits) },
+            { actual: batteries.actual, note: batteries.note },
+            { actual: num(data.outcome.kyc_submitted) },
+            { actual: inr(data.outcome.revenue) },
+        ];
+    } else {
+        const x = data.isr ?? { calls: 0, engaged: 0, hot_to_field: 0, hot_visited: 0, quotes_delivered: 0, won: 0 };
+        const engagedPct = x.calls > 0 ? Math.round((x.engaged / x.calls) * 100) : null;
+        cells = [
+            { actual: num(Math.round((data.averages.avg_calls_per_day ?? 0) * 10) / 10) },
+            engagedPct == null ? { actual: "—", note: "no calls" } : { actual: `${engagedPct}%`, note: "of calls" },
+            { actual: num(x.hot_to_field) },
+            { actual: num(x.hot_visited), note: x.hot_to_field > 0 ? `of ${num(x.hot_to_field)}` : "none sent" },
+            { actual: num(x.quotes_delivered), note: "delivered" },
+        ];
+        last = num(x.won);
+    }
+    return (
+        <div
+            className={`grid min-h-[44px] ${grid} items-center gap-3 border-b border-border bg-[#f6f8fa]`}
+            title="The manager plus each member for the days they were in the team (Performance › Team total)."
+        >
+            <span className="truncate pl-1 text-[13px] font-semibold text-ink">Team subtotal · {name}</span>
+            {cells.map((c, i) => (
+                <span key={i} className="text-[13px] text-ink tabular-nums">
+                    <span className="font-bold">{c.actual}</span>
+                    {c.note ? <span className="text-ink-muted"> / {c.note}</span> : null}
+                </span>
+            ))}
+            <span className="text-right text-[13px] font-semibold tabular-nums text-ink">{last}</span>
         </div>
     );
 }

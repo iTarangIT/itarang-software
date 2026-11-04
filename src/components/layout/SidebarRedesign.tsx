@@ -215,7 +215,6 @@ const ADMIN_SALES_HEAD_GROUPS: LayoutGroup[] = [
                     "admin-inventory-upload",
                 ],
             },
-            { id: "sh-ecommerce-products", label: "E-commerce products" },
         ],
     },
     {
