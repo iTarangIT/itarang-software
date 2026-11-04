@@ -255,7 +255,9 @@ async function closeBookedVisit(
             .update(leadVisits)
             .set({
                 visit_status: "cancelled",
-                visit_remarks: sql`concat_ws(' · ', ${leadVisits.visit_remarks}, ${`Closed by the visit on ${day}`})`,
+                // ::text is required: concat_ws takes "any", so Postgres cannot
+                // infer the parameter's type and refuses the query (42P18).
+                visit_remarks: sql`concat_ws(' · ', ${leadVisits.visit_remarks}, ${`Closed by the visit on ${day}`}::text)`,
                 updated_at: new Date(),
             })
             .where(inArray(leadVisits.visit_id, rest.map((r) => r.visit_id)));
