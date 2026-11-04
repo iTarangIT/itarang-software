@@ -29,6 +29,73 @@ export async function hasInvoiceLedgerTables(): Promise<boolean> {
     return present;
 }
 
+let applications: boolean | null = null;
+let applicationsAt = 0;
+
+/**
+ * E-368: credit_note_applications — the part of each credit note already used
+ * against an invoice in Vyapar. Without it a credit note nets at its full total.
+ */
+export async function hasCreditNoteApplications(): Promise<boolean> {
+    const now = Date.now();
+    if (applications !== null && now - applicationsAt < PROBE_TTL_MS) return applications;
+    try {
+        const res = (await db.execute(sql`
+            SELECT to_regclass('public.credit_note_applications') IS NOT NULL AS ok
+        `)) as unknown as Array<{ ok: boolean }>;
+        applications = Boolean(res[0]?.ok);
+    } catch {
+        applications = false;
+    }
+    applicationsAt = now;
+    return applications;
+}
+
+let registerRows: boolean | null = null;
+let registerRowsAt = 0;
+
+/**
+ * E-370: vyapar_register_rows — each invoice as it stood in the last Vyapar
+ * Sale Report imported (duplicate / updated detection). Without it the import
+ * compares with the CRM invoice itself.
+ */
+export async function hasVyaparRegisterRows(): Promise<boolean> {
+    const now = Date.now();
+    if (registerRows !== null && now - registerRowsAt < PROBE_TTL_MS) return registerRows;
+    try {
+        const res = (await db.execute(sql`
+            SELECT to_regclass('public.vyapar_register_rows') IS NOT NULL AS ok
+        `)) as unknown as Array<{ ok: boolean }>;
+        registerRows = Boolean(res[0]?.ok);
+    } catch {
+        registerRows = false;
+    }
+    registerRowsAt = now;
+    return registerRows;
+}
+
+let zohoPayments: boolean | null = null;
+let zohoPaymentsAt = 0;
+
+/**
+ * E-369 (ID 200 f): zoho_invoice_payments — payments entered in the CRM on old
+ * Zoho invoices. Without it the Zoho balance counts as before.
+ */
+export async function hasZohoInvoicePayments(): Promise<boolean> {
+    const now = Date.now();
+    if (zohoPayments !== null && now - zohoPaymentsAt < PROBE_TTL_MS) return zohoPayments;
+    try {
+        const res = (await db.execute(sql`
+            SELECT to_regclass('public.zoho_invoice_payments') IS NOT NULL AS ok
+        `)) as unknown as Array<{ ok: boolean }>;
+        zohoPayments = Boolean(res[0]?.ok);
+    } catch {
+        zohoPayments = false;
+    }
+    zohoPaymentsAt = now;
+    return zohoPayments;
+}
+
 let refusedCols: boolean | null = null;
 let refusedAt = 0;
 

@@ -121,6 +121,7 @@ export async function runDialerPollOnce(): Promise<DialerPollResult> {
             terminationReason: s.terminationReason ?? null,
             answeredBy: s.answeredBy ?? null,
             callResult: s.callResult ?? null,
+            callLanguage: s.callLanguage ?? null,
           });
           result.finalized += 1;
           result.perRow.push({

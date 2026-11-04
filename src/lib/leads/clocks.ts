@@ -50,14 +50,22 @@ import { timeLimitDef } from "@/lib/timeLimits/registry";
 const rowsOf = <T>(r: unknown): T[] => (Array.isArray(r) ? r : ((r as { rows?: T[] })?.rows ?? [])) as T[];
 const d = (v: string | Date | null | undefined): Date | null => (v == null ? null : v instanceof Date ? v : new Date(v));
 
+// ID 218: a failed probe (pool busy, connection reset) used to read as "table
+// missing", so the Response time card told live users E-337 was not applied.
+// A table that exists never goes away, so "present" is remembered for the
+// process; "missing" is re-checked after a minute; a query error is thrown so
+// callers report an error, not a missing migration.
+const tableSeen = new Map<string, { ok: boolean; at: number }>();
+const MISSING_RECHECK_MS = 60_000;
+
 async function tableExists(name: string): Promise<boolean> {
-    try {
-        const db = await database();
-        const r = rowsOf<{ ok: boolean }>(await db.execute(sql`SELECT to_regclass(${`public.${name}`}) IS NOT NULL AS ok`));
-        return Boolean(r[0]?.ok);
-    } catch {
-        return false;
-    }
+    const seen = tableSeen.get(name);
+    if (seen && (seen.ok || Date.now() - seen.at < MISSING_RECHECK_MS)) return seen.ok;
+    const db = await database();
+    const r = rowsOf<{ ok: boolean }>(await db.execute(sql`SELECT to_regclass(${`public.${name}`}) IS NOT NULL AS ok`));
+    const ok = Boolean(r[0]?.ok);
+    tableSeen.set(name, { ok, at: Date.now() });
+    return ok;
 }
 
 /** Is E-337 on this database? */

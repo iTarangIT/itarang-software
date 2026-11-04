@@ -325,23 +325,13 @@ async function rightNow(): Promise<RightNow> {
     const c = await countAwaitingAssignment();
     // 18 Oct rework 1: non-Hot waits in working days against ready_to_assigned.
     Object.assign(base, { waiting: c.total, oldestDays: c.oldestOtherDays, split: c.split, otherPast: c.otherPast, limitDays: c.overdueDays });
-  } catch {
-    /* not measured */
-  }
-  try {
-    // ID 85 (15 Oct): Hot leads have their own limit to get an owner.
+    // ID 85 #7 (22 Oct): Hot waiting / past the limit come from the SAME count
+    // as the CEO card and Ready to assign (Hot first, still awaiting an owner),
+    // so "past" can never exceed "Hot". Shown only once the Hot clock exists.
     const { hasLimitEvents } = await import("@/lib/leads/clocks");
-    if (await hasLimitEvents()) {
-      const { db } = await import("@/lib/db");
-      const [r] = (await db.execute(sql`
-        SELECT COUNT(*)::int AS waiting, COUNT(*) FILTER (WHERE c.limit_passed_at IS NOT NULL)::int AS past
-          FROM lead_clocks c
-         WHERE c.clock = 'hot_assign' AND c.first_attempt_at IS NULL AND c.ended_at IS NULL
-      `)) as unknown as Array<{ waiting: number; past: number }>;
-      Object.assign(base, { hotWaiting: Number(r?.waiting ?? 0), hotPast: Number(r?.past ?? 0) });
-    }
+    if (await hasLimitEvents()) Object.assign(base, { hotWaiting: c.split.hot, hotPast: c.hotPast });
   } catch (e) {
-    console.warn("[sales-daily] hot waiting not measured:", e instanceof Error ? e.message : e);
+    console.warn("[sales-daily] ready leads not measured:", e instanceof Error ? e.message : e);
   }
   return base;
 }
@@ -373,9 +363,13 @@ async function medianWaitToAssign(mtd: { from: string; to: string }): Promise<{ 
          AND (f.performed_at AT TIME ZONE 'Asia/Kolkata')::date BETWEEN ${mtd.from}::date AND ${mtd.to}::date
          AND f.performed_at > (to_jsonb(dl) ->> 'sales_ready_at')::timestamptz
     `)) as unknown as Array<{ ready_at: string; assigned_at: string }>;
-    const { loadOfficeCalendar } = await import("@/lib/calendar/holidays");
-    const { holidays, hours } = await loadOfficeCalendar();
-    const waits = rows.map((r) => workingDaysElapsed(new Date(r.ready_at), new Date(r.assigned_at), holidays, hours));
+    // ID 85 #6: a finished wait counts the holidays as they stood when it ended.
+    const { loadOfficeCalendar, holidaysAsOf } = await import("@/lib/calendar/holidays");
+    const [{ hours }, asOf] = await Promise.all([loadOfficeCalendar(), holidaysAsOf()]);
+    const waits = rows.map((r) => {
+      const end = new Date(r.assigned_at);
+      return workingDaysElapsed(new Date(r.ready_at), end, asOf(end), hours);
+    });
     return { median: medianAndP90(waits).median, n: waits.length };
   } catch (e) {
     console.warn("[sales-daily] median wait not measured:", e instanceof Error ? e.message : e);

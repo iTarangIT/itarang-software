@@ -86,7 +86,11 @@ function shapeRow(r: any) {
       hasTranscript: r.hasTranscript,
       providerStatus: r.logStatus,
       bandCallStatus: r.logCallStatus,
+      band: r.logBand,
     }),
+    // The call's intent band — the Outcome chip names it when the analyser's
+    // own outcome word is just 'unknown'.
+    band: r.logBand ?? null,
     // Cross-campaign attempt tracking (only populated on the detail query).
     attemptCount: Number(r.attemptCount ?? 0),
     nextAttemptAt:
@@ -150,6 +154,11 @@ const selectShape = {
   )`,
   logCallStatus: sql<string | null>`(
     select call_status from ai_call_logs
+    where call_id = ${dialerCampaignLeads.bolna_call_id}
+    limit 1
+  )`,
+  logBand: sql<string | null>`(
+    select band from ai_call_logs
     where call_id = ${dialerCampaignLeads.bolna_call_id}
     limit 1
   )`,

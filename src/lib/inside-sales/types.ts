@@ -43,6 +43,8 @@ export type QueueRow = TeamReviewFields & {
     interest_level: string | null;
     current_owner_id: string | null;
     current_owner_name: string | null;
+    /** ID 85 #5 — the holder's role; the row's no-touch / idle cues follow it. */
+    current_owner_role?: string | null;
     last_touchpoint_at: string | null;
     /** E-300 — last call / visit / status change; drives the stale cue. */
     last_worked_at: string | null;

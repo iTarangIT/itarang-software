@@ -2,10 +2,12 @@
 // ONE named ISR, in the CRM and (once switched on) in NeoDove. The CRM keeps
 // the clock, because NeoDove cannot.
 //
-//   handOffToIsr()          right after the call (postCallOutcome): the lead's
-//                           owner, or the next ISR on the "callback owners"
-//                           list, is assigned (system assignment, no human
-//                           actor), told by bell + email with the call brief.
+//   handOffToOwner()        right after the call (postCallOutcome): the lead's
+//                           owner, else the ASM whose territory covers the
+//                           lead's city (E-367, switch-gated), else the next
+//                           ISR on the "callback owners" list, is assigned
+//                           (system assignment, no human actor), told by
+//                           bell + email with the call brief.
 //   runCallbackLoopTick()   every 5 minutes (src/instrumentation-node.ts):
 //                           15 min before due → reminder (+ NeoDove push when
 //                           the switch is on); 30 min overdue with no call →
@@ -34,15 +36,19 @@ import type { LeadStatus } from "@/lib/lifecycle/transitions";
 import { hasCallOutcomeTables } from "@/lib/ai/storage/callOutcomeStore";
 import {
     briefLines,
+    callbackExpired,
+    CALLBACK_EXPIRE_WORKING_DAYS,
     KIND_LABEL,
     pickInTurn,
     type CallbackBrief,
     type CallbackKind,
 } from "./callbackBrief";
 
-export { briefLines, buildCallbackBrief, pickInTurn } from "./callbackBrief";
+export { briefLines, buildCallbackBrief, callbackExpired, CALLBACK_EXPIRE_WORKING_DAYS, pickInTurn } from "./callbackBrief";
 export type { CallbackBrief, CallbackKind } from "./callbackBrief";
 import { nextWorkingMorning } from "./callCategory";
+import { discardRoute, logRoute, routeToTerritoryAsm } from "./territoryRouting";
+import { placeLabel } from "./territoryRules";
 
 
 export const CALLBACK_LOOP_SETTINGS_KEY = "callback_loop";
@@ -170,11 +176,13 @@ export async function hasCallbackLoopColumns(): Promise<boolean> {
 // ── Hand-off ────────────────────────────────────────────────────────────────
 
 /**
- * Give the callback to one ISR. The lead's current owner keeps it; an unowned
- * lead goes to the next ISR on the list. Returns the ISR's id, or null when
- * nobody could be picked (the caller then falls back to telling the admins).
+ * Give the callback to one person. The lead's current owner keeps it; an
+ * unowned lead goes to the ASM whose territory covers its city (E-367, when
+ * the switch is on — territoryRouting.ts), else to the next ISR on the list.
+ * Returns the owner's id, or null when nobody could be picked (the caller then
+ * falls back to telling the admins).
  */
-export async function handOffToIsr(input: {
+export async function handOffToOwner(input: {
     leadId: string;
     callbackId: string;
     kind: CallbackKind;
@@ -211,9 +219,8 @@ export async function handOffToIsr(input: {
             hour: "numeric",
             minute: "2-digit",
         });
+        let routedPlace: string | null = null;
         if (!ownerId) {
-            const target = await nextCallbackOwner();
-            if (!target) return null;
             // Sales-ready reason BEFORE the assignment, or assigning stamps
             // "assigned by an admin" (first event wins).
             await markSalesReady(db, {
@@ -221,18 +228,58 @@ export async function handOffToIsr(input: {
                 reason: input.kind === "qualified" ? "ai_qualified" : "ai_callback",
                 actorId: null,
             });
-            const out = await assignLeadOwner({
-                leadId: input.leadId,
-                fromStatus: (lead.lead_status as LeadStatus | null) ?? null,
-                target,
-                actorId: null,
-                actorRole: null,
-                remarks: `${SYSTEM_ASSIGNMENT_REMARK} — ${KIND_LABEL[input.kind]}, due ${when}.`,
-                touchpointType: "lead_assigned",
-            });
-            if (!out.assigned) return null;
-            ownerId = target.id;
-            ownerRole = target.role;
+            const fromStatus = (lead.lead_status as LeadStatus | null) ?? null;
+
+            // 1. The ASM whose territory covers the lead's city (switch-gated;
+            //    complaints are never routed here). territoryRouting.ts.
+            const route = await routeToTerritoryAsm({ leadId: input.leadId, kind: input.kind });
+            if (route.target && route.rule) {
+                const place = placeLabel(route.place?.state ?? null, route.place?.city ?? null, route.rule);
+                const out = await assignLeadOwner({
+                    leadId: input.leadId,
+                    fromStatus,
+                    target: route.target,
+                    actorId: null,
+                    actorRole: null,
+                    remarks: `${SYSTEM_ASSIGNMENT_REMARK} — ${KIND_LABEL[input.kind]}, due ${when}. Routed to the ${place} territory ASM.`,
+                    touchpointType: "lead_assigned",
+                });
+                if (out.assigned) {
+                    ownerId = route.target.id;
+                    ownerRole = route.target.role;
+                    routedPlace = place;
+                } else {
+                    // Refused (e.g. a Won lead is never given to an ASM): the
+                    // turn goes back and the ISRs take it below.
+                    await discardRoute(route.logId);
+                }
+            }
+
+            // 2. Otherwise the next ISR on the callback owners list.
+            if (!ownerId) {
+                const target = await nextCallbackOwner();
+                const out = target
+                    ? await assignLeadOwner({
+                          leadId: input.leadId,
+                          fromStatus,
+                          target,
+                          actorId: null,
+                          actorRole: null,
+                          remarks: `${SYSTEM_ASSIGNMENT_REMARK} — ${KIND_LABEL[input.kind]}, due ${when}.`,
+                          touchpointType: "lead_assigned",
+                      })
+                    : null;
+                await logRoute({
+                    leadId: input.leadId,
+                    kind: input.kind,
+                    rule: target && out?.assigned ? "isr_round_robin" : "unassigned",
+                    place: route.place,
+                    chosenUserId: target && out?.assigned ? target.id : null,
+                });
+                if (!target || !out?.assigned) return null;
+                ownerId = target.id;
+                ownerRole = target.role;
+            }
         }
 
         await db.execute(sql`
@@ -246,7 +293,9 @@ export async function handOffToIsr(input: {
             const lines = briefLines(input.brief);
             await emit({
                 type: ASSIGNED_TYPE,
-                title: `${KIND_LABEL[input.kind]}: ${lead.name ?? "a dealer"} — due ${when}`,
+                title: routedPlace
+                    ? `New ${KIND_LABEL[input.kind].toLowerCase()} in ${routedPlace}: ${lead.name ?? "a dealer"} — call by ${when}`
+                    : `${KIND_LABEL[input.kind]}: ${lead.name ?? "a dealer"} — due ${when}`,
                 message: lines.join("\n"),
                 leadId: input.leadId,
                 stage: "AI callback",
@@ -268,6 +317,9 @@ export async function handOffToIsr(input: {
         return null;
     }
 }
+
+/** @deprecated the old name, from before territory routing — use handOffToOwner. */
+export const handOffToIsr = handOffToOwner;
 
 // ── NeoDove push ────────────────────────────────────────────────────────────
 
@@ -353,8 +405,9 @@ export async function runCallbackLoopTick(now: Date = new Date()): Promise<{
     reminded: number;
     pushed: number;
     escalated: number;
+    expired: number;
 }> {
-    const out = { reminded: 0, pushed: 0, escalated: 0 };
+    const out = { reminded: 0, pushed: 0, escalated: 0, expired: 0 };
     if (!(await hasCallOutcomeTables()) || !(await hasCallbackLoopColumns())) return out;
     const settings = await getCallbackLoopSettings();
     const remindBy = new Date(now.getTime() + REMIND_BEFORE_MS).toISOString();
@@ -393,7 +446,9 @@ export async function runCallbackLoopTick(now: Date = new Date()): Promise<{
             ],
             email: true,
         });
-        if (settings.neodovePush) {
+        // ASMs (territory-routed leads, E-367) have no NeoDove campaign: pushing
+        // would only raise a false "has no campaign" alert to the Sales Head.
+        if (settings.neodovePush && (cb.owner_role ?? "").toLowerCase() !== "asm") {
             await pushToOwnerCampaign(cb).catch((e) =>
                 console.warn("[callbackLoop] push failed:", e instanceof Error ? e.message : e),
             );
@@ -416,7 +471,8 @@ export async function runCallbackLoopTick(now: Date = new Date()): Promise<{
                    AND NOT EXISTS (
                        SELECT 1 FROM lead_touchpoints t
                         WHERE t.dealer_lead_id = lc.lead_id
-                          AND t.touchpoint_type = 'inside_sales_call'
+                          -- a call, or (for a territory ASM) a visit, settles it
+                          AND t.touchpoint_type IN ('inside_sales_call', 'visit')
                           AND t.performed_at >= lc.due_at - interval '15 minutes')
                 RETURNING lc.*
             )
@@ -451,7 +507,57 @@ export async function runCallbackLoopTick(now: Date = new Date()): Promise<{
             email: true,
         });
     }
+
+    out.expired = await expireStaleCallbacks(now);
     return out;
+}
+
+/**
+ * ID 212: a sales callback still open `CALLBACK_EXPIRE_WORKING_DAYS` working
+ * days after it fell due is closed as expired, with a follow-up for the owner
+ * (as after 3 unanswered tries). Complaints stay open until resolveComplaint.
+ * Old callbacks with no ISR are included: an open one kept the lead out of
+ * every AI campaign with nothing to end it.
+ */
+async function expireStaleCallbacks(now: Date): Promise<number> {
+    // Cheap pre-filter in SQL (3 working days are at least 3 calendar days),
+    // the exact working-day rule in JS.
+    const candidates = rows<{ id: string; lead_id: string; due_at: string }>(
+        await db.execute(sql`
+            SELECT id, lead_id, due_at::text AS due_at FROM lead_callbacks
+             WHERE owner_type = 'sales' AND status IN ('open', 'dialing')
+               AND COALESCE(kind, '') <> 'complaint'
+               AND due_at <= ${now.toISOString()}::timestamptz - make_interval(days => ${CALLBACK_EXPIRE_WORKING_DAYS})
+             LIMIT 2000
+        `),
+    );
+    if (candidates.length === 0) return 0;
+    const { loadOfficeCalendar } = await import("@/lib/calendar/holidays");
+    const { workingDaysDueAt } = await import("@/lib/calendar/officeCalendar");
+    const { holidays, hours } = await loadOfficeCalendar();
+    const ids = candidates.filter((c) => callbackExpired(new Date(c.due_at), now, holidays, hours)).map((c) => c.id);
+    if (ids.length === 0) return 0;
+    const note = `No call within ${CALLBACK_EXPIRE_WORKING_DAYS} working days of the due time.`;
+    const closed = rows<{ lead_id: string }>(
+        await db.execute(sql`
+            UPDATE lead_callbacks
+               SET status = 'expired', completed_at = now(), completion_note = ${note}, updated_at = now()
+             WHERE id IN (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})
+               AND status IN ('open', 'dialing')
+            RETURNING lead_id
+        `),
+    );
+    const follow = workingDaysDueAt(now, NOT_REACHED_FOLLOW_UP_WORKING_DAYS, holidays, hours);
+    const leadIds = [...new Set(closed.map((r) => r.lead_id))];
+    if (follow && leadIds.length) {
+        // Only where no later follow-up is already set.
+        await db.execute(sql`
+            UPDATE dealer_leads SET next_follow_up_at = ${follow.toISOString()}::timestamptz
+             WHERE id IN (${sql.join(leadIds.map((id) => sql`${id}`), sql`, `)})
+               AND (next_follow_up_at IS NULL OR next_follow_up_at < now())
+        `);
+    }
+    return closed.length;
 }
 
 // ── NeoDove results ─────────────────────────────────────────────────────────
@@ -521,7 +627,7 @@ export async function noteNeodoveCallForCallback(input: {
             await db.execute(sql`
                 UPDATE lead_callbacks
                    SET status = 'expired', push_attempts = ${tries}, completed_at = now(),
-                       completion_note = ${`Not reached after ${tries} NeoDove calls.`}, updated_at = now()
+                       completion_note = ${`Not reached after ${tries} unanswered calls.`}, updated_at = now()
                  WHERE id = ${cb.id}
             `);
             if (follow) {
@@ -573,6 +679,12 @@ export async function leadsWithOpenCallback(leadIds: string[]): Promise<Set<stri
                 await db.execute(sql`
                     SELECT DISTINCT lead_id FROM lead_callbacks
                      WHERE owner_type = 'sales' AND status IN ('open', 'dialing')
+                       -- ID 212: a callback the expiry tick missed (ticker down,
+                       -- E-362 not applied) stops blocking AI calls after 14
+                       -- days; a complaint blocks until resolved. to_jsonb: the
+                       -- kind column is E-362.
+                       AND (due_at > now() - interval '14 days'
+                            OR to_jsonb(lead_callbacks) ->> 'kind' = 'complaint')
                        AND lead_id IN (${sql.join(
                            chunk.map((id) => sql`${id}`),
                            sql`, `,

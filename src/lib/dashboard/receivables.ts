@@ -2,10 +2,9 @@
 // /ceo/receivables page and the ageing strip on "Revenue & costs" (ID 89), so
 // the two can never bucket the same invoice differently.
 //
-// Same rule and source as the CEO overview's "Accounts Receivable" card:
-// outstandingTotal() is SUM(balance) over revenueUnion() WHERE
-// REVENUE_OUTSTANDING, all-time. matchedUnion() is that same union plus the
-// dealer match, so the total here is the card's number. Ageing is days since
+// The CEO overview's "Accounts Receivable" card reads receivablesSummary()
+// below (ID 217), so the card, this page and the ageing strip are one figure.
+// matchedUnion() is revenueUnion() plus the dealer match. Ageing is days since
 // the invoice date (and days past due where the invoice carries a due date).
 //
 // ID 71: a non-void credit note is listed beside the unpaid invoices of the
@@ -16,6 +15,7 @@ import { sql } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import { matchedUnion, OWED_KEY, REVENUE_OUTSTANDING, REVENUE_OWED } from "@/lib/dashboard/revenueSource";
+import { ageReceivables, type ReceivablesAgeing } from "@/lib/dashboard/receivablesAgeing";
 
 // The pure netting / ageing rules (unit-tested) — re-exported so callers keep
 // importing from here.
@@ -55,6 +55,28 @@ export type ReceivableRow = {
     /** The customer the balance nets under (GSTIN key, or the row itself). */
     owe_key: string;
 };
+
+// ID 217: the CEO card showed ₹3.31 Cr while Revenue & costs showed ₹3.33 Cr —
+// two separate computations (a SQL sum and this list) read at different
+// moments. Every all-time Accounts Receivable figure now comes from
+// receivablesSummary(): the list, netted and aged once, held for a few seconds
+// so screens loaded together read the very same computation.
+const SUMMARY_TTL_MS = 30_000;
+let summaryCache: { at: number; value: Promise<ReturnType<typeof ageReceivablesOf>> } | null = null;
+const ageReceivablesOf = (rows: ReceivableRow[]) => ageReceivables(rows);
+
+/** The one Accounts Receivable figure: total owed, invoices still owed and age buckets. */
+export async function receivablesSummary(): Promise<ReceivablesAgeing> {
+    const now = Date.now();
+    if (!summaryCache || now - summaryCache.at > SUMMARY_TTL_MS) {
+        const value = listReceivables().then(ageReceivablesOf);
+        summaryCache = { at: now, value };
+        value.catch(() => {
+            if (summaryCache?.value === value) summaryCache = null;
+        });
+    }
+    return summaryCache.value;
+}
 
 /** Every invoice still owed (and the credit notes netting it), largest balance first. */
 export async function listReceivables(): Promise<ReceivableRow[]> {

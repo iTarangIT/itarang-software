@@ -3,6 +3,8 @@
 
 import { PRODUCT_LINE_LABELS, type ProductLine } from "@/lib/ai/scoring/signals";
 import { extractDealerLines } from "@/lib/ai/analysis/postCallHelpers";
+import { workingDaysDueAt } from "@/lib/calendar/officeCalendar";
+import type { OfficeHoursArg } from "@/lib/calendar/officeHours";
 
 export type CallbackKind = "sales" | "complaint" | "qualified";
 
@@ -98,3 +100,23 @@ export const KIND_LABEL: Record<CallbackKind, string> = {
     qualified: "Qualified lead",
     complaint: "Complaint",
 };
+
+// ── Expiry (ID 212) ─────────────────────────────────────────────────────────
+
+/** A sales callback nobody worked this many working days after it fell due is closed. */
+export const CALLBACK_EXPIRE_WORKING_DAYS = 3;
+
+/**
+ * Has an open callback run out? True once `CALLBACK_EXPIRE_WORKING_DAYS`
+ * working days (holidays and office hours as loaded) have passed since it fell
+ * due. Without it an open callback kept the lead out of AI calling for ever.
+ */
+export function callbackExpired(
+    dueAt: Date,
+    now: Date,
+    holidays: ReadonlySet<string>,
+    hours?: OfficeHoursArg,
+): boolean {
+    const end = workingDaysDueAt(dueAt, CALLBACK_EXPIRE_WORKING_DAYS, holidays, hours);
+    return end != null && end.getTime() <= now.getTime();
+}

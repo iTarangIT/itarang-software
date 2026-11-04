@@ -978,8 +978,8 @@ export async function startCallbackLoopTicker() {
     try {
       const { runCallbackLoopTick } = await import("@/lib/ai-dialer/callbackLoop");
       const r = await runCallbackLoopTick();
-      if (r.reminded || r.escalated) {
-        console.log(`[instrumentation:callback-loop] reminded ${r.reminded} (pushed ${r.pushed}), escalated ${r.escalated}`);
+      if (r.reminded || r.escalated || r.expired) {
+        console.log(`[instrumentation:callback-loop] reminded ${r.reminded} (pushed ${r.pushed}), escalated ${r.escalated}, expired ${r.expired}`);
       }
     } catch (err) {
       console.error(
@@ -1661,6 +1661,51 @@ export async function startEmiMessagesTicker() {
   if (typeof interval.unref === "function") interval.unref();
 
   console.log("[instrumentation] EMI aging + EMI messages (1h) started in-process");
+}
+
+// ---------------------------------------------------------------------------
+// ID 220 — dispatched sales become delivered after DISPATCH_TO_SOLD_DAYS.
+//
+// The job was only in vercel.json, which never fires on the PM2 live server,
+// so a sale stayed 'Dispatched' until the dealer pressed Mark delivered. A
+// 5-minute tick claims one run per IST day from 09:30 (digest_runs, the Drive
+// 08:30 scan pattern). Off outside production unless opted in, so a dev
+// process on a shared DB cannot take the day's claim.
+// ---------------------------------------------------------------------------
+export async function startDispatchToSoldTicker() {
+  if (process.env.VERCEL === "1") return;
+  if (process.env.NODE_ENV !== "production" && process.env.ENABLE_DISPATCH_TO_SOLD === undefined) return;
+  if (process.env.ENABLE_DISPATCH_TO_SOLD === "0") return;
+
+  const TICK_INTERVAL_MS = 5 * 60_000;
+  let inFlight = false;
+
+  const tick = async () => {
+    if (inFlight) return;
+    inFlight = true;
+    try {
+      const { runDailyDispatchToSold } = await import("@/lib/sales/dispatchToSold");
+      const r = await runDailyDispatchToSold();
+      if (r.ran) {
+        console.log(`[instrumentation:dispatch-to-sold] ${r.istDate}: ${r.moved} delivered, ${r.failed} failed`);
+      }
+    } catch (err) {
+      console.error(
+        "[instrumentation:dispatch-to-sold] tick failed:",
+        err instanceof Error ? err.message : err,
+      );
+    } finally {
+      inFlight = false;
+    }
+  };
+
+  const kickoff = setTimeout(tick, 265_000);
+  if (typeof kickoff.unref === "function") kickoff.unref();
+
+  const interval = setInterval(tick, TICK_INTERVAL_MS);
+  if (typeof interval.unref === "function") interval.unref();
+
+  console.log("[instrumentation] dispatch-to-sold (daily 09:30 IST) started in-process");
 }
 
 // ---------------------------------------------------------------------------

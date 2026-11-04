@@ -10,6 +10,7 @@ import {
     successResponse,
     withErrorHandler,
 } from "@/lib/api-utils";
+import { canonicalTerritoryPlace } from "@/lib/ai-dialer/territoryRouting";
 
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -26,11 +27,16 @@ export const PATCH = withErrorHandler(
         const { id } = await ctx.params;
         if (!id) return errorResponse("Territory id required.", 400);
         const b = BodySchema.parse(await req.json());
+        // E-367 — same canonical place as POST (territories drive lead routing).
+        const place = await canonicalTerritoryPlace({ state: b.state, city: b.city ?? null });
+        if (place.unknownState) {
+            return errorResponse(`"${b.state}" is not a state we know. Check the spelling.`, 400);
+        }
 
         const res = await db.execute(sql`
             UPDATE asm_territories SET
-                state = ${b.state},
-                city = ${b.city ?? null},
+                state = ${place.state},
+                city = ${place.city},
                 active_from = ${b.active_from ?? null},
                 active_to = ${b.active_to ?? null},
                 updated_at = NOW()

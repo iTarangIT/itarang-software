@@ -14,6 +14,7 @@
 import React from "react";
 import { useQuery } from "@tanstack/react-query";
 
+import { InfoTip } from "@/components/ui/info-tip";
 import { GrossMarginPanel } from "@/components/dashboard/ceo/GrossMarginPanel";
 import { BusinessSnapshotPanel } from "@/components/dashboard/ceo/BusinessSnapshotPanel";
 import { ExpenseBreakdownPanel } from "@/components/dashboard/ceo/ExpenseBreakdownPanel";
@@ -88,7 +89,8 @@ export default function RevenueAndCostsPage() {
             if (!res.ok) throw new Error("Failed to load accounts receivable");
             return (await res.json()).data as ReceivablesAgeing;
         },
-        refetchInterval: 5 * 60_000,
+        // ID 217: same refresh as the CEO overview card, so they never drift apart.
+        refetchInterval: 60_000,
     });
 
     const m = metrics || {};
@@ -144,8 +146,8 @@ export default function RevenueAndCostsPage() {
                             />
                         </div>
                         <span className="text-xs leading-relaxed text-ink-muted">
-                            This counts stock bought, not stock sold, so a window of heavy stocking reads negative. It is
-                            not Realization (revenue − expense, below), which leaves OEM purchases out.
+                            Counts stock bought, not stock sold.
+                            <InfoTip className="ml-1">{"A window of heavy stocking reads negative. This is not Realization (revenue − expense, below), which leaves OEM purchases out."}</InfoTip>
                         </span>
                     </>
                 )}

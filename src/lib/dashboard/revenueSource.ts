@@ -41,7 +41,12 @@ import {
   leadKeyValidOn,
 } from "@/lib/leads/gstinMatch";
 import { hasAccountOwnershipTables } from "@/lib/accounts/tables";
-import { hasInvoiceLedgerTables, hasZohoRefusedGstin } from "@/lib/sales/ledgerTables";
+import {
+  hasCreditNoteApplications,
+  hasInvoiceLedgerTables,
+  hasZohoInvoicePayments,
+  hasZohoRefusedGstin,
+} from "@/lib/sales/ledgerTables";
 
 /**
  * 'credit' (E-322, tracker ID 71) is a credit note: a NEGATIVE amount dated on
@@ -147,6 +152,16 @@ async function revenueUnion(): Promise<SQL> {
   // E-340 (ID 62): a Zoho invoice whose customer GSTIN failed the check goes to
   // Needs attention ("Customer GSTIN fails check" / "is ours"), like a Drive one.
   const refused = ledger && (await hasZohoRefusedGstin());
+  // E-368: the part of a credit note already used against an invoice in Vyapar
+  // (that invoice's Received already includes it) is not netted a second time.
+  const applied = ledger && (await hasCreditNoteApplications());
+  // E-369 (ID 200 f): payments entered in the CRM on old Zoho invoices come
+  // off Zoho's own balance; a fully paid one reads as paid.
+  const zohoPaid = await hasZohoInvoicePayments();
+  const zohoBalance = zohoPaid ? sql`GREATEST(COALESCE(zi.balance, 0) - COALESCE(zp.amount_paid, 0), 0)` : sql`zi.balance`;
+  const zohoStatus = zohoPaid
+    ? sql`CASE WHEN COALESCE(zp.amount_paid, 0) > 0 AND COALESCE(zi.balance, 0) - zp.amount_paid <= 0.005 AND zi.status IS DISTINCT FROM 'void' THEN 'paid' ELSE zi.status END`
+    : sql`zi.status`;
   const zoho = sql`
     SELECT
       'zoho'::text                                                   AS source,
@@ -156,11 +171,11 @@ async function revenueUnion(): Promise<SQL> {
       zi.due_date                                                    AS due_date,
       zi.customer_name                                               AS customer_name,
       zi.total                                                       AS total,
-      zi.balance                                                     AS balance,
-      ${ledger ? sql`CASE WHEN zv.invoice_id IS NOT NULL THEN 'void' ELSE zi.status END` : sql`zi.status`} AS status,
+      ${zohoBalance}                                                 AS balance,
+      ${ledger ? sql`CASE WHEN zv.invoice_id IS NOT NULL THEN 'void' ELSE ${zohoStatus} END` : zohoStatus} AS status,
       zi.organization_id                                             AS organization_id,
       ('/api/admin/zoho/invoices/' || zi.zoho_invoice_id || '/pdf')  AS document_url,
-      zi.payment_reference                                           AS payment_reference,
+      ${zohoPaid ? sql`COALESCE(zp.payment_reference, zi.payment_reference)` : sql`zi.payment_reference`} AS payment_reference,
       ${refused ? sql`(zcg.refused_gstin IS NOT NULL)` : sql`false`}  AS needs_attention,
       ${refused ? sql`zcg.refused_reason` : sql`NULL::text`}          AS attention_reason,
       -- Zoho's invoice LIST payload (what the sync stores) carries no GSTIN.
@@ -175,6 +190,7 @@ async function revenueUnion(): Promise<SQL> {
             LEFT JOIN invoice_voids zv
                    ON zv.source = 'zoho' AND zv.invoice_id = zi.id::text`
       : sql``}
+    ${zohoPaid ? sql`LEFT JOIN zoho_invoice_payments zp ON zp.invoice_id = zi.id` : sql``}
   `;
 
   if (!(await hasSalesInvoicesTable())) {
@@ -210,7 +226,7 @@ async function revenueUnion(): Promise<SQL> {
   // a negative amount on the issue date, matched to a dealer like an invoice.
   // Balance = the negative amount: a credit note also reduces what the dealer
   // owes us (Kartik, 10 Oct) — REVENUE_OWED, netted per customer GSTIN and
-  // never below zero (owedTotalSql). Its lines are negative too (source
+  // never below zero (outstandingTotal). Its lines are negative too (source
   // 'credit'), so batteries sold, By SKU and gross margin net it the same way.
   const credit = sql`
     SELECT
@@ -221,7 +237,9 @@ async function revenueUnion(): Promise<SQL> {
       NULL::date                                                     AS due_date,
       cn.customer_name                                               AS customer_name,
       -(COALESCE(cn.total, 0))                                       AS total,
-      -(COALESCE(cn.total, 0))                                       AS balance,
+      ${applied
+        ? sql`-(COALESCE(cn.total, 0) - LEAST(GREATEST(COALESCE(cna.amount_applied, 0), 0), GREATEST(COALESCE(cn.total, 0), 0)))`
+        : sql`-(COALESCE(cn.total, 0))`}                             AS balance,
       CASE WHEN cv.invoice_id IS NOT NULL THEN 'void' ELSE 'credit_note' END AS status,
       cn.organization_id                                             AS organization_id,
       cn.document_url                                                AS document_url,
@@ -231,6 +249,7 @@ async function revenueUnion(): Promise<SQL> {
       ${GSTIN_KEY(sql`cn.customer_gstin`)}                           AS gstin_key
     FROM credit_notes cn
     LEFT JOIN invoice_voids cv ON cv.source = 'credit' AND cv.invoice_id = cn.id::text
+    ${applied ? sql`LEFT JOIN credit_note_applications cna ON cna.credit_note_id = cn.id` : sql``}
   `;
 
   return sql`(${zoho} UNION ALL ${drive} UNION ALL ${credit})`;
@@ -353,8 +372,12 @@ export const REVENUE_OUTSTANDING = sql`(
 export const REVENUE_IS_CREDIT = sql`(r.source = 'credit')`;
 export const REVENUE_IS_ORDER = sql`(${REVENUE_NOT_VOID} AND r.source <> 'credit')`;
 
-/** Accounts Receivable rule: an outstanding invoice, or a non-void credit note (negative balance) netted against it. */
-export const REVENUE_OWED = sql`(${REVENUE_OUTSTANDING} OR (r.source = 'credit' AND r.status = 'credit_note'))`;
+/**
+ * Accounts Receivable rule: an outstanding invoice, or a non-void credit note
+ * with an unused (negative) balance netted against it. E-368: a note fully
+ * used against an invoice in Vyapar has balance 0 and nets nothing.
+ */
+export const REVENUE_OWED = sql`(${REVENUE_OUTSTANDING} OR (r.source = 'credit' AND r.status = 'credit_note' AND COALESCE(r.balance, 0) < 0))`;
 
 /**
  * The customer a balance is netted under: the GSTIN key; a row without one
@@ -392,9 +415,10 @@ export async function revenueTotal(
 }
 
 /**
- * Receivables. Pass no window for the all-time snapshot the standalone
- * Accounts Receivable card uses; pass one for the windowed figure that sits
- * inside the Realization drill-down beside a windowed revenue and expense.
+ * Receivables in SQL. The windowed figure sits inside the Realization
+ * drill-down beside a windowed revenue and expense. The all-time Accounts
+ * Receivable figure on screens is receivablesSummary() (receivables.ts, ID
+ * 217); this unwindowed form is kept for the verify scripts' cross-check.
  */
 export async function outstandingTotal(
   startStr?: string | null,

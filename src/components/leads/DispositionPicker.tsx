@@ -21,6 +21,7 @@
 // consumed from both (dashboard)/leads and (dashboard)/inside-sales.
 
 import {
+    AI_ONLY_DISPOSITIONS,
     CONNECTED_DISPOSITIONS,
     CONNECT_STATUS,
     CONNECT_STATUS_LABEL,
@@ -138,7 +139,10 @@ export function DispositionPicker({
                         (b) => !value.bucket || value.bucket === b,
                     ).map((b) => (
                         <optgroup key={b} label={`Connected › ${b}`}>
-                            {CONNECTED_DISPOSITIONS[b].map((d) => (
+                            {CONNECTED_DISPOSITIONS[b]
+                                // AI-only labels: filterable, never logged by a rep.
+                                .filter((d) => isFilter || !AI_ONLY_DISPOSITIONS.has(d))
+                                .map((d) => (
                                 <option key={`${b}:${d}`} value={d}>
                                     {d}
                                 </option>

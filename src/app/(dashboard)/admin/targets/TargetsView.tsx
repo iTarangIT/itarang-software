@@ -384,8 +384,7 @@ function PersonCard({
                     </span>{" "}
                     “{corrections[0].correction_remark ?? ""}”
                     <span className="block text-amber-800/80">
-                        The targets stay in force and the 48-hour clock keeps running. Change the stretch (or ask the CEO to post a
-                        change), then push again.
+                        Targets stay in force and the 48-hour clock keeps running. Change the stretch, then push again.
                     </span>
                 </div>
             )}

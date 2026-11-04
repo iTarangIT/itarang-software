@@ -10,23 +10,14 @@
  */
 import { requireRole } from "@/lib/auth-utils";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
-import { listDealerHealth } from "@/lib/dealers/accountHealth";
 import { hasOrderClaimTables } from "@/lib/accounts/tables";
-import { myDealersScope } from "@/lib/accounts/quotationAccess";
-import { getTeamMemberIds } from "@/lib/users/team";
+import { myDealerRows } from "@/lib/accounts/myDealers";
 import { MY_DEALERS_ROLES } from "../_roles";
 
 export const dynamic = "force-dynamic";
 
 export const GET = withErrorHandler(async () => {
     const user = await requireRole(MY_DEALERS_ROLES);
-    const scope = myDealersScope(user.role);
-    const team = new Set(scope === "team" ? await getTeamMemberIds(user.id) : []);
-    const whose = (ownerId: string | null) =>
-        ownerId === user.id ? "own" : ownerId && team.has(ownerId) ? "team" : "other";
-    const rows = (await listDealerHealth())
-        .filter((r) => r.account_id)
-        .map((r) => ({ ...r, scope: whose(r.owner_id) }))
-        .filter((r) => r.scope === "own" || (scope === "team" && r.scope === "team") || scope === "all");
+    const { rows, scope } = await myDealerRows(user);
     return successResponse({ rows, scope, can_record_orders: await hasOrderClaimTables() });
 });

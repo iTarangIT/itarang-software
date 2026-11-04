@@ -32,9 +32,12 @@ const TONE: Record<CallCategory, string> = {
   not_interested: "bg-zinc-100 text-zinc-700 border-zinc-200",
   not_relevant: "bg-zinc-100 text-zinc-700 border-zinc-200",
   needs_review: "bg-violet-50 text-violet-800 border-violet-200",
+  wrong_number: "bg-red-50 text-red-700 border-red-200",
+  no_response: "bg-gray-50 text-gray-600 border-gray-200",
+  out_of_service: "bg-slate-100 text-slate-700 border-slate-200",
+  busy: "bg-yellow-50 text-yellow-800 border-yellow-200",
   unavailable: "bg-gray-50 text-gray-600 border-gray-200",
-  hung_up: "bg-gray-50 text-gray-600 border-gray-200",
-  wrong_number: "bg-gray-50 text-gray-600 border-gray-200",
+  hung_up: "bg-orange-50 text-orange-700 border-orange-200",
   failed: "bg-gray-50 text-gray-600 border-gray-200",
 };
 
@@ -46,7 +49,13 @@ const HINT: Partial<Record<CallCategory, string>> = {
   disconnected: "Cut off mid-conversation — redialled automatically (within the retry budget).",
   no_interest_signal: "Spoke, but shared nothing and asked for nothing.",
   needs_review: "The transcript could not be analysed — retried in the background.",
-  unavailable: "No answer, busy, rejected, voicemail or silent.",
+  wrong_number: "The number does not exist, or the person said it is the wrong number.",
+  no_response: "Rang out, or picked up and never said a word.",
+  out_of_service: "Switched off, not reachable or out of coverage.",
+  busy: "The line was engaged, or the call was declined.",
+  unavailable: "Voicemail, an auto-reply or a company IVR answered, or the owner was not there.",
+  hung_up: "Hung up before the conversation began or during the introduction — no intent score.",
+  failed: "The dialer could not place the call (our setup, not the dealer).",
 };
 
 export function CampaignOutcomeBreakdown({

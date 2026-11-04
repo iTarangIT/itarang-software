@@ -2,7 +2,7 @@
 // and the "a person owes him a call" enrolment skip.
 
 import { describe, expect, it } from "vitest";
-import { briefLines, buildCallbackBrief, pickInTurn } from "@/lib/ai-dialer/callbackBrief";
+import { briefLines, buildCallbackBrief, callbackExpired, pickInTurn } from "@/lib/ai-dialer/callbackBrief";
 import { planEnrolment } from "@/lib/ai-dialer/numberHygiene";
 
 const ist = (s: string) => new Date(`${s}+05:30`);
@@ -74,5 +74,23 @@ describe("no double calling", () => {
             { id: "b", phone: "+917000123456", name: null },
         ]);
         expect(out.map((d) => d.skip)).toEqual(["open_callback", null]);
+    });
+});
+
+describe("callbackExpired (ID 212)", () => {
+    const none = new Set<string>();
+    // Due Monday 2 Nov 2026 11:00 IST; 3 working days (Mon-Sat) run to the end of Thursday 5 Nov.
+    const due = ist("2026-11-02T11:00:00");
+
+    it("stays open within 3 working days of the due time", () => {
+        expect(callbackExpired(due, ist("2026-11-04T18:00:00"), none)).toBe(false);
+    });
+
+    it("expires once 3 working days have passed", () => {
+        expect(callbackExpired(due, ist("2026-11-06T09:00:00"), none)).toBe(true);
+    });
+
+    it("does not count a holiday", () => {
+        expect(callbackExpired(due, ist("2026-11-06T09:00:00"), new Set(["2026-11-04"]))).toBe(false);
     });
 });

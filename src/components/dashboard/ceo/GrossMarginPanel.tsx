@@ -92,7 +92,7 @@ export function GrossMarginPanel({ showMapping = false }: { showMapping?: boolea
             {error && <NotAvailable reason={(error as Error).message} />}
 
             {report && !report.available && (
-                <NotAvailable reason="The invoice ledger is not set up on this database yet (migration E-322), so gross margin cannot be calculated." />
+                <NotAvailable reason="Gross margin is not available on this server yet." />
             )}
 
             {report?.available && months.length === 0 && (

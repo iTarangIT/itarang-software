@@ -11,6 +11,7 @@ import {
     ATTEMPTED_STATUSES,
     CAMPAIGN_LEAD_STATUSES,
     CAMPAIGN_LEAD_STATUS_LABELS,
+    EARLY_HANGUP_MAX_AGENT_TURNS,
     EARLY_HANGUP_SECS,
     NON_CONVERSATION_STATUSES,
     RETRYABLE_STATUSES,
@@ -20,6 +21,7 @@ import {
     classifyCarrierAnnouncement,
     dealerSpoke,
     dealerSpokeSql,
+    isGreetingOnly,
     reclassifyStoredAttempt,
     sqlStatusList,
 } from "@/lib/ai-dialer/campaignLeadStatus";
@@ -209,9 +211,9 @@ describe("answered, but the dealer never spoke → silent / hung_up", () => {
         for (const e of inputs) expect(classifyCallEnd(e).status).not.toBe("no_conversation");
     });
 
-    it("labels: Silent Call / Hung Up Early, the queue reads Queued, nothing reads Pending", () => {
+    it("labels: Silent Call / Early Hang-up, the queue reads Queued, nothing reads Pending", () => {
         expect(CAMPAIGN_LEAD_STATUS_LABELS.silent).toBe("Silent Call");
-        expect(CAMPAIGN_LEAD_STATUS_LABELS.hung_up).toBe("Hung Up Early");
+        expect(CAMPAIGN_LEAD_STATUS_LABELS.hung_up).toBe("Early Hang-up");
         expect(CAMPAIGN_LEAD_STATUS_LABELS.pending).toBe("Queued");
         expect(Object.values(CAMPAIGN_LEAD_STATUS_LABELS)).not.toContain("Pending");
     });
@@ -726,5 +728,117 @@ describe("D2 / B5 — switchboards, the voicemail flag and answered_by", () => {
 describe("D2 — IVR label", () => {
     it("a switchboard row reads IVR everywhere the shared label is used", () => {
         expect(CAMPAIGN_LEAD_STATUS_LABELS.switchboard).toBe("IVR");
+    });
+});
+
+// ── 3 Nov 2026: Out of Service and Early Hang-up ────────────────────────────
+
+describe("out of service is split from no response", () => {
+    const cases = [
+        "The number you have dialled is currently switched off.",
+        "आप जिस नंबर पर कॉल कर रहे हैं वह अभी बंद है।",
+        "The number you have dialled is not reachable.",
+        "The number you are calling is out of coverage area.",
+        "आप जिस नंबर से संपर्क करना चाहते हैं वह अभी पहुंच से बाहर है।",
+    ];
+    for (const announcement of cases) {
+        it(`"${announcement.slice(0, 40)}…" → no_response / out_of_service`, () => {
+            const transcript = `${agent}\nuser: ${announcement}`;
+            expect(classifyCarrierAnnouncement(announcement)).toBe("out_of_service");
+            const r = classifyCallEnd({ providerStatus: "done", transcript });
+            expect(r.status).toBe("no_response");
+            expect(r.outcome).toBe("out_of_service");
+        });
+    }
+
+    it("a carrier 'not answering' stays plain no response", () => {
+        const r = classifyCallEnd({
+            providerStatus: "done",
+            transcript: `${agent}\nuser: The person you are calling is not answering.`,
+        });
+        expect(r).toEqual({ status: "no_response", outcome: null });
+    });
+
+    it("a dealer saying his shop is closed is still a conversation", () => {
+        const r = classifyCallEnd({
+            providerStatus: "done",
+            transcript: `${agent}\nuser: दुकान अभी बंद है, कल आना`,
+            terminationReason: "Call ended by remote party",
+        });
+        expect(r.status).toBe("completed");
+    });
+});
+
+describe("early hang-up: before the conversation began or during the introduction", () => {
+    const remote = "Call ended by remote party";
+
+    it("dealer said only hello and hung up during the intro → hung_up", () => {
+        for (const said of ["Hello?", "हाँ जी, कौन?", "haan bolo", "Hello hello", "ಹಲೋ", "कोण बोलताय?"]) {
+            const r = classifyCallEnd({
+                providerStatus: "done",
+                transcript: `${agent}\nuser: ${said}`,
+                terminationReason: remote,
+                durationSecs: 12,
+            });
+            expect(r, said).toEqual({ status: "hung_up", outcome: "early_hangup" });
+        }
+    });
+
+    it("Priya answered his 'kaun?' once and he hung up → still early", () => {
+        const transcript = [agent, "user: कौन?", "agent: जी, मैं प्रिया, iTarang से।"].join("\n");
+        expect(classifyCallEnd({ transcript, terminationReason: remote }).status).toBe("hung_up");
+    });
+
+    it("past the introduction it is a conversation, even if he only said 'haan'", () => {
+        const transcript = [
+            agent,
+            "user: haan",
+            "agent: आप e-rickshaw battery का काम करते हैं?",
+            "user: haan",
+            "agent: lithium भी रखते हैं?",
+        ].join("\n");
+        expect(EARLY_HANGUP_MAX_AGENT_TURNS).toBe(2);
+        expect(classifyCallEnd({ transcript, terminationReason: remote }).status).toBe("completed");
+    });
+
+    it("any real words make it a conversation", () => {
+        const r = classifyCallEnd({
+            transcript: `${agent}\nuser: हाँ, battery का काम है, बोलिए`,
+            terminationReason: remote,
+        });
+        expect(r.status).toBe("completed");
+    });
+
+    it("without a remote-hangup reason a greeting stays completed", () => {
+        expect(classifyCallEnd({ providerStatus: "done", transcript: `${agent}\nuser: Hello?` }).status).toBe(
+            "completed",
+        );
+        expect(
+            classifyCallEnd({
+                transcript: `${agent}\nuser: Hello?`,
+                terminationReason: "end_call tool was called",
+            }).status,
+        ).toBe("completed");
+    });
+
+    it("silent dealer who hung up while Priya was on her first turn → hung_up, whatever the duration", () => {
+        expect(
+            classifyCallEnd({ transcript: agent, terminationReason: remote, durationSecs: 16 }).status,
+        ).toBe("hung_up");
+    });
+
+    it("silent dealer who stayed past the opening → silent", () => {
+        const transcript = [agent, "agent: Hello? क्या आप मुझे सुन पा रहे हैं?"].join("\n");
+        expect(
+            classifyCallEnd({ transcript, terminationReason: remote, durationSecs: 25 }).status,
+        ).toBe("silent");
+    });
+
+    it("isGreetingOnly", () => {
+        expect(isGreetingOnly("Hello? Haan ji, kaun?")).toBe(true);
+        expect(isGreetingOnly("हाँ जी बोलिए")).toBe(true);
+        expect(isGreetingOnly("battery chahiye")).toBe(false);
+        expect(isGreetingOnly("haan haan haan haan haan haan haan")).toBe(false);
+        expect(isGreetingOnly("")).toBe(false);
     });
 });

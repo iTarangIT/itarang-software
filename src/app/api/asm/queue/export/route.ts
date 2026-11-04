@@ -90,7 +90,7 @@ const COLUMNS: CsvColumn<AsmQueueRow>[] = [
     { header: "Actual Visit Date", value: (r) => csvDate(r.actual_visit_date) },
     { header: "Owner", value: (r) => r.current_owner_name ?? "" },
     { header: "ASM", value: (r) => r.asm_name ?? "" },
-    { header: "Sent By", value: (r) => r.assigned_by?.name ?? "" },
+    { header: "Sent By", value: (r) => (r.assigned_by?.via === "ai" ? "Assigned by AI" : (r.assigned_by?.name ?? "")) },
     { header: "Assigned At", value: (r) => csvDateTime(r.assigned_at) },
     { header: "Last Touchpoint", value: (r) => csvDateTime(r.last_touchpoint_at) },
     { header: "Closed At", value: (r) => csvDateTime(r.closed_at) },

@@ -4,6 +4,7 @@
 import { aiInterestLevelSql } from "@/lib/ai/storage/aiInterest";
 import { markSalesReady } from "@/lib/leads/salesReady";
 import { analyzeTranscript } from "@/lib/ai/analysis";
+import { languageToStore } from "@/lib/ai-dialer/callLanguage";
 import { db } from "@/lib/db";
 import { aiCallLogs, dealerLeads, dialerCampaigns } from "@/lib/db/schema";
 import { eq, sql } from "drizzle-orm";
@@ -73,9 +74,25 @@ export type ElevenLabsFinalizePayload = {
    */
   answeredBy?: string | null;
   callResult?: string | null;
+  /** Item 2 — the language the agent spoke with the dealer (`call_language`). */
+  callLanguage?: string | null;
 };
 
 const IN_PROGRESS = new Set(["initiated", "ringing", "in-progress"]);
+
+/** Best-effort: a failure here must never stop the call being finalized. */
+async function rememberCallLanguage(leadId: string, callLanguage: string | null | undefined): Promise<void> {
+  const name = languageToStore({ callLanguage, dealerSpoke: true, current: null });
+  if (!name) return;
+  try {
+    await db.execute(sql`
+      UPDATE dealer_leads SET language = ${name}
+       WHERE id = ${leadId} AND lower(coalesce(language, '')) IS DISTINCT FROM ${name}
+    `);
+  } catch (e) {
+    console.warn("[elevenlabs:finalize] call language not stored:", e instanceof Error ? e.message : e);
+  }
+}
 const ADVANCE_DELAY_MS = 5_000;
 
 // Resolve a browser-playable recording URL for an ElevenLabs call. ElevenLabs
@@ -115,6 +132,7 @@ export async function finalizeElevenLabsCall(
     terminationReason,
     answeredBy,
     callResult,
+    callLanguage,
   } = payload;
 
   if (IN_PROGRESS.has(status)) {
@@ -152,7 +170,14 @@ export async function finalizeElevenLabsCall(
   // E-310 — kept on ai_call_logs so the split above can be re-read later.
   const endEvidence: CallEndEvidenceRow = { endReason: terminationReason };
 
-  if (!transcript) {
+  // Item 5 (3 Nov 2026) — no conversation, no score. A call where the dealer
+  // never really spoke (Early Hang-up during the introduction, a silent line,
+  // voicemail, IVR, a carrier recording) still leaves a transcript: the AI's
+  // own greeting. Scoring that produced Cold / 0 intent from nothing, so every
+  // call that did not END as completed takes this path. The transcript is
+  // kept on the log; the lead's score and interest level are left alone.
+  if (!transcript || callEnd.status !== "completed") {
+    const keptTranscript = transcript || null;
     console.log(
       "[elevenlabs:finalize] no transcript on terminal event, status:",
       status,
@@ -194,8 +219,10 @@ export async function finalizeElevenLabsCall(
       endedAt,
       agentId,
       status: status || "failed",
-      transcript: null,
+      transcript: keptTranscript,
       summary: null,
+      // Item 5: an Early Hang-up is not an AI conversation (exclusionFilter).
+      callStatus: callEnd.status === "hung_up" ? "early_hangup" : null,
       recordingUrl,
       duration,
       phone: phone ?? leadForPhone?.phone ?? null,
@@ -218,10 +245,11 @@ export async function finalizeElevenLabsCall(
         leadId: leadForPhone.id,
         provider: "elevenlabs",
         callId: conversationId,
-        transcript: null,
+        transcript: keptTranscript,
         providerStatus: status || "failed",
         // B5 — the campaign row's own verdict: connected = a person spoke.
         callEndStatus: callEnd.status,
+        callOutcome: callEnd.outcome,
         durationSec: duration ?? null,
         recordingUrl,
       });
@@ -230,7 +258,7 @@ export async function finalizeElevenLabsCall(
         leadId: leadForPhone.id,
         status: callEnd.status,
         bolnaCallId: conversationId || null,
-        outcome: status || "no_transcript",
+        outcome: callEnd.outcome ?? (status || "no_transcript"),
         intentScore: null,
       });
       campaignIdAfterComplete = r.campaignId;
@@ -243,16 +271,17 @@ export async function finalizeElevenLabsCall(
         leadId: leadForPhone.id,
         plan: await preparePostCall({
           callEnd,
+          agentCallResult: callResult,
           callOutcome: status,
           analysis: null,
-          transcript: null,
+          transcript: keptTranscript,
           leadId: leadForPhone.id,
         }),
         callEnd,
         band: null,
         intentScore: null,
         summary: null,
-        transcript: null,
+        transcript: keptTranscript,
         campaign: r,
       });
 
@@ -364,6 +393,10 @@ export async function finalizeElevenLabsCall(
     return;
   }
 
+  // Item 2 — remember the language the dealer answered in, so the next call
+  // opens in it (triggerCall). Only completed calls reach here: a person spoke.
+  await rememberCallLanguage(lead.id, callLanguage);
+
   const result = await analyzeTranscript(transcript);
 
   // No silent zeros: on analysis failure mark needs_review, KEEP any prior
@@ -395,6 +428,7 @@ export async function finalizeElevenLabsCall(
       leadId: lead.id,
       plan: await preparePostCall({
         callEnd,
+        agentCallResult: callResult,
         analysis: null,
         analysisFailed: true,
         transcript,
@@ -422,6 +456,7 @@ export async function finalizeElevenLabsCall(
   // AI dialer review — category, callback and retry decided once, up front.
   const plan = await preparePostCall({
     callEnd,
+    agentCallResult: callResult,
     analysis,
     transcript,
     leadId: lead.id,
@@ -636,6 +671,7 @@ export async function finalizeElevenLabsCall(
     callbackAgreed: analysis.signals?.callback_agreed === "yes",
     relevantDealer: analysis.signals?.relevant_dealer === "yes",
     pitchHeard: analysis.signals?.pitch_heard === "yes",
+    callbackTopic: analysis.signals?.callback_topic ?? null,
     durationSec: duration ?? null,
     recordingUrl,
     summary: analysis.memory?.intent_summary ?? null,

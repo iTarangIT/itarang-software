@@ -15,7 +15,7 @@
 // with them, which is the same discipline CampaignLeadTranscriptDrawer states.
 
 import type { Band, CallStatus as BandCallStatus } from "@/lib/ai/scoring/computeBand";
-import type { Disqualifier } from "@/lib/ai/scoring/signals";
+import type { CallbackTopic, Disqualifier } from "@/lib/ai/scoring/signals";
 import type { CallStatus } from "@/lib/lifecycle/touchpointTypes";
 import { dealerSpoke } from "@/lib/ai-dialer/campaignLeadStatus";
 import {
@@ -36,6 +36,11 @@ export type AiCallDispositionInput = {
      * Absent → dealerSpoke(transcript), the same rule from the text alone.
      */
     callEndStatus?: string | null;
+    /**
+     * classifyCallEnd().outcome — what the classifier learned that the status
+     * does not say: out_of_service, invalid_number, early_hangup.
+     */
+    callOutcome?: string | null;
     /** ai_call_logs.status — the raw provider status string. */
     providerStatus: string | null;
     /** analyzeTranscript() returned {status:"failed"} — a call we cannot read. */
@@ -47,6 +52,8 @@ export type AiCallDispositionInput = {
     callbackAgreed?: boolean | null;
     relevantDealer?: boolean | null;
     pitchHeard?: boolean | null;
+    /** signals.callback_topic — a complaint is a service matter, not intent. */
+    callbackTopic?: CallbackTopic | null;
 };
 
 /** Which rule fired. A test key and a structured log key; never persisted. */
@@ -60,12 +67,17 @@ export type AiDispositionReason =
     | "nc:failed"
     | "nc:unknown"
     | "nc:no_person"
+    | "nc:early_hangup"
     | "c:analysis_failed"
     | "c:not_analysed"
     | "c:dropped_empty"
     | "c:irrelevant"
     | "c:disqualified"
     | "c:callback_only"
+    | "c:qualified"
+    | "c:warm_callback"
+    | "c:cold_details"
+    | "c:complaint"
     | "c:substance"
     | "c:short_hangup"
     | "c:no_disclosure";
@@ -158,6 +170,8 @@ export function mapAiCallToDisposition(
         : dealerSpoke(input.transcript);
 
     if (connected) return connectedDisposition(input);
+    const byEnd = notConnectedByCallEnd(input);
+    if (byEnd) return byEnd;
     // Answered, no person: a machine, a switchboard or a silent line. The
     // sheet has no "machine" label; nobody picked up is the truthful one.
     if (input.transcript && input.transcript.trim() !== "") {
@@ -170,6 +184,29 @@ export function mapAiCallToDisposition(
         };
     }
     return notConnected(input);
+}
+
+/**
+ * 3 Nov 2026 — the campaign row's own verdict names the reason more exactly
+ * than the raw provider status: an Early Hang-up, a switched-off phone, a busy
+ * line, a dead number. null → fall back to the transcript / provider rules.
+ */
+function notConnectedByCallEnd(input: AiCallDispositionInput): AiCallDisposition | null {
+    const status = input.callEndStatus ?? "";
+    const outcome = (input.callOutcome ?? "").toLowerCase();
+    const nc = (label: string, reasonCode: AiDispositionReason): AiCallDisposition => ({
+        connectStatus: "not_connected",
+        bucket: null,
+        disposition: label,
+        callStatus: callStatusFor(label, "not_connected"),
+        reasonCode,
+    });
+    if (outcome === "invalid_number") return nc("Incorrect / Invalid number", "nc:invalid_number");
+    if (status === "hung_up") return nc("User disconnected the call", "nc:early_hangup");
+    if (status === "no_response" && outcome === "out_of_service") return nc("Switch off", "nc:switched_off");
+    if (status === "busy") return nc("Busy in another call", "nc:busy");
+    if (status === "rejected") return nc("User disconnected the call", "nc:rejected");
+    return null;
 }
 
 function notConnected(input: AiCallDispositionInput): AiCallDisposition {
@@ -241,6 +278,14 @@ function connectedDisposition(
         return connected("Short Hang up", "Cold", "c:dropped_empty");
     }
 
+    // 3 Nov 2026 — when the band engine ran, the L2 bucket FOLLOWS THE BAND, so
+    // the touchpoint and the lead tell the same story: Qualified → Hot, Warm →
+    // Warm, Cold → Cold, Disqualified / a firm no → Lost. It used to be read from
+    // relevant_dealer / pitch_heard, which the finalizers pass as `=== "yes"`:
+    // a dealer who never named his product lines was filed "Some other
+    // Business" (Lost) while his band said Cold or Warm.
+    if (input.band) return bandDisposition(input, input.band, connected);
+
     // C3 before C4, matching computeBand's own precedence (relevant_dealer is
     // tested before the hard disqualifiers). A dealer outside our market is
     // better described as other business than as "Not Interested" — and keeping
@@ -270,13 +315,10 @@ function connectedDisposition(
         return connected("As to Call Back", "Cold", "c:callback_only");
     }
 
-    // C6 — the dealer told us something. Qualified and Warm BOTH land here, and
-    // that is deliberate: every label in the sheet's Hot bucket names a
-    // commercial artefact (Quotation Sent, Under Negotiation, Documents
-    // Recieved) that only a human can produce, so an AI qualification call
-    // structurally cannot reach Hot. The disposition describes the CALL; the
-    // band describes the LEAD. Re-encoding the band into the L3 would put a
-    // second, disagreeing intent scale on the same row.
+    // C6 — the dealer told us something. Only rows with NO band reach this
+    // rule (calls scored before the band engine). A banded call is decided by
+    // bandDisposition, where Qualified reads Hot / "AI Qualified" (3 Nov 2026,
+    // user decision — the old rule capped every AI call at Warm).
     if (info >= 1) {
         return connected("Information Collected", "Warm", "c:substance");
     }
@@ -286,13 +328,52 @@ function connectedDisposition(
         return connected("Short Hang up", "Cold", "c:short_hangup");
     }
 
-    // C8 — sat through the pitch, disclosed nothing, refused nothing. The sheet
-    // has no words for this either: "Need Some Time" and "No requirement in
-    // current" both put a statement in the dealer's mouth. The smallest honest
-    // addition would be one Cold label, "Pitch Heard, No Response" — but the CC
-    // team owns this vocabulary (dispositions.ts:9-14), so it is theirs to add,
-    // not ours to assume.
-    return connected(null, null, "c:no_disclosure");
+    // C8 — sat through the pitch, disclosed nothing, refused nothing. "Need Some
+    // Time" and "No requirement in current" would both put a statement in the
+    // dealer's mouth; "Pitch Heard, No Response" (added 3 Nov 2026) says only
+    // what happened.
+    return connected("Pitch Heard, No Response", "Cold", "c:no_disclosure");
+}
+
+type ConnectedFn = (
+    disposition: string | null,
+    bucket: DispositionBucket | null,
+    reasonCode: AiDispositionReason,
+) => AiCallDisposition;
+
+/** The scored path: L2 = the band, L3 = the closest sheet label for it. */
+function bandDisposition(
+    input: AiCallDispositionInput,
+    band: Band,
+    connected: ConnectedFn,
+): AiCallDisposition {
+    const info = input.infoSignalsCount ?? 0;
+    // A firm no beats anything said before it (computeBand's own order).
+    if (
+        input.disqualifier === "not_interested" ||
+        input.disqualifier === "dont_call" ||
+        input.disqualifier === "hostile"
+    ) {
+        return connected("Not Interested", "Lost", "c:disqualified");
+    }
+    // Outside our product lines (D10).
+    if (band === "Disqualified") return connected("Some other Business", "Lost", "c:irrelevant");
+    // D8 — a complaint about a battery he already has: a service matter.
+    if (input.callbackTopic === "complaint") return connected("Service Issue", "Cold", "c:complaint");
+    if (band === "Qualified") return connected("AI Qualified", "Hot", "c:qualified");
+    if (band === "Warm") {
+        if (info === 0 && input.callbackAgreed === true) {
+            return connected("Callback Agreed", "Warm", "c:warm_callback");
+        }
+        return connected("Information Collected", "Warm", "c:substance");
+    }
+    // Cold.
+    if (input.callbackAgreed === true && info === 0) {
+        return connected("As to Call Back", "Cold", "c:callback_only");
+    }
+    if (info >= 1) return connected("Details Shared, Not Qualified", "Cold", "c:cold_details");
+    if (input.pitchHeard === false) return connected("Short Hang up", "Cold", "c:short_hangup");
+    return connected("Pitch Heard, No Response", "Cold", "c:no_disclosure");
 }
 
 /** Resolve the touchpoint call_status through the shared sheet-derived table. */

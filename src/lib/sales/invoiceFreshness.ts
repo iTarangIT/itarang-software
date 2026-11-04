@@ -16,6 +16,8 @@
  *   last_payment_at  ID 200 — when a Drive / Vyapar invoice's amount paid
  *                 last changed (the Payment button sets payment_marked_by,
  *                 the Vyapar register sets payment_reference)
+ *   payments_as_of  the "Generated on" of the newest Vyapar register
+ *                 imported — what the payments are true as of
  *
  * Cached for five minutes per process: it sits under several tiles.
  */
@@ -55,8 +57,18 @@ export async function invoiceFreshness(opts: { fresh?: boolean } = {}): Promise<
                  ${ledger ? sql`, (SELECT MAX(cn.created_at) FROM credit_notes cn)` : sql``}
                ) AS last_read_at,
                (SELECT MAX(si.updated_at) FROM sales_invoices si
-                 WHERE si.payment_marked_by IS NOT NULL OR si.payment_reference IS NOT NULL) AS last_payment_at
-    `)) as unknown as Array<{ read_up_to: string | null; last_read_at: string | Date | null; last_payment_at: string | Date | null }>;
+                 WHERE si.payment_marked_by IS NOT NULL OR si.payment_reference IS NOT NULL) AS last_payment_at,
+               ${ledger
+                   ? sql`(SELECT MAX((ii.summary->>'generated_at')::timestamptz) FROM invoice_imports ii
+                          WHERE ii.kind = 'vyapar_register'
+                            AND ii.summary->>'generated_at' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T')`
+                   : sql`NULL::timestamptz`} AS payments_as_of
+    `)) as unknown as Array<{
+        read_up_to: string | null;
+        last_read_at: string | Date | null;
+        last_payment_at: string | Date | null;
+        payments_as_of: string | Date | null;
+    }>;
     const [{ holidays, hours }, limits] = await Promise.all([loadOfficeCalendar(), getTimeLimits()]);
     const lastReadAt = row?.last_read_at ? new Date(row.last_read_at) : null;
     const since = lastReadAt ? workingDaysSince(lastReadAt, new Date(), holidays, hours) : null;
@@ -68,6 +80,7 @@ export async function invoiceFreshness(opts: { fresh?: boolean } = {}): Promise<
         stale_after: staleAfter,
         stale: isStale(since, staleAfter),
         last_payment_at: row?.last_payment_at ? new Date(row.last_payment_at).toISOString() : null,
+        payments_as_of: row?.payments_as_of ? new Date(row.payments_as_of).toISOString() : null,
     };
     cached = { at: Date.now(), value };
     return value;

@@ -31,7 +31,8 @@ import { and, gte, lt, sql } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import { dealerLeads, dealers } from "@/lib/db/schema";
-import { outstandingTotal, revenueTotal } from "@/lib/dashboard/revenueSource";
+import { revenueTotal } from "@/lib/dashboard/revenueSource";
+import { receivablesSummary } from "@/lib/dashboard/receivables";
 
 export interface MonthWindow {
   /** Inclusive start, YYYY-MM-DD. */
@@ -126,7 +127,7 @@ export async function getCeoBusinessMetrics(
     // has no date filter here either. ID 89 / 71: the CEO route's own helper,
     // so the mirror also counts manual invoices and nets credit notes per
     // customer (never below zero) — no longer Zoho balances alone.
-    outstandingTotal(),
+    receivablesSummary().then((s) => s.owed),
 
     // Buyback: submitted is stamped on the request (there is no status column
     // on buyback_requests); completed is a CLOSED deal. Statuses are uppercase

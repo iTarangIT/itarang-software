@@ -10,7 +10,7 @@ import { requireRole } from "@/lib/auth-utils";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
 import { getTimeLimits } from "@/lib/timeLimits/store";
 import { getOfficeHours } from "@/lib/calendar/officeHoursStore";
-import { staleThresholdsFor } from "@/lib/inside-sales/staleness";
+import { cuesByRole, staleThresholdsFor } from "@/lib/inside-sales/staleness";
 
 const READ_ROLES = [
     "inside_sales_rep",
@@ -39,5 +39,7 @@ export const GET = withErrorHandler(async () => {
         office_hours: officeHours,
         // 18 Oct row 33: the ISR queue's row colours and "past limit" state.
         idle_limit_days: limits.idle_cc,
+        // ID 85 #5: per-row cues by the HOLDER's role (ISR / ASM); the two fields above stay for older clients.
+        cues_by_role: cuesByRole(limits),
     });
 });

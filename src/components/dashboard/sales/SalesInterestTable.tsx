@@ -2,6 +2,7 @@
 
 // B7 row 3 — hot / warm / cold with the four ageing buckets.
 
+import { InfoTip } from "@/components/ui/info-tip";
 import type { InterestSection } from "@/lib/admin/salesDashboardTypes";
 
 const fmt = (n: number) => n.toLocaleString("en-IN");
@@ -17,13 +18,9 @@ export function SalesInterestTable({ d }: { d: InterestSection }) {
         <div className="rounded-xl border border-border bg-surface shadow-card">
             <div className="px-4 py-3">
                 <h3 className="text-sm font-semibold text-ink">Hot / warm / cold, by age</h3>
-                <p
-                    className="text-[11px] text-ink-muted"
-                    title={`Measured on ${d.ageing_basis}`}
-                >
-                    Open leads by interest level and how many days they have held that
-                    rating. Calls, visits and edits do not reset it — only a change of
-                    rating does.
+                <p className="text-[11px] text-ink-muted">
+                    Open leads by rating and days held.
+                    <InfoTip className="ml-1">{`Days since the lead got its current Hot / Warm / Cold rating. Calls, visits and edits do not reset it — only a change of rating does. Measured on ${d.ageing_basis}.`}</InfoTip>
                 </p>
             </div>
             <div className="overflow-x-auto border-t border-border">

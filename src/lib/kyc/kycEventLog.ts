@@ -305,13 +305,7 @@ export async function recordStaffKycStep(
     } = {},
 ): Promise<void> {
     try {
-        if (opts.once) {
-            const seen = (await db.execute(sql`
-                SELECT 1 FROM audit_logs
-                 WHERE entity_type = ${KYC_EVENT} AND entity_id = ${leadId} AND changes->>'once' = ${opts.once}
-                 LIMIT 1`)) as unknown as unknown[];
-            if (seen.length) return;
-        }
+        if (opts.once && (await seenOnce(leadId, opts.once))) return;
         const { kycCheckOutcome } = await import("./kycEventText");
         const outcome = "result" in opts ? kycCheckOutcome(opts.result) : null;
         const [lead] = (await db.execute(sql`
@@ -325,6 +319,39 @@ export async function recordStaffKycStep(
         });
     } catch (err) {
         console.error(`[kycEventLog] staff step for ${leadId} not logged:`, err);
+    }
+}
+
+/** Has a line with this `once` key already been written on the file? */
+async function seenOnce(leadId: string, once: string): Promise<boolean> {
+    const seen = (await db.execute(sql`
+        SELECT 1 FROM audit_logs
+         WHERE entity_type = ${KYC_EVENT} AND entity_id = ${leadId} AND changes->>'once' = ${once}
+         LIMIT 1`)) as unknown as unknown[];
+    return seen.length > 0;
+}
+
+/**
+ * A step nobody did by hand (a provider callback): logged as "iTarang
+ * (automatic)", once per `once` key, for the file's dealer. Never throws.
+ */
+export async function recordSystemKycStepOnce(
+    leadId: string,
+    action: string,
+    once: string,
+    detail?: Record<string, unknown>,
+): Promise<void> {
+    try {
+        if (await seenOnce(leadId, once)) return;
+        await recordKycEvent({
+            leadId,
+            action,
+            actor: { id: null, name: null, role: null, type: "system", channel: "system" },
+            detail: { ...(detail ?? {}), once },
+            notify: false,
+        });
+    } catch (err) {
+        console.error(`[kycEventLog] system step for ${leadId} not logged:`, err);
     }
 }
 

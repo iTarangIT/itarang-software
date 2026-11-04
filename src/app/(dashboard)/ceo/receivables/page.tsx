@@ -10,6 +10,7 @@ import { requireRole } from "@/lib/auth-utils";
 import {
     listReceivables,
     matchesReceivableSearch,
+    netInvoicesAfterCredits,
     netOwed,
     receivableFileNote,
     receivableSourceLabel,
@@ -21,8 +22,10 @@ import {
 
 // ID 166: invoice PDFs open through a fresh 15-minute link on each click.
 import FreshFileLink from "@/components/shared/FreshFileLink";
-import { receivablesSourceText } from "@/lib/sales/invoiceFreshnessRules";
+import { InfoTip } from "@/components/ui/info-tip";
+import { paymentsStaleText, receivablesSourceText } from "@/lib/sales/invoiceFreshnessRules";
 import DebtorTable, { type Debtor } from "./_components/DebtorTable";
+import VyaparPaymentUpload from "./_components/VyaparPaymentUpload";
 export const dynamic = "force-dynamic";
 
 type AgeKey = ReceivableAgeKey | "all";
@@ -65,17 +68,22 @@ export default async function CeoReceivablesPage({
     const credits = rows.filter((r) => r.source === "credit");
     const overdue = rows.filter((r) => r.overdue_days != null && r.overdue_days > 0);
     const unlinked = rows.filter((r) => r.account_id == null && r.dealer_lead_id == null);
-    const byAge = AGES.map((a) => ({ ...a, rows: rows.filter((r) => ageOf(r) === a.key) }));
-    const noDate = rows.filter((r) => ageOf(r) === "no_date");
+    // ID 217: age tabs count what is left on each invoice after the customer's
+    // credit notes (oldest first) — the same buckets as Revenue & costs.
+    const net = netInvoicesAfterCredits(rows);
+    const byAge = AGES.map((a) => ({ ...a, rows: net.filter((r) => ageOf(r) === a.key) }));
+    const noDate = net.filter((r) => ageOf(r) === "no_date");
     // ID 200: the search narrows the invoice list and the customers alike.
     const found = q ? rows.filter((r) => matchesReceivableSearch(r, q)) : rows;
-    const shown = age === "all" ? found : found.filter((r) => ageOf(r) === age);
+    const shown =
+        age === "all" ? found : net.filter((r) => ageOf(r) === age && (!q || matchesReceivableSearch(r, q)));
 
     // Who owes the most — the list a collections call starts from.
     // Each customer keeps its rows so the table can expand to the invoices behind the count.
     const byDealer = new Map<string, Debtor>();
     for (const r of found) {
-        const key = r.account_id ?? r.dealer_lead_id ?? `name:${(r.customer_name ?? "").toLowerCase()}`;
+        // ID 217: one row per customer as the figure nets them (GSTIN key).
+        const key = r.owe_key;
         const d = byDealer.get(key) ?? {
             key,
             name: r.dealer_name ?? r.customer_name ?? "(no name)",
@@ -130,12 +138,16 @@ export default async function CeoReceivablesPage({
                 </Link>
                 <h1 className="mt-2 text-2xl font-bold tracking-tight text-brand-navy">Accounts Receivable</h1>
                 <p className="mt-1 text-sm text-ink-muted">
-                    Every Zoho and Drive invoice that is not paid, void or draft and still has a balance — as of now,
-                    whatever date it was raised. The amount is the unpaid balance (invoice total minus what has been
-                    paid), including GST, less any credit note issued to the same customer (never below zero per
-                    customer). Age is days since the invoice or credit note date.
+                    Unpaid balance of every invoice, less the customer&apos;s credit notes, as of now.
+                    <InfoTip className="ml-1">{"Every Zoho, Drive and Vyapar invoice that is not paid, void or draft and still has a balance, whatever date it was raised. The amount is the invoice total minus what has been paid, including GST, less any credit note issued to the same customer (never below zero per customer). Age is days since the invoice or credit note date."}</InfoTip>
                 </p>
                 <p className="mt-1 text-xs text-gray-500">{receivablesSourceText(freshness)}</p>
+                {paymentsStaleText(freshness) && (
+                    <p className="mt-1 text-xs font-medium text-red-600">{paymentsStaleText(freshness)}</p>
+                )}
+                <div className="mt-3">
+                    <VyaparPaymentUpload />
+                </div>
             </div>
 
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -292,8 +304,7 @@ export default async function CeoReceivablesPage({
             )}
 
             <p className="text-xs text-gray-500">
-                Payments are only seen once they are recorded on the invoice (Zoho balance, or amount paid on a Drive
-                invoice). Money collected but not yet entered still shows here as owed.
+                Money collected shows as owed until the next Vyapar Sale Report upload.
             </p>
         </div>
     );

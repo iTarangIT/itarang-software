@@ -31,7 +31,7 @@
 // dialer loop, the API routes AND the client-side status badge, so the label on
 // a chip and the rule that assigned it cannot drift apart.
 
-import { parseTranscriptTurns } from "./call-quality/transcript";
+import { parseTranscriptTurns, type TranscriptTurn } from "./call-quality/transcript";
 import {
     classifyProviderStatus,
     classifyTriggerDetail,
@@ -117,7 +117,7 @@ export const TERMINAL_STATUSES = [
  * classifier splits it along the usual dialer dispositions (dead air vs early
  * abandon vs ring-no-answer):
  *   silent   "Silent Call"   — answered and listened, never said a word
- *   hung_up  "Hung Up Early" — answered, dropped during the greeting
+ *   hung_up  "Early Hang-up" — dropped before or during the introduction
  *   a 0-second no-transcript "completed" → no_response (never connected)
  * `no_conversation` stays in the vocabulary for rows the backfill could not
  * split; the classifier no longer writes it.
@@ -134,7 +134,9 @@ export const CAMPAIGN_LEAD_STATUS_LABELS: Record<CampaignLeadStatus, string> = {
     // (badge, tab, card, drawer, export); the stored value stays `switchboard`.
     switchboard: "IVR",
     silent: "Silent Call",
-    hung_up: "Hung Up Early",
+    // 3 Nov 2026 — the CRM's word for it: hung up before the conversation
+    // began or during Priya's introduction (no intent score is computed).
+    hung_up: "Early Hang-up",
     no_conversation: "Silent Call (legacy)",
     failed: "Failed",
     skipped: "Skipped",
@@ -305,6 +307,26 @@ const MACHINE_PATTERNS = [
 ] as const;
 
 const BUSY_WORDS = ["busy", "another call", "व्यस्त", "बिज़ी", "बिजी", "दूसरी कॉल", "vyast", "dusri call"];
+// Out of service (3 Nov 2026): the phone is switched off, unreachable or out
+// of coverage. The dealer was not reached, but unlike a ring-out there is no
+// point redialling in five minutes. Only read inside a carrier FRAME turn, so
+// "दुकान बंद है" from a dealer never lands here.
+const OUT_OF_SERVICE_WORDS = [
+    "switched off",
+    "switch off",
+    "not reachable",
+    "unreachable",
+    "out of coverage",
+    "coverage area",
+    "बंद है",
+    "स्विच ऑफ",
+    "पहुंच से बाहर",
+    "पहुँच से बाहर",
+    "कवरेज",
+    "नेटवर्क क्षेत्र से बाहर",
+    "band hai",
+    "pahunch se bahar",
+];
 const INVALID_WORDS = [
     "does not exist",
     "doesn't exist",
@@ -342,6 +364,7 @@ const FRAME_RE = new RegExp(alternation(ANNOUNCEMENT_FRAME_PHRASES), "i");
 const VOICEMAIL_RE = new RegExp(alternation(VOICEMAIL_PHRASES), "i");
 const BUSY_RE = new RegExp(alternation(BUSY_WORDS), "i");
 const INVALID_RE = new RegExp(alternation(INVALID_WORDS), "i");
+const OUT_OF_SERVICE_RE = new RegExp(alternation(OUT_OF_SERVICE_WORDS), "i");
 const SWITCHBOARD_RE = new RegExp(SWITCHBOARD_PATTERN, "i");
 
 /**
@@ -355,7 +378,13 @@ const SWITCHBOARD_RE = new RegExp(SWITCHBOARD_PATTERN, "i");
 const CONTENT_RE = /[^\s!-\/:-@\[-`{-~…।]/;
 const CONTENT_SQL_CLASS = "[^[:space:][:punct:]…।]";
 
-export type AnnouncementKind = "busy" | "no_response" | "voicemail" | "switchboard" | "invalid";
+export type AnnouncementKind =
+    | "busy"
+    | "no_response"
+    | "out_of_service"
+    | "voicemail"
+    | "switchboard"
+    | "invalid";
 
 /** Is this dealer turn really a recording or a machine, and if so which kind? */
 export function classifyCarrierAnnouncement(
@@ -368,8 +397,9 @@ export function classifyCarrierAnnouncement(
     if (FRAME_RE.test(text)) {
         if (BUSY_RE.test(text)) return "busy";
         if (INVALID_RE.test(text)) return "invalid";
-        // Not answering / switched off / unreachable / out of coverage: in every
-        // case the dealer was not reached, which is what No Response means.
+        // Switched off / unreachable / out of coverage: Out of Service.
+        if (OUT_OF_SERVICE_RE.test(text)) return "out_of_service";
+        // Not answering: the dealer was not reached — No Response.
         return "no_response";
     }
     // No frame, so a MACHINE_PHRASES / MACHINE_PATTERNS match: an IVR, hold
@@ -381,6 +411,14 @@ export function classifyCarrierAnnouncement(
 type TranscriptReading = {
     /** At least one turn of any speaker. */
     anyTurn: boolean;
+    /** How many turns the AI spoke. */
+    agentTurns: number;
+    /**
+     * Every real dealer turn was only a greeting or "who is it?" — "hello",
+     * "haan ji", "कौन?" — nothing that starts a conversation. False when the
+     * dealer said nothing at all (dealerSpoke false).
+     */
+    dealerOnlyGreeted: boolean;
     /** At least one real dealer turn. */
     dealerSpoke: boolean;
     /**
@@ -391,18 +429,71 @@ type TranscriptReading = {
     announcement: AnnouncementKind | null;
 };
 
+// What a dealer says when he picks up, before any conversation: a greeting,
+// a "yes?", or "who is this?". Hindi / Hinglish, Marathi, Kannada, Gujarati,
+// Bengali, Punjabi and English. Compared word by word after lower-casing and
+// dropping punctuation, so "Hello? Haan ji, kaun?" is all greeting.
+const GREETING_WORDS = new Set([
+    // English
+    "hello", "helo", "hallo", "hellow", "hi", "hey", "yes", "yeah", "ok", "okay",
+    "who", "is", "this", "speaking", "sir", "madam", "hm", "hmm", "hmmm",
+    // Hindi (romanised)
+    "haan", "han", "haa", "ha", "haanji", "hanji", "ji", "jee", "kaun", "kon", "koun",
+    "bolo", "boliye", "bolie", "bol", "rahe", "raha", "rahi", "ho", "hai", "bataiye", "batao",
+    "kya", "namaste", "namaskar", "aap", "achha", "acha", "accha",
+    // Hindi (Devanagari)
+    "हेलो", "हैलो", "हलो", "हेल्लो", "हाँ", "हां", "हा", "जी", "हांजी", "हाँजी", "कौन", "बोलो",
+    "बोलिए", "बोलिये", "बोल", "रहे", "रहा", "रही", "हो", "है", "हैं", "बताइए", "बताइये", "बताओ",
+    "क्या", "नमस्ते", "नमस्कार", "आप", "हम्म", "अच्छा",
+    // Marathi
+    "bola", "boltay", "बोला", "कोण", "बोलताय",
+    // Kannada
+    "yaaru", "yaru", "heli", "ಹಲೋ", "ಹೌದು", "ಯಾರು", "ಹೇಳಿ",
+    // Gujarati
+    "હેલો", "હા", "કોણ", "બોલો",
+    // Bengali
+    "ke", "bolun", "হ্যালো", "হ্যাঁ", "কে", "বলুন",
+    // Punjabi
+    "ਹੈਲੋ", "ਹਾਂ", "ਜੀ", "ਕੌਣ", "ਬੋਲੋ",
+]);
+/** More words than this is a sentence, not a greeting. */
+const MAX_GREETING_WORDS = 6;
+
+/** Is this dealer turn nothing but a greeting / "who is it?" */
+export function isGreetingOnly(text: string): boolean {
+    const words = text
+        .toLowerCase()
+        .replace(/[!-\/:-@\[-`{-~…।?¿¡]/g, " ")
+        .split(/\s+/)
+        .filter(Boolean);
+    if (words.length === 0 || words.length > MAX_GREETING_WORDS) return false;
+    return words.every((w) => GREETING_WORDS.has(w));
+}
+
 function readTranscript(transcript: string | null | undefined): TranscriptReading {
-    const turns = parseTranscriptTurns(transcript);
+    const turns: TranscriptTurn[] = parseTranscriptTurns(transcript);
     let dealerSpoke = false;
+    let dealerOnlyGreeted = true;
+    let agentTurns = 0;
     let announcement: AnnouncementKind | null = null;
     for (const turn of turns) {
+        if (turn.speaker === "agent") agentTurns++;
         if (turn.speaker !== "user" || !CONTENT_RE.test(turn.text)) continue;
         const kind = classifyCarrierAnnouncement(turn.text);
         if (kind === "switchboard") announcement = kind;
         else if (kind) announcement ??= kind;
-        else dealerSpoke = true;
+        else {
+            dealerSpoke = true;
+            if (!isGreetingOnly(turn.text)) dealerOnlyGreeted = false;
+        }
     }
-    return { anyTurn: turns.length > 0, dealerSpoke, announcement };
+    return {
+        anyTurn: turns.length > 0,
+        agentTurns,
+        dealerOnlyGreeted: dealerSpoke && dealerOnlyGreeted,
+        dealerSpoke,
+        announcement,
+    };
 }
 
 /** Did the dealer say anything real? The definition of "conversation started". */
@@ -496,8 +587,20 @@ function seconds(v: number | string | null | undefined): number | null {
     return Number.isFinite(n) && n >= 0 ? n : null;
 }
 
+/**
+ * The most AI turns a call can have and still have ended "during the
+ * introduction" when the dealer only greeted: Priya's opening, plus her one
+ * reply to "hello? kaun?" (3 Nov 2026).
+ */
+export const EARLY_HANGUP_MAX_AGENT_TURNS = 2;
+
 /** Answered, but the dealer never spoke: which of the two was it? */
-function silentOrHungUp(e: CallEndEvidence): "silent" | "hung_up" {
+function silentOrHungUp(e: CallEndEvidence, agentTurns = 0): "silent" | "hung_up" {
+    // The dealer put the phone down while Priya was still on her opening
+    // turn — the introduction is ~15 s now, longer than EARLY_HANGUP_SECS.
+    if (agentTurns <= 1 && REMOTE_HANGUP_TERMINATION.test(e.terminationReason ?? "")) {
+        return "hung_up";
+    }
     const d = seconds(e.durationSecs);
     // No duration: only a remote-hangup reason can say "early".
     if (d == null) {
@@ -582,13 +685,28 @@ export function classifyCallEnd(e: CallEndEvidence): CallEndClassification {
         return { status: silentOrHungUp(e), outcome: null };
     }
 
-    if (reading.dealerSpoke) return { status: "completed", outcome: null };
+    if (reading.dealerSpoke) {
+        // Early Hang-up (3 Nov 2026): the dealer said only "hello? haan? kaun?"
+        // and hung up during the introduction. There was no conversation, so
+        // there is nothing to score. Needs the remote-hangup reason as proof —
+        // without it the call stays completed.
+        if (
+            reading.dealerOnlyGreeted &&
+            reading.agentTurns <= EARLY_HANGUP_MAX_AGENT_TURNS &&
+            REMOTE_HANGUP_TERMINATION.test(e.terminationReason ?? "")
+        ) {
+            return { status: "hung_up", outcome: "early_hangup" };
+        }
+        return { status: "completed", outcome: null };
+    }
 
     switch (reading.announcement) {
         case "busy":
             return { status: "busy", outcome: null };
         case "no_response":
             return { status: "no_response", outcome: null };
+        case "out_of_service":
+            return { status: "no_response", outcome: "out_of_service" };
         case "voicemail":
             return { status: "voicemail", outcome: null };
         case "switchboard":
@@ -604,7 +722,7 @@ export function classifyCallEnd(e: CallEndEvidence): CallEndClassification {
     }
 
     // The line connected and the AI spoke, but no dealer turn followed.
-    if (reading.anyTurn) return { status: silentOrHungUp(e), outcome: null };
+    if (reading.anyTurn) return { status: silentOrHungUp(e, reading.agentTurns), outcome: null };
 
     const provider = (e.providerStatus ?? "").trim().toLowerCase();
     if (provider) {

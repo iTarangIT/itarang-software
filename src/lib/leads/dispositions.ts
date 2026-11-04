@@ -63,6 +63,10 @@ export const CONNECTED_DISPOSITIONS: Record<DispositionBucket, readonly string[]
         "No requirement in current",
         "Bad Experience with Trontek",
         "Short Hang up",
+        // AI call labels (3 Nov 2026) — the sheet had no words for these. Each
+        // is a fact about the call, never a statement put in the dealer's mouth.
+        "Pitch Heard, No Response",
+        "Details Shared, Not Qualified",
     ],
     Warm: [
         "Details Shared",
@@ -70,6 +74,8 @@ export const CONNECTED_DISPOSITIONS: Record<DispositionBucket, readonly string[]
         "Meeting Scheduled",
         "Commercials Explained",
         "Price High",
+        // AI: agreed a callback from a person (band Warm, qualification-2.1.0).
+        "Callback Agreed",
     ],
     Hot: [
         "Quotation Sent",
@@ -77,6 +83,9 @@ export const CONNECTED_DISPOSITIONS: Record<DispositionBucket, readonly string[]
         "Under Negotiation",
         "Documents Recieved",
         "Commercials Finalised",
+        // AI: the call qualified the dealer (band Qualified) — 3 Nov 2026, so an
+        // AI-Qualified lead reads Hot on its touchpoint as it does on the lead.
+        "AI Qualified",
     ],
     Converted: [
         "Deal Closed",
@@ -92,6 +101,19 @@ export const CONNECTED_DISPOSITIONS: Record<DispositionBucket, readonly string[]
         "REJECTED BY US",
     ],
 } as const;
+
+/**
+ * Labels only the AI dialer writes (3 Nov 2026). They are real members of the
+ * sheet, so a touchpoint carrying one classifies, filters and buckets like any
+ * other. They are kept off the rep-facing picker and the WhatsApp assistant,
+ * which log what a PERSON did on a call.
+ */
+export const AI_ONLY_DISPOSITIONS: ReadonlySet<string> = new Set([
+    "Pitch Heard, No Response",
+    "Details Shared, Not Qualified",
+    "Callback Agreed",
+    "AI Qualified",
+]);
 
 /** L1 = Not Connected. Ten reasons, no bucket. */
 export const NOT_CONNECTED_REASONS = [

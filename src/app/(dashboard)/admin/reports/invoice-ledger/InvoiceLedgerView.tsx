@@ -83,6 +83,9 @@ type Preview = {
         serials?: number;
         unmapped_items: number;
         gstin_refused?: number;
+        new_docs?: number;
+        updated_docs?: number;
+        duplicates?: number;
     };
     unmapped_items: string[];
     rows: Array<{
@@ -97,19 +100,61 @@ type Preview = {
         batteries: number;
         taxable: number | null;
         action: string;
+        crm_total?: number | null;
+        register_total?: number | null;
+        paid_before?: number | null;
+        paid_after?: number | null;
+        balance_after?: number | null;
+        payment_change?: "none" | "increase" | "decrease" | "no_data";
+        total_mismatch?: boolean;
+        overrides_manual?: boolean;
+        classification?: "new" | "duplicate" | "updated";
     }>;
+    payments?: {
+        generated_at: string | null;
+        last_generated_at: string | null;
+        older_than_last: boolean;
+        increases: number;
+        decreases: number;
+        collected: number;
+        open_balance: number;
+        total_mismatches: number;
+        not_in_file: Array<{ number: string; party: string | null; date: string | null; balance: number }>;
+        not_in_file_balance: number;
+        before_period: { count: number; balance: number; oldest: string | null };
+    } | null;
 };
+
+/** "2026-10-28T14:24:00+05:30" → "28 Oct 2026, 2:24 pm" (India time). */
+const istStamp = (iso: string | null | undefined) =>
+    iso
+        ? new Date(iso).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", year: "numeric", hour: "numeric", minute: "2-digit" })
+        : "—";
+
+function PaymentCell({ r }: { r: Preview["rows"][number] }) {
+    if (!r.payment_change) return <span className="text-ink-muted">—</span>;
+    if (r.payment_change === "no_data") return <span className="text-ink-muted">no payment in file</span>;
+    const tone = r.payment_change === "increase" ? "text-emerald-700" : r.payment_change === "decrease" ? "text-rose-700" : "text-ink-muted";
+    return (
+        <span className={tone} title={r.overrides_manual ? "Lowers an amount entered by hand with the Payment button" : undefined}>
+            {r.payment_change === "none" ? inr(r.paid_after) : `${inr(r.paid_before)} → ${inr(r.paid_after)}`}
+            {r.overrides_manual ? " (was entered by hand)" : ""}
+        </span>
+    );
+}
 
 function ImportTab() {
     const qc = useQueryClient();
     const [file, setFile] = useState<File | null>(null);
     const [kind, setKind] = useState<"vyapar_register" | "gstr1">("vyapar_register");
     const [preview, setPreview] = useState<Preview | null>(null);
+    // Payment sync: an export older than the last one imported needs an explicit yes.
+    const [allowOlder, setAllowOlder] = useState(false);
 
     const history = useQuery({
         queryKey: ["invoice-ledger-imports"],
         queryFn: async () =>
-            readData<{ imports: Array<{ id: string; kind: string; file_name: string | null; period_from: string | null; period_to: string | null; summary: Record<string, number> | null; created_at: string; imported_by: string | null }> }>(
+            readData<{ imports: Array<{ id: string; kind: string; file_name: string | null; period_from: string | null; period_to: string | null; summary: Record<string, number | string | null> | null; created_at: string; imported_by: string | null }> }>(
                 await fetch("/api/admin/sales-invoices/ledger/import"),
                 "Could not load imports",
             ),
@@ -122,6 +167,7 @@ function ImportTab() {
             fd.append("file", file);
             fd.append("kind", kind);
             fd.append("mode", mode);
+            if (mode === "commit" && allowOlder) fd.append("allow_older", "1");
             return readData<{ mode: string; preview?: Preview; summary?: Record<string, number> }>(
                 await fetch("/api/admin/sales-invoices/ledger/import", { method: "POST", body: fd }),
                 "Import failed",
@@ -130,6 +176,7 @@ function ImportTab() {
         onSuccess: (data) => {
             if (data.mode === "preview") {
                 setPreview(data.preview ?? null);
+                setAllowOlder(false);
                 return;
             }
             const s = data.summary ?? {};
@@ -138,10 +185,16 @@ function ImportTab() {
             toast.success(
                 kind === "gstr1"
                     ? `GSTR-1 imported: ${s.documents ?? 0} documents.${refused}`
-                    : `Imported ${s.documents ?? 0} invoices (${s.created_ids ?? 0} new, ${s.voided ?? 0} voided as cancelled).${refused}`,
+                    : `Imported ${s.documents ?? 0} invoices (${s.created_ids ?? 0} new, ${s.voided ?? 0} voided as cancelled).` +
+                          (s.payments_set
+                              ? ` Payments updated on ${s.payments_set} (${inr(s.collected ?? 0)} newly collected${s.payments_decreased ? `, ${s.payments_decreased} lowered` : ""}).`
+                              : "") +
+                          refused,
             );
+            qc.invalidateQueries({ queryKey: ["invoice-freshness"] });
             setPreview(null);
             setFile(null);
+            setAllowOlder(false);
             qc.invalidateQueries({ queryKey: ["invoice-ledger-imports"] });
             qc.invalidateQueries({ queryKey: ["invoice-ledger-items"] });
         },
@@ -197,7 +250,10 @@ function ImportTab() {
                             Sheet <strong>{preview.sheet ?? "—"}</strong> · {preview.period.from ?? "?"} to {preview.period.to ?? "?"} ·{" "}
                             {preview.totals.documents} documents
                             {preview.kind === "vyapar_register" &&
-                                ` · ${preview.totals.update} update · ${preview.totals.create} new · ${preview.totals.in_zoho ?? 0} already in Zoho (skipped) · ${preview.totals.cancelled} cancelled · ${preview.totals.lines} lines · ${preview.totals.batteries} batteries · ${preview.totals.serials ?? 0} battery serials read`}
+                                (preview.totals.duplicates != null
+                                    ? ` · ${preview.totals.new_docs ?? 0} new · ${preview.totals.updated_docs ?? 0} updated · ${preview.totals.duplicates} duplicates (skipped)`
+                                    : ` · ${preview.totals.update} update · ${preview.totals.create} new`) +
+                                ` · ${preview.totals.in_zoho ?? 0} already in Zoho (skipped) · ${preview.totals.cancelled} cancelled · ${preview.totals.lines} lines · ${preview.totals.batteries} batteries · ${preview.totals.serials ?? 0} battery serials read`}
                         </p>
                         <p>
                             Columns read:{" "}
@@ -220,6 +276,7 @@ function ImportTab() {
                             </p>
                         )}
                     </div>
+                    {preview.payments && <PaymentSyncPanel p={preview.payments} allowOlder={allowOlder} setAllowOlder={setAllowOlder} />}
                     <div className="max-h-96 overflow-auto rounded-md border border-border">
                         <table className="w-full text-xs">
                             <thead className="sticky top-0 bg-surface-subtle text-left text-ink-muted">
@@ -231,6 +288,8 @@ function ImportTab() {
                                     <th className="px-2 py-1.5 text-right">Lines</th>
                                     <th className="px-2 py-1.5 text-right">Batteries</th>
                                     <th className="px-2 py-1.5 text-right">Before GST</th>
+                                    {preview.payments && <th className="px-2 py-1.5 text-right">Paid (CRM → Vyapar)</th>}
+                                    {preview.payments && <th className="px-2 py-1.5 text-right">Still owed</th>}
                                     <th className="px-2 py-1.5">Action</th>
                                 </tr>
                             </thead>
@@ -252,15 +311,44 @@ function ImportTab() {
                                         <td className="px-2 py-1 text-right">{r.lines}</td>
                                         <td className="px-2 py-1 text-right">{r.batteries}</td>
                                         <td className="px-2 py-1 text-right">{inr(r.taxable)}</td>
+                                        {preview.payments && (
+                                            <td className="px-2 py-1 text-right whitespace-nowrap">
+                                                <PaymentCell r={r} />
+                                            </td>
+                                        )}
+                                        {preview.payments && (
+                                            <td className="px-2 py-1 text-right whitespace-nowrap">
+                                                {r.balance_after == null ? "—" : inr(r.balance_after)}
+                                                {r.total_mismatch && (
+                                                    <span
+                                                        className="ml-1 text-amber-700"
+                                                        title={`CRM total ${inr(r.crm_total)} but Vyapar says ${inr(r.register_total)} — the payment is capped at the CRM total; check the invoice.`}
+                                                    >
+                                                        ⚠ total differs
+                                                    </span>
+                                                )}
+                                            </td>
+                                        )}
                                         <td className="px-2 py-1">
-                                            {r.cancelled ? <span className="text-rose-700">void (cancelled)</span> : r.doc_type === "credit_note" ? "credit note" : r.action === "in_zoho" ? "already in Zoho (skipped)" : r.action}
+                                            {r.action === "in_zoho" ? (
+                                                "already in Zoho (skipped)"
+                                            ) : r.classification === "duplicate" ? (
+                                                <span className="text-ink-muted">duplicate (skipped)</span>
+                                            ) : r.cancelled ? (
+                                                <span className="text-rose-700">void (cancelled)</span>
+                                            ) : (
+                                                `${r.doc_type === "credit_note" ? "credit note · " : ""}${r.classification ?? r.action}`
+                                            )}
                                         </td>
                                     </tr>
                                 ))}
                             </tbody>
                         </table>
                     </div>
-                    <Button disabled={send.isPending || preview.totals.documents === 0} onClick={() => send.mutate("commit")}>
+                    <Button
+                        disabled={send.isPending || preview.totals.documents === 0 || (!!preview.payments?.older_than_last && !allowOlder)}
+                        onClick={() => send.mutate("commit")}
+                    >
                         {send.isPending && send.variables === "commit" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
                         Import {preview.totals.documents} documents
                     </Button>
@@ -282,7 +370,10 @@ function ImportTab() {
                                 <span className="text-ink-muted">
                                     {i.period_from?.slice(0, 10) ?? "?"} → {i.period_to?.slice(0, 10) ?? "?"}
                                 </span>
-                                <span className="text-ink-muted">{i.summary?.documents ?? 0} docs</span>
+                                <span className="text-ink-muted">{Number(i.summary?.documents ?? 0)} docs</span>
+                                {i.summary?.generated_at && (
+                                    <span className="text-ink-muted">Vyapar export of {istStamp(String(i.summary.generated_at))}</span>
+                                )}
                                 <span className="text-ink-muted">
                                     {new Date(i.created_at).toLocaleString("en-IN")} · {i.imported_by ?? "—"}
                                 </span>
@@ -292,6 +383,78 @@ function ImportTab() {
                     </ul>
                 )}
             </div>
+        </div>
+    );
+}
+
+/**
+ * Payment sync — what this Vyapar export does to amounts paid, and what it
+ * cannot see. Vyapar is the source of truth: the figures are absolute.
+ */
+function PaymentSyncPanel({
+    p,
+    allowOlder,
+    setAllowOlder,
+}: {
+    p: NonNullable<Preview["payments"]>;
+    allowOlder: boolean;
+    setAllowOlder: (v: boolean) => void;
+}) {
+    return (
+        <div className="space-y-2 rounded-md border border-border bg-surface-subtle px-3 py-2 text-xs">
+            <p className="font-medium text-ink">
+                Payments as of the Vyapar export of {istStamp(p.generated_at)}
+                {!p.generated_at && <span className="ml-1 font-normal text-amber-700">(no “Generated on” line in the file)</span>}
+            </p>
+            <p className="text-ink-muted">
+                {p.increases} invoice(s) get new payments ({inr(p.collected)} newly collected) · {p.decreases} lowered · still owed on the
+                invoices in this file after import: {inr(p.open_balance)}
+                {p.last_generated_at && <> · last export imported: {istStamp(p.last_generated_at)}</>}
+            </p>
+            {p.older_than_last && (
+                <div className="rounded border border-rose-200 bg-rose-50 px-2 py-1.5 text-rose-800">
+                    This export is OLDER than the last one imported ({istStamp(p.last_generated_at)}). Importing it sets payments back to
+                    older figures. Export the Sale Report again from Vyapar.
+                    <label className="mt-1 flex items-center gap-2">
+                        <input type="checkbox" checked={allowOlder} onChange={(e) => setAllowOlder(e.target.checked)} />
+                        I understand — import this older file anyway
+                    </label>
+                </div>
+            )}
+            {p.decreases > 0 && (
+                <p className="text-rose-700">
+                    {p.decreases} invoice(s) show LESS paid in Vyapar than in the CRM (a reversed or re-allocated payment, or an amount
+                    entered by hand here). Vyapar wins — check them in the table below.
+                </p>
+            )}
+            {p.total_mismatches > 0 && (
+                <p className="text-amber-700">
+                    {p.total_mismatches} invoice total(s) differ between the CRM and Vyapar — payments are capped at the CRM total. Fix the
+                    invoice in Needs attention.
+                </p>
+            )}
+            {p.before_period.count > 0 && (
+                <p className="text-amber-700">
+                    {p.before_period.count} open invoice(s) ({inr(p.before_period.balance)}) are dated before this export starts — it cannot
+                    update them. Export the Sale Report from {p.before_period.oldest ?? "the oldest open invoice"} (or from the start of the
+                    financial year) to sync their payments.
+                </p>
+            )}
+            {p.not_in_file.length > 0 && (
+                <details>
+                    <summary className="cursor-pointer text-amber-700">
+                        {p.not_in_file.length} open CRM invoice(s) ({inr(p.not_in_file_balance)}) fall inside this export&apos;s dates but are
+                        not in it — left unchanged. Check them in Vyapar (deleted, renumbered, or a filtered export?).
+                    </summary>
+                    <ul className="mt-1 max-h-40 list-disc overflow-auto pl-4">
+                        {p.not_in_file.map((m) => (
+                            <li key={m.number}>
+                                <span className="font-mono">{m.number}</span> · {m.date ?? "—"} · {m.party ?? "—"} · {inr(m.balance)} owed
+                            </li>
+                        ))}
+                    </ul>
+                </details>
+            )}
         </div>
     );
 }
