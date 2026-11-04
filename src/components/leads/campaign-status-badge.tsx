@@ -273,11 +273,24 @@ const OUTCOME_STYLES: Record<string, { bg: string; text: string; label: string }
   },
 };
 
+// A scored call whose analyser outcome is only 'unknown' (the dealer named no
+// battery spec, volume or financing) is named by its intent band instead.
+const BAND_OUTCOME_STYLES: Record<string, { bg: string; text: string; label: string }> = {
+  Qualified: { bg: "bg-emerald-50", text: "text-emerald-700", label: "Qualified" },
+  Warm: { bg: "bg-amber-50", text: "text-amber-700", label: "Warm interest" },
+  Cold: { bg: "bg-sky-50", text: "text-sky-700", label: "Cold" },
+  Disqualified: { bg: "bg-rose-50", text: "text-rose-700", label: "Not a fit" },
+};
+const VAGUE_OUTCOMES = new Set(["unknown", "needs_review", "no_response"]);
+
 export function CampaignOutcomeBadge({
   outcome,
   failureReason,
+  band,
 }: {
   outcome: string | null;
+  /** ai_call_logs.band — names the chip when the outcome word says nothing. */
+  band?: string | null;
   /**
    * The derived reason this call produced no conversation, from
    * src/lib/ai-dialer/failureReason.ts. When present it REPLACES the raw
@@ -318,6 +331,17 @@ Provider said: ${failureReason.detail}` : "",
       >
         {failureReason.label}
         {failureReason.detail ? " ⓘ" : ""}
+      </span>
+    );
+  }
+
+  const bandCfg = band ? BAND_OUTCOME_STYLES[band] : undefined;
+  if (bandCfg && (!outcome || VAGUE_OUTCOMES.has(outcome))) {
+    return (
+      <span
+        className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium ${bandCfg.bg} ${bandCfg.text}`}
+      >
+        {bandCfg.label}
       </span>
     );
   }
