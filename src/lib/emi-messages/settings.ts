@@ -10,8 +10,10 @@ import {
     EMI_MESSAGE_KINDS,
     defaultEmiMessagesSettings,
     type EmiMessageConfig,
+    type EmiLenderSwitch,
     type EmiMessagesSettings,
 } from "./rules";
+import { normaliseSmsPlan } from "./sms-plan";
 
 export const EMI_MESSAGES_SETTINGS_KEY = "emi_messages";
 
@@ -41,9 +43,21 @@ export function normaliseEmiSettings(v: Record<string, unknown> | null | undefin
         } satisfies EmiMessageConfig;
     }
     const hour = Number(src.sendFromHourIst);
+    const pilotNbfcId = typeof src.pilotNbfcId === "string" && src.pilotNbfcId ? src.pilotNbfcId : null;
+    // 4 Nov: per-financer switches. Saved before then = the pilot lender, both channels.
+    const lenders: Record<string, EmiLenderSwitch> = {};
+    if (src.lenders && typeof src.lenders === "object") {
+        for (const [id, v] of Object.entries(src.lenders as Record<string, Record<string, unknown>>)) {
+            if (id && v) lenders[id] = { sms: v.sms === true, whatsapp: v.whatsapp === true };
+        }
+    } else if (pilotNbfcId) {
+        lenders[pilotNbfcId] = { sms: true, whatsapp: true };
+    }
     return {
         enabled: src.enabled === true,
-        pilotNbfcId: typeof src.pilotNbfcId === "string" && src.pilotNbfcId ? src.pilotNbfcId : null,
+        pilotNbfcId,
+        lenders,
+        sms: normaliseSmsPlan(src.sms),
         waLanguage: str(src.waLanguage, d.waLanguage) || d.waLanguage,
         sendFromHourIst: Number.isInteger(hour) && hour >= 0 && hour <= 21 ? hour : d.sendFromHourIst,
         messages,

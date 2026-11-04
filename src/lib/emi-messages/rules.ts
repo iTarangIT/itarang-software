@@ -13,6 +13,8 @@
  * approved. Database side: ./settings.ts, ./store.ts, ./run.ts.
  */
 
+import { defaultSmsPlan, type EmiSmsPlan } from "./sms-plan";
+
 export const EMI_SCHEDULED_KINDS = ["due_3d", "due_today", "overdue_1", "overdue_3", "overdue_7"] as const;
 export type EmiScheduledKind = (typeof EMI_SCHEDULED_KINDS)[number];
 export const EMI_MESSAGE_KINDS = [...EMI_SCHEDULED_KINDS, "received"] as const;
@@ -26,6 +28,7 @@ export const EMI_CHANNELS: readonly EmiChannel[] = ["whatsapp", "sms"];
  *   total_due     3 Nov: everything unpaid on the loan up to this EMI (or up to
  *                 today when that is later) — missed months included
  *   pending_emis  how many EMIs make up total_due
+ *   paid_date     4 Nov: the day a payment was recorded ("received" SMS)
  */
 export const EMI_FIELDS = [
     "name",
@@ -36,6 +39,7 @@ export const EMI_FIELDS = [
     "days_overdue",
     "total_due",
     "pending_emis",
+    "paid_date",
 ] as const;
 export type EmiField = (typeof EMI_FIELDS)[number];
 export type EmiFieldValues = Partial<Record<EmiField, string>>;
@@ -71,11 +75,21 @@ export type EmiMessageConfig = {
     smsText: string;
 };
 
+/** Per financer (nbfc_tenants.id): which channels its customers get. */
+export type EmiLenderSwitch = { sms: boolean; whatsapp: boolean };
+
 export type EmiMessagesSettings = {
     /** Master switch. Off = nothing is sent (ships off). */
     enabled: boolean;
-    /** The one pilot lender (nbfc_tenants.id). Null = nobody gets the scheduled messages. */
+    /**
+     * Until 4 Nov the one pilot lender. Kept so old settings read: with no
+     * `lenders` saved yet, it becomes that lender with both channels on.
+     */
     pilotNbfcId: string | null;
+    /** 4 Nov: on/off per financer and channel, set by Admin / Sales Head. A lender not listed gets nothing. */
+    lenders: Record<string, EmiLenderSwitch>;
+    /** 4 Nov: the SMS schedule and the DLT templates (./sms-plan.ts). The `messages` below are WhatsApp only. */
+    sms: EmiSmsPlan;
     /** Meta template language code. */
     waLanguage: string;
     /** Scheduled messages go out from this hour (IST). */
@@ -122,7 +136,7 @@ export function defaultEmiMessagesSettings(): EmiMessagesSettings {
             smsText: "",
         };
     }
-    return { enabled: false, pilotNbfcId: null, waLanguage: "hi", sendFromHourIst: 10, messages, updatedBy: null, updatedAt: null };
+    return { enabled: false, pilotNbfcId: null, lenders: {}, sms: defaultSmsPlan(), waLanguage: "hi", sendFromHourIst: 10, messages, updatedBy: null, updatedAt: null };
 }
 
 /** The "{field}" names in a text, in order, repeats kept (a WhatsApp template's body parameters). */
@@ -211,6 +225,9 @@ export function smsValues(values: EmiFieldValues): EmiFieldValues {
         total_due: digits(values.total_due),
         due_date: day(values.due_date),
         next_due_date: day(values.next_due_date),
+        paid_date: day(values.paid_date),
+        // DLT {#var#} takes up to 30 characters.
+        lender: values.lender?.slice(0, 30),
     };
 }
 
@@ -219,6 +236,13 @@ export function fmtDay(day: string | null | undefined): string {
     if (!day) return "-";
     const [y, m, d] = day.slice(0, 10).split("-");
     return y && m && d ? `${d}-${m}-${y}` : day;
+}
+
+/** The financers whose customers get messages on `channel`. */
+export function lendersOn(settings: Pick<EmiMessagesSettings, "lenders">, channel: EmiChannel): string[] {
+    return Object.entries(settings.lenders)
+        .filter(([, v]) => v[channel])
+        .map(([id]) => id);
 }
 
 /** Last 10 digits of an Indian mobile, or null. */

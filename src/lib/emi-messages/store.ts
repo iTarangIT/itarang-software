@@ -34,6 +34,34 @@ export async function hasEmiMessages(): Promise<boolean> {
     return ok;
 }
 
+let smsProbe: { at: number; ok: boolean } | null = null;
+
+/**
+ * Does emi_customer_messages take the SMS-plan kinds (E-371: sms_before,
+ * sms_due_today, sms_overdue)? Without it those claims would fail the kind
+ * check, so the SMS plan does not run. Cached for a minute.
+ */
+export async function hasEmiSmsKinds(): Promise<boolean> {
+    if (smsProbe && Date.now() - smsProbe.at < 60_000) return smsProbe.ok;
+    let ok = false;
+    try {
+        const r = rowsOf<{ ok: boolean }>(
+            await db.execute(sql`
+                SELECT EXISTS (
+                    SELECT 1 FROM pg_constraint
+                     WHERE conname = 'emi_customer_messages_kind_chk'
+                       AND pg_get_constraintdef(oid) LIKE '%sms_before%'
+                ) AS ok
+            `),
+        );
+        ok = Boolean(r[0]?.ok);
+    } catch {
+        ok = false;
+    }
+    smsProbe = { at: Date.now(), ok };
+    return ok;
+}
+
 export type EmiMessageClaim = {
     emiScheduleId: string | null;
     loanSanctionId: string;

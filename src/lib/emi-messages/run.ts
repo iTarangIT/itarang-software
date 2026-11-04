@@ -10,16 +10,20 @@
  *   sendPortalReminder()  the lender portal's "Send payment reminder", for real.
  *   sendEmiTestMessages() Admin > Settings > EMI messages > test send.
  *
- * Every send is claimed first (./store.ts) and goes on WhatsApp (a Meta
- * template) and SMS (Exotel, the DLT-registered text) with the APPROVED text only.
- * Nothing is sent while the settings are off, without a pilot lender, or
- * before E-365. Rules: ./rules.ts.
+ * Every send is claimed first (./store.ts). WhatsApp: the five scheduled
+ * messages + "received" (a Meta template, the APPROVED text only). SMS (4 Nov):
+ * the SMS plan (./sms-plan.ts) — day-wise DLT reminder templates N days
+ * before, "आज" on the due day, the total-overdue SMS daily / every N days, and
+ * "received" — through Exotel under each template's DLT id. Both only for the
+ * financers switched on for that channel (settings.lenders). Nothing is sent
+ * while the settings are off or before E-365; the SMS plan also needs E-371.
  */
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
-    EMI_CHANNELS,
     EMI_MESSAGE_KINDS,
+    daysBetween,
+    lendersOn,
     dueKindsFor,
     fillText,
     fmtAmount,
@@ -34,7 +38,15 @@ import {
     type EmiMessagesSettings,
 } from "./rules";
 import { getEmiMessagesSettings } from "./settings";
-import { claimEmiMessage, finishEmiMessage, hasEmiMessages, type EmiMessageClaim } from "./store";
+import { claimEmiMessage, finishEmiMessage, hasEmiMessages, hasEmiSmsKinds, type EmiMessageClaim } from "./store";
+import {
+    dayOfMonth,
+    smsStepFor,
+    smsTemplateFor,
+    smsWindow,
+    type EmiSmsStepKind,
+    type EmiSmsTemplate,
+} from "./sms-plan";
 
 const rowsOf = <T>(r: unknown): T[] => (Array.isArray(r) ? r : ((r as { rows?: T[] })?.rows ?? [])) as T[];
 
@@ -96,7 +108,7 @@ function istToday(now: Date): string {
     return new Date(now.getTime() + 5.5 * 3600_000).toISOString().slice(0, 10);
 }
 
-function valuesFor(e: EmiContext, kind: EmiMessageKind, opts: { paid?: number; today: string }): EmiFieldValues {
+function valuesFor(e: EmiContext, kind: EmiMessageKind | "sms", opts: { paid?: number; today: string }): EmiFieldValues {
     const due = Number(e.amount ?? 0) - Number(e.amount_paid ?? 0);
     const overdue = Math.max(0, Math.round((Date.parse(`${opts.today}T00:00:00Z`) - Date.parse(`${e.due_date}T00:00:00Z`)) / 86_400_000));
     return {
@@ -108,6 +120,7 @@ function valuesFor(e: EmiContext, kind: EmiMessageKind, opts: { paid?: number; t
         days_overdue: String(overdue),
         total_due: fmtAmount(e.total_due ?? 0),
         pending_emis: String(e.pending_emis ?? 0),
+        paid_date: fmtDay(opts.today),
     };
 }
 
@@ -142,7 +155,53 @@ async function deliver(
     return { status: r.success ? "sent" : "failed", providerMessageId: r.messageId, error: r.success ? null : r.error };
 }
 
-/** Claim, send, record — on both channels. Returns how many were sent. */
+type SendOutcome = { status: "sent" | "failed" | "skipped"; providerMessageId: string | null; error: string | null };
+
+/** One SMS-plan SMS through Exotel: the DLT text with its fields filled, under its DLT id. */
+async function deliverSms(tpl: EmiSmsTemplate, phone: string, values: EmiFieldValues): Promise<SendOutcome> {
+    if (!tpl.dltTemplateId.trim()) return { status: "skipped", providerMessageId: null, error: "no DLT template id" };
+    const { sendExotelSms } = await import("@/lib/exotel");
+    const r = await sendExotelSms({ mobile_number: phone, body: fillText(tpl.text, smsValues(values)), dlt_template_id: tpl.dltTemplateId });
+    if (r.skipped) return { status: "skipped", providerMessageId: null, error: r.error };
+    return { status: r.success ? "sent" : "failed", providerMessageId: r.messageId, error: r.success ? null : r.error };
+}
+
+/** Claim, send, record one SMS-plan SMS. Returns 1 when sent. */
+async function claimAndSendSms(
+    e: EmiContext,
+    kind: EmiSmsStepKind | "received" | "reminder",
+    ref: string,
+    tpl: EmiSmsTemplate,
+    values: EmiFieldValues,
+): Promise<number> {
+    // No DLT id yet = this SMS is not set up: no claim, no history line.
+    if (!tpl.dltTemplateId.trim()) return 0;
+    const phone = mobile10(e.phone);
+    const claim: EmiMessageClaim = {
+        emiScheduleId: e.emi_id,
+        loanSanctionId: e.loan_sanction_id,
+        leadId: e.lead_id,
+        nbfcId: e.nbfc_id,
+        kind,
+        channel: "sms",
+        ref,
+        phone,
+        body: fillText(tpl.text, smsValues(values)),
+    };
+    const id = await claimEmiMessage(claim);
+    if (!id) return 0; // this step already went for this EMI
+    const out: SendOutcome = phone
+        ? await deliverSms(tpl, phone, values).catch((err) => ({
+              status: "failed" as const,
+              providerMessageId: null,
+              error: err instanceof Error ? err.message : String(err),
+          }))
+        : { status: "skipped", providerMessageId: null, error: "no valid customer mobile on the file" };
+    await finishEmiMessage(id, claim, out);
+    return out.status === "sent" ? 1 : 0;
+}
+
+/** Claim, send, record — WhatsApp by default (SMS go by the SMS plan since 4 Nov). Returns how many were sent. */
 async function claimAndSend(
     e: EmiContext,
     kind: EmiMessageKind | "reminder",
@@ -151,7 +210,7 @@ async function claimAndSend(
     values: EmiFieldValues,
     settings: EmiMessagesSettings,
     ref = "",
-    channels: readonly EmiChannel[] = EMI_CHANNELS,
+    channels: readonly EmiChannel[] = ["whatsapp"],
 ): Promise<number> {
     const phone = mobile10(e.phone);
     let sent = 0;
@@ -191,7 +250,7 @@ export async function runEmiMessages(now = new Date()): Promise<{ aged: boolean;
     await runEmiAging();
 
     const settings = await getEmiMessagesSettings();
-    if (!settings.enabled || !settings.pilotNbfcId || !(await hasEmiMessages())) return { aged: true, sent: 0 };
+    if (!settings.enabled || !(await hasEmiMessages())) return { aged: true, sent: 0 };
     // Off the live site a job's sends are dropped (ID 125) — do not claim
     // messages that would then never go.
     const { jobSendsAllowed } = await import("@/lib/runtime/liveSite");
@@ -200,26 +259,71 @@ export async function runEmiMessages(now = new Date()): Promise<{ aged: boolean;
     if (hourIst < settings.sendFromHourIst || hourIst >= 21) return { aged: true, sent: 0 };
 
     const today = istToday(now);
-    const days = Object.values(settings.messages).map((m) => m.day);
-    const minDay = Math.min(...days);
-    const maxDay = Math.max(...days);
-    const emis = rowsOf<EmiContext>(
-        await db.execute(contextSql(sql`
-            ls.nbfc_id = ${settings.pilotNbfcId}::uuid
-            AND e.status IN ('scheduled', 'overdue', 'missed')
-            AND e.amount_paid < COALESCE(e.amount, 0)
-            AND e.due_date BETWEEN (${today}::date - ${maxDay}::int) AND (${today}::date - ${minDay}::int)
-        `, today)),
-    );
-
     let sent = 0;
-    for (const e of emis) {
-        for (const kind of dueKindsFor({ dueDate: e.due_date, unpaid: true }, today, settings.messages)) {
-            const cfg = settings.messages[kind];
-            sent += await claimAndSend(e, kind, cfg, cfg.text!, valuesFor(e, kind, { today }), settings);
+
+    // WhatsApp — the five scheduled messages, for the financers on WhatsApp.
+    const waLenders = lendersOn(settings, "whatsapp");
+    if (waLenders.length) {
+        const days = Object.values(settings.messages).map((m) => m.day);
+        const minDay = Math.min(...days);
+        const maxDay = Math.max(...days);
+        const emis = rowsOf<EmiContext>(
+            await db.execute(contextSql(sql`
+                ls.nbfc_id IN (${sql.join(waLenders.map((id) => sql`${id}::uuid`), sql`, `)})
+                AND e.status IN ('scheduled', 'overdue', 'missed')
+                AND e.amount_paid < COALESCE(e.amount, 0)
+                AND e.due_date BETWEEN (${today}::date - ${maxDay}::int) AND (${today}::date - ${minDay}::int)
+            `, today)),
+        );
+        for (const e of emis) {
+            for (const kind of dueKindsFor({ dueDate: e.due_date, unpaid: true }, today, settings.messages)) {
+                const cfg = settings.messages[kind];
+                sent += await claimAndSend(e, kind, cfg, cfg.text!, valuesFor(e, kind, { today }), settings);
+            }
         }
     }
+
+    sent += await runSmsPlan(settings, today);
     return { aged: true, sent };
+}
+
+/**
+ * SMS (4 Nov): for the financers on SMS, every unpaid EMI in the plan's
+ * window gets the step its day calls for — the reminder template of its own
+ * due day N days before, "आज" on the day, then the total-overdue SMS. The
+ * overdue SMS goes once per LOAN a day (it carries the loan's total), counted
+ * from the loan's latest overdue EMI — a newly missed EMI starts it again.
+ */
+async function runSmsPlan(settings: EmiMessagesSettings, today: string): Promise<number> {
+    const lenders = lendersOn(settings, "sms");
+    if (!lenders.length || !(await hasEmiSmsKinds())) return 0;
+    const plan = settings.sms;
+    const { maxOverdue, maxBefore } = smsWindow(plan);
+    const emis = rowsOf<EmiContext>(
+        await db.execute(contextSql(sql`
+            ls.nbfc_id IN (${sql.join(lenders.map((id) => sql`${id}::uuid`), sql`, `)})
+            AND e.status IN ('scheduled', 'overdue', 'missed')
+            AND e.amount_paid < COALESCE(e.amount, 0)
+            AND e.due_date BETWEEN (${today}::date - ${maxOverdue}::int) AND (${today}::date + ${maxBefore}::int)
+        `, today)),
+    );
+    // The overdue SMS: one per loan, from its latest overdue EMI.
+    const latestOverdue = new Map<string, EmiContext>();
+    for (const e of emis) {
+        if (e.due_date >= today) continue;
+        const cur = latestOverdue.get(e.loan_sanction_id);
+        if (!cur || e.due_date > cur.due_date) latestOverdue.set(e.loan_sanction_id, e);
+    }
+    let sent = 0;
+    for (const e of emis) {
+        const offset = daysBetween(e.due_date, today);
+        if (offset > 0 && latestOverdue.get(e.loan_sanction_id) !== e) continue;
+        const step = smsStepFor(offset, plan);
+        if (!step) continue;
+        const tpl = smsTemplateFor(step.kind, e.due_date, plan);
+        sent += await claimAndSendSms(e, step.kind, step.ref, tpl, valuesFor(e, "sms", { today }));
+    }
+    return sent;
 }
 
 /**
@@ -230,14 +334,16 @@ export async function runEmiMessages(now = new Date()): Promise<{ aged: boolean;
 export async function queueEmiReceived(input: { emiId: string; amount?: number | null; paymentRef: string | null }): Promise<void> {
     try {
         const settings = await getEmiMessagesSettings();
-        const cfg = settings.messages.received;
-        if (!settings.enabled || !settings.pilotNbfcId || !cfg.on || !cfg.text) return;
-        if (!(await hasEmiMessages())) return;
+        if (!settings.enabled || !(await hasEmiMessages())) return;
         const today = istToday(new Date());
         const [e] = rowsOf<EmiContext>(await db.execute(contextSql(sql`e.id = ${input.emiId}::uuid`, today)));
-        if (!e || e.nbfc_id !== settings.pilotNbfcId) return;
+        const sw = e?.nbfc_id ? settings.lenders[e.nbfc_id] : undefined;
+        if (!e || !sw) return;
         const ref = (input.paymentRef ?? `paid-${e.amount_paid}`).slice(0, 100);
-        await claimAndSend(e, "received", cfg, cfg.text, valuesFor(e, "received", { paid: input.amount ?? undefined, today }), settings, ref);
+        const values = valuesFor(e, "received", { paid: input.amount ?? undefined, today });
+        const cfg = settings.messages.received;
+        if (sw.whatsapp && cfg.on && cfg.text) await claimAndSend(e, "received", cfg, cfg.text, values, settings, ref);
+        if (sw.sms) await claimAndSendSms(e, "received", ref, settings.sms.receivedTpl, values);
     } catch (err) {
         console.error("[emi-messages] received message failed:", err instanceof Error ? err.message : err);
     }
@@ -267,6 +373,14 @@ export async function sendPortalReminder(input: {
         `, today)} ORDER BY e.due_date LIMIT 1`),
     );
     if (!e) return { sent: false, reason: "No unpaid EMI on this loan." };
+    if (input.channel === "sms") {
+        // SMS: the SMS-plan template for where the EMI stands (overdue → the total-overdue SMS).
+        const step: EmiSmsStepKind = e.due_date < today ? "sms_overdue" : e.due_date === today ? "sms_due_today" : "sms_before";
+        const tpl = smsTemplateFor(step, e.due_date, settings.sms);
+        if (!tpl.dltTemplateId) return { sent: false, reason: "That SMS has no DLT template id yet (Settings > EMI messages)." };
+        const n = await claimAndSendSms(e, "reminder", input.actionId, tpl, valuesFor(e, "sms", { today }));
+        return n > 0 ? { sent: true } : { sent: false, reason: "The SMS could not be sent (see the file's history)." };
+    }
     const kind: EmiMessageKind = e.due_date < today ? "overdue_1" : e.due_date === today ? "due_today" : "due_3d";
     const cfg = settings.messages[kind];
     if (!cfg.text) return { sent: false, reason: `The "${kind}" text is not approved yet.` };
@@ -282,7 +396,12 @@ export async function sendPortalReminder(input: {
 export async function sendEmiTestMessages(input: {
     phone: string;
     kinds?: EmiMessageKind[];
-}): Promise<Array<{ kind: EmiMessageKind; channel: EmiChannel; status: string; error: string | null }>> {
+    /** SMS plan test (4 Nov): the reminder of this due day (default: today's), "आज", overdue, received. */
+    sms?: boolean;
+    smsDay?: number;
+    /** false = no WhatsApp test messages. */
+    whatsapp?: boolean;
+}): Promise<Array<{ kind: string; channel: EmiChannel; status: string; error: string | null }>> {
     const phone = mobile10(input.phone);
     if (!phone) throw Object.assign(new Error("Give a 10-digit Indian mobile number."), { status: 400 });
     if (!(await hasEmiMessages())) throw Object.assign(new Error("EMI messages are not set up on this server yet (E-365)."), { status: 503 });
@@ -296,13 +415,46 @@ export async function sendEmiTestMessages(input: {
         days_overdue: "3",
         total_due: fmtAmount(12750),
         pending_emis: "3",
+        paid_date: fmtDay(istToday(new Date())),
     };
-    const out: Array<{ kind: EmiMessageKind; channel: EmiChannel; status: string; error: string | null }> = [];
-    for (const kind of input.kinds?.length ? input.kinds : EMI_MESSAGE_KINDS) {
+    const out: Array<{ kind: string; channel: EmiChannel; status: string; error: string | null }> = [];
+    if (input.sms !== false) {
+        const day = input.smsDay ?? dayOfMonth(istToday(new Date()));
+        const plan = settings.sms;
+        const tests: Array<[string, EmiSmsTemplate]> = [
+            [`SMS reminder (day ${day})`, plan.reminders[day - 1] ?? plan.reminders[0]!],
+            ["SMS due today (आज)", plan.dueTodayTpl],
+            ["SMS overdue (total)", plan.overdueTpl],
+            ["SMS received", plan.receivedTpl],
+        ];
+        for (const [label, tpl] of tests) {
+            // Test rows go as kind "reminder" (valid with or without E-371); the label says which.
+            const claim: EmiMessageClaim = {
+                emiScheduleId: null,
+                loanSanctionId: "TEST",
+                leadId: null,
+                nbfcId: null,
+                kind: "reminder",
+                channel: "sms",
+                phone,
+                body: fillText(tpl.text, smsValues(sample)),
+                isTest: true,
+            };
+            const id = await claimEmiMessage(claim);
+            const r = await deliverSms(tpl, phone, sample).catch((err) => ({
+                status: "failed" as const,
+                providerMessageId: null,
+                error: err instanceof Error ? err.message : String(err),
+            }));
+            if (id) await finishEmiMessage(id, claim, r);
+            out.push({ kind: label, channel: "sms", status: r.status, error: r.error });
+        }
+    }
+    for (const kind of input.whatsapp === false ? [] : input.kinds?.length ? input.kinds : EMI_MESSAGE_KINDS) {
         const cfg = settings.messages[kind];
         const text = cfg.pendingText ?? cfg.text;
         if (!text) continue;
-        for (const channel of EMI_CHANNELS) {
+        for (const channel of ["whatsapp"] as const) {
             const claim: EmiMessageClaim = {
                 emiScheduleId: null,
                 loanSanctionId: "TEST",
