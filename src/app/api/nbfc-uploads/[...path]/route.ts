@@ -26,9 +26,15 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { getAuthenticatedAppUser } from "@/lib/kyc/admin-workflow";
 import { getNbfcObject } from "@/lib/nbfc/nbfc-storage";
-import { fileLinkTooLong, fileLinkValid, safeStorageKey } from "@/lib/storage/fileAccess";
+import {
+  FRESH_LINK_TTL_SECONDS,
+  fileLinkTooLong,
+  fileLinkValid,
+  safeStorageKey,
+  signedNbfcPath,
+} from "@/lib/storage/fileAccess";
 import { canOpenStoredFile, logFileOpen } from "@/lib/storage/fileAuthz";
-import { classifyFile, isLoggedFile, NBFC_FILE_BUCKET } from "@/lib/storage/fileRules";
+import { classifyFile, NBFC_FILE_BUCKET } from "@/lib/storage/fileRules";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -88,11 +94,12 @@ export async function GET(
   const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || null;
   const exp = req.nextUrl.searchParams.get("exp");
   const by = req.nextUrl.searchParams.get("by") || null;
-  // A signed link for exactly this file, never honoured for more than 15
-  // minutes on an identity file whatever minted it.
+  // ID 166 (4 Nov): a signed link for exactly this file, never honoured for
+  // more than 15 minutes — any NBFC file, not only identity files (same rule
+  // as /api/files).
   const signatureOk =
     fileLinkValid(bucket, key, exp, req.nextUrl.searchParams.get("sig"), Date.now(), by) &&
-    !(isLoggedFile(file) && fileLinkTooLong(exp));
+    !fileLinkTooLong(exp);
   // 17 Oct (user): every open needs a login; a signed link opens only for the
   // login it was minted for (`by`). Same rule as /api/files.
   const user = await sessionUser();
@@ -101,13 +108,37 @@ export async function GET(
 
   if (signedLink) {
     await logFileOpen({ file, bucket, key, userId: by, role: null, via: "signed_link", allowed: true, ip });
-  } else {
-
-    const { allowed } = await canOpenStoredFile(user, bucket, key);
-    await logFileOpen({ file, bucket, key, userId: user.id, role: user.role, via: "session", allowed, ip });
-    if (!allowed) return forbidden(req);
+    return serve(key);
   }
 
+  // No link for this login: the file rule decides for the signed-in user.
+  const { allowed } = await canOpenStoredFile(user, bucket, key);
+  if (!allowed) {
+    await logFileOpen({ file, bucket, key, userId: user.id, role: user.role, via: "session", allowed, ip });
+    return forbidden(req);
+  }
+
+  // ID 166 (decided 4 Nov, as /api/files): the plain stored address never
+  // serves the bytes. An allowed login is sent on to a fresh 15-minute link
+  // made for it; <img>, <video> and old links keep working (same origin, the
+  // redirect carries the session). Relative Location — behind the proxy
+  // req.nextUrl.origin can be the internal host.
+  const fresh = signedNbfcPath(`/api/nbfc-uploads/${key.split("/").map(encodeURIComponent).join("/")}`, FRESH_LINK_TTL_SECONDS, {
+    by: user.id,
+  });
+  if (fresh && fresh.includes("sig=")) {
+    await logFileOpen({ file, bucket, key, userId: user.id, role: user.role, via: "session_redirect", allowed, ip });
+    return new NextResponse(null, {
+      status: 302,
+      headers: { Location: fresh, "Cache-Control": "private, no-store" },
+    });
+  }
+  // No signing secret configured (dev): serve on the session, as before.
+  await logFileOpen({ file, bucket, key, userId: user.id, role: user.role, via: "session", allowed, ip });
+  return serve(key);
+}
+
+async function serve(key: string) {
   const buf = await getNbfcObject(key);
   if (!buf) return NextResponse.json({ error: "Not found" }, { status: 404 });
   return fileResponse(buf, extOf(key));

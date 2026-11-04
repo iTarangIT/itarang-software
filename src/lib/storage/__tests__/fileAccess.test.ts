@@ -266,6 +266,16 @@ describe("the routes use these rules", () => {
         expect(route).toMatch(/status: 302,\s*headers: \{ Location: fresh/);
     });
 
+    it("the NBFC store opener follows the same rule: 15-minute cap on every link, plain address redirected (ID 166, 4 Nov)", () => {
+        const route = read("app", "api", "nbfc-uploads", "[...path]", "route.ts");
+        expect(route).toMatch(/fileLinkValid\(bucket, key, exp, req\.nextUrl\.searchParams\.get\("sig"\), Date\.now\(\), by\) &&\s*!fileLinkTooLong\(exp\)/);
+        expect(route).not.toMatch(/isLoggedFile\(file\) && fileLinkTooLong/);
+        const allowAt = route.indexOf("await canOpenStoredFile(user, bucket, key)");
+        expect(allowAt).toBeGreaterThan(-1);
+        expect(route.indexOf('via: "session_redirect"')).toBeGreaterThan(allowAt);
+        expect(route).toMatch(/status: 302,\s*headers: \{ Location: fresh/);
+    });
+
     it("an application-signed onboarding link opens only onboarding buckets, with no session (ID 166 decision 5)", () => {
         const route = read("app", "api", "files", "[bucket]", "[...path]", "route.ts");
         expect(route).toMatch(/signatureOk && isOnboardingLinkSubject\(by\) && ONBOARDING_LINK_BUCKETS\.includes\(bucket\)/);
