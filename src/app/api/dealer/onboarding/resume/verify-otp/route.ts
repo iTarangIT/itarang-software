@@ -6,6 +6,7 @@ import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { clientIp, takeIpToken } from "@/lib/auth/reset-throttle";
 import { findResumableApplication, isMissingTable } from "@/lib/onboarding/resumeLookup";
+import { onboardingDocumentLinks } from "@/lib/onboarding/onboardingFileLinks";
 import {
   hashResumeOtp,
   RESUME_OTP_FORMAT_RE,
@@ -88,10 +89,15 @@ export async function POST(req: NextRequest) {
     const resumeToken = used.length ? signResumeToken(application.id) : null;
     if (!resumeToken) return NextResponse.json({ success: false, message: WRONG }, { status: 400 });
 
-    // 17 Oct (user): no document opens without a login, so the resume code no
-    // longer hands out links to the uploaded files. `documentLinks` stays in
-    // the reply (empty) for the form that reads it.
-    const documentLinks: Record<string, string> = {};
+    // ID 166 decision 5 (confirmed 23 Oct): the code proved this is the
+    // dealer's own application, so it gets fresh links to its own earlier
+    // uploads — that application only, each valid 15 minutes (signed for the
+    // application, not a login). Keyed by the stored URL the form holds; a
+    // newer view mints again via POST /api/dealer/onboarding/file-link.
+    const documentLinks = await onboardingDocumentLinks(application.id).catch((err) => {
+      console.error("[onboarding/resume/verify-otp] document links failed:", err);
+      return {} as Record<string, string>;
+    });
 
     return NextResponse.json({
       success: true,

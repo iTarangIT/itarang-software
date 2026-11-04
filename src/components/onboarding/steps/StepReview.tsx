@@ -379,6 +379,28 @@ export default function StepReview() {
   // ON that application; entering it here yields a token the submit accepts.
   const resumeTokenRef = useRef<string | null>(null);
   const [freshLinks, setFreshLinks] = useState<Record<string, string>>({});
+
+  // ID 166: an earlier upload opened through a resume-code link (signed for
+  // the application, 15 minutes) gets a fresh link on each open.
+  const openPreview = async (doc: PreviewDoc) => {
+    const token = resumeTokenRef.current;
+    if (!token || !doc.url.includes("by=app%3A")) {
+      setPreviewDoc(doc);
+      return;
+    }
+    try {
+      const res = await fetch("/api/dealer/onboarding/file-link", {
+        method: "POST",
+        cache: "no-store",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ resumeToken: token, url: doc.url }),
+      });
+      const json = await res.json().catch(() => null);
+      setPreviewDoc(res.ok && json?.success && json.url ? { ...doc, url: json.url } : doc);
+    } catch {
+      setPreviewDoc(doc);
+    }
+  };
   const [resume, setResume] = useState<{
     sentTo: string | null;
     code: string;
@@ -920,37 +942,37 @@ export default function StepReview() {
           <DocumentTile
             label="GST Certificate"
             item={state.company?.gstCertificate as UploadItemLike}
-            onOpen={setPreviewDoc}
+            onOpen={openPreview}
           />
           <DocumentTile
             label="Company PAN"
             item={state.company?.companyPanFile as UploadItemLike}
-            onOpen={setPreviewDoc}
+            onOpen={openPreview}
           />
           <DocumentTile
             label="ITR (Last 3 Years)"
             item={state.compliance?.itr3Years as UploadItemLike}
-            onOpen={setPreviewDoc}
+            onOpen={openPreview}
           />
           <DocumentTile
             label="Bank Statement"
             item={state.compliance?.bankStatement3Months as UploadItemLike}
-            onOpen={setPreviewDoc}
+            onOpen={openPreview}
           />
           <DocumentTile
             label="Undated Cheques"
             item={state.compliance?.undatedCheques as UploadItemLike}
-            onOpen={setPreviewDoc}
+            onOpen={openPreview}
           />
           <DocumentTile
             label="Passport Photo"
             item={state.compliance?.passportPhoto as UploadItemLike}
-            onOpen={setPreviewDoc}
+            onOpen={openPreview}
           />
           <DocumentTile
             label="Udyam Certificate"
             item={state.compliance?.udyamCertificate as UploadItemLike}
-            onOpen={setPreviewDoc}
+            onOpen={openPreview}
           />
         </div>
       </ReviewCard>
