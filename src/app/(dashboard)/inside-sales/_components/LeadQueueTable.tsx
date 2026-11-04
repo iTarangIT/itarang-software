@@ -18,7 +18,7 @@ import { OwnerIndicator } from "./OwnerIndicator";
 import { NeodoveTag } from "@/components/leads/neodove-tag";
 import { IvrTag } from "@/components/leads/ivr-tag";
 import { SentByStamp } from "@/components/leads/sent-by-stamp";
-import { idleSeverity, staleSeverity, workingDaysSince, type StaleThresholds } from "@/lib/inside-sales/staleness";
+import { cuesForHolder, idleSeverity, staleSeverity, workingDaysSince, type CuesByRole, type StaleThresholds } from "@/lib/inside-sales/staleness";
 import type { OfficeHours } from "@/lib/calendar/officeHours";
 import { followUpAgeingBasis } from "@/lib/leads/followUpAgeing";
 import { wonWithoutQuote, type QueueRow, type QueueTab } from "@/lib/inside-sales/types";
@@ -47,6 +47,8 @@ type Props = {
      * no-touch cues.
      */
     idleLimitDays?: number;
+    /** ID 85 #5 — when loaded, each row uses the cues of its holder's role (overrides the two above). */
+    cuesByRole?: CuesByRole;
     /** ID 85 #8 — office hours in force (working weekdays); Mon–Sat when absent. */
     officeHours?: OfficeHours;
     /** Lead-detail route prefix. Twins of the ISR queue (/partner) pass their own. */
@@ -103,6 +105,7 @@ export function LeadQueueTable({
     holidaySet,
     staleThresholds,
     idleLimitDays,
+    cuesByRole,
     officeHours,
     leadHrefBase = "/inside-sales/lead",
     selection,
@@ -187,8 +190,10 @@ export function LeadQueueTable({
                             // later of the last work and the assignment.
                             const days = workingDaysSince(followUpAgeingBasis(row, nowMs), holidaySet, new Date(nowMs), officeHours);
                             // 18 Oct row 33: the ISR idle limit when loaded (past it = "past limit").
-                            const sev = idleLimitDays ? idleSeverity(days, idleLimitDays) : staleSeverity(days, staleThresholds);
-                            const idlePast = !!idleLimitDays && days != null && days >= Math.floor(idleLimitDays);
+                            const cue = cuesByRole ? cuesForHolder(cuesByRole, row.current_owner_role) : null;
+                            const idle = cue ? cue.idleDays : idleLimitDays;
+                            const sev = idle ? idleSeverity(days, idle) : staleSeverity(days, cue?.stale ?? staleThresholds);
+                            const idlePast = !!idle && days != null && days >= Math.floor(idle);
                             const followUpOverdue =
                                 row.next_follow_up_at && new Date(row.next_follow_up_at).getTime() < nowMs;
                             const href = `${leadHrefBase}/${encodeURIComponent(row.id)}`;

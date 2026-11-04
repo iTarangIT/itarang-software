@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { QueueTabs } from "./QueueTabs";
 import { LeadQueueTable } from "./LeadQueueTable";
-import type { StaleThresholds } from "@/lib/inside-sales/staleness";
+import type { CuesByRole, StaleThresholds } from "@/lib/inside-sales/staleness";
 import type { OfficeHours } from "@/lib/calendar/officeHours";
 import { BulkClaimBar } from "./BulkClaimBar";
 import { ClaimByNumberPanel } from "@/components/leads/ClaimByNumberPanel";
@@ -315,7 +315,7 @@ export function QueueView({
     // ── Holiday cache for stale-row visual cues (BRD §0.5) ───────────────
     const holidaysQuery = useQuery<{
         success: true;
-        data: { dates: string[]; stale_thresholds?: StaleThresholds; office_hours?: OfficeHours; idle_limit_days?: number };
+        data: { dates: string[]; stale_thresholds?: StaleThresholds; office_hours?: OfficeHours; idle_limit_days?: number; cues_by_role?: CuesByRole };
     }>({
         queryKey: ["inside-sales-holidays"],
         queryFn: async () => {
@@ -335,6 +335,8 @@ export function QueueView({
     const officeHours = holidaysQuery.data?.data?.office_hours;
     // 18 Oct row 33 — the inside-sales idle limit (idle_cc) colours the rows.
     const idleLimitDays = holidaysQuery.data?.data?.idle_limit_days;
+    // ID 85 #5 — per-row cues by the holder's role.
+    const cuesByRole = holidaysQuery.data?.data?.cues_by_role;
 
     return (
         <div className="space-y-4">
@@ -550,6 +552,7 @@ export function QueueView({
                     holidaySet={holidaySet}
                     staleThresholds={staleThresholds}
                     idleLimitDays={idleLimitDays}
+                    cuesByRole={cuesByRole}
                     officeHours={officeHours}
                     selection={
                         selectable

@@ -1,5 +1,5 @@
 // GET  /api/admin/settings/holidays — the office calendar and its change log
-//      (E-350). Admin, Sales Head (edit) and the CEO (reads, via Time limits).
+//      (E-350). Admin edits (ID 85 #4); the Sales Head and the CEO read it.
 // POST /api/admin/settings/holidays — add a working-day-calendar holiday
 // (BRD §0.1). Idempotent on holiday_date (unique) — re-adding reactivates it.
 

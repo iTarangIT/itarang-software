@@ -24,7 +24,7 @@ import { LEAD_EVENT_TYPES, parseEventTypes } from "@/lib/leads/eventTypes";
 import { parseLeadListFilters } from "@/lib/leads/leadListParams";
 import { ownerScopeSql } from "@/lib/users/teamSql";
 import { hasLeadClocks } from "@/lib/leads/clocks";
-import { loadOfficeCalendar, primeHolidayLog, workingDaysBetweenAsOfSql } from "@/lib/calendar/holidays";
+import { holidaysAsOf, loadOfficeCalendar, primeHolidayLog, workingDaysBetweenAsOfSql } from "@/lib/calendar/holidays";
 import { workingHoursBetween } from "@/lib/leads/workingHours";
 import { idleDays } from "@/lib/leads/idle";
 import { idlePastLimitSql } from "@/lib/leads/idleLimit";
@@ -973,7 +973,8 @@ const leadEvents: Dataset = {
         return countEvents(await eventFilters(ctx));
     },
     async build(ctx) {
-        const [events, cal] = await Promise.all([fetchEvents(await eventFilters(ctx)), loadOfficeCalendar()]);
+        // ID 85 #6: each gap counts the holidays as they stood at that event.
+        const [events, cal, asOf] = await Promise.all([fetchEvents(await eventFilters(ctx)), loadOfficeCalendar(), holidaysAsOf()]);
         return [
             {
                 ...this.sheets[0],
@@ -983,7 +984,7 @@ const leadEvents: Dataset = {
                   const at = ist(e.event_at);
                   // 18 Oct row 36: working hours on the office calendar, like the lead clock.
                   const ready = e.sales_ready_at ? new Date(e.sales_ready_at) : null;
-                  const gap = at && ready && new Date(at) >= ready ? workingHoursBetween(ready, new Date(at), cal.holidays, cal.hours) : null;
+                  const gap = at && ready && new Date(at) >= ready ? workingHoursBetween(ready, new Date(at), asOf(new Date(at)), cal.hours) : null;
                   return {
                     ...e,
                     event_at: at,
