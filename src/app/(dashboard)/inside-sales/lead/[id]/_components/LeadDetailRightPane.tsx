@@ -13,7 +13,7 @@ import {
     BadgeInfo,
     History,
 } from "lucide-react";
-import type { LeadDetailBundle } from "@/lib/inside-sales/types";
+import type { LeadDetailBundle, LeadDetailCommercials } from "@/lib/inside-sales/types";
 import {
     CommercialsDetail,
     CommercialsVersionHistory,
@@ -43,9 +43,13 @@ type Props = {
     bundle: LeadDetailBundle;
     /** ID 172: the Sales Head may change a locked deal card. */
     viewerRole?: string | null;
+    /** ID 216: set for whoever may update commercials — "Revise" on a rejected quote. */
+    onReviseQuote?: (c: LeadDetailCommercials) => void;
+    /** ID 216: ?quote=<id> from a bell / WhatsApp link — that version is opened. */
+    focusQuoteId?: string | null;
 };
 
-export function LeadDetailRightPane({ bundle, viewerRole }: Props) {
+export function LeadDetailRightPane({ bundle, viewerRole, onReviseQuote, focusQuoteId }: Props) {
     const [open, setOpen] = useState<Record<GroupKey, boolean>>({
         snapshot: true,
         business: true,
@@ -289,7 +293,24 @@ export function LeadDetailRightPane({ bundle, viewerRole }: Props) {
                                                             />
                                                         </div>
                                                     )}
-                                                    <CommercialsVersionHistory history={bundle.commercials_history} />
+                                                    <CommercialsVersionHistory
+                                                        history={bundle.commercials_history}
+                                                        onRevise={onReviseQuote}
+                                                        focusId={focusQuoteId}
+                                                    />
+                                                </>
+                                            ) : bundle.commercials_history.length > 0 ? (
+                                                // ID 216: no current quote (the CEO rejected the only
+                                                // one) — the history, reason included, still shows.
+                                                <>
+                                                    <div className="text-sm text-gray-500">
+                                                        No current quote. Revise a rejected version or use Update Commercials.
+                                                    </div>
+                                                    <CommercialsVersionHistory
+                                                        history={bundle.commercials_history}
+                                                        onRevise={onReviseQuote}
+                                                        focusId={focusQuoteId}
+                                                    />
                                                 </>
                                             ) : (
                                                 <div className="text-sm text-gray-500">No commercials logged yet. Use Update Commercials to record the first event.</div>

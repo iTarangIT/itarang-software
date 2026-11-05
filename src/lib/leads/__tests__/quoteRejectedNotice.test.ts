@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/db", () => ({ db: {} }));
 vi.mock("@/lib/touchpoints/write", () => ({ writeTouchpoint: vi.fn() }));
-const { ownerWhatsAppNumber, quoteRejectedMessage } = await import("../quoteRejectedNotice");
+const { ownerWhatsAppNumber, quoteRejectedLeadHref, quoteRejectedMessage } = await import("../quoteRejectedNotice");
 const { leadMoveOnWithdraw } = await import("../withdrawQuote");
 const { rollbackTarget } = await import("../quoteApproval");
 
@@ -83,5 +83,15 @@ describe("ownerWhatsAppNumber", () => {
     it("gives null for nothing usable", () => {
         expect(ownerWhatsAppNumber(null)).toBeNull();
         expect(ownerWhatsAppNumber("12345")).toBeNull();
+    });
+});
+
+describe("ID 216: quoteRejectedLeadHref", () => {
+    it("opens an ASM's lead under /asm at the rejected quote", () => {
+        expect(quoteRejectedLeadHref("L1", "C9", "asm")).toBe("/asm/lead/L1?quote=C9");
+    });
+    it("opens everyone else's under /inside-sales", () => {
+        expect(quoteRejectedLeadHref("L1", "C9", "inside_sales_rep")).toBe("/inside-sales/lead/L1?quote=C9");
+        expect(quoteRejectedLeadHref("L1", "C9", null)).toBe("/inside-sales/lead/L1?quote=C9");
     });
 });

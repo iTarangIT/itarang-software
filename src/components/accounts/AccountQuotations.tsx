@@ -25,6 +25,8 @@ type Quotation = {
     product_lines: CommercialsProductLine[] | null;
     total: string | null;
     credit_terms: string | null;
+    dealer_payment_terms: string | null;
+    credit_days: number | null;
     notes: string | null;
     approval_status: "pending" | "approved" | "rejected";
     approval_mode: string | null;
@@ -91,7 +93,15 @@ function StatusChip({ q }: { q: Quotation }) {
 export function AccountQuotationsPanel({ accountId, readOnly = false }: { accountId: string; readOnly?: boolean }) {
     const queryClient = useQueryClient();
     const [creating, setCreating] = useState(false);
+    // ID 216: "Revise" on a rejected quotation opens Create prefilled from it.
+    const [reviseFrom, setReviseFrom] = useState<Quotation | null>(null);
     const [sending, setSending] = useState<Quotation | null>(null);
+    // ID 216: ?quote=<id> from the rejection bell / WhatsApp marks that quotation.
+    const [focusId, setFocusId] = useState<string | null>(null);
+    useEffect(() => {
+        const q = new URLSearchParams(window.location.search).get("quote");
+        if (q) setFocusId(q);
+    }, []);
     const { data, isLoading, error } = useQuery<PanelData>({
         queryKey: qKey(accountId),
         queryFn: () => api(`/api/dealer-accounts/${encodeURIComponent(accountId)}/quotations`),
@@ -159,7 +169,11 @@ export function AccountQuotationsPanel({ accountId, readOnly = false }: { accoun
                         const sendable = q.approval_status === "approved" && !q.withdrawn_at && q.is_latest_live && !!q.quote_pdf_url;
                         const withdrawable = !q.withdrawn_at && q.approval_status !== "rejected" && q.dealer_decision !== "approved";
                         return (
-                            <li key={q.quotation_id} className="px-4 py-3 text-sm">
+                            <li
+                                key={q.quotation_id}
+                                id={`quote-${q.quotation_id}`}
+                                className={`px-4 py-3 text-sm ${focusId === q.quotation_id ? "bg-amber-50 ring-1 ring-inset ring-amber-300" : ""}`}
+                            >
                                 <div className="flex flex-wrap items-center gap-2">
                                     <span className="font-semibold text-ink">v{q.version_no}</span>
                                     {q.quote_number && <span className="font-mono text-xs text-ink-muted">{q.quote_number}</span>}
@@ -201,6 +215,18 @@ export function AccountQuotationsPanel({ accountId, readOnly = false }: { accoun
                                             <Send className="h-3.5 w-3.5" /> {q.sent_count > 0 ? "Send again" : "Send to account"}
                                         </button>
                                     )}
+                                    {canWork && q.approval_status === "rejected" && !q.withdrawn_at && (
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                setReviseFrom(q);
+                                                setCreating(true);
+                                            }}
+                                            className="inline-flex items-center gap-1 text-brand-sky hover:underline"
+                                        >
+                                            <Plus className="h-3.5 w-3.5" /> Revise
+                                        </button>
+                                    )}
                                     {canWork && withdrawable && (
                                         <button
                                             type="button"
@@ -225,9 +251,14 @@ export function AccountQuotationsPanel({ accountId, readOnly = false }: { accoun
                 <CreateAccountQuoteDialog
                     accountId={accountId}
                     accountName={data.account.name}
-                    onClose={() => setCreating(false)}
+                    initial={reviseFrom}
+                    onClose={() => {
+                        setCreating(false);
+                        setReviseFrom(null);
+                    }}
                     onSaved={() => {
                         setCreating(false);
+                        setReviseFrom(null);
                         refresh();
                     }}
                 />
@@ -273,11 +304,14 @@ const ASSET_TYPES: { key: AssetType; label: string }[] = [
 function CreateAccountQuoteDialog({
     accountId,
     accountName,
+    initial,
     onClose,
     onSaved,
 }: {
     accountId: string;
     accountName: string;
+    /** ID 216: a rejected quotation to revise — its lines, terms and notes. */
+    initial?: Quotation | null;
     onClose: () => void;
     onSaved: () => void;
 }) {
@@ -289,10 +323,12 @@ function CreateAccountQuoteDialog({
     const [assetType, setAssetType] = useState<AssetType>("battery");
     const [productId, setProductId] = useState("");
     const [qty, setQty] = useState("1");
-    const [lines, setLines] = useState<CommercialsProductLine[]>([]);
-    const [payTerms, setPayTerms] = useState<"cash" | "credit">("cash");
-    const [creditDays, setCreditDays] = useState("");
-    const [notes, setNotes] = useState("");
+    const [lines, setLines] = useState<CommercialsProductLine[]>(initial?.product_lines ?? []);
+    const [payTerms, setPayTerms] = useState<"cash" | "credit">(
+        initial?.dealer_payment_terms === "credit" ? "credit" : "cash",
+    );
+    const [creditDays, setCreditDays] = useState(initial?.credit_days != null ? String(initial.credit_days) : "");
+    const [notes, setNotes] = useState(initial?.notes ?? "");
     const [formError, setFormError] = useState<string | null>(null);
 
     const options = useMemo(() => products.data?.[assetType] ?? [], [products.data, assetType]);
@@ -357,7 +393,10 @@ function CreateAccountQuoteDialog({
     };
 
     return (
-        <Dialog title={`New quotation — ${accountName}`} onClose={onClose}>
+        <Dialog
+            title={initial ? `Revise v${initial.version_no} — ${accountName}` : `New quotation — ${accountName}`}
+            onClose={onClose}
+        >
             <div className="space-y-4 text-sm">
                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-[130px_1fr_80px_auto]">
                     <select value={assetType} onChange={(e) => { setAssetType(e.target.value as AssetType); setProductId(""); }} className="rounded-lg border border-border px-2 py-1.5">

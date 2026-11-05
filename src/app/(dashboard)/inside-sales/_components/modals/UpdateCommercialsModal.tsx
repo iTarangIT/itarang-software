@@ -25,6 +25,8 @@ type Props = {
     leadId: string;
     currentCommercials: LeadDetailCommercials | null;
     onSuccess: () => void;
+    /** ID 216: "Revise" on a rejected quote opens as a Quote revision. */
+    initialEventType?: EventType;
 };
 
 const EVENT_TYPES = [
@@ -52,8 +54,8 @@ const assetLabel = (t: AssetType) =>
 
 const inr = (n: number) => `₹${n.toLocaleString("en-IN")}`;
 
-export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercials, onSuccess }: Props) {
-    const [eventType, setEventType] = useState<EventType>("quote_issue");
+export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercials, onSuccess, initialEventType }: Props) {
+    const [eventType, setEventType] = useState<EventType>(initialEventType ?? "quote_issue");
     // E-322 (ID 73): dealer payment terms are a pick list; any credit sends the
     // quote for approval. Customer finance is the END customer's NBFC need.
     // Warranty and delivery are the admin's standard terms — shown, not typed.
