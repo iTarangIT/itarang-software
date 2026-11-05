@@ -18,7 +18,7 @@ Read-only checks: `node --import tsx --env-file=.env.local scripts/verify-04nov.
 
 ## Live steps left (production)
 
-1. Apply E-372 on db-2: `node scripts/_apply-e372.mjs database-2` (db-1 done 5 Nov). Without it the tickers run, Ops shows "not recorded yet".
+1. ~~Apply E-372 on db-2~~ — done 5 Nov (db-1 and db-2). Production deployed 5 Nov as 8bf98b9f.
 2. Before deploying production, run `scripts/verify-dispatch-to-sold.ts` on db-2 to post how many sales the first run will move (the backlog: every live run so far failed). The morning after deploy, run it again: moved > 0, failed 0. Customers of sales dispatched over 3 days ago get no SMS; their dealers get the notice.
 3. Admin > Settings > Missed Callbacks: switch on (ships off).
 4. Ask Meta to approve `itarang_callback_missed` (dealer, due time, owner), then add `callback_missed` to WA_TEMPLATES_APPROVED.
