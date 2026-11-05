@@ -11,12 +11,14 @@
 // A page button can open this tab with a dataset and filters pre-set:
 //   /admin/reports?section=downloads&dataset=visits&from=2026-09-01&person=<id>
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, Download, Loader2, Mail } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import type { DatasetInfo } from "@/lib/exports/datasets/types";
+import { EXCEL_TOO_BIG, type DatasetInfo } from "@/lib/exports/datasets/types";
+import { downloadFailureMessage } from "@/lib/exports/datasets/downloadClient";
+import { defaultDates, istToday } from "@/lib/exports/datasets/range";
 import { MultiSelectFilter } from "@/components/reports/MultiSelectFilter";
 import type { DownloadLogRow } from "@/lib/exports/downloadLog";
 
@@ -73,7 +75,16 @@ export function DataDownloadsView() {
     }, [values]);
     const qs = new URLSearchParams(params).toString();
 
-    const count = useQuery<{ count: number; over_cap: boolean; own_only: boolean }>({
+    // ID 223 / 224: also whether Excel is too big, whether it is emailed, and the dates covered.
+    const count = useQuery<{
+        count: number;
+        over_cap: boolean;
+        own_only: boolean;
+        excel_over_cap?: boolean;
+        emailed?: boolean;
+        at_once_rows?: number;
+        range?: string;
+    }>({
         enabled: !!dataset,
         queryKey: ["data-download-count", datasetId, qs],
         queryFn: () => getJson(`/api/admin/data-downloads/${datasetId}${qs ? `?${qs}` : ""}`),
@@ -86,13 +97,24 @@ export function DataDownloadsView() {
     });
 
     const set = (key: string, value: string) => setValues((prev) => ({ ...prev, [key]: value }));
+    // ID 224: the date boxes show the dates the file will cover (this month to today).
     const pick = (id: string) => {
         setDatasetId(id);
-        setValues({});
+        const info = datasets.find((d) => d.id === id);
+        const dates = info ? defaultDates(info, istToday()) : null;
+        setValues(dates ? { ...dates } : {});
         setError(null);
         setNotice(null);
         setShowColumns(false);
     };
+    const prefilled = useRef(false);
+    useEffect(() => {
+        if (prefilled.current || !dataset) return;
+        prefilled.current = true;
+        if (values.from || values.to) return;
+        const dates = defaultDates(dataset, istToday());
+        if (dates) setValues((prev) => ({ ...prev, ...dates }));
+    }, [dataset, values.from, values.to]);
 
     const mainColumns = dataset?.sheets[0].columns ?? [];
     const allKeys = mainColumns.map((c) => c.key);
@@ -146,13 +168,17 @@ export function DataDownloadsView() {
                 }),
             });
             if (!res.ok) {
+                // ID 223: a proxy time-out answers with an HTML page, not our JSON.
                 const json = await res.json().catch(() => null);
-                throw new Error(json?.error?.message ?? "The download failed.");
+                throw new Error(downloadFailureMessage(res.status, json));
             }
-            if (background) {
+            if (background || res.status === 202) {
                 const json = await res.json();
+                const tail = `A link will be emailed to ${json.data.sent_to}; it works for ${json.data.link_hours} hours.`;
                 setNotice(
-                    `The file is being prepared. A link will be emailed to ${json.data.sent_to}; it works for ${json.data.link_hours} hours.`,
+                    json.data.auto
+                        ? `${Number(json.data.rows).toLocaleString("en-IN")} rows is too big to build while you wait, so the file is being prepared. ${tail}`
+                        : `The file is being prepared. ${tail}`,
                 );
                 return;
             }
@@ -188,6 +214,9 @@ export function DataDownloadsView() {
     const rowCap = catalogue.data?.row_cap ?? 50000;
     const backgroundCap = catalogue.data?.background_row_cap ?? 500000;
     const canBackground = overCap && !!dataset?.background && (count.data?.count ?? 0) <= backgroundCap;
+    // ID 223: Excel greyed out above EXCEL_ROW_CAP; emailed above the at-once size.
+    const excelTooBig = count.data?.excel_over_cap === true;
+    const emailed = count.data?.emailed === true;
     const needsReason = fullPhone && reason.trim().length < 5;
     const common = dataset?.commonFilters ?? [];
     const showPeople = !dataset?.own_only && (catalogue.data?.people.length ?? 0) > 0;
@@ -293,15 +322,7 @@ export function DataDownloadsView() {
                     </div>
 
                     <div className="space-y-3 px-4 py-3">
-                        {dataset.dateFields.length > 0 && !values.from && !values.to && (
-                            <p className="text-xs text-ink-muted">
-                                {dataset.id === "leads"
-                                    ? "No date range set — every lead matching the filters."
-                                    : dataset.allWhenNoDates
-                                      ? "No date range set — every row matching the filters."
-                                      : "No date range set — this month."}
-                            </p>
-                        )}
+                        {count.data?.range && <p className="text-xs text-ink-muted">Dates in the file: {count.data.range}.</p>}
 
                         <p className="text-sm text-ink">
                             {count.isLoading ? (
@@ -348,6 +369,13 @@ export function DataDownloadsView() {
                             </div>
                         )}
 
+                        {!overCap && excelTooBig && (
+                            <p className="flex items-center gap-2 text-sm text-ink">
+                                <AlertTriangle className="h-4 w-4" />
+                                {EXCEL_TOO_BIG}
+                                {emailed ? ` More than ${(count.data?.at_once_rows ?? 5000).toLocaleString("en-IN")} rows: the CSV is emailed to you as a link.` : ""}
+                            </p>
+                        )}
                         {error && (
                             <p className="flex items-center gap-2 text-sm text-danger">
                                 <AlertTriangle className="h-4 w-4" />
@@ -370,7 +398,13 @@ export function DataDownloadsView() {
                                 </>
                             ) : (
                                 <>
-                                    <Button type="button" size="sm" disabled={!!busy || overCap || needsReason || count.isLoading} onClick={() => download("xlsx")}>
+                                    <Button
+                                        type="button"
+                                        size="sm"
+                                        title={excelTooBig ? EXCEL_TOO_BIG : undefined}
+                                        disabled={!!busy || overCap || excelTooBig || needsReason || count.isLoading}
+                                        onClick={() => download("xlsx")}
+                                    >
                                         <Download className="mr-1 h-3.5 w-3.5" />
                                         {busy === "xlsx" ? "Preparing…" : "Download Excel"}
                                     </Button>
@@ -381,9 +415,28 @@ export function DataDownloadsView() {
                                         disabled={!!busy || overCap || needsReason || count.isLoading}
                                         onClick={() => download("csv")}
                                     >
-                                        <Download className="mr-1 h-3.5 w-3.5" />
-                                        {busy === "csv" ? "Preparing…" : dataset.sheets.length > 1 ? `Download CSV (${dataset.sheets[0].name} sheet only)` : "Download CSV"}
+                                        {emailed ? <Mail className="mr-1 h-3.5 w-3.5" /> : <Download className="mr-1 h-3.5 w-3.5" />}
+                                        {busy === "csv"
+                                            ? "Preparing…"
+                                            : emailed
+                                              ? "Email me the CSV"
+                                              : dataset.sheets.length > 1
+                                                ? `Download CSV (${dataset.sheets[0].name} sheet only)`
+                                                : "Download CSV"}
                                     </Button>
+                                    {/* ID 223: "Email me the file" on every download that can be emailed. */}
+                                    {dataset.background && !emailed && (
+                                        <Button
+                                            type="button"
+                                            size="sm"
+                                            variant="outline"
+                                            disabled={!!busy || overCap || needsReason || count.isLoading}
+                                            onClick={() => download(excelTooBig ? "csv" : "xlsx", true)}
+                                        >
+                                            <Mail className="mr-1 h-3.5 w-3.5" />
+                                            Email me the file
+                                        </Button>
+                                    )}
                                 </>
                             )}
                             <button type="button" className="text-sm text-brand-600 underline" onClick={() => setShowColumns((v) => !v)}>

@@ -21,7 +21,6 @@ import {
     listSalesHeadAction,
     listSalesHeadActionFiltered,
     phonesForActionRows,
-    searchActionRows,
     type ActionKey,
 } from "@/lib/dashboard/salesHeadActions";
 import { LEADS_BULK_ROLES } from "@/lib/leads/access";
@@ -30,6 +29,7 @@ import { getTimeLimits } from "@/lib/timeLimits/store";
 import { getOfficeHours } from "@/lib/calendar/officeHoursStore";
 import { shortOfficeHours } from "@/lib/calendar/officeHours";
 import { NeedsActionTable } from "./NeedsActionTable";
+import { parseVisitBooked, VISIT_BOOKED_OPTIONS } from "@/lib/dashboard/fieldVisitText";
 import { FieldVisitTrend } from "./FieldVisitTrend";
 import { dayOr, fieldVisitPeriod, istToday, shiftDay } from "@/lib/dashboard/fieldVisitTrend";
 
@@ -86,7 +86,7 @@ export default async function NeedsActionListPage({
     // picking a state never hides the other states from the menu.
     const [rows, all, limits] = await Promise.all([
         teamIds
-            ? listSalesHeadAction(k, { ...actionScopeFrom(qs), teamIds }).then((r) => searchActionRows(r, qs.get("q")))
+            ? listSalesHeadActionFiltered(k, qs, teamIds)
             : listSalesHeadActionFiltered(k, qs),
         listSalesHeadAction(k, { teamIds }),
         getTimeLimits(),
@@ -144,7 +144,7 @@ export default async function NeedsActionListPage({
         <input key={key} type="hidden" name={key} value={sp[key]} />
     ));
     const csvHref = `/api/admin/reports/needs-action/${k}${qs.toString() ? `?${qs}` : ""}`;
-    const anyFilter = Boolean(sp.q || sp.state || sp.spoc_id || (sp.team && sp.team !== "all"));
+    const anyFilter = Boolean(sp.q || sp.state || sp.spoc_id || (sp.team && sp.team !== "all") || (sp.visit && sp.visit !== "all"));
     const hasValue = rows.some((r) => r.value != null);
     const total = rows.reduce((a, r) => a + (r.value ?? 0), 0);
     const back = teamIds
@@ -198,6 +198,16 @@ export default async function NeedsActionListPage({
                             <option value="inside">Inside sales (ISR)</option>
                         </select>
                     </>
+                )}
+                {/* ID 222: a booked visit keeps the lead here; this picks either kind out. */}
+                {k === "visit_overdue" && (
+                    <select name="visit" defaultValue={parseVisitBooked(sp.visit)} aria-label="Visit booked" className={field}>
+                        {VISIT_BOOKED_OPTIONS.map((o) => (
+                            <option key={o.value} value={o.value}>
+                                {o.value === "all" ? "Booked or not" : o.label}
+                            </option>
+                        ))}
+                    </select>
                 )}
                 <button type="submit" className="min-h-10 rounded-[10px] bg-brand-navy px-4 text-[13px] font-semibold text-white hover:bg-brand-800">
                     Apply

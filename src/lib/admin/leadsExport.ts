@@ -115,9 +115,21 @@ export async function fetchLeadsForExport(
     limit: number = LEADS_EXPORT_ROW_CAP,
 ): Promise<LeadsExportRow[]> {
     const where = buildExportWhere(f);
+    // ID 223: every per-lead aggregate below runs over the CHOSEN leads only.
+    // They used to scan every visit, call, remark and matched invoice in the
+    // CRM on each download, which is part of why "all leads" (14,700) died
+    // behind the proxy's time limit.
     const rows = await db.execute<LeadsExportRow>(sql`
         WITH today AS (
             SELECT (now() AT TIME ZONE 'Asia/Kolkata')::date AS d
+        ),
+        picked AS (
+            SELECT dl.id
+              FROM dealer_leads dl
+              ${aiSignalsJoin(f)}
+             WHERE ${where}
+             ORDER BY dl.last_touchpoint_at DESC NULLS LAST, dl.created_at DESC
+             LIMIT ${limit}
         ),
         visits AS (
             SELECT v.dealer_lead_id,
@@ -127,6 +139,7 @@ export async function fetchLeadsForExport(
                          AND v.visit_status NOT IN ('visited', 'cancelled', 'no_show')
                    ) AS next_visit_date
               FROM lead_visits v
+             WHERE v.dealer_lead_id IN (SELECT id FROM picked)
              GROUP BY v.dealer_lead_id
         ),
         calls AS (
@@ -135,16 +148,19 @@ export async function fetchLeadsForExport(
                    MIN(t.next_action_at) FILTER (WHERE t.next_action_at >= now()) AS next_call_at
               FROM lead_touchpoints t
              WHERE t.touchpoint_type IN ('inside_sales_call', 'ai_call')
+               AND t.dealer_lead_id IN (SELECT id FROM picked)
              GROUP BY t.dealer_lead_id
         ),
         remarks AS (
             SELECT DISTINCT ON (t.dealer_lead_id) t.dealer_lead_id, t.remarks
               FROM lead_touchpoints t
              WHERE t.remarks IS NOT NULL AND trim(t.remarks) <> ''
+               AND t.dealer_lead_id IN (SELECT id FROM picked)
              ORDER BY t.dealer_lead_id, t.performed_at DESC NULLS LAST, t.created_at DESC
         ),
         -- The lead ↔ invoice join: account / GSTIN match (matchedUnion), not name.
-        billing AS (${billingSource(await matchedUnion())}),
+        billing AS (${billingSource(sql`(SELECT * FROM ${await matchedUnion()} AS mu
+                                             WHERE mu.dealer_lead_id::text IN (SELECT id::text FROM picked))`)}),
         pre_bill AS (
             SELECT b.dealer_lead_id, COUNT(v.visit_id)::int AS visits_before_first_billing
               FROM billing b
@@ -183,7 +199,8 @@ export async function fetchLeadsForExport(
                b.last_billing_date::text              AS last_billing_date,
                pb.visits_before_first_billing,
                COALESCE(b.billing_match, 'none')      AS billing_match
-          FROM dealer_leads dl
+          FROM picked p
+          JOIN dealer_leads dl ON dl.id = p.id
           LEFT JOIN users owner ON owner.id::text = dl.current_owner_id
           LEFT JOIN users closer ON closer.id::text = dl.closing_owner_id
           LEFT JOIN visits vi ON vi.dealer_lead_id = dl.id
@@ -191,12 +208,9 @@ export async function fetchLeadsForExport(
           LEFT JOIN remarks r ON r.dealer_lead_id = dl.id
           LEFT JOIN billing b ON b.dealer_lead_id = dl.id::text
           LEFT JOIN pre_bill pb ON pb.dealer_lead_id = dl.id::text
-          -- The AI filters (AI band, AI called, signals, callback) name ai.*;
-          -- the join is emitted only when one is set, as on the lead list.
-          ${aiSignalsJoin(f)}
-         WHERE ${where}
+          -- The filters (AI ones included, through aiSignalsJoin) are applied
+          -- once, in "picked".
          ORDER BY dl.last_touchpoint_at DESC NULLS LAST, dl.created_at DESC
-         LIMIT ${limit}
     `);
     return rows as unknown as LeadsExportRow[];
 }

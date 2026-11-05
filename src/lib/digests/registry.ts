@@ -18,6 +18,7 @@ import { dealerValidationDigest } from "./kinds/dealer-validation";
 import { idleWeeklyDigest } from "./kinds/idle-weekly";
 import { targetsPendingDigest } from "./kinds/targets-pending";
 import { kycReviewDigest } from "./kinds/kyc-review";
+import { missedCallbacksDigest } from "./kinds/missed-callbacks";
 import { myDayDigest } from "./kinds/my-day";
 import { myTeamDigest } from "./kinds/my-team";
 import { salesDailyDigest } from "./kinds/sales-daily";
@@ -35,6 +36,8 @@ export const DIGEST_KINDS: DigestKindDescriptor[] = [
   myDayDigest,
   myTeamDigest,
   emiMessagesDigest,
+  // ID 212 — yesterday's missed callbacks, its own morning mail.
+  missedCallbacksDigest,
 ];
 
 export function digestKind(id: string): DigestKindDescriptor | null {

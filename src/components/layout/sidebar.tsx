@@ -476,6 +476,16 @@ function myDayDigestItem(idPrefix: string) {
   };
 }
 
+// ID 212 — the morning list of callbacks missed the day before.
+function missedCallbacksDigestItem(idPrefix: string) {
+  return {
+    id: `${idPrefix}-missed-callbacks-digest`,
+    label: "Missed Callbacks Report",
+    icon: MailCheck,
+    href: "/admin/settings/missed-callbacks",
+  };
+}
+
 // R-15 — Monday's count of leads idle over 7 working days, per holder.
 function idleWeeklyDigestItem(idPrefix: string) {
   return {
@@ -577,6 +587,7 @@ const ROLE_TRAILING_SECTIONS: Record<string, any[]> = {
         scrapBuybackDigestItem("sh"),
         salesDailyDigestItem("sh"),
         idleWeeklyDigestItem("sh"),
+        missedCallbacksDigestItem("sh"),
         targetsPendingDigestItem("sh"),
         emiMessagesDigestItem("sh"),
         myDayDigestItem("sh"),
@@ -1723,6 +1734,7 @@ const roleNavigation: Record<string, any[]> = {
         scrapBuybackDigestItem("admin"),
         salesDailyDigestItem("admin"),
         idleWeeklyDigestItem("admin"),
+        missedCallbacksDigestItem("admin"),
         targetsPendingDigestItem("admin"),
         emiMessagesDigestItem("admin"),
         myDayDigestItem("admin"),
@@ -2638,7 +2650,7 @@ const roleNavigation: Record<string, any[]> = {
       items: [
         {
           id: "ops-jobs",
-          label: "Collector Health",
+          label: "Jobs & collectors",
           icon: ListChecks,
           href: "/operations/jobs",
         },

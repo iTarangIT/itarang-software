@@ -34,14 +34,13 @@ import { markLeadLost } from "@/lib/leads/markLost";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
-export type Contactability = "dead_number" | "non_responsive";
+// The vocabulary lives in contactabilityLabels.ts (no database) so pure code
+// can read it; re-exported here for every existing import.
+import { CONTACTABILITY_LABEL, type Contactability } from "@/lib/leads/contactabilityLabels";
+export type { Contactability } from "@/lib/leads/contactabilityLabels";
+export { CONTACTABILITY_LABEL };
 
 export { DEAD_NUMBER_REASONS };
-
-export const CONTACTABILITY_LABEL: Record<Contactability, string> = {
-    dead_number: "Dead number",
-    non_responsive: "Non-responsive (6 calls on 6 days, 45 days, no answer)",
-};
 
 /** The owner of record's name, for the event remark ("owner kept: Priya"). */
 async function ownerLabel(tx: Tx, leadId: string): Promise<string> {

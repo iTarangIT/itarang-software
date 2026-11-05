@@ -14,21 +14,58 @@ export interface FileContext {
     filters: Record<string, string>;
     fullPhone: boolean;
     ownOnly: boolean;
+    /** ID 224: the dates the file really covers, in words (range.ts effectiveRange). */
+    rangeText?: string;
+}
+
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+const IST_MS = 5.5 * 60 * 60 * 1000;
+
+/**
+ * ID 224 — one reading of every timestamp the datasets hand over. A Date is an
+ * instant; a string with Z or an offset is an instant; a naive
+ * "YYYY-MM-DD HH:MM[:SS]" (Postgres `timestamp` columns and to_jsonb text) is
+ * stored as UTC, so it is read as UTC — never in the server's own zone.
+ */
+export function parseInstant(v: unknown): Date | null {
+    if (v == null || v === "") return null;
+    if (v instanceof Date) return Number.isNaN(v.getTime()) ? null : v;
+    const s = String(v).trim();
+    const naive = /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(s);
+    const d = new Date(naive ? `${s.replace(" ", "T")}Z` : DATE_ONLY.test(s) ? `${s}T00:00:00Z` : s);
+    return Number.isNaN(d.getTime()) ? null : d;
 }
 
 /** A date-only string → a Date at UTC midnight, which Excel shows as that calendar day. */
 function excelDate(v: unknown): Date | null {
     if (!v) return null;
-    const s = String(v);
-    const d = new Date(/^\d{4}-\d{2}-\d{2}$/.test(s) ? `${s}T00:00:00Z` : s);
-    return Number.isNaN(d.getTime()) ? null : d;
+    if (typeof v === "string" && DATE_ONLY.test(v.slice(0, 10)) && v.length <= 10) return parseInstant(v);
+    // A timestamp in a date column: its IST calendar day.
+    const d = parseInstant(v);
+    if (!d) return null;
+    return new Date(`${new Date(d.getTime() + IST_MS).toISOString().slice(0, 10)}T00:00:00Z`);
 }
 
 /** A timestamp → the same instant shifted so Excel displays IST wall-clock. */
 function excelDateTimeIst(v: unknown): Date | null {
-    if (!v) return null;
-    const d = new Date(String(v));
-    return Number.isNaN(d.getTime()) ? null : new Date(d.getTime() + 5.5 * 60 * 60 * 1000);
+    const d = parseInstant(v);
+    return d ? new Date(d.getTime() + IST_MS) : null;
+}
+
+/** ID 224: a CSV date cell — the IST calendar day, YYYY-MM-DD. */
+export function csvDateIst(v: unknown): string {
+    if (v == null || v === "") return "";
+    if (typeof v === "string" && DATE_ONLY.test(v)) return v;
+    const d = parseInstant(v);
+    return d ? new Date(d.getTime() + IST_MS).toISOString().slice(0, 10) : String(v);
+}
+
+/** ID 224: a CSV date-time cell — IST wall clock, YYYY-MM-DD HH:MM (a 4:15 pm call reads 16:15). */
+export function csvDateTimeIst(v: unknown): string {
+    if (v == null || v === "") return "";
+    const d = parseInstant(v);
+    if (!d) return String(v);
+    return new Date(d.getTime() + IST_MS).toISOString().slice(0, 16).replace("T", " ");
 }
 
 function cell(col: DatasetColumn, v: unknown, fullPhone: boolean): ExcelJS.CellValue {
@@ -84,12 +121,14 @@ export async function buildXlsx(sheets: DatasetSheet[], ctx: FileContext): Promi
         ["Dataset", ctx.datasetLabel],
         ["Downloaded by", ctx.downloadedBy],
         ["Downloaded at (IST)", nowIst()],
+        ["Dates covered", ctx.rangeText ?? "—"],
         ...sheets.map((s): [string, string] => [`Rows — ${s.name}`, s.rows.length.toLocaleString("en-IN")]),
         ["Rows included", ctx.ownOnly ? "Only the rows this person owns (a manager: also his team's, ID 155)." : "Every row matching the filters."],
         ["Phone numbers", ctx.fullPhone ? "Full numbers (a reason was recorded)." : "Masked (98xxxxx343)."],
         ...Object.entries(ctx.filters).map(([k, v]): [string, string] => [`Filter — ${k}`, v]),
     ];
-    if (Object.keys(ctx.filters).length === 0) facts.push(["Filters", "None — the default range."]);
+    const otherFilters = Object.keys(ctx.filters).filter((k) => k !== "from" && k !== "to" && k !== "date_field");
+    if (otherFilters.length === 0) facts.push(["Filters", "None besides the dates above."]);
     let n = 0;
     for (const f of facts) zebra(about.addRow(f), n++);
     for (const sheet of sheets) {
@@ -108,7 +147,11 @@ const csvCell = (v: unknown): string => {
     return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 };
 
-/** CSV carries one table, so it is the dataset's first sheet. Dates stay as stored. */
+/**
+ * CSV carries one table, so it is the dataset's first sheet. ID 224: dates in
+ * IST and one format — YYYY-MM-DD for a date, YYYY-MM-DD HH:MM for a date-time
+ * (they used to be UTC, in three shapes, so a 4:15 pm call read 10:45).
+ */
 export function buildCsv(sheet: DatasetSheet, ctx: FileContext): string {
     const lines = [sheet.columns.map((c) => csvCell(c.header)).join(",")];
     for (const r of sheet.rows) {
@@ -117,6 +160,8 @@ export function buildCsv(sheet: DatasetSheet, ctx: FileContext): string {
                 .map((c) => {
                     const v = r[c.key];
                     if (c.kind === "phone") return csvCell(ctx.fullPhone ? v : maskPhone(v == null ? null : String(v)));
+                    if (c.kind === "datetime") return csvCell(csvDateTimeIst(v));
+                    if (c.kind === "date") return csvCell(csvDateIst(v));
                     return csvCell(typeof v === "boolean" ? (v ? "Yes" : "No") : v);
                 })
                 .join(","),

@@ -32,6 +32,12 @@ describe("recordingCell", () => {
     it("no recording → blank", () => {
         expect(recordingCell(null, "call-42", O)).toBeNull();
         expect(recordingCell("  ", null, O)).toBeNull();
+        expect(recordingCell(null, null, O, true)).toBeNull();
+    });
+
+    it("ID 224: a connected AI call with no stored link still gets the checked recording route", () => {
+        expect(recordingCell(null, "call-42", O, true)).toBe(`${O}/api/ai-dialer/recording/call-42`);
+        expect(recordingCell("", "call-42", `${O}/`, true)).toBe(`${O}/api/ai-dialer/recording/call-42`);
     });
 });
 

@@ -248,7 +248,10 @@ export async function workItems(person: Pick<DigestPerson, "id">, sendDay: strin
         lead_id: r.lead_id,
         dealer: r.dealer,
         city: r.city,
-        what: r.past_limit ? "Waiting for a field visit · past the limit" : "Waiting for a field visit",
+        // ID 222: the booked visit, as on the list ("visit booked for 13 Nov").
+        what: `${r.past_limit ? "Waiting for a field visit · past the limit" : "Waiting for a field visit"}${
+          r.visit_booked ? ` · visit booked for ${r.visit_booked}` : ""
+        }`,
         due: null,
         days: Number(r.days ?? 0),
         list: "field_visit",

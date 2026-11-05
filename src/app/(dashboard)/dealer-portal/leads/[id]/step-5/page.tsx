@@ -685,8 +685,10 @@ export default function Step5Page() {
                 <p className="text-xs text-gray-600 mt-1">
                   Inventory is now in <b>dispatched</b> state. The warranty is active and the
                   customer has been notified. Click <b>Mark Delivered</b> when the customer
-                  has physically received the unit, or the system will auto-finalize the sale
-                  in {hoursToAuto !== null ? `${hoursToAuto} hour${hoursToAuto === 1 ? "" : "s"}` : "1 day"}.
+                  has physically received the unit, or the system marks it delivered{" "}
+                  {autoSoldAt
+                    ? `on ${fmtDateTime(autoSoldAt.toISOString())}${hoursToAuto !== null ? ` (in about ${hoursToAuto} hour${hoursToAuto === 1 ? "" : "s"})` : ""}`
+                    : "at the daily 9:30 am run, a day after dispatch"}.
                 </p>
               </div>
             </div>
@@ -705,7 +707,7 @@ export default function Step5Page() {
               <KV label="Battery" value={<span className="font-mono text-xs">{product?.battery_serial ?? "—"}</span>} />
               <KV label="Charger" value={<span className="font-mono text-xs">{product?.charger_serial ?? "—"}</span>} />
               <KV label="Dispatched" value={fmtDateTime(dispatchDate?.toISOString())} />
-              <KV label="Auto-finalize" value={fmtDateTime(autoSoldAt?.toISOString())} />
+              <KV label="Marked delivered automatically" value={fmtDateTime(autoSoldAt?.toISOString())} />
               <KV label="Loan Ref" value={loan?.loan_file_number ?? "—"} />
               <KV label="Lender" value={loan?.loan_approved_by ?? "—"} />
             </div>
@@ -738,7 +740,9 @@ export default function Step5Page() {
           </div>
 
           <p className="text-[11px] text-gray-400 text-center pt-2">
-            A dispatched sale is marked delivered automatically the next morning, or press this button.
+            {/* ID 220: the daily job runs at 9:30 am IST and moves sales dispatched more than a day earlier. */}
+            A dispatched sale is marked delivered automatically at the first 9:30 am run a full day after dispatch
+            {autoSoldAt ? ` (${fmtDateTime(autoSoldAt.toISOString())})` : ""}, or press this button.
           </p>
         </div>
       </div>

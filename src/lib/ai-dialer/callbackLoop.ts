@@ -506,6 +506,10 @@ export async function runCallbackLoopTick(now: Date = new Date()): Promise<{
             to,
             email: true,
         });
+        // ID 212 (decided 4 Nov): also WhatsApp the Sales Head and the ISR's
+        // manager. Best effort; never holds up the loop.
+        const { alertMissedCallbackWhatsApp } = await import("@/lib/ai-dialer/callbackMissedAlert");
+        await alertMissedCallbackWhatsApp(cb);
     }
 
     out.expired = await expireStaleCallbacks(now);
