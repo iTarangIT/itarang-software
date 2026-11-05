@@ -5,6 +5,9 @@ import { aiInterestLevelSql } from "@/lib/ai/storage/aiInterest";
 import { markSalesReady } from "@/lib/leads/salesReady";
 import { analyzeTranscript } from "@/lib/ai/analysis";
 import { languageToStore } from "@/lib/ai-dialer/callLanguage";
+import { recordDialDisposition } from "@/lib/ai/storage/dialDisposition";
+import type { DispositionV3 } from "@/lib/ai-dialer/dispositionV3";
+import { dealerSpoke as dealerSpokeIn } from "@/lib/ai-dialer/campaignLeadStatus";
 import { db } from "@/lib/db";
 import { aiCallLogs, dealerLeads, dialerCampaigns } from "@/lib/db/schema";
 import { eq, sql } from "drizzle-orm";
@@ -76,6 +79,8 @@ export type ElevenLabsFinalizePayload = {
   callResult?: string | null;
   /** Item 2 — the language the agent spoke with the dealer (`call_language`). */
   callLanguage?: string | null;
+  /** Dispositions v3 — data collection `callback_agreed`. */
+  callbackAgreed?: string | null;
 };
 
 const IN_PROGRESS = new Set(["initiated", "ringing", "in-progress"]);
@@ -133,6 +138,7 @@ export async function finalizeElevenLabsCall(
     answeredBy,
     callResult,
     callLanguage,
+    callbackAgreed,
   } = payload;
 
   if (IN_PROGRESS.has(status)) {
@@ -169,6 +175,35 @@ export async function finalizeElevenLabsCall(
   });
   // E-310 — kept on ai_call_logs so the split above can be re-read later.
   const endEvidence: CallEndEvidenceRow = { endReason: terminationReason };
+
+  // Dispositions v3 (E-373) — the sheet's L1 / L2 / L3 for this dial, stored
+  // once per conversation and handed to the touchpoint writer. `analysis` is
+  // the transcript analysis' callback signals, when the call was analysed.
+  const recordVerdict = async (
+    leadId: string | null,
+    analysis?: { callbackAgreed?: boolean; callbackWhen?: string | null },
+  ) =>
+    (
+      await recordDialDisposition({
+        dialKey: conversationId,
+        leadId,
+        phone,
+        dialledAt: startedAt ?? null,
+        evidence: {
+          callEnd,
+          answeredBy,
+          callResult,
+          callbackAgreed,
+          analysisCallbackAgreed: analysis?.callbackAgreed ?? null,
+          analysisCallbackWhen: analysis?.callbackWhen ?? null,
+          callLanguage,
+          terminationReason,
+          durationSecs: duration,
+          transcript,
+          dealerSpoke: dealerSpokeIn(transcript),
+        },
+      })
+    ).d;
 
   // Item 5 (3 Nov 2026) — no conversation, no score. A call where the dealer
   // never really spoke (Early Hang-up during the introduction, a silent line,
@@ -238,10 +273,13 @@ export async function finalizeElevenLabsCall(
     // the Cost tile sums.
     await fetchAndPersistCallCost("elevenlabs", conversationId);
 
+    const v3 = await recordVerdict(leadForPhone?.id ?? null);
+
     if (leadForPhone) {
       // Record it in the CC team's vocabulary. See the Bolna twin for why this
       // sits after the log exists and before completeCampaignLead.
       await writeAiCallTouchpoint({
+        v3,
         leadId: leadForPhone.id,
         provider: "elevenlabs",
         callId: conversationId,
@@ -389,6 +427,7 @@ export async function finalizeElevenLabsCall(
       nextAction: null,
       callStatus: "unattributed",
     });
+    await recordVerdict(null);
     await fetchAndPersistCallCost("elevenlabs", conversationId);
     return;
   }
@@ -421,6 +460,7 @@ export async function finalizeElevenLabsCall(
       endedAt,
       agentId,
       callEnd,
+      v3: await recordVerdict(lead.id),
     });
     await applyPostCall({
       provider: "elevenlabs",
@@ -516,8 +556,12 @@ export async function finalizeElevenLabsCall(
 
     await fetchAndPersistCallCost("elevenlabs", conversationId);
 
-    // A transcript exists, so this is CONNECTED — Cold / Short Hang up.
+    // A transcript exists, so this is CONNECTED — v3 decides which row.
     await writeAiCallTouchpoint({
+      v3: await recordVerdict(lead.id, {
+        callbackAgreed: analysis.signals?.callback_agreed === "yes",
+        callbackWhen: analysis.signals?.callback_when ?? null,
+      }),
       leadId: lead.id,
       provider: "elevenlabs",
       callId: conversationId,
@@ -655,8 +699,12 @@ export async function finalizeElevenLabsCall(
   await fetchAndPersistCallCost("elevenlabs", conversationId);
 
   // The scored path. The band rides on external_tag rather than deciding the L2
-  // bucket — an AI call cannot reach the sheet's Hot bucket. See aiDisposition.ts.
+  // bucket — an AI call cannot reach the sheet's Hot bucket. See dispositionV3.ts.
   await writeAiCallTouchpoint({
+    v3: await recordVerdict(lead.id, {
+      callbackAgreed: analysis.signals?.callback_agreed === "yes",
+      callbackWhen: analysis.signals?.callback_when ?? null,
+    }),
     leadId: lead.id,
     provider: "elevenlabs",
     callId: conversationId,
@@ -958,6 +1006,8 @@ async function markLeadNeedsReview(opts: {
   endedAt?: Date | null;
   agentId?: string | null;
   callEnd: CallEndClassification;
+  /** Dispositions v3 — this dial's verdict. */
+  v3?: DispositionV3 | null;
   endEvidence?: CallEndEvidenceRow;
 }): Promise<Awaited<ReturnType<typeof completeCampaignLead>>> {
   const history = opts.followUpHistory || [];
@@ -1012,6 +1062,7 @@ async function markLeadNeedsReview(opts: {
   // Connected with a NULL L3: the dealer WAS reached, but the failure is ours.
   // See the Bolna twin — that null is the extraction-failure measurement.
   await writeAiCallTouchpoint({
+    v3: opts.v3 ?? null,
     leadId: opts.leadId,
     provider: "elevenlabs",
     callId: opts.callId,

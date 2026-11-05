@@ -85,20 +85,12 @@ export async function noteCallResultForNumber(
               ? "dead_number"
               : null;
     if (!observed && status !== "completed") return;
+    if (observed) {
+        await markNumber(leadId, observed);
+        return;
+    }
     if (!(await hasPhoneTypeTable())) return;
     try {
-        if (observed) {
-            await db.execute(sql`
-                INSERT INTO dealer_lead_phone_type (lead_id, phone, phone_type, checked_at)
-                SELECT id, phone, ${observed}, now() FROM dealer_leads
-                 WHERE id = ${leadId} AND coalesce(btrim(phone), '') <> ''
-                ON CONFLICT (lead_id) DO UPDATE
-                   SET phone = EXCLUDED.phone,
-                       phone_type = EXCLUDED.phone_type,
-                       checked_at = EXCLUDED.checked_at
-            `);
-            return;
-        }
         const r = (await db.execute(sql`
             SELECT pt.phone FROM dealer_lead_phone_type pt
              WHERE pt.lead_id = ${leadId} AND pt.phone_type IN (${OBSERVED_SQL})
@@ -113,6 +105,32 @@ export async function noteCallResultForNumber(
     } catch (err) {
         console.error(
             "[phoneTypeStore.noteCallResultForNumber] failed:",
+            err instanceof Error ? err.message : err,
+        );
+    }
+}
+
+/**
+ * Mark the lead's CURRENT number as a switchboard (an IVR, or — Dispositions
+ * v3 — a tracking number that answers and forwards to nobody) or a dead number
+ * (SIP 404 / 410, a "does not exist" recording). Marked numbers are skipped at
+ * enrolment AND at dial time, and listed under Needs dealer mobile.
+ */
+export async function markNumber(leadId: string, mark: "switchboard" | "dead_number"): Promise<void> {
+    if (!(await hasPhoneTypeTable())) return;
+    try {
+        await db.execute(sql`
+            INSERT INTO dealer_lead_phone_type (lead_id, phone, phone_type, checked_at)
+            SELECT id, phone, ${mark}, now() FROM dealer_leads
+             WHERE id = ${leadId} AND coalesce(btrim(phone), '') <> ''
+            ON CONFLICT (lead_id) DO UPDATE
+               SET phone = EXCLUDED.phone,
+                   phone_type = EXCLUDED.phone_type,
+                   checked_at = EXCLUDED.checked_at
+        `);
+    } catch (err) {
+        console.error(
+            "[phoneTypeStore.markNumber] failed:",
             err instanceof Error ? err.message : err,
         );
     }

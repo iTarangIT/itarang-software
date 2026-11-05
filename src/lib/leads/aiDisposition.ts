@@ -275,7 +275,7 @@ function connectedDisposition(
     // C2 — picked up, nothing of substance said. The sheet has exactly the right
     // words for this and files them under Cold.
     if (input.bandCallStatus === "dropped_empty") {
-        return connected("Short Hang up", "Cold", "c:dropped_empty");
+        return connected("Hung up during intro", "Cold", "c:dropped_empty");
     }
 
     // 3 Nov 2026 — when the band engine ran, the L2 bucket FOLLOWS THE BAND, so
@@ -312,7 +312,7 @@ function connectedDisposition(
     // by the disposition at all — the callback filter reads
     // ai_call_logs.signals->>'callback_agreed' directly.
     if (input.callbackAgreed === true && info === 0) {
-        return connected("As to Call Back", "Cold", "c:callback_only");
+        return connected("Ask to Call Back", "Cold", "c:callback_only");
     }
 
     // C6 — the dealer told us something. Only rows with NO band reach this
@@ -325,7 +325,7 @@ function connectedDisposition(
 
     // C7 — heard little and disclosed nothing: a hang-up in all but name.
     if (input.pitchHeard === false) {
-        return connected("Short Hang up", "Cold", "c:short_hangup");
+        return connected("Hung up during intro", "Cold", "c:short_hangup");
     }
 
     // C8 — sat through the pitch, disclosed nothing, refused nothing. "Need Some
@@ -369,10 +369,10 @@ function bandDisposition(
     }
     // Cold.
     if (input.callbackAgreed === true && info === 0) {
-        return connected("As to Call Back", "Cold", "c:callback_only");
+        return connected("Ask to Call Back", "Cold", "c:callback_only");
     }
     if (info >= 1) return connected("Details Shared, Not Qualified", "Cold", "c:cold_details");
-    if (input.pitchHeard === false) return connected("Short Hang up", "Cold", "c:short_hangup");
+    if (input.pitchHeard === false) return connected("Hung up during intro", "Cold", "c:short_hangup");
     return connected("Pitch Heard, No Response", "Cold", "c:no_disclosure");
 }
 

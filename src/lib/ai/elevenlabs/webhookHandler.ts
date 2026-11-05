@@ -13,6 +13,8 @@ import { classifyCallEnd } from "@/lib/ai-dialer/campaignLeadStatus";
 import { applyPostCall, preparePostCall } from "@/lib/ai-dialer/postCallOutcome";
 import type { ElevenLabsWebhookEvent } from "./types";
 import { normalizePostCall } from "./normalizePostCall";
+import { recordDialDisposition } from "@/lib/ai/storage/dialDisposition";
+import { writeAiCallTouchpoint } from "@/lib/ai/storage/callTouchpoint";
 
 /**
  * The telephony detail on a call_initiation_failure.
@@ -83,7 +85,32 @@ export async function handleElevenLabsWebhook(event: ElevenLabsWebhookEvent) {
               .join(" "),
             sipStatusCode: telephony.sipStatusCode,
           });
-          const outcome = data.failure_reason ?? "initiation_failed";
+          // Dispositions v3 — keep the SIP code on the outcome, so the retry
+          // policy and the carrier-refusal counter read it like a trigger failure.
+          const outcome =
+            (data.failure_reason ?? "initiation_failed") +
+            (telephony.sipStatusCode ? ` (sip status: ${telephony.sipStatusCode})` : "");
+          const failureText = [data.failure_reason, telephony.detail].filter(Boolean).join(" ");
+          if (data.conversation_id) {
+            const { d: v3 } = await recordDialDisposition({
+              dialKey: data.conversation_id,
+              leadId: row[0].lead_id,
+              campaignId: row[0].campaign_id,
+              evidence: { callEnd, failureText, sipCode: telephony.sipStatusCode },
+            });
+            // Our-side refusals never reached the dealer: no touchpoint (see
+            // advanceCampaign.recordTriggerVerdict).
+            if (!v3.effects.carrierRefusal) await writeAiCallTouchpoint({
+              v3,
+              leadId: row[0].lead_id,
+              provider: "elevenlabs",
+              callId: data.conversation_id,
+              transcript: null,
+              providerStatus: "initiation_failed",
+              callEndStatus: callEnd.status,
+              callOutcome: outcome,
+            });
+          }
           const r = await completeCampaignLead({
             leadId: row[0].lead_id,
             status: callEnd.status,

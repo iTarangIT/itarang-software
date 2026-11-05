@@ -36,6 +36,7 @@ export type NormalizedElevenLabsStatus = {
   callResult?: string | null;
   /** Item 2 — data collection `call_language`. */
   callLanguage?: string | null;
+  callbackAgreed?: string | null;
   error?: string;
 };
 
@@ -150,6 +151,7 @@ export async function getElevenLabsCallStatus(
       answeredBy: dataCollectionValue(data?.analysis, "answered_by"),
       callResult: dataCollectionValue(data?.analysis, "call_result"),
       callLanguage: dataCollectionValue(data?.analysis, "call_language"),
+      callbackAgreed: dataCollectionValue(data?.analysis, "callback_agreed"),
     };
   } catch (err) {
     return {

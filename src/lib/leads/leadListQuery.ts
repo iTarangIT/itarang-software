@@ -12,6 +12,7 @@
 
 import { numberSearchMode } from "@/lib/leads/claimScope";
 import { sql } from "drizzle-orm";
+import { dispositionFilterValues } from "@/lib/leads/dispositions";
 import { db } from "@/lib/db";
 import { UNASSIGNED_FILTER } from "@/lib/admin/leadsInfoFilters";
 import type { IntentBucket } from "@/lib/leads/intentBucket";
@@ -480,7 +481,7 @@ function buildWhere(f: LeadListFilters, opts?: { ignoreIntent?: boolean }) {
         conds.push(sql`dl.last_disposition_bucket = ${f.dispositionBucket}`);
     }
     if (f.disposition) {
-        conds.push(sql`dl.last_disposition = ${f.disposition}`);
+        conds.push(sql`dl.last_disposition IN (${sql.join(dispositionFilterValues(f.disposition).map((v) => sql`${v}`), sql`, `)})`);
     }
     // ── Idle age ─────────────────────────────────────────────────────────
     // Inclusive working-day bands on the office calendar: 30–59 admits exactly

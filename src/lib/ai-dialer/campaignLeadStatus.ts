@@ -570,7 +570,7 @@ const ANSWERED_BY_PERSON = new Set(["owner", "staff_or_family", "other_business"
  * up, not our agent. ElevenLabs writes "Call ended by remote party" / "client
  * disconnected"; Bolna's hangup_reason says "user hangup" / "customer hung up".
  */
-const REMOTE_HANGUP_TERMINATION =
+export const REMOTE_HANGUP_TERMINATION =
     /remote party|client disconnected|(?:user|customer|callee)[ _-]?(?:hung[ _-]?up|hangup|ended|disconnected)|hung[ _-]?up by (?:user|customer)/i;
 
 /**

@@ -319,9 +319,9 @@ describe("mapAiCallToDisposition — named cases", () => {
         ).toBe("incorrect_number");
     });
 
-    it("dropped_empty → Cold / Short Hang up", () => {
+    it("dropped_empty → Cold / Hung up during intro", () => {
         expect(connected({ bandCallStatus: "dropped_empty", band: null })).toMatchObject(
-            { bucket: "Cold", disposition: "Short Hang up" },
+            { bucket: "Cold", disposition: "Hung up during intro" },
         );
     });
 
@@ -340,10 +340,10 @@ describe("mapAiCallToDisposition — named cases", () => {
         }
     });
 
-    it("callback with nothing disclosed → Cold / As to Call Back", () => {
+    it("callback with nothing disclosed → Cold / Ask to Call Back", () => {
         expect(connected({ callbackAgreed: true, infoSignalsCount: 0 })).toMatchObject({
             bucket: "Cold",
-            disposition: "As to Call Back",
+            disposition: "Ask to Call Back",
         });
     });
 
@@ -441,9 +441,9 @@ describe("mapAiCallToDisposition — named cases", () => {
         expect(out.reasonCode).toBe("c:no_disclosure");
     });
 
-    it("pitch NOT heard, nothing disclosed → Short Hang up", () => {
+    it("pitch NOT heard, nothing disclosed → Hung up during intro", () => {
         expect(connected({ pitchHeard: false, infoSignalsCount: 0 })).toMatchObject({
-            disposition: "Short Hang up",
+            disposition: "Hung up during intro",
             bucket: "Cold",
         });
     });

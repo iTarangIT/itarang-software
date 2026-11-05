@@ -10,6 +10,7 @@
 // and buildWhere. No `db` import: these are composed by the caller.
 
 import { sql, type SQL } from "drizzle-orm";
+import { dispositionFilterValues } from "@/lib/leads/dispositions";
 import {
     AI_ATTEMPTED_SQL,
     AI_CONNECTED_SQL,
@@ -65,7 +66,7 @@ export function dispositionPredicates(f: LeadStateFilters): SQL[] {
         out.push(sql`dl.last_disposition_bucket = ${f.dispositionBucket}`);
     }
     if (f.disposition) {
-        out.push(sql`dl.last_disposition = ${f.disposition}`);
+        out.push(sql`dl.last_disposition IN (${sql.join(dispositionFilterValues(f.disposition).map((v) => sql`${v}`), sql`, `)})`);
     }
     return out;
 }

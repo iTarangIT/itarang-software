@@ -115,6 +115,8 @@ type Lead = {
   queuePosition: number;
   status: string;
   callOutcome: string | null;
+  /** Dispositions v3 (E-373) — this attempt's L1 / L2 / L3 and SIP code. */
+  disposition?: { l1: string; l2: string; l3: string | null; sipCode: number | null } | null;
   /** ai_call_logs.band for this attempt (Qualified | Warm | Cold | Disqualified). */
   band?: string | null;
   /** Derived server-side — see src/lib/ai-dialer/failureReason.ts. */
@@ -368,6 +370,21 @@ function LeadRow({
           band={row.band}
         />
         <CallCategoryBadge category={row.category} />
+      </td>
+      <td className="px-3 py-2.5 text-xs">
+        {row.disposition ? (
+          <span className="flex flex-col gap-0.5" title={`${row.disposition.l1} › ${row.disposition.l2}${row.disposition.l3 ? ` › ${row.disposition.l3}` : ""}`}>
+            <span className="font-medium text-gray-800">{row.disposition.l3 ?? row.disposition.l2}</span>
+            <span className="text-[10px] text-gray-500">
+              {row.disposition.l3 ? `${row.disposition.l1} › ${row.disposition.l2}` : row.disposition.l1}
+              {row.disposition.sipCode != null && (
+                <span className="ml-1 rounded bg-gray-100 px-1 font-mono text-gray-600">SIP {row.disposition.sipCode}</span>
+              )}
+            </span>
+          </span>
+        ) : (
+          <span className="text-gray-400">—</span>
+        )}
       </td>
       <td className="px-3 py-2.5 text-xs">
         {row.intentScore != null ? (
@@ -1202,6 +1219,9 @@ export function CampaignDetailView({
                   </th>
                   <th className="px-3 py-2.5 text-left font-semibold">
                     Outcome
+                  </th>
+                  <th className="px-3 py-2.5 text-left font-semibold">
+                    Disposition
                   </th>
                   <th className="px-3 py-2.5 text-left font-semibold">
                     Intent

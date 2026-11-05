@@ -133,13 +133,11 @@ describe("normalisation", () => {
         }
     });
 
-    it("accepts the corrected spelling of the sheet's typo, and the typo", () => {
-        // The sheet says "Documents Recieved". If someone fixes it in NeoDove's
-        // settings, historical rows must not silently become unmapped.
-        expect(classifyDisposition("Documents Received")?.label).toBe(
-            "Documents Recieved",
-        );
-        expect(classifyDisposition("Documents Recieved")?.isKnown).toBe(true);
+    it("v3 corrected two spellings; the old ones still classify to the new label", () => {
+        expect(classifyDisposition("Documents Recieved")?.label).toBe("Documents Received");
+        expect(classifyDisposition("Documents Received")?.isKnown).toBe(true);
+        expect(classifyDisposition("As to Call Back")?.label).toBe("Ask to Call Back");
+        expect(classifyDisposition("as to call back")?.bucket).toBe("Cold");
         expect(classifyDisposition("Commercials Finalized")?.label).toBe(
             "Commercials Finalised",
         );

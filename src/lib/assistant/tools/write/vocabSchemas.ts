@@ -4,11 +4,11 @@
 
 import { z } from "zod";
 import {
-    AI_ONLY_DISPOSITIONS,
     ALL_CONNECTED_DISPOSITIONS,
     CONNECT_STATUS,
-    DISPOSITION_BUCKETS,
+    isRepLoggable,
     NOT_CONNECTED_REASONS,
+    REP_DISPOSITION_BUCKETS,
 } from "@/lib/leads/dispositions";
 import { LEAD_STATUS, LOST_REASON } from "@/lib/lifecycle/transitions";
 import { VISIT_NEXT_ACTION, VISIT_OUTCOME, VISIT_STATUS } from "@/lib/asm/types";
@@ -20,14 +20,14 @@ const tuple = (xs: readonly string[]) => xs as unknown as [string, ...string[]];
 export const DispositionLabel = z
     .enum(
         tuple([
-            ...ALL_CONNECTED_DISPOSITIONS.filter((d) => !AI_ONLY_DISPOSITIONS.has(d)),
+            ...ALL_CONNECTED_DISPOSITIONS.filter(isRepLoggable),
             ...NOT_CONNECTED_REASONS,
         ]),
     )
     .describe("The CC-sheet disposition, spelled exactly as listed");
 export const ConnectStatus = z.enum(CONNECT_STATUS);
 export const Bucket = z
-    .enum(DISPOSITION_BUCKETS)
+    .enum(REP_DISPOSITION_BUCKETS)
     .describe("Cold / Warm / Hot / Converted / Lost — only when the rep said it");
 // ID 115: Won, Converted and Transferred to ASM are set only by their own
 // actions (mark_won / onboarding approval / transfer), never by a logged call or
