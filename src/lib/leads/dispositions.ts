@@ -44,6 +44,10 @@ export const DISPOSITION_BUCKETS = [
     "Hot",
     "Converted",
     "Lost",
+    // Dispositions v3 (4 Nov 2026): Connected › Machine — the line answered but
+    // no person did (IVR, a voicemail box, a tracking number, dead audio). AI
+    // dialer only; a rep never logs it.
+    "Machine",
 ] as const;
 export type DispositionBucket = (typeof DISPOSITION_BUCKETS)[number];
 
@@ -58,10 +62,16 @@ export const CONNECTED_DISPOSITIONS: Record<DispositionBucket, readonly string[]
     Cold: [
         "Loan Procedure Issue",
         "Service Issue",
-        "As to Call Back",
+        "Ask to Call Back",
         "Need Some Time",
         "No requirement in current",
         "Bad Experience with Trontek",
+        // Dispositions v3 (4 Nov 2026) — "Short Hang up" split into these four.
+        "Hung up during intro",
+        "Wrong person (staff / family)",
+        "Dropped mid-call",
+        "Language mismatch",
+        // Retired by v3; kept only so old records still classify (RETIRED_DISPOSITIONS).
         "Short Hang up",
         // AI call labels (3 Nov 2026) — the sheet had no words for these. Each
         // is a fact about the call, never a statement put in the dealer's mouth.
@@ -81,7 +91,7 @@ export const CONNECTED_DISPOSITIONS: Record<DispositionBucket, readonly string[]
         "Quotation Sent",
         "Commercials Explained",
         "Under Negotiation",
-        "Documents Recieved",
+        "Documents Received",
         "Commercials Finalised",
         // AI: the call qualified the dealer (band Qualified) — 3 Nov 2026, so an
         // AI-Qualified lead reads Hot on its touchpoint as it does on the lead.
@@ -100,6 +110,12 @@ export const CONNECTED_DISPOSITIONS: Record<DispositionBucket, readonly string[]
         "Business Closed",
         "REJECTED BY US",
     ],
+    Machine: [
+        "IVR / auto-attendant",
+        "Recording / voicemail",
+        "Tracking number, no voice",
+        "Dead audio (no sound either way)",
+    ],
 } as const;
 
 /**
@@ -113,7 +129,27 @@ export const AI_ONLY_DISPOSITIONS: ReadonlySet<string> = new Set([
     "Details Shared, Not Qualified",
     "Callback Agreed",
     "AI Qualified",
+    // Dispositions v3: the Machine L2 is the dialer's own verdict on the line.
+    "IVR / auto-attendant",
+    "Recording / voicemail",
+    "Tracking number, no voice",
+    "Dead audio (no sound either way)",
 ]);
+
+/**
+ * Labels the sheet has retired (Dispositions v3, 4 Nov 2026). They still
+ * classify, filter and bucket so old records keep their meaning, but nobody —
+ * rep, assistant or AI — writes them any more.
+ */
+export const RETIRED_DISPOSITIONS: ReadonlySet<string> = new Set(["Short Hang up"]);
+
+/** A bucket a rep can log into: every bucket except the AI-only Machine. */
+export const REP_DISPOSITION_BUCKETS = ["Cold", "Warm", "Hot", "Converted", "Lost"] as const satisfies readonly DispositionBucket[];
+
+/** May a person (rep picker, WhatsApp assistant) log this label? */
+export function isRepLoggable(label: string): boolean {
+    return !AI_ONLY_DISPOSITIONS.has(label) && !RETIRED_DISPOSITIONS.has(label);
+}
 
 /** L1 = Not Connected. Ten reasons, no bucket. */
 export const NOT_CONNECTED_REASONS = [
@@ -146,15 +182,17 @@ export const ALL_CONNECTED_DISPOSITIONS: readonly string[] = (() => {
 
 // ── Normalisation ─────────────────────────────────────────────────────────
 
-// Spelling variants that must resolve to the same disposition. The sheet's own
-// "Documents Recieved" is a typo; the day someone fixes it in NeoDove's settings
-// every historical row must not silently become unmapped, and vice versa. Keys
-// and values are both run through normalizeDispositionKey().
+// Spelling variants that must resolve to the same disposition. Dispositions v3
+// (4 Nov 2026) fixed the sheet's "Documents Recieved" and "As to Call Back";
+// every historical row (and NeoDove, until its settings change) still carries
+// the old spelling, so it must not become unmapped. Keys and values are both
+// run through normalizeDispositionKey().
 const ALIASES: Record<string, string> = {
-    "documents received": "Documents Recieved",
+    // v3 (4 Nov 2026) corrected two spellings; the old ones are on stored rows.
+    "documents recieved": "Documents Received",
     "commercials finalized": "Commercials Finalised",
-    "ask to call back": "As to Call Back",
-    "asked to call back": "As to Call Back",
+    "as to call back": "Ask to Call Back",
+    "asked to call back": "Ask to Call Back",
     "switched off": "Switch off",
     "wrong number": "Incorrect / Invalid number",
     "invalid number": "Incorrect / Invalid number",
@@ -434,8 +472,30 @@ export const DISPOSITION_BUCKET_TONE: Record<DispositionBucket, string> = {
     Hot: "bg-rose-50 text-rose-700 border-rose-200",
     Converted: "bg-emerald-50 text-emerald-700 border-emerald-200",
     Lost: "bg-gray-100 text-gray-600 border-gray-300",
+    Machine: "bg-violet-50 text-violet-700 border-violet-200",
 };
 
 /** Tone for a row with no bucket: a not-connected reason, or an unmapped value. */
+/**
+ * Every stored spelling of a label, for an exact-match SQL filter. The two
+ * labels v3 re-spelled ("As to Call Back", "Documents Recieved") sit on rows
+ * written before 4 Nov 2026, and a filter on the new spelling must find them.
+ */
+export function dispositionFilterValues(label: string): string[] {
+    const canonical = classifyDisposition(label)?.label ?? label;
+    const key = normalizeDispositionKey(canonical);
+    const out = new Set<string>([label, canonical]);
+    for (const [legacy, target] of Object.entries(LEGACY_SPELLINGS)) {
+        if (normalizeDispositionKey(target) === key) out.add(legacy);
+    }
+    return [...out];
+}
+
+/** Old spelling → the v3 label that replaced it. Spelled exactly as stored. */
+const LEGACY_SPELLINGS: Record<string, string> = {
+    "As to Call Back": "Ask to Call Back",
+    "Documents Recieved": "Documents Received",
+};
+
 export const DISPOSITION_NEUTRAL_TONE =
     "bg-slate-50 text-slate-600 border-slate-200";

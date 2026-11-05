@@ -9,7 +9,7 @@ import {
     checkCallProposal,
     checkVisitProposal,
 } from "../vocab";
-import { AI_ONLY_DISPOSITIONS, CONNECTED_DISPOSITIONS, NOT_CONNECTED_REASONS, classifyDisposition } from "@/lib/leads/dispositions";
+import { CONNECTED_DISPOSITIONS, NOT_CONNECTED_REASONS, classifyDisposition, isRepLoggable } from "@/lib/leads/dispositions";
 import { LEAD_STATUS, LOST_REASON } from "@/lib/lifecycle/transitions";
 import { VISIT_OUTCOME } from "@/lib/asm/types";
 
@@ -63,8 +63,8 @@ describe("INV6_closed_vocabulary: §9.3 map is a subset of the existing enums", 
     it("COVERAGE: every CONNECTED_DISPOSITIONS label maps to a call row in that bucket; every VISIT_OUTCOME to a visit row", () => {
         for (const [bucket, labels] of Object.entries(CONNECTED_DISPOSITIONS)) {
             for (const label of labels) {
-                // AI-only labels are not something a rep logs (dispositions.ts).
-                if (AI_ONLY_DISPOSITIONS.has(label)) continue;
+                // AI-only and retired labels are not something a rep logs (dispositions.ts).
+                if (!isRepLoggable(label)) continue;
                 const row = callRowFor(label, "connected");
                 expect(row, `${bucket}: ${label}`).not.toBeNull();
                 expect(row!.buckets, `${bucket}: ${label}`).toContain(bucket);
@@ -134,7 +134,7 @@ describe("checkCallProposal", () => {
 
     it("a status outside the row → asks, never guesses", () => {
         expect(
-            checkCallProposal({ label: "As to Call Back", connect: "connected", bucket: "Cold", status: "Converted" }).ok,
+            checkCallProposal({ label: "Ask to Call Back", connect: "connected", bucket: "Cold", status: "Converted" }).ok,
         ).toBe(false);
     });
 
@@ -178,12 +178,14 @@ describe("checkCallProposal", () => {
         }
     });
 
-    it("the Cold outcomes and Documents Recieved are mapped", () => {
-        expect(checkCallProposal({ label: "Short Hang up", connect: "connected", bucket: "Cold" })).toMatchObject({ ok: true, status: NO_CHANGE });
+    it("the Cold outcomes and Documents Received are mapped; the retired Short Hang up is not", () => {
+        expect(checkCallProposal({ label: "Hung up during intro", connect: "connected", bucket: "Cold" })).toMatchObject({ ok: true, status: NO_CHANGE });
+        expect(checkCallProposal({ label: "Wrong person (staff / family)", connect: "connected", bucket: "Cold" }).ok).toBe(true);
+        expect(checkCallProposal({ label: "Short Hang up", connect: "connected", bucket: "Cold" }).ok).toBe(false);
         expect(checkCallProposal({ label: "Service Issue", connect: "connected", bucket: "Cold", status: "Under_Discussion" })).toMatchObject({
             ok: true, status: "Under_Discussion",
         });
-        expect(checkCallProposal({ label: "Documents Recieved", connect: "connected", bucket: "Hot" })).toMatchObject({ ok: true, interest: "hot" });
+        expect(checkCallProposal({ label: "Documents Received", connect: "connected", bucket: "Hot" })).toMatchObject({ ok: true, interest: "hot" });
     });
 
     it("a Lost outcome may keep the lead open when the rep says so; unstated still asks", () => {
@@ -198,7 +200,7 @@ describe("checkCallProposal", () => {
         expect(checkCallProposal({ label: "Details Shared", connect: "connected", bucket: "Cold" })).toEqual({
             ok: false, question: "Is the dealer warm?",
         });
-        expect(checkCallProposal({ label: "As to Call Back", connect: "connected", bucket: "Warm" })).toEqual({
+        expect(checkCallProposal({ label: "Ask to Call Back", connect: "connected", bucket: "Warm" })).toEqual({
             ok: false, question: "Is the dealer cold?",
         });
         expect(checkCallProposal({ label: "Details Shared", connect: "connected", bucket: "Warm" }).ok).toBe(true);

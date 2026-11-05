@@ -46,6 +46,11 @@ import {
 } from "@/lib/ai-dialer/retryPolicy";
 import { noteTriggerResult } from "@/lib/ai-dialer/lineHealth";
 import { dialTimeSkip, ENROL_SKIP_OUTCOME } from "@/lib/ai-dialer/numberHygiene";
+import { observedNumbers } from "@/lib/ai-dialer/phoneTypeStore";
+import { classifyTriggerDetail } from "@/lib/ai-dialer/failureReason";
+import { recordDialDisposition, triggerDialKey } from "@/lib/ai/storage/dialDisposition";
+import { writeAiCallTouchpoint } from "@/lib/ai/storage/callTouchpoint";
+import type { CallEndClassification } from "@/lib/ai-dialer/campaignLeadStatus";
 import { leadsWithOpenCallback } from "@/lib/ai-dialer/callbackLoop";
 import {
   nextWindowOpenSql,
@@ -192,6 +197,51 @@ async function isStillRunning(campaignId: string): Promise<boolean> {
     .where(eq(dialerCampaigns.id, campaignId))
     .limit(1);
   return r[0]?.status === "running";
+}
+
+/**
+ * Dispositions v3 — a dial the provider refused before any conversation
+ * existed still gets its L1 / L2 / L3 and a touchpoint on the lead. Keyed
+ * trigger:<campaign_lead_id>:<attempt>, so a retry of the same advance writes
+ * the same row. Never throws.
+ */
+async function recordTriggerVerdict(input: {
+  provider: string;
+  campaignId: string;
+  campaignLeadId: string;
+  attempt: number;
+  leadId: string;
+  phone: string | null;
+  reason: string;
+  callEnd: CallEndClassification;
+}): Promise<void> {
+  try {
+    const dialKey = triggerDialKey(input.campaignLeadId, input.attempt);
+    const { d } = await recordDialDisposition({
+      dialKey,
+      leadId: input.leadId,
+      campaignId: input.campaignId,
+      phone: input.phone,
+      evidence: { callEnd: input.callEnd, failureText: input.reason },
+    });
+    // A refusal on OUR side (carrier 401/403/407/429/503, a config error) never
+    // reached the dealer: no touchpoint, or the non-responsive rule (6 dial
+    // days, none connected) would count our outage against him.
+    if (d.effects.carrierRefusal || classifyTriggerDetail(input.reason) === "config_error") return;
+    await writeAiCallTouchpoint({
+      v3: d,
+      leadId: input.leadId,
+      provider: input.provider,
+      callId: dialKey,
+      transcript: null,
+      providerStatus: "trigger_failed",
+      callEndStatus: input.callEnd.status,
+      callOutcome: input.callEnd.outcome,
+      summary: input.reason,
+    });
+  } catch (err) {
+    console.error("[advanceCampaign] trigger verdict not recorded:", err instanceof Error ? err.message : err);
+  }
 }
 
 // After a failed trigger. Reports it to the carrier-pause counter; returns the
@@ -422,6 +472,24 @@ export async function advanceCampaign(
         continue;
       }
 
+      // Dispositions v3 — a number retired mid-campaign (an IVR or tracking
+      // number, SIP 404 / 410) is skipped at dial time too, not only when the
+      // next campaign enrols it. Matched on the number, so another lead on the
+      // same switchboard is skipped with it.
+      const retired = (await observedNumbers([lead[0].phone])).values().next().value;
+      if (retired) {
+        await db
+          .update(dialerCampaignLeads)
+          .set({
+            status: "skipped",
+            completed_at: new Date(),
+            call_outcome: ENROL_SKIP_OUTCOME[retired],
+          })
+          .where(eq(dialerCampaignLeads.id, claimed.campaignLeadId));
+        await syncCampaignCounters(campaignId);
+        continue;
+      }
+
       // BRD §0.2 — defensive exclusion filter. A lead can enter an active
       // sales state after the campaign was queued; skip it the same way as a
       // no-phone lead so the campaign keeps advancing and the dialer never
@@ -531,6 +599,16 @@ export async function advanceCampaign(
           },
         );
         const exOutcome = `trigger_exception: ${exReason}`;
+        await recordTriggerVerdict({
+          provider,
+          campaignId,
+          campaignLeadId: claimed.campaignLeadId,
+          attempt: claimed.attemptCount,
+          leadId: lead[0].id,
+          phone: lead[0].phone,
+          reason: exReason,
+          callEnd: classifyCallEnd({ triggerError: exReason }),
+        });
         await recordAttemptOutcome({
           campaignLeadId: claimed.campaignLeadId,
           status: classifyCallEnd({ triggerError: exReason }).status,
@@ -563,6 +641,16 @@ export async function advanceCampaign(
         // 603) — so this is where most "the dealer didn't pick up" outcomes
         // are born. Classify it instead of filing every one as failed.
         const failOutcome = `trigger_failed: ${reason}`;
+        await recordTriggerVerdict({
+          provider,
+          campaignId,
+          campaignLeadId: claimed.campaignLeadId,
+          attempt: claimed.attemptCount,
+          leadId: lead[0].id,
+          phone: lead[0].phone,
+          reason,
+          callEnd: classifyCallEnd({ triggerError: reason }),
+        });
         await recordAttemptOutcome({
           campaignLeadId: claimed.campaignLeadId,
           status: classifyCallEnd({ triggerError: reason }).status,

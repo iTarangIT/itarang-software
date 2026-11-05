@@ -284,7 +284,7 @@ async function handleDisposition(
             callBackAsked:
                 classifyDisposition(event.disposition ?? event.tag ?? "", {
                     callConnected: event.callConnected ?? false,
-                })?.label === "As to Call Back",
+                })?.label === "Ask to Call Back",
         });
         // ID 36: contactability after every call.
         await reviewLeadContactability({

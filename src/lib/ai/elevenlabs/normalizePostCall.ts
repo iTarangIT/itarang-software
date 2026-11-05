@@ -65,6 +65,8 @@ export interface NormalizedPostCall {
   callResult: string | null;
   /** Item 2 (3 Nov 2026) — data collection `call_language` (hi / mr / kn …). */
   callLanguage: string | null;
+  /** Dispositions v3 — data collection `callback_agreed` ("true" / "false"). */
+  callbackAgreed: string | null;
 }
 
 /**
@@ -176,5 +178,6 @@ export function normalizePostCall(
     answeredBy: dataCollectionValue(data.analysis, "answered_by"),
     callResult: dataCollectionValue(data.analysis, "call_result"),
     callLanguage: dataCollectionValue(data.analysis, "call_language"),
+    callbackAgreed: dataCollectionValue(data.analysis, "callback_agreed"),
   };
 }

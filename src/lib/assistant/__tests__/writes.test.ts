@@ -101,7 +101,7 @@ describe("log_call proposals (UC-02, UC-03)", () => {
         const cases: Record<string, unknown>[] = [
             { channel: "call", connect_status: "connected", disposition: "Commercials Explained" }, // warm or hot?
             { channel: "call", connect_status: "connected", disposition: "Price High", bucket: "Warm" }, // still talking or lost?
-            { channel: "call", connect_status: "connected", disposition: "As to Call Back", bucket: "Cold", status: "Commercials_Finalised" },
+            { channel: "call", connect_status: "connected", disposition: "Ask to Call Back", bucket: "Cold", status: "Commercials_Finalised" },
             { channel: "call", connect_status: "not_connected", disposition: "Switch off", status: "Lost" },
             { channel: "call", connect_status: "not_connected", disposition: "Did not pick", follow_up_at: "2026-09-20T11:00:00+05:30" }, // past
             { channel: "call", connect_status: "not_connected", disposition: "Did not pick", follow_up_at: "2027-06-01T11:00:00+05:30" }, // > 90 days

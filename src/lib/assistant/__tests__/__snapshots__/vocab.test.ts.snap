@@ -43,7 +43,7 @@ exports[`INV6_closed_vocabulary: §9.3 map is a subset of the existing enums > m
       "id": "call_back",
       "interest": null,
       "labels": [
-        "As to Call Back",
+        "Ask to Call Back",
         "Need Some Time",
         "Details Shared",
         "Information Collected",
@@ -73,10 +73,13 @@ exports[`INV6_closed_vocabulary: §9.3 map is a subset of the existing enums > m
         "Service Issue",
         "No requirement in current",
         "Bad Experience with Trontek",
-        "Short Hang up",
+        "Hung up during intro",
+        "Wrong person (staff / family)",
+        "Dropped mid-call",
+        "Language mismatch",
       ],
       "lostReasonByLabel": {},
-      "said": "loan / finance trouble, service complaint, no requirement right now, bad experience with Trontek, hung up quickly",
+      "said": "loan / finance trouble, service complaint, no requirement right now, bad experience with Trontek, hung up quickly, spoke to staff not the owner, call dropped, language problem",
       "status": {
         "options": [
           "Under_Discussion",
@@ -147,7 +150,7 @@ exports[`INV6_closed_vocabulary: §9.3 map is a subset of the existing enums > m
       "labels": [
         "Quotation Sent",
         "Under Negotiation",
-        "Documents Recieved",
+        "Documents Received",
         "Commercials Finalised",
       ],
       "lostReasonByLabel": {},
@@ -231,10 +234,10 @@ exports[`INV6_closed_vocabulary: §9.3 map is a subset of the existing enums > m
     },
   ],
   "HINGLISH_CALL_ALIASES": {
-    "baad me call karna": "As to Call Back",
-    "baad mein call karo": "As to Call Back",
+    "baad me call karna": "Ask to Call Back",
+    "baad mein call karo": "Ask to Call Back",
     "busy tha": "Busy in another call",
-    "call back karna": "As to Call Back",
+    "call back karna": "Ask to Call Back",
     "competitor se le liya": "Lost to Competition",
     "deal final": "Commercials Finalised",
     "details bhej di": "Details Shared",
