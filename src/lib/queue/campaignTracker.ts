@@ -35,10 +35,14 @@ import {
   planRetryDetailed,
   type RetryWindow,
 } from "@/lib/ai-dialer/retryPolicy";
+import { planLongHorizonRedial } from "@/lib/ai/storage/dialDisposition";
 
 // E-315 — automatic redials per unreached lead for every NEW campaign. A lead
 // gets at most 1 + this many dials. Old campaigns keep max_retries NULL (off).
-export const DEFAULT_MAX_RETRIES = 3;
+// 5 since Dispositions v3 (5 Nov 2026): "Did not pick" is redialled in the next
+// window, up to 2 a day for 3 days — six dials — and the sheet's rule, not this
+// budget, should be what stops it. Campaigns created earlier keep their value.
+export const DEFAULT_MAX_RETRIES = 5;
 
 // Bolna typically resolves a call within ~2 minutes. After 4 minutes with no
 // webhook the call is effectively orphaned — flip the row to failed and let
@@ -475,6 +479,14 @@ export async function recordAttemptOutcome(opts: {
   outcome?: string | null;
   bolnaCallId?: string | null;
   intentScore?: number | null;
+  /**
+   * Dispositions v3 — this dial's label. Decides the redial by the sheet's
+   * rule (retryPolicy.REATTEMPT_RULES) and is kept on the history entry so the
+   * "once" rules can count earlier attempts.
+   */
+  disposition?: string | null;
+  /** The time the dealer asked to be called back (Ask to Call Back), if any. */
+  requestedAt?: Date | null;
 }): Promise<{ written: boolean; retryAt: Date | null }> {
   const row = await db
     .select({
@@ -499,6 +511,7 @@ export async function recordAttemptOutcome(opts: {
   const attempt = Math.max(r?.attempt_count ?? 1, 1);
 
   let retryAt: Date | null = null;
+  let longHorizon: { at: Date; once: boolean } | null = null;
   // false = our line refused the dial (SIP 403 etc.) — refund the attempt.
   let consumesAttempt = true;
   if (r && r.max_retries != null && r.max_retries > 0) {
@@ -512,7 +525,7 @@ export async function recordAttemptOutcome(opts: {
         }
       : await defaultRetryWindow();
     const history = Array.isArray(r.attempt_history)
-      ? (r.attempt_history as Array<{ counted?: boolean; at?: string | null }>)
+      ? (r.attempt_history as Array<{ counted?: boolean; at?: string | null; disp?: string | null }>)
       : [];
     const now = new Date();
     const plan = planRetryDetailed({
@@ -525,8 +538,16 @@ export async function recordAttemptOutcome(opts: {
       lineBlockedRetriesUsed: history.filter((h) => h.counted === false).length,
       // B3 — earlier dials today plus the one that just ended.
       dialsToday: countDialsOnIstDay(history, now) + 1,
+      disposition: opts.disposition ?? null,
+      history,
+      requestedAt: opts.requestedAt ?? null,
     });
-    retryAt = plan?.at ?? null;
+    if (plan?.longHorizon) {
+      // 7 / 30 / 90 days: the row is done; the lead waits in ai_redial_plan.
+      longHorizon = { at: plan.at, once: plan.longHorizon.once };
+    } else {
+      retryAt = plan?.at ?? null;
+    }
     consumesAttempt = plan?.consumesAttempt ?? true;
   }
 
@@ -538,6 +559,8 @@ export async function recordAttemptOutcome(opts: {
     call_id: opts.bolnaCallId ?? null,
     // Only written when false, so existing history entries read as counted.
     ...(consumesAttempt ? {} : { counted: false }),
+    // Dispositions v3 — the label this dial got.
+    ...(opts.disposition ? { disp: opts.disposition } : {}),
   };
 
   const updated = await db
@@ -570,6 +593,15 @@ export async function recordAttemptOutcome(opts: {
   // clears it. Best-effort, never throws.
   if (written && r?.lead_id) {
     await noteCallResultForNumber(r.lead_id, opts.status, opts.outcome ?? null);
+    if (longHorizon && opts.disposition) {
+      await planLongHorizonRedial({
+        leadId: r.lead_id,
+        dueAt: longHorizon.at,
+        disposition: opts.disposition,
+        once: longHorizon.once,
+        sourceDial: opts.bolnaCallId ?? null,
+      });
+    }
   }
   if (written && retryAt) {
     console.log("[CAMPAIGN] retry scheduled", {
@@ -591,6 +623,9 @@ export async function completeCampaignLead(opts: {
   outcome?: string | null;
   intentScore?: number | null;
   campaignId?: string | null;
+  /** Dispositions v3 — see recordAttemptOutcome. */
+  disposition?: string | null;
+  requestedAt?: Date | null;
 }): Promise<{
   campaignId: string | null;
   /** The dialer_campaign_leads row this result closed (null = none / stale). */
@@ -667,6 +702,8 @@ export async function completeCampaignLead(opts: {
       outcome: opts.outcome,
       bolnaCallId: opts.bolnaCallId,
       intentScore: opts.intentScore,
+      disposition: opts.disposition ?? null,
+      requestedAt: opts.requestedAt ?? null,
     });
 
     // Counters are derived from the rows we just wrote — see

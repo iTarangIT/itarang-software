@@ -28,6 +28,7 @@ import { businessTypeFilterParam } from "@/lib/leads/businessType";
 import { exportsOwnLeadsOnly } from "@/lib/exports/downloadLog";
 import { isReadySplit, type ReadySplit } from "@/lib/leads/salesReady";
 import { hasPhoneTypeTable } from "@/lib/ai-dialer/phoneTypeStore";
+import { hasDialDispositionTables } from "@/lib/ai/storage/dialDisposition";
 import { pickTeamMember } from "@/lib/users/teamRules";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -64,6 +65,9 @@ export async function parseLeadListFilters(
     const idleLimitsTable = idlePastLimit ? await hasTimeLimitTable() : false;
     const needsMobile = searchParams.get("needs_mobile") === "1";
     const phoneTypeTable = needsMobile ? await hasPhoneTypeTable() : false;
+    // Dispositions v3 (E-373): only name ai_redial_plan when the table exists.
+    const aiRedialDue =
+        searchParams.get("ai_redial_due") === "1" ? await hasDialDispositionTables() : false;
 
     return {
         status: searchParams.get("status") || null,
@@ -109,6 +113,7 @@ export async function parseLeadListFilters(
         callback: searchParams.get("callback") === "1",
         needsMobile,
         phoneTypeTable,
+        aiRedialDue,
         disposition: searchParams.get("disposition")?.trim() || null,
         businessType: businessTypeFilterParam(searchParams.get("business_type")),
         // ID 199: a manager (own-scoped role with a team) narrows to one person

@@ -6,6 +6,7 @@ import {
     isHumanDisposition,
     languageFlipped,
     mapDispositionV3,
+    redialHints,
     type DispositionV3Input,
 } from "../dispositionV3";
 import { classifyDisposition } from "@/lib/leads/dispositions";
@@ -329,4 +330,16 @@ describe("every v3 label exists in the CRM vocabulary", () => {
             expect(c?.bucket).toBe(d.bucket);
         },
     );
+});
+
+describe("redialHints", () => {
+    it("hung up during intro → shorter opener; wrong person → ask for the owner's mobile", () => {
+        expect(redialHints("19")).toEqual({ short_opener: "1", ask_owner_mobile: "0", last_disposition_rule: "19" });
+        expect(redialHints("18")).toEqual({ short_opener: "0", ask_owner_mobile: "1", last_disposition_rule: "18" });
+    });
+
+    it("any other rule, or none, sends both flags off (keys always present)", () => {
+        expect(redialHints("2")).toEqual({ short_opener: "0", ask_owner_mobile: "0", last_disposition_rule: "2" });
+        expect(redialHints(null)).toEqual({ short_opener: "0", ask_owner_mobile: "0", last_disposition_rule: "" });
+    });
 });

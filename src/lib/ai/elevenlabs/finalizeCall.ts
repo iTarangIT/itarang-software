@@ -298,6 +298,7 @@ export async function finalizeElevenLabsCall(
         bolnaCallId: conversationId || null,
         outcome: callEnd.outcome ?? (status || "no_transcript"),
         intentScore: null,
+        disposition: v3.disposition,
       });
       campaignIdAfterComplete = r.campaignId;
 
@@ -557,11 +558,12 @@ export async function finalizeElevenLabsCall(
     await fetchAndPersistCallCost("elevenlabs", conversationId);
 
     // A transcript exists, so this is CONNECTED — v3 decides which row.
+    const droppedV3 = await recordVerdict(lead.id, {
+      callbackAgreed: analysis.signals?.callback_agreed === "yes",
+      callbackWhen: analysis.signals?.callback_when ?? null,
+    });
     await writeAiCallTouchpoint({
-      v3: await recordVerdict(lead.id, {
-        callbackAgreed: analysis.signals?.callback_agreed === "yes",
-        callbackWhen: analysis.signals?.callback_when ?? null,
-      }),
+      v3: droppedV3,
       leadId: lead.id,
       provider: "elevenlabs",
       callId: conversationId,
@@ -591,6 +593,8 @@ export async function finalizeElevenLabsCall(
       status: callEnd.status,
       bolnaCallId: conversationId || null,
       outcome: campaignOutcomeFor(plan, callEnd.outcome ?? "dropped_empty"),
+      disposition: droppedV3.disposition,
+      requestedAt: plan.callbackDue,
       intentScore: droppedScore,
     });
     await applyPostCall({
@@ -700,11 +704,12 @@ export async function finalizeElevenLabsCall(
 
   // The scored path. The band rides on external_tag rather than deciding the L2
   // bucket — an AI call cannot reach the sheet's Hot bucket. See dispositionV3.ts.
+  const scoredV3 = await recordVerdict(lead.id, {
+    callbackAgreed: analysis.signals?.callback_agreed === "yes",
+    callbackWhen: analysis.signals?.callback_when ?? null,
+  });
   await writeAiCallTouchpoint({
-    v3: await recordVerdict(lead.id, {
-      callbackAgreed: analysis.signals?.callback_agreed === "yes",
-      callbackWhen: analysis.signals?.callback_when ?? null,
-    }),
+    v3: scoredV3,
     leadId: lead.id,
     provider: "elevenlabs",
     callId: conversationId,
@@ -732,6 +737,8 @@ export async function finalizeElevenLabsCall(
     bolnaCallId: conversationId || null,
     outcome: campaignOutcomeFor(plan, callEnd.outcome ?? analysis.outcome),
     intentScore: analysis.intent_score,
+    disposition: scoredV3.disposition,
+    requestedAt: plan.callbackDue,
   });
 
   // The category, the callback record and the sales hand-off — the one
@@ -1081,6 +1088,7 @@ async function markLeadNeedsReview(opts: {
     bolnaCallId: opts.callId || null,
     outcome: opts.callEnd.outcome ?? "needs_review",
     intentScore: null,
+    disposition: opts.v3?.disposition ?? null,
   });
   return r;
 }

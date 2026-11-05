@@ -85,7 +85,7 @@ async function main() {
                 {
                     leadId: fresh.id,
                     actorId: fresh.current_owner_id!,
-                    body: { touchpoint_type: "inside_sales_call", disposition: { connect_status: "connected", label: "As to Call Back", bucket: "Warm" } } as never,
+                    body: { touchpoint_type: "inside_sales_call", disposition: { connect_status: "connected", label: "Ask to Call Back", bucket: "Warm" } } as never,
                 },
                 { tx },
             );
