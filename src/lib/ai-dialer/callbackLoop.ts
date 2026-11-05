@@ -458,8 +458,9 @@ export async function runCallbackLoopTick(now: Date = new Date()): Promise<{
     pushed: number;
     escalated: number;
     expired: number;
+    inboundMissed: number;
 }> {
-    const out = { reminded: 0, pushed: 0, escalated: 0, expired: 0 };
+    const out = { reminded: 0, pushed: 0, escalated: 0, expired: 0, inboundMissed: 0 };
     if (!(await hasCallOutcomeTables()) || !(await hasCallbackLoopColumns())) return out;
     const settings = await getCallbackLoopSettings();
     const remindBy = new Date(now.getTime() + REMIND_BEFORE_MS).toISOString();
@@ -569,6 +570,11 @@ export async function runCallbackLoopTick(now: Date = new Date()): Promise<{
     }
 
     out.expired = await expireStaleCallbacks(now);
+    // Task 9 — an inbound call with no post-call after 3 minutes was not
+    // answered: it becomes a 10-minute return task (reminded / escalated above
+    // on later ticks).
+    const { sweepMissedInbound } = await import("./inbound");
+    out.inboundMissed = await sweepMissedInbound(now);
     return out;
 }
 

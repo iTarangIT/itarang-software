@@ -32,6 +32,7 @@ export interface ElevenLabsPostCallTranscriptionData {
     phone_call?: {
       external_number?: string;
       direction?: string;
+      call_sid?: string;
     };
     [k: string]: unknown;
   };

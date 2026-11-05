@@ -12,7 +12,7 @@ import { completeCampaignLead } from "@/lib/queue/campaignTracker";
 import { classifyCallEnd } from "@/lib/ai-dialer/campaignLeadStatus";
 import { applyPostCall, preparePostCall } from "@/lib/ai-dialer/postCallOutcome";
 import type { ElevenLabsWebhookEvent } from "./types";
-import { normalizePostCall } from "./normalizePostCall";
+import { dataCollectionValue, normalizePostCall } from "./normalizePostCall";
 import { noteTriggerResult } from "@/lib/ai-dialer/lineHealth";
 import { recordDialDisposition } from "@/lib/ai/storage/dialDisposition";
 import { writeAiCallTouchpoint } from "@/lib/ai/storage/callTouchpoint";
@@ -184,6 +184,35 @@ export async function handleElevenLabsWebhook(event: ElevenLabsWebhookEvent) {
     // lead-id hint the payload always carried — belong somewhere they can be
     // asserted on.
     const call = normalizePostCall(event.data);
+
+    // Task 9 — a dealer rang the Vobiz number. Logged on the lead and its
+    // callback (inbound.ts); never processed as a campaign dial.
+    const meta = (event.data.metadata ?? {}) as { phone_call?: { direction?: string; call_sid?: string } };
+    const dynVars = event.data.conversation_initiation_client_data?.dynamic_variables ?? {};
+    if (meta.phone_call?.direction === "inbound" || dynVars.inbound === "1") {
+      const { handleInboundPostCall } = await import("@/lib/ai-dialer/inbound");
+      const analysis = event.data.analysis as { transcript_summary?: unknown } | undefined;
+      await handleInboundPostCall({
+        conversationId: call.conversationId,
+        callSid: meta.phone_call?.call_sid ?? null,
+        callerPhone: call.phone,
+        status: call.status,
+        transcript: call.transcript,
+        recordingUrl: call.recordingUrl,
+        duration: call.duration,
+        startedAt: call.startedAt,
+        endedAt: call.endedAt,
+        agentId: call.agentId,
+        terminationReason: call.terminationReason,
+        answeredBy: call.answeredBy,
+        callResult: call.callResult,
+        callbackAgreed: call.callbackAgreed,
+        callbackTime: dataCollectionValue(event.data.analysis, "callback_time"),
+        callLanguage: call.callLanguage,
+        summary: typeof analysis?.transcript_summary === "string" ? analysis.transcript_summary : null,
+      });
+      return;
+    }
 
     // Task 10 — a carrier probe rang the team's own number. It is not a dealer
     // call: nothing to attribute, score or count.

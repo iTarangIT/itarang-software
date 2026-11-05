@@ -878,7 +878,8 @@ async function persistTranscriptTurns(
   }
 }
 
-async function upsertAiCallLog(opts: {
+/** Exported for the inbound path (src/lib/ai-dialer/inbound.ts). */
+export async function upsertAiCallLog(opts: {
   callId: string;
   /**
    * Null when no dealer_leads row matched.
