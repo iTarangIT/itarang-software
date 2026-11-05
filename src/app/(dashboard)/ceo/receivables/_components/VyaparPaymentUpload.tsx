@@ -5,6 +5,7 @@
 // paid and owed before → after, customers whose balance moves), then import.
 // Same endpoint as Invoice Ledger › Import; nothing is written until Import.
 
+import { InfoTip } from "@/components/ui/info-tip";
 import { Fragment, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AlertTriangle, ArrowRight, CheckCircle2, FileSpreadsheet, Loader2, Upload, X } from "lucide-react";
@@ -282,9 +283,10 @@ export default function VyaparPaymentUpload() {
                 <div>
                     <h2 className="text-sm font-semibold text-gray-900">Update payments from Vyapar</h2>
                     <p className="mt-0.5 text-xs text-gray-500">
-                        Upload the Vyapar <span className="font-medium text-gray-700">Sale Report</span> (Reports › Sale Report › Excel, from
-                        the start of the financial year). Each invoice&apos;s paid amount is set to what Vyapar has received so far — re-uploading
-                        the same file changes nothing. Preview first; nothing is saved until you import.
+                        Upload the Vyapar <span className="font-medium text-gray-700">Sale Report</span>; preview first, nothing is saved until you import.
+                        <InfoTip className="ml-1">
+                            {"In Vyapar: Reports › Sale Report › Excel, from the start of the financial year. Each invoice's paid amount is set to what Vyapar has received so far, so uploading the same file again changes nothing."}
+                        </InfoTip>
                     </p>
                 </div>
                 <button

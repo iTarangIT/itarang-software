@@ -1,3 +1,4 @@
+import { InfoTip } from "@/components/ui/info-tip";
 import { requireRole } from "@/lib/auth-utils";
 import { EXPENSE_ADMIN_ROLES } from "@/lib/auth/requireApiAdmin";
 import { ExpenseTrackerView } from "./_components/ExpenseTrackerView";
@@ -18,9 +19,10 @@ export default async function AdminExpenseTrackerPage() {
           AI Expense Tracker
         </h1>
         <p className="mt-1 text-sm text-gray-500">
-          Upload a vendor invoice or receipt. AI extracts the amount, vendor and
-          date and suggests a department + project tag — review, correct, and
-          submit. Submitted expenses reflect immediately on the CEO dashboard.
+          Upload a vendor invoice or receipt; check what AI read, then submit.
+          <InfoTip className="ml-1">
+            {"AI reads the amount, vendor and date and suggests a department and project tag. Review, correct, and submit; submitted expenses show on the CEO dashboard at once."}
+          </InfoTip>
         </p>
       </header>
       <ExpenseTrackerView />

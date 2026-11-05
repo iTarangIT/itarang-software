@@ -267,7 +267,7 @@ phase5_pg_external.sh                                     ← opens VPS Postgres
 2. **Update CRM env** (Vercel + local `.env.local`):
    ```env
    OPENAI_API_KEY=sk-...
-   IOT_DATABASE_URL=postgres://dashboard_ro:...@72.61.246.37:5433/intellicar?sslmode=require
+   IOT_DATABASE_URL=postgres://dashboard_ro:<password>@72.61.246.37:5433/intellicar?sslmode=require
    ```
 
 3. **Push the schema**:

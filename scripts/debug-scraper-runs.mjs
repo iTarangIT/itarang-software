@@ -7,15 +7,19 @@ const { Client } = pg;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const caCert = fs.readFileSync(path.join(__dirname, '..', 'global-bundle.pem')).toString();
 
-const SOURCE_URL = 'postgresql://postgres.zziynfmqfvchkheqnqqr:MYsupabase%402026@aws-1-ap-northeast-2.pooler.supabase.com:5432/postgres';
+const SOURCE_URL = process.env.MIGRATE_SOURCE_DB_URL;
 const TARGET = {
     host: 'database-supabase.c9w88wq6qyco.ap-south-1.rds.amazonaws.com',
     port: 5432,
     user: 'postgres',
-    password: 'Rushikesh8208',
+    password: process.env.MIGRATE_TARGET_DB_PASSWORD,
     database: 'postgres',
     ssl: { rejectUnauthorized: false, ca: caCert },
 };
+if (!SOURCE_URL || !TARGET.password) {
+    console.error('Set MIGRATE_SOURCE_DB_URL and MIGRATE_TARGET_DB_PASSWORD first: database passwords are not kept in the code (ID 225).');
+    process.exit(1);
+}
 
 async function run() {
     const src = new Client({ connectionString: SOURCE_URL, ssl: { rejectUnauthorized: false } });

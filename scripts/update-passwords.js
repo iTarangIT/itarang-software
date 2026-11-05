@@ -9,11 +9,17 @@ const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.
     }
 });
 
+// ID 225: the new passwords come from the environment, never from the code.
 const UPDATES = [
-    { email: 'ceo@itarang.com', password: 'NewCEOPassword123!' },
-    { email: 'sales.head@itarang.com', password: 'NewSalesHeadPass123!' },
-    { email: 'dealer@itarang.com', password: 'NewDealerPass123!' }
+    { email: 'ceo@itarang.com', password: process.env.NEW_PASSWORD_CEO },
+    { email: 'sales.head@itarang.com', password: process.env.NEW_PASSWORD_SALES_HEAD },
+    { email: 'dealer@itarang.com', password: process.env.NEW_PASSWORD_DEALER }
 ];
+const missing = UPDATES.filter((u) => !u.password).map((u) => u.email);
+if (missing.length) {
+    console.error(`Set NEW_PASSWORD_CEO, NEW_PASSWORD_SALES_HEAD and NEW_PASSWORD_DEALER first (missing for: ${missing.join(', ')}).`);
+    process.exit(1);
+}
 
 async function updatePasswords() {
     console.log('🚀 Starting secure password update for CEO, Sales Head, and Dealer Portal...');

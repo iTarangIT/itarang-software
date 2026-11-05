@@ -7,6 +7,7 @@
  *   OrderClaimBadge    a row's open claim (awaiting invoice / no invoice raised)
  *   OrderClaimsList    "Order claimed, no invoice raised" — the exception list
  */
+import { InfoTip } from "@/components/ui/info-tip";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
@@ -233,8 +234,10 @@ export function OrderClaimsList({
                     {title} · {rows.length}
                 </h2>
                 <p className="text-[11px] text-ink-muted">
-                    &ldquo;Order placed&rdquo; was recorded, but no invoice for the dealer is dated within{" "}
-                    {ORDER_CLAIM_WINDOW_DAYS} days of the order. Raise the invoice, or withdraw the order if it did not happen.
+                    No invoice within {ORDER_CLAIM_WINDOW_DAYS} days of the order.
+                    <InfoTip className="ml-1">
+                        {`"Order placed" was recorded, but no invoice for the dealer is dated within ${ORDER_CLAIM_WINDOW_DAYS} days of the order. Raise the invoice, or withdraw the order if it did not happen.`}
+                    </InfoTip>
                 </p>
             </div>
             <div className="overflow-x-auto border-t border-border">

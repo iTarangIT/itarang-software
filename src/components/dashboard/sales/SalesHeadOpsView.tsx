@@ -15,6 +15,7 @@
 // Filters live in the URL (same keys as the sales dashboard API), so a view
 // survives a refresh and can be shared.
 
+import { InfoTip } from "@/components/ui/info-tip";
 import { idleLimitLabel, staleCriticalShort } from "@/lib/timeLimits/labels";
 import { shortOfficeHours, type OfficeHours } from "@/lib/calendar/officeHours";
 import { freshRepeatSplit } from "@/lib/visits/freshRepeat";
@@ -799,11 +800,18 @@ export function SalesHeadOpsView() {
             <DashCard
                 title="Team scorecard against target"
                 caption={
-                    (monthToDate
-                        ? `Actual / target to date${daysLeft == null ? "" : `, and what each person needs per working day for the rest of the month. ${daysLeft} working days left.`}`
-                        : `Actual / target for the selected days — the monthly target pro-rata to ${periodDays} working ${periodDays === 1 ? "day" : "days"}${daysLeft == null ? "" : `. Revenue needed per day is for the rest of the month: ${daysLeft} working days left`}.`) +
-                    // ID 155: teams are grouped under today's manager; the subtotal is dated.
-                    " Each row is that person's own numbers, grouped under today's manager (↳). The Team subtotal row is the manager plus each member for the days they were in the team, as on Performance › Team total."
+                    <>
+                        {monthToDate
+                            ? `Actual / target to date${daysLeft == null ? "" : `. ${daysLeft} working days left.`}`
+                            : `Actual / target for the selected days${daysLeft == null ? "" : `. ${daysLeft} working days left in the month.`}`}
+                        {/* ID 155: teams are grouped under today's manager; the subtotal is dated. */}
+                        <InfoTip className="ml-1">
+                            {(monthToDate
+                                ? "The last column is what each person needs per working day for the rest of the month."
+                                : `The monthly target is pro-rata to ${periodDays} working ${periodDays === 1 ? "day" : "days"}; revenue needed per day is for the rest of the month.`) +
+                                " Each row is that person's own numbers, grouped under today's manager (↳). The Team subtotal row is the manager plus each member for the days they were in the team, as on Performance › Team total."}
+                        </InfoTip>
+                    </>
                 }
                 action={
                     <SegmentedControl
@@ -1003,9 +1011,10 @@ export function SalesHeadOpsView() {
                             </>
                         )}
                         <span className="basis-full text-xs text-ink-muted">
-                            Steps Admin, Sales Head and the house logins did on a customer file for the dealer (&ldquo;Done by &lt;name&gt; for
-                            &lt;dealer&gt;&rdquo;). The dealer keeps the credit for the file; this is counted separately and is not in anyone&apos;s
-                            figures above.
+                            Steps staff did on a customer file for the dealer; not in anyone&apos;s figures above.
+                            <InfoTip className="ml-1">
+                                {"Steps Admin, Sales Head and the house logins did on a customer file for the dealer (“Done by <name> for <dealer>”). The dealer keeps the credit for the file; this is counted separately."}
+                            </InfoTip>
                         </span>
                     </div>
                 )}
@@ -1013,9 +1022,10 @@ export function SalesHeadOpsView() {
                 {score === "field" && <InvoicesReadUpTo />}
                 {score === "inside" && (
                     <span className="text-xs text-ink-muted">
-                        Hot leads to field counts leads that were Hot at the moment of transfer. &ldquo;Of which visited&rdquo; shows whether the ASM
-                        agreed they were worth a visit. Engaged = calls where the rep spoke with the dealer. Every figure is credited to the person who
-                        did it.
+                        Every figure is credited to the person who did it.
+                        <InfoTip className="ml-1">
+                            {"Hot leads to field counts leads that were Hot at the moment of transfer. “Of which visited” shows whether the ASM agreed they were worth a visit. Engaged = calls where the rep spoke with the dealer."}
+                        </InfoTip>
                         {insidePeople.length > 0
                             ? (() => {
                                   const none = insidePeople.filter((p) => !targetOf(p.spoc_id, "calls_per_day") && !targetOf(p.spoc_id, "hot_to_ground"));
@@ -1032,9 +1042,10 @@ export function SalesHeadOpsView() {
                     <Link href="/admin/targets" className="font-semibold text-brand-sky hover:underline">
                         Admin › Targets
                     </Link>
-                    {monthDays > 0 ? `, pro-rata to ${targetDays} of ${monthDays} working days` : ", pro-rata to working days"}. Batteries and revenue
-                    come from invoices matched to each person&apos;s dealer accounts. Where an invoice has no item lines, &ldquo;≈&rdquo; is an
-                    estimate from the battery units on that dealer&apos;s approved quote, not an invoiced count.
+                    {monthDays > 0 ? `, pro-rata to ${targetDays} of ${monthDays} working days` : ", pro-rata to working days"}.
+                    <InfoTip className="ml-1">
+                        {"Batteries and revenue come from invoices matched to each person's dealer accounts. Where an invoice has no item lines, “≈” is an estimate from the battery units on that dealer's approved quote, not an invoiced count."}
+                    </InfoTip>
                     {targets.error ? " Targets could not be loaded for your role." : ""}
                 </span>
             </DashCard>
@@ -1265,8 +1276,10 @@ export function SalesHeadOpsView() {
                         }}
                     />
                     <span className="text-xs leading-relaxed text-ink-muted">
-                        Engaged = calls where the rep spoke with the dealer, with its share of calls. WhatsApp = chats that count as contact
-                        (dealer replied, with a fresh screenshot), with its share of all contacts.
+                        Engaged = the rep spoke with the dealer. WhatsApp = chats that count as contact.
+                        <InfoTip className="ml-1">
+                            {"Engaged is shown with its share of calls. A WhatsApp chat counts as contact when the dealer replied, with a fresh screenshot; it is shown with its share of all contacts."}
+                        </InfoTip>
                         {measures.error ? " These two columns could not be loaded." : ""}
                     </span>
                 </DashCard>
@@ -1313,11 +1326,10 @@ export function SalesHeadOpsView() {
                         }}
                     />
                     <span className="text-xs leading-relaxed text-ink-muted">
-                        Visits = Fresh + Repeat. A visit is one person at one dealer on one day. Fresh = that person&apos;s first visit to
-                        the dealer ever; Repeat = they had visited the dealer before. New to iTarang = of the dealers visited, those
-                        nobody from iTarang had visited before. Click any number to see the dealers.{" "}
-                        Of the visits marked visited: verified = with a shop photo and a location pin; productive = outcome Productive or
-                        Commercials progressed. Each with its share.
+                        Visits = Fresh + Repeat. Click any number to see the dealers.
+                        <InfoTip className="ml-1">
+                            {"A visit is one person at one dealer on one day. Fresh = that person's first visit to the dealer ever; Repeat = they had visited the dealer before. New to iTarang = of the dealers visited, those nobody from iTarang had visited before. Of the visits marked visited: verified = with a shop photo and a location pin; productive = outcome Productive or Commercials progressed. Each with its share."}
+                        </InfoTip>
                         {measures.error ? " These two columns could not be loaded." : ""}
                     </span>
                 </DashCard>
