@@ -23,3 +23,16 @@ Read-only checks: `node --import tsx --env-file=.env.local scripts/verify-04nov.
 3. Admin > Settings > Missed Callbacks: switch on (ships off).
 4. Ask Meta to approve `itarang_callback_missed` (dealer, due time, owner), then add `callback_missed` to WA_TEMPLATES_APPROVED.
 5. Kartik: OK or keep off — EMI auto-debit, NBFC origination upkeep, Bolna / ElevenLabs schedulers.
+
+
+# Batch 2 — 5 Nov: the rest of the Aditya tab
+
+| ID | What was built | How to check |
+|---|---|---|
+| 221 | Reassign by name, never a user id. The owner sees only their active direct reports (name · role · territory); the server refuses anyone else; nobody in the team = no Reassign button (an ISR keeps Transfer to ASM). A manager gets "Reassign within team" on the ASM lead page too (as on the ISR page). "Notify admin" removed: the new owner and the OLD owner's manager get a bell with the reason (new type lead.team_lead_moved). ASM to ASM: the field link and the booked visit move with the lead (also on the Admin Leads-list ASM swap). WhatsApp reassign follows the same rule. Admin / Sales Head / CEO keep Reassign from the Leads list. (The screen part was Rushikesh's; built here as asked.) | Sandbox: Sonu's lead > Reassign lists ASM, ISR Test, Nidhi; Nidhi's own lead has no Reassign. |
+| 85 | AI calling hours: Admin only (Sales Head and CEO see the hours and the log). A change can start on a later day (Call timing > "Starts"); it shows "Scheduled" in the log and is put into force on its day by the hours lookup every dialer reader uses — no ticker, no migration. A past day is refused. Left: the L2 clean-up on live (runbook, Kartik's go-ahead). | Call timing as Admin: pick a later "Starts" day → log shows Scheduled. |
+| 215 | The two approved status renames: Commercials Explained → "Quote given", Commercials Finalised → "Dealer agreed" (lists, chips, filters, downloads, messages, refusal texts, the Sales Head Hot-leads row). Stored codes unchanged; NeoDove call-outcome names unchanged (they must match NeoDove's text). AI Analyst told the new words. Not done: Batch 1 (Rushikesh), the 23 CEO-sheet rows and the Names tab — the wording audit sheet is not in the repo. | Leads list Status filter shows "Quote given" / "Dealer agreed". |
+| 200 d | The "import this older file anyway" tick box is gone (Invoice Ledger and CEO > Receivables); an older Vyapar export is always refused. | Upload an older export: Save stays disabled. |
+| 226 | `npm run migration:next` — the next free E- number from main, every remote branch, this tree and the checklist (today: E-373). CLAUDE.md says to use it. Sandbox (db-1) checks 5 Nov: check-migrations-applied "All checked migrations are present" (332 files); audit-schema: no column the code declares is missing, no type mismatch (the 80 "differences" are DB columns/tables read through to_jsonb / raw SQL on purpose). | Run on db-2: `node scripts/check-migrations-applied.mjs database-2` and `node --import tsx --env-file=../itarang-software/.env.production scripts/audit-schema.ts`. |
+
+Not code (left for people): 225 on hold (Kartik); 188 waits for Anirudh's format; 194 already on; 70 Zoho copy L9 + item names L19 on live; 203 five browser timings on live; 85 L2 run on live.

@@ -5,8 +5,8 @@
  *   file  — the Vyapar sales register or GSTR-1 export (.xlsx / .xls / .csv)
  *   kind  — 'vyapar_register' | 'gstr1'
  *   mode  — 'preview' (default; nothing written) | 'commit'
- *   allow_older — '1' to commit a Vyapar export older than the last one
- *           imported (otherwise 409: it would roll payments back)
+ *   A Vyapar export older than the last one imported is refused (409: it
+ *   would roll payments back). ID 200 d: there is no override.
  *
  * Preview first, always: the columns are matched by name because no sample
  * export existed when this was built, so the person importing confirms what
@@ -59,10 +59,10 @@ export const POST = withErrorHandler(async (req: NextRequest) => {
         return errorResponse(parsed.warnings[0] ?? "No invoices were read from the file — nothing imported.", 422);
     }
     // Payment sync: an export older than the last one imported would roll
-    // payments back — refused (409) unless the person confirms the older file.
-    const allowOlder = String(form.get("allow_older") ?? "") === "1";
+    // payments back — always refused (409). ID 200 d (Kartik, 4 Nov): no
+    // "import anyway" override.
     try {
-        const result = await commitImport(parsed, { fileName: file.name, actorId: user.id, allowOlder });
+        const result = await commitImport(parsed, { fileName: file.name, actorId: user.id });
         // The "Payments as of …" caption is cached per process; refresh it now.
         await invoiceFreshness({ fresh: true }).catch(() => null);
         return successResponse({ mode: "commit", file_name: file.name, ...result });

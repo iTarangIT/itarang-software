@@ -52,6 +52,7 @@
     "seed:monitor-user": "node --import tsx --env-file=.env.local scripts/create-monitor-user.ts",
     "db:catalog": "tsx scripts/db-catalog.ts",
     "db:drift": "tsx scripts/db-drift.ts",
+    "migration:next": "node scripts/next-migration-number.mjs",
     "db:sandbox-excel": "tsx scripts/db-sandbox-excel.ts",
     "db:redundancy-audit": "tsx scripts/db-redundancy-audit.ts",
     "docs:db-schema": "tsx scripts/generate-db-schema-doc.ts",

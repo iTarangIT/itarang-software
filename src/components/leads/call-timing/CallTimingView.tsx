@@ -35,6 +35,8 @@ type Payload = {
         after: CallingHours | null;
         reason: string | null;
         by: string | null;
+        effective_from?: string | null;
+        pending?: boolean;
     }>;
 };
 
@@ -102,8 +104,11 @@ export function CallTimingView() {
     // ID 85: a change of the calling hours needs a reason (shown in the log the CEO reads).
     const [reason, setReason] = useState("");
     const reasonOk = reason.trim().length >= CALLING_HOURS_REASON_MIN;
+    // ID 85: Admin picks the day the new hours start (today = at once).
+    const todayIst = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(new Date());
+    const [fromDay, setFromDay] = useState(todayIst);
     const apply = useMutation({
-        mutationFn: async (w: { window_start: string; window_end: string; reason: string }) => {
+        mutationFn: async (w: { window_start: string; window_end: string; reason: string; effective_from: string }) => {
             const res = await fetch("/api/campaigns/call-timing", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -271,22 +276,36 @@ export function CallTimingView() {
                                     placeholder="Why (shown in the log the CEO reads)"
                                     className={`${INPUT} min-w-[220px]`}
                                 />
+                                <label className="flex items-center gap-1.5 text-xs text-gray-600">
+                                    Starts
+                                    <input
+                                        type="date"
+                                        value={fromDay}
+                                        min={todayIst}
+                                        onChange={(e) => setFromDay(e.target.value || todayIst)}
+                                        className={INPUT}
+                                    />
+                                </label>
                                 <button
                                     disabled={apply.isPending || !reasonOk}
                                     title={reasonOk ? undefined : "Give a reason first"}
                                     onClick={() =>
-                                        apply.mutate({ window_start: s.window_start, window_end: s.window_end, reason })
+                                        apply.mutate({ window_start: s.window_start, window_end: s.window_end, reason, effective_from: fromDay })
                                     }
                                     className="px-3 py-2 rounded-lg bg-gray-900 text-white text-sm font-medium disabled:opacity-50"
                                 >
-                                    {apply.isSuccess ? "Saved as default calling hours" : "Use as default calling hours"}
+                                    {apply.isSuccess
+                                        ? fromDay > todayIst
+                                            ? `Scheduled from ${fromDay}`
+                                            : "Saved as default calling hours"
+                                        : "Use as default calling hours"}
                                 </button>
                             </>
                         )}
                         {apply.isError && <p className="w-full text-xs text-rose-600">{(apply.error as Error).message}</p>}
                         {s && q.data?.can_set_hours && (
                             <p className="w-full text-xs text-gray-400">
-                                New campaigns start with these hours. Running campaigns keep their own window.
+                                New campaigns start with these hours from the day picked. Running campaigns keep their own window.
                             </p>
                         )}
                     </div>
@@ -299,6 +318,7 @@ export function CallTimingView() {
                                     <thead className="text-left text-gray-500">
                                         <tr>
                                             <th className="py-1 pr-4 font-medium">Changed</th>
+                                            <th className="py-1 pr-4 font-medium">Starts</th>
                                             <th className="py-1 pr-4 font-medium">From → to</th>
                                             <th className="py-1 font-medium">By · why</th>
                                         </tr>
@@ -315,6 +335,14 @@ export function CallTimingView() {
                                                         hour: "numeric",
                                                         minute: "2-digit",
                                                     })}
+                                                </td>
+                                                <td className="py-1.5 pr-4 whitespace-nowrap">
+                                                    {r.effective_from ?? "—"}
+                                                    {r.pending && (
+                                                        <span className="ml-1.5 rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">
+                                                            Scheduled
+                                                        </span>
+                                                    )}
                                                 </td>
                                                 <td className="py-1.5 pr-4 whitespace-nowrap">
                                                     {callingHoursText(r.before)} → {callingHoursText(r.after)}

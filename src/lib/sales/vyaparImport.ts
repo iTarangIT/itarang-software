@@ -721,7 +721,7 @@ export type CommitSummary = ImportPreview["totals"] & {
 
 export async function commitImport(
     parsed: ParseResult,
-    meta: { fileName: string | null; actorId: string; allowOlder?: boolean },
+    meta: { fileName: string | null; actorId: string },
 ): Promise<{ import_id: string; summary: CommitSummary }> {
     // E-370: the classification below is made against the CRM as it is now;
     // if another register import commits before this one takes the lock, the
@@ -776,7 +776,7 @@ export async function commitImport(
             // been committed since the preview).
             await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${IMPORT_LOCK}))`);
             const last = await lastRegisterGeneratedAt(tx);
-            if (asOf && last && isOlderExport(asOf, last) && !meta.allowOlder) throw new OlderExportError(asOf, last);
+            if (asOf && last && isOlderExport(asOf, last)) throw new OlderExportError(asOf, last);
             if ((await lastRegisterImportId(tx)) !== lastImportBefore) {
                 throw new Error("Another Vyapar import finished while this one was being prepared. Preview the file again, then import.");
             }

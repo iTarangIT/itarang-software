@@ -14,7 +14,7 @@ import { LogTouchpointModal } from "@/app/(dashboard)/inside-sales/_components/m
 import { UpdateCommercialsModal } from "@/app/(dashboard)/inside-sales/_components/modals/UpdateCommercialsModal";
 import { MarkLostModal } from "@/app/(dashboard)/inside-sales/_components/modals/MarkLostModal";
 import { MarkConvertedModal } from "@/app/(dashboard)/inside-sales/_components/modals/MarkConvertedModal";
-import { ReassignLeadModal } from "@/app/(dashboard)/inside-sales/_components/modals/ReassignLeadModal";
+import { ReassignLeadModal, type TeamTarget } from "@/app/(dashboard)/inside-sales/_components/modals/ReassignLeadModal";
 import { EscalateModal } from "@/app/(dashboard)/inside-sales/_components/modals/EscalateModal";
 import { LogVisitModal } from "@/app/(dashboard)/asm/_components/modals/LogVisitModal";
 import { AsmLeadActionBar } from "./AsmLeadActionBar";
@@ -38,6 +38,9 @@ type Props = {
     viewerRole: string;
 };
 
+/** The roles GET/POST /api/inside-sales/lead/[id]/reassign accept (its MUTATE_ROLES). */
+const REASSIGN_ROLES = ["inside_sales_rep", "asm", "admin", "partner"];
+
 export function AsmLeadDetailView({ leadId, viewerId, viewerRole }: Props) {
     const qc = useQueryClient();
     const [activeModal, setActiveModal] = useState<ActiveModal>(null);
@@ -60,6 +63,22 @@ export function AsmLeadDetailView({ leadId, viewerId, viewerRole }: Props) {
         retry: (count, err) => (err as Error).message !== LEAD_NOT_ACCESSIBLE && count < 3,
         refetchOnWindowFocus: true,
     });
+
+    // ID 221: who the lead may go to, by name — the owner's own team, or (ID 155)
+    // a manager and their team when the viewer manages the current owner.
+    const ownerId = query.data?.data?.lead?.current_owner_id ?? null;
+    const teamQuery = useQuery<{ can_team_reassign: boolean; can_owner_reassign?: boolean; targets: TeamTarget[] }>({
+        queryKey: ["asm-lead", leadId, "team-reassign", ownerId],
+        enabled: !!ownerId && REASSIGN_ROLES.includes(viewerRole),
+        queryFn: async () => {
+            const res = await fetch(`/api/inside-sales/lead/${encodeURIComponent(leadId)}/reassign`, { cache: "no-store" });
+            const json = await res.json().catch(() => null);
+            if (!res.ok || !json?.success) return { can_team_reassign: false, can_owner_reassign: false, targets: [] };
+            return json.data;
+        },
+    });
+    const canTeamReassign = Boolean(teamQuery.data?.can_team_reassign && teamQuery.data.targets.length > 0);
+    const canOwnerReassign = Boolean(teamQuery.data?.can_owner_reassign && teamQuery.data.targets.length > 0);
 
     const invalidate = useCallback(() => {
         qc.invalidateQueries({ queryKey: ["asm-lead", leadId] });
@@ -179,6 +198,8 @@ export function AsmLeadDetailView({ leadId, viewerId, viewerRole }: Props) {
                 viewerRole={viewerRole}
                 onAction={setActiveModal}
                 onChanged={onActionSuccess}
+                canTeamReassign={!isOwner && canTeamReassign}
+                canOwnerReassign={isOwner && canOwnerReassign}
             />
 
             <LogVisitModal
@@ -236,8 +257,9 @@ export function AsmLeadDetailView({ leadId, viewerId, viewerRole }: Props) {
                 open={activeModal === "reassign"}
                 onClose={() => setActiveModal(null)}
                 leadId={leadId}
-                viewerId={viewerId}
                 onSuccess={onActionSuccess}
+                targets={teamQuery.data?.targets ?? []}
+                asManager={!isOwner}
             />
             <EscalateModal
                 open={activeModal === "escalate"}

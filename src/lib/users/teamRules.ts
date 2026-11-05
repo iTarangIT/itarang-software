@@ -188,3 +188,27 @@ export function orderByTeam<T extends { spoc_id: string }>(
     for (const p of list) if (!placed.has(p.spoc_id)) out.push({ ...p, member: under(p) });
     return out;
 }
+
+/**
+ * ID 221 (decided 3 Nov, Kartik): an OWNER gives a lead only to someone in
+ * their own team — their active direct reports — picked by name. Admin, Sales
+ * Head and CEO keep the Leads-list reassign to anyone; a manager moving a
+ * report's lead uses checkTeamReassign above.
+ */
+export function checkOwnerReassign(input: {
+    targetUserId: string;
+    reportIds: readonly string[];
+}): { ok: true } | { ok: false; message: string } {
+    if (!input.reportIds.includes(input.targetUserId)) {
+        return { ok: false, message: "You can give a lead only to someone in your team." };
+    }
+    return { ok: true };
+}
+
+/** ID 221: the place shown beside a name in the picker — an ASM's territory, else a dash. */
+export function territoryText(role: string | null | undefined, places: ReadonlyArray<{ state: string | null; city: string | null }>): string {
+    if ((role ?? "").toLowerCase() !== "asm" || places.length === 0) return "—";
+    const parts = [...new Set(places.map((p) => (p.city ? `${p.city}, ${p.state ?? ""}`.replace(/, $/, "") : (p.state ?? "")).trim()).filter(Boolean))];
+    if (parts.length <= 2) return parts.join(" · ");
+    return `${parts.slice(0, 2).join(" · ")} +${parts.length - 2}`;
+}

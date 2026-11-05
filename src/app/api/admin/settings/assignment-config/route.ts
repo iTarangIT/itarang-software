@@ -9,6 +9,7 @@ import { z } from "zod";
 import { requireRole } from "@/lib/auth-utils";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
 import { saveCallingHours } from "@/lib/ai-dialer/callingHoursLog";
+import { CALLING_HOURS_EDIT_ROLES } from "@/lib/ai-dialer/callTiming";
 
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 
@@ -20,12 +21,14 @@ const BodySchema = z.object({
         .array(z.enum(["mon", "tue", "wed", "thu", "fri", "sat", "sun"]))
         .min(1),
     reason: z.string().max(500).optional(),
+    effective_from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
 });
 
 export const PUT = withErrorHandler(async (req: Request) => {
-    const user = await requireRole(["admin", "sales_head"]);
+    // ID 85 (5 Nov): calling hours are Admin only, like every time limit.
+    const user = await requireRole([...CALLING_HOURS_EDIT_ROLES]);
     const b = BodySchema.parse(await req.json());
-    const { logged } = await saveCallingHours({
+    const { logged, scheduled } = await saveCallingHours({
         start: b.working_hours_start,
         end: b.working_hours_end,
         days: b.working_days,
@@ -33,6 +36,7 @@ export const PUT = withErrorHandler(async (req: Request) => {
         reason: b.reason ?? null,
         actorId: user.id,
         source: "assignment_config",
+        effectiveFrom: b.effective_from ?? null,
     });
-    return successResponse({ ok: true, logged });
+    return successResponse({ ok: true, logged, scheduled });
 });

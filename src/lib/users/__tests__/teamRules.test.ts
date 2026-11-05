@@ -201,3 +201,30 @@ describe("pickTeamMember (ID 199)", () => {
         expect(pickTeamMember("u1", "u9", team)).toBeNull();
     });
 });
+
+// ID 221 (decided 3 Nov, Kartik) — an owner gives a lead only to their own team.
+import { checkOwnerReassign, territoryText } from "@/lib/users/teamRules";
+
+describe("checkOwnerReassign (ID 221)", () => {
+    it("a direct report is fine; anyone else is refused", () => {
+        expect(checkOwnerReassign({ targetUserId: "isr-2", reportIds: ["isr-2", "isr-3"] })).toEqual({ ok: true });
+        const r = checkOwnerReassign({ targetUserId: "finance-1", reportIds: ["isr-2"] });
+        expect(r).toEqual({ ok: false, message: "You can give a lead only to someone in your team." });
+    });
+    it("nobody under the owner: every target is refused", () => {
+        expect(checkOwnerReassign({ targetUserId: "isr-2", reportIds: [] }).ok).toBe(false);
+    });
+});
+
+describe("territoryText (ID 221)", () => {
+    it("an ASM's cities, or a dash for anyone else", () => {
+        expect(territoryText("asm", [{ state: "Bihar", city: "Patna" }])).toBe("Patna, Bihar");
+        expect(territoryText("asm", [{ state: "Bihar", city: null }])).toBe("Bihar");
+        expect(territoryText("inside_sales_rep", [{ state: "Bihar", city: "Patna" }])).toBe("—");
+        expect(territoryText("asm", [])).toBe("—");
+    });
+    it("more than two places are summed up", () => {
+        const places = ["Patna", "Gaya", "Muzaffarpur", "Darbhanga"].map((city) => ({ state: "Bihar", city }));
+        expect(territoryText("ASM", places)).toBe("Patna, Bihar · Gaya, Bihar +2");
+    });
+});
