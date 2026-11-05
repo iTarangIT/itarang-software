@@ -497,3 +497,24 @@ export function dispositionForDial(e: DialEvidence): { d: DispositionV3; input: 
     const input = dispositionInputFrom(e);
     return { d: mapDispositionV3(input), input };
 }
+
+// ── Redial hints for the agent ───────────────────────────────────────────────
+
+/**
+ * Dynamic variables a redial passes to the agent, from the lead's LAST v3
+ * rule (the sheet's re-attempt column): "Hung up during intro" → the shorter
+ * opener; "Wrong person" → ask for the owner's mobile first. Always both keys,
+ * "0" or "1", so the agent prompt can read them unconditionally. They only
+ * change anything once the prompt uses them (agent owner).
+ */
+export function redialHints(lastRule: string | null | undefined): {
+    short_opener: "0" | "1";
+    ask_owner_mobile: "0" | "1";
+    last_disposition_rule: string;
+} {
+    return {
+        short_opener: lastRule === "19" ? "1" : "0",
+        ask_owner_mobile: lastRule === "18" ? "1" : "0",
+        last_disposition_rule: lastRule ?? "",
+    };
+}

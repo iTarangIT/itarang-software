@@ -48,7 +48,12 @@ import { noteTriggerResult } from "@/lib/ai-dialer/lineHealth";
 import { dialTimeSkip, ENROL_SKIP_OUTCOME } from "@/lib/ai-dialer/numberHygiene";
 import { observedNumbers } from "@/lib/ai-dialer/phoneTypeStore";
 import { classifyTriggerDetail } from "@/lib/ai-dialer/failureReason";
-import { recordDialDisposition, triggerDialKey } from "@/lib/ai/storage/dialDisposition";
+import {
+  leadsWithRedialNotDue,
+  markRedialUsed,
+  recordDialDisposition,
+  triggerDialKey,
+} from "@/lib/ai/storage/dialDisposition";
 import { writeAiCallTouchpoint } from "@/lib/ai/storage/callTouchpoint";
 import type { CallEndClassification } from "@/lib/ai-dialer/campaignLeadStatus";
 import { leadsWithOpenCallback } from "@/lib/ai-dialer/callbackLoop";
@@ -214,7 +219,7 @@ async function recordTriggerVerdict(input: {
   phone: string | null;
   reason: string;
   callEnd: CallEndClassification;
-}): Promise<void> {
+}): Promise<string | null> {
   try {
     const dialKey = triggerDialKey(input.campaignLeadId, input.attempt);
     const { d } = await recordDialDisposition({
@@ -227,7 +232,7 @@ async function recordTriggerVerdict(input: {
     // A refusal on OUR side (carrier 401/403/407/429/503, a config error) never
     // reached the dealer: no touchpoint, or the non-responsive rule (6 dial
     // days, none connected) would count our outage against him.
-    if (d.effects.carrierRefusal || classifyTriggerDetail(input.reason) === "config_error") return;
+    if (d.effects.carrierRefusal || classifyTriggerDetail(input.reason) === "config_error") return d.disposition;
     await writeAiCallTouchpoint({
       v3: d,
       leadId: input.leadId,
@@ -239,8 +244,10 @@ async function recordTriggerVerdict(input: {
       callOutcome: input.callEnd.outcome,
       summary: input.reason,
     });
+    return d.disposition;
   } catch (err) {
     console.error("[advanceCampaign] trigger verdict not recorded:", err instanceof Error ? err.message : err);
+    return null;
   }
 }
 
@@ -490,6 +497,22 @@ export async function advanceCampaign(
         continue;
       }
 
+      // Dispositions v3 — a long-horizon redial (Need Some Time 7 d, Not
+      // Interested 90 d …) is booked for this lead and not due yet.
+      const notDue = (await leadsWithRedialNotDue([claimed.leadId])).get(claimed.leadId);
+      if (notDue) {
+        await db
+          .update(dialerCampaignLeads)
+          .set({
+            status: "skipped",
+            completed_at: new Date(),
+            call_outcome: `skipped_redial_not_due: ${notDue.toISOString()}`,
+          })
+          .where(eq(dialerCampaignLeads.id, claimed.campaignLeadId));
+        await syncCampaignCounters(campaignId);
+        continue;
+      }
+
       // BRD §0.2 — defensive exclusion filter. A lead can enter an active
       // sales state after the campaign was queued; skip it the same way as a
       // no-phone lead so the campaign keeps advancing and the dialer never
@@ -599,7 +622,7 @@ export async function advanceCampaign(
           },
         );
         const exOutcome = `trigger_exception: ${exReason}`;
-        await recordTriggerVerdict({
+        const exDisposition = await recordTriggerVerdict({
           provider,
           campaignId,
           campaignLeadId: claimed.campaignLeadId,
@@ -613,6 +636,7 @@ export async function advanceCampaign(
           campaignLeadId: claimed.campaignLeadId,
           status: classifyCallEnd({ triggerError: exReason }).status,
           outcome: exOutcome,
+          disposition: exDisposition,
         });
         await syncCampaignCounters(campaignId);
         const stop = await afterFailedTrigger(campaignId, exOutcome, exReason);
@@ -641,7 +665,7 @@ export async function advanceCampaign(
         // 603) — so this is where most "the dealer didn't pick up" outcomes
         // are born. Classify it instead of filing every one as failed.
         const failOutcome = `trigger_failed: ${reason}`;
-        await recordTriggerVerdict({
+        const failDisposition = await recordTriggerVerdict({
           provider,
           campaignId,
           campaignLeadId: claimed.campaignLeadId,
@@ -655,6 +679,7 @@ export async function advanceCampaign(
           campaignLeadId: claimed.campaignLeadId,
           status: classifyCallEnd({ triggerError: reason }).status,
           outcome: failOutcome,
+          disposition: failDisposition,
         });
         await syncCampaignCounters(campaignId);
         const stop = await afterFailedTrigger(campaignId, failOutcome, reason);
@@ -664,6 +689,8 @@ export async function advanceCampaign(
 
       // D1 — the call reached the carrier: the refused-in-a-row run is over.
       await noteTriggerResult(campaignId, null);
+      // A due long-horizon redial is now spent (a "once" rule stays used).
+      await markRedialUsed(lead[0].id);
 
       // Success path: attach the provider call id to the row so the
       // polling backstop can look up status later. If the attach fails,

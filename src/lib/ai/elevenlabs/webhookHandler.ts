@@ -91,6 +91,7 @@ export async function handleElevenLabsWebhook(event: ElevenLabsWebhookEvent) {
             (data.failure_reason ?? "initiation_failed") +
             (telephony.sipStatusCode ? ` (sip status: ${telephony.sipStatusCode})` : "");
           const failureText = [data.failure_reason, telephony.detail].filter(Boolean).join(" ");
+          let v3Label: string | null = null;
           if (data.conversation_id) {
             const { d: v3 } = await recordDialDisposition({
               dialKey: data.conversation_id,
@@ -98,6 +99,7 @@ export async function handleElevenLabsWebhook(event: ElevenLabsWebhookEvent) {
               campaignId: row[0].campaign_id,
               evidence: { callEnd, failureText, sipCode: telephony.sipStatusCode },
             });
+            v3Label = v3.disposition;
             // Our-side refusals never reached the dealer: no touchpoint (see
             // advanceCampaign.recordTriggerVerdict).
             if (!v3.effects.carrierRefusal) await writeAiCallTouchpoint({
@@ -118,6 +120,7 @@ export async function handleElevenLabsWebhook(event: ElevenLabsWebhookEvent) {
             outcome,
             intentScore: null,
             campaignId: row[0].campaign_id,
+            disposition: v3Label,
           });
           // AI dialer review — counted in the campaign's outcome report too.
           if (data.conversation_id) {

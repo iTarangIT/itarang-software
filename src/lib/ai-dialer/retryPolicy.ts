@@ -46,12 +46,38 @@ export type RetryInput = {
      * that just ended. At MAX_DIALS_PER_DAY the next retry moves to tomorrow.
      */
     dialsToday?: number;
+    /**
+     * Dispositions v3 — this dial's label (dispositionV3.ts). When set, the
+     * sheet's re-attempt rule for it (REATTEMPT_RULES) decides; without it
+     * (Bolna, rows from before v3) the old gap tables do.
+     */
+    disposition?: string | null;
+    /**
+     * Earlier dials of this row, oldest first, NOT including the one that just
+     * ended — for the "once" rules and the 3-day limit on "Did not pick".
+     */
+    history?: ReadonlyArray<ReattemptHistoryEntry>;
+    /** The time the dealer asked to be called (Ask to Call Back), if given. */
+    requestedAt?: Date | null;
+};
+
+export type ReattemptHistoryEntry = {
+    at?: string | null;
+    counted?: boolean;
+    /** The v3 disposition stored on the attempt_history entry. */
+    disp?: string | null;
 };
 
 export type RetryPlan = {
     at: Date;
     /** false = this dial never reached the dealer's network; it is refunded. */
     consumesAttempt: boolean;
+    /**
+     * Set when the sheet's rule outlives the campaign (7 / 30 / 90 days): the
+     * row is done, and `at` is when the lead may be AI-dialled again
+     * (ai_redial_plan, E-373). The row itself is NOT redialled.
+     */
+    longHorizon?: { once: boolean };
 };
 
 const MIN = 60_000;
@@ -206,8 +232,236 @@ export function planRetryDetailed(input: RetryInput): RetryPlan | null {
             consumesAttempt: false,
         };
     }
+    if (input.disposition && reattemptRuleFor(input.disposition)) {
+        return planReattempt(input);
+    }
     const at = planRetry(input);
     return at ? { at, consumesAttempt: true } : null;
+}
+
+// ── Dispositions v3: the sheet's re-attempt rule per disposition ────────────
+//
+// docs/tasks/AI_Dispositions_4Nov.xlsx, column "Re-attempt rule". Keyed by the
+// label dispositionV3 writes (the L3, or the L2 for a not-connected reason).
+//
+//   after         a fixed gap (15 min, 30 min, 2 h), clamped into the window
+//   next_window   the next half-day window (10-14 / 14-19 inside dialler hours)
+//   next_day      tomorrow, in the SAME half-day window or the OTHER one
+//   at_requested  the time the dealer asked for; none given: next day, same window
+//   long          outlives the campaign: 3 / 7 / 30 / 90 days (ai_redial_plan)
+//   none          the AI does not redial (a person follows up, or the number is retired)
+//
+// maxPerDay / maxDays / maxTimes cap the rule; max_retries stays the outer cap
+// for redials inside the campaign.
+
+export type ReattemptRule =
+    | { kind: "after"; ms: number; maxPerDay?: number; maxTimes?: number; thenNextDay?: boolean }
+    | { kind: "next_window"; maxPerDay?: number; maxDays?: number }
+    | { kind: "next_day"; window: "same" | "other"; maxTimes?: number }
+    | { kind: "at_requested" }
+    | { kind: "long"; days: number; once: boolean }
+    | { kind: "none" };
+
+export const REATTEMPT_RULES: Readonly<Record<string, ReattemptRule>> = {
+    // Connected › Machine
+    "IVR / auto-attendant": { kind: "none" }, // number retired for the campaign
+    "Recording / voicemail": { kind: "next_day", window: "same", maxTimes: 1 },
+    "Tracking number, no voice": { kind: "none" }, // retired; find the shop's mobile
+    "Dead audio (no sound either way)": { kind: "after", ms: 15 * MIN, maxTimes: 1, thenNextDay: true },
+    // Connected › Cold
+    "Loan Procedure Issue": { kind: "none" }, // a person calls back within 24 h
+    "Service Issue": { kind: "none" },
+    "Ask to Call Back": { kind: "at_requested" },
+    "Need Some Time": { kind: "long", days: 7, once: false },
+    "No requirement in current": { kind: "long", days: 30, once: false },
+    "Bad Experience with Trontek": { kind: "none" }, // complaint: never redial from the AI
+    "Hung up during intro": { kind: "next_day", window: "other" },
+    "Wrong person (staff / family)": { kind: "next_day", window: "same" },
+    "Dropped mid-call": { kind: "after", ms: 15 * MIN, maxTimes: 1 },
+    "Language mismatch": { kind: "next_day", window: "same" },
+    "Short Hang up": { kind: "next_day", window: "other" }, // retired label, old rows
+    // Connected › Warm / Hot / Converted — a person owns the lead from here.
+    "Details Shared": { kind: "none" },
+    "Information Collected": { kind: "none" },
+    "Meeting Scheduled": { kind: "none" },
+    "Commercials Explained": { kind: "long", days: 3, once: false },
+    "Price High": { kind: "long", days: 7, once: false },
+    "Quotation Sent": { kind: "none" },
+    "Under Negotiation": { kind: "none" },
+    "Documents Received": { kind: "none" },
+    "Commercials Finalised": { kind: "none" },
+    "Deal Closed": { kind: "none" },
+    "Order Received": { kind: "none" },
+    "Full Payment Received": { kind: "none" },
+    "Onboarding Done": { kind: "none" },
+    // Connected › Lost
+    "Not Interested": { kind: "long", days: 90, once: true },
+    "Lost to Competition": { kind: "long", days: 90, once: true },
+    "Some other Business": { kind: "none" }, // out of segment
+    "Business Closed": { kind: "none" },
+    "REJECTED BY US": { kind: "none" },
+    // Not Connected
+    "Did not pick": { kind: "next_window", maxPerDay: 2, maxDays: 3 },
+    "Busy in another call": { kind: "after", ms: 30 * MIN, maxPerDay: 2 },
+    "User disconnected the call": { kind: "next_day", window: "other" },
+    "Switch off": { kind: "next_day", window: "same" },
+    "Out of Coverage area / Network issue": { kind: "after", ms: 2 * HOUR },
+    // Our side refused. The line-blocked refund above handles it first; past
+    // the refund cap it is a plain failure, retried in the next window.
+    "Call not connected / can not be completed": { kind: "next_window" },
+    "Other reason": { kind: "next_day", window: "same" },
+    "Incorrect / Invalid number": { kind: "none" }, // fix the lead
+    "Incoming calls not available": { kind: "long", days: 7, once: false },
+    "Number not in use / does not exist / out of service": { kind: "none" }, // retired
+};
+
+export function reattemptRuleFor(disposition: string | null | undefined): ReattemptRule | null {
+    if (!disposition) return null;
+    return REATTEMPT_RULES[disposition] ?? null;
+}
+
+/** The split of a (dialler-hours) window into [start, split) and [split, end). */
+function halves(window: RetryWindow): { split: number; start: number; end: number } {
+    const start = hhmmToMinutes(window.start);
+    const end = hhmmToMinutes(window.end);
+    const preferred = 14 * 60;
+    const split = start < preferred && preferred < end ? preferred : Math.floor((start + end) / 2);
+    return { split, start, end };
+}
+
+/** The first allowed day at/after `dayIndex`, within a week; null if none. */
+function allowedDayFrom(dayIndex: number, window: RetryWindow): number | null {
+    for (let n = 0; n <= 7; n++) {
+        const weekday = WEEKDAY_BY_UTC_DAY[new Date((dayIndex + n) * DAY_MS).getUTCDay()];
+        if (dayAllowed(window, weekday)) return dayIndex + n;
+    }
+    return null;
+}
+
+function atIst(dayIndex: number, minute: number): Date {
+    return new Date(dayIndex * DAY_MS + minute * MIN - IST_OFFSET_MS);
+}
+
+/**
+ * Tomorrow (or the next allowed day), in the same half-day window as `now` or
+ * the other one. Keeps the same offset into the half, so a day's redials do
+ * not all stack on the hour.
+ */
+export function nextDayInWindow(now: Date, window: RetryWindow, which: "same" | "other"): Date | null {
+    const w = withinDialerHours(window);
+    const { split, start, end } = halves(w);
+    const { dayIndex, minute } = istParts(now);
+    const inMorning = minute < split;
+    const morning = which === "same" ? inMorning : !inMorning;
+    const [from, to] = morning ? [start, split] : [split, end];
+    const ownFrom = inMorning ? start : split;
+    const offset = Math.max(0, Math.min(minute - ownFrom, to - from - 1));
+    const day = allowedDayFrom(dayIndex + 1, w);
+    return day == null ? null : atIst(day, from + offset);
+}
+
+/** The next half-day window opening strictly after `now`. */
+export function nextHalfWindow(now: Date, window: RetryWindow): Date | null {
+    const w = withinDialerHours(window);
+    const { split, start } = halves(w);
+    const { dayIndex, minute } = istParts(now);
+    const weekday = WEEKDAY_BY_UTC_DAY[new Date(dayIndex * DAY_MS).getUTCDay()];
+    if (dayAllowed(w, weekday)) {
+        if (minute < start) return atIst(dayIndex, start);
+        if (minute < split) return atIst(dayIndex, split);
+    }
+    const day = allowedDayFrom(dayIndex + 1, w);
+    return day == null ? null : atIst(day, start);
+}
+
+/** IST day index of an ISO time, or null. */
+function dayOf(iso: string | null | undefined): number | null {
+    if (!iso) return null;
+    const t = new Date(iso);
+    return Number.isFinite(t.getTime()) ? istParts(t).dayIndex : null;
+}
+
+/** The IST day of this row's first dial (history, or today). */
+function firstDialDay(history: ReadonlyArray<ReattemptHistoryEntry>, now: Date): number {
+    let first = istParts(now).dayIndex;
+    for (const h of history) {
+        const d = dayOf(h.at);
+        if (d != null && d < first) first = d;
+    }
+    return first;
+}
+
+/**
+ * The sheet's rule for this dial's disposition. Pure; see REATTEMPT_RULES.
+ * null = the row is done (no redial, nothing long-horizon).
+ */
+export function planReattempt(input: RetryInput): RetryPlan | null {
+    const rule = reattemptRuleFor(input.disposition);
+    if (!rule || rule.kind === "none") return null;
+    const window = withinDialerHours(input.window);
+    const history = input.history ?? [];
+    const sameDispBefore = history.filter(
+        (h) => h.counted !== false && h.disp === input.disposition,
+    ).length;
+
+    if (rule.kind === "long") {
+        // Outlives the campaign: the campaign's retry budget does not apply.
+        if (rule.once && sameDispBefore > 0) return null;
+        const at = clampIntoWindow(new Date(input.now.getTime() + rule.days * DAY_MS), window);
+        return { at, consumesAttempt: true, longHorizon: { once: rule.once } };
+    }
+
+    // A redial inside the campaign: the E-315 budget is the outer cap.
+    const { maxRetries, attemptCount } = input;
+    if (maxRetries == null || maxRetries <= 0) return null;
+    if (attemptCount < 1 || attemptCount >= 1 + maxRetries) return null;
+
+    let at: Date | null = null;
+    switch (rule.kind) {
+        case "after": {
+            if (rule.maxTimes != null && sameDispBefore >= rule.maxTimes) {
+                // Used up. Dead audio gets one more try the next day.
+                if (!rule.thenNextDay || sameDispBefore > rule.maxTimes) return null;
+                at = nextDayInWindow(input.now, window, "same");
+                break;
+            }
+            at = clampIntoWindow(new Date(input.now.getTime() + rule.ms), window);
+            break;
+        }
+        case "next_window":
+            at = nextHalfWindow(input.now, window);
+            break;
+        case "next_day":
+            if (rule.maxTimes != null && sameDispBefore >= rule.maxTimes) return null;
+            at = nextDayInWindow(input.now, window, rule.window);
+            break;
+        case "at_requested": {
+            const asked = input.requestedAt;
+            at =
+                asked && asked.getTime() > input.now.getTime()
+                    ? clampIntoWindow(asked, window)
+                    : nextDayInWindow(input.now, window, "same");
+            break;
+        }
+    }
+    if (!at) return null;
+
+    // B3: at most two dials a day (or the rule's own lower cap). A third waits
+    // for tomorrow's window.
+    const ruleCap = "maxPerDay" in rule && rule.maxPerDay != null ? rule.maxPerDay : MAX_DIALS_PER_DAY;
+    const perDay = Math.min(MAX_DIALS_PER_DAY, ruleCap);
+    const today = istParts(input.now).dayIndex;
+    if ((input.dialsToday ?? 0) >= perDay && istParts(at).dayIndex === today) {
+        const day = allowedDayFrom(today + 1, window);
+        if (day == null) return null;
+        at = atIst(day, hhmmToMinutes(window.start));
+    }
+
+    // "Did not pick": only for the first maxDays IST days of this row.
+    if (rule.kind === "next_window" && rule.maxDays != null) {
+        if (istParts(at).dayIndex - firstDialDay(history, input.now) >= rule.maxDays) return null;
+    }
+    return { at, consumesAttempt: true };
 }
 
 /**

@@ -246,3 +246,92 @@ export async function latestDispositionsFor(
 export function triggerDialKey(campaignLeadId: string | number, attempt: number): string {
     return `trigger:${campaignLeadId}:${attempt}`;
 }
+
+// ── ai_redial_plan: re-attempts that outlive a campaign ──────────────────────
+
+/**
+ * Book a long-horizon redial (Need Some Time 7 d, No requirement 30 d, Not
+ * Interested 90 d once …). One row per lead; a later verdict replaces it,
+ * except that a "once" rule already used is never re-armed by the same label.
+ */
+export async function planLongHorizonRedial(input: {
+    leadId: string;
+    dueAt: Date;
+    disposition: string;
+    once: boolean;
+    sourceDial: string | null;
+}): Promise<void> {
+    try {
+        if (!(await hasDialDispositionTables())) return;
+        await db.execute(sql`
+            INSERT INTO ai_redial_plan (lead_id, due_at, l3, once_only, used, source_dial)
+            VALUES (${input.leadId}, ${input.dueAt.toISOString()}::timestamptz, ${input.disposition},
+                    ${input.once}, false, ${input.sourceDial})
+            ON CONFLICT (lead_id) DO UPDATE SET
+                due_at = EXCLUDED.due_at, l3 = EXCLUDED.l3, once_only = EXCLUDED.once_only,
+                used = false, source_dial = EXCLUDED.source_dial, updated_at = now()
+             WHERE NOT (ai_redial_plan.once_only AND ai_redial_plan.used AND ai_redial_plan.l3 = EXCLUDED.l3)
+        `);
+    } catch (err) {
+        console.error("[dialDisposition.planLongHorizonRedial] failed:", err instanceof Error ? err.message : err);
+    }
+}
+
+/**
+ * Leads the AI must not dial yet: a long-horizon redial is booked and not due.
+ * Empty without E-373.
+ */
+export async function leadsWithRedialNotDue(leadIds: string[]): Promise<Map<string, Date>> {
+    const out = new Map<string, Date>();
+    const ids = [...new Set(leadIds.filter(Boolean))];
+    if (ids.length === 0 || !(await hasDialDispositionTables())) return out;
+    try {
+        const r = rowsOf<{ lead_id: string; due_at: string | Date }>(
+            await db.execute(sql`
+                SELECT lead_id, due_at FROM ai_redial_plan
+                 WHERE due_at > now()
+                   AND lead_id IN (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})
+            `),
+        );
+        for (const row of r) out.set(row.lead_id, new Date(row.due_at));
+    } catch (err) {
+        console.error("[dialDisposition.leadsWithRedialNotDue] failed:", err instanceof Error ? err.message : err);
+    }
+    return out;
+}
+
+/** The lead was dialled again after its plan fell due: the plan is spent. */
+export async function markRedialUsed(leadId: string): Promise<void> {
+    try {
+        if (!(await hasDialDispositionTables())) return;
+        await db.execute(sql`
+            UPDATE ai_redial_plan SET used = true, updated_at = now()
+             WHERE lead_id = ${leadId} AND due_at <= now() AND NOT used
+        `);
+    } catch (err) {
+        console.error("[dialDisposition.markRedialUsed] failed:", err instanceof Error ? err.message : err);
+    }
+}
+
+/** SQL predicate over `dl` (dealer_leads): a long-horizon AI redial is due now. */
+export const AI_REDIAL_DUE_SQL = sql`EXISTS (
+    SELECT 1 FROM ai_redial_plan rp
+     WHERE rp.lead_id = dl.id AND rp.due_at <= now() AND NOT rp.used
+)`;
+
+/** The rule number of the lead's latest outbound v3 verdict, or null. */
+export async function lastDispositionRuleFor(leadId: string): Promise<string | null> {
+    try {
+        if (!(await hasDialDispositionTables())) return null;
+        const r = rowsOf<{ rule_no: string }>(
+            await db.execute(sql`
+                SELECT rule_no FROM ai_dial_dispositions
+                 WHERE lead_id = ${leadId} AND direction = 'outbound'
+                 ORDER BY dialled_at DESC LIMIT 1
+            `),
+        )[0];
+        return r?.rule_no ?? null;
+    } catch {
+        return null;
+    }
+}

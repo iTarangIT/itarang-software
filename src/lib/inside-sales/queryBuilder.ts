@@ -181,7 +181,7 @@ function extraFilters({
             EXISTS (SELECT 1 FROM ai_call_logs a
                      WHERE a.lead_id = dl.id
                        AND a.signals ->> 'callback_agreed' = 'yes')
-            OR to_jsonb(dl) ->> 'last_disposition' = 'As to Call Back'
+            OR to_jsonb(dl) ->> 'last_disposition' IN ('Ask to Call Back', 'As to Call Back')
         )`);
     }
     if (finalisedOnly) parts.push(sql` AND ${finalisedNotWonSql()}`);
