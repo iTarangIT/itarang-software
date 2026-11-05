@@ -56,6 +56,12 @@ export interface DatasetInfo {
     commonFilters?: CommonFilter[];
     /** A file above DOWNLOAD_ROW_CAP can be prepared in the background and emailed as a link. */
     background?: boolean;
+    /**
+     * ID 223: above this many rows the file is emailed instead of built while
+     * the person waits (the live proxy gives up at about 100 s). Absent =
+     * DOWNLOAD_ROW_CAP. Leads is heavy (four sheets, clocks, campaigns).
+     */
+    atOnceRows?: number;
     sheets: DatasetSheetSpec[];
 }
 
@@ -66,6 +72,22 @@ export const TEAM_ROLES: Record<string, string> = { field: "asm", inside: "insid
 
 /** Files above this many rows do not download at once. */
 export const DOWNLOAD_ROW_CAP = 50_000;
+
+/**
+ * ID 223 (decided 3 Nov, Kartik): above this many rows the Excel button is
+ * greyed out — "Too big for Excel at once. Use CSV, or pick fewer dates." Set
+ * from timing: 5,116 leads with all four sheets took 11-12 s on the sandbox
+ * (scripts/time-data-download.ts); live tables are larger.
+ */
+export const EXCEL_ROW_CAP = 5_000;
+
+/** The message shown when Excel is greyed out. */
+export const EXCEL_TOO_BIG = "Too big for Excel at once. Use CSV, or pick fewer dates.";
+
+/** Rows built while the person waits; above it the file is emailed (ID 223). */
+export function atOnceLimit(info: { atOnceRows?: number }): number {
+    return Math.min(info.atOnceRows ?? DOWNLOAD_ROW_CAP, DOWNLOAD_ROW_CAP);
+}
 
 /** The most a background file may hold; above it the filters must be narrowed. */
 export const BACKGROUND_ROW_CAP = 500_000;

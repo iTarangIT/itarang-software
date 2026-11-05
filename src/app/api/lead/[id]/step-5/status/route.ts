@@ -13,6 +13,8 @@ import {
 import { requireRole } from "@/lib/auth-utils";
 // ID 183 (16 Oct): dispatch is the file's dealer's — and, since 16 Oct evening, the iTarang house login on a file it pushed out; never Admin / Sales Head acting for the dealer.
 import { dealerMayDispatch } from "@/lib/auth/requireLeadAccess";
+import { dispatchToSoldDays } from "@/lib/sales/dispatchToSold";
+import { nextAutoDeliveredAt } from "@/lib/sales/dispatchToSoldSchedule";
 
 // Consolidated Step 5 state for the dealer page: loan details + product
 // summary + active OTP session (if any).
@@ -106,12 +108,11 @@ export async function GET(
         .where(eq(inventory.serial_number, selection.battery_serial))
         .limit(1);
       if (asset) {
-        const days = Number(process.env.DISPATCH_TO_SOLD_DAYS ?? "1");
         const dispatchDate = batteryRow?.dispatch_date ?? null;
+        // ID 220: the 09:30 IST daily run that will really move it, not
+        // dispatch + 1 day (an afternoon dispatch moves two mornings later).
         const autoSoldAt = dispatchDate
-          ? new Date(
-              new Date(dispatchDate).getTime() + days * 24 * 60 * 60 * 1000,
-            ).toISOString()
+          ? nextAutoDeliveredAt(new Date(dispatchDate), dispatchToSoldDays()).toISOString()
           : null;
         dispatchInfo = {
           warrantyId: asset.id,

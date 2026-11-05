@@ -21,14 +21,22 @@ export function exportOrigin(env: Record<string, string | undefined> = process.e
     return (env.APP_URL || env.NEXT_PUBLIC_APP_URL || "https://crm.itarang.com").replace(/\/+$/, "");
 }
 
-/** The Recording cell of the Calls download. */
-export function recordingCell(stored: unknown, aiCallId: unknown, origin: string): string | null {
+/**
+ * The Recording cell of the Calls download.
+ *
+ * ID 224 point 7: an AI call that connected has a recording even when no link
+ * is stored yet (ElevenLabs gives none at the end of the call; the recording
+ * route fetches it on first play), so `aiConnected` gives it the recording
+ * route's link instead of a blank.
+ */
+export function recordingCell(stored: unknown, aiCallId: unknown, origin: string, aiConnected = false): string | null {
     const url = typeof stored === "string" ? stored.trim() : "";
-    if (!url) return null;
+    const callId = typeof aiCallId === "string" ? aiCallId.trim() : "";
+    const route = () => `${origin.replace(/\/+$/, "")}/api/ai-dialer/recording/${encodeURIComponent(callId)}`;
+    if (!url) return callId && aiConnected ? route() : null;
     const own = fileOpenHref(url, origin);
     if (own) return own;
-    const callId = typeof aiCallId === "string" ? aiCallId.trim() : "";
-    if (callId) return `${origin.replace(/\/+$/, "")}/api/ai-dialer/recording/${encodeURIComponent(callId)}`;
+    if (callId) return route();
     return RECORDING_NOT_COPIED;
 }
 

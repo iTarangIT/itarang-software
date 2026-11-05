@@ -16,6 +16,7 @@ import { and, desc, eq, inArray, lt, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { deployedAssets, inventory, leads, productSelections } from "@/lib/db/schema";
 import { istSlotState, type Slot } from "@/lib/monitor/schedule";
+import { deliveredSmsTimely } from "@/lib/sales/dispatchToSoldSchedule";
 
 /** 09:30 IST — the old Vercel schedule (04:00 UTC). */
 export const DISPATCH_TO_SOLD_SLOT: Slot = { hour: 9, minute: 30 };
@@ -54,10 +55,18 @@ export async function runDispatchToSold(opts: { now?: Date; dryRun?: boolean } =
     };
 
     const ripe = await db
-        .select({ lead_id: inventory.linked_lead_id })
+        .select({ lead_id: inventory.linked_lead_id, dispatch_date: inventory.dispatch_date })
         .from(inventory)
         .where(and(eq(inventory.status, "dispatched"), lt(inventory.dispatch_date, cutoff)));
     const leadIds = [...new Set(ripe.map((r) => r.lead_id).filter((x): x is string => !!x))];
+    // Earliest dispatch per lead, for the customer SMS rule below.
+    const dispatchedAt = new Map<string, Date>();
+    for (const r of ripe) {
+        if (!r.lead_id || !r.dispatch_date) continue;
+        const d = new Date(r.dispatch_date);
+        const prev = dispatchedAt.get(r.lead_id);
+        if (!prev || d < prev) dispatchedAt.set(r.lead_id, d);
+    }
     if (leadIds.length === 0) return out;
 
     const leadRows = await db
@@ -95,7 +104,12 @@ export async function runDispatchToSold(opts: { now?: Date; dryRun?: boolean } =
                     leadId: lead.id,
                     batterySerial,
                     chargerSerial: selection.charger_serial ?? null,
-                    performedBy: lead.dealer_id ?? "cron",
+                    // As if the dealer pressed Mark delivered: the dealer's
+                    // users.id. NOT dealer_id — that is the account id
+                    // ("ACC-…"), and inventory_events / deployment_history
+                    // .performed_by are uuid columns, so every run failed
+                    // with "invalid input syntax for type uuid" (5 Nov).
+                    performedBy: lead.uploader_id,
                     soldAt: now,
                 });
                 await tx.update(leads).set({ kyc_status: "sold", sold_at: now, updated_at: now }).where(eq(leads.id, lead.id));
@@ -103,7 +117,10 @@ export async function runDispatchToSold(opts: { now?: Date; dryRun?: boolean } =
             });
             if (!moved) continue;
             out.leadsProcessed.push(lead.id);
-            await notifyAfterDelivery(lead, batterySerial);
+            // ID 220: a "delivery confirmed" SMS weeks after dispatch confuses the
+            // customer — the first run after the fix moves a backlog that never
+            // moved (every run failed until 5 Nov). The dealer notice always goes.
+            await notifyAfterDelivery(lead, batterySerial, deliveredSmsTimely(dispatchedAt.get(lead.id) ?? null, now));
         } catch (err) {
             const error = err instanceof Error ? err.message : String(err);
             out.failed.push({ leadId: lead.id, error });
@@ -117,6 +134,7 @@ export async function runDispatchToSold(opts: { now?: Date; dryRun?: boolean } =
 async function notifyAfterDelivery(
     lead: { id: string; phone: string | null; mobile: string | null },
     batterySerial: string,
+    smsCustomer: boolean,
 ): Promise<void> {
     const [asset] = await db
         .select({ id: deployedAssets.id, warranty_end_date: deployedAssets.warranty_end_date })
@@ -129,7 +147,7 @@ async function notifyAfterDelivery(
         notifyDelivered({ leadId: lead.id, warrantyId, batterySerial, source: "cron" }).catch(() => {});
     }
     const customerPhone = lead.phone || lead.mobile;
-    if (customerPhone) {
+    if (customerPhone && smsCustomer) {
         const warrantyEnd = asset?.warranty_end_date ? new Date(asset.warranty_end_date).toISOString().slice(0, 10) : "—";
         const { sendKycSms } = await import("@/lib/sms");
         sendKycSms({
@@ -172,6 +190,16 @@ export async function runDailyDispatchToSold(now: Date = new Date()): Promise<Da
     try {
         const r = await runDispatchToSold({ now });
         counts = { moved: r.leadsProcessed.length, skipped_no_serial: r.skippedNoSerial.length, failed: r.failed.length };
+        // A sale that failed is a failed day (Ops Console > Jobs shows it red, with
+        // the reason) and a later tick retries it; moved sales are no longer
+        // 'dispatched', so a retry never moves one twice.
+        if (r.failed.length > 0) {
+            status = "failed";
+            error = r.failed
+                .slice(0, 3)
+                .map((f) => `${f.leadId}: ${f.error.slice(0, 150)}`)
+                .join("; ");
+        }
         return { ran: true, istDate: state.istDate, moved: r.leadsProcessed.length, failed: r.failed.length };
     } catch (err) {
         status = "failed";

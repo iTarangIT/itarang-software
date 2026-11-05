@@ -26,12 +26,16 @@ import { prepareAndEmail } from "@/lib/exports/datasets/background";
 import { saveColumnSet } from "@/lib/exports/datasets/columnSets";
 import { datasetAccess, datasetById, type RunContext } from "@/lib/exports/datasets/registry";
 import { getTeamMemberIds } from "@/lib/users/team";
+import { effectiveRange, istToday, rangeFileTag } from "@/lib/exports/datasets/range";
 import {
     BACKGROUND_LINK_HOURS,
     BACKGROUND_ROW_CAP,
     DOWNLOAD_ROW_CAP,
+    EXCEL_ROW_CAP,
+    EXCEL_TOO_BIG,
     FULL_PHONE_REASON_MIN,
     FULL_PHONE_ROLES,
+    atOnceLimit,
     pickColumns,
 } from "@/lib/exports/datasets/types";
 import { buildCsv, buildXlsx } from "@/lib/exports/datasets/workbook";
@@ -60,10 +64,22 @@ const tooMany = (n: number, cap: number) =>
     );
 
 export const GET = withErrorHandler(async (req: Request, context: Ctx) => {
-    const opened = await open(context, new URL(req.url).searchParams);
+    const params = new URL(req.url).searchParams;
+    const opened = await open(context, params);
     if (!opened) return errorResponse("This download is not available to your role.", 403);
     const count = await opened.dataset.count(opened.run);
-    return successResponse({ count, over_cap: count > DOWNLOAD_ROW_CAP, own_only: opened.run.ownOnly });
+    const atOnce = atOnceLimit(opened.dataset);
+    return successResponse({
+        count,
+        over_cap: count > DOWNLOAD_ROW_CAP,
+        own_only: opened.run.ownOnly,
+        // ID 223: Excel greyed out above EXCEL_ROW_CAP; emailed above the at-once size.
+        excel_over_cap: count > EXCEL_ROW_CAP,
+        at_once_rows: atOnce,
+        emailed: count > atOnce && count <= DOWNLOAD_ROW_CAP && !!opened.dataset.background,
+        // ID 224: the dates the file will cover, in words.
+        range: effectiveRange(opened.dataset, Object.fromEntries(params), istToday()).text,
+    });
 });
 
 const Body = z.object({
@@ -94,26 +110,38 @@ export const POST = withErrorHandler(async (req: Request, context: Ctx) => {
         fullPhone = true;
     }
 
+    // ID 224: the dates the file really covers, stated in it and in its name.
+    const range = effectiveRange(dataset, clean, istToday());
     const fileCtx = {
         datasetLabel: dataset.label,
         downloadedBy: `${user.name ?? user.email} (${user.role})`,
         filters: clean,
         fullPhone,
         ownOnly: run.ownOnly,
+        rangeText: range.text,
     };
     const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-");
-    const name = `${dataset.id.replace(/_/g, "-")}-${stamp}`;
+    const tag = rangeFileTag(range);
+    const name = `${dataset.id.replace(/_/g, "-")}${tag ? `-${tag}` : ""}-${stamp}`;
 
     const count = await dataset.count(run);
 
-    if (body.background) {
+    // ID 223 (decided 3 Nov): no Excel above EXCEL_ROW_CAP, at once or by email.
+    if (body.format === "xlsx" && count > EXCEL_ROW_CAP) return errorResponse(EXCEL_TOO_BIG, 400);
+
+    // ID 223: above the size the server builds while the person waits, the
+    // file is emailed instead — the live proxy gives up at about 100 s and the
+    // page could only say "The download failed.".
+    const auto = !body.background && count > atOnceLimit(dataset) && count <= DOWNLOAD_ROW_CAP && !!dataset.background;
+
+    if (body.background || auto) {
         if (!dataset.background) return errorResponse("This dataset cannot be prepared in the background. Narrow the filters instead.", 400);
         if (!user.email) return errorResponse("Your login has no email address to send the link to.", 400);
         if (count > BACKGROUND_ROW_CAP) return tooMany(count, BACKGROUND_ROW_CAP);
         const baseUrl = (process.env.APP_URL || process.env.NEXT_PUBLIC_APP_URL || new URL(req.url).origin).replace(/\/$/, "");
         // `user` and `run` are resolved above: the request context is gone inside after().
         after(() => prepareAndEmail({ dataset, run, fileCtx, format: body.format, columns: body.columns, name, baseUrl, reason: body.reason }));
-        return successResponse({ background: true, sent_to: user.email, rows: count, link_hours: BACKGROUND_LINK_HOURS }, 202);
+        return successResponse({ background: true, auto, sent_to: user.email, rows: count, link_hours: BACKGROUND_LINK_HOURS }, 202);
     }
 
     if (count > DOWNLOAD_ROW_CAP) return tooMany(count, DOWNLOAD_ROW_CAP);

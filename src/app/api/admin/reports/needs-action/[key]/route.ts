@@ -10,10 +10,7 @@ import {
     actionCsvColumns,
     ACTION_KEYS,
     actionKeyVisibleTo,
-    actionScopeFrom,
-    listSalesHeadAction,
     listSalesHeadActionFiltered,
-    searchActionRows,
     type ActionKey,
 } from "@/lib/dashboard/salesHeadActions";
 
@@ -32,7 +29,7 @@ export const GET = withErrorHandler(async (req: Request, ctx: { params: Promise<
     const p = new URL(req.url).searchParams;
     const rows =
         access.kind === "team"
-            ? searchActionRows(await listSalesHeadAction(key as ActionKey, { ...actionScopeFrom(p), teamIds: access.teamIds }), p.get("q"))
+            ? await listSalesHeadActionFiltered(key as ActionKey, p, access.teamIds)
             : await listSalesHeadActionFiltered(key as ActionKey, p);
     if (p.get("format") === "json") return successResponse({ key, rows });
     return csvResponse({
