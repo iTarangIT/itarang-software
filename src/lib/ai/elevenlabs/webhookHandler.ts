@@ -13,6 +13,7 @@ import { classifyCallEnd } from "@/lib/ai-dialer/campaignLeadStatus";
 import { applyPostCall, preparePostCall } from "@/lib/ai-dialer/postCallOutcome";
 import type { ElevenLabsWebhookEvent } from "./types";
 import { normalizePostCall } from "./normalizePostCall";
+import { noteTriggerResult } from "@/lib/ai-dialer/lineHealth";
 import { recordDialDisposition } from "@/lib/ai/storage/dialDisposition";
 import { writeAiCallTouchpoint } from "@/lib/ai/storage/callTouchpoint";
 
@@ -143,7 +144,13 @@ export async function handleElevenLabsWebhook(event: ElevenLabsWebhookEvent) {
               campaign: r,
             });
           }
-          if (r.campaignId) {
+          // Task 10 — an asynchronous refusal (SIP 503 etc. reported after
+          // the trigger said OK) counts towards the carrier pause like a
+          // synchronous one; a pause stops the advance.
+          const pausedNow = r.campaignId
+            ? await noteTriggerResult(r.campaignId, outcome)
+            : false;
+          if (r.campaignId && !pausedNow) {
             await advanceCampaign(r.campaignId, { preCallDelayMs: 5_000 });
           }
         }
@@ -177,6 +184,13 @@ export async function handleElevenLabsWebhook(event: ElevenLabsWebhookEvent) {
     // lead-id hint the payload always carried — belong somewhere they can be
     // asserted on.
     const call = normalizePostCall(event.data);
+
+    // Task 10 — a carrier probe rang the team's own number. It is not a dealer
+    // call: nothing to attribute, score or count.
+    if (event.data.conversation_initiation_client_data?.dynamic_variables?.is_probe === "1") {
+      console.log("[elevenlabs:webhook] carrier probe finished:", call.conversationId);
+      return;
+    }
 
     console.log("[ELEVENLABS WEBHOOK] Received:", {
       conversationId: call.conversationId,

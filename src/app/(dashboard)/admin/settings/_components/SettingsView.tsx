@@ -10,6 +10,7 @@ import { NotificationAccessManager } from "./NotificationAccessManager";
 import { EmailNotificationManager } from "./EmailNotificationManager";
 import { QuotationCcForm } from "./QuotationCcForm";
 import { CallbackLoopForm } from "./CallbackLoopForm";
+import { DialerAlertsForm } from "./DialerAlertsForm";
 import { QuotationTermsForm } from "./QuotationTermsForm";
 import { TerritoryManager } from "./TerritoryManager";
 import { ReportingLinesManager } from "./ReportingLinesManager";
@@ -51,6 +52,8 @@ const TAB_VALUES = [
     "logins",
     // D8 — who takes AI-call callbacks, and the NeoDove push switch.
     "ai-callbacks",
+    // Priya KPI tasks 5 + 10 — carrier-pause alerts, probe number, nightly readout.
+    "dialer-alerts",
 ] as const;
 type TabValue = (typeof TAB_VALUES)[number];
 
@@ -104,6 +107,7 @@ export function SettingsView() {
                     { value: "reporting-lines", label: "Reporting lines" },
                     { value: "logins", label: "Logins" },
                     { value: "ai-callbacks", label: "AI callbacks" },
+                    { value: "dialer-alerts", label: "Dialer alerts" },
                 ]}
             />
 
@@ -116,6 +120,7 @@ export function SettingsView() {
                     {active === "reporting-lines" && <ReportingLinesManager />}
                     {active === "logins" && <LoginsManager />}
                     {active === "ai-callbacks" && <CallbackLoopForm />}
+                    {active === "dialer-alerts" && <DialerAlertsForm />}
                     {active === "territories" &&
                         (bundleQuery.isLoading ? (
                             <div className="flex items-center gap-2 py-8 text-sm text-ink-muted">
