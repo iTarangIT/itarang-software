@@ -9,7 +9,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
-import { Loader2 } from "lucide-react";
+import { Loader2, MapPin } from "lucide-react";
 
 import {
     ACCOUNT_BUCKETS,
@@ -35,7 +35,7 @@ const inr = (n: number) => `₹${n.toLocaleString("en-IN", { maximumFractionDigi
 /** Most urgent first: Orange, Red, Dormant, then the rest. */
 const URGENCY: AccountBucket[] = ["orange", "red", "dormant", "cooling", "never_ordered", "not_ordered_yet", "active", "closed"];
 
-type MyDealerRow = DealerHealthRow & { scope: "own" | "team" | "other" };
+type MyDealerRow = DealerHealthRow & { scope: "own" | "team" | "other"; can_log_visit: boolean };
 type Whose = "" | "own" | "team" | "other";
 const WHOSE_LABEL: Record<Exclude<Whose, "">, string> = { own: "Mine", team: "My team", other: "Others" };
 
@@ -132,6 +132,7 @@ export function MyDealersView() {
                             <th className="px-3 py-2 text-right font-semibold">Usual gap (d)</th>
                             <th className="px-3 py-2 text-right font-semibold">Revenue 90d</th>
                             <th className="px-3 py-2 text-right font-semibold">Lifetime</th>
+                            <th className="px-3 py-2" />
                             {data?.can_record_orders && <th className="px-3 py-2" />}
                         </tr>
                     </thead>
@@ -173,6 +174,18 @@ export function MyDealersView() {
                                 <td className="px-3 py-2 text-right tabular-nums">{r.avg_reorder_days ?? "—"}</td>
                                 <td className="px-3 py-2 text-right tabular-nums">{inr(r.revenue_90d)}</td>
                                 <td className="px-3 py-2 text-right tabular-nums">{inr(r.revenue_lifetime)}</td>
+                                <td className="px-3 py-2 text-right">
+                                    {/* ID 210: straight to the camera + location page for this counter. */}
+                                    {r.account_id && r.can_log_visit && (
+                                        <Link
+                                            href={`/visits/capture?account=${encodeURIComponent(r.account_id)}`}
+                                            className="inline-flex items-center gap-1 whitespace-nowrap rounded-md border border-border px-2 py-1 text-xs font-medium text-brand-sky hover:bg-bg"
+                                        >
+                                            <MapPin className="h-3.5 w-3.5" />
+                                            Log visit
+                                        </Link>
+                                    )}
+                                </td>
                                 {data?.can_record_orders && (
                                     <td className="px-3 py-2 text-right">
                                         {r.account_id && r.scope === "own" && r.bucket !== "closed" && !r.order_claim && (
