@@ -21,6 +21,7 @@
  * reading it.
  */
 
+import { InfoTip } from "@/components/ui/info-tip";
 import React, { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -162,12 +163,10 @@ export function NeedsAttentionPanel() {
             Could not be imported ({unreadable.length})
           </p>
           <p className="text-xs text-gray-500">
-            No expense was recorded for these files, so this spend is not on the
-            dashboard. Most are here because the extraction call itself failed —
-            no OpenAI credit, a rate limit, a timeout — rather than because
-            anything is wrong with the file. Retry reads them again; it costs one
-            model call each. If a file genuinely cannot be read, replace it in
-            Drive with a clearer scan and the next scan will pick that up.
+            This spend is not on the dashboard yet. Retry reads the files again.
+            <InfoTip className="ml-1">
+              {"No expense was recorded for these files. Most are here because the reading itself failed (no OpenAI credit, a rate limit, a timeout), not because anything is wrong with the file. Retry costs one AI read each. If a file really cannot be read, replace it in Drive with a clearer scan; the next scan picks it up."}
+            </InfoTip>
           </p>
           <div className="flex items-center gap-3">
             <Button

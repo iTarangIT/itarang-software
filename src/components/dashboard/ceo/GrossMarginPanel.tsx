@@ -4,6 +4,7 @@
 // only for invoice lines that could be costed; what could not be is stated
 // beside it, so a month never reads as more profitable than the data supports.
 
+import { InfoTip } from "@/components/ui/info-tip";
 import { useQuery } from "@tanstack/react-query";
 
 import {
@@ -167,10 +168,10 @@ export function GrossMarginPanel({ showMapping = false }: { showMapping?: boolea
                         </table>
                     </div>
                     <p className="text-xs leading-relaxed text-ink-muted">
-                        Margin is on what was sold, not on stock bought. Cost is the product&apos;s average OEM invoice
-                        value over the last 180 days, else all its stock, else the OEM price book. Voided invoices are
-                        left out and credit notes come off the month, as in revenue. Lines and products are the same as
-                        Invoice Ledger › By SKU.
+                        Margin on what was sold, not on stock bought.
+                        <InfoTip className="ml-1">
+                            {"Cost is the product's average OEM invoice value over the last 180 days, else all its stock, else the OEM price book. Voided invoices are left out and credit notes come off the month, as in revenue. Lines and products are the same as Invoice Ledger › By SKU."}
+                        </InfoTip>
                     </p>
                 </>
             )}

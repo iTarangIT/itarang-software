@@ -36,3 +36,12 @@ Read-only checks: `node --import tsx --env-file=.env.local scripts/verify-04nov.
 | 226 | `npm run migration:next` — the next free E- number from main, every remote branch, this tree and the checklist (today: E-373). CLAUDE.md says to use it. Sandbox (db-1) checks 5 Nov: check-migrations-applied "All checked migrations are present" (332 files); audit-schema: no column the code declares is missing, no type mismatch (the 80 "differences" are DB columns/tables read through to_jsonb / raw SQL on purpose). | Run on db-2: `node scripts/check-migrations-applied.mjs database-2` and `node --import tsx --env-file=../itarang-software/.env.production scripts/audit-schema.ts`. |
 
 Not code (left for people): 225 on hold (Kartik); 188 waits for Anirudh's format; 194 already on; 70 Zoho copy L9 + item names L19 on live; 203 five browser timings on live; 85 L2 run on live.
+
+# Batch 3: 5 Nov, the last code items
+
+| ID | What was built | How to check |
+|---|---|---|
+| 225 (code part) | Deleted `scripts/_empty-audit-db2.mjs` and `scripts/_verify-empty-audit.mjs` (they held the live database's admin password). Five old migration scripts held another RDS password (database-supabase) and the old Supabase pooler password: they now read MIGRATE_SOURCE_DB_URL / MIGRATE_TARGET_DB_PASSWORD and stop without them. `update-passwords.js` and `seed-ganesh-neodove.js` held real people's login passwords: now NEW_PASSWORD_CEO / _SALES_HEAD / _DEALER and SEED_USER_PASSWORD. Two docs no longer name a password. New guard `src/lib/security/__tests__/no-stored-db-passwords.test.ts` fails on any stored connection-string password or script password (it caught all 14 on the old tree). **Still Apoorv's**: the passwords stay in git history, so change the db-2 admin password, the database-supabase RDS password and those users' login passwords; close db-2 to the internet; clean the history. | `npx vitest run src/lib/security` |
+| 215 (own pass) | Dealer Health columns and actions, the Revenue & costs duplicate block, the Expense tracker Drive-folder panels, and 25+ word paragraphs / internal codes on the eight CEO pages: see `docs/tasks/02NovTask/CEO_WORDING_215.md` § "Aditya's sheet rows, own pass (5 Nov)". Shown words and layout only. | Open each CEO page: one line + i, numbers unchanged. |
+
+Live steps (the user runs on db-2): see the runbook lines in this section's chat record; results go below when run.

@@ -162,7 +162,7 @@ export const EXPENSE_PANEL: DriveFoldersPanelConfig = {
   ],
   scanLabel: "Scan now",
   emptyHint:
-    "No folders yet. Share a Drive folder with the service account, then paste its link above.",
+    "No folders yet. Share a Drive folder with the CRM's Google account, then paste its link above.",
   removeTitle: "Remove folder (imported expenses are kept)",
   includeHint: (tokens) =>
     `Importing only what is inside folders named ${tokens}. The sale side is read separately into revenue, so it stays out of expenses.`,
@@ -188,7 +188,7 @@ export const SALES_PANEL: DriveFoldersPanelConfig = {
   ],
   scanLabel: "Scan sales now",
   emptyHint:
-    "No folders yet. Share the accounts folder with the service account, then paste its link above.",
+    "No folders yet. Share the accounts folder with the CRM's Google account, then paste its link above.",
   removeTitle: "Remove folder (imported invoices are kept)",
   includeHint: (tokens) =>
     `Importing only what is inside folders named ${tokens}. The purchase side is read separately into expenses, so it stays out of revenue.`,
@@ -342,10 +342,7 @@ export function DriveFoldersPanel({
         <div className="flex items-start gap-2 p-3 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900">
           <CloudOff className="w-4 h-4 mt-0.5 shrink-0" />
           <span>
-            Google Drive is not configured on this server. Set{" "}
-            <code className="font-mono">GOOGLE_SERVICE_ACCOUNT_EMAIL</code> and{" "}
-            <code className="font-mono">GOOGLE_PRIVATE_KEY</code>, and enable the Drive
-            API for that service account.
+            Google Drive is not connected on this server. Ask the developer to connect it.
           </span>
         </div>
       )}
@@ -415,12 +412,11 @@ export function DriveFoldersPanel({
           {folders.map((f) => (
             <li key={f.id} className="flex flex-wrap items-center gap-3 px-4 py-3">
               <div className="flex-1 min-w-[200px]">
-                <p className="text-sm font-medium text-gray-900">
-                  {f.label || f.drive_folder_id}
+                <p className="text-sm font-medium text-gray-900" title={`Drive folder id: ${f.drive_folder_id}`}>
+                  {f.label || "Drive folder"}
                 </p>
-                <p className="text-[11px] text-gray-500 font-mono">
-                  {f.drive_folder_id}
-                  {f.recursive ? " · includes sub-folders" : ""} · last scanned{" "}
+                <p className="text-[11px] text-gray-500">
+                  {f.recursive ? "Includes sub-folders · " : ""}Last scanned{" "}
                   {fmtWhen(f.last_scanned_at)}
                 </p>
                 {/* Visible, not buried in config — this setting is the
@@ -576,7 +572,7 @@ function ScanSummaryBlock({ summary: s }: { summary: ScanSummary }) {
         {/* files_seen minus files_new is what the md5 dedup saved in model calls */}
         {s.files_seen > s.files_new && (
           <span className="font-normal text-gray-500">
-            ({s.files_seen - s.files_new} unchanged, not re-read)
+            ({s.files_seen - s.files_new} already read)
           </span>
         )}
       </p>

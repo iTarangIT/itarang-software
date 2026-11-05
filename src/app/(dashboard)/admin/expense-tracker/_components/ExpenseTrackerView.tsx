@@ -638,7 +638,7 @@ export function ExpenseTrackerView() {
               }
             >
               <Download className="w-4 h-4 mr-2" />
-              Download
+              Download Excel + PDFs
             </Button>
           </div>
         </div>
@@ -831,7 +831,7 @@ function RecordedRow({ row }: { row: RecordedExpense }) {
             title={
               row.bucket_source
                 ? `Set by: ${row.bucket_source}`
-                : "Not classified yet — run the E-218 backfill"
+                : "Not classified yet"
             }
           >
             <span

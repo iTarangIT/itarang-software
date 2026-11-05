@@ -116,7 +116,9 @@ export default function RevenueAndCostsPage() {
 
             {/* E-224 removed a "Net" strip from the Business snapshot because it
                 sat under the tiles reading like Realization. This one is named for
-                exactly what it subtracts and says how it differs. */}
+                exactly what it subtracts and says how it differs. ID 215 (5 Nov):
+                it is also the only copy of revenue / purchases / expenses on the
+                page; its tiles open the drill-downs the snapshot tiles did. */}
             <DashCard
                 title="Revenue minus purchases and expenses"
                 caption={net.data ? net.data.label : windowLabel}
@@ -128,16 +130,28 @@ export default function RevenueAndCostsPage() {
                 ) : (
                     <>
                         <div data-testid="net-strip" className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                            <KpiTile label="Revenue" value={inr(net.data.sales)} sub="Sales invoices, void excluded" />
                             <KpiTile
+                                testid="tile-sales-to-dealer"
+                                label="Revenue"
+                                value={inr(net.data.sales)}
+                                sub="Sales invoices, void excluded"
+                                onClick={() => setDrill({ metric: "sales", title: `Revenue · ${net.data!.label}`, params: windowParams })}
+                            />
+                            <KpiTile
+                                testid="tile-oem-purchases"
                                 label="Stock bought from OEMs"
                                 value={`−${inr(net.data.purchases)}`}
                                 sub="By OEM invoice date"
+                                onClick={() =>
+                                    setDrill({ metric: "purchases", title: `Stock bought from OEMs · ${net.data!.label}`, params: windowParams })
+                                }
                             />
                             <KpiTile
+                                testid="tile-other-expenses"
                                 label="Running expenses"
                                 value={`−${inr(net.data.otherExpenses)}`}
                                 sub="Approved expenses"
+                                onClick={() => setDrill({ metric: "expenses", title: `Running expenses · ${net.data!.label}`, params: windowParams })}
                             />
                             <KpiTile
                                 label="Net"
@@ -185,18 +199,12 @@ export default function RevenueAndCostsPage() {
 
             <GrossMarginPanel showMapping />
 
-            {/* ID 89 — every panel in the redesign's card look. The business
-                snapshot gets the wide column so its three tiles sit in a row. */}
+            {/* ID 89 — every panel in the redesign's card look. ID 215: the
+                snapshot's tiles moved into the strip above; the panel keeps the
+                manual sales upload and the recent lists. */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
                 <div className="lg:col-span-2" data-testid="business-snapshot-panel-wrapper">
-                    <BusinessSnapshotPanel
-                        purchasesMtd={Number(m.purchases_mtd ?? 0)}
-                        salesMtd={Number(m.revenue_mtd ?? 0)}
-                        otherExpensesMtd={Number(m.other_expenses_mtd ?? 0)}
-                        recentInvoices={m.recent_invoices || []}
-                        recentExpenses={m.recent_expenses || []}
-                        onTileClick={(metric, title, params) => setDrill({ metric, title, params })}
-                    />
+                    <BusinessSnapshotPanel recentInvoices={m.recent_invoices || []} recentExpenses={m.recent_expenses || []} />
                 </div>
 
                 <div className="space-y-6">

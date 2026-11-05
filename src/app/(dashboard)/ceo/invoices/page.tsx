@@ -1,5 +1,6 @@
 "use client";
 
+import { InfoTip } from "@/components/ui/info-tip";
 import React, { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -338,7 +339,7 @@ function SourceBadge({ source }: { source: "zoho" | "drive" | "credit" }) {
       title={
         drive
           ? "Read from the Google Drive invoice folder"
-          : "Synced from the Zoho Invoice API before the move to Vyapar"
+          : "From Zoho, before the move to Vyapar"
       }
       className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[10px] font-bold uppercase tracking-wider ${
         drive
@@ -710,12 +711,7 @@ export default function CEOInvoicesPage() {
         >
           <CloudOff className="w-4 h-4 mt-0.5 shrink-0" />
           <span>
-            Showing Zoho invoices only — the Drive invoice table does not exist on this
-            database yet. Apply{" "}
-            <code className="font-mono text-xs">
-              drizzle/E-280_drive_sales_invoices.sql
-            </code>{" "}
-            to include invoices filed since the move to Vyapar.
+            Showing Zoho invoices only: invoices filed since the move to Vyapar are not available on this server yet.
           </span>
         </div>
       )}
@@ -816,8 +812,8 @@ export default function CEOInvoicesPage() {
                 {summary.unlinked_count.toLocaleString("en-IN")} invoice
                 {summary.unlinked_count === 1 ? "" : "s"} ({formatINR(summary.unlinked_total)})
               </span>{" "}
-              in this view aren&apos;t linked to a CRM dealer, so no salesperson gets credit for them.
-              Linking needs the same GSTIN on the invoice and on the dealer&apos;s lead.
+              in this view aren&apos;t linked to a CRM dealer, so no one gets credit for them.
+              <InfoTip className="ml-1">{"Linking needs the same GSTIN on the invoice and on the dealer's lead."}</InfoTip>
             </>
           ) : summary ? (
             <span className="text-emerald-700">Every invoice in this view is linked to a CRM dealer.</span>

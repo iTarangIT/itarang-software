@@ -1,3 +1,4 @@
+import { InfoTip } from "@/components/ui/info-tip";
 import { Suspense } from "react";
 
 import { requireRole } from "@/lib/auth-utils";
@@ -15,17 +16,10 @@ export default async function TargetsPage() {
             <header>
                 <h1 className="text-2xl font-semibold tracking-tight text-ink">Targets</h1>
                 <p className="mt-1 text-sm text-ink-muted">
-                    The CEO enters each person&apos;s targets — drafts nobody else sees — and presses Post to
-                    Sales Head. Only the CEO adds a person or a metric, and only the CEO removes a target he
-                    set; a removed target keeps its history, and the person is told if it had reached them. The Sales Head (or Admin) may add a stretch on top of the CEO target, with a
-                    note (CEO 100 + 50 = 150; a stretch never reduces it), then presses Approve &amp; push.
-                    The person is told by notification and email and accepts, or asks for a correction, on
-                    their performance page. Not accepted within 48 hours of the first push and the daily
-                    Targets Pending mail says so; asking for a correction does not stop that clock. A change
-                    after posting is a new version: the CEO posts it, the Sales Head pushes it, and until
-                    then the last version stays in force. History lists every version. Progress is measured
-                    pro-rata by working day (Mon–Sat, minus holidays) from the 1st of the month; a custom
-                    metric&apos;s progress is entered by hand.
+                    CEO sets targets → Sales Head adds a stretch and pushes → each person accepts.
+                    <InfoTip className="ml-1">
+                        {"The CEO enters each person's targets (drafts nobody else sees) and presses Post to Sales Head. Only the CEO adds a person or a metric, and only the CEO removes a target he set; a removed target keeps its history, and the person is told if it had reached them. The Sales Head (or Admin) may add a stretch on top of the CEO target, with a note (CEO 100 + 50 = 150; a stretch never reduces it), then presses Approve & push. The person is told by notification and email and accepts, or asks for a correction, on their performance page. Not accepted within 48 hours of the first push and the daily Targets Pending mail says so; asking for a correction does not stop that clock. A change after posting is a new version: the CEO posts it, the Sales Head pushes it, and until then the last version stays in force. History lists every version. Progress is measured pro-rata by working day (Mon–Sat, minus holidays) from the 1st of the month; a custom metric's progress is entered by hand."}
+                    </InfoTip>
                 </p>
             </header>
             <Suspense fallback={null}>
