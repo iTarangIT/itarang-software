@@ -75,6 +75,20 @@ export const SCHEDULED_JOBS: ScheduledJob[] = [
     runner: { kind: "ticker", job: "callback-loop", everyMs: 5 * MIN },
   },
   {
+    id: "ai-dialer-readout",
+    title: "AI dialer quality readout",
+    what: "Emails Settings › Dialer alerts one row per dialling day: dials, humans, complete conversations per 100 dials, humans gone in 15 s, inbound answered, and today's call defects.",
+    cronPaths: [],
+    runner: {
+      kind: "ticker",
+      job: "ai-dialer-readout",
+      everyMs: 5 * MIN,
+      dailyKind: "ai_dialer_readout",
+      dailyAt: "19:20 IST",
+      offSwitch: "ENABLE_AI_DIALER_READOUT",
+    },
+  },
+  {
     id: "call-cost-backfill",
     title: "AI call costs",
     what: "Fetches each finished AI call's cost from Bolna / ElevenLabs when the call itself did not record it.",

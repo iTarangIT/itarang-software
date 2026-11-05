@@ -51,6 +51,7 @@ export async function register() {
       startIotOfflineScanTicker,
       startCallCostBackfillTicker,
       startNbfcNightlyTicker,
+      startAiDialerReadoutTicker,
       startDigilockerExpiryTicker,
     } = await import("./instrumentation-node");
     // ID 125 — every ticker runs as a named job. Its timers inherit the job
@@ -95,6 +96,8 @@ export async function register() {
     await runAsJob("iot-offline-scan", startIotOfflineScanTicker);
     await runAsJob("call-cost-backfill", startCallCostBackfillTicker);
     await runAsJob("nbfc-nightly", startNbfcNightlyTicker);
+    // Priya KPI task 5 — the AI dialer quality readout, daily 19:20 IST (kickoff 290s out).
+    await runAsJob("ai-dialer-readout", startAiDialerReadoutTicker);
     // ID 201 — DigiLocker "expired" history lines (kickoff 285s out).
     await runAsJob("digilocker-expiry", startDigilockerExpiryTicker);
     await runAsJob("recording-transcription", startRecordingTranscriptionTicker);
