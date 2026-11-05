@@ -6,9 +6,10 @@
 //     and on a customer's application only the files it uploaded itself
 //     (16 Oct, E-349 — dealerUploadedFile). 18 Oct rework: a file with no
 //     upload record (consent PDFs, photos, rows from before uploaders were
-//     recorded) is NOT the dealer's. The customer's loan agreement + audit
-//     trail in the NBFC store still open for the customer's dealer
-//     (classifyNbfcFile "agreements" -> dealerMay: true) — awaiting Kartik;
+//     recorded) is NOT the dealer's. 5 Nov (proposal on Kartik's 2 Nov row
+//     19, Apoorv to confirm): in the NBFC store the customer's dealer opens
+//     its customer's signed loan agreement, but NOT the e-sign audit trail —
+//     that stays with Admin, Sales Head, CEO and the NBFC (AUDIT_TRAIL_NAME);
 //   - an NBFC opens only the files of applications shared with it;
 //   - expense bills and scanned invoices: Finance, Admin, CEO and the person
 //     who submitted the expense (the Sales Head does NOT see them);
@@ -106,6 +107,8 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const AGREEMENT_PREFIXES = new Set(["agreements", "dealer-signed-agreement-upload"]);
 const AGREEMENT_FILE = /^(?:signed-agreement|audit-trail|unsigned-agreement)\.pdf$/i;
+/** An e-sign audit trail by its file name (agreements/<leadId>/audit-trail.pdf and variants). */
+const AUDIT_TRAIL_NAME = /audit[-_]?trail/i;
 
 /**
  * The NBFC store's key layout, from its uploaders:
@@ -125,7 +128,11 @@ function classifyNbfcFile(parts: string[]): FileKind {
     const [first = "", second = ""] = parts;
     const top = first.toLowerCase();
     if (!second) return { kind: "unknown" };
-    if (top === "agreements") return { kind: "nbfc_lead", leadId: second, dealerMay: true };
+    if (top === "agreements") {
+        // ID 166 (5 Nov): the dealer opens the loan agreement, never its audit trail.
+        const name = parts[parts.length - 1] ?? "";
+        return { kind: "nbfc_lead", leadId: second, dealerMay: !AUDIT_TRAIL_NAME.test(name) };
+    }
     if (top === "admin-attachments" || top === "verdict-attachments") {
         return { kind: "nbfc_lead", leadId: second, dealerMay: false };
     }
