@@ -423,7 +423,7 @@ export function mapDispositionV3(input: DispositionV3Input): DispositionV3 {
 }
 
 /** Is the dial a person on the line? (the readout's "humans"). */
-export function isHumanDisposition(d: Pick<DispositionV3, "l1" | "l2" | "rule">): boolean {
+export function isHumanDisposition(d: { l1: string; l2: string; rule: string }): boolean {
     if (d.l1 !== "Connected") return d.rule === "7"; // a person said "wrong number"
     return d.l2 !== "Machine";
 }

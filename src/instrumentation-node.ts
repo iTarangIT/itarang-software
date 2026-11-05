@@ -2259,6 +2259,48 @@ export async function startCallCostBackfillTicker() {
 }
 
 /**
+ * Priya KPI task 5 — the AI dialer quality readout: one row per dialling day
+ * (dials, humans, complete conversations per 100 dials, humans gone in 15 s,
+ * inbound answered) emailed to Settings › Dialer alerts, once a day from
+ * 19:20 IST (dialling ends at 19:00). A 5-minute tick claims the day in
+ * digest_runs (kind 'ai_dialer_readout'). Off with ENABLE_AI_DIALER_READOUT=0;
+ * like every job send, suppressed off the live site.
+ */
+export async function startAiDialerReadoutTicker() {
+  if (process.env.VERCEL === "1") return;
+  if (process.env.ENABLE_AI_DIALER_READOUT === "0") return;
+
+  const TICK_INTERVAL_MS = 5 * 60_000;
+  let inFlight = false;
+
+  const tick = async () => {
+    if (inFlight) return;
+    inFlight = true;
+    try {
+      const { runOncePerIstDay } = await import("@/lib/runtime/dailyJob");
+      const { runNightlyReadout } = await import("@/lib/ai-dialer/readout/readoutQuery");
+      const r = await runOncePerIstDay("ai_dialer_readout", { hour: 19, minute: 20 }, () => runNightlyReadout());
+      if (r.ran) console.log(`[instrumentation:ai-dialer-readout] ${r.istDate}: ${JSON.stringify(r.counts)}`);
+    } catch (err) {
+      console.error(
+        "[instrumentation:ai-dialer-readout] tick failed:",
+        err instanceof Error ? err.message : err,
+      );
+    } finally {
+      inFlight = false;
+    }
+  };
+
+  const kickoff = setTimeout(trackTick(tick), 290_000);
+  if (typeof kickoff.unref === "function") kickoff.unref();
+
+  const interval = setInterval(trackTick(tick), TICK_INTERVAL_MS);
+  if (typeof interval.unref === "function") interval.unref();
+
+  console.log("[instrumentation] ai-dialer-readout (daily 19:20 IST) started in-process");
+}
+
+/**
  * NBFC nightly: CDS → PCI → anomaly flags → COR expiry, once a day from 05:30
  * IST (the old vercel.json time). A 5-minute tick claims the day in
  * digest_runs (kind 'nbfc_nightly'). Off outside production unless opted in,
