@@ -29,6 +29,7 @@ import {
     type CsvColumn,
 } from "@/lib/leads/queueCsv";
 import { LEAD_STATUS_LABEL } from "@/lib/leads/queueFilters";
+import { typeCodeForDownload } from "@/lib/leads/downloadTypeCode";
 import { CALL_STATUS_LABEL, NEXT_ACTION_LABEL, humanise } from "@/lib/lifecycle/touchpointLabels";
 import { fmtDuration, prettyRole, type LeadTracking } from "./trackingTypes";
 
@@ -233,7 +234,8 @@ export function buildTrackingCsvRows(trackings: LeadTracking[]): TrackingCsvRow[
                 duration_sec: ev.duration_sec ?? "",
                 next_action: ev.next_action ? humanise(ev.next_action, NEXT_ACTION_LABEL) : "",
                 handed_to: ev.to_person?.name ?? "",
-                type_code: ev.type_code,
+                // ID 209: a person's call reads `call`; AI calls stay `ai_call`.
+                type_code: typeCodeForDownload(ev.type_code) ?? "",
             });
         }
     }

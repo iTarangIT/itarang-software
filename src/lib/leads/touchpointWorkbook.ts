@@ -27,6 +27,8 @@ import { db } from "@/lib/db";
 import { engagedState } from "@/lib/reports/metricDefinitions";
 import { fmtIst, styleHeader, zebra } from "@/lib/excel/sheetStyle";
 import { LEAD_STATUS_LABEL } from "@/lib/leads/queueFilters";
+import { typeCodeForDownload } from "@/lib/leads/downloadTypeCode";
+import { roleLabel } from "@/lib/admin/reportHelpers";
 import {
     CALL_STATUS_LABEL,
     NEXT_ACTION_LABEL,
@@ -65,6 +67,7 @@ export const HISTORY_COLUMNS = [
     "Event",
     "Activity",
     "By",
+    "Role",
     "At (IST)",
     "Details",
     "Call Status",
@@ -112,6 +115,7 @@ type TouchpointRow = {
     lead_id: string;
     touchpoint_type: string | null;
     performed_by_name: string | null;
+    performed_by_role: string | null;
     performed_at: string | null;
     call_status: string | null;
     call_duration_sec: number | null;
@@ -126,6 +130,7 @@ type StatusRow = {
     from_status: string | null;
     to_status: string | null;
     changed_by_name: string | null;
+    changed_by_role: string | null;
     changed_at: string | null;
     to_lost_reason: string | null;
     /** ID 170 (E-333): the reason before a Lost-reason change. */
@@ -143,6 +148,7 @@ type HistoryEvent = {
         event: string;
         activity: string;
         by: string;
+        role: string;
         at: string;
         details: string;
         call_status: string;
@@ -167,6 +173,7 @@ const EMPTY_EVENT_CELLS: HistoryEvent["cells"] = {
     event: DASH,
     activity: DASH,
     by: DASH,
+    role: DASH,
     at: DASH,
     details: DASH,
     call_status: DASH,
@@ -185,6 +192,8 @@ function touchpointEvent(r: TouchpointRow): HistoryEvent {
             event: "Touchpoint",
             activity: humanise(r.touchpoint_type, TOUCHPOINT_TYPE_LABEL),
             by: r.performed_by_name ?? "System",
+            // ID 209: the caller's role next to "By".
+            role: r.performed_by_role ? roleLabel(r.performed_by_role) : DASH,
             at: fmtIst(r.performed_at),
             details: r.remarks ?? DASH,
             call_status: humanise(r.call_status, CALL_STATUS_LABEL),
@@ -193,7 +202,8 @@ function touchpointEvent(r: TouchpointRow): HistoryEvent {
             next_action: humanise(r.next_action, NEXT_ACTION_LABEL),
             next_action_at: r.next_action_at ? fmtIst(r.next_action_at) : DASH,
             lost_reason: DASH,
-            type: r.touchpoint_type ?? DASH,
+            // ID 209: a person's call reads `call`; AI calls stay `ai_call`.
+            type: typeCodeForDownload(r.touchpoint_type) ?? DASH,
         },
     };
 }
@@ -205,6 +215,7 @@ function statusEvent(r: StatusRow): HistoryEvent {
             event: "Status change",
             activity: `${statusText(r.from_status)} → ${statusText(r.to_status)}${r.won_undone ? " (undone)" : ""}`,
             by: r.changed_by_name ?? "System",
+            role: r.changed_by_role ? roleLabel(r.changed_by_role) : DASH,
             at: fmtIst(r.changed_at),
             details: r.reason_notes ?? DASH,
             call_status: DASH,
@@ -267,6 +278,7 @@ export async function buildTouchpointWorkbook(
                 t.dealer_lead_id AS lead_id,
                 t.touchpoint_type,
                 u.name AS performed_by_name,
+                u.role AS performed_by_role,
                 t.performed_at::text AS performed_at,
                 t.call_status,
                 t.call_duration_sec,
@@ -288,6 +300,7 @@ export async function buildTouchpointWorkbook(
                 h.from_status,
                 h.to_status,
                 u.name AS changed_by_name,
+                u.role AS changed_by_role,
                 h.changed_at::text AS changed_at,
                 h.to_lost_reason,
                 h.reason_notes,
@@ -358,6 +371,7 @@ export async function buildTouchpointWorkbook(
         // about it. For a status change Activity is "From → To".
         { header: "Activity", key: "activity", width: 30 },
         { header: "By", key: "by", width: 22 },
+        { header: "Role", key: "role", width: 16 },
         { header: "At (IST)", key: "at", width: 24 },
         { header: "Details", key: "details", width: 60 },
         { header: "Call Status", key: "call_status", width: 18 },
