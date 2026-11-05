@@ -52,6 +52,21 @@ describe("viewer links (ID 166)", () => {
         expect(out.when).toBeInstanceOf(Date);
         expect(out.n).toBe(3);
     });
+
+    it("an old Supabase address (video KYC rows) leaves as a fresh proxy link too (5 Nov)", () => {
+        vi.stubEnv("FILE_LINK_SECRET", "test-secret-0123456789");
+        const legacy = "https://abcd.supabase.co/storage/v1/object/public/documents/kyc/LEAD-1/video.webm";
+        const out = signFileLinksDeep({ api_response: { video_url: legacy } }, "user-3");
+        const link = out.api_response.video_url;
+        expect(link.startsWith("/api/files/documents/kyc/LEAD-1/video.webm?")).toBe(true);
+        const q = params(link);
+        expect(q.get("by")).toBe("user-3");
+        expect(fileLinkValid("documents", "kyc/LEAD-1/video.webm", q.get("exp"), q.get("sig"), Date.now(), "user-3")).toBe(true);
+        expect(viewerFileLink(legacy, "user-3")!.includes("supabase")).toBe(false);
+        // an unknown bucket is not ours: left alone
+        const other = "https://abcd.supabase.co/storage/v1/object/public/other-bucket/x.pdf";
+        expect(viewerFileLink(other, "u")).toBe(other);
+    });
 });
 
 describe("onboarding links for a dealer with no login (ID 166 decision 5)", () => {

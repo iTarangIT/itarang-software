@@ -41,6 +41,33 @@ function formatDob(dob: Date | string | null | undefined): string | null {
   return d.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
 }
 
+/**
+ * ID 166 (5 Nov): the Active Video KYC face-match pictures are Decentro links.
+ * They leave as our own checked + logged picture route (liveness-image), never
+ * as the stored Decentro address.
+ */
+function livenessPicturesViaServer(apiResponse: unknown, leadId: string, verificationId: string): unknown {
+  const ar = apiResponse as { results?: { videoFaceMatchResults?: unknown } } | null;
+  const rows = ar?.results?.videoFaceMatchResults;
+  if (!ar || !Array.isArray(rows)) return apiResponse;
+  const base = `/api/admin/kyc/${encodeURIComponent(leadId)}/verification/${encodeURIComponent(verificationId)}/liveness-image`;
+  return {
+    ...ar,
+    results: {
+      ...ar.results,
+      videoFaceMatchResults: rows.map((r, i) => {
+        if (!r || typeof r !== "object") return r;
+        const row = r as Record<string, unknown>;
+        return {
+          ...row,
+          originalImage: row.originalImage ? `${base}?row=${i}&kind=original` : row.originalImage,
+          finalMatchImage: row.finalMatchImage ? `${base}?row=${i}&kind=match` : row.finalMatchImage,
+        };
+      }),
+    },
+  };
+}
+
 export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ leadId: string }> },
@@ -184,7 +211,10 @@ export async function GET(
       submittedAt: v.submitted_at,
       completedAt: v.completed_at,
       apiRequest: v.api_request,
-      apiResponse: v.api_response,
+      apiResponse:
+        v.verification_type === "active_video_kyc"
+          ? livenessPicturesViaServer(v.api_response, leadId, v.id)
+          : v.api_response,
     });
 
     // Split verifications by applicant. Rows without an applicant column
