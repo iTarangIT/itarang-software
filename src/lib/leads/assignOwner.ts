@@ -262,6 +262,14 @@ async function assignOwner(input: AssignLeadOwnerInput): Promise<AssignOutcome> 
                 target.id,
                 sql`, asm_id = ${target.id}`,
             );
+            // ID 221 (Kartik, 3 Nov): the booked visit moves with the lead to the
+            // new ASM (the same rule as reassign.ts moveFieldVisits).
+            await db.execute(sql`
+                UPDATE lead_visits SET asm_id = ${target.id}, updated_at = NOW()
+                 WHERE dealer_lead_id = ${leadId}
+                   AND visit_status IN ('scheduled', 'pending_scheduling')
+                   AND asm_id IS DISTINCT FROM ${target.id}
+            `);
             await writeTouchpoint({
                 dealerLeadId: leadId,
                 touchpointType: "asm_transfer",

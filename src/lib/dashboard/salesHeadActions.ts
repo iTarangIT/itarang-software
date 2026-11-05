@@ -59,6 +59,8 @@ import { workingHoursBetween } from "@/lib/leads/workingHours";
 import { loadOfficeCalendar, workingDaysSinceSql } from "@/lib/calendar/holidays";
 import { getTimeLimits } from "@/lib/timeLimits/store";
 import { fieldVisitDetail, filterVisitBooked, parseVisitBooked } from "@/lib/dashboard/fieldVisitText";
+import { LEAD_STATUS_LABEL } from "@/lib/leads/queueFilters";
+import type { LeadStatus } from "@/lib/lifecycle/transitions";
 import { listStockTasks, STOCK_TASK_ROLES, STOCK_TASKS_HREF } from "@/lib/inventory/stockUploadTasks/service";
 
 export const ACTION_KEYS = [
@@ -466,7 +468,7 @@ async function hotAged(s: ActionScope): Promise<Built> {
     const rows = raw.map((r) =>
         base(
             r,
-            `Hot since ${String(r.hot_since)} · ${plural(Number(r.age), "day")} · ${r.lead_status ? String(r.lead_status).replace(/_/g, " ") : "not in sales yet"}`,
+            `Hot since ${String(r.hot_since)} · ${plural(Number(r.age), "day")} · ${r.lead_status ? (LEAD_STATUS_LABEL[String(r.lead_status) as LeadStatus] ?? String(r.lead_status).replace(/_/g, " ")) : "not in sales yet"}`,
         ),
     );
     const over30 = raw.filter((r) => Number(r.age) > 30).length;

@@ -27,9 +27,19 @@ type Props = {
     onChanged?: () => void;
     /** ID 155: the viewer manages the current owner and may move the lead within their team. */
     canTeamReassign?: boolean;
+    /** ID 221: the owner has someone in their team to give the lead to. */
+    canOwnerReassign?: boolean;
 };
 
-export function LeadActionBar({ bundle, isOwner, viewerRole, onAction, onChanged, canTeamReassign = false }: Props) {
+export function LeadActionBar({
+    bundle,
+    isOwner,
+    viewerRole,
+    onAction,
+    onChanged,
+    canTeamReassign = false,
+    canOwnerReassign = false,
+}: Props) {
     const lead = bundle.lead;
     const status = lead.lead_status as LeadStatus | null;
     const isUnassigned = !lead.current_owner_id && !(status && isTerminal(status));
@@ -175,9 +185,12 @@ export function LeadActionBar({ bundle, isOwner, viewerRole, onAction, onChanged
                     Mark Lost
                 </ActionButton>
             )}
-            <ActionButton icon={Repeat} onClick={() => onAction("reassign")}>
-                Reassign
-            </ActionButton>
+            {/* ID 221: only to someone in the owner's team; nobody under them = no button (Transfer to ASM stays). */}
+            {canOwnerReassign && (
+                <ActionButton icon={Repeat} onClick={() => onAction("reassign")}>
+                    Reassign
+                </ActionButton>
+            )}
             <ActionButton
                 icon={AlertCircle}
                 tone="amber"

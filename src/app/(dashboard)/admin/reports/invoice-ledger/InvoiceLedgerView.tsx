@@ -148,8 +148,6 @@ function ImportTab() {
     const [file, setFile] = useState<File | null>(null);
     const [kind, setKind] = useState<"vyapar_register" | "gstr1">("vyapar_register");
     const [preview, setPreview] = useState<Preview | null>(null);
-    // Payment sync: an export older than the last one imported needs an explicit yes.
-    const [allowOlder, setAllowOlder] = useState(false);
 
     const history = useQuery({
         queryKey: ["invoice-ledger-imports"],
@@ -167,7 +165,6 @@ function ImportTab() {
             fd.append("file", file);
             fd.append("kind", kind);
             fd.append("mode", mode);
-            if (mode === "commit" && allowOlder) fd.append("allow_older", "1");
             return readData<{ mode: string; preview?: Preview; summary?: Record<string, number> }>(
                 await fetch("/api/admin/sales-invoices/ledger/import", { method: "POST", body: fd }),
                 "Import failed",
@@ -176,7 +173,6 @@ function ImportTab() {
         onSuccess: (data) => {
             if (data.mode === "preview") {
                 setPreview(data.preview ?? null);
-                setAllowOlder(false);
                 return;
             }
             const s = data.summary ?? {};
@@ -194,7 +190,6 @@ function ImportTab() {
             qc.invalidateQueries({ queryKey: ["invoice-freshness"] });
             setPreview(null);
             setFile(null);
-            setAllowOlder(false);
             qc.invalidateQueries({ queryKey: ["invoice-ledger-imports"] });
             qc.invalidateQueries({ queryKey: ["invoice-ledger-items"] });
         },
@@ -276,7 +271,7 @@ function ImportTab() {
                             </p>
                         )}
                     </div>
-                    {preview.payments && <PaymentSyncPanel p={preview.payments} allowOlder={allowOlder} setAllowOlder={setAllowOlder} />}
+                    {preview.payments && <PaymentSyncPanel p={preview.payments} />}
                     <div className="max-h-96 overflow-auto rounded-md border border-border">
                         <table className="w-full text-xs">
                             <thead className="sticky top-0 bg-surface-subtle text-left text-ink-muted">
@@ -346,7 +341,7 @@ function ImportTab() {
                         </table>
                     </div>
                     <Button
-                        disabled={send.isPending || preview.totals.documents === 0 || (!!preview.payments?.older_than_last && !allowOlder)}
+                        disabled={send.isPending || preview.totals.documents === 0 || !!preview.payments?.older_than_last}
                         onClick={() => send.mutate("commit")}
                     >
                         {send.isPending && send.variables === "commit" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
@@ -391,15 +386,7 @@ function ImportTab() {
  * Payment sync — what this Vyapar export does to amounts paid, and what it
  * cannot see. Vyapar is the source of truth: the figures are absolute.
  */
-function PaymentSyncPanel({
-    p,
-    allowOlder,
-    setAllowOlder,
-}: {
-    p: NonNullable<Preview["payments"]>;
-    allowOlder: boolean;
-    setAllowOlder: (v: boolean) => void;
-}) {
+function PaymentSyncPanel({ p }: { p: NonNullable<Preview["payments"]> }) {
     return (
         <div className="space-y-2 rounded-md border border-border bg-surface-subtle px-3 py-2 text-xs">
             <p className="font-medium text-ink">
@@ -413,12 +400,9 @@ function PaymentSyncPanel({
             </p>
             {p.older_than_last && (
                 <div className="rounded border border-rose-200 bg-rose-50 px-2 py-1.5 text-rose-800">
-                    This export is OLDER than the last one imported ({istStamp(p.last_generated_at)}). Importing it sets payments back to
-                    older figures. Export the Sale Report again from Vyapar.
-                    <label className="mt-1 flex items-center gap-2">
-                        <input type="checkbox" checked={allowOlder} onChange={(e) => setAllowOlder(e.target.checked)} />
-                        I understand — import this older file anyway
-                    </label>
+                    {/* ID 200 d (Kartik, 4 Nov): an older file is refused, no override. */}
+                    This export is OLDER than the last one imported ({istStamp(p.last_generated_at)}), so it cannot be imported: it would
+                    set payments back to older figures. Export the Sale Report again from Vyapar and upload that.
                 </div>
             )}
             {p.decreases > 0 && (

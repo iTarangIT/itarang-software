@@ -206,6 +206,10 @@ export async function resolveScheduleDefaults(): Promise<
   typeof FALLBACK_DEFAULTS
 > {
   try {
+    // ID 85: a calling-hours change dated to start today is put into force
+    // first (once a minute at most), so every reader follows it on its day.
+    const { applyDueCallingHours } = await import("@/lib/ai-dialer/callingHoursLog");
+    await applyDueCallingHours();
     const rows = await db.execute<{
       working_hours_start: string | null;
       working_hours_end: string | null;

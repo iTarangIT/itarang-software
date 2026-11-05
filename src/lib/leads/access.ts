@@ -489,9 +489,10 @@ const COST_ANALYTICS_ROLES = [
 ];
 
 /**
- * ID 144 — who sees when dealers answer the AI dialer (by weekday and hour),
- * and may set the default calling hours from it. Server gate on
- * /api/campaigns/call-timing reads the same list.
+ * ID 144 — who sees when dealers answer the AI dialer (by weekday and hour)
+ * and the calling-hours log. Server gate on /api/campaigns/call-timing reads
+ * the same list. Changing the hours is Admin only (ID 85,
+ * CALLING_HOURS_EDIT_ROLES in lib/ai-dialer/callTiming.ts).
  */
 export const CALL_TIMING_ROLES = ["admin", "ceo", "sales_head"] as const;
 
