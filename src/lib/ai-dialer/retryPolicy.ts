@@ -16,8 +16,9 @@
 // the org default working hours, so an automatic retry never rings a dealer at
 // night even though a manual 'now' campaign may be started at any hour.
 
-import { classifyTriggerDetail, isRetryableFailure } from "./failureReason";
+import { isRetryableFailure } from "./failureReason";
 import { DIALER_HOURS } from "@/lib/queue/campaignSchedule";
+import { CARRIER_PAUSE_THRESHOLD, lineBlockKind } from "./carrierPause";
 
 export type RetryWindow = {
     /** 'HH:MM' IST */
@@ -146,13 +147,10 @@ export const LINE_BLOCKED_PAUSE_MS = 30 * MIN;
 export const MAX_LINE_BLOCKED_RETRIES = 10;
 
 export function isLineBlockedFailure(callOutcome: string | null): boolean {
-    const outcome = callOutcome ?? "";
-    const m = /^trigger_(?:failed|exception):\s*([\s\S]*)$/i.exec(outcome);
-    if (!m) return false;
-    const detail = m[1].toLowerCase();
-    if (/(^|[^0-9])(401|403|407|429)([^0-9]|$)/.test(detail)) return true;
-    if (detail.includes("too many requests") || detail.includes("rate limit")) return true;
-    return classifyTriggerDetail(detail) === "config_error";
+    // Priya KPI task 10 (4 Nov 2026): the carrier codes are 401 / 403 / 407 /
+    // 429 / 503, read from a trigger failure OR an initiation failure that
+    // carries "(sip status: …)"; a config error on our side is refunded too.
+    return lineBlockKind(callOutcome) !== null;
 }
 
 // ── D1: pause the campaign when the carrier keeps refusing ──────────────────
@@ -163,7 +161,8 @@ export function isLineBlockedFailure(callOutcome: string | null): boolean {
 // counted in a row per campaign (src/lib/ai-dialer/lineHealth.ts), and at
 // CARRIER_PAUSE_THRESHOLD the campaign pauses until someone presses Resume.
 
-export const CARRIER_PAUSE_THRESHOLD = 10;
+// One number for the whole dialer: carrierPause.ts owns it.
+export { CARRIER_PAUSE_THRESHOLD };
 /** After any failed trigger, wait this long before dialling the next lead. */
 export const FAILED_TRIGGER_GAP_MS = 2_000;
 

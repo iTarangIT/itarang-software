@@ -192,7 +192,7 @@ async function hasCallingRows(campaignId: string): Promise<boolean> {
 }
 
 // D1 — re-read before every dial after the first. The loop can run for a while
-// (up to MAX_SKIPS leads, 2s apart after a failed trigger), and a Stop, a
+// (every row it skips, 2s apart after a failed trigger), and a Stop, a
 // carrier pause or a window park written meanwhile must stop the NEXT dial,
 // not the next advanceCampaign call.
 async function isStillRunning(campaignId: string): Promise<boolean> {
@@ -378,13 +378,13 @@ export async function advanceCampaign(
       await new Promise((r) => setTimeout(r, opts.preCallDelayMs));
     }
 
-    // Inner retry: if we claim a row whose lead has no phone, skip it
-    // (mark failed + bump counters), try the next. Cap iterations so a
-    // bad batch of phone-less leads can't loop forever. 100 covers the
-    // common case of an imported batch with a contiguous cluster of bad
-    // numbers — 20 was too tight and stalled real campaigns.
-    const MAX_SKIPS = 100;
-    for (let i = 0; i < MAX_SKIPS; i++) {
+    // Walk the queue until a call is placed, the campaign stops or pauses, or
+    // nothing is left. Each pass claims (and so consumes) one row, so the walk
+    // ends. Priya KPI task 10 (4 Nov 2026) removed the 100-row MAX_SKIPS cap:
+    // on a refused afternoon it returned "skipped" after 100 rows and the next
+    // tick walked 100 more, so a blocked line burned the queue in chunks; the
+    // carrier pause (lineHealth.ts) is what stops a refusing line now.
+    for (let i = 0; ; i++) {
       if (i > 0 && !(await isStillRunning(campaignId))) {
         return { kind: "campaign-not-running" };
       }
@@ -586,7 +586,13 @@ export async function advanceCampaign(
       // E-315 — a retry is a deliberate same-day redial; without the bypass the
       // 25h duplicate guard answers success-with-no-call-id and the row sits in
       // 'calling' until the watchdog fails it.
-      const bypassIdempotency = isRecall || claimed.attemptCount > 1;
+      //
+      // Task 10 — a REFUNDED attempt (the carrier refused it) gives its count
+      // back, so attemptCount alone says "first dial" again; but the refused
+      // dial already claimed the duplicate key. Any row with history in this
+      // campaign is a redial.
+      const bypassIdempotency =
+        isRecall || claimed.attemptCount > 1 || claimed.lastOutcome != null;
 
       // Place the call via the right provider.
       let trigResult: { success: boolean; call_id?: string; error?: string };
@@ -738,14 +744,6 @@ export async function advanceCampaign(
       };
     }
 
-    // Exhausted the inner retry without placing a call. The campaign is
-    // not finalized — the caller should re-invoke advanceCampaign (or
-    // the watchdog will pick it up at the next cron tick).
-    console.warn("[advanceCampaign] max-skips-exceeded — campaign will resume on next webhook/cron tick", {
-      campaignId,
-      maxSkips: MAX_SKIPS,
-    });
-    return { kind: "skipped", reason: "max-skips-exceeded" };
   } catch (err) {
     console.error("[advanceCampaign] failed:", err);
     return {
