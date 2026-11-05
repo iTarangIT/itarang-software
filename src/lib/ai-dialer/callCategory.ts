@@ -379,6 +379,50 @@ export function callbackDueAt(input: {
     return clampIntoWindow(due, input.window);
 }
 
+/**
+ * A delay that fixes the time of day: "2 ghante", "30 minute", "thodi der".
+ * A day count ("2 din baad") or a bare "kal" names a day, not a time.
+ */
+const HOUR_DELAY =
+    /\d+\s*(?:minute|min|मिनट|मिनिट|hour|hr|घंटा|घंटे|ghanta|ghante)|thodi der|thoda time|थोड़ी देर|थोड़ा टाइम/i;
+
+/** A part-of-day word (morning / afternoon / evening), in Hindi or English. */
+export function hasPartOfDay(text: string | null | undefined): boolean {
+    return /shaam|sham\b|शाम|evening|dopahar|dophar|दोपहर|afternoon|subah|सुबह|morning|raat|रात|night/i.test(text ?? "");
+}
+
+/**
+ * Task 11 (D8, 4 Nov 2026) — callbackDueAt plus whether the DEALER set the
+ * time. "Never a silent 11:00": when he named no clock time, no part of the
+ * day and no delay ("2 ghante") — nothing, or a bare "kal" — the callback is
+ * flagged time-not-set and falls due at the next working day's window
+ * opening, so the ISR knows to ask rather than trusting an invented hour.
+ *
+ * The model's callback_at counts as set only when the dealer's own words carry
+ * a time: the analyser turns a bare "kal" into "tomorrow 11:00" as readily as
+ * the old default did.
+ */
+export function callbackDueDetail(input: {
+    owner: CallbackOwner;
+    callbackAt?: string | null;
+    callbackWhen?: string | null;
+    transcript?: string | null;
+    now: Date;
+    window: RetryWindow;
+}): { at: Date; timeSet: boolean } {
+    const { now } = input;
+    const words = [input.callbackWhen ?? "", input.transcript ? extractDealerLines(input.transcript) : ""].join(" ");
+    const said = parseClockTime(words, now) != null || hasPartOfDay(words) || HOUR_DELAY.test(words);
+    if (said) return { at: callbackDueAt(input), timeSet: true };
+    if (input.owner !== "sales") return { at: callbackDueAt(input), timeSet: false };
+    return { at: firstOpeningNextWorkingDay(now, input.window), timeSet: false };
+}
+
+/** The window's opening on the next working day (the window's days). */
+export function firstOpeningNextWorkingDay(now: Date, window: RetryWindow): Date {
+    return clampIntoWindow(istAt(now, 1, 0), window);
+}
+
 /** parseCallbackTimeFromTranscript, re-based on `now` (it reads the real clock). */
 function relativeFrom(transcript: string, now: Date): Date | null {
     const parsed = parseCallbackTimeFromTranscript(transcript);

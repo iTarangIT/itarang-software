@@ -32,7 +32,7 @@ import type { CallEndClassification } from "./campaignLeadStatus";
 import {
     CALL_CATEGORY_LABELS,
     CALL_CATEGORY_VERSION,
-    callbackDueAt,
+    callbackDueDetail,
     categorizeCall,
     type CategoryAnalysis,
     type CategoryResult,
@@ -50,6 +50,7 @@ import {
     recordCallOutcome,
     reopenCallback,
     upsertOpenCallback,
+    setCallbackTimeNotSet,
 } from "@/lib/ai/storage/callOutcomeStore";
 import type { QualificationSignals } from "@/lib/ai/scoring/signals";
 import { buildCallbackBrief, handOffToOwner, type CallbackKind } from "./callbackLoop";
@@ -74,6 +75,8 @@ export type PostCallAnalysis = CategoryAnalysis & {
 export type PostCallPlan = {
     cat: CategoryResult;
     callbackDue: Date | null;
+    /** Task 11 — false when the dealer named no time (callbackDueDetail). */
+    timeSet?: boolean;
     /** D8 — what the callback is: a promised call, a complaint, or Qualified with no time agreed. */
     kind?: CallbackKind;
     /** D8 — the call's signals, for the brief. */
@@ -148,7 +151,7 @@ export async function preparePostCall(input: {
             }
         }
         const window = await defaultRetryWindow();
-        const callbackDue = callbackDueAt({
+        const { at: callbackDue, timeSet } = callbackDueDetail({
             owner: cat.callbackOwner,
             callbackAt: input.analysis.callback_time,
             callbackWhen: input.analysis.signals.callback_when ?? null,
@@ -156,7 +159,7 @@ export async function preparePostCall(input: {
             now: input.now ?? new Date(),
             window,
         });
-        return { cat, callbackDue, kind, signals };
+        return { cat, callbackDue, timeSet, kind, signals };
     } catch (e) {
         console.warn("[postCallOutcome] callback time not resolved:", e instanceof Error ? e.message : e);
         return { cat, callbackDue: new Date(Date.now() + AI_CALLBACK_REDIAL_GAP_MS), kind, signals };
@@ -263,6 +266,7 @@ export async function applyPostCall(input: {
                 band: input.band,
                 summary: input.summary,
                 notify: cb?.created ?? true,
+                timeSet: plan.kind === "qualified" ? false : (plan.timeSet ?? true),
             });
         }
     } catch (e) {
@@ -281,8 +285,10 @@ async function handOffSalesCallback(input: {
     band: string | null;
     summary: string | null;
     notify: boolean;
+    timeSet: boolean;
 }): Promise<void> {
     const { leadId, dueAt, cat } = input;
+    if (input.callbackId) await setCallbackTimeNotSet(input.callbackId, !input.timeSet);
     const due = dueAt.toISOString();
 
     // D10 — a callback agreed on an AI call is a sales-ready event for any band
@@ -332,6 +338,7 @@ async function handOffSalesCallback(input: {
             dueAt,
             transcript: input.transcript,
             summary: input.summary,
+            timeSet: input.timeSet,
         });
         const isr = await handOffToOwner({
             leadId,

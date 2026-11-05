@@ -25,6 +25,8 @@ type Brief = {
     openQuestions?: string[];
     secondNumber?: string | null;
     summary?: string | null;
+    /** Task 11 — the dealer named no time. */
+    timeNotSet?: boolean;
 };
 
 type OpenCallback = {
@@ -41,6 +43,8 @@ type OpenCallback = {
     kind: string | null;
     brief: Brief | null;
     assigned_name: string | null;
+    /** Task 11 (E-375) — the dealer named no time; null without E-375. */
+    time_not_set?: boolean | null;
 };
 
 const KIND_TITLE: Record<string, string> = {
@@ -131,6 +135,14 @@ export function CallbackBriefCard({ leadId, className = "" }: { leadId: string; 
             <p className={`mt-1 text-xs ${cb.overdue ? "font-semibold text-rose-700" : "text-gray-700"}`}>
                 Due {due}
                 {cb.overdue && " · overdue"}
+                {(cb.time_not_set ?? b?.timeNotSet) && (
+                    <span
+                        className="ml-1.5 rounded-full border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800"
+                        title="The dealer did not name a time. This is the first slot in calling hours, not his — ask when suits him."
+                    >
+                        Time not set
+                    </span>
+                )}
                 {cb.requested_text && ` · dealer said “${cb.requested_text}”`}
             </p>
             {b?.purpose && <p className="mt-2 text-xs font-medium text-gray-900">{b.purpose}</p>}
