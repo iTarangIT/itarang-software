@@ -27,6 +27,8 @@ export type CallbackBrief = {
     openQuestions: string[];
     secondNumber: string | null;
     summary: string | null;
+    /** Task 11 — the dealer named no time; the due time is the window opening. */
+    timeNotSet?: boolean;
 };
 
 const PURPOSE: Record<CallbackKind, string> = {
@@ -49,6 +51,8 @@ export function buildCallbackBrief(input: {
     dueAt: Date;
     transcript?: string | null;
     summary?: string | null;
+    /** Task 11 — false when the dealer gave no time (callbackDueDetail). */
+    timeSet?: boolean;
 }): CallbackBrief {
     const when = input.dueAt.toLocaleString("en-IN", {
         timeZone: "Asia/Kolkata",
@@ -74,10 +78,13 @@ export function buildCallbackBrief(input: {
         promise:
             input.kind === "qualified"
                 ? `No time agreed — due ${when}`
-                : `Priya promised a call${input.callbackWhen ? ` (“${input.callbackWhen}”)` : ""} — due ${when}`,
+                : input.timeSet === false
+                  ? `Time not set — the dealer gave no time${input.callbackWhen ? ` (“${input.callbackWhen}”)` : ""}. Call at ${when} and agree one.`
+                  : `Priya promised a call${input.callbackWhen ? ` (“${input.callbackWhen}”)` : ""} — due ${when}`,
         openQuestions: open,
         secondNumber: second,
         summary: input.summary?.trim() || null,
+        timeNotSet: input.kind === "qualified" || input.timeSet === false,
     };
 }
 
@@ -119,4 +126,16 @@ export function callbackExpired(
 ): boolean {
     const end = workingDaysDueAt(dueAt, CALLBACK_EXPIRE_WORKING_DAYS, holidays, hours);
     return end != null && end.getTime() <= now.getTime();
+}
+
+// ── The ISR metric (task 11) ────────────────────────────────────────────────
+
+/** Window around the due time that counts as "made on time". */
+export const ON_TIME_BEFORE_MIN = 15;
+export const ON_TIME_AFTER_MIN = 30;
+
+/** On-time share as a percentage, one decimal; null when nothing fell due. */
+export function onTimePct(onTime: number, due: number): number | null {
+    if (!Number.isFinite(due) || due <= 0) return null;
+    return Math.round((Math.max(0, Math.min(onTime, due)) / due) * 1000) / 10;
 }

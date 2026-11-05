@@ -290,6 +290,39 @@ export async function settleCallbacksForLeadWork(
     }
 }
 
+let timeNotSetProbe: { at: number; ok: boolean } | null = null;
+/** E-375 — lead_callbacks.time_not_set. */
+export async function hasCallbackTimeNotSet(): Promise<boolean> {
+    if (timeNotSetProbe && Date.now() - timeNotSetProbe.at < 5 * 60_000) return timeNotSetProbe.ok;
+    try {
+        const r = rows<{ ok: boolean }>(await db.execute(sql`
+            SELECT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                 WHERE table_schema = 'public' AND table_name = 'lead_callbacks' AND column_name = 'time_not_set'
+            ) AS ok
+        `));
+        timeNotSetProbe = { at: Date.now(), ok: !!r[0]?.ok };
+    } catch {
+        timeNotSetProbe = { at: Date.now(), ok: false };
+    }
+    return timeNotSetProbe.ok;
+}
+
+/**
+ * Task 11 — flag (or clear) "time not set" on a callback: the dealer named no
+ * time, so the due time is the window opening, not his. No-op without E-375.
+ */
+export async function setCallbackTimeNotSet(callbackId: string, notSet: boolean): Promise<void> {
+    try {
+        if (!(await hasCallbackTimeNotSet())) return;
+        await db.execute(sql`
+            UPDATE lead_callbacks SET time_not_set = ${notSet}, updated_at = now() WHERE id = ${callbackId}
+        `);
+    } catch (e) {
+        console.warn("[callOutcomeStore] time_not_set not written:", e instanceof Error ? e.message : e);
+    }
+}
+
 /** The lead's open callback, for the lead page. null on no E-356 / none open. */
 export async function openCallbackForLead(leadId: string): Promise<{
     id: string;
@@ -310,6 +343,8 @@ export async function openCallbackForLead(leadId: string): Promise<{
     brief: unknown;
     /** D8 — the ISR it was given to. */
     assigned_name: string | null;
+    /** Task 11 (E-375) — the dealer named no time; null without E-375. */
+    time_not_set: boolean | null;
 } | null> {
     if (!(await hasCallOutcomeTables())) return null;
     try {
@@ -320,6 +355,7 @@ export async function openCallbackForLead(leadId: string): Promise<{
                    -- D8 columns through to_jsonb: safe on a database without E-362.
                    to_jsonb(lc) ->> 'kind' AS kind,
                    to_jsonb(lc) -> 'brief' AS brief,
+                   (to_jsonb(lc) ->> 'time_not_set')::boolean AS time_not_set,
                    (SELECT u.name FROM users u WHERE u.id::text = lc.assigned_user_id) AS assigned_name
               FROM lead_callbacks lc
              WHERE lc.lead_id = ${leadId} AND lc.status IN ('open', 'dialing')

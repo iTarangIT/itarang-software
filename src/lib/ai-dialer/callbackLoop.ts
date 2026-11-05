@@ -152,6 +152,36 @@ async function nextCallbackOwner(): Promise<{ id: string; name: string | null; r
     return null;
 }
 
+/**
+ * Task 11 — "owner set at once": when the callback-owners list is empty (or
+ * everyone on it is inactive) the callback still gets a person, never the
+ * CEO's "Ready leads with no owner" card. Any active inside-sales rep, the one
+ * with the fewest open callbacks first; failing that, a Sales Head. null only
+ * when the CRM has neither.
+ */
+export const FALLBACK_OWNER_ROLES = ["inside_sales_rep", "sales_head"] as const;
+
+async function fallbackCallbackOwner(): Promise<{ id: string; name: string | null; role: string | null } | null> {
+    for (const role of FALLBACK_OWNER_ROLES) {
+        const candidates = rows<{ id: string }>(
+            await db.execute(sql`
+                SELECT u.id::text AS id
+                  FROM users u
+                 WHERE lower(u.role) = ${role} AND u.is_active = TRUE
+                 ORDER BY (SELECT count(*) FROM lead_callbacks lc
+                            WHERE lc.assigned_user_id = u.id::text AND lc.status IN ('open', 'dialing')) ASC,
+                          u.name ASC
+                 LIMIT 5
+            `),
+        );
+        for (const c of candidates) {
+            const t = await resolveAssignTarget(c.id);
+            if (t.ok) return t.target;
+        }
+    }
+    return null;
+}
+
 // ── Probe ───────────────────────────────────────────────────────────────────
 
 let probe: { at: number; ok: boolean } | null = null;
@@ -255,9 +285,10 @@ export async function handOffToOwner(input: {
                 }
             }
 
-            // 2. Otherwise the next ISR on the callback owners list.
+            // 2. Otherwise the next ISR on the callback owners list; 3. an
+            //    empty list still gets a person (fallbackCallbackOwner).
             if (!ownerId) {
-                const target = await nextCallbackOwner();
+                const target = (await nextCallbackOwner()) ?? (await fallbackCallbackOwner());
                 const out = target
                     ? await assignLeadOwner({
                           leadId: input.leadId,
@@ -288,6 +319,23 @@ export async function handOffToOwner(input: {
                    brief = ${JSON.stringify(input.brief)}::jsonb, updated_at = now()
              WHERE id = ${input.callbackId}
         `);
+
+        // Task 11 — the scheduled call goes into the ISR's NeoDove at once (when
+        // the switch is on), not 15 minutes before it is due; the reminder
+        // tick only retries a push that did not land.
+        if (input.notify && (ownerRole ?? "").toLowerCase() !== "asm") {
+            const settings = await getCallbackLoopSettings();
+            if (settings.neodovePush) {
+                const row = rows<DueRow>(
+                    await db.execute(sql`SELECT ${DUE_ROW_COLUMNS} FROM lead_callbacks lc WHERE lc.id = ${input.callbackId}`),
+                )[0];
+                if (row) {
+                    await pushToOwnerCampaign(row).catch((e) =>
+                        console.warn("[callbackLoop] hand-off push failed:", e instanceof Error ? e.message : e),
+                    );
+                }
+            }
+        }
 
         if (input.notify) {
             const lines = briefLines(input.brief);
@@ -341,8 +389,9 @@ async function ownerCampaignId(ownerId: string): Promise<string | null> {
     }
 }
 
-async function pushToOwnerCampaign(cb: DueRow): Promise<void> {
-    if (!cb.assigned_user_id) return;
+/** Push the callback into its owner's NeoDove campaign. true = NeoDove took it. */
+async function pushToOwnerCampaign(cb: DueRow): Promise<boolean> {
+    if (!cb.assigned_user_id) return false;
     const campaignId = await ownerCampaignId(cb.assigned_user_id);
     if (!campaignId) {
         await emit({
@@ -353,7 +402,7 @@ async function pushToOwnerCampaign(cb: DueRow): Promise<void> {
             from: SYSTEM_PARTY,
             to: [{ audience: { kind: "roles", roles: SALES_HEAD_ROLES }, as: { party: "admin", label: "Sales Head" }, href: `/leads?lead=${cb.lead_id}` }],
         });
-        return;
+        return false;
     }
     const { pushOneLead } = await import("@/lib/neodove/pushOne");
     const brief = (cb.brief ?? null) as CallbackBrief | null;
@@ -376,9 +425,10 @@ async function pushToOwnerCampaign(cb: DueRow): Promise<void> {
     });
     if (res.ok) {
         await db.execute(sql`UPDATE lead_callbacks SET neodove_pushed_at = now() WHERE id = ${cb.id}`);
-    } else {
-        console.warn(`[callbackLoop] NeoDove push failed for ${cb.lead_id}: ${res.message}`);
+        return true;
     }
+    console.warn(`[callbackLoop] NeoDove push failed for ${cb.lead_id}: ${res.message}`);
+    return false;
 }
 
 // ── The 5-minute tick ───────────────────────────────────────────────────────
@@ -393,10 +443,12 @@ type DueRow = {
     name: string | null;
     owner_name: string | null;
     owner_role: string | null;
+    neodove_pushed_at: string | null;
 };
 
 const DUE_ROW_COLUMNS = sql`
     lc.id, lc.lead_id, lc.assigned_user_id, lc.due_at::text AS due_at, lc.kind, lc.brief,
+    lc.neodove_pushed_at::text AS neodove_pushed_at,
     (SELECT COALESCE(dl.shop_name, dl.dealer_name, dl.phone) FROM dealer_leads dl WHERE dl.id = lc.lead_id) AS name,
     (SELECT u.name FROM users u WHERE u.id::text = lc.assigned_user_id) AS owner_name,
     (SELECT u.role FROM users u WHERE u.id::text = lc.assigned_user_id) AS owner_role`;
@@ -448,11 +500,15 @@ export async function runCallbackLoopTick(now: Date = new Date()): Promise<{
         });
         // ASMs (territory-routed leads, E-367) have no NeoDove campaign: pushing
         // would only raise a false "has no campaign" alert to the Sales Head.
-        if (settings.neodovePush && (cb.owner_role ?? "").toLowerCase() !== "asm") {
-            await pushToOwnerCampaign(cb).catch((e) =>
-                console.warn("[callbackLoop] push failed:", e instanceof Error ? e.message : e),
-            );
-            out.pushed++;
+        // Pushed at hand-off already → nothing to do; otherwise this is the
+        // retry. Counted only when NeoDove took it (task 11: the count used to
+        // go up on a failed push too).
+        if (settings.neodovePush && !cb.neodove_pushed_at && (cb.owner_role ?? "").toLowerCase() !== "asm") {
+            const ok = await pushToOwnerCampaign(cb).catch((e) => {
+                console.warn("[callbackLoop] push failed:", e instanceof Error ? e.message : e);
+                return false;
+            });
+            if (ok) out.pushed++;
         }
     }
 
