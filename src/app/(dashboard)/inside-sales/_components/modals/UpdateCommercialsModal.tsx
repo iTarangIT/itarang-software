@@ -8,6 +8,7 @@ import { FileUploadField } from "../FileUploadField";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
+import { InfoTip } from "@/components/ui/info-tip";
 import { DEAL_CARD_QUESTIONS } from "@/lib/leads/dealCardRules";
 import type { DealerOnboardedVerdict } from "@/lib/leads/dealerOnboardedRules";
 import type {
@@ -25,6 +26,8 @@ type Props = {
     leadId: string;
     currentCommercials: LeadDetailCommercials | null;
     onSuccess: () => void;
+    /** ID 216: "Revise" on a rejected quote opens as a Quote revision. */
+    initialEventType?: EventType;
 };
 
 const EVENT_TYPES = [
@@ -44,7 +47,7 @@ const TERMS_EVENTS: readonly EventType[] = ["terms_update", "final_terms"];
 const ASSET_TYPES: { key: AssetType; label: string }[] = [
     { key: "battery", label: "Battery" },
     { key: "charger", label: "Charger" },
-    { key: "paraphernalia", label: "Paraphernalia" },
+    { key: "paraphernalia", label: "Accessories" },
 ];
 
 const assetLabel = (t: AssetType) =>
@@ -52,8 +55,8 @@ const assetLabel = (t: AssetType) =>
 
 const inr = (n: number) => `₹${n.toLocaleString("en-IN")}`;
 
-export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercials, onSuccess }: Props) {
-    const [eventType, setEventType] = useState<EventType>("quote_issue");
+export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercials, onSuccess, initialEventType }: Props) {
+    const [eventType, setEventType] = useState<EventType>(initialEventType ?? "quote_issue");
     // E-322 (ID 73): dealer payment terms are a pick list; any credit sends the
     // quote for approval. Customer finance is the END customer's NBFC need.
     // Warranty and delivery are the admin's standard terms — shown, not typed.
@@ -323,11 +326,11 @@ export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercia
             // Saying only "saved" leaves them to guess.
             const version = `v${(currentCommercials?.version_no ?? 0) + 1}`;
             if (json?.data?.auto_approved) {
-                toast.success(`Commercials ${version} saved — quote auto-approved and sent.`);
+                toast.success(`Quote ${version} saved, approved and sent.`);
             } else if (json?.data?.approval_status === "pending" && json?.data?.terms_hold) {
-                toast.success(`Commercials ${version} saved — credit terms, awaiting CEO approval.`);
+                toast.success(`Quote ${version} saved. Credit terms need CEO approval.`);
             } else if (json?.data?.approval_status === "pending") {
-                toast.success(`Commercials ${version} saved — awaiting CEO approval.`);
+                toast.success(`Quote ${version} saved. Waiting for CEO approval.`);
             } else {
                 toast.success(`Commercials ${version} saved.`);
             }
@@ -343,11 +346,11 @@ export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercia
         <Modal
             open={open}
             onClose={handleClose}
-            title="Update Commercials"
+            title="Update quote"
             subtitle={
                 currentCommercials
-                    ? `Current: v${currentCommercials.version_no} · ${currentCommercials.event_type}`
-                    : "First commercial event"
+                    ? `Current: version ${currentCommercials.version_no} · ${EVENT_TYPES.find((e) => e.key === currentCommercials.event_type)?.label ?? currentCommercials.event_type}`
+                    : "First quote"
             }
             width="lg"
             closeOnBackdrop={!submitting}
@@ -362,7 +365,7 @@ export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercia
         >
             <form onSubmit={submit} className="space-y-4">
                 <div>
-                    <Label>Event type</Label>
+                    <Label>Update type</Label>
                     <select
                         className="mt-1 w-full rounded-md border border-gray-200 px-3 py-2 text-sm bg-white"
                         value={eventType}
@@ -373,9 +376,14 @@ export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercia
                 </div>
                 {TERMS_EVENTS.includes(eventType) && (
                     <p className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-800">
-                        {eventType === "final_terms"
-                            ? "Final terms use the price of the quote the dealer approved. To change the price, create a Quote revision — it goes through approval."
-                            : "Terms updates keep the latest quote's price. To change the price, create a Quote revision."}
+                        {eventType === "final_terms" ? (
+                            <>
+                                Uses the price of the quote the dealer approved.{" "}
+                                <InfoTip>To change the price, choose Quote revision. A revision needs approval again.</InfoTip>
+                            </>
+                        ) : (
+                            "Terms updates keep the latest quote's price. To change the price, create a Quote revision."
+                        )}
                     </p>
                 )}
                 {/* ── Products (E-128/E-168) — the card drives the deal total ─ */}
@@ -389,8 +397,7 @@ export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercia
 
                     {productsState === "error" ? (
                         <p className="text-sm text-red-600">
-                            Could not load the product catalogue. You can still save —
-                            describe products in the notes below.
+                            Couldn&apos;t load products. Describe them in Deal notes below, then save.
                         </p>
                     ) : (
                         <div className="flex flex-wrap items-end gap-2">
@@ -682,7 +689,10 @@ export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercia
                 </div>
 
                 <div>
-                    <Label>Deal notes (extra product/quantity context for onboarding)</Label>
+                    <Label className="flex items-center gap-1">
+                        Deal notes
+                        <InfoTip>Extra product or quantity details for onboarding.</InfoTip>
+                    </Label>
                     <textarea
                         className="mt-1 w-full rounded-md border border-gray-200 px-3 py-2 text-sm min-h-[64px]"
                         value={dealNotes ?? ""}
@@ -696,11 +706,11 @@ export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercia
                       * and a dealer's inbox is the author knowing that.
                       */}
                     <p className="mt-1 text-[11px] text-amber-700">
-                        Printed on the quotation the dealer receives — keep internal remarks in Version notes below.
+                        Printed on the dealer&apos;s quote. Put internal remarks in Internal notes below.
                     </p>
                 </div>
                 <div>
-                    <Label>Version notes (this commercial event)</Label>
+                    <Label>Internal notes</Label>
                     <textarea
                         className="mt-1 w-full rounded-md border border-gray-200 px-3 py-2 text-sm min-h-[48px]"
                         value={notes}

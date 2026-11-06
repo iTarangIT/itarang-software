@@ -17,6 +17,7 @@
 
 import { and, desc, eq, inArray, ne, notInArray, sql } from "drizzle-orm";
 import { linkOnboardingToLead } from "@/lib/onboarding/linkToLead";
+import { attachOnboardingToLead } from "@/lib/onboarding/leadMatch";
 
 import { db } from "@/lib/db/index";
 import {
@@ -2347,6 +2348,12 @@ async function submitToAdmin(session: SessionRow): Promise<void> {
     current_state: "SUBMITTED",
     session_status: "submitted",
   });
+  // ID 214: a WhatsApp submission sits on exactly one lead too (it used to
+  // be linked only when the session started). Both never throw.
+  if (session.application_id) {
+    await linkOnboardingToLead(session.application_id);
+    await attachOnboardingToLead(session.application_id);
+  }
   await reply(
     session,
     "✅ *Submitted!* Thank you. Our team will review your application and get back to you on WhatsApp shortly.",

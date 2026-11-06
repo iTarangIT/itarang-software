@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import RequestCorrectionDialog from "@/components/admin/dealer-verification/RequestCorrectionDialog";
 import DealerTypeBadge from "@/components/admin/dealer-verification/DealerTypeBadge";
+import { LeadMatchPanel } from "@/components/admin/dealer-verification/LeadMatchPanel";
 import { dealerTypeLabel } from "@/lib/dealer/dealer-type";
 import { usesManualAgreement } from "@/lib/dealer/dealer-capabilities";
 import { OVERRIDE_REASON_MIN } from "@/lib/agreement/executedAgreementCheck";
@@ -839,6 +840,7 @@ function ActionCard({
   branchAck, setBranchAck,
   hasSalesperson,
   onSetSalesperson,
+  leadMatchBlocked = false,
 }: {
   remarks: string;
   setRemarks: (value: string) => void;
@@ -860,6 +862,8 @@ function ActionCard({
   onSetSalesperson?: (salespersonUserId: string) => Promise<boolean>;
   branchAck: boolean;
   setBranchAck: (value: boolean) => void;
+  /** ID 214 — the lead is not confirmed yet. */
+  leadMatchBlocked?: boolean;
 }) {
   // E-225 — mirrors the server: the agreement gate is an E-SIGN gate. A
   // manual-mode dealer can be approved without one; the warning below makes
@@ -882,7 +886,8 @@ function ActionCard({
   // ID 66 — every onboarding names its salesperson before approval.
   const salespersonBlock = !hasSalesperson;
   const approvalBlocked =
-    financeGateBlock || duplicateBlock || submissionGateBlock || branchAckBlock || salespersonBlock;
+    financeGateBlock || duplicateBlock || submissionGateBlock || branchAckBlock || salespersonBlock ||
+    (leadMatchBlocked && !submissionGateBlock);
   const [quickSalesperson, setQuickSalesperson] = useState("");
   const [quickSalespersonSaving, setQuickSalespersonSaving] = useState(false);
 
@@ -940,6 +945,18 @@ function ActionCard({
                 approving.
               </p>
             )}
+          </div>
+        </div>
+      )}
+
+      {leadMatchBlocked && !submissionGateBlock && (
+        <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-4">
+          <div className="flex items-start gap-3">
+            <Clock3 className="mt-0.5 h-4 w-4 text-amber-600" />
+            <p className="text-sm text-amber-800">
+              <span className="font-semibold">Approve &amp; Activate waits for the lead.</span>{" "}
+              In the Lead section, check the lead, its owner and who gets the credit, then press Confirm.
+            </p>
           </div>
         </div>
       )}
@@ -1121,6 +1138,8 @@ export default function DealerReviewPage() {
   // Explicit admin acknowledgement for branch-classified approvals — the
   // approve endpoint returns 409 without it.
   const [branchAck, setBranchAck] = useState(false);
+  // ID 214: approval waits until the lead is confirmed (LeadMatchPanel).
+  const [leadMatchBlocked, setLeadMatchBlocked] = useState(false);
 
   // ✅ NEW — edit state
   const [isEditing, setIsEditing]   = useState(false);
@@ -3459,6 +3478,11 @@ export default function DealerReviewPage() {
               onApplied={reloadDealer}
             />
           ) : null}
+
+          {/* ID 214 — the lead this onboarding is on; approval waits for Confirm. */}
+          {data.onboardingStatus !== "approved" && (
+            <LeadMatchPanel dealerId={data.id} readOnly={isRejected} onBlockedChange={setLeadMatchBlocked} />
+          )}
         </div>
 
         <ActionCard
@@ -3479,6 +3503,7 @@ export default function DealerReviewPage() {
           setBranchAck={setBranchAck}
           hasSalesperson={!!data.salespersonUserId}
           onSetSalesperson={handleQuickSetSalesperson}
+          leadMatchBlocked={data.onboardingStatus !== "approved" && leadMatchBlocked}
         />
 
         {/* Finance enablement for a dealer already approved WITHOUT it. Not

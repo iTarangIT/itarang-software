@@ -52,7 +52,7 @@ export const VISIT_OUTCOME_LABELS: Record<VisitOutcome, string> = {
     productive: "Productive",
     dealer_not_present: "Dealer not present",
     dealer_uninterested: "Dealer uninterested",
-    commercials_progressed: "Commercials progressed",
+    commercials_progressed: "Price talks moved forward",
     scheduling_issue: "Scheduling issue",
     other: "Other",
 };

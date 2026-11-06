@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import { IntentReviewCard } from "@/components/leads/intent-review/IntentReviewCard";
+import { InfoTip } from "@/components/ui/info-tip";
 import {
   Phone,
   TrendingUp,
@@ -38,8 +39,8 @@ const BAND_CHIP: Record<string, string> = {
 
 const CALL_STATUS_CHIP: Record<string, { label: string; cls: string }> = {
   complete: { label: "Complete", cls: "bg-emerald-50 text-emerald-700 border-emerald-200" },
-  dropped_partial: { label: "Dropped (partial)", cls: "bg-amber-50 text-amber-700 border-amber-200" },
-  dropped_empty: { label: "Dropped (empty)", cls: "bg-gray-100 text-gray-500 border-gray-200" },
+  dropped_partial: { label: "Cut off mid-call", cls: "bg-amber-50 text-amber-700 border-amber-200" },
+  dropped_empty: { label: "Cut off, no talk", cls: "bg-gray-100 text-gray-500 border-gray-200" },
 };
 
 // Telephony / legacy outcome labels for calls with no band (no-answer, busy …).
@@ -52,7 +53,7 @@ const OUTCOME_LABEL: Record<string, string> = {
   busy: "Busy",
   failed: "Failed",
   completed: "Completed",
-  dropped_empty: "Dropped (empty)",
+  dropped_empty: "Cut off, no talk",
   unknown: "No Outcome",
 };
 
@@ -122,6 +123,8 @@ function OverallSummary({ calls, lead }: { calls: CallItem[]; lead: any }) {
   // Without it the badge below labelled that sentence "AI generated", which is
   // both untrue and undermines the badge everywhere it IS true.
   const [source, setSource] = useState<"saved" | "generated" | "none">("generated");
+  // The pointer that sits behind the "i" next to the no-transcript sentence.
+  const [summaryTip, setSummaryTip] = useState<string | null>(null);
 
   const transcriptCount = calls.filter((c) => c.transcript).length;
 
@@ -157,18 +160,19 @@ function OverallSummary({ calls, lead }: { calls: CallItem[]; lead: any }) {
           `${external.length} call${external.length === 1 ? "" : "s"} logged in ` +
           `${vendors.join(" / ") || "an external system"}` +
           `${agents.length ? ` by ${agents.join(", ")}` : ""}. ` +
-          `No transcript is available, and the calls carry no notes to summarise yet. ` +
-          `See Call History below for each outcome.`;
+          `No notes or transcript to summarise yet.`;
         // ID 118 item 2 (18 Oct): NeoDove and logged calls feed the server's
         // summary through their notes and outcome — ask it first (it refuses a
         // lead this user may not edit; then the plain sentence stays).
         setSummary(noTranscript);
+        setSummaryTip("See Call history below for each call's outcome.");
         setLoading(true);
         fetch(`/api/leads/${lead.id}/summary`, { method: "POST" })
           .then(async (r) => (r.ok ? await r.json().catch(() => null) : null))
           .then((data) => {
             if (!data?.summary) return;
             setSummary(data.summary);
+            setSummaryTip(null);
             setSource("generated");
           })
           .catch(() => {})
@@ -177,8 +181,8 @@ function OverallSummary({ calls, lead }: { calls: CallItem[]; lead: any }) {
       }
       setSummary(
         calls.length
-          ? "Calls were made but none produced a transcript, so there is nothing to summarise."
-          : "No calls have been made on this lead yet.",
+          ? "No call transcripts yet, so there's no summary."
+          : "No calls on this lead yet.",
       );
       return;
     }
@@ -209,7 +213,7 @@ function OverallSummary({ calls, lead }: { calls: CallItem[]; lead: any }) {
         setSummary(generated);
         setSource("generated");
       })
-      .catch(() => setSummary("Unable to generate summary at this time."))
+      .catch(() => setSummary("Couldn't write the summary. Refresh the page to try again."))
       .finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -220,7 +224,7 @@ function OverallSummary({ calls, lead }: { calls: CallItem[]; lead: any }) {
         <div className="w-7 h-7 bg-slate-100 rounded-lg flex items-center justify-center">
           <FileText className="w-3.5 h-3.5 text-slate-600" />
         </div>
-        <h3 className="text-sm font-semibold text-gray-800">Overall Summary</h3>
+        <h3 className="text-sm font-semibold text-gray-800">Summary</h3>
         {!loading && summary && source !== "none" && (
           <span className="ml-auto text-[10px] text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">
             {source === "saved" ? "saved" : "AI generated"}
@@ -234,7 +238,15 @@ function OverallSummary({ calls, lead }: { calls: CallItem[]; lead: any }) {
           <span className="text-sm">Generating summary across {transcriptCount} transcripts…</span>
         </div>
       ) : summary ? (
-        <p className="text-sm text-gray-600 leading-relaxed whitespace-pre-wrap">{summary}</p>
+        <p className="text-sm text-gray-600 leading-relaxed whitespace-pre-wrap">
+          {summary}
+          {summaryTip && (
+            <>
+              {" "}
+              <InfoTip>{summaryTip}</InfoTip>
+            </>
+          )}
+        </p>
       ) : (
         <p className="text-sm text-gray-400">No summary available.</p>
       )}
@@ -254,7 +266,7 @@ function SummaryBlock({ calls }: { calls: CallItem[] }) {
 
   const stats = [
     { icon: PhoneCall, label: "Total Calls", value: totalCalls, sub: "attempts made", color: "text-blue-600", bg: "bg-blue-50" },
-    { icon: TrendingUp, label: "Avg Intent Score", value: avgIntent ?? "—", sub: "across all calls", color: "text-emerald-600", bg: "bg-emerald-50" },
+    { icon: TrendingUp, label: "Average AI score", value: avgIntent ?? "—", sub: "across all calls", color: "text-emerald-600", bg: "bg-emerald-50" },
     { icon: Target, label: "Latest Status", value: latest ? resultLabel(latest) : "—", sub: latest ? formatDate(latest.when) : "no calls yet", color: "text-purple-600", bg: "bg-purple-50" },
     { icon: MessageSquare, label: "Transcripts", value: calls.filter((c) => c.transcript).length, sub: "calls with transcript", color: "text-amber-600", bg: "bg-amber-50" },
   ];
@@ -326,7 +338,9 @@ function CallCard({ item }: { item: CallItem }) {
             <div className="flex items-center gap-2 flex-wrap">
               <p className="text-sm font-medium text-gray-800">Attempt #{item.index}</p>
               {item.provider && (
-                <span className="text-[10px] uppercase tracking-wide text-gray-400">{item.provider}</span>
+                <span className="text-[10px] tracking-wide text-gray-400">
+                  {item.provider.toLowerCase() === "neodove" ? "NeoDove" : "AI call"}
+                </span>
               )}
             </div>
             <p className="text-xs text-gray-400">
@@ -361,7 +375,7 @@ function CallCard({ item }: { item: CallItem }) {
             {item.intent_score != null && (
               <span className="inline-flex items-center gap-1">
                 <TrendingUp className="w-3.5 h-3.5 text-blue-500" />
-                Intent <span className="font-semibold text-gray-800">{item.intent_score}</span>
+                AI score <span className="font-semibold text-gray-800">{item.intent_score}</span>
               </span>
             )}
             {item.info_signals_count != null && (

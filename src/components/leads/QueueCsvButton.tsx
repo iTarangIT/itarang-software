@@ -52,7 +52,7 @@ export function QueueCsvButton({
         setNote(null);
         try {
             const res = await fetch(href, { cache: "no-store" });
-            if (!res.ok) throw new Error(`Export failed (${res.status})`);
+            if (!res.ok) throw new Error("Couldn't download the file. Try again.");
 
             const rows = Number(res.headers.get("X-Export-Rows") ?? "0");
             const total = Number(res.headers.get("X-Export-Total") ?? "0");
@@ -74,7 +74,7 @@ export function QueueCsvButton({
             }
 
             if (truncated) {
-                setNote(`Exported the first ${rows} of ${total} matching leads.`);
+                setNote(`Downloaded the first ${rows} of ${total} leads.`);
             } else if (rows === 0) {
                 // Not an error — the filters simply matched nothing. Said out
                 // loud because a downloaded file with one header row and no data
@@ -82,7 +82,7 @@ export function QueueCsvButton({
                 setNote("No leads matched — the file has headers only.");
             }
         } catch (e) {
-            setError(e instanceof Error ? e.message : "Export failed");
+            setError(e instanceof Error ? e.message : "Couldn't download the file. Try again.");
         } finally {
             setBusy(false);
         }
@@ -102,7 +102,7 @@ export function QueueCsvButton({
                 ) : (
                     <Download className="h-4 w-4" />
                 )}
-                {label ?? (format === "xlsx" ? "Export to Excel" : "Download CSV")}
+                {label ?? (format === "xlsx" ? "Download Excel" : "Download CSV")}
             </button>
             {(error || note) && (
                 <p

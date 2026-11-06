@@ -14,6 +14,7 @@ import { CLAIM_ROLES, type LeadDetailBundle } from "@/lib/inside-sales/types";
 import { isOpen, isTerminal, type LeadStatus } from "@/lib/lifecycle/transitions";
 import type { ActiveModal } from "./LeadDetailView";
 import { CallNowButton } from "@/components/leads/call-now-button";
+import { InfoTip } from "@/components/ui/info-tip";
 import { CorrectLeadGstinButton } from "@/components/leads/CorrectLeadGstinButton";
 import { GSTIN_CORRECTION_MANAGER_ROLES } from "@/lib/leads/correctLeadGstinRules";
 import { canReassignToIsr, canTransferAnyLead, managerMayTransferStatus } from "@/lib/leads/access";
@@ -86,7 +87,7 @@ export function LeadActionBar({
                     className="inline-flex items-center gap-2 px-4 py-2 rounded-md text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 transition"
                 >
                     <UserPlus2 className="h-4 w-4" />
-                    Claim Lead
+                    Claim lead
                 </button>
             </div>
         );
@@ -95,7 +96,7 @@ export function LeadActionBar({
     // Non-owner — show informational state with no buttons (CEO / admin / other rep).
     if (!isOwner) {
         const helper = isAdmin
-            ? "Admin/CEO — reassign first to modify."
+            ? "View only. Reassign the lead to make changes."
             : "Read-only — you are not the current owner.";
         // The Sales Head / admin may still correct a Won lead's GSTIN (ID 124).
         const managerCanFixGstin = isWon && (GSTIN_CORRECTION_MANAGER_ROLES as readonly string[]).includes(viewerRole);
@@ -140,11 +141,12 @@ export function LeadActionBar({
     return (
         <div className="sticky bottom-0 z-10 bg-white border-t border-gray-200 px-4 sm:px-6 py-2.5 flex flex-wrap items-center gap-2">
             <ActionButton primary icon={MessageSquarePlus} onClick={() => onAction("touchpoint")}>
-                Log Touchpoint
+                Log activity
             </ActionButton>
             <ActionButton icon={Receipt} onClick={() => onAction("commercials")}>
-                Update Commercials
+                Update quote
             </ActionButton>
+            <InfoTip className="-ml-1">Share a brochure, give or revise a quote, or change terms.</InfoTip>
             {/* ID 83: the owner asks the NeoDove calling team to ring this dealer
                 next. The call that follows is marked "called on your behalf". */}
             <CallNowButton
@@ -196,7 +198,7 @@ export function LeadActionBar({
                 tone="amber"
                 onClick={() => onAction("escalate")}
                 disabled={!open}
-                disabledReason={!open ? "Lead is already terminal" : undefined}
+                disabledReason={!open ? "This lead is closed" : undefined}
             >
                 Escalate
             </ActionButton>

@@ -14,10 +14,10 @@ export default async function EmiMessagesSettingsPage() {
             <header>
                 <h1 className="text-2xl font-semibold tracking-tight text-ink">EMI messages</h1>
                 <p className="mt-1 text-sm text-ink-muted">
-                    Messages to the customer of a financed file: EMI due in a few days, due today, overdue, and
-                    &quot;EMI received&quot; on every recorded payment — on WhatsApp and SMS, in Hindi. Each goes once per
-                    EMI, and only while it is unpaid. Pilot on one lender. Meta and DLT approve the exact text, so an
-                    edited text is held until you mark it approved.
+                    Messages to the customer of a financed file, in Hindi: reminders before the EMI date, &quot;आज&quot; on the
+                    due day, overdue with the total amount, and &quot;EMI received&quot; on every recorded payment. Switch
+                    SMS and WhatsApp on per financer, and set when the SMS go. Each step goes once per EMI, and only
+                    while it is unpaid.
                 </p>
             </header>
             <div className="rounded-xl border border-border bg-surface shadow-card">

@@ -62,6 +62,8 @@ export const STATUS_EVENTS = [
     "transfer",
     "mark_won",
     "onboarding_approved",
+    // ID 214: a dealer's onboarding was submitted on this lead → Won (system).
+    "onboarding_submitted",
     "mark_lost",
     "reactivation",
     "dropout_lost",
@@ -151,6 +153,12 @@ export function checkStatusMove(input: {
         case "mark_won":
             if (to !== "Won") return { ok: false, reason: "Mark Won can only set Won." };
             if (!open) return { ok: false, reason: `The lead is already ${label(from)}.` };
+            return { ok: true };
+        case "onboarding_submitted":
+            // ID 214 (Kartik, 2 Nov): the linked lead moves to Won at submission,
+            // from any open stage — and a Lost lead reopens to Won.
+            if (to !== "Won") return { ok: false, reason: "An onboarding submission can only set Won." };
+            if (from === "Converted") return { ok: false, reason: "The lead is already Converted." };
             return { ok: true };
         case "onboarding_approved":
             if (to !== "Converted") return { ok: false, reason: "Onboarding approval can only set Converted." };

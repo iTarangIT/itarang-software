@@ -30,7 +30,7 @@ export function ClearPhoneMarkButton({
                 toast.error(json?.error?.message ?? "Could not clear the mark");
                 return;
             }
-            toast.success(`The ${label} mark is cleared: the next campaign dials this number again`);
+            toast.success("Mark cleared. The next AI campaign will call this number.");
             router.refresh();
         } finally {
             setBusy(false);

@@ -468,7 +468,7 @@ export function AsmQueueView({ viewerId, viewerRole, teamPeople = [] }: Props) {
                     />
                     <Button type="button" onClick={() => setCreateOpen(true)} className="gap-1.5">
                         <Plus className="h-4 w-4" />
-                        Create Lead
+                        Create lead
                     </Button>
                 </div>
             </div>

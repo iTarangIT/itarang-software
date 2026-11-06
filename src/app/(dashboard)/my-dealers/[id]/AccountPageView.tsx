@@ -44,7 +44,6 @@ export function AccountPageView({ accountId }: { accountId: string }) {
                         <div className="flex flex-wrap items-start justify-between gap-2">
                             <div>
                                 <h1 className="text-xl font-semibold tracking-tight text-ink">{data.account.name}</h1>
-                                <p className="font-mono text-xs text-ink-muted">{data.account.id}</p>
                             </div>
                             {/* ID 196: a verified visit on this counter (owner or their manager). */}
                             {data.can_create && (

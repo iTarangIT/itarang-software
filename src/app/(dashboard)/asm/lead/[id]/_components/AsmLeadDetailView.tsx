@@ -1,11 +1,11 @@
 "use client";
 
 import { isOpen, type LeadStatus, type LostReason } from "@/lib/lifecycle/transitions";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, AlertTriangle, ArrowLeft } from "lucide-react";
 import Link from "next/link";
-import { hasApprovedQuote, type LeadDetailBundle } from "@/lib/inside-sales/types";
+import { hasApprovedQuote, type LeadDetailBundle, type LeadDetailCommercials } from "@/lib/inside-sales/types";
 import { LeadDetailHeader } from "@/app/(dashboard)/inside-sales/lead/[id]/_components/LeadDetailHeader";
 import { LeadActivityPanes } from "@/app/(dashboard)/inside-sales/lead/[id]/_components/LeadActivityPanes";
 import { LeadDetailRightPane } from "@/app/(dashboard)/inside-sales/lead/[id]/_components/LeadDetailRightPane";
@@ -44,6 +44,14 @@ const REASSIGN_ROLES = ["inside_sales_rep", "asm", "admin", "partner"];
 export function AsmLeadDetailView({ leadId, viewerId, viewerRole }: Props) {
     const qc = useQueryClient();
     const [activeModal, setActiveModal] = useState<ActiveModal>(null);
+    // ID 216: "Revise" on a rejected quote opens Update Commercials prefilled
+    // from that version; ?quote=<id> (bell / WhatsApp link) opens that version.
+    const [reviseFrom, setReviseFrom] = useState<LeadDetailCommercials | null>(null);
+    const [focusQuoteId, setFocusQuoteId] = useState<string | null>(null);
+    useEffect(() => {
+        const q = new URLSearchParams(window.location.search).get("quote");
+        if (q) setFocusQuoteId(q);
+    }, []);
     // ID 76: a Lost-type call outcome opens Mark Lost with the reason pre-filled.
     const [lostPrefill, setLostPrefill] = useState<LostReason | null>(null);
     const [staleInfo, setStaleInfo] = useState<{
@@ -189,7 +197,19 @@ export function AsmLeadDetailView({ leadId, viewerId, viewerRole }: Props) {
                         currentOwnerId: lead.current_owner_id,
                     })}
                 />
-                <LeadDetailRightPane bundle={bundle} viewerRole={viewerRole} />
+                <LeadDetailRightPane
+                    bundle={bundle}
+                    viewerRole={viewerRole}
+                    focusQuoteId={focusQuoteId}
+                    onReviseQuote={
+                        isOwner
+                            ? (c) => {
+                                  setReviseFrom(c);
+                                  setActiveModal("commercials");
+                              }
+                            : undefined
+                    }
+                />
             </div>
 
             <AsmLeadActionBar
@@ -229,11 +249,20 @@ export function AsmLeadDetailView({ leadId, viewerId, viewerRole }: Props) {
                 onOpenCommercials={() => setActiveModal("commercials")}
             />
             <UpdateCommercialsModal
+                // ID 216: remount per source so the form takes that version's values.
+                key={reviseFrom?.commercial_id ?? "current"}
                 open={activeModal === "commercials"}
-                onClose={() => setActiveModal(null)}
+                onClose={() => {
+                    setActiveModal(null);
+                    setReviseFrom(null);
+                }}
                 leadId={leadId}
-                currentCommercials={bundle.current_commercials}
-                onSuccess={onActionSuccess}
+                currentCommercials={reviseFrom ?? bundle.current_commercials}
+                initialEventType={reviseFrom ? "quote_revision" : undefined}
+                onSuccess={() => {
+                    setReviseFrom(null);
+                    onActionSuccess();
+                }}
             />
             <MarkLostModal
                 key={lostPrefill ?? "none"}

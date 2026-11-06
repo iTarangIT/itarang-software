@@ -5,7 +5,7 @@
 import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { LOST_REASON, OPEN_STATUSES } from "@/lib/lifecycle/transitions";
-import { connectedCall } from "@/lib/reports/metricDefinitions";
+import { connectedCall, notDirectOnboarding } from "@/lib/reports/metricDefinitions";
 import { hasLeadScope, leadScopeSql } from "@/lib/leads/leadScopeSql";
 import { ONBOARDING_DROPOUT_REASONS, OWNER_DRILL_METRICS } from "./types";
 import { isUndefinedColumn, ownerConversionRate, roleLabel } from "./reportHelpers";
@@ -179,14 +179,14 @@ async function leadFunnel(f: DashboardFilters): Promise<ReportResult> {
     const rows = await db.execute<{ lead_status: string | null; c: string }>(sql`
         SELECT dl.lead_status, COUNT(*)::text AS c
         FROM dealer_leads dl
-        WHERE dl.is_active IS NOT FALSE ${cohort}
+        WHERE dl.is_active IS NOT FALSE AND ${notDirectOnboarding("dl")} ${cohort}
         GROUP BY dl.lead_status
     `);
     const reachedRows = await db.execute<{ stage: string; c: string }>(sql`
         WITH cohort AS (
             SELECT dl.id, dl.lead_status
             FROM dealer_leads dl
-            WHERE dl.is_active IS NOT FALSE ${cohort}
+            WHERE dl.is_active IS NOT FALSE AND ${notDirectOnboarding("dl")} ${cohort}
         ),
         reached AS (
             SELECT c.id, c.lead_status AS stage FROM cohort c

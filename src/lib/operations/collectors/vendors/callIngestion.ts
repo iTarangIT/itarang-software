@@ -48,11 +48,12 @@ export const callIngestionCollector: OpsCollector = {
 
     for (const provider of PROVIDERS) {
       try {
+        // ID 229: age against Postgres now(), not the app clock (clock skew).
         const rows = (await db.execute(sql`
-          SELECT MAX(ended_at) AS last_ended
+          SELECT MAX(ended_at) AS last_ended, now() AS db_now
           FROM ai_call_logs
           WHERE provider = ${provider} AND ended_at IS NOT NULL
-        `)) as unknown as Array<{ last_ended: string | Date | null }>;
+        `)) as unknown as Array<{ last_ended: string | Date | null; db_now: string | Date | null }>;
 
         const raw = rows[0]?.last_ended;
         if (!raw) {
@@ -65,7 +66,8 @@ export const callIngestionCollector: OpsCollector = {
         const lastEnded = raw instanceof Date ? raw : new Date(raw);
         if (Number.isNaN(lastEnded.getTime())) continue;
 
-        const ageDays = (Date.now() - lastEnded.getTime()) / MS_PER_DAY;
+        const dbNow = rows[0]?.db_now ? new Date(rows[0].db_now) : new Date();
+        const ageDays = (dbNow.getTime() - lastEnded.getTime()) / MS_PER_DAY;
         samples.push({
           metric_key: "vendor.call_log_age_days",
           source: `vendor:${provider}`,

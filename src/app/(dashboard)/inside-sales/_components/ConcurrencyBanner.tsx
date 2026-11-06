@@ -10,17 +10,22 @@ type Props = {
 };
 
 export function ConcurrencyBanner({ onRefresh, currentOwnerName, currentUpdatedAt }: Props) {
+    const when = currentUpdatedAt
+        ? new Date(currentUpdatedAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })
+        : null;
+    const ownerLine = currentOwnerName
+        ? `Owner: ${currentOwnerName}${when ? `, ${when}` : ""}. `
+        : when
+          ? `Changed ${when}. `
+          : "";
     return (
         <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 flex items-start gap-3">
             <AlertOctagon className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
             <div className="flex-1 min-w-0">
-                <div className="text-sm font-semibold text-amber-900">Lead changed by someone else</div>
+                <div className="text-sm font-semibold text-amber-900">Someone else changed this lead.</div>
                 <div className="text-xs text-amber-800 mt-0.5">
-                    {currentOwnerName ? `Current owner: ${currentOwnerName}. ` : ""}
-                    {currentUpdatedAt
-                        ? `Last updated ${new Date(currentUpdatedAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}. `
-                        : ""}
-                    Please coordinate before retrying.
+                    {ownerLine}
+                    Talk to them before you try again.
                 </div>
             </div>
             <button

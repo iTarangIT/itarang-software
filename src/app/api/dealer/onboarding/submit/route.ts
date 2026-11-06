@@ -1,4 +1,5 @@
 import { linkOnboardingToLead } from "@/lib/onboarding/linkToLead";
+import { attachOnboardingToLead } from "@/lib/onboarding/leadMatch";
 import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "node:crypto";
 import { and, desc, eq, inArray, ne, or, sql } from "drizzle-orm";
@@ -884,6 +885,10 @@ export async function POST(req: NextRequest) {
     // only). Best-effort — never throws.
     // ID 67 / P1-4: link this onboarding to its lead by phone. Never throws.
     await linkOnboardingToLead(finalApplicationId!);
+    // ID 214: every onboarding on exactly one lead — GSTIN / phone / email /
+    // name ladder, else a Direct onboarding lead; the lead moves to Won.
+    // Never throws; a no-op without E-377.
+    await attachOnboardingToLead(finalApplicationId!);
     await markDocsSubmitted(finalApplicationId);
 
     // Notify the Dealer Validation team that an application has arrived.

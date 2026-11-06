@@ -20,6 +20,18 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 
 import { classifyFile, isKycFile, isLoggedFile, NBFC_FILE_BUCKET } from "@/lib/storage/fileRules";
+import { supabaseUrlToProxyPath } from "@/lib/storage/legacyUrl";
+
+/**
+ * ID 166 (5 Nov): a row written before the S3 move holds an absolute Supabase
+ * storage address (that project is deleted; the bytes now live behind
+ * /api/files and /api/nbfc-uploads). Read it as the proxy path it maps to, so
+ * it is checked, signed for the viewer and logged like any other stored file
+ * instead of leaving as the stored address.
+ */
+function asProxyPath(url: string): string {
+    return supabaseUrlToProxyPath(url) ?? url;
+}
 
 /** Decode until it stops changing; a string that is not valid encoding is final. */
 function decodings(segment: string): string[] {
@@ -219,6 +231,7 @@ export function isShortLinkFile(bucket: string, key: string): boolean {
 /** bucket + key (and the canonical /api/nbfc-uploads path) of an NBFC store URL; else null. */
 export function nbfcUploadsTarget(url: string | null | undefined): { path: string; bucket: string; key: string } | null {
     if (!url) return null;
+    url = asProxyPath(url);
     const at = url.indexOf("/nbfc-uploads/");
     if (at === -1) return null;
     const rest = url.slice(at + "/nbfc-uploads/".length).split(/[?#]/)[0];
@@ -264,6 +277,7 @@ export function filesProxyTarget(url: string): { path: string; bucket: string; k
 }
 
 function proxyTarget(url: string): { at: number; path: string; bucket: string; key: string } | null {
+    url = asProxyPath(url);
     const at = url.indexOf("/api/files/");
     if (at === -1) return null;
     const path = url.slice(at).split("?")[0];
@@ -319,7 +333,7 @@ export function viewerFileLink(url: string | null | undefined, viewerId: string)
 export function signFileLinksDeep<T>(value: T, viewerId: string): T {
     const walk = (v: unknown): unknown => {
         if (typeof v === "string") {
-            return v.includes("/api/files/") || v.includes("/nbfc-uploads/")
+            return v.includes("/api/files/") || v.includes("/nbfc-uploads/") || v.includes("/storage/v1/object/")
                 ? (filesProxyTarget(v) || nbfcUploadsTarget(v) ? viewerFileLink(v, viewerId) : v)
                 : v;
         }
@@ -378,7 +392,7 @@ export function shareableFileUrl(
     const origin = (opts.origin ?? process.env.NEXT_PUBLIC_APP_URL ?? "").replace(/\/+$/, "");
     const t = proxyTarget(url);
     if (!t) return url;
-    const absolute = /^https?:\/\//i.test(url) ? url.split("?")[0] : `${origin}${t.path}`;
+    const absolute = /^https?:\/\//i.test(url) && url.includes("/api/files/") ? url.split("?")[0] : `${origin}${t.path}`;
     // ID 166 (15 Oct report rows, WhatsApp agreement / audit trail): made at
     // send time and valid 15 minutes — Meta fetches the file within seconds.
     const signed = fileLinkSignature(t.bucket, t.key, linkTtl(t.bucket, t.key, opts.ttlSeconds ?? FRESH_LINK_TTL_SECONDS));

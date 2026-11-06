@@ -46,6 +46,16 @@ export function quoteRejectedMessage(p: QuoteRejectedNoticeInput): string {
     return `${who} rejected quotation v${p.versionNo}${ref}${money} for ${dealer}. Reason: ${p.reason.trim()}. ${next}`;
 }
 
+/**
+ * ID 216: the bell and WhatsApp open the owner's own lead page at the rejected
+ * quote — an ASM's lead lives under /asm, everyone else's under /inside-sales.
+ * The page reads ?quote= and opens that version with its Revise button. Pure.
+ */
+export function quoteRejectedLeadHref(leadId: string, commercialId: string, ownerRole: string | null | undefined): string {
+    const base = ownerRole === "asm" ? "/asm/lead" : "/inside-sales/lead";
+    return `${base}/${encodeURIComponent(leadId)}?quote=${encodeURIComponent(commercialId)}`;
+}
+
 /** users.phone is free text; Meta wants digits with the country code. Pure. */
 export function ownerWhatsAppNumber(raw: string | null | undefined): string | null {
     const digits = (raw ?? "").replace(/\D/g, "");
@@ -69,6 +79,27 @@ export async function alertOwnerQuoteRejected(p: {
     if (!p.ownerUserId) return;
     const message = quoteRejectedMessage(p.notice);
 
+    // The owner's role (for the link) and WhatsApp number, in one read.
+    let owner: { phone: string | null; role: string | null } = { phone: null, role: null };
+    try {
+        const { db } = await import("@/lib/db");
+        const rows = (await db.execute<{ phone: string | null; role: string | null }>(sql`
+            SELECT COALESCE(
+                     (SELECT b.wa_phone FROM assistant_wa_bindings b
+                       WHERE b.user_id = u.id AND b.status = 'active' AND b.wa_phone IS NOT NULL
+                       LIMIT 1),
+                     u.phone) AS phone,
+                   u.role
+              FROM users u
+             WHERE u.id = ${p.ownerUserId}
+             LIMIT 1
+        `)) as unknown as Array<{ phone: string | null; role: string | null }>;
+        if (rows[0]) owner = rows[0];
+    } catch (err) {
+        console.error("[quoteRejectedNotice] owner lookup failed", { leadId: p.leadId, err });
+    }
+    const href = quoteRejectedLeadHref(p.leadId, p.commercialId, owner.role);
+
     try {
         const { notifyQuotationRejected } = await import("@/lib/notifications/events");
         await notifyQuotationRejected({
@@ -82,31 +113,29 @@ export async function alertOwnerQuoteRejected(p: {
             reason: p.notice.reason,
             rejectorName: p.notice.rejectorName,
             message,
+            href,
         });
     } catch (err) {
         console.error("[quoteRejectedNotice] bell failed", { leadId: p.leadId, err });
     }
 
     try {
-        const { db } = await import("@/lib/db");
-        const rows = (await db.execute<{ phone: string | null }>(sql`
-            SELECT COALESCE(
-                     (SELECT b.wa_phone FROM assistant_wa_bindings b
-                       WHERE b.user_id = u.id AND b.status = 'active' AND b.wa_phone IS NOT NULL
-                       LIMIT 1),
-                     u.phone) AS phone
-              FROM users u
-             WHERE u.id = ${p.ownerUserId}
-             LIMIT 1
-        `)) as unknown as Array<{ phone: string | null }>;
-        const to = ownerWhatsAppNumber(rows[0]?.phone);
+        const to = ownerWhatsAppNumber(owner.phone);
         if (!to) {
             console.log(`[quoteRejectedNotice] owner ${p.ownerUserId} has no WhatsApp number; bell only`);
             return;
         }
         const { getAdapter } = await import("@/lib/whatsapp");
         const { logOutbound } = await import("@/lib/whatsapp/notifications");
-        const body = `❌ *Quotation rejected*\n\n${message}`;
+        // ID 216: the link opens the lead at this quote, with Revise.
+        let link = "";
+        try {
+            const { publicOrigin } = await import("@/lib/public-origin");
+            link = `\n\nOpen the quote: ${publicOrigin({})}${href}`;
+        } catch {
+            /* no configured origin: send without the link */
+        }
+        const body = `❌ *Quotation rejected*\n\n${message}${link}`;
         const res = await getAdapter().sendText(to, body);
         await logOutbound(null, res, { messageType: "text", textBody: body });
         if (!res.ok) {

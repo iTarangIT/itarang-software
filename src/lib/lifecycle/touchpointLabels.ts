@@ -55,6 +55,7 @@ export const TOUCHPOINT_TYPE_LABEL: Record<TouchpointType, string> = {
     reactivated_via_admin: "Reactivated (admin)",
     ai_dialer_admin_push: "Pushed to AI dialer",
     onboarding_dropout_action: "Onboarding loopback",
+    onboarding_linked: "Dealer onboarding",
     lead_created: "Lead created",
     lead_reinquiry: "Re-inquiry",
     sales_ready: "Sales-ready",

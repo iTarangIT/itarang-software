@@ -11,6 +11,7 @@
 
 import { ChevronDown, RotateCcw, Search, X } from "lucide-react";
 import { Input } from "@/components/ui/input";
+import { InfoTip } from "@/components/ui/info-tip";
 import { LEAD_STATUS } from "@/lib/lifecycle/transitions";
 import { UNASSIGNED_FILTER } from "@/lib/admin/leadsInfoFilters";
 import {
@@ -236,8 +237,8 @@ export function LeadsFilterBar({
                     )}
                     {(numberSearch.filtered_out?.length ?? 0) > 0 && (
                         <span>
-                            Hidden by the current filters: {numberSearch.filtered_out!.join(", ")} — clear the
-                            filters or untick &ldquo;Hide dead &amp; disqualified&rdquo; to see them.{" "}
+                            Hidden by your filters: {numberSearch.filtered_out!.join(", ")}. Clear filters to see them.{" "}
+                            <InfoTip>Or untick &ldquo;Hide dead &amp; disqualified&rdquo; — those leads are hidden by default.</InfoTip>{" "}
                         </span>
                     )}
                     {numberSearch.invalid.length > 0 && (
@@ -245,8 +246,8 @@ export function LeadsFilterBar({
                     )}
                     {(numberSearch.over_limit ?? 0) > 0 && (
                         <span>
-                            Only the first {LIST_SEARCH_MAX_NUMBERS} numbers were searched; {numberSearch.over_limit}{" "}
-                            more were ignored.
+                            We searched the first {LIST_SEARCH_MAX_NUMBERS} numbers. Search the other {numberSearch.over_limit}{" "}
+                            separately.
                         </span>
                     )}
                 </p>
@@ -278,7 +279,7 @@ export function LeadsFilterBar({
                     value={draft.intent}
                     onChange={(e) => setIntentBucket(e.target.value)}
                 >
-                    <option value="">All interest</option>
+                    <option value="">All interest levels</option>
                     {INTENT_BUCKET_OPTIONS.map((b) => (
                         <option key={b} value={b}>
                             {INTENT_BUCKET_LABEL[b]}
@@ -516,7 +517,7 @@ export function LeadsFilterBar({
                             value={draft.scrapeRun}
                             onChange={(e) => onChange("scrapeRun", e.target.value)}
                         >
-                            <option value="">All scrape runs</option>
+                            <option value="">All dealer searches</option>
                             {scrapeRunOptions.map((r) => (
                                 <option key={r.id} value={r.id}>
                                     {r.label} — {r.lead_count} lead{r.lead_count === 1 ? "" : "s"}
@@ -681,7 +682,7 @@ export function LeadsFilterBar({
                             them (hide_dead=0); source reports always count them. */}
                         <label
                             className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-600 hover:border-gray-400"
-                            title="Dead / non-responsive numbers (in Number Repair) and AI-disqualified leads are hidden by default"
+                            title="We hide dead or non-responsive numbers (in Number Repair) and leads the AI disqualified."
                         >
                             <input
                                 type="checkbox"
@@ -764,11 +765,12 @@ export function LeadsFilterBar({
                         )}
                         <select
                             aria-label="Raw source"
+                            title="The source exactly as it came in the file or system."
                             className={`${SELECT_CLASS} w-full`}
                             value={draft.source}
                             onChange={(e) => onChange("source", e.target.value)}
                         >
-                            <option value="">All raw sources</option>
+                            <option value="">All original sources</option>
                             {(facets?.sources ?? []).map((s) => (
                                 <option key={s} value={s}>
                                     {pretty(s)}
@@ -897,6 +899,7 @@ export function LeadsFilterBar({
 
                                 <select
                                     aria-label="Minimum signals disclosed"
+                                    title="Details the dealer gave the AI, such as battery spec or monthly volume."
                                     className={`${SELECT_CLASS} w-full`}
                                     value={draft.signalsMin}
                                     onChange={(e) => onChange("signalsMin", e.target.value)}
@@ -904,7 +907,7 @@ export function LeadsFilterBar({
                                     <option value="">Any number of signals</option>
                                     {[1, 2, 3, 4, 5].map((n) => (
                                         <option key={n} value={String(n)}>
-                                            {n}+ signals disclosed
+                                            {n}+ details shared on the AI call
                                         </option>
                                     ))}
                                 </select>

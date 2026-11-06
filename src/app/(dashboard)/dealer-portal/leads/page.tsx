@@ -5,6 +5,7 @@ import { PlusCircle, Search, Filter, Loader2, Trash2, X, AlertTriangle, Pencil, 
 import { useEffect, useState, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { toast } from 'sonner';
+import { InfoTip } from '@/components/ui/info-tip';
 import { isCashMethod, isFinanceMethod } from '@/components/dealer-portal/lead-wizard/constants';
 
 function DealerLeadsContent() {
@@ -121,7 +122,7 @@ function DealerLeadsContent() {
             }
             const { pushed = [], skipped = [], dealer } = j.data ?? {};
             if (pushed.length) {
-                toast.success(`${pushed.length} lead${pushed.length === 1 ? '' : 's'} pushed to ${dealer?.name ?? 'the dealer'}`);
+                toast.success(`${pushed.length} lead${pushed.length === 1 ? '' : 's'} moved to ${dealer?.name ?? 'the dealer'}`);
             }
             if (skipped.length) {
                 const names = new Map<string, string>(leads.map((l: any) => [l.id, l.owner_name || l.id]));
@@ -173,10 +174,10 @@ function DealerLeadsContent() {
                 setDeleteTarget(null);
                 fetchLeads();
             } else {
-                toast.error(data.error?.message || data.message || 'Failed to delete lead');
+                toast.error(data.error?.message || data.message || "Couldn't remove the lead. Try again.");
             }
         } catch {
-            toast.error('Failed to delete lead');
+            toast.error("Couldn't remove the lead. Try again.");
         } finally {
             setDeleting(false);
         }
@@ -276,8 +277,8 @@ function DealerLeadsContent() {
         <div className="space-y-6 -mx-6 sm:mx-0">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 px-4 sm:px-0">
                 <div>
-                    <h1 className="text-2xl font-bold text-gray-900">Lead Management</h1>
-                    <p className="text-gray-500 text-sm">Track and manage your customer pipeline</p>
+                    <h1 className="text-2xl font-bold text-gray-900">Leads</h1>
+                    <p className="text-gray-500 text-sm">Track your customers&apos; battery and loan applications</p>
                 </div>
                 <div className="flex items-center gap-2">
                     {/* ID 183: files the house pushed out are the dealer's now — listed apart. */}
@@ -288,7 +289,7 @@ function DealerLeadsContent() {
                     )}
                     <Link href="/dealer-portal/leads/new" className="inline-flex items-center gap-2 px-4 py-2 bg-brand-600 text-white font-medium rounded-lg hover:bg-brand-700 transition-colors shadow-sm">
                         <PlusCircle className="w-5 h-5" />
-                        New Lead
+                        Create lead
                     </Link>
                 </div>
             </div>
@@ -342,7 +343,7 @@ function DealerLeadsContent() {
                         <button onClick={() => setPushOpen(true)}
                             className="inline-flex items-center gap-2 px-4 py-2 bg-brand-600 text-white text-sm font-medium rounded-lg hover:bg-brand-700">
                             <Send className="w-4 h-4" />
-                            Push to dealer
+                            Move to dealer
                         </button>
                     </div>
                 </div>
@@ -457,7 +458,7 @@ function DealerLeadsContent() {
                                                             className="text-brand-600 hover:text-brand-800 font-medium text-xs"
                                                             title="Open this lead at its current step"
                                                         >
-                                                            View Details
+                                                            View
                                                         </Link>
                                                     );
                                                 })()}
@@ -471,7 +472,7 @@ function DealerLeadsContent() {
                                                 <button
                                                     onClick={(e) => { e.stopPropagation(); setDeleteTarget(lead); }}
                                                     className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all"
-                                                    title="Delete lead"
+                                                    title="Remove lead"
                                                 >
                                                     <Trash2 className="w-3.5 h-3.5" />
                                                 </button>
@@ -530,7 +531,7 @@ function DealerLeadsContent() {
                                         href={resolveLeadHref(lead)}
                                         className="flex-1 text-center px-3 py-2 bg-brand-50 text-brand-700 rounded-lg text-sm font-semibold hover:bg-brand-100 transition-colors"
                                     >
-                                        View Details
+                                        View
                                     </Link>
                                     <button
                                         onClick={() => openEdit(lead)}
@@ -543,8 +544,8 @@ function DealerLeadsContent() {
                                     <button
                                         onClick={() => setDeleteTarget(lead)}
                                         className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all"
-                                        title="Delete lead"
-                                        aria-label="Delete lead"
+                                        title="Remove lead"
+                                        aria-label="Remove lead"
                                     >
                                         <Trash2 className="w-4 h-4" />
                                     </button>
@@ -619,10 +620,12 @@ function DealerLeadsContent() {
                                 className="w-full px-4 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent"
                             />
                             <p className="text-xs text-gray-500">
-                                Leads whose customer already signed consent are not moved. Any coupon the house reserved on a lead is released, and its salesperson is cleared.
+                                Leads with signed customer consent stay here.{" "}
+                                <InfoTip>For leads that move, we release any coupon the house reserved and clear the salesperson.</InfoTip>
                             </p>
                             <p className="text-xs text-gray-500">
-                                Finance leads move only to a finance-enabled dealer. A lead you pushed out can be pushed again (to the same or another dealer) until the customer signs consent.
+                                Finance leads go only to dealers who offer finance.{" "}
+                                <InfoTip>You can move a lead again, to the same or another dealer, until the customer signs consent.</InfoTip>
                             </p>
                         </div>
                         <div className="px-6 pb-5 flex gap-3">
@@ -633,7 +636,7 @@ function DealerLeadsContent() {
                             <button onClick={handlePush} disabled={pushing || !pushMatch || pushReason.trim().length < 3}
                                 className="flex-1 px-4 py-3 bg-brand-600 text-white rounded-xl font-semibold text-sm hover:bg-brand-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2">
                                 {pushing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-                                {pushing ? 'Pushing...' : 'Push leads'}
+                                {pushing ? 'Pushing...' : 'Move leads'}
                             </button>
                         </div>
                     </div>
@@ -733,7 +736,7 @@ function DealerLeadsContent() {
                                     <AlertTriangle className="w-5 h-5 text-white" />
                                 </div>
                                 <div>
-                                    <h3 className="text-lg font-bold text-white">Remove Lead</h3>
+                                    <h3 className="text-lg font-bold text-white">Remove lead</h3>
                                     <p className="text-red-100 text-xs mt-0.5">Removed from your dashboard</p>
                                 </div>
                             </div>
@@ -758,9 +761,8 @@ function DealerLeadsContent() {
                                 It hides it here; iTarang admin and the lender keep
                                 their copies until they remove it too. */}
                             <p className="text-xs text-gray-500">
-                                It disappears from your lead list. If iTarang admin or a lender is
-                                still holding this application, their copy stays until they remove
-                                it as well — only then is it deleted for good.
+                                It disappears from your lead list.{' '}
+                                <InfoTip>If iTarang admin or a lender still has this application, their copy stays. It is deleted for good only when they remove it too.</InfoTip>
                             </p>
                         </div>
                         <div className="px-6 pb-5 flex gap-3">
@@ -819,7 +821,7 @@ function WithDealer({
             </div>
             {last && (
                 <span className="text-[10.5px] text-gray-500">
-                    Last: {last.action.replace(/^LEAD_/, '').replace(/_/g, ' ').toLowerCase()} ·{' '}
+                    Last: {last.action.replace(/^LEAD_/, '').replace(/_/g, ' ').toLowerCase().replace(/^./, (c: string) => c.toUpperCase())} ·{' '}
                     {new Date(last.at).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
                     {last.by ? ` · ${last.by}` : ''}
                 </span>

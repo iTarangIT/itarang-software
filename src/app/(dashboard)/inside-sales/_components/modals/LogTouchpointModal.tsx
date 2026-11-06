@@ -6,6 +6,7 @@ import { Modal } from "../Modal";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
+import { InfoTip } from "@/components/ui/info-tip";
 import { type TouchpointType } from "@/lib/lifecycle/touchpointTypes";
 import {
     DispositionPicker,
@@ -66,6 +67,14 @@ const REP_TYPES: TouchpointType[] = [
     "inside_sales_call",
     "whatsapp",
 ];
+
+// On-screen names for the activity-type picker (ID 215). The stored value stays the code.
+const TYPE_OPTION_LABEL: Partial<Record<TouchpointType, string>> = {
+    inside_sales_call: "Call",
+    whatsapp: "WhatsApp",
+    status_change_note: "Note",
+    visit: "Visit",
+};
 
 export function LogTouchpointModal({
     open,
@@ -244,7 +253,7 @@ export function LogTouchpointModal({
                 }
                 throw new Error(json?.error?.message ?? "Failed to log touchpoint");
             }
-            toast.success("Touchpoint logged.");
+            toast.success("Activity logged.");
             // ID 76: a Lost-type outcome prompts Mark Lost, reason pre-filled —
             // the call alone never closes the lead.
             const savedBucket =
@@ -281,7 +290,7 @@ export function LogTouchpointModal({
         <Modal
             open={open}
             onClose={handleClose}
-            title="Log Touchpoint"
+            title="Log activity"
             subtitle={lead.dealer_name ?? lead.shop_name ?? leadId}
             width={isVisit ? "lg" : "md"}
             closeOnBackdrop={!busy}
@@ -302,7 +311,7 @@ export function LogTouchpointModal({
                             ? "Saving…"
                             : isVisit
                                 ? "Save visit"
-                                : "Save touchpoint"}
+                                : "Save"}
                     </Button>
                 </>
             }
@@ -319,14 +328,14 @@ export function LogTouchpointModal({
                 className="space-y-4"
             >
                 <div>
-                    <Label>Touchpoint type</Label>
+                    <Label>Activity type</Label>
                     <select
                         className="mt-1 w-full rounded-md border border-gray-200 px-3 py-2 text-sm bg-white"
                         value={type}
                         onChange={(e) => setType(e.target.value as TouchpointType)}
                     >
                         {typeOptions.map((t) => (
-                            <option key={t} value={t}>{t.replaceAll("_", " ")}</option>
+                            <option key={t} value={t}>{TYPE_OPTION_LABEL[t] ?? t.replaceAll("_", " ")}</option>
                         ))}
                     </select>
                 </div>
@@ -381,21 +390,20 @@ export function LogTouchpointModal({
                                     checked={isEngaged}
                                     onChange={(e) => setIsEngaged(e.target.checked)}
                                 />
-                                Mark as engaged touchpoint
-                                <span className="text-[11px] text-gray-500">(the dealer responded in this interaction)</span>
+                                The dealer responded
                             </label>
                         )}
 
                         {type === "inside_sales_call" && changeStatus && toStatus && (
                             <p className="rounded-md bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
-                                This outcome moves the lead to <strong>{LEAD_STATUS_LABEL[toStatus as LeadStatus] ?? toStatus}</strong>.
-                                Commercials stages move only with quotes; Won and Lost have their own buttons.
+                                This outcome moves the lead to <strong>{LEAD_STATUS_LABEL[toStatus as LeadStatus] ?? toStatus}</strong>.{" "}
+                                <InfoTip>Quote stages change only when you add a quote. Use Mark Won or Mark Lost for those.</InfoTip>
                             </p>
                         )}
                         {type === "inside_sales_call" && COMMERCIALS_CALL_LABELS.includes(disposition.disposition) &&
                             !hasQuote && (
                                 <div className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                                    <span>No quote in the system — this call does not move the commercials stage.</span>
+                                    <span>No quote yet, so this call won&apos;t change the quote stage.</span>
                                     {onOpenCommercials ? (
                                         <button
                                             type="button"
@@ -404,7 +412,7 @@ export function LogTouchpointModal({
                                             title="Save this call, then open Update Commercials to create the quote"
                                             className="shrink-0 rounded-md border border-amber-300 bg-white px-2.5 py-1 font-semibold text-amber-900 hover:bg-amber-100 disabled:opacity-50"
                                         >
-                                            Save &amp; Update Commercials
+                                            Save and update quote
                                         </button>
                                     ) : (
                                         <span>
@@ -440,7 +448,7 @@ export function LogTouchpointModal({
                         {type === "inside_sales_call" && (
                             <div>
                                 <Label>
-                                    Temperature{" "}
+                                    Interest{" "}
                                     {auto.interest && <span className="text-[11px] text-emerald-700">(auto from call outcome)</span>}
                                 </Label>
                                 <select

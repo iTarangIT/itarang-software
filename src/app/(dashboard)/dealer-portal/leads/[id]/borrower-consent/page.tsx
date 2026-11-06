@@ -1011,7 +1011,7 @@ export default function BorrowerConsentPage() {
                 ? { ...prev, co_borrower_submitted_at: prev.co_borrower_submitted_at ?? nowIso, lead_kyc_status: 'pending_itarang_reverification' }
                 : prev,
             );
-            toast.success('Submitted for verification. Admin will review and you will be notified.');
+            toast.success('Sent for verification. We\'ll tell you when Admin has reviewed it.');
             await loadPageData(true);
         } catch (err: any) {
             setApiError(err?.message || 'Failed to submit for verification');
@@ -1230,7 +1230,7 @@ export default function BorrowerConsentPage() {
                                 <div className="flex-1 text-sm">
                                     <p className="font-bold text-emerald-800">Submitted — awaiting admin review</p>
                                     <p className="text-emerald-700 mt-0.5 text-xs">
-                                        Step 3 has been submitted to iTarang admin. You'll be notified once admin completes the review.
+                                        Step 3 sent to iTarang admin. We&apos;ll tell you when they finish the review.
                                     </p>
                                 </div>
                             </div>
@@ -1616,7 +1616,7 @@ export default function BorrowerConsentPage() {
 
                                 <div className="flex flex-wrap items-center justify-between gap-3">
                                     <p className="text-xs text-gray-500 flex-1 min-w-[240px]">
-                                        Submitting sends the co-borrower KYC back to the iTarang admin team. Admin can act on the documents once submitted.
+                                        This sends the co-borrower KYC to iTarang admin for review.
                                     </p>
                                     <PrimaryButton onClick={handleSubmitForVerification} loading={submitting} disabled={submitting || !canSubmit}>
                                         {alreadySubmitted ? 'Submitted' : 'Submit for Verification'}

@@ -21,6 +21,8 @@ export const LEAD_DOORS = [
     "ai_dialer",
     "neodove",
     "ecofy",
+    // ID 214: an onboarding that matched no lead — the lead is created for it.
+    "direct_onboarding",
 ] as const;
 export type LeadDoor = (typeof LEAD_DOORS)[number];
 
@@ -32,6 +34,7 @@ export const LEAD_DOOR_LABEL: Record<LeadDoor, string> = {
     ai_dialer: "AI-dialer list",
     neodove: "NeoDove",
     ecofy: "Ecofy",
+    direct_onboarding: "Direct onboarding",
 };
 
 export const LEAD_ORIGINS = [

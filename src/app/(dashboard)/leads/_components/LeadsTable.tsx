@@ -23,6 +23,7 @@ import {
 // NOTE: @/components/leads/call-button, NOT the older (dashboard)/leads/CallButton.tsx
 // — only this one takes `provider` and `onCallStart`, which the dialer needs.
 import { CallButton } from "@/components/leads/call-button";
+import { InfoTip } from "@/components/ui/info-tip";
 import { SendToNeodoveButton } from "@/components/leads/send-to-neodove-button";
 import { NeodoveTag } from "@/components/leads/neodove-tag";
 import { IvrTag } from "@/components/leads/ivr-tag";
@@ -54,6 +55,8 @@ import {
 } from "@/lib/leads/dispositions";
 import type { LeadsCapabilities } from "@/lib/leads/access";
 import type { LeadListRow } from "@/lib/leads/leadListQuery";
+import type { TeamReviewFields } from "@/lib/leads/teamReviewSql";
+import { TEAM_REVIEW_COLUMN_COUNT, TeamReviewCells, TeamReviewHeaders } from "@/components/leads/TeamReviewColumns";
 import { businessTypeLabel, businessTypeTone } from "@/lib/leads/businessType";
 import { leadSourceLabel, SOURCE_LABELS } from "@/lib/leads/leadSourceVocab";
 
@@ -135,7 +138,9 @@ export type LeadRow = LeadListRow & {
     business_type?: string | null;
     /** D2 — an IVR / company bot answered the AI call on this number. */
     is_ivr?: boolean;
-};
+    /** ID 199: "Time limit passed" chips — set by the API on a team view. */
+    past_limits?: string[];
+} & TeamReviewFields;
 
 type Props = {
     rows: LeadRow[];
@@ -153,6 +158,8 @@ type Props = {
     dialerPhase: "idle" | "calling" | "countdown";
     countdown: number;
     endedLeadIds: Set<string>;
+    /** ID 199: a manager's team view — adds the review columns. */
+    teamReview?: boolean;
 };
 
 export function LeadsTable({
@@ -170,6 +177,7 @@ export function LeadsTable({
     dialerPhase,
     countdown,
     endedLeadIds,
+    teamReview = false,
 }: Props) {
     // The checkbox column only earns its place if the viewer can act in bulk.
     const selectable = caps.canBulkAct || caps.canSendToNeodove;
@@ -179,7 +187,8 @@ export function LeadsTable({
     // Intent, Visit/Outcome, Last Touch, Idle, Source/Campaign/Created, Actions = 11.
     // Then the optional checkbox and the optional Owner + ASM pair. Used by the
     // loading and empty rows.
-    const colSpan = 11 + (selectable ? 1 : 0) + (caps.canSeeOwnerAsm ? 2 : 0);
+    const colSpan =
+        11 + (selectable ? 1 : 0) + (caps.canSeeOwnerAsm ? 2 : 0) + (teamReview ? TEAM_REVIEW_COLUMN_COUNT : 0);
     // Pinned once per render so every row's idle figure is measured against the
     // same instant — and so the map callback stays pure (react-hooks/purity).
     // eslint-disable-next-line react-hooks/purity
@@ -234,17 +243,22 @@ export function LeadsTable({
                                 Visit / Outcome
                             </th>
                             <th className="min-w-[110px] px-4 py-3 text-left font-semibold">
-                                Last Touch
+                                Last activity
                             </th>
-                            <th
-                                className="min-w-[90px] px-4 py-3 text-left font-semibold"
-                                title="Calendar days since the lead was last worked (a call, visit or status change) — or since it was created, if it has never been worked. Assigning, claiming or commenting does not reset it."
-                            >
-                                Idle
+                            <th className="min-w-[90px] px-4 py-3 text-left font-semibold">
+                                <span className="inline-flex items-center gap-1">
+                                    Idle days
+                                    <InfoTip>
+                                        Working days (holidays off) since the latest of: last call, visit or
+                                        status change; the day the owner got the lead; a follow-up in the
+                                        next 30 days.
+                                    </InfoTip>
+                                </span>
                             </th>
                             <th className="min-w-[170px] px-4 py-3 text-left font-semibold">
                                 Source / Campaign
                             </th>
+                            {teamReview && <TeamReviewHeaders />}
                             <th className="min-w-[300px] px-4 py-3 text-right font-semibold">
                                 Actions
                             </th>
@@ -568,7 +582,7 @@ export function LeadsTable({
                                                 title={
                                                     idle === null
                                                         ? "No touchpoint and no creation date"
-                                                        : `${idle} working days (office calendar, holidays off) since the later of the last call, visit or status change, the date the holder got the lead, and a follow-up within 30 days`
+                                                        : `${idle} working days idle. Counted from the latest of: last call, visit or status change; the day the owner got the lead; a follow-up in the next 30 days. Holidays are off.`
                                                 }
                                             >
                                                 {idleText.primary}
@@ -621,6 +635,12 @@ export function LeadsTable({
                                                 Created {fmtDate(row.created_at)}
                                             </div>
                                         </td>
+                                        {teamReview && (
+                                            <TeamReviewCells
+                                                row={row}
+                                                outcomeLabel={(o) => VISIT_OUTCOME_LABELS[o as VisitOutcome] ?? pretty(o)}
+                                            />
+                                        )}
 
                                         {/* Actions — stopPropagation so a button press
                                             never also opens the row drawer. */}

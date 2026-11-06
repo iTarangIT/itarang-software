@@ -30,6 +30,7 @@ import { log } from "@/lib/log";
 import { notifyRoles } from "@/lib/notifications/notify";
 
 import { candidatesForRule, shadowedSources } from "./alertRouting";
+import { callFeedAlertAudience, callFeedAlertEmail, isTestMailbox } from "./callFeedText";
 import { rootCauseMessage } from "./errors";
 import { formatMetricValue } from "./format";
 import { comparatorFor, getMetric, METRICS, severityForRule } from "./registry";
@@ -251,6 +252,9 @@ export async function evaluateAlerts(): Promise<AlertEvaluation> {
               rule.metric_key,
               candidate.source,
               message,
+              // Business emails go once per alert (when it opens), not on every
+              // cooldown re-notify — an overnight gap would mail all night.
+              row.inserted === true,
             );
             result.notified += 1;
           }
@@ -312,6 +316,8 @@ async function deliver(
   metricKey: string,
   source: string,
   message: string,
+  /** True on the first notice of an alert and on its recovery notice. */
+  firstOrLast = true,
 ): Promise<void> {
   const channels = Array.isArray(rule.notify_channels)
     ? (rule.notify_channels as string[])
@@ -322,14 +328,33 @@ async function deliver(
       ? `Resolved: ${metricKey}`
       : `${severity === "crit" ? "CRITICAL" : "Warning"}: ${metricKey}`;
 
+  // ID 229: a call feed going quiet is a business problem, not only an ops one
+  // — on the live CRM the CEO and the Sales Head get the bell and an email
+  // (6 Nov). The sandbox receives no NeoDove calls by design, so there it
+  // stays an ops-only bell.
+  const audience = callFeedAlertAudience(metricKey, process.env.NEXT_PUBLIC_APP_URL);
+
   if (channels.includes("inapp")) {
     try {
-      await notifyRoles(["operations"], {
+      await notifyRoles(audience.bellRoles, {
         type: "ops_alert",
         title,
         message,
         data: { metric_key: metricKey, source, severity },
       });
+      // Named logins (CALL_FEED_ALERT_LOGINS, empty now) by email — skipped when
+      // the role list above already rang them.
+      if (audience.logins.length > 0) {
+        await db.execute(sql`
+          INSERT INTO notifications (id, user_id, type, title, message, data, lead_id, read, created_at)
+          SELECT gen_random_uuid()::text, u.id, 'ops_alert', ${title}, ${message},
+                 ${JSON.stringify({ metric_key: metricKey, source, severity })}::jsonb, NULL, false, NOW()
+          FROM users u
+          WHERE LOWER(u.email) IN (${sql.join(audience.logins.map((e) => sql`${e.toLowerCase()}`), sql`, `)})
+            AND u.is_active = TRUE
+            AND LOWER(u.role) NOT IN (${sql.join(audience.bellRoles.map((r) => sql`${r}`), sql`, `)})
+        `);
+      }
     } catch (e) {
       log.warn(`[ops] in-app alert notify failed: ${rootCauseMessage(e)}`);
     }
@@ -349,6 +374,37 @@ async function deliver(
       });
     } catch (e) {
       log.warn(`[ops] alert email failed: ${rootCauseMessage(e)}`);
+    }
+  }
+
+  // ID 229 business email: every active CEO and Sales Head login (plus any
+  // CALL_FEED_ALERT_LOGINS address; test e2e-… mailboxes skipped), regardless of the rule's
+  // channels or OPS_ALERT_EMAIL.
+  if ((audience.emailRoles.length > 0 || audience.logins.length > 0) && firstOrLast) {
+    try {
+      const rows = audience.emailRoles.length > 0
+        ? ((await db.execute(sql`
+            SELECT DISTINCT email FROM users
+            WHERE LOWER(role) IN (${sql.join(audience.emailRoles.map((r) => sql`${r}`), sql`, `)})
+              AND is_active = TRUE AND email IS NOT NULL AND email <> ''
+          `)) as unknown as Array<{ email: string }>)
+        : [];
+      const seen = new Set<string>();
+      const to = [...audience.logins, ...rows.map((r) => r.email)]
+        .map((e) => e.trim())
+        .filter((e) => {
+          const k = e.toLowerCase();
+          if (!e || isTestMailbox(e) || seen.has(k)) return false;
+          seen.add(k);
+          return true;
+        });
+      if (to.length > 0) {
+        const { subject, text } = callFeedAlertEmail(severity, source, message);
+        const { getMailer } = await import("@/lib/email/mailer");
+        await getMailer().sendMail({ to: to.join(", "), subject, text });
+      }
+    } catch (e) {
+      log.warn(`[ops] call-feed alarm email failed: ${rootCauseMessage(e)}`);
     }
   }
 }

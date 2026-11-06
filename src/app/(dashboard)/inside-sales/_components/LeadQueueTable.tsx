@@ -154,9 +154,9 @@ export function LeadQueueTable({
                             <th className="text-left px-4 py-3 font-semibold">Status</th>
                             <th className="text-left px-4 py-3 font-semibold">Interest / AI</th>
                             <th className="text-left px-4 py-3 font-semibold">Owner</th>
-                            <th className="text-left px-4 py-3 font-semibold">Last Touch</th>
+                            <th className="text-left px-4 py-3 font-semibold">Last activity</th>
                             <th className="text-left px-4 py-3 font-semibold">Follow-up</th>
-                            <th className="text-right px-4 py-3 font-semibold">Days Idle</th>
+                            <th className="text-right px-4 py-3 font-semibold">Idle days</th>
                             {showReview && <TeamReviewHeaders />}
                         </tr>
                     </thead>

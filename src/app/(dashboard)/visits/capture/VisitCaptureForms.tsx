@@ -89,7 +89,7 @@ export function AccountVisitCapture({ accountId, name, backHref }: { accountId: 
     return (
         <div className="space-y-4">
             <p className="text-sm text-gray-600">
-                Visit to counter <span className="font-medium text-gray-900">{name}</span> — today
+                Visit to <span className="font-medium text-gray-900">{name}</span> — today
             </p>
             <div>
                 <Label>
@@ -121,7 +121,7 @@ export function AccountVisitCapture({ accountId, name, backHref }: { accountId: 
                     className="mt-1 min-h-[96px] w-full rounded-md border border-gray-200 px-3 py-2 text-sm"
                     value={remarks}
                     onChange={(e) => setRemarks(e.target.value)}
-                    placeholder="What happened at the counter?"
+                    placeholder="What happened at the shop?"
                 />
             </div>
             <div className="flex justify-end gap-2">

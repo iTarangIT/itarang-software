@@ -99,7 +99,7 @@ export function TouchpointHistoryPane({ leadId, touchpoints, limitEvents = [], c
         <div className="overflow-y-auto border-r border-gray-100 bg-white">
             <div className="px-6 py-4 sticky top-0 bg-white border-b border-gray-100 z-[1] flex items-start justify-between gap-3">
                 <div>
-                    <h2 className="text-sm font-semibold text-gray-900">Touchpoint History</h2>
+                    <h2 className="text-sm font-semibold text-gray-900">Activity</h2>
                     <p className="text-[11px] text-gray-500 mt-0.5">
                         {touchpoints.length} {touchpoints.length === 1 ? "entry" : "entries"} · newest first
                     </p>
@@ -110,7 +110,7 @@ export function TouchpointHistoryPane({ leadId, touchpoints, limitEvents = [], c
                         className="shrink-0 inline-flex items-center gap-1.5 rounded-md border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
                     >
                         <Download className="h-3.5 w-3.5" />
-                        Export to Excel
+                        Download Excel
                     </a>
                 )}
             </div>
@@ -133,7 +133,7 @@ export function TouchpointHistoryPane({ leadId, touchpoints, limitEvents = [], c
                 )}
                 {touchpoints.length === 0 ? (
                     <div className="text-sm text-gray-500 py-10 text-center">
-                        No touchpoints logged yet. Use the action bar below to log the first one.
+                        No activity yet. [Log activity]
                     </div>
                 ) : (
                     <ol className="space-y-3">

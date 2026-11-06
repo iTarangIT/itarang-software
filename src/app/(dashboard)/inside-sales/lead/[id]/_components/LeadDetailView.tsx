@@ -1,11 +1,11 @@
 "use client";
 
 import type { LostReason } from "@/lib/lifecycle/transitions";
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, AlertTriangle, ArrowLeft } from "lucide-react";
 import Link from "next/link";
-import { hasApprovedQuote, type LeadDetailBundle } from "@/lib/inside-sales/types";
+import { hasApprovedQuote, type LeadDetailBundle, type LeadDetailCommercials } from "@/lib/inside-sales/types";
 import { LeadDetailHeader } from "./LeadDetailHeader";
 import { LeadActivityPanes } from "./LeadActivityPanes";
 import { LeadDetailRightPane } from "./LeadDetailRightPane";
@@ -22,9 +22,10 @@ import { EscalateModal } from "../../../_components/modals/EscalateModal";
 import { ClaimLeadConfirm } from "../../../_components/modals/ClaimLeadConfirm";
 import { canExportLeadHistory } from "@/lib/leads/access";
 import { CallbackBriefCard } from "@/components/leads/callback-brief-card";
+import { InfoTip } from "@/components/ui/info-tip";
 
 export const LEAD_NOT_ACCESSIBLE =
-    "This lead is not assigned to you any more — it may have been transferred to another owner. Ask your manager if you still need it.";
+    "This lead is no longer yours. Ask your manager if you still need it.";
 
 export type ActiveModal =
     | null
@@ -53,6 +54,14 @@ type Props = {
 export function LeadDetailView({ leadId, viewerId, viewerRole, backHref = "/inside-sales" }: Props) {
     const qc = useQueryClient();
     const [activeModal, setActiveModal] = useState<ActiveModal>(null);
+    // ID 216: "Revise" on a rejected quote opens Update Commercials prefilled
+    // from that version; ?quote=<id> (bell / WhatsApp link) opens that version.
+    const [reviseFrom, setReviseFrom] = useState<LeadDetailCommercials | null>(null);
+    const [focusQuoteId, setFocusQuoteId] = useState<string | null>(null);
+    useEffect(() => {
+        const q = new URLSearchParams(window.location.search).get("quote");
+        if (q) setFocusQuoteId(q);
+    }, []);
     // ID 76: a Lost-type call outcome opens Mark Lost with the reason pre-filled.
     const [lostPrefill, setLostPrefill] = useState<LostReason | null>(null);
     const [staleInfo, setStaleInfo] = useState<{
@@ -123,6 +132,12 @@ export function LeadDetailView({ leadId, viewerId, viewerRole, backHref = "/insi
                     <AlertTriangle className="h-5 w-5 text-rose-600 shrink-0" />
                     <div className="text-sm text-rose-800">
                         {(query.error as Error | undefined)?.message ?? "Lead not found or no longer accessible."}
+                        {(query.error as Error | undefined)?.message === LEAD_NOT_ACCESSIBLE && (
+                            <>
+                                {" "}
+                                <InfoTip>It may have moved to another owner.</InfoTip>
+                            </>
+                        )}
                     </div>
                 </div>
                 <Link href={backHref} className="mt-4 inline-flex items-center gap-1 text-sm text-blue-700 hover:underline">
@@ -176,7 +191,19 @@ export function LeadDetailView({ leadId, viewerId, viewerRole, backHref = "/insi
                         currentOwnerId: lead.current_owner_id,
                     })}
                 />
-                <LeadDetailRightPane bundle={bundle} viewerRole={viewerRole} />
+                <LeadDetailRightPane
+                    bundle={bundle}
+                    viewerRole={viewerRole}
+                    focusQuoteId={focusQuoteId}
+                    onReviseQuote={
+                        isOwner
+                            ? (c) => {
+                                  setReviseFrom(c);
+                                  setActiveModal("commercials");
+                              }
+                            : undefined
+                    }
+                />
             </div>
 
             <LeadActionBar
@@ -208,11 +235,20 @@ export function LeadDetailView({ leadId, viewerId, viewerRole, backHref = "/insi
                 onOpenCommercials={() => setActiveModal("commercials")}
             />
             <UpdateCommercialsModal
+                // ID 216: remount per source so the form takes that version's values.
+                key={reviseFrom?.commercial_id ?? "current"}
                 open={activeModal === "commercials"}
-                onClose={() => setActiveModal(null)}
+                onClose={() => {
+                    setActiveModal(null);
+                    setReviseFrom(null);
+                }}
                 leadId={leadId}
-                currentCommercials={bundle.current_commercials}
-                onSuccess={onActionSuccess}
+                currentCommercials={reviseFrom ?? bundle.current_commercials}
+                initialEventType={reviseFrom ? "quote_revision" : undefined}
+                onSuccess={() => {
+                    setReviseFrom(null);
+                    onActionSuccess();
+                }}
             />
             <TransferAsmModal
                 open={activeModal === "transfer_asm"}

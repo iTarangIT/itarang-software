@@ -9,6 +9,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
+import { InfoTip } from "@/components/ui/info-tip";
 
 interface HistoryRow {
   at: string;
@@ -75,7 +76,7 @@ export default function AskItarangHelp({ leadId }: { leadId: string }) {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <span className="text-gray-700">
             {state.open
-              ? "You asked iTarang to help on this file. The iTarang team may upload documents, send the consent code and submit for you. The file stays yours."
+              ? <>You asked iTarang to help with this file. It stays yours.{" "}<InfoTip>The iTarang team may upload documents, send the consent code and submit for you.</InfoTip></>
               : "Stuck on this file? Ask the iTarang team to help — they can work it for you; the file stays yours."}
           </span>
           <button

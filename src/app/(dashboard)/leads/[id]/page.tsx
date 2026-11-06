@@ -214,7 +214,7 @@ export default async function LeadDetailPage({ params }: any) {
           className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-800 mb-6 transition-colors"
         >
           <ArrowLeft className="w-4 h-4" />
-          Back to Leads
+          Back
         </Link>
 
         {/* D8 — the promised callback and its brief. */}

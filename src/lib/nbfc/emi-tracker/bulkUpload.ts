@@ -99,6 +99,8 @@ export interface ScheduleUpdate {
   newPaidAt: string; // YYYY-MM-DD
   newDaysOverdue: number;
   prevStatus: string | null;
+  /** ID 204: the sheet's collected amount for this slot (null = settle in full). */
+  amount: number | null;
 }
 
 /** Result of planning a row's collections against its loan's schedule. */
@@ -164,6 +166,7 @@ export function planScheduleUpdates(
       newPaidAt: paidAt,
       newDaysOverdue: daysOverdue,
       prevStatus: target.status,
+      amount: c.amount,
     });
   }
 

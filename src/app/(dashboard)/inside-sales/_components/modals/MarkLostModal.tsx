@@ -31,6 +31,8 @@ export const LOST_REASON_LABELS: Record<LostReason, string> = {
     duplicate_lead: "Duplicate lead",
     other: "Other (notes required)",
     onboarding_dropout: "Onboarding dropout (admin only)",
+    // ID 214: set by the system when Dealer Validation rejects the onboarding.
+    onboarding_rejected: "Onboarding rejected",
     lost_to_competition: "Lost to competition (name the competitor)",
     moved_to_other_business: "Moved to other business",
 };
@@ -57,7 +59,7 @@ export function MarkLostModal({ open, onClose, leadId, onSuccess, defaultReason 
             return;
         }
         if (reason === "other" && !notes.trim()) {
-            toast.error("Notes are required when reason is 'other'.");
+            toast.error("Add notes when the reason is Other.");
             return;
         }
         if (reason === "lost_to_competition" && !competitor.trim()) {
@@ -65,7 +67,7 @@ export function MarkLostModal({ open, onClose, leadId, onSuccess, defaultReason 
             return;
         }
         if (reason === "onboarding_dropout") {
-            toast.error("onboarding_dropout is admin-only (BRD §0.11).");
+            toast.error("Only Admin can choose Onboarding dropout.");
             return;
         }
         if (isHighImpactLostReason(reason) && !confirmedHighImpact) {
@@ -127,7 +129,7 @@ export function MarkLostModal({ open, onClose, leadId, onSuccess, defaultReason 
                             onChange={(e) => setReason(e.target.value as LostReason | "")}
                         >
                             <option value="">— select —</option>
-                            {LOST_REASON.filter((r) => r !== "onboarding_dropout").map((r) => (
+                            {LOST_REASON.filter((r) => r !== "onboarding_dropout" && r !== "onboarding_rejected").map((r) => (
                                 <option key={r} value={r}>{LOST_REASON_LABELS[r]}</option>
                             ))}
                         </select>

@@ -93,9 +93,9 @@ export async function reassignLead(input: ReassignInput, opts?: { tx?: Tx }): Pr
             throw new ReassignError("target_inactive", "Target user is inactive.", 400);
         }
 
-        const locked = (await tx.execute<{ lead_status: string | null; pre_transfer_status: string | null }>(sql`
-            SELECT lead_status, pre_transfer_status FROM dealer_leads WHERE id = ${input.leadId} FOR UPDATE
-        `)) as unknown as Array<{ lead_status: string | null; pre_transfer_status: string | null }>;
+        const locked = (await tx.execute<{ lead_status: string | null; pre_transfer_status: string | null; asm_id: string | null }>(sql`
+            SELECT lead_status, pre_transfer_status, asm_id FROM dealer_leads WHERE id = ${input.leadId} FOR UPDATE
+        `)) as unknown as Array<{ lead_status: string | null; pre_transfer_status: string | null; asm_id: string | null }>;
         // ID 179: a Won lead is never given to an ASM.
         const wonRefusal = wonToAsmRefusal(locked[0]?.lead_status, target.role);
         if (wonRefusal) throw new ReassignError("won_to_asm", wonRefusal, 409);

@@ -28,7 +28,7 @@
 
 const database = async () => (await import("@/lib/db")).db;
 import { sql, type SQL } from "drizzle-orm";
-import { engagedCall, humanCall } from "@/lib/reports/metricDefinitions";
+import { engagedCall, humanCall, notDirectOnboarding } from "@/lib/reports/metricDefinitions";
 import {
     ALL_CLOCK_KINDS,
     BASE_CLOCK_KINDS,
@@ -136,7 +136,9 @@ export async function computeLeadClocks(now = new Date(), opts: { kinds?: readon
                    dl.assigned_at,
                    dl.current_owner_id
               FROM dealer_leads dl
-             WHERE dl.is_active IS NOT FALSE AND dl.created_at IS NOT NULL`),
+             WHERE dl.is_active IS NOT FALSE AND dl.created_at IS NOT NULL
+               -- ID 214: a Direct onboarding lead has no first-call time limits.
+               AND ${notDirectOnboarding("dl")}`),
         db.execute(sql`
             SELECT t.dealer_lead_id AS lead_id, t.performed_at AS at, t.performed_by AS by, 'call' AS kind,
                    TRUE AS attempt, (${engagedCall(sql`t`)}) AS contact

@@ -87,7 +87,7 @@ export function LeadsSelectionBar({
                 );
             }
             toast.success(
-                `Type of Business updated on ${json.data.affected} lead${
+                `Business type set on ${json.data.affected} lead${
                     json.data.affected === 1 ? "" : "s"
                 }${json.data.skipped ? `, ${json.data.skipped} skipped` : ""}.`,
             );
@@ -182,8 +182,8 @@ export function LeadsSelectionBar({
                         // Say it plainly rather than silently handing back fewer
                         // ids than the user asked for.
                         <span className="text-xs font-medium text-amber-700">
-                            Capped at {cappedAt.toLocaleString("en-IN")} — the most a
-                            bulk action accepts.
+                            Only {cappedAt.toLocaleString("en-IN")} selected — the most one
+                            bulk action can take.
                         </span>
                     )}
                 </div>
@@ -206,7 +206,7 @@ export function LeadsSelectionBar({
                                 aria-label="Set type of business"
                                 className="rounded-lg border border-sky-200 bg-white px-2 py-1 text-xs text-sky-900 outline-none focus:border-sky-400"
                             >
-                                <option value="">Set type of business…</option>
+                                <option value="">Set business type…</option>
                                 {BUSINESS_TYPE_OPTIONS.map((o) => (
                                     <option key={o.value} value={o.value}>
                                         {o.label}

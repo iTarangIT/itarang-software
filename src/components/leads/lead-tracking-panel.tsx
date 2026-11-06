@@ -380,7 +380,7 @@ export function LeadTrackingPanel({ leadId, canDownload, compact = false }: Prop
                                 <ul className="mb-2 ml-1 space-y-1.5 border-l border-gray-100 pl-3">
                                     {evs.length === 0 && (
                                         <li className="text-[11px] text-gray-400">
-                                            Nothing was done during this hold.
+                                            No actions while they held the lead.
                                         </li>
                                     )}
                                     {evs.map((ev, i) => (

@@ -31,7 +31,7 @@ export default async function VisitCapturePage({
             <div className="rounded-md border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
                 {msg}{" "}
                 <Link href={back} className="underline">
-                    Go back
+                    Back
                 </Link>
             </div>,
         );
@@ -68,11 +68,11 @@ export default async function VisitCapturePage({
              WHERE a.id = ${sp.account}
         `)) as unknown as Array<{ id: string; name: string; owner_id: string | null }>;
         const back = `/my-dealers/${encodeURIComponent(sp.account)}`;
-        if (!acct) return refuse("That counter was not found.", "/my-dealers");
+        if (!acct) return refuse("Dealer not found.", "/my-dealers");
         const ok = mayLogAccountVisit({ userId: user.id, ownerId: acct.owner_id, teamIds: await getTeamMemberIds(user.id) });
-        if (!ok) return refuse("Only this counter's owner, or their manager, can log a visit here.", back);
+        if (!ok) return refuse("Only this dealer's owner or their manager can log a visit here.", back);
         return shell(<AccountVisitCapture accountId={acct.id} name={acct.name} backHref={back} />);
     }
 
-    return refuse("Open this page from a lead or a counter.", "/");
+    return refuse("Open this page from a lead or a dealer.", "/");
 }

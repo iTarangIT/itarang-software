@@ -9,6 +9,7 @@ import { eq } from "drizzle-orm";
 import { sendDealerRejectionNotificationEmail } from "@/lib/email/sendDealerRejectionNotificationEmail";
 import { getDealerNotificationRecipients } from "@/lib/email/dealer-notification-recipients";
 import { requireSalesHead } from "@/lib/auth/requireSalesHead";
+import { onOnboardingRejected } from "@/lib/onboarding/leadMatch";
 import { notifyOnboardingDecision } from "@/lib/notifications/events";
 import {
   sendDealerRejectedWhatsApp,
@@ -70,6 +71,10 @@ export async function POST(req: NextRequest, context: RouteContext) {
         updated_at: new Date(),
       })
       .where(eq(dealerOnboardingApplications.id, dealerId));
+
+    // ID 214: the lead goes to Lost 'Onboarding rejected' (reopened to Won
+    // when the dealer applies again). Never throws.
+    await onOnboardingRejected(dealerId, auth.user.id, typeof remarks === "string" ? remarks : null);
 
     const notificationRecipients = await getDealerNotificationRecipients(application, {
       includeDealer: true,

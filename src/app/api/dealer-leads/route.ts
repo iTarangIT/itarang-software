@@ -55,6 +55,7 @@ import {
 } from "@/lib/leads/acquisitionCampaigns";
 import { BUSINESS_TYPE_OPTIONS, normalizeBusinessType } from "@/lib/leads/businessType";
 import { fetchIvrLeadIds } from "@/lib/ai-dialer/phoneTypeStore";
+import { pastLimitLabelsByLead } from "@/lib/leads/queuePastLimit";
 
 export async function POST(req: NextRequest) {
   // ⚠ SECURITY: this create had no auth check (middleware does not gate
@@ -399,11 +400,14 @@ export const GET = withErrorHandler(async (req: Request) => {
   > = {};
   const pageIds = rows.map((l) => l.id).filter(Boolean) as string[];
   let ivrLeads = new Set<string>();
+  let pastLimits = new Map<string, string[]>();
   if (pageIds.length) {
     campaigns = await fetchCampaignForLeads(pageIds);
     businessTypes = await fetchBusinessTypeForLeads(pageIds);
     // D2 — the IVR chip: an IVR / company bot answered this number.
     ivrLeads = await fetchIvrLeadIds(pageIds);
+    // ID 199: "Time limit passed" on a manager's team view.
+    if (teamMemberIds.length > 0) pastLimits = await pastLimitLabelsByLead(pageIds);
     // Only fetched for roles allowed to see it — a request that cannot render
     // the stamp should not pay for the query either.
     if (caps.canSeeOwnerAsm) {
@@ -449,8 +453,11 @@ export const GET = withErrorHandler(async (req: Request) => {
     }
   }
 
+  // ID 199: a manager reviewing their team reads whose lead each row is —
+  // the owner stays visible on their own and their direct reports' rows.
+  const teamOwners = new Set([user.id, ...teamMemberIds]);
   const maskOversight = (l: LeadListRow) =>
-    caps.canSeeOwnerAsm
+    caps.canSeeOwnerAsm || (teamMemberIds.length > 0 && !!l.current_owner_id && teamOwners.has(l.current_owner_id))
       ? l
       : {
           ...l,
@@ -487,6 +494,7 @@ export const GET = withErrorHandler(async (req: Request) => {
       last_connect_status: dispositions[l.id]?.connectStatus ?? null,
       business_type: businessTypes[l.id] ?? null,
       is_ivr: ivrLeads.has(l.id),
+      past_limits: pastLimits.get(l.id) ?? [],
     })),
     total: stats.total,
     // { battery_sale: n, …, unset: n } under the current filters minus

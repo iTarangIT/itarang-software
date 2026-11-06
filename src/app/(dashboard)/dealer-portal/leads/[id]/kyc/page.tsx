@@ -44,8 +44,8 @@ type VerificationRow = {
 };
 
 const DEFAULT_CUSTOMER_VERIFICATIONS: VerificationRow[] = [
-    { type: 'aadhaar', label: 'Adhaar Verification', status: 'pending' },
-    { type: 'pan', label: 'Pan verification', status: 'pending' },
+    { type: 'aadhaar', label: 'Aadhaar verification', status: 'pending' },
+    { type: 'pan', label: 'PAN verification', status: 'pending' },
     { type: 'bank', label: 'Bank Verification', status: 'pending' },
     { type: 'address_proof', label: 'Address Proof', status: 'pending' },
     { type: 'rc', label: 'RC Verification', status: 'pending' },
@@ -157,7 +157,7 @@ export default function KYCPage() {
 
             if (!fetchedLead) {
                 setAccessDenied(true);
-                setApiError('Lead record could not be loaded. Please return to lead creation and try again.');
+                setApiError('Couldn\'t load this lead. Go back to Create lead and try again.');
                 return;
             }
 
@@ -656,9 +656,9 @@ export default function KYCPage() {
             <div className="min-h-screen flex items-center justify-center bg-[#F8F9FB]">
                 <div className="text-center max-w-md">
                     <Shield className="w-14 h-14 text-red-400 mx-auto mb-4" />
-                    <h2 className="text-2xl font-bold text-gray-900">Access Denied</h2>
+                    <h2 className="text-2xl font-bold text-gray-900">KYC not open for this lead</h2>
                     <p className="mt-2 text-sm text-gray-500">
-                        {apiError || 'Step 2 is only available for hot leads with non-cash payment method.'}
+                        {apiError || 'KYC (step 2) is only for Hot leads paying with finance.'}
                     </p>
                     <button onClick={() => router.push('/dealer-portal/leads/new')} className="mt-6 px-6 py-3 bg-[#0047AB] text-white rounded-xl font-bold">Back to Lead Creation</button>
                 </div>
@@ -811,7 +811,7 @@ export default function KYCPage() {
                                 <Clock className="w-5 h-5 text-amber-600 flex-shrink-0" />
                                 <div>
                                     <p className="text-sm font-bold text-amber-800">Awaiting Admin Verification</p>
-                                    <p className="text-xs text-amber-600 mt-0.5">Signed consent has been uploaded and is pending admin review. You will be notified once verified.</p>
+                                    <p className="text-xs text-amber-600 mt-0.5">Signed consent uploaded. We&apos;ll tell you when Admin verifies it.</p>
                                 </div>
                             </div>
                         ) : consentStatus === 'esign_failed' ? (
@@ -921,7 +921,7 @@ export default function KYCPage() {
                                 </div>
                                 <div className="flex-1">
                                     <p className="text-sm font-bold text-blue-800">Customer is Signing...</p>
-                                    <p className="text-xs text-blue-600 mt-0.5">Customer has opened the consent link and is completing the Aadhaar eSign process. This page will update automatically.</p>
+                                    <p className="text-xs text-blue-600 mt-0.5">The customer is signing with Aadhaar eSign. This page updates on its own.</p>
                                 </div>
                             </div>
                         ) : consentStatus === 'admin_rejected' ? (
@@ -1124,7 +1124,7 @@ export default function KYCPage() {
                                 <CheckCircle2 className="w-5 h-5 text-emerald-600 flex-shrink-0" />
                                 <div>
                                     <p className="text-sm font-bold text-emerald-800">Verification Submitted</p>
-                                    <p className="text-xs text-emerald-600 mt-0.5">Coupon <span className="font-mono font-bold">{couponCode}</span> consumed. Verification is in progress.</p>
+                                    <p className="text-xs text-emerald-600 mt-0.5">Coupon <span className="font-mono font-bold">{couponCode}</span> used. Verification has started.</p>
                                 </div>
                             </div>
                         ) : lead?.coupon_status === 'reserved' ? (
@@ -1167,7 +1167,7 @@ export default function KYCPage() {
                                     className="w-full px-6 py-3 bg-[#0047AB] text-white rounded-xl text-sm font-bold hover:bg-[#003580] transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                                 >
                                     {submitting && <Loader2 className="w-4 h-4 animate-spin" />}
-                                    Submit for Verification
+                                    Submit for verification
                                 </button>
                             </div>
                         ) : (

@@ -70,6 +70,8 @@ export const TOUCHPOINT_TYPE = [
   "ai_dialer_admin_push",
   // Post-conversion loopback (BRD §0.11)
   "onboarding_dropout_action",
+  // ID 214: the dealer's onboarding was linked to / submitted on this lead.
+  "onboarding_linked",
   // 29 Sep 2026 — lead events (tracker IDs 81, 82, 36). None is work.
   "lead_created",
   "lead_reinquiry",

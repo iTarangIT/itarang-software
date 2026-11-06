@@ -196,7 +196,7 @@ export function LeadDrawer({ lead, caps, onClose, onDone }: Props) {
             });
             const json = await res.json();
             if (!res.ok || !json.success) {
-                throw new Error(json?.error?.message ?? "Reassign failed");
+                throw new Error(json?.error?.message ?? "Couldn't reassign the lead. Try again.");
             }
             toast.success("Lead reassigned.");
             onDone();
@@ -343,7 +343,7 @@ export function LeadDrawer({ lead, caps, onClose, onDone }: Props) {
                             )}
                         </dd>
 
-                        <dt className="col-span-1 text-gray-500">Last touch</dt>
+                        <dt className="col-span-1 text-gray-500">Last activity</dt>
                         <dd className="col-span-2 tabular-nums text-gray-800">
                             {fmtDateTime(lead.last_touchpoint_at)}
                         </dd>
@@ -398,7 +398,7 @@ export function LeadDrawer({ lead, caps, onClose, onDone }: Props) {
                         className="mt-3 inline-flex items-center gap-1.5 text-[11px] font-semibold text-gray-700 transition hover:text-gray-900"
                     >
                         <ExternalLink className="h-3 w-3" />
-                        Open full lead &amp; timeline
+                        View lead timeline
                     </Link>
                     {/* The working page: status, Undo Mark Won, Withdraw quote.
                         Managers had no link to it from the leads list. */}
@@ -503,7 +503,7 @@ export function LeadDrawer({ lead, caps, onClose, onDone }: Props) {
                                 Reassign owner
                             </h3>
                             <p className="mt-1 text-[11px] text-gray-500">
-                                The reason is recorded as a touchpoint on the lead.
+                                Your reason is saved in the lead&apos;s activity.
                             </p>
 
                             <div className="mt-4 space-y-3">
@@ -531,7 +531,7 @@ export function LeadDrawer({ lead, caps, onClose, onDone }: Props) {
                                     </select>
                                     {usersQuery.error && (
                                         <p className="mt-1 text-[11px] text-rose-600">
-                                            Could not load users.
+                                            Couldn&apos;t load the team list. Try again.
                                         </p>
                                     )}
                                 </div>
@@ -544,7 +544,7 @@ export function LeadDrawer({ lead, caps, onClose, onDone }: Props) {
                                         value={reason}
                                         onChange={(e) => setReason(e.target.value)}
                                         rows={4}
-                                        placeholder="Why is this lead being reassigned?"
+                                        placeholder="Why are you reassigning this lead?"
                                         disabled={submitting}
                                         className="w-full rounded-md border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-100 disabled:bg-gray-50"
                                     />
@@ -565,7 +565,7 @@ export function LeadDrawer({ lead, caps, onClose, onDone }: Props) {
                 {!caps.canBulkAct && (
                         <div className="px-5 py-4">
                             <p className="text-[11px] text-gray-400">
-                                Reassignment is limited to admins and the sales head.
+                                Only Admin and Sales Head can reassign leads.
                             </p>
                         </div>
                 )}

@@ -128,7 +128,7 @@ export default function ReselectFinancingCard({
 
       {slotsFree <= 0 ? (
         <p className="mt-3 text-xs text-slate-500">
-          This lead is already with an NBFC. Its slot frees once that lender declines.
+          This lead is already with a lender. You can pick another only if they decline.
         </p>
       ) : available.length === 0 ? (
         <p className="mt-3 text-xs text-slate-500">

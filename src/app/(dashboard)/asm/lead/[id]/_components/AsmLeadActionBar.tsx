@@ -15,6 +15,7 @@ import { Ban } from "lucide-react";
 import type { LeadDetailBundle } from "@/lib/inside-sales/types";
 import { isOpen, type LeadStatus } from "@/lib/lifecycle/transitions";
 import { CallNowButton } from "@/components/leads/call-now-button";
+import { InfoTip } from "@/components/ui/info-tip";
 import { CorrectLeadGstinButton } from "@/components/leads/CorrectLeadGstinButton";
 import { GSTIN_CORRECTION_MANAGER_ROLES } from "@/lib/leads/correctLeadGstinRules";
 
@@ -119,7 +120,7 @@ export function AsmLeadActionBar({
     return (
         <div className="sticky bottom-0 z-10 bg-white border-t border-gray-200 px-4 sm:px-6 py-2.5 flex flex-wrap items-center gap-2">
             <Btn primary tone="emerald" icon={MapPinned} onClick={() => onAction("visit")}>
-                Log Visit
+                Log visit
             </Btn>
             {status === "Transferred_to_ASM" && (
                 <Btn icon={Ban} onClick={visitNotNeeded} disabled={savingNotNeeded}>
@@ -127,11 +128,12 @@ export function AsmLeadActionBar({
                 </Btn>
             )}
             <Btn icon={MessageSquarePlus} onClick={() => onAction("touchpoint")}>
-                Log Touchpoint
+                Log activity
             </Btn>
             <Btn icon={Receipt} onClick={() => onAction("commercials")}>
-                Update Commercials
+                Update quote
             </Btn>
+            <InfoTip className="-ml-1">Share a brochure, give or revise a quote, or change terms.</InfoTip>
             {/* ID 83: the owner asks the NeoDove calling team to ring this dealer
                 next. The call that follows is marked "called on your behalf". */}
             <CallNowButton
@@ -177,7 +179,7 @@ export function AsmLeadActionBar({
                 icon={AlertCircle}
                 onClick={() => onAction("escalate")}
                 disabled={!open}
-                disabledReason={!open ? "Lead is already terminal" : undefined}
+                disabledReason={!open ? "This lead is closed" : undefined}
             >
                 Escalate
             </Btn>

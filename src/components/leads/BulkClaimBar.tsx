@@ -169,7 +169,7 @@ export function BulkClaimBar({
             <Modal
                 open={confirmOpen}
                 onClose={() => !submitting && setConfirmOpen(false)}
-                title="Claim Leads"
+                title="Claim leads"
                 width="sm"
                 closeOnBackdrop={!submitting}
                 footer={

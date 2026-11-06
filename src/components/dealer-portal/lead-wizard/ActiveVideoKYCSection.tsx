@@ -5,6 +5,7 @@ import {
     AlertCircle, CheckCircle2, Clock, Copy, Loader2, MessageSquare, RefreshCw, Send, Video,
 } from 'lucide-react';
 import { SectionCard, PrimaryButton, SecondaryButton } from './shared';
+import { InfoTip } from '@/components/ui/info-tip';
 
 type StatusState =
     | 'loading'
@@ -183,11 +184,12 @@ export default function ActiveVideoKYCSection({
                 <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 text-sm text-blue-900">
                     <p className="font-semibold mb-1">RBI-grade Video KYC</p>
                     <p className="text-blue-800/90 leading-relaxed">
-                        We&apos;ll SMS a one-time secure link to
+                        We&apos;ll SMS
                         {customerName ? <> <span className="font-semibold">{customerName}</span></> : ' the customer'}
-                        {' '}at <span className="font-semibold">{maskedPhone(phone)}</span>.
-                        They open it on their phone and follow Decentro&apos;s prompts (blink, head turn, OTP utterance).
-                        Verification matches their live video against their Aadhaar / passport photo.
+                        {' '}a secure link at <span className="font-semibold">{maskedPhone(phone)}</span> to record a live video.{' '}
+                        <InfoTip>
+                            They open it on their phone and follow the steps (blink, turn head, say the OTP). We match the video to their Aadhaar or passport photo.
+                        </InfoTip>
                     </p>
                 </div>
 
@@ -210,7 +212,7 @@ export default function ActiveVideoKYCSection({
                         <Clock className="w-5 h-5 text-amber-600 flex-shrink-0" />
                         <div className="text-sm text-amber-800">
                             <p className="font-semibold">Customer completed the session — awaiting admin review.</p>
-                            <p className="text-xs text-amber-700/80 mt-0.5">Submit-for-Verification stays disabled until admin accepts.</p>
+                            <p className="text-xs text-amber-700/80 mt-0.5">You can submit for verification after Admin accepts the video.</p>
                         </div>
                     </div>
                 )}
@@ -273,7 +275,7 @@ export default function ActiveVideoKYCSection({
                                         {copied ? 'Copied' : 'Copy'}
                                     </button>
                                 </div>
-                                <p className="text-[10px] text-gray-500">Share the link manually if the SMS didn&apos;t land. Decentro times the link out after ~24 hours.</p>
+                                <p className="text-[10px] text-gray-500">If the SMS didn&apos;t arrive, share the link yourself. It expires after about 24 hours.</p>
                             </div>
                         )}
 
