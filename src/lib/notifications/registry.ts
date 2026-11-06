@@ -163,6 +163,7 @@ export const TYPE_LABELS: Record<string, string> = {
   "lead.reassigned_to_you": "Lead reassigned to you",
   "lead.reactivated": "Lead reactivated and back with you",
   "lead.moved_away": "Your lead moved to someone else by a manager",
+  "lead.team_reassigned": "A team member's lead was reassigned (to their manager)",
   "lead.visit_update": "Field visit booked / done / not needed (to the owner at transfer and whoever transferred it)",
   "lead.deal_card_changed": "Deal card on your lead changed by the Sales Head",
   "lead.discarded": "Lead discarded",

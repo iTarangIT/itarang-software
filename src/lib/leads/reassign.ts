@@ -68,9 +68,9 @@ export async function reassignLead(input: ReassignInput, opts?: { tx?: Tx }): Pr
             throw new ReassignError("target_inactive", "Target user is inactive.", 400);
         }
 
-        const locked = (await tx.execute<{ lead_status: string | null; pre_transfer_status: string | null }>(sql`
-            SELECT lead_status, pre_transfer_status FROM dealer_leads WHERE id = ${input.leadId} FOR UPDATE
-        `)) as unknown as Array<{ lead_status: string | null; pre_transfer_status: string | null }>;
+        const locked = (await tx.execute<{ lead_status: string | null; pre_transfer_status: string | null; asm_id: string | null }>(sql`
+            SELECT lead_status, pre_transfer_status, asm_id FROM dealer_leads WHERE id = ${input.leadId} FOR UPDATE
+        `)) as unknown as Array<{ lead_status: string | null; pre_transfer_status: string | null; asm_id: string | null }>;
         // ID 179: a Won lead is never given to an ASM.
         const wonRefusal = wonToAsmRefusal(locked[0]?.lead_status, target.role);
         if (wonRefusal) throw new ReassignError("won_to_asm", wonRefusal, 409);
@@ -91,6 +91,21 @@ export async function reassignLead(input: ReassignInput, opts?: { tx?: Tx }): Pr
         const closedVisits = handBack
             ? await releaseAsm(tx, input.leadId, `Closed: lead handed back to ${target.name ?? "an inside-sales rep"}`)
             : 0;
+        // ID 221: ASM to ASM — the lead's ASM link and any booked visit move
+        // with the lead, so the new ASM sees the visit and the old one drops it.
+        const oldAsm = locked[0]?.asm_id ?? null;
+        if (!handBack && target.role === "asm" && oldAsm && oldAsm !== input.targetUserId) {
+            await tx.execute(sql`
+                UPDATE dealer_leads SET asm_id = ${input.targetUserId} WHERE id = ${input.leadId}
+            `);
+            await tx.execute(sql`
+                UPDATE lead_visits
+                   SET asm_id = ${input.targetUserId}
+                 WHERE dealer_lead_id = ${input.leadId}
+                   AND asm_id = ${oldAsm}
+                   AND visit_status = 'scheduled'
+            `);
+        }
         const backTo = handBack ? statusBeforeTransfer(locked[0]?.pre_transfer_status ?? null) : null;
 
         await writeTouchpoint(

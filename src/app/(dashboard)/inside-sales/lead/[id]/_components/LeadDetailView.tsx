@@ -86,17 +86,19 @@ export function LeadDetailView({ leadId, viewerId, viewerRole, backHref = "/insi
     // team. Asked only when the viewer is not the owner and their role can
     // reach the reassign route at all.
     const ownerId = query.data?.data?.lead?.current_owner_id ?? null;
-    const teamQuery = useQuery<{ can_team_reassign: boolean; targets: TeamTarget[] }>({
+    // ID 221: asked for the owner too — their direct reports, by name.
+    const teamQuery = useQuery<{ can_team_reassign: boolean; can_owner_reassign?: boolean; targets: TeamTarget[] }>({
         queryKey: ["inside-sales-lead", leadId, "team-reassign", ownerId],
-        enabled: !!ownerId && ownerId !== viewerId && TEAM_REASSIGN_ROLES.includes(viewerRole),
+        enabled: !!ownerId && TEAM_REASSIGN_ROLES.includes(viewerRole),
         queryFn: async () => {
             const res = await fetch(`/api/inside-sales/lead/${encodeURIComponent(leadId)}/reassign`, { cache: "no-store" });
             const json = await res.json().catch(() => null);
-            if (!res.ok || !json?.success) return { can_team_reassign: false, targets: [] };
+            if (!res.ok || !json?.success) return { can_team_reassign: false, can_owner_reassign: false, targets: [] };
             return json.data;
         },
     });
     const canTeamReassign = Boolean(teamQuery.data?.can_team_reassign && teamQuery.data.targets.length > 0);
+    const canOwnerReassign = Boolean(teamQuery.data?.can_owner_reassign && teamQuery.data.targets.length > 0);
 
     const invalidate = useCallback(() => {
         qc.invalidateQueries({ queryKey: ["inside-sales-lead", leadId] });
@@ -205,6 +207,7 @@ export function LeadDetailView({ leadId, viewerId, viewerRole, backHref = "/insi
                 onAction={setActiveModal}
                 onChanged={invalidate}
                 canTeamReassign={!isOwner && canTeamReassign}
+                canOwnerReassign={isOwner && canOwnerReassign}
             />
 
             {/* Modals — render only when active to keep the tree small. */}
@@ -273,7 +276,8 @@ export function LeadDetailView({ leadId, viewerId, viewerRole, backHref = "/insi
                 leadId={leadId}
                 viewerId={viewerId}
                 onSuccess={onActionSuccess}
-                teamTargets={!isOwner && canTeamReassign ? teamQuery.data?.targets : undefined}
+                teamTargets={teamQuery.data?.targets}
+                asManager={!isOwner}
             />
             <ReassignToIsrModal
                 open={activeModal === "reassign_isr"}

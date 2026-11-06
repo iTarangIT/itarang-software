@@ -6,6 +6,12 @@
 //
 // ID 155: GET returns whether the viewer may move this lead as the owner's
 // manager, and to whom (themself + their direct reports), for the picker.
+//
+// ID 221 (Kartik, 3 Nov): the OWNER too hands a lead only to the team under
+// them — their active direct reports, picked by name. No user-id box; the
+// server refuses anyone else. Nobody under the owner = no Reassign (an ISR
+// still sends a lead to an ASM with Transfer to ASM). 'Notify admin' is gone;
+// the new owner and the old owner's manager get a bell.
 
 import { z } from "zod";
 import { eq, inArray, sql } from "drizzle-orm";
@@ -13,18 +19,17 @@ import { requireRole } from "@/lib/auth-utils";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
 import { db } from "@/lib/db";
 import { dealerLeads, users } from "@/lib/db/schema";
-import { getTeamMemberIds } from "@/lib/users/team";
+import { getManagerOf, getReassignPickList, getTeamMemberIds } from "@/lib/users/team";
 import { checkReassignReason, checkTeamReassign, ownerScopeIds } from "@/lib/users/teamRules";
 import { assertOwner } from "@/lib/leads/ownership";
 import { REASSIGN_REASON_MIN, ReassignError, reassignLead } from "@/lib/leads/reassign";
-import { notifyLeadsReassigned } from "@/lib/leads/newOwnerNotice";
+import { notifyLeadsReassigned, notifyOwnerManagerOfMove } from "@/lib/leads/newOwnerNotice";
 
 const MUTATE_ROLES = ["inside_sales_rep", "asm", "admin", "partner"];
 
 const BodySchema = z.object({
     target_user_id: z.string().min(1),
     reason: z.string().min(REASSIGN_REASON_MIN).max(5000),
-    notify_admin: z.boolean().optional(),
 });
 
 export const POST = withErrorHandler(
@@ -54,6 +59,14 @@ export const POST = withErrorHandler(
 
         try {
             if (isOwner) {
+                // ID 221: only to someone in the owner's own team.
+                const mine = await getTeamMemberIds(user.id);
+                if (!mine.includes(body.target_user_id)) {
+                    return errorResponse(
+                        "You can hand a lead only to someone in your team. Ask your manager to move it to anyone else.",
+                        403,
+                    );
+                }
                 await reassignLead({
                     leadId: id,
                     actorId: user.id,
@@ -102,14 +115,24 @@ export const POST = withErrorHandler(
             reason: body.reason,
             fromOwners: { [id]: lead?.current_owner_id ?? null },
         });
+        // ID 221: the old owner's manager hears about it too.
+        const fromOwnerId = lead?.current_owner_id ?? null;
+        await notifyOwnerManagerOfMove({
+            leadId: id,
+            fromOwnerId,
+            managerId: await getManagerOf(fromOwnerId),
+            toUserId: body.target_user_id,
+            actorId: user.id,
+            reason: body.reason,
+        });
 
-        return successResponse({ ok: true, notify_admin: !!body.notify_admin });
+        return successResponse({ ok: true });
     },
 );
 
-// ID 155: who the viewer may hand this lead to as the owner's manager. Empty
-// targets (can_team_reassign false) for the owner themself — they use the
-// ordinary picker — and for anyone who does not manage the current owner.
+// ID 155: who the viewer may hand this lead to as the owner's manager.
+// ID 221: for the owner themself, their active direct reports
+// (can_owner_reassign); empty = no Reassign button.
 export const GET = withErrorHandler(
     async (_req: Request, ctx: { params: Promise<{ id: string }> }) => {
         const user = await requireRole(MUTATE_ROLES);
@@ -121,9 +144,13 @@ export const GET = withErrorHandler(
             .where(eq(dealerLeads.id, id))
             .limit(1);
         if (!lead) return errorResponse("Lead not found", 404);
-        const teamMemberIds = lead.current_owner_id === user.id ? [] : await getTeamMemberIds(user.id);
+        if (lead.current_owner_id === user.id) {
+            const targets = (await getReassignPickList(user.id)).map((t) => ({ ...t, is_self: false }));
+            return successResponse({ can_team_reassign: false, can_owner_reassign: targets.length > 0, targets });
+        }
+        const teamMemberIds = await getTeamMemberIds(user.id);
         const managesOwner = !!lead.current_owner_id && teamMemberIds.includes(lead.current_owner_id);
-        if (!managesOwner) return successResponse({ can_team_reassign: false, targets: [] });
+        if (!managesOwner) return successResponse({ can_team_reassign: false, can_owner_reassign: false, targets: [] });
         const ids = ownerScopeIds(user.id, teamMemberIds).filter((u) => u !== lead.current_owner_id);
         const rows = ids.length
             ? await db
@@ -131,10 +158,17 @@ export const GET = withErrorHandler(
                   .from(users)
                   .where(inArray(users.id, ids))
             : [];
+        const territory = new Map((await getReassignPickList(user.id)).map((t) => [t.id, t.territory]));
         const targets = rows
             .filter((r) => r.is_active !== false)
-            .map((r) => ({ id: r.id, name: r.name, role: r.role, is_self: r.id === user.id }))
+            .map((r) => ({
+                id: r.id,
+                name: r.name,
+                role: r.role,
+                territory: territory.get(r.id) ?? null,
+                is_self: r.id === user.id,
+            }))
             .sort((a, b) => Number(b.is_self) - Number(a.is_self) || a.name.localeCompare(b.name));
-        return successResponse({ can_team_reassign: true, targets });
+        return successResponse({ can_team_reassign: true, can_owner_reassign: false, targets });
     },
 );

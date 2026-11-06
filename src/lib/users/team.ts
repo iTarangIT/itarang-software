@@ -55,6 +55,56 @@ export async function getTeamPeople(managerId: string): Promise<Array<{ id: stri
 }
 
 /**
+ * ID 221: the people a lead may be handed to by name — the manager's ACTIVE
+ * direct reports with role and territory (an ASM's active cities). Nobody
+ * remembers a user id. Empty = nobody under this person.
+ */
+export async function getReassignPickList(
+    managerId: string,
+): Promise<Array<{ id: string; name: string; role: string; territory: string | null }>> {
+    const ids = await getTeamMemberIds(managerId);
+    if (ids.length === 0) return [];
+    const rows = (await db.execute(sql`
+        SELECT u.id::text AS id, COALESCE(u.name, u.email) AS name, COALESCE(u.role, '') AS role,
+               (SELECT string_agg(DISTINCT COALESCE(t.city, t.state), ', ')
+                  FROM asm_territories t
+                 WHERE t.asm_id = u.id::text
+                   AND (t.active_to IS NULL OR t.active_to >= (now() AT TIME ZONE 'Asia/Kolkata')::date)) AS territory
+          FROM users u
+         WHERE u.id::text IN (${sql.join(ids.map((i) => sql`${i}`), sql`, `)})
+           AND u.is_active IS DISTINCT FROM false
+         ORDER BY name ASC
+    `)) as unknown as Array<{ id: string; name: string; role: string; territory: string | null }>;
+    return rows;
+}
+
+/** ID 221: `userId`'s manager on their current line, or null. */
+export async function getManagerOf(userId: string | null | undefined): Promise<string | null> {
+    if (!userId) return null;
+    try {
+        if (await hasReportingHistoryTable()) {
+            const rows = (await db.execute(sql`
+                SELECT l.manager_id::text AS manager FROM user_reporting_lines l
+                 WHERE l.user_id::text = ${userId}
+                   AND l.effective_to IS NULL
+                   AND l.effective_from <= (now() AT TIME ZONE 'Asia/Kolkata')::date
+                 LIMIT 1
+            `)) as unknown as Array<{ manager: string | null }>;
+            return rows[0]?.manager ?? null;
+        }
+        if (await hasReportsToColumn()) {
+            const rows = (await db.execute(sql`
+                SELECT to_jsonb(u) ->> 'reports_to' AS manager FROM users u WHERE u.id::text = ${userId} LIMIT 1
+            `)) as unknown as Array<{ manager: string | null }>;
+            return rows[0]?.manager ?? null;
+        }
+    } catch (err) {
+        console.warn("[team] getManagerOf failed", err);
+    }
+    return null;
+}
+
+/**
  * ID 155: may `userId` READ lead `leadId` under the own-leads rule (ID 45)?
  * True when they own it, or a direct report of theirs owns it. Read paths
  * only; changing a lead stays with its owner (assertOwner).
