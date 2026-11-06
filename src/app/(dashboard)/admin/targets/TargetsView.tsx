@@ -28,7 +28,9 @@ import {
     SALES_HEAD_METRIC_FOR_ROLES,
     TARGET_METRIC_KEYS,
     TARGET_METRICS,
+    NOT_MEASURED,
     TARGET_STATUS_LABEL,
+    displayTargetNote,
     metricsForRole,
     type TargetStatus,
 } from "@/lib/targets/rules";
@@ -85,6 +87,19 @@ async function post(body: unknown) {
     const json = await res.json();
     if (!json.success) throw new Error(json.error?.message ?? "Action failed");
     return json.data;
+}
+
+/** "22 Sept" (IST) — C15 "Waiting for Sonu since 22 Sept (41 days)". */
+const fmtDayShort = (iso: string) =>
+    new Date(iso).toLocaleDateString("en-IN", { day: "numeric", month: "short", timeZone: "Asia/Kolkata" });
+
+function waitingText(r: TargetRow, name: string): string | null {
+    if (r.status !== "pushed" || r.hours_since_push_unaccepted == null) return null;
+    const since = r.first_pushed_at ?? r.pushed_at;
+    const days = Math.floor(r.hours_since_push_unaccepted / 24);
+    const who = name.trim().split(/\s+/)[0] || name;
+    const when = since ? ` since ${fmtDayShort(since)}` : "";
+    return `Waiting for ${who}${when} (${days === 1 ? "1 day" : `${days} days`})`;
 }
 
 const fmtWhen = (iso: string | null) =>
@@ -273,6 +288,8 @@ function PersonCard({
 }) {
     const first = rows[0];
     const name = first.user_name ?? first.user_id;
+    // C16: "Nothing recorded …" is said once, under the name.
+    const noData = rows.some((r) => r.progress?.not_measured_reason === NOT_MEASURED.no_data);
     const rejected = rows.filter((r) => r.status === "rejected");
     const corrections = rows.filter((r) => r.correction_open);
     const postIds = toPost(rows);
@@ -344,6 +361,9 @@ function PersonCard({
                 <h2 className="text-sm font-semibold text-ink">
                     {name}
                     <span className="ml-2 text-[11px] font-normal text-ink-muted">{(first.user_role ?? "").replace(/_/g, " ")}</span>
+                    {noData && (
+                        <span className="block text-[11px] font-normal text-ink-muted">Not measured: {NOT_MEASURED.no_data}</span>
+                    )}
                 </h2>
                 <button
                     type="button"
@@ -482,7 +502,7 @@ function PersonCard({
                                             {(r.next_stretch ?? r.stretch) > 0 ? `+ ${fmtTarget(r.metric, r.next_stretch ?? r.stretch, r.unit)}` : "—"}
                                             {(r.next_stretch != null ? r.next_stretch_note : r.stretch_note) && (
                                                 <span className="block max-w-[180px] text-[10px] italic text-ink-muted">
-                                                    “{r.next_stretch != null ? r.next_stretch_note : r.stretch_note}”
+                                                    “{displayTargetNote(r.next_stretch != null ? r.next_stretch_note : r.stretch_note)}”
                                                 </span>
                                             )}
                                         </span>
@@ -506,8 +526,7 @@ function PersonCard({
                                                 : (STATUS_TONE[r.status] ?? "text-ink-muted")
                                         }
                                     >
-                                        {TARGET_STATUS_LABEL[r.status] ?? r.status}
-                                        {r.status === "pushed" && r.hours_since_push_unaccepted != null && ` (${r.hours_since_push_unaccepted}h since first sent)`}
+                                        {waitingText(r, name) ?? TARGET_STATUS_LABEL[r.status] ?? r.status}
                                     </span>
                                     {r.posted_at && r.status !== "draft" && (
                                         <span className="block text-[10px] text-ink-muted">Posted {fmtWhen(r.posted_at)}</span>
@@ -521,6 +540,7 @@ function PersonCard({
                                 <TargetProgressCells
                                     metric={r.metric}
                                     p={r.progress}
+                                    hideReason={NOT_MEASURED.no_data}
                                     unit={r.unit}
                                     kind={r.kind}
                                     actualSlot={
@@ -629,7 +649,7 @@ function StretchCell({
     onSave: (r: TargetRow, raw: string, note: string | null) => void;
 }) {
     const shown = row.next_stretch ?? row.stretch;
-    const shownNote = (row.next_stretch != null ? row.next_stretch_note : row.stretch_note) ?? "";
+    const shownNote = displayTargetNote(row.next_stretch != null ? row.next_stretch_note : row.stretch_note) ?? "";
     const [value, setValue] = useState(shown ? String(shown) : "");
     const [note, setNote] = useState(shownNote);
     const save = () => onSave(row, value, note.trim() || null);
@@ -706,7 +726,7 @@ function HistoryPanel({ month, userId }: { month: string; userId: string }) {
                                     {num(v.stretch)}
                                 </td>
                                 <td className="py-1 pr-2">{v.changed_by_name ?? "—"}</td>
-                                <td className="py-1 text-ink-muted">{v.note ?? ""}</td>
+                                <td className="py-1 text-ink-muted">{displayTargetNote(v.note) ?? ""}</td>
                             </tr>
                         ))}
                     </tbody>

@@ -42,7 +42,7 @@ export const ORDER_CLAIM_VIEW_ROLES = [
 export class OrderClaimsUnavailable extends Error {
     readonly status = 503;
     constructor() {
-        super("Recording an order needs migration E-334 on this database.");
+        super("Recording an order is not set up on this server yet. Ask Admin.");
     }
 }
 

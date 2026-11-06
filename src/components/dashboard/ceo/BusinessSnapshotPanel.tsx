@@ -13,6 +13,7 @@ import { formatINRCompact } from "@/lib/format";
 import { DashCard, TABLE_HEAD } from "@/components/dashboard/redesign/primitives";
 import { Pagination, usePagination } from "@/components/shared/Pagination";
 import { ManualSalesUpload } from "./ManualSalesUpload";
+import { expenseBucketLabel } from "@/lib/expenses";
 
 /** Rows per page in the two recent lists — they are a glance, not a ledger. */
 const RECENT_PAGE_SIZE = 5;
@@ -29,6 +30,8 @@ interface RecentInvoice {
 interface RecentExpense {
   id: string;
   category: string;
+  vendor?: string | null;
+  bucket?: string | null;
   amount: string;
   approved_at: string | null;
   submitter_name: string | null;
@@ -40,6 +43,15 @@ interface Props {
 }
 
 const formatINR = (n: number) => formatINRCompact(n);
+
+/** C23: vendor first; a bare "Invoice" category says nothing, so the bucket next. */
+function expenseName(exp: RecentExpense): string {
+  const vendor = exp.vendor?.trim();
+  if (vendor) return vendor;
+  const generic = !exp.category || exp.category.trim().toLowerCase() === "invoice";
+  if (generic && exp.bucket) return expenseBucketLabel(exp.bucket);
+  return exp.category || "Expense";
+}
 
 export function BusinessSnapshotPanel({ recentInvoices = [], recentExpenses = [] }: Props) {
   // E-219 — both recent lists are paged five at a time, with the compact control.
@@ -57,7 +69,7 @@ export function BusinessSnapshotPanel({ recentInvoices = [], recentExpenses = []
 
       <div className="mt-2 grid grid-cols-1 gap-4">
         <div>
-          <p className={cn(TABLE_HEAD, "mb-2")}>Recent Zoho invoices (before Vyapar)</p>
+          <p className={cn(TABLE_HEAD, "mb-2")}>Recent invoices</p>
           {recentInvoices.length === 0 ? (
             <p data-testid="recent-invoices-empty" className="text-xs text-ink-muted">No invoices synced yet.</p>
           ) : (
@@ -110,7 +122,7 @@ export function BusinessSnapshotPanel({ recentInvoices = [], recentExpenses = []
                 >
                   <div className="min-w-0 flex-1">
                     <p className="font-semibold text-ink truncate">
-                      {exp.category}
+                      {expenseName(exp)}
                     </p>
                     <p className="text-[11px] text-ink-muted truncate">
                       {exp.submitter_name || "—"}

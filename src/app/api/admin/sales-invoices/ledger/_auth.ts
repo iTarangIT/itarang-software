@@ -14,7 +14,7 @@ class LedgerUnavailable extends Error {
 export async function requireLedger() {
     const user = await requireRole(LEDGER_ROLES);
     if (!(await hasInvoiceLedgerTables())) {
-        throw new LedgerUnavailable("The invoice ledger needs migration E-322 on this database.");
+        throw new LedgerUnavailable("The invoice ledger is not set up on this server yet. Ask Admin.");
     }
     return user;
 }

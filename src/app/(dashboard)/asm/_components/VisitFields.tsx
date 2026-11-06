@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { InfoTip } from "@/components/ui/info-tip";
+import { LEAD_STATUS_LABEL } from "@/lib/leads/queueFilters";
 import { PhotoUploader } from "./PhotoUploader";
 import { VerifiedVisitCapture, type CapturedVisit } from "@/components/visits/VerifiedVisitCapture";
 import { istDay } from "@/lib/visits/verifiedCapture";
@@ -388,7 +389,7 @@ export function VisitFields({ form, leadId }: { form: UseVisitForm; leadId: stri
                             commercials stages move only with quotes. */}
                         <p className="mt-1 rounded-md bg-gray-50 px-3 py-2 text-xs text-gray-600">
                             {statusTo
-                                ? <>Moves to {statusTo.replace(/_/g, " ")}.{" "}<InfoTip>Or back to its stage before the transfer, if that is further along.</InfoTip></>
+                                ? <>Moves to {LEAD_STATUS_LABEL[statusTo] ?? statusTo.replace(/_/g, " ")}.{" "}<InfoTip>Or back to its stage before the transfer, if that is further along.</InfoTip></>
                                 : lead.lead_status === "Transferred_to_ASM"
                                   ? <>The lead goes back to its earlier stage.{" "}<InfoTip>This ends Awaiting field visit. The lead returns to its stage before the transfer, at least Under discussion.</InfoTip></>
                                   : "Status changes on its own when you add a quote."}

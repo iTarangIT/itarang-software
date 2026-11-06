@@ -5,7 +5,8 @@
 
 import { InfoTip } from "@/components/ui/info-tip";
 import Link from "next/link";
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
+import { ActionsMenu, type ActionsMenuItem } from "@/components/ui/actions-menu";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 
@@ -38,6 +39,20 @@ const pct = (r: number | null) => (r == null ? "—" : `${Math.round(r * 100)}%`
 export type DealerHealthFilter = AccountBucket | "" | "ordering";
 const ORDERING: readonly AccountBucket[] = ["active", "cooling"];
 
+// C13 (wording audit, 2 Nov): the "Show all columns" choice, remembered per browser.
+const ALL_COLS_KEY = "dealerHealth.allColumns";
+function readAllCols(): boolean {
+    try {
+        return window.localStorage.getItem(ALL_COLS_KEY) === "1";
+    } catch {
+        return false;
+    }
+}
+function subscribeAllCols(onChange: () => void): () => void {
+    window.addEventListener("storage", onChange);
+    return () => window.removeEventListener("storage", onChange);
+}
+
 export function DealerHealthView({ initialBucket = "" }: { initialBucket?: DealerHealthFilter }) {
     const [group, setGroup] = useState<Group>("owner");
     const [bucket, setBucket] = useState<DealerHealthFilter>(initialBucket);
@@ -46,6 +61,54 @@ export function DealerHealthView({ initialBucket = "" }: { initialBucket?: Deale
     // ID 5 — close a dealer as "Lost / closed" with a reason, or reopen it.
     const [closing, setClosing] = useState<string | null>(null);
     const [closeReason, setCloseReason] = useState("");
+    // C12 (wording audit, 2 Nov): one "⋯" menu per row; the order form opens in place.
+    const [ordering, setOrdering] = useState<string | null>(null);
+    const rowActions = (accountId: string, isClosed: boolean, canOrder: boolean): ActionsMenuItem[] => {
+        if (isClosed) {
+            return [
+                {
+                    label: "Reopen",
+                    disabled: closure.isPending,
+                    onSelect: () => closure.mutate({ accountId, action: "reopen" }),
+                },
+            ];
+        }
+        const items: ActionsMenuItem[] = [];
+        if (canOrder) {
+            items.push({
+                label: "Order placed",
+                tone: "good",
+                onSelect: () => {
+                    setClosing(null);
+                    setOrdering(accountId);
+                },
+            });
+        }
+        items.push({
+            label: "Close dealer",
+            tone: "danger",
+            onSelect: () => {
+                setOrdering(null);
+                setClosing(accountId);
+                setCloseReason("");
+                closure.reset();
+            },
+        });
+        return items;
+    };
+    // C13: Lifetime and Days between orders are hidden until asked for.
+    const [colsOverride, setColsOverride] = useState<boolean | null>(null);
+    const storedAllCols = useSyncExternalStore(subscribeAllCols, readAllCols, () => false);
+    const allCols = colsOverride ?? storedAllCols;
+    const toggleCols = () => {
+        const next = !allCols;
+        setColsOverride(next);
+        try {
+            window.localStorage.setItem(ALL_COLS_KEY, next ? "1" : "0");
+        } catch {
+            /* storage blocked: the choice lasts for this visit */
+        }
+    };
     const closure = useMutation({
         mutationFn: async (args: { accountId: string; action: "close" | "reopen" }) => {
             const res = await fetch(`/api/admin/accounts/${encodeURIComponent(args.accountId)}/closure`, {
@@ -147,8 +210,13 @@ export function DealerHealthView({ initialBucket = "" }: { initialBucket?: Deale
                 </p>
             )}
 
+            <div className="flex justify-end">
+                <button type="button" onClick={toggleCols} className="text-xs font-semibold text-brand-sky hover:underline">
+                    {allCols ? "Show fewer columns" : "Show all columns"}
+                </button>
+            </div>
             <div className="rounded-xl border border-border bg-surface shadow-card overflow-x-auto">
-                <table className="w-full min-w-[1100px] text-sm">
+                <table className={`w-full ${allCols ? "min-w-[1100px]" : "min-w-[900px]"} text-sm`}>
                     <thead className="bg-bg/60 text-[11px] uppercase tracking-wide text-ink-muted">
                         <tr>
                             <th className="px-3 py-2 text-left font-semibold">Dealer</th>
@@ -159,15 +227,15 @@ export function DealerHealthView({ initialBucket = "" }: { initialBucket?: Deale
                             <th className="px-3 py-2 text-right font-semibold">Days since order</th>
                             <th className="px-3 py-2 text-right font-semibold">Orders</th>
                             <th className="px-3 py-2 text-right font-semibold">Revenue (90 days)</th>
-                            <th className="px-3 py-2 text-right font-semibold">Lifetime</th>
-                            <th className="px-3 py-2 text-right font-semibold">Days between orders</th>
+                            {allCols && <th className="px-3 py-2 text-right font-semibold">Lifetime</th>}
+                            {allCols && <th className="px-3 py-2 text-right font-semibold">Days between orders</th>}
                             {data?.can_close && <th className="px-3 py-2 text-left font-semibold">Actions</th>}
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-border">
                         {visible.length === 0 && (
                             <tr>
-                                <td colSpan={data?.can_close ? 11 : 10} className="px-3 py-8 text-center text-ink-muted">
+                                <td colSpan={(data?.can_close ? 11 : 10) - (allCols ? 0 : 2)} className="px-3 py-8 text-center text-ink-muted">
                                     No dealers in this bucket.
                                 </td>
                             </tr>
@@ -190,7 +258,7 @@ export function DealerHealthView({ initialBucket = "" }: { initialBucket?: Deale
                                         {[
                                             r.city,
                                             r.gstin_missing ? "GSTIN missing" : r.gstin,
-                                            r.came_through === "direct" ? "direct onboarding" : null,
+                                            r.came_through === "direct" ? "direct" : null,
                                         ]
                                             .filter(Boolean)
                                             .join(" · ")}
@@ -217,38 +285,25 @@ export function DealerHealthView({ initialBucket = "" }: { initialBucket?: Deale
                                 </td>
                                 <td className="px-3 py-2 text-right tabular-nums">{r.orders}</td>
                                 <td className="px-3 py-2 text-right tabular-nums">{inr(r.revenue_90d)}</td>
-                                <td className="px-3 py-2 text-right tabular-nums">{inr(r.revenue_lifetime)}</td>
-                                <td className="px-3 py-2 text-right tabular-nums">{r.avg_reorder_days ?? "—"}</td>
+                                {allCols && <td className="px-3 py-2 text-right tabular-nums">{inr(r.revenue_lifetime)}</td>}
+                                {allCols && <td className="px-3 py-2 text-right tabular-nums">{r.avg_reorder_days ?? "—"}</td>}
                                 {data?.can_close && (
                                     <td className="px-3 py-2 text-right">
-                                        {/* ID 5 (E-334) — record an order before its invoice exists. */}
-                                        {data?.can_record_orders && r.account_id && r.bucket !== "closed" && !r.order_claim && closing !== r.account_id && (
-                                            <div className="mb-1">
-                                                <OrderPlacedButton accountId={r.account_id} />
-                                            </div>
-                                        )}
-                                        {r.account_id && r.bucket === "closed" && (
-                                            <button
-                                                type="button"
-                                                disabled={closure.isPending}
-                                                onClick={() => closure.mutate({ accountId: r.account_id!, action: "reopen" })}
-                                                className="text-xs font-semibold text-brand-sky hover:underline"
-                                            >
-                                                Reopen
-                                            </button>
-                                        )}
-                                        {r.account_id && r.bucket !== "closed" && closing !== r.account_id && (
-                                            <button
-                                                type="button"
-                                                onClick={() => {
-                                                    setClosing(r.account_id);
-                                                    setCloseReason("");
-                                                    closure.reset();
+                                        {/* ID 5 — record an order before its invoice exists. */}
+                                        {r.account_id && ordering === r.account_id && (
+                                            <OrderPlacedButton
+                                                accountId={r.account_id}
+                                                open
+                                                onOpenChange={(o) => {
+                                                    if (!o) setOrdering(null);
                                                 }}
-                                                className="text-xs font-semibold text-rose-700 hover:underline"
-                                            >
-                                                Close dealer
-                                            </button>
+                                            />
+                                        )}
+                                        {r.account_id && ordering !== r.account_id && closing !== r.account_id && (
+                                            <ActionsMenu
+                                                label={`Actions for ${r.dealer}`}
+                                                items={rowActions(r.account_id, r.bucket === "closed", Boolean(data?.can_record_orders && !r.order_claim))}
+                                            />
                                         )}
                                         {closing === r.account_id && (
                                             <div className="flex flex-col items-end gap-1">

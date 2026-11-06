@@ -12,6 +12,8 @@
 // Energy news card stays on this page; its full feed is /ceo/news.
 
 import { InfoTip } from "@/components/ui/info-tip";
+import { LEAD_STATUS_LABEL } from "@/lib/leads/queueFilters";
+import type { LeadStatus } from "@/lib/lifecycle/transitions";
 import React from "react";
 import Link from "next/link";
 import { InvoicesReadUpTo } from "@/components/sales/InvoicesReadUpTo";
@@ -657,37 +659,45 @@ export default function CEODashboard() {
   // ── Sales engine ─────────────────────────────────────────────────────────
   // The Lead Funnel report's stages when it loads (share of the period's leads
   // that ever reached each stage); the control tower's three steps otherwise.
-  type FunnelRow = { label: string; count: number; pct: number | null; note: string };
+  // C3 (wording audit, 2 Nov): the short status names, and one "Now" column
+  // instead of "there now" on every row. `count` = ever reached (null for the
+  // rows where "reached" does not apply); `now` = leads at that stage today.
+  type FunnelRow = { label: string; count: number | null; pct: number | null; note: string; now: number | null };
+  const FUNNEL_LABEL: Record<string, string> = {
+    "All leads created": "All leads",
+    "Not in sales lifecycle (AI pool)": "AI pool",
+    "Never Assigned": "Never assigned",
+  };
   const stageRows: FunnelRow[] = (stages.data?.rows ?? []).map((r, i) => {
+    const stage = String(r.stage);
     const ever = r.ever_reached == null ? null : Number(r.ever_reached);
     const pct = r.pct_reached == null ? null : Number(r.pct_reached);
     return {
-      label: String(r.stage).replace(/_/g, " "),
-      count: ever ?? Number(r.count ?? 0),
+      label:
+        LEAD_STATUS_LABEL[stage as LeadStatus] ?? FUNNEL_LABEL[stage] ?? stage.replace(/_/g, " "),
+      count: ever,
       pct: i === 0 ? null : pct,
-      note:
-        i === 0
-          ? "Created in the period"
-          : pct == null
-            ? "there now"
-            : `${pct}% of leads in`,
+      note: i === 0 || pct == null ? "" : `${pct}%`,
+      now: i === 0 ? null : Number(r.count ?? 0),
     };
   });
   const rateOf = (a: number, b: number) => (b > 0 ? Math.round((a / b) * 100) : null);
   const engineRows: FunnelRow[] = engine
     ? [
-        { label: "Leads in", count: engine.leads_in.now, pct: null, note: "Created in the period" },
+        { label: "Leads in", count: engine.leads_in.now, pct: null, note: "", now: null },
         {
           label: "Converted",
           count: engine.converted.now,
           pct: rateOf(engine.converted.now, engine.leads_in.now),
           note: `${rateOf(engine.converted.now, engine.leads_in.now) ?? "—"}% of leads in`,
+          now: null,
         },
         {
           label: "First order",
           count: engine.first_orders.now,
           pct: rateOf(engine.first_orders.now, engine.converted.now),
           note: `${rateOf(engine.first_orders.now, engine.converted.now) ?? "—"}% of converted`,
+          now: null,
         },
       ]
     : [];
@@ -801,9 +811,6 @@ export default function CEODashboard() {
             </Link>
           </p>
         )}
-        <p className="text-xs text-ink-muted">
-          Not tracked yet: orders claimed without an invoice.
-        </p>
       </div>
 
       {/* Headline tiles */}
@@ -904,8 +911,12 @@ export default function CEODashboard() {
           label="Accounts Receivable"
           value={owed == null ? "—" : inr(owed)}
           href="/ceo/receivables"
-          sub="Unpaid on all invoices, as of now · not limited to the period · open for ageing"
-          footer={<ReceivablesSource />}
+          sub={
+            <>
+              unpaid · all invoices
+              <ReceivablesSource compact />
+            </>
+          }
         />
       </div>
 
@@ -948,8 +959,13 @@ export default function CEODashboard() {
             <LoadingBlock />
           ) : overview.error ? (
             <NotAvailable reason={(overview.error as Error).message} />
-          ) : pacePoints.length === 0 ? (
-            <NotAvailable empty reason="No invoices dated in this period." />
+          ) : !pacePoints.some((p) => p.value !== 0) ? (
+            // C2 (wording audit, 2 Nov): expense-only buckets come back with
+            // revenue 0, which drew an axis of ₹1 ₹1 ₹0 — say so instead.
+            <NotAvailable
+              empty
+              reason={period === "mtd" ? "No invoices yet this month" : "No invoices in this period"}
+            />
           ) : (
             <RevenuePaceChart
               points={pacePoints}
@@ -1143,17 +1159,29 @@ export default function CEODashboard() {
           ) : (
             <>
               <div className="flex flex-col">
+                {stageRows.length > 0 && (
+                  <div className="grid grid-cols-[minmax(0,140px)_64px_minmax(0,1fr)_96px_56px] items-center gap-3 pb-1 text-[11px] font-semibold text-ink-muted">
+                    <span>Stage</span>
+                    <span className="text-right">Reached</span>
+                    <span />
+                    <span>Share</span>
+                    <span className="text-right">Now</span>
+                  </div>
+                )}
                 {funnelRows.map((f) => (
                   <div
                     key={f.label}
-                    className="grid min-h-[42px] grid-cols-[minmax(0,150px)_64px_minmax(0,1fr)_120px] items-center gap-3 border-t border-[#f1f4f7]"
+                    className="grid min-h-[42px] grid-cols-[minmax(0,140px)_64px_minmax(0,1fr)_96px_56px] items-center gap-3 border-t border-[#f1f4f7]"
                   >
-                    <span className="truncate text-[13.5px] font-semibold text-ink">{f.label}</span>
+                    <span className="text-[13.5px] font-semibold leading-tight text-ink">{f.label}</span>
                     <span className="text-right text-[15px] font-bold text-brand-navy tabular-nums">
-                      {num(f.count)}
+                      {f.count == null ? "" : num(f.count)}
                     </span>
                     {f.pct == null ? <span /> : <ProgressBar pct={f.pct} height={12} />}
                     <span className="text-[12.5px] text-ink-muted tabular-nums">{f.note}</span>
+                    <span className="text-right text-[13px] text-ink tabular-nums">
+                      {f.now == null ? "" : num(f.now)}
+                    </span>
                   </div>
                 ))}
               </div>
@@ -1271,7 +1299,7 @@ export default function CEODashboard() {
                   <span className="text-right">Converted</span>
                   <span
                     className="text-right"
-                    title="Open leads past the holder's idle limit: inside sales and ASM limits from Admin › Time limits (ID 192)"
+                    title="Open leads past the holder's idle limit: inside sales and ASM limits from Admin › Time limits"
                   >
                     Idle leads
                   </span>

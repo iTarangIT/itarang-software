@@ -61,6 +61,10 @@ import { getTimeLimits } from "@/lib/timeLimits/store";
 import { fieldVisitDetail, filterVisitBooked, parseVisitBooked } from "@/lib/dashboard/fieldVisitText";
 import { LEAD_STATUS_LABEL } from "@/lib/leads/queueFilters";
 import type { LeadStatus } from "@/lib/lifecycle/transitions";
+
+/** The status-chip words for a stored status code (Names tab row 8). */
+const statusWords = (s: unknown): string =>
+    LEAD_STATUS_LABEL[String(s ?? "") as LeadStatus] ?? String(s ?? "").replace(/_/g, " ");
 import { listStockTasks, STOCK_TASK_ROLES, STOCK_TASKS_HREF } from "@/lib/inventory/stockUploadTasks/service";
 
 export const ACTION_KEYS = [
@@ -443,7 +447,7 @@ async function wonWithoutQuote(s: ActionScope): Promise<Built> {
            ${scope(s, "owner")}
          ORDER BY ${wonAt} DESC NULLS LAST`);
     const rows = raw.map((r) =>
-        base(r, `${String(r.lead_status ?? "").replace(/_/g, " ")} on ${String(r.won_on ?? "—")} · no dealer-approved quote`),
+        base(r, `${statusWords(r.lead_status)} on ${String(r.won_on ?? "—")} · no dealer-approved quote`),
     );
     return { rows, sub: "This month · check the price before onboarding" };
 }
@@ -516,7 +520,7 @@ async function wonUndoneWeek(s: ActionScope): Promise<Built> {
     const rows = raw.map((r) =>
         base(
             r,
-            `Undone ${String(r.undone_on)} by ${str(r.decided_by_name) ?? "—"} · back to ${String(r.restore_status ?? "").replace(/_/g, " ")} · ${String(r.request_reason)}`,
+            `Undone ${String(r.undone_on)} by ${str(r.decided_by_name) ?? "—"} · back to ${statusWords(r.restore_status)} · ${String(r.request_reason)}`,
         ),
     );
     const people = new Set(rows.map((r) => r.owner_id ?? "")).size;

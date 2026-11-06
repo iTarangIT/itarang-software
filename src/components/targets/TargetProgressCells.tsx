@@ -56,11 +56,14 @@ export function TargetProgressCells({
     unit,
     kind,
     actualSlot,
+    hideReason,
 }: {
     metric: string;
     p: Progress;
     unit?: string | null;
     kind?: MetricKind;
+    /** C16: a reason already said once for the person (under the name) is not repeated per row. */
+    hideReason?: string;
     /** Replaces the MTD actual cell's content — a custom metric's hand-entered progress input. */
     actualSlot?: React.ReactNode;
 }) {
@@ -73,7 +76,7 @@ export function TargetProgressCells({
                 {perDay && <span className="block text-[10px] text-ink-muted">per day</span>}
             </td>
             <td className="px-3 py-2 text-right tabular-nums">
-                {actualSlot ?? (p.actual == null ? <NotMeasured reason={p.not_measured_reason} /> : fmt(p.actual))}
+                {actualSlot ?? (p.actual == null ? <NotMeasured reason={hideReason && p.not_measured_reason === hideReason ? null : p.not_measured_reason} /> : fmt(p.actual))}
                 {actualSlot == null && p.actual != null && perDay && (
                     <span className="block text-[10px] text-ink-muted">a day, on average</span>
                 )}

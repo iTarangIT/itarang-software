@@ -448,7 +448,7 @@ export function KpiTile({
     /** `good` colours the change green, otherwise red; omit when there is no previous period. */
     delta?: { text: string; good: boolean } | null;
     spark?: number[];
-    sub?: string;
+    sub?: React.ReactNode;
     /** A line under `sub`, e.g. ID 171's "Invoices read up to <date>". */
     footer?: React.ReactNode;
 }) {

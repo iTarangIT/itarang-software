@@ -45,9 +45,21 @@ function useInvalidateClaims() {
     return () => CLAIM_QUERY_KEYS.forEach((queryKey) => queryClient.invalidateQueries({ queryKey }));
 }
 
-export function OrderPlacedButton({ accountId }: { accountId: string }) {
+export function OrderPlacedButton({
+    accountId,
+    open: openProp,
+    onOpenChange,
+}: {
+    accountId: string;
+    /** Controlled from a row "⋯" menu (Dealer Health): no own link is drawn. */
+    open?: boolean;
+    onOpenChange?: (open: boolean) => void;
+}) {
     const today = istToday();
-    const [open, setOpen] = useState(false);
+    const controlled = openProp !== undefined;
+    const [openState, setOpenState] = useState(false);
+    const open = controlled ? Boolean(openProp) : openState;
+    const setOpen = (v: boolean) => (controlled ? onOpenChange?.(v) : setOpenState(v));
     const [orderDate, setOrderDate] = useState(today);
     const [po, setPo] = useState("");
     const [note, setNote] = useState("");
@@ -68,6 +80,7 @@ export function OrderPlacedButton({ accountId }: { accountId: string }) {
     });
 
     if (!open) {
+        if (controlled) return null;
         return (
             <button
                 type="button"

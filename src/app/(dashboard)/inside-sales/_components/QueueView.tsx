@@ -451,7 +451,7 @@ export function QueueView({
                                 finalisedOnly ? "bg-emerald-500" : "bg-gray-300"
                             }`}
                         />
-                        Finalised, not Won
+                        Dealer agreed, not Won
                         {counts?.finalised_not_won ? (
                             <span className="ml-0.5 rounded-full bg-emerald-600 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white">
                                 {counts.finalised_not_won}

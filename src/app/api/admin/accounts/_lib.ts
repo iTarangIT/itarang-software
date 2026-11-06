@@ -45,7 +45,7 @@ export class HttpError extends Error {
 export async function requireAccountTables(): Promise<void> {
     if (!(await hasAccountOwnershipTables())) {
         throw new HttpError(
-            "E-321 not applied: the account ownership tables do not exist on this database yet.",
+            "Account owners are not set up on this server yet. Ask Admin.",
             503,
         );
     }

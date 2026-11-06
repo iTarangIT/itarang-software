@@ -137,11 +137,16 @@ export default async function CeoReceivablesPage({
                     <ArrowLeft className="h-3.5 w-3.5" /> CEO overview
                 </Link>
                 <h1 className="mt-2 text-2xl font-bold tracking-tight text-brand-navy">Accounts Receivable</h1>
+                {/* C24 (wording audit, 2 Nov): one line; the rule and the source sit behind the "i". */}
                 <p className="mt-1 text-sm text-ink-muted">
                     Unpaid balance of every invoice, less the customer&apos;s credit notes, as of now.
-                    <InfoTip className="ml-1">{"Every Zoho, Drive and Vyapar invoice that is not paid, void or draft and still has a balance, whatever date it was raised. The amount is the invoice total minus what has been paid, including GST, less any credit note issued to the same customer (never below zero per customer). Age is days since the invoice or credit note date."}</InfoTip>
+                    <InfoTip className="ml-1">
+                        <span className="block">
+                            {"Every Zoho, Drive and Vyapar invoice that is not paid, void or draft and still has a balance, whatever date it was raised. The amount is the invoice total minus what has been paid, including GST, less any credit note issued to the same customer (never below zero per customer). Age is days since the invoice or credit note date."}
+                        </span>
+                        <span className="mt-1.5 block">{receivablesSourceText(freshness)}</span>
+                    </InfoTip>
                 </p>
-                <p className="mt-1 text-xs text-gray-500">{receivablesSourceText(freshness)}</p>
                 {paymentsStaleText(freshness) && (
                     <p className="mt-1 text-xs font-medium text-red-600">{paymentsStaleText(freshness)}</p>
                 )}
