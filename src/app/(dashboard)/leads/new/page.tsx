@@ -167,8 +167,8 @@ export default function NewDealerLeadPage() {
             <ChevronLeft className="w-5 h-5 text-gray-600" />
           </Link>
           <div>
-            <h1 className="text-xl font-bold text-gray-900 tracking-tight">New Dealer Lead</h1>
-            <p className="text-sm text-gray-500 mt-0.5">Add a dealer to your outreach pipeline</p>
+            <h1 className="text-xl font-bold text-gray-900 tracking-tight">Create lead</h1>
+            <p className="text-sm text-gray-500 mt-0.5">Add a dealer you want to sell to</p>
           </div>
         </div>
 
@@ -553,12 +553,12 @@ const inputCls = (error?: boolean) =>
 function statusHint(status: string): string {
   const hints: Record<string, string> = {
     new:          "Fresh lead — not yet contacted.",
-    cold:         "Low interest — needs nurturing.",
+    cold:         "Low interest — keep in touch.",
     warm:         "Showing some interest — follow up soon.",
     hot:          "High intent — prioritise immediately.",
     contacted:    "Already reached out, awaiting response.",
     interested:   "Expressed interest — move to qualification.",
-    disqualified: "Not a fit — removed from active pipeline.",
+    disqualified: "Not a fit — we stop working this lead.",
     stop:         "Do not contact — excluded from all outreach.",
   };
   return hints[status] ?? "";

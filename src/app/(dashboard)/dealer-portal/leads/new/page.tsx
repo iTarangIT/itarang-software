@@ -221,7 +221,7 @@ function NewLeadWizardContent() {
                     }
                 }
             } else {
-                setApiError(readApiError(result, 'Initialization failed. Please retry.'));
+                setApiError(readApiError(result, 'Couldn\'t start the form. Try again.'));
             }
         } catch {
             setApiError('Connection lost. Please try again.');
@@ -578,7 +578,7 @@ function NewLeadWizardContent() {
             {showDraftPrompt && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
                     <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full mx-4 p-6 space-y-4">
-                        <h3 className="text-lg font-bold text-gray-900">Resume Previous Draft?</h3>
+                        <h3 className="text-lg font-bold text-gray-900">Resume your draft?</h3>
                         <p className="text-sm text-gray-600">You have an unsaved lead draft. Would you like to continue where you left off?</p>
                         <div className="flex gap-3">
                             <button onClick={handleStartFresh} className="flex-1 px-4 py-2.5 border border-gray-300 rounded-xl font-medium text-gray-700 hover:bg-gray-50">Start Fresh</button>
@@ -599,7 +599,7 @@ function NewLeadWizardContent() {
                                     <UserPlus className="w-5 h-5 text-white" />
                                 </div>
                                 <div>
-                                    <h3 className="text-lg font-bold text-white">Confirm Lead Creation</h3>
+                                    <h3 className="text-lg font-bold text-white">Create this lead?</h3>
                                     <p className="text-blue-100 text-xs mt-0.5">Reference: {referenceId || 'Generating...'}</p>
                                 </div>
                             </div>
@@ -656,7 +656,7 @@ function NewLeadWizardContent() {
                                     willGoToKyc ? 'text-emerald-700' : willGoToProductSelection ? 'text-violet-700' : 'text-blue-700'
                                 }`}>
                                     {willGoToKyc
-                                        ? 'This lead will be created and you will proceed directly to KYC verification (Step 2).'
+                                        ? 'Next, you\'ll go to KYC (step 2).'
                                         : willGoToProductSelection
                                         ? 'This lead will be created and you will proceed directly to Product Selection (Step 4). KYC is skipped for cash.'
                                         : 'This lead will be created and saved at Step 1. You can advance it later from the leads list.'}
@@ -709,7 +709,7 @@ function NewLeadWizardContent() {
             <div className="max-w-[1600px] mx-auto px-0 sm:px-6 lg:px-10 py-8 pb-28">
                 {/* Header */}
                 <ProgressHeader
-                    title="Create New Lead"
+                    title="Create lead"
                     subtitle={`Lead ID: ${referenceId || '#IT-XXXX-XXXXXXX'}`}
                     step={1}
                     onBack={() => router.back()}
@@ -1074,7 +1074,7 @@ function NewLeadWizardContent() {
                             {isFinanceMethod(formData.payment_method) && (
                                 <div className="px-4 py-3 bg-amber-50 border border-amber-200 rounded-xl">
                                     <p className="text-xs font-medium text-amber-700">
-                                        Finance case selected. KYC documents will be mandatory in the next step.
+                                        Finance selected. You&apos;ll need KYC documents in the next step.
                                     </p>
                                 </div>
                             )}
@@ -1205,7 +1205,7 @@ function NewLeadWizardContent() {
                             Cancel
                         </button>
                         <SecondaryButton onClick={handleSaveDraft} loading={savingDraft} disabled={loading}>
-                            Save Draft
+                            Save draft
                         </SecondaryButton>
                         <PrimaryButton onClick={commitStep} loading={loading} disabled={savingDraft}>
                             <ArrowRight className="w-4 h-4" /> Create Lead

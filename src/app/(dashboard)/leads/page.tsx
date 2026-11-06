@@ -396,7 +396,7 @@ function UploadModal({
       });
       const data = await res.json();
       if (!res.ok || !data.success) {
-        setError(data.error || "Import failed");
+        setError(data.error || "Import failed. Check the file and try again.");
         setStatus("error");
         return;
       }
@@ -426,7 +426,7 @@ function UploadModal({
               <FileSpreadsheet className="w-4 h-4 text-white" />
             </div>
             <h2 className="text-sm font-semibold text-gray-900">
-              Import Leads
+              Import leads
             </h2>
           </div>
           <button
@@ -678,7 +678,7 @@ function UploadModal({
               {status === "parsing" && (
                 <div className="flex items-center justify-center gap-2 py-4 text-gray-500">
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  <span className="text-sm">Parsing file...</span>
+                  <span className="text-sm">Reading file…</span>
                 </div>
               )}
             </>
@@ -904,7 +904,7 @@ function AiDialerBanner({
             onClick={onSkipCountdown}
             className="px-3 py-1.5 text-xs font-medium bg-amber-500 hover:bg-amber-600 text-white rounded-lg transition-all"
           >
-            Call Now
+            Call now
           </button>
         )}
         <button
@@ -1118,7 +1118,7 @@ function ConvertedLeadCard({
                 <div className="py-1 max-h-64 overflow-y-auto">
                   {ownersError && (
                     <p className="px-3 py-2 text-xs text-rose-600">
-                      Could not load users.
+                      Couldn&apos;t load the team list. Close and try again.
                     </p>
                   )}
                   {!ownersError && owners.length === 0 && (
@@ -2137,7 +2137,7 @@ export default function LeadsUnifiedPage() {
             [
               { key: "scraper", label: "Scraper" },
               { key: "leads", label: "Leads" },
-              { key: "converted", label: "My Converted Leads" },
+              { key: "converted", label: "My converted leads" },
               { key: "campaigns", label: "Campaigns" },
               ...(canSeeCostAnalytics
                 ? [{ key: "cost-analytics" as Tab, label: "Cost Analytics" }]
@@ -2430,7 +2430,7 @@ export default function LeadsUnifiedPage() {
                 ))}
               </div>
               {convertedLeads.length === 0 && (
-                <EmptyState label="No converted leads yet" />
+                <EmptyState label="No converted leads yet. [View leads]" />
               )}
               <Pagination
                 page={convertedPage}

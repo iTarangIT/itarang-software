@@ -62,7 +62,7 @@ export function ClaimByNumberPanel({ onClaimed }: { onClaimed?: () => void }) {
             <div>
                 <h3 className="text-sm font-semibold text-gray-900">Find a lead to claim</h3>
                 <p className="text-xs text-gray-500">
-                    Search by mobile number — one, or several separated by commas. Only matching leads are shown.
+                    Search one or more mobile numbers, separated by commas.
                 </p>
             </div>
             <form onSubmit={search} className="flex gap-2">

@@ -210,7 +210,7 @@ export default function ActiveVideoKYCSection({
                         <Clock className="w-5 h-5 text-amber-600 flex-shrink-0" />
                         <div className="text-sm text-amber-800">
                             <p className="font-semibold">Customer completed the session — awaiting admin review.</p>
-                            <p className="text-xs text-amber-700/80 mt-0.5">Submit-for-Verification stays disabled until admin accepts.</p>
+                            <p className="text-xs text-amber-700/80 mt-0.5">You can submit for verification after Admin accepts the video.</p>
                         </div>
                     </div>
                 )}

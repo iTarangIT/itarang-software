@@ -148,7 +148,7 @@ export default function FinancingOffersSection({ leadId }: { leadId: string }) {
   async function convertToCash() {
     const ok = await confirmDialog({
       title: "Convert to cash sale?",
-      message: "Financing data will be purged and the lead reopens in cash mode.",
+      message: "This removes the loan details and reopens the lead as a cash sale.",
       confirmText: "Convert to cash",
       variant: "danger",
     });
@@ -218,7 +218,7 @@ export default function FinancingOffersSection({ leadId }: { leadId: string }) {
           ? "The customer has accepted the offer. The NBFC is now running E-NACH and agreement signing."
           : anyOffer
             ? "Walk the customer through the firm offer below and accept it to proceed to E-NACH and agreement signing."
-            : "Waiting for the NBFC to review the file and submit a firm offer. This updates as offers arrive."}
+            : "Waiting for the lender's firm offer. This updates on its own."}
       </p>
 
       {error && <p className="text-xs text-red-600 mb-3">{error}</p>}

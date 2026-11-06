@@ -683,7 +683,7 @@ export default function ProductSelectionPage() {
           <div className="mb-6 flex items-start gap-3 px-5 py-4 rounded-2xl bg-amber-50 border-2 border-amber-200">
             <Banknote className="w-5 h-5 text-amber-700 flex-shrink-0 mt-0.5" />
             <div className="text-sm">
-              <p className="font-black text-amber-900">CASH SALE — KYC steps skipped</p>
+              <p className="font-black text-amber-900">Cash sale — no KYC needed</p>
               <p className="text-amber-800 mt-0.5">
                 Confirming will mark inventory <strong>SOLD</strong> and activate warranty
                 immediately. There is no admin approval step.
@@ -985,7 +985,7 @@ export default function ProductSelectionPage() {
               </button>
             ) : (
               <PrimaryButton onClick={handleSubmit} disabled={!canSubmit} loading={submitting}>
-                {externalLender ? `Continue with ${BAJAJ_FALLBACK.name}` : "Send to NBFC"}
+                {externalLender ? `Continue with ${BAJAJ_FALLBACK.name}` : "Send to lender"}
                 <ChevronRight className="w-4 h-4" />
               </PrimaryButton>
             )}

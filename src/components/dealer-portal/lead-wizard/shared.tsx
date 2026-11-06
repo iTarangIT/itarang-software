@@ -565,7 +565,7 @@ export function OCRModal({ open, onClose, onResult }: {
                     setNotice('Auto-filled with local OCR (lower confidence). Please verify each field before submitting.');
                     setTimeout(() => onClose(), 2200);
                 } else if (isPartial) {
-                    setNotice('Partial data extracted — please verify the remaining fields after closing.');
+                    setNotice('Some details were filled in. Check the other fields after you close this.');
                     setTimeout(() => onClose(), 1500);
                 } else {
                     onClose();

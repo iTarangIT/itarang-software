@@ -44,7 +44,7 @@ export function EscalateModal({ open, onClose, leadId, viewerRole, onSuccess }: 
     const submit = async (e: React.FormEvent) => {
         e.preventDefault();
         if (notes.trim().length < 30) {
-            toast.error("Escalation notes must be at least 30 characters (BRD §0.6).");
+            toast.error("Write at least 30 characters in the notes.");
             return;
         }
         setSubmitting(true);

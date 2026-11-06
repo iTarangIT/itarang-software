@@ -542,7 +542,7 @@ export default function Step5Page() {
     const ok = await confirmDialog({
       title: "Convert to cash sale?",
       message:
-        "The dealer is the sole authoriser — no admin approval. The customer pays the dealer directly.",
+        "You approve this yourself — no admin approval. The customer pays you directly.",
       confirmText: "Convert to cash",
       variant: "danger",
     });
@@ -817,14 +817,14 @@ export default function Step5Page() {
               />
               <ActionRow
                 title="Change Payment Mode to Cash"
-                description="Convert to a cash sale. No admin approval — dealer authorises directly."
+                description="Convert to a cash sale. You approve it — no admin approval."
                 onClick={handleSwitchToCash}
                 tone="outline"
                 busy={actioning === "switch"}
               />
               <ActionRow
                 title="Close Lead"
-                description="Mark this lead as closed. No further action will be possible."
+                description="Close this lead. You can't take any more action on it."
                 onClick={handleCloseLead}
                 tone="muted"
                 busy={actioning === "close"}

@@ -102,7 +102,7 @@ export function QueueCsvButton({
                 ) : (
                     <Download className="h-4 w-4" />
                 )}
-                {label ?? (format === "xlsx" ? "Export to Excel" : "Download CSV")}
+                {label ?? (format === "xlsx" ? "Download Excel" : "Download CSV")}
             </button>
             {(error || note) && (
                 <p

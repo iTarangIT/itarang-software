@@ -129,8 +129,8 @@ export function MyDealersView() {
                             <th className="px-3 py-2 text-left font-semibold">Bucket</th>
                             <th className="px-3 py-2 text-left font-semibold">Last invoice</th>
                             <th className="px-3 py-2 text-right font-semibold">Days since</th>
-                            <th className="px-3 py-2 text-right font-semibold">Usual gap (d)</th>
-                            <th className="px-3 py-2 text-right font-semibold">Revenue 90d</th>
+                            <th className="px-3 py-2 text-right font-semibold">Usual gap (days)</th>
+                            <th className="px-3 py-2 text-right font-semibold">Revenue, last 90 days</th>
                             <th className="px-3 py-2 text-right font-semibold">Lifetime</th>
                             <th className="px-3 py-2" />
                             {data?.can_record_orders && <th className="px-3 py-2" />}

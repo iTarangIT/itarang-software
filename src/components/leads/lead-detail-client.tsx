@@ -177,8 +177,8 @@ function OverallSummary({ calls, lead }: { calls: CallItem[]; lead: any }) {
       }
       setSummary(
         calls.length
-          ? "Calls were made but none produced a transcript, so there is nothing to summarise."
-          : "No calls have been made on this lead yet.",
+          ? "No call transcripts yet, so there's no summary."
+          : "No calls on this lead yet.",
       );
       return;
     }
@@ -209,7 +209,7 @@ function OverallSummary({ calls, lead }: { calls: CallItem[]; lead: any }) {
         setSummary(generated);
         setSource("generated");
       })
-      .catch(() => setSummary("Unable to generate summary at this time."))
+      .catch(() => setSummary("Couldn't write the summary. Refresh the page to try again."))
       .finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -220,7 +220,7 @@ function OverallSummary({ calls, lead }: { calls: CallItem[]; lead: any }) {
         <div className="w-7 h-7 bg-slate-100 rounded-lg flex items-center justify-center">
           <FileText className="w-3.5 h-3.5 text-slate-600" />
         </div>
-        <h3 className="text-sm font-semibold text-gray-800">Overall Summary</h3>
+        <h3 className="text-sm font-semibold text-gray-800">Summary</h3>
         {!loading && summary && source !== "none" && (
           <span className="ml-auto text-[10px] text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">
             {source === "saved" ? "saved" : "AI generated"}
@@ -254,7 +254,7 @@ function SummaryBlock({ calls }: { calls: CallItem[] }) {
 
   const stats = [
     { icon: PhoneCall, label: "Total Calls", value: totalCalls, sub: "attempts made", color: "text-blue-600", bg: "bg-blue-50" },
-    { icon: TrendingUp, label: "Avg Intent Score", value: avgIntent ?? "—", sub: "across all calls", color: "text-emerald-600", bg: "bg-emerald-50" },
+    { icon: TrendingUp, label: "Average AI score", value: avgIntent ?? "—", sub: "across all calls", color: "text-emerald-600", bg: "bg-emerald-50" },
     { icon: Target, label: "Latest Status", value: latest ? resultLabel(latest) : "—", sub: latest ? formatDate(latest.when) : "no calls yet", color: "text-purple-600", bg: "bg-purple-50" },
     { icon: MessageSquare, label: "Transcripts", value: calls.filter((c) => c.transcript).length, sub: "calls with transcript", color: "text-amber-600", bg: "bg-amber-50" },
   ];

@@ -37,7 +37,7 @@ export function LeadActivityPanes({
     const tabs: TabItem[] = [
         {
             value: "touchpoints",
-            label: "Touchpoint History",
+            label: "Activity",
             count: bundle.touchpoints.length,
         },
         { value: "calls", label: "AI Call History" },

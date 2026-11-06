@@ -198,7 +198,7 @@ function WithdrawButton({ claimId }: { claimId: number }) {
 export function OrderClaimsList({
     canWithdraw,
     mine = false,
-    title = "Order claimed, no invoice raised",
+    title = "Orders placed, no invoice yet",
 }: {
     canWithdraw: boolean;
     /** Only the viewer's own accounts, whatever their role. */

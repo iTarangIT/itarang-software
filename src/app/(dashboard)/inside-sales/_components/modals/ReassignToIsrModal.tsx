@@ -122,7 +122,7 @@ export function ReassignToIsrModal({ open, onClose, leadId, currentOwnerId, onSu
                         className="mt-1 w-full rounded-md border border-gray-200 px-3 py-2 text-sm min-h-[80px]"
                         value={reason}
                         onChange={(e) => setReason(e.target.value)}
-                        placeholder="Why is this lead being reassigned? The rep it is taken from will see this."
+                        placeholder="Why are you moving this lead? The current ISR will see this."
                         maxLength={2000}
                     />
                 </div>

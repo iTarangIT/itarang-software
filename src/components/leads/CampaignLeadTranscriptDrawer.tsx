@@ -626,7 +626,7 @@ export function CampaignLeadTranscriptDrawer({
             <EmptyState
               icon={<Clock className="w-8 h-8 text-gray-300" />}
               title="Call not yet placed"
-              body="This lead is waiting in the queue. The drawer will update automatically when the call begins."
+              body="Waiting in the call queue. This updates when the call starts."
             />
           ) : status === "calling" ? (
             <EmptyState

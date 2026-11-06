@@ -84,7 +84,7 @@ export function LeadDetailRightPane({ bundle, viewerRole, onReviseQuote, focusQu
     // ID 78: Withdraw quote — the reason is required; the lead goes back to
     // Under discussion and the dealer's link closes.
     const withdraw = async (commercialId: string) => {
-        const reason = window.prompt("Why is this quote being withdrawn? (at least 5 characters)")?.trim();
+        const reason = window.prompt("Why are you withdrawing this quote? (at least 5 characters)")?.trim();
         if (!reason) return;
         if (reason.length < 5) {
             toast.error("Give a reason of at least 5 characters.");
@@ -322,7 +322,7 @@ export function LeadDetailRightPane({ bundle, viewerRole, onReviseQuote, focusQu
                                                     />
                                                 </>
                                             ) : (
-                                                <div className="text-sm text-gray-500">No commercials logged yet. Use Update Commercials to record the first event.</div>
+                                                <div className="text-sm text-gray-500">No quote yet. [Update quote]</div>
                                             )}
                                         </div>
                                     )}
@@ -331,9 +331,9 @@ export function LeadDetailRightPane({ bundle, viewerRole, onReviseQuote, focusQu
                                             <Field label="Lead Status" value={lead.lead_status} />
                                             <Field label="Interest Level" value={lead.interest_level} />
                                             <Field label="Next Follow-up" value={fmtDate(lead.next_follow_up_at)} />
-                                            <Field label="Last Touchpoint" value={fmtDate(lead.last_touchpoint_at)} />
+                                            <Field label="Last activity" value={fmtDate(lead.last_touchpoint_at)} />
                                             <Field label="ASM" value={lead.asm_name} />
-                                            <Field label="Pre-Transfer Status" value={lead.pre_transfer_status} />
+                                            <Field label="Status before transfer to ASM" value={lead.pre_transfer_status} />
                                             {lead.lost_reason && <Field label="Lost Reason" value={lead.lost_reason} />}
                                             {lead.lost_reason_notes && (
                                                 <div className="col-span-2">

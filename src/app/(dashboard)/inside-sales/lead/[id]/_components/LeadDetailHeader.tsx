@@ -199,7 +199,7 @@ export function LeadDetailHeader({
                 )}
                 {onboardingInitiated && (
                     <Banner tone="emerald" icon={CheckCircle2}>
-                        <span className="font-medium">Onboarding Initiated</span>
+                        <span className="font-medium">Onboarding started</span>
                         {" — Application "}
                         <span className="font-medium">{shortAppId(lead.dealer_onboarding_application_id)}</span>
                         {" · Status: "}
@@ -212,7 +212,7 @@ export function LeadDetailHeader({
                             href={`/dealer-onboarding?applicationId=${lead.dealer_onboarding_application_id}`}
                             className="font-semibold underline underline-offset-2 hover:text-emerald-900"
                         >
-                            Continue Onboarding →
+                            Continue onboarding →
                         </Link>
                     </Banner>
                 )}

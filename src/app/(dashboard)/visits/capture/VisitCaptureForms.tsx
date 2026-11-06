@@ -121,7 +121,7 @@ export function AccountVisitCapture({ accountId, name, backHref }: { accountId: 
                     className="mt-1 min-h-[96px] w-full rounded-md border border-gray-200 px-3 py-2 text-sm"
                     value={remarks}
                     onChange={(e) => setRemarks(e.target.value)}
-                    placeholder="What happened at the counter?"
+                    placeholder="What happened at the shop?"
                 />
             </div>
             <div className="flex justify-end gap-2">

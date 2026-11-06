@@ -46,7 +46,7 @@ const TERMS_EVENTS: readonly EventType[] = ["terms_update", "final_terms"];
 const ASSET_TYPES: { key: AssetType; label: string }[] = [
     { key: "battery", label: "Battery" },
     { key: "charger", label: "Charger" },
-    { key: "paraphernalia", label: "Paraphernalia" },
+    { key: "paraphernalia", label: "Accessories" },
 ];
 
 const assetLabel = (t: AssetType) =>
@@ -345,11 +345,11 @@ export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercia
         <Modal
             open={open}
             onClose={handleClose}
-            title="Update Commercials"
+            title="Update quote"
             subtitle={
                 currentCommercials
                     ? `Current: v${currentCommercials.version_no} · ${currentCommercials.event_type}`
-                    : "First commercial event"
+                    : "First quote"
             }
             width="lg"
             closeOnBackdrop={!submitting}
@@ -364,7 +364,7 @@ export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercia
         >
             <form onSubmit={submit} className="space-y-4">
                 <div>
-                    <Label>Event type</Label>
+                    <Label>Update type</Label>
                     <select
                         className="mt-1 w-full rounded-md border border-gray-200 px-3 py-2 text-sm bg-white"
                         value={eventType}
@@ -698,11 +698,11 @@ export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercia
                       * and a dealer's inbox is the author knowing that.
                       */}
                     <p className="mt-1 text-[11px] text-amber-700">
-                        Printed on the quotation the dealer receives — keep internal remarks in Version notes below.
+                        Printed on the dealer&apos;s quote. Put internal remarks in Internal notes below.
                     </p>
                 </div>
                 <div>
-                    <Label>Version notes (this commercial event)</Label>
+                    <Label>Internal notes</Label>
                     <textarea
                         className="mt-1 w-full rounded-md border border-gray-200 px-3 py-2 text-sm min-h-[48px]"
                         value={notes}

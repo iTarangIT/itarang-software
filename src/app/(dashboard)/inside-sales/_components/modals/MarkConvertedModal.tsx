@@ -277,7 +277,7 @@ export function MarkConvertedModal({ open, onClose, leadId, onSuccess, hasApprov
                         )}
                     </div>
                     <div>
-                        <Label>Conversion notes (optional)</Label>
+                        <Label>Notes (optional)</Label>
                         <textarea
                             className="mt-1 w-full rounded-md border border-gray-200 px-3 py-2 text-sm min-h-[64px]"
                             value={notes}

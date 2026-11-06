@@ -128,7 +128,7 @@ export default function DraftsPage() {
         <div className="space-y-6 -mx-6 sm:mx-0">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 px-4 sm:px-0">
                 <div>
-                    <h1 className="text-2xl font-bold text-gray-900">My Drafts</h1>
+                    <h1 className="text-2xl font-bold text-gray-900">My drafts</h1>
                     <p className="text-gray-500 text-sm">KYC forms you&apos;ve saved to finish later. Auto-saved every 2 minutes while you work.</p>
                 </div>
                 <Link

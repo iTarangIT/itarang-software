@@ -148,9 +148,9 @@ export function EditLeadForm({
         );
       }
       if (json.business_type_saved === false) {
-        toast.warning('Lead updated, but Type of Business could not be saved on this database.');
+        toast.warning('Lead saved, but business type wasn\'t saved. Try again.');
       } else if (json.notes_saved === false) {
-        toast.warning('Lead updated, but the notes could not be saved on this database.');
+        toast.warning('Lead saved, but the notes weren\'t saved. Try again.');
       } else {
         toast.success('Lead updated.');
       }
@@ -194,7 +194,7 @@ export function EditLeadForm({
               </p>
             ) : (
               <p className="mt-1 text-[11px] text-gray-400">
-                Normalised to +91 on save. Must be unique across leads.
+                We add +91 when you save. No other lead can have this number.
               </p>
             )}
           </div>

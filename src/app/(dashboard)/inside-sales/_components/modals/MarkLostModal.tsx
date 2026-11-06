@@ -59,7 +59,7 @@ export function MarkLostModal({ open, onClose, leadId, onSuccess, defaultReason 
             return;
         }
         if (reason === "other" && !notes.trim()) {
-            toast.error("Notes are required when reason is 'other'.");
+            toast.error("Add notes when the reason is Other.");
             return;
         }
         if (reason === "lost_to_competition" && !competitor.trim()) {
@@ -67,7 +67,7 @@ export function MarkLostModal({ open, onClose, leadId, onSuccess, defaultReason 
             return;
         }
         if (reason === "onboarding_dropout") {
-            toast.error("onboarding_dropout is admin-only (BRD §0.11).");
+            toast.error("Only Admin can choose Onboarding dropout.");
             return;
         }
         if (isHighImpactLostReason(reason) && !confirmedHighImpact) {

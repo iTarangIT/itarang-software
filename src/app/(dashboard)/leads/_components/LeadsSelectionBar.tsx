@@ -206,7 +206,7 @@ export function LeadsSelectionBar({
                                 aria-label="Set type of business"
                                 className="rounded-lg border border-sky-200 bg-white px-2 py-1 text-xs text-sky-900 outline-none focus:border-sky-400"
                             >
-                                <option value="">Set type of business…</option>
+                                <option value="">Set business type…</option>
                                 {BUSINESS_TYPE_OPTIONS.map((o) => (
                                     <option key={o.value} value={o.value}>
                                         {o.label}

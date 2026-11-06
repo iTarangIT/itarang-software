@@ -39,7 +39,7 @@ type Day = {
 };
 
 const KIND: Record<Visit["kind"], string> = {
-    existing_counter: "Existing counter",
+    existing_counter: "Existing dealer",
     existing_lead: "Existing lead",
     new_lead: "New lead",
 };

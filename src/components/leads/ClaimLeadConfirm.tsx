@@ -43,7 +43,7 @@ export function ClaimLeadConfirm({ open, onClose, leadId, dealerName, onSuccess 
         <Modal
             open={open}
             onClose={() => !submitting && onClose()}
-            title="Claim Lead"
+            title="Claim lead"
             width="sm"
             closeOnBackdrop={!submitting}
             footer={

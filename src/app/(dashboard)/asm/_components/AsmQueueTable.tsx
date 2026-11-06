@@ -162,7 +162,7 @@ export function AsmQueueTable({
                             <th className="text-left px-4 py-3 font-semibold">Dealer / Shop</th>
                             <th className="text-left px-4 py-3 font-semibold">Phone</th>
                             <th className="text-left px-4 py-3 font-semibold">Region</th>
-                            <th className="text-left px-4 py-3 font-semibold">Lead Status</th>
+                            <th className="text-left px-4 py-3 font-semibold">Status</th>
                             <th className="text-left px-4 py-3 font-semibold">Visit</th>
                             <th className="text-left px-4 py-3 font-semibold">Outcome</th>
                             <th className="text-left px-4 py-3 font-semibold">Scheduled</th>

@@ -276,8 +276,8 @@ function DealerLeadsContent() {
         <div className="space-y-6 -mx-6 sm:mx-0">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 px-4 sm:px-0">
                 <div>
-                    <h1 className="text-2xl font-bold text-gray-900">Lead Management</h1>
-                    <p className="text-gray-500 text-sm">Track and manage your customer pipeline</p>
+                    <h1 className="text-2xl font-bold text-gray-900">Leads</h1>
+                    <p className="text-gray-500 text-sm">Track your customers&apos; battery and loan applications</p>
                 </div>
                 <div className="flex items-center gap-2">
                     {/* ID 183: files the house pushed out are the dealer's now — listed apart. */}
@@ -288,7 +288,7 @@ function DealerLeadsContent() {
                     )}
                     <Link href="/dealer-portal/leads/new" className="inline-flex items-center gap-2 px-4 py-2 bg-brand-600 text-white font-medium rounded-lg hover:bg-brand-700 transition-colors shadow-sm">
                         <PlusCircle className="w-5 h-5" />
-                        New Lead
+                        Create lead
                     </Link>
                 </div>
             </div>
@@ -342,7 +342,7 @@ function DealerLeadsContent() {
                         <button onClick={() => setPushOpen(true)}
                             className="inline-flex items-center gap-2 px-4 py-2 bg-brand-600 text-white text-sm font-medium rounded-lg hover:bg-brand-700">
                             <Send className="w-4 h-4" />
-                            Push to dealer
+                            Move to dealer
                         </button>
                     </div>
                 </div>
@@ -633,7 +633,7 @@ function DealerLeadsContent() {
                             <button onClick={handlePush} disabled={pushing || !pushMatch || pushReason.trim().length < 3}
                                 className="flex-1 px-4 py-3 bg-brand-600 text-white rounded-xl font-semibold text-sm hover:bg-brand-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2">
                                 {pushing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-                                {pushing ? 'Pushing...' : 'Push leads'}
+                                {pushing ? 'Pushing...' : 'Move leads'}
                             </button>
                         </div>
                     </div>

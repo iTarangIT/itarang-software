@@ -230,7 +230,7 @@ export function QuotationSendDialog({
         }),
       });
       const j = await r.json();
-      if (!j.success) throw new Error(j.error?.message ?? "Could not send the quotation.");
+      if (!j.success) throw new Error(j.error?.message ?? "Couldn't send the quote. Try again.");
       setOutcomes(j.data.outcomes as Outcome[]);
       await load();
     } catch (e) {
@@ -354,7 +354,7 @@ export function QuotationSendDialog({
                 <div className="flex min-w-0 items-center gap-2">
                   <FileText className="h-4 w-4 shrink-0 text-gray-400" />
                   <span className="truncate text-xs text-gray-700">
-                    {state?.quote_pdf_url ? "Quotation draft" : "No draft yet"}
+                    {state?.quote_pdf_url ? "Quote PDF" : "No draft yet"}
                   </span>
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
@@ -444,7 +444,7 @@ export function QuotationSendDialog({
                     />
                     {!state?.email && (
                       <span className="mt-1 block text-[10px] text-gray-500">
-                        No email on this lead yet — it will be saved once the send succeeds.
+                        No email on this lead yet. We&apos;ll save this one after the quote is sent.
                       </span>
                     )}
                   </label>

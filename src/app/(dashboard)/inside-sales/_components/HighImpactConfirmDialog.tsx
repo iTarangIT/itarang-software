@@ -9,7 +9,7 @@ import type { LostReason } from "@/lib/lifecycle/transitions";
 const CONSEQUENCE: Partial<Record<LostReason, { title: string; body: string }>> = {
     business_closed: {
         title: "Permanent AI dialer exclusion",
-        body: "This will permanently exclude the phone from the AI dialer pool (ai_recall_status → excluded). The dealer cannot be re-engaged through AI calling.",
+        body: "The AI dialer will never call this number again.",
     },
     duplicate_lead: {
         title: "Merge review required",
@@ -39,7 +39,7 @@ export function HighImpactConfirmDialog({ open, reason, onCancel, onConfirm, loa
         <Modal
             open={open && Boolean(consequence)}
             onClose={onCancel}
-            title="Confirm high-impact close"
+            title="Mark this lead Lost?"
             width="sm"
             closeOnBackdrop={!loading}
             footer={
@@ -53,7 +53,7 @@ export function HighImpactConfirmDialog({ open, reason, onCancel, onConfirm, loa
                         disabled={loading}
                         className="bg-rose-600 hover:bg-rose-700 text-white"
                     >
-                        {loading ? "Saving…" : "Continue & Mark Lost"}
+                        {loading ? "Saving…" : "Mark Lost"}
                     </Button>
                 </>
             }
@@ -66,7 +66,7 @@ export function HighImpactConfirmDialog({ open, reason, onCancel, onConfirm, loa
                     <h3 className="text-sm font-semibold text-gray-900">{consequence?.title}</h3>
                     <p className="text-sm text-gray-700 leading-relaxed">{consequence?.body}</p>
                     <p className="text-xs text-gray-500 mt-3">
-                        This action cannot be undone from the rep workspace. Admin can reactivate via the Lost lead reactivation flow.
+                        You can&apos;t undo this. Only Admin, the Sales Head or the CEO can reactivate a Lost lead.
                     </p>
                 </div>
             </div>

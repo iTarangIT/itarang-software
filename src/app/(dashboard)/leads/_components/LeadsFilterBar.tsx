@@ -516,7 +516,7 @@ export function LeadsFilterBar({
                             value={draft.scrapeRun}
                             onChange={(e) => onChange("scrapeRun", e.target.value)}
                         >
-                            <option value="">All scrape runs</option>
+                            <option value="">All dealer searches</option>
                             {scrapeRunOptions.map((r) => (
                                 <option key={r.id} value={r.id}>
                                     {r.label} — {r.lead_count} lead{r.lead_count === 1 ? "" : "s"}
@@ -655,7 +655,7 @@ export function LeadsFilterBar({
                             them (hide_dead=0); source reports always count them. */}
                         <label
                             className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-600 hover:border-gray-400"
-                            title="Dead / non-responsive numbers (in Number Repair) and AI-disqualified leads are hidden by default"
+                            title="We hide dead or non-responsive numbers (in Number Repair) and leads the AI disqualified."
                         >
                             <input
                                 type="checkbox"

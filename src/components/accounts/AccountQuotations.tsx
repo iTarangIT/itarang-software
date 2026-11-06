@@ -130,7 +130,7 @@ export function AccountQuotationsPanel({ accountId, readOnly = false }: { accoun
         <section className="rounded-xl border border-border bg-surface shadow-card">
             <header className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-3">
                 <div>
-                    <h2 className="text-sm font-semibold text-ink">Account quotations</h2>
+                    <h2 className="text-sm font-semibold text-ink">Quotes for this dealer</h2>
                     <p className="text-[11px] text-ink-muted">
                         Separate from lead quotations. A line below its OEM reference price, or credit terms, waits for the CEO.
                     </p>
@@ -197,7 +197,7 @@ export function AccountQuotationsPanel({ accountId, readOnly = false }: { accoun
                                     </p>
                                 )}
                                 {q.quote_pdf_error && q.approval_status === "approved" && !q.quote_pdf_url && (
-                                    <p className="mt-1 text-[12px] text-rose-700">The document could not be generated.</p>
+                                    <p className="mt-1 text-[12px] text-rose-700">Couldn&apos;t create the PDF. Click Generate document to try again.</p>
                                 )}
                                 <div className="mt-2 flex flex-wrap gap-3 text-xs font-semibold">
                                     {q.quote_pdf_url && (
@@ -212,7 +212,7 @@ export function AccountQuotationsPanel({ accountId, readOnly = false }: { accoun
                                     )}
                                     {canWork && sendable && (
                                         <button type="button" onClick={() => setSending(q)} className="inline-flex items-center gap-1 text-emerald-700 hover:underline">
-                                            <Send className="h-3.5 w-3.5" /> {q.sent_count > 0 ? "Send again" : "Send to account"}
+                                            <Send className="h-3.5 w-3.5" /> {q.sent_count > 0 ? "Send again" : "Send to dealer"}
                                         </button>
                                     )}
                                     {canWork && q.approval_status === "rejected" && !q.withdrawn_at && (
@@ -232,7 +232,7 @@ export function AccountQuotationsPanel({ accountId, readOnly = false }: { accoun
                                             type="button"
                                             disabled={withdraw.isPending}
                                             onClick={() => {
-                                                const reason = window.prompt("Why are you withdrawing this quotation?");
+                                                const reason = window.prompt("Why are you withdrawing this quote?");
                                                 if (reason && reason.trim().length >= 3) withdraw.mutate({ id: q.quotation_id, reason: reason.trim() });
                                             }}
                                             className="inline-flex items-center gap-1 text-ink-muted hover:underline"
@@ -298,7 +298,7 @@ function Dialog({ title, onClose, children }: { title: string; onClose: () => vo
 const ASSET_TYPES: { key: AssetType; label: string }[] = [
     { key: "battery", label: "Battery" },
     { key: "charger", label: "Charger" },
-    { key: "paraphernalia", label: "Paraphernalia" },
+    { key: "paraphernalia", label: "Accessories" },
 ];
 
 function CreateAccountQuoteDialog({
@@ -356,7 +356,7 @@ function CreateAccountQuoteDialog({
             window.alert(
                 r.auto_approved
                     ? `Approved automatically${r.quote_number ? ` — ${r.quote_number}` : ""}. You can send it to the account now.`
-                    : "Sent to the CEO for approval. The account sees nothing until it is approved.",
+                    : "Sent to the CEO for approval. The dealer sees it only after approval.",
             );
             onSaved();
         },
@@ -473,7 +473,7 @@ function CreateAccountQuoteDialog({
                     )}
                 </div>
                 {payTerms === "credit" && <p className="text-[11px] text-amber-700">Credit terms always go to the CEO for approval.</p>}
-                <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} maxLength={5000} placeholder="Notes printed on the quotation (optional)" className="w-full rounded-lg border border-border px-2 py-1.5 text-xs" />
+                <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} maxLength={5000} placeholder="Notes printed on the quote (optional)" className="w-full rounded-lg border border-border px-2 py-1.5 text-xs" />
                 <p className="text-[11px] text-ink-muted">Warranty and delivery are the standard terms set by Admin.</p>
 
                 {(formError || save.error) && (

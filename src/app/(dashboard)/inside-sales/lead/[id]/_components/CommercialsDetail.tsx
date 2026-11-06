@@ -90,7 +90,7 @@ export function QuoteApprovalBlock({
     const label =
         status === "approved"
             ? cc.approval_mode === "auto"
-                ? "Auto-approved (at or above OEM reference)"
+                ? "Approved automatically (at or above OEM price)"
                 : "Approved"
             : status === "rejected"
               ? "Rejected"
@@ -151,13 +151,13 @@ export function QuoteApprovalBlock({
                             rel="noreferrer"
                             className="font-medium underline underline-offset-2"
                         >
-                            Preview draft
+                            Preview PDF
                         </a>
                     ) : (
                         <span className="opacity-80">
                             {cc.quote_pdf_error
-                                ? "Draft generation failed — open Send to retry."
-                                : "Draft not generated yet."}
+                                ? "Quote PDF failed. Open Send to try again."
+                                : "Quote PDF not ready yet."}
                         </span>
                     )}
                     {onWithdraw && !cc.withdrawn_at && cc.dealer_decision !== "approved" && (

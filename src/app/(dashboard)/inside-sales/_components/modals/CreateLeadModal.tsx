@@ -145,7 +145,7 @@ export function CreateLeadModal({ open, onClose, onSuccess }: Props) {
                     : "Lead created — find it in the Unassigned (Claim) tab.",
             );
             if (json?.data?.business_type_saved === false) {
-                toast.warning("Type of Business could not be saved on this database.");
+                toast.warning("Lead created, but business type wasn't saved. Set it on the lead page.");
             }
             const newId: string | undefined = json?.data?.id;
             const goVisit = atShop && json?.data?.owned_by_you && newId;
@@ -271,7 +271,7 @@ export function CreateLeadModal({ open, onClose, onSuccess }: Props) {
                     <span>
                         I&apos;m at the shop now
                         <span className="block text-xs text-gray-500">
-                            After the lead is created, log the visit with a shop photo and your live location.
+                            Next, log the visit with a shop photo and your live location.
                         </span>
                     </span>
                 </label>

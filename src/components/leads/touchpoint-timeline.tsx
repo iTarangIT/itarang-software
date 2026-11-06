@@ -158,7 +158,7 @@ export function TouchpointTimeline({
                             className="shrink-0 inline-flex items-center gap-1.5 rounded-md border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
                         >
                             <Download className="h-3.5 w-3.5" />
-                            Export to Excel
+                            Download Excel
                         </a>
                     )}
                 </div>

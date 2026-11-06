@@ -42,7 +42,7 @@ export function ReassignLeadModal({ open, onClose, leadId, viewerId, onSuccess, 
             return;
         }
         if (reason.trim().length < 20) {
-            toast.error("Reason must be at least 20 characters (BRD §0.3).");
+            toast.error("Write at least 20 characters.");
             return;
         }
         setSubmitting(true);

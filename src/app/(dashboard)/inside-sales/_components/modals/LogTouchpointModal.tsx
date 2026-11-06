@@ -244,7 +244,7 @@ export function LogTouchpointModal({
                 }
                 throw new Error(json?.error?.message ?? "Failed to log touchpoint");
             }
-            toast.success("Touchpoint logged.");
+            toast.success("Activity logged.");
             // ID 76: a Lost-type outcome prompts Mark Lost, reason pre-filled —
             // the call alone never closes the lead.
             const savedBucket =
@@ -281,7 +281,7 @@ export function LogTouchpointModal({
         <Modal
             open={open}
             onClose={handleClose}
-            title="Log Touchpoint"
+            title="Log activity"
             subtitle={lead.dealer_name ?? lead.shop_name ?? leadId}
             width={isVisit ? "lg" : "md"}
             closeOnBackdrop={!busy}
@@ -302,7 +302,7 @@ export function LogTouchpointModal({
                             ? "Saving…"
                             : isVisit
                                 ? "Save visit"
-                                : "Save touchpoint"}
+                                : "Save"}
                     </Button>
                 </>
             }
@@ -319,7 +319,7 @@ export function LogTouchpointModal({
                 className="space-y-4"
             >
                 <div>
-                    <Label>Touchpoint type</Label>
+                    <Label>Activity type</Label>
                     <select
                         className="mt-1 w-full rounded-md border border-gray-200 px-3 py-2 text-sm bg-white"
                         value={type}
@@ -395,7 +395,7 @@ export function LogTouchpointModal({
                         {type === "inside_sales_call" && COMMERCIALS_CALL_LABELS.includes(disposition.disposition) &&
                             !hasQuote && (
                                 <div className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                                    <span>No quote in the system — this call does not move the commercials stage.</span>
+                                    <span>No quote yet, so this call won&apos;t change the quote stage.</span>
                                     {onOpenCommercials ? (
                                         <button
                                             type="button"
@@ -440,7 +440,7 @@ export function LogTouchpointModal({
                         {type === "inside_sales_call" && (
                             <div>
                                 <Label>
-                                    Temperature{" "}
+                                    Interest{" "}
                                     {auto.interest && <span className="text-[11px] text-emerald-700">(auto from call outcome)</span>}
                                 </Label>
                                 <select

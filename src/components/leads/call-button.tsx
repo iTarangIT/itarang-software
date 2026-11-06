@@ -106,12 +106,12 @@ export function CallButton({
       )}
       {state === "success" && (
         <>
-          <CheckCircle className="w-3.5 h-3.5" /> Called!
+          <CheckCircle className="w-3.5 h-3.5" /> Call started
         </>
       )}
       {state === "error" && (
         <>
-          <XCircle className="w-3.5 h-3.5" /> Failed
+          <XCircle className="w-3.5 h-3.5" /> Call failed
         </>
       )}
     </Button>

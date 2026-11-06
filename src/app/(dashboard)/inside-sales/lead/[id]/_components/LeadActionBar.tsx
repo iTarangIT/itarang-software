@@ -78,7 +78,7 @@ export function LeadActionBar({ bundle, isOwner, viewerRole, onAction, onChanged
                     className="inline-flex items-center gap-2 px-4 py-2 rounded-md text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 transition"
                 >
                     <UserPlus2 className="h-4 w-4" />
-                    Claim Lead
+                    Claim lead
                 </button>
             </div>
         );
@@ -87,7 +87,7 @@ export function LeadActionBar({ bundle, isOwner, viewerRole, onAction, onChanged
     // Non-owner — show informational state with no buttons (CEO / admin / other rep).
     if (!isOwner) {
         const helper = isAdmin
-            ? "Admin/CEO — reassign first to modify."
+            ? "View only. Reassign the lead to make changes."
             : "Read-only — you are not the current owner.";
         // The Sales Head / admin may still correct a Won lead's GSTIN (ID 124).
         const managerCanFixGstin = isWon && (GSTIN_CORRECTION_MANAGER_ROLES as readonly string[]).includes(viewerRole);
@@ -132,7 +132,7 @@ export function LeadActionBar({ bundle, isOwner, viewerRole, onAction, onChanged
     return (
         <div className="sticky bottom-0 z-10 bg-white border-t border-gray-200 px-4 sm:px-6 py-2.5 flex flex-wrap items-center gap-2">
             <ActionButton primary icon={MessageSquarePlus} onClick={() => onAction("touchpoint")}>
-                Log Touchpoint
+                Log activity
             </ActionButton>
             <ActionButton icon={Receipt} onClick={() => onAction("commercials")}>
                 Update Commercials
@@ -188,7 +188,7 @@ export function LeadActionBar({ bundle, isOwner, viewerRole, onAction, onChanged
                 tone="amber"
                 onClick={() => onAction("escalate")}
                 disabled={!open}
-                disabledReason={!open ? "Lead is already terminal" : undefined}
+                disabledReason={!open ? "This lead is closed" : undefined}
             >
                 Escalate
             </ActionButton>

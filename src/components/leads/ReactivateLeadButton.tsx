@@ -93,7 +93,7 @@ export function ReactivateLeadButton({
                 value={reason}
                 onChange={(e) => setReason(e.target.value)}
                 rows={3}
-                placeholder="Why is this lead being reactivated? (e.g. dealer called back, number corrected)"
+                placeholder="Why reactivate? e.g. dealer called back, number corrected"
                 disabled={busy}
                 className="mt-2 w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-100 disabled:bg-gray-50"
             />

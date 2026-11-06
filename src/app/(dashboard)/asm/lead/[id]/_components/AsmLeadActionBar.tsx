@@ -106,7 +106,7 @@ export function AsmLeadActionBar({ bundle, isOwner, viewerRole, onAction, onChan
     return (
         <div className="sticky bottom-0 z-10 bg-white border-t border-gray-200 px-4 sm:px-6 py-2.5 flex flex-wrap items-center gap-2">
             <Btn primary tone="emerald" icon={MapPinned} onClick={() => onAction("visit")}>
-                Log Visit
+                Log visit
             </Btn>
             {status === "Transferred_to_ASM" && (
                 <Btn icon={Ban} onClick={visitNotNeeded} disabled={savingNotNeeded}>
@@ -114,7 +114,7 @@ export function AsmLeadActionBar({ bundle, isOwner, viewerRole, onAction, onChan
                 </Btn>
             )}
             <Btn icon={MessageSquarePlus} onClick={() => onAction("touchpoint")}>
-                Log Touchpoint
+                Log activity
             </Btn>
             <Btn icon={Receipt} onClick={() => onAction("commercials")}>
                 Update Commercials
@@ -164,7 +164,7 @@ export function AsmLeadActionBar({ bundle, isOwner, viewerRole, onAction, onChan
                 icon={AlertCircle}
                 onClick={() => onAction("escalate")}
                 disabled={!open}
-                disabledReason={!open ? "Lead is already terminal" : undefined}
+                disabledReason={!open ? "This lead is closed" : undefined}
             >
                 Escalate
             </Btn>

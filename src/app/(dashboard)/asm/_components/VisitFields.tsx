@@ -26,7 +26,7 @@ import {
 } from "@/lib/asm/types";
 
 const STATUS_LABELS: Record<VisitStatus, string> = {
-    pending_scheduling: "Pending scheduling",
+    pending_scheduling: "Needs scheduling",
     scheduled: "Scheduled",
     visited: "Visited",
     postponed: "Postponed",
@@ -138,7 +138,7 @@ export function useVisitForm(open: boolean, lead?: VisitLeadState) {
     const captureGps = () => {
         if (!("geolocation" in navigator)) {
             setGpsState("error");
-            toast.error("Geolocation not available on this device");
+            toast.error("This phone can't share its location.");
             return;
         }
         setGpsState("loading");
@@ -389,12 +389,12 @@ export function VisitFields({ form, leadId }: { form: UseVisitForm; leadId: stri
                                 ? `Moves to ${statusTo.replace(/_/g, " ")} (or the stage it had before the transfer, if further).`
                                 : lead.lead_status === "Transferred_to_ASM"
                                   ? "Ends Awaiting field visit — the lead goes back to its earlier stage, at least Under discussion."
-                                  : "Status is set by events: quotes move the commercials stages."}
+                                  : "Status changes on its own when you add a quote."}
                         </p>
                     </div>
                     <div>
                         <Label>
-                            Temperature{" "}
+                            Interest{" "}
                             {auto.interest && <span className="text-[11px] text-emerald-700">(auto)</span>}
                         </Label>
                         <select
@@ -476,7 +476,7 @@ export function VisitFields({ form, leadId }: { form: UseVisitForm; leadId: stri
                     )}
                     {gpsState === "denied" && (
                         <span className="text-xs text-amber-700">
-                            Permission denied — proceeding without GPS
+                            Location blocked. You can save without it.
                         </span>
                     )}
                     {gpsState === "error" && (

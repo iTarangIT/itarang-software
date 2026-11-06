@@ -30,7 +30,7 @@ export function LogVisitModal({ open, onClose, leadId, onSuccess, lead }: Props)
         <Modal
             open={open}
             onClose={() => !form.submitting && onClose()}
-            title="Log Visit"
+            title="Log visit"
             subtitle="ASM ground action audit row"
             width="lg"
             closeOnBackdrop={!form.submitting}

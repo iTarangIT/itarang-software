@@ -90,7 +90,7 @@ export default function SubmitExpensePage() {
       const r = await fetch("/api/expenses/submit", { method: "POST", body: fd });
       const j = await r.json();
       if (!r.ok || !j.success) {
-        throw new Error(j?.error?.message || "Submission failed");
+        throw new Error(j?.error?.message || "Couldn't submit the expense. Try again.");
       }
       return j;
     },
@@ -114,7 +114,7 @@ export default function SubmitExpensePage() {
       <div>
         <h1 className="text-2xl font-bold text-gray-900 tracking-tight flex items-center gap-2">
           <Receipt className="w-6 h-6 text-brand-600" />
-          Submit Business Expense
+          Submit expense
         </h1>
         <p className="text-sm text-gray-500 mt-1">
           Upload the bill and submit for CEO approval. Approved expenses are reflected on the CEO dashboard.
@@ -192,8 +192,9 @@ export default function SubmitExpensePage() {
 
         <div>
           <label className="block text-xs font-semibold text-gray-700 mb-1.5 uppercase tracking-wider">
-            Upload Bill (PDF or image, ≤ 5MB)
+            Bill
           </label>
+          <p className="-mt-1 mb-1.5 text-[11px] text-gray-500">PDF or image, up to 5 MB</p>
           <div className="flex items-center gap-3">
             <label className="cursor-pointer inline-flex items-center gap-2 px-4 py-2.5 rounded-xl border border-dashed border-gray-300 bg-gray-50 hover:bg-gray-100 text-sm font-medium text-gray-700">
               <Upload className="w-4 h-4" />
@@ -235,13 +236,13 @@ export default function SubmitExpensePage() {
             className="bg-brand-600 hover:bg-brand-700 text-white px-6"
           >
             {submitMutation.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-            Submit Expense
+            Submit
           </Button>
         </div>
       </form>
 
       <div className="p-6 rounded-2xl bg-white border border-gray-100 shadow-sm">
-        <h2 className="text-sm font-semibold text-gray-900 mb-4">My Submissions</h2>
+        <h2 className="text-sm font-semibold text-gray-900 mb-4">My expenses</h2>
         {isLoading ? (
           <div className="flex items-center justify-center py-8">
             <Loader2 className="w-5 h-5 animate-spin text-gray-400" />
