@@ -245,6 +245,11 @@ export const ANALYST_RULES: ReadonlyArray<{ topics: readonly AnalystTopic[]; tex
         topics: ["leads", "quotes"],
         text: "Status words: lead_status 'Commercials_Explained' shows as 'Quote given', 'Commercials_Finalised' as 'Dealer agreed'.",
     },
+    // ID 215 (2 Nov): the screens renamed two statuses; the stored codes did not change.
+    {
+        topics: ["leads", "quotes"],
+        text: "Status words: lead_status 'Commercials_Explained' shows as 'Quote given', 'Commercials_Finalised' as 'Dealer agreed'.",
+    },
     {
         topics: ["won", "people"],
         text: "Dealers converted = dealer_leads.lead_status 'Converted' with closed_at in the period, credited to closing_owner_id.",
