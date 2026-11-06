@@ -23,6 +23,7 @@ import {
 // NOTE: @/components/leads/call-button, NOT the older (dashboard)/leads/CallButton.tsx
 // — only this one takes `provider` and `onCallStart`, which the dialer needs.
 import { CallButton } from "@/components/leads/call-button";
+import { InfoTip } from "@/components/ui/info-tip";
 import { SendToNeodoveButton } from "@/components/leads/send-to-neodove-button";
 import { NeodoveTag } from "@/components/leads/neodove-tag";
 import { IvrTag } from "@/components/leads/ivr-tag";
@@ -242,13 +243,17 @@ export function LeadsTable({
                                 Visit / Outcome
                             </th>
                             <th className="min-w-[110px] px-4 py-3 text-left font-semibold">
-                                Last Touch
+                                Last activity
                             </th>
-                            <th
-                                className="min-w-[90px] px-4 py-3 text-left font-semibold"
-                                title="Calendar days since the lead was last worked (a call, visit or status change) — or since it was created, if it has never been worked. Assigning, claiming or commenting does not reset it."
-                            >
-                                Idle
+                            <th className="min-w-[90px] px-4 py-3 text-left font-semibold">
+                                <span className="inline-flex items-center gap-1">
+                                    Idle days
+                                    <InfoTip>
+                                        Working days (holidays off) since the latest of: last call, visit or
+                                        status change; the day the owner got the lead; a follow-up in the
+                                        next 30 days.
+                                    </InfoTip>
+                                </span>
                             </th>
                             <th className="min-w-[170px] px-4 py-3 text-left font-semibold">
                                 Source / Campaign
@@ -577,7 +582,7 @@ export function LeadsTable({
                                                 title={
                                                     idle === null
                                                         ? "No touchpoint and no creation date"
-                                                        : `${idle} working days (office calendar, holidays off) since the later of the last call, visit or status change, the date the holder got the lead, and a follow-up within 30 days`
+                                                        : `${idle} working days idle. Counted from the latest of: last call, visit or status change; the day the owner got the lead; a follow-up in the next 30 days. Holidays are off.`
                                                 }
                                             >
                                                 {idleText.primary}

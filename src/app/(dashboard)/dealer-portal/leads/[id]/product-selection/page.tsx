@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
+import { InfoTip } from "@/components/ui/info-tip";
 import {
   CheckCircle2,
   ChevronRight,
@@ -603,7 +604,7 @@ export default function ProductSelectionPage() {
           </h2>
           <p className="text-sm text-gray-500 mt-3 leading-relaxed max-w-sm mx-auto">
             {soldOutright
-              ? `Inventory marked SOLD and warranty activated for lead ${leadId}.`
+              ? "Sold. The warranty is now active."
               : external
                 ? "Continue to Step 5 to pick the battery and confirm with the customer's OTP."
                 : NBFC_RECEIVED_MSG}
@@ -698,7 +699,11 @@ export default function ProductSelectionPage() {
           <div className="mb-6 flex items-start gap-3 px-5 py-4 rounded-2xl bg-blue-50 border border-blue-200 text-sm text-blue-900">
             <ShieldCheck className="w-5 h-5 flex-shrink-0 mt-0.5" />
             <span>
-              This lead is in <strong>{access.kycStatus}</strong>.{" "}
+              This lead is at:{" "}
+              <strong>
+                {(access.kycStatus ?? "").replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase())}
+              </strong>
+              .{" "}
               {access.reason ||
                 "Product selection is read-only — visit Step 5 for the next action."}
             </span>
@@ -801,10 +806,12 @@ export default function ProductSelectionPage() {
                   onDocsMirrored={(items) => setPreSanctionDocs(items)}
                 />
                 <p className="mb-3 text-xs text-slate-500">
-                  Attach anything the lender needs before sanction — installation
-                  images, NBFC-signed docs, agreements. Any format (image, video,
-                  zip, PDF), up to 10 items. You can also merge several images /
-                  PDFs into one PDF.
+                  Attach what the lender needs before sanction (up to 10 files).{" "}
+                  <InfoTip>
+                    For example installation photos, lender-signed documents or
+                    agreements. Any format: image, video, zip or PDF. You can merge
+                    images or PDFs into one PDF.
+                  </InfoTip>
                 </p>
                 <div className="mb-3 flex flex-wrap items-center gap-2">
                   <label
@@ -1308,10 +1315,11 @@ function SectionG({
     <SectionCard title="Financing Options">
       <div className="mb-3 px-3 py-2.5 bg-amber-50 border border-amber-200 rounded-xl">
         <p className="text-[11px] text-amber-800 leading-relaxed">
-          <strong>Indicative — subject to verification.</strong> Final terms are
-          confirmed by the lender after Field Investigation and Active Video
-          KYC. The customer selects <strong>one</strong> lending partner; it
-          verifies independently and submits a firm offer.
+          <strong>Indicative terms — the lender confirms them after its checks.</strong>{" "}
+          <InfoTip>
+            The lender confirms final terms after a field visit and video KYC. The
+            customer picks one lender, who checks and sends a firm offer.
+          </InfoTip>
         </p>
       </div>
 

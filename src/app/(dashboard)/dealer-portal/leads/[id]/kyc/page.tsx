@@ -1124,7 +1124,7 @@ export default function KYCPage() {
                                 <CheckCircle2 className="w-5 h-5 text-emerald-600 flex-shrink-0" />
                                 <div>
                                     <p className="text-sm font-bold text-emerald-800">Verification Submitted</p>
-                                    <p className="text-xs text-emerald-600 mt-0.5">Coupon <span className="font-mono font-bold">{couponCode}</span> consumed. Verification is in progress.</p>
+                                    <p className="text-xs text-emerald-600 mt-0.5">Coupon <span className="font-mono font-bold">{couponCode}</span> used. Verification has started.</p>
                                 </div>
                             </div>
                         ) : lead?.coupon_status === 'reserved' ? (

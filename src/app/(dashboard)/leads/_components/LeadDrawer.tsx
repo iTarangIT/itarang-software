@@ -398,7 +398,7 @@ export function LeadDrawer({ lead, caps, onClose, onDone }: Props) {
                         className="mt-3 inline-flex items-center gap-1.5 text-[11px] font-semibold text-gray-700 transition hover:text-gray-900"
                     >
                         <ExternalLink className="h-3 w-3" />
-                        Open full lead &amp; timeline
+                        View lead timeline
                     </Link>
                     {/* The working page: status, Undo Mark Won, Withdraw quote.
                         Managers had no link to it from the leads list. */}

@@ -15,7 +15,7 @@ type Props = {
     leadId: string;
     onSuccess: (result: { next_action: VisitNextAction }) => void;
     /** Current status / temperature, so the form can pre-fill the auto values. */
-    lead?: VisitLeadState;
+    lead?: VisitLeadState & { dealer_name?: string | null; shop_name?: string | null };
 };
 
 export function LogVisitModal({ open, onClose, leadId, onSuccess, lead }: Props) {
@@ -31,7 +31,7 @@ export function LogVisitModal({ open, onClose, leadId, onSuccess, lead }: Props)
             open={open}
             onClose={() => !form.submitting && onClose()}
             title="Log visit"
-            subtitle="ASM ground action audit row"
+            subtitle={lead?.dealer_name ?? lead?.shop_name ?? undefined}
             width="lg"
             closeOnBackdrop={!form.submitting}
             footer={

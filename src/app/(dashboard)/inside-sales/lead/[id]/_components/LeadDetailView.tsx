@@ -22,9 +22,10 @@ import { EscalateModal } from "../../../_components/modals/EscalateModal";
 import { ClaimLeadConfirm } from "../../../_components/modals/ClaimLeadConfirm";
 import { canExportLeadHistory } from "@/lib/leads/access";
 import { CallbackBriefCard } from "@/components/leads/callback-brief-card";
+import { InfoTip } from "@/components/ui/info-tip";
 
 export const LEAD_NOT_ACCESSIBLE =
-    "This lead is not assigned to you any more — it may have been transferred to another owner. Ask your manager if you still need it.";
+    "This lead is no longer yours. Ask your manager if you still need it.";
 
 export type ActiveModal =
     | null
@@ -132,6 +133,12 @@ export function LeadDetailView({ leadId, viewerId, viewerRole, backHref = "/insi
                     <AlertTriangle className="h-5 w-5 text-rose-600 shrink-0" />
                     <div className="text-sm text-rose-800">
                         {(query.error as Error | undefined)?.message ?? "Lead not found or no longer accessible."}
+                        {(query.error as Error | undefined)?.message === LEAD_NOT_ACCESSIBLE && (
+                            <>
+                                {" "}
+                                <InfoTip>It may have moved to another owner.</InfoTip>
+                            </>
+                        )}
                     </div>
                 </div>
                 <Link href={backHref} className="mt-4 inline-flex items-center gap-1 text-sm text-blue-700 hover:underline">

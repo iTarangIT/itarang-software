@@ -30,7 +30,7 @@ export default async function InsideSalesQueuePage() {
                         My leads
                     </h1>
                     <p className="mt-1 text-sm text-gray-600">
-                        Welcome, {user.name}. Work AI-qualified dealer leads through engagement, commercials, and handoff.
+                        Welcome, {user.name}. Call AI-qualified dealers, share quotes and hand leads to ASMs.
                     </p>
                 </div>
             </header>

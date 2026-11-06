@@ -17,6 +17,7 @@ import { FileText, Loader2, Plus, Send, Trash2, Undo2 } from "lucide-react";
 
 import type { AssetType, CommercialsProductLine, ProductMasterResponse } from "@/lib/inside-sales/types";
 import { buildQuotePreview } from "@/lib/inside-sales/quotePreview";
+import { InfoTip } from "@/components/ui/info-tip";
 
 type Quotation = {
     quotation_id: string;
@@ -81,11 +82,11 @@ function StatusChip({ q }: { q: Quotation }) {
           : q.approval_status === "rejected"
             ? ["Rejected by CEO", "bg-rose-50 text-rose-700 border-rose-200"]
             : q.dealer_decision === "approved"
-              ? ["Account approved", "bg-emerald-600 text-white border-emerald-600"]
+              ? ["Dealer approved", "bg-emerald-600 text-white border-emerald-600"]
               : q.dealer_decision === "declined"
-                ? ["Account declined", "bg-orange-50 text-orange-700 border-orange-200"]
+                ? ["Dealer declined", "bg-orange-50 text-orange-700 border-orange-200"]
                 : q.sent_count > 0
-                  ? ["Sent — awaiting account", "bg-sky-50 text-sky-700 border-sky-200"]
+                  ? ["Sent — waiting for dealer", "bg-sky-50 text-sky-700 border-sky-200"]
                   : [q.approval_mode === "auto" ? "Approved (auto) — not sent" : "Approved — not sent", "bg-emerald-50 text-emerald-700 border-emerald-200"];
     return <span className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${tone}`}>{label}</span>;
 }
@@ -132,7 +133,8 @@ export function AccountQuotationsPanel({ accountId, readOnly = false }: { accoun
                 <div>
                     <h2 className="text-sm font-semibold text-ink">Quotes for this dealer</h2>
                     <p className="text-[11px] text-ink-muted">
-                        Separate from lead quotations. A line below its OEM reference price, or credit terms, waits for the CEO.
+                        Separate from lead quotes. Some quotes need CEO approval.{" "}
+                        <InfoTip>A price below the OEM reference price, or credit terms, needs CEO approval.</InfoTip>
                     </p>
                 </div>
                 {canWork && (
@@ -141,7 +143,7 @@ export function AccountQuotationsPanel({ accountId, readOnly = false }: { accoun
                         onClick={() => setCreating(true)}
                         className="inline-flex items-center gap-1.5 rounded-lg bg-brand-navy px-3 py-1.5 text-xs font-semibold text-white hover:opacity-90"
                     >
-                        <Plus className="h-3.5 w-3.5" /> Create quotation
+                        <Plus className="h-3.5 w-3.5" /> Create quote
                     </button>
                 )}
             </header>
@@ -154,7 +156,7 @@ export function AccountQuotationsPanel({ accountId, readOnly = false }: { accoun
             {error && <p className="px-4 py-6 text-sm text-rose-600">{(error as Error).message}</p>}
             {data && data.quotations.length === 0 && (
                 <p className="px-4 py-6 text-sm text-ink-muted">
-                    No quotations for this account yet.{canWork ? " Press “Create quotation” to raise one." : ""}
+                    No quotations for this account yet.{canWork ? " Press “Create quote” to raise one." : ""}
                 </p>
             )}
             {(regenerate.error || withdraw.error) && (
@@ -355,7 +357,7 @@ function CreateAccountQuoteDialog({
         onSuccess: (r) => {
             window.alert(
                 r.auto_approved
-                    ? `Approved automatically${r.quote_number ? ` — ${r.quote_number}` : ""}. You can send it to the account now.`
+                    ? `Approved automatically${r.quote_number ? ` — ${r.quote_number}` : ""}. You can send it to the dealer now.`
                     : "Sent to the CEO for approval. The dealer sees it only after approval.",
             );
             onSaved();
@@ -394,7 +396,7 @@ function CreateAccountQuoteDialog({
 
     return (
         <Dialog
-            title={initial ? `Revise v${initial.version_no} — ${accountName}` : `New quotation — ${accountName}`}
+            title={initial ? `Revise v${initial.version_no} — ${accountName}` : `New quote — ${accountName}`}
             onClose={onClose}
         >
             <div className="space-y-4 text-sm">
@@ -547,7 +549,7 @@ function SendAccountQuoteDialog({
     });
 
     return (
-        <Dialog title={`Send ${quotation.quote_number ?? `v${quotation.version_no}`} to the account`} onClose={onClose}>
+        <Dialog title={`Send ${quotation.quote_number ?? `v${quotation.version_no}`} to the dealer`} onClose={onClose}>
             {info.isLoading ? (
                 <p className="text-sm text-ink-muted">Loading…</p>
             ) : info.error ? (
@@ -564,7 +566,7 @@ function SendAccountQuoteDialog({
                         <input value={phone ?? info.data?.phone ?? ""} onChange={(e) => setPhone(e.target.value)} disabled={!useWa} placeholder="10-digit mobile" className="flex-1 rounded-lg border border-border px-2 py-1" />
                     </label>
                     <textarea value={message} onChange={(e) => setMessage(e.target.value)} rows={3} maxLength={2000} placeholder="Covering note (optional)" className="w-full rounded-lg border border-border px-2 py-1.5 text-xs" />
-                    <p className="text-[11px] text-ink-muted">The account gets the PDF and a link to approve it. The owner, you and the Admin CC list are copied.</p>
+                    <p className="text-[11px] text-ink-muted">The dealer gets the PDF and a link to approve it.{" "}<InfoTip>The owner, you and Admin&apos;s CC list also get a copy.</InfoTip></p>
                     {send.error && <p className="rounded-lg bg-rose-50 px-3 py-2 text-xs text-rose-700">{(send.error as Error).message}</p>}
                     {(info.data?.dispatches.length ?? 0) > 0 && (
                         <div className="rounded-lg border border-border p-2 text-[11px] text-ink-muted">

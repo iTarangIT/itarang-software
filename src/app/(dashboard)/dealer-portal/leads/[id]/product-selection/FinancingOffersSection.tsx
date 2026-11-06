@@ -19,6 +19,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { confirmDialog } from "@/components/ui/confirm-dialog";
 import ReselectFinancingCard from "./ReselectFinancingCard";
+import { InfoTip } from "@/components/ui/info-tip";
 
 /**
  * The card claims "this updates as offers arrive", so the section polls while
@@ -178,8 +179,10 @@ export default function FinancingOffersSection({ leadId }: { leadId: string }) {
       <div className="mb-6 rounded-2xl border border-amber-200 bg-amber-50 p-5">
         <h3 className="text-sm font-black uppercase tracking-wider text-amber-900">Financing Unavailable</h3>
         <p className="text-xs text-amber-800 mt-1 mb-4">
-          All financing avenues for this lead were exhausted and an admin confirmed it as a dead-end.
-          You can convert it to a cash sale in place, or leave it closed.
+          No lender can finance this lead.{" "}
+          <InfoTip>
+            Admin confirmed every lender option was tried. You can convert it to a cash sale or leave it closed.
+          </InfoTip>
         </p>
         {error && <p className="text-xs text-red-600 mb-3">{error}</p>}
         <button

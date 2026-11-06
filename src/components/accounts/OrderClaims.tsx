@@ -10,6 +10,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
+import { InfoTip } from "@/components/ui/info-tip";
 
 import { ORDER_CLAIM_WINDOW_DAYS } from "@/lib/dealers/accountHealthRules";
 import type { DealerHealthRow } from "@/lib/dealers/accountHealth";
@@ -109,7 +110,8 @@ export function OrderPlacedButton({ accountId }: { accountId: string }) {
                 className="w-56 rounded-lg border border-border px-2 py-1 text-xs"
             />
             <p className="w-56 text-[11px] text-ink-muted">
-                Reminders pause for {ORDER_CLAIM_WINDOW_DAYS} days from the order date. An invoice in that time confirms it.
+                Reminders pause for {ORDER_CLAIM_WINDOW_DAYS} days from the order date.{" "}
+                <InfoTip>An invoice within those days confirms the order.</InfoTip>
             </p>
             <div className="flex gap-2">
                 <button type="button" onClick={() => setOpen(false)} className="text-xs text-ink-muted">
@@ -138,8 +140,8 @@ export function OrderClaimBadge({ claim }: { claim: NonNullable<DealerHealthRow[
         </div>
     ) : (
         <div className="mt-1 text-[11px] font-medium text-rose-700">
-            Order claimed {dmy(claim.order_date)}
-            {po} — no invoice raised
+            Order placed {dmy(claim.order_date)}
+            {po} — no invoice yet
         </div>
     );
 }

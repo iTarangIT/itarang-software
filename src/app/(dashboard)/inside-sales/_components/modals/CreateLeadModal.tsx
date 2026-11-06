@@ -164,7 +164,7 @@ export function CreateLeadModal({ open, onClose, onSuccess }: Props) {
         <Modal
             open={open}
             onClose={handleClose}
-            title="Create Lead"
+            title="Create lead"
             subtitle="Adds a new dealer lead"
             width="md"
             closeOnBackdrop={!submitting}

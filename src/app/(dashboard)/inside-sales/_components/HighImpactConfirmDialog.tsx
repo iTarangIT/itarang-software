@@ -4,24 +4,28 @@
 import { AlertTriangle } from "lucide-react";
 import { Modal } from "./Modal";
 import { Button } from "@/components/ui/button";
+import { InfoTip } from "@/components/ui/info-tip";
 import type { LostReason } from "@/lib/lifecycle/transitions";
 
-const CONSEQUENCE: Partial<Record<LostReason, { title: string; body: string }>> = {
+const CONSEQUENCE: Partial<Record<LostReason, { title: string; body: string; tip?: string }>> = {
     business_closed: {
         title: "Permanent AI dialer exclusion",
         body: "The AI dialer will never call this number again.",
     },
     duplicate_lead: {
         title: "Merge review required",
-        body: "This indicates the dealer exists under another phone in our system. A merge review will be required to consolidate touchpoints and commercials.",
+        body: "This dealer already exists under another phone number.",
+        tip: "Admin will review and merge the two leads' activity and quotes.",
     },
     rejected_by_us_credit: {
         title: "Credit rejection — archive recommended",
-        body: "This signals our credit team rejected the dealer's profile. The lead will be archived; downstream reactivation is not recommended unless credit signals change.",
+        body: "Our credit team rejected this dealer. We'll archive the lead.",
+        tip: "Don't reactivate it unless the dealer's credit changes.",
     },
     rejected_by_us_geography: {
         title: "Out-of-service area — archive recommended",
-        body: "This signals we cannot serve this dealer's location. Reactivation is not recommended unless our service area expands.",
+        body: "We can't serve this dealer's area.",
+        tip: "Don't reactivate it unless we start serving this area.",
     },
 };
 
@@ -64,7 +68,15 @@ export function HighImpactConfirmDialog({ open, reason, onCancel, onConfirm, loa
                 </div>
                 <div className="space-y-2">
                     <h3 className="text-sm font-semibold text-gray-900">{consequence?.title}</h3>
-                    <p className="text-sm text-gray-700 leading-relaxed">{consequence?.body}</p>
+                    <p className="text-sm text-gray-700 leading-relaxed">
+                        {consequence?.body}
+                        {consequence?.tip ? (
+                            <>
+                                {" "}
+                                <InfoTip>{consequence.tip}</InfoTip>
+                            </>
+                        ) : null}
+                    </p>
                     <p className="text-xs text-gray-500 mt-3">
                         You can&apos;t undo this. Only Admin, the Sales Head or the CEO can reactivate a Lost lead.
                     </p>

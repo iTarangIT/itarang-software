@@ -18,6 +18,7 @@ import {
 } from "@/lib/dealers/accountHealthRules";
 import type { DealerHealthRow } from "@/lib/dealers/accountHealth";
 import { OrderClaimBadge, OrderClaimsList, OrderPlacedButton } from "@/components/accounts/OrderClaims";
+import { InfoTip } from "@/components/ui/info-tip";
 
 const BUCKET_TONE: Record<AccountBucket, string> = {
     active: "bg-emerald-50 text-emerald-700 border-emerald-200",
@@ -80,7 +81,8 @@ export function MyDealersView() {
     if (allRows.length === 0) {
         return (
             <p className="rounded-xl border border-border bg-surface px-4 py-8 text-center text-sm text-ink-muted">
-                No dealer accounts are assigned to you yet. Your Sales Head assigns owners on the Accounts page.
+                No dealers assigned to you yet.{" "}
+                <InfoTip>Your Sales Head assigns dealer owners on the Accounts page.</InfoTip>
             </p>
         );
     }
@@ -126,7 +128,7 @@ export function MyDealersView() {
                     <thead className="bg-bg/60 text-[11px] uppercase tracking-wide text-ink-muted">
                         <tr>
                             <th className="px-3 py-2 text-left font-semibold">Dealer</th>
-                            <th className="px-3 py-2 text-left font-semibold">Bucket</th>
+                            <th className="px-3 py-2 text-left font-semibold">Reorder stage</th>
                             <th className="px-3 py-2 text-left font-semibold">Last invoice</th>
                             <th className="px-3 py-2 text-right font-semibold">Days since</th>
                             <th className="px-3 py-2 text-right font-semibold">Usual gap (days)</th>

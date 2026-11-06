@@ -6,6 +6,7 @@ import { Modal } from "../Modal";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
+import { InfoTip } from "@/components/ui/info-tip";
 import { type TouchpointType } from "@/lib/lifecycle/touchpointTypes";
 import {
     DispositionPicker,
@@ -66,6 +67,14 @@ const REP_TYPES: TouchpointType[] = [
     "inside_sales_call",
     "whatsapp",
 ];
+
+// On-screen names for the activity-type picker (ID 215). The stored value stays the code.
+const TYPE_OPTION_LABEL: Partial<Record<TouchpointType, string>> = {
+    inside_sales_call: "Call",
+    whatsapp: "WhatsApp",
+    status_change_note: "Note",
+    visit: "Visit",
+};
 
 export function LogTouchpointModal({
     open,
@@ -326,7 +335,7 @@ export function LogTouchpointModal({
                         onChange={(e) => setType(e.target.value as TouchpointType)}
                     >
                         {typeOptions.map((t) => (
-                            <option key={t} value={t}>{t.replaceAll("_", " ")}</option>
+                            <option key={t} value={t}>{TYPE_OPTION_LABEL[t] ?? t.replaceAll("_", " ")}</option>
                         ))}
                     </select>
                 </div>
@@ -381,15 +390,14 @@ export function LogTouchpointModal({
                                     checked={isEngaged}
                                     onChange={(e) => setIsEngaged(e.target.checked)}
                                 />
-                                Mark as engaged touchpoint
-                                <span className="text-[11px] text-gray-500">(the dealer responded in this interaction)</span>
+                                The dealer responded
                             </label>
                         )}
 
                         {type === "inside_sales_call" && changeStatus && toStatus && (
                             <p className="rounded-md bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
-                                This outcome moves the lead to <strong>{LEAD_STATUS_LABEL[toStatus as LeadStatus] ?? toStatus}</strong>.
-                                Commercials stages move only with quotes; Won and Lost have their own buttons.
+                                This outcome moves the lead to <strong>{LEAD_STATUS_LABEL[toStatus as LeadStatus] ?? toStatus}</strong>.{" "}
+                                <InfoTip>Quote stages change only when you add a quote. Use Mark Won or Mark Lost for those.</InfoTip>
                             </p>
                         )}
                         {type === "inside_sales_call" && COMMERCIALS_CALL_LABELS.includes(disposition.disposition) &&
@@ -404,7 +412,7 @@ export function LogTouchpointModal({
                                             title="Save this call, then open Update Commercials to create the quote"
                                             className="shrink-0 rounded-md border border-amber-300 bg-white px-2.5 py-1 font-semibold text-amber-900 hover:bg-amber-100 disabled:opacity-50"
                                         >
-                                            Save &amp; Update Commercials
+                                            Save and update quote
                                         </button>
                                     ) : (
                                         <span>

@@ -28,6 +28,7 @@ import { AlertCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { InfoTip } from '@/components/ui/info-tip';
 import { BUSINESS_TYPE_OPTIONS, BUSINESS_TYPES } from '@/lib/leads/businessType';
 
 // Mirrors PatchSchema in src/app/api/dealer-leads/[id]/route.ts. The server
@@ -144,7 +145,7 @@ export function EditLeadForm({
       // successful one. Stay on the page and say what went wrong.
       if (!res.ok || !json?.success) {
         throw new Error(
-          json?.error?.message ?? `Could not save the lead (HTTP ${res.status}).`,
+          json?.error?.message ?? "Couldn't save the lead. Try again.",
         );
       }
       if (json.business_type_saved === false) {
@@ -239,8 +240,11 @@ export function EditLeadForm({
       <div className="space-y-5">
         <h2 className="text-lg font-semibold text-gray-900">Location</h2>
         <p className="-mt-3 text-[11px] text-gray-500">
-          State and city are canonicalised on save — they drive the region
-          filters and the AI dialer&apos;s audience.
+          We correct state and city spellings when you save.{' '}
+          <InfoTip>
+            They decide the region filters and which dealers the AI dialer
+            calls.
+          </InfoTip>
         </p>
 
         <div className="grid md:grid-cols-2 gap-5">
@@ -281,7 +285,8 @@ export function EditLeadForm({
             {initialData.overall_summary?.trim() || 'No summary yet.'}
           </p>
           <p className="mt-1 text-xs text-gray-500">
-            Written by the system from the call transcripts and refreshed after each new call. Your notes above are kept separately.
+            Written from the call transcripts after each call.{' '}
+            <InfoTip>Your notes above are saved separately.</InfoTip>
           </p>
         </div>
       </div>

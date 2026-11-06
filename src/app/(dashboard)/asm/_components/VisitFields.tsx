@@ -12,6 +12,7 @@ import { CheckCircle2, Loader2, MapPin } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
+import { InfoTip } from "@/components/ui/info-tip";
 import { PhotoUploader } from "./PhotoUploader";
 import { VerifiedVisitCapture, type CapturedVisit } from "@/components/visits/VerifiedVisitCapture";
 import { istDay } from "@/lib/visits/verifiedCapture";
@@ -155,7 +156,8 @@ export function useVisitForm(open: boolean, lead?: VisitLeadState) {
                     toast.message("Permission denied — proceed without GPS");
                 } else {
                     setGpsState("error");
-                    toast.error(`GPS error: ${err.message}`);
+                    console.error("GPS error:", err.message);
+                    toast.error("Couldn't get your location. Turn location on and try again.");
                 }
             },
             { enableHighAccuracy: true, timeout: 8000 },
@@ -386,9 +388,9 @@ export function VisitFields({ form, leadId }: { form: UseVisitForm; leadId: stri
                             commercials stages move only with quotes. */}
                         <p className="mt-1 rounded-md bg-gray-50 px-3 py-2 text-xs text-gray-600">
                             {statusTo
-                                ? `Moves to ${statusTo.replace(/_/g, " ")} (or the stage it had before the transfer, if further).`
+                                ? <>Moves to {statusTo.replace(/_/g, " ")}.{" "}<InfoTip>Or back to its stage before the transfer, if that is further along.</InfoTip></>
                                 : lead.lead_status === "Transferred_to_ASM"
-                                  ? "Ends Awaiting field visit — the lead goes back to its earlier stage, at least Under discussion."
+                                  ? <>The lead goes back to its earlier stage.{" "}<InfoTip>This ends Awaiting field visit. The lead returns to its stage before the transfer, at least Under discussion.</InfoTip></>
                                   : "Status changes on its own when you add a quote."}
                         </p>
                     </div>
@@ -506,8 +508,8 @@ export function VisitFields({ form, leadId }: { form: UseVisitForm; leadId: stri
                         ))}
                     </select>
                     <p className="mt-1 text-[11px] text-gray-500">
-                        convert / lost / escalate will open the matching modal
-                        after the visit saves.
+                        Mark Won, Mark Lost and Escalate open their form after
+                        you save.
                     </p>
                 </div>
                 {nextAction === "next_visit" && (

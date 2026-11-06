@@ -17,7 +17,7 @@ export function PastLimitChip({ className = "", limits }: { className?: string; 
             className={`inline-flex items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[10px] font-semibold text-rose-700 whitespace-nowrap ${className}`}
         >
             <AlarmClock className="h-3 w-3" />
-            {named.length ? `Past: ${named[0]}${named.length > 1 ? ` +${named.length - 1}` : ""}` : "Past a limit"}
+            {named.length ? `Late: ${named[0]}${named.length > 1 ? ` +${named.length - 1}` : ""}` : "Over time limit"}
         </span>
     );
 }

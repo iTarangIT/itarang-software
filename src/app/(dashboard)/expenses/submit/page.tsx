@@ -4,6 +4,7 @@ import React, { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Upload, Receipt, CheckCircle2, XCircle, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { InfoTip } from "@/components/ui/info-tip";
 
 import { onFreshFileClick } from "@/lib/storage/freshFileLink";
 import { TravelDaysPicker, travelDaysReady, type PickedDay } from "@/components/expenses/TravelDaysPicker";
@@ -117,7 +118,8 @@ export default function SubmitExpensePage() {
           Submit expense
         </h1>
         <p className="text-sm text-gray-500 mt-1">
-          Upload the bill and submit for CEO approval. Approved expenses are reflected on the CEO dashboard.
+          Upload the bill and send it to the CEO for approval.{" "}
+          <InfoTip>Approved expenses show on the CEO dashboard.</InfoTip>
         </p>
       </div>
 
@@ -268,7 +270,7 @@ export default function SubmitExpensePage() {
                   {mine.map((s) => (
                     <tr key={s.id} className="border-b border-gray-50">
                       <td className="py-3 pr-4 text-xs text-gray-600 whitespace-nowrap">
-                        {new Date(s.created_at).toLocaleDateString("en-IN")}
+                        {new Date(s.created_at).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
                       </td>
                       <td className="py-3 pr-4 text-xs font-semibold text-gray-900">{s.category}</td>
                       <td className="py-3 pr-4 text-xs font-bold text-gray-900 whitespace-nowrap">
@@ -322,7 +324,7 @@ export default function SubmitExpensePage() {
                     <div className="min-w-0">
                       <p className="text-sm font-semibold text-gray-900 truncate">{s.category}</p>
                       <p className="text-[11px] text-gray-500 mt-0.5">
-                        {new Date(s.created_at).toLocaleDateString("en-IN")}
+                        {new Date(s.created_at).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
                       </p>
                     </div>
                     <p className="text-sm font-bold text-gray-900 whitespace-nowrap">

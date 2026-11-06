@@ -7,6 +7,7 @@ import { AlertTriangle, CheckCircle2, Globe, MessageCircle } from "lucide-react"
 import { Modal } from "../Modal";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
+import { InfoTip } from "@/components/ui/info-tip";
 import { whatsappOnboardingChatUrl } from "@/lib/whatsapp/chat-link";
 import { checkCustomerGstin, GSTIN_CHECK_MESSAGE, normalizeGstin } from "@/lib/leads/gstin";
 
@@ -234,9 +235,12 @@ export function MarkConvertedModal({ open, onClose, leadId, onSuccess, hasApprov
                             <CheckCircle2 className="h-5 w-5" />
                         </div>
                         <div className="space-y-1 text-sm text-gray-700">
-                            <p>Marks the lead <span className="font-semibold">Won</span> (you are recorded as the closing owner) and starts dealer onboarding. It becomes <span className="font-semibold">Converted</span> when the onboarding is approved.</p>
+                            <p>Marks the lead <span className="font-semibold">Won</span> and starts dealer onboarding.{" "}
+                                <InfoTip>You become the closing owner. The lead becomes Converted when onboarding is approved.</InfoTip>
+                            </p>
                             <p className="text-xs text-gray-500">
-                                A draft dealer onboarding application is created automatically and linked to this lead. If it cannot be created, the conversion is rolled back.
+                                We create a draft onboarding form for this lead.{" "}
+                                <InfoTip>If we can&apos;t create it, the lead is not marked Won.</InfoTip>
                             </p>
                         </div>
                     </div>
@@ -244,9 +248,8 @@ export function MarkConvertedModal({ open, onClose, leadId, onSuccess, hasApprov
                         <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
                             <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                             <span>
-                                No dealer-approved quote on this lead. You can still mark it Won; it will be
-                                flagged <span className="font-semibold">Won without an approved quote</span> for
-                                the admin and sales head.
+                                No dealer-approved quote. You can still mark it Won.{" "}
+                                <InfoTip>Admin and Sales Head will see it flagged as Won without an approved quote.</InfoTip>
                             </span>
                         </div>
                     )}

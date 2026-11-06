@@ -14,6 +14,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Loader2, Undo2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { InfoTip } from "@/components/ui/info-tip";
 
 type UndoState = {
     available: boolean;
@@ -97,8 +98,8 @@ export function WonUndoControl({ leadId, onDone }: { leadId: string; onDone?: ()
                 <p className="mt-1 text-[12px] text-gray-700">“{s.pending.request_reason}”</p>
                 {s.eligible ? (
                     <p className="mt-1 text-[11px] text-gray-600">
-                        Approving puts the lead back at <span className="font-medium">{pretty(s.restore_status)}</span>{" "}
-                        with the same owner, withdraws the empty onboarding application and removes the Won.
+                        Approving puts the lead back at <span className="font-medium">{pretty(s.restore_status)}</span>.{" "}
+                        <InfoTip>Same owner. It withdraws the empty onboarding form and removes the Won.</InfoTip>
                     </p>
                 ) : (
                     <p className="mt-1 text-[11px] text-rose-700">{s.reason}</p>
@@ -176,8 +177,11 @@ export function WonUndoControl({ leadId, onDone }: { leadId: string; onDone?: ()
             </h3>
             <p className="mt-1 text-[11px] text-gray-600">
                 For a Won marked by mistake. The lead goes back to{" "}
-                <span className="font-medium">{pretty(s.restore_status)}</span> with the same owner, the empty
-                onboarding application is withdrawn and the Won is not counted. It is not a drop-out or a Lost.
+                <span className="font-medium">{pretty(s.restore_status)}</span>.{" "}
+                <InfoTip>
+                    Same owner. We withdraw the empty onboarding form and don&apos;t count the Won. It isn&apos;t a
+                    drop-out or a Lost.
+                </InfoTip>
             </p>
             <textarea
                 value={text}

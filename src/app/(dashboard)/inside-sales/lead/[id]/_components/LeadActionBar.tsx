@@ -14,6 +14,7 @@ import { CLAIM_ROLES, type LeadDetailBundle } from "@/lib/inside-sales/types";
 import { isOpen, isTerminal, type LeadStatus } from "@/lib/lifecycle/transitions";
 import type { ActiveModal } from "./LeadDetailView";
 import { CallNowButton } from "@/components/leads/call-now-button";
+import { InfoTip } from "@/components/ui/info-tip";
 import { CorrectLeadGstinButton } from "@/components/leads/CorrectLeadGstinButton";
 import { GSTIN_CORRECTION_MANAGER_ROLES } from "@/lib/leads/correctLeadGstinRules";
 import { canReassignToIsr, canTransferAnyLead, managerMayTransferStatus } from "@/lib/leads/access";
@@ -135,8 +136,9 @@ export function LeadActionBar({ bundle, isOwner, viewerRole, onAction, onChanged
                 Log activity
             </ActionButton>
             <ActionButton icon={Receipt} onClick={() => onAction("commercials")}>
-                Update Commercials
+                Update quote
             </ActionButton>
+            <InfoTip className="-ml-1">Share a brochure, give or revise a quote, or change terms.</InfoTip>
             {/* ID 83: the owner asks the NeoDove calling team to ring this dealer
                 next. The call that follows is marked "called on your behalf". */}
             <CallNowButton

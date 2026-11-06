@@ -30,7 +30,7 @@ export default async function AsmQueuePage() {
                         My visits
                     </h1>
                     <p className="mt-1 text-sm text-gray-600">
-                        Welcome, {user.name}. Track your handed-off leads, schedule visits, and close on the ground.
+                        Welcome, {user.name}. Plan visits for leads sent to you and close deals at the shop.
                     </p>
                 </div>
             </header>

@@ -15,6 +15,7 @@ import { Ban } from "lucide-react";
 import type { LeadDetailBundle } from "@/lib/inside-sales/types";
 import { isOpen, type LeadStatus } from "@/lib/lifecycle/transitions";
 import { CallNowButton } from "@/components/leads/call-now-button";
+import { InfoTip } from "@/components/ui/info-tip";
 import { CorrectLeadGstinButton } from "@/components/leads/CorrectLeadGstinButton";
 import { GSTIN_CORRECTION_MANAGER_ROLES } from "@/lib/leads/correctLeadGstinRules";
 
@@ -117,8 +118,9 @@ export function AsmLeadActionBar({ bundle, isOwner, viewerRole, onAction, onChan
                 Log activity
             </Btn>
             <Btn icon={Receipt} onClick={() => onAction("commercials")}>
-                Update Commercials
+                Update quote
             </Btn>
+            <InfoTip className="-ml-1">Share a brochure, give or revise a quote, or change terms.</InfoTip>
             {/* ID 83: the owner asks the NeoDove calling team to ring this dealer
                 next. The call that follows is marked "called on your behalf". */}
             <CallNowButton

@@ -19,8 +19,14 @@ interface CallButtonProps {
 type CallState = "idle" | "calling" | "success" | "error";
 
 const PROVIDER_LABEL: Record<Provider, string> = {
-  bolna: "Bolna",
-  elevenlabs: "ElevenLabs",
+  bolna: "AI call 1",
+  elevenlabs: "AI call 2",
+};
+
+// Tooltip on the button (an "i" button cannot sit inside a button).
+const PROVIDER_TIP: Record<Provider, string> = {
+  bolna: "Starts an AI call to this dealer with AI voice 1.",
+  elevenlabs: "Starts an AI call to this dealer with AI voice 2.",
 };
 
 const PROVIDER_ENDPOINT: Record<Provider, string> = {
@@ -84,6 +90,7 @@ export function CallButton({
       size="sm"
       variant="outline"
       onClick={handleCall}
+      title={PROVIDER_TIP[provider]}
       disabled={disabled || state === "calling"}
       className={`
         flex items-center gap-2 transition-all duration-200

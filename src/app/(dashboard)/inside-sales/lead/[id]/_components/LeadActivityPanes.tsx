@@ -40,11 +40,11 @@ export function LeadActivityPanes({
             label: "Activity",
             count: bundle.touchpoints.length,
         },
-        { value: "calls", label: "AI Call History" },
+        { value: "calls", label: "AI calls" },
         // E-295 — the journey (who held it, for how long, what they did) and
         // its CSV. The rep / ASM is on their own lead here, so the endpoint's
         // own-only scope passes.
-        { value: "tracking", label: "Lead Tracking" },
+        { value: "tracking", label: "Lead tracking" },
         // E-311 — documents filed on the lead + its visit photos.
         { value: "documents", label: "Documents & photos" },
     ];

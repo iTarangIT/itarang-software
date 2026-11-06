@@ -89,7 +89,7 @@ export function AccountVisitCapture({ accountId, name, backHref }: { accountId: 
     return (
         <div className="space-y-4">
             <p className="text-sm text-gray-600">
-                Visit to counter <span className="font-medium text-gray-900">{name}</span> — today
+                Visit to <span className="font-medium text-gray-900">{name}</span> — today
             </p>
             <div>
                 <Label>

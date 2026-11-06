@@ -12,6 +12,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { Loader2, Tag } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { InfoTip } from "@/components/ui/info-tip";
 import { CHANGEABLE_LOST_REASONS } from "@/lib/leads/changeLostReasonRules";
 import { LOST_REASON_LABELS } from "@/app/(dashboard)/inside-sales/_components/modals/MarkLostModal";
 import type { LostReason } from "@/lib/lifecycle/transitions";
@@ -89,8 +90,10 @@ export function ChangeLostReasonButton({
                 Change Lost reason
             </h3>
             <p className="mt-1 text-[11px] text-gray-600">
-                Now: <span className="font-medium">{current}</span>. The lead stays Lost — closed date and closing
-                owner do not change. The old and new reason go in its history.
+                Now: <span className="font-medium">{current}</span>. The lead stays Lost.{" "}
+                <InfoTip>
+                    The closed date and closing owner stay the same. Both reasons are kept in the lead&apos;s history.
+                </InfoTip>
             </p>
             <div className="mt-2 space-y-2">
                 <select

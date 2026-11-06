@@ -27,17 +27,34 @@ import { DealCardBlock } from "./DealCardBlock";
 import { businessTypeLabel, businessTypeTone } from "@/lib/leads/businessType";
 import { doorLabel, originLabel, SOURCE_LABELS } from "@/lib/leads/leadSourceVocab";
 import { SetLeadSource } from "@/components/leads/SetLeadSource";
+import { InfoTip } from "@/components/ui/info-tip";
+import { INTEREST_OPTIONS, LEAD_STATUS_LABEL } from "@/lib/leads/queueFilters";
 
 type GroupKey = "snapshot" | "business" | "commercials" | "workflow" | "attribution" | "ownership";
 
 const GROUPS: { key: GroupKey; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
-    { key: "snapshot", label: "Dealer Snapshot", icon: User2 },
-    { key: "business", label: "Business Profile", icon: Building2 },
-    { key: "commercials", label: "Commercials", icon: Receipt },
-    { key: "workflow", label: "Workflow", icon: Workflow },
-    { key: "attribution", label: "Attribution", icon: BadgeInfo },
-    { key: "ownership", label: "Ownership History", icon: History },
+    { key: "snapshot", label: "Dealer", icon: User2 },
+    { key: "business", label: "Business", icon: Building2 },
+    { key: "commercials", label: "Quotes", icon: Receipt },
+    { key: "workflow", label: "Status", icon: Workflow },
+    { key: "attribution", label: "Source", icon: BadgeInfo },
+    { key: "ownership", label: "Owner history", icon: History },
 ];
+
+/** On-screen names of the commercials update types (the stored codes stay). */
+const EVENT_TYPE_LABEL: Record<string, string> = {
+    brochure_share: "Brochure share",
+    quote_issue: "Quote issued",
+    quote_revision: "Quote revision",
+    terms_update: "Terms update",
+    final_terms: "Final terms",
+};
+const eventTypeLabel = (code: string | null | undefined) =>
+    (code && EVENT_TYPE_LABEL[code]) || code || "";
+
+const INTEREST_LABEL: Record<string, string> = Object.fromEntries(
+    INTEREST_OPTIONS.map((o) => [o.value, o.label]),
+);
 
 type Props = {
     bundle: LeadDetailBundle;
@@ -107,7 +124,7 @@ export function LeadDetailRightPane({ bundle, viewerRole, onReviseQuote, focusQu
             const live = json?.data?.liveQuote as { versionNo: number } | null | undefined;
             toast.success(
                 live
-                    ? `Quote withdrawn. v${live.versionNo} is still live, so the lead's status is unchanged.`
+                    ? `Quote withdrawn. Version ${live.versionNo} is still active, so the status stays the same.`
                     : "Quote withdrawn.",
             );
             await queryClient.invalidateQueries();
@@ -244,7 +261,15 @@ export function LeadDetailRightPane({ bundle, viewerRole, onReviseQuote, focusQu
                                             <Field label="Interest Level" value={lead.interest_level} />
                                             <Field label="Timezone" value={lead.timezone} />
                                             <div className="col-span-2">
-                                                <Field label="Preliminary Payment Intent" value={lead.preliminary_payment_intent} />
+                                                <div>
+                                                    <div className="text-[10px] uppercase tracking-wide text-gray-500 mb-0.5 flex items-center gap-1">
+                                                        Expected payment method
+                                                        <InfoTip>As given when the lead was uploaded.</InfoTip>
+                                                    </div>
+                                                    <div className="text-sm text-gray-900 break-words">
+                                                        {lead.preliminary_payment_intent ? lead.preliminary_payment_intent : <span className="text-gray-400">—</span>}
+                                                    </div>
+                                                </div>
                                             </div>
                                             <div className="col-span-2">
                                                 <Field label="Overall Summary" value={lead.overall_summary ? <p className="whitespace-pre-wrap">{lead.overall_summary}</p> : null} />
@@ -256,7 +281,7 @@ export function LeadDetailRightPane({ bundle, viewerRole, onReviseQuote, focusQu
                                             {cc ? (
                                                 <>
                                                     <div className="flex items-center justify-between text-xs text-gray-500">
-                                                        <span>Current version: <span className="font-semibold text-gray-800">v{cc.version_no}</span> · {cc.event_type}</span>
+                                                        <span><span className="font-semibold text-gray-800">Version {cc.version_no}</span> · {eventTypeLabel(cc.event_type)}</span>
                                                         <span>{fmtDate(cc.created_at)}</span>
                                                     </div>
                                                     <CommercialsDetail
@@ -276,11 +301,13 @@ export function LeadDetailRightPane({ bundle, viewerRole, onReviseQuote, focusQu
                                                     {liveQuoteBelow && (
                                                         <div className="space-y-1.5">
                                                             <p className="text-xs text-gray-500">
-                                                                Live quote:{" "}
-                                                                <span className="font-semibold text-gray-800">v{liveQuoteBelow.version_no}</span>
-                                                                {liveQuoteBelow.final_price ? ` · ₹${liveQuoteBelow.final_price}` : ""}
-                                                                {" — "}v{cc.version_no} above has not replaced it, so this is
-                                                                still the quote the dealer can answer.
+                                                                Active quote:{" "}
+                                                                <span className="font-semibold text-gray-800">version {liveQuoteBelow.version_no}</span>
+                                                                {liveQuoteBelow.final_price ? ` · ₹${liveQuoteBelow.final_price}` : ""}{" "}
+                                                                <InfoTip>
+                                                                    Version {cc.version_no} above has not replaced it yet, so the
+                                                                    dealer can still answer this one.
+                                                                </InfoTip>
                                                             </p>
                                                             <QuoteApprovalBlock
                                                                 cc={liveQuoteBelow}
@@ -328,8 +355,18 @@ export function LeadDetailRightPane({ bundle, viewerRole, onReviseQuote, focusQu
                                     )}
                                     {g.key === "workflow" && (
                                         <div className="grid grid-cols-2 gap-3">
-                                            <Field label="Lead Status" value={lead.lead_status} />
-                                            <Field label="Interest Level" value={lead.interest_level} />
+                                            <Field
+                                                label="Status"
+                                                value={
+                                                    lead.lead_status
+                                                        ? (LEAD_STATUS_LABEL as Record<string, string>)[lead.lead_status] ?? lead.lead_status
+                                                        : null
+                                                }
+                                            />
+                                            <Field
+                                                label="Interest"
+                                                value={lead.interest_level ? INTEREST_LABEL[lead.interest_level] ?? lead.interest_level : null}
+                                            />
                                             <Field label="Next Follow-up" value={fmtDate(lead.next_follow_up_at)} />
                                             <Field label="Last activity" value={fmtDate(lead.last_touchpoint_at)} />
                                             <Field label="ASM" value={lead.asm_name} />
@@ -344,7 +381,6 @@ export function LeadDetailRightPane({ bundle, viewerRole, onReviseQuote, focusQu
                                     )}
                                     {g.key === "attribution" && (
                                         <div className="grid grid-cols-2 gap-3">
-                                            <Field label="AI Session ID" value={lead.ai_session_id} />
                                             <Field label="Originator" value={lead.originator_name} />
                                             <Field label="Assigned At" value={fmtDate(lead.assigned_at)} />
                                             <Field label="Closed At" value={fmtDate(lead.closed_at)} />

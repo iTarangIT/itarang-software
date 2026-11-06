@@ -22,6 +22,7 @@ import ProductSelector, {
     type ProductSelectorValue,
 } from '@/components/dealer-portal/lead-wizard/ProductSelector';
 import LeadWorkNote from '@/components/dealer-portal/lead-wizard/LeadWorkNote';
+import { InfoTip } from '@/components/ui/info-tip';
 
 const emptyFormData = {
     full_name: '',
@@ -410,7 +411,7 @@ function NewLeadWizardContent() {
     // ─── Submit ─────────────────────────────────────────────────────────────
 
     const commitStep = () => {
-        if (!leadId) { setApiError('Lead draft not initialized. Please refresh.'); return; }
+        if (!leadId) { setApiError('The form didn\'t load. Refresh the page.'); return; }
         const errs = validate();
         if (Object.keys(errs).length > 0) {
             // Popup: name the missing/invalid fields in form order.
@@ -490,7 +491,7 @@ function NewLeadWizardContent() {
                 }
             } else {
                 const details = result.error?.details?.map((d: any) => `${d.path}: ${d.message}`).join(', ');
-                setApiError(details ? `Validation error — ${details}` : readApiError(result, 'Server Error'));
+                setApiError(details ? `Some details are wrong: ${details}` : readApiError(result, 'Something went wrong. Try again.'));
             }
         } catch {
             setApiError('Connection failed. Please retry.');
@@ -502,7 +503,7 @@ function NewLeadWizardContent() {
     // Save the current Step-1 progress as a draft without committing. No strict
     // validation — the dealer can resume later from "My Drafts".
     const handleSaveDraft = async () => {
-        if (!leadId) { setApiError('Lead draft not initialized. Please refresh.'); return; }
+        if (!leadId) { setApiError('The form didn\'t load. Refresh the page.'); return; }
         setSavingDraft(true);
         setApiError(null);
         try {
@@ -658,8 +659,8 @@ function NewLeadWizardContent() {
                                     {willGoToKyc
                                         ? 'Next, you\'ll go to KYC (step 2).'
                                         : willGoToProductSelection
-                                        ? 'This lead will be created and you will proceed directly to Product Selection (Step 4). KYC is skipped for cash.'
-                                        : 'This lead will be created and saved at Step 1. You can advance it later from the leads list.'}
+                                        ? <>Next, you&apos;ll go to product selection (step 4). <InfoTip>Cash sales don&apos;t need KYC.</InfoTip></>
+                                        : <>We&apos;ll save the lead at step 1. <InfoTip>You can continue it later from your lead list.</InfoTip></>}
                                 </p>
                             </div>
                         </div>
@@ -1083,7 +1084,7 @@ function NewLeadWizardContent() {
                                 {formData.payment_method === 'cash' ? (
                                     <p className="text-xs font-medium text-gray-600">
                                         <span className="inline-block w-2 h-2 bg-green-500 rounded-full mr-2" />
-                                        <strong>Cash Payment:</strong> KYC verification will be skipped. Lead goes directly to product selection.
+                                        <strong>Cash:</strong> no KYC needed. The lead goes straight to product selection.
                                     </p>
                                 ) : formData.interest_level === 'hot' ? (
                                     <p className="text-xs font-medium text-gray-600">

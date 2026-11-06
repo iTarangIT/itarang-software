@@ -150,7 +150,7 @@ export function TravelDaysPicker({
                                 </button>
                             </div>
                             {d.alreadyClaimed && (
-                                <p className="mt-1 text-xs text-rose-700">Already in another pending or approved claim of this category.</p>
+                                <p className="mt-1 text-xs text-rose-700">You already claimed this day in another {category} expense.</p>
                             )}
                             {d.error && <p className="mt-1 text-xs text-rose-700">{d.error}</p>}
                             {d.verdict === "not_supported" && (

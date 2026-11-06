@@ -13,6 +13,7 @@ import { toast } from "sonner";
 import { Modal } from "../Modal";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
+import { InfoTip } from "@/components/ui/info-tip";
 import type { UserOption } from "@/lib/admin/types";
 
 /** Same minimum as the Leads page drawer's Reassign. */
@@ -111,7 +112,8 @@ export function ReassignToIsrModal({ open, onClose, leadId, currentOwnerId, onSu
                     </select>
                     {usersQuery.error && <p className="mt-1 text-[11px] text-rose-600">Could not load the reps.</p>}
                     <p className="mt-1 text-[11px] text-gray-500">
-                        Same rules as Leads › Reassign. A lead with a field visit booked stays with the ASM.
+                        A lead with a booked field visit stays with the ASM.{" "}
+                        <InfoTip>Same rules as Reassign on the Leads page.</InfoTip>
                     </p>
                 </div>
                 <div>

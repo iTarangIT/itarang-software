@@ -14,6 +14,7 @@ import { SentByStamp } from "@/components/leads/sent-by-stamp";
 import { ReactivateLeadButton } from "@/components/leads/ReactivateLeadButton";
 import { ChangeLostReasonButton } from "@/components/leads/ChangeLostReasonButton";
 import { WonUndoControl } from "@/components/leads/WonUndoControl";
+import { InfoTip } from "@/components/ui/info-tip";
 import { capabilitiesFor, canReactivateLead } from "@/lib/leads/access";
 
 // Roles permitted to override a lead's temperature (mirrors the PATCH route).
@@ -180,10 +181,10 @@ export function LeadDetailHeader({
                     user — it is waiting on that link, not on a rep. */}
                 {isUnassigned && bundle.caller_not_linked && (
                     <Banner tone="amber" icon={AlertCircle}>
-                        <span className="font-medium">Caller not linked.</span> First called by NeoDove agent{" "}
-                        <span className="font-medium">{bundle.caller_not_linked.agent_name ?? "(no name)"}</span> on{" "}
-                        {formatDateTime(bundle.caller_not_linked.first_call_at)}, who is not linked to a CRM user. Link the
-                        agent and this lead becomes theirs, dated at that call.{" "}
+                        <span className="font-medium">Caller not linked:</span> NeoDove agent{" "}
+                        <span className="font-medium">{bundle.caller_not_linked.agent_name ?? "(no name)"}</span> called first on{" "}
+                        {formatDateTime(bundle.caller_not_linked.first_call_at)} but has no CRM login.{" "}
+                        <InfoTip>Link the agent to a CRM user and the lead becomes theirs from that call&apos;s date.</InfoTip>{" "}
                         <Link
                             href="/leads/neodove-campaigns/agents"
                             className="font-semibold underline underline-offset-2 hover:text-amber-900"

@@ -8,6 +8,7 @@ import { FileUploadField } from "../FileUploadField";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
+import { InfoTip } from "@/components/ui/info-tip";
 import { DEAL_CARD_QUESTIONS } from "@/lib/leads/dealCardRules";
 import type { DealerOnboardedVerdict } from "@/lib/leads/dealerOnboardedRules";
 import type {
@@ -325,11 +326,11 @@ export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercia
             // Saying only "saved" leaves them to guess.
             const version = `v${(currentCommercials?.version_no ?? 0) + 1}`;
             if (json?.data?.auto_approved) {
-                toast.success(`Commercials ${version} saved — quote auto-approved and sent.`);
+                toast.success(`Quote ${version} saved, approved and sent.`);
             } else if (json?.data?.approval_status === "pending" && json?.data?.terms_hold) {
-                toast.success(`Commercials ${version} saved — credit terms, awaiting CEO approval.`);
+                toast.success(`Quote ${version} saved. Credit terms need CEO approval.`);
             } else if (json?.data?.approval_status === "pending") {
-                toast.success(`Commercials ${version} saved — awaiting CEO approval.`);
+                toast.success(`Quote ${version} saved. Waiting for CEO approval.`);
             } else {
                 toast.success(`Commercials ${version} saved.`);
             }
@@ -348,7 +349,7 @@ export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercia
             title="Update quote"
             subtitle={
                 currentCommercials
-                    ? `Current: v${currentCommercials.version_no} · ${currentCommercials.event_type}`
+                    ? `Current: version ${currentCommercials.version_no} · ${EVENT_TYPES.find((e) => e.key === currentCommercials.event_type)?.label ?? currentCommercials.event_type}`
                     : "First quote"
             }
             width="lg"
@@ -375,9 +376,14 @@ export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercia
                 </div>
                 {TERMS_EVENTS.includes(eventType) && (
                     <p className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-800">
-                        {eventType === "final_terms"
-                            ? "Final terms use the price of the quote the dealer approved. To change the price, create a Quote revision — it goes through approval."
-                            : "Terms updates keep the latest quote's price. To change the price, create a Quote revision."}
+                        {eventType === "final_terms" ? (
+                            <>
+                                Uses the price of the quote the dealer approved.{" "}
+                                <InfoTip>To change the price, choose Quote revision. A revision needs approval again.</InfoTip>
+                            </>
+                        ) : (
+                            "Terms updates keep the latest quote's price. To change the price, create a Quote revision."
+                        )}
                     </p>
                 )}
                 {/* ── Products (E-128/E-168) — the card drives the deal total ─ */}
@@ -391,8 +397,7 @@ export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercia
 
                     {productsState === "error" ? (
                         <p className="text-sm text-red-600">
-                            Could not load the product catalogue. You can still save —
-                            describe products in the notes below.
+                            Couldn&apos;t load products. Describe them in Deal notes below, then save.
                         </p>
                     ) : (
                         <div className="flex flex-wrap items-end gap-2">
@@ -684,7 +689,10 @@ export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercia
                 </div>
 
                 <div>
-                    <Label>Deal notes (extra product/quantity context for onboarding)</Label>
+                    <Label className="flex items-center gap-1">
+                        Deal notes
+                        <InfoTip>Extra product or quantity details for onboarding.</InfoTip>
+                    </Label>
                     <textarea
                         className="mt-1 w-full rounded-md border border-gray-200 px-3 py-2 text-sm min-h-[64px]"
                         value={dealNotes ?? ""}

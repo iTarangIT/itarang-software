@@ -37,6 +37,7 @@ import {
   buildCcList,
   isPlausibleEmail,
 } from "@/lib/leads/quotationCcRules";
+import { InfoTip } from "@/components/ui/info-tip";
 
 type Channel = "email" | "whatsapp";
 
@@ -254,12 +255,12 @@ export function QuotationSendDialog({
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
       role="dialog"
       aria-modal="true"
-      aria-label="Send quotation to dealer"
+      aria-label="Send quote to dealer"
     >
       <div className="flex max-h-[90vh] w-full max-w-lg flex-col overflow-hidden rounded-xl bg-white shadow-xl">
         <div className="flex items-start justify-between border-b border-gray-100 px-5 py-4">
           <div>
-            <h2 className="text-sm font-semibold text-gray-900">Send quotation to dealer</h2>
+            <h2 className="text-sm font-semibold text-gray-900">Send quote to dealer</h2>
             <p className="mt-0.5 text-xs text-gray-500">
               {state?.quote_number ? (
                 <span className="font-medium text-gray-700">{state.quote_number}</span>
@@ -293,17 +294,12 @@ export function QuotationSendDialog({
                   <div>
                     {state.approval_status !== "approved" ? (
                       <>
-                        This quotation is <b>{state.approval_status ?? "undecided"}</b>. Only an
-                        approved quotation can be sent to a dealer.
+                        This quote is <b>{state.approval_status ?? "undecided"}</b>. You can send
+                        only an approved quote.
                       </>
                     ) : (
                       <>
-                        The quotation draft has not been generated yet.
-                        {state.quote_pdf_error ? (
-                          <span className="mt-1 block font-mono text-[10px] opacity-80">
-                            {state.quote_pdf_error}
-                          </span>
-                        ) : null}
+                        The quote PDF isn&apos;t ready. Click Generate.
                       </>
                     )}
                   </div>
@@ -459,10 +455,16 @@ export function QuotationSendDialog({
                       {ccList.length ? ccList.join(", ") : "No one"}
                     </div>
                     <div className="mt-0.5 text-[10px] text-gray-500">
-                      {whatsappOnly
-                        ? "WhatsApp has no CC — these people get a separate email with the PDF. "
-                        : ""}
-                      Lead owner, you (the sender) and the admin CC list are added automatically.
+                      {whatsappOnly ? (
+                        <>
+                          These people also get the quote by email.{" "}
+                          <InfoTip>
+                            WhatsApp has no CC, so they get a separate email with the PDF. The lead owner, you and Admin&apos;s CC list are always added.
+                          </InfoTip>
+                        </>
+                      ) : (
+                        "Lead owner, you (the sender) and the admin CC list are added automatically."
+                      )}
                     </div>
                     <label className="mt-2 block">
                       <span className="mb-1 block text-[10px] font-medium uppercase tracking-wide text-gray-500">

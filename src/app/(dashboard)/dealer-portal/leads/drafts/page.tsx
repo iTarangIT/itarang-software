@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
+import { InfoTip } from '@/components/ui/info-tip';
 import {
     PlusCircle, Search, Filter, Loader2, Trash2, X, AlertTriangle,
     FileText, ChevronRight, CheckCircle2, Clock,
@@ -176,7 +177,7 @@ export default function DraftsPage() {
                             <FileText className="w-6 h-6 text-gray-400" />
                         </div>
                         <p className="font-medium text-gray-700">No drafts yet</p>
-                        <p className="text-sm mt-1">Open any KYC form and click <span className="font-semibold">Save Draft</span> to park it here. Auto-save will keep this list fresh as you work.</p>
+                        <p className="text-sm mt-1">Click <span className="font-semibold">Save draft</span> on any KYC form to keep it here.</p>
                     </div>
                 ) : (
                   <>
@@ -321,7 +322,7 @@ export default function DraftsPage() {
                                         <AlertTriangle className="w-5 h-5 text-white" />
                                     </div>
                                     <div>
-                                        <h3 className="text-lg font-bold text-white">Clear Draft</h3>
+                                        <h3 className="text-lg font-bold text-white">Clear draft</h3>
                                         <p className="text-amber-50 text-xs mt-0.5">The lead and uploaded documents are kept</p>
                                     </div>
                                 </div>
@@ -346,7 +347,8 @@ export default function DraftsPage() {
                                 </div>
                             </div>
                             <p className="text-xs text-gray-500">
-                                This removes only the draft snapshot. Uploaded documents and the lead record stay intact — you can restart KYC from the lead any time.
+                                Only the saved draft is cleared. The lead and its documents stay.{' '}
+                                <InfoTip>You can restart KYC from the lead at any time.</InfoTip>
                             </p>
                         </div>
                         <div className="px-6 pb-5 flex gap-3">
@@ -363,7 +365,7 @@ export default function DraftsPage() {
                                 className="flex-1 px-4 py-3 bg-amber-600 text-white rounded-xl font-semibold text-sm hover:bg-amber-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
                             >
                                 {deleteMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
-                                {deleteMutation.isPending ? 'Clearing...' : 'Clear Draft'}
+                                {deleteMutation.isPending ? 'Clearing...' : 'Clear draft'}
                             </button>
                         </div>
                     </div>

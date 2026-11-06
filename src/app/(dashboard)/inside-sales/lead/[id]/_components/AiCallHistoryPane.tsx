@@ -47,7 +47,7 @@ export function AiCallHistoryPane({ leadId }: { leadId: string }) {
             );
             const json = (await res.json()) as TranscriptResponse;
             if (!res.ok || json.success === false) {
-                throw new Error(json.error?.message ?? `HTTP ${res.status}`);
+                throw new Error(json.error?.message ?? "Couldn't load AI calls. Try again.");
             }
             return json.data ?? { attempts: [], convertedOnAttempt: null };
         },
@@ -68,8 +68,7 @@ export function AiCallHistoryPane({ leadId }: { leadId: string }) {
                     <PhoneOff className="mx-auto h-8 w-8 text-gray-300" />
                     <p className="mt-3 text-sm font-medium text-gray-700">No AI calls yet</p>
                     <p className="mt-1 text-xs text-gray-500">
-                        Campaign calls and single Bolna / ElevenLabs calls appear here once the
-                        call has ended.
+                        AI calls show here after each call ends.
                     </p>
                 </div>
             </Centered>

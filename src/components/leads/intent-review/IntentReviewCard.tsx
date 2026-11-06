@@ -147,11 +147,8 @@ export function IntentReviewCard({ leadId }: { leadId: string }) {
               <p className="text-[11px] text-emerald-700 flex items-start gap-1.5 rounded-lg bg-emerald-50 border border-emerald-100 px-2 py-1.5">
                 <UserCheck className="w-3 h-3 mt-px shrink-0" />
                 <span>
-                  This lead is routing on a human correction
-                  {provenance?.overriddenByName && (
-                    <> by {provenance.overriddenByName}</>
-                  )}
-                  , not on the AI band shown above.
+                  {provenance?.overriddenByName || "A team member"} corrected the AI band. The
+                  lead follows that, not the band above.
                 </span>
               </p>
             )}
