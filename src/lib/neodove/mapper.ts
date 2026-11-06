@@ -129,11 +129,21 @@ function pick(obj: Record<string, unknown>, ...keys: string[]): unknown {
 const asString = (v: unknown): string | null =>
     v === undefined || v === null || v === "" ? null : String(v).trim();
 
-const asNumber = (v: unknown): number | null => {
+/**
+ * ID 224: a call length as seconds. NeoDove's own disposition webhook sends
+ * none (checked 6 Nov on every stored body: only `call_connected`); a
+ * "Workflows > Send Webhook" body that NeoDove sets up can carry one, as
+ * plain seconds ("95"), "mm:ss" ("01:35") or "hh:mm:ss". Anything else → null.
+ */
+export function asDurationSec(v: unknown): number | null {
     if (v === undefined || v === null || v === "") return null;
-    const n = Number(v);
-    return Number.isFinite(n) ? n : null;
-};
+    if (typeof v === "number") return Number.isFinite(v) && v >= 0 ? Math.round(v) : null;
+    const s = String(v).trim();
+    if (/^\d+(\.\d+)?$/.test(s)) return Math.round(Number(s));
+    const m = /^(?:(\d+):)?(\d{1,2}):(\d{2})$/.exec(s);
+    if (m) return Number(m[1] ?? 0) * 3600 + Number(m[2]) * 60 + Number(m[3]);
+    return null;
+}
 
 // http(s) only. A recording URL is rendered as a link and as an <audio> src, so
 // anything else — a relative path, a `javascript:` string, a plain "NA" — is
@@ -288,7 +298,12 @@ export function parseInboundEvent(raw: unknown): NeodoveInboundEvent {
     // the join key that survives a phone number being edited in NeoDove. It was
     // being ignored entirely, so inbound matching fell back to phone alone —
     // exactly the fragility the field exists to avoid.
-    const flat: Record<string, unknown> = { ...flattenOtherProperties(base), ...base };
+    // ID 224: a workflow webhook may put the call's details under a `call` /
+    // `call_details` / `call_log` object; lift them one level, under the body.
+    const callObj = pick(base, "call", "call_details", "callDetails", "call_log", "callLog");
+    const callFlat: Record<string, unknown> =
+        callObj && typeof callObj === "object" && !Array.isArray(callObj) ? (callObj as Record<string, unknown>) : {};
+    const flat: Record<string, unknown> = { ...flattenOtherProperties(base), ...callFlat, ...base };
 
     const eventType = inferEventType(flat);
     const rawMobile = asString(
@@ -360,8 +375,23 @@ export function parseInboundEvent(raw: unknown): NeodoveInboundEvent {
             pick(flat, "lead_stage_name", "leadStageName", "stage", "lead_stage", "leadStage"),
         ),
         agentName: asString(pick(flat, "agent", "agent_name", "agentName", "user")),
-        callDurationSec: asNumber(
-            pick(flat, "duration", "call_duration", "callDuration", "duration_sec"),
+        callDurationSec: asDurationSec(
+            pick(
+                flat,
+                "duration",
+                "call_duration",
+                "callDuration",
+                "duration_sec",
+                // ID 224: names a NeoDove workflow webhook may use.
+                "call_duration_sec",
+                "call_duration_in_sec",
+                "duration_in_seconds",
+                "durationInSeconds",
+                "talk_time",
+                "talkTime",
+                "billsec",
+                "call_length",
+            ),
         ),
         // E-226. Only accepted if it looks like an http(s) URL: this value is
         // rendered as a link and fed to an <audio> element, so a stray "yes" or
@@ -378,6 +408,11 @@ export function parseInboundEvent(raw: unknown): NeodoveInboundEvent {
                 "recording_link",
                 "audio_url",
                 "audioUrl",
+                // ID 224: names a NeoDove workflow webhook may use.
+                "call_recording_url",
+                "callRecordingUrl",
+                "recording_file",
+                "recording_file_url",
             ),
         ),
         // `dispose_remarks` is what the telecaller actually typed — the "disposed
