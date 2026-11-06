@@ -11,7 +11,6 @@ import { InfoTip } from "@/components/ui/info-tip";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
-import { InfoTip } from "@/components/ui/info-tip";
 
 import { ORDER_CLAIM_WINDOW_DAYS } from "@/lib/dealers/accountHealthRules";
 import type { DealerHealthRow } from "@/lib/dealers/accountHealth";
