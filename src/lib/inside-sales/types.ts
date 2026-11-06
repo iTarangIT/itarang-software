@@ -23,11 +23,11 @@ export const QUEUE_TABS = [
 export type QueueTab = (typeof QUEUE_TABS)[number];
 
 export const TAB_LABELS: Record<QueueTab, string> = {
-    my_open: "My Open Leads",
-    follow_ups: "Follow-ups Today",
-    unassigned: "Unassigned (Claim)",
-    team: "Team (Read-only)",
-    my_closed: "My Closed Leads",
+    my_open: "My open leads",
+    follow_ups: "Follow-ups today",
+    unassigned: "Unassigned",
+    team: "Team (view only)",
+    my_closed: "My closed leads",
 };
 
 export type QueueRow = TeamReviewFields & {

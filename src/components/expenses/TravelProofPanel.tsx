@@ -75,7 +75,7 @@ export function TravelProofPanel({ expenseId, onClose }: { expenseId: string; on
             >
                 <div className="mb-4 flex items-start justify-between gap-2">
                     <div>
-                        <h2 className="text-lg font-semibold text-gray-900">Travel proof — Day evidence</h2>
+                        <h2 className="text-lg font-semibold text-gray-900">Travel proof by day</h2>
                         {data && (
                             <p className="text-xs text-gray-500">
                                 {data.claim.submitter_name ?? "—"} · {data.claim.category} · ₹

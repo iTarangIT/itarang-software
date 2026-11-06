@@ -13,6 +13,7 @@ import {
 } from "./list-chrome";
 import { ParaphernaliaList } from "./paraphernalia";
 import { ProductPhotoSection } from "./ProductPhotoSection";
+import { InfoTip } from "@/components/ui/info-tip";
 import { PricingSummary } from "./PricingSummary";
 import type { ProductCart } from "./useProductCart";
 
@@ -89,13 +90,13 @@ export function ProductCartSections({
               <EmptyState
                 icon={<BatteryIcon className="w-10 h-10 text-gray-300" />}
                 title="No battery stock in this category"
-                hint="Your dealership has no available batteries in this category yet. Ask your admin to add inventory (Inventory → Add Item / Bulk Upload) for this category, then refresh."
+                hint={<>No batteries in stock for this category.{" "}<InfoTip>Ask your admin to add stock (Inventory → Add Item or Bulk Upload), then refresh.</InfoTip></>}
               />
             ) : bl.scoped.length === 0 ? (
               <EmptyState
                 icon={<BatteryIcon className="w-10 h-10 text-gray-300" />}
                 title="No batteries match the selected product type"
-                hint="Your dealership has battery stock in this category, but none matches the Product Type chosen in Step 1. Change the Product Type above, or ask your admin to stock a matching battery."
+                hint={<>No battery matches the product type from step 1.{" "}<InfoTip>Change the product type above, or ask your admin to stock a matching battery.</InfoTip></>}
               />
             ) : (
               <>
@@ -218,7 +219,7 @@ export function ProductCartSections({
               <EmptyState
                 icon={<Plug className="w-10 h-10 text-gray-300" />}
                 title="No chargers match the selected product type"
-                hint="Your dealership has charger stock in this category, but none matches the Product Type chosen in Step 1. Change the Product Type above, or ask your admin to stock a matching charger."
+                hint={<>No charger matches the product type from step 1.{" "}<InfoTip>Change the product type above, or ask your admin to stock a matching charger.</InfoTip></>}
               />
             ) : (
               <>

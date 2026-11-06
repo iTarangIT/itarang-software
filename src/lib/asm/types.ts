@@ -17,11 +17,11 @@ export const ASM_QUEUE_TABS = [
 export type AsmQueueTab = (typeof ASM_QUEUE_TABS)[number];
 
 export const ASM_TAB_LABELS: Record<AsmQueueTab, string> = {
-    my_visits: "My Active Visits",
-    today: "Today's Schedule",
-    territory: "Territory Feed",
-    unclaimed: "Unclaimed in my territory",
-    my_closed: "My Closed",
+    my_visits: "My active visits",
+    today: "Today",
+    territory: "All in my territory",
+    unclaimed: "Unassigned in my territory",
+    my_closed: "My closed",
 };
 
 // Visit lifecycle (BRD §0.8) — mirrors lead_visits.visit_status enum.

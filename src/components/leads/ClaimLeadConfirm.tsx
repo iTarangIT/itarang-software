@@ -9,6 +9,7 @@ import { toast } from "sonner";
 import { UserPlus2 } from "lucide-react";
 import { Modal } from "@/app/(dashboard)/inside-sales/_components/Modal";
 import { Button } from "@/components/ui/button";
+import { InfoTip } from "@/components/ui/info-tip";
 
 type Props = {
     open: boolean;
@@ -62,7 +63,8 @@ export function ClaimLeadConfirm({ open, onClose, leadId, dealerName, onSuccess 
                 <div className="space-y-2 text-sm text-gray-700">
                     <p>You will become the current owner of <span className="font-semibold text-gray-900">{dealerName}</span>.</p>
                     <p className="text-xs text-gray-500">
-                        Status will move from <code>New_Unassigned</code> to <code>Assigned_Not_Contacted</code>. You can reassign later from the action bar if needed.
+                        Status changes from Unassigned to Assigned.{" "}
+                        <InfoTip>You can reassign it later from the lead page.</InfoTip>
                     </p>
                 </div>
             </div>

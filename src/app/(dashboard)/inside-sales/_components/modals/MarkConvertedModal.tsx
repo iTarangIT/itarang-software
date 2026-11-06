@@ -121,7 +121,8 @@ export function MarkConvertedModal({ open, onClose, leadId, onSuccess, hasApprov
                 toast.success("WhatsApp onboarding invite sent to the dealer.");
             } else {
                 toast.warning(
-                    "Onboarding set up, but the WhatsApp invite couldn't be delivered (the dealer's 24-hour window may be closed). They can message us to begin.",
+                    "Onboarding set up, but the WhatsApp invite failed. Ask the dealer to message us first.",
+                    { description: "WhatsApp lets us message a dealer only within 24 hours of their last message." },
                 );
             }
             if (chatTab) chatTab.location.href = whatsappOnboardingChatUrl();

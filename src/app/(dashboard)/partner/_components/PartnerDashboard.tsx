@@ -88,9 +88,9 @@ export function PartnerDashboard() {
     return (
         <div className="space-y-6">
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
-                <KPICard title="My Open Leads" value={c?.my_open ?? "…"} icon={Users} />
-                <KPICard title="Follow-ups Today" value={c?.follow_ups ?? "…"} icon={CalendarClock} />
-                <KPICard title="Unassigned (Claim)" value={c?.unassigned ?? "…"} icon={Inbox} />
+                <KPICard title="My open leads" value={c?.my_open ?? "…"} icon={Users} />
+                <KPICard title="Follow-ups today" value={c?.follow_ups ?? "…"} icon={CalendarClock} />
+                <KPICard title="Unassigned" value={c?.unassigned ?? "…"} icon={Inbox} />
                 <KPICard title="PIs Pending with CEO" value={quotes.data?.counts.pending ?? "…"} icon={Receipt} />
                 <KPICard title="Approved PIs" value={quotes.data?.counts.approved ?? "…"} icon={CheckCircle2} />
                 <KPICard title="Buyback Unread" value={buyback.unread.total} icon={Bell} />

@@ -249,7 +249,7 @@ export function EmptyState({
 }: {
   icon: React.ReactNode;
   title: string;
-  hint?: string;
+  hint?: React.ReactNode;
 }) {
   return (
     <div className="flex flex-col items-center justify-center py-10 text-center">

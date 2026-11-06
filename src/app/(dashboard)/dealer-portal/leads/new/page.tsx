@@ -436,7 +436,7 @@ function NewLeadWizardContent() {
         }
         // ID 33 — typed text in the dealer search must end in a picked dealer.
         if (pushEligible && dealerQuery.trim() && !dealerMatch) {
-            setApiError('Pick the dealer from the list, or clear the dealer search to keep this lead with iTarang House.');
+            setApiError('Pick a dealer from the list, or clear the search. If you clear it, the lead stays with iTarang House.');
             return;
         }
         setShowConfirm(true);
