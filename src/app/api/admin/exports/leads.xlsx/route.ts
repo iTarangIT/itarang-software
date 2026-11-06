@@ -15,7 +15,8 @@ import ExcelJS from "exceljs";
 
 import { requireRole } from "@/lib/auth-utils";
 import { errorResponse, withErrorHandler } from "@/lib/api-utils";
-import { capabilitiesFor } from "@/lib/leads/access";
+import { capabilitiesFor, exportsOwnLeadsOnly } from "@/lib/leads/access";
+import { getTeamMemberIds } from "@/lib/users/team";
 import { parseLeadListFilters } from "@/lib/leads/leadListParams";
 import { businessTypeLabel } from "@/lib/leads/businessType";
 import { maskPhone } from "@/lib/whatsapp/notifications";
@@ -66,7 +67,10 @@ export const GET = withErrorHandler(async (req: Request) => {
 
     const searchParams = new URL(req.url).searchParams;
     // ID 45: partner (a rep role) is scoped to its own leads, as on /leads.
-    const filters = await parseLeadListFilters(searchParams, caps, user);
+    // ID 199: a manager's sheet follows their list — the team too, narrowed by
+    // the Team member pick — exactly as GET /api/dealer-leads/export.
+    const teamMemberIds = exportsOwnLeadsOnly(user.role) ? await getTeamMemberIds(user.id) : [];
+    const filters = await parseLeadListFilters(searchParams, caps, { ...user, teamMemberIds });
 
     const total = await countLeadsForExport(filters);
     if (total > LEADS_EXPORT_ROW_CAP) {

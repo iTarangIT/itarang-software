@@ -28,6 +28,7 @@ import { SOURCE_DOOR_NONE } from "@/lib/leads/leadSourceVocab";
 import { effectiveDoorSql } from "@/lib/leads/leadSourceDoorSql";
 import { NEEDS_DEALER_MOBILE_SQL } from "@/lib/ai-dialer/phoneTypeStore";
 import { ownerScopeIds } from "@/lib/users/teamRules";
+import { LAST_DONE_VISIT_JOIN, TEAM_REVIEW_SELECT } from "@/lib/leads/teamReviewSql";
 
 // Shared with the API route. Both ends of a created-at range must look like a
 // calendar date before it goes near SQL.
@@ -662,9 +663,12 @@ export async function fetchLeadListRows(
             dl.next_call_at,
             dl.total_attempts,
             dl.follow_up_history
+            -- ID 199: the review columns a manager reads on a team view.
+            ${TEAM_REVIEW_SELECT}
         FROM dealer_leads dl
         ${aiSignalsJoin(f)}
         ${LATEST_VISIT_JOIN}
+        ${LAST_DONE_VISIT_JOIN}
         LEFT JOIN users owner ON owner.id::text = dl.current_owner_id
         LEFT JOIN users asm ON asm.id::text = dl.asm_id
         WHERE ${where}

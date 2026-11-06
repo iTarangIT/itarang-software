@@ -2335,6 +2335,7 @@ export default function LeadsUnifiedPage() {
             loading={leadsLoading}
             // ID 199: a manager's team view shows whose lead each row is.
             caps={teamView ? { ...caps, canSeeOwnerAsm: true } : caps}
+            teamReview={teamView}
             hasFilters={hasAnyFilter(draft)}
             selected={selectedLeadIds}
             onToggle={toggleLeadSelected}

@@ -54,6 +54,8 @@ import {
 } from "@/lib/leads/dispositions";
 import type { LeadsCapabilities } from "@/lib/leads/access";
 import type { LeadListRow } from "@/lib/leads/leadListQuery";
+import type { TeamReviewFields } from "@/lib/leads/teamReviewSql";
+import { TEAM_REVIEW_COLUMN_COUNT, TeamReviewCells, TeamReviewHeaders } from "@/components/leads/TeamReviewColumns";
 import { businessTypeLabel, businessTypeTone } from "@/lib/leads/businessType";
 import { leadSourceLabel, SOURCE_LABELS } from "@/lib/leads/leadSourceVocab";
 
@@ -135,7 +137,9 @@ export type LeadRow = LeadListRow & {
     business_type?: string | null;
     /** D2 — an IVR / company bot answered the AI call on this number. */
     is_ivr?: boolean;
-};
+    /** ID 199: "Time limit passed" chips — set by the API on a team view. */
+    past_limits?: string[];
+} & TeamReviewFields;
 
 type Props = {
     rows: LeadRow[];
@@ -153,6 +157,8 @@ type Props = {
     dialerPhase: "idle" | "calling" | "countdown";
     countdown: number;
     endedLeadIds: Set<string>;
+    /** ID 199: a manager's team view — adds the review columns. */
+    teamReview?: boolean;
 };
 
 export function LeadsTable({
@@ -170,6 +176,7 @@ export function LeadsTable({
     dialerPhase,
     countdown,
     endedLeadIds,
+    teamReview = false,
 }: Props) {
     // The checkbox column only earns its place if the viewer can act in bulk.
     const selectable = caps.canBulkAct || caps.canSendToNeodove;
@@ -179,7 +186,8 @@ export function LeadsTable({
     // Intent, Visit/Outcome, Last Touch, Idle, Source/Campaign/Created, Actions = 11.
     // Then the optional checkbox and the optional Owner + ASM pair. Used by the
     // loading and empty rows.
-    const colSpan = 11 + (selectable ? 1 : 0) + (caps.canSeeOwnerAsm ? 2 : 0);
+    const colSpan =
+        11 + (selectable ? 1 : 0) + (caps.canSeeOwnerAsm ? 2 : 0) + (teamReview ? TEAM_REVIEW_COLUMN_COUNT : 0);
     // Pinned once per render so every row's idle figure is measured against the
     // same instant — and so the map callback stays pure (react-hooks/purity).
     // eslint-disable-next-line react-hooks/purity
@@ -245,6 +253,7 @@ export function LeadsTable({
                             <th className="min-w-[170px] px-4 py-3 text-left font-semibold">
                                 Source / Campaign
                             </th>
+                            {teamReview && <TeamReviewHeaders />}
                             <th className="min-w-[300px] px-4 py-3 text-right font-semibold">
                                 Actions
                             </th>
@@ -621,6 +630,12 @@ export function LeadsTable({
                                                 Created {fmtDate(row.created_at)}
                                             </div>
                                         </td>
+                                        {teamReview && (
+                                            <TeamReviewCells
+                                                row={row}
+                                                outcomeLabel={(o) => VISIT_OUTCOME_LABELS[o as VisitOutcome] ?? pretty(o)}
+                                            />
+                                        )}
 
                                         {/* Actions — stopPropagation so a button press
                                             never also opens the row drawer. */}
