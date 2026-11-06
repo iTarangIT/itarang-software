@@ -210,6 +210,8 @@ function inferEventType(body: Record<string, unknown>): NeodoveEventType {
         .toLowerCase()
         .replace(/[\s-]+/g, "_");
 
+    // ID 224: our Workflow's CALL_RECORDING — checked first, it is never a call.
+    if (raw.includes("recording")) return "call_recording";
     if (raw.includes("delete")) return "lead_deleted";
     if (raw.includes("create")) return "lead_created";
     if (raw.includes("not_connected") || raw.includes("notconnected")) {
@@ -443,6 +445,9 @@ export function touchpointTypeFor(eventType: NeodoveEventType): TouchpointType {
         case "call_connected":
         case "call_not_connected":
         case "lead_disposed":
+        // The recording belongs to a call; inbound.ts never writes a
+        // touchpoint for it (it attaches to the call's own one).
+        case "call_recording":
             return "inside_sales_call";
         case "lead_created":
         case "lead_deleted":

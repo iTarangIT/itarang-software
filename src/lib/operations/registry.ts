@@ -682,7 +682,7 @@ export const METRICS: MetricDef[] = [
     direction: "lower_is_better",
     warn: 120,
     crit: 240,
-    help: "Working minutes since the last NeoDove call reached this server (source neodove) or the last AI dialer result was written (source ai_dialer). Only office hours on working days count, so nights and holidays never ring. Over 2 working hours: check that NeoDove's webhook still points at this server (crm.itarang.com, not the sandbox) and that the dialer is running.",
+    help: "Source neodove: working minutes that leads pushed to NeoDove have waited with no update back (0 when nothing is waiting). Source ai_dialer: working minutes since the last AI dialer result was written. Only office hours on working days count, so nights and holidays never ring. Over 2 working hours: check that NeoDove's webhook still points at this server (crm.itarang.com, not the sandbox) and that the dialer is running.",
   },
   {
     key: "vendor.call_log_age_days",

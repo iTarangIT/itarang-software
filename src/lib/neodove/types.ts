@@ -39,6 +39,11 @@ export const NEODOVE_EVENT_TYPE = [
     "lead_deleted",
     "call_connected",
     "call_not_connected",
+    // ID 224 (6 Nov): our own Workflow → Send Webhook on "Call Connected"
+    // sends event_name CALL_RECORDING with the recording link. It is NOT a
+    // second call: inbound.ts attaches the link to the call the Lead Dispose
+    // webhook writes (whichever arrives first) and never writes a touchpoint.
+    "call_recording",
 ] as const;
 export type NeodoveEventType = (typeof NEODOVE_EVENT_TYPE)[number];
 
