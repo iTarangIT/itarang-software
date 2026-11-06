@@ -672,6 +672,19 @@ export const METRICS: MetricDef[] = [
     help: "Month-to-date approved tech spend per vendor, one sample per vendor.",
   },
   {
+    // Tracker ID 229 (3 Nov): NeoDove's webhook pointed at the sandbox for
+    // weeks and nothing said so. Working minutes (office hours, working days)
+    // since the last NeoDove delivery / AI dialer result reached this server.
+    key: "calls.feed_gap",
+    label: "Calls reaching live",
+    module: "spend",
+    unit: "minutes",
+    direction: "lower_is_better",
+    warn: 120,
+    crit: 240,
+    help: "Working minutes since the last NeoDove call reached this server (source neodove) or the last AI dialer result was written (source ai_dialer). Only office hours on working days count, so nights and holidays never ring. Over 2 working hours: check that NeoDove's webhook still points at this server (crm.itarang.com, not the sandbox) and that the dialer is running.",
+  },
+  {
     key: "vendor.call_log_age_days",
     label: "Last recorded call",
     module: "spend",

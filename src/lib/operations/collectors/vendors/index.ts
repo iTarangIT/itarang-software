@@ -17,6 +17,7 @@
 
 import type { OpsCollector } from "../types";
 
+import { callFeedCollector } from "./callFeed";
 import { callIngestionCollector } from "./callIngestion";
 import { elevenLabsCollector } from "./elevenlabs";
 import { vendorUsageCollector } from "./usage";
@@ -25,4 +26,6 @@ export const vendorCollectors: OpsCollector[] = [
   elevenLabsCollector,
   vendorUsageCollector,
   callIngestionCollector,
+  // ID 229: NeoDove calls / AI dialer results stopped reaching live.
+  callFeedCollector,
 ];
