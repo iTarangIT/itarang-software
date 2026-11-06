@@ -1,6 +1,8 @@
 "use client";
 
 import React, { useMemo, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { Tabs } from "@/components/ui/tabs";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Loader2,
@@ -86,6 +88,18 @@ export function ExpenseTrackerView() {
   const qc = useQueryClient();
 
   // Upload / extract state
+  // C29: ?tab=settings opens the Drive folders; the list is the default.
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+  const tab: "expenses" | "settings" = searchParams?.get("tab") === "settings" ? "settings" : "expenses";
+  const changeTab = (v: string) => {
+    const params = new URLSearchParams(searchParams?.toString() ?? "");
+    if (v === "settings") params.set("tab", "settings");
+    else params.delete("tab");
+    const qs = params.toString();
+    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+  };
   const [files, setFiles] = useState<File[]>([]);
   const [billUrl, setBillUrl] = useState<string | null>(null);
   const [billPath, setBillPath] = useState<string | null>(null);
@@ -356,336 +370,351 @@ export function ExpenseTrackerView() {
   const isBulk = files.length > 1;
 
   return (
-    <div className="space-y-8">
-      {/* E-216 — automated Drive ingestion. Above the manual uploader because
-          it is now the main way invoices arrive; the uploader is the exception
-          for a bill that never made it into a folder. */}
-      <DriveFoldersPanel />
+    <div className="space-y-6">
+      {/* C29 (wording audit, 2 Nov): the list first; the Drive folders and
+          scans sit behind a Settings tab instead of filling the page. */}
+      <Tabs
+        tabs={[
+          { value: "expenses", label: "Expenses" },
+          { value: "settings", label: "Settings" },
+        ]}
+        value={tab}
+        onValueChange={changeTab}
+      />
+      {tab === "settings" ? (
+        <div className="space-y-8">
+          {/* E-216 — automated Drive ingestion. Above the manual uploader because
+              it is now the main way invoices arrive; the uploader is the exception
+              for a bill that never made it into a folder. */}
+          <DriveFoldersPanel />
 
-      {/* E-280 — the revenue half of the same accounts folder. Registered
-          separately with the include/exclude filters inverted, so the purchase
-          scanner and this one can never read each other's side. */}
-      <DriveFoldersPanel config={SALES_PANEL} />
+          {/* E-280 — the revenue half of the same accounts folder. Registered
+              separately with the include/exclude filters inverted, so the purchase
+              scanner and this one can never read each other's side. */}
+          <DriveFoldersPanel config={SALES_PANEL} />
 
-      {/* E-280 — sales files that never became an invoice (missing from
-          revenue) and invoices that imported but look wrong. Renders nothing
-          when both are empty. */}
-      <SalesScanAttentionPanel />
-
-      {/* E-216 — anything imported that a human still needs to look at. Renders
-          nothing at all when the queue is empty. */}
-      <NeedsAttentionPanel />
-
-      {/* Upload + extract */}
-      <div className="p-6 rounded-2xl bg-white border border-gray-100 shadow-sm space-y-5">
-        <div className="flex flex-wrap items-center gap-3">
-          <label className="cursor-pointer inline-flex items-center gap-2 px-4 py-2.5 rounded-xl border border-dashed border-gray-300 bg-gray-50 hover:bg-gray-100 text-sm font-medium text-gray-700">
-            <Upload className="w-4 h-4" />
-            {files.length === 0
-              ? "Choose invoice(s) — PDF or image"
-              : files.length === 1
-                ? files[0].name
-                : `${files.length} files selected`}
-            <input
-              type="file"
-              className="hidden"
-              multiple
-              accept="application/pdf,image/*"
-              onChange={(e) => {
-                setFiles(Array.from(e.target.files ?? []));
-                setHasDraft(false);
-                setBulkSummary(null);
-              }}
-            />
-          </label>
-
-          {!isBulk && (
-            <Button
-              type="button"
-              onClick={() => extractMutation.mutate()}
-              disabled={!singleFile || extractMutation.isPending}
-              className="bg-brand-600 hover:bg-brand-700 text-white"
-            >
-              {extractMutation.isPending ? (
-                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-              ) : (
-                <Sparkles className="w-4 h-4 mr-2" />
-              )}
-              Extract with AI
-            </Button>
-          )}
-
-          {isBulk && (
-            <Button
-              type="button"
-              onClick={() => bulkMutation.mutate()}
-              disabled={bulkMutation.isPending}
-              className="bg-brand-600 hover:bg-brand-700 text-white"
-            >
-              {bulkMutation.isPending ? (
-                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-              ) : (
-                <Layers className="w-4 h-4 mr-2" />
-              )}
-              Bulk import {files.length} invoices
-            </Button>
-          )}
+          {/* E-280 — sales files that never became an invoice (missing from
+              revenue) and invoices that imported but look wrong. Renders nothing
+              when both are empty. */}
+          <SalesScanAttentionPanel />
         </div>
-
-        {bulkProgress && (
-          <p className="text-xs font-medium text-gray-500 flex items-center gap-2">
-            <Loader2 className="w-3.5 h-3.5 animate-spin" />
-            Processing {bulkProgress.done}/{bulkProgress.total} invoices…
-          </p>
-        )}
-
-        {bulkSummary && <BulkSummaryPanel summary={bulkSummary} />}
-
-        {hasDraft && !isBulk && (
-          <form
-            className="space-y-5 pt-2 border-t border-gray-100"
-            onSubmit={(e) => {
-              e.preventDefault();
-              submitMutation.mutate();
-            }}
-          >
-            <p className="flex items-center gap-1.5 text-[11px] font-semibold text-brand-700 uppercase tracking-wider">
-              <Sparkles className="w-3.5 h-3.5" /> AI-filled draft — review before submitting
-            </p>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-              <div>
-                <label className={labelCls}>Invoice #</label>
-                <input
-                  className={inputCls}
-                  value={invoiceNumber}
-                  onChange={(e) => setInvoiceNumber(e.target.value)}
-                  placeholder="e.g. INV-2026-0042"
-                />
-              </div>
-              <div>
-                <label className={labelCls}>Vendor</label>
-                <input className={inputCls} value={vendor} onChange={(e) => setVendor(e.target.value)} />
-              </div>
-              <div>
-                <label className={labelCls}>Amount (₹)</label>
-                <input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  className={inputCls}
-                  value={amount}
-                  onChange={(e) => setAmount(e.target.value)}
-                  required
-                />
-              </div>
-              <div>
-                <label className={labelCls}>Date</label>
-                <input
-                  type="date"
-                  className={inputCls}
-                  value={expenseDate}
-                  onChange={(e) => setExpenseDate(e.target.value)}
-                />
-              </div>
-              <div>
-                <label className={labelCls}>
-                  Department
-                  {lowConfidence && (
-                    <span className="ml-2 normal-case text-amber-600">· low AI confidence, please check</span>
-                  )}
-                </label>
-                <select
-                  className={`${inputCls} ${lowConfidence ? "border-amber-300 ring-2 ring-amber-100" : ""}`}
-                  value={department}
-                  onChange={(e) => setDepartment(e.target.value)}
-                >
-                  {EXPENSE_DEPARTMENTS.map((d) => (
-                    <option key={d.value} value={d.value}>
-                      {d.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className={labelCls}>Project Tag</label>
-                <input
-                  className={inputCls}
-                  value={projectTag}
-                  list="ai-expense-tag-options"
-                  placeholder="e.g. AI Caller"
-                  onChange={(e) => setProjectTag(e.target.value)}
-                />
-                <datalist id="ai-expense-tag-options">
-                  {tags.map((t) => (
-                    <option key={t} value={t} />
-                  ))}
-                </datalist>
-              </div>
-              <div className="md:col-span-2">
-                <label className={labelCls}>Description</label>
-                <input
-                  className={inputCls}
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                />
-              </div>
-            </div>
-
-            <div className="flex items-center justify-between pt-1">
-              {billUrl ? (
-                <a
-                  href={billUrl}
-                  onClick={(e) => onFreshFileClick(e, billUrl)}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-xs font-semibold text-brand-600 hover:underline"
-                >
-                  View uploaded bill{fileName ? ` · ${fileName}` : ""}
-                </a>
-              ) : (
-                <span />
-              )}
-              <Button
-                type="submit"
-                disabled={submitMutation.isPending}
-                className="bg-brand-600 hover:bg-brand-700 text-white px-6"
-              >
-                {submitMutation.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-                Submit Expense
-              </Button>
-            </div>
-          </form>
-        )}
-
-        {error && (
-          <div className="p-3 rounded-xl bg-rose-50 border border-rose-100 text-xs font-medium text-rose-700">
-            {error}
-          </div>
-        )}
-        {success && (
-          <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-100 text-xs font-medium text-emerald-700 flex items-center gap-1.5">
-            <CheckCircle2 className="w-4 h-4" />
-            {success}
-          </div>
-        )}
-      </div>
-
-      {/* Recorded expenses */}
-      <div className="p-6 rounded-2xl bg-white border border-gray-100 shadow-sm">
-        <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
-          <h2 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
-            Recorded AI Expenses
-            {!recordedLoading && (
-              <span className="text-[11px] font-medium text-gray-400">
-                {recorded.length} {recorded.length === 1 ? "invoice" : "invoices"}
-                {recorded.length > 0 && (
-                  <span title={formatINRExact(rangeTotal)}> · {formatINRCompact(rangeTotal)}</span>
+      ) : (
+        <div className="space-y-8">
+          {/* E-216 — anything imported that a human still needs to look at. Renders
+              nothing at all when the queue is empty. */}
+          <NeedsAttentionPanel />
+          {/* Recorded expenses */}
+          <div className="p-6 rounded-2xl bg-white border border-gray-100 shadow-sm">
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+              <h2 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
+                Recorded AI expenses
+                {!recordedLoading && (
+                  <span className="text-[11px] font-medium text-gray-400">
+                    {recorded.length} {recorded.length === 1 ? "invoice" : "invoices"}
+                    {recorded.length > 0 && (
+                      <span title={formatINRExact(rangeTotal)}> · {formatINRCompact(rangeTotal)}</span>
+                    )}
+                    {hasRange && ` · ${rangeLabel}`}
+                  </span>
                 )}
-                {hasRange && ` · ${rangeLabel}`}
-              </span>
-            )}
-            {recordedFetching && !recordedLoading && (
-              <Loader2 className="w-3.5 h-3.5 animate-spin text-gray-300" />
-            )}
-          </h2>
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="flex items-center gap-1.5">
-              <input
-                type="month"
-                aria-label="From month"
-                className={monthInputCls}
-                value={fromMonth}
-                // Keeps the picker from offering an end before the start; the
-                // server swaps them anyway, this just avoids the dead state.
-                max={toMonth || undefined}
-                onChange={(e) => setFromMonth(e.target.value)}
-              />
-              <span className="text-[11px] font-medium text-gray-400">to</span>
-              <input
-                type="month"
-                aria-label="To month"
-                className={monthInputCls}
-                value={toMonth}
-                min={fromMonth || undefined}
-                onChange={(e) => setToMonth(e.target.value)}
-              />
+                {recordedFetching && !recordedLoading && (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-gray-300" />
+                )}
+              </h2>
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="month"
+                    aria-label="From month"
+                    className={monthInputCls}
+                    value={fromMonth}
+                    // Keeps the picker from offering an end before the start; the
+                    // server swaps them anyway, this just avoids the dead state.
+                    max={toMonth || undefined}
+                    onChange={(e) => setFromMonth(e.target.value)}
+                  />
+                  <span className="text-[11px] font-medium text-gray-400">to</span>
+                  <input
+                    type="month"
+                    aria-label="To month"
+                    className={monthInputCls}
+                    value={toMonth}
+                    min={fromMonth || undefined}
+                    onChange={(e) => setToMonth(e.target.value)}
+                  />
+                </div>
+                {hasRange && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFromMonth("");
+                      setToMonth("");
+                    }}
+                    className="text-[11px] font-semibold text-gray-400 hover:text-gray-600 px-1"
+                    title="Clear the range and show everything"
+                  >
+                    Clear
+                  </button>
+                )}
+                <Button
+                  type="button"
+                  onClick={downloadRange}
+                  disabled={!canDownload}
+                  className="bg-brand-600 hover:bg-brand-700 text-white"
+                  title={
+                    canDownload
+                      ? `Download Excel + invoice PDFs for ${rangeLabel}`
+                      : hasRange
+                        ? "No records in this range to download"
+                        : "Pick a month or range to download"
+                  }
+                >
+                  <Download className="w-4 h-4 mr-2" />
+                  Download Excel + PDFs
+                </Button>
+              </div>
             </div>
-            {hasRange && (
-              <button
-                type="button"
-                onClick={() => {
-                  setFromMonth("");
-                  setToMonth("");
-                }}
-                className="text-[11px] font-semibold text-gray-400 hover:text-gray-600 px-1"
-                title="Clear the range and show everything"
-              >
-                Clear
-              </button>
+            {recordedLoading ? (
+              <div className="flex items-center justify-center py-8">
+                <Loader2 className="w-5 h-5 animate-spin text-gray-400" />
+              </div>
+            ) : recorded.length === 0 ? (
+              <p className="text-xs text-gray-400 italic">
+                {hasRange
+                  ? `No AI expenses in ${rangeLabel}.`
+                  : "No AI expenses recorded yet."}
+              </p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-[10px] uppercase tracking-wider text-gray-500 border-b border-gray-100">
+                      <th className="py-2 font-semibold">Date</th>
+                      <th className="py-2 font-semibold">Invoice #</th>
+                      <th className="py-2 font-semibold">Vendor</th>
+                      <th className="py-2 font-semibold">Amount</th>
+                      <th className="py-2 font-semibold">Department</th>
+                      <th className="py-2 font-semibold">Bucket</th>
+                      <th className="py-2 font-semibold">Project</th>
+                      <th className="py-2 font-semibold">File</th>
+                      <th className="py-2 font-semibold">Bill</th>
+                      <th className="py-2 font-semibold"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {recorded.map((row) => (
+                      <RecordedRow key={row.id} row={row} />
+                    ))}
+                  </tbody>
+                </table>
+                {listing?.capped && (
+                  // Without this the count and total above read as the whole
+                  // range, when they are only its most recent slice.
+                  <p className="mt-3 text-[11px] font-medium text-amber-700">
+                    Showing the {listing.limit} most recent records
+                    {hasRange ? ` in ${rangeLabel}` : ""} — narrow the range to see the rest.
+                  </p>
+                )}
+              </div>
             )}
-            <Button
-              type="button"
-              onClick={downloadRange}
-              disabled={!canDownload}
-              className="bg-brand-600 hover:bg-brand-700 text-white"
-              title={
-                canDownload
-                  ? `Download Excel + invoice PDFs for ${rangeLabel}`
-                  : hasRange
-                    ? "No records in this range to download"
-                    : "Pick a month or range to download"
-              }
-            >
-              <Download className="w-4 h-4 mr-2" />
-              Download Excel + PDFs
-            </Button>
           </div>
-        </div>
-        {recordedLoading ? (
-          <div className="flex items-center justify-center py-8">
-            <Loader2 className="w-5 h-5 animate-spin text-gray-400" />
-          </div>
-        ) : recorded.length === 0 ? (
-          <p className="text-xs text-gray-400 italic">
-            {hasRange
-              ? `No AI expenses in ${rangeLabel}.`
-              : "No AI expenses recorded yet."}
-          </p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-left text-[10px] uppercase tracking-wider text-gray-500 border-b border-gray-100">
-                  <th className="py-2 font-semibold">Date</th>
-                  <th className="py-2 font-semibold">Invoice #</th>
-                  <th className="py-2 font-semibold">Vendor</th>
-                  <th className="py-2 font-semibold">Amount</th>
-                  <th className="py-2 font-semibold">Department</th>
-                  <th className="py-2 font-semibold">Bucket</th>
-                  <th className="py-2 font-semibold">Project</th>
-                  <th className="py-2 font-semibold">File</th>
-                  <th className="py-2 font-semibold">Bill</th>
-                  <th className="py-2 font-semibold"></th>
-                </tr>
-              </thead>
-              <tbody>
-                {recorded.map((row) => (
-                  <RecordedRow key={row.id} row={row} />
-                ))}
-              </tbody>
-            </table>
-            {listing?.capped && (
-              // Without this the count and total above read as the whole
-              // range, when they are only its most recent slice.
-              <p className="mt-3 text-[11px] font-medium text-amber-700">
-                Showing the {listing.limit} most recent records
-                {hasRange ? ` in ${rangeLabel}` : ""} — narrow the range to see the rest.
+
+          {/* Upload + extract */}
+          <div className="p-6 rounded-2xl bg-white border border-gray-100 shadow-sm space-y-5">
+            <div className="flex flex-wrap items-center gap-3">
+              <label className="cursor-pointer inline-flex items-center gap-2 px-4 py-2.5 rounded-xl border border-dashed border-gray-300 bg-gray-50 hover:bg-gray-100 text-sm font-medium text-gray-700">
+                <Upload className="w-4 h-4" />
+                {files.length === 0
+                  ? "Choose invoice(s) — PDF or image"
+                  : files.length === 1
+                    ? files[0].name
+                    : `${files.length} files selected`}
+                <input
+                  type="file"
+                  className="hidden"
+                  multiple
+                  accept="application/pdf,image/*"
+                  onChange={(e) => {
+                    setFiles(Array.from(e.target.files ?? []));
+                    setHasDraft(false);
+                    setBulkSummary(null);
+                  }}
+                />
+              </label>
+
+              {!isBulk && (
+                <Button
+                  type="button"
+                  onClick={() => extractMutation.mutate()}
+                  disabled={!singleFile || extractMutation.isPending}
+                  className="bg-brand-600 hover:bg-brand-700 text-white"
+                >
+                  {extractMutation.isPending ? (
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  ) : (
+                    <Sparkles className="w-4 h-4 mr-2" />
+                  )}
+                  Extract with AI
+                </Button>
+              )}
+
+              {isBulk && (
+                <Button
+                  type="button"
+                  onClick={() => bulkMutation.mutate()}
+                  disabled={bulkMutation.isPending}
+                  className="bg-brand-600 hover:bg-brand-700 text-white"
+                >
+                  {bulkMutation.isPending ? (
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  ) : (
+                    <Layers className="w-4 h-4 mr-2" />
+                  )}
+                  Bulk import {files.length} invoices
+                </Button>
+              )}
+            </div>
+
+            {bulkProgress && (
+              <p className="text-xs font-medium text-gray-500 flex items-center gap-2">
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                Processing {bulkProgress.done}/{bulkProgress.total} invoices…
               </p>
             )}
+
+            {bulkSummary && <BulkSummaryPanel summary={bulkSummary} />}
+
+            {hasDraft && !isBulk && (
+              <form
+                className="space-y-5 pt-2 border-t border-gray-100"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  submitMutation.mutate();
+                }}
+              >
+                <p className="flex items-center gap-1.5 text-[11px] font-semibold text-brand-700 uppercase tracking-wider">
+                  <Sparkles className="w-3.5 h-3.5" /> AI-filled draft — review before submitting
+                </p>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                  <div>
+                    <label className={labelCls}>Invoice #</label>
+                    <input
+                      className={inputCls}
+                      value={invoiceNumber}
+                      onChange={(e) => setInvoiceNumber(e.target.value)}
+                      placeholder="e.g. INV-2026-0042"
+                    />
+                  </div>
+                  <div>
+                    <label className={labelCls}>Vendor</label>
+                    <input className={inputCls} value={vendor} onChange={(e) => setVendor(e.target.value)} />
+                  </div>
+                  <div>
+                    <label className={labelCls}>Amount (₹)</label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      className={inputCls}
+                      value={amount}
+                      onChange={(e) => setAmount(e.target.value)}
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className={labelCls}>Date</label>
+                    <input
+                      type="date"
+                      className={inputCls}
+                      value={expenseDate}
+                      onChange={(e) => setExpenseDate(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className={labelCls}>
+                      Department
+                      {lowConfidence && (
+                        <span className="ml-2 normal-case text-amber-600">· low AI confidence, please check</span>
+                      )}
+                    </label>
+                    <select
+                      className={`${inputCls} ${lowConfidence ? "border-amber-300 ring-2 ring-amber-100" : ""}`}
+                      value={department}
+                      onChange={(e) => setDepartment(e.target.value)}
+                    >
+                      {EXPENSE_DEPARTMENTS.map((d) => (
+                        <option key={d.value} value={d.value}>
+                          {d.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className={labelCls}>Project Tag</label>
+                    <input
+                      className={inputCls}
+                      value={projectTag}
+                      list="ai-expense-tag-options"
+                      placeholder="e.g. AI Caller"
+                      onChange={(e) => setProjectTag(e.target.value)}
+                    />
+                    <datalist id="ai-expense-tag-options">
+                      {tags.map((t) => (
+                        <option key={t} value={t} />
+                      ))}
+                    </datalist>
+                  </div>
+                  <div className="md:col-span-2">
+                    <label className={labelCls}>Description</label>
+                    <input
+                      className={inputCls}
+                      value={description}
+                      onChange={(e) => setDescription(e.target.value)}
+                    />
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between pt-1">
+                  {billUrl ? (
+                    <a
+                      href={billUrl}
+                      onClick={(e) => onFreshFileClick(e, billUrl)}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-xs font-semibold text-brand-600 hover:underline"
+                    >
+                      View uploaded bill{fileName ? ` · ${fileName}` : ""}
+                    </a>
+                  ) : (
+                    <span />
+                  )}
+                  <Button
+                    type="submit"
+                    disabled={submitMutation.isPending}
+                    className="bg-brand-600 hover:bg-brand-700 text-white px-6"
+                  >
+                    {submitMutation.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                    Submit Expense
+                  </Button>
+                </div>
+              </form>
+            )}
+
+            {error && (
+              <div className="p-3 rounded-xl bg-rose-50 border border-rose-100 text-xs font-medium text-rose-700">
+                {error}
+              </div>
+            )}
+            {success && (
+              <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-100 text-xs font-medium text-emerald-700 flex items-center gap-1.5">
+                <CheckCircle2 className="w-4 h-4" />
+                {success}
+              </div>
+            )}
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }

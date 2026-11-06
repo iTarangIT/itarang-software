@@ -108,6 +108,8 @@ export function OutsideTerritoryClaims({ filters = {} }: { filters?: OutsideTerr
 
     return (
         <div className="space-y-2.5 rounded-xl border border-amber-200 bg-amber-50/60 px-4 py-3">
+            {/* C32 (wording audit, 2 Nov): no "None." box — the section shows only when there are claims. */}
+            {d.counts.outside > 0 && (
             <div>
                 <p className="text-xs font-semibold text-amber-800">
                     Claimed outside territory — {period} ({d.counts.outside})
@@ -128,13 +130,12 @@ export function OutsideTerritoryClaims({ filters = {} }: { filters?: OutsideTerr
                             />
                         )}
                     </ul>
-                ) : (
-                    <p className="mt-1 text-xs text-amber-900">None.</p>
-                )}
+                ) : null}
             </div>
+            )}
 
             {d.counts.no_location > 0 && (
-                <div className="border-t border-amber-200 pt-2">
+                <div className={d.counts.outside > 0 ? "border-t border-amber-200 pt-2" : ""}>
                     <p className="text-xs font-semibold text-amber-800">
                         No location on the lead ({d.counts.no_location}) — cannot be checked; add the lead&apos;s state and city
                     </p>
@@ -153,7 +154,9 @@ export function OutsideTerritoryClaims({ filters = {} }: { filters?: OutsideTerr
             )}
 
             {d.no_territory.length > 0 && (
-                <p className="border-t border-amber-200 pt-2 text-xs text-amber-900">
+                <p
+                    className={`${d.counts.outside > 0 || d.counts.no_location > 0 ? "border-t border-amber-200 pt-2 " : ""}text-xs text-amber-900`}
+                >
                     <span className="font-semibold text-amber-800">No territory set up</span> for{" "}
                     {d.no_territory.map((a) => `${a.name ?? "an ASM"} (${a.claims} claim${a.claims === 1 ? "" : "s"})`).join(", ")} — their
                     claims cannot be checked. Set territories in Admin › Settings › Territories.{" "}

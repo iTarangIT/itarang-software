@@ -43,7 +43,9 @@ import type { ReceivablesAgeing } from "@/lib/dashboard/receivables";
 type NetSummary = { purchases: number; sales: number; otherExpenses: number; net: number; label: string };
 
 /** primitives' inr() is for positive figures; the net can go negative. */
-const signedInr = (n: number) => `${n < 0 ? "−" : ""}${inr(Math.abs(n))}`;
+const signedInr = (n: number) => `${Math.round(n) < 0 ? "−" : ""}${inr(Math.abs(n))}`;
+// C19 (wording audit, 2 Nov): money out reads "−₹x", but nothing reads "−₹0".
+const minusInr = (n: number) => (Math.round(n) > 0 ? `−${inr(n)}` : inr(0));
 
 export default function RevenueAndCostsPage() {
     const [win, setWin] = React.useState<CeoWindow>(DEFAULT_CEO_WINDOW);
@@ -140,7 +142,7 @@ export default function RevenueAndCostsPage() {
                             <KpiTile
                                 testid="tile-oem-purchases"
                                 label="Stock bought from OEMs"
-                                value={`−${inr(net.data.purchases)}`}
+                                value={minusInr(net.data.purchases)}
                                 sub="By OEM invoice date"
                                 onClick={() =>
                                     setDrill({ metric: "purchases", title: `Stock bought from OEMs · ${net.data!.label}`, params: windowParams })
@@ -149,14 +151,18 @@ export default function RevenueAndCostsPage() {
                             <KpiTile
                                 testid="tile-other-expenses"
                                 label="Running expenses"
-                                value={`−${inr(net.data.otherExpenses)}`}
+                                value={minusInr(net.data.otherExpenses)}
                                 sub="Approved expenses"
                                 onClick={() => setDrill({ metric: "expenses", title: `Running expenses · ${net.data!.label}`, params: windowParams })}
                             />
                             <KpiTile
                                 label="Net"
                                 value={signedInr(net.data.net)}
-                                pill={{ text: net.data.net >= 0 ? "Positive" : "Negative", tone: net.data.net >= 0 ? "good" : "bad" }}
+                                pill={
+                                    Math.round(net.data.net) === 0
+                                        ? undefined
+                                        : { text: net.data.net > 0 ? "Positive" : "Negative", tone: net.data.net > 0 ? "good" : "bad" }
+                                }
                             />
                         </div>
                         <span className="text-xs leading-relaxed text-ink-muted">

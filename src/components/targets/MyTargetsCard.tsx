@@ -21,7 +21,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 
 import { TargetProgressCells, fmtTargetPer, fmtTargetSum, progressHeaders } from "@/components/targets/TargetProgressCells";
-import { CORRECTION_REMARK_MIN } from "@/lib/targets/rules";
+import { CORRECTION_REMARK_MIN, displayTargetNote } from "@/lib/targets/rules";
 import type { TargetRow } from "@/lib/targets/service";
 
 type Ctx = { working_days_total: number; working_days_elapsed: number; actuals_up_to?: string | null };
@@ -265,7 +265,7 @@ function TargetsTable({
                             <td className="px-3 py-2 text-right tabular-nums">
                                 <span className="font-semibold">{fmtTargetPer(r.metric, r.final_target, r.unit, r.kind)}</span>
                                 <span className="block text-[10px] text-ink-muted">{fmtTargetSum(r.metric, r.ceo_target, r.stretch, r.unit)}</span>
-                                {r.stretch_note && <span className="block text-[10px] italic text-ink-muted">“{r.stretch_note}”</span>}
+                                {r.stretch_note && <span className="block text-[10px] italic text-ink-muted">“{displayTargetNote(r.stretch_note)}”</span>}
                             </td>
                             {progress && (
                                 <TargetProgressCells

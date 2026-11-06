@@ -240,15 +240,11 @@ export const ANALYST_RULES: ReadonlyArray<{ topics: readonly AnalystTopic[]; tex
         text:
             "Leads in = every active dealer_leads row created in the period, whatever its source (bulk imports included), except source_door 'direct_onboarding'.",
     },
-    // ID 215 (2 Nov): the screens renamed two statuses; the stored codes did not change.
+    // ID 215 (2 Nov): the screens renamed two statuses; the stored codes did not change
+    // (Names tab rule 8). An "activity" on screen is a lead_touchpoints row.
     {
         topics: ["leads", "quotes"],
-        text: "Status words: lead_status 'Commercials_Explained' shows as 'Quote given', 'Commercials_Finalised' as 'Dealer agreed'.",
-    },
-    // ID 215 (2 Nov): the screens renamed two statuses; the stored codes did not change.
-    {
-        topics: ["leads", "quotes"],
-        text: "Status words: lead_status 'Commercials_Explained' shows as 'Quote given', 'Commercials_Finalised' as 'Dealer agreed'.",
+        text: "Status words: lead_status 'Commercials_Explained' shows as 'Quote given', 'Commercials_Finalised' as 'Dealer agreed'. An activity is a lead_touchpoints row.",
     },
     {
         topics: ["won", "people"],

@@ -83,7 +83,7 @@ async function defaultOwnerToCloser(accountId: string, leadId: string, approvedB
     const r = rows[0];
     if (!r || r.owner_id) return;
     await assignOwner([accountId], r.closer_id, {
-        reason: "Default owner: closed the lead this dealer came from (ID 159)",
+        reason: "Default owner: closed the lead this dealer came from",
         actorId: approvedBy ?? r.closer_id,
     });
 }

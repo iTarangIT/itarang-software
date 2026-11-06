@@ -13,6 +13,7 @@ import { ChevronDown, RotateCcw, Search, X } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { InfoTip } from "@/components/ui/info-tip";
 import { LEAD_STATUS } from "@/lib/lifecycle/transitions";
+import { LEAD_STATUS_LABEL } from "@/lib/leads/queueFilters";
 import { UNASSIGNED_FILTER } from "@/lib/admin/leadsInfoFilters";
 import {
     INTENT_BUCKET_LABEL,
@@ -268,7 +269,7 @@ export function LeadsFilterBar({
                     <option value={UNASSIGNED_FILTER}>Unassigned</option>
                     {LEAD_STATUS.filter((s) => s !== "New_Unassigned").map((s) => (
                         <option key={s} value={s}>
-                            {pretty(s)}
+                            {LEAD_STATUS_LABEL[s] ?? pretty(s)}
                         </option>
                     ))}
                 </select>

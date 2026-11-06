@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
+import { ActionsMenu } from "@/components/ui/actions-menu";
 import { cn } from "@/lib/utils";
 import {
   readJsonBody,
@@ -115,6 +116,18 @@ function formatINR(n: number): string {
   return `₹${n.toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
 }
 
+// C27 (wording audit, 2 Nov): sentence case, plain words — no ALL CAPS.
+const STATUS_LABEL: Record<string, string> = {
+  draft: "Draft",
+  sent: "Sent",
+  overdue: "Overdue",
+  paid: "Paid",
+  partially_paid: "Partly paid",
+  void: "Void",
+  credit_note: "Credit note",
+};
+const statusLabel = (s: string) => STATUS_LABEL[s] ?? (s.charAt(0).toUpperCase() + s.slice(1)).replace(/_/g, " ");
+
 function StatusBadge({ status }: { status: string | null }) {
   const s = (status || "").toLowerCase();
   const styles: Record<string, string> = {
@@ -124,13 +137,14 @@ function StatusBadge({ status }: { status: string | null }) {
     draft: "bg-gray-50 text-gray-600 border-gray-200",
     partially_paid: "bg-amber-50 text-amber-700 border-amber-200",
     void: "bg-gray-100 text-gray-500 border-gray-300",
+    credit_note: "bg-rose-50 text-rose-700 border-rose-200",
   };
   const cls = styles[s] || "bg-gray-50 text-gray-600 border-gray-200";
   return (
     <span
-      className={`inline-flex items-center px-2 py-0.5 rounded-full border text-[10px] font-bold uppercase tracking-wider ${cls}`}
+      className={`inline-flex items-center px-2 py-0.5 rounded-full border text-[10px] font-bold ${cls}`}
     >
-      {s || "—"}
+      {s ? statusLabel(s) : "—"}
     </span>
   );
 }
@@ -326,7 +340,7 @@ function SourceBadge({ source }: { source: "zoho" | "drive" | "credit" }) {
       <span
         data-testid="source-credit"
         title="Credit note — subtracted from revenue in the month it was issued"
-        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[10px] font-bold uppercase tracking-wider bg-rose-50 text-rose-700 border-rose-200"
+        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[10px] font-bold bg-rose-50 text-rose-700 border-rose-200"
       >
         Credit note
       </span>
@@ -341,7 +355,7 @@ function SourceBadge({ source }: { source: "zoho" | "drive" | "credit" }) {
           ? "Read from the Google Drive invoice folder"
           : "From Zoho, before the move to Vyapar"
       }
-      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[10px] font-bold uppercase tracking-wider ${
+      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[10px] font-bold ${
         drive
           ? "bg-indigo-50 text-indigo-700 border-indigo-200"
           : "bg-slate-50 text-slate-600 border-slate-200"
@@ -563,7 +577,7 @@ export default function CEOInvoicesPage() {
       <div className="p-5 rounded-2xl bg-white border border-gray-100 shadow-sm space-y-4">
         <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
           <div>
-            <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-1">
+            <label className="block text-[10px] font-bold text-gray-500 mb-1">
               From
             </label>
             <input
@@ -578,7 +592,7 @@ export default function CEOInvoicesPage() {
             />
           </div>
           <div>
-            <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-1">
+            <label className="block text-[10px] font-bold text-gray-500 mb-1">
               To
             </label>
             <input
@@ -593,7 +607,7 @@ export default function CEOInvoicesPage() {
             />
           </div>
           <div className="md:col-span-2">
-            <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-1">
+            <label className="block text-[10px] font-bold text-gray-500 mb-1">
               Customer search
             </label>
             <div className="relative">
@@ -615,7 +629,7 @@ export default function CEOInvoicesPage() {
 
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div className="flex items-center gap-1.5 flex-wrap">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-gray-500 mr-1">
+            <span className="text-[10px] font-bold text-gray-500 mr-1">
               Status:
             </span>
             {STATUS_OPTIONS.map((s) => {
@@ -626,13 +640,13 @@ export default function CEOInvoicesPage() {
                   data-testid={`status-chip-${s}`}
                   data-active={active ? "true" : "false"}
                   onClick={() => toggleStatus(s)}
-                  className={`px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border transition-colors ${
+                  className={`px-2.5 py-1 rounded-full text-[10px] font-bold border transition-colors ${
                     active
                       ? "bg-brand-600 text-white border-brand-600"
                       : "bg-white text-gray-600 border-gray-200 hover:bg-gray-50"
                   }`}
                 >
-                  {s.replace("_", " ")}
+                  {statusLabel(s)}
                 </button>
               );
             })}
@@ -645,7 +659,7 @@ export default function CEOInvoicesPage() {
                 }}
                 className="ml-1 text-[10px] font-semibold text-rose-600 hover:underline"
               >
-                clear
+                Clear
               </button>
             )}
           </div>
@@ -668,18 +682,6 @@ export default function CEOInvoicesPage() {
               </span>
             )}
             <Button
-              data-testid="refresh-zoho"
-              variant="outline"
-              onClick={() => refresh.mutate()}
-              disabled={refresh.isPending}
-              className="flex items-center gap-2 border-brand-200 text-brand-700 hover:bg-brand-50"
-            >
-              <RefreshCw
-                className={cn("w-4 h-4", refresh.isPending && "animate-spin")}
-              />
-              {refresh.isPending ? "Refreshing…" : "Refresh from Zoho"}
-            </Button>
-            <Button
               data-testid="scan-drive"
               variant="outline"
               onClick={() => scanDrive.mutate()}
@@ -700,6 +702,18 @@ export default function CEOInvoicesPage() {
               <Download className="w-4 h-4" />
               Download CSV
             </Button>
+            {/* C28 (wording audit, 2 Nov): invoices moved to Vyapar, so the old
+                Zoho refresh is no longer a main button. */}
+            {refresh.isPending ? (
+              <span data-testid="refresh-zoho-pending" className="flex items-center gap-1.5 text-xs text-brand-700">
+                <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Refreshing old Zoho invoices…
+              </span>
+            ) : (
+              <ActionsMenu
+                label="More invoice actions"
+                items={[{ label: "Refresh old Zoho invoices", onSelect: () => refresh.mutate() }]}
+              />
+            )}
           </div>
         </div>
       </div>
@@ -778,21 +792,21 @@ export default function CEOInvoicesPage() {
       {/* Summary tiles */}
       <div className="grid grid-cols-3 gap-4">
         <div className="p-4 rounded-2xl bg-white border border-gray-100 shadow-sm">
-          <p className="text-[10px] font-bold uppercase tracking-wider text-gray-500">
+          <p className="text-[10px] font-bold text-gray-500">
             Invoices in view
           </p>
           <p data-testid="summary-count" data-count={summary?.count ?? ""} className="text-2xl font-bold text-gray-900 mt-1">{summary?.count ?? "—"}</p>
         </div>
         <div className="p-4 rounded-2xl bg-emerald-50/40 border border-emerald-100 shadow-sm">
-          <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-700/70">
-            Total Invoiced
+          <p className="text-[10px] font-bold text-emerald-700/70">
+            Total invoiced
           </p>
           <p data-testid="summary-total" data-total={summary?.total ?? ""} className="text-2xl font-bold text-emerald-900 mt-1">
             {summary ? formatINR(summary.total) : "—"}
           </p>
         </div>
         <div className="p-4 rounded-2xl bg-amber-50/40 border border-amber-100 shadow-sm">
-          <p className="text-[10px] font-bold uppercase tracking-wider text-amber-700/70">
+          <p className="text-[10px] font-bold text-amber-700/70">
             Accounts Receivable
           </p>
           <p data-testid="summary-balance" data-balance={summary?.balance ?? ""} className="text-2xl font-bold text-amber-900 mt-1">
@@ -820,7 +834,7 @@ export default function CEOInvoicesPage() {
           ) : null}
         </p>
         <div className="flex items-center gap-2">
-          <label htmlFor="dealer-match" className="text-[10px] font-bold uppercase tracking-wider text-gray-500">
+          <label htmlFor="dealer-match" className="text-[10px] font-bold text-gray-500">
             Dealer link
           </label>
           <select
@@ -913,7 +927,7 @@ export default function CEOInvoicesPage() {
             <div className="overflow-x-auto">
               <table data-testid="invoice-table" className="w-full text-sm">
                 <thead>
-                  <tr className="text-left text-[10px] uppercase tracking-wider text-gray-500 border-b border-gray-100">
+                  <tr className="text-left text-[10px] text-gray-500 border-b border-gray-100">
                     <th className="py-2 font-semibold">Invoice #</th>
                     <th className="py-2 font-semibold">Source</th>
                     <th className="py-2 font-semibold">Date</th>
@@ -996,7 +1010,7 @@ export default function CEOInvoicesPage() {
                                   <Link
                                     data-testid="assign-owner"
                                     href={`/admin/accounts/${encodeURIComponent(r.account_id)}`}
-                                    className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-amber-700 hover:underline whitespace-nowrap"
+                                    className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-700 hover:underline whitespace-nowrap"
                                   >
                                     <UserPlus className="w-3 h-3" />
                                     Assign owner
@@ -1006,7 +1020,7 @@ export default function CEOInvoicesPage() {
                                   <button
                                     data-testid="link-account"
                                     onClick={() => setLinking(r)}
-                                    className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-brand-700 hover:underline whitespace-nowrap"
+                                    className="inline-flex items-center gap-1 text-[10px] font-bold text-brand-700 hover:underline whitespace-nowrap"
                                   >
                                     <Link2 className="w-3 h-3" />
                                     Link to account
@@ -1017,7 +1031,7 @@ export default function CEOInvoicesPage() {
                                     data-testid="mark-not-dealer"
                                     disabled={decide.isPending}
                                     onClick={() => decide.mutate({ row: r, action: "not_dealer" })}
-                                    className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-gray-600 hover:underline whitespace-nowrap disabled:opacity-50"
+                                    className="inline-flex items-center gap-1 text-[10px] font-bold text-gray-600 hover:underline whitespace-nowrap disabled:opacity-50"
                                   >
                                     <Ban className="w-3 h-3" />
                                     Not a dealer sale
@@ -1028,7 +1042,7 @@ export default function CEOInvoicesPage() {
                                     data-testid="clear-link"
                                     disabled={decide.isPending}
                                     onClick={() => decide.mutate({ row: r, action: "clear" })}
-                                    className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-gray-500 hover:underline whitespace-nowrap disabled:opacity-50"
+                                    className="inline-flex items-center gap-1 text-[10px] font-bold text-gray-500 hover:underline whitespace-nowrap disabled:opacity-50"
                                   >
                                     <Undo2 className="w-3 h-3" />
                                     Undo
@@ -1061,7 +1075,7 @@ export default function CEOInvoicesPage() {
                                 setPayRef(opening ? (r.payment_reference ?? "") : "");
                                 recordPayment.reset();
                               }}
-                              className="text-[10px] font-bold uppercase tracking-wider text-brand-700 hover:underline whitespace-nowrap"
+                              className="text-[10px] font-bold text-brand-700 hover:underline whitespace-nowrap"
                             >
                               {payingId === r.id ? "Cancel" : "Payment"}
                             </button>
@@ -1073,7 +1087,7 @@ export default function CEOInvoicesPage() {
                               setVoidReason("");
                               voidInvoice.reset();
                             }}
-                            className="ml-2 text-[10px] font-bold uppercase tracking-wider text-rose-700 hover:underline whitespace-nowrap"
+                            className="ml-2 text-[10px] font-bold text-rose-700 hover:underline whitespace-nowrap"
                           >
                             {voidingId === r.id ? "Cancel" : r.status === "void" ? "Restore" : "Void"}
                           </button>
@@ -1084,7 +1098,7 @@ export default function CEOInvoicesPage() {
                           <td colSpan={colCount} className="py-3 px-2">
                             <div className="flex flex-wrap items-end gap-3">
                               <div>
-                                <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-1">
+                                <label className="block text-[10px] font-bold text-gray-500 mb-1">
                                   {r.status === "void" ? "Why restore it?" : "Why is it void?"}
                                 </label>
                                 <input
@@ -1130,7 +1144,7 @@ export default function CEOInvoicesPage() {
                           <td colSpan={colCount} className="py-3 px-2">
                             <div className="flex flex-wrap items-end gap-3">
                               <div>
-                                <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-1">
+                                <label className="block text-[10px] font-bold text-gray-500 mb-1">
                                   Collected so far
                                 </label>
                                 <div className="relative">
@@ -1151,7 +1165,7 @@ export default function CEOInvoicesPage() {
                                 </p>
                               </div>
                               <div>
-                                <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-1">
+                                <label className="block text-[10px] font-bold text-gray-500 mb-1">
                                   Reference / UTR
                                 </label>
                                 <input

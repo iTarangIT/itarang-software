@@ -168,6 +168,10 @@ export const GET = withErrorHandler(
         .select({
           id: expenseSubmissions.id,
           category: expenseSubmissions.category,
+          // C23 (wording audit, 2 Nov): AI / Drive rows all store category
+          // "Invoice"; the list shows the vendor, else the bucket.
+          vendor: expenseSubmissions.vendor,
+          bucket: expenseSubmissions.bucket,
           amount: expenseSubmissions.amount,
           approved_at: expenseSubmissions.approved_at,
           submitter_name: users.name,

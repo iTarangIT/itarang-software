@@ -333,6 +333,17 @@ export type Progress = {
     not_measured_reason?: string | null;
 };
 
+/**
+ * C17 (wording audit, 2 Nov): notes written by a database change carry its
+ * code ("(E-343)"). Shown words only — the stored note is not rewritten.
+ */
+export function displayTargetNote(note: string | null | undefined): string | null {
+    if (!note) return note ?? null;
+    if (/^Converted from the Sales Head target \(E-\d+\)$/.test(note.trim())) return "From the Sales Head's target";
+    if (/^Version in force when E-\d+ was applied$/.test(note.trim())) return "Version in force at the start";
+    return note.replace(/\s*\((?:E|ID)[- ]?\d+\)/g, "");
+}
+
 /** ID 189 — the reasons an actual reads "not measured" instead of a number. */
 export const NOT_MEASURED = {
     kyc_disbursed: "Loans are not linked to a CRM owner yet, so this cannot be counted per person.",

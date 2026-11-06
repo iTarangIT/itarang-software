@@ -26,6 +26,15 @@ const REASONS = [
     "Other",
 ] as const;
 
+// Names tab rule 3: a label per reason; the REASONS codes stay the saved values.
+const REASON_LABEL: Record<(typeof REASONS)[number], string> = {
+    Commercials_Finalised: "Dealer agreed",
+    Site_Visit_Needed: "Site visit needed",
+    Negotiation_Beyond_IS_Authority: "Negotiation beyond ISR's authority",
+    Demo_Requested: "Demo requested",
+    Other: "Other",
+};
+
 const VISIT_TYPES = ["Initial_Visit", "Demo", "Negotiation", "Closing"] as const;
 
 export function TransferAsmModal({ open, onClose, leadId, state, city, onSuccess }: Props) {
@@ -140,7 +149,7 @@ export function TransferAsmModal({ open, onClose, leadId, state, city, onSuccess
                             value={reason}
                             onChange={(e) => setReason(e.target.value as (typeof REASONS)[number])}
                         >
-                            {REASONS.map((r) => <option key={r} value={r}>{r.replaceAll("_", " ")}</option>)}
+                            {REASONS.map((r) => <option key={r} value={r}>{REASON_LABEL[r]}</option>)}
                         </select>
                     </div>
                     <div>

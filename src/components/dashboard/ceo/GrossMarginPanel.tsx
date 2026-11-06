@@ -100,7 +100,23 @@ export function GrossMarginPanel({ showMapping = false }: { showMapping?: boolea
                 <NotAvailable empty reason="No sales invoices in this period." />
             )}
 
-            {report?.available && months.length > 0 && (
+            {/* C20 (wording audit, 2 Nov): with no product cost anywhere every
+                cell read "no cost · ₹x not costed" — one line instead, and the
+                table waits until costs exist. */}
+            {report?.available && months.length > 0 && totals.costed === 0 && (
+                <div className="flex flex-wrap items-center gap-2 text-[13px]">
+                    <span className="font-semibold text-brand-navy">
+                        {unmapped > 0
+                            ? `No product costs yet: map ${unmapped} invoice item${unmapped === 1 ? "" : "s"}`
+                            : "No product costs yet"}
+                    </span>
+                    <span className="ml-auto">
+                        <CardLink href={ITEM_MAPPING_HREF}>Map invoice items</CardLink>
+                    </span>
+                </div>
+            )}
+
+            {report?.available && months.length > 0 && totals.costed > 0 && (
                 <>
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                         <KpiTile
@@ -176,7 +192,7 @@ export function GrossMarginPanel({ showMapping = false }: { showMapping?: boolea
                 </>
             )}
 
-            {showMapping && report?.available && (
+            {showMapping && report?.available && totals.costed > 0 && (
                 <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4 text-[13px]">
                     <span className="font-semibold text-brand-navy">Invoice items and their products</span>
                     {unmapped > 0 && <StatusPill tone="warn">{unmapped} not linked in this period</StatusPill>}

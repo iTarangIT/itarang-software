@@ -58,7 +58,10 @@ export function InfoTip({
                 aria-label={label}
                 aria-expanded={open}
                 aria-describedby={open ? id : undefined}
-                onClick={() => {
+                onClick={(e) => {
+                    // Inside a tile that is a link, the "i" must not follow it.
+                    e.preventDefault();
+                    e.stopPropagation();
                     // A tap pins it open; a second tap closes it.
                     const next = !pinned;
                     setPinned(next);

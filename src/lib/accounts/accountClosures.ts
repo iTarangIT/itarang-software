@@ -49,7 +49,7 @@ export async function notClosedSql(accountId: SQL): Promise<SQL> {
 export class ClosuresUnavailable extends Error {
     readonly status = 503;
     constructor() {
-        super("Closing a dealer needs migration E-332 on this database.");
+        super("Closing a dealer is not set up on this server yet. Ask Admin.");
     }
 }
 
