@@ -811,3 +811,28 @@ describe("the disposition never moves the pipeline", () => {
         }
     });
 });
+
+describe("ID 224: our CALL_RECORDING workflow", () => {
+    const body = {
+        event_name: "CALL_RECORDING",
+        mobile: "9509624540",
+        lead_id: "ae8ef37e-c0cd-4e69-b150-55a29b090065",
+        campaign_id: "be8ef37e-c0cd-4e69-b150-55a29b090065",
+        agent_name: "Sonu",
+        recording_url: "https://recordings.neodove.com/abc.mp3",
+        time: "1638806214940",
+    };
+    it("is its own event type, never a disposition or a connected call", () => {
+        expect(parseInboundEvent(body).eventType).toBe("call_recording");
+    });
+    it("carries the recording link and the lead keys", () => {
+        const e = parseInboundEvent(body);
+        expect(e.recordingUrl).toBe("https://recordings.neodove.com/abc.mp3");
+        expect(e.neodoveLeadId).toBe("ae8ef37e-c0cd-4e69-b150-55a29b090065");
+        expect(e.mobile).toBe("+919509624540");
+    });
+    it("does not share an idempotency key with the same call's Lead Dispose", () => {
+        const dispose = parseInboundEvent({ ...body, event_name: "LEAD_DISPOSE", recording_url: undefined });
+        expect(parseInboundEvent(body).externalEventId).not.toBe(dispose.externalEventId);
+    });
+});

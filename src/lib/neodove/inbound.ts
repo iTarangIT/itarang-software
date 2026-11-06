@@ -28,6 +28,7 @@ import {
     callOutcomeFor,
     callStatusFor,
     dispositionFor,
+    parseInboundEvent,
     remarksFor,
     touchpointTypeFor,
 } from "./mapper";
@@ -56,6 +57,8 @@ export type InboundOutcome = {
         | "merge_request_raised"
         | "duplicate_skipped"
         | "delete_flagged"
+        | "recording_attached"
+        | "recording_waiting"
         | "unresolved"
         | "error";
     note?: string;
@@ -164,6 +167,9 @@ export async function handleNeodoveEvent(
             case "call_not_connected":
                 outcome = await handleDisposition(event);
                 break;
+            case "call_recording":
+                outcome = await handleCallRecording(event);
+                break;
         }
         // Stamped here, at the one choke point every handler passes through,
         // because the ledger row is CLAIMED before any of them run — the webhook
@@ -262,6 +268,11 @@ async function handleDisposition(
     if (statusRefused) await recordStatusRefused(event, statusRefused);
 
     await attachCallEvidence(touchpointId, event, dealerLeadId);
+    // ID 224: a CALL_RECORDING that arrived before this disposition waits on
+    // its ledger row — pick it up now.
+    if (!event.recordingUrl && touchpointTypeFor(event.eventType) === "inside_sales_call") {
+        await attachWaitingRecording(touchpointId, dealerLeadId);
+    }
     await recordLeadDisposition(dealerLeadId, event);
 
     // ID 83: the first human call by a linked agent makes them the owner of an
@@ -547,6 +558,114 @@ async function handleLeadDeleted(
     });
 
     return { handled: true, dealerLeadId, action: "delete_flagged" };
+}
+
+// ── Call recording (ID 224) ───────────────────────────────────────────────
+
+/**
+ * How far apart a CALL_RECORDING and its call's Lead Dispose may arrive (our
+ * own receipt clock on both sides). NeoDove sends the recording on "Call
+ * Connected" and the disposition when the agent submits the form, so either
+ * can come first.
+ */
+const RECORDING_PAIR_WINDOW = sql`interval '3 hours'`;
+
+/**
+ * ID 224 (6 Nov): NeoDove's fixed Lead Dispose webhook carries no recording.
+ * Our Workflow → Send Webhook ("Call Connected", event_name CALL_RECORDING)
+ * does. It is the SAME call, so it must never become a second touchpoint —
+ * that would double every call count. Instead:
+ *   - the call's touchpoint is already here (disposition came first): attach
+ *     the link to the newest NeoDove call on this lead without one;
+ *   - not yet: leave it on this ledger row; handleDisposition picks it up
+ *     (attachWaitingRecording) when the call arrives.
+ * Never creates a lead: a recording for a number we do not know is noted.
+ */
+async function handleCallRecording(event: NeodoveInboundEvent): Promise<InboundOutcome> {
+    const dealerLeadId = await resolveInboundLead(event);
+    if (!dealerLeadId) {
+        const note = `Recording for a number not in the CRM (mobile=${event.mobile ?? "none"})`;
+        await recordError(event, note);
+        return { handled: false, dealerLeadId: null, action: "unresolved", note };
+    }
+    if (!event.recordingUrl) {
+        return { handled: true, dealerLeadId, action: "duplicate_skipped", note: "No recording on this call" };
+    }
+    const rows = await db.execute<{ touchpoint_id: string }>(sql`
+        SELECT touchpoint_id::text AS touchpoint_id
+          FROM lead_touchpoints
+         WHERE dealer_lead_id = ${dealerLeadId}
+           AND external_system = 'neodove'
+           AND touchpoint_type = 'inside_sales_call'
+           AND recording_url IS NULL
+           AND created_at >= NOW() - ${RECORDING_PAIR_WINDOW}
+         ORDER BY created_at DESC
+         LIMIT 1
+    `);
+    const touchpointId = rows[0]?.touchpoint_id;
+    if (!touchpointId) {
+        return { handled: true, dealerLeadId, action: "recording_waiting", note: "Waiting for the call's disposition" };
+    }
+    await storeRecordingOnly(touchpointId, event.recordingUrl);
+    await markRecordingUsed(event.externalEventId, touchpointId);
+    return { handled: true, dealerLeadId, action: "recording_attached" };
+}
+
+/**
+ * The other order: the disposition's touchpoint was just written and a
+ * CALL_RECORDING for this lead arrived before it and is still unused.
+ */
+async function attachWaitingRecording(touchpointId: string, dealerLeadId: string): Promise<void> {
+    try {
+        const rows = await db.execute<{ external_event_id: string; request_payload: unknown }>(sql`
+            SELECT external_event_id, request_payload
+              FROM neodove_sync_events
+             WHERE direction = 'inbound'
+               AND event_type = 'call_recording'
+               AND dealer_lead_id = ${dealerLeadId}
+               AND created_at >= NOW() - ${RECORDING_PAIR_WINDOW}
+               AND (response_payload ->> 'recording_attached_to') IS NULL
+             ORDER BY created_at DESC
+             LIMIT 1
+        `);
+        const row = rows[0];
+        if (!row) return;
+        const url = parseInboundEvent(row.request_payload).recordingUrl;
+        if (!url) return;
+        await storeRecordingOnly(touchpointId, url);
+        await markRecordingUsed(row.external_event_id, touchpointId);
+    } catch (err) {
+        console.warn("[NeoDove/inbound] waiting recording not attached:", errorMessage(err));
+    }
+}
+
+/** Recording link only (own copy first, NeoDove's link if that fails). */
+async function storeRecordingOnly(touchpointId: string, recordingUrl: string): Promise<void> {
+    const url =
+        (await rehostRecording({ provider: "neodove", callId: touchpointId, recordingUrl })) || recordingUrl;
+    try {
+        await db.execute(sql`
+            UPDATE lead_touchpoints
+               SET recording_url = COALESCE(recording_url, ${url})
+             WHERE touchpoint_id = ${touchpointId}::uuid
+        `);
+    } catch (err) {
+        console.warn("[NeoDove/inbound] recording not stored (is E-226 applied?):", errorMessage(err));
+    }
+}
+
+async function markRecordingUsed(externalEventId: string, touchpointId: string): Promise<void> {
+    try {
+        await db.execute(sql`
+            UPDATE neodove_sync_events
+               SET response_payload = COALESCE(response_payload, '{}'::jsonb)
+                                      || jsonb_build_object('recording_attached_to', ${touchpointId}::text)
+             WHERE direction = 'inbound'
+               AND external_event_id = ${externalEventId}
+        `);
+    } catch (err) {
+        console.error("[NeoDove/inbound] failed to mark recording used:", errorMessage(err));
+    }
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────
