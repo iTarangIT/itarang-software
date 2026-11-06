@@ -1,8 +1,10 @@
 /**
  * Tracker ID 229 — alarm when NeoDove calls (or AI dialer results) stop
- * reaching live. One sample per feed: working minutes since the last arrival
- * (src/lib/operations/callFeed.ts). The alert rule (registry
- * "calls.feed_gap") opens past 2 working hours and rings Admin, the Sales Head and Kartik (bell + email)
+ * reaching live. One sample per feed (src/lib/operations/callFeed.ts):
+ * NeoDove = working minutes that pushed leads have waited with no update
+ * back (0 when nothing waits); AI dialer = working minutes since the last
+ * result. The alert rule (registry "calls.feed_gap") opens past 2 working
+ * hours and rings the CEO and the Sales Head (bell + email)
  * once per gap (alerts.ts: one open alert per source, cooldown); it resolves
  * on the next fresh sample under the line.
  *
@@ -26,12 +28,12 @@ export const callFeedCollector: OpsCollector = {
         try {
             const { now, feeds } = await loadCallFeedStatus();
             return feeds
-                .filter((f) => f.lastAt && f.gapWorkingMinutes != null)
+                .filter((f) => f.gapWorkingMinutes != null)
                 .map((f) => ({
                     metric_key: "calls.feed_gap",
                     source: f.feed,
                     value_num: f.gapWorkingMinutes as number,
-                    meta: { last_at: f.lastAt, measured_at: now, label: CALL_FEED_LABEL[f.feed] },
+                    meta: { last_at: f.lastAt, waiting_since: f.waitingSince, measured_at: now, label: CALL_FEED_LABEL[f.feed] },
                 }));
         } catch (err) {
             console.error("[ops:call_feed] probe failed:", rootCauseMessage(err));

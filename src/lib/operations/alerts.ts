@@ -329,9 +329,9 @@ async function deliver(
       : `${severity === "crit" ? "CRITICAL" : "Warning"}: ${metricKey}`;
 
   // ID 229: a call feed going quiet is a business problem, not only an ops one
-  // — on the live CRM Admin, the Sales Head and Kartik's own login get the
-  // bell and an email (6 Nov). The sandbox receives no NeoDove calls by
-  // design, so there it stays an ops-only bell.
+  // — on the live CRM the CEO and the Sales Head get the bell and an email
+  // (6 Nov). The sandbox receives no NeoDove calls by design, so there it
+  // stays an ops-only bell.
   const audience = callFeedAlertAudience(metricKey, process.env.NEXT_PUBLIC_APP_URL);
 
   if (channels.includes("inapp")) {
@@ -342,7 +342,7 @@ async function deliver(
         message,
         data: { metric_key: metricKey, source, severity },
       });
-      // Named logins (Kartik's) by email, whatever their role — skipped when
+      // Named logins (CALL_FEED_ALERT_LOGINS, empty now) by email — skipped when
       // the role list above already rang them.
       if (audience.logins.length > 0) {
         await db.execute(sql`
@@ -377,8 +377,8 @@ async function deliver(
     }
   }
 
-  // ID 229 business email: Kartik's address plus every active Admin and Sales
-  // Head login (test e2e-… mailboxes skipped), regardless of the rule's
+  // ID 229 business email: every active CEO and Sales Head login (plus any
+  // CALL_FEED_ALERT_LOGINS address; test e2e-… mailboxes skipped), regardless of the rule's
   // channels or OPS_ALERT_EMAIL.
   if ((audience.emailRoles.length > 0 || audience.logins.length > 0) && firstOrLast) {
     try {

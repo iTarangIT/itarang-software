@@ -37,16 +37,15 @@ export function workingGapText(min: number | null): string {
 export const CALL_FEED_METRIC = "calls.feed_gap";
 
 /**
- * Kartik's own login (not a CEO login). 6 Nov: he gets the call-feed alarm by
- * bell and email, matched by this address.
+ * Named logins that also get the call-feed alarm, matched by email whatever
+ * their role. Empty since 6 Nov (the CEO and the Sales Head only).
  */
-export const CALL_FEED_ALERT_LOGINS = ["kartik.itarang@gmail.com"];
+export const CALL_FEED_ALERT_LOGINS: string[] = [];
 
 /**
- * Who hears a call-feed alarm on the live CRM (6 Nov): bell and email to
- * Kartik's login, every Sales Head and every Admin; the ops bell as before.
- * The sandbox gets no NeoDove calls by design, so there it stays an ops-only
- * bell. Pure.
+ * Who hears a call-feed alarm on the live CRM (6 Nov, final): bell and email
+ * to every CEO and Sales Head login; the ops bell as before. The sandbox gets
+ * no NeoDove calls by design, so there it stays an ops-only bell. Pure.
  */
 export function callFeedAlertAudience(
     metricKey: string,
@@ -55,8 +54,8 @@ export function callFeedAlertAudience(
     const live = (appUrl ?? "").includes("crm.itarang.com");
     if (metricKey !== CALL_FEED_METRIC || !live) return { bellRoles: ["operations"], emailRoles: [], logins: [] };
     return {
-        bellRoles: ["operations", "admin", "sales_head"],
-        emailRoles: ["admin", "sales_head"],
+        bellRoles: ["operations", "ceo", "sales_head"],
+        emailRoles: ["ceo", "sales_head"],
         logins: CALL_FEED_ALERT_LOGINS,
     };
 }
@@ -80,10 +79,14 @@ export function callFeedAlertEmail(
         };
     }
     const hours = severity === "crit" ? 4 : 2;
+    const what =
+        source === "neodove"
+            ? `Leads pushed to NeoDove have had no update back for over ${hours} working hours. NeoDove may have a problem, or its webhook may have been changed`
+            : `No ${feed} have reached the live CRM for over ${hours} working hours`;
     return {
         subject: `[iTarang CRM] ${severity === "crit" ? "Urgent" : "Warning"}: no ${feed} for over ${hours} working hours`,
         text:
-            `No ${feed} have reached the live CRM for over ${hours} working hours.\n\n${message}\n\n` +
+            `${what}.\n\n${message}\n\n` +
             (source === "ai_dialer"
                 ? "Check that the AI dialer is running."
                 : "Check in NeoDove that the webhook still points at https://crm.itarang.com (not the sandbox).") +

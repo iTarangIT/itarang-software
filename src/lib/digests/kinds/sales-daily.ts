@@ -149,7 +149,7 @@ const SECTIONS: DigestSection[] = [
   // ID 51 — Ecofy leads in the daily email.
   { key: "block_g", label: "G · Ecofy", hint: "Ecofy pickup queue (unassigned), new Ecofy leads yesterday, and every Ecofy lead by stage.", group: "backlog" },
   // ID 229 — calls still reaching live.
-  { key: "block_h", label: "H · Calls reaching live", hint: "When the last NeoDove call and the last AI dialer result reached the CRM, and the working time since.", group: "backlog" },
+  { key: "block_h", label: "H · Calls reaching live", hint: "When the last NeoDove call and the last AI dialer result reached the CRM, and how long pushed leads have waited with no update.", group: "backlog" },
 ];
 
 // ─────────────────────────────── dates ──────────────────────────────────────
@@ -921,7 +921,7 @@ async function collect(
             // ID 229 — a call feed that stopped reaching live is seen the next morning at the latest.
             key: "block_h",
             title: `H · Calls reaching live at ${asOf}`,
-            columns: ["Feed", "Last received", "Working time since"],
+            columns: ["Feed", "Last received", "Waiting with no update"],
             rows: callFeed
               ? callFeed.feeds.map((f) => [
                   CALL_FEED_LABEL[f.feed],
@@ -930,7 +930,7 @@ async function collect(
                 ])
               : [],
             textColumns: 3,
-            note: "Only office hours on working days count. Over 2 working hours, Admin, the Sales Head and Kartik get a bell and an email.",
+            note: "NeoDove: how long leads pushed to NeoDove have waited with no update back (0 m = nothing waiting). AI dialer: time since the last result. Only office hours on working days count. Over 2 working hours, the CEO and the Sales Head get a bell and an email.",
             empty: "Could not be read on this database.",
           },
         ],

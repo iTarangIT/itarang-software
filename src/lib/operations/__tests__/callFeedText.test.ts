@@ -14,11 +14,11 @@ describe("ID 229: call feed text", () => {
 });
 
 describe("call-feed alarm audience and email (6 Nov)", () => {
-    it("live: bell to ops, Admin, Sales Head and Kartik's login; email to Admin, Sales Head and Kartik", () => {
+    it("live: bell to ops, CEO and Sales Head; email to CEO and Sales Head only", () => {
         expect(callFeedAlertAudience("calls.feed_gap", "https://crm.itarang.com")).toEqual({
-            bellRoles: ["operations", "admin", "sales_head"],
-            emailRoles: ["admin", "sales_head"],
-            logins: ["kartik.itarang@gmail.com"],
+            bellRoles: ["operations", "ceo", "sales_head"],
+            emailRoles: ["ceo", "sales_head"],
+            logins: [],
         });
     });
     it("sandbox, or any other metric: ops bell only, no email", () => {
@@ -33,6 +33,7 @@ describe("call-feed alarm audience and email (6 Nov)", () => {
     it("plain-words email", () => {
         const w = callFeedAlertEmail("warn", "neodove", "x");
         expect(w.subject).toBe("[iTarang CRM] Warning: no NeoDove calls for over 2 working hours");
+        expect(w.text).toContain("Leads pushed to NeoDove have had no update back for over 2 working hours");
         expect(w.text).toContain("crm.itarang.com (not the sandbox)");
         expect(callFeedAlertEmail("crit", "ai_dialer", "x").subject).toContain("Urgent: no AI dialer results for over 4");
         expect(callFeedAlertEmail("resolved", "neodove", "x").subject).toBe("[iTarang CRM] NeoDove calls are reaching the CRM again");
