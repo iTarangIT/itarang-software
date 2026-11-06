@@ -245,6 +245,29 @@ export function lendersOn(settings: Pick<EmiMessagesSettings, "lenders">, channe
         .map(([id]) => id);
 }
 
+/**
+ * ID 204 (Kartik, 4 Nov): the lender portal's "Send payment reminder" follows
+ * the same switches as the automatic messages — the master switch, this
+ * lender's channel switch, and (WhatsApp) that message's own on/off. Returns
+ * why it must not send, or null when it may. Pure.
+ */
+export function portalReminderRefusal(
+    settings: Pick<EmiMessagesSettings, "enabled" | "lenders" | "messages">,
+    nbfcId: string | null | undefined,
+    channel: EmiChannel,
+    kind: EmiMessageKind,
+): string | null {
+    if (!settings.enabled) return "EMI messages are switched off (Admin > Settings > EMI messages).";
+    const sw = nbfcId ? settings.lenders[nbfcId] : undefined;
+    if (!sw || !sw[channel]) {
+        return `${channel === "sms" ? "SMS" : "WhatsApp"} reminders are not switched on for this lender (Admin > Settings > EMI messages).`;
+    }
+    if (channel === "whatsapp" && !settings.messages[kind]?.on) {
+        return "That WhatsApp message is switched off (Admin > Settings > EMI messages).";
+    }
+    return null;
+}
+
 /** Last 10 digits of an Indian mobile, or null. */
 export function mobile10(phone: string | null | undefined): string | null {
     const d = (phone ?? "").replace(/\D/g, "").slice(-10);

@@ -8,6 +8,7 @@ import {
     fillText,
     fmtDay,
     mobile10,
+    portalReminderRefusal,
     smsValues,
     templateParams,
     textFields,
@@ -127,5 +128,36 @@ describe("SMS texts (Exotel / DLT, 30 Oct)", () => {
 
     it("by default the SMS uses the WhatsApp text (no separate wording)", () => {
         for (const m of Object.values(defaultEmiMessagesSettings().messages)) expect(m.smsText).toBe("");
+    });
+});
+
+describe("ID 204: portal 'Send payment reminder' follows the switches", () => {
+    const on = () => {
+        const s = approvedAll();
+        s.enabled = true;
+        s.lenders = { pilot: { sms: true, whatsapp: true } };
+        return s;
+    };
+
+    it("sends for a lender switched on for that channel", () => {
+        expect(portalReminderRefusal(on(), "pilot", "whatsapp", "due_3d")).toBeNull();
+        expect(portalReminderRefusal(on(), "pilot", "sms", "due_3d")).toBeNull();
+    });
+
+    it("refuses another lender, or a lender switched off on that channel", () => {
+        expect(portalReminderRefusal(on(), "other", "whatsapp", "due_3d")).toMatch(/not switched on for this lender/);
+        const s = on();
+        s.lenders.pilot = { sms: false, whatsapp: true };
+        expect(portalReminderRefusal(s, "pilot", "sms", "due_3d")).toMatch(/SMS reminders/);
+        expect(portalReminderRefusal(s, null, "whatsapp", "due_3d")).not.toBeNull();
+    });
+
+    it("refuses when the WhatsApp message itself is off, or everything is off", () => {
+        const s = on();
+        s.messages.overdue_1 = { ...s.messages.overdue_1, on: false };
+        expect(portalReminderRefusal(s, "pilot", "whatsapp", "overdue_1")).toMatch(/message is switched off/);
+        const off = on();
+        off.enabled = false;
+        expect(portalReminderRefusal(off, "pilot", "sms", "due_3d")).toMatch(/switched off/);
     });
 });

@@ -34,7 +34,7 @@ import {
   nbfcLoans,
 } from "@/lib/db/schema";
 import { createPaymentQr, createRecurringDebit, razorpayErrorMessage } from "@/lib/razorpay";
-import { applyEmiPayment } from "@/lib/nbfc/servicing/applyEmiPayment";
+import { attemptTenant, recordSliceAttempts, settleCollectedPaymentFifo } from "@/lib/nbfc/servicing/settleCollectedPayment";
 import { isCronAuthorised } from "@/lib/cron-auth";
 
 export const runtime = "nodejs";
@@ -223,15 +223,30 @@ async function run(): Promise<Summary> {
             .update(emiPaymentAttempts)
             .set({ status: "simulated", updated_at: now })
             .where(eq(emiPaymentAttempts.id, attempt.id));
-          await db.transaction((tx) =>
-            applyEmiPayment(tx, {
-              emiId: emi.emiId,
+          // ID 204 (Kartik, 4 Nov): the debited amount clears the oldest
+          // unpaid EMIs first, up to this one — as on "Record payment".
+          await db.transaction(async (tx) => {
+            const s = await settleCollectedPaymentFifo(tx, {
+              targetEmiId: emi.emiId,
+              amount: amountInr,
               paymentRef: `SIM-${attempt.id}`,
               paidAt: now,
               mode: "simulate",
               channel: "enach",
-            }),
-          );
+            });
+            if (s.applied) {
+              await recordSliceAttempts(tx, {
+                settled: s,
+                targetEmiId: emi.emiId,
+                keyPrefix: `SIM-${attempt.id}`,
+                mode: "simulate",
+                channel: "enach",
+                paidAt: now,
+                tenantId: await attemptTenant(tx, attempt.id),
+                note: "FIFO: part of an auto-debit raised on a later EMI, applied to the oldest unpaid EMI first",
+              });
+            }
+          });
           summary.simulated++;
         }
         continue;

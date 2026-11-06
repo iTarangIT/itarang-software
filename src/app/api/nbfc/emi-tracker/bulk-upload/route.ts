@@ -35,7 +35,8 @@ import {
   nbfcLoans,
 } from "@/lib/db/schema";
 import { getCurrentTenant, requireNbfcAccess } from "@/lib/nbfc/tenant";
-import { SYSTEM_USER_ID, applyEmiPayment } from "@/lib/nbfc/servicing/applyEmiPayment";
+import { SYSTEM_USER_ID } from "@/lib/nbfc/servicing/applyEmiPayment";
+import { recordSliceAttempts, settleCollectedPaymentFifo } from "@/lib/nbfc/servicing/settleCollectedPayment";
 import { runEmiAging } from "@/lib/nbfc/servicing/runEmiAging";
 import { runCdsNightlyJob } from "@/lib/nbfc/cds/computeCds";
 import { computePciForAllLoans } from "@/lib/nbfc/pci/computePci";
@@ -337,20 +338,36 @@ export async function POST(req: NextRequest) {
             // (amount_paid, outstanding, loan close) — in its own savepoint so
             // a refusal leaves the row's sheet correction below untouched. The
             // sheet's status / paid date / days overdue still win, as before.
+            // Decided 4 Nov (Kartik): the collected amount goes to the loan's
+            // oldest unpaid EMI first, as on "Record payment".
             if (u.newStatus === "paid" || u.newStatus === "paid_late") {
               const ap = `${sp}_pay`;
               await tx.execute(sql.raw(`SAVEPOINT ${ap}`));
               try {
-                const res = await applyEmiPayment(tx, {
-                  emiId: u.emiId,
+                const paidAt = new Date(`${u.newPaidAt}T00:00:00.000Z`);
+                const res = await settleCollectedPaymentFifo(tx, {
+                  targetEmiId: u.emiId,
+                  amount: u.amount != null && u.amount > 0 ? u.amount : null,
                   paymentRef: `bulk:${u.newPaidAt}`,
-                  paidAt: new Date(`${u.newPaidAt}T00:00:00.000Z`),
+                  paidAt,
                   mode: "manual",
                   channel: "bulk_upload",
                   actorUserId,
                 });
+                if (res.applied) {
+                  await recordSliceAttempts(tx, {
+                    settled: res,
+                    targetEmiId: u.emiId,
+                    keyPrefix: `bulk:${u.emiId}:${u.newPaidAt}`,
+                    mode: "manual",
+                    channel: "bulk_upload",
+                    paidAt,
+                    tenantId: tenant.id,
+                    note: `EMI tracker upload: collection for installment ${u.emiSeq}, applied to the oldest unpaid EMI first`,
+                  });
+                }
                 await tx.execute(sql.raw(`RELEASE SAVEPOINT ${ap}`));
-                if (res.applied && u.newPaidAt) receivedEmis.push({ emiId: u.emiId, paidOn: u.newPaidAt });
+                if (res.applied && res.lastEmiId && u.newPaidAt) receivedEmis.push({ emiId: res.lastEmiId, paidOn: u.newPaidAt });
               } catch {
                 await tx.execute(sql.raw(`ROLLBACK TO SAVEPOINT ${ap}`));
                 await tx.execute(sql.raw(`RELEASE SAVEPOINT ${ap}`));
