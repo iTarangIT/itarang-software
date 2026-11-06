@@ -7,6 +7,7 @@ import {
     ShieldCheck
 } from 'lucide-react';
 import { Dropdown } from '@/components/ui/select-dropdown';
+import { InfoTip } from '@/components/ui/info-tip';
 import { onFreshFileClick } from '@/lib/storage/freshFileLink';
 
 // Re-export so existing `import { Dropdown } from './shared'` callers keep working.
@@ -156,7 +157,7 @@ function getDealerStatus(uploaded: boolean, status?: string): { label: string; c
     return { label: 'Uploaded - Pending Review', color: 'text-blue-600', dotColor: 'bg-amber-500', icon: 'clock' };
 }
 
-export function DocumentCard({ label, required, uploaded, status, failedReason, onUpload, disabled, fileUrl, hint }: {
+export function DocumentCard({ label, required, uploaded, status, failedReason, onUpload, disabled, fileUrl, hint, hintTip }: {
     label: string;
     required?: boolean;
     uploaded: boolean;
@@ -168,6 +169,8 @@ export function DocumentCard({ label, required, uploaded, status, failedReason, 
     // Optional helper text shown under the label (e.g. which documents are
     // acceptable for this slot). Hidden once a file has been uploaded.
     hint?: string | null;
+    // The rest of the hint, behind an "i" (writing standard rule 4).
+    hintTip?: string | null;
 }) {
     const dealerStatus = getDealerStatus(uploaded, status);
     const isPdf = !!fileUrl && /\.pdf($|\?)/i.test(fileUrl);
@@ -271,7 +274,10 @@ export function DocumentCard({ label, required, uploaded, status, failedReason, 
                         </span>
                     </div>
                     {hint && !uploaded && (
-                        <p className="text-[10px] text-gray-500 mt-1.5 leading-snug">{hint}</p>
+                        <p className="text-[10px] text-gray-500 mt-1.5 leading-snug">
+                            {hint}
+                            {hintTip && <>{" "}<InfoTip>{hintTip}</InfoTip></>}
+                        </p>
                     )}
                     {failedReason && (
                         <p className="text-[10px] text-red-500 mt-1.5 leading-snug line-clamp-2">{failedReason}</p>

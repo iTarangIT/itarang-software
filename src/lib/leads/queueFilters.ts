@@ -92,7 +92,7 @@ export const INTEREST_OPTIONS: { value: string; label: string }[] = [
   { value: "hot", label: "Hot" },
   { value: "warm", label: "Warm" },
   { value: "cold", label: "Cold" },
-  { value: "order_placed", label: "Order Placed" },
+  { value: "order_placed", label: "Ready to order" },
 ];
 
 /** How many filters are currently doing work — drives the "Filters (n)" badge. */

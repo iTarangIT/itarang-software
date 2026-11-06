@@ -221,7 +221,7 @@ describe("prompt matches the tools", () => {
         expect(isr).toMatch(/can't be browsed here: a lead from the pool is claimed by its exact phone number with claim_lead/);
         const asm = buildSystemPrompt({ user: ASM, now, tools, writesEnabled: true });
         expect(asm).toMatch(/THE USER'S QUEUE TABS: my_visits .*today .*my_closed /);
-        expect(asm).toContain('"Unclaimed in my territory"');
+        expect(asm).toContain('"Unassigned in my territory"');
     });
 
     it("rule 14 is role-specific; stale results are re-fetched; visit captions skip read_document; ASM follow-up kinds", () => {

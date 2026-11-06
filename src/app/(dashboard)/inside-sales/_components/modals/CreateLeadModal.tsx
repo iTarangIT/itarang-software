@@ -142,7 +142,7 @@ export function CreateLeadModal({ open, onClose, onSuccess }: Props) {
             toast.success(
                 json?.data?.owned_by_you
                     ? "Lead created — it is yours. Find it in your open leads."
-                    : "Lead created — find it in the Unassigned (Claim) tab.",
+                    : "Lead created. Find it in the Unassigned tab.",
             );
             if (json?.data?.business_type_saved === false) {
                 toast.warning("Lead created, but business type wasn't saved. Set it on the lead page.");

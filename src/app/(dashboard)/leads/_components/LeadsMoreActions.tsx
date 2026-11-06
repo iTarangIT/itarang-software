@@ -58,7 +58,7 @@ export function LeadsMoreActions({
                         role="menuitem"
                         onClick={onDownloadAll}
                         disabled={downloadingAll}
-                        title="Every lead matching the current filters, with visit, call, remarks and billing columns"
+                        title="Every lead that matches your filters, with visit, call, remarks and billing columns."
                         className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50"
                     >
                         {downloadingAll ? (
@@ -66,7 +66,7 @@ export function LeadsMoreActions({
                         ) : (
                             <FileSpreadsheet className="w-4 h-4" />
                         )}
-                        Download all
+                        Download full sheet
                     </button>
                     {/* R-21 — every event on these leads, by the date it happened. */}
                     <EventLogExportButton selectedIds={selectedIds} variant="menu" />

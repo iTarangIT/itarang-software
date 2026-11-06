@@ -18,6 +18,7 @@ import { toast } from "sonner";
 import { Loader2, UserPlus2, X } from "lucide-react";
 import { Modal } from "@/app/(dashboard)/inside-sales/_components/Modal";
 import { Button } from "@/components/ui/button";
+import { InfoTip } from "@/components/ui/info-tip";
 import {
     BULK_CLAIM_CAP,
     type BulkClaimInput,
@@ -202,10 +203,11 @@ export function BulkClaimBar({
                             .
                         </p>
                         <p className="text-xs text-gray-500">
-                            Each lead moves from <code>New_Unassigned</code> to{" "}
-                            <code>Assigned_Not_Contacted</code>. Any lead another rep claims
-                            first is skipped and reported. You can reassign later from the
-                            lead&apos;s action bar if needed.
+                            Each lead moves from Unassigned to Assigned.{" "}
+                            <InfoTip>
+                                If another rep claims a lead first, we skip it and tell you. You
+                                can reassign later from the lead page.
+                            </InfoTip>
                         </p>
                     </div>
                 </div>

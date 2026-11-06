@@ -684,12 +684,14 @@ export default function Step5Page() {
                   OTP accepted — battery dispatched
                 </h2>
                 <p className="text-xs text-gray-600 mt-1">
-                  Inventory is now in <b>dispatched</b> state. The warranty is active and the
-                  customer has been notified. Click <b>Mark Delivered</b> when the customer
-                  has physically received the unit, or the system marks it delivered{" "}
-                  {autoSoldAt
-                    ? `on ${fmtDateTime(autoSoldAt.toISOString())}${hoursToAuto !== null ? ` (in about ${hoursToAuto} hour${hoursToAuto === 1 ? "" : "s"})` : ""}`
-                    : "at the daily 9:30 am run, a day after dispatch"}.
+                  Click <b>Mark delivered</b> when the customer has the battery.{" "}
+                  <InfoTip>
+                    The warranty is active and the customer has been told. If you don&apos;t,
+                    it is marked delivered{" "}
+                    {autoSoldAt
+                      ? `on ${fmtDateTime(autoSoldAt.toISOString())}${hoursToAuto !== null ? ` (in about ${hoursToAuto} hour${hoursToAuto === 1 ? "" : "s"})` : ""}`
+                      : "at the daily 9:30 am run, a day after dispatch"}.
+                  </InfoTip>
                 </p>
               </div>
             </div>
@@ -730,7 +732,7 @@ export default function Step5Page() {
               ) : (
                 <CheckCircle2 className="w-4 h-4" />
               )}
-              {marking ? "Finalising…" : "Mark Delivered"}
+              {marking ? "Finalising…" : "Mark delivered"}
             </button>
             <button
               onClick={() => router.push("/dealer-portal/leads")}

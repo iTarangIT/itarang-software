@@ -456,7 +456,7 @@ describe("trimTurns", () => {
 describe("prompt and config", () => {
     it("names the user's own tabs only, and states IST now", () => {
         const p = buildSystemPrompt({ user: ASM, now: new Date("2026-09-24T12:10:00Z"), tools: ["my_queue"], writesEnabled: false });
-        expect(p).toContain("Today's Schedule");
+        expect(p).toContain('today ("Today")');
         expect(p).not.toContain("follow_ups");
         expect(p).toContain("today = 2026-09-24");
         expect(p).toContain("Changes are NOT enabled");
