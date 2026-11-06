@@ -1,5 +1,15 @@
 // ID 229: pure text helpers for the call-feed lines (no database import, so unit-testable).
 
+export type CallFeedKey = "neodove" | "ai_dialer";
+
+export const CALL_FEED_LABEL: Record<CallFeedKey, string> = {
+    neodove: "Last NeoDove call received",
+    ai_dialer: "Last AI dialer result",
+};
+
+/** Two working hours (ID 229). */
+export const CALL_FEED_ALARM_WORKING_MINUTES = 120;
+
 /** "5 Nov, 14:32" in IST, or "never". Pure. */
 export function istWhen(iso: string | null): string {
     if (!iso) return "never";

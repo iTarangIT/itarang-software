@@ -18,15 +18,8 @@ import { bgDb as db } from "@/lib/db/background";
 import { loadOfficeCalendar } from "@/lib/calendar/holidays";
 import { workingMinutesBetween } from "@/lib/leads/workingHours";
 
-export type CallFeedKey = "neodove" | "ai_dialer";
-
-export const CALL_FEED_LABEL: Record<CallFeedKey, string> = {
-    neodove: "Last NeoDove call received",
-    ai_dialer: "Last AI dialer result",
-};
-
-/** Two working hours (ID 229). */
-export const CALL_FEED_ALARM_WORKING_MINUTES = 120;
+import type { CallFeedKey } from "./callFeedText";
+export { CALL_FEED_ALARM_WORKING_MINUTES, CALL_FEED_LABEL, type CallFeedKey } from "./callFeedText";
 
 export type CallFeedStatus = {
     feed: CallFeedKey;

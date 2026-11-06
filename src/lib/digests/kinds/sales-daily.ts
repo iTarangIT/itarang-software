@@ -100,13 +100,9 @@ import {
 import { formatSlotTime } from "../schedule";
 import { fmtDay, staleAlertText } from "@/lib/sales/invoiceFreshnessRules";
 import { ECOFY_STAGE_LABELS } from "@/lib/ecofy/access";
-import {
-  CALL_FEED_ALARM_WORKING_MINUTES,
-  CALL_FEED_LABEL,
-  istWhen,
-  loadCallFeedStatus,
-  workingGapText,
-} from "@/lib/operations/callFeed";
+// ID 229: pure text only here; the database read is imported lazily in collect()
+// so this module still loads without DATABASE_URL (unit tests).
+import { CALL_FEED_ALARM_WORKING_MINUTES, CALL_FEED_LABEL, istWhen, workingGapText } from "@/lib/operations/callFeedText";
 import type {
   DigestDetail,
   DigestFigures,
@@ -604,7 +600,7 @@ async function collect(
       // 188 #4: Block G's "New leads yesterday" is the same Yesterday as the rest (Monday: Saturday).
       ecofySnapshot(periods.yesterday.from),
       // ID 229: never fails the email — a read error prints "could not be read".
-      loadCallFeedStatus().catch(() => null),
+      import("@/lib/operations/callFeed").then((m) => m.loadCallFeedStatus()).catch(() => null),
     ]);
     const blockA = await buildBlockA(db as never, periods, { yesterday, dayBefore, sameDayLastWeek, last7, mtd, lastMonth }, unmatched);
     // 18 Oct row 25: Block D splits Awaiting field visit at the transfer → visit limit.
