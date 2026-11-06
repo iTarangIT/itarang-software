@@ -32,3 +32,50 @@ export function workingGapText(min: number | null): string {
     const m = min % 60;
     return h > 0 ? `${h} h ${m} m` : `${m} m`;
 }
+
+/** The ops metric behind the call-feed alarm (registry.ts). */
+export const CALL_FEED_METRIC = "calls.feed_gap";
+
+/**
+ * Who hears a call-feed alarm on the live CRM (6 Nov: Kartik asked that the
+ * CEO and the Sales Head get both the bell and an email). The sandbox gets
+ * no NeoDove calls by design, so there it stays an ops-only bell. Pure.
+ */
+export function callFeedAlertAudience(
+    metricKey: string,
+    appUrl: string | null | undefined,
+): { bellRoles: string[]; emailRoles: string[] } {
+    const live = (appUrl ?? "").includes("crm.itarang.com");
+    if (metricKey !== CALL_FEED_METRIC || !live) return { bellRoles: ["operations"], emailRoles: [] };
+    return { bellRoles: ["operations", "admin", "ceo", "sales_head"], emailRoles: ["ceo", "sales_head"] };
+}
+
+/** Test logins (e2e-…@) never get the alarm email. Pure. */
+export function isTestMailbox(email: string): boolean {
+    return /^e2e[-_.]/i.test(email.trim());
+}
+
+/** Plain-words subject and body for the call-feed alarm email. Pure. */
+export function callFeedAlertEmail(
+    severity: "warn" | "crit" | "resolved",
+    source: string,
+    message: string,
+): { subject: string; text: string } {
+    const feed = source === "ai_dialer" ? "AI dialer results" : source === "neodove" ? "NeoDove calls" : source;
+    if (severity === "resolved") {
+        return {
+            subject: `[iTarang CRM] ${feed} are reaching the CRM again`,
+            text: `${feed} are reaching the live CRM again.\n\n${message}\n\nOps Console: https://crm.itarang.com/operations/alerts`,
+        };
+    }
+    const hours = severity === "crit" ? 4 : 2;
+    return {
+        subject: `[iTarang CRM] ${severity === "crit" ? "Urgent" : "Warning"}: no ${feed} for over ${hours} working hours`,
+        text:
+            `No ${feed} have reached the live CRM for over ${hours} working hours.\n\n${message}\n\n` +
+            (source === "ai_dialer"
+                ? "Check that the AI dialer is running."
+                : "Check in NeoDove that the webhook still points at https://crm.itarang.com (not the sandbox).") +
+            `\n\nOps Console: https://crm.itarang.com/operations/alerts`,
+    };
+}

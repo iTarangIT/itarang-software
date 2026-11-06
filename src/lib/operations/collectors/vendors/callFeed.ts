@@ -2,7 +2,7 @@
  * Tracker ID 229 — alarm when NeoDove calls (or AI dialer results) stop
  * reaching live. One sample per feed: working minutes since the last arrival
  * (src/lib/operations/callFeed.ts). The alert rule (registry
- * "calls.feed_gap") opens past 2 working hours and rings Admin and the CEO
+ * "calls.feed_gap") opens past 2 working hours and rings Admin, the CEO and the Sales Head (bell + email)
  * once per gap (alerts.ts: one open alert per source, cooldown); it resolves
  * on the next fresh sample under the line.
  *
