@@ -14,15 +14,16 @@ describe("ID 229: call feed text", () => {
 });
 
 describe("call-feed alarm audience and email (6 Nov)", () => {
-    it("live: bell to ops, admin, CEO, Sales Head; email to CEO and Sales Head", () => {
+    it("live: bell to ops, Admin, Sales Head and Kartik's login; email to Admin, Sales Head and Kartik", () => {
         expect(callFeedAlertAudience("calls.feed_gap", "https://crm.itarang.com")).toEqual({
-            bellRoles: ["operations", "admin", "ceo", "sales_head"],
-            emailRoles: ["ceo", "sales_head"],
+            bellRoles: ["operations", "admin", "sales_head"],
+            emailRoles: ["admin", "sales_head"],
+            logins: ["kartik.itarang@gmail.com"],
         });
     });
     it("sandbox, or any other metric: ops bell only, no email", () => {
-        expect(callFeedAlertAudience("calls.feed_gap", "https://sandbox.itarang.com")).toEqual({ bellRoles: ["operations"], emailRoles: [] });
-        expect(callFeedAlertAudience("db.latency", "https://crm.itarang.com")).toEqual({ bellRoles: ["operations"], emailRoles: [] });
+        expect(callFeedAlertAudience("calls.feed_gap", "https://sandbox.itarang.com")).toEqual({ bellRoles: ["operations"], emailRoles: [], logins: [] });
+        expect(callFeedAlertAudience("db.latency", "https://crm.itarang.com")).toEqual({ bellRoles: ["operations"], emailRoles: [], logins: [] });
         expect(callFeedAlertAudience("calls.feed_gap", undefined).emailRoles).toEqual([]);
     });
     it("skips e2e test mailboxes", () => {

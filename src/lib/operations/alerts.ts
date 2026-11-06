@@ -329,9 +329,9 @@ async function deliver(
       : `${severity === "crit" ? "CRITICAL" : "Warning"}: ${metricKey}`;
 
   // ID 229: a call feed going quiet is a business problem, not only an ops one
-  // — on the live CRM Admin, the CEO (Kartik) and the Sales Head get the bell,
-  // and the CEO and Sales Head an email too (6 Nov). The sandbox receives no
-  // NeoDove calls by design, so there it stays an ops-only bell.
+  // — on the live CRM Admin, the Sales Head and Kartik's own login get the
+  // bell and an email (6 Nov). The sandbox receives no NeoDove calls by
+  // design, so there it stays an ops-only bell.
   const audience = callFeedAlertAudience(metricKey, process.env.NEXT_PUBLIC_APP_URL);
 
   if (channels.includes("inapp")) {
@@ -342,6 +342,19 @@ async function deliver(
         message,
         data: { metric_key: metricKey, source, severity },
       });
+      // Named logins (Kartik's) by email, whatever their role — skipped when
+      // the role list above already rang them.
+      if (audience.logins.length > 0) {
+        await db.execute(sql`
+          INSERT INTO notifications (id, user_id, type, title, message, data, lead_id, read, created_at)
+          SELECT gen_random_uuid()::text, u.id, 'ops_alert', ${title}, ${message},
+                 ${JSON.stringify({ metric_key: metricKey, source, severity })}::jsonb, NULL, false, NOW()
+          FROM users u
+          WHERE LOWER(u.email) IN (${sql.join(audience.logins.map((e) => sql`${e.toLowerCase()}`), sql`, `)})
+            AND u.is_active = TRUE
+            AND LOWER(u.role) NOT IN (${sql.join(audience.bellRoles.map((r) => sql`${r}`), sql`, `)})
+        `);
+      }
     } catch (e) {
       log.warn(`[ops] in-app alert notify failed: ${rootCauseMessage(e)}`);
     }
@@ -364,16 +377,27 @@ async function deliver(
     }
   }
 
-  // ID 229 business email: every active CEO and Sales Head login (test e2e-…
-  // mailboxes skipped), regardless of the rule's channels or OPS_ALERT_EMAIL.
-  if (audience.emailRoles.length > 0 && firstOrLast) {
+  // ID 229 business email: Kartik's address plus every active Admin and Sales
+  // Head login (test e2e-… mailboxes skipped), regardless of the rule's
+  // channels or OPS_ALERT_EMAIL.
+  if ((audience.emailRoles.length > 0 || audience.logins.length > 0) && firstOrLast) {
     try {
-      const rows = (await db.execute(sql`
-        SELECT DISTINCT email FROM users
-        WHERE LOWER(role) IN (${sql.join(audience.emailRoles.map((r) => sql`${r}`), sql`, `)})
-          AND is_active = TRUE AND email IS NOT NULL AND email <> ''
-      `)) as unknown as Array<{ email: string }>;
-      const to = rows.map((r) => r.email.trim()).filter((e) => e && !isTestMailbox(e));
+      const rows = audience.emailRoles.length > 0
+        ? ((await db.execute(sql`
+            SELECT DISTINCT email FROM users
+            WHERE LOWER(role) IN (${sql.join(audience.emailRoles.map((r) => sql`${r}`), sql`, `)})
+              AND is_active = TRUE AND email IS NOT NULL AND email <> ''
+          `)) as unknown as Array<{ email: string }>)
+        : [];
+      const seen = new Set<string>();
+      const to = [...audience.logins, ...rows.map((r) => r.email)]
+        .map((e) => e.trim())
+        .filter((e) => {
+          const k = e.toLowerCase();
+          if (!e || isTestMailbox(e) || seen.has(k)) return false;
+          seen.add(k);
+          return true;
+        });
       if (to.length > 0) {
         const { subject, text } = callFeedAlertEmail(severity, source, message);
         const { getMailer } = await import("@/lib/email/mailer");

@@ -37,17 +37,28 @@ export function workingGapText(min: number | null): string {
 export const CALL_FEED_METRIC = "calls.feed_gap";
 
 /**
- * Who hears a call-feed alarm on the live CRM (6 Nov: Kartik asked that the
- * CEO and the Sales Head get both the bell and an email). The sandbox gets
- * no NeoDove calls by design, so there it stays an ops-only bell. Pure.
+ * Kartik's own login (not a CEO login). 6 Nov: he gets the call-feed alarm by
+ * bell and email, matched by this address.
+ */
+export const CALL_FEED_ALERT_LOGINS = ["kartik.itarang@gmail.com"];
+
+/**
+ * Who hears a call-feed alarm on the live CRM (6 Nov): bell and email to
+ * Kartik's login, every Sales Head and every Admin; the ops bell as before.
+ * The sandbox gets no NeoDove calls by design, so there it stays an ops-only
+ * bell. Pure.
  */
 export function callFeedAlertAudience(
     metricKey: string,
     appUrl: string | null | undefined,
-): { bellRoles: string[]; emailRoles: string[] } {
+): { bellRoles: string[]; emailRoles: string[]; logins: string[] } {
     const live = (appUrl ?? "").includes("crm.itarang.com");
-    if (metricKey !== CALL_FEED_METRIC || !live) return { bellRoles: ["operations"], emailRoles: [] };
-    return { bellRoles: ["operations", "admin", "ceo", "sales_head"], emailRoles: ["ceo", "sales_head"] };
+    if (metricKey !== CALL_FEED_METRIC || !live) return { bellRoles: ["operations"], emailRoles: [], logins: [] };
+    return {
+        bellRoles: ["operations", "admin", "sales_head"],
+        emailRoles: ["admin", "sales_head"],
+        logins: CALL_FEED_ALERT_LOGINS,
+    };
 }
 
 /** Test logins (e2e-…@) never get the alarm email. Pure. */

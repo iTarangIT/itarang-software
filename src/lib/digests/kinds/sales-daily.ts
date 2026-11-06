@@ -930,7 +930,7 @@ async function collect(
                 ])
               : [],
             textColumns: 3,
-            note: "Only office hours on working days count. Over 2 working hours, Admin, the CEO and the Sales Head get a bell, and the CEO and Sales Head an email.",
+            note: "Only office hours on working days count. Over 2 working hours, Admin, the Sales Head and Kartik get a bell and an email.",
             empty: "Could not be read on this database.",
           },
         ],
