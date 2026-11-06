@@ -83,11 +83,9 @@ export function LeadDetailView({ leadId, viewerId, viewerRole, backHref = "/insi
         refetchOnWindowFocus: true,
     });
 
-    // ID 155: a manager viewing a direct report's lead may move it within the
-    // team. Asked only when the viewer is not the owner and their role can
-    // reach the reassign route at all.
+    // Who the lead may go to, by name (ID 221): the owner's own team, or — for
+    // a manager viewing a direct report's lead (ID 155) — the manager and team.
     const ownerId = query.data?.data?.lead?.current_owner_id ?? null;
-    // ID 221: asked for the owner too — their direct reports, by name.
     const teamQuery = useQuery<{ can_team_reassign: boolean; can_owner_reassign?: boolean; targets: TeamTarget[] }>({
         queryKey: ["inside-sales-lead", leadId, "team-reassign", ownerId],
         enabled: !!ownerId && TEAM_REASSIGN_ROLES.includes(viewerRole),
@@ -99,6 +97,7 @@ export function LeadDetailView({ leadId, viewerId, viewerRole, backHref = "/insi
         },
     });
     const canTeamReassign = Boolean(teamQuery.data?.can_team_reassign && teamQuery.data.targets.length > 0);
+    // ID 221: an owner with nobody under them gets no Reassign.
     const canOwnerReassign = Boolean(teamQuery.data?.can_owner_reassign && teamQuery.data.targets.length > 0);
 
     const invalidate = useCallback(() => {
@@ -281,9 +280,8 @@ export function LeadDetailView({ leadId, viewerId, viewerRole, backHref = "/insi
                 open={activeModal === "reassign"}
                 onClose={() => setActiveModal(null)}
                 leadId={leadId}
-                viewerId={viewerId}
                 onSuccess={onActionSuccess}
-                teamTargets={teamQuery.data?.targets}
+                targets={teamQuery.data?.targets ?? []}
                 asManager={!isOwner}
             />
             <ReassignToIsrModal

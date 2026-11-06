@@ -36,13 +36,21 @@ type Props = {
     onAction: (modal: ActiveModal) => void;
     /** Refresh after an inline action (Visit not needed). */
     onChanged?: () => void;
-    /** ID 221: the viewer manages the owner — the same team list as on the ISR page. */
+    /** ID 155 / 221: the viewer manages the current owner and may move the lead within their team. */
     canTeamReassign?: boolean;
-    /** ID 221: the owner has people under them — Reassign is shown only then. */
+    /** ID 221: the owner has someone in their team to give the lead to. */
     canOwnerReassign?: boolean;
 };
 
-export function AsmLeadActionBar({ bundle, isOwner, viewerRole, onAction, onChanged, canTeamReassign = false, canOwnerReassign = false }: Props) {
+export function AsmLeadActionBar({
+    bundle,
+    isOwner,
+    viewerRole,
+    onAction,
+    onChanged,
+    canTeamReassign = false,
+    canOwnerReassign = false,
+}: Props) {
     const lead = bundle.lead;
     const [savingNotNeeded, setSavingNotNeeded] = useState(false);
 
@@ -82,19 +90,24 @@ export function AsmLeadActionBar({ bundle, isOwner, viewerRole, onAction, onChan
     );
 
     if (!isOwner) {
-        const helper = canTeamReassign
-            ? "Your team member's lead — you can move it within your team."
-            : isAdmin
-              ? "Admin/CEO — reassign first to modify."
+        const helper = isAdmin
+            ? "Admin/CEO — reassign first to modify."
+            : canTeamReassign
+              ? "Your team member's lead — you can move it within your team."
               : "Read-only — you are not the current owner.";
         const managerCanFixGstin = isWon && (GSTIN_CORRECTION_MANAGER_ROLES as readonly string[]).includes(viewerRole);
         return (
             <div className="sticky bottom-0 z-10 bg-white border-t border-gray-200 px-6 py-3 text-xs text-gray-500 flex flex-wrap items-center gap-3">
                 <span>{helper}</span>
+                {/* ID 155 / 221: the same "Reassign within team" as the ISR lead page. */}
                 {canTeamReassign && (
-                    <Btn icon={Repeat} onClick={() => onAction("reassign")}>
+                    <button
+                        type="button"
+                        onClick={() => onAction("reassign")}
+                        className="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-800 hover:bg-gray-50"
+                    >
                         Reassign within team
-                    </Btn>
+                    </button>
                 )}
                 {managerCanFixGstin && correctGstin}
             </div>
@@ -155,7 +168,7 @@ export function AsmLeadActionBar({ bundle, isOwner, viewerRole, onAction, onChan
                     Mark Lost
                 </Btn>
             )}
-            {/* ID 221: only to the team under you — no team, no button. */}
+            {/* ID 221: only to someone in the owner's team; nobody under them = no button. */}
             {canOwnerReassign && (
                 <Btn icon={Repeat} onClick={() => onAction("reassign")}>
                     Reassign

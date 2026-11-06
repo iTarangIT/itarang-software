@@ -38,6 +38,9 @@ type Props = {
     viewerRole: string;
 };
 
+/** The roles GET/POST /api/inside-sales/lead/[id]/reassign accept (its MUTATE_ROLES). */
+const REASSIGN_ROLES = ["inside_sales_rep", "asm", "admin", "partner"];
+
 export function AsmLeadDetailView({ leadId, viewerId, viewerRole }: Props) {
     const qc = useQueryClient();
     const [activeModal, setActiveModal] = useState<ActiveModal>(null);
@@ -69,12 +72,12 @@ export function AsmLeadDetailView({ leadId, viewerId, viewerRole }: Props) {
         refetchOnWindowFocus: true,
     });
 
-    // ID 221: who this lead can go to, by name — the owner's direct reports, or
-    // for a manager themself + the team (same endpoint as the ISR page).
+    // ID 221: who the lead may go to, by name — the owner's own team, or (ID 155)
+    // a manager and their team when the viewer manages the current owner.
     const ownerId = query.data?.data?.lead?.current_owner_id ?? null;
     const teamQuery = useQuery<{ can_team_reassign: boolean; can_owner_reassign?: boolean; targets: TeamTarget[] }>({
         queryKey: ["asm-lead", leadId, "team-reassign", ownerId],
-        enabled: !!ownerId,
+        enabled: !!ownerId && REASSIGN_ROLES.includes(viewerRole),
         queryFn: async () => {
             const res = await fetch(`/api/inside-sales/lead/${encodeURIComponent(leadId)}/reassign`, { cache: "no-store" });
             const json = await res.json().catch(() => null);
@@ -283,9 +286,8 @@ export function AsmLeadDetailView({ leadId, viewerId, viewerRole }: Props) {
                 open={activeModal === "reassign"}
                 onClose={() => setActiveModal(null)}
                 leadId={leadId}
-                viewerId={viewerId}
                 onSuccess={onActionSuccess}
-                teamTargets={teamQuery.data?.targets}
+                targets={teamQuery.data?.targets ?? []}
                 asManager={!isOwner}
             />
             <EscalateModal

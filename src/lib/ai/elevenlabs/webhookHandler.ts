@@ -12,7 +12,10 @@ import { completeCampaignLead } from "@/lib/queue/campaignTracker";
 import { classifyCallEnd } from "@/lib/ai-dialer/campaignLeadStatus";
 import { applyPostCall, preparePostCall } from "@/lib/ai-dialer/postCallOutcome";
 import type { ElevenLabsWebhookEvent } from "./types";
-import { normalizePostCall } from "./normalizePostCall";
+import { dataCollectionValue, normalizePostCall } from "./normalizePostCall";
+import { noteTriggerResult } from "@/lib/ai-dialer/lineHealth";
+import { recordDialDisposition } from "@/lib/ai/storage/dialDisposition";
+import { writeAiCallTouchpoint } from "@/lib/ai/storage/callTouchpoint";
 
 /**
  * The telephony detail on a call_initiation_failure.
@@ -83,7 +86,34 @@ export async function handleElevenLabsWebhook(event: ElevenLabsWebhookEvent) {
               .join(" "),
             sipStatusCode: telephony.sipStatusCode,
           });
-          const outcome = data.failure_reason ?? "initiation_failed";
+          // Dispositions v3 — keep the SIP code on the outcome, so the retry
+          // policy and the carrier-refusal counter read it like a trigger failure.
+          const outcome =
+            (data.failure_reason ?? "initiation_failed") +
+            (telephony.sipStatusCode ? ` (sip status: ${telephony.sipStatusCode})` : "");
+          const failureText = [data.failure_reason, telephony.detail].filter(Boolean).join(" ");
+          let v3Label: string | null = null;
+          if (data.conversation_id) {
+            const { d: v3 } = await recordDialDisposition({
+              dialKey: data.conversation_id,
+              leadId: row[0].lead_id,
+              campaignId: row[0].campaign_id,
+              evidence: { callEnd, failureText, sipCode: telephony.sipStatusCode },
+            });
+            v3Label = v3.disposition;
+            // Our-side refusals never reached the dealer: no touchpoint (see
+            // advanceCampaign.recordTriggerVerdict).
+            if (!v3.effects.carrierRefusal) await writeAiCallTouchpoint({
+              v3,
+              leadId: row[0].lead_id,
+              provider: "elevenlabs",
+              callId: data.conversation_id,
+              transcript: null,
+              providerStatus: "initiation_failed",
+              callEndStatus: callEnd.status,
+              callOutcome: outcome,
+            });
+          }
           const r = await completeCampaignLead({
             leadId: row[0].lead_id,
             status: callEnd.status,
@@ -91,6 +121,7 @@ export async function handleElevenLabsWebhook(event: ElevenLabsWebhookEvent) {
             outcome,
             intentScore: null,
             campaignId: row[0].campaign_id,
+            disposition: v3Label,
           });
           // AI dialer review — counted in the campaign's outcome report too.
           if (data.conversation_id) {
@@ -113,7 +144,13 @@ export async function handleElevenLabsWebhook(event: ElevenLabsWebhookEvent) {
               campaign: r,
             });
           }
-          if (r.campaignId) {
+          // Task 10 — an asynchronous refusal (SIP 503 etc. reported after
+          // the trigger said OK) counts towards the carrier pause like a
+          // synchronous one; a pause stops the advance.
+          const pausedNow = r.campaignId
+            ? await noteTriggerResult(r.campaignId, outcome)
+            : false;
+          if (r.campaignId && !pausedNow) {
             await advanceCampaign(r.campaignId, { preCallDelayMs: 5_000 });
           }
         }
@@ -147,6 +184,42 @@ export async function handleElevenLabsWebhook(event: ElevenLabsWebhookEvent) {
     // lead-id hint the payload always carried — belong somewhere they can be
     // asserted on.
     const call = normalizePostCall(event.data);
+
+    // Task 9 — a dealer rang the Vobiz number. Logged on the lead and its
+    // callback (inbound.ts); never processed as a campaign dial.
+    const meta = (event.data.metadata ?? {}) as { phone_call?: { direction?: string; call_sid?: string } };
+    const dynVars = event.data.conversation_initiation_client_data?.dynamic_variables ?? {};
+    if (meta.phone_call?.direction === "inbound" || dynVars.inbound === "1") {
+      const { handleInboundPostCall } = await import("@/lib/ai-dialer/inbound");
+      const analysis = event.data.analysis as { transcript_summary?: unknown } | undefined;
+      await handleInboundPostCall({
+        conversationId: call.conversationId,
+        callSid: meta.phone_call?.call_sid ?? null,
+        callerPhone: call.phone,
+        status: call.status,
+        transcript: call.transcript,
+        recordingUrl: call.recordingUrl,
+        duration: call.duration,
+        startedAt: call.startedAt,
+        endedAt: call.endedAt,
+        agentId: call.agentId,
+        terminationReason: call.terminationReason,
+        answeredBy: call.answeredBy,
+        callResult: call.callResult,
+        callbackAgreed: call.callbackAgreed,
+        callbackTime: dataCollectionValue(event.data.analysis, "callback_time"),
+        callLanguage: call.callLanguage,
+        summary: typeof analysis?.transcript_summary === "string" ? analysis.transcript_summary : null,
+      });
+      return;
+    }
+
+    // Task 10 — a carrier probe rang the team's own number. It is not a dealer
+    // call: nothing to attribute, score or count.
+    if (event.data.conversation_initiation_client_data?.dynamic_variables?.is_probe === "1") {
+      console.log("[elevenlabs:webhook] carrier probe finished:", call.conversationId);
+      return;
+    }
 
     console.log("[ELEVENLABS WEBHOOK] Received:", {
       conversationId: call.conversationId,

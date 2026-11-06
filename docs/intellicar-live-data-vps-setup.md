@@ -18,7 +18,7 @@ Only `IOT_DATABASE_URL` is used by the app (`IOT_BRIDGE_DATABASE_URL` is not con
 ## Step 0 — Prerequisites (security; do these first)
 
 These must happen before prod holds any of this, because the bastion key and the
-`MYitarang2026` password were exposed in chat.
+RDS master password were exposed in chat.
 
 ### 0a. Rotate the bastion key — generate it ON the VPS (private key never leaves the box)
 ```bash

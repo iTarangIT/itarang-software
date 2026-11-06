@@ -887,7 +887,7 @@ export async function POST(req: NextRequest) {
     await linkOnboardingToLead(finalApplicationId!);
     // ID 214: every onboarding on exactly one lead — GSTIN / phone / email /
     // name ladder, else a Direct onboarding lead; the lead moves to Won.
-    // Never throws; a no-op without E-372.
+    // Never throws; a no-op without E-377.
     await attachOnboardingToLead(finalApplicationId!);
     await markDocsSubmitted(finalApplicationId);
 

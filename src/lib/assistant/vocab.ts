@@ -106,7 +106,7 @@ export const CALL_VOCAB: readonly CallVocabRow[] = deepFreeze<CallVocabRow[]>([
         id: "call_back",
         said: "call back later, needs time, shared details, meeting fixed",
         connect: "connected",
-        labels: ["As to Call Back", "Need Some Time", "Details Shared", "Information Collected", "Meeting Scheduled"],
+        labels: ["Ask to Call Back", "Need Some Time", "Details Shared", "Information Collected", "Meeting Scheduled"],
         buckets: ["Cold", "Warm"],
         askBucket: false,
         status: { options: ["Under_Discussion"], whenUnstated: "no_change", question: "" },
@@ -117,14 +117,18 @@ export const CALL_VOCAB: readonly CallVocabRow[] = deepFreeze<CallVocabRow[]>([
     {
         // The sheet's other Cold outcomes: spoke to the dealer, nothing now.
         id: "cold_issue",
-        said: "loan / finance trouble, service complaint, no requirement right now, bad experience with Trontek, hung up quickly",
+        said: "loan / finance trouble, service complaint, no requirement right now, bad experience with Trontek, hung up quickly, spoke to staff not the owner, call dropped, language problem",
         connect: "connected",
         labels: [
             "Loan Procedure Issue",
             "Service Issue",
             "No requirement in current",
             "Bad Experience with Trontek",
-            "Short Hang up",
+            // v3 retired "Short Hang up" and split it into these four.
+            "Hung up during intro",
+            "Wrong person (staff / family)",
+            "Dropped mid-call",
+            "Language mismatch",
         ],
         buckets: ["Cold"],
         askBucket: false,
@@ -166,8 +170,8 @@ export const CALL_VOCAB: readonly CallVocabRow[] = deepFreeze<CallVocabRow[]>([
         id: "quote_negotiation",
         said: "quote sent, negotiating, documents received, deal final",
         connect: "connected",
-        // "Documents Recieved" is the sheet's own spelling (dispositions.ts).
-        labels: ["Quotation Sent", "Under Negotiation", "Documents Recieved", "Commercials Finalised"],
+        // Spelling corrected by Dispositions v3 (4 Nov 2026); the old one is an alias.
+        labels: ["Quotation Sent", "Under Negotiation", "Documents Received", "Commercials Finalised"],
         buckets: ["Hot"],
         askBucket: false,
         status: {
@@ -272,9 +276,9 @@ export const HINGLISH_CALL_ALIASES: Readonly<Record<string, string>> = deepFreez
     "phone band tha": "Switch off",
     "busy tha": "Busy in another call",
     "galat number": "Incorrect / Invalid number",
-    "baad mein call karo": "As to Call Back",
-    "baad me call karna": "As to Call Back",
-    "call back karna": "As to Call Back",
+    "baad mein call karo": "Ask to Call Back",
+    "baad me call karna": "Ask to Call Back",
+    "call back karna": "Ask to Call Back",
     "time chahiye": "Need Some Time",
     "soch ke batayenge": "Need Some Time",
     "details bhej di": "Details Shared",

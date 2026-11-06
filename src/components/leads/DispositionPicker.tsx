@@ -21,12 +21,13 @@
 // consumed from both (dashboard)/leads and (dashboard)/inside-sales.
 
 import {
-    AI_ONLY_DISPOSITIONS,
     CONNECTED_DISPOSITIONS,
     CONNECT_STATUS,
     CONNECT_STATUS_LABEL,
     DISPOSITION_BUCKETS,
+    isRepLoggable,
     NOT_CONNECTED_REASONS,
+    REP_DISPOSITION_BUCKETS,
 } from "@/lib/leads/dispositions";
 
 export type DispositionValue = {
@@ -114,7 +115,7 @@ export function DispositionPicker({
                     onChange={(e) => setBucket(e.target.value)}
                 >
                     <option value="">{isFilter ? "Any bucket" : "— bucket —"}</option>
-                    {DISPOSITION_BUCKETS.map((b) => (
+                    {(isFilter ? DISPOSITION_BUCKETS : REP_DISPOSITION_BUCKETS).map((b) => (
                         <option key={b} value={b}>
                             {b}
                         </option>
@@ -135,13 +136,13 @@ export function DispositionPicker({
                 </option>
 
                 {value.connectStatus !== "not_connected" &&
-                    DISPOSITION_BUCKETS.filter(
+                    (isFilter ? DISPOSITION_BUCKETS : REP_DISPOSITION_BUCKETS).filter(
                         (b) => !value.bucket || value.bucket === b,
                     ).map((b) => (
                         <optgroup key={b} label={`Connected › ${b}`}>
                             {CONNECTED_DISPOSITIONS[b]
                                 // AI-only labels: filterable, never logged by a rep.
-                                .filter((d) => isFilter || !AI_ONLY_DISPOSITIONS.has(d))
+                                .filter((d) => isFilter || isRepLoggable(d))
                                 .map((d) => (
                                 <option key={`${b}:${d}`} value={d}>
                                     {d}

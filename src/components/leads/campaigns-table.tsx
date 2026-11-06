@@ -298,7 +298,9 @@ export function CampaignsTable({
                         className="text-[11px] text-rose-700 mt-0.5"
                         title={c.carrierPause.lastCarrierError ?? undefined}
                       >
-                        Carrier refused calls
+                        {c.carrierPause.pauseReason === "setup_error"
+                          ? "Setup error — fix, then resume"
+                          : "Carrier refused calls"}
                       </p>
                     ) : c.status === "scheduled" && c.resumeAfter ? (
                       <p className="text-[11px] text-blue-700 mt-0.5">

@@ -123,44 +123,6 @@ export async function notifyLeadsReassigned(input: {
 }
 
 /**
- * ID 221 (Kartik, 3 Nov): when a lead is reassigned, the previous owner's
- * manager is told who moved it, to whom and why. Skipped when the manager is
- * the one who moved it or the one who got it. Never throws.
- */
-export async function notifyOwnerManagerOfMove(input: {
-    leadId: string;
-    fromOwnerId: string | null | undefined;
-    managerId: string | null | undefined;
-    toUserId: string;
-    actorId: string;
-    reason?: string | null;
-}): Promise<void> {
-    const m = input.managerId;
-    if (!m || !input.fromOwnerId || m === input.actorId || m === input.toUserId) return;
-    try {
-        const who = await people([input.fromOwnerId, input.toUserId, input.actorId, m]);
-        const names = await leadNames([input.leadId]);
-        const from = who.get(input.fromOwnerId)?.name ?? "your team member";
-        const to = who.get(input.toUserId)?.name ?? "someone else";
-        const by = who.get(input.actorId)?.name ?? from;
-        const why = input.reason?.trim() ? ` Reason: ${input.reason.trim()}` : "";
-        await notifyUser(m, {
-            type: "lead.team_reassigned",
-            title: "Team lead reassigned",
-            message: `${names.get(input.leadId) ?? "A lead"} of ${from} moved to ${to} by ${by}.${why}`,
-            leadId: input.leadId,
-            data: { href: `${leadPageFor(who.get(m)?.role)}/${input.leadId}`, from: input.fromOwnerId, to: input.toUserId },
-        });
-    } catch (err) {
-        console.error("[lead-notice] lead.team_reassigned failed:", err);
-    }
-}
-
-function leadPageFor(role: string | null | undefined): string {
-    return role === "asm" ? "/asm/lead" : "/inside-sales/lead";
-}
-
-/**
  * ID 179 (Kartik 15 Oct) — the rep who loses a lead is told: "Lead moved to
  * <name> by <manager>. Reason: …". Only when someone ELSE moved it (a rep's
  * own reassign or transfer tells nobody they already know) and not when the
@@ -210,6 +172,41 @@ export async function notifyPreviousOwners(input: {
         }
     } catch (err) {
         console.error("[lead-notice] lead.moved_away failed:", err);
+    }
+}
+
+/**
+ * ID 221 (3 Nov) — when an owner reassigns a lead, the OLD owner's manager is
+ * told, with the reason, instead of the old "Notify admin" tick (which told
+ * nobody). Skipped when that manager made the move or is the new owner, and
+ * when the old owner has no manager on a current reporting line. Never throws.
+ */
+export async function notifyOwnersManager(input: {
+    leadId: string;
+    fromOwnerId: string | null | undefined;
+    toUserId: string;
+    actorId: string;
+    reason?: string | null;
+}): Promise<void> {
+    if (!input.fromOwnerId) return;
+    try {
+        const { currentTeamOf } = await import("@/lib/users/team");
+        const managerId = (await currentTeamOf()).get(input.fromOwnerId);
+        if (!managerId || managerId === input.actorId || managerId === input.toUserId) return;
+        const who = await people([input.fromOwnerId, input.toUserId, managerId]);
+        const names = await leadNames([input.leadId]);
+        const from = who.get(input.fromOwnerId)?.name ?? "A team member";
+        const to = who.get(input.toUserId)?.name ?? "someone else";
+        const why = input.reason?.trim() ? ` Reason: ${input.reason.trim()}` : "";
+        await notifyUser(managerId, {
+            type: "lead.team_lead_moved",
+            title: "Team lead reassigned",
+            message: `${from} gave ${names.get(input.leadId) ?? "a lead"} to ${to}.${why}`,
+            leadId: input.leadId,
+            data: { href: leadHrefFor(who.get(input.toUserId)?.role, input.leadId), from: input.fromOwnerId, to: input.toUserId },
+        });
+    } catch (err) {
+        console.error("[lead-notice] lead.team_lead_moved failed:", err);
     }
 }
 

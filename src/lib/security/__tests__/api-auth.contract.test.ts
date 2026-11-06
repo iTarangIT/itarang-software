@@ -354,6 +354,7 @@ describe("the public list", () => {
       "/api/payments/razorpay/emi-webhook",
       "/api/whatsapp/webhook",
       "/api/neodove/webhook",
+      "/api/elevenlabs/inbound-init",
       "/api/public/quotations/abc.def",
       "/api/nbfc/recovery/agent-form/tok/visit",
       "/api/onboarding/correct/tok",

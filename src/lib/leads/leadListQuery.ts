@@ -12,6 +12,7 @@
 
 import { numberSearchMode } from "@/lib/leads/claimScope";
 import { sql } from "drizzle-orm";
+import { dispositionFilterValues } from "@/lib/leads/dispositions";
 import { db } from "@/lib/db";
 import { UNASSIGNED_FILTER } from "@/lib/admin/leadsInfoFilters";
 import type { IntentBucket } from "@/lib/leads/intentBucket";
@@ -27,6 +28,7 @@ import { awaitingAssignment, readySplitSql, type ReadySplit } from "@/lib/leads/
 import { SOURCE_DOOR_NONE } from "@/lib/leads/leadSourceVocab";
 import { effectiveDoorSql } from "@/lib/leads/leadSourceDoorSql";
 import { NEEDS_DEALER_MOBILE_SQL } from "@/lib/ai-dialer/phoneTypeStore";
+import { AI_REDIAL_DUE_SQL } from "@/lib/ai/storage/dialDisposition";
 import { ownerScopeIds } from "@/lib/users/teamRules";
 import { LAST_DONE_VISIT_JOIN, TEAM_REVIEW_SELECT } from "@/lib/leads/teamReviewSql";
 
@@ -221,6 +223,12 @@ export type LeadListFilters = {
      */
     needsMobile?: boolean;
     phoneTypeTable?: boolean;
+    /**
+     * Dispositions v3 (E-373) — a long-horizon AI redial is due (Need Some
+     * Time after 7 days, Not Interested after 90 …): list these to build the
+     * next AI campaign. Only set by the parser when ai_redial_plan exists.
+     */
+    aiRedialDue?: boolean;
     // ── Type of Business (E-296) ─────────────────────────────────────────
     /**
      * battery_sale | buyback | scrap | other, or BUSINESS_TYPE_UNSET
@@ -481,7 +489,7 @@ function buildWhere(f: LeadListFilters, opts?: { ignoreIntent?: boolean }) {
         conds.push(sql`dl.last_disposition_bucket = ${f.dispositionBucket}`);
     }
     if (f.disposition) {
-        conds.push(sql`dl.last_disposition = ${f.disposition}`);
+        conds.push(sql`dl.last_disposition IN (${sql.join(dispositionFilterValues(f.disposition).map((v) => sql`${v}`), sql`, `)})`);
     }
     // ── Idle age ─────────────────────────────────────────────────────────
     // Inclusive working-day bands on the office calendar: 30–59 admits exactly
@@ -542,9 +550,10 @@ function buildWhere(f: LeadListFilters, opts?: { ignoreIntent?: boolean }) {
     // only when the filter is set — exactly as the E-236 filters above do.
     if (f.callback) {
         conds.push(
-            sql`(ai.callback_agreed = 'yes' OR dl.last_disposition = 'As to Call Back')`,
+            sql`(ai.callback_agreed = 'yes' OR dl.last_disposition IN ('Ask to Call Back', 'As to Call Back'))`,
         );
     }
+    if (f.aiRedialDue) conds.push(AI_REDIAL_DUE_SQL);
     if (f.needsMobile) {
         conds.push(
             f.phoneTypeTable ? NEEDS_DEALER_MOBILE_SQL : sql`coalesce(btrim(dl.phone), '') = ''`,

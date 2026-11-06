@@ -30,7 +30,8 @@ export type DigestKindId =
   | "targets_pending"
   | "my_day"
   | "my_team"
-  | "emi_messages";
+  | "emi_messages"
+  | "missed_callbacks";
 
 /** One figure about the covered day. */
 export type ActivityLine = {

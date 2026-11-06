@@ -1,3 +1,4 @@
+import { InfoTip } from "@/components/ui/info-tip";
 import { requireRole } from "@/lib/auth-utils";
 import { ACCOUNT_BUCKETS } from "@/lib/dealers/accountHealthRules";
 import { DealerHealthView, type DealerHealthFilter } from "./DealerHealthView";
@@ -23,9 +24,10 @@ export default async function DealerHealthPage({
             <header>
                 <h1 className="text-2xl font-semibold tracking-tight text-ink">Dealer Health</h1>
                 <p className="mt-1 text-sm text-ink-muted">
-                    Every live dealer account — including dealers onboarded directly — by how recently
-                    it last ordered. Orders are its invoices, matched to the account&apos;s GSTIN; the
-                    owner is the account owner. Orange is the time to pitch; Red means billing must happen.
+                    Every live dealer, by how recently it last ordered.
+                    <InfoTip className="ml-1">
+                        {"Every live dealer account, including dealers onboarded directly. Orders are its invoices, matched to the account's GSTIN; the owner is the account owner. Orange is the time to pitch; Red means billing must happen."}
+                    </InfoTip>
                 </p>
             </header>
             <DealerHealthView initialBucket={initialBucket} />

@@ -2189,9 +2189,9 @@ export async function notifyQuotationDealerDecision(p: {
     p.decision === "approved"
       ? p.awaitingVisit
         ? `${dealer} APPROVED quotation${ref}${money} ${channel}. The lead returns to ` +
-          `Commercials finalised after the field visit.`
-        : `${dealer} APPROVED quotation${ref}${money} ${channel}. The lead is now Commercials ` +
-          `finalised — open it and Mark Won.` +
+          `Dealer agreed after the field visit.`
+        : `${dealer} APPROVED quotation${ref}${money} ${channel}. The lead is now Dealer ` +
+          `agreed — open it and Mark Won.` +
           (p.visitStillScheduled ? ` The ASM field visit stays scheduled.` : ``)
       : `${dealer} DECLINED quotation${ref}${money} ${channel}.` +
         (p.note ? ` They said: "${p.note}"` : "") +

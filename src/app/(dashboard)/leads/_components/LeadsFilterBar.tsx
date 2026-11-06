@@ -617,6 +617,32 @@ export function LeadsFilterBar({
                             Needs dealer mobile
                         </button>
 
+                        {/* Dispositions v3 (E-373): leads whose 7 / 30 / 90-day AI
+                            redial has come round — the list for the next AI campaign. */}
+                        <button
+                            type="button"
+                            onClick={() => onChange("aiRedialDue", draft.aiRedialDue ? "" : "1")}
+                            aria-pressed={draft.aiRedialDue === "1"}
+                            title={
+                                draft.aiRedialDue
+                                    ? "Showing only leads due an AI redial — click to show all"
+                                    : "Show only leads whose AI redial is due (Need Some Time after 7 days, No requirement after 30, Not Interested after 90, once)."
+                            }
+                            className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${
+                                draft.aiRedialDue
+                                    ? "border-violet-300 bg-violet-50 text-violet-700"
+                                    : "border-gray-200 bg-white text-gray-600 hover:border-gray-400"
+                            }`}
+                        >
+                            <span
+                                aria-hidden
+                                className={`h-1.5 w-1.5 rounded-full ${
+                                    draft.aiRedialDue ? "bg-violet-500" : "bg-gray-300"
+                                }`}
+                            />
+                            Due for AI redial
+                        </button>
+
                         {/* ID 184: the Sales dashboard card "Ready leads with no owner",
                             same rule (awaitingAssignment), so this list and its export
                             give the card's number. The split matches the card. */}

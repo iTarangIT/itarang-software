@@ -12,7 +12,7 @@ import { db } from "@/lib/db";
 import { savedColumnSets } from "@/lib/exports/datasets/columnSets";
 import { DATASETS, datasetAccess, datasetInfo, type Dataset } from "@/lib/exports/datasets/registry";
 import { LEAD_ASSIGNEE_ROLES } from "@/lib/leads/access";
-import { BACKGROUND_LINK_HOURS, BACKGROUND_ROW_CAP, DOWNLOAD_LOG_ROLES, DOWNLOAD_ROW_CAP, FULL_PHONE_ROLES } from "@/lib/exports/datasets/types";
+import { BACKGROUND_LINK_HOURS, BACKGROUND_ROW_CAP, DOWNLOAD_LOG_ROLES, DOWNLOAD_ROW_CAP, EXCEL_ROW_CAP, FULL_PHONE_ROLES } from "@/lib/exports/datasets/types";
 
 export const dynamic = "force-dynamic";
 
@@ -69,6 +69,7 @@ export const GET = withErrorHandler(async () => {
         people,
         saved_columns,
         row_cap: DOWNLOAD_ROW_CAP,
+        excel_row_cap: EXCEL_ROW_CAP,
         background_row_cap: BACKGROUND_ROW_CAP,
         background_link_hours: BACKGROUND_LINK_HOURS,
         can_full_phone: (FULL_PHONE_ROLES as readonly string[]).includes(role),

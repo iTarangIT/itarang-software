@@ -31,7 +31,8 @@ export type WaTemplateKey =
   | "dispatch_otp"
   | "sanctioned"
   | "dispatch_done"
-  | "kyc_update";
+  | "kyc_update"
+  | "callback_missed";
 
 export interface WaTemplateSpec {
   /** Name registered in Meta Business Manager. */
@@ -96,6 +97,19 @@ export const WA_TEMPLATES: Record<WaTemplateKey, WaTemplateSpec> = {
     params: ["customerName", "referenceId", "action", "actor", "time"],
     envOverride: "WA_KYC_UPDATE_TEMPLATE",
     envLangOverride: "WA_KYC_UPDATE_TEMPLATE_LANG",
+  },
+  /**
+   * ID 212 — a callback still not made 30 min after the agreed time, to the
+   * Sales Head and the ISR's manager (lib/ai-dialer/callbackMissedAlert):
+   * "Callback missed: {dealer}, agreed for {dueTime}, owner {owner}". Free text
+   * until approved (reaches only an open 24h window).
+   */
+  callback_missed: {
+    name: "itarang_callback_missed",
+    lang: "en",
+    params: ["dealer", "dueTime", "owner"],
+    envOverride: "WA_CALLBACK_MISSED_TEMPLATE",
+    envLangOverride: "WA_CALLBACK_MISSED_TEMPLATE_LANG",
   },
 };
 

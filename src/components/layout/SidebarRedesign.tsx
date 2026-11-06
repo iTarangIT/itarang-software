@@ -258,6 +258,7 @@ const ADMIN_SALES_HEAD_GROUPS: LayoutGroup[] = [
                     ...both("kyc-review-digest"),
                     ...both("scrap-buyback-digest"),
                     ...both("idle-weekly-digest"),
+                    ...both("missed-callbacks-digest"),
                     ...both("targets-pending-digest"),
                 ],
             },

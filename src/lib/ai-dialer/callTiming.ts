@@ -106,10 +106,15 @@ export async function setDefaultCallingHours(
     windowEnd: string,
     userId: string,
     reason: string | null,
-): Promise<{ logged: boolean }> {
+    effectiveFrom?: string | null,
+): Promise<{ logged: boolean; scheduled: boolean }> {
     const { saveCallingHours } = await import("./callingHoursLog");
-    return saveCallingHours({ start: windowStart, end: windowEnd, reason, actorId: userId, source: "call_timing" });
+    return saveCallingHours({ start: windowStart, end: windowEnd, reason, actorId: userId, source: "call_timing", effectiveFrom });
 }
 
-/** Who may change the default calling hours — the same roles as the settings page. */
-export const CALLING_HOURS_EDIT_ROLES = ["admin", "sales_head"] as const;
+/**
+ * Who may change the default calling hours. ID 85 (5 Nov): Admin only, like
+ * every time limit (Kartik, 10 Oct); the Sales Head and the CEO see the hours
+ * and the log.
+ */
+export const CALLING_HOURS_EDIT_ROLES = ["admin"] as const;

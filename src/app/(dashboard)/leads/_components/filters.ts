@@ -82,6 +82,8 @@ export type LeadFilters = {
     callback: "" | "1";
     /** "1" = B1: no phone, or not a mobile — the AI dialer skips these. */
     needsMobile: "" | "1";
+    /** "1" = Dispositions v3: a long-horizon AI redial (7 / 30 / 90 days) is due. */
+    aiRedialDue: "" | "1";
     /**
      * E-296 "Type of Business" — a BUSINESS_TYPES value, or "unset" for leads
      * with none recorded. "" = any.
@@ -137,6 +139,7 @@ export const EMPTY_FILTERS: LeadFilters = {
     signalsMin: "",
     callback: "",
     needsMobile: "",
+    aiRedialDue: "",
     businessType: "",
     showDead: "",
     readyNoOwner: "",
@@ -159,6 +162,7 @@ export const SECONDARY_KEYS: (keyof LeadFilters)[] = [
     "neodove",
     "callback",
     "needsMobile",
+    "aiRedialDue",
     "readyNoOwner",
     "showDead",
     "asmId",
@@ -239,6 +243,7 @@ export function toSearchParams(
     if (f.signalsMin) p.set("signals_min", f.signalsMin);
     if (f.callback) p.set("callback", f.callback);
     if (f.needsMobile) p.set("needs_mobile", f.needsMobile);
+    if (f.aiRedialDue) p.set("ai_redial_due", f.aiRedialDue);
     if (f.businessType) p.set("business_type", f.businessType);
     if (f.showDead) p.set("hide_dead", "0");
     if (f.readyNoOwner) {
@@ -307,6 +312,7 @@ export function fromSearchParams(sp: URLSearchParams): LeadFilters {
             : "",
         callback: sp.get("callback") === "1" ? "1" : "",
         needsMobile: sp.get("needs_mobile") === "1" ? "1" : "",
+        aiRedialDue: sp.get("ai_redial_due") === "1" ? "1" : "",
         // Closed vocabulary (+ "unset"), validated for the same blank-<select>
         // reason as the fields above.
         businessType: businessTypeFilterParam(sp.get("business_type")) ?? "",

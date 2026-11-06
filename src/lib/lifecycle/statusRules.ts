@@ -181,7 +181,7 @@ export function checkStatusMove(input: {
             }
             return { ok: true };
         case "quote_approved":
-            if (to !== "Commercials_Finalised") return { ok: false, reason: "A dealer approval can only set Commercials finalised." };
+            if (to !== "Commercials_Finalised") return { ok: false, reason: "A dealer approval can only set Dealer agreed." };
             if (!open) return { ok: false, reason: `The lead is ${label(from)}; it is closed.` };
             if (from !== "Transferred_to_ASM" && !isForward(from, to)) {
                 return { ok: false, reason: `A lead cannot move back from ${label(from)} to ${label(to)}.` };
@@ -190,7 +190,7 @@ export function checkStatusMove(input: {
         case "quote_withdrawn":
         case "quote_rejected": {
             if (from === "Commercials_Finalised") {
-                return { ok: false, reason: "The dealer approved the quote; from Commercials finalised use Mark Won or Mark Lost." };
+                return { ok: false, reason: "The dealer approved the quote; from Dealer agreed use Mark Won or Mark Lost." };
             }
             const commercials = ["Commercials_Explained", "Awaiting_Customer_Decision"];
             if (to !== "Under_Discussion" || !commercials.includes(from ?? "")) {

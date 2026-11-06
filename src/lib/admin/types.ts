@@ -96,7 +96,7 @@ export const ALERT_PANEL_LABELS: Record<AlertPanelKey, string> = {
     non_responsive: "Non-responsive (6 unanswered call days in 45)",
     won_without_quote: "Won without an approved quote",
     transfer_visit_overdue: "Awaiting field visit past 3 working days",
-    finalised_not_won: "Commercials finalised, not marked Won",
+    finalised_not_won: "Dealer agreed, not marked Won",
 };
 
 const wd = (n: number) => `${n} working day${n === 1 ? "" : "s"}`;

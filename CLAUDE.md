@@ -84,7 +84,7 @@ ceo, business_head, sales_head, sales_manager, sales_executive, finance_controll
 
 The team uses **hand-written, named, idempotent SQL migration files** in `drizzle/` (see `E-002_nbfc_portal_credentials.sql`, `E-027_telemetry_ingestion_log.sql` for the pattern). Conventions:
 
-- File name: `E-<number>_<short_snake_case_description>.sql`. Pick the next free `E-` number.
+- File name: `E-<number>_<short_snake_case_description>.sql`. Take the number from `npm run migration:next` (reads main, every remote branch and the checklist), and run it again just before pushing — parallel branches have collided on the same number.
 - Every DDL statement must be idempotent: `ADD COLUMN IF NOT EXISTS`, `CREATE TABLE IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`. Wrap blocks in `DO $do$ BEGIN … EXCEPTION WHEN undefined_table THEN RAISE NOTICE 'skip' END; $do$;` when the migration may run against a DB that doesn't yet have the table.
 - Strictly **additive** — never `DROP COLUMN`, never narrow a type, never retroactively `SET NOT NULL` on a column with existing rows. If a destructive change is genuinely needed, escalate to the team and stage it across two migrations (additive write → deploy → backfill → second migration removes old).
 - Update `src/lib/db/schema.ts` to mirror the migration so type-checking matches the DB. Source of truth is the migration file.

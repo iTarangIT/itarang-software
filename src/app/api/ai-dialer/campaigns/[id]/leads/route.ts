@@ -23,6 +23,7 @@ import {
 import { db } from "@/lib/db";
 import { dialerCampaignLeads, dealerLeads } from "@/lib/db/schema";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
+import { latestDispositionsFor, triggerDialKey } from "@/lib/ai/storage/dialDisposition";
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { INTENT_THRESHOLDS } from "@/lib/ai/scoring";
 import {
@@ -105,6 +106,26 @@ function shapeRow(r: any) {
   };
 }
 
+/**
+ * Dispositions v3 (E-373) — this attempt's L1 / L2 / L3 and SIP code. A placed
+ * call is stored under its conversation id; a refused one under
+ * trigger:<row id>:<attempt>. Absent (null) on rows from before E-373.
+ */
+async function withDispositions<T extends { id: string }>(
+  shaped: T[],
+  raw: Array<{ id: string; bolnaCallId?: string | null; rowAttempts?: number | null }>,
+): Promise<Array<T & { disposition: { l1: string; l2: string; l3: string | null; sipCode: number | null } | null }>> {
+  const keyOf = new Map<string, string>();
+  for (const r of raw) {
+    keyOf.set(r.id, r.bolnaCallId || triggerDialKey(r.id, Number(r.rowAttempts ?? 0)));
+  }
+  const found = await latestDispositionsFor([...keyOf.values()]);
+  return shaped.map((row) => {
+    const d = found.get(keyOf.get(row.id) ?? "");
+    return { ...row, disposition: d ? { l1: d.l1, l2: d.l2, l3: d.l3, sipCode: d.sipCode } : null };
+  });
+}
+
 // The row's outcome category — the SAME rule the outcome tiles count by
 // (campaignOutcomes.leadCategorySql), so a tile and the list it filters agree.
 // Only added to the select when E-356 exists — naming the table on a database
@@ -117,6 +138,9 @@ const selectShape = {
   queuePosition: dialerCampaignLeads.queue_position,
   status: dialerCampaignLeads.status,
   callOutcome: dialerCampaignLeads.call_outcome,
+  // Dispositions v3 — the key its ai_dial_dispositions row is stored under.
+  bolnaCallId: dialerCampaignLeads.bolna_call_id,
+  rowAttempts: dialerCampaignLeads.attempt_count,
   intentScore: dialerCampaignLeads.intent_score,
   startedAt: dialerCampaignLeads.started_at,
   completedAt: dialerCampaignLeads.completed_at,
@@ -400,7 +424,7 @@ export const GET = withErrorHandler(
       .offset(offset);
 
     return successResponse({
-      data: rows.map(shapeRow),
+      data: await withDispositions(rows.map(shapeRow), rows),
       page,
       pageSize: PAGE_SIZE,
     });

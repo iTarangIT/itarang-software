@@ -11,6 +11,7 @@
 // their own pages: /ceo/quotations, /ceo/finance, /ceo/intellicar. The Green
 // Energy news card stays on this page; its full feed is /ceo/news.
 
+import { InfoTip } from "@/components/ui/info-tip";
 import React from "react";
 import Link from "next/link";
 import { InvoicesReadUpTo } from "@/components/sales/InvoicesReadUpTo";
@@ -957,9 +958,12 @@ export default function CEODashboard() {
             />
           )}
           <span className="text-xs text-ink-muted">
-            {revenueTarget.line
-              ? `Non-void invoices dated in the period, less credit notes. ${revenueTarget.line} (sum of everyone's targets${revenueTarget.split ? `: ${revenueTarget.split}` : ""}). Pace is a straight line over calendar days.`
-              : "Non-void invoices dated in the period, less credit notes. No company revenue target is set, so there is no target-pace line. Pace is a straight line over calendar days."}
+            {revenueTarget.line ? `${revenueTarget.line}.` : "No company revenue target is set."}
+            <InfoTip className="ml-1">
+              {revenueTarget.line
+                ? `Revenue = non-void invoices dated in the period, less credit notes. The target is the sum of everyone's targets${revenueTarget.split ? `: ${revenueTarget.split}` : ""}. Pace is a straight line over calendar days.`
+                : "Revenue = non-void invoices dated in the period, less credit notes. With no company revenue target there is no target-pace line. Pace is a straight line over calendar days."}
+            </InfoTip>
           </span>
         </DashCard>
 

@@ -87,7 +87,22 @@ type Campaign = {
   resumeAfter: string | null;
   pausedAt: string | null;
   /** D1 (E-360) — set when the carrier refused 10 calls in a row and the campaign paused itself. */
-  carrierPause?: { pauseReason: string; lastCarrierError: string | null; pausedAt: string | null } | null;
+  carrierPause?: {
+    pauseReason: string;
+    lastCarrierError: string | null;
+    pausedAt: string | null;
+    // Task 10 (E-374) — null on a database without it.
+    sipCode?: number | null;
+    cursorQueuePosition?: number | null;
+    refundedRows?: number | null;
+    pausesToday?: number | null;
+    probeCount?: number | null;
+    maxProbes?: number;
+    nextProbeAt?: string | null;
+    lastProbeAt?: string | null;
+    lastProbeResult?: string | null;
+    needsManualResume?: boolean;
+  } | null;
   // E-315 — automatic retries. maxRetries null = auto-retry off (older runs).
   maxRetries?: number | null;
   retryScheduled?: number;
@@ -109,12 +124,61 @@ function fmtIst(iso: string): string {
   });
 }
 
+/**
+ * Task 10 (E-374) — why the line paused this campaign, where it will pick up,
+ * and what the probe is doing about it.
+ */
+function CarrierPausePanel({ pause }: { pause: NonNullable<Campaign["carrierPause"]> }) {
+  const setup = pause.pauseReason === "setup_error";
+  const probes = pause.probeCount ?? 0;
+  const max = pause.maxProbes ?? 6;
+  return (
+    <div className="mt-2 space-y-0.5 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800">
+      <p className="font-medium">
+        {setup ? "Paused: a setup error refused every call" : "Paused: the carrier refused calls"}
+        {pause.sipCode != null && <span className="ml-1 rounded bg-rose-100 px-1 font-mono">SIP {pause.sipCode}</span>}
+        {pause.lastCarrierError ? ` — "${pause.lastCarrierError}"` : ""}
+      </p>
+      <p>
+        No leads were used up
+        {pause.refundedRows ? ` — ${pause.refundedRows} refused lead${pause.refundedRows === 1 ? "" : "s"} back in the queue` : ""}
+        {pause.cursorQueuePosition != null ? `; it picks up from #${pause.cursorQueuePosition + 1}` : ""}.
+      </p>
+      {setup ? (
+        <p>Fix the setting on our side (see the error), then press Resume calling.</p>
+      ) : pause.needsManualResume ? (
+        <p>
+          {probes >= max
+            ? `${probes} test calls were refused.`
+            : pause.pausesToday && pause.pausesToday >= 2
+              ? "Second pause today."
+              : ""}{" "}
+          Waiting for someone to press Resume calling — a test call runs first, and it stays paused if that is refused too.
+        </p>
+      ) : (
+        <p>
+          Test call {probes} of {max}
+          {pause.nextProbeAt ? ` · next at ${fmtIst(pause.nextProbeAt)} IST` : ""} — it resumes on its own once one goes through
+          (10:00–19:00 only).
+        </p>
+      )}
+      {pause.lastProbeResult && (
+        <p className="text-rose-700/80">
+          Last test call{pause.lastProbeAt ? ` (${fmtIst(pause.lastProbeAt)})` : ""}: {pause.lastProbeResult}
+        </p>
+      )}
+    </div>
+  );
+}
+
 type Lead = {
   id: string;
   leadId: string;
   queuePosition: number;
   status: string;
   callOutcome: string | null;
+  /** Dispositions v3 (E-373) — this attempt's L1 / L2 / L3 and SIP code. */
+  disposition?: { l1: string; l2: string; l3: string | null; sipCode: number | null } | null;
   /** ai_call_logs.band for this attempt (Qualified | Warm | Cold | Disqualified). */
   band?: string | null;
   /** Derived server-side — see src/lib/ai-dialer/failureReason.ts. */
@@ -368,6 +432,21 @@ function LeadRow({
           band={row.band}
         />
         <CallCategoryBadge category={row.category} />
+      </td>
+      <td className="px-3 py-2.5 text-xs">
+        {row.disposition ? (
+          <span className="flex flex-col gap-0.5" title={`${row.disposition.l1} › ${row.disposition.l2}${row.disposition.l3 ? ` › ${row.disposition.l3}` : ""}`}>
+            <span className="font-medium text-gray-800">{row.disposition.l3 ?? row.disposition.l2}</span>
+            <span className="text-[10px] text-gray-500">
+              {row.disposition.l3 ? `${row.disposition.l1} › ${row.disposition.l2}` : row.disposition.l1}
+              {row.disposition.sipCode != null && (
+                <span className="ml-1 rounded bg-gray-100 px-1 font-mono text-gray-600">SIP {row.disposition.sipCode}</span>
+              )}
+            </span>
+          </span>
+        ) : (
+          <span className="text-gray-400">—</span>
+        )}
       </td>
       <td className="px-3 py-2.5 text-xs">
         {row.intentScore != null ? (
@@ -920,14 +999,7 @@ export function CampaignDetailView({
                 </p>
               )}
             {campaign.status === "paused" && campaign.carrierPause && (
-              <p className="mt-2 text-xs text-rose-700">
-                Paused because the carrier refused 10 calls in a row
-                {campaign.carrierPause.lastCarrierError
-                  ? ` ("${campaign.carrierPause.lastCarrierError}")`
-                  : ""}
-                . No leads were used up. Press Resume calling once the line is
-                working again.
-              </p>
+              <CarrierPausePanel pause={campaign.carrierPause} />
             )}
             {campaign.status === "paused" && !campaign.carrierPause && (
               <p className="mt-2 text-xs text-slate-600">
@@ -1202,6 +1274,9 @@ export function CampaignDetailView({
                   </th>
                   <th className="px-3 py-2.5 text-left font-semibold">
                     Outcome
+                  </th>
+                  <th className="px-3 py-2.5 text-left font-semibold">
+                    Disposition
                   </th>
                   <th className="px-3 py-2.5 text-left font-semibold">
                     Intent

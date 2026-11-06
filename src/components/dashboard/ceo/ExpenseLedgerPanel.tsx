@@ -23,6 +23,7 @@
  * to be the smaller of the two; the note under the table says so on screen.
  */
 
+import { InfoTip } from "@/components/ui/info-tip";
 import React from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import {
@@ -252,10 +253,9 @@ export function ExpenseLedgerPanel({ params }: Props) {
               about the LIST being partial, not the numbers. */}
           {data.capped && (
             <p className="mt-3 text-xs text-warning bg-warning-bg rounded-xl px-3 py-2">
-              Showing the most recent {data.cap.toLocaleString("en-IN")} of{" "}
-              {data.grandCount.toLocaleString("en-IN")} invoices. Department
-              counts and totals cover all of them; narrow the date range or the
-              filters to see the rest individually.
+              Showing the latest {data.cap.toLocaleString("en-IN")} of{" "}
+              {data.grandCount.toLocaleString("en-IN")} invoices; the totals count all of them.
+              <InfoTip className="ml-1">{"Department counts and totals cover every invoice in the window. Narrow the dates or the filters to see the rest one by one."}</InfoTip>
             </p>
           )}
 

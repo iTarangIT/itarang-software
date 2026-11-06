@@ -17,8 +17,11 @@ import { reviewLeadContactability } from "@/lib/leads/contactability";
 import {
     aiExternalTag,
     mapAiCallToDisposition,
+    type AiCallDisposition,
     type AiCallDispositionInput,
 } from "@/lib/leads/aiDisposition";
+import { callStatusForDisposition } from "@/lib/leads/dispositions";
+import type { DispositionV3 } from "@/lib/ai-dialer/dispositionV3";
 
 export type AiCallTouchpointInput = AiCallDispositionInput & {
     leadId: string;
@@ -32,7 +35,39 @@ export type AiCallTouchpointInput = AiCallDispositionInput & {
     /** From resolveNextCallAt(), when the analyzer scheduled a follow-up. */
     nextCallAt?: Date | null;
     performedAt?: Date;
+    /**
+     * Dispositions v3 (E-373) — the sheet's verdict for this dial. When given it
+     * decides the label; mapAiCallToDisposition stays the fallback for callers
+     * that do not compute one (Bolna).
+     */
+    v3?: DispositionV3 | null;
 };
+
+/**
+ * The touchpoint shape of a v3 verdict.
+ *
+ * The sheet files Machine rows (IVR, voicemail box, tracking number, dead
+ * audio) under L1 Connected. On a TOUCHPOINT, "connected" has meant "a person
+ * spoke" since B5 (28 Oct): every connect-rate figure, the contactability
+ * review and the CEO's AI connect % count it. So a Machine row keeps its label
+ * and its Machine bucket but is written not connected / not_responding. The
+ * sheet's own L1 is kept verbatim in ai_dial_dispositions.
+ */
+export function touchpointDispositionFromV3(v3: DispositionV3): AiCallDisposition {
+    const machine = v3.bucket === "Machine";
+    const connectStatus = machine ? "not_connected" : v3.connectStatus;
+    const callStatus = machine
+        ? "not_responding"
+        : (callStatusForDisposition({ label: v3.disposition, connectStatus: v3.connectStatus }) ??
+          (v3.connectStatus === "connected" ? "connected" : "not_responding"));
+    return {
+        connectStatus,
+        bucket: v3.bucket,
+        disposition: v3.disposition,
+        callStatus,
+        reasonCode: (v3.connectStatus === "connected" ? "c:substance" : "nc:unknown") as AiCallDisposition["reasonCode"],
+    };
+}
 
 function rowsOf<T>(result: unknown): T[] {
     return (result as { rows?: T[] }).rows ?? (result as T[]);
@@ -49,6 +84,13 @@ function buildRemarks(
     input: AiCallTouchpointInput,
     connected: boolean,
 ): string {
+    if (input.v3) {
+        const v = input.v3;
+        const head = `[AI] ${v.l1} › ${v.l2}${v.l3 ? ` › ${v.l3}` : ""}`;
+        const sip = v.sipCode != null ? ` · SIP ${v.sipCode}` : "";
+        const summary = (input.summary ?? "").trim();
+        return `${head}${sip}${summary ? ` · "${summary}"` : ""}`;
+    }
     if (!connected) {
         return `[AI] No conversation (${input.providerStatus ?? "unknown"})`;
     }
@@ -87,7 +129,7 @@ export async function writeAiCallTouchpoint(
             return null;
         }
 
-        const d = mapAiCallToDisposition(input);
+        const d = input.v3 ? touchpointDispositionFromV3(input.v3) : mapAiCallToDisposition(input);
         const connected = d.connectStatus === "connected";
         const performedAt = input.performedAt ?? new Date();
 

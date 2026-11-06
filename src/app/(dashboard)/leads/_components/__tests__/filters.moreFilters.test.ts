@@ -35,6 +35,7 @@ describe("More filters badge (countSecondary)", () => {
         ["neodove", "1"],
         ["callback", "1"],
         ["needsMobile", "1"],
+        ["aiRedialDue", "1"],
         ["readyNoOwner", "1"],
         ["showDead", "1"],
     ] as [keyof LeadFilters, string][])("counts %s, moved from the top row", (key, value) => {

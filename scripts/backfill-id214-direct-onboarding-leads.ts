@@ -14,7 +14,7 @@
 // is skipped (every form number already on a lead). --apply writes a JSON
 // record of what it created (reports/) — the lead ids an undo needs. On the
 // live database --apply also needs --confirm-live (after Kartik's go-ahead).
-// Re-running is a no-op. Needs E-372 only for the match columns (written
+// Re-running is a no-op. Needs E-377 only for the match columns (written
 // when present).
 //
 //   node --import tsx --env-file=.env.local scripts/backfill-id214-direct-onboarding-leads.ts

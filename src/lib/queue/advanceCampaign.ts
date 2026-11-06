@@ -46,6 +46,16 @@ import {
 } from "@/lib/ai-dialer/retryPolicy";
 import { noteTriggerResult } from "@/lib/ai-dialer/lineHealth";
 import { dialTimeSkip, ENROL_SKIP_OUTCOME } from "@/lib/ai-dialer/numberHygiene";
+import { observedNumbers } from "@/lib/ai-dialer/phoneTypeStore";
+import { classifyTriggerDetail } from "@/lib/ai-dialer/failureReason";
+import {
+  leadsWithRedialNotDue,
+  markRedialUsed,
+  recordDialDisposition,
+  triggerDialKey,
+} from "@/lib/ai/storage/dialDisposition";
+import { writeAiCallTouchpoint } from "@/lib/ai/storage/callTouchpoint";
+import type { CallEndClassification } from "@/lib/ai-dialer/campaignLeadStatus";
 import { leadsWithOpenCallback } from "@/lib/ai-dialer/callbackLoop";
 import {
   nextWindowOpenSql,
@@ -182,7 +192,7 @@ async function hasCallingRows(campaignId: string): Promise<boolean> {
 }
 
 // D1 — re-read before every dial after the first. The loop can run for a while
-// (up to MAX_SKIPS leads, 2s apart after a failed trigger), and a Stop, a
+// (every row it skips, 2s apart after a failed trigger), and a Stop, a
 // carrier pause or a window park written meanwhile must stop the NEXT dial,
 // not the next advanceCampaign call.
 async function isStillRunning(campaignId: string): Promise<boolean> {
@@ -192,6 +202,53 @@ async function isStillRunning(campaignId: string): Promise<boolean> {
     .where(eq(dialerCampaigns.id, campaignId))
     .limit(1);
   return r[0]?.status === "running";
+}
+
+/**
+ * Dispositions v3 — a dial the provider refused before any conversation
+ * existed still gets its L1 / L2 / L3 and a touchpoint on the lead. Keyed
+ * trigger:<campaign_lead_id>:<attempt>, so a retry of the same advance writes
+ * the same row. Never throws.
+ */
+async function recordTriggerVerdict(input: {
+  provider: string;
+  campaignId: string;
+  campaignLeadId: string;
+  attempt: number;
+  leadId: string;
+  phone: string | null;
+  reason: string;
+  callEnd: CallEndClassification;
+}): Promise<string | null> {
+  try {
+    const dialKey = triggerDialKey(input.campaignLeadId, input.attempt);
+    const { d } = await recordDialDisposition({
+      dialKey,
+      leadId: input.leadId,
+      campaignId: input.campaignId,
+      phone: input.phone,
+      evidence: { callEnd: input.callEnd, failureText: input.reason },
+    });
+    // A refusal on OUR side (carrier 401/403/407/429/503, a config error) never
+    // reached the dealer: no touchpoint, or the non-responsive rule (6 dial
+    // days, none connected) would count our outage against him.
+    if (d.effects.carrierRefusal || classifyTriggerDetail(input.reason) === "config_error") return d.disposition;
+    await writeAiCallTouchpoint({
+      v3: d,
+      leadId: input.leadId,
+      provider: input.provider,
+      callId: dialKey,
+      transcript: null,
+      providerStatus: "trigger_failed",
+      callEndStatus: input.callEnd.status,
+      callOutcome: input.callEnd.outcome,
+      summary: input.reason,
+    });
+    return d.disposition;
+  } catch (err) {
+    console.error("[advanceCampaign] trigger verdict not recorded:", err instanceof Error ? err.message : err);
+    return null;
+  }
 }
 
 // After a failed trigger. Reports it to the carrier-pause counter; returns the
@@ -321,13 +378,13 @@ export async function advanceCampaign(
       await new Promise((r) => setTimeout(r, opts.preCallDelayMs));
     }
 
-    // Inner retry: if we claim a row whose lead has no phone, skip it
-    // (mark failed + bump counters), try the next. Cap iterations so a
-    // bad batch of phone-less leads can't loop forever. 100 covers the
-    // common case of an imported batch with a contiguous cluster of bad
-    // numbers — 20 was too tight and stalled real campaigns.
-    const MAX_SKIPS = 100;
-    for (let i = 0; i < MAX_SKIPS; i++) {
+    // Walk the queue until a call is placed, the campaign stops or pauses, or
+    // nothing is left. Each pass claims (and so consumes) one row, so the walk
+    // ends. Priya KPI task 10 (4 Nov 2026) removed the 100-row MAX_SKIPS cap:
+    // on a refused afternoon it returned "skipped" after 100 rows and the next
+    // tick walked 100 more, so a blocked line burned the queue in chunks; the
+    // carrier pause (lineHealth.ts) is what stops a refusing line now.
+    for (let i = 0; ; i++) {
       if (i > 0 && !(await isStillRunning(campaignId))) {
         return { kind: "campaign-not-running" };
       }
@@ -422,6 +479,40 @@ export async function advanceCampaign(
         continue;
       }
 
+      // Dispositions v3 — a number retired mid-campaign (an IVR or tracking
+      // number, SIP 404 / 410) is skipped at dial time too, not only when the
+      // next campaign enrols it. Matched on the number, so another lead on the
+      // same switchboard is skipped with it.
+      const retired = (await observedNumbers([lead[0].phone])).values().next().value;
+      if (retired) {
+        await db
+          .update(dialerCampaignLeads)
+          .set({
+            status: "skipped",
+            completed_at: new Date(),
+            call_outcome: ENROL_SKIP_OUTCOME[retired],
+          })
+          .where(eq(dialerCampaignLeads.id, claimed.campaignLeadId));
+        await syncCampaignCounters(campaignId);
+        continue;
+      }
+
+      // Dispositions v3 — a long-horizon redial (Need Some Time 7 d, Not
+      // Interested 90 d …) is booked for this lead and not due yet.
+      const notDue = (await leadsWithRedialNotDue([claimed.leadId])).get(claimed.leadId);
+      if (notDue) {
+        await db
+          .update(dialerCampaignLeads)
+          .set({
+            status: "skipped",
+            completed_at: new Date(),
+            call_outcome: `skipped_redial_not_due: ${notDue.toISOString()}`,
+          })
+          .where(eq(dialerCampaignLeads.id, claimed.campaignLeadId));
+        await syncCampaignCounters(campaignId);
+        continue;
+      }
+
       // BRD §0.2 — defensive exclusion filter. A lead can enter an active
       // sales state after the campaign was queued; skip it the same way as a
       // no-phone lead so the campaign keeps advancing and the dialer never
@@ -495,7 +586,13 @@ export async function advanceCampaign(
       // E-315 — a retry is a deliberate same-day redial; without the bypass the
       // 25h duplicate guard answers success-with-no-call-id and the row sits in
       // 'calling' until the watchdog fails it.
-      const bypassIdempotency = isRecall || claimed.attemptCount > 1;
+      //
+      // Task 10 — a REFUNDED attempt (the carrier refused it) gives its count
+      // back, so attemptCount alone says "first dial" again; but the refused
+      // dial already claimed the duplicate key. Any row with history in this
+      // campaign is a redial.
+      const bypassIdempotency =
+        isRecall || claimed.attemptCount > 1 || claimed.lastOutcome != null;
 
       // Place the call via the right provider.
       let trigResult: { success: boolean; call_id?: string; error?: string };
@@ -531,10 +628,21 @@ export async function advanceCampaign(
           },
         );
         const exOutcome = `trigger_exception: ${exReason}`;
+        const exDisposition = await recordTriggerVerdict({
+          provider,
+          campaignId,
+          campaignLeadId: claimed.campaignLeadId,
+          attempt: claimed.attemptCount,
+          leadId: lead[0].id,
+          phone: lead[0].phone,
+          reason: exReason,
+          callEnd: classifyCallEnd({ triggerError: exReason }),
+        });
         await recordAttemptOutcome({
           campaignLeadId: claimed.campaignLeadId,
           status: classifyCallEnd({ triggerError: exReason }).status,
           outcome: exOutcome,
+          disposition: exDisposition,
         });
         await syncCampaignCounters(campaignId);
         const stop = await afterFailedTrigger(campaignId, exOutcome, exReason);
@@ -563,10 +671,21 @@ export async function advanceCampaign(
         // 603) — so this is where most "the dealer didn't pick up" outcomes
         // are born. Classify it instead of filing every one as failed.
         const failOutcome = `trigger_failed: ${reason}`;
+        const failDisposition = await recordTriggerVerdict({
+          provider,
+          campaignId,
+          campaignLeadId: claimed.campaignLeadId,
+          attempt: claimed.attemptCount,
+          leadId: lead[0].id,
+          phone: lead[0].phone,
+          reason,
+          callEnd: classifyCallEnd({ triggerError: reason }),
+        });
         await recordAttemptOutcome({
           campaignLeadId: claimed.campaignLeadId,
           status: classifyCallEnd({ triggerError: reason }).status,
           outcome: failOutcome,
+          disposition: failDisposition,
         });
         await syncCampaignCounters(campaignId);
         const stop = await afterFailedTrigger(campaignId, failOutcome, reason);
@@ -576,6 +695,8 @@ export async function advanceCampaign(
 
       // D1 — the call reached the carrier: the refused-in-a-row run is over.
       await noteTriggerResult(campaignId, null);
+      // A due long-horizon redial is now spent (a "once" rule stays used).
+      await markRedialUsed(lead[0].id);
 
       // Success path: attach the provider call id to the row so the
       // polling backstop can look up status later. If the attach fails,
@@ -623,14 +744,6 @@ export async function advanceCampaign(
       };
     }
 
-    // Exhausted the inner retry without placing a call. The campaign is
-    // not finalized — the caller should re-invoke advanceCampaign (or
-    // the watchdog will pick it up at the next cron tick).
-    console.warn("[advanceCampaign] max-skips-exceeded — campaign will resume on next webhook/cron tick", {
-      campaignId,
-      maxSkips: MAX_SKIPS,
-    });
-    return { kind: "skipped", reason: "max-skips-exceeded" };
   } catch (err) {
     console.error("[advanceCampaign] failed:", err);
     return {

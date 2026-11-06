@@ -13,7 +13,7 @@
  *   onOnboardingRejected(appId)    the linked lead → Lost 'Onboarding rejected'.
  *   leadMatchApprovalBlock(appId)  approval waits for Admin's Confirm.
  *
- * Needs E-372 (columns on dealer_onboarding_applications, raw SQL, not in
+ * Needs E-377 (columns on dealer_onboarding_applications, raw SQL, not in
  * schema.ts). Without it everything here is a no-op and onboarding works as
  * before (phone link only). Never throws from the submit / reject hooks: an
  * onboarding must not fail because the lead could not be handled.
@@ -45,7 +45,7 @@ type Exec = Tx | typeof db;
 const rowsOf = <T>(r: unknown): T[] => (Array.isArray(r) ? r : ((r as { rows?: T[] })?.rows ?? [])) as T[];
 
 let probe: Promise<boolean> | null = null;
-/** E-372 applied here? Cached per process. */
+/** E-377 applied here? Cached per process. */
 export function hasLeadMatchColumns(): Promise<boolean> {
     probe ??= (async () => {
         try {
@@ -522,7 +522,7 @@ async function releaseLead(tx: Tx, app: AppRow, leadId: string, actorId: string,
 }
 
 export async function applyLeadMatchAction(appId: string, actorId: string, a: LeadMatchAction): Promise<void> {
-    if (!(await hasLeadMatchColumns())) throw new LeadMatchError("The lead check is not set up on this server yet (E-372).", 409);
+    if (!(await hasLeadMatchColumns())) throw new LeadMatchError("The lead check is not set up on this server yet (E-377).", 409);
     if (a.action === "find_again") {
         const r = await attachOnboardingToLead(appId, { actorId });
         if (!r.done) throw new LeadMatchError("Could not look for the lead; try again.", 409);

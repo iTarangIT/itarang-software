@@ -14,6 +14,12 @@ import { z } from "zod";
 import { requireRole } from "@/lib/auth-utils";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
 import { getCallbackLoopSettings, setCallbackLoopSettings } from "@/lib/ai-dialer/callbackLoop";
+import { callbackOnTimeByOwner } from "@/lib/ai-dialer/callbackMetrics";
+
+/** IST calendar day `daysAgo` before today, YYYY-MM-DD. */
+function istDayAgo(daysAgo: number): string {
+    return new Date(Date.now() + 330 * 60_000 - daysAgo * 86_400_000).toISOString().slice(0, 10);
+}
 
 export const dynamic = "force-dynamic";
 
@@ -26,7 +32,12 @@ const BodySchema = z.object({
 
 export const GET = withErrorHandler(async () => {
     await requireRole(ROLES);
-    return successResponse({ settings: await getCallbackLoopSettings() });
+    // Task 11 — the ISR metric: promised callbacks made within 30 minutes.
+    const [settings, onTime] = await Promise.all([
+        getCallbackLoopSettings(),
+        callbackOnTimeByOwner({ fromIstDay: istDayAgo(6), toIstDay: istDayAgo(0) }),
+    ]);
+    return successResponse({ settings, onTime });
 });
 
 export const PUT = withErrorHandler(async (req: Request) => {

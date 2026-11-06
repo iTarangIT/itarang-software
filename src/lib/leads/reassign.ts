@@ -5,7 +5,8 @@
 // field visit given to an ISR / partner is refused while the ASM has a visit
 // booked, and otherwise returns to its pre-transfer stage with the ASM
 // unlinked and the open visits closed (asmHandBack.ts, the same rule as
-// assignOwner.ts).
+// assignOwner.ts). ID 221 (Kartik, 3 Nov): a lead given to another ASM takes
+// its field link and its booked visits with it (moveFieldVisits).
 //
 // ONE transaction: the owner change and the ownership_transfer touchpoint
 // commit together (the route used to run them as two separate statements).
@@ -49,7 +50,31 @@ export type ReassignInput = {
     fromOwnerId?: string;
 };
 
-export async function reassignLead(input: ReassignInput, opts?: { tx?: Tx }): Promise<void> {
+/** Open (booked) visit statuses — what moves with the lead (ID 221). */
+export const OPEN_VISIT_STATUSES = ["scheduled", "pending_scheduling"] as const;
+
+/**
+ * ID 221: hand the lead's field link and its booked visits to the ASM it now
+ * belongs to. Only when the lead has a field ASM and it is someone else.
+ * Returns how many booked visits moved. Shared with assignOwner's ASM swap.
+ */
+export async function moveFieldVisits(tx: Tx, leadId: string, toAsmId: string): Promise<number> {
+    const [cur] = (await tx.execute(sql`
+        SELECT asm_id FROM dealer_leads WHERE id = ${leadId}
+    `)) as unknown as Array<{ asm_id: string | null }>;
+    if (!cur?.asm_id || cur.asm_id === toAsmId) return 0;
+    await tx.execute(sql`UPDATE dealer_leads SET asm_id = ${toAsmId}, updated_at = NOW() WHERE id = ${leadId}`);
+    const moved = (await tx.execute(sql`
+        UPDATE lead_visits
+           SET asm_id = ${toAsmId}, updated_at = NOW()
+         WHERE dealer_lead_id = ${leadId}
+           AND visit_status IN (${sql.join(OPEN_VISIT_STATUSES.map((v) => sql`${v}`), sql`, `)})
+        RETURNING visit_id
+    `)) as unknown as unknown[];
+    return moved.length;
+}
+
+export async function reassignLead(input: ReassignInput, opts?: { tx?: Tx }): Promise<{ visitsMoved: number }> {
     const fromOwnerId = input.fromOwnerId ?? input.actorId;
     if (input.targetUserId === fromOwnerId) {
         throw new ReassignError(
@@ -91,21 +116,9 @@ export async function reassignLead(input: ReassignInput, opts?: { tx?: Tx }): Pr
         const closedVisits = handBack
             ? await releaseAsm(tx, input.leadId, `Closed: lead handed back to ${target.name ?? "an inside-sales rep"}`)
             : 0;
-        // ID 221: ASM to ASM — the lead's ASM link and any booked visit move
-        // with the lead, so the new ASM sees the visit and the old one drops it.
-        const oldAsm = locked[0]?.asm_id ?? null;
-        if (!handBack && target.role === "asm" && oldAsm && oldAsm !== input.targetUserId) {
-            await tx.execute(sql`
-                UPDATE dealer_leads SET asm_id = ${input.targetUserId} WHERE id = ${input.leadId}
-            `);
-            await tx.execute(sql`
-                UPDATE lead_visits
-                   SET asm_id = ${input.targetUserId}
-                 WHERE dealer_lead_id = ${input.leadId}
-                   AND asm_id = ${oldAsm}
-                   AND visit_status = 'scheduled'
-            `);
-        }
+        // ID 221: ASM to ASM — the field link and the booked visit go with the lead.
+        const visitsMoved =
+            !handBack && (target.role ?? "").toLowerCase() === "asm" ? await moveFieldVisits(tx, input.leadId, input.targetUserId) : 0;
         const backTo = handBack ? statusBeforeTransfer(locked[0]?.pre_transfer_status ?? null) : null;
 
         await writeTouchpoint(
@@ -131,6 +144,7 @@ export async function reassignLead(input: ReassignInput, opts?: { tx?: Tx }): Pr
             },
             { tx },
         );
+        return { visitsMoved };
     };
     return opts?.tx ? run(opts.tx) : db.transaction(run);
 }

@@ -11,6 +11,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { dialerCampaigns, dialerCampaignLeads } from "@/lib/db/schema";
 import { advanceCampaign } from "./advanceCampaign";
+import { runCarrierProbes } from "@/lib/ai-dialer/lineHealth";
 import { windowOpenSql } from "./campaignWindow";
 import {
   runAiCallbackTick,
@@ -28,6 +29,8 @@ export type WindowTickOutcome = {
   retried: string[];
   /** E-356 — AI callbacks re-dialled / settled, needs_review calls re-scored. */
   callbacks?: AiCallbackTickOutcome;
+  /** Task 10 (E-374) — carrier probes placed, and the campaigns they resumed. */
+  probes?: { probed: number; resumed: string[] };
 };
 
 /**
@@ -245,5 +248,16 @@ export async function runCampaignWindowTick(): Promise<WindowTickOutcome> {
       err instanceof Error ? err.message : err,
     );
   }
-  return { parked, resumed, advanced, retried, callbacks };
+  // Task 10 — probe the line for campaigns the carrier paused (every 30 min,
+  // 10:00–19:00 IST; a placed probe resumes the campaign). Isolated too.
+  let probes: { probed: number; resumed: string[] } | undefined;
+  try {
+    probes = await runCarrierProbes();
+  } catch (err) {
+    console.error(
+      "[runCampaignWindowTick] runCarrierProbes failed:",
+      err instanceof Error ? err.message : err,
+    );
+  }
+  return { parked, resumed, advanced, retried, callbacks, probes };
 }

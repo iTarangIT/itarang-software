@@ -31,6 +31,8 @@ import { syncInvoicesSinceLastRun } from "@/lib/zoho/sync";
 import { db } from "@/lib/db";
 import { dialerCampaigns } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
+// ID 227 — every tick is recorded in scheduled_job_state (Ops Console > Jobs).
+import { trackTick } from "@/lib/runtime/jobRuns";
 
 export async function startDialerTickers() {
   // Skip on Vercel — let the crons handle it.
@@ -161,16 +163,16 @@ export async function startDialerTickers() {
   // interval. E-228 stores resume_after on the row precisely so a restart
   // mid-pause is a non-event: the state is on disk, not in this process.
   const kickoff = setTimeout(() => {
-    pollTick();
-    watchdogTick();
-    windowTick();
+    void trackTick(pollTick, "poll")();
+    void trackTick(watchdogTick, "watchdog")();
+    void trackTick(windowTick, "window")();
   }, 5_000);
   if (typeof kickoff.unref === "function") kickoff.unref();
 
-  const pollInterval = setInterval(pollTick, POLL_INTERVAL_MS);
+  const pollInterval = setInterval(trackTick(pollTick, "poll"), POLL_INTERVAL_MS);
   if (typeof pollInterval.unref === "function") pollInterval.unref();
 
-  const watchdogInterval = setInterval(watchdogTick, WATCHDOG_INTERVAL_MS);
+  const watchdogInterval = setInterval(trackTick(watchdogTick, "watchdog"), WATCHDOG_INTERVAL_MS);
   if (typeof watchdogInterval.unref === "function") {
     watchdogInterval.unref();
   }
@@ -178,7 +180,7 @@ export async function startDialerTickers() {
   // Its own opt-out, separate from ENABLE_DIALER_POLL: a deployment may want to
   // silence the status poll without also freezing every scheduled campaign.
   if (process.env.ENABLE_CAMPAIGN_RESUME !== "0") {
-    const windowInterval = setInterval(windowTick, WINDOW_INTERVAL_MS);
+    const windowInterval = setInterval(trackTick(windowTick, "window"), WINDOW_INTERVAL_MS);
     if (typeof windowInterval.unref === "function") windowInterval.unref();
   }
 
@@ -268,10 +270,10 @@ export async function startZohoSyncTicker() {
 
   // Kick off shortly after boot so a freshly-deployed server populates the
   // table without waiting a full hour. Staggered behind the dialer kickoff.
-  const kickoff = setTimeout(syncTick, 20_000);
+  const kickoff = setTimeout(trackTick(syncTick), 20_000);
   if (typeof kickoff.unref === "function") kickoff.unref();
 
-  const interval = setInterval(syncTick, SYNC_INTERVAL_MS);
+  const interval = setInterval(trackTick(syncTick), SYNC_INTERVAL_MS);
   if (typeof interval.unref === "function") interval.unref();
 
   console.log("[instrumentation] zoho-sync (1h) started in-process");
@@ -337,10 +339,10 @@ export async function startBuybackDispatchTicker() {
   };
 
   // Staggered behind the dialer (5s) and Zoho (20s) kickoffs.
-  const kickoff = setTimeout(tick, 35_000);
+  const kickoff = setTimeout(trackTick(tick), 35_000);
   if (typeof kickoff.unref === "function") kickoff.unref();
 
-  const interval = setInterval(tick, DISPATCH_INTERVAL_MS);
+  const interval = setInterval(trackTick(tick), DISPATCH_INTERVAL_MS);
   if (typeof interval.unref === "function") interval.unref();
 
   console.log("[instrumentation] buyback-dispatch (30s) started in-process");
@@ -430,17 +432,17 @@ export async function startBuybackDedupTicker() {
     }
   };
 
-  const agreementInterval = setInterval(syncTick, AGREEMENT_INTERVAL_MS);
+  const agreementInterval = setInterval(trackTick(syncTick, "agreements"), AGREEMENT_INTERVAL_MS);
   if (typeof agreementInterval.unref === "function") agreementInterval.unref();
 
   // Staggered behind the dialer (5s), Zoho (20s) and dispatch (35s) kickoffs.
-  const kickoff = setTimeout(sweep, 60_000);
+  const kickoff = setTimeout(trackTick(sweep, "dedup"), 60_000);
   if (typeof kickoff.unref === "function") kickoff.unref();
 
-  const sweepInterval = setInterval(sweep, SWEEP_INTERVAL_MS);
+  const sweepInterval = setInterval(trackTick(sweep, "dedup"), SWEEP_INTERVAL_MS);
   if (typeof sweepInterval.unref === "function") sweepInterval.unref();
 
-  const nudgeInterval = setInterval(nudge, NUDGE_INTERVAL_MS);
+  const nudgeInterval = setInterval(trackTick(nudge, "nudge"), NUDGE_INTERVAL_MS);
   if (typeof nudgeInterval.unref === "function") nudgeInterval.unref();
 
   console.log("[instrumentation] buyback-dedup (6h) + price-review nudge (24h) started in-process");
@@ -495,10 +497,10 @@ export async function startBuybackGatewayTicker() {
   };
 
   // Staggered behind the dialer (5s), Zoho (20s), dispatch (35s) and dedup (60s).
-  const kickoff = setTimeout(tick, 45_000);
+  const kickoff = setTimeout(trackTick(tick), 45_000);
   if (typeof kickoff.unref === "function") kickoff.unref();
 
-  const interval = setInterval(tick, TICK_INTERVAL_MS);
+  const interval = setInterval(trackTick(tick), TICK_INTERVAL_MS);
   if (typeof interval.unref === "function") interval.unref();
 
   console.log("[instrumentation] buyback-gateway poller (60s) started in-process");
@@ -579,10 +581,10 @@ export async function startDriveExpenseTicker() {
 
   // Staggered behind dialer (5s), Zoho (20s), dispatch (35s), gateway (45s)
   // and dedup (60s), so a cold boot doesn't fire six jobs at once.
-  const kickoff = setTimeout(tick, 90_000);
+  const kickoff = setTimeout(trackTick(tick), 90_000);
   if (typeof kickoff.unref === "function") kickoff.unref();
 
-  const interval = setInterval(tick, SCAN_INTERVAL_MS);
+  const interval = setInterval(trackTick(tick), SCAN_INTERVAL_MS);
   if (typeof interval.unref === "function") interval.unref();
 
   console.log(
@@ -659,10 +661,10 @@ export async function startOemPriceSweepTicker() {
   // Last in the staggered kickoff queue — dialer (5s), Zoho (20s), dispatch
   // (35s), gateway (45s), dedup (60s), drive (90s). Nothing here is urgent to
   // the minute.
-  const kickoff = setTimeout(tick, 120_000);
+  const kickoff = setTimeout(trackTick(tick), 120_000);
   if (typeof kickoff.unref === "function") kickoff.unref();
 
-  const interval = setInterval(tick, SWEEP_INTERVAL_MS);
+  const interval = setInterval(trackTick(tick), SWEEP_INTERVAL_MS);
   if (typeof interval.unref === "function") interval.unref();
 
   console.log(
@@ -753,10 +755,10 @@ export async function startAuctionTicker() {
   };
 
   // Staggered behind the dialer (5s), Zoho (20s) and buyback-dispatch (35s).
-  const kickoff = setTimeout(tick, 45_000);
+  const kickoff = setTimeout(trackTick(tick), 45_000);
   if (typeof kickoff.unref === "function") kickoff.unref();
 
-  const interval = setInterval(tick, TICK_INTERVAL_MS);
+  const interval = setInterval(trackTick(tick), TICK_INTERVAL_MS);
   if (typeof interval.unref === "function") interval.unref();
 
   console.log("[instrumentation] auction scheduler (15s) started in-process");
@@ -834,10 +836,10 @@ export async function startScraperQueueTicker() {
   // (35s), gateway (45s), auction (45s), dedup (60s), drive (90s), oem-price
   // (120s). Nothing here is urgent to the minute and a batch that waits an
   // extra two minutes on boot is indistinguishable from one that did not.
-  const kickoff = setTimeout(tick, 135_000);
+  const kickoff = setTimeout(trackTick(tick), 135_000);
   if (typeof kickoff.unref === "function") kickoff.unref();
 
-  const interval = setInterval(tick, TICK_INTERVAL_MS);
+  const interval = setInterval(trackTick(tick), TICK_INTERVAL_MS);
   if (typeof interval.unref === "function") interval.unref();
 
   console.log(
@@ -901,10 +903,10 @@ export async function startKycAutoApprovalTicker() {
   // Behind the scraper queue (135s) in the staggered kickoff — nothing here is
   // urgent to the minute and a case whose SLA expired hours ago can wait for
   // boot to settle.
-  const kickoff = setTimeout(tick, 150_000);
+  const kickoff = setTimeout(trackTick(tick), 150_000);
   if (typeof kickoff.unref === "function") kickoff.unref();
 
-  const interval = setInterval(tick, TICK_INTERVAL_MS);
+  const interval = setInterval(trackTick(tick), TICK_INTERVAL_MS);
   if (typeof interval.unref === "function") interval.unref();
 
   console.log("[instrumentation] KYC auto-approval SLA sweep (10s) started in-process");
@@ -953,10 +955,10 @@ export async function startEcofyReminderTicker() {
     }
   };
 
-  const kickoff = setTimeout(tick, 170_000);
+  const kickoff = setTimeout(trackTick(tick), 170_000);
   if (typeof kickoff.unref === "function") kickoff.unref();
 
-  const interval = setInterval(tick, TICK_INTERVAL_MS);
+  const interval = setInterval(trackTick(tick), TICK_INTERVAL_MS);
   if (typeof interval.unref === "function") interval.unref();
 
   console.log("[instrumentation] Ecofy reminder sweep (5m) started in-process");
@@ -991,10 +993,10 @@ export async function startCallbackLoopTicker() {
     }
   };
 
-  const kickoff = setTimeout(tick, 255_000);
+  const kickoff = setTimeout(trackTick(tick), 255_000);
   if (typeof kickoff.unref === "function") kickoff.unref();
 
-  const interval = setInterval(tick, TICK_INTERVAL_MS);
+  const interval = setInterval(trackTick(tick), TICK_INTERVAL_MS);
   if (typeof interval.unref === "function") interval.unref();
 
   console.log("[instrumentation] AI-call callback loop (5m) started in-process");
@@ -1028,10 +1030,10 @@ export async function startNbfcRequestSlaTicker() {
   };
 
   // Behind the KYC auto-approval sweep (150s) in the staggered kickoff.
-  const kickoff = setTimeout(tick, 165_000);
+  const kickoff = setTimeout(trackTick(tick), 165_000);
   if (typeof kickoff.unref === "function") kickoff.unref();
 
-  const interval = setInterval(tick, TICK_INTERVAL_MS);
+  const interval = setInterval(trackTick(tick), TICK_INTERVAL_MS);
   if (typeof interval.unref === "function") interval.unref();
 
   console.log("[instrumentation] NBFC request SLA sweep (60s) started in-process");
@@ -1117,10 +1119,10 @@ export async function startRecordingTranscriptionTicker() {
 
   // Staggered kickoff, after the scraper queue (135s) so boot is not a
   // thundering herd. Nothing here is urgent to the second on startup.
-  const kickoff = setTimeout(tick, 150_000);
+  const kickoff = setTimeout(trackTick(tick), 150_000);
   if (typeof kickoff.unref === "function") kickoff.unref();
 
-  const interval = setInterval(tick, TICK_INTERVAL_MS);
+  const interval = setInterval(trackTick(tick), TICK_INTERVAL_MS);
   if (typeof interval.unref === "function") interval.unref();
 
   console.log(
@@ -1199,10 +1201,10 @@ export async function startDriveMirrorTicker() {
   };
 
   // Behind the NBFC request SLA sweep (165s) in the staggered kickoff.
-  const kickoff = setTimeout(tick, 180_000);
+  const kickoff = setTimeout(trackTick(tick), 180_000);
   if (typeof kickoff.unref === "function") kickoff.unref();
 
-  const interval = setInterval(tick, TICK_INTERVAL_MS);
+  const interval = setInterval(trackTick(tick), TICK_INTERVAL_MS);
   if (typeof interval.unref === "function") interval.unref();
 
   console.log("[instrumentation] Google Drive mirror sweep (60s) started in-process");
@@ -1313,10 +1315,10 @@ export async function startOpsMonitorTicker() {
   // Staggered behind every other ticker (5s, 20s, 35s, 45s, 60s) so a cold
   // boot does not open five collectors' worth of queries while the dialer and
   // Zoho are already competing for the same max: 5 connection pool.
-  const kickoff = setTimeout(tick, 75_000);
+  const kickoff = setTimeout(trackTick(tick), 75_000);
   if (typeof kickoff.unref === "function") kickoff.unref();
 
-  const interval = setInterval(tick, TICK_INTERVAL_MS);
+  const interval = setInterval(trackTick(tick), TICK_INTERVAL_MS);
   if (typeof interval.unref === "function") interval.unref();
 
   console.log("[instrumentation] ops-monitor (60s) started in-process");
@@ -1439,10 +1441,10 @@ export async function startDigestTicker() {
   // drive-mirror (180s) and drive-sales (195s). Nothing here is urgent to the
   // minute, and a digest is the last thing that should compete with the app
   // finishing its boot.
-  const kickoff = setTimeout(tick, 210_000);
+  const kickoff = setTimeout(trackTick(tick), 210_000);
   if (typeof kickoff.unref === "function") kickoff.unref();
 
-  const interval = setInterval(tick, TICK_INTERVAL_MS);
+  const interval = setInterval(trackTick(tick), TICK_INTERVAL_MS);
   if (typeof interval.unref === "function") interval.unref();
 
   console.log("[instrumentation] digests (5m) started in-process");
@@ -1525,10 +1527,10 @@ export async function startDriveSalesTicker() {
   // 195s — the next free slot after the Drive mirror sweep at 180s, so a cold
   // boot does not fire every job at once. This one is last on purpose: it is
   // the least urgent and the most expensive per tick.
-  const kickoff = setTimeout(tick, 195_000);
+  const kickoff = setTimeout(trackTick(tick), 195_000);
   if (typeof kickoff.unref === "function") kickoff.unref();
 
-  const interval = setInterval(tick, SCAN_INTERVAL_MS);
+  const interval = setInterval(trackTick(tick), SCAN_INTERVAL_MS);
   if (typeof interval.unref === "function") interval.unref();
 
   // Tracker ID 9 — one extra scan per IST day from 08:30, so the 09:00 Daily
@@ -1564,7 +1566,7 @@ export async function startDriveSalesTicker() {
   const dailyEnabled =
     process.env.NODE_ENV === "production" || process.env.ENABLE_DRIVE_SALES_DAILY === "1";
   if (dailyEnabled) {
-    const daily = setInterval(dailyTick, DAILY_TICK_MS);
+    const daily = setInterval(trackTick(dailyTick, "daily"), DAILY_TICK_MS);
     if (typeof daily.unref === "function") daily.unref();
   }
 
@@ -1611,10 +1613,10 @@ export async function startDealerPaymentReminderTicker() {
   };
 
   // Low priority: behind the digest kickoff in the staggered start.
-  const kickoff = setTimeout(tick, 210_000);
+  const kickoff = setTimeout(trackTick(tick), 210_000);
   if (typeof kickoff.unref === "function") kickoff.unref();
 
-  const interval = setInterval(tick, TICK_INTERVAL_MS);
+  const interval = setInterval(trackTick(tick), TICK_INTERVAL_MS);
   if (typeof interval.unref === "function") interval.unref();
 
   console.log("[instrumentation] dealer payment reminder sweep (15m) started in-process");
@@ -1654,10 +1656,10 @@ export async function startEmiMessagesTicker() {
     }
   };
 
-  const kickoff = setTimeout(tick, 260_000);
+  const kickoff = setTimeout(trackTick(tick), 260_000);
   if (typeof kickoff.unref === "function") kickoff.unref();
 
-  const interval = setInterval(tick, TICK_INTERVAL_MS);
+  const interval = setInterval(trackTick(tick), TICK_INTERVAL_MS);
   if (typeof interval.unref === "function") interval.unref();
 
   console.log("[instrumentation] EMI aging + EMI messages (1h) started in-process");
@@ -1699,10 +1701,10 @@ export async function startDispatchToSoldTicker() {
     }
   };
 
-  const kickoff = setTimeout(tick, 265_000);
+  const kickoff = setTimeout(trackTick(tick), 265_000);
   if (typeof kickoff.unref === "function") kickoff.unref();
 
-  const interval = setInterval(tick, TICK_INTERVAL_MS);
+  const interval = setInterval(trackTick(tick), TICK_INTERVAL_MS);
   if (typeof interval.unref === "function") interval.unref();
 
   console.log("[instrumentation] dispatch-to-sold (daily 09:30 IST) started in-process");
@@ -1797,10 +1799,10 @@ export async function startMonitorMorningTicker() {
   // Behind the digests kickoff at 210s. Launching Chromium is the most
   // expensive thing any ticker in this file does, and 08:00 is a window hours
   // wide — there is nothing to gain by competing with the app's boot for it.
-  const kickoff = setTimeout(tick, 225_000);
+  const kickoff = setTimeout(trackTick(tick), 225_000);
   if (typeof kickoff.unref === "function") kickoff.unref();
 
-  const interval = setInterval(tick, TICK_INTERVAL_MS);
+  const interval = setInterval(trackTick(tick), TICK_INTERVAL_MS);
   if (typeof interval.unref === "function") interval.unref();
 
   console.log("[instrumentation] monitor-morning (5m, 08:00 IST slot) started in-process");
@@ -1861,10 +1863,10 @@ export async function startGreenNewsTicker() {
 
   // 240s out — behind every other kickoff; a news fetch is the least urgent
   // thing a freshly-booted process could be doing.
-  const kickoff = setTimeout(tick, 240_000);
+  const kickoff = setTimeout(trackTick(tick), 240_000);
   if (typeof kickoff.unref === "function") kickoff.unref();
 
-  const interval = setInterval(tick, TICK_INTERVAL_MS);
+  const interval = setInterval(trackTick(tick), TICK_INTERVAL_MS);
   if (typeof interval.unref === "function") interval.unref();
 
   console.log("[instrumentation] green-news (30m ask, 2h effective) started in-process");
@@ -1921,9 +1923,9 @@ export async function startWaAssistantSweepTicker() {
     }
   };
   // After every other kickoff (last one is 225s).
-  const kickoff = setTimeout(tick, 240_000);
+  const kickoff = setTimeout(trackTick(tick), 240_000);
   if (typeof kickoff.unref === "function") kickoff.unref();
-  const interval = setInterval(tick, TICK_INTERVAL_MS);
+  const interval = setInterval(trackTick(tick), TICK_INTERVAL_MS);
   if (typeof interval.unref === "function") interval.unref();
   console.log("[instrumentation] wa-assistant action sweep (60s) started in-process");
 }
@@ -1963,9 +1965,9 @@ export async function startDealerAgreementRefreshTicker() {
     }
   };
 
-  const kickoff = setTimeout(tick, 210_000);
+  const kickoff = setTimeout(trackTick(tick), 210_000);
   if (typeof kickoff.unref === "function") kickoff.unref();
-  const interval = setInterval(tick, TICK_INTERVAL_MS);
+  const interval = setInterval(trackTick(tick), TICK_INTERVAL_MS);
   if (typeof interval.unref === "function") interval.unref();
 
   console.log("[instrumentation] dealer agreement refresh sweep (15 min) started in-process");
@@ -2007,9 +2009,9 @@ export async function startAgreementExpiryReminderTicker() {
     }
   };
 
-  const kickoff = setTimeout(tick, 215_000);
+  const kickoff = setTimeout(trackTick(tick), 215_000);
   if (typeof kickoff.unref === "function") kickoff.unref();
-  const interval = setInterval(tick, TICK_INTERVAL_MS);
+  const interval = setInterval(trackTick(tick), TICK_INTERVAL_MS);
   if (typeof interval.unref === "function") interval.unref();
 
   console.log("[instrumentation] dealer agreement expiry reminder (hourly) started in-process");
@@ -2050,9 +2052,9 @@ export async function startDealerReorderReminderTicker() {
     }
   };
 
-  const kickoff = setTimeout(tick, 220_000);
+  const kickoff = setTimeout(trackTick(tick), 220_000);
   if (typeof kickoff.unref === "function") kickoff.unref();
-  const interval = setInterval(tick, TICK_INTERVAL_MS);
+  const interval = setInterval(trackTick(tick), TICK_INTERVAL_MS);
   if (typeof interval.unref === "function") interval.unref();
 
   console.log("[instrumentation] dealer reorder reminders (hourly) started in-process");
@@ -2087,9 +2089,9 @@ export async function startLeadClocksTicker() {
     }
   };
 
-  const kickoff = setTimeout(tick, 225_000);
+  const kickoff = setTimeout(trackTick(tick), 225_000);
   if (typeof kickoff.unref === "function") kickoff.unref();
-  const interval = setInterval(tick, TICK_INTERVAL_MS);
+  const interval = setInterval(trackTick(tick), TICK_INTERVAL_MS);
   if (typeof interval.unref === "function") interval.unref();
 
   console.log("[instrumentation] lead clocks (hourly) started in-process");
@@ -2129,9 +2131,9 @@ export async function startInvoiceFreshnessTicker() {
     }
   };
 
-  const kickoff = setTimeout(tick, 245_000);
+  const kickoff = setTimeout(trackTick(tick), 245_000);
   if (typeof kickoff.unref === "function") kickoff.unref();
-  const interval = setInterval(tick, TICK_INTERVAL_MS);
+  const interval = setInterval(trackTick(tick), TICK_INTERVAL_MS);
   if (typeof interval.unref === "function") interval.unref();
 
   console.log("[instrumentation] invoice freshness alert (hourly from 10:00 IST) started in-process");
@@ -2174,10 +2176,211 @@ export async function startStockUploadSweepTicker() {
     }
   };
 
-  const kickoff = setTimeout(tick, 250_000);
+  const kickoff = setTimeout(trackTick(tick), 250_000);
   if (typeof kickoff.unref === "function") kickoff.unref();
-  const interval = setInterval(tick, TICK_INTERVAL_MS);
+  const interval = setInterval(trackTick(tick), TICK_INTERVAL_MS);
   if (typeof interval.unref === "function") interval.unref();
 
   console.log("[instrumentation] stock-upload task sweep (hourly) started in-process");
+}
+
+// ---------------------------------------------------------------------------
+// ID 227 — scheduled jobs that were only in vercel.json, which never fires on
+// the PM2 servers. Each runs here now; Ops Console > Jobs shows its last run
+// (scheduled_job_state, E-372). The list of every job, its runner and the
+// ones deliberately left off: src/lib/operations/scheduledJobs.ts.
+// ---------------------------------------------------------------------------
+
+/** Offline-battery alerts every 15 min (only while the device feed is alive). */
+export async function startIotOfflineScanTicker() {
+  if (process.env.VERCEL === "1") return;
+  if (process.env.ENABLE_IOT_OFFLINE_SCAN === "0") return;
+
+  const TICK_INTERVAL_MS = 15 * 60_000;
+  let inFlight = false;
+
+  const tick = async () => {
+    if (inFlight) return;
+    inFlight = true;
+    try {
+      const { runOfflineScanTick } = await import("@/lib/iot/alerts/offlineScanTick");
+      const r = await runOfflineScanTick();
+      if (r.ran) console.log("[instrumentation:iot-offline-scan] scanned", JSON.stringify(r.result));
+    } catch (err) {
+      console.error(
+        "[instrumentation:iot-offline-scan] tick failed:",
+        err instanceof Error ? err.message : err,
+      );
+    } finally {
+      inFlight = false;
+    }
+  };
+
+  const kickoff = setTimeout(trackTick(tick), 270_000);
+  if (typeof kickoff.unref === "function") kickoff.unref();
+
+  const interval = setInterval(trackTick(tick), TICK_INTERVAL_MS);
+  if (typeof interval.unref === "function") interval.unref();
+
+  console.log("[instrumentation] iot-offline-scan (15m) started in-process");
+}
+
+/** AI call costs fetched from Bolna / ElevenLabs every 15 min (the retry net). */
+export async function startCallCostBackfillTicker() {
+  if (process.env.VERCEL === "1") return;
+  if (process.env.ENABLE_CALL_COST_BACKFILL === "0") return;
+
+  const TICK_INTERVAL_MS = 15 * 60_000;
+  let inFlight = false;
+
+  const tick = async () => {
+    if (inFlight) return;
+    inFlight = true;
+    try {
+      const { backfillCallCosts } = await import("@/lib/ai/storage/backfillCallCosts");
+      await backfillCallCosts();
+    } catch (err) {
+      console.error(
+        "[instrumentation:call-cost-backfill] tick failed:",
+        err instanceof Error ? err.message : err,
+      );
+    } finally {
+      inFlight = false;
+    }
+  };
+
+  const kickoff = setTimeout(trackTick(tick), 275_000);
+  if (typeof kickoff.unref === "function") kickoff.unref();
+
+  const interval = setInterval(trackTick(tick), TICK_INTERVAL_MS);
+  if (typeof interval.unref === "function") interval.unref();
+
+  console.log("[instrumentation] call-cost-backfill (15m) started in-process");
+}
+
+/**
+ * Priya KPI task 5 — the AI dialer quality readout: one row per dialling day
+ * (dials, humans, complete conversations per 100 dials, humans gone in 15 s,
+ * inbound answered) emailed to Settings › Dialer alerts, once a day from
+ * 19:20 IST (dialling ends at 19:00). A 5-minute tick claims the day in
+ * digest_runs (kind 'ai_dialer_readout'). Off with ENABLE_AI_DIALER_READOUT=0;
+ * like every job send, suppressed off the live site.
+ */
+export async function startAiDialerReadoutTicker() {
+  if (process.env.VERCEL === "1") return;
+  if (process.env.ENABLE_AI_DIALER_READOUT === "0") return;
+
+  const TICK_INTERVAL_MS = 5 * 60_000;
+  let inFlight = false;
+
+  const tick = async () => {
+    if (inFlight) return;
+    inFlight = true;
+    try {
+      const { runOncePerIstDay } = await import("@/lib/runtime/dailyJob");
+      const { runNightlyReadout } = await import("@/lib/ai-dialer/readout/readoutQuery");
+      const r = await runOncePerIstDay("ai_dialer_readout", { hour: 19, minute: 20 }, () => runNightlyReadout());
+      if (r.ran) console.log(`[instrumentation:ai-dialer-readout] ${r.istDate}: ${JSON.stringify(r.counts)}`);
+    } catch (err) {
+      console.error(
+        "[instrumentation:ai-dialer-readout] tick failed:",
+        err instanceof Error ? err.message : err,
+      );
+    } finally {
+      inFlight = false;
+    }
+  };
+
+  const kickoff = setTimeout(trackTick(tick), 290_000);
+  if (typeof kickoff.unref === "function") kickoff.unref();
+
+  const interval = setInterval(trackTick(tick), TICK_INTERVAL_MS);
+  if (typeof interval.unref === "function") interval.unref();
+
+  console.log("[instrumentation] ai-dialer-readout (daily 19:20 IST) started in-process");
+}
+
+/**
+ * NBFC nightly: CDS → PCI → anomaly flags → COR expiry, once a day from 05:30
+ * IST (the old vercel.json time). A 5-minute tick claims the day in
+ * digest_runs (kind 'nbfc_nightly'). Off outside production unless opted in,
+ * so a dev process on a shared DB cannot take the day's claim.
+ */
+export async function startNbfcNightlyTicker() {
+  if (process.env.VERCEL === "1") return;
+  if (process.env.NODE_ENV !== "production" && process.env.ENABLE_NBFC_NIGHTLY === undefined) return;
+  if (process.env.ENABLE_NBFC_NIGHTLY === "0") return;
+
+  const TICK_INTERVAL_MS = 5 * 60_000;
+  let inFlight = false;
+
+  const tick = async () => {
+    if (inFlight) return;
+    inFlight = true;
+    try {
+      const { runOncePerIstDay } = await import("@/lib/runtime/dailyJob");
+      const { runNbfcNightly } = await import("@/lib/nbfc/nightly");
+      const r = await runOncePerIstDay("nbfc_nightly", { hour: 5, minute: 30 }, runNbfcNightly);
+      if (r.ran) {
+        const line = `[instrumentation:nbfc-nightly] ${r.istDate}: ${JSON.stringify(r.counts)}`;
+        if (r.failed) console.error(`[instrumentation:nbfc-nightly] step failed: ${line}`);
+        else console.log(line);
+      }
+    } catch (err) {
+      console.error(
+        "[instrumentation:nbfc-nightly] tick failed:",
+        err instanceof Error ? err.message : err,
+      );
+    } finally {
+      inFlight = false;
+    }
+  };
+
+  const kickoff = setTimeout(trackTick(tick), 280_000);
+  if (typeof kickoff.unref === "function") kickoff.unref();
+
+  const interval = setInterval(trackTick(tick), TICK_INTERVAL_MS);
+  if (typeof interval.unref === "function") interval.unref();
+
+  console.log("[instrumentation] nbfc-nightly (daily 05:30 IST) started in-process");
+}
+
+/**
+ * ID 201 — "DigiLocker request expired" history lines for both borrowers, even
+ * when nobody opens the Aadhaar card. Every 15 min; same once-keys as the
+ * status routes, so a line is never written twice.
+ */
+export async function startDigilockerExpiryTicker() {
+  if (process.env.VERCEL === "1") return;
+  if (process.env.ENABLE_DIGILOCKER_EXPIRY_SWEEP === "0") return;
+
+  const TICK_INTERVAL_MS = 15 * 60_000;
+  let inFlight = false;
+
+  const tick = async () => {
+    if (inFlight) return;
+    inFlight = true;
+    try {
+      const { runDigilockerExpirySweep } = await import("@/lib/kyc/digilockerExpirySweep");
+      const r = await runDigilockerExpirySweep();
+      if (r.main + r.coBorrower > 0) {
+        console.log(`[instrumentation:digilocker-expiry] expired: ${r.main} main, ${r.coBorrower} co-borrower`);
+      }
+    } catch (err) {
+      console.error(
+        "[instrumentation:digilocker-expiry] tick failed:",
+        err instanceof Error ? err.message : err,
+      );
+    } finally {
+      inFlight = false;
+    }
+  };
+
+  const kickoff = setTimeout(trackTick(tick), 285_000);
+  if (typeof kickoff.unref === "function") kickoff.unref();
+
+  const interval = setInterval(trackTick(tick), TICK_INTERVAL_MS);
+  if (typeof interval.unref === "function") interval.unref();
+
+  console.log("[instrumentation] digilocker-expiry (15m) started in-process");
 }

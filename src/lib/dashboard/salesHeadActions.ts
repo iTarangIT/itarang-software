@@ -58,6 +58,9 @@ import { WORKABLE_STATUSES } from "@/lib/lifecycle/transitions";
 import { workingHoursBetween } from "@/lib/leads/workingHours";
 import { loadOfficeCalendar, workingDaysSinceSql } from "@/lib/calendar/holidays";
 import { getTimeLimits } from "@/lib/timeLimits/store";
+import { fieldVisitDetail, filterVisitBooked, parseVisitBooked } from "@/lib/dashboard/fieldVisitText";
+import { LEAD_STATUS_LABEL } from "@/lib/leads/queueFilters";
+import type { LeadStatus } from "@/lib/lifecycle/transitions";
 import { listStockTasks, STOCK_TASK_ROLES, STOCK_TASKS_HREF } from "@/lib/inventory/stockUploadTasks/service";
 
 export const ACTION_KEYS = [
@@ -136,6 +139,8 @@ export type ActionRow = {
     past_limit?: boolean;
     /** Working days the row has waited (field visit: since transfer; quote: since delivery) — My day's sort. */
     days?: number | null;
+    /** ID 222, Waiting for a field visit: the booked visit ("13 Nov"), null when none. */
+    visit_booked?: string | null;
 };
 
 export type ActionTileData = { count: number; sub: string };
@@ -301,7 +306,14 @@ async function visitOverdue(s: ActionScope): Promise<Built> {
                    COALESCE(a.id::text, u.id::text) AS owner_id,
                    ${IST_DAY(sql.raw(TRANSFER_AT_EXPR))} AS transferred_on,
                    ${TRANSFER_WORKING_DAYS_SQL} AS days,
-                   FLOOR(${transferLimit})::int AS lim
+                   FLOOR(${transferLimit})::int AS lim,
+                   -- ID 222: the booked visit, as Leads' "Next visit date": the
+                   -- earliest from today not visited, cancelled or no-show.
+                   (SELECT TO_CHAR(MIN(v.scheduled_date), 'DD Mon')
+                      FROM lead_visits v
+                     WHERE v.dealer_lead_id = dl.id
+                       AND v.scheduled_date >= (now() AT TIME ZONE 'Asia/Kolkata')::date
+                       AND v.visit_status NOT IN ('visited', 'cancelled', 'no_show')) AS visit_booked
               FROM dealer_leads dl
               LEFT JOIN users a ON a.id::text = dl.asm_id
               LEFT JOIN users u ON u.id::text = dl.current_owner_id
@@ -311,13 +323,12 @@ async function visitOverdue(s: ActionScope): Promise<Built> {
         const days = Number(r.days);
         const lim = Number(r.lim);
         const past = days > lim;
+        const booked = r.visit_booked ? String(r.visit_booked) : null;
         return {
-            ...base(
-                r,
-                `Transferred ${String(r.transferred_on)} · ${plural(days, "working day")}, no visit · ${past ? "past" : "within"} the limit (${plural(lim, "working day")})`,
-            ),
+            ...base(r, fieldVisitDetail({ transferredOn: String(r.transferred_on), days, lim, booked })),
             past_limit: past,
             days,
+            visit_booked: booked,
         };
     });
     const pastRows = rows.filter((r) => r.past_limit);
@@ -457,7 +468,7 @@ async function hotAged(s: ActionScope): Promise<Built> {
     const rows = raw.map((r) =>
         base(
             r,
-            `Hot since ${String(r.hot_since)} · ${plural(Number(r.age), "day")} · ${r.lead_status ? String(r.lead_status).replace(/_/g, " ") : "not in sales yet"}`,
+            `Hot since ${String(r.hot_since)} · ${plural(Number(r.age), "day")} · ${r.lead_status ? (LEAD_STATUS_LABEL[String(r.lead_status) as LeadStatus] ?? String(r.lead_status).replace(/_/g, " ")) : "not in sales yet"}`,
         ),
     );
     const over30 = raw.filter((r) => Number(r.age) > 30).length;
@@ -591,9 +602,19 @@ export function searchActionRows(rows: ActionRow[], q: string | null | undefined
     );
 }
 
-/** One tile's rows for the list page and its CSV — the same filters for both. */
-export async function listSalesHeadActionFiltered(key: ActionKey, p: URLSearchParams): Promise<ActionRow[]> {
-    return searchActionRows(await listSalesHeadAction(key, actionScopeFrom(p)), p.get("q"));
+/**
+ * One tile's rows for the list page and its CSV — the same filters for both.
+ * `teamIds` = a manager's team view (needsActionAccess), else the whole list.
+ */
+export async function listSalesHeadActionFiltered(
+    key: ActionKey,
+    p: URLSearchParams,
+    teamIds?: string[] | null,
+): Promise<ActionRow[]> {
+    const scope = teamIds ? { ...actionScopeFrom(p), teamIds } : actionScopeFrom(p);
+    const rows = searchActionRows(await listSalesHeadAction(key, scope), p.get("q"));
+    // ID 222: No visit booked / Visit booked, on the field-visit list only.
+    return key === "visit_overdue" ? filterVisitBooked(rows, parseVisitBooked(p.get("visit"))) : rows;
 }
 
 /**
@@ -619,10 +640,13 @@ export const ACTION_CSV_COLUMNS: Array<{ header: string; value: (r: ActionRow) =
     { header: "Owner", value: (r) => r.owner_name ?? "" },
     { header: "Why it is here", value: (r) => r.detail },
     { header: "Past the limit", value: (r) => (r.past_limit == null ? "" : r.past_limit ? "Yes" : "No") },
+    { header: "Visit booked for", value: (r) => r.visit_booked ?? "" },
     { header: "Value (Rs)", value: (r) => (r.value == null ? "" : String(Math.round(r.value))) },
 ];
 
-/** One tile's CSV columns: "Past the limit" only where the tile sets it (ID 190, field visits). */
+/** One tile's CSV columns: "Past the limit" and "Visit booked for" only on field visits (IDs 190, 222). */
 export function actionCsvColumns(key: ActionKey): typeof ACTION_CSV_COLUMNS {
-    return key === "visit_overdue" ? ACTION_CSV_COLUMNS : ACTION_CSV_COLUMNS.filter((c) => c.header !== "Past the limit");
+    return key === "visit_overdue"
+        ? ACTION_CSV_COLUMNS
+        : ACTION_CSV_COLUMNS.filter((c) => c.header !== "Past the limit" && c.header !== "Visit booked for");
 }

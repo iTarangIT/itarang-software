@@ -5,6 +5,7 @@
 // paid and owed before → after, customers whose balance moves), then import.
 // Same endpoint as Invoice Ledger › Import; nothing is written until Import.
 
+import { InfoTip } from "@/components/ui/info-tip";
 import { Fragment, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AlertTriangle, ArrowRight, CheckCircle2, FileSpreadsheet, Loader2, Upload, X } from "lucide-react";
@@ -182,13 +183,11 @@ export default function VyaparPaymentUpload() {
     const [busy, setBusy] = useState<"preview" | "commit" | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [view, setView] = useState<"changes" | "all">("changes");
-    const [allowOlder, setAllowOlder] = useState(false);
 
     const reset = () => {
         setFile(null);
         setPreview(null);
         setError(null);
-        setAllowOlder(false);
         setView("changes");
         if (input.current) input.current.value = "";
     };
@@ -202,13 +201,11 @@ export default function VyaparPaymentUpload() {
             fd.append("file", file);
             fd.append("kind", "vyapar_register");
             fd.append("mode", mode);
-            if (mode === "commit" && allowOlder) fd.append("allow_older", "1");
             const res = await fetch("/api/admin/sales-invoices/ledger/import", { method: "POST", body: fd });
             if (mode === "preview") {
                 const data = await readData<{ preview: Preview }>(res, "Could not read the file");
                 setPreview(data.preview);
                 setView("changes");
-                setAllowOlder(false);
                 return;
             }
             const data = await readData<{ summary: Record<string, number> }>(res, "Import failed");
@@ -265,7 +262,8 @@ export default function VyaparPaymentUpload() {
     const nothingToDo = classified && counts.new + counts.updated === 0;
     const shown = view === "changes" ? changed : (preview?.rows ?? []);
     const flagged = (p?.not_in_file.length ?? 0) + (p?.before_period.count ?? 0);
-    const blocked = !!p?.older_than_last && !allowOlder;
+    // ID 200 d (Kartik, 4 Nov): an older export is refused, no override.
+    const blocked = !!p?.older_than_last;
 
     const pill = (k: "changes" | "all", text: string, n: number) => (
         <button
@@ -285,9 +283,10 @@ export default function VyaparPaymentUpload() {
                 <div>
                     <h2 className="text-sm font-semibold text-gray-900">Update payments from Vyapar</h2>
                     <p className="mt-0.5 text-xs text-gray-500">
-                        Upload the Vyapar <span className="font-medium text-gray-700">Sale Report</span> (Reports › Sale Report › Excel, from
-                        the start of the financial year). Each invoice&apos;s paid amount is set to what Vyapar has received so far — re-uploading
-                        the same file changes nothing. Preview first; nothing is saved until you import.
+                        Upload the Vyapar <span className="font-medium text-gray-700">Sale Report</span>; preview first, nothing is saved until you import.
+                        <InfoTip className="ml-1">
+                            {"In Vyapar: Reports › Sale Report › Excel, from the start of the financial year. Each invoice's paid amount is set to what Vyapar has received so far, so uploading the same file again changes nothing."}
+                        </InfoTip>
                     </p>
                 </div>
                 <button
@@ -413,11 +412,9 @@ export default function VyaparPaymentUpload() {
                             <p className="flex items-center gap-2 font-semibold">
                                 <AlertTriangle className="h-4 w-4" /> This export is older than the last one imported ({istStamp(p.last_generated_at)}).
                             </p>
-                            <p className="mt-0.5 text-xs">Importing it would set payments back to older figures. Export the Sale Report again from Vyapar.</p>
-                            <label className="mt-1.5 flex items-center gap-2 text-xs">
-                                <input type="checkbox" checked={allowOlder} onChange={(e) => setAllowOlder(e.target.checked)} />
-                                I understand — import this older file anyway
-                            </label>
+                            <p className="mt-0.5 text-xs">
+                                It cannot be imported: it would set payments back to older figures. Export the Sale Report again from Vyapar and upload that.
+                            </p>
                         </div>
                     )}
 

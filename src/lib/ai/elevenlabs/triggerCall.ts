@@ -7,6 +7,8 @@ import { normalizeIndianPhone, phoneLookupVariants } from "@/lib/ai/phone";
 import { dedupClaim } from "@/lib/queue/safeRedis";
 import { openingLanguageOverride } from "@/lib/ai-dialer/callLanguage";
 import { ElevenLabsCallPayload, ElevenLabsCallResponse } from "./types";
+import { redialHints } from "@/lib/ai-dialer/dispositionV3";
+import { lastDispositionRuleFor } from "@/lib/ai/storage/dialDisposition";
 
 // One ElevenLabs call per (lead, phone, day). Same rationale as Bolna —
 // stops QStash retries from billing 3x for the same daily outreach attempt.
@@ -255,6 +257,8 @@ export async function triggerElevenLabsCall(
       last_call_memory: lastCallMemory,
       persistent_memory: persistentMemory,
       timezone: "Asia/Kolkata",
+      // Dispositions v3 — how the last dial ended shapes this one's opening.
+      ...redialHints(await lastDispositionRuleFor(lead.id)),
     };
 
     // Item 2 (3 Nov 2026) — open in the dealer's own language when an earlier

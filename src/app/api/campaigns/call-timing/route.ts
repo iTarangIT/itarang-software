@@ -80,11 +80,13 @@ const Body = z.object({
     window_start: z.string().regex(HHMM),
     window_end: z.string().regex(HHMM),
     reason: z.string().max(500).optional(),
+    /** ID 85: the IST day the hours start; absent = today. */
+    effective_from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
 });
 
 export const POST = withErrorHandler(async (req: Request) => {
     const user = await requireRole([...CALLING_HOURS_EDIT_ROLES]);
     const b = Body.parse(await req.json());
-    const { logged } = await setDefaultCallingHours(b.window_start, b.window_end, user.id, b.reason ?? null);
-    return successResponse({ ok: true, window_start: b.window_start, window_end: b.window_end, logged });
+    const { logged, scheduled } = await setDefaultCallingHours(b.window_start, b.window_end, user.id, b.reason ?? null, b.effective_from ?? null);
+    return successResponse({ ok: true, window_start: b.window_start, window_end: b.window_end, logged, scheduled });
 });

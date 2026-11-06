@@ -35,9 +35,9 @@ const TARGET: Record<QuoteStatusEvent, LeadStatus> = {
 };
 
 const REMARK: Record<QuoteStatusEvent, string> = {
-    created: "Quote created — Commercials explained.",
+    created: "Quote created — Quote given.",
     delivered: "Quote delivered to the dealer — awaiting their decision.",
-    dealer_approved: "Dealer approved the quote — Commercials finalised. Next: Mark Won.",
+    dealer_approved: "Dealer approved the quote — Dealer agreed. Next: Mark Won.",
 };
 
 export type QuoteEventResult = {

@@ -17,7 +17,11 @@ type Settings = {
     neodovePush: boolean;
     updatedAt: string | null;
 };
-type UserOption = { id: string; name: string | null; role: string | null };
+type OnTime = { userId: string; name: string | null; due: number; onTime: number; pct: number | null };
+// /api/admin/users answers user_id. This read `id` before 5 Nov 2026: every
+// option had no value, so the picker saved the option TEXT ("Name (role)") as
+// an owner id and the round-robin could never assign anyone.
+type UserOption = { user_id: string; name: string | null; role: string | null };
 
 const QUERY_KEY = ["callback-loop-settings"];
 
@@ -33,7 +37,7 @@ export function CallbackLoopForm() {
             const res = await fetch("/api/admin/settings/callback-loop", { cache: "no-store" });
             const json = await res.json();
             if (!res.ok || !json.success) throw new Error(json?.error?.message ?? "Failed to load");
-            return json.data.settings as Settings;
+            return json.data as { settings: Settings; onTime: OnTime[] };
         },
     });
     const usersQ = useQuery({
@@ -57,10 +61,11 @@ export function CallbackLoopForm() {
         return <div className="py-8 text-sm text-red-600">Failed to load the callback settings.</div>;
     }
 
-    const saved = settingsQ.data;
+    const saved = settingsQ.data.settings;
+    const onTime = settingsQ.data.onTime ?? [];
     const current = draft ?? { ownerIds: saved.ownerIds, neodovePush: saved.neodovePush };
     const users = usersQ.data ?? [];
-    const nameOf = (id: string) => users.find((u) => u.id === id)?.name ?? id;
+    const nameOf = (id: string) => users.find((u) => u.user_id === id)?.name ?? id;
     const dirty = draft !== null;
 
     const update = (next: Partial<typeof current>) => setDraft({ ...current, ...next });
@@ -145,10 +150,10 @@ export function CallbackLoopForm() {
                     >
                         <option value="">Add an ISR…</option>
                         {users
-                            .filter((u) => !current.ownerIds.includes(u.id))
+                            .filter((u) => !current.ownerIds.includes(u.user_id))
                             .map((u) => (
-                                <option key={u.id} value={u.id}>
-                                    {u.name ?? u.id}
+                                <option key={u.user_id} value={u.user_id}>
+                                    {u.name ?? u.user_id}
                                     {u.role ? ` (${u.role.replace(/_/g, " ")})` : ""}
                                 </option>
                             ))}
@@ -177,12 +182,44 @@ export function CallbackLoopForm() {
                 <span>
                     Push callbacks to NeoDove
                     <span className="block text-xs text-ink-muted">
-                        15 minutes before the promised time, the lead is sent to the ISR&apos;s own NeoDove campaign
-                        with the brief. Turn on only after the one-off test: an owned test lead reaches her NeoDove
-                        list and her call comes back under her name.
+                        As soon as a callback is assigned, the lead is sent to the ISR&apos;s own NeoDove campaign
+                        with the brief (retried 15 minutes before it is due if that did not go through). Turn on only
+                        after the one-off test: an owned test lead reaches her NeoDove list and her call comes back
+                        under her name.
                     </span>
                 </span>
             </label>
+
+            <div className="space-y-2">
+                <p className="text-xs font-medium text-ink">Promised callbacks made within 30 minutes — last 7 days</p>
+                {onTime.length === 0 ? (
+                    <p className="text-xs text-ink-muted">No callback fell due in the last 7 days.</p>
+                ) : (
+                    <table className="w-full text-xs">
+                        <thead className="text-left text-ink-muted">
+                            <tr>
+                                <th className="py-1 font-medium">Owner</th>
+                                <th className="py-1 font-medium text-right">Due</th>
+                                <th className="py-1 font-medium text-right">On time</th>
+                                <th className="py-1 font-medium text-right">%</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {onTime.map((r) => (
+                                <tr key={r.userId} className="border-t border-border">
+                                    <td className="py-1">{r.name ?? r.userId}</td>
+                                    <td className="py-1 text-right tabular-nums">{r.due}</td>
+                                    <td className="py-1 text-right tabular-nums">{r.onTime}</td>
+                                    <td className="py-1 text-right tabular-nums">{r.pct == null ? "—" : `${r.pct}%`}</td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                )}
+                <p className="text-[11px] text-ink-muted">
+                    On time = a call or visit logged between 15 minutes before and 30 minutes after the time Priya promised.
+                </p>
+            </div>
 
             <div className="flex items-center gap-3">
                 <Button onClick={save} disabled={!dirty || saving}>

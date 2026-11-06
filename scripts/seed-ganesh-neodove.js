@@ -35,10 +35,15 @@ const postgres = require('postgres');
 
 const USER = {
     email: 'ganesh@itarangjosh.com',
-    password: 'Ganesh_Sales@2026',
+    // ID 225: set SEED_USER_PASSWORD; no password is kept in the code.
+    password: process.env.SEED_USER_PASSWORD,
     name: 'Ganesh',
     role: 'asm',
 };
+if (!USER.password) {
+    console.error('Set SEED_USER_PASSWORD first.');
+    process.exit(1);
+}
 
 const CAMPAIGN = {
     // The row this script first seeded (NDC-20260825-401) was deleted as a

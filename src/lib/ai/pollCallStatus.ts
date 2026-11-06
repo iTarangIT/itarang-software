@@ -122,6 +122,7 @@ export async function runDialerPollOnce(): Promise<DialerPollResult> {
             answeredBy: s.answeredBy ?? null,
             callResult: s.callResult ?? null,
             callLanguage: s.callLanguage ?? null,
+            callbackAgreed: s.callbackAgreed ?? null,
           });
           result.finalized += 1;
           result.perRow.push({

@@ -13,10 +13,36 @@ import {
   type CollectorHealth,
 } from "@/lib/operations/runner";
 
+import {
+  getScheduledJobsReport,
+  type ScheduledJobsReport,
+} from "@/lib/operations/scheduledJobsStatus";
+
 import { AutoRefresh } from "../_components/AutoRefresh";
 import { RunCollectorButton } from "../_components/RunCollectorButton";
+import { ScheduledJobsCard } from "../_components/ScheduledJobsCard";
 
-export const metadata = { title: "Collectors · Ops Console" };
+export const metadata = { title: "Jobs · Ops Console" };
+
+/** ID 227 — the scheduled jobs list; its own failure never hides the collectors. */
+async function ScheduledJobsSection() {
+  let report: ScheduledJobsReport;
+  try {
+    report = await getScheduledJobsReport();
+  } catch (e) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base text-danger">Scheduled jobs unavailable</CardTitle>
+        </CardHeader>
+        <CardContent className="text-xs text-ink-muted">
+          {e instanceof Error ? e.message : String(e)}
+        </CardContent>
+      </Card>
+    );
+  }
+  return <ScheduledJobsCard report={report} />;
+}
 
 /**
  * Collector health — "is the monitoring itself alive?"
@@ -81,9 +107,12 @@ export default async function OperationsJobsPage() {
     ]);
   } catch (e) {
     return (
-      <MissingTables
-        message={e instanceof Error ? e.message : String(e)}
-      />
+      <div className="space-y-4">
+        <ScheduledJobsSection />
+        <MissingTables
+          message={e instanceof Error ? e.message : String(e)}
+        />
+      </div>
     );
   }
 
@@ -92,6 +121,7 @@ export default async function OperationsJobsPage() {
 
   return (
     <div className="space-y-4">
+      <ScheduledJobsSection />
       <Card>
         <CardHeader className="flex flex-row items-start justify-between gap-3">
           <div>

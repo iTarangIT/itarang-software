@@ -40,6 +40,7 @@ import { displayCampaignName } from "@/lib/leads/regionSummary";
 import { onboardingStall, STALL_LABEL } from "@/lib/onboarding/stall";
 import { connectedCall, engagedCall, engagedState, humanCall } from "@/lib/reports/metricDefinitions";
 import { TARGET_METRIC_KEYS, TARGET_STATUS_LABEL, TARGET_STATUSES } from "@/lib/targets/rules";
+import { CLOSED_LEAD_STATUSES, contactabilityText, leadStatusText } from "./labels";
 import { listTargets, targetViewerFor, targetVisibleSql } from "@/lib/targets/service";
 
 import { DOWNLOAD_ROW_CAP, initialsOf, TEAM_ROLES, type DatasetInfo, type DatasetSheet } from "./types";
@@ -130,16 +131,26 @@ function commonConds(ctx: RunContext, cols: { person?: SQL; state?: SQL; leadId?
     return out;
 }
 
-/** `from` / `to` as an inclusive range on a calendar-day expression. Default: this month, or every row. */
+/**
+ * `from` / `to` as an inclusive range on a calendar-day expression. Default:
+ * this month to today, or every row. ID 224: a range with no end runs to today
+ * (IST) — "this month" used to have no end, so Visits listed December and
+ * January bookings. The same rule as range.ts effectiveRange(), which the file
+ * and the page state.
+ */
 function dayRange(params: URLSearchParams, day: SQL, whenEmpty: "month" | "all" = "month"): SQL {
     const from = params.get("from");
     const to = params.get("to");
+    const okFrom = !!from && ISO_DATE.test(from);
+    const okTo = !!to && ISO_DATE.test(to);
     const conds: SQL[] = [];
-    if (from && ISO_DATE.test(from)) conds.push(sql`${day} >= ${from}::date`);
-    if (to && ISO_DATE.test(to)) conds.push(sql`${day} <= ${to}::date`);
+    if (okFrom) conds.push(sql`${day} >= ${from}::date`);
+    if (okTo) conds.push(sql`${day} <= ${to}::date`);
+    else if (okFrom) conds.push(sql`${day} <= ${IST_TODAY}`);
     if (conds.length === 0) {
         if (whenEmpty === "all") return sql`TRUE`;
         conds.push(sql`${day} >= date_trunc('month', (now() AT TIME ZONE 'Asia/Kolkata'))::date`);
+        conds.push(sql`${day} <= ${IST_TODAY}`);
     }
     return sql.join(conds, sql` AND `);
 }
@@ -190,6 +201,9 @@ async function leadExtras(ids: string[]): Promise<Map<string, Record<string, unk
               LEFT JOIN LATERAL (
                   SELECT NULL::timestamptz AS started_at, NULL::timestamptz AS first_attempt_at, NULL::int AS attempt_working_minutes,
                          NULL::timestamptz AS limit_passed_at, NULL::boolean AS owner_inferred) oc ON TRUE`;
+        // ID 223: the lead columns and the campaign lookup are independent, so
+        // they run together; the campaign chunks two at a time.
+        const campaignsP = campaignsFor(ids);
         const data = await rows(sql`
             SELECT dl.id AS lead_id,
                    x.j ->> 'gstin' AS gstin,
@@ -214,6 +228,7 @@ async function leadExtras(ids: string[]): Promise<Map<string, Record<string, unk
                    x.j ->> 'intent_band' AS ai_band,
                    x.j ->> 'final_intent_score' AS ai_score,
                    x.j ->> 'contactability' AS contactability,
+                   dl.lead_status AS status_code,
                    x.j ->> 'last_disposition' AS last_call_outcome,
                    q.value AS quote_value, q.state AS quote_state,
                    acct.activated_at AS account_activated_on,
@@ -237,20 +252,27 @@ async function leadExtras(ids: string[]): Promise<Map<string, Record<string, unk
                     FROM dealer_lead_commercials c
                    WHERE c.dealer_lead_id = dl.id AND c.event_type IN ('quote_issue', 'quote_revision')
                    ORDER BY c.version_no DESC LIMIT 1) q ON TRUE
+              -- ID 224: the Dealer accounts rule (accountList.ts): activated_at, else
+              -- the account's created date. accounts has no activated_at column
+              -- today, so this column was blank on every lead.
               LEFT JOIN LATERAL (
-                  SELECT (to_jsonb(a) ->> 'activated_at')::timestamptz AS activated_at
+                  SELECT COALESCE((to_jsonb(a) ->> 'activated_at')::timestamptz, a.created_at) AS activated_at
                     FROM accounts a JOIN account_ownership ao ON ao.account_id = a.id
                    WHERE ao.source_dealer_lead_id = dl.id LIMIT 1) acct ON TRUE
              WHERE dl.id IN ${jsonIds(ids)}
         `);
         // HANDOVER-A31 (22 Oct check): the Leads list's campaign — the latest AI
         // dialer / NeoDove campaign — from its own lookup (never throws).
-        const campaigns: Record<string, LeadCampaign> = {};
-        for (let i = 0; i < ids.length; i += 1_000) Object.assign(campaigns, await fetchCampaignForLeads(ids.slice(i, i + 1_000)));
+        const campaigns = await campaignsP;
+        // ID 223: one holiday set for the whole file, not one per lead.
+        const holidaySet = new Set(holidays);
+        const nowMs = Date.now();
         for (const r of data) {
             // created_at has no time zone and is stored as UTC.
             const created = r.created_on ? `${String(r.created_on).replace(" ", "T")}Z` : null;
-            const closed = r.lost_on || r.account_activated_on;
+            // ID 224: a Won / Converted / Lost lead is closed whatever its dates say
+            // (Lost leads could lack closed_at; Won ones were never treated as closed).
+            const closed = CLOSED_LEAD_STATUSES.has(String(r.status_code ?? "")) || r.lost_on || r.account_activated_on;
             out.set(String(r.lead_id), {
                 ...r,
                 created_on: created,
@@ -259,6 +281,7 @@ async function leadExtras(ids: string[]): Promise<Map<string, Record<string, unk
                 campaign: campaigns[String(r.lead_id)]?.name ?? null,
                 campaign_system: campaigns[String(r.lead_id)] ? CAMPAIGN_SYSTEM_LABEL[campaigns[String(r.lead_id)].system] : null,
                 owner_role: ((r.owner_role as string | null) ?? "").replace(/_/g, " ") || null,
+                contactability: contactabilityText(r.contactability),
                 // The score column defaults to 0; a lead the AI never scored shows blank, not 0.
                 ai_score: r.ai_band || Number(r.ai_score) > 0 ? r.ai_score : null,
                 idle_past_limit: closed ? null : (r.idle_past_limit ?? null),
@@ -274,8 +297,8 @@ async function leadExtras(ids: string[]): Promise<Map<string, Record<string, unk
                               next_follow_up_at: (r.next_follow_up as string | null) ?? null,
                               created_at: created,
                           },
-                          Date.now(),
-                          new Set(holidays),
+                          nowMs,
+                          holidaySet,
                           hours,
                       ),
             });
@@ -286,12 +309,36 @@ async function leadExtras(ids: string[]): Promise<Map<string, Record<string, unk
     return out;
 }
 
-/** The shared `person` filter is the lead list's own `owner_id` (the current owner). */
+/**
+ * The shared `person` filter is the lead list's own `owner_id` (the current owner).
+ * ID 224 point 5: the download includes dead numbers and AI-disqualified leads
+ * unless `contactability` says "hide" (Leave them out) or "only".
+ */
 function leadParams(ctx: RunContext): URLSearchParams {
     const p = new URLSearchParams(ctx.params);
     const person = personParam(ctx);
     if (person) p.set("owner_id", person);
+    const c = p.get("contactability");
+    if (c === "hide") {
+        p.delete("contactability");
+        p.set("hide_dead", "1");
+    } else if (c !== "only") {
+        p.set("contactability", "include");
+        p.set("hide_dead", "0");
+    }
     return p;
+}
+
+/** HANDOVER-A31: each lead's latest campaign, 1,000 ids a query, two queries at a time. */
+async function campaignsFor(ids: string[]): Promise<Record<string, LeadCampaign>> {
+    const chunks: string[][] = [];
+    for (let i = 0; i < ids.length; i += 1_000) chunks.push(ids.slice(i, i + 1_000));
+    const out: Record<string, LeadCampaign> = {};
+    for (let i = 0; i < chunks.length; i += 2) {
+        const parts = await Promise.all(chunks.slice(i, i + 2).map((c) => fetchCampaignForLeads(c)));
+        for (const part of parts) Object.assign(out, part);
+    }
+    return out;
 }
 
 const leads: Dataset = {
@@ -301,10 +348,26 @@ const leads: Dataset = {
     roles: MANAGERS,
     ownRowsRoles: ["asm", "inside_sales_rep", "partner"],
     dateFields: [{ value: "created", label: "Lead created" }],
+    // The lead list has no default range: no dates = every lead.
+    allWhenNoDates: true,
+    // ID 223: above 5,000 leads the file is emailed (11-12 s for 5,116 on the sandbox).
+    atOnceRows: 5_000,
     commonFilters: ["person"],
     background: true,
     filters: [
         { key: "search", label: "Search (name, or mobile numbers separated by commas)", type: "text" },
+        // ID 224 point 5: dead numbers and AI-disqualified leads are IN the file
+        // unless asked otherwise. The Leads list hides them by default and the
+        // download inherited that, so "Contactability" was blank on every row.
+        {
+            key: "contactability",
+            label: "Dead numbers & AI-disqualified",
+            type: "select",
+            options: [
+                { value: "hide", label: "Leave them out" },
+                { value: "only", label: "Only those" },
+            ],
+        },
         { key: "state", label: "State", type: "text" },
         { key: "city", label: "City", type: "text" },
         // ID 11 — read by parseLeadListFilters, same values as the Leads list.
@@ -364,7 +427,7 @@ const leads: Dataset = {
                 { key: "city", header: "City", meaning: "Lead's city." },
                 { key: "state", header: "State", meaning: "Lead's state." },
                 { key: "business_type", header: "Type of business", meaning: "Battery sale, buyback, scrap or other; 'Not set' on leads created before 17 Sep 2026." },
-                { key: "lead_status", header: "Status", meaning: "Current pipeline status.", width: 22 },
+                { key: "lead_status", header: "Status", meaning: "Current pipeline status, as the Leads list shows it. 'Not in pipeline' = no status yet (for example an AI dialer list lead not yet called through).", width: 22 },
                 { key: "interest_level", header: "Temperature", meaning: "Hot, Warm or Cold." },
                 { key: "owner_name", header: "Current owner", meaning: "Who holds the lead today. Open-lead counts follow this person.", width: 22 },
                 { key: "closed_by_name", header: "Closed by", meaning: "Who held the lead when it was won or lost. Conversions are credited here and never move with reassignment.", width: 22 },
@@ -404,11 +467,11 @@ const leads: Dataset = {
                 { key: "next_follow_up", header: "Next follow-up", meaning: "The follow-up date set on the lead.", kind: "datetime" },
                 { key: "ai_band", header: "AI band", meaning: "Qualified, Warm, Cold or Disqualified, from the AI call." },
                 { key: "ai_score", header: "AI score", meaning: "The AI intent score.", kind: "number" },
-                { key: "contactability", header: "Contactability", meaning: "Set when the dealer cannot be reached (wrong number, do not call …)." },
+                { key: "contactability", header: "Contactability", meaning: "Dead number, or non-responsive (6 calls on 6 days over 45 days, no answer). Blank = reachable. Included in the file unless the filter leaves them out." },
                 { key: "last_call_outcome", header: "Last call outcome", meaning: "The outcome of the most recent call." },
                 { key: "quote_value", header: "Latest quote (₹)", meaning: "Value of the newest quote version on the lead.", kind: "money" },
                 { key: "quote_state", header: "Latest quote state", meaning: "Pending, approved or rejected by iTarang; then the dealer's answer; or withdrawn." },
-                { key: "account_activated_on", header: "Account activated on", meaning: "When the dealer account that came from this lead went live.", kind: "datetime" },
+                { key: "account_activated_on", header: "Account activated on", meaning: "When the dealer account that came from this lead went live: the same date as Dealer accounts' 'Activated on' (the account's creation when no activation time is stored).", kind: "datetime" },
                 { key: "lost_on", header: "Lost on", meaning: "When the lead was closed as Lost.", kind: "datetime" },
                 { key: "lost_reason", header: "Lost reason", meaning: "Why it was lost.", width: 24 },
                 { key: "competitor", header: "Competitor", meaning: "The competitor named when it was lost.", width: 22 },
@@ -462,6 +525,8 @@ const leads: Dataset = {
         const ids = leadRows.map((r) => r.lead_id);
         if (ids.length === 0) return this.sheets.map((s) => ({ ...s, rows: [] }));
 
+        // ID 223: the extra lead columns run alongside the three side sheets.
+        const moreP = leadExtras(ids);
         const invoices = await matchedUnion();
         const [calls, visits, invoiceRows] = await Promise.all([
             rows(sql`
@@ -507,7 +572,7 @@ const leads: Dataset = {
             billing.set(k, b);
         }
 
-        const more = await leadExtras(ids);
+        const more = await moreP;
         const [leadsSheet, callsSheet, visitsSheet, invoicesSheet] = this.sheets;
         return [
             {
@@ -518,6 +583,8 @@ const leads: Dataset = {
                         ...(more.get(r.lead_id) ?? {}),
                         ...r,
                         dealer_name: r.dealer_name ?? r.shop_name,
+                        // ID 224: Status in words, as on screen.
+                        lead_status: leadStatusText(r.lead_status),
                         business_type: businessTypeLabel(r.business_type),
                         invoices: b?.n ?? 0,
                         billed: b?.total ?? null,
@@ -843,6 +910,8 @@ const dealerAccounts: Dataset = {
     ownRowsRoles: ["asm", "inside_sales_rep"],
     dateFields: [],
     commonFilters: ["person", "state"],
+    // ID 223: "Email me the file" is offered on every download.
+    background: true,
     filters: [
         { key: "came_through", label: "Came through", type: "select", options: [{ value: "lead", label: "Lead" }, { value: "direct", label: "Direct onboarding" }] },
         { key: "bucket", label: "Health", type: "select", options: ACCOUNT_BUCKETS.map((b) => ({ value: b, label: ACCOUNT_BUCKET_LABELS[b] })) },
@@ -930,6 +999,8 @@ const leadEvents: Dataset = {
     roles: MANAGERS,
     dateFields: [{ value: "event", label: "Event time" }],
     commonFilters: ["person"],
+    // ID 223: "Email me the file" is offered on every download.
+    background: true,
     // ID 34 — pick the event types here instead of filtering in Excel.
     filters: [
         { key: "event_type", label: "Event type", type: "multiselect", options: LEAD_EVENT_TYPES.map((t) => ({ value: t.value, label: t.label })) },
@@ -1081,7 +1152,11 @@ const calls: Dataset = {
                    ${engagedState(t)} AS engaged,
                    (SELECT a.band FROM ai_call_logs a
                      WHERE ${AI_CALL} AND a.call_id = t.external_event_id LIMIT 1) AS ai_band,
-                   t.recording_url, t.remarks,
+                   -- ID 224 point 7: an AI call's recording lives on ai_call_logs.
+                   COALESCE(NULLIF(t.recording_url, ''),
+                            (SELECT a.recording_url FROM ai_call_logs a
+                              WHERE ${AI_CALL} AND a.call_id = t.external_event_id LIMIT 1)) AS recording_url,
+                   t.remarks,
                    CASE WHEN ${AI_CALL} THEN t.external_event_id END AS ai_call_id
               FROM lead_touchpoints t
               LEFT JOIN dealer_leads dl ON dl.id = t.dealer_lead_id
@@ -1095,7 +1170,10 @@ const calls: Dataset = {
         return [
             {
                 ...this.sheets[0],
-                rows: data.map(({ ai_call_id, recording_url, ...r }) => ({ ...r, recording_url: recordingCell(recording_url, ai_call_id, origin) })),
+                rows: data.map(({ ai_call_id, recording_url, ...r }) => ({
+                    ...r,
+                    recording_url: recordingCell(recording_url, ai_call_id, origin, r.connected === true),
+                })),
             },
         ];
     },
@@ -1221,7 +1299,7 @@ const visits: Dataset = {
                    CASE WHEN v.actual_visit_date >= (tr.performed_at AT TIME ZONE 'Asia/Kolkata')::date
                         THEN CASE WHEN ${transferToVisitDays} <= ${visitLimitOnTransferDay} THEN 'Yes' ELSE 'No' END END AS transfer_visit_within_limit,
                    ${clockCols},
-                   replace(dl.lead_status, '_', ' ') AS lead_status_now, dl.interest_level AS interest_now,
+                   dl.lead_status AS lead_status_now, dl.interest_level AS interest_now,
                    dl.next_follow_up_at AS next_follow_up, dl.last_disposition, ou.name AS owner_now
               FROM lead_visits v
               LEFT JOIN dealer_leads dl ON dl.id = v.dealer_lead_id
@@ -1246,7 +1324,8 @@ const visits: Dataset = {
              ORDER BY visit_date DESC NULLS LAST
              LIMIT ${rowLimit(ctx)}
         `);
-        return [{ ...this.sheets[0], rows: data }];
+        // ID 224: the lead's status in words, as on screen.
+        return [{ ...this.sheets[0], rows: data.map((r) => ({ ...r, lead_status_now: leadStatusText(r.lead_status_now) })) }];
     },
 };
 
@@ -1281,7 +1360,8 @@ const quoteFrom = sql`
           -- Discount compares only the lines that carry a list price.
           SELECT SUM(${QUOTE_LINE_LIST_PRICE} * ${jnum(sql`pl ->> 'quantity'`)}) AS list_total,
                  SUM(${jnum(sql`pl ->> 'unit_price'`)} * ${jnum(sql`pl ->> 'quantity'`)})
-                     FILTER (WHERE ${QUOTE_LINE_LIST_PRICE} IS NOT NULL) AS quoted_listed_total
+                     FILTER (WHERE ${QUOTE_LINE_LIST_PRICE} IS NOT NULL) AS quoted_listed_total,
+                 SUM(${jnum(sql`pl ->> 'unit_price'`)} * ${jnum(sql`pl ->> 'quantity'`)}) AS lines_total
             FROM jsonb_array_elements(${jarr(sql`c.product_lines`)}) pl
       ) lt ON TRUE
       LEFT JOIN LATERAL (
@@ -1339,7 +1419,7 @@ const quotes: Dataset = {
                 { key: "dealer", header: "Dealer", meaning: "Dealer or shop name on the lead.", width: 28 },
                 { key: "created_by", header: "Created by", meaning: "Who raised the quote.", width: 22 },
                 { key: "created_at", header: "Created on", meaning: "When the quote was raised.", kind: "datetime" },
-                { key: "price_quoted", header: "Quoted (₹)", meaning: "The price quoted on this version.", kind: "money" },
+                { key: "price_quoted", header: "Quoted (₹)", meaning: "The price quoted on this version before GST: the price typed, else the final price, else the total of its lines.", kind: "money" },
                 { key: "final_price", header: "Final price (₹)", meaning: "The final price, when one was recorded.", kind: "money" },
                 { key: "sub_total", header: "Before GST (₹)", meaning: "From the generated quotation; blank until the quote is approved and its PDF generated.", kind: "money" },
                 { key: "gst", header: "GST (₹)", meaning: "Total with GST minus the amount before GST, from the generated quotation.", kind: "money" },
@@ -1456,7 +1536,9 @@ const quotes: Dataset = {
                 SELECT c.quote_number, c.version_no, c.is_current, c.dealer_lead_id AS lead_id,
                        COALESCE(dl.dealer_name, dl.shop_name) AS dealer,
                        COALESCE(cu.name, c.created_by) AS created_by, c.created_at,
-                       c.price_quoted, c.final_price,
+                       -- ID 224 point 8: the quote form fills only Final price, so
+                       -- Quoted read blank: the typed price, else Final, else the lines.
+                       COALESCE(c.price_quoted, c.final_price, lt.lines_total) AS price_quoted, c.final_price,
                        ${jnum(sql`c.quote_snapshot ->> 'subTotal'`)} AS sub_total,
                        ${jnum(sql`c.quote_snapshot ->> 'total'`)} - ${jnum(sql`c.quote_snapshot ->> 'subTotal'`)} AS gst,
                        ${jnum(sql`c.quote_snapshot ->> 'total'`)} AS total_with_gst,
@@ -1523,6 +1605,8 @@ const targets: Dataset = {
     ownRowsRoles: ["asm", "inside_sales_rep"],
     dateFields: [],
     commonFilters: ["team", "person"],
+    // ID 223: "Email me the file" is offered on every download.
+    background: true,
     filters: [
         { key: "month", label: "Month (YYYY-MM; blank = this month)", type: "text" },
         { key: "status", label: "Target status", type: "select", options: TARGET_STATUSES.filter((s) => s !== "rejected").map((s) => ({ value: s, label: TARGET_STATUS_LABEL[s] })) },
@@ -1603,6 +1687,8 @@ const targets: Dataset = {
                     .map(({ progress, ...t }) => ({
                         ...t,
                         ...progress,
+                        // ID 224 point 9: status in words, as on the Targets page.
+                        status: TARGET_STATUS_LABEL[t.status as keyof typeof TARGET_STATUS_LABEL] ?? t.status,
                         waiting_push: t.waiting_push ? "Yes" : "",
                         is_custom: t.is_custom ? "Yes" : "",
                         user_role: (t.user_role ?? "").replace(/_/g, " ") || null,
@@ -2054,7 +2140,9 @@ const inventoryDataset: Dataset = {
     },
     async build(ctx) {
         const data = await rows(sql`
-            SELECT i.id, i.serial_number, i.model_type, i.asset_category, i.asset_type, i.quantity, i.oem_name,
+            SELECT i.id, i.serial_number, i.model_type, i.asset_category, i.asset_type,
+                   -- ID 224 point 10: a serial item is one unit; quantity is blank on those rows.
+                   COALESCE(i.quantity, CASE WHEN i.is_serialized THEN 1 END) AS quantity, i.oem_name,
                    i.oem_invoice_number, i.oem_invoice_date, i.inventory_amount, i.gst_amount,
                    COALESCE(i.price_inclusive_gst, i.final_amount) AS with_gst,
                    i.status, i.warehouse_location, a.business_entity_name AS dealer, i.received_date, i.sold_at,
@@ -2121,6 +2209,8 @@ const ecofyLeadsDataset: Dataset = {
         { value: "assigned", label: "Assigned" },
     ],
     commonFilters: ["team", "person", "state"],
+    // ID 223: "Email me the file" is offered on every download.
+    background: true,
     filters: [
         {
             key: "view",
@@ -2229,6 +2319,6 @@ export function datasetAccess(dataset: DatasetInfo, role: string | null | undefi
 
 /** The catalogue as the page needs it — no functions. */
 export function datasetInfo(d: Dataset): DatasetInfo {
-    const { id, label, description, roles, ownRowsRoles, dateFields, allWhenNoDates, filters, commonFilters, background, sheets } = d;
-    return { id, label, description, roles, ownRowsRoles, dateFields, allWhenNoDates, filters, commonFilters, background, sheets };
+    const { id, label, description, roles, ownRowsRoles, dateFields, allWhenNoDates, filters, commonFilters, background, atOnceRows, sheets } = d;
+    return { id, label, description, roles, ownRowsRoles, dateFields, allWhenNoDates, filters, commonFilters, background, atOnceRows, sheets };
 }

@@ -48,6 +48,11 @@ export async function register() {
       startCallbackLoopTicker,
       startEmiMessagesTicker,
       startDispatchToSoldTicker,
+      startIotOfflineScanTicker,
+      startCallCostBackfillTicker,
+      startNbfcNightlyTicker,
+      startAiDialerReadoutTicker,
+      startDigilockerExpiryTicker,
     } = await import("./instrumentation-node");
     // ID 125 — every ticker runs as a named job. Its timers inherit the job
     // context, so the email / WhatsApp / Telegram senders drop what a job tries
@@ -87,6 +92,14 @@ export async function register() {
     await runAsJob("emi-messages", startEmiMessagesTicker);
     // ID 220 — dispatched → delivered, once a day from 09:30 IST (kickoff 265s out).
     await runAsJob("dispatch-to-sold", startDispatchToSoldTicker);
+    // ID 227 — jobs that were only in vercel.json (kickoffs 270-280s out).
+    await runAsJob("iot-offline-scan", startIotOfflineScanTicker);
+    await runAsJob("call-cost-backfill", startCallCostBackfillTicker);
+    await runAsJob("nbfc-nightly", startNbfcNightlyTicker);
+    // Priya KPI task 5 — the AI dialer quality readout, daily 19:20 IST (kickoff 290s out).
+    await runAsJob("ai-dialer-readout", startAiDialerReadoutTicker);
+    // ID 201 — DigiLocker "expired" history lines (kickoff 285s out).
+    await runAsJob("digilocker-expiry", startDigilockerExpiryTicker);
     await runAsJob("recording-transcription", startRecordingTranscriptionTicker);
     await runAsJob("drive-mirror", startDriveMirrorTicker);
     // E-280 — Drive sales-invoice scan. Kickoff staggered 195s out, the last

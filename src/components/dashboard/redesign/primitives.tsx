@@ -433,11 +433,17 @@ export function KpiTile({
     sub,
     footer,
     href,
+    onClick,
+    testid,
 }: {
     label: string;
     value: string;
     /** Makes the whole tile a link to the detail behind the number. */
     href?: string;
+    /** Makes the whole tile a button (e.g. opens a drill-down); ignored with `href`. */
+    onClick?: () => void;
+    /** data-testid on the tile; the value gets `<testid>-value`. */
+    testid?: string;
     pill?: { text: string; tone: Tone };
     /** `good` colours the change green, otherwise red; omit when there is no previous period. */
     delta?: { text: string; good: boolean } | null;
@@ -449,7 +455,12 @@ export function KpiTile({
     const body = (
         <>
             <span className="text-[13px] font-semibold text-ink-muted">{label}</span>
-            <span className="text-[27px] font-bold leading-tight tracking-tight text-brand-navy tabular-nums">{value}</span>
+            <span
+                data-testid={testid ? `${testid}-value` : undefined}
+                className="text-[27px] font-bold leading-tight tracking-tight text-brand-navy tabular-nums"
+            >
+                {value}
+            </span>
             <div className="flex min-h-[22px] flex-wrap items-center gap-2">
                 {pill && <StatusPill tone={pill.tone}>{pill.text}</StatusPill>}
                 {delta && (
@@ -462,12 +473,29 @@ export function KpiTile({
         </>
     );
     const box = "flex flex-col gap-2 rounded-2xl border border-border bg-surface p-[18px] shadow-card";
-    return href ? (
-        <Link href={href} className={cn(box, "transition hover:border-brand-sky hover:shadow-md")}>
+    if (href) {
+        return (
+            <Link href={href} data-testid={testid} className={cn(box, "transition hover:border-brand-sky hover:shadow-md")}>
+                {body}
+            </Link>
+        );
+    }
+    if (onClick) {
+        return (
+            <button
+                type="button"
+                data-testid={testid}
+                onClick={onClick}
+                className={cn(box, "text-left transition hover:border-brand-sky hover:shadow-md")}
+            >
+                {body}
+            </button>
+        );
+    }
+    return (
+        <div data-testid={testid} className={box}>
             {body}
-        </Link>
-    ) : (
-        <div className={box}>{body}</div>
+        </div>
     );
 }
 

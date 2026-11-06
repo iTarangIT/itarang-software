@@ -8,6 +8,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const colleagues: Record<string, unknown>[] = [];
 const execute = vi.fn(async (_q?: unknown) => colleagues);
 vi.mock("@/lib/db", () => ({ db: { execute } }));
+// ID 221: reassign_lead offers only the user's own team.
+const teamOf = vi.fn(async (_userId: string) =>
+    colleagues.map((c) => ({ id: c.id, name: c.name, role: c.role, territory: "—", is_self: false })),
+);
+vi.mock("@/lib/users/teamTargets", () => ({ activeReportTargets: (id: string) => teamOf(id) }));
 const findLeadInScope = vi.fn();
 vi.mock("../scope", async (orig) => ({ ...(await orig<typeof import("../scope")>()), findLeadInScope }));
 const createPending = vi.fn<(...a: unknown[]) => Promise<unknown>>(async () => ({ id: "act-1", expiresAt: new Date() }));
@@ -181,13 +186,28 @@ describe("reassign_lead", () => {
         colleagues.push({ id: "isr-2", name: "Neha Joshi", role: "inside_sales_rep" }, { id: "asm-9", name: "Neha Kulkarni", role: "asm" });
     });
 
-    it("only active ISRs and ASMs, never the user themself", async () => {
+    it("ID 221: only the user's own team; someone outside it is not offered", async () => {
         await run(ASM, "reassign_lead", { lead_id: "DL-7", to: "Neha Joshi", reason: "dealer prefers phone follow-up now" });
-        const { PgDialect } = await import("drizzle-orm/pg-core");
-        const q = new PgDialect().sqlToQuery(execute.mock.calls[0]![0] as never);
-        expect(q.sql).toMatch(/LOWER\(role\) IN \('inside_sales_rep', 'asm'\)/);
-        expect(q.sql).toMatch(/is_active = TRUE/);
-        expect(q.params).toContain("asm-1");
+        expect(teamOf).toHaveBeenCalledWith("asm-1");
+        const r = await run(ASM, "reassign_lead", { lead_id: "DL-7", to: "Priya Outside", reason: "dealer prefers phone follow-up now" });
+        expect(r.kind).toBe("question");
+        expect((r as { question: string }).question).toMatch(/not in your team/);
+    });
+
+    it("ID 221: nobody in the team → declined, nothing proposed", async () => {
+        teamOf.mockResolvedValueOnce([]);
+        const r = await run(ASM, "reassign_lead", { lead_id: "DL-7", to: "Neha Joshi", reason: "dealer prefers phone follow-up now" });
+        expect(r.kind).toBe("declined");
+        expect(createPending).not.toHaveBeenCalled();
+    });
+
+    it("ID 221 applier: a target no longer in the team at Confirm → target_unavailable", async () => {
+        teamOf.mockResolvedValueOnce([]);
+        const plan = APPLIERS.reassign_lead.schema.parse({
+            lead_id: "DL-7", target_user_id: "isr-2", target_name: "Neha", target_role: "inside_sales_rep", reason: "x".repeat(20),
+        });
+        await expect(APPLIERS.reassign_lead.apply({ tx: TX, user: ASM, step: 1 }, plan)).rejects.toEqual(new ActionRejected("target_unavailable"));
+        expect(reassignLead).not.toHaveBeenCalled();
     });
 
     it("a clear match → preview 'you → Name (ISR)' with the read-only warning", async () => {
@@ -226,9 +246,10 @@ describe("reassign_lead", () => {
         ]);
         // A system correction, not work: the idle clock does not move.
         expect(stored().preview.resets_idle_clock).toBe(false);
-        // To an ASM it is no hand-back: owner only.
+        // To an ASM it is no hand-back: ID 221 — the booked visits move with the lead.
         await run(ASM, "reassign_lead", { lead_id: "DL-7", to: "Neha Kulkarni", reason: "dealer prefers phone follow-up now" });
-        expect(stored().preview.lines.map((l) => l.label)).toEqual(["Owner", "Reason"]);
+        expect(stored().preview.lines.map((l) => l.label)).toEqual(["Owner", "Booked visits", "Reason"]);
+        expect(stored().preview.lines[1]!.value).toBe("2 move to Neha Kulkarni");
         execute.mockImplementation(async () => colleagues);
     });
 
